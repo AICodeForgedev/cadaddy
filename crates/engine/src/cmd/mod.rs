@@ -167,6 +167,7 @@ pub mod ugsheets;
 pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
+pub mod validate_height;
 pub mod validate_kind;
 pub mod validate_packet;
 pub mod validate_prescreen;

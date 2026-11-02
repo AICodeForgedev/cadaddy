@@ -277,7 +277,7 @@ pub struct Override {
 
 /// Is `key` (a project rule key) a validation rule override?
 pub fn is_override_key(key: &str) -> bool {
-    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX) && !super::validate_kind::is_kind_key(key)
+    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX) && !super::validate_kind::is_kind_key(key) && !super::validate_height::is_height_key(key)
 }
 
 /// Read a project rule as a validation rule override: the rule must exist, the field be one a

@@ -8,8 +8,12 @@
 //!     wall of its level: which wall, which face, how far off that face (inches; negative inside
 //!     the wall). Off by more than the rule's `plan_in`, or no wall within 10 ft, is a `fail`.
 //!   - **G-HEIGHT**: every wall-height element's height above its floor against the height the
-//!     documents give (the prints' height rules, the schedule row of its mark, the project's
-//!     `mounting_height` rules for its kind and room). Off by more than `height_in` is a `fail`.
+//!     documents give ([`super::validate_height`]: an AFF note tied to it on its plan, the
+//!     interior elevation that shows it, the legend row of its mark or kind, the schedule row of
+//!     its mark, the general notes of its trade, then the project rules `validate.height.<mark|kind>`
+//!     and `mounting_height`), each with its source (sheet, point, words). Off by more than
+//!     `height_in` is a `fail`; a model height that is a default no document gives is a
+//!     `default` (severity low).
 //!   - **G-PRESENT**: every room whose type has an expected set: each item of the set counted in
 //!     the room (`missing` when fewer, `extra` when more than an exact count).
 //!
@@ -26,7 +30,9 @@
 //! records, the job's legend and tables or the project's `validate.kind.<mark>` rules say it is
 //! ([`super::validate_kind`]). `checked` lists every rule run (0 when it found nothing to
 //! check); `unmatched` counts, by kind and mark, the elements no rule naming kinds applies to,
-//! and `unmeasured` the ones a rule applies to but could not measure, by why.
+//! and `unmeasured` the ones a rule applies to but could not measure, by why (G-HEIGHT: kind by
+//! kind, `<kind>: no height in any document …`, so it lists only kinds no document gives a
+//! height).
 //!
 //! The same numbers go into each packet's `objects.json` (`prescreen`) and the Validate run's
 //! pre-screen counts. The tolerances, severities and on/off of G-HOST, G-HEIGHT and G-PRESENT
@@ -43,6 +49,7 @@ use serde_json::{Value, json};
 use super::agentready::ANSWER_MAX;
 use super::bspec::current;
 use super::validate::{Frame, model_of, prints_of, stored_host};
+use super::validate_height::{self as vh, DocHeights};
 use super::validate_kind::Kinds;
 use super::validate_packet::{Area, compass, grow, inside, point_in, pt, r2, seg_dist};
 use super::validate_rules::{self as vr, Effective};
@@ -73,7 +80,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default), issue, expected, found, measured (G-HEIGHT: aff_in, expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
             .noundo()
             .files(),
     ]
@@ -476,31 +483,20 @@ struct Item {
     built: bool,
     /// The wall its record says it is on (its own `host_wall`, or its built twin's).
     host: Option<String>,
-    /// The height its own record says the documents give it (`mount_height` read off a print, a
-    /// note, a legend or a schedule: a typical room's `44" AFF`), inches, and where.
-    documented: Option<(f64, String)>,
+    /// Its own height record (`mount_height`: read off a print, a note, a legend or a schedule,
+    /// or a default the job assumed).
+    record: Option<vh::Record>,
+    /// Its symbol's point on its sheet (model coordinates): plan elements only.
+    sheet_at: Option<cadaddy_geom::Vec2>,
 }
 
 /// An element's mounting height as its record has it from the documents (not a rule's or a
 /// default): inches, and the record's source.
+#[cfg(test)]
 fn documented_height(e: &cadaddy_doc::Entity) -> Option<(f64, String)> {
-    use cadaddy_doc::props::SourceKind as K;
-    let props = cadaddy_doc::props::read(&e.common.xdata);
-    let p = props.get("mount_height")?;
-    if !matches!(p.source.kind, K::Print | K::Legend | K::Schedule | K::Spec | K::Submittal | K::Note) {
-        return None;
-    }
-    let z = p
-        .text()
-        .trim()
-        .trim_end_matches('"')
-        .trim_end_matches("in")
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|z| z.is_finite() && *z > 0.0 && *z < 240.0)?;
-    let kind = format!("{:?}", p.source.kind).to_ascii_lowercase();
-    Some((z, format!("its record: {kind} {}", p.source.doc.as_deref().unwrap_or_default()).trim().to_string()))
+    let r = vh::record_of(e).filter(|r| !r.assumed)?;
+    let kind = format!("{:?}", r.kind).to_ascii_lowercase();
+    Some((r.inches, format!("its record: {kind} {}", r.doc).trim().to_string()))
 }
 
 impl Item {
@@ -538,7 +534,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 z_in: e.z_in,
                 built: false,
                 host: ent.and_then(stored_host),
-                documented: ent.and_then(documented_height),
+                record: ent.and_then(vh::record_of),
+                sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
             }
         })
         .collect();
@@ -601,64 +598,15 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             mounting,
             built: true,
             host: stored_host(e),
-            documented: documented_height(e),
+            // A built part's height record is its own, else the plan element's it was built from.
+            record: vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x))),
+            sheet_at: None,
         });
     }
     for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
         it.host = twin_host.get(&it.handle.to_ascii_uppercase()).cloned();
     }
     out
-}
-
-/// The height the documents give an element, inches, and where it comes from.
-fn expected_height(it: &Item, room: Option<&Area>, prints: Option<&Prints>, pr: &ProjectRules) -> Option<(f64, String)> {
-    // Its own printed height (a typical room's note by it) first: the most particular document.
-    if let Some(d) = &it.documented {
-        return Some(d.clone());
-    }
-    if let Some(p) = prints {
-        let mark_is = |m: &Option<String>| m.as_deref().zip(it.mark.as_deref()).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b));
-        let rule = p
-            .rules
-            .heights
-            .iter()
-            .find(|h| mark_is(&h.mark))
-            .or_else(|| p.rules.heights.iter().find(|h| h.mark.is_none() && h.kind.as_deref().is_some_and(|k| has_words(&it.kind, k))));
-        if let Some(h) = rule.filter(|h| h.mounting_in.is_finite()) {
-            return Some((
-                h.mounting_in,
-                format!("prints height rule{}", if h.source.is_empty() { String::new() } else { format!(" ({})", h.source) }),
-            ));
-        }
-        if let Some(row) = p
-            .schedule
-            .iter()
-            .find(|r| it.mark.as_deref().is_some_and(|m| r.mark.eq_ignore_ascii_case(m)) && r.mounting_in.is_some_and(f64::is_finite))
-        {
-            return row.mounting_in.map(|z| (z, format!("schedule {} on {}, mark {}", row.schedule, row.sheet, row.mark)));
-        }
-    }
-    // The project's mounting heights: `<kind>/<room>` (the room's name words), else
-    // `<kind>/general`, else `<kind>`.
-    let room_name = room.and_then(|a| a.name.as_deref()).unwrap_or_default();
-    let mut best: Option<(u8, usize, f64, String)> = None;
-    for e in pr.list_domain(RuleDomain::MountingHeight) {
-        let (dev, rm) = e.key.split_once('/').map_or((e.key.as_str(), ""), |(a, b)| (a, b));
-        if !has_words(&it.kind, dev) {
-            continue;
-        }
-        let rank = match words(rm).as_str() {
-            "" | "general" | "any" | "all" => 1,
-            w if !room_name.is_empty() && has_words(room_name, w) => 2,
-            _ => continue,
-        };
-        let Some(z) = v::parse_inches(&e.active.value) else { continue };
-        let key = (rank, words(dev).len());
-        if best.as_ref().is_none_or(|b| key > (b.0, b.1)) {
-            best = Some((rank, key.1, z, format!("project rule mounting_height/{}", e.key)));
-        }
-    }
-    best.map(|(_, _, z, src)| (z, src))
 }
 
 /// The tolerance `name` of a rule, else `default`.
@@ -787,7 +735,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     let mut findings: Vec<(u8, Value)> = Vec::new();
     let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     // Every rule run is listed, with its counts (0 when it found nothing to check).
-    for (id, verdicts) in [("G-HOST", &["pass", "fail"][..]), ("G-HEIGHT", &["pass", "fail"][..]), ("G-PRESENT", &["pass", "missing", "extra"][..])] {
+    for (id, verdicts) in
+        [("G-HOST", &["pass", "fail"][..]), ("G-HEIGHT", &["pass", "fail", "default"][..]), ("G-PRESENT", &["pass", "missing", "extra"][..])]
+    {
         if on(id).is_some() {
             checked.insert(id.to_string(), verdicts.iter().map(|v| (v.to_string(), 0)).collect());
         }
@@ -904,28 +854,123 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // G-HEIGHT: the height above the floor against the documents.
     if let Some(r) = on("G-HEIGHT") {
         let t = tol(r, "height_in", 2.0);
+        let marks: BTreeSet<String> = all.iter().filter_map(|it| it.mark.as_deref()).map(|m| m.trim().to_ascii_uppercase()).collect();
+        let mut docs = DocHeights::of(sc.d, sc.sp, &marks);
+        let points: Vec<(String, String, cadaddy_geom::Vec2)> =
+            mine.iter().filter(|(it, _)| !it.built).filter_map(|(it, _)| it.sheet_at.map(|p| (it.handle.clone(), it.kind.clone(), p))).collect();
+        docs.tie(&points);
+        // The room an element is in, for an elevation titled with one: its area, else (a device
+        // in a wall) the room whose outline is nearest within a foot.
+        let room_near = |it: &Item, a: Option<&Area>| -> Option<String> {
+            if let Some(n) = a.and_then(|a| a.number.clone()) {
+                return Some(n);
+            }
+            let list = by_level.get(&it.level.to_ascii_lowercase())?;
+            let mut near: Vec<(f64, &Area)> = list
+                .iter()
+                .filter(|x| x.kind != "zone" && x.number.is_some() && x.outline.len() >= 3)
+                .filter_map(|x| {
+                    let n = x.outline.len();
+                    let d = (0..n)
+                        .filter_map(|i| Some(seg_dist(it.at, *x.outline.get(i)?, *x.outline.get((i + 1) % n)?).0))
+                        .fold(f64::INFINITY, f64::min);
+                    (d <= 1.0).then_some((d, *x))
+                })
+                .collect();
+            near.sort_by(|p, q| p.0.total_cmp(&q.0));
+            match (near.first(), near.get(1)) {
+                (Some(f), Some(s)) if (s.0 - f.0).abs() < 1e-6 && s.1.number != f.1.number => None,
+                (Some(f), _) => f.1.number.clone(),
+                _ => None,
+            }
+        };
+        let mut why_kind: BTreeMap<String, u64> = BTreeMap::new();
+        let mut skip = |why: String| *why_kind.entry(why).or_default() += 1;
         for (it, a) in mine.iter().filter(|(it, _)| it.mounting == Mounting::Wall && applies(r, it)) {
-            let mut skip = |why: &str| *unmeasured.entry(r.rule.id.clone()).or_default().entry(why.to_string()).or_default() += 1;
             let Some(z) = it.z_in else {
-                skip("no height in the model");
+                skip("no height in the model".to_string());
                 continue;
             };
-            let Some((want, src)) = expected_height(it, *a, sc.prints, &sc.d.project_rules) else {
-                skip("no height in the documents or project rules for its kind or mark");
+            let origin = vh::model_origin(it.record.as_ref());
+            let room = room_near(it, *a);
+            let ask = vh::Ask {
+                handle: &it.handle,
+                kind: &it.kind,
+                mark: it.mark.as_deref(),
+                room_number: room.as_deref(),
+                room_name: a.and_then(|a| a.name.as_deref()),
+                trade: super::validate_packet::trade_of_kind(&it.kind, sc.rules),
+                record: it.record.as_ref(),
+            };
+            let Some(want) = docs.expected(&ask, sc.prints, &sc.d.project_rules) else {
+                let kind = it.kind.replace('_', " ");
+                if origin == Some("default") {
+                    // A height nobody documented: reported as the default it is.
+                    skip(format!("{kind}: no height in any document or project rule; its model height is a default"));
+                    tally(&r.rule.id, "default");
+                    let said = it.record.as_ref().map(|x| x.doc.trim().to_string()).filter(|x| !x.is_empty());
+                    let issue = format!(
+                        "{kind} at {z:.1} in AFF: a default height{}, not from any document",
+                        said.as_deref().map_or_else(String::new, |x| format!(" ({})", x.chars().take(80).collect::<String>()))
+                    );
+                    let measured = json!({"aff_in": r2(z), "expected_in": null, "model_height_from": "default", "model_height_note": said});
+                    let mut f = base(
+                        r,
+                        it,
+                        *a,
+                        "default",
+                        issue,
+                        format!(
+                            "a height from the documents (an AFF note, the interior elevation, the legend, a schedule, the general notes) or a project rule {}{}",
+                            vh::HEIGHT_PREFIX,
+                            it.mark.as_deref().unwrap_or(&it.kind)
+                        ),
+                        format!("{z:.1} in AFF (a default)"),
+                        measured,
+                    );
+                    f["severity"] = json!("low");
+                    findings.push((2, f));
+                } else {
+                    skip(format!(
+                        "{kind}: no height in any document (an AFF note by it, an interior elevation, the legend, a schedule, the general notes) or project rule {}<mark|kind>",
+                        vh::HEIGHT_PREFIX
+                    ));
+                }
                 continue;
             };
-            let off = z - want;
+            let off = z - want.inches;
             let verdict = if off.abs() <= t { "pass" } else { "fail" };
             tally(&r.rule.id, verdict);
+            let src = &want.what;
+            let defaulted = if origin == Some("default") { "; its model height is a default, not from a document" } else { "" };
             let issue = if verdict == "pass" {
-                format!("{} at {:.1} in AFF as {src} gives", it.kind, z)
+                format!("{} at {:.1} in AFF as {src} gives{defaulted}", it.kind, z)
             } else {
-                format!("{} is at {:.1} in AFF; {src} gives {:.1} in", it.kind, z, want)
+                format!("{} is at {:.1} in AFF; {src} gives {:.1} in{defaulted}", it.kind, z, want.inches)
             };
-            let measured = json!({"aff_in": r2(z), "expected_in": r2(want), "off_in": r2(off), "expected_from": src});
-            let mut f = base(r, it, *a, verdict, issue, format!("{want:.1} in AFF (±{t} in)"), format!("{z:.1} in AFF"), measured);
+            let measured = json!({
+                "aff_in": r2(z),
+                "expected_in": r2(want.inches),
+                "off_in": r2(off),
+                "expected_from": src,
+                "expected_source": want.to_json(),
+                "model_height_from": origin.unwrap_or("model"),
+            });
+            let mut f = base(r, it, *a, verdict, issue, format!("{:.1} in AFF (±{t} in)", want.inches), format!("{z:.1} in AFF"), measured);
             f["tolerance_in"] = json!(t);
+            f["expected_source"] = want.to_json();
             findings.push((if verdict == "pass" { 9 } else { sev_rank(&r.rule.severity) }, f));
+        }
+        // Why, kind by kind (the most common first when there are many kinds).
+        let mut whys: Vec<(String, u64)> = why_kind.into_iter().collect();
+        whys.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
+        let listed = unmeasured.entry(r.rule.id.clone()).or_default();
+        for (i, (why, n)) in whys.into_iter().enumerate() {
+            let key = if i < vh::MAX_KINDS_LISTED { why } else { "other kinds: no height in any document or project rule".to_string() };
+            *listed.entry(key).or_default() += n;
+        }
+        if listed.is_empty() {
+            unmeasured.remove(&r.rule.id);
         }
     }
     // G-PRESENT: each room type's expected set.
@@ -1444,7 +1489,8 @@ mod tests {
             mounting: Mounting::Wall,
             built: false,
             host: None,
-            documented: None,
+            record: None,
+            sheet_at: None,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));

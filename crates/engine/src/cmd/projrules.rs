@@ -118,6 +118,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if super::validate_kind::is_kind_key(key) {
         super::validate_kind::check_kind_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
     }
+    // A kind's or mark's mounting height (validate.height.<kind|mark>) must name one and read.
+    if super::validate_height::is_height_key(key) {
+        super::validate_height::check_height_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
+    }
     // A room type's expected set (prescreen.expect.<room type>) must read.
     if super::validate_prescreen::is_expect_key(key) {
         super::validate_prescreen::check_expect_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
