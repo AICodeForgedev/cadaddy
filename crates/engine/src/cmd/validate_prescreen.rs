@@ -37,12 +37,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use cadaddy_doc::projrules::{ProjectRules, RuleDomain};
 use cadaddy_doc::{Drawing, EntityKind};
 use cadaddy_walk3d::BuildingSpec;
-use cadaddy_walk3d::validate::{self as v, Model, ModelWall, Mounting, Prints};
+use cadaddy_walk3d::validate::{self as v, Model, ModelWall, Mounting, Prints, WallSpan};
 use serde_json::{Value, json};
 
 use super::agentready::ANSWER_MAX;
 use super::bspec::current;
-use super::validate::{Frame, model_of, prints_of};
+use super::validate::{Frame, model_of, prints_of, stored_host};
 use super::validate_kind::Kinds;
 use super::validate_packet::{Area, compass, grow, inside, point_in, pt, r2, seg_dist};
 use super::validate_rules::{self as vr, Effective};
@@ -73,7 +73,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-PRESENT], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}}, total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict, issue, expected, found, measured, confidence, severity, area?, level, at?, source: \"prescreen\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), rooms_without_set, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the documents (G-HEIGHT), and each room type's expected set (project rules `prescreen.expect.<room type>`) against what the room holds (G-PRESENT)")
             .noundo()
             .files(),
     ]
@@ -166,6 +166,113 @@ pub(crate) fn nearest_wall<'a>(at: [f64; 2], walls: impl IntoIterator<Item = &'a
         ));
     }
     best.map(|(_, f)| f)
+}
+
+/// How far above or below a wall piece over an opening an element may be and still be on it,
+/// inches.
+const SPAN_SLACK_IN: f64 = 2.0;
+
+/// How an element sits against the walls of its level.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Hosting {
+    /// The face it is measured to: its stored host wall's when that is within the tolerance (or
+    /// no wall's is), else the nearest face of a wall that is there at its height.
+    pub face: Option<WallFace>,
+    /// Where `face` comes from: `stored` (its own host wall record) or `nearest`.
+    pub from: &'static str,
+    /// No wall is there at its height within the tolerance, but it is on the face line of a wall
+    /// piece over an opening (below or above it): that face, and the piece's bottom and top,
+    /// inches above the floor.
+    pub opening: Option<(WallFace, f64, f64)>,
+    /// Its stored host wall when the walls of its level don't have it.
+    pub stored_missing: Option<String>,
+    /// Its stored host wall when it is on another wall: the host's face (none: no piece of it
+    /// within reach at its height) and the host's piece over an opening it is under, if any.
+    pub stored_elsewhere: Option<(String, Option<WallFace>, Option<(WallFace, f64, f64)>)>,
+}
+
+impl Hosting {
+    /// Its findings' `measured`: the face, where it comes from, the opening and the stored host.
+    pub(crate) fn to_json(&self, z_in: Option<f64>) -> Value {
+        let mut m = match (&self.opening, &self.face) {
+            (Some((f, _, _)), _) | (None, Some(f)) => f.to_json(),
+            (None, None) => json!({"wall": null, "searched_ft": HOST_SEARCH_FT}),
+        };
+        m["host_from"] = json!(self.from);
+        if let Some((_, bottom, top)) = &self.opening {
+            m["opening"] = json!({"wall_from_aff_in": r2(*bottom), "wall_to_aff_in": r2(*top), "element_aff_in": z_in.map(r2)});
+        }
+        if let Some(h) = &self.stored_missing {
+            m["stored_host"] = json!({"wall": h, "why": "not among the built walls of its level; measured to the nearest wall"});
+        }
+        if let Some((h, face, open)) = &self.stored_elsewhere {
+            let why = match (face, open) {
+                (_, Some((_, bottom, _))) => format!("its record's wall {h} is only over an opening here (from {:.0} in above the floor)", bottom),
+                (Some(f), None) => format!("its record's wall {h} is {:.1} in off; it is on another wall", f.off_face_in),
+                (None, None) => format!("its record's wall {h} is not within {HOST_SEARCH_FT} ft at its height"),
+            };
+            m["stored_host"] = json!({"wall": h, "face": face.as_ref().map(WallFace::to_json), "why": why});
+        }
+        m
+    }
+}
+
+/// Where an element at `at` (feet), `z_in` above its floor, sits against `walls` and `spans`
+/// ([`Hosting`]): on its stored host wall's face when it is within `tol_in` (G-HOST's plan
+/// tolerance) of it; else on the nearest face of a wall there at its height; else, when no
+/// such face is within the tolerance, in the opening under a wall piece whose face line it is
+/// on, or off its stored host's face (else the nearest one).
+pub(crate) fn host_of(at: [f64; 2], z_in: Option<f64>, stored: Option<&str>, walls: &[&ModelWall], spans: &[&WallSpan], tol_in: f64) -> Hosting {
+    let at_height = |s: &WallSpan| z_in.is_none_or(|z| z >= s.bottom_in - SPAN_SLACK_IN && z <= s.top_in + SPAN_SLACK_IN);
+    let of = |id: Option<&str>, w: &ModelWall| id.is_none_or(|h| w.id.eq_ignore_ascii_case(h));
+    let solid = |id: Option<&str>| {
+        nearest_wall(
+            at,
+            walls.iter().copied().filter(|w| of(id, w)).chain(spans.iter().filter(|s| at_height(s) && of(id, &s.wall)).map(|s| &s.wall)),
+            HOST_SEARCH_FT,
+        )
+    };
+    let open = |id: Option<&str>| {
+        spans
+            .iter()
+            .filter(|s| !at_height(s) && of(id, &s.wall))
+            .filter_map(|s| nearest_wall(at, [&s.wall], HOST_SEARCH_FT).map(|f| (f, s.bottom_in, s.top_in)))
+            .min_by(|a, b| a.0.off_face_in.abs().total_cmp(&b.0.off_face_in.abs()).then(a.0.wall.cmp(&b.0.wall)))
+    };
+    let within = |f: &WallFace| f.off_face_in.abs() <= tol_in;
+    let mut out = Hosting { from: "nearest", ..Hosting::default() };
+    let mut host = None;
+    if let Some(h) = stored.map(str::trim).filter(|h| !h.is_empty()) {
+        if walls.iter().any(|w| w.id.eq_ignore_ascii_case(h)) || spans.iter().any(|s| s.wall.id.eq_ignore_ascii_case(h)) {
+            host = Some(h);
+        } else {
+            out.stored_missing = Some(h.to_string());
+        }
+    }
+    let on_host = host.map(|h| (h, solid(Some(h))));
+    if let Some((_, Some(f))) = on_host.as_ref().filter(|(_, f)| f.as_ref().is_some_and(within)) {
+        out.face = Some(f.clone());
+        out.from = "stored";
+        return out;
+    }
+    let near = solid(None);
+    if let Some((h, f)) = on_host {
+        out.stored_elsewhere = Some((h.to_string(), f.clone(), open(Some(h)).filter(|(o, _, _)| within(o))));
+        if near.as_ref().is_some_and(within) {
+            out.face = near;
+            return out;
+        }
+        out.opening = open(Some(h)).or_else(|| open(None)).filter(|(o, _, _)| within(o));
+        if out.opening.is_some() {
+            out.stored_elsewhere = None;
+        }
+        out.face = f.or(near);
+        out.from = if out.face.as_ref().is_some_and(|x| x.wall.eq_ignore_ascii_case(h)) { "stored" } else { "nearest" };
+        return out;
+    }
+    out.opening = open(None).filter(|(o, _, _)| within(o) && near.as_ref().is_none_or(|n| !within(n)));
+    out.face = near;
+    out
 }
 
 // ---------------------------------------------------------------- expected sets
@@ -367,6 +474,8 @@ struct Item {
     z_in: Option<f64>,
     mounting: Mounting,
     built: bool,
+    /// The wall its record says it is on (its own `host_wall`, or its built twin's).
+    host: Option<String>,
 }
 
 impl Item {
@@ -403,17 +512,26 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 at: e.at,
                 z_in: e.z_in,
                 built: false,
+                host: ent.and_then(stored_host),
             }
         })
         .collect();
     let plan: BTreeSet<String> = model.elements.iter().map(|e| e.id.to_ascii_uppercase()).collect();
+    // A plan element's built twin may hold its host wall.
+    let mut twin_host: HashMap<String, String> = HashMap::new();
     const MEP_KINDS: [&str; 5] = ["equipment", "fixture", "device", "light_fixture", "terminal"];
     let upf = frame.upf();
     for e in d.model.iter().take(MAX_ENTITIES) {
         if out.len() >= MAX_ELEMENTS {
             break;
         }
-        if super::wallgen::made_as(e).is_none() || super::bimlook::made_source(e).is_some_and(|h| plan.contains(&h.hex().to_ascii_uppercase())) {
+        if super::wallgen::made_as(e).is_none() {
+            continue;
+        }
+        if let Some(src) = super::bimlook::made_source(e).map(|h| h.hex().to_ascii_uppercase()).filter(|h| plan.contains(h)) {
+            if let Some(h) = stored_host(e) {
+                twin_host.insert(src, h);
+            }
             continue;
         }
         let Some(kind) = super::elemprops::element_kind(e).filter(|k| MEP_KINDS.contains(&k.as_str())) else { continue };
@@ -456,7 +574,11 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             z_in,
             mounting,
             built: true,
+            host: stored_host(e),
         });
+    }
+    for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
+        it.host = twin_host.get(&it.handle.to_ascii_uppercase()).cloned();
     }
     out
 }
@@ -627,6 +749,10 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     for w in &sc.model.walls {
         walls.entry(w.level.to_ascii_lowercase()).or_default().push(w);
     }
+    let mut spans: HashMap<String, Vec<&WallSpan>> = HashMap::new();
+    for w in &sc.model.wall_spans {
+        spans.entry(w.wall.level.to_ascii_lowercase()).or_default().push(w);
+    }
     let mut findings: Vec<(u8, Value)> = Vec::new();
     let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     // Every rule run is listed, with its counts (0 when it found nothing to check).
@@ -688,28 +814,56 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 .or_default() += unknown;
         }
         for (it, a) in mine.iter().filter(|(it, _)| !matches!(it.mounting, Mounting::Ceiling | Mounting::Other) && applies(r, it)) {
-            let near = walls.get(&it.level.to_ascii_lowercase()).map(|ws| nearest_wall(it.at, ws.iter().copied(), HOST_SEARCH_FT)).unwrap_or(None);
-            let (verdict, issue, found, measured) = match &near {
-                Some(f) if f.off_face_in.abs() <= t => {
-                    ("pass", format!("on the {} face of wall {}", f.face, f.wall), format!("{:.1} in off the face", f.off_face_in), f.to_json())
-                }
-                Some(f) => (
+            let lv = it.level.to_ascii_lowercase();
+            let h = host_of(
+                it.at,
+                it.z_in,
+                it.host.as_deref(),
+                walls.get(&lv).map_or(&[][..], Vec::as_slice),
+                spans.get(&lv).map_or(&[][..], Vec::as_slice),
+                t,
+            );
+            let its = if h.from == "stored" { "its host wall" } else { "wall" };
+            let (verdict, issue, found) = match (&h.opening, &h.face) {
+                (Some((f, bottom, top)), _) => (
+                    "fail",
+                    format!(
+                        "{} is on the {} face line of wall {} but in the opening under it: the wall there spans {:.0} to {:.0} in above the floor, the {} is at {:.1} in",
+                        it.kind,
+                        f.face,
+                        f.wall,
+                        bottom,
+                        top,
+                        it.kind,
+                        it.z_in.unwrap_or(0.0)
+                    ),
+                    format!(
+                        "in the opening of wall {} ({:.1} in off its {} face line; the wall there starts {:.0} in above the floor)",
+                        f.wall, f.off_face_in, f.face, bottom
+                    ),
+                ),
+                (None, Some(f)) if f.off_face_in.abs() <= t => (
+                    "pass",
+                    match &h.stored_elsewhere {
+                        Some((other, _, _)) => format!("on the {} face of wall {} (its record names wall {other})", f.face, f.wall),
+                        None => format!("on the {} face of {its} {}", f.face, f.wall),
+                    },
+                    format!("{:.1} in off the face", f.off_face_in),
+                ),
+                (None, Some(f)) => (
                     "fail",
                     if f.off_face_in > 0.0 {
-                        format!("{} floats {:.1} in in front of the {} face of wall {}", it.kind, f.off_face_in, f.face, f.wall)
+                        format!("{} floats {:.1} in in front of the {} face of {its} {}", it.kind, f.off_face_in, f.face, f.wall)
                     } else {
-                        format!("{} is buried {:.1} in inside wall {}", it.kind, -f.off_face_in, f.wall)
+                        format!("{} is buried {:.1} in inside {its} {}", it.kind, -f.off_face_in, f.wall)
                     },
-                    format!("{:.1} in off the {} face of wall {}", f.off_face_in, f.face, f.wall),
-                    f.to_json(),
+                    format!("{:.1} in off the {} face of {its} {}", f.off_face_in, f.face, f.wall),
                 ),
-                None => (
-                    "fail",
-                    format!("{} has no wall within {HOST_SEARCH_FT} ft: it floats", it.kind),
-                    format!("no wall within {HOST_SEARCH_FT} ft"),
-                    json!({"wall": null, "searched_ft": HOST_SEARCH_FT}),
-                ),
+                (None, None) => {
+                    ("fail", format!("{} has no wall within {HOST_SEARCH_FT} ft: it floats", it.kind), format!("no wall within {HOST_SEARCH_FT} ft"))
+                }
             };
+            let measured = h.to_json(it.z_in);
             tally(&r.rule.id, verdict);
             let mut f = base(r, it, *a, verdict, issue, format!("on a wall face, within {t} in"), found, measured);
             f["tolerance_in"] = json!(t);
@@ -881,11 +1035,12 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let sc =
         Scope { d, sp: &sp, model: &model, frame: &frame, prints: prints.as_ref(), rules: &rules, areas: &areas, whole_levels: whole, only: &only };
     let out = screen(&sc);
+    let wall_list = walls_summary(&model, &areas);
     let listed: Vec<&Value> = out.findings.iter().filter(|f| all || f["verdict"] != "pass").collect();
     let total = listed.len();
     let mut written = Value::Null;
     if let Some(f) = &path {
-        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
+        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
         let text = serde_json::to_string_pretty(&body).map_err(|e| bad(CMD, e.to_string()))?;
         super::exchange::write_file(CMD, f, text.as_bytes())?;
         written = json!(f);
@@ -899,6 +1054,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "checked": out.checked,
         "unmatched": out.unmatched.to_json(),
         "unmeasured": out.unmeasured,
+        "walls": wall_list,
         "total": total,
         "problems": out.problems(),
         "cursor": cursor,
@@ -933,12 +1089,80 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// The walls G-HOST measures against on the scope's levels: the pieces standing on the floor,
+/// the pieces over an opening, and the walls that can't be measured, with why (the first few).
+fn walls_summary(model: &Model, areas: &[Area]) -> Value {
+    let levels: BTreeSet<String> = areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
+    let on = |l: &str| levels.contains(&l.to_ascii_lowercase());
+    let mut why: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut first: Vec<Value> = Vec::new();
+    for u in model.unmeasured_walls.iter().filter(|u| on(&u.level)) {
+        *why.entry(u.why.as_str()).or_default() += 1;
+        if first.len() < 10 {
+            first.push(json!({"handle": u.id, "level": u.level, "at": pt([r2(u.at[0]), r2(u.at[1])]), "why": u.why}));
+        }
+    }
+    let elements: BTreeSet<&str> = model
+        .walls
+        .iter()
+        .filter(|w| on(&w.level))
+        .map(|w| w.id.as_str())
+        .chain(model.wall_spans.iter().filter(|s| on(&s.wall.level)).map(|s| s.wall.id.as_str()))
+        .chain(model.unmeasured_walls.iter().filter(|u| on(&u.level)).map(|u| u.id.as_str()))
+        .collect();
+    json!({
+        "elements": elements.len(),
+        "pieces": model.walls.iter().filter(|w| on(&w.level)).count(),
+        "over_openings": model.wall_spans.iter().filter(|s| on(&s.wall.level)).count(),
+        "unmeasured": {"walls": why.values().sum::<u64>(), "why": why, "first": first},
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn wall(id: &str, a: [f64; 2], b: [f64; 2], t: f64) -> ModelWall {
         ModelWall { id: id.into(), level: "L1".into(), a, b, thickness_in: t, stud_in: None, wall_type: Some("Partition".into()) }
+    }
+
+    #[test]
+    fn host_of_reads_the_stored_host_then_the_wall_there_at_its_height() {
+        // W1 along y = 0 (6"), with a door from x 4 to 7 under its header D1 (from 84"); W2 a
+        // partition 2' north.
+        let walls =
+            [wall("W1", [0.0, 0.25], [4.0, 0.25], 6.0), wall("W1", [7.0, 0.25], [10.0, 0.25], 6.0), wall("W2", [0.0, 2.75], [10.0, 2.75], 6.0)];
+        let header = WallSpan { wall: wall("W1", [4.0, 0.25], [7.0, 0.25], 6.0), bottom_in: 84.0, top_in: 108.0 };
+        let ws: Vec<&ModelWall> = walls.iter().collect();
+        let ss = [&header];
+        // Beside the door, at 18": on W1.
+        let h = host_of([2.0, 0.55], Some(18.0), None, &ws, &ss, 6.0);
+        assert_eq!((h.face.as_ref().map(|f| f.wall.as_str()), h.from, h.opening.is_none()), (Some("W1"), "nearest", true), "{h:?}");
+        // Under the header at 18": in the opening.
+        let h = host_of([5.5, 0.55], Some(18.0), None, &ws, &ss, 6.0);
+        let (f, bottom, _) = h.opening.clone().unwrap_or_else(|| panic!("{h:?}"));
+        assert_eq!(f.wall, "W1");
+        assert!((f.off_face_in - 0.6).abs() < 1e-6 && bottom == 84.0, "{h:?}");
+        // Over the door at 90": on the header.
+        let h = host_of([5.5, 0.55], Some(90.0), None, &ws, &ss, 6.0);
+        assert!(h.opening.is_none() && h.face.as_ref().is_some_and(|f| f.wall == "W1" && f.off_face_in.abs() < 1.0), "{h:?}");
+        // No height known: the header counts.
+        let h = host_of([5.5, 0.55], None, None, &ws, &ss, 6.0);
+        assert!(h.opening.is_none() && h.face.is_some(), "{h:?}");
+        // Its record names W2, which it is on: measured to W2 even where W1 is nearer.
+        let h = host_of([2.0, 2.45], Some(18.0), Some("w2"), &ws, &ss, 6.0);
+        assert_eq!((h.face.as_ref().map(|f| f.wall.as_str()), h.from), (Some("W2"), "stored"), "{h:?}");
+        // Its record names W2, but it is on W1: on W1, the record noted.
+        let h = host_of([2.0, 0.55], Some(18.0), Some("W2"), &ws, &ss, 6.0);
+        assert_eq!((h.face.as_ref().map(|f| f.wall.as_str()), h.from), (Some("W1"), "nearest"), "{h:?}");
+        assert_eq!(h.stored_elsewhere.as_ref().map(|s| s.0.as_str()), Some("W2"), "{h:?}");
+        // Its record names a wall the model doesn't have: the nearest, the record noted.
+        let h = host_of([2.0, 0.55], Some(18.0), Some("ABC"), &ws, &ss, 6.0);
+        assert_eq!((h.face.as_ref().map(|f| f.wall.as_str()), h.stored_missing.as_deref()), (Some("W1"), Some("ABC")), "{h:?}");
+        // Floating 1.5' off its stored host with nothing nearer: measured to the host.
+        let h = host_of([2.0, 1.25], Some(18.0), Some("W2"), &ws, &ss, 6.0);
+        assert_eq!((h.face.as_ref().map(|f| f.wall.as_str()), h.from), (Some("W2"), "stored"), "{h:?}");
+        assert!(h.face.as_ref().is_some_and(|f| f.off_face_in > 6.0), "{h:?}");
     }
 
     #[test]
@@ -1166,6 +1390,7 @@ mod tests {
             z_in: None,
             mounting: Mounting::Wall,
             built: false,
+            host: None,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));

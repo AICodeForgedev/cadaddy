@@ -1231,20 +1231,35 @@ fn in_area(
         }
         let mounting = field(&props, &e.fields, &["mounting"])
             .unwrap_or_else(|| serde_json::to_value(e.mounting).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default());
-        // The wall it is on: the nearest wall of the level within reach of its centreline.
+        // The wall it is on: its stored host wall's nearest piece when the model has that wall,
+        // else the nearest wall of the level within reach of its centreline (a piece over an
+        // opening says so, with the heights it spans).
         let host = if e.mounting == Mounting::Wall || e.mounting == Mounting::Unknown {
-            model
+            let pieces: Vec<(&v::ModelWall, Option<(f64, f64)>)> = model
                 .walls
                 .iter()
-                .filter(|w| lvl(&w.level))
-                .map(|w| (seg_dist(e.at, w.a, w.b), w))
-                .filter(|((dist, _), w)| *dist <= HOST_REACH_FT + w.thickness_in / 24.0)
+                .map(|w| (w, None))
+                .chain(model.wall_spans.iter().map(|s| (&s.wall, Some((s.bottom_in, s.top_in)))))
+                .filter(|(w, _)| lvl(&w.level))
+                .collect();
+            let stored = ent.and_then(|x| super::validate::stored_host(x));
+            let mine: Vec<(&v::ModelWall, Option<(f64, f64)>)> =
+                stored.as_deref().map(|h| pieces.iter().copied().filter(|(w, _)| w.id.eq_ignore_ascii_case(h)).collect()).unwrap_or_default();
+            let (from, pieces) = if mine.is_empty() { ("nearest", pieces) } else { ("stored", mine) };
+            pieces
+                .into_iter()
+                .map(|(w, band)| (seg_dist(e.at, w.a, w.b), w, band))
+                .filter(|((dist, _), w, _)| from == "stored" || *dist <= HOST_REACH_FT + w.thickness_in / 24.0)
                 .min_by(|a, b| a.0.0.total_cmp(&b.0.0).then(a.1.id.cmp(&b.1.id)))
-                .map(|((dist, q), w)| {
+                .map(|((dist, q), w, band)| {
                     let (nx, ny) = (e.at[0] - q[0], e.at[1] - q[1]);
                     let (nx, ny) = if nx.hypot(ny) > 1e-6 { (nx, ny) } else { (centre[0] - q[0], centre[1] - q[1]) };
                     let toward_area = nx * (centre[0] - q[0]) + ny * (centre[1] - q[1]) >= 0.0;
-                    json!({"wall": w.id, "type": w.wall_type, "off_centreline_in": r2(dist * 12.0), "face": compass(nx, ny), "faces_area": toward_area})
+                    let mut j = json!({"wall": w.id, "type": w.wall_type, "off_centreline_in": r2(dist * 12.0), "face": compass(nx, ny), "faces_area": toward_area, "from": from});
+                    if let Some((bottom, top)) = band {
+                        j["over_opening"] = json!({"wall_from_aff_in": r2(bottom), "wall_to_aff_in": r2(top)});
+                    }
+                    j
                 })
         } else {
             None
@@ -1409,6 +1424,27 @@ fn in_area(
     if !walls_json.is_empty() {
         kinds.insert("wall".into());
     }
+    // The pieces of wall over an opening (the plan shows a gap there) and the walls that can't
+    // be measured, so an element on one is never judged against nothing.
+    let mut spans: Vec<&v::WallSpan> =
+        model.wall_spans.iter().filter(|s| lvl(&s.wall.level) && segment_touches(reach, s.wall.a, s.wall.b)).take(MAX_OBJECTS).collect();
+    spans.sort_by(|a, b| a.wall.id.cmp(&b.wall.id).then(a.wall.a[0].total_cmp(&b.wall.a[0])).then(a.wall.a[1].total_cmp(&b.wall.a[1])));
+    let spans_json: Vec<Value> = spans
+        .iter()
+        .map(|s| {
+            json!({"handle": s.wall.id, "type": s.wall.wall_type, "a_ft": pt(s.wall.a), "b_ft": pt(s.wall.b), "thickness_in": r2(s.wall.thickness_in), "from_aff_in": r2(s.bottom_in), "to_aff_in": r2(s.top_in), "why": "over an opening"})
+        })
+        .collect();
+    let unmeasured_json: Vec<Value> = {
+        let ids: BTreeSet<&str> = walls.iter().map(|w| w.id.as_str()).chain(spans.iter().map(|s| s.wall.id.as_str())).collect();
+        model
+            .unmeasured_walls
+            .iter()
+            .filter(|u| lvl(&u.level) && inside(reach, u.at) && !ids.contains(u.id.as_str()))
+            .take(MAX_OBJECTS)
+            .map(|u| json!({"handle": u.id, "at_ft": pt(u.at), "why": u.why}))
+            .collect()
+    };
     let mut ops: Vec<&v::ModelOpening> =
         model.openings.iter().filter(|o| lvl(&o.level) && (inside(reach, o.min) || inside(reach, o.max))).take(MAX_OBJECTS).collect();
     ops.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1420,7 +1456,7 @@ fn in_area(
         })
         .collect();
     let loose: Vec<Value> = failures.iter().filter(|f| f.element.is_none()).take(MAX_OBJECTS).map(fail_json).collect();
-    let counts = json!({"elements": total_elements + built_listed, "nearby": nearby.len(), "runs": total_runs, "walls": walls_json.len(), "openings": openings_json.len(), "failures": failures.len()});
+    let counts = json!({"elements": total_elements + built_listed, "nearby": nearby.len(), "runs": total_runs, "walls": walls_json.len(), "wall_spans": spans_json.len(), "walls_unmeasured": unmeasured_json.len(), "openings": openings_json.len(), "failures": failures.len()});
     let mut objects = json!({
         "area": area.id,
         "level": area.level,
@@ -1431,6 +1467,8 @@ fn in_area(
         "nearby_about": "elements just outside this area's outline (in the margin), each with the room it is in: not this area's, never judged here",
         "runs": runs_json,
         "walls": walls_json,
+        "wall_spans": spans_json,
+        "walls_unmeasured": unmeasured_json,
         "openings": openings_json,
         "failures_without_element": loose,
         "counts": counts,
@@ -1476,6 +1514,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
     s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
