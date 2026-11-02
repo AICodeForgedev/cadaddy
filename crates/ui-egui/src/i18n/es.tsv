@@ -3293,3 +3293,57 @@
 	Remove Company Standard	Quitar estándar de la empresa
 	Set Company Standard	Definir estándar de la empresa
 	Standards	Estándares
+	 ({n} shown; Export writes them all)	 ({n} mostradas; Exportar las escribe todas)
+	(no picture)	(sin imagen)
+	A false alarm	Una falsa alarma
+	Confidence:	Confianza:
+	Current room	Habitación actual
+	Defer	Aplazar
+	Expected:	Esperado:
+	False alarms: {rate}	Falsas alarmas: {rate}
+	Findings ({n})	Hallazgos ({n})
+	Found:	Encontrado:
+	From the 2D drawing	Del dibujo 2D
+	From the BIM model	Del modelo BIM
+	Issue:	Problema:
+	It is a real error	Es un error real
+	Leave it for a field decision	Dejarlo para una decisión en obra
+	No file chosen. Type: automation.takeoff {params}	No se eligió ningún archivo. Escriba: automation.takeoff {params}
+	No findings to review.	No hay hallazgos que revisar.
+	No run yet: choose a scope and trades, then Start.	Aún no hay ejecución: elija el alcance y las especialidades y pulse Iniciar.
+	No takeoff yet: Refresh runs it.	Aún no hay mediciones: Actualizar las calcula.
+	Overall	Global
+	Refresh	Actualizar
+	Reject	Rechazar
+	Resume	Reanudar
+	Rules ({on} of {all} on)	Reglas ({on} de {all} activas)
+	Scope:	Alcance:
+	Scores	Puntuaciones
+	Show answered	Mostrar respondidos
+	Takeoff	Mediciones
+	Takeoff written to {path}	Mediciones escritas en {path}
+	Trades:	Especialidades:
+	done	terminado
+	judging	en evaluación
+	project	proyecto
+	waiting for an agent	esperando a un agente
+	{done} of {total} areas, {state}	{done} de {total} áreas, {state}
+	{source}: {n} lines	{source}: {n} líneas
+	Automation Takeoff	Mediciones de automatización
+	Cancel Validation Run	Cancelar validación
+	Change a Validation Rule	Cambiar una regla de validación
+	Validation Areas	Áreas de validación
+	Validation Evidence Packet	Paquete de evidencias de validación
+	Validation Rules	Reglas de validación
+	Validate	Validar
+	Automation	Automatización
+	Model Checks	Comprobaciones del modelo
+	Qty	Cant.
+	Elements	Elementos
+	Fire	Incendios
+	Validate: waiting for an agent	Validar: esperando a un agente
+	Validate Model Against Prints (Agent)	Validar el modelo con los planos (agente)
+	Next Validation Packet	Siguiente paquete de validación
+	Report Validation Findings	Informar de los hallazgos de validación
+	Validation Run Status	Estado de la ejecución de validación
+	Plant Validation Errors	Plantar errores de validación

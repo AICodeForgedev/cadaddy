@@ -77,7 +77,7 @@ pub fn built_in() -> Vec<Def> {
     let _ = docking.set_visible(Panel::ToolSets, false);
     let electrical = Def {
         name: "Electrical".into(),
-        ribbon_tabs: ["Home", "Insert", "Annotate", "View", "Output"].map(String::from).to_vec(),
+        ribbon_tabs: ["Home", "Insert", "Annotate", "View", "Output", "Automation"].map(String::from).to_vec(),
         ribbon_tab: "Insert".into(),
         show_toolsets: false,
         docking: Some(docking),

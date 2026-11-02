@@ -68,7 +68,7 @@ fn outlines(d: &Drawing, space: &Space, near: Option<Bounds2>) -> (Vec<Vec<Vec2>
 /// An object's outline as polylines (tolerance `tol`), infinite lines clipped to a generous
 /// box around the extents `ext`.
 fn object_polys(d: &Drawing, e: &Entity, tol: f64, ext: Bounds2) -> Vec<Vec<Vec2>> {
-    let mut polys = crate::select::hit_polylines(d, e, tol);
+    let mut polys = crate::select::linework_polylines(d, e, tol);
     // Block references, dimensions and multileaders end with their bounding box (so a click
     // inside one picks it); a boundary follows only what they draw, the door swing not its box.
     if matches!(e.kind, EntityKind::Insert(_) | EntityKind::Dimension(_) | EntityKind::MLeader(_)) {

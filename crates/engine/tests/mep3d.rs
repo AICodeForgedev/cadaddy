@@ -625,3 +625,39 @@ fn a_run_through_an_elevator_hoistway_is_a_clash() {
     assert_eq!(shaft.len(), 1, "{r}");
     assert_eq!(shaft[0]["at"], json!([108.0, 108.0]), "{r}");
 }
+
+/// A branch circuit's drop down a wall to its outlet (a conduit riser from the ceiling to the
+/// box's height) is below the ceiling by design: no clash. A duct hanging low is one, and so is
+/// a conduit run across the room at that height.
+#[test]
+fn a_drop_to_an_outlet_is_no_clash_and_a_low_duct_is() {
+    let mut s = Session::new();
+    let spec = json!({
+        "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0}],
+        "mep": {
+            "systems": [
+                {"name": "SA", "layer": "M-SUPP", "kind": "duct", "size_in": [12, 8], "bottom_ft": 9.5},
+                {"name": "E-CIRCUIT-EST", "layer": "E-COND", "kind": "conduit", "size_in": [0.75, 0.75], "bottom_ft": 9.5}
+            ],
+            "runs": [
+                {"system": "E-CIRCUIT-EST", "level": "Level 1", "points": [[50, 50]], "size_in": [0.75, 0.75], "bottoms_ft": [1.5], "top_ft": 9.5},
+                {"system": "SA", "level": "Level 1", "points": [[0, 200], [300, 200]], "size_in": [12, 8], "bottoms_ft": [7.0]},
+                {"system": "E-CIRCUIT-EST", "level": "Level 1", "points": [[0, 400], [300, 400]], "size_in": [0.75, 0.75], "bottoms_ft": [7.0]}
+            ]
+        }
+    });
+    s.execute("bspec.set", &json!({"spec": spec})).unwrap();
+    let r = s.execute("model.clashes", &json!({})).unwrap();
+    let low: Vec<(&str, f64)> = r["clashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["kind"] == json!("below_ceiling"))
+        .map(|c| (c["systems"][0].as_str().unwrap_or(""), c["at"][1].as_f64().unwrap_or(f64::NAN)))
+        .collect();
+    assert_eq!(low.len(), 2, "the duct and the low conduit run, not the drop: {r}");
+    assert!(low.iter().any(|(sys, y)| *sys == "SA" && (*y - 200.0).abs() < 1e-6), "{r}");
+    assert!(low.iter().all(|(_, y)| (*y - 50.0).abs() > 1e-6), "the drop is no clash: {r}");
+    // Each clash says where it is.
+    assert!(r["clashes"].as_array().unwrap().iter().all(|c| c["at"].as_array().is_some_and(|a| a.len() == 2)), "{r}");
+}

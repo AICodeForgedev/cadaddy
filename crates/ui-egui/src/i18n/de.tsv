@@ -3103,3 +3103,57 @@
 	Remove Company Standard	Firmenstandard entfernen
 	Set Company Standard	Firmenstandard festlegen
 	Standards	Standards
+	 ({n} shown; Export writes them all)	 ({n} angezeigt; Export schreibt alle)
+	(no picture)	(kein Bild)
+	A false alarm	Ein Fehlalarm
+	Confidence:	Sicherheit:
+	Current room	Aktueller Raum
+	Defer	Zurückstellen
+	Expected:	Erwartet:
+	False alarms: {rate}	Fehlalarme: {rate}
+	Findings ({n})	Befunde ({n})
+	Found:	Gefunden:
+	From the 2D drawing	Aus der 2D-Zeichnung
+	From the BIM model	Aus dem BIM-Modell
+	Issue:	Problem:
+	It is a real error	Es ist ein echter Fehler
+	Leave it for a field decision	Für eine Entscheidung vor Ort lassen
+	No file chosen. Type: automation.takeoff {params}	Keine Datei gewählt. Eingeben: automation.takeoff {params}
+	No findings to review.	Keine Befunde zu prüfen.
+	No run yet: choose a scope and trades, then Start.	Noch kein Lauf: Umfang und Gewerke wählen, dann Starten.
+	No takeoff yet: Refresh runs it.	Noch kein Aufmaß: Aktualisieren erstellt es.
+	Overall	Gesamt
+	Refresh	Aktualisieren
+	Reject	Ablehnen
+	Resume	Fortsetzen
+	Rules ({on} of {all} on)	Regeln ({on} von {all} aktiv)
+	Scope:	Umfang:
+	Scores	Bewertungen
+	Show answered	Beantwortete zeigen
+	Takeoff	Aufmaß
+	Takeoff written to {path}	Aufmaß geschrieben nach {path}
+	Trades:	Gewerke:
+	done	fertig
+	judging	wird beurteilt
+	project	Projekt
+	waiting for an agent	Warten auf einen Agenten
+	{done} of {total} areas, {state}	{done} von {total} Bereichen, {state}
+	{source}: {n} lines	{source}: {n} Zeilen
+	Automation Takeoff	Automatisierung: Aufmaß
+	Cancel Validation Run	Prüflauf abbrechen
+	Change a Validation Rule	Prüfregel ändern
+	Validation Areas	Prüfbereiche
+	Validation Evidence Packet	Prüf-Nachweispaket
+	Validation Rules	Prüfregeln
+	Validate	Prüfen
+	Automation	Automatisierung
+	Model Checks	Modellprüfungen
+	Qty	Menge
+	Elements	Elemente
+	Fire	Brandschutz
+	Validate: waiting for an agent	Prüfen: Warten auf einen Agenten
+	Validate Model Against Prints (Agent)	Modell anhand der Pläne prüfen (Agent)
+	Next Validation Packet	Nächstes Prüfpaket
+	Report Validation Findings	Prüfergebnisse melden
+	Validation Run Status	Status des Prüflaufs
+	Plant Validation Errors	Prüffehler einbauen

@@ -2221,7 +2221,16 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         run: &'a MepRun,
         piece: Piece,
         w: f64,
+        /// A conduit or cable dropping down a wall to its device: below the ceiling by design.
+        drop: bool,
     }
+    let wiring = |sys: &str| {
+        sp.mep
+            .systems
+            .iter()
+            .find(|x| x.name == sys)
+            .is_some_and(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
+    };
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
@@ -2233,12 +2242,14 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z0 = (level.elevation_ft + bot) * upf;
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
-                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w });
+                // Ending at a device's height above its floor (an outlet, a switch), not on it.
+                let drop = wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft;
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop });
             }
             continue;
         }
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
-        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
     // Below the ceiling of the room it passes through (else the level's), into the slab above.
@@ -2262,7 +2273,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|(_, z, _)| *z)
             .fold(f64::NAN, f64::min);
         let ceiling = if ceiling.is_finite() { ceiling } else { (level.elevation_ft + level.ceiling_ft) * upf };
-        if it.piece.z0 < ceiling - tol {
+        if it.piece.z0 < ceiling - tol && !it.drop {
             out.push(json!({
                 "kind": "below_ceiling", "systems": [it.run.system], "level": it.run.level,
                 "message": format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches((ceiling - it.piece.z0) / upf * 12.0)),

@@ -3281,3 +3281,57 @@ menu	View	عرض
 	Remove Company Standard	إزالة معيار الشركة
 	Set Company Standard	تعيين معيار الشركة
 	Standards	المعايير
+	 ({n} shown; Export writes them all)	 (يُعرض {n}؛ التصدير يكتبها كلها)
+	(no picture)	(لا صورة)
+	A false alarm	إنذار كاذب
+	Confidence:	الثقة:
+	Current room	الغرفة الحالية
+	Defer	تأجيل
+	Expected:	المتوقع:
+	False alarms: {rate}	الإنذارات الكاذبة: {rate}
+	Findings ({n})	النتائج ({n})
+	Found:	الموجود:
+	From the 2D drawing	من الرسم ثنائي الأبعاد
+	From the BIM model	من نموذج BIM
+	Issue:	المشكلة:
+	It is a real error	إنه خطأ حقيقي
+	Leave it for a field decision	اتركه لقرار في الموقع
+	No file chosen. Type: automation.takeoff {params}	لم يُختر ملف. اكتب: automation.takeoff {params}
+	No findings to review.	لا توجد نتائج للمراجعة.
+	No run yet: choose a scope and trades, then Start.	لا يوجد تشغيل بعد: اختر النطاق والتخصصات ثم ابدأ.
+	No takeoff yet: Refresh runs it.	لا يوجد حصر بعد: التحديث يشغّله.
+	Overall	الإجمالي
+	Refresh	تحديث
+	Reject	رفض
+	Resume	استئناف
+	Rules ({on} of {all} on)	القواعد ({on} من {all} مفعّلة)
+	Scope:	النطاق:
+	Scores	الدرجات
+	Show answered	إظهار المُجاب عنها
+	Takeoff	حصر الكميات
+	Takeoff written to {path}	كُتب حصر الكميات في {path}
+	Trades:	التخصصات:
+	done	مكتمل
+	judging	قيد التقييم
+	project	المشروع
+	waiting for an agent	في انتظار وكيل
+	{done} of {total} areas, {state}	{done} من {total} مناطق، {state}
+	{source}: {n} lines	{source}: {n} سطرًا
+	Automation Takeoff	حصر الكميات الآلي
+	Cancel Validation Run	إلغاء تشغيل التحقق
+	Change a Validation Rule	تغيير قاعدة تحقق
+	Validation Areas	مناطق التحقق
+	Validation Evidence Packet	حزمة أدلة التحقق
+	Validation Rules	قواعد التحقق
+	Validate	تحقق
+	Automation	الأتمتة
+	Model Checks	فحوصات النموذج
+	Qty	الكمية
+	Elements	العناصر
+	Fire	الحريق
+	Validate: waiting for an agent	التحقق: في انتظار وكيل
+	Validate Model Against Prints (Agent)	التحقق من النموذج مقابل المخططات (وكيل)
+	Next Validation Packet	حزمة التحقق التالية
+	Report Validation Findings	الإبلاغ عن نتائج التحقق
+	Validation Run Status	حالة جولة التحقق
+	Plant Validation Errors	زرع أخطاء للتحقق

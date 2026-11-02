@@ -3361,3 +3361,57 @@
 	Remove Company Standard	移除公司标准
 	Set Company Standard	设置公司标准
 	Standards	标准
+	 ({n} shown; Export writes them all)	（显示 {n} 行；导出会写入全部）
+	(no picture)	（无图片）
+	A false alarm	误报
+	Confidence:	置信度：
+	Current room	当前房间
+	Defer	推迟
+	Expected:	预期：
+	False alarms: {rate}	误报率：{rate}
+	Findings ({n})	发现 ({n})
+	Found:	实际：
+	From the 2D drawing	来自二维图形
+	From the BIM model	来自 BIM 模型
+	Issue:	问题：
+	It is a real error	确实是错误
+	Leave it for a field decision	留待现场决定
+	No file chosen. Type: automation.takeoff {params}	未选择文件。请输入：automation.takeoff {params}
+	No findings to review.	没有需要审阅的发现。
+	No run yet: choose a scope and trades, then Start.	尚无运行：选择范围和专业，然后点击“开始”。
+	No takeoff yet: Refresh runs it.	尚无工程量：点击“刷新”运行。
+	Overall	总体
+	Refresh	刷新
+	Reject	拒绝
+	Resume	继续
+	Rules ({on} of {all} on)	规则（已启用 {on}/{all}）
+	Scope:	范围：
+	Scores	得分
+	Show answered	显示已回答
+	Takeoff	工程量
+	Takeoff written to {path}	工程量已写入 {path}
+	Trades:	专业：
+	done	完成
+	judging	评判中
+	project	项目
+	waiting for an agent	等待智能体
+	{done} of {total} areas, {state}	{total} 个区域中的 {done} 个，{state}
+	{source}: {n} lines	{source}：{n} 行
+	Automation Takeoff	自动化工程量
+	Cancel Validation Run	取消验证运行
+	Change a Validation Rule	更改验证规则
+	Validation Areas	验证区域
+	Validation Evidence Packet	验证证据包
+	Validation Rules	验证规则
+	Validate	验证
+	Automation	自动化
+	Model Checks	模型检查
+	Qty	数量
+	Elements	图元
+	Fire	消防
+	Validate: waiting for an agent	验证：正在等待代理
+	Validate Model Against Prints (Agent)	对照图纸验证模型（代理）
+	Next Validation Packet	下一个验证包
+	Report Validation Findings	报告验证结果
+	Validation Run Status	验证运行状态
+	Plant Validation Errors	植入验证错误

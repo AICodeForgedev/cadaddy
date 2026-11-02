@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?}, out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?}, out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -417,7 +417,7 @@ fn run_areas(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The area a packet call names.
-fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, frame: &Frame) -> Result<Area> {
+pub(crate) fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, frame: &Frame) -> Result<Area> {
     match p.get("area") {
         Some(Value::String(id)) => {
             let id = id.trim();
@@ -1606,12 +1606,32 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| prints_from_job(s, &frame));
     let job_submittals: Vec<String> = super::guided::load_job(s).ok().flatten().map(|j| j.submittals).unwrap_or_default();
     let (all_rules, rejected) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
+    let only_rules: Option<BTreeSet<String>> = match p.get("rules") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(a)) => Some(
+            a.iter()
+                .take(100)
+                .map(|r| {
+                    r.as_str()
+                        .map(|x| x.trim().to_ascii_uppercase())
+                        .filter(|x| all_rules.iter().any(|e| e.rule.id == *x))
+                        .ok_or_else(|| bad(CMD, format!("unknown rule {r} (validate.rules lists them)")))
+                })
+                .collect::<Result<BTreeSet<_>>>()?,
+        ),
+        Some(_) => return Err(bad(CMD, "`rules` is a list of rule ids (validate.rules)")),
+    };
     let upf = frame.upf();
 
     // What the model holds here, and the rules that apply.
     let built = built_parts(d, &sp, &frame, &area, 30.0);
     let here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built);
-    let (rules_on, rules_off) = rules_for(&here.kinds, &all_rules);
+    let (mut rules_on, mut rules_off) = rules_for(&here.kinds, &all_rules);
+    // Only the rules a validate run asked for (`rules`): the others are listed as left out.
+    if let Some(only) = &only_rules {
+        rules_off.extend(rules_on.iter().filter(|r| !only.contains(&r.rule.id)).map(|r| r.rule.id.clone()));
+        rules_on.retain(|r| only.contains(&r.rule.id));
+    }
     let rules_json = json!({
         "area": area.id,
         "kinds": here.kinds.iter().collect::<Vec<_>>(),

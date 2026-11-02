@@ -40,8 +40,9 @@ fn saved(d: &Path, name: &str) -> (Session, String) {
 }
 
 /// Every command with the parameter that names its output file and the extension that suits it.
-const COMMANDS: [(&str, &str, &str); 14] = [
+const COMMANDS: [(&str, &str, &str); 15] = [
     ("takeoff", "file", "csv"),
+    ("automation.takeoff", "path", "csv"),
     ("takeoff.layers", "file", "csv"),
     ("dataextraction", "file", "csv"),
     ("eattext", "file", "csv"),

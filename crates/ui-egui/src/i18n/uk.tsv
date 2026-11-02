@@ -3415,6 +3415,57 @@
 	Apply Submittals	Застосувати погоджену документацію
 	Dimming Check	Перевірка регулювання яскравості
 	Read Partition Type Legend	Прочитати легенду типів перегородок
+	 ({n} shown; Export writes them all)	 (показано {n}; експорт запише всі)
+	(no picture)	(немає зображення)
+	A false alarm	Хибна тривога
+	Confidence:	Упевненість:
+	Current room	Поточне приміщення
+	Defer	Відкласти
+	Expected:	Очікувано:
+	False alarms: {rate}	Хибні тривоги: {rate}
+	Findings ({n})	Знахідки ({n})
+	Found:	Знайдено:
+	From the 2D drawing	З 2D-креслення
+	From the BIM model	З BIM-моделі
+	Issue:	Проблема:
+	It is a real error	Це справжня помилка
+	Leave it for a field decision	Залишити для рішення на об’єкті
+	No file chosen. Type: automation.takeoff {params}	Файл не вибрано. Введіть: automation.takeoff {params}
+	No findings to review.	Немає знахідок для перегляду.
+	No run yet: choose a scope and trades, then Start.	Перевірок ще немає: виберіть обсяг і розділи, потім «Почати».
+	No takeoff yet: Refresh runs it.	Підрахунку ще немає: «Оновити» запускає його.
+	Overall	Загалом
+	Refresh	Оновити
+	Reject	Відхилити
+	Resume	Продовжити
+	Rules ({on} of {all} on)	Правила (увімкнено {on} з {all})
+	Scope:	Обсяг:
+	Scores	Оцінки
+	Show answered	Показати з відповіддю
+	Takeoff	Підрахунок
+	Takeoff written to {path}	Підрахунок записано у {path}
+	Trades:	Розділи:
+	done	готово
+	judging	оцінюється
+	project	проєкт
+	waiting for an agent	очікування агента
+	{done} of {total} areas, {state}	{done} з {total} зон, {state}
+	{source}: {n} lines	{source}: рядків {n}
+	Automation Takeoff	Підрахунок автоматизації
+	Cancel Validation Run	Скасувати перевірку
+	Validate	Перевірити
+	Automation	Автоматизація
+	Model Checks	Перевірки моделі
+	Qty	К-сть
+	Elements	Елементи
+	Fire	Пожежна безпека
+	System	Система
+	Validate: waiting for an agent	Перевірка: очікування агента
+	Validate Model Against Prints (Agent)	Перевірка моделі за кресленнями (агент)
+	Next Validation Packet	Наступний пакет перевірки
+	Report Validation Findings	Повідомити результати перевірки
+	Validation Run Status	Стан прогону перевірки
+	Plant Validation Errors	Додати помилки для перевірки
 	Change a Validation Rule	Змінити правило перевірки
 	Validation Areas	Області перевірки
 	Validation Evidence Packet	Пакет доказів перевірки
