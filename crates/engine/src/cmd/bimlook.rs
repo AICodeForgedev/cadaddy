@@ -934,7 +934,7 @@ fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Valu
         return out;
     }
     let r2 = |v: f64| if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 };
-    let at = frame.to_ft_on(&c.level, b.center());
+    let at = frame.built_on(&c.level, e, b.center());
     out.insert("at".into(), json!([r2(at[0]), r2(at[1])]));
     let z = match &e.kind {
         EntityKind::Mesh(m) => {

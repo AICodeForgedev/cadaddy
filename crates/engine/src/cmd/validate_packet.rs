@@ -102,7 +102,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?}, out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals, objects, rules, prompt, counts, left_out: [{what, why}]}: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -271,7 +271,8 @@ pub(crate) fn model_areas(d: &Drawing, frame: &Frame) -> Vec<Area> {
     let mut out: Vec<Area> = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
     for r in rooms.iter().filter(|r| r.outline.len() >= 3) {
-        let outline: Vec<[f64; 2]> = r.outline.iter().take(10_000).map(|p| frame.to_ft_on(&r.level, *p)).map(|p| [r4(p[0]), r4(p[1])]).collect();
+        let Some(e) = d.model.get(r.handle) else { continue };
+        let outline: Vec<[f64; 2]> = r.outline.iter().take(10_000).map(|p| frame.built_on(&r.level, e, *p)).map(|p| [r4(p[0]), r4(p[1])]).collect();
         let Some(b) = bbox(&outline) else { continue };
         let key = r.number.as_deref().map(str::trim).filter(|n| !n.is_empty()).unwrap_or(r.name.trim());
         let mut id = format!("{}/{}", r.level.trim(), key.split_whitespace().collect::<Vec<_>>().join(" "));
@@ -420,9 +421,42 @@ fn run_areas(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// The area a packet call names.
+/// Whether an area is (a stretch of) the room a call names by its number, name or id.
+pub(crate) fn names_room(a: &Area, r: &str) -> bool {
+    let base = a.id.split('#').next().unwrap_or(&a.id);
+    a.number.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(r))
+        || a.name.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(r))
+        || a.id.eq_ignore_ascii_case(r)
+        || base.eq_ignore_ascii_case(r)
+}
+
+/// The area a packet call names: `area` (an id, a window with its level), else the one area of
+/// the `room` it names (on `level` when given), as `validate` takes its scope.
 pub(crate) fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, frame: &Frame) -> Result<Area> {
+    if p.get("area").is_none_or(Value::is_null)
+        && let Some(r) = str_param(p, "room").map(str::trim).filter(|r| !r.is_empty())
+    {
+        let level = level_param(cmd, sp, p, false)?;
+        let found: Vec<Area> = model_areas(d, frame)
+            .into_iter()
+            .filter(|a| names_room(a, r) && level.as_ref().is_none_or(|l| a.level.eq_ignore_ascii_case(l)))
+            .collect();
+        let r = r.chars().take(40).collect::<String>();
+        return match found.len() {
+            0 => Err(bad(cmd, format!("no model room is numbered or named {r} (validate.areas lists them)"))),
+            1 => found.into_iter().next().ok_or_else(|| bad(cmd, "no area")),
+            n => {
+                let ids: Vec<&str> = found.iter().take(12).map(|a| a.id.as_str()).collect();
+                Err(bad(cmd, format!("room {r} is {n} areas (a packet is one): give `area`, one of {}", ids.join(", "))))
+            }
+        };
+    }
     match p.get("area") {
+        Some(a @ Value::Array(_)) => {
+            let w = four(cmd, a, "area")?;
+            let lv = level_param(cmd, sp, p, true)?.unwrap_or_default();
+            Ok(window_area(&lv, w))
+        }
         Some(Value::String(id)) => {
             let id = id.trim();
             if let Some((lv, w)) = id.split_once("/win:") {
@@ -440,7 +474,10 @@ pub(crate) fn area_param(cmd: &str, sp: &BuildingSpec, p: &Value, d: &Drawing, f
             let lv = level_param(cmd, sp, o, true)?.unwrap_or_default();
             Ok(window_area(&lv, w))
         }
-        _ => Err(bad(cmd, "`area` is an id from validate.areas, or {area: [x0, y0, x1, y1] (building feet), level}")),
+        _ if str_param(p, "level").is_some() => {
+            Err(bad(cmd, "a packet is one area: give `area` (validate.areas {level} lists the level's) or `room`"))
+        }
+        _ => Err(bad(cmd, "`area` is an id from validate.areas, or {area: [x0, y0, x1, y1] (building feet), level}; or give `room`")),
     }
 }
 
@@ -886,8 +923,8 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
         if b.is_empty() {
             continue;
         }
-        let lo = frame.to_ft_on(&area.level, b.min);
-        let hi = frame.to_ft_on(&area.level, b.max);
+        let lo = frame.built_on(&area.level, e, b.min);
+        let hi = frame.built_on(&area.level, e, b.max);
         let rect = [lo[0], lo[1], hi[0], hi[1]];
         if intersect(rect, r).is_none() && !inside(r, lo) {
             continue;
@@ -1964,7 +2001,19 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     if !is_built {
         left_out.push(("3D view and wall elevations".into(), "the model is not built yet (model.build)".into()));
     } else {
-        let around = json!([r2(proj_box[0]), r2(proj_box[1]), r2(proj_box[2]), r2(proj_box[3])]);
+        // The level's built model is drawn where the build put it (stacked over the lowest
+        // level's plan when the build stacked the levels), not over the level's own sheet.
+        let built_box = {
+            let pts: Vec<[f64; 2]> = corners(grow(area.bbox, margin))
+                .iter()
+                .map(|q| {
+                    let v = frame.to_built(&area.level, *q);
+                    [v.x, v.y]
+                })
+                .collect();
+            bbox(&pts).unwrap_or(proj_box)
+        };
+        let around = json!([r2(built_box[0]), r2(built_box[1]), r2(built_box[2]), r2(built_box[3])]);
         model_imgs.push(ModelImage {
             file: "model/3d.png".into(),
             kind: "3d",
@@ -1973,7 +2022,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             rect: None,
             px: Some([1200, 900]),
             wall: None,
-            render: Some(json!({"width": 1200, "height": 900, "level": area.level, "around": around})),
+            render: Some(json!({"width": 1200, "height": 900, "level": area.level, "around": around.clone()})),
             over: None,
         });
         let z = level_spec.map_or(0.0, |l| l.elevation_ft) * upf + 5.0 * upf;
@@ -2013,8 +2062,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let back = 6.0;
             let eye_ft = [m[0] + nx * back, m[1] + ny * back];
-            let e = frame.to_sheet(&area.level, eye_ft);
-            let t = frame.to_sheet(&area.level, m);
+            let e = frame.to_built(&area.level, eye_ft);
+            let t = frame.to_built(&area.level, m);
             model_imgs.push(ModelImage {
                 file: format!("model/elevation_{:02}.png", k + 1),
                 kind: "elevation",
@@ -2023,7 +2072,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
                 rect: None,
                 px: Some([1200, 900]),
                 wall: Some(w.id.clone()),
-                render: Some(json!({"width": 1200, "height": 900, "level": area.level, "eye": [r2(e.x), r2(e.y), r2(z)], "target": [r2(t.x), r2(t.y), r2(z)], "around": [r2(proj_box[0]), r2(proj_box[1]), r2(proj_box[2]), r2(proj_box[3])]})),
+                render: Some(json!({"width": 1200, "height": 900, "level": area.level, "eye": [r2(e.x), r2(e.y), r2(z)], "target": [r2(t.x), r2(t.y), r2(z)], "around": around.clone()})),
                 over: None,
             });
         }
