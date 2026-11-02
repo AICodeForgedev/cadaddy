@@ -384,7 +384,7 @@ fn walls_built_after_a_big_print_set_are_found() {
 }
 
 /// Each built wall box as Walk mode draws a wall: its two long faces standing on the floor, a
-/// cap over them (drawn twice), its ends; no bottom.
+/// cap over them (drawn twice), its ends; no bottom, no wall type.
 fn walk_mode_walls(s: Session) -> Session {
     let mut d = (*s.doc().unwrap()).clone();
     let walls: Vec<Arc<Entity>> = d.model.iter().filter(|e| made_as(e).as_deref() == Some("wall")).cloned().collect();
@@ -404,7 +404,12 @@ fn walk_mode_walls(s: Session) -> Session {
                 out.faces.push(MeshFace { v: again, hidden: 0 });
             }
         }
-        let _ = d.modify_entity(w.handle, |e| e.kind = EntityKind::Mesh(out));
+        // Walk mode's walls have no wall type.
+        let _ = d.modify_entity(w.handle, |e| {
+            e.kind = EntityKind::Mesh(out);
+            let x: Vec<_> = e.common.xdata.iter().filter(|t| !t.value.starts_with("type:")).cloned().collect();
+            e.common.xdata = x.into();
+        });
     }
     let mut s2 = Session::empty();
     s2.open_drawing(d, "Sample Floor Plan", None);
@@ -415,4 +420,6 @@ fn walk_mode_walls(s: Session) -> Session {
 fn walls_walk_mode_built_are_found_by_their_caps() {
     let mut s = walk_mode_walls(built(0));
     assert_hosted_and_listed(&mut s);
+    let r = s.execute("bim.element", &json!({"handle": receptacle(&s)})).unwrap();
+    assert!(r["host"]["type"].is_null(), "an untyped wall: {r:#}");
 }
