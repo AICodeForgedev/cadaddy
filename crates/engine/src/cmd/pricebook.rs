@@ -462,7 +462,8 @@ fn folder_param(p: &Value) -> Option<&str> {
     str_param(p, "folder")
 }
 
-fn need_folder(cmd: &str, p: &Value) -> Result<PathBuf> {
+/// The local price database's folder (its own files, updated in place: no overwrite guard).
+fn need_folder(_s: &Session, cmd: &str, p: &Value) -> Result<PathBuf> {
     local_folder(folder_param(p)).ok_or_else(|| bad(cmd, "no folder for the local price database: give `folder` (or set CADADDY_PRICEBOOK)"))
 }
 
@@ -506,9 +507,9 @@ fn run_list(_s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-fn run_set(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.set";
-    let dir = need_folder(C, p)?;
+    let dir = need_folder(s, C, p)?;
     let key = str_param(p, "key").map(str::trim).filter(|k| !k.is_empty() && k.len() <= 64).ok_or_else(|| bad(C, "`key` is required"))?.to_string();
     let f = |k: &str| p.get(k).and_then(Value::as_f64).filter(|x| x.is_finite() && *x >= 0.0);
     let pack_qty = f("pack_qty").filter(|q| *q > 0.0);
@@ -560,9 +561,9 @@ fn run_set(_s: &mut Session, p: &Value) -> Result<Value> {
               "price": choose(&after, &key).map(|c| chosen_json(&c))}))
 }
 
-fn run_remove(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_remove(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.remove";
-    let dir = need_folder(C, p)?;
+    let dir = need_folder(s, C, p)?;
     let key = str_param(p, "key").map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(C, "`key` is required"))?;
     let vendor = str_param(p, "vendor").map(str::trim).filter(|v| !v.is_empty()).ok_or_else(|| bad(C, "`vendor` is required"))?;
     let location = str_param(p, "location").map(str::trim);
@@ -580,9 +581,9 @@ fn run_remove(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"removed": gone.len()}))
 }
 
-fn run_settings(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.settings";
-    let dir = need_folder(C, p)?;
+    let dir = need_folder(s, C, p)?;
     let mut r = local_rule(&dir);
     if let Some(pick) = str_param(p, "pick") {
         if !PICKS.contains(&pick) {
@@ -606,9 +607,9 @@ fn run_settings(_s: &mut Session, p: &Value) -> Result<Value> {
     Ok(v)
 }
 
-fn run_map(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_map(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.map";
-    let dir = need_folder(C, p)?;
+    let dir = need_folder(s, C, p)?;
     let item = str_param(p, "item").map(str::trim).filter(|i| !i.is_empty()).ok_or_else(|| bad(C, "`item` is required"))?.to_string();
     let size = str_param(p, "size").map(str::trim).unwrap_or_default().to_string();
     let keys: Vec<String> = p
@@ -692,11 +693,11 @@ fn table_rows(cells: &[Vec<String>], raw: Option<&[Vec<String>]>, want: &str) ->
         .collect()
 }
 
-fn run_import(_s: &mut Session, p: &Value) -> Result<Value> {
+fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.import";
     let path =
         str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "`path` (a .xlsx or .csv price book) is required"))?;
-    let dir = need_folder(C, p)?;
+    let dir = need_folder(s, C, p)?;
     let bytes = crate::readfile::read(path).map_err(|e| bad(C, format!("{path}: {e}")))?;
     let (quote_rows, map_rows) = if path.to_ascii_lowercase().ends_with(".xlsx") {
         let wb = super::table::xlsx::open(&bytes).map_err(|e| bad(C, format!("{path}: {e}")))?;
