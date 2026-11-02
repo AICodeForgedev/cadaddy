@@ -433,11 +433,16 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
     };
     let name = format!("{} {} {}", text("description"), text("name"), text("device_type"));
     let k = kind.as_str();
+    // The code rules' decisions (bim.coderules): GFCI by circuit, tamper-resistant in guest rooms.
+    let decided = text("receptacle_type");
+    let tr = (text("tamper_resistant") == "YES").then(|| TAMPER_RESISTANT.to_string());
     Some(match k {
+        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "GFCI" => ("gfci_receptacle".into(), tr),
+        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "STANDARD" => ("receptacle".into(), tr),
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" if mark.contains("GFCI") || mark.contains("GFI") || name.contains("GFCI") => {
-            ("gfci_receptacle".into(), None)
+            ("gfci_receptacle".into(), tr)
         }
-        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" => (k.to_string(), None),
+        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" => (k.to_string(), tr),
         "switch" | "3way_switch" => {
             let config = match mark.as_str() {
                 "S3" | "3W" => Some("three way"),
@@ -467,8 +472,19 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
 /// configuration, else the first of its kind.
 fn requirement_for<'a>(reqs: &'a [Requirement], kind: &str, config: Option<&str>) -> Option<&'a Requirement> {
     let mine: Vec<&Requirement> = reqs.iter().filter(|r| r.kind == kind).collect();
-    config.and_then(|c| mine.iter().copied().find(|r| r.config.as_deref() == Some(c))).or_else(|| mine.first().copied())
+    let tr =
+        |r: &&Requirement| r.product.to_ascii_uppercase().contains("TAMPER") || r.features.iter().any(|f| f.to_ascii_uppercase().contains("TAMPER"));
+    match config {
+        // A tamper-resistant receptacle: the section's tamper-resistant product, else its kind's.
+        Some(TAMPER_RESISTANT) => mine.iter().copied().find(tr).or_else(|| mine.first().copied()),
+        Some(c) => mine.iter().copied().find(|r| r.config.as_deref() == Some(c)).or_else(|| mine.first().copied()),
+        // Not one: a product that isn't the tamper-resistant one first.
+        None => mine.iter().copied().find(|r| !tr(r)).or_else(|| mine.first().copied()),
+    }
 }
+
+/// A receptacle's configuration when the code rules make it tamper-resistant.
+const TAMPER_RESISTANT: &str = "tamper-resistant";
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut given: Vec<String> = Vec::new();
@@ -549,10 +565,16 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         // Resolved: the submittal's maker and catalog; else the spec's one maker when it names one.
         let resolved_maker =
             maker.as_ref().map(|m| m.0.clone()).or_else(|| req.filter(|r| r.makers.len() == 1).and_then(|r| r.makers.first().cloned()));
+        let tr = config.as_deref() == Some(TAMPER_RESISTANT);
+        let config = config.filter(|c| c != TAMPER_RESISTANT);
+        let mut features = req.map(|r| r.features.clone()).unwrap_or_default();
+        if tr && !features.iter().any(|f| f == "TR") {
+            features.push("TR".into());
+        }
         let resolved = json!({
             "maker": resolved_maker, "catalog": catalog,
             "color": req.and_then(|r| r.color.clone()), "configuration": config.clone().or_else(|| req.and_then(|r| r.config.clone())),
-            "rating": req.and_then(|r| r.rating.clone()), "features": req.map(|r| r.features.clone()).unwrap_or_default(),
+            "rating": req.and_then(|r| r.rating.clone()), "features": features,
         });
         let src = req.map_or_else(Source::computed, spec_src);
         let mut set = |key: &str, value: Value, source: Source| {
@@ -578,6 +600,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             }
             if !r.features.is_empty() {
                 set("required_features", json!(r.features.join(", ")), spec_src(r));
+            }
+            // The section's own tamper-resistant product: where the documents say TR.
+            if tr && r.product.to_ascii_uppercase().contains("TAMPER") {
+                set("tr_documented", json!(format!("{} p.{} ({})", r.section, r.page, r.product)), spec_src(r));
             }
         }
         if store != before {

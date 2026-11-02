@@ -4907,11 +4907,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
-    // The specifications' product data (and the submittals' as applied) onto the elements.
-    let t = web_time::Instant::now();
-    products_step(s, job, &mut result);
-    bim_step(s, job, "product data", t);
-    // The code rules on the devices (tamper-resistant in guest rooms, GFCI by circuit), the
+    // The code rules on the devices first (their product follows the decision: a GFCI built standard is a receptacle,
+    // a guest room's is the tamper-resistant one; tamper-resistant in guest rooms, GFCI by circuit), the
     // decisions the documents can't make left `undecided` and asked.
     let t = web_time::Instant::now();
     match s.execute("bim.coderules", &json!({})) {
@@ -4942,6 +4939,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["code_rules_error"] = json!(e.to_string()),
     }
     bim_step(s, job, "code rules", t);
+    // The specifications' product data (and the submittals' as applied) onto the elements.
+    let t = web_time::Instant::now();
+    products_step(s, job, &mut result);
+    bim_step(s, job, "product data", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {

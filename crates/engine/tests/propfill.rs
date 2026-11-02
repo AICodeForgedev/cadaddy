@@ -298,6 +298,25 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     let a = device_of(&mut s, "A");
     assert_eq!(a["tamper_resistant"]["value"], "yes", "{a:#}");
     assert!(a["tamper_resistant"]["source"]["doc"].as_str().is_some_and(|d| d.contains("406.12") && d.contains("101")), "{a:#}");
+    // Its product follows: the section's tamper-resistant receptacle, where the documents say TR.
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-tr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.2 STRAIGHT-BLADE RECEPTACLES\nA. Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\n\
+         B. Tamper-Resistant Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    let product: Value = serde_json::from_str(a["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["product"].as_str().is_some_and(|p| p.to_ascii_uppercase().contains("TAMPER")), "{product:#}");
+    assert!(product["resolved"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "TR")), "{product:#}");
+    assert!(a["tr_documented"]["value"].as_str().is_some_and(|d| d.starts_with("26 27 26") && d.to_ascii_uppercase().contains("TAMPER")), "{a:#}");
+    assert_eq!(a["tr_documented"]["source"]["kind"], "spec");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
