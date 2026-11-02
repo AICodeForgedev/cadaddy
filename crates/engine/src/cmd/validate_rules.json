@@ -60,6 +60,26 @@
       }
     },
     {
+      "id": "G-KEYNOTE",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Each plan keynote marker in the area whose note calls for an object (a box of a size, a device, conduit of a size, a sleeve) has that object in the model at the marker, and conduit a keynote calls for has the size and route the note gives (pull tape, above a hard-lid ceiling, in the corridor, a riser between the floors).",
+      "how": [
+        "objects.json `keynotes` holds the keynote lists of the sheets that mark this area (number and note) and each marker in or by it; the prescreen (G-KEYNOTE) has matched each note's call to the model within route_ft of its marker. Start from its findings.",
+        "Look at each marker's crop (its number in a hexagon or circle, and what its leader points at) and read the note in the keynote list crop.",
+        "A box, device or sleeve the note calls for with nothing of that kind and size at the marker is 'missing', citing the note's number and text and the marker; a box of another size is a 'fail'.",
+        "Keynote conduit: the size, pull tape and route the note gives; a riser goes up to the next floor's box. Each rated wall or floor it passes is listed with the rating its firestopping must keep."
+      ],
+      "documents": ["plan", "enlarged_plan", "rcp", "riser_diagram"],
+      "tolerance": {"route_ft": 10, "size_in": 0.1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "Keynote 2 calls for an 8\"x8\"x6\" junction box and 1\" conduit with pull tape above the corridor's ceiling; the model has the box 2 ft from the marker and 1\" conduit above the 9 ft ceiling in the corridor.",
+        "fail": "Keynote 5 calls for a 12\"x12\"x6\" pull box; the box at its marker is 4\"x4\"x2-1/8\"."
+      }
+    },
+    {
       "id": "G-TYPE",
       "trade": "general",
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},

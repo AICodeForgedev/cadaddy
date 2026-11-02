@@ -171,6 +171,7 @@ pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
 pub mod validate_height;
+pub mod validate_keynote;
 pub mod validate_kind;
 pub mod validate_lighting;
 pub mod validate_packet;
