@@ -1,10 +1,10 @@
 //! Named wall faces (Q6174): each built wall's faces as the rooms they face and the compass side,
-//! `<room>/<N|S|E|W>` (a demising wall is `121/S` on one face and `123/N` on the other).
+//! `<room>/<N|S|E|W>` (a demising wall is `1201/S` on one face and `1203/N` on the other).
 //!
 //! A room's outline is walked counter-clockwise; each edge the built walls stand along (their
 //! pieces parallel to it, within their thickness of it) is a face: the wall's face toward the
 //! room. Its side is the compass side its outward direction points to, from the plan's north (+Y
-//! unless the caller turns it). A second or skewed face on the same side gets a number (`121/S2`):
+//! unless the caller turns it). A second or skewed face on the same side gets a number (`1201/S2`):
 //! the square faces first, the longest first. Each face knows its walls and their type, its
 //! length and height, its openings (gaps in the full-height wall: a door under a head, a window
 //! over a sill, an open bay) and the faces at its two ends, in corner order round the room.
@@ -622,7 +622,7 @@ mod tests {
         assert!(skew > 10.0);
     }
 
-    /// Two rooms 12 ft deep (inches), 101 west of a 6" demising wall at x=144..150, 103 east.
+    /// Two rooms 12 ft deep (inches), 1001 west of a 6" demising wall at x=144..150, 1003 east.
     #[test]
     fn four_named_faces_and_a_demising_walls_two_names() {
         let h = 3.0;
@@ -635,23 +635,23 @@ mod tests {
             piece(5, (297.0, -3.0), (297.0, 147.0), h, z), // east
         ];
         let rooms = vec![
-            room("101", &[(0.0, 0.0), (144.0, 0.0), (144.0, 144.0), (0.0, 144.0)]),
-            room("103", &[(150.0, 0.0), (294.0, 0.0), (294.0, 144.0), (150.0, 144.0)]),
+            room("1001", &[(0.0, 0.0), (144.0, 0.0), (144.0, 144.0), (0.0, 144.0)]),
+            room("1003", &[(150.0, 0.0), (294.0, 0.0), (294.0, 144.0), (150.0, 144.0)]),
         ];
         let fs = faces(&rooms, &ps, 12.0, 0.0);
         let names: Vec<&str> = fs.iter().map(|f| f.name.as_str()).collect();
-        for n in ["101/N", "101/S", "101/E", "101/W", "103/N", "103/S", "103/E", "103/W"] {
+        for n in ["1001/N", "1001/S", "1001/E", "1001/W", "1003/N", "1003/S", "1003/E", "1003/W"] {
             assert!(names.contains(&n), "{n} in {names:?}");
         }
-        let e101 = fs.iter().find(|f| f.name == "101/E").expect("101/E");
-        let w103 = fs.iter().find(|f| f.name == "103/W").expect("103/W");
+        let e101 = fs.iter().find(|f| f.name == "1001/E").expect("1001/E");
+        let w103 = fs.iter().find(|f| f.name == "1003/W").expect("1003/W");
         assert_eq!(e101.wall, Handle(4));
         assert_eq!(w103.wall, Handle(4), "one wall, two faces");
         assert!((e101.a.x - 144.0).abs() < 1e-6 && (w103.a.x - 150.0).abs() < 1e-6, "{:?} {:?}", e101.a, w103.a);
-        // Corner order (counter-clockwise): 101/S runs west→east, from 101/W to 101/E.
-        let s101 = fs.iter().find(|f| f.name == "101/S").expect("101/S");
-        assert_eq!(s101.prev.as_deref(), Some("101/W"));
-        assert_eq!(s101.next.as_deref(), Some("101/E"));
+        // Corner order (counter-clockwise): 1001/S runs west→east, from 1001/W to 1001/E.
+        let s101 = fs.iter().find(|f| f.name == "1001/S").expect("1001/S");
+        assert_eq!(s101.prev.as_deref(), Some("1001/W"));
+        assert_eq!(s101.next.as_deref(), Some("1001/E"));
         assert!((s101.len - 144.0).abs() < 1e-6 && (s101.top - s101.floor - 108.0).abs() < 1e-6);
         assert_eq!(s101.wall_type.as_deref(), Some("P1"));
     }

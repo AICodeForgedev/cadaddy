@@ -30,7 +30,7 @@ fn text_on(s: &mut Session, layer: &str, at: [f64; 2], t: &str) {
     s.execute("text", &json!({"at": at, "text": t, "height": 6})).expect("text");
 }
 
-/// Two rooms side by side, 6" walls: 101 west 0.5–19.75', 102 east 20.25–40', 0.5–9.5' deep.
+/// Two rooms side by side, 6" walls: 1001 west 0.5–19.75', 1002 east 20.25–40', 0.5–9.5' deep.
 fn two_rooms() -> Drawing {
     let mut d = Drawing::new_imperial();
     let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
@@ -44,16 +44,16 @@ fn two_rooms() -> Drawing {
 
 fn room_tags(s: &mut Session) {
     text_on(s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
-    text_on(s, "A-ROOM-TAG", [116.0, 52.0], "101");
+    text_on(s, "A-ROOM-TAG", [116.0, 52.0], "1001");
     text_on(s, "A-ROOM-TAG", [350.0, 64.0], "STORAGE");
-    text_on(s, "A-ROOM-TAG", [356.0, 52.0], "102");
+    text_on(s, "A-ROOM-TAG", [356.0, 52.0], "1002");
 }
 
 fn device(x: f64, y: f64, mark: &str, kind: &str, symbol: &str, extra: Value) -> Value {
     let mut fields = json!({
         "type": {"value": mark, "source": "plan"},
         "device_type": {"value": format!("{kind} {mark}"), "source": "plan"},
-        "sheet": {"value": "E-101", "source": "plan"},
+        "sheet": {"value": "E-901", "source": "plan"},
         "symbol": {"value": symbol, "source": "plan"},
     });
     if let (Some(f), Some(x)) = (fields.as_object_mut(), extra.as_object()) {
@@ -76,7 +76,7 @@ fn spec(tags: Vec<Value>) -> Value {
 
 /// A 66" AFF note on the device (a made-up elevation).
 fn at66() -> Value {
-    json!({"mount_height_in": "66", "mount_height_note": "66\" AFF on A-601"})
+    json!({"mount_height_in": "66", "mount_height_note": "66\" AFF on A-900"})
 }
 
 /// The made-up job: the two rooms, devices, rooms traced and properties filled.
@@ -85,13 +85,13 @@ fn job(extra_objects: bool) -> Session {
     s.open_drawing(two_rooms(), "Layout Rooms", None);
     room_tags(&mut s);
     let tags = vec![
-        // 101: a receptacle on the south face 15" from the east face; one in the partition.
+        // 1001: a receptacle on the south face 15" from the east face; one in the partition.
         device(18.5, 0.6, "A", "receptacle", "1F0", json!({})),
         device(19.6, 5.0, "B", "receptacle", "1F1", json!({})),
         // Two switches side by side (1.8") at one height: one 2-gang plate.
         device(10.0, 9.4, "S", "switch", "1F2", json!({})),
         device(10.15, 9.4, "S2", "switch", "1F3", json!({})),
-        // 102: a refrigerator receptacle behind it, and one beside it (exposed).
+        // 1002: a refrigerator receptacle behind it, and one beside it (exposed).
         device(26.25, 0.6, "R", "receptacle", "1F4", json!({})),
         device(28.0, 0.6, "X", "receptacle", "1F5", json!({})),
         // A microwave receptacle centred in an upper cabinet, and one 4" off its centre.
@@ -117,14 +117,14 @@ fn job(extra_objects: bool) -> Session {
             s.execute("bim.layout.object", &json!({"kind": kind, "tag": tag, "level": "L1", "box": b, "source": "made-up submittal"}))
                 .expect("object");
         };
-        // 102's south wall (face at y = 6"): a refrigerator 30" wide at 25'–27.5'.
+        // 1002's south wall (face at y = 6"): a refrigerator 30" wide at 25'–27.5'.
         obj(&mut s, "refrigerator", "REF-1", [300.0, 6.0, 0.0, 330.0, 36.0, 70.0]);
         // An upper cabinet 30" wide centred on 34.25'.
         obj(&mut s, "upper_cabinet", "UPPER-3", [396.0, 6.0, 54.0, 426.0, 18.0, 84.0]);
         // Two narrow cabinets 3 1/4" wide centred on 37' and 38.5'.
         obj(&mut s, "upper_cabinet", "CAB-N1", [444.0 - 1.625, 6.0, 54.0, 444.0 + 1.625, 18.0, 84.0]);
         obj(&mut s, "upper_cabinet", "CAB-N2", [462.0 - 1.625, 6.0, 54.0, 462.0 + 1.625, 18.0, 84.0]);
-        // 101's north wall (face at y = 114"): a sink base 12'–14.5', a dishwasher 14.5'–16.5'.
+        // 1001's north wall (face at y = 114"): a sink base 12'–14.5', a dishwasher 14.5'–16.5'.
         obj(&mut s, "sink_base", "SB-1", [144.0, 90.0, 0.0, 174.0, 114.0, 34.5]);
         obj(&mut s, "dishwasher", "DW-1", [174.0, 90.0, 0.0, 198.0, 114.0, 34.0]);
     }
@@ -167,20 +167,20 @@ fn extent(s: &mut Session, mark: &str) -> ([f64; 4], f64, f64) {
 fn a_room_has_four_named_faces_and_a_demising_wall_two_names() {
     let _g = serial();
     let mut s = job(false);
-    let r = s.execute("bim.faces", &json!({"room": "101"})).expect("faces");
+    let r = s.execute("bim.faces", &json!({"room": "1001"})).expect("faces");
     let names: Vec<&str> = r["faces"].as_array().expect("faces").iter().filter_map(|f| f["name"].as_str()).collect();
-    for n in ["101/N", "101/S", "101/E", "101/W"] {
+    for n in ["1001/N", "1001/S", "1001/E", "1001/W"] {
         assert!(names.contains(&n), "{n} in {names:?}: {r:#}");
     }
     let face =
         |r: &Value, n: &str| r["faces"].as_array().and_then(|a| a.iter().find(|f| f["name"] == n).cloned()).unwrap_or_else(|| panic!("{n}: {r:#}"));
-    let e101 = face(&r, "101/E");
-    let r2 = s.execute("bim.faces", &json!({"room": "102"})).expect("faces");
-    let w102 = face(&r2, "102/W");
-    assert_eq!(e101["wall"], w102["wall"], "the partition is 101/E on one face and 102/W on the other");
+    let e101 = face(&r, "1001/E");
+    let r2 = s.execute("bim.faces", &json!({"room": "1002"})).expect("faces");
+    let w102 = face(&r2, "1002/W");
+    assert_eq!(e101["wall"], w102["wall"], "the partition is 1001/E on one face and 1002/W on the other");
     assert_eq!(e101["wall_type"], "Partition");
-    let s101 = face(&r, "101/S");
-    assert_eq!((s101["prev"].as_str(), s101["next"].as_str()), (Some("101/W"), Some("101/E")), "corner order: {s101:#}");
+    let s101 = face(&r, "1001/S");
+    assert_eq!((s101["prev"].as_str(), s101["next"].as_str()), (Some("1001/W"), Some("1001/E")), "corner order: {s101:#}");
     assert!((s101["length_in"].as_f64().unwrap() - 231.0).abs() < 0.5, "{s101:#}");
 }
 
@@ -191,23 +191,23 @@ fn a_device_is_placed_from_its_faces_and_follows_its_wall() {
     let r = s.execute("bim.layout.rehost", &json!({})).expect("rehost");
     assert!(r["devices"]["on_face"].as_u64().is_some_and(|n| n >= 10), "{r:#}");
     assert!(r["fields"].as_array().is_some_and(|f| f.len() == 6), "{r:#}");
-    // A: on 101/S, 18" AFF to its centre, 15" from 101/E (measured from the plan: derived), flush.
+    // A: on 1001/S, 18" AFF to its centre, 15" from 1001/E (measured from the plan: derived), flush.
     let a = props(&mut s, "A");
-    assert_eq!(a["host_face"]["value"], "101/S", "{a:#}");
+    assert_eq!(a["host_face"]["value"], "1001/S", "{a:#}");
     assert_eq!(a["height_ref"]["value"], "centre");
     assert!((num(&a, "height_aff") - 18.0).abs() < 1e-6, "{a:#}");
-    assert_eq!(a["offset_from"]["value"], "101/E", "{a:#}");
+    assert_eq!(a["offset_from"]["value"], "1001/E", "{a:#}");
     assert!((num(&a, "offset_along") - 15.0).abs() <= 0.25, "{a:#}");
     assert!(a["offset_along"]["note"].as_str().is_some_and(|n| n.contains("derived: measured from the plan")), "{a:#}");
     assert!(num(&a, "offset_depth").abs() <= 0.25, "flush: {a:#}");
     assert_eq!(a["layout_solve"]["value"], "pending framing", "no studs yet: {a:#}");
-    // B: in the partition's west face (101/E).
+    // B: in the partition's west face (1001/E).
     let b = props(&mut s, "B");
-    assert_eq!(b["host_face"]["value"], "101/E", "{b:#}");
+    assert_eq!(b["host_face"]["value"], "1001/E", "{b:#}");
     let (_, az0, az1) = extent(&mut s, "A");
-    // Move the partition 1 ft east: A keeps 15" from 101/E, B stays in its face, heights hold.
-    let faces = s.execute("bim.faces", &json!({"room": "101"})).expect("faces");
-    let wall = faces["faces"].as_array().unwrap().iter().find(|f| f["name"] == "101/E").unwrap()["wall"].as_str().unwrap().to_string();
+    // Move the partition 1 ft east: A keeps 15" from 1001/E, B stays in its face, heights hold.
+    let faces = s.execute("bim.faces", &json!({"room": "1001"})).expect("faces");
+    let wall = faces["faces"].as_array().unwrap().iter().find(|f| f["name"] == "1001/E").unwrap()["wall"].as_str().unwrap().to_string();
     s.execute("move", &json!({"handles": [wall], "delta": [12.0, 0.0]})).expect("move");
     let f = s.execute("bim.layout.follow", &json!({})).expect("follow");
     assert!(f["moved"].as_u64().is_some_and(|n| n >= 2), "{f:#}");
@@ -224,12 +224,12 @@ fn a_device_is_placed_from_its_faces_and_follows_its_wall() {
 fn the_layout_lists_each_face_in_field_terms_and_draws_a_sheet() {
     let _g = serial();
     let mut s = job(false);
-    let r = s.execute("bim.layout", &json!({"room": "101", "draw": true})).expect("layout");
+    let r = s.execute("bim.layout", &json!({"room": "1001", "draw": true})).expect("layout");
     let text = r["text"].as_str().expect("text");
-    let south = text.lines().find(|l| l.starts_with("101/S")).unwrap_or_else(|| panic!("{text}"));
-    assert!(south.contains("REC (A) 18 in AFF ctr") && south.contains("15 in from 101/E"), "{south}");
+    let south = text.lines().find(|l| l.starts_with("1001/S")).unwrap_or_else(|| panic!("{text}"));
+    assert!(south.contains("REC (A) 18 in AFF ctr") && south.contains("15 in from 1001/E"), "{south}");
     assert!(south.contains("band ±6 in") && south.contains("pending framing") && south.contains("plate standard"), "{south}");
-    assert!(text.lines().any(|l| l.starts_with("101/N")), "{text}");
+    assert!(text.lines().any(|l| l.starts_with("1001/N")), "{text}");
     assert!(r["sheet"]["entities"].as_u64().is_some_and(|n| n > 10) && r["sheet"]["dimensions"].as_u64().is_some_and(|n| n >= 2), "{r:#}");
     let name = r["sheet"]["layout"].as_str().unwrap().to_string();
     let lays = s.execute("layout.list", &json!({})).expect("layouts");
@@ -326,7 +326,7 @@ fn appliance_and_cabinet_constraints_by_their_plates_edges() {
     assert!(((m1[0] + m1[2]) / 2.0 - (m0[0] + m0[2]) / 2.0 - 6.0).abs() <= 0.25, "{m0:?} → {m1:?}");
     assert!((z0 - z1).abs() < 1e-6);
     // The layout prints the tie.
-    let lay = s.execute("bim.layout", &json!({"room": "102"})).expect("layout");
+    let lay = s.execute("bim.layout", &json!({"room": "1002"})).expect("layout");
     assert!(lay["text"].as_str().is_some_and(|t| t.contains("ctr inside UPPER-3 ±2 in") && t.contains("66 in AFF")), "{}", lay["text"]);
 }
 

@@ -2,7 +2,7 @@
 //! and the field layout of a room.
 //!
 //! - **Faces** (`bim.faces`, [`faces`]): every built wall's faces, named by the room each faces and
-//!   its compass side (`121/S`; a demising wall is `121/S` and `123/N`), each with its wall type,
+//!   its compass side (`1201/S`; a demising wall is `1201/S` and `1203/N`), each with its wall type,
 //!   length, height, openings and the faces at its two ends.
 //! - **Relative placement** (`bim.layout.rehost`): each wall device's `host_face`, its height above
 //!   the floor to a stated point (`height_aff` to `height_ref`: centre, or top/bottom when the
@@ -90,7 +90,7 @@ use super::casework::CASEWORK_APP;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FACES, "Wall Faces", run_faces)
-            .params("{room?: number or name, level?, wall?: handle, north?: degrees counter-clockwise from +Y (plan north; default 0), limit? (200)} → {count, by_level, plan_north, faces: [{name, room, side, level, wall, walls, wall_type, length_in, height_in, openings: [{kind: door|window|opening, from_in, to_in, bottom_in, top_in}], prev, next, skew_deg, order}]}: every built wall's faces named by the room each faces and its compass side (`121/S`; a demising wall is `121/S` on one face and `123/N` on the other; a skewed or second face on a side gets a number, `121/S2`)")
+            .params("{room?: number or name, level?, wall?: handle, north?: degrees counter-clockwise from +Y (plan north; default 0), limit? (200)} → {count, by_level, plan_north, faces: [{name, room, side, level, wall, walls, wall_type, length_in, height_in, openings: [{kind: door|window|opening, from_in, to_in, bottom_in, top_in}], prev, next, skew_deg, order}]}: every built wall's faces named by the room each faces and its compass side (`1201/S`; a demising wall is `1201/S` on one face and `1203/N` on the other; a skewed or second face on a side gets a number, `1201/S2`)")
             .menu(&["Tools", "Building", "Wall Faces"])
             .noundo(),
         CommandSpec::new(REHOST, "Place Devices on Wall Faces", run_rehost)
@@ -100,7 +100,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {moved, kept, lost: [{handle, why}]}: re-derives each wall device's x,y,z from its face, its reference face or object, its height and depth (after a wall moved or was re-typed, or a cabinet it is tied to moved); its dimensions stay")
             .menu(&["Tools", "Building", "Devices Follow Their Walls"]),
         CommandSpec::new(LAYOUT, "Room Layout", run_layout)
-            .params("{room: number or name, level?, draw?: bool (a layout sheet with each face unfolded and dimension strings from its reference faces), north?} → {room, level, faces: [{name, wall_type, length, openings, devices: [{handle, text, ...}]}], text, sheet?}: the room's faces with their devices in field terms (\"121/S: REC 18 in AFF ctr (hard); 15 in from 121/E target, band ±6 in, pending framing; plate standard 1-gang 2.75 x 4.5 in\")"),
+            .params("{room: number or name, level?, draw?: bool (a layout sheet with each face unfolded and dimension strings from its reference faces), north?} → {room, level, faces: [{name, wall_type, length, openings, devices: [{handle, text, ...}]}], text, sheet?}: the room's faces with their devices in field terms (\"1201/S: REC 18 in AFF ctr (hard); 15 in from 1201/E target, band ±6 in, pending framing; plate standard 1-gang 2.75 x 4.5 in\")"),
         CommandSpec::new(CONSTRAIN, "Tie a Device to an Object", run_constrain)
             .params("{handle: device, ref: object handle or tag, ref_point?: center|edge|face (center), axis?: along|vertical|both (along), target_in?: 0, plus_minus_in: number, inside?: bool, follow?: bool (true: it moves with the object), source?: where the documents say it (an elevation, a shop drawing, a submittal's rough-in)} → {handle, constraint}: ties a device's placement to another object with a tolerance band; G-LAYOUT checks it and bim.layout.follow keeps it"),
         CommandSpec::new(OBJECT, "Add Casework or Appliance Object", run_object)
@@ -618,6 +618,11 @@ fn band_kind(words: &[String], rules: &Value) -> String {
     "default".into()
 }
 
+/// Whether a device takes a faceplate (its words name a kind the rules data lists).
+fn has_plate(words: &[String], rules: &Value) -> bool {
+    says_any(words, &rules["plate_kinds"])
+}
+
 fn abbrev(words: &[String], mark: Option<&str>, rules: &Value) -> String {
     let said = rules["abbrev"].as_array().into_iter().flatten().find(|r| says_any(words, &r["words"])).and_then(|r| r["say"].as_str());
     match (said, mark.map(str::trim).filter(|m| !m.is_empty())) {
@@ -718,13 +723,19 @@ fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)]) -> Optio
     let depth_front = d1;
     let zc = (dv.z0 + dv.z1) / 2.0;
     // The reference: the face at the nearer end, else that end itself.
+    // The reference: the face across the nearer corner (square to this one, the device in front
+    // of it), else the one across the other corner, else the nearer end of the face itself.
     let start = t <= f.len - t;
-    let (nb, end_pt, sign, end_word) = if start { (f.prev.as_deref(), f.a, 1.0, "start") } else { (f.next.as_deref(), f.b, -1.0, "end") };
-    let refface = nb.and_then(|n| cx.face(f.level.as_deref(), n));
-    let (reference, offset) = match refface {
-        Some(r) => (Ref::Face { name: r.name.clone(), wall: r.wall, inward: r.inward }, r.depth(c)),
-        None => (Ref::End { name: format!("the {end_word} of {}", f.name), point: end_pt, sign }, (t - dot(end_pt - f.a, f.u)) * sign),
-    };
+    let near_end = |at_start: bool| if at_start { (f.prev.as_deref(), f.a, 1.0, "start") } else { (f.next.as_deref(), f.b, -1.0, "end") };
+    let picked = [near_end(start), near_end(!start)].into_iter().find_map(|(nb, _, _, _)| {
+        let r = nb.and_then(|n| cx.face(f.level.as_deref(), n))?;
+        let off = r.depth(c);
+        (dot(f.u, r.inward).abs() > 0.5 && off >= -inch).then(|| (Ref::Face { name: r.name.clone(), wall: r.wall, inward: r.inward }, off))
+    });
+    let (reference, offset) = picked.unwrap_or_else(|| {
+        let (_, end_pt, sign, end_word) = near_end(start);
+        (Ref::End { name: format!("the {end_word} of {}", f.name), point: end_pt, sign }, (t - dot(end_pt - f.a, f.u)) * sign)
+    });
     // A dimension from the device to a face or an opening edge on its face: the document's offset.
     let mut documented = None;
     let mut offset = offset;
@@ -1048,6 +1059,10 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let mut plate_of: HashMap<usize, (Plate, String, usize)> = HashMap::new();
     let mut ganged = 0usize;
     for (fk, js) in &on_face {
+        // Only devices that take a faceplate (receptacles, switches, outlets…) share one.
+        let js: Vec<usize> =
+            js.iter().copied().filter(|j| placed.get(*j).and_then(|(i, _)| devs.get(*i)).is_some_and(|dv| has_plate(&dv.words, &rules))).collect();
+        let js = &js;
         let pts: Vec<(f64, f64)> = js.iter().filter_map(|j| placed.get(*j)).map(|(_, pl)| (pl.t / inch, pl.zc / inch)).collect();
         for (g, grp) in
             solve::gangs(&pts, gang["spacing_in"].as_f64().unwrap_or(2.5), gang["same_height_in"].as_f64().unwrap_or(1.0)).into_iter().enumerate()
@@ -1166,7 +1181,16 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             store.set("plate_group", Prop::new(group.clone(), Source::computed()).with_note(&format!("{n} device(s) under one plate")));
             *styles.entry(format!("{} {}-gang", plate.style, plate.gangs)).or_default() += 1;
         }
-        let (pw, ph) = plate_of.get(&j).map_or((2.75, 4.5), |(p, _, _)| (p.w, p.h));
+        if !plate_of.contains_key(&j) {
+            // No faceplate (a plumbing fixture, a luminaire, an alarm device): its box is its extent.
+            let what = store.get("kind").map(Prop::text).unwrap_or_else(|| "device".into()).replace('_', " ");
+            store.set("faceplate", Prop::new(NO_FACE, Source::computed()).with_note(&format!("no faceplate: a {what}; its own box is its extent")));
+            store.set("faceplate_w", Prop::new(r2(pl.along_len / inch), Source::computed()).with_unit("in").with_note("its box"));
+            store.set("faceplate_h", Prop::new(r2((dv.z1 - dv.z0) / inch), Source::computed()).with_unit("in").with_note("its box"));
+            store.remove("plate_group");
+            *styles.entry("none (no faceplate)".into()).or_default() += 1;
+        }
+        let (pw, ph) = plate_of.get(&j).map_or((pl.along_len / inch, (dv.z1 - dv.z0) / inch), |(p, _, _)| (p.w, p.h));
         let prect = Rect::centred(pl.t / inch, (pl.zc - floor) / inch, pw, ph);
         // Ties: a person's or a document's stay; the rules data's are derived afresh.
         let mut ties: Vec<Tie> = ties_of(&store).into_iter().filter(|t| !t.derived).collect();
@@ -1555,11 +1579,14 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
                 m,
             ));
         }
-        ons.push(On { idx: i, face: face.clone(), level: dv.level.clone(), rect, group: dv.text("plate_group").unwrap_or_else(|| key.clone()) });
+        let plated = dv.text("faceplate").is_some_and(|p| p != NO_FACE);
+        if plated {
+            ons.push(On { idx: i, face: face.clone(), level: dv.level.clone(), rect, group: dv.text("plate_group").unwrap_or_else(|| key.clone()) });
+        }
         // Casings beside openings on its wall: a piece over an opening starts above the floor.
         let openings: Vec<(f64, f64, f64)> = pieces
             .iter()
-            .filter(|p| p.wall == wall && p.z0 > floor + inch * 2.0 && dep.abs() <= half * 2.0 + inch * 3.0)
+            .filter(|p| plated && p.wall == wall && p.z0 > floor + inch * 2.0 && dep.abs() <= half * 2.0 + inch * 3.0)
             .map(|p| {
                 let (s0, s1) = (dot(p.a - a, u) / inch, dot(p.b - a, u) / inch);
                 (s0.min(s1), s0.max(s1), (p.z0 - floor) / inch)
@@ -1600,8 +1627,9 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
         }
     }
     // A plate that passed every fit says so once.
-    for list in out.values_mut() {
-        if list.iter().any(|c| c.check == "face" && c.verdict == "pass") && !list.iter().any(|c| c.check == "plate") {
+    let plated: HashSet<String> = ons.iter().filter_map(|o| devs.get(o.idx)).map(|d| d.h.hex().to_ascii_uppercase()).collect();
+    for (key, list) in out.iter_mut() {
+        if plated.contains(key) && list.iter().any(|c| c.check == "face" && c.verdict == "pass") && !list.iter().any(|c| c.check == "plate") {
             list.push(check(
                 "plate",
                 "pass",
