@@ -384,6 +384,8 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(json!({ "path": path, "format": format, "files": files, "message": format!("Exported to {path}") }));
     }
+    // A DWG (or template) export says what the file leaves out, as a save does.
+    let lost = super::file::loss_on_save(s, &format!("export.{format}"));
     let shaded = if format == "png" { super::view::view3d::shaded_png(s, 2400, 1600) } else { None };
     let bytes = match shaded {
         Some(b) => b,
@@ -396,13 +398,15 @@ fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
             (hooks.write)(s.doc()?, &name).map_err(|e| bad("export", e))?
         }
     };
-    match path {
+    let mut r = match path {
         Some(path) => {
             write_file("export", path, &bytes)?;
-            Ok(json!({ "path": path, "format": format, "bytes": bytes.len(), "message": format!("Exported to {path}") }))
+            json!({ "path": path, "format": format, "bytes": bytes.len(), "message": format!("Exported to {path}") })
         }
-        None => Ok(json!({ "data": base64_encode(&bytes), "format": format, "bytes": bytes.len() })),
-    }
+        None => json!({ "data": base64_encode(&bytes), "format": format, "bytes": bytes.len() }),
+    };
+    super::file::report_not_saved(s, &mut r, &lost);
+    Ok(r)
 }
 
 /// The files of an OBJ bundle (see `io::mesh3d_io::obj_bundle`): names without folders.

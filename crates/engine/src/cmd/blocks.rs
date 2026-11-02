@@ -474,7 +474,11 @@ fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
     let bytes = (hooks.write)(&d, &path).map_err(|e| bad("wblock", e))?;
     #[cfg(not(target_arch = "wasm32"))]
     crate::writefile::write(&path, &bytes).map_err(|e| bad("wblock", format!("{path}: {e}")))?;
-    Ok(json!({ "path": path, "entities": d.model.len(), "bytes": bytes.len() }))
+    // A DWG says what it leaves out, as a save does.
+    let lost = if super::file::drops_unknown(&path) { super::file::not_saved(&d) } else { Default::default() };
+    let mut r = json!({ "path": path, "entities": d.model.len(), "bytes": bytes.len() });
+    super::file::report_not_saved(s, &mut r, &lost);
+    Ok(r)
 }
 
 fn run_base(s: &mut Session, p: &Value) -> Result<Value> {

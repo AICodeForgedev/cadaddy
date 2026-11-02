@@ -1851,7 +1851,7 @@ fn report_sat_text_dropped(s: &mut Session, r: &mut Value) {
 }
 
 /// Say on the command line what the file couldn't keep, and list it in the result's `notSaved`.
-fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
+pub(super) fn report_not_saved(s: &mut Session, r: &mut Value, lost: &std::collections::BTreeMap<String, usize>) {
     let Some(msg) = not_saved_message(lost) else { return };
     s.echo(msg);
     if let Some(o) = r.as_object_mut() {
