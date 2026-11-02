@@ -209,8 +209,12 @@ pub(super) fn parse_lw(v: &Value) -> std::result::Result<Lineweight, String> {
 
 /// The allowed lineweights, for refusal messages.
 pub(super) fn lineweight_choices() -> String {
-    let mm: Vec<String> = Lineweight::STANDARD.iter().map(|w| format!("{:.2}", f64::from(*w) / 100.0)).collect();
-    format!("use ByLayer, ByBlock, Default or a standard lineweight in mm ({}) or in 1/100 mm (0-211)", mm.join(", "))
+    format!("use ByLayer, ByBlock, Default or a standard lineweight in mm ({}) or in 1/100 mm (0-211)", standard_mm_list())
+}
+
+/// AutoCAD's standard lineweights in millimetres: "0.00, 0.05, …, 2.11".
+pub(super) fn standard_mm_list() -> String {
+    Lineweight::STANDARD.iter().map(|w| format!("{:.2}", f64::from(*w) / 100.0)).collect::<Vec<_>>().join(", ")
 }
 
 fn apply(l: &mut Layer, p: &Value) -> Result<()> {
