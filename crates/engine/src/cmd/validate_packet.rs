@@ -22,7 +22,14 @@
 //!     same view, none is narrower than 320 px. A crop is at least 150 dpi of the printed sheet (the paper size is
 //!     taken from the sheet's shape, ARCH/ANSI/ISO), in tiles when large; the manifest gives
 //!     each crop's sheet rectangle and pixel scale, so a sheet point is at
-//!     `((x − x0)·s, (y1 − y)·s)` pixels.
+//!     `((x − x0)·s, (y1 − y)·s)` pixels. A crop is drawn as its PDF page prints (Q6135): the
+//!     lettering the import read off strokes as those strokes (the readings, often at a glyph
+//!     cluster's size, are left out), no masks (the import's merged masks sit later than what
+//!     they covered), nothing on a layer that is off; each picture is labelled by the view of
+//!     its own sheet it overlaps most; each crop is compared with its sheet's PDF page read
+//!     again (the job's file and page, `prints` when the job's folder isn't here) at the same
+//!     rectangle and pixels, the similarity in the manifest, a low one flagged there and in
+//!     `prompt.md`. Only pictures whose files were written are listed.
 //!   - `model/`: the model over each plan crop (the print in grey, the model by trade colour:
 //!     architecture blue, electrical red, mechanical green, plumbing cyan, fire magenta), a
 //!     clean plan of the model alone, and when the model is built a 3D view of the area and an
@@ -136,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it)}], model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -1952,6 +1959,286 @@ fn render_drawing(od: &Drawing, rect: [f64; 4], px: [u32; 2]) -> Option<Vec<u8>>
     png_of(od, &all, rect, px)
 }
 
+// ---------------------------------------------------------------- a print as its page shows it
+
+/// The layer (off) the PDF import keeps lettering strokes on once it has read them as text, and
+/// the text style of a reading no hidden text confirms (`cadaddy_io::pdf_read`; that crate
+/// reaches this one only through the read hook, so a test checks the names agree).
+const SHX_SOURCE_LAYER: &str = "PDF-SHX-SOURCE";
+const OCR_TEXT_STYLE: &str = "PDF-SHX-OCR";
+/// The import names a style after the PDF font its text was set in (`PDF-Arial`).
+const PDF_STYLE_PREFIX: &str = "PDF-";
+/// Under this, a crop is flagged as not looking like its PDF page.
+const MIN_SIMILARITY: f64 = 0.6;
+/// PDF pages read again per packet to compare its crops with.
+const MAX_COMPARE_SHEETS: usize = 24;
+/// A printed line counts as matched within this many pixels.
+const INK_REACH_PX: i64 = 2;
+/// A pixel this dark (0–255) or darker is ink.
+const INK_LEVEL: u32 = 200;
+
+fn on_layer(e: &Entity, name: &str) -> bool {
+    e.common.layer.eq_ignore_ascii_case(name)
+}
+
+/// The drawing's tables for drawing a print: the lettering strokes the import read as text
+/// shown again (the page shows them, not the reading).
+fn print_tables(d: &Drawing) -> Drawing {
+    let mut t = d.clone();
+    for l in t.layers.iter_mut().filter(|l| l.name.eq_ignore_ascii_case(SHX_SOURCE_LAYER)) {
+        l.on = true;
+        l.frozen = false;
+    }
+    t
+}
+
+/// What of a print's objects its page shows. The lettering the import read off strokes is
+/// drawn as those strokes (`PDF-SHX-SOURCE`), not as the reading: an unconfirmed reading
+/// (`PDF-SHX-OCR`) is left out (its strokes stayed linework), and where the crop holds the kept
+/// strokes, so is every text not set in a PDF font (the readings the hidden text confirmed,
+/// often at a cluster's size, not the lettering's). Masks (wipeouts) are left out: on white
+/// paper they only hide, and the import's merged masks sit later than what they covered
+/// (a block of notes, half a plan). Objects on layers that are off or frozen stay out.
+fn as_printed<'a>(d: &Drawing, ents: &[&'a Entity]) -> Vec<&'a Entity> {
+    let strokes = ents.iter().any(|e| on_layer(e, SHX_SOURCE_LAYER));
+    let shown = |e: &Entity| on_layer(e, SHX_SOURCE_LAYER) || d.layer(&e.common.layer).is_none_or(|l| l.visible());
+    ents.iter()
+        .copied()
+        .filter(|e| shown(e))
+        .filter(|e| match &e.kind {
+            EntityKind::Wipeout(_) => false,
+            EntityKind::Text(t) => {
+                let style = t.style.to_ascii_uppercase();
+                style != OCR_TEXT_STYLE && (!strokes || style.starts_with(PDF_STYLE_PREFIX))
+            }
+            _ => true,
+        })
+        .collect()
+}
+
+/// A picture's ink: one bit per pixel, row by row.
+struct Ink {
+    w: u32,
+    h: u32,
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl Ink {
+    /// From a picture's RGBA bytes (opaque: the page is white).
+    fn of(w: u32, h: u32, rgba: &[u8]) -> Ink {
+        let n = (w as usize).saturating_mul(h as usize).min(rgba.len() / 4);
+        let mut bits = vec![0u64; n.div_ceil(64)];
+        let mut count = 0usize;
+        for (i, p) in rgba.chunks_exact(4).enumerate().take(n) {
+            let lum = (u32::from(p[0]) * 3 + u32::from(p[1]) * 6 + u32::from(p[2])) / 10;
+            if lum <= INK_LEVEL
+                && let Some(b) = bits.get_mut(i / 64)
+            {
+                *b |= 1 << (i % 64);
+                count += 1;
+            }
+        }
+        Ink { w, h, bits, count }
+    }
+    fn at(&self, x: i64, y: i64) -> bool {
+        if x < 0 || y < 0 || x >= i64::from(self.w) || y >= i64::from(self.h) {
+            return false;
+        }
+        let i = (y as usize) * (self.w as usize) + x as usize;
+        self.bits.get(i / 64).is_some_and(|b| b & (1 << (i % 64)) != 0)
+    }
+    fn near(&self, x: i64, y: i64) -> bool {
+        (-INK_REACH_PX..=INK_REACH_PX).any(|dy| (-INK_REACH_PX..=INK_REACH_PX).any(|dx| self.at(x + dx, y + dy)))
+    }
+    /// The share of this picture's ink that `other` has within reach.
+    fn found_in(&self, other: &Ink) -> f64 {
+        if self.count == 0 {
+            return 1.0;
+        }
+        let mut hit = 0usize;
+        for (k, b) in self.bits.iter().enumerate() {
+            let mut v = *b;
+            while v != 0 {
+                let i = k * 64 + v.trailing_zeros() as usize;
+                v &= v - 1;
+                let (x, y) = ((i % self.w.max(1) as usize) as i64, (i / self.w.max(1) as usize) as i64);
+                if other.near(x, y) {
+                    hit += 1;
+                }
+            }
+        }
+        hit as f64 / self.count as f64
+    }
+}
+
+/// How alike two pictures of one rectangle are, 0–1: the harmonic mean of the share of each
+/// one's ink the other has within [`INK_REACH_PX`] (both blank: 1).
+fn similarity(a: &Ink, b: &Ink) -> f64 {
+    if a.count == 0 && b.count == 0 {
+        return 1.0;
+    }
+    if a.count == 0 || b.count == 0 {
+        return 0.0;
+    }
+    let (p, r) = (a.found_in(b), b.found_in(a));
+    if p + r <= 0.0 { 0.0 } else { 2.0 * p * r / (p + r) }
+}
+
+/// `ents` drawn over `rect` at `px` (as [`png_of`]): the PNG, and its ink.
+fn png_and_ink(d: &Drawing, ents: &[&Entity], rect: [f64; 4], px: [u32; 2]) -> Option<(Vec<u8>, Ink)> {
+    let list = cadaddy_render::build_entities(d, ents.iter().copied(), &cadaddy_render::Options::default());
+    let ro = cadaddy_render::raster::RasterOptions { background: cadaddy_color::Rgb(255, 255, 255), hairline: 1.2, px_per_mm: 0.0, antialias: true };
+    let pm = cadaddy_render::raster::render(&list, &view_of(rect, px), &ro)?;
+    let ink = Ink::of(pm.width(), pm.height(), pm.data());
+    Some((pm.encode_png().ok()?, ink))
+}
+
+/// Where a sheet's PDF page is and where the job put it in the drawing.
+#[derive(Clone, Debug)]
+struct PageRef {
+    path: std::path::PathBuf,
+    file: String,
+    page: u64,
+    scale: Option<f64>,
+    region: [f64; 4],
+}
+
+/// Each imported sheet's page (by sheet number, upper case), from the job: its classified
+/// sheets (file, page, scale) and where each landed (`sheet_regions`). `prints` overrides the
+/// folder the job read them from.
+fn page_refs(job: &super::guided::GuidedJob, prints: Option<&str>) -> BTreeMap<String, std::result::Result<PageRef, String>> {
+    let mut out = BTreeMap::new();
+    let entries: Vec<&Value> =
+        job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten().take(MAX_FOLDER_FILES).collect();
+    let folder = prints.map(str::to_string).unwrap_or_else(|| job.pdfs_path.clone());
+    let dir = local_path(&folder);
+    let dir = if dir.is_file() { dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default() } else { dir };
+    for r in job.sheet_regions.iter().take(MAX_FOLDER_FILES) {
+        let key = r.number.trim().to_ascii_uppercase();
+        if key.is_empty() || out.contains_key(&key) || !r.rect.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let current = |sh: &&&Value| sh.get("superseded_by").and_then(Value::as_str).is_none_or(str::is_empty);
+        // A sheet printing several views is classified once per view (`P-301/2`).
+        let is_it = |n: &str| n.split('/').next().is_some_and(|x| x.trim().eq_ignore_ascii_case(&key));
+        let Some(sh) = entries.iter().filter(current).find(|sh| sh.get("number").and_then(Value::as_str).is_some_and(is_it)) else {
+            continue;
+        };
+        let file = sh.get("file").and_then(Value::as_str).unwrap_or_default().to_string();
+        let page = sh.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1);
+        let scale = sh.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 1.0);
+        let named = local_path(&file);
+        let path = if named.is_absolute() && named.is_file() { named } else { dir.join(last_part(&file)) };
+        let got = if file.is_empty() {
+            Err("the job keeps no PDF file for it".to_string())
+        } else if path.is_file() {
+            Ok(PageRef { path, file: last_part(&file), page, scale, region: norm_rect(r.rect) })
+        } else {
+            Err(format!("its PDF ({}) isn't on this machine: give the prints folder as `prints`", last_part(&file)))
+        };
+        out.insert(key, got);
+    }
+    out
+}
+
+/// A sheet's PDF page read again as the page shows it (no text recovery, no masks, no
+/// images), and the map from the drawing's sheet rectangle onto it.
+struct PageRead {
+    d: Drawing,
+    /// drawing point → page point: `[sx, sy, x0, y0, px0, py0]`, `p = (q − q0)·s + p0`.
+    map: [f64; 6],
+}
+
+fn read_page(r: &PageRef) -> std::result::Result<PageRead, String> {
+    let hook = super::file::io().and_then(|h| h.read_pdf).ok_or_else(|| "PDF pages can't be read in this build".to_string())?;
+    let bytes = crate::readfile::read(&r.path).map_err(|e| e.to_string())?;
+    if bytes.len() > 200 * 1024 * 1024 {
+        return Err("the file is over 200 MB".into());
+    }
+    let mut q = json!({"page": r.page, "images": false, "masks": false, "recoverText": false});
+    if let Some(k) = r.scale {
+        q["scale"] = json!(k);
+    }
+    let (d, rep) = hook(&bytes, &q)?;
+    let sheet = |i: usize| rep.get("sheet").and_then(|v| v.get(i)).and_then(Value::as_f64).filter(|x| x.is_finite() && *x > 0.0);
+    let k = rep.get("scale").and_then(Value::as_f64).filter(|k| k.is_finite() && *k > 0.0).unwrap_or(1.0);
+    let (Some(w), Some(h)) = (sheet(0), sheet(1)) else { return Err("the page has no size".into()) };
+    let (rw, rh) = (r.region[2] - r.region[0], r.region[3] - r.region[1]);
+    if rw <= 0.0 || rh <= 0.0 {
+        return Err("the sheet has no size in the drawing".into());
+    }
+    Ok(PageRead { d, map: [w * k / rw, h * k / rh, r.region[0], r.region[1], 0.0, 0.0] })
+}
+
+impl PageRead {
+    fn rect(&self, r: [f64; 4]) -> [f64; 4] {
+        let [sx, sy, x0, y0, px, py] = self.map;
+        [(r[0] - x0) * sx + px, (r[1] - y0) * sy + py, (r[2] - x0) * sx + px, (r[3] - y0) * sy + py]
+    }
+    fn ink(&self, rect: [f64; 4], px: [u32; 2]) -> Option<Ink> {
+        let r = self.rect(rect);
+        let b = Bounds2::new(Vec2::new(r[0], r[1]), Vec2::new(r[2], r[3]));
+        let ents: Vec<&Entity> = self
+            .d
+            .model
+            .iter()
+            .map(|e| e.as_ref())
+            .filter(|e| b.intersects(&cadaddy_doc::entity_bounds(&self.d, e, 0)))
+            .take(MAX_CROP_ENTITIES)
+            .collect();
+        png_and_ink(&self.d, &ents, r, px).map(|(_, ink)| ink)
+    }
+}
+
+/// The view a picture of `rect` on `sheet` is of: of the views the spec and the unit types
+/// place on that sheet, the one it overlaps most (its centre nearest on a tie).
+fn view_at(views: &[(String, String, [f64; 4])], sheet: &str, rect: [f64; 4]) -> Option<String> {
+    let c = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    views
+        .iter()
+        .filter(|(s, ..)| s.eq_ignore_ascii_case(sheet.trim()))
+        .filter_map(|(_, t, r)| {
+            let i = intersect(rect, *r)?;
+            let area = (i[2] - i[0]) * (i[3] - i[1]);
+            let d = ((r[0] + r[2]) / 2.0 - c[0]).hypot((r[1] + r[3]) / 2.0 - c[1]);
+            (area > 0.0).then_some((area, d, t))
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0).then(b.1.total_cmp(&a.1)).then(b.2.cmp(a.2)))
+        .map(|(_, _, t)| t.clone())
+}
+
+/// Every view the spec's sheet links and its unit types place on a sheet: (sheet, title, rect).
+fn sheet_views(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, String, [f64; 4])> {
+    let mut out: Vec<(String, String, [f64; 4])> =
+        sp.sheets.iter().filter_map(|l| l.view.as_ref().map(|v| (l.number.trim().to_string(), v.title.clone(), norm_rect(v.rect)))).collect();
+    let spec = d.building_spec.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
+    for v in spec
+        .as_ref()
+        .and_then(|s| s.get("unit_types"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(1_000)
+        .filter_map(|t| t.get("views").and_then(Value::as_array))
+        .flatten()
+        .take(MAX_FOLDER_FILES)
+    {
+        let r = v.get("rect").and_then(Value::as_array);
+        let n = |i: usize| r.and_then(|r| r.get(i)).and_then(Value::as_f64).filter(|x| x.is_finite());
+        if let (Some(s), Some(t), Some(a), Some(b), Some(c), Some(e)) =
+            (v.get("sheet").and_then(Value::as_str), v.get("title").and_then(Value::as_str), n(0), n(1), n(2), n(3))
+        {
+            out.push((s.trim().to_string(), t.to_string(), norm_rect([a, b, c, e])));
+        }
+    }
+    out.sort_by(|a, b| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.iter().zip(b.2.iter()).fold(std::cmp::Ordering::Equal, |o, (x, y)| o.then(x.total_cmp(y))))
+    });
+    out.dedup();
+    out
+}
+
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
@@ -2695,8 +2982,21 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let (model, frame) = model_of(d, &sp);
     let area = area_param(CMD, &sp, p, d, &frame)?;
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| prints_from_job(s, &frame));
+    let job = super::guided::load_job(s).ok().flatten();
     let (job_submittals, job_prints): (Vec<String>, Option<String>) =
-        super::guided::load_job(s).ok().flatten().map(|j| (j.submittals, Some(j.pdfs_path).filter(|x| !x.trim().is_empty()))).unwrap_or_default();
+        job.as_ref().map(|j| (j.submittals.clone(), Some(j.pdfs_path.clone()).filter(|x| !x.trim().is_empty()))).unwrap_or_default();
+    // The crops are compared with their PDF pages (`compare`, default on), read from `prints`
+    // when the job's folder isn't on this machine.
+    let compare = match p.get("compare") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(CMD, "`compare` is true or false")),
+    };
+    let prints_dir: Option<String> = match p.get("prints") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(x)) if !x.trim().is_empty() && x.len() <= 4096 => Some(x.trim().to_string()),
+        Some(_) => return Err(bad(CMD, "`prints` is the folder (or PDF) the job's prints are in")),
+    };
     let (all_rules, rejected) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let only_rules: Option<BTreeSet<String>> = match p.get("rules") {
         None | Some(Value::Null) => None,
@@ -2808,7 +3108,15 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The print crops.
     let within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
     let texts = Texts::of(d, &within);
-    let Planned { crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
+    let Planned { mut crops, mut left_out } = plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref());
+    // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
+    // lies in), not by the link that brought it in.
+    let views = sheet_views(d, &sp);
+    for c in crops.iter_mut() {
+        if let Some(v) = view_at(&views, &c.sheet, c.rect).or_else(|| view_at(&views, &c.sheet, c.whole)) {
+            c.view = Some(v);
+        }
+    }
     if sp.sheets.is_empty() {
         left_out.push(("print crops".into(), "the building spec lists no sheets (levels.sheets finds them)".into()));
     }
@@ -3108,11 +3416,18 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // The pictures.
     let all_rects: Vec<[f64; 4]> = crops.iter().map(|(_, c)| c.rect).collect();
     let index = PrintIndex::of(d, &all_rects);
+    // A picture is listed only once its file is there.
+    let written = |file: &str| std::fs::metadata(full(file)).is_ok_and(|m| m.is_file() && m.len() > 0);
     let write_png = |file: &str, png: Option<Vec<u8>>, left_out: &mut Vec<(String, String)>| -> Result<bool> {
         match png {
             Some(b) => {
                 super::exchange::write_file(CMD, &full(file), &b)?;
-                Ok(true)
+                if written(file) {
+                    Ok(true)
+                } else {
+                    left_out.push((file.to_string(), "the picture was drawn but its file isn't there".into()));
+                    Ok(false)
+                }
             }
             None => {
                 left_out.push((file.to_string(), "the picture couldn't be drawn".into()));
@@ -3120,20 +3435,86 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     };
+    // The prints as their pages show them.
+    let tables = print_tables(d);
     let mut prints_out: Vec<Value> = Vec::new();
+    let mut inks: Vec<(usize, &Crop, Ink)> = Vec::new();
     for (_, c) in &crops {
-        let ents = index.within(c.rect);
-        if write_png(&c.file, png_of(d, &ents, c.rect, c.px), &mut left_out)? {
-            prints_out.push(c.to_json());
+        let ents = as_printed(d, &index.within(c.rect));
+        match png_and_ink(&tables, &ents, c.rect, c.px) {
+            Some((png, ink)) => {
+                if write_png(&c.file, Some(png), &mut left_out)? {
+                    prints_out.push(c.to_json());
+                    inks.push((prints_out.len() - 1, *c, ink));
+                }
+            }
+            None => {
+                write_png(&c.file, None, &mut left_out)?;
+            }
         }
     }
+    // Each crop against its sheet's PDF page read again, at the same rectangle and pixels.
+    let similarity_json = {
+        let refs = job.as_ref().map(|j| page_refs(j, prints_dir.as_deref())).unwrap_or_default();
+        let sheets: BTreeSet<String> = inks.iter().map(|(_, c, _)| c.sheet.trim().to_ascii_uppercase()).collect();
+        let mut low: Vec<Value> = Vec::new();
+        let mut not_compared: Vec<Value> = Vec::new();
+        let mut compared = 0usize;
+        let mut read = 0usize;
+        for sheet in &sheets {
+            let why = if !compare {
+                Some("not asked (compare: false)".to_string())
+            } else {
+                match refs.get(sheet) {
+                    None => Some("the job keeps no PDF page for this sheet".to_string()),
+                    Some(Err(e)) => Some(e.clone()),
+                    Some(Ok(_)) if read >= MAX_COMPARE_SHEETS => Some(format!("over the {MAX_COMPARE_SHEETS} pages a packet reads again")),
+                    Some(Ok(r)) => {
+                        read += 1;
+                        match read_page(r) {
+                            Err(e) => Some(format!("{} p.{}: {e}", r.file, r.page)),
+                            Ok(page) => {
+                                for (k, c, ink) in inks.iter().filter(|(_, c, _)| c.sheet.trim().eq_ignore_ascii_case(sheet)) {
+                                    let Some(o) = prints_out.get_mut(*k) else { continue };
+                                    match page.ink(c.rect, c.px) {
+                                        Some(pi) => {
+                                            let sim = r2(similarity(ink, &pi));
+                                            o["similarity"] = json!(sim);
+                                            o["page"] = json!(format!("{} p.{}", r.file, r.page));
+                                            compared += 1;
+                                            if sim < MIN_SIMILARITY {
+                                                o["similarity_low"] = json!(true);
+                                                low.push(json!({"file": c.file, "similarity": sim}));
+                                            }
+                                        }
+                                        None => o["similarity_why"] = json!("the page couldn't be drawn at this rectangle"),
+                                    }
+                                }
+                                None
+                            }
+                        }
+                    }
+                }
+            };
+            if let Some(why) = why {
+                not_compared.push(json!({"sheet": sheet, "why": why}));
+            }
+        }
+        json!({
+            "about": "each print crop against its sheet's PDF page read again as the page shows it (no text read off strokes, no masks), at the same rectangle and pixels: the harmonic mean of the share of each picture's ink the other has within 2 px (1 = alike, 0 = nothing in common)",
+            "low_under": MIN_SIMILARITY,
+            "compared": compared,
+            "low": low,
+            "not_compared": not_compared,
+        })
+    };
     let mut model_out: Vec<Value> = Vec::new();
     for m in &model_imgs_kept {
         let ok = match (m.kind, m.over, &m.render) {
             ("overlay", Some(i), _) => {
                 let Some(c) = crops.iter().find(|(k, _)| *k == i).map(|(_, c)| *c) else { continue };
                 let place = c.place.clone().unwrap_or(Place::Same);
-                let od = model_drawing(d, &index.within(c.rect), &model, &area, &frame, &place, &all_rules, &built, upf, &kinds);
+                let od = model_drawing(d, &as_printed(d, &index.within(c.rect)), &model, &area, &frame, &place, &all_rules, &built, upf, &kinds);
                 write_png(&m.file, render_drawing(&od, c.rect, c.px), &mut left_out)?
             }
             ("plan", _, _) => {
@@ -3146,7 +3527,11 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
                 q["path"] = json!(full(&m.file));
                 q["force"] = json!(true);
                 match s.execute("model.render", &q) {
-                    Ok(_) => true,
+                    Ok(_) if written(&m.file) => true,
+                    Ok(_) => {
+                        left_out.push((m.file.clone(), "model.render wrote no file".into()));
+                        false
+                    }
                     Err(e) => {
                         left_out.push((m.file.clone(), format!("model.render: {e}")));
                         false
@@ -3164,8 +3549,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         let Some(path) = path else { continue };
         match submittal_png(path, *page) {
             Ok(b) => {
-                super::exchange::write_file(CMD, &full(file), &b)?;
-                subs_out.push(json!({"file": file, "submittal": sb, "page": page, "for": why}));
+                if write_png(file, Some(b), &mut left_out)? {
+                    subs_out.push(json!({"file": file, "submittal": sb, "page": page, "for": why}));
+                }
             }
             Err(e) => left_out.push((file.clone(), format!("submittal {sb}: {e}"))),
         }
@@ -3175,7 +3561,17 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let kept_crops: Vec<Crop> = crops.iter().map(|(_, c)| (*c).clone()).filter(|c| prints_out.iter().any(|j| j["file"] == json!(c.file))).collect();
     let kept_models: Vec<ModelImage> =
         model_imgs_kept.iter().map(|m| (*m).clone()).filter(|m| model_out.iter().any(|j| j["file"] == json!(m.file))).collect();
-    let prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts);
+    let mut prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts);
+    if let Some(low) = similarity_json["low"].as_array().filter(|l| !l.is_empty()) {
+        prompt.push_str("\n## Crops that may not look like their PDF page\n\n");
+        for l in low {
+            prompt.push_str(&format!(
+                "- `{}`: similarity {} to the page: read it with care, and say so when a finding rests on it.\n",
+                l["file"].as_str().unwrap_or_default(),
+                l["similarity"]
+            ));
+        }
+    }
     left_out.sort();
     left_out.dedup();
     let manifest = json!({
@@ -3189,6 +3585,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "model": model_out,
         "submittals": subs_out,
         "submittals_unlisted": unlisted_json,
+        "similarity": similarity_json,
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
@@ -3404,5 +3801,63 @@ mod tests {
         let a = window_area("L1", [10.0, 4.0, 2.0, 0.0]);
         assert_eq!(a.id, "L1/win:2.00,0.00,10.00,4.00");
         assert_eq!(a.bbox, [2.0, 0.0, 10.0, 4.0]);
+    }
+
+    #[test]
+    fn the_print_layer_and_style_names_are_the_pdf_readers() {
+        assert_eq!(SHX_SOURCE_LAYER, cadaddy_io::pdf_read::SHX_SOURCE_LAYER);
+        assert_eq!(OCR_TEXT_STYLE, cadaddy_io::pdf_read::OCR_TEXT_STYLE);
+    }
+
+    /// A `w` × `h` white picture with black pixels at `dots`.
+    fn picture(w: u32, h: u32, dots: &[(u32, u32)]) -> Ink {
+        let mut rgba = vec![255u8; (w * h * 4) as usize];
+        for (x, y) in dots {
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i..i + 3].copy_from_slice(&[0, 0, 0]);
+        }
+        Ink::of(w, h, &rgba)
+    }
+
+    #[test]
+    fn similarity_forgives_a_pixel_or_two_and_nothing_more() {
+        let line: Vec<(u32, u32)> = (10..90).map(|x| (x, 50)).collect();
+        let a = picture(100, 100, &line);
+        assert_eq!(a.count, 80);
+        assert!((similarity(&a, &a) - 1.0).abs() < 1e-12);
+        // Two pixels down: the same line.
+        let b = picture(100, 100, &(10..90).map(|x| (x, 52)).collect::<Vec<_>>());
+        assert!((similarity(&a, &b) - 1.0).abs() < 1e-12);
+        // Five down: another one.
+        let c = picture(100, 100, &(10..90).map(|x| (x, 55)).collect::<Vec<_>>());
+        assert_eq!(similarity(&a, &c), 0.0);
+        // Half of it: found entirely in the whole, holding half of the whole (and the two
+        // pixels past its end within reach).
+        let d = picture(100, 100, &(10..50).map(|x| (x, 50)).collect::<Vec<_>>());
+        let r = 42.0 / 80.0;
+        assert!((similarity(&a, &d) - 2.0 * r / (1.0 + r)).abs() < 1e-9);
+        // Blank against blank is alike; blank against ink is not.
+        let blank = picture(100, 100, &[]);
+        assert_eq!(similarity(&blank, &blank), 1.0);
+        assert_eq!(similarity(&blank, &a), 0.0);
+        // A grey (light) pixel isn't ink.
+        let mut rgba = vec![255u8; 4];
+        rgba[..3].copy_from_slice(&[230, 230, 230]);
+        assert_eq!(Ink::of(1, 1, &rgba).count, 0);
+        // Hostile sizes never index past the bytes.
+        assert_eq!(Ink::of(1000, 1000, &[0; 8]).count, 2);
+    }
+
+    #[test]
+    fn a_picture_takes_the_view_it_overlaps_most_on_its_own_sheet() {
+        let views = vec![
+            ("P-1".to_string(), "PLAN - SANITARY".to_string(), [0.0, 0.0, 10.0, 10.0]),
+            ("P-1".to_string(), "PLAN - WATER".to_string(), [10.0, 0.0, 20.0, 10.0]),
+            ("P-2".to_string(), "OTHER SHEET".to_string(), [0.0, 0.0, 30.0, 30.0]),
+        ];
+        assert_eq!(view_at(&views, "P-1", [11.0, 1.0, 19.0, 9.0]).as_deref(), Some("PLAN - WATER"));
+        assert_eq!(view_at(&views, "p-1 ", [2.0, 1.0, 13.0, 9.0]).as_deref(), Some("PLAN - SANITARY"));
+        assert_eq!(view_at(&views, "P-1", [40.0, 40.0, 50.0, 50.0]), None);
+        assert_eq!(view_at(&views, "P-3", [0.0, 0.0, 5.0, 5.0]), None);
     }
 }

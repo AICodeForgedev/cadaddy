@@ -818,3 +818,127 @@ fn the_packet_offers_the_submittals_of_its_marks_and_names_one_the_job_did_not_l
     assert!(why.contains("applied it to 1 element(s) (marks EF-1)") && why.contains("the job lists none"), "{why}");
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// A copy of `s`'s drawing with `f` applied, in a new session.
+fn edited(s: &Session, f: impl FnOnce(&mut cadaddy_engine::doc::Drawing)) -> Session {
+    let mut d = (*s.doc().unwrap()).clone();
+    f(&mut d);
+    let mut out = Session::empty();
+    out.open_drawing(d, "Sample Job", None);
+    out
+}
+
+fn add(d: &mut cadaddy_engine::doc::Drawing, layer: &str, kind: EntityKind) {
+    let h = d.new_handle();
+    let mut e = Entity::new(h, kind);
+    e.common.layer = layer.into();
+    d.model.push(e);
+}
+
+fn big_text(at: [f64; 2], style: &str, value: &str) -> EntityKind {
+    EntityKind::Text(Text {
+        insert: Vec3::new(at[0], at[1], 0.0),
+        align_pt: None,
+        height: 120.0,
+        value: value.into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: style.into(),
+        halign: Default::default(),
+        valign: Default::default(),
+    })
+}
+
+/// Every picture the manifest lists is a file in the packet.
+fn all_written(m: &Value, out: &Path) {
+    for sec in ["prints", "model", "submittals"] {
+        for p in m[sec].as_array().unwrap() {
+            let f = out.join(p["file"].as_str().unwrap());
+            assert!(std::fs::metadata(&f).is_ok_and(|x| x.len() > 0), "{} is listed but not written", f.display());
+        }
+    }
+}
+
+#[test]
+fn a_print_crop_draws_the_lettering_as_printed_and_a_late_mask_hides_nothing() {
+    use cadaddy_engine::doc::{Layer, TextStyle, Wipeout};
+    use cadaddy_engine::geom::Vec2;
+    let j = job();
+    // As a PDF import leaves a sheet: lettering read off strokes, the strokes kept on an off
+    // layer; the readings at a cluster's size (two sheet inches high); a mask merged over the
+    // general notes, later than the notes it once sat behind.
+    let stroke_at = at(E101, [8.0, 3.0]);
+    let notes = [E101 + 2800.0, 2000.0];
+    let readings = |d: &mut cadaddy_engine::doc::Drawing| {
+        d.text_styles.push(TextStyle { name: "PDF-SHX-OCR".into(), ..TextStyle::default() });
+        add(d, "0", big_text(at(E101, [2.0, 2.0]), "PDF-SHX-OCR", "WWW"));
+        add(d, "0", big_text(at(E101, [2.0, 8.0]), "Standard", "MMM"));
+    };
+    let strokes = |d: &mut cadaddy_engine::doc::Drawing| {
+        d.layers.push(Layer { on: false, ..Layer::new("PDF-SHX-SOURCE") });
+        for k in 0..3 {
+            let x = stroke_at[0] + f64::from(k) * 4.0;
+            add(d, "PDF-SHX-SOURCE", EntityKind::Line(Line { a: Vec3::new(x, stroke_at[1], 0.0), b: Vec3::new(x, stroke_at[1] + 6.0, 0.0) }));
+        }
+        let (x, y) = (notes[0] - 20.0, notes[1] - 40.0);
+        let boundary = vec![Vec2::new(x, y), Vec2::new(x + 400.0, y), Vec2::new(x + 400.0, y + 80.0), Vec2::new(x, y + 80.0)];
+        add(d, "0", EntityKind::Wipeout(Wipeout { boundary }));
+    };
+    let mut plain = edited(&j.s, strokes);
+    let mut read = edited(&plain, readings);
+    let id = office(&mut read);
+    let (o1, o2) = (dir("lettering-plain"), dir("lettering-read"));
+    plain.execute("validate.packet", &json!({"area": id, "out_dir": o1.to_string_lossy()})).unwrap();
+    read.execute("validate.packet", &json!({"area": id, "out_dir": o2.to_string_lossy()})).unwrap();
+    let (m1, m2) = (read_json(&o1.join("manifest.json")), read_json(&o2.join("manifest.json")));
+    all_written(&m2, &o2);
+    // The readings draw nothing: the crop is the one without them, byte for byte.
+    let e = crop(&m2, "E-101", "plan");
+    let file = e["file"].as_str().unwrap();
+    assert_eq!(std::fs::read(o1.join(file)).unwrap(), std::fs::read(o2.join(file)).unwrap(), "the readings show in {file}");
+    assert_eq!(crop(&m1, "E-101", "plan")["file"], e["file"]);
+    // The strokes the page prints are drawn.
+    let img = image::open(o2.join(file)).unwrap().to_rgba8();
+    let (x, y) = pixel_of(e, [stroke_at[0] + 4.0, stroke_at[1] + 3.0]);
+    assert!(darkest(&img, x, y, 2) < 400, "the lettering's strokes at ({x:.0},{y:.0})");
+    // The notes show through the late mask.
+    let n = crop(&m2, "E-101", "general_notes");
+    let img = image::open(o2.join(n["file"].as_str().unwrap())).unwrap().to_rgba8();
+    let (x, y) = pixel_of(n, [notes[0] + 20.0, notes[1] + 2.0]);
+    assert!(darkest(&img, x, y, 4) < 400, "the notes under the mask at ({x:.0},{y:.0})");
+    // No PDF to compare with: said, per sheet.
+    let why = m2["similarity"]["not_compared"].as_array().unwrap();
+    assert!(why.iter().any(|w| w["sheet"] == "E-101" && w["why"] == "the job keeps no PDF page for this sheet"), "{why:?}");
+}
+
+#[test]
+fn each_view_is_labelled_by_the_view_it_shows_on_its_own_sheet() {
+    let j = job();
+    let mut sp = spec();
+    // A-401 prints two views of the office's type side by side: its sanitary and its water plan;
+    // the set links the sheet by its sanitary view only.
+    let san = [A401 + 200.0, 200.0, A401 + 1600.0, 1400.0];
+    let wat = [A401 + 1800.0, 200.0, A401 + 3200.0, 1400.0];
+    let sheets: Vec<Value> = sp["sheets"].as_array().unwrap().iter().filter(|l| l["number"] != "A-401").cloned().collect();
+    sp["sheets"] = json!(sheets);
+    sp["sheets"].as_array_mut().unwrap().push(json!({"number": "A-401", "title": "ENLARGED PLANS", "discipline": "A", "source": "model",
+        "rect": [A401, 0.0, A401 + SW, SH], "view": {"title": "OFFICE PLAN - SANITARY", "rect": san}}));
+    sp["unit_types"] = json!([{"id": "OFC", "name": "OFFICE TYPE", "views": [
+        {"sheet": "A-401", "title": "OFFICE PLAN - SANITARY", "rect": san},
+        {"sheet": "A-401", "title": "OFFICE PLAN - WATER", "rect": wat}]}]);
+    sp["unit_instances"] = json!([{"number": "101", "level": "L1", "type": "OFC"}]);
+    let mut s = edited(&j.s, |_| {});
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let id = office(&mut s);
+    let out = dir("views");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let unit: Vec<&Value> = m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == "A-401" && c["placed_by"] == "unit_type").collect();
+    for (part, title) in [("WATER", "OFFICE PLAN - WATER"), ("SANITARY", "OFFICE PLAN - SANITARY")] {
+        let c = unit.iter().find(|c| c["shows"].as_str().is_some_and(|x| x.ends_with(part))).unwrap_or_else(|| panic!("no {part} view in {unit:?}"));
+        assert_eq!(c["view"], title, "{c}");
+    }
+    let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    assert!(prompt.contains("view OFFICE PLAN - WATER"), "{prompt}");
+}
