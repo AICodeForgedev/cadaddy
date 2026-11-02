@@ -1293,6 +1293,11 @@ struct InArea {
     cited: BTreeMap<String, Cited>,
     /// The area's own elements: kind, mark, submittal (for the submittals' matching).
     products: Vec<(String, Option<String>, Option<String>)>,
+    /// The area holds luminaires or lighting controls: its packet carries the lighting-control
+    /// legend.
+    lighting: bool,
+    /// The lighting types' cut-sheet pages (`<file> p.<n>`) the packet carries.
+    cut_sheets: BTreeSet<String>,
 }
 
 /// The elements of an area read from one sheet.
@@ -1645,7 +1650,7 @@ fn in_area(
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, counts, nearby: nearby_handles, cited, products }
+    InArea { objects, kinds, categories, marks, wall_types, counts, nearby: nearby_handles, cited, products, lighting: false, cut_sheets: BTreeSet::new() }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1682,7 +1687,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
@@ -2421,6 +2426,19 @@ fn plan_crops(
             }
             _ => {}
         }
+        // The lighting-control legend, where the area holds lighting.
+        if keys.lighting && matches!(kind, "legend" | "schedule" | "general_notes" | "spec" | "other") {
+            for key in ["LIGHTING CONTROL", "LIGHTING CONTROLS"] {
+                for (at, _) in texts.find(sr, key, true).into_iter().take(1) {
+                    add(
+                        &mut crops,
+                        "legend",
+                        [at[0] - 0.02 * w, at[1] - 0.3 * h, at[0] + 0.33 * w, at[1] + 0.03 * h],
+                        "lighting control legend".into(),
+                    );
+                }
+            }
+        }
         // General notes: on a notes sheet, and on the plans in the packet.
         if kind == "general_notes" || plan_sheets.contains(&l.number) {
             for (at, _) in texts.find(sr, "GENERAL NOTES", true).into_iter().take(1) {
@@ -2707,6 +2725,17 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(Value::Array(els)) = here.objects.get_mut("elements") {
         super::validate_tr::annotate(d, &sp, &model, &kinds, prints.as_ref(), &all_rules, &area, els);
     }
+    // The lighting documents of the types present (fixture schedule rows, submittal products and
+    // their cut-sheet pages, the control legend), and each luminaire's and control's facts.
+    let lighting = match here.objects.get_mut("elements") {
+        Some(Value::Array(els)) => super::validate_lighting::annotate(d, &model, &kinds, prints.as_ref(), &all_rules, els),
+        _ => None,
+    };
+    if let Some((summary, pages)) = lighting {
+        here.objects["lighting"] = summary;
+        here.cut_sheets.extend(pages);
+        here.lighting = true;
+    }
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2732,7 +2761,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -2961,6 +2990,10 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
                 .or_default()
                 .insert(format!("kind {kind} (the job's submittal for that kind elsewhere; no element here carries one)"));
         }
+    }
+    // The cut-sheet pages of the luminaire types present.
+    for page in &here.cut_sheets {
+        wanted.entry(page.clone()).or_default().insert("a luminaire type's cut sheet".to_string());
     }
     let mut search: Vec<String> = job_submittals.clone();
     search.extend(job_prints.clone());

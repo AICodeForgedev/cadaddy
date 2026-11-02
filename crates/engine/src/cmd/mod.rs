@@ -169,6 +169,7 @@ mod unittypes;
 pub mod validate;
 pub mod validate_height;
 pub mod validate_kind;
+pub mod validate_lighting;
 pub mod validate_packet;
 pub mod validate_prescreen;
 pub(crate) mod validate_present;
