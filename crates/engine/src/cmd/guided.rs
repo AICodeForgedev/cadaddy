@@ -7734,6 +7734,215 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     report_progress(s, json!({"step": "lighting"}), &line);
     s.echo(line);
     result["lighting"] = json!({"types": types.len(), "luminaires": changes.len(), "conflicts": issues.len(), "rfis": rfis, "unshown": unshown});
+    controls_step(s, job, &types, result)
+}
+
+/// Lighting controls: each luminaire's control by its room and switch leg (the plans' letters on
+/// fixtures and switches), else its circuit's (a contactor or time switch per the panel schedule's
+/// codes), else none; emergency and exit fixtures unswitched by design. Conflicts: a leg no
+/// switch in the room has, a switch leg no fixture has, a 3-way without its pair, a dimmer over
+/// a fixture whose driver doesn't dim (or dims another way), a fixture with no control at all.
+fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::FixtureType], result: &mut Value) -> crate::Result<()> {
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    // Each circuit's codes (C, TS, EM...) by panel and number.
+    let mut codes: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for p in &sp.mep.panel_schedules {
+        for c in &p.circuits {
+            codes.insert((p.panel.to_ascii_uppercase(), c.number.clone()), c.protection.clone());
+        }
+    }
+    struct Dev {
+        h: cadaddy_doc::Handle,
+        room: String,
+        leg: String,
+        mark: String,
+        kind: String,
+        dimming: String,
+        product: String,
+        circuit: (String, String),
+    }
+    let d = s.doc()?;
+    let mut lums: Vec<Dev> = Vec::new();
+    let mut ctrls: Vec<Dev> = Vec::new();
+    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
+        let kind = super::elemprops::reported_kind(e, base.clone());
+        let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
+        let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
+        if !is_lum && !is_ctl {
+            continue;
+        }
+        let st = props::read(&e.common.xdata);
+        let text = |k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = {
+            let m = text("type_mark");
+            if m.is_empty() { super::lightsched::type_of(&text("type")) } else { m.to_ascii_uppercase() }
+        };
+        let circuit = text("circuit");
+        let number = circuit.rsplit_once(['-', '/', '.']).map_or(String::new(), |(_, n)| n.trim().to_string());
+        let dv = Dev {
+            h: e.handle,
+            room: text("room").to_ascii_uppercase(),
+            leg: text("switch_leg").to_ascii_lowercase(),
+            mark,
+            kind,
+            dimming: text("dimming").to_ascii_uppercase(),
+            product: format!("{} {} {}", text("product"), text("configuration"), text("required_features")).to_ascii_uppercase(),
+            circuit: (text("panel").to_ascii_uppercase(), number),
+        };
+        if is_lum { lums.push(dv) } else { ctrls.push(dv) }
+    }
+    let emergency = |mark: &str| {
+        types.iter().find(|t| t.tag == mark).is_some_and(|t| {
+            let u = format!("{} {}", t.description, t.notes).to_ascii_uppercase();
+            u.contains("EXIT") || u.contains("EMERGENCY")
+        })
+    };
+    let is_dimmer = |c: &Dev| c.mark.starts_with("SD") || c.mark.starts_with("D") && c.mark.len() <= 3 || c.product.contains("DIMMER");
+    let dim_kind = |text: &str| -> &'static str {
+        if text.contains("0-10") {
+            "0-10V"
+        } else if ["ELV", "MLV", "PHASE", "FORWARD", "REVERSE", "TRIAC"].iter().any(|w| text.contains(w)) {
+            "phase"
+        } else if text.contains("NON-DIM") || text == "NONE" || text.contains("NO DIM") {
+            "none"
+        } else {
+            ""
+        }
+    };
+    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let mut issues: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut tally: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for l in &lums {
+        let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
+        let by_leg: Vec<&Dev> = in_room.iter().copied().filter(|c| !l.leg.is_empty() && c.leg == l.leg).collect();
+        let circuit_codes = codes.get(&l.circuit).cloned().unwrap_or_default();
+        let (control, src, how): (String, Source, &'static str) = if !by_leg.is_empty() {
+            (
+                format!("switch leg {}: {}", l.leg, by_leg.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
+                Source::from_doc(SourceKind::Print, "switch leg letters on the plan"),
+                "leg",
+            )
+        } else if circuit_codes.iter().any(|c| c == "C" || c == "TS") {
+            (
+                format!(
+                    "{} (panel {} circuit {}: {})",
+                    if circuit_codes.iter().any(|c| c == "TS") { "time switch" } else { "contactor" },
+                    l.circuit.0,
+                    l.circuit.1,
+                    circuit_codes.join("/")
+                ),
+                Source::from_doc(SourceKind::Schedule, "panel schedule codes"),
+                "contactor",
+            )
+        } else if emergency(&l.mark) || circuit_codes.iter().any(|c| c == "EM") {
+            ("unswitched: emergency / exit".to_string(), Source::from_doc(SourceKind::Schedule, "light fixture schedule"), "emergency")
+        } else if !in_room.is_empty() && l.leg.is_empty() {
+            (
+                format!("the room's switches: {}", in_room.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
+                Source::computed(),
+                "room",
+            )
+        } else {
+            ("none found".to_string(), Source::computed(), "none")
+        };
+        *tally.entry(how).or_default() += 1;
+        if how == "none" {
+            let what = if l.leg.is_empty() { "fixture with no control" } else { "switch leg with no switch" };
+            issues.entry(what).or_default().push(format!("{} {} in {}", l.mark, l.h.hex(), if l.room.is_empty() { "no room" } else { &l.room }));
+        }
+        // A dimmer over a fixture that doesn't dim, or dims another way.
+        for c in by_leg.iter().filter(|c| is_dimmer(c)) {
+            let (dk, lk) = (dim_kind(&c.product), dim_kind(&l.dimming));
+            if lk == "none" || (!dk.is_empty() && !lk.is_empty() && dk != lk) {
+                issues.entry("dimmer over a fixture that doesn't dim that way").or_default().push(format!(
+                    "{} {} ({}) under {} {} ({}) in {}",
+                    l.mark,
+                    l.h.hex(),
+                    if lk.is_empty() { "?" } else { lk },
+                    c.mark,
+                    c.h.hex(),
+                    if dk.is_empty() { "?" } else { dk },
+                    l.room
+                ));
+            }
+        }
+        if let Some(e) = d.model.iter().find(|e| e.handle == l.h) {
+            let mut st = props::read(&e.common.xdata);
+            if !st.get("control").is_some_and(|o| o.source.kind == SourceKind::User) {
+                st.set("control", Prop::new(control, src));
+                changes.push((l.h, st));
+            }
+        }
+    }
+    // Switches: a leg no fixture in the room has; a 3-way without its pair.
+    let mut threeway: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for c in &ctrls {
+        if c.kind == "occupancy_sensor" {
+            continue;
+        }
+        if !c.leg.is_empty() && !lums.iter().any(|l| l.room == c.room && l.leg == c.leg) {
+            issues.entry("switch leg with no fixture").or_default().push(format!("{} {} leg {} in {}", c.mark, c.h.hex(), c.leg, c.room));
+        }
+        if c.mark.starts_with("S3") || c.kind == "3way_switch" || c.product.contains("THREE WAY") {
+            *threeway.entry((c.room.clone(), c.leg.clone())).or_default() += 1;
+        }
+    }
+    for ((room, leg), n) in &threeway {
+        if *n == 1 {
+            issues.entry("3-way switch without its pair").or_default().push(format!("room {room} leg {}", if leg.is_empty() { "-" } else { leg }));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, st) in &changes {
+        let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, st).into());
+    }
+    let mut rfis = Vec::new();
+    for (what, list) in &issues {
+        let shown: Vec<&String> = list.iter().take(12).collect();
+        let more = if list.len() > shown.len() { format!(" and {} more", list.len() - shown.len()) } else { String::new() };
+        let issue = format!("Lighting controls: {} {what}: {}{more}", list.len(), shown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join("; "));
+        let fix = match *what {
+            "fixture with no control" => "Show its switch leg (or its contactor / sensor), or note it unswitched",
+            "switch leg with no switch" => "Add the switch for that leg, or correct the fixture's leg letter",
+            "switch leg with no fixture" => "Correct the switch's leg letter, or add the fixtures it controls",
+            "3-way switch without its pair" => "Show the second 3-way switch, or make it single pole",
+            _ => "Match the dimmer to the driver (0-10V dimmer for 0-10V drivers, phase dimmer for phase-dimmable), or the fixture to the dimmer",
+        };
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in issue.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-L{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::Lighting;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("lighting controls ({what})"),
+                issue: issue.clone(),
+                assumed: "The model links what the plans' letters link; the rest is held.".into(),
+                proposed: Some(fix.into()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(StageName::BimBuild, &issue, "lighting controls on the plans", 1, vec![fix.into()], None, false);
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.touch();
+    let line = format!(
+        "  lighting controls: {} luminaires by {:?}; {} controls; conflicts {}",
+        lums.len(),
+        tally,
+        ctrls.len(),
+        issues.iter().map(|(k, v)| format!("{k}: {}", v.len())).collect::<Vec<_>>().join(", ")
+    );
+    report_progress(s, json!({"step": "lighting controls"}), &line);
+    s.echo(line);
+    result["lighting_controls"] =
+        json!({"by": tally, "issues": issues.iter().map(|(k, v)| (k.to_string(), v.len())).collect::<BTreeMap<_, _>>(), "rfis": rfis});
     Ok(())
 }
 
