@@ -451,6 +451,8 @@ struct Txt {
     at: [f64; 2],
     h: f64,
     handle: cadaddy_doc::Handle,
+    /// A block reference's attribute (a tag drawn as a block), not a text of its own.
+    attrib: bool,
 }
 
 fn clean(s: &str) -> String {
@@ -468,6 +470,23 @@ fn sheet_texts(d: &Drawing, rects: &[[f64; 4]]) -> Vec<Txt> {
             EntityKind::MText(t) => {
                 (cadaddy_fonts::plain_mtext(&t.contents).lines().take(MAX_NOTES).map(str::to_string).collect(), t.insert.xy(), t.height)
             }
+            // A tag drawn as a block: its shown attributes (`EUH` over its number).
+            EntityKind::Insert(i) => {
+                for a in i.attribs.iter().filter(|a| !a.invisible).take(20) {
+                    let (p, h) = (a.text.insert.xy(), a.text.height.abs());
+                    let text = clean(&a.text.value);
+                    if !text.is_empty()
+                        && p.x.is_finite()
+                        && p.y.is_finite()
+                        && h.is_finite()
+                        && h > 0.0
+                        && rects.iter().any(|r| inside(*r, [p.x, p.y]))
+                    {
+                        out.push(Txt { text, at: [p.x, p.y], h, handle: e.handle, attrib: true });
+                    }
+                }
+                continue;
+            }
             _ => continue,
         };
         let h = h.abs();
@@ -477,7 +496,7 @@ fn sheet_texts(d: &Drawing, rects: &[[f64; 4]]) -> Vec<Txt> {
         for (i, l) in lines.iter().enumerate() {
             let text = clean(l);
             if !text.is_empty() {
-                out.push(Txt { text, at: [at.x, at.y - i as f64 * h * 1.6], h, handle: e.handle });
+                out.push(Txt { text, at: [at.x, at.y - i as f64 * h * 1.6], h, handle: e.handle, attrib: false });
             }
         }
     }
@@ -803,8 +822,8 @@ impl Keynotes {
             segs: Vec<Seg>,
             /// The circle round it or the mask under it (its box), when one is.
             tagged: Option<[f64; 4]>,
-            /// Its own text.
-            text: cadaddy_doc::Handle,
+            /// Its own text (its entity and point: a block's attributes share the entity).
+            text: (cadaddy_doc::Handle, [f64; 2]),
         }
         let mut cands: Vec<Cand> = Vec::new();
         for (si, ts) in by_sheet.iter().enumerate() {
@@ -822,12 +841,13 @@ impl Keynotes {
                 if list.note(&number).is_none() || t.h < 0.6 * list.body_h || t.h > 1.7 * list.body_h || lists_here.iter().any(|r| inside(*r, t.at)) {
                     continue;
                 }
-                let b = d.model.get(t.handle).map(|e| cadaddy_doc::entity_bounds(d, e, 0));
+                // A text's own box (an attribute's would be its whole block's).
+                let b = d.model.get(t.handle).filter(|_| !t.attrib).map(|e| cadaddy_doc::entity_bounds(d, e, 0));
                 let c = match b.filter(|b| !b.is_empty() && b.center().x.is_finite() && b.center().y.is_finite()) {
                     Some(b) => [b.center().x, b.center().y],
                     None => [t.at[0] + 0.3 * t.h * t.text.len() as f64, t.at[1] + 0.5 * t.h],
                 };
-                cands.push(Cand { sheet: si, list: li, number, c, h: t.h, segs: Vec::new(), tagged: None, text: t.handle });
+                cands.push(Cand { sheet: si, list: li, number, c, h: t.h, segs: Vec::new(), tagged: None, text: (t.handle, t.at) });
             }
         }
         if cands.is_empty() {
@@ -917,7 +937,7 @@ impl Keynotes {
             }
             let crowded = by_sheet.get(c.sheet).into_iter().flatten().any(|t| {
                 let mid = [t.at[0] + 0.3 * t.h * t.text.chars().count() as f64, t.at[1] + 0.5 * t.h];
-                t.handle != c.text && (mid[0] - c.c[0]).hypot(mid[1] - c.c[1]) <= reach_of(c.h) && shut(mid)
+                (t.handle, t.at) != c.text && (mid[0] - c.c[0]).hypot(mid[1] - c.c[1]) <= reach_of(c.h) && shut(mid)
             });
             if crowded {
                 continue;

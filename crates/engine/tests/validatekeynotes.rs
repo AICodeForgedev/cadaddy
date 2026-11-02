@@ -75,6 +75,54 @@ fn equipment_tag(s: &mut Session, p: [f64; 2], name: &str, n: &str) {
     s.execute("pline", &json!({"vertices": v, "closed": true})).unwrap();
 }
 
+/// An equipment tag whose name is a block's attribute, its number a text, in a hexagon.
+fn block_tag(s: Session, p: [f64; 2], name: &str, n: &str) -> Session {
+    let mut s = s;
+    let q = at(p);
+    layer(&mut s, "E-ANNO-KEYN");
+    text(&mut s, [q[0] - 2.0, q[1] - 7.0], n, 6.0);
+    let v: Vec<[f64; 2]> =
+        (0..6).map(|i| f64::from(i) * std::f64::consts::PI / 3.0).map(|t| [q[0] + 14.0 * t.cos(), q[1] + 14.0 * t.sin()]).collect();
+    s.execute("pline", &json!({"vertices": v, "closed": true})).unwrap();
+    let mut d = (*s.doc().unwrap()).clone();
+    let style = d.model.iter().find_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.clone()) } else { None }).unwrap();
+    if !d.blocks.contains_key("TAG") {
+        let mut b = Block::new("TAG");
+        let h = d.new_handle();
+        b.entities.push(Entity::new(h, EntityKind::Line(Line { a: Vec3::new(-1.0, 0.0, 0.0), b: Vec3::new(1.0, 0.0, 0.0) })));
+        d.blocks.insert("TAG".into(), Arc::new(b));
+    }
+    let attribs = vec![Attrib {
+        tag: "NAME".into(),
+        text: Text { value: name.into(), insert: Vec3::new(q[0] - 6.0, q[1] + 1.0, 0.0), height: 6.0, ..style },
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: AttribProps::default(),
+        multiline: None,
+        modes: AttribModes::default(),
+    }];
+    let ins = Insert {
+        block: "TAG".into(),
+        insert: Vec3::new(q[0], q[1], 0.0),
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs,
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+        clip: None,
+    };
+    let h = d.new_handle();
+    let mut e = Entity::new(h, EntityKind::Insert(ins));
+    e.common.layer = "E-ANNO-KEYN".into();
+    d.model.push(e);
+    let mut s2 = Session::empty();
+    s2.open_drawing(d, "Sample Job", None);
+    s2
+}
+
 /// A keynote marker drawn as its number over a mask (a wipeout blanking the linework under it).
 fn masked_marker(s: Session, level: u8, p: [f64; 2], n: &str) -> Session {
     let mut s = s;
@@ -265,7 +313,9 @@ fn job_with(mep_spec: Value, riser_box: (&str, &str)) -> Job {
     marker(&mut s, 1, [31.0, 9.0], "4");
     marker(&mut s, 1, [5.0, 20.0], "2");
     // Level 2's: a number over a mask, no hexagon.
-    let mut s = masked_marker(s, 2, [5.0, 20.0], "2");
+    let s = masked_marker(s, 2, [5.0, 20.0], "2");
+    // An equipment tag drawn as a block (its name an attribute) over a 3: no marker either.
+    let mut s = block_tag(s, [3.0, 9.0], "EUH", "3");
     // An equipment tag (EF over 3) and a circuit number with no hexagon: not markers.
     equipment_tag(&mut s, [3.0, 3.0], "EF", "3");
     layer(&mut s, "E-ANNO-TEXT");
@@ -375,6 +425,7 @@ fn a_box_present_of_the_wrong_size_and_missing_and_the_conduit_with_its_wall() {
     // The bare circuit number and the equipment tag's number are no markers.
     assert!(fs.iter().all(|f| (f["at"][0].as_f64().unwrap() - 18.0).abs() > 1.0), "{r}");
     assert!(fs.iter().all(|f| (f["at"][0].as_f64().unwrap() - 3.0).abs() > 1.5), "{r}");
+    assert!(fs.iter().all(|f| f["measured"]["keynote"]["number"] != "3" || f["at"][1].as_f64().unwrap() < 7.0), "{r}");
     // Keynote 4's exit sign: the luminaire whose schedule row says EXIT SIGN.
     let x = finding(&fs, "4", [31.0, 9.0], "exit_sign");
     assert_eq!(x["verdict"], "pass", "{x}");
