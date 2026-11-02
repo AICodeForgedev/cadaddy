@@ -55,7 +55,8 @@ const MAX_COUNT: u32 = 1_000;
 const MAX_NAME: usize = 60;
 /// Elements and built parts looked at, at most.
 const MAX_ELEMENTS: usize = 200_000;
-const MAX_ENTITIES: usize = 2_000_000;
+/// Objects looked at, at most: every one (as [`super::validate::MAX_ENTITIES`]).
+const MAX_ENTITIES: usize = super::validate::MAX_ENTITIES;
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 50;
 /// Findings written to `path`, at most.

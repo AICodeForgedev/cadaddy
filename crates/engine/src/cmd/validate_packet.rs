@@ -72,8 +72,8 @@ const TILE_PX: u32 = 2000;
 const MAX_TILES_SIDE: u32 = 4;
 const DEFAULT_IMAGES: usize = 40;
 const MAX_IMAGES: usize = 200;
-/// Objects looked at, at most.
-const MAX_ENTITIES: usize = 2_000_000;
+/// Objects looked at, at most: every one (as [`super::validate::MAX_ENTITIES`]).
+const MAX_ENTITIES: usize = super::validate::MAX_ENTITIES;
 /// Objects drawn in one picture, at most.
 const MAX_CROP_ENTITIES: usize = 400_000;
 const MAX_AREAS: usize = 50_000;
@@ -945,6 +945,66 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
     out
 }
 
+/// One wall of a packet: a built wall's pieces along one line (its openings split it) as one,
+/// from end to end.
+struct WholeWall<'a> {
+    of: &'a v::ModelWall,
+    a: [f64; 2],
+    b: [f64; 2],
+    pieces: usize,
+}
+
+impl WholeWall<'_> {
+    /// Its handle, type, thickness, centreline and both face lines (each named by the way it
+    /// faces).
+    fn to_json(&self) -> Value {
+        let w = self.of;
+        let (dx, dy) = (self.b[0] - self.a[0], self.b[1] - self.a[1]);
+        let len = dx.hypot(dy);
+        let half = (w.thickness_in / 24.0).max(0.0);
+        let n = if len > 1e-9 { [-dy / len * half, dx / len * half] } else { [0.0, 0.0] };
+        let face = |k: f64| json!({"face": compass(n[0] * k, n[1] * k), "a_ft": pt([self.a[0] + n[0] * k, self.a[1] + n[1] * k]), "b_ft": pt([self.b[0] + n[0] * k, self.b[1] + n[1] * k])});
+        json!({
+            "handle": w.id, "type": w.wall_type, "thickness_in": r2(w.thickness_in), "stud_in": w.stud_in.map(r2),
+            "a_ft": pt(self.a), "b_ft": pt(self.b), "length_ft": r2(len), "faces": [face(1.0), face(-1.0)], "pieces": self.pieces,
+        })
+    }
+}
+
+/// `pieces` as whole walls: the pieces of one wall (one handle, as thick) on one line are one
+/// wall from its first end to its last; walls in handle order.
+fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
+    const ON_LINE_FT: f64 = 1.0 / 12.0;
+    let mut ps: Vec<&v::ModelWall> = pieces.to_vec();
+    ps.sort_by(|a, b| a.id.cmp(&b.id).then(a.a[0].total_cmp(&b.a[0])).then(a.a[1].total_cmp(&b.a[1])));
+    let mut out: Vec<WholeWall> = Vec::new();
+    for p in ps {
+        let joined = out.iter_mut().rev().take_while(|w| w.of.id == p.id).find(|w| {
+            let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+            let len = dx.hypot(dy);
+            if len <= 1e-9 || (w.of.thickness_in - p.thickness_in).abs() > 0.5 {
+                return false;
+            }
+            let off = |q: [f64; 2]| ((q[0] - w.a[0]) * dy - (q[1] - w.a[1]) * dx).abs() / len;
+            off(p.a) <= ON_LINE_FT && off(p.b) <= ON_LINE_FT
+        });
+        match joined {
+            Some(w) => {
+                let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+                let len2 = dx * dx + dy * dy;
+                let s = |q: [f64; 2]| ((q[0] - w.a[0]) * dx + (q[1] - w.a[1]) * dy) / len2;
+                let (s0, s1) = [s(p.a), s(p.b)].iter().fold((0.0_f64, 1.0_f64), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+                let a0 = w.a;
+                w.a = [a0[0] + dx * s0, a0[1] + dy * s0];
+                w.b = [a0[0] + dx * s1, a0[1] + dy * s1];
+                w.pieces += 1;
+            }
+            None => out.push(WholeWall { of: p, a: p.a, b: p.b, pieces: 1 }),
+        }
+    }
+    out
+}
+
 /// What the packet knows of the model in the area.
 struct InArea {
     objects: Value,
@@ -1151,15 +1211,13 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         })
         .collect();
     let mut wall_types = BTreeSet::new();
-    let mut ws: Vec<&&v::ModelWall> = walls.iter().collect();
-    ws.sort_by(|a, b| a.id.cmp(&b.id));
-    let walls_json: Vec<Value> = ws
+    let walls_json: Vec<Value> = whole_walls(&walls)
         .iter()
         .map(|w| {
-            if let Some(t) = &w.wall_type {
+            if let Some(t) = &w.of.wall_type {
                 wall_types.insert(t.clone());
             }
-            json!({"handle": w.id, "type": w.wall_type, "a_ft": pt(w.a), "b_ft": pt(w.b), "thickness_in": r2(w.thickness_in), "stud_in": w.stud_in.map(r2)})
+            w.to_json()
         })
         .collect();
     if !walls_json.is_empty() {
