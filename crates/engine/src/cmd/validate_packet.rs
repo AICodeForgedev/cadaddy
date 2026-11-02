@@ -24,9 +24,13 @@
 //!   - `objects.json`: every model element in the area (handle, kind, trade, mark, tag, name,
 //!     level, room, position, height above the floor, host wall and face, mounting, size,
 //!     system, circuit, switch leg, maker, catalog number, submittal, source sheet and point, and
-//!     the `bim.validate` failures already found for it), the runs, walls and openings.
-//!   - `rules.json`: the validation rules (`validate.rules`) that apply to the kinds present,
-//!     with the project's overrides applied.
+//!     the `bim.validate` failures already found for it), the runs, walls and openings. A
+//!     generic element's kind (`device`) is what its records, the job's legend and tables or
+//!     the project say it is ([`super::validate_kind`]; `kind_read` the kind as built,
+//!     `kind_from` where the kind came from), its `category` the IFC class it is written as,
+//!     and its trade that category's (an air terminal and an exhaust fan are mechanical).
+//!   - `rules.json`: the validation rules (`validate.rules`) that apply to the kinds, BIM
+//!     categories and marks present, with the project's overrides applied.
 //!   - `prompt.md`: the judging agent's instructions, made from those rules.
 //!
 //! The same drawing and area give byte-identical `manifest.json`, `objects.json`, `rules.json`
@@ -51,6 +55,7 @@ use serde_json::{Value, json};
 
 use super::bspec::current;
 use super::validate::{Frame, PROV_APP, model_of, prints_from_job, prints_of};
+use super::validate_kind::{Kinds, Resolved};
 use super::validate_prescreen::{self as ps, UnitOf};
 use super::validate_rules::{self as vr, Effective};
 use super::*;
@@ -787,6 +792,25 @@ impl Texts {
 
 // ---------------------------------------------------------------- the model in the area
 
+/// The trade of an element: the trade of the first rule naming its BIM category (an air terminal
+/// and an exhaust fan are mechanical), else of its kind.
+fn trade_of(r: &Resolved, rules: &[Effective]) -> &'static str {
+    let by_category = r
+        .category
+        .as_deref()
+        .and_then(|c| rules.iter().find(|x| x.rule.trade != "general" && x.rule.applies_to.categories.iter().any(|k| k.eq_ignore_ascii_case(c))));
+    match by_category {
+        Some(x) => vr::TRADES.iter().find(|t| **t == x.rule.trade).copied().unwrap_or("general"),
+        None => trade_of_kind(&r.kind, rules),
+    }
+}
+
+/// A model element's kind, resolved ([`super::validate_kind`]).
+fn resolve_element(d: &Drawing, kinds: &Kinds, e: &v::Element) -> Resolved {
+    let ent = cadaddy_doc::Handle::parse_hex(&e.id).and_then(|h| d.model.get(h)).map(|a| a.as_ref());
+    kinds.resolve(&e.kind, e.mark.as_deref().or(e.tag.as_deref()), ent)
+}
+
 /// The trade an element kind belongs to: the first trade rule that applies, else by its words.
 fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
     if let Some(r) =
@@ -895,7 +919,13 @@ fn field(props: &[(String, String)], fields: &BTreeMap<String, String>, keys: &[
 /// of equipment, a device or light it modelled), on the area's level near it.
 struct BuiltPart {
     handle: String,
+    /// What it is, resolved ([`super::validate_kind`]).
     kind: String,
+    /// As the build tags it, when that differs (`device`, `fixture`).
+    kind_read: Option<String>,
+    kind_from: &'static str,
+    category: Option<String>,
+    mark: Option<String>,
     /// Its plan box, building feet.
     rect: [f64; 4],
     /// Its bottom and top above the floor, inches.
@@ -905,7 +935,7 @@ struct BuiltPart {
 }
 
 /// The build's MEP parts on `area`'s level within `reach` feet of it.
-fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach: f64) -> Vec<BuiltPart> {
+fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach: f64, kinds: &Kinds) -> Vec<BuiltPart> {
     const MEP_KINDS: [&str; 7] = ["duct", "pipe", "conduit", "equipment", "fixture", "device", "light_fixture"];
     let upf = frame.upf();
     let floor = sp.level(&area.level).map_or(0.0, |l| l.elevation_ft) * upf;
@@ -936,7 +966,19 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
             }
             _ => None,
         };
-        out.push(BuiltPart { handle: e.handle.hex(), kind, rect, z_in, from: super::bimlook::made_source(e).map(|h| h.hex()) });
+        let mark = super::validate_kind::mark_of(e);
+        let r = kinds.resolve(&kind, mark.as_deref(), Some(e));
+        out.push(BuiltPart {
+            handle: e.handle.hex(),
+            kind_read: (r.kind != kind).then_some(kind),
+            kind: r.kind,
+            kind_from: r.from,
+            category: r.category,
+            mark,
+            rect,
+            z_in,
+            from: super::bimlook::made_source(e).map(|h| h.hex()),
+        });
         if out.len() >= MAX_OBJECTS {
             break;
         }
@@ -1009,13 +1051,15 @@ fn whole_walls<'a>(pieces: &[&'a v::ModelWall]) -> Vec<WholeWall<'a>> {
 struct InArea {
     objects: Value,
     kinds: BTreeSet<String>,
+    /// The BIM categories (IFC classes) of what is in the area.
+    categories: BTreeSet<String>,
     marks: BTreeSet<String>,
     wall_types: BTreeSet<String>,
     submittals: BTreeSet<String>,
     counts: Value,
 }
 
-fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rules: &[Effective], built: &[BuiltPart]) -> InArea {
+fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rules: &[Effective], built: &[BuiltPart], kinds_of: &Kinds) -> InArea {
     let upf = super::elemprops::units_per_foot(d);
     let reach = grow(area.bbox, 1.0);
     let lvl = |l: &str| l.eq_ignore_ascii_case(&area.level);
@@ -1030,6 +1074,7 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     let walls: Vec<&v::ModelWall> = model.walls.iter().filter(|w| lvl(&w.level) && segment_touches(reach, w.a, w.b)).take(MAX_OBJECTS).collect();
     let centre = [(area.bbox[0] + area.bbox[2]) / 2.0, (area.bbox[1] + area.bbox[3]) / 2.0];
     let mut kinds = BTreeSet::new();
+    let mut categories = BTreeSet::new();
     let mut marks = BTreeSet::new();
     let mut submittals = BTreeSet::new();
     let mut elements: Vec<Value> = Vec::new();
@@ -1037,7 +1082,11 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     els.sort_by(|a, b| (a.kind.as_str(), a.id.as_str()).cmp(&(b.kind.as_str(), b.id.as_str())));
     let total_elements = els.len();
     for e in els.into_iter().take(MAX_OBJECTS) {
-        kinds.insert(e.kind.clone());
+        let rk = resolve_element(d, kinds_of, e);
+        kinds.insert(rk.kind.clone());
+        if let Some(c) = &rk.category {
+            categories.insert(c.clone());
+        }
         if let Some(m) = &e.mark {
             marks.insert(m.clone());
         }
@@ -1086,8 +1135,11 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&e.id))).map(fail_json).collect();
         elements.push(json!({
             "handle": e.id,
-            "kind": e.kind,
-            "trade": trade_of_kind(&e.kind, rules),
+            "kind": rk.kind,
+            "kind_read": (rk.kind != e.kind).then_some(&e.kind),
+            "kind_from": rk.from,
+            "category": rk.category,
+            "trade": trade_of(&rk, rules),
             "mark": e.mark,
             "tag": e.tag,
             "name": field(&props, &e.fields, &["name", "description"]),
@@ -1127,6 +1179,9 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         }
         built_listed += 1;
         kinds.insert(b.kind.clone());
+        if let Some(c) = &b.category {
+            categories.insert(c.clone());
+        }
         let ent = cadaddy_doc::Handle::parse_hex(&b.handle).and_then(|h| d.model.get(h));
         let mut props: Vec<(String, String)> = Vec::new();
         let mut print_src: Option<Value> = None;
@@ -1142,7 +1197,7 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         }
         props.sort();
         let none = BTreeMap::new();
-        let mark = field(&props, &none, &["mark", "type_mark", "type"]);
+        let mark = b.mark.clone().or_else(|| field(&props, &none, &["mark", "type_mark", "type"]));
         if let Some(m) = &mark {
             marks.insert(m.clone());
         }
@@ -1156,8 +1211,11 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
         elements.push(json!({
             "handle": b.handle,
             "kind": b.kind,
+            "kind_read": b.kind_read,
+            "kind_from": b.kind_from,
+            "category": b.category,
             "built": true,
-            "trade": trade_of_kind(&b.kind, rules),
+            "trade": trade_of(&Resolved { kind: b.kind.clone(), from: b.kind_from, category: b.category.clone() }, rules),
             "mark": mark,
             "name": field(&props, &none, &["name", "description"]),
             "level": area.level,
@@ -1250,13 +1308,19 @@ fn in_area(d: &Drawing, model: &Model, prints: Option<&Prints>, area: &Area, rul
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, marks, wall_types, submittals, counts }
+    InArea { objects, kinds, categories, marks, wall_types, submittals, counts }
 }
 
 // ---------------------------------------------------------------- rules and prompt
 
-fn rules_for<'a>(kinds: &BTreeSet<String>, all: &'a [Effective]) -> (Vec<&'a Effective>, Vec<String>) {
-    let applies = |r: &Effective| kinds.iter().any(|k| r.rule.applies_to_kind(k));
+/// The rules that apply to what is in the area, by its kinds, BIM categories and marks: the
+/// ones in use, and the ones the project turned off.
+fn rules_for<'a>(here: &InArea, all: &'a [Effective]) -> (Vec<&'a Effective>, Vec<String>) {
+    let applies = |r: &Effective| {
+        here.kinds.iter().any(|k| r.rule.applies_to_kind(k))
+            || here.categories.iter().any(|c| r.rule.applies_to_element("", Some(c), None))
+            || here.marks.iter().any(|m| r.rule.applies_to_element("", None, Some(m)))
+    };
     let on: Vec<&Effective> = all.iter().filter(|r| r.enabled && applies(r)).collect();
     let off: Vec<String> = all.iter().filter(|r| !r.enabled && applies(r)).map(|r| r.rule.id.clone()).collect();
     (on, off)
@@ -1429,6 +1493,7 @@ fn model_drawing(
     rules: &[Effective],
     built: &[BuiltPart],
     upf: f64,
+    kinds: &Kinds,
 ) -> Drawing {
     let mut od = Drawing::new_imperial();
     od.blocks = d.blocks.clone();
@@ -1492,7 +1557,7 @@ fn model_drawing(
     }
     // The build's MEP parts: their plan boxes.
     for b in built {
-        let col = trade_colour(trade_of_kind(&b.kind, rules));
+        let col = trade_colour(trade_of(&Resolved { kind: b.kind.clone(), from: b.kind_from, category: b.category.clone() }, rules));
         let c = corners(b.rect);
         for w in c.iter().zip(c.iter().cycle().skip(1)) {
             if let (Some(a), Some(z)) = (to(*w.0), to(*w.1)) {
@@ -1504,7 +1569,7 @@ fn model_drawing(
     let text_h = 0.35 * upf * sc;
     for e in model.elements.iter().filter(|e| lvl(&e.level) && inside(reach, e.at)).take(MAX_OBJECTS) {
         let Some(c) = to(e.at) else { continue };
-        let col = trade_colour(trade_of_kind(&e.kind, rules));
+        let col = trade_colour(trade_of(&resolve_element(d, kinds, e), rules));
         let vertices = [(-half, -half), (half, -half), (half, half), (-half, half)]
             .iter()
             .map(|(dx, dy)| cadaddy_geom::PolyVertex { p: Vec2::new(c.x + dx, c.y + dy), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
@@ -1950,8 +2015,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let upf = frame.upf();
 
     // What the model holds here, and the rules that apply.
-    let built = built_parts(d, &sp, &frame, &area, 30.0);
-    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built);
+    let kinds = Kinds::of(d, &sp, prints.as_ref());
+    let built = built_parts(d, &sp, &frame, &area, 30.0, &kinds);
+    let mut here = in_area(d, &model, prints.as_ref(), &area, &all_rules, &built, &kinds);
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -1988,7 +2054,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
         here.objects["unit"] = j;
     }
-    let (mut rules_on, mut rules_off) = rules_for(&here.kinds, &all_rules);
+    let (mut rules_on, mut rules_off) = rules_for(&here, &all_rules);
     // Only the rules a validate run asked for (`rules`): the others are listed as left out.
     if let Some(only) = &only_rules {
         rules_off.extend(rules_on.iter().filter(|r| !only.contains(&r.rule.id)).map(|r| r.rule.id.clone()));
@@ -2232,12 +2298,12 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             ("overlay", Some(i), _) => {
                 let Some(c) = crops.iter().find(|(k, _)| *k == i).map(|(_, c)| *c) else { continue };
                 let place = c.place.clone().unwrap_or(Place::Same);
-                let od = model_drawing(d, &index.within(c.rect), &model, &area, &frame, &place, &all_rules, &built, upf);
+                let od = model_drawing(d, &index.within(c.rect), &model, &area, &frame, &place, &all_rules, &built, upf, &kinds);
                 write_png(&m.file, render_drawing(&od, c.rect, c.px), &mut left_out)?
             }
             ("plan", _, _) => {
                 let (Some(rect), Some(px)) = (m.rect, m.px) else { continue };
-                let od = model_drawing(d, &[], &model, &area, &frame, &Place::Same, &all_rules, &built, upf);
+                let od = model_drawing(d, &[], &model, &area, &frame, &Place::Same, &all_rules, &built, upf, &kinds);
                 write_png(&m.file, render_drawing(&od, rect, px), &mut left_out)?
             }
             (_, _, Some(r)) => {

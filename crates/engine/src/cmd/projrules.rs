@@ -114,6 +114,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if matches!(domain, RuleDomain::Tolerance | RuleDomain::Custom) && super::validate_rules::is_override_key(key) {
         super::validate_rules::check_override(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
     }
+    // What a mark is (validate.kind.<mark>) must name a mark and a kind.
+    if super::validate_kind::is_kind_key(key) {
+        super::validate_kind::check_kind_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
+    }
     // A room type's expected set (prescreen.expect.<room type>) must read.
     if super::validate_prescreen::is_expect_key(key) {
         super::validate_prescreen::check_expect_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;

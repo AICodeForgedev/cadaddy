@@ -258,9 +258,12 @@ fn an_upper_floor_element_stands_in_its_room_by_its_wall() {
     for (level, _, _) in LEVELS {
         let r = s.execute("validate.prescreen", &json!({"level": level, "rules": ["G-HOST"], "all": true, "limit": 50})).unwrap();
         let host: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["rule"] == "G-HOST").collect();
-        assert_eq!(host.len(), 1, "{level}'s plan receptacle is measured: {r:#}");
-        assert!(host.iter().all(|f| f["verdict"] == "pass" && f["level"] == level), "{level}: {r:#}");
-        let a = nums(&host[0]["at"]);
+        // The plan's receptacle, and the built device the job's tag names a receptacle (Q6128).
+        assert_eq!(host.len(), 2, "{level}'s receptacles are measured: {r:#}");
+        assert!(host.iter().all(|f| f["verdict"] == "pass" && f["level"] == level && f["kind"] == "receptacle"), "{level}: {r:#}");
+        let plan: Vec<&&Value> = host.iter().filter(|f| f["built"] == false).collect();
+        assert_eq!(plan.len(), 1, "{level}: {r:#}");
+        let a = nums(&plan[0]["at"]);
         assert!((a[0] - PLAN_RECEP[0]).abs() < 1.0 && (a[1] - PLAN_RECEP[1]).abs() < 1.0, "{level}: {r:#}");
     }
 }
