@@ -78,19 +78,23 @@ pub enum TagVerdict {
     Unlisted(String),
 }
 
-/// Words of a heading whose table lists no devices: panel, door, room, wall and finish tables,
-/// and the site, planting, material and code tables (`PLANT LEGEND`, `OCCUPANT LOAD FACTOR
-/// LEGEND`), whose marks a device's mark can share.
-const NOT_DEVICE_TABLES: &[&str] = &[
-    "PANEL",
-    "DOOR",
-    "WINDOW",
-    "ROOM",
-    "FINISH",
-    "WALL",
-    "PARTITION",
-    "SEE ",
-    "REFER",
+/// Whether a heading names a table of device types: a symbol/electrical legend or a
+/// fixture/luminaire/device/equipment schedule. Panel, door, room and wall tables don't.
+pub fn is_device_table_heading(t: &str) -> bool {
+    let u = t.trim().to_ascii_uppercase();
+    if u.len() > 60 || ["PANEL", "DOOR", "WINDOW", "ROOM", "FINISH", "WALL", "PARTITION", "SEE ", "REFER"].iter().any(|w| u.contains(w)) {
+        return false;
+    }
+    if u.contains("LEGEND") {
+        return true;
+    }
+    u.contains("SCHEDULE") && ["FIXTURE", "LUMINAIRE", "LIGHTING", "LIGHT", "DEVICE", "EQUIPMENT", "FAN"].iter().any(|w| u.contains(w))
+}
+
+/// Words of a heading whose table, a legend or a schedule all the same, lists no device types:
+/// the site, planting, material, code and structural tables (`PLANT LEGEND`, `OCCUPANT LOAD
+/// FACTOR LEGEND`, `COLUMN FOUNDATION SCHEDULE`), whose marks a device's mark can share.
+const NOT_DEVICE_TYPES: &[&str] = &[
     "PLANT",
     "EROSION",
     "MATERIAL",
@@ -108,18 +112,11 @@ const NOT_DEVICE_TABLES: &[&str] = &[
     "LINTEL",
 ];
 
-/// Whether a heading names a table of device types: a symbol/electrical legend or a
-/// fixture/luminaire/device/equipment schedule. Panel, door, room, wall, site and structural
-/// tables don't.
-pub fn is_device_table_heading(t: &str) -> bool {
+/// Whether a heading's table lists device types ([`read_legend`]): a device table
+/// ([`is_device_table_heading`]) that isn't another trade's ([`NOT_DEVICE_TYPES`]).
+pub fn lists_device_types(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
-    if u.len() > 60 || NOT_DEVICE_TABLES.iter().any(|w| u.contains(w)) {
-        return false;
-    }
-    if u.contains("LEGEND") {
-        return true;
-    }
-    u.contains("SCHEDULE") && ["FIXTURE", "LUMINAIRE", "LIGHTING", "LIGHT", "DEVICE", "EQUIPMENT", "FAN"].iter().any(|w| u.contains(w))
+    is_device_table_heading(&u) && !NOT_DEVICE_TYPES.iter().any(|w| u.contains(w))
 }
 
 /// Most designations kept from one set.
@@ -148,7 +145,7 @@ pub fn designations(texts: &[TextItem]) -> BTreeMap<String, String> {
 /// text of each row) and extent.
 pub fn read_legend(texts: &[TextItem]) -> Legend {
     let mut out = Legend::default();
-    let headings = texts.iter().filter(|t| is_device_table_heading(&t.value) && t.height > 0.0 && t.height.is_finite()).take(MAX_TABLES);
+    let headings = texts.iter().filter(|t| lists_device_types(&t.value) && t.height > 0.0 && t.height.is_finite()).take(MAX_TABLES);
     for h in headings {
         let hh = h.height;
         let (x0, x1) = (h.at.x - LEFT_REACH * hh, h.at.x + RIGHT_REACH * hh);
@@ -414,9 +411,10 @@ mod tests {
             "OCCUPANT LOAD FACTOR LEGEND",
             "MATERIAL LEGEND",
         ] {
-            assert!(!is_device_table_heading(h), "{h}");
+            assert!(!lists_device_types(h), "{h}");
         }
-        assert!(is_device_table_heading("LIFE SAFETY LEGEND"), "its pull stations and extinguishers are");
+        assert!(lists_device_types("LIFE SAFETY LEGEND"), "its pull stations and extinguishers are");
+        assert!(is_device_table_heading("PLANT LEGEND"), "still a legend (its rows aren't notes), of no device types");
     }
 
     /// Q6165: a sheet's tags are its own legends' types: with a legend in the set, a sheet whose
