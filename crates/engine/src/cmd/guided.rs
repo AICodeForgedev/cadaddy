@@ -4309,6 +4309,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
         all_devices.extend(fixtures);
     }
+    if schedule.is_some() || job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+        let stacks = plumbing_stacks(s.doc()?, job);
+        if !stacks.is_empty() {
+            progress_line(&format!("  waste and vent stacks the plumbing plans letter: {}", stacks.len()));
+            all_devices.extend(stacks);
+        }
+    }
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
@@ -4388,6 +4395,32 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let before = out.len();
                 let mut out = out;
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
+                let near = DUPLICATE_FIXTURE_FT * upf_dev;
+                let mut kept: Vec<(String, String, [f64; 2])> = Vec::new();
+                let before_dupes = out.len();
+                let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                out.retain(|dv| {
+                    if dv.kind != "plumbing fixture" && dv.kind != "plumbing stack" {
+                        return true;
+                    }
+                    let key = (dv.tag.clone(), digits(&dv.level));
+                    if kept.iter().any(|(t, l, at)| *t == key.0 && *l == key.1 && (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near) {
+                        return false;
+                    }
+                    kept.push((key.0, key.1, dv.at));
+                    true
+                });
+                if out.len() < before_dupes {
+                    progress_line(&format!("  plumbing fixtures tagged on two plans, one kept: {}", before_dupes - out.len()));
+                }
+                // The guest rooms the plumbing plans don't show take the fixture set of a room of
+                // their type that the plans do.
+                let (fixture_copies, fixture_report) = copy_room_fixtures(s.doc()?, job, &out);
+                if !fixture_copies.is_empty() {
+                    progress_line(&format!("  plumbing fixtures laid into the rooms of their type: {} ({fixture_report:?})", fixture_copies.len()));
+                    stamped.extend(fixture_copies);
+                }
                 if connected > 0 {
                     progress_line(&format!("  equipment connections (EF, PTAC tags) put at their equipment: {connected}"));
                 }
@@ -4431,6 +4464,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
+        }
+        // The stacks are pipes through the storey, not devices.
+        let (stacks, devices): (Vec<super::readers::ReadDevice>, Vec<super::readers::ReadDevice>) =
+            devices.into_iter().partition(|dv| dv.kind == "plumbing stack");
+        if !stacks.is_empty()
+            && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        {
+            let n = stacks_as_risers(&mut sp, &stacks);
+            if n > 0 {
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+            let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
+            for st in &stacks {
+                *by.entry((st.level.clone(), st.leg.clone())).or_default() += 1;
+            }
+            progress_line(&format!("  waste and vent stacks as risers: {n} ({by:?})"));
         }
         match super::readers::place_devices(s, &devices, "guided job") {
             Ok(mut v) => {
@@ -5494,6 +5543,19 @@ fn turn_vec(v: cadaddy_geom::Vec2, k: u8) -> cadaddy_geom::Vec2 {
         3 => cadaddy_geom::Vec2::new(v.y, -v.x),
         _ => v,
     }
+}
+
+/// [`turn_vec`] undone.
+fn unturn_vec(v: cadaddy_geom::Vec2, k: u8) -> cadaddy_geom::Vec2 {
+    let back = turn_vec(v, (4 - k % 4) % 4);
+    if k >= 4 { cadaddy_geom::Vec2::new(-back.x, back.y) } else { back }
+}
+
+/// Where a point `q` of the room came from in the view, for a rigid `fit` ([`place_in_room`]
+/// undone).
+fn view_point(q: [f64; 2], fit: RoomFit) -> Option<[f64; 2]> {
+    let p = fit.from + unturn_vec(cadaddy_geom::Vec2::new(q[0], q[1]) - fit.to, fit.k);
+    (fit.rigid && p.is_finite()).then_some([p.x, p.y])
 }
 
 /// Where `p` of the view `view` goes in a room spanning `room` by `fit`.
@@ -6594,10 +6656,138 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
     moved
 }
 
+/// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
+const DUPLICATE_FIXTURE_FT: f64 = 2.0;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
 const PTAC_CONNECTION_IN: f64 = 12.0;
+
+/// The plumbing fixtures of the guest rooms the plumbing plans show (the enlarged sanitary
+/// views draw one pair of rooms a floor, P-1 water closet, P-2 lavatory...): each room of the
+/// same type with none gets the fixture set of the room of its type that has the most, laid in
+/// the way a typical view of that type goes into each of the two (turned and mirrored as each
+/// room is). `placed`: the devices put onto the plans. The copies, and per type how many rooms.
+fn copy_room_fixtures(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    placed: &[super::readers::ReadDevice],
+) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>) {
+    let mut out = Vec::new();
+    let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let fixtures: Vec<&super::readers::ReadDevice> =
+        placed.iter().filter(|dv| dv.kind == "plumbing fixture" || dv.kind == "plumbing stack").collect();
+    if types.is_empty() || fixtures.is_empty() {
+        return (out, report);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    // Each typed room's fixtures.
+    let in_room: Vec<Vec<&super::readers::ReadDevice>> = rooms
+        .iter()
+        .map(|(_, level, outline, _)| {
+            fixtures
+                .iter()
+                .filter(|f| digits(&f.level) == digits(level) && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(f.at[0], f.at[1])))
+                .copied()
+                .collect()
+        })
+        .collect();
+    // The typical views of each type, with their linework.
+    let mut views: BTreeMap<BTreeSet<String>, Vec<([f64; 4], Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
+    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let titled: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let words = type_words(&v.title, Some(&vocabulary));
+                (types.contains(&words) && !v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
+            })
+            .collect();
+        if titled.is_empty() {
+            continue;
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        for (region, words) in titled {
+            let list = views.entry(words).or_default();
+            if list.len() >= 4 {
+                continue;
+            }
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
+            list.push((region, super::grids::line_samples(&ents, upf)));
+        }
+    }
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let fit = |vi: &([f64; 4], Vec<cadaddy_geom::Vec2>), ri: usize| {
+        let b = room_boxes.get(ri)?;
+        rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
+    };
+    for words in &types {
+        let Some(vs) = views.get(words) else { continue };
+        let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
+        // The type's fixture set: one of each tag the plans letter in the rooms of this type, the
+        // rooms with the most first (a tag lettered across the wall, in the room behind, would
+        // put a second where there is none), taken back into the view that goes into its room.
+        let near = 2.0 * upf;
+        let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
+        let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
+        let mut sources = 0usize;
+        let mut by_count: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
+        by_count.sort_by_key(|i| std::cmp::Reverse(in_room.get(*i).map_or(0, Vec::len)));
+        for src in by_count {
+            let Some((v, fit_src)) = vs.iter().filter(|v| v_used.is_none_or(|u| std::ptr::eq(u, *v))).find_map(|v| fit(v, src).map(|f| (v, f)))
+            else {
+                continue;
+            };
+            v_used = Some(v);
+            sources += 1;
+            for f in in_room.get(src).into_iter().flatten() {
+                let Some(p) = view_point(f.at, fit_src) else { continue };
+                if !set.iter().any(|(_, g)| g.tag == f.tag) {
+                    set.push((p, f));
+                }
+            }
+        }
+        let Some(v) = v_used else { continue };
+        // Each room of the type: the set's fixtures it hasn't (by tag, about there).
+        let mut took = 0usize;
+        for ri in of_type.iter().copied() {
+            let Some(fit_t) = fit(v, ri) else { continue };
+            let Some((name, level, _, number)) = rooms.get(ri) else { continue };
+            let b = room_boxes.get(ri).copied().unwrap_or_default();
+            let have = in_room.get(ri).cloned().unwrap_or_default();
+            let mut added = false;
+            for (p, f) in &set {
+                let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
+                if have.iter().any(|h| h.tag == f.tag && (h.at[0] - at[0]).hypot(h.at[1] - at[1]) <= near) {
+                    continue;
+                }
+                out.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
+                added = true;
+            }
+            took += usize::from(added);
+            if out.len() >= MAX_STAMPED {
+                break;
+            }
+        }
+        let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
+        let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
+        report.insert(format!("{label}: set {tags:?} from {sources} rooms the plans tag"), took);
+    }
+    (out, report)
+}
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -6947,16 +7137,20 @@ fn plumbing_fixtures(
         .collect();
     let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
     for e in d.model.iter() {
-        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
-        let value = t.value.trim();
-        if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0) {
-            continue;
-        }
+        // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
+        let lettered: Vec<&cadaddy_doc::Text> = match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) => vec![t],
+            cadaddy_doc::EntityKind::Insert(ins) => ins.attribs.iter().take(8).map(|a| &a.text).collect(),
+            _ => continue,
+        };
         let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
-        if sheet_key(sheet) == value {
-            continue;
+        for t in lettered {
+            let value = t.value.trim();
+            if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite()) || sheet_key(sheet) == value {
+                continue;
+            }
+            found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
         }
-        found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
         if found.len() >= MAX_FIXTURES {
             break;
         }
@@ -6976,6 +7170,133 @@ fn plumbing_fixtures(
             ..Default::default()
         })
         .collect()
+}
+
+/// The waste and vent stacks the plumbing plans letter (`3" WASTE` over `STACK VENT`, `2" VENT
+/// STACK`): each where its leader ends, as an item of kind `plumbing stack` (tag: its size and
+/// words, leg: its system, `SAN` or `V`), placed and laid into the rooms like the fixtures.
+fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::readers::ReadDevice> {
+    let spans: Vec<(&str, u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
+        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
+        .collect();
+    let sheet_of = |h: u64| spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map(|(s, _, _)| *s);
+    let mut texts: Vec<(String, cadaddy_geom::Vec2, f64, &str)> = Vec::new();
+    let mut segs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2, &str)> = Vec::new();
+    for e in d.model.iter() {
+        let Some(sheet) = sheet_of(e.handle.0) else { continue };
+        match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.height.is_finite() && t.height > 0.0 && t.insert.is_finite() && texts.len() < MAX_FIXTURES => {
+                texts.push((t.value.trim().to_ascii_uppercase(), t.insert.xy(), t.height, sheet));
+            }
+            cadaddy_doc::EntityKind::Line(l) if segs.len() < MAX_LEADER_PIECES => segs.push((l.a.xy(), l.b.xy(), sheet)),
+            cadaddy_doc::EntityKind::LwPolyline(pl) if !pl.closed && pl.vertices.len() <= 8 && segs.len() < MAX_LEADER_PIECES => {
+                segs.extend(pl.vertices.windows(2).filter_map(|w| Some((w.first()?.p, w.get(1)?.p, sheet))));
+            }
+            _ => {}
+        }
+    }
+    // `3"`, `1 1/2"`, `4"` at the start: the pipe size.
+    let size_of = |t: &str| -> Option<f64> {
+        let (num, _) = t.split_once('"')?;
+        let num = num.trim().replace('-', " ");
+        let mut total = 0.0;
+        for part in num.split_whitespace().take(2) {
+            total += match part.split_once('/') {
+                Some((a, b)) => a.parse::<f64>().ok()? / b.parse::<f64>().ok().filter(|b| *b > 0.0)?,
+                None => part.parse::<f64>().ok()?,
+            };
+        }
+        (total > 0.0 && total <= 12.0).then_some(total)
+    };
+    let mut out = Vec::new();
+    for (value, at, h, sheet) in &texts {
+        let Some(size) = size_of(value) else { continue };
+        if !(value.contains("WASTE") || value.contains("VENT") || value.contains("SOIL")) {
+            continue;
+        }
+        // Its second line (`STACK VENT` under `3" WASTE`).
+        let under = texts.iter().find(|(v, p, _, s2)| {
+            s2 == sheet && v.starts_with("STACK") && (p.x - at.x).abs() <= 2.0 * h && at.y - p.y > 0.0 && at.y - p.y <= 2.2 * h
+        });
+        let label = match under {
+            Some((v, ..)) => format!("{value} {v}"),
+            None => value.clone(),
+        };
+        if !label.contains("STACK") {
+            continue;
+        }
+        let width = 0.8 * h * label.chars().count().min(24) as f64;
+        let lo = cadaddy_geom::Vec2::new(at.x - 1.5 * h, under.map_or(at.y, |u| u.1.y) - 1.5 * h);
+        let hi = cadaddy_geom::Vec2::new(at.x + width + 1.5 * h, at.y + 2.5 * h);
+        let near = |p: cadaddy_geom::Vec2| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y;
+        // Its leader: a straight piece from the label out, to its far end.
+        let Some(end) = segs
+            .iter()
+            .filter(|(_, _, s2)| s2 == sheet)
+            .filter_map(|(a, b, _)| match (near(*a), near(*b)) {
+                (true, false) => Some(*b),
+                (false, true) => Some(*a),
+                _ => None,
+            })
+            .max_by(|p, q| p.dist(*at).total_cmp(&q.dist(*at)))
+            .filter(|e| e.dist(*at) <= 40.0 * h)
+        else {
+            continue;
+        };
+        let system = if label.contains("WASTE") || label.contains("SOIL") { "SAN" } else { "V" };
+        out.push(super::readers::ReadDevice {
+            tag: format!("{label} ({size}\")"),
+            at: [end.x, end.y],
+            sheet: (*sheet).to_string(),
+            level: job.level_at([end.x, end.y]).map_or_else(String::new, |r| r.level.clone()),
+            kind: "plumbing stack".into(),
+            leg: system.into(),
+            ..Default::default()
+        });
+        if out.len() >= MAX_FIXTURES {
+            break;
+        }
+    }
+    out
+}
+
+/// The stacks ([`plumbing_stacks`]), placed, as risers through their storey: the system (a
+/// sanitary one made when the spec has none) and size their label gives. How many.
+fn stacks_as_risers(sp: &mut cadaddy_walk3d::BuildingSpec, stacks: &[super::readers::ReadDevice]) -> usize {
+    if stacks.iter().any(|st| st.leg == "SAN")
+        && !sp.mep.systems.iter().any(|y| y.name == "SAN")
+        && let Ok(sys) = serde_json::from_value(
+            json!({"name": "SAN", "kind": "pipe", "layer": "P-SAN", "size_in": [3.0, 0.0], "bottom_ft": 0.0, "color_index": 30, "show": true}),
+        )
+    {
+        sp.mep.systems.push(sys);
+    }
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut n = 0usize;
+    for st in stacks {
+        let Some(lv) =
+            sp.level(&st.level).or_else(|| sp.levels.iter().find(|l| !digits(&st.level).is_empty() && digits(&l.name) == digits(&st.level)))
+        else {
+            continue;
+        };
+        let (name, top) = (lv.name.clone(), lv.height_ft);
+        if !(sp.mep.systems.iter().any(|y| y.name == st.leg) && top.is_finite() && top > 0.0) {
+            continue;
+        }
+        let size = st.tag.rsplit_once('(').and_then(|(_, r)| r.trim_end_matches(')').trim_end_matches('"').parse::<f64>().ok()).unwrap_or(3.0);
+        let Ok(run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
+            "system": st.leg, "level": name, "points": [st.at], "size_in": [size, 0.0], "bottoms_ft": [0.0], "top_ft": top,
+            "height_source": "stack through the storey", "size_source": "tag", "source_sheet": st.sheet,
+        })) else {
+            continue;
+        };
+        sp.mep.runs.push(run);
+        n += 1;
+    }
+    n
 }
 
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
@@ -11396,6 +11717,81 @@ mod tests {
         let mut near = vec![super::super::readers::ReadDevice { tag: "EF".into(), at: [17.0, 120.0], level: "Level 3".into(), ..Default::default() }];
         assert_eq!(connect_to_equipment(&[eq], &mut near, 180.0), 1);
         assert_eq!(near[0].at, [17.0, 16.0]);
+    }
+
+    #[test]
+    fn a_rooms_point_goes_back_to_the_view_for_every_turn() {
+        // Room to view to another room: each of the eight turns undone exactly.
+        let view = [0.0, 0.0, 144.0, 288.0];
+        for k in 0..8u8 {
+            let fit = RoomFit { k, from: cadaddy_geom::Vec2::new(72.0, 144.0), to: cadaddy_geom::Vec2::new(10_072.0, 144.0), rigid: true };
+            for p in [[10.0, 20.0], [130.0, 270.0], [72.0, 0.0]] {
+                let q = place_in_room(p, view, [10_000.0, 0.0, 10_144.0, 288.0], fit).unwrap();
+                let back = view_point(q, fit).unwrap();
+                assert!((back[0] - p[0]).abs() < 1e-9 && (back[1] - p[1]).abs() < 1e-9, "k {k}: {p:?} -> {q:?} -> {back:?}");
+            }
+        }
+        // A fit by shares of the box can't be undone.
+        let loose = RoomFit { k: 0, from: cadaddy_geom::Vec2::new(0.0, 0.0), to: cadaddy_geom::Vec2::new(0.0, 0.0), rigid: false };
+        assert!(view_point([1.0, 1.0], loose).is_none());
+    }
+
+    #[test]
+    fn the_plumbing_plans_stacks_are_risers_where_their_leaders_end() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // P-7: a two-line label with its leader to the stack, a one-line one, and a label with no
+        // leader (no place to put it).
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
+        };
+        t(&mut s, [100.0, 200.0], "3\" WASTE");
+        t(&mut s, [100.0, 193.0], "STACK VENT");
+        s.execute("line", &json!({"points": [[98.0, 196.0], [70.0, 160.0]]})).unwrap();
+        t(&mut s, [300.0, 200.0], "2\" VENT STACK");
+        s.execute("line", &json!({"points": [[298.0, 202.0], [280.0, 240.0]]})).unwrap();
+        t(&mut s, [500.0, 200.0], "4\" WASTE STACK");
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-7".into(),
+            level: "3".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-7".into(), lo, hi }];
+        let stacks = plumbing_stacks(s.doc().unwrap(), &job);
+        assert_eq!(stacks.len(), 2, "{stacks:?}");
+        let san = stacks.iter().find(|st| st.leg == "SAN").unwrap();
+        assert_eq!(san.at, [70.0, 160.0]);
+        assert_eq!(san.tag, "3\" WASTE STACK VENT (3\")");
+        let vent = stacks.iter().find(|st| st.leg == "V").unwrap();
+        assert_eq!(vent.at, [280.0, 240.0]);
+        // As risers through the storey: a sanitary system made, each its size, floor to floor.
+        let mut sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 3", "elevation_ft": 24.0, "height_ft": 10.0, "ceiling_ft": 8.0}],
+            "mep": {"systems": [{"name": "V", "kind": "pipe", "layer": "P-V", "size_in": [2.0, 0.0], "bottom_ft": 10.0}]}
+        }))
+        .unwrap();
+        let placed: Vec<super::super::readers::ReadDevice> = stacks
+            .into_iter()
+            .map(|mut st| {
+                st.level = "Level 3".into();
+                st
+            })
+            .collect();
+        assert_eq!(stacks_as_risers(&mut sp, &placed), 2);
+        assert!(sp.mep.systems.iter().any(|y| y.name == "SAN"));
+        let r = sp.mep.runs.iter().find(|r| r.system == "SAN").unwrap();
+        assert_eq!((r.points.len(), r.size_in[0], r.top_ft), (1, 3.0, Some(10.0)));
+        assert!(sp.check().iter().all(|i| !i.path.starts_with("mep.runs")), "{:?}", sp.check());
     }
 
     #[test]
