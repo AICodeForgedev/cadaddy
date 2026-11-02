@@ -746,7 +746,7 @@ fn charge_match(budget: &mut u64) -> Result<(), ()> {
     Ok(())
 }
 
-pub(super) fn split_patterns(pat: &str, budget: &mut u64) -> Result<Vec<Vec<char>>, ()> {
+pub(crate) fn split_patterns(pat: &str, budget: &mut u64) -> Result<Vec<Vec<char>>, ()> {
     let mut out = vec![Vec::new()];
     let mut chars = pat.chars().peekable();
     let mut in_set = false;
@@ -785,7 +785,7 @@ pub(super) fn split_patterns(pat: &str, budget: &mut u64) -> Result<Vec<Vec<char
     Ok(out)
 }
 
-pub(super) fn match_pattern(text: &[char], pat: &[char], budget: &mut u64) -> Result<bool, ()> {
+pub(crate) fn match_pattern(text: &[char], pat: &[char], budget: &mut u64) -> Result<bool, ()> {
     if let Some(('~', rest)) = pat.split_first().map(|(c, r)| (*c, r))
         && !rest.is_empty()
     {
