@@ -329,7 +329,10 @@ pub(crate) fn model_of(d: &Drawing, sp: &BuildingSpec) -> (Model, Frame) {
         let ty_attr = dev.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case(&rules.devices.type_attr)).map(|(_, v)| v.clone());
         let mark =
             cadaddy_doc::bimspec::entity_type_mark(&e.common.xdata).map(str::to_string).or_else(|| ty_attr.clone()).filter(|m| !m.trim().is_empty());
-        let kind = prov.get("kind").cloned().or_else(|| ty_attr.clone()).unwrap_or_else(|| dev.block.clone()).to_ascii_lowercase();
+        // Its kind: as a review set it, else as the build wrote it (its legend row's, its
+        // sheet's), else its type, else its symbol's name.
+        let built_kind = cadaddy_doc::props::read(&e.common.xdata).get("kind").map(|p| p.text()).filter(|k| !k.trim().is_empty());
+        let kind = prov.get("kind").cloned().or(built_kind).or_else(|| ty_attr.clone()).unwrap_or_else(|| dev.block.clone()).to_ascii_lowercase();
         let tag = prov.get("tag").cloned().or_else(|| dev.attrs.iter().find(|(k, _)| k.eq_ignore_ascii_case("TAG")).map(|(_, v)| v.clone()));
         let mut fields =
             mark.as_ref().and_then(|mk| types.iter().find(|(k, _)| k.eq_ignore_ascii_case(mk))).map(|(_, f)| f.clone()).unwrap_or_default();

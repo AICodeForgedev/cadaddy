@@ -89,6 +89,8 @@ const MAX_TEXT_CROPS_PER_SHEET: usize = 6;
 const MAX_ELEVATIONS: usize = 6;
 /// Enlarged views of a room's unit type, and riser diagram crops, in one packet at most.
 const MAX_UNIT_VIEWS: usize = 6;
+/// The views a unit type lists (its plans, RCP, trades' plans, elevations) taken at most.
+const MAX_TYPE_VIEWS: usize = 40;
 const MAX_RISERS: usize = 4;
 /// Elements, runs, walls listed in objects.json, at most (each).
 const MAX_OBJECTS: usize = 5_000;
@@ -1694,6 +1696,15 @@ fn plan_crops(
             });
         }
     };
+    // The sheets of the room's unit type's own views (placed by the type, in 1b).
+    let unit_sheets: BTreeSet<String> = unit
+        .and_then(|u| u.ty.get("views"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(MAX_TYPE_VIEWS)
+        .filter_map(|v| v.get("sheet").and_then(Value::as_str).map(str::to_ascii_uppercase))
+        .collect();
     // 1. The plans, enlarged plans and RCPs of the area's level.
     for l in links.iter().filter(|l| shows_level(l, &area.level)) {
         let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
@@ -1712,6 +1723,7 @@ fn plan_crops(
             Some(r) if l.view.is_some() => (Place::Fit(r.clone()), "view_placement"),
             Some(r) => (Place::Fit(r.clone()), "registration"),
             None if intersect(proj_box, clip).is_some() => (Place::Same, "same_sheet"),
+            None if unit_sheets.contains(&l.number.to_ascii_uppercase()) => continue,
             None => {
                 left_out.push((
                     format!("sheet {} {}", l.number, l.title),
@@ -1739,7 +1751,84 @@ fn plan_crops(
             names.iter().any(|n| t.contains(&format!(" {} ", upper_words(&n.replace(['.', '-', '/', '_', ','], " ")))))
         };
         let mut n_unit = 0usize;
-        for l in &links {
+        // The type's own views (the job lists them: sheet, title, where), each into the packet
+        // whatever its kind (plans, RCP, elevations), turned and mirrored as the room is.
+        let rect4 = |v: &Value| -> Option<[f64; 4]> {
+            let r = v.as_array()?;
+            let n = |i: usize| r.get(i).and_then(Value::as_f64).filter(|x| x.is_finite());
+            Some([n(0)?, n(1)?, n(2)?, n(3)?])
+        };
+        let listed: Vec<(String, String, [f64; 4], Option<[f64; 4]>)> =
+            u.ty.get("views")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .take(MAX_TYPE_VIEWS)
+                // A view of one floor's guest rooms (its `levels`): only for a room on that floor.
+                .filter(|v| {
+                    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                    let levels: Vec<String> =
+                        v.get("levels").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(digits).collect();
+                    levels.is_empty() || levels.iter().any(|l| !l.is_empty() && *l == digits(&area.level))
+                })
+                .filter_map(|v| {
+                    Some((
+                        v.get("sheet")?.as_str()?.to_string(),
+                        v.get("title")?.as_str()?.to_string(),
+                        rect4(v.get("rect")?)?,
+                        v.get("sheet_rect").and_then(rect4),
+                    ))
+                })
+                .collect();
+        for (sheet, title, vr, sheet_rect) in &listed {
+            // Its sheet as the set links it, else (a unit sheet of no level: A821) as the job
+            // read it.
+            let found = links
+                .iter()
+                .find(|l| l.number.eq_ignore_ascii_case(sheet) && l.rect.map(norm_rect).is_some_and(|sr| intersect(norm_rect(*vr), sr).is_some()))
+                .copied();
+            let made;
+            let l: &SheetLink = match (found, sheet_rect) {
+                (Some(l), _) => l,
+                (None, Some(sr)) => {
+                    made = SheetLink {
+                        number: sheet.clone(),
+                        title: String::new(),
+                        discipline: Some(cadaddy_mepfix::sheet_facts::discipline_of(sheet)),
+                        level: None,
+                        source: "unit type view".into(),
+                        rect: Some(*sr),
+                        levels: Vec::new(),
+                        registration: None,
+                        view: None,
+                    };
+                    &made
+                }
+                (None, None) => continue,
+            };
+            let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+            if !want(trade) {
+                continue;
+            }
+            let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(*vr), sr)) else { continue };
+            let up = title.to_ascii_uppercase();
+            let kind = if up.contains(" WALL") || up.contains("ELEVATION") { "elevation" } else { "enlarged_plan" };
+            let unit_fit = Some(&u.fit).filter(|f| f.is_object());
+            let mut o = match (fit, unit_fit) {
+                (Some(f), _) => {
+                    json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": "layout_fit", "fit_ft": f["fit_ft"], "matched": f["matched"]})
+                }
+                (None, Some(f)) => json!({"rotation_deg": f["rotation_deg"], "mirrored": f["mirrored"], "by": f["by"]}),
+                (None, None) => json!({"rotation_deg": null, "mirrored": u.hand == "mirrored", "by": "unit hand"}),
+            };
+            o["hand"] = json!(u.hand);
+            o["unit_type"] = json!(u.id);
+            if let Some(w) = turn_words(&o) {
+                o["read"] = json!(w);
+            }
+            push(&mut crops, l, kind, trade, rect, "unit_type", None, Some(format!("unit type {}: {title}", u.name)), Some(o));
+        }
+        for l in links.iter().filter(|l| !listed.iter().any(|(sh, ..)| l.number.eq_ignore_ascii_case(sh))) {
             if n_unit >= MAX_UNIT_VIEWS {
                 break;
             }
@@ -1914,20 +2003,21 @@ fn submittal_ref(s: &str) -> (String, u32) {
 
 /// Where a submittal file named `name` is, among the job's submittal paths (files or folders).
 fn find_submittal(paths: &[String], name: &str) -> Option<std::path::PathBuf> {
-    let want = name.to_ascii_lowercase();
+    let want = name.trim().to_ascii_lowercase();
+    // Its file name, or the name without its extension (the elements carry the submittal's stem:
+    // `Submittal #265119-1 Lighting Package`).
+    let is = |f: &std::path::Path| {
+        f.file_name().is_some_and(|x| x.to_string_lossy().to_ascii_lowercase() == want)
+            || f.file_stem().is_some_and(|x| x.to_string_lossy().to_ascii_lowercase() == want)
+    };
     for p in paths.iter().take(MAX_FOLDER_FILES) {
         let path = std::path::Path::new(p);
         if path.is_file() {
-            if path.file_name().is_some_and(|f| f.to_string_lossy().to_ascii_lowercase() == want) {
+            if is(path) {
                 return Some(path.to_path_buf());
             }
         } else if let Ok(rd) = std::fs::read_dir(path) {
-            let mut hits: Vec<std::path::PathBuf> = rd
-                .take(MAX_FOLDER_FILES)
-                .filter_map(|e| e.ok())
-                .map(|e| e.path())
-                .filter(|f| f.file_name().is_some_and(|x| x.to_string_lossy().to_ascii_lowercase() == want))
-                .collect();
+            let mut hits: Vec<std::path::PathBuf> = rd.take(MAX_FOLDER_FILES).filter_map(|e| e.ok()).map(|e| e.path()).filter(|f| is(f)).collect();
             hits.sort();
             if let Some(h) = hits.into_iter().next() {
                 return Some(h);
@@ -2444,6 +2534,20 @@ mod tests {
     fn submittal_references_split_into_file_and_page() {
         assert_eq!(submittal_ref("Lighting.pdf p.3"), ("Lighting.pdf".into(), 3));
         assert_eq!(submittal_ref("Panels.pdf"), ("Panels.pdf".into(), 1));
+    }
+
+    #[test]
+    fn a_submittal_is_found_by_its_file_name_or_its_stem() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-subs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("Submittal #265119-1 Lighting Package.pdf");
+        std::fs::write(&f, b"%PDF-1.4").unwrap();
+        let paths = vec![dir.to_string_lossy().to_string()];
+        assert_eq!(find_submittal(&paths, "Submittal #265119-1 Lighting Package"), Some(f.clone()));
+        assert_eq!(find_submittal(&paths, "submittal #265119-1 lighting package.PDF"), Some(f.clone()));
+        assert_eq!(find_submittal(&[f.to_string_lossy().to_string()], "Submittal #265119-1 Lighting Package"), Some(f.clone()));
+        assert_eq!(find_submittal(&paths, "Lighting"), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -204,6 +204,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 room: String::new(),
                 aff_in: None,
                 aff_note: String::new(),
+                kind_source: String::new(),
+                ifc_class: String::new(),
             }
         })
         .collect();
@@ -1393,6 +1395,12 @@ pub struct ReadDevice {
     pub aff_in: Option<f64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub aff_note: String,
+    /// Where its kind came from when a legend row named it (`E-1 ELECTRICAL LEGEND: DUPLEX
+    /// RECEPTACLE - NEMA 5-20R, UNO`), and the IFC class that row's kind is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind_source: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ifc_class: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1522,6 +1530,20 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         if !dv.leg.is_empty() {
             e.set("switch_leg", dv.leg.clone(), "plan");
+        }
+        if !dv.kind_source.is_empty() {
+            e.set("kind_source", dv.kind_source.clone(), "legend");
+        }
+        // A luminaire stays a `device` element by its mark; what it is, said for its readers.
+        if luminaire {
+            e.set("device_kind", if read == "wall luminaire" { "wall_luminaire" } else { "luminaire" }, "submittal");
+            e.set("ifc_class", "IfcLightFixture", "submittal");
+        }
+        if !dv.ifc_class.is_empty() {
+            e.set("ifc_class", dv.ifc_class.clone(), "legend");
+        }
+        if matches!(read, "smoke_detector" | "heat_detector" | "ceiling_receptacle") {
+            e.set("mount", "ceiling", "legend");
         }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");

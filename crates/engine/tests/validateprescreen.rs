@@ -430,6 +430,37 @@ fn a_typical_rooms_packet_has_its_types_views_turned_as_the_room_is() {
 }
 
 #[test]
+fn a_typical_rooms_packet_takes_every_view_its_type_lists_even_on_a_sheet_of_no_level() {
+    // The job lists the type's views (its mechanical plan, an interior elevation on A-821: a unit
+    // sheet the set links to no level) and lays the type into room 102 turned 90° by linework.
+    let mut j = job();
+    let a102 = area_of(&mut j.s, "102");
+    let x821 = A501 + 2.0 * SW;
+    let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    sp["unit_types"][0]["items"] = json!([]);
+    sp["unit_types"][0]["views"] = json!([
+        {"sheet": "M-401", "title": "ENLARGED PLAN - KING", "rect": [M401 + 200.0, 200.0, M401 + 1800.0, 1400.0]},
+        {"sheet": "A-821", "title": "KING - BED WALL", "rect": [x821 + 300.0, 300.0, x821 + 1300.0, 900.0], "sheet_rect": [x821, 0.0, x821 + SW, SH]}
+    ]);
+    sp["unit_instances"][0]["fit"] = json!({"rotation_deg": 90.0, "mirrored": false, "by": "linework (as the stamping)"});
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    let out = dir("p102v");
+    j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let prints = m["prints"].as_array().unwrap();
+    let elev = prints.iter().find(|c| c["sheet"] == "A-821").unwrap_or_else(|| panic!("no elevation of the type: {m}"));
+    assert_eq!((elev["kind"].clone(), elev["placed_by"].clone()), (json!("elevation"), json!("unit_type")), "{elev}");
+    assert_eq!(elev["orientation"]["by"], "linework (as the stamping)", "{elev}");
+    assert_eq!(elev["orientation"]["rotation_deg"], 90.0, "{elev}");
+    let mech = prints.iter().find(|c| c["sheet"] == "M-401").unwrap_or_else(|| panic!("no mechanical view: {m}"));
+    assert_eq!(mech["placed_by"], "unit_type");
+    // Neither of the type's sheets is reported as not placed.
+    let left = m["left_out"].as_array().cloned().unwrap_or_default();
+    assert!(!left.iter().any(|l| l["what"].as_str().is_some_and(|w| w.contains("M-401") || w.contains("A-821"))), "{left:?}");
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
 fn the_prescreen_is_deterministic_paged_written_and_in_the_validate_run() {
     let mut j = job();
     rule(&mut j.s, "custom", "prescreen.expect.guest room", "ptac=1; receptacle=1+").unwrap();

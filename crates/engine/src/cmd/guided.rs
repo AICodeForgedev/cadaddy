@@ -2323,6 +2323,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         room: String::new(),
                         aff_in: None,
                         aff_note: String::new(),
+                        kind_source: String::new(),
+                        ifc_class: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2348,6 +2350,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             room: String::new(),
                             aff_in: None,
                             aff_note: String::new(),
+                            kind_source: String::new(),
+                            ifc_class: String::new(),
                         });
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -4309,6 +4313,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
         all_devices.extend(fixtures);
     }
+    if schedule.is_some() || job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
+        let stacks = plumbing_stacks(s.doc()?, job);
+        if !stacks.is_empty() {
+            progress_line(&format!("  waste and vent stacks the plumbing plans letter: {}", stacks.len()));
+            all_devices.extend(stacks);
+        }
+    }
     if !all_devices.is_empty() {
         // Onto the architecture like the MEP: a device that can't be placed is left out.
         let has_arch = job.sheet_regions.iter().any(|r| r.kind == "plan" && r.discipline.eq_ignore_ascii_case("A"));
@@ -4388,6 +4399,32 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let before = out.len();
                 let mut out = out;
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
+                let near = DUPLICATE_FIXTURE_FT * upf_dev;
+                let mut kept: Vec<(String, String, [f64; 2])> = Vec::new();
+                let before_dupes = out.len();
+                let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                out.retain(|dv| {
+                    if dv.kind != "plumbing fixture" && dv.kind != "plumbing stack" {
+                        return true;
+                    }
+                    let key = (dv.tag.clone(), digits(&dv.level));
+                    if kept.iter().any(|(t, l, at)| *t == key.0 && *l == key.1 && (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near) {
+                        return false;
+                    }
+                    kept.push((key.0, key.1, dv.at));
+                    true
+                });
+                if out.len() < before_dupes {
+                    progress_line(&format!("  plumbing fixtures tagged on two plans, one kept: {}", before_dupes - out.len()));
+                }
+                // The guest rooms the plumbing plans don't show take the fixture set of a room of
+                // their type that the plans do.
+                let (fixture_copies, fixture_report) = copy_room_fixtures(s.doc()?, job, &out);
+                if !fixture_copies.is_empty() {
+                    progress_line(&format!("  plumbing fixtures laid into the rooms of their type: {} ({fixture_report:?})", fixture_copies.len()));
+                    stamped.extend(fixture_copies);
+                }
                 if connected > 0 {
                     progress_line(&format!("  equipment connections (EF, PTAC tags) put at their equipment: {connected}"));
                 }
@@ -4432,6 +4469,69 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
         }
+        // A "receptacle" that is only a circuit-like name (a panel's feeder, DP2-11) by a keynote's
+        // box (its number drawn in it) is no device: every receptacle symbol is round.
+        let mut devices = devices;
+        let before_boxes = devices.len();
+        {
+            let d = s.doc()?;
+            let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
+            devices.retain(|dv| {
+                if dv.kind != "receptacle" {
+                    return true;
+                }
+                let Some(cadaddy_doc::EntityKind::Insert(ins)) =
+                    cadaddy_doc::Handle::parse_hex(&dv.handle).and_then(|h| d.model.get(h)).map(|e| &e.kind)
+                else {
+                    return true;
+                };
+                !*shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block).is_some_and(|sh| plain_box(&sh)))
+            });
+        }
+        if devices.len() < before_boxes {
+            progress_line(&format!(
+                "  circuit names by a keynote's box (its number in it), not receptacles: {} left out",
+                before_boxes - devices.len()
+            ));
+        }
+        // What each device is, by the legend row its symbol is.
+        let legend = legend_symbols(s.doc()?, job);
+        if !legend.is_empty() {
+            let n = kinds_from_legend(s.doc()?, &legend, &mut devices);
+            let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+            for dv in &devices {
+                *kinds.entry(if dv.kind.is_empty() { super::readers::device_kind(&dv.tag).to_string() } else { dv.kind.clone() }).or_default() += 1;
+            }
+            progress_line(&format!(
+                "  device kinds from the legends: {} symbols in {} rows; {n} devices took theirs; by kind {kinds:?}",
+                legend.len(),
+                legend.values().collect::<BTreeSet<_>>().len()
+            ));
+            // The ones still of no kind: their marks, each a question for the legend.
+            let mut unknown: BTreeMap<&str, usize> = BTreeMap::new();
+            for dv in devices.iter().filter(|dv| dv.kind.is_empty() && super::readers::device_kind(&dv.tag) == "device") {
+                *unknown.entry(dv.tag.as_str()).or_default() += 1;
+            }
+            if !unknown.is_empty() {
+                progress_line(&format!("  devices of no kind (their mark is in no legend row or known list): {unknown:?}"));
+            }
+        }
+        // The stacks are pipes through the storey, not devices.
+        let (stacks, devices): (Vec<super::readers::ReadDevice>, Vec<super::readers::ReadDevice>) =
+            devices.into_iter().partition(|dv| dv.kind == "plumbing stack");
+        if !stacks.is_empty()
+            && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        {
+            let n = stacks_as_risers(&mut sp, &stacks);
+            if n > 0 {
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+            let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
+            for st in &stacks {
+                *by.entry((st.level.clone(), st.leg.clone())).or_default() += 1;
+            }
+            progress_line(&format!("  waste and vent stacks as risers: {n} ({by:?})"));
+        }
         match super::readers::place_devices(s, &devices, "guided job") {
             Ok(mut v) => {
                 // What the devices stage read and the model doesn't hold, and what typical-room
@@ -4455,6 +4555,40 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     if n > 0 {
                         s.doc_mut()?.building_spec = Some(sp.to_json());
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
+                    }
+                }
+                // The typical rooms as unit types: their views and each room's hand and fit, for the
+                // packets and the unit takeoff (written unless the spec has its own).
+                if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+                    let empty = |v: &Value| v.is_null() || v.as_array().is_some_and(Vec::is_empty);
+                    if empty(&sp.unit_types) && empty(&sp.unit_instances) {
+                        let (types, instances) = job_unit_types(s.doc()?, job);
+                        if !types.is_empty() {
+                            let mirrored = instances.iter().filter(|i| i["hand"] == "mirrored").count();
+                            let fitted = instances.iter().filter(|i| i.get("fit").is_some()).count();
+                            progress_line(&format!(
+                                "  unit types: {} ({} views); {} rooms ({fitted} with their layout fit, {mirrored} mirrored)",
+                                types.len(),
+                                types.iter().map(|t| t["views"].as_array().map_or(0, Vec::len)).sum::<usize>(),
+                                instances.len()
+                            ));
+                            // Each room's level as the spec names it (the job's rooms carry its codes).
+                            let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                            let mut instances = instances;
+                            for inst in &mut instances {
+                                let code = inst["level"].as_str().unwrap_or_default().to_string();
+                                let name = sp
+                                    .level(&code)
+                                    .or_else(|| sp.levels.iter().find(|l| !digits(&code).is_empty() && digits(&l.name) == digits(&code)))
+                                    .map(|l| l.name.clone());
+                                if let Some(n) = name {
+                                    inst["level"] = json!(n);
+                                }
+                            }
+                            sp.unit_types = Value::Array(types);
+                            sp.unit_instances = Value::Array(instances);
+                            s.doc_mut()?.building_spec = Some(sp.to_json());
+                        }
                     }
                 }
                 // The plumbing fixtures named by their schedule.
@@ -5494,6 +5628,19 @@ fn turn_vec(v: cadaddy_geom::Vec2, k: u8) -> cadaddy_geom::Vec2 {
         3 => cadaddy_geom::Vec2::new(v.y, -v.x),
         _ => v,
     }
+}
+
+/// [`turn_vec`] undone.
+fn unturn_vec(v: cadaddy_geom::Vec2, k: u8) -> cadaddy_geom::Vec2 {
+    let back = turn_vec(v, (4 - k % 4) % 4);
+    if k >= 4 { cadaddy_geom::Vec2::new(-back.x, back.y) } else { back }
+}
+
+/// Where a point `q` of the room came from in the view, for a rigid `fit` ([`place_in_room`]
+/// undone).
+fn view_point(q: [f64; 2], fit: RoomFit) -> Option<[f64; 2]> {
+    let p = fit.from + unturn_vec(cadaddy_geom::Vec2::new(q[0], q[1]) - fit.to, fit.k);
+    (fit.rigid && p.is_finite()).then_some([p.x, p.y])
 }
 
 /// Where `p` of the view `view` goes in a room spanning `room` by `fit`.
@@ -6594,10 +6741,584 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
     moved
 }
 
+/// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
+const DUPLICATE_FIXTURE_FT: f64 = 2.0;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
 const PTAC_CONNECTION_IN: f64 = 12.0;
+
+/// The plumbing fixtures of the guest rooms the plumbing plans show (the enlarged sanitary
+/// views draw one pair of rooms a floor, P-1 water closet, P-2 lavatory...): each room of the
+/// same type with none gets the fixture set of the room of its type that has the most, laid in
+/// the way a typical view of that type goes into each of the two (turned and mirrored as each
+/// room is). `placed`: the devices put onto the plans. The copies, and per type how many rooms.
+fn copy_room_fixtures(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    placed: &[super::readers::ReadDevice],
+) -> (Vec<super::readers::ReadDevice>, BTreeMap<String, usize>) {
+    let mut out = Vec::new();
+    let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let fixtures: Vec<&super::readers::ReadDevice> =
+        placed.iter().filter(|dv| dv.kind == "plumbing fixture" || dv.kind == "plumbing stack").collect();
+    if types.is_empty() || fixtures.is_empty() {
+        return (out, report);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    // Each typed room's fixtures.
+    let in_room: Vec<Vec<&super::readers::ReadDevice>> = rooms
+        .iter()
+        .map(|(_, level, outline, _)| {
+            fixtures
+                .iter()
+                .filter(|f| digits(&f.level) == digits(level) && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(f.at[0], f.at[1])))
+                .copied()
+                .collect()
+        })
+        .collect();
+    // The typical views of each type, with their linework.
+    let mut views: BTreeMap<BTreeSet<String>, Vec<([f64; 4], Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
+    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let titled: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let words = type_words(&v.title, Some(&vocabulary));
+                (types.contains(&words) && !v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
+            })
+            .collect();
+        if titled.is_empty() {
+            continue;
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        for (region, words) in titled {
+            let list = views.entry(words).or_default();
+            if list.len() >= 4 {
+                continue;
+            }
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
+            list.push((region, super::grids::line_samples(&ents, upf)));
+        }
+    }
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let fit = |vi: &([f64; 4], Vec<cadaddy_geom::Vec2>), ri: usize| {
+        let b = room_boxes.get(ri)?;
+        rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
+    };
+    for words in &types {
+        let Some(vs) = views.get(words) else { continue };
+        let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
+        // The type's fixture set: one of each tag the plans letter in the rooms of this type, the
+        // rooms with the most first (a tag lettered across the wall, in the room behind, would
+        // put a second where there is none), taken back into the view that goes into its room.
+        let near = 2.0 * upf;
+        let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
+        let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
+        let mut sources = 0usize;
+        let mut by_count: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
+        by_count.sort_by_key(|i| std::cmp::Reverse(in_room.get(*i).map_or(0, Vec::len)));
+        for src in by_count {
+            let Some((v, fit_src)) = vs.iter().filter(|v| v_used.is_none_or(|u| std::ptr::eq(u, *v))).find_map(|v| fit(v, src).map(|f| (v, f)))
+            else {
+                continue;
+            };
+            v_used = Some(v);
+            sources += 1;
+            for f in in_room.get(src).into_iter().flatten() {
+                let Some(p) = view_point(f.at, fit_src) else { continue };
+                if !set.iter().any(|(_, g)| g.tag == f.tag) {
+                    set.push((p, f));
+                }
+            }
+        }
+        let Some(v) = v_used else { continue };
+        // Each room of the type: the set's fixtures it hasn't (by tag, about there).
+        let mut took = 0usize;
+        for ri in of_type.iter().copied() {
+            let Some(fit_t) = fit(v, ri) else { continue };
+            let Some((name, level, _, number)) = rooms.get(ri) else { continue };
+            let b = room_boxes.get(ri).copied().unwrap_or_default();
+            let have = in_room.get(ri).cloned().unwrap_or_default();
+            let mut added = false;
+            for (p, f) in &set {
+                let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
+                if have.iter().any(|h| h.tag == f.tag && (h.at[0] - at[0]).hypot(h.at[1] - at[1]) <= near) {
+                    continue;
+                }
+                out.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
+                added = true;
+            }
+            took += usize::from(added);
+            if out.len() >= MAX_STAMPED {
+                break;
+            }
+        }
+        let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
+        let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
+        report.insert(format!("{label}: set {tags:?} from {sources} rooms the plans tag"), took);
+    }
+    (out, report)
+}
+
+/// The typical rooms as unit types (`unittypes`): each type of room the enlarged views draw,
+/// with every view of it (sheet, title, where: plans, RCP, power, mechanical, plumbing,
+/// elevations), and each room of the type as an instance with its hand and how its type's plan
+/// lies in it (turned, mirrored), as the stamping laid the views in. `(unit_types,
+/// unit_instances)`.
+fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec<Value>) {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
+    // Each type's views; its plan's linework (the first plan view: not an RCP, elevation or detail).
+    let mut views: BTreeMap<BTreeSet<String>, Vec<Value>> = BTreeMap::new();
+    let mut plan: BTreeMap<BTreeSet<String>, ([f64; 4], Vec<cadaddy_geom::Vec2>, String)> = BTreeMap::new();
+    // The guest-room views of no one type (seen before a type's own views are: added after).
+    let mut generic: Vec<Value> = Vec::new();
+    // Each sheet once, whole: its entry, else (a sheet only of several levels' views, P-7) one
+    // spanning all its views.
+    let refs = job_sheet_refs(job);
+    let base = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
+    let mut sheets: Vec<super::printmep::SheetRef> = Vec::new();
+    for r in &refs {
+        let b = base(&r.number);
+        match sheets.iter_mut().find(|s| base(&s.number) == b) {
+            // The sheet's own entry wins; views of it widen a stand-in to the whole sheet.
+            Some(s) if r.view.is_none() && r.number.trim().eq_ignore_ascii_case(&b) => *s = r.clone(),
+            Some(s) if s.view.is_none() && s.number.trim().eq_ignore_ascii_case(&b) => {}
+            Some(s) => {
+                s.rect = [s.rect[0].min(r.rect[0]), s.rect[1].min(r.rect[1]), s.rect[2].max(r.rect[2]), s.rect[3].max(r.rect[3])];
+                s.span = s.span.or(r.span);
+            }
+            None => sheets.push(super::printmep::SheetRef {
+                view: None,
+                number: if r.view.is_none() { r.number.clone() } else { b.clone() },
+                ..r.clone()
+            }),
+        }
+    }
+    for sh in sheets.iter().take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let mut objects = None;
+        let titled = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts);
+        let titles: Vec<[f64; 2]> = titled.iter().map(|t| t.at).collect();
+        for v in titled.iter().cloned() {
+            let words = type_words(&v.title, Some(&vocabulary));
+            // A view of "the guest room" naming no type and a floor (ENLARGED GUESTROOM - 3RD
+            // FLOOR - SANITARY): every guest room type's, on that floor.
+            let up = v.title.to_ascii_uppercase();
+            let enlarged = up.contains("ENLARGED") || up.contains("PLAN");
+            if !types.contains(&words) && enlarged && (up.contains("GUESTROOM") || up.contains("GUEST ROOM")) {
+                let Some(region) = v.region.or_else(|| title_cell(v.at, &titles, sh.rect)) else {
+                    progress_line(&format!("  unit types: {} {:?} at {:?}: no part of the sheet found for it", sh.number, v.title, v.at));
+                    continue;
+                };
+                let levels = cadaddy_mepfix::sheet_reader::detect_levels(&v.title);
+                for (_, list) in views.iter_mut().filter(|(w, _)| sleeping_room(w)) {
+                    if list.len() < MAX_UNIT_VIEWS {
+                        list.push(json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text, "levels": levels}));
+                    }
+                }
+                generic.push(
+                    json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text, "levels": levels}),
+                );
+                continue;
+            }
+            let Some(region) = v.region.filter(|_| types.contains(&words)) else { continue };
+            let list = views.entry(words.clone()).or_default();
+            if list.len() < MAX_UNIT_VIEWS {
+                list.push(json!({"sheet": sh.number, "title": v.title, "rect": region, "sheet_rect": sh.rect, "scale": v.scale_text}));
+            }
+            let up = v.title.to_ascii_uppercase();
+            let side = [" WALL", "ELEVATION", "SECTION", "DETAIL", "RCP", "REFLECTED"].iter().any(|w| up.contains(w));
+            if !side && !plan.contains_key(&words) {
+                let objs = objects.get_or_insert_with(|| super::bspec::plan_objects(&sub));
+                let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                    objs.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
+                plan.insert(words, (region, super::grids::line_samples(&ents, upf), format!("{} {}", sh.number, v.title)));
+            }
+        }
+    }
+    if !generic.is_empty() {
+        let names: Vec<String> =
+            generic.iter().map(|g| format!("{} {}", g["sheet"].as_str().unwrap_or(""), g["title"].as_str().unwrap_or(""))).collect();
+        progress_line(&format!("  unit types: guest-room views of no one type, each floor's: {names:?}"));
+    }
+    for (_, list) in views.iter_mut().filter(|(w, _)| sleeping_room(w)) {
+        for g in &generic {
+            if list.len() < MAX_UNIT_VIEWS && !list.contains(g) {
+                list.push(g.clone());
+            }
+        }
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let id_of = |w: &BTreeSet<String>| w.iter().cloned().collect::<Vec<_>>().join("-");
+    // A room the rooms stage left unnumbered: the number printed in it on its floor's plan.
+    let numbers = super::identity::number_texts(d);
+    let printed = |outline: &[cadaddy_geom::Vec2]| -> Option<String> {
+        let b = bbox(outline);
+        let mid = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+        numbers
+            .iter()
+            .filter(|(_, at)| cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(at[0], at[1])))
+            .min_by(|a, b| (a.1[0] - mid[0]).hypot(a.1[1] - mid[1]).total_cmp(&(b.1[0] - mid[0]).hypot(b.1[1] - mid[1])))
+            .map(|(n, _)| n.clone())
+    };
+    let mut unit_types = Vec::new();
+    let mut instances = Vec::new();
+    // Rooms to live in (guest rooms, dwelling units): not a corridor or a back-of-house room that
+    // an enlarged view happens to show.
+    for words in types.iter().filter(|w| sleeping_room(w)) {
+        let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
+        let Some(vs) = views.get(words) else { continue };
+        // Its name: what its rooms are called most.
+        let mut names: BTreeMap<&str, usize> = BTreeMap::new();
+        for i in &of_type {
+            if let Some(r) = rooms.get(*i) {
+                *names.entry(r.0.trim()).or_default() += 1;
+            }
+        }
+        let name = names.iter().max_by_key(|(_, n)| **n).map_or_else(|| id_of(words), |(n, _)| (*n).to_string());
+        let p = plan.get(words);
+        unit_types.push(json!({
+            "id": id_of(words), "name": name, "views": vs,
+            "source": {"sheet": p.map_or_else(|| vs.first().and_then(|v| v.get("sheet")).cloned().unwrap_or(Value::Null), |p| json!(p.2.split(' ').next().unwrap_or(""))), "by": "guided job: typical-room views"},
+        }));
+        for i in of_type.iter().copied().take(MAX_STAMPED) {
+            let Some((rname, level, outline, number)) = rooms.get(i) else { continue };
+            let fit = p.and_then(|(region, lines, _)| {
+                let b = room_boxes.get(i)?;
+                rigid_room_fit(lines, *region, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
+            });
+            let mut inst = json!({
+                "number": if number.trim().is_empty() { printed(outline).unwrap_or_else(|| stamped_room(rname, number, i)) } else { number.trim().to_string() },
+                "level": level, "type": id_of(words), "unit_type": id_of(words),
+                "hand": if fit.is_some_and(|f| f.k >= 4) { "mirrored" } else { "normal" },
+                "source": "guided job",
+            });
+            if let (Some(f), Some(p)) = (fit, p) {
+                inst["fit"] =
+                    json!({"rotation_deg": f64::from(f.k % 4) * 90.0, "mirrored": f.k >= 4, "view": p.2, "by": "linework (as the stamping)"});
+            }
+            instances.push(inst);
+        }
+    }
+    (unit_types, instances)
+}
+
+/// A view's part of its sheet when its linework can't be told from its neighbours' (views in a
+/// row sharing grid lines): from its title right to the next title of its row and up to the next
+/// title over it (else to the sheet's edge, less the title block's strip).
+fn title_cell(at: [f64; 2], titles: &[[f64; 2]], sheet: [f64; 4]) -> Option<[f64; 4]> {
+    let (w, h) = (sheet[2] - sheet[0], sheet[3] - sheet[1]);
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return None;
+    }
+    let row = 0.05 * h;
+    let left = (at[0] - 0.02 * w).max(sheet[0]);
+    let right = titles
+        .iter()
+        .filter(|t| (t[1] - at[1]).abs() <= row && t[0] > at[0] + 0.02 * w)
+        .map(|t| t[0] - 0.02 * w)
+        .fold(sheet[2] - TITLE_BLOCK_SHARE * w, f64::min);
+    let bottom = (at[1] - 0.02 * h).max(sheet[1]);
+    let top = titles.iter().filter(|t| t[1] > at[1] + row && t[0] >= left && t[0] <= right).map(|t| t[1] - 0.02 * h).fold(sheet[3], f64::min);
+    (right > left && top > bottom).then_some([left, bottom, right, top])
+}
+
+/// The strip of a sheet its title block takes (a share of its width, at the right).
+const TITLE_BLOCK_SHARE: f64 = 0.12;
+
+/// The views of one unit type kept at most.
+const MAX_UNIT_VIEWS: usize = 40;
+
+/// A legend row's device kind and IFC class from its description (`DUPLEX RECEPTACLE - NEMA
+/// 5-20R`: a receptacle, `IfcOutlet`). None for a row that names no device (a mounting height
+/// note, a circuit designation, a fixture that the luminaire schedule types).
+pub(crate) fn legend_kind(description: &str) -> Option<(&'static str, &'static str)> {
+    let u = description.to_ascii_uppercase();
+    let has = |w: &str| u.contains(w);
+    if ["INSTALL DEVICE AT", "DESIGNATION", "MOUNT 6", "LOWER CASE", "INDICATES", "LIGHTING FIXTURE", "CIRCUITING"].iter().any(|w| has(w)) {
+        return None;
+    }
+    Some(if has("GFCI") || has("GROUND FAULT") || has("GFI ") {
+        ("gfci_receptacle", "IfcOutlet")
+    } else if has("CEILING MOUNTED") && has("RECEPTACLE") {
+        ("ceiling_receptacle", "IfcOutlet")
+    } else if has("QUAD") && has("RECEPTACLE") {
+        ("quad_receptacle", "IfcOutlet")
+    } else if has("RECEPTACLE") {
+        ("receptacle", "IfcOutlet")
+    } else if has("FLOOR BOX") {
+        ("floor_box", "IfcOutlet")
+    } else if has("3-WAY") || has("THREE WAY") {
+        ("3way_switch", "IfcSwitchingDevice")
+    } else if has("OCCUPANCY") || has("VACANCY") {
+        ("occupancy_sensor", "IfcSensor")
+    } else if has("SWITCH") && !has("DISCONNECT") {
+        ("switch", "IfcSwitchingDevice")
+    } else if has("DISCONNECT") {
+        ("disconnect", "IfcSwitchingDevice")
+    } else if has("SMOKE") {
+        ("smoke_detector", "IfcSensor")
+    } else if has("HEAT SENSOR") || has("HEAT DETECTOR") {
+        ("heat_detector", "IfcSensor")
+    } else if has("PULL STATION") {
+        ("pull_station", "IfcAlarm")
+    } else if has("HORN") || has("STROBE") {
+        ("fire_alarm_notification", "IfcAlarm")
+    } else if has("TELEVISION") || has("TV OUTLET") || has("CATV") {
+        ("tv_outlet", "IfcOutlet")
+    } else if has("DATA") || has("TELEPHONE") {
+        ("data_outlet", "IfcOutlet")
+    } else if has("AUDIO") {
+        ("av_outlet", "IfcOutlet")
+    } else if has("WIRELESS ACCESS") {
+        ("wireless_access_point", "IfcCommunicationsAppliance")
+    } else if has("CAMERA") {
+        ("camera", "IfcCommunicationsAppliance")
+    } else if has("SPEAKER") {
+        ("speaker", "IfcAudioVisualAppliance")
+    } else if has("THERMOSTAT") {
+        ("thermostat", "IfcUnitaryControlElement")
+    } else if has("EXHAUST FAN") {
+        ("exhaust_fan", "IfcFan")
+    } else if has("JUNCTION BOX") {
+        ("junction_box", "IfcJunctionBox")
+    } else if has("PANELBOARD") || has("PANEL BOARD") {
+        ("panel", "IfcElectricDistributionBoard")
+    } else if has("EXIT SIGN") {
+        ("exit_sign", "IfcLightFixture")
+    } else if has("DAMPER") {
+        ("motorized_damper", "IfcDamper")
+    } else if has("DOOR HOLD") {
+        ("door_holder", "IfcElectricAppliance")
+    } else if ["CARD READER", "INTERCOM", "BELL", "PUSH BUTTON", "VOLUME CONTROL", "DOOR CONTACT", "DOOR POWER", "POWER PACK"].iter().any(|w| has(w))
+    {
+        ("low_voltage_device", "IfcCommunicationsAppliance")
+    } else {
+        return None;
+    })
+}
+
+/// A symbol block's shape, whatever its size and name (a PDF import names the repeated drawings
+/// of each page apart): its lines, circles, arcs and polyline corners, put in its box scaled to
+/// one, rounded to a 16th, sorted. None for an empty block or one of more than 64 parts.
+pub(crate) fn symbol_shape(d: &cadaddy_doc::Drawing, block: &str) -> Option<Vec<(u8, i32, i32, i32)>> {
+    let b = d.block(block)?;
+    if b.entities.len() > 64 {
+        return None;
+    }
+    shape_of(b.entities.iter().map(|e| &e.kind))
+}
+
+/// [`symbol_shape`] of some drawn objects (a symbol drawn once, as linework, in a legend row).
+fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
+    let mut parts: Vec<(u8, [f64; 2], f64)> = Vec::new();
+    for kind in objects.take(64) {
+        match kind {
+            cadaddy_doc::EntityKind::Line(l) => {
+                parts.push((0, [l.a.x, l.a.y], 0.0));
+                parts.push((0, [l.b.x, l.b.y], 0.0));
+            }
+            cadaddy_doc::EntityKind::Circle(c) => parts.push((1, [c.center.x, c.center.y], c.radius)),
+            cadaddy_doc::EntityKind::Arc(a) => parts.push((2, [a.center.x, a.center.y], a.radius)),
+            cadaddy_doc::EntityKind::LwPolyline(pl) => parts.extend(pl.vertices.iter().take(64).map(|v| (3, [v.p.x, v.p.y], 0.0))),
+            _ => {}
+        }
+    }
+    let (lo, hi) = parts.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), (_, p, r)| {
+        ([lo[0].min(p[0] - r), lo[1].min(p[1] - r)], [hi[0].max(p[0] + r), hi[1].max(p[1] + r)])
+    });
+    let size = (hi[0] - lo[0]).max(hi[1] - lo[1]);
+    if parts.is_empty() || !(size.is_finite() && size > 0.0) {
+        return None;
+    }
+    let q = |v: f64| (v / size * 16.0).round() as i32;
+    let mut sig: Vec<(u8, i32, i32, i32)> = parts.iter().map(|(k, p, r)| (*k, q(p[0] - lo[0]), q(p[1] - lo[1]), q(*r))).collect();
+    sig.sort_unstable();
+    sig.dedup();
+    Some(sig)
+}
+
+/// A symbol's shape ([`symbol_shape`]).
+type Shape = Vec<(u8, i32, i32, i32)>;
+
+/// Whether a shape is a keynote's box: straight pieces only, drawn into all four corners of its
+/// extent (square or eased), with its number's strokes inside. A receptacle's symbol is round (a
+/// circle never comes near its extent's corners); an empty box (furniture, equipment drawn by a
+/// receptacle whose label it was taken for) has nothing inside.
+fn plain_box(shape: &Shape) -> bool {
+    let straight = !shape.is_empty() && shape.iter().all(|(k, _, _, r)| (*k == 0 || *k == 3) && *r == 0);
+    let (x1, y1) = shape.iter().fold((0, 0), |(x, y), (_, px, py, _)| (x.max(*px), y.max(*py)));
+    let corner = |x: i32, y: i32| shape.iter().any(|(_, px, py, _)| (px - x).abs() <= 1 && (py - y).abs() <= 1);
+    let inside = shape.iter().any(|(_, px, py, _)| *px > 1 && *px < x1 - 1 && *py > 1 && *py < y1 - 1);
+    straight && x1 > 2 && y1 > 2 && corner(0, 0) && corner(x1, 0) && corner(0, y1) && corner(x1, y1) && inside
+}
+
+/// The electrical legends' symbols: each row's symbol (by its shape) with its description and
+/// sheet. Read off the SYMBOL | DESCRIPTION tables of the E sheets: those in the drawing and the
+/// legend sheets the set wasn't imported for (re-read from their PDF pages).
+fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, (String, String)> {
+    let mut out: BTreeMap<Shape, (String, String)> = BTreeMap::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("E") && seen.insert(r.number.split('/').next().unwrap_or("").to_string()))
+        .take(MAX_LEGEND_SHEETS)
+        .map(|sh| {
+            (
+                sh.number.split('/').next().unwrap_or("").to_string(),
+                super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() }),
+            )
+        })
+        .collect();
+    pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    for (number, sub) in &pages {
+        legend_rows(sub, number, &mut out);
+    }
+    out
+}
+
+/// One sheet's legend rows into `out` ([`legend_symbols`]).
+fn legend_rows(sub: &cadaddy_doc::Drawing, number: &str, out: &mut BTreeMap<Shape, (String, String)>) {
+    let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+    let heads: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+        texts.iter().filter(|t| t.value.trim().eq_ignore_ascii_case("SYMBOL")).take(20).collect();
+    if heads.is_empty() {
+        return;
+    }
+    let symbols: Vec<(String, cadaddy_geom::Vec2)> = sub
+        .model
+        .iter()
+        .filter_map(|e| {
+            let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { return None };
+            let b = cadaddy_doc::entity_bounds(sub, e, 0);
+            (!b.is_empty()).then(|| (ins.block.clone(), b.center()))
+        })
+        .take(MAX_LEGEND_SYMBOLS)
+        .collect();
+    for head in heads {
+        let h = head.height.max(1e-6);
+        // Its description column: the DESCRIPTION header beside it, on its row.
+        let Some(desc) = texts
+            .iter()
+            .filter(|t| t.value.trim().to_ascii_uppercase().starts_with("DESCRIPTION") && (t.at.y - head.at.y).abs() <= h && t.at.x > head.at.x)
+            .min_by(|a, b| (a.at.x - head.at.x).total_cmp(&(b.at.x - head.at.x)))
+        else {
+            continue;
+        };
+        // The table: down to the next SYMBOL header under this one (or a long way).
+        let below = texts
+            .iter()
+            .filter(|t| t.value.trim().eq_ignore_ascii_case("SYMBOL") && (t.at.x - head.at.x).abs() <= 2.0 * h && t.at.y < head.at.y - h)
+            .map(|t| t.at.y)
+            .fold(head.at.y - LEGEND_ROWS_H * h, f64::max);
+        let rows: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+            texts.iter().filter(|t| (t.at.x - desc.at.x).abs() <= 1.5 * h && t.at.y < head.at.y - 0.5 * h && t.at.y > below).collect();
+        for (block, c) in symbols.iter().filter(|(_, c)| c.x > head.at.x - 3.0 * h && c.x < desc.at.x && c.y < head.at.y && c.y > below) {
+            let Some(shape) = symbol_shape(sub, block) else { continue };
+            if out.contains_key(&shape) {
+                continue;
+            }
+            // Its row: the description line nearest its middle.
+            let Some(row) = rows
+                .iter()
+                .filter(|t| (t.at.y - c.y).abs() <= 2.0 * t.height.max(h))
+                .min_by(|a, b| (a.at.y - c.y).abs().total_cmp(&(b.at.y - c.y).abs()))
+            else {
+                continue;
+            };
+            out.insert(shape, (row.value.trim().to_string(), number.to_string()));
+        }
+        // A symbol drawn once (the import blocks only what repeats on a page): the linework in
+        // the row's symbol cell, left of its description, on its first line.
+        let x0 = head.at.x - 3.0 * h;
+        let x1 = desc.at.x - 0.5 * h;
+        let drawn: Vec<(cadaddy_geom::Bounds2, &cadaddy_doc::EntityKind)> = sub
+            .model
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    cadaddy_doc::EntityKind::Line(_)
+                        | cadaddy_doc::EntityKind::Circle(_)
+                        | cadaddy_doc::EntityKind::Arc(_)
+                        | cadaddy_doc::EntityKind::LwPolyline(_)
+                )
+            })
+            .filter_map(|e| {
+                let b = cadaddy_doc::entity_bounds(sub, e, 0);
+                (!b.is_empty() && b.min.x >= x0 && b.max.x <= x1 && b.min.y > below && b.max.y < head.at.y).then_some((b, &e.kind))
+            })
+            .take(MAX_LEGEND_SYMBOLS)
+            .collect();
+        for row in &rows {
+            let th = row.height.max(1e-6);
+            let (y0, y1) = (row.at.y - 1.0 * th, row.at.y + 1.8 * th);
+            let cell: Vec<&cadaddy_doc::EntityKind> = drawn.iter().filter(|(b, _)| b.min.y >= y0 && b.max.y <= y1).map(|(_, k)| *k).collect();
+            if cell.len() < 2 {
+                continue;
+            }
+            let Some(shape) = shape_of(cell.into_iter()) else { continue };
+            out.entry(shape).or_insert_with(|| (row.value.trim().to_string(), number.to_string()));
+        }
+    }
+}
+
+/// A legend table's rows reach at most this many header heights down.
+const LEGEND_ROWS_H: f64 = 150.0;
+/// Symbols looked at on one legend sheet, at most.
+const MAX_LEGEND_SYMBOLS: usize = 50_000;
+
+/// Each device whose symbol is a legend row's: that row's kind and IFC class, the row its source.
+/// How many took one.
+fn kinds_from_legend(d: &cadaddy_doc::Drawing, legend: &BTreeMap<Shape, (String, String)>, devices: &mut [super::readers::ReadDevice]) -> usize {
+    let mut n = 0usize;
+    let mut shapes: BTreeMap<String, Option<Shape>> = BTreeMap::new();
+    for dv in devices.iter_mut() {
+        if !(dv.kind.is_empty() || dv.kind == "device") {
+            continue;
+        }
+        let Some(cadaddy_doc::EntityKind::Insert(ins)) = cadaddy_doc::Handle::parse_hex(&dv.handle).and_then(|h| d.model.get(h)).map(|e| &e.kind)
+        else {
+            continue;
+        };
+        let shape = shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block));
+        let Some((desc, sheet)) = shape.as_ref().and_then(|sh| legend.get(sh)) else { continue };
+        let Some((kind, ifc)) = legend_kind(desc) else { continue };
+        dv.kind = kind.into();
+        dv.ifc_class = ifc.into();
+        dv.kind_source = format!("{sheet} legend: {desc}");
+        n += 1;
+    }
+    n
+}
 
 /// What [`stamp_typical_runs`] made: the stamped runs, which of the runs it was given lie in a
 /// typical room's plan (each `true` went into the rooms), and the count per sheet and view.
@@ -6947,16 +7668,20 @@ fn plumbing_fixtures(
         .collect();
     let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
     for e in d.model.iter() {
-        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
-        let value = t.value.trim();
-        if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0) {
-            continue;
-        }
+        // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
+        let lettered: Vec<&cadaddy_doc::Text> = match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) => vec![t],
+            cadaddy_doc::EntityKind::Insert(ins) => ins.attribs.iter().take(8).map(|a| &a.text).collect(),
+            _ => continue,
+        };
         let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
-        if sheet_key(sheet) == value {
-            continue;
+        for t in lettered {
+            let value = t.value.trim();
+            if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite()) || sheet_key(sheet) == value {
+                continue;
+            }
+            found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
         }
-        found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
         if found.len() >= MAX_FIXTURES {
             break;
         }
@@ -6976,6 +7701,133 @@ fn plumbing_fixtures(
             ..Default::default()
         })
         .collect()
+}
+
+/// The waste and vent stacks the plumbing plans letter (`3" WASTE` over `STACK VENT`, `2" VENT
+/// STACK`): each where its leader ends, as an item of kind `plumbing stack` (tag: its size and
+/// words, leg: its system, `SAN` or `V`), placed and laid into the rooms like the fixtures.
+fn plumbing_stacks(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<super::readers::ReadDevice> {
+    let spans: Vec<(&str, u64, u64)> = job
+        .sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(sp.sheet.split('/').next().unwrap_or(&sp.sheet)).eq_ignore_ascii_case("P"))
+        .map(|sp| (sp.sheet.as_str(), sp.lo, sp.hi))
+        .collect();
+    let sheet_of = |h: u64| spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&h)).map(|(s, _, _)| *s);
+    let mut texts: Vec<(String, cadaddy_geom::Vec2, f64, &str)> = Vec::new();
+    let mut segs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2, &str)> = Vec::new();
+    for e in d.model.iter() {
+        let Some(sheet) = sheet_of(e.handle.0) else { continue };
+        match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) if t.height.is_finite() && t.height > 0.0 && t.insert.is_finite() && texts.len() < MAX_FIXTURES => {
+                texts.push((t.value.trim().to_ascii_uppercase(), t.insert.xy(), t.height, sheet));
+            }
+            cadaddy_doc::EntityKind::Line(l) if segs.len() < MAX_LEADER_PIECES => segs.push((l.a.xy(), l.b.xy(), sheet)),
+            cadaddy_doc::EntityKind::LwPolyline(pl) if !pl.closed && pl.vertices.len() <= 8 && segs.len() < MAX_LEADER_PIECES => {
+                segs.extend(pl.vertices.windows(2).filter_map(|w| Some((w.first()?.p, w.get(1)?.p, sheet))));
+            }
+            _ => {}
+        }
+    }
+    // `3"`, `1 1/2"`, `4"` at the start: the pipe size.
+    let size_of = |t: &str| -> Option<f64> {
+        let (num, _) = t.split_once('"')?;
+        let num = num.trim().replace('-', " ");
+        let mut total = 0.0;
+        for part in num.split_whitespace().take(2) {
+            total += match part.split_once('/') {
+                Some((a, b)) => a.parse::<f64>().ok()? / b.parse::<f64>().ok().filter(|b| *b > 0.0)?,
+                None => part.parse::<f64>().ok()?,
+            };
+        }
+        (total > 0.0 && total <= 12.0).then_some(total)
+    };
+    let mut out = Vec::new();
+    for (value, at, h, sheet) in &texts {
+        let Some(size) = size_of(value) else { continue };
+        if !(value.contains("WASTE") || value.contains("VENT") || value.contains("SOIL")) {
+            continue;
+        }
+        // Its second line (`STACK VENT` under `3" WASTE`).
+        let under = texts.iter().find(|(v, p, _, s2)| {
+            s2 == sheet && v.starts_with("STACK") && (p.x - at.x).abs() <= 2.0 * h && at.y - p.y > 0.0 && at.y - p.y <= 2.2 * h
+        });
+        let label = match under {
+            Some((v, ..)) => format!("{value} {v}"),
+            None => value.clone(),
+        };
+        if !label.contains("STACK") {
+            continue;
+        }
+        let width = 0.8 * h * label.chars().count().min(24) as f64;
+        let lo = cadaddy_geom::Vec2::new(at.x - 1.5 * h, under.map_or(at.y, |u| u.1.y) - 1.5 * h);
+        let hi = cadaddy_geom::Vec2::new(at.x + width + 1.5 * h, at.y + 2.5 * h);
+        let near = |p: cadaddy_geom::Vec2| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y;
+        // Its leader: a straight piece from the label out, to its far end.
+        let Some(end) = segs
+            .iter()
+            .filter(|(_, _, s2)| s2 == sheet)
+            .filter_map(|(a, b, _)| match (near(*a), near(*b)) {
+                (true, false) => Some(*b),
+                (false, true) => Some(*a),
+                _ => None,
+            })
+            .max_by(|p, q| p.dist(*at).total_cmp(&q.dist(*at)))
+            .filter(|e| e.dist(*at) <= 40.0 * h)
+        else {
+            continue;
+        };
+        let system = if label.contains("WASTE") || label.contains("SOIL") { "SAN" } else { "V" };
+        out.push(super::readers::ReadDevice {
+            tag: format!("{label} ({size}\")"),
+            at: [end.x, end.y],
+            sheet: (*sheet).to_string(),
+            level: job.level_at([end.x, end.y]).map_or_else(String::new, |r| r.level.clone()),
+            kind: "plumbing stack".into(),
+            leg: system.into(),
+            ..Default::default()
+        });
+        if out.len() >= MAX_FIXTURES {
+            break;
+        }
+    }
+    out
+}
+
+/// The stacks ([`plumbing_stacks`]), placed, as risers through their storey: the system (a
+/// sanitary one made when the spec has none) and size their label gives. How many.
+fn stacks_as_risers(sp: &mut cadaddy_walk3d::BuildingSpec, stacks: &[super::readers::ReadDevice]) -> usize {
+    if stacks.iter().any(|st| st.leg == "SAN")
+        && !sp.mep.systems.iter().any(|y| y.name == "SAN")
+        && let Ok(sys) = serde_json::from_value(
+            json!({"name": "SAN", "kind": "pipe", "layer": "P-SAN", "size_in": [3.0, 0.0], "bottom_ft": 0.0, "color_index": 30, "show": true}),
+        )
+    {
+        sp.mep.systems.push(sys);
+    }
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut n = 0usize;
+    for st in stacks {
+        let Some(lv) =
+            sp.level(&st.level).or_else(|| sp.levels.iter().find(|l| !digits(&st.level).is_empty() && digits(&l.name) == digits(&st.level)))
+        else {
+            continue;
+        };
+        let (name, top) = (lv.name.clone(), lv.height_ft);
+        if !(sp.mep.systems.iter().any(|y| y.name == st.leg) && top.is_finite() && top > 0.0) {
+            continue;
+        }
+        let size = st.tag.rsplit_once('(').and_then(|(_, r)| r.trim_end_matches(')').trim_end_matches('"').parse::<f64>().ok()).unwrap_or(3.0);
+        let Ok(run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
+            "system": st.leg, "level": name, "points": [st.at], "size_in": [size, 0.0], "bottoms_ft": [0.0], "top_ft": top,
+            "height_source": "stack through the storey", "size_source": "tag", "source_sheet": st.sheet,
+        })) else {
+            continue;
+        };
+        sp.mep.runs.push(run);
+        n += 1;
+    }
+    n
 }
 
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
@@ -11396,6 +12248,258 @@ mod tests {
         let mut near = vec![super::super::readers::ReadDevice { tag: "EF".into(), at: [17.0, 120.0], level: "Level 3".into(), ..Default::default() }];
         assert_eq!(connect_to_equipment(&[eq], &mut near, 180.0), 1);
         assert_eq!(near[0].at, [17.0, 16.0]);
+    }
+
+    #[test]
+    fn a_rooms_point_goes_back_to_the_view_for_every_turn() {
+        // Room to view to another room: each of the eight turns undone exactly.
+        let view = [0.0, 0.0, 144.0, 288.0];
+        for k in 0..8u8 {
+            let fit = RoomFit { k, from: cadaddy_geom::Vec2::new(72.0, 144.0), to: cadaddy_geom::Vec2::new(10_072.0, 144.0), rigid: true };
+            for p in [[10.0, 20.0], [130.0, 270.0], [72.0, 0.0]] {
+                let q = place_in_room(p, view, [10_000.0, 0.0, 10_144.0, 288.0], fit).unwrap();
+                let back = view_point(q, fit).unwrap();
+                assert!((back[0] - p[0]).abs() < 1e-9 && (back[1] - p[1]).abs() < 1e-9, "k {k}: {p:?} -> {q:?} -> {back:?}");
+            }
+        }
+        // A fit by shares of the box can't be undone.
+        let loose = RoomFit { k: 0, from: cadaddy_geom::Vec2::new(0.0, 0.0), to: cadaddy_geom::Vec2::new(0.0, 0.0), rigid: false };
+        assert!(view_point([1.0, 1.0], loose).is_none());
+    }
+
+    #[test]
+    fn the_plumbing_plans_stacks_are_risers_where_their_leaders_end() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // P-7: a two-line label with its leader to the stack, a one-line one, and a label with no
+        // leader (no place to put it).
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
+        };
+        t(&mut s, [100.0, 200.0], "3\" WASTE");
+        t(&mut s, [100.0, 193.0], "STACK VENT");
+        s.execute("line", &json!({"points": [[98.0, 196.0], [70.0, 160.0]]})).unwrap();
+        t(&mut s, [300.0, 200.0], "2\" VENT STACK");
+        s.execute("line", &json!({"points": [[298.0, 202.0], [280.0, 240.0]]})).unwrap();
+        t(&mut s, [500.0, 200.0], "4\" WASTE STACK");
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-7".into(),
+            level: "3".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-7".into(), lo, hi }];
+        let stacks = plumbing_stacks(s.doc().unwrap(), &job);
+        assert_eq!(stacks.len(), 2, "{stacks:?}");
+        let san = stacks.iter().find(|st| st.leg == "SAN").unwrap();
+        assert_eq!(san.at, [70.0, 160.0]);
+        assert_eq!(san.tag, "3\" WASTE STACK VENT (3\")");
+        let vent = stacks.iter().find(|st| st.leg == "V").unwrap();
+        assert_eq!(vent.at, [280.0, 240.0]);
+        // As risers through the storey: a sanitary system made, each its size, floor to floor.
+        let mut sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 3", "elevation_ft": 24.0, "height_ft": 10.0, "ceiling_ft": 8.0}],
+            "mep": {"systems": [{"name": "V", "kind": "pipe", "layer": "P-V", "size_in": [2.0, 0.0], "bottom_ft": 10.0}]}
+        }))
+        .unwrap();
+        let placed: Vec<super::super::readers::ReadDevice> = stacks
+            .into_iter()
+            .map(|mut st| {
+                st.level = "Level 3".into();
+                st
+            })
+            .collect();
+        assert_eq!(stacks_as_risers(&mut sp, &placed), 2);
+        assert!(sp.mep.systems.iter().any(|y| y.name == "SAN"));
+        let r = sp.mep.runs.iter().find(|r| r.system == "SAN").unwrap();
+        assert_eq!((r.points.len(), r.size_in[0], r.top_ft), (1, 3.0, Some(10.0)));
+        assert!(sp.check().iter().all(|i| !i.path.starts_with("mep.runs")), "{:?}", sp.check());
+    }
+
+    #[test]
+    fn the_typical_rooms_become_unit_types_with_their_views_and_each_rooms_hand() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework at `o`: as drawn, turned half round, or mirrored (east to west).
+        let unit = |s: &mut crate::Session, o: [f64; 2], how: u8| {
+            let p = |x: f64, y: f64| match how {
+                1 => [o[0] + 144.0 - x, o[1] + 288.0 - y],
+                2 => [o[0] + 144.0 - x, o[1] + y],
+                _ => [o[0] + x, o[1] + y],
+            };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, 0);
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT PLAN - DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let e = [x0 + 1000.0, 300.0];
+        for (a, b) in [((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 94.0)), ((144.0, 94.0), (0.0, 94.0)), ((0.0, 94.0), (0.0, 0.0))] {
+            line(&mut s, [e[0] + a.0, e[1] + a.1], [e[0] + b.0, e[1] + b.1]);
+        }
+        s.execute("text", &json!({"at": [e[0], e[1] - 19.0], "text": "DOUBLE QUEEN - BED WALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [e[0], e[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0], 0);
+        unit(&mut s, [10_400.0, 0.0], 1);
+        unit(&mut s, [10_800.0, 0.0], 2);
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-8".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-8".into(), lo, hi }];
+        let room = |n: &str, x: f64, name: &str| json!({"name": name, "number": n, "level": "2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(
+                json!({"rooms": [room("201", 10_000.0, "DOUBLE QUEEN"), room("202", 10_400.0, "DOUBLE QUEEN"), room("203", 10_800.0, "DOUBLE QUEEN"), room("200", 11_200.0, "CORRIDOR")]}),
+            );
+        }
+        let (types, instances) = job_unit_types(s.doc().unwrap(), &job);
+        assert_eq!(types.len(), 1, "{types:?}");
+        let views: Vec<&str> = types[0]["views"].as_array().unwrap().iter().filter_map(|v| v["title"].as_str()).collect();
+        assert!(views.contains(&"UNIT PLAN - DOUBLE QUEEN") && views.contains(&"DOUBLE QUEEN - BED WALL"), "{views:?}");
+        let of = |n: &str| instances.iter().find(|i| i["number"] == n).unwrap().clone();
+        assert_eq!((of("201")["hand"].clone(), of("201")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(0.0)), "{instances:?}");
+        assert_eq!((of("202")["hand"].clone(), of("202")["fit"]["rotation_deg"].clone()), (json!("normal"), json!(180.0)), "{instances:?}");
+        assert_eq!(of("203")["hand"], json!("mirrored"), "{instances:?}");
+        assert!(instances.iter().all(|i| i["type"] == types[0]["id"]), "no corridor unit: {instances:?}");
+    }
+
+    #[test]
+    fn a_view_whose_linework_runs_into_its_neighbours_takes_its_titles_cell() {
+        // P-7: four sanitary views in a row along the bottom, two water views over them.
+        let sheet = [0.0, 0.0, 2000.0, 1400.0];
+        let titles = [[100.0, 50.0], [550.0, 50.0], [1000.0, 50.0], [1450.0, 50.0], [550.0, 600.0], [1000.0, 600.0]];
+        let c = title_cell([550.0, 50.0], &titles, sheet).unwrap();
+        assert!((c[0] - 510.0).abs() < 1e-9 && (c[2] - 960.0).abs() < 1e-9, "to the next title of its row: {c:?}");
+        assert!((c[1] - 22.0).abs() < 1e-9 && (c[3] - 572.0).abs() < 1e-9, "up to the title over it: {c:?}");
+        // The last of the row stops at the title block; one with nothing over it runs to the top.
+        let last = title_cell([1450.0, 50.0], &titles, sheet).unwrap();
+        assert!((last[2] - 1760.0).abs() < 1e-9 && (last[3] - 1400.0).abs() < 1e-9, "{last:?}");
+        assert!(title_cell([1.0, 1.0], &titles, [0.0, 0.0, f64::NAN, 1.0]).is_none());
+    }
+
+    #[test]
+    fn a_symbol_is_known_by_its_shape_not_its_size_or_name() {
+        let mut s = crate::Session::new();
+        // A duplex receptacle (a circle, two short lines through it) at two sizes, and a keynote
+        // box (a square), each made a block.
+        let block = |s: &mut crate::Session, name: &str, k: f64, square: bool| {
+            let lo = s.doc().unwrap().handseed;
+            if square {
+                s.execute("pline", &json!({"vertices": [[0, 0], [k * 6.0, 0], [k * 6.0, k * 6.0], [0, k * 6.0]], "closed": true})).unwrap();
+            } else {
+                s.execute("circle", &json!({"center": [0, 0], "radius": k * 3.0})).unwrap();
+                s.execute("line", &json!({"points": [[-k * 4.5, k], [k * 4.5, k]]})).unwrap();
+                s.execute("line", &json!({"points": [[-k * 4.5, -k], [k * 4.5, -k]]})).unwrap();
+            }
+            let handles: Vec<String> = s.doc().unwrap().model.iter().filter(|e| e.handle.0 >= lo).map(|e| e.handle.hex()).collect();
+            s.execute("block", &json!({"name": name, "base": [0, 0], "handles": handles})).unwrap();
+        };
+        block(&mut s, "PDF-SYM-12", 1.0, false);
+        block(&mut s, "PDF-SYM-301", 4.0, false);
+        block(&mut s, "PDF-SYM-7", 1.0, true);
+        let d = s.doc().unwrap();
+        let (a, b, c) = (symbol_shape(d, "PDF-SYM-12"), symbol_shape(d, "PDF-SYM-301"), symbol_shape(d, "PDF-SYM-7"));
+        assert!(a.is_some() && a == b, "{a:?} {b:?}");
+        assert_ne!(a, c);
+        assert_eq!(symbol_shape(d, "NO-SUCH-BLOCK"), None);
+        // An empty box is no keynote (furniture by a receptacle); the receptacle isn't one either.
+        assert!(!plain_box(&c.unwrap()) && !plain_box(&a.unwrap()));
+        let keynote: Shape = vec![(3, 0, 0, 0), (3, 16, 0, 0), (3, 16, 16, 0), (3, 0, 16, 0), (0, 8, 4, 0), (0, 8, 12, 0)];
+        assert!(plain_box(&keynote));
+        let round: Shape = vec![
+            (3, 8, 0, 0),
+            (3, 16, 8, 0),
+            (3, 8, 16, 0),
+            (3, 0, 8, 0),
+            (3, 3, 2, 0),
+            (3, 13, 2, 0),
+            (3, 3, 14, 0),
+            (3, 13, 14, 0),
+            (0, 2, 6, 0),
+            (0, 14, 6, 0),
+        ];
+        assert!(!plain_box(&round), "a circle drawn as a polygon is round");
+        // A box with rounded corners, quantized onto its edges.
+        let rounded: Shape =
+            vec![(3, 0, 1, 0), (3, 0, 11, 0), (3, 1, 0, 0), (3, 1, 12, 0), (3, 15, 0, 0), (3, 15, 12, 0), (3, 16, 1, 0), (3, 16, 11, 0)];
+        assert!(!plain_box(&rounded), "an eased box with nothing in it");
+        // PDF-SYM-108 itself: an eased box with its "1" drawn inside.
+        let keynote_1: Shape = vec![
+            (0, 4, 11, 0),
+            (0, 6, 0, 0),
+            (3, 0, 0, 0),
+            (3, 0, 1, 0),
+            (3, 0, 10, 0),
+            (3, 0, 11, 0),
+            (3, 1, 0, 0),
+            (3, 1, 11, 0),
+            (3, 12, 2, 0),
+            (3, 12, 7, 0),
+            (3, 14, 0, 0),
+            (3, 14, 11, 0),
+        ];
+        assert!(plain_box(&keynote_1));
+    }
+
+    #[test]
+    fn a_legend_rows_description_names_its_devices_kind_and_ifc_class() {
+        // The hotel's E-1 legend rows, as printed.
+        for (row, want) in [
+            ("DUPLEX RECEPTACLE - NEMA 5-20R, UNO", Some(("receptacle", "IfcOutlet"))),
+            ("CEILING MOUNTED DUPLEX RECEPTACLE", Some(("ceiling_receptacle", "IfcOutlet"))),
+            ("QUAD RECEPTACLE - NEMA 5-20R, UNO", Some(("quad_receptacle", "IfcOutlet"))),
+            ("SINGLE POLE WALL SWITCH", Some(("switch", "IfcSwitchingDevice"))),
+            ("SMOKE SENSOR", Some(("smoke_detector", "IfcSensor"))),
+            ("FIRE ALARM HORN/STROBE", Some(("fire_alarm_notification", "IfcAlarm"))),
+            ("TELEVISION OUTLET", Some(("tv_outlet", "IfcOutlet"))),
+            ("TELEPHONE/DATA OUTLET", Some(("data_outlet", "IfcOutlet"))),
+            ("OCCUPANCY SENSOR", Some(("occupancy_sensor", "IfcSensor"))),
+            ("JUNCTION BOX", Some(("junction_box", "IfcJunctionBox"))),
+            ("DISCONNECT SWITCH", Some(("disconnect", "IfcSwitchingDevice"))),
+            ("ELECTRICAL PANELBOARD", Some(("panel", "IfcElectricDistributionBoard"))),
+            ("INSTALL DEVICE AT HEIGHT INDICATED (+60\" = MOUNT AT 60\"AFF)", None),
+            ("RECEPTACLE DESIGNATION - REFER TO ABBREVIATIONS ON THIS SHEET", None),
+            ("LIGHTING FIXTURE - REFER TO LIGHT FIXTURE SCHEDULE", None),
+        ] {
+            assert_eq!(legend_kind(row), want, "{row}");
+        }
     }
 
     #[test]
