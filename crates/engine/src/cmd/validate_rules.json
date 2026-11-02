@@ -9,10 +9,11 @@
       "how": [
         "Look at each trade plan crop of the area (and the enlarged plan when there is one) and list every symbol inside the area with its tag.",
         "Find each listed symbol in the model picture and the object list (same kind, near the same place).",
-        "A symbol with no model element is a 'missing' finding; cite the print crop and where on it the symbol is."
+        "A symbol with no model element is a 'missing' finding; cite the print crop and where on it the symbol is.",
+        "The prescreen has already matched the symbols the job read (objects.json `prescreen`, G-PRESENT): start from its missing and extra findings and check the symbols the job did not read."
       ],
       "documents": ["plan", "enlarged_plan", "rcp", "legend"],
-      "tolerance": {"plan_in": 6},
+      "tolerance": {"plan_in": 36},
       "severity": "high",
       "prescreen": "counts",
       "examples": {

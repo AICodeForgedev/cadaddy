@@ -152,7 +152,7 @@ pub(crate) fn grow(r: [f64; 4], by: f64) -> [f64; 4] {
     [r[0] - by, r[1] - by, r[2] + by, r[3] + by]
 }
 
-fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+pub(crate) fn intersect(a: [f64; 4], b: [f64; 4]) -> Option<[f64; 4]> {
     let r = [a[0].max(b[0]), a[1].max(b[1]), a[2].min(b[2]), a[3].min(b[3])];
     (r[0] < r[2] && r[1] < r[3]).then_some(r)
 }
@@ -161,11 +161,11 @@ pub(crate) fn inside(r: [f64; 4], p: [f64; 2]) -> bool {
     p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3]
 }
 
-fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
+pub(crate) fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
-fn norm_rect(r: [f64; 4]) -> [f64; 4] {
+pub(crate) fn norm_rect(r: [f64; 4]) -> [f64; 4] {
     [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])]
 }
 
@@ -1513,7 +1513,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: the room type's expected set against what the room holds). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
@@ -2305,7 +2305,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT the room type's expected set (project rules)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
