@@ -167,7 +167,7 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
                 "{}: the drawings protect it with {} at {}; its submittal allows at most {max:.0} A{class} ({})",
                 e.tag, e.drawing_ocpd, e.source_panel, e.source
             ),
-            fix: format!("{max:.0} A{class} fuses in its disconnect (a fused switch), or a {max:.0} A breaker at {}", e.source_panel),
+            fix: format!("{max:.0} A{class} fuses in its disconnect (a fused switch), or a breaker of {max:.0} A at {}", e.source_panel),
         });
     }
     let base = e.mca.or_else(|| e.fla.or(e.nameplate_a).map(|a| a * rule.conductor_factor.unwrap_or(1.25)));
