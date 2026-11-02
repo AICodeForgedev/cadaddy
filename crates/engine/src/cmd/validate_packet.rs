@@ -1158,6 +1158,9 @@ struct InArea {
     counts: Value,
     /// The handles of the elements beside the area (not its own).
     nearby: BTreeSet<String>,
+    /// The area holds luminaires or lighting controls: its packet carries the lighting-control
+    /// legend.
+    lighting: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1438,7 +1441,7 @@ fn in_area(
     if total_elements > MAX_OBJECTS || total_runs > MAX_OBJECTS {
         objects["left_out"] = json!(format!("listed at most {MAX_OBJECTS} elements and runs each"));
     }
-    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles }
+    InArea { objects, kinds, categories, marks, wall_types, submittals, counts, nearby: nearby_handles, lighting: false }
 }
 
 // ---------------------------------------------------------------- rules and prompt
@@ -1475,7 +1478,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says). Start from these numbers; overturn one only with a print image that shows otherwise.\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents; G-PRESENT: the room type's expected set against what the room holds; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n");
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -2066,6 +2069,19 @@ fn plan_crops(
             }
             _ => {}
         }
+        // The lighting-control legend, where the area holds lighting.
+        if keys.lighting && matches!(kind, "legend" | "schedule" | "general_notes" | "spec" | "other") {
+            for key in ["LIGHTING CONTROL", "LIGHTING CONTROLS"] {
+                for (at, _) in texts.find(sr, key, true).into_iter().take(1) {
+                    add(
+                        &mut crops,
+                        "legend",
+                        [at[0] - 0.02 * w, at[1] - 0.3 * h, at[0] + 0.33 * w, at[1] + 0.03 * h],
+                        "lighting control legend".into(),
+                    );
+                }
+            }
+        }
         // General notes: on a notes sheet, and on the plans in the packet.
         if kind == "general_notes" || plan_sheets.contains(&l.number) {
             for (at, _) in texts.find(sr, "GENERAL NOTES", true).into_iter().take(1) {
@@ -2245,6 +2261,17 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(Value::Array(els)) = here.objects.get_mut("elements") {
         super::validate_tr::annotate(d, &sp, &model, &kinds, prints.as_ref(), &all_rules, &area, els);
     }
+    // The lighting documents of the types present (fixture schedule rows, submittal products and
+    // their cut-sheet pages, the control legend), and each luminaire's and control's facts.
+    let lighting = match here.objects.get_mut("elements") {
+        Some(Value::Array(els)) => super::validate_lighting::annotate(d, &model, &kinds, prints.as_ref(), &all_rules, els),
+        _ => None,
+    };
+    if let Some((summary, pages)) = lighting {
+        here.objects["lighting"] = summary;
+        here.submittals.extend(pages);
+        here.lighting = true;
+    }
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -2258,7 +2285,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         only: &[],
     });
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules), E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the documents, G-PRESENT the room type's expected set (project rules), E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         // The area's own: an element beside it is measured in its own area's packet.
         "findings": pre

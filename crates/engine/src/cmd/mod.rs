@@ -168,6 +168,7 @@ pub(crate) mod underlay;
 mod unittypes;
 pub mod validate;
 pub mod validate_kind;
+pub mod validate_lighting;
 pub mod validate_packet;
 pub mod validate_prescreen;
 pub mod validate_rules;

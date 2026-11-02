@@ -784,9 +784,11 @@ mod tests {
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
         assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
         assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN"]));
-        // Occupancy sensors: present, host.
-        assert_eq!(got("occupancy_sensor"), set(&["G-HOST", "E-OCC"]));
-        assert_eq!(got("vacancy_sensor"), set(&["G-HOST", "E-OCC"]));
+        // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
+        // one's drivers and the room's count (Q6145).
+        let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT"]);
+        assert_eq!(got("occupancy_sensor"), sensor);
+        assert_eq!(got("vacancy_sensor"), sensor);
         // A conduit is hosted by nothing; G-HOST is not its rule.
         assert!(!got("conduit").contains("G-HOST"));
         let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();

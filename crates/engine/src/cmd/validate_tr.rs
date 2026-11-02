@@ -113,7 +113,7 @@ fn flag(text: &str) -> Option<bool> {
 // ---------------------------------------------------------------- the product record
 
 /// A product record (Q6136) as stored on an element: a JSON object, or its text.
-fn product_of(e: Option<&Entity>, fields: Option<&BTreeMap<String, String>>) -> Option<Value> {
+pub(crate) fn product_of(e: Option<&Entity>, fields: Option<&BTreeMap<String, String>>) -> Option<Value> {
     let from_prop = e.and_then(|e| {
         let props = cadaddy_doc::props::read(&e.common.xdata);
         props.get("product").filter(|p| p.has_value()).map(|p| p.value.clone())
