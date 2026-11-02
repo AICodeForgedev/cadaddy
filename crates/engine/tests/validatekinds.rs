@@ -66,10 +66,23 @@ fn job() -> Session {
     s
 }
 
-/// The job's spec tags as the real job leaves them: every device of kind `device`, with only
-/// the plan tag as its type (no legend words). The marks' counts.
+/// The job's spec tags as a job with no legend kinds leaves them: every device of kind `device`,
+/// with only the plan tag as its type (no legend words), and no kind stored on its built device
+/// (Q6130 stores one). The marks' counts.
 fn generic_tags(s: &mut Session) -> BTreeMap<String, u64> {
+    use cadaddy_engine::doc::props;
     let d = s.doc_mut().unwrap();
+    let built: Vec<_> = d.model.iter().filter(|e| made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    for h in built {
+        d.modify_entity(h, |e| {
+            let mut p = props::read(&e.common.xdata);
+            for key in ["kind", "legend_kind", "device_kind", "kind_source", "ifc_class"] {
+                p.remove(key);
+            }
+            e.common.xdata = props::write(&e.common.xdata, &p).into();
+        })
+        .unwrap();
+    }
     let mut sp: Value = serde_json::from_str(d.building_spec.as_deref().unwrap()).unwrap();
     let mut marks = BTreeMap::new();
     for t in sp["tags"].as_array_mut().unwrap().iter_mut().filter(|t| t["id"].as_str().unwrap_or("").starts_with("device:")) {
