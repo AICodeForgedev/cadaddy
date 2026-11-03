@@ -9430,16 +9430,17 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     for sc in &scenarios {
         let tier = sc["tier"].as_str().unwrap_or_default();
         let name = sc["name"].as_str().unwrap_or_default();
+        let over = format!("{} feeders, {:.0} ft", sc["quantity"]["feeders"], sc["quantity"]["feet"].as_f64().unwrap_or(0.0));
+        let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["labor_hours"].as_f64()) {
-            (Some(c), Some(h)) => format!(
-                "; saves ${c:.0} and {h:.0} labor hours over {} feeders, {:.0} ft{}",
-                sc["quantity"]["feeders"],
-                sc["quantity"]["feet"].as_f64().unwrap_or(0.0),
-                sc["unpriced"]
-                    .as_array()
-                    .filter(|u| !u.is_empty())
-                    .map(|u| format!(" (unpriced: {})", u.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")))
-                    .unwrap_or_default()
+            (Some(c), Some(h)) => format!("; saves ${c:.0} and {h:.0} labor hours over {over}"),
+            _ if sc["as_designed"].is_object() => format!(
+                "; over {over}: savings not priced (no price for {}); of what is priced, as designed ${:.0} and {:.0} h, the alternative ${:.0} and {:.0} h",
+                unpriced.join(", "),
+                sc["as_designed"]["cost"].as_f64().unwrap_or(0.0),
+                sc["as_designed"]["labor_hours"].as_f64().unwrap_or(0.0),
+                sc["alternative"]["cost"].as_f64().unwrap_or(0.0),
+                sc["alternative"]["labor_hours"].as_f64().unwrap_or(0.0),
             ),
             _ => String::new(),
         };
