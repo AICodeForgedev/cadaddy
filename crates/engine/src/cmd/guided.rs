@@ -8073,7 +8073,8 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     use cadaddy_geom::Vec2;
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let norm = cadaddy_mepfix::printlinks::norm_sheet;
+    // A sheet by its number (`E-4/3`: E-4's view of level 3).
+    let norm = |v: &str| cadaddy_mepfix::printlinks::norm_sheet(v.split('/').next().unwrap_or(v));
     // The devices: where each one's symbol is on its sheet, and where it is on its level.
     struct Dev {
         i: usize,
@@ -8243,11 +8244,14 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                 Route::Riser => {
                     // Up to the same note's box on the next level, when it is above this one.
                     let Some(lv) = level_of(&b.level) else { continue };
+                    // Each level's plan has its own place in the drawing: compared from its corner.
+                    let corner = |l: &cadaddy_walk3d::Level| l.region.map_or(Vec2::ZERO, |r| Vec2::new(r[0], r[1]));
+                    let here = b.plan - corner(&lv);
                     let above = boxes
                         .iter()
                         .filter(|o| o.text == b.text || (o.work.system == b.work.system && o.work.conduits.iter().any(|c| c.1 == Route::Riser)))
                         .filter_map(|o| Some((o, level_of(&o.level)?)))
-                        .filter(|(o, ol)| ol.elevation_ft > lv.elevation_ft + 1.0 && (o.plan - b.plan).len() <= RISER_REACH_FT * upf)
+                        .filter(|(o, ol)| ol.elevation_ft > lv.elevation_ft + 1.0 && (o.plan - corner(ol) - here).len() <= RISER_REACH_FT * upf)
                         .min_by(|a, b| a.1.elevation_ft.total_cmp(&b.1.elevation_ft));
                     let Some((o, ol)) = above else { continue };
                     r.points = vec![[b.plan.x, b.plan.y]];
