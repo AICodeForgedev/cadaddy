@@ -88,7 +88,11 @@ impl Fact {
     }
     /// Its source as a property's: a submittal, a specification section or a print.
     pub(crate) fn source_of(&self) -> Source {
-        let doc = if self.quote.is_empty() { self.source.clone() } else { format!("{} (\"{}\")", self.source, self.quote.chars().take(60).collect::<String>()) };
+        let doc = if self.quote.is_empty() {
+            self.source.clone()
+        } else {
+            format!("{} (\"{}\")", self.source, self.quote.chars().take(60).collect::<String>())
+        };
         Source::from_doc(doc_kind(&self.source), &doc)
     }
 }
@@ -204,7 +208,12 @@ pub(crate) fn read(_s: &mut Session, paths: &[String], show_text: usize) -> Read
         let name = std::path::Path::new(&f).file_name().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
         // The document's trades by its own name and its folder's (a project's export names the
         // package: `Building Concrete Mix/Rev 1/…`).
-        let parent = std::path::Path::new(&f).parent().and_then(|p| p.parent()).and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let parent = std::path::Path::new(&f)
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
         let trades = trades_of(&format!("{name} {parent}"));
         if trades.is_empty() {
             continue;
@@ -290,7 +299,15 @@ fn page_at(text: &str, at: usize) -> Option<usize> {
 
 /// A number with its fraction (`1/2`, `3 1/2`, `11 7/8`, `4.5`) at the end of `s`.
 fn tail_number(s: &str) -> Option<f64> {
-    let tail: String = s.trim_end().chars().rev().take_while(|c| c.is_ascii_digit() || matches!(c, '/' | ' ' | '.' | '-')).collect::<String>().chars().rev().collect();
+    let tail: String = s
+        .trim_end()
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '/' | ' ' | '.' | '-'))
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     let tail = tail.trim().replace('-', " ");
     whole_and_fraction(&tail)
 }
@@ -306,7 +323,9 @@ pub(super) fn whole_and_fraction(t: &str) -> Option<f64> {
         (b > 0.0).then(|| a / b)
     };
     let v = match frac(last) {
-        Some(f) => f + parts.len().checked_sub(2).and_then(|i| parts.get(i)).and_then(|w| w.parse::<f64>().ok()).filter(|w| w.fract() == 0.0).unwrap_or(0.0),
+        Some(f) => {
+            f + parts.len().checked_sub(2).and_then(|i| parts.get(i)).and_then(|w| w.parse::<f64>().ok()).filter(|w| w.fract() == 0.0).unwrap_or(0.0)
+        }
         None => last.parse::<f64>().ok()?,
     };
     v.is_finite().then_some(v)
@@ -346,7 +365,11 @@ fn facts_from(text: &str, label: &str, title: &str, trades: &[&str], out: &mut V
     // A specification section names itself so.
     let src = |at: usize| {
         let s = src(at);
-        if title.to_ascii_uppercase().contains("SUBMITTAL") || label.to_ascii_uppercase().contains("SUBMITTAL") { s } else { s.replacen("submittal ", "specification ", 1) }
+        if title.to_ascii_uppercase().contains("SUBMITTAL") || label.to_ascii_uppercase().contains("SUBMITTAL") {
+            s
+        } else {
+            s.replacen("submittal ", "specification ", 1)
+        }
     };
     let up = text.to_ascii_uppercase();
     let lines: Vec<(usize, &str)> = {
@@ -415,7 +438,8 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
             let compact = u.replace(' ', "");
             let mut rest = compact.as_str();
             while let Some(i) = rest.find("PSI") {
-                let num: String = rest.get(..i).unwrap_or_default().chars().rev().take_while(char::is_ascii_digit).collect::<String>().chars().rev().collect();
+                let num: String =
+                    rest.get(..i).unwrap_or_default().chars().rev().take_while(char::is_ascii_digit).collect::<String>().chars().rev().collect();
                 if let Ok(v) = num.parse::<f64>()
                     && (2500.0..=10_000.0).contains(&v)
                 {
@@ -443,28 +467,49 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
     for (at, l) in lines {
         let u = l.to_ascii_uppercase().replace(['”', '″'], "\"").replace(['’', '′'], "'");
         // Strand: `1/2" DIAMETER, SEVEN WIRE` (a text copy can lose the slash: `1 2"`).
-        if (u.contains("SEVEN WIRE") || u.contains("7-WIRE") || u.contains("7 WIRE") || u.contains("STRAND")) && u.contains('"')
-            && let Some(q) = u.find('"') {
-                let head = u.get(..q).unwrap_or_default();
-                let lost_slash = head.trim_end().ends_with(" 1 2") || head.trim_end() == "1 2";
-                let v = if lost_slash { Some(0.5) } else { tail_number(head) };
-                if let Some(v) = v.filter(|v| [0.375, 0.5, 0.6].iter().any(|s| (s - v).abs() < 1e-6)) {
-                    out.push(Fact::new("concrete.strand_in", format!("{}\" strand", num_text(v)), Some(v), &src(*at), l));
-                }
+        if (u.contains("SEVEN WIRE") || u.contains("7-WIRE") || u.contains("7 WIRE") || u.contains("STRAND"))
+            && u.contains('"')
+            && let Some(q) = u.find('"')
+        {
+            let head = u.get(..q).unwrap_or_default();
+            let lost_slash = head.trim_end().ends_with(" 1 2") || head.trim_end() == "1 2";
+            let v = if lost_slash { Some(0.5) } else { tail_number(head) };
+            if let Some(v) = v.filter(|v| [0.375, 0.5, 0.6].iter().any(|s| (s - v).abs() < 1e-6)) {
+                out.push(Fact::new("concrete.strand_in", format!("{}\" strand", num_text(v)), Some(v), &src(*at), l));
             }
+        }
         // Chairs: `CHAIRS @ 4'-0" O.C.`, `CHAIR SPACING SHALL BE 4'-0" MAX`.
-        if u.contains("CHAIR") && let Some(v) = spacing_after(&u, &["CHAIRS @", "CHAIR SPACING SHALL BE", "CHAIRS AT", "CHAIR SPACING"])
-            && (1.0..=10.0).contains(&v) {
-                out.push(Fact::new("concrete.chair_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
-            }
+        if u.contains("CHAIR")
+            && let Some(v) = spacing_after(&u, &["CHAIRS @", "CHAIR SPACING SHALL BE", "CHAIRS AT", "CHAIR SPACING"])
+            && (1.0..=10.0).contains(&v)
+        {
+            out.push(Fact::new("concrete.chair_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
+        }
         // Tendon spacing: `TENDONS @ 4'-0" O.C.`.
-        if u.contains("TENDON") && u.contains("O.C") && let Some(v) = spacing_after(&u, &["TENDONS @", "TENDONS AT", "TENDON SPACING"])
-            && (1.0..=30.0).contains(&v) {
-                out.push(Fact::new("concrete.tendon_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
-            }
+        if u.contains("TENDON")
+            && u.contains("O.C")
+            && let Some(v) = spacing_after(&u, &["TENDONS @", "TENDONS AT", "TENDON SPACING"])
+            && (1.0..=30.0).contains(&v)
+        {
+            out.push(Fact::new("concrete.tendon_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
+        }
         // Vapor barrier: `15 MIL` beside VAPOR.
-        if u.contains("VAPOR") && u.contains("MIL") && let Some(i) = u.find("MIL") {
-            let num: String = u.get(..i).unwrap_or_default().trim_end().trim_end_matches('-').chars().rev().take_while(char::is_ascii_digit).collect::<String>().chars().rev().collect();
+        if u.contains("VAPOR")
+            && u.contains("MIL")
+            && let Some(i) = u.find("MIL")
+        {
+            let num: String = u
+                .get(..i)
+                .unwrap_or_default()
+                .trim_end()
+                .trim_end_matches('-')
+                .chars()
+                .rev()
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
             if let Ok(v) = num.parse::<f64>()
                 && (4.0..=40.0).contains(&v)
             {
@@ -472,19 +517,24 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
             }
         }
         // Slab thickness: `5" SLAB`, `5" THICK SLAB`, `SLAB THICKNESS = 5"`.
-        if u.contains("SLAB") && u.contains('"')
-            && let Some(v) = slab_inches(&u) {
-                out.push(Fact::new("concrete.slab_thickness_in", format!("{}\" slab", num_text(v)), Some(v), &src(*at), l));
-            }
+        if u.contains("SLAB")
+            && u.contains('"')
+            && let Some(v) = slab_inches(&u)
+        {
+            out.push(Fact::new("concrete.slab_thickness_in", format!("{}\" slab", num_text(v)), Some(v), &src(*at), l));
+        }
         // Welded wire: `6x6-W2.9xW2.9`.
         if let Some(st) = wire_style(&u) {
             out.push(Fact::new("concrete.mesh", st, None, &src(*at), l));
         }
         // Gypsum underlayment thickness.
-        if u.contains("UNDERLAYMENT") && u.contains('"') && let Some(q) = u.find('"')
-            && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| (0.25..=3.0).contains(v)) {
-                out.push(Fact::new("concrete.underlayment_in", format!("{}\" underlayment", num_text(v)), Some(v), &src(*at), l));
-            }
+        if u.contains("UNDERLAYMENT")
+            && u.contains('"')
+            && let Some(q) = u.find('"')
+            && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| (0.25..=3.0).contains(v))
+        {
+            out.push(Fact::new("concrete.underlayment_in", format!("{}\" underlayment", num_text(v)), Some(v), &src(*at), l));
+        }
     }
 }
 
@@ -575,10 +625,12 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
                 material.push((mark, product, depth, pieces, src(*at), l.trim().to_string()));
                 continue;
             }
-            if (u.contains("O.C") || u.contains(" OC")) && let Some(q) = u.find('"')
-                && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6)) {
-                    spacings.push((v, format!("{}|{}", src(*at), l.trim())));
-                }
+            if (u.contains("O.C") || u.contains(" OC"))
+                && let Some(q) = u.find('"')
+                && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6))
+            {
+                spacings.push((v, format!("{}|{}", src(*at), l.trim())));
+            }
             for d in [9.5, 11.875, 14.0, 16.0, 18.0, 20.0, 24.0] {
                 let txt = inches_text(d);
                 if u.contains(&txt) && (u.contains("JOIST") || u.contains("TJI") || u.contains("BCI") || u.contains("LPI") || u.trim() == txt) {
@@ -626,12 +678,24 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
             }
             let marks = by.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
             let first = material.first().map(|m| m.4.clone()).unwrap_or_default();
-            out.push(Fact::new("framing.joists_material", format!("{total} pieces ({marks})"), Some(total), &first, "the material list's quantities"));
+            out.push(Fact::new(
+                "framing.joists_material",
+                format!("{total} pieces ({marks})"),
+                Some(total),
+                &first,
+                "the material list's quantities",
+            ));
         }
         if !listed.is_empty() {
             let total: f64 = listed.values().sum();
             let marks = listed.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
-            out.push(Fact::new("framing.joists_listed", format!("{total} joists ({marks})"), Some(total), &listed_src, "the layout's labels (mark - count @ spacing)"));
+            out.push(Fact::new(
+                "framing.joists_listed",
+                format!("{total} joists ({marks})"),
+                Some(total),
+                &listed_src,
+                "the layout's labels (mark - count @ spacing)",
+            ));
         }
     }
     if truss_doc {
@@ -672,7 +736,10 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
 /// Whether a word is a framing mark (`J7`, `J14`, `T01`): letters then digits, short.
 fn is_mark(w: &str) -> bool {
     let w = w.trim();
-    (2..=6).contains(&w.len()) && w.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && w.chars().any(|c| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_alphanumeric())
+    (2..=6).contains(&w.len())
+        && w.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && w.chars().any(|c| c.is_ascii_digit())
+        && w.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 /// A layout's labels in a row: `J7- 14 @ 24"`, `J1 - 14 @ 24"`: (mark, count, spacing).
@@ -713,7 +780,9 @@ fn material_row(line: &str) -> Option<(String, String, f64, f64)> {
     if !length_cell(cells.get(last)?) {
         return None;
     }
-    let k = (0..last).find(|&k| cells.get(k).is_some_and(|c| is_mark(c)) && cells.get(k + 1).is_some_and(|c| c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())))?;
+    let k = (0..last).find(|&k| {
+        cells.get(k).is_some_and(|c| is_mark(c)) && cells.get(k + 1).is_some_and(|c| c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic()))
+    })?;
     let nums: Vec<f64> = cells.get(k + 2..last)?.iter().map(|c| c.parse::<f64>().ok()).collect::<Option<Vec<f64>>>()?;
     if nums.len() < 3 {
         return None;
@@ -742,13 +811,21 @@ fn finish_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> Str
         if let Some((v, q, _)) = most_common(&coats) {
             let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
             let total = v + if primer { 1.0 } else { 0.0 };
-            out.push(Fact::new("finishes.paint_coats", format!("{} coats{}", num_text(total), if primer { " (a primer and the finish coats)" } else { "" }), Some(total), s, quote));
+            out.push(Fact::new(
+                "finishes.paint_coats",
+                format!("{} coats{}", num_text(total), if primer { " (a primer and the finish coats)" } else { "" }),
+                Some(total),
+                s,
+                quote,
+            ));
         }
     }
     if title.contains("FLOOR") || title.contains("RESILIENT") || title.contains("CARPET") {
         for (at, l) in lines {
             let u = l.to_ascii_uppercase().replace(['”', '″'], "\"").replace('×', "X");
-            let kind = ["LUXURY VINYL", "LVT", "VINYL PLANK", "VINYL TILE", "CARPET TILE", "SHEET VINYL", "PORCELAIN", "CERAMIC"].into_iter().find(|w| u.contains(w));
+            let kind = ["LUXURY VINYL", "LVT", "VINYL PLANK", "VINYL TILE", "CARPET TILE", "SHEET VINYL", "PORCELAIN", "CERAMIC"]
+                .into_iter()
+                .find(|w| u.contains(w));
             let Some(kind) = kind else { continue };
             // A piece size: `7" X 48"`, `24" X 24"`.
             if let Some(i) = u.find("\" X ").or_else(|| u.find("\"X")) {
@@ -760,7 +837,16 @@ fn finish_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> Str
                     && (2.0..=96.0).contains(&a)
                     && (2.0..=96.0).contains(&b)
                 {
-                    out.push(Fact::new("finishes.flooring_piece_sf", format!("{kind} {}\"x{}\"", num_text(a), num_text(b)), Some(a * b / 144.0), &src(*at), l).scoped(kind));
+                    out.push(
+                        Fact::new(
+                            "finishes.flooring_piece_sf",
+                            format!("{kind} {}\"x{}\"", num_text(a), num_text(b)),
+                            Some(a * b / 144.0),
+                            &src(*at),
+                            l,
+                        )
+                        .scoped(kind),
+                    );
                     continue;
                 }
             }
@@ -776,7 +862,13 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
     while i < lines.len() {
         let (at, l) = lines.get(i).copied().unwrap_or((0, ""));
         let u = l.trim().to_ascii_uppercase();
-        let Some(id) = u.strip_prefix("HARDWARE SET#:").or_else(|| u.strip_prefix("HARDWARE SET #:")).or_else(|| u.strip_prefix("HARDWARE SET:")).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()) else {
+        let Some(id) = u
+            .strip_prefix("HARDWARE SET#:")
+            .or_else(|| u.strip_prefix("HARDWARE SET #:"))
+            .or_else(|| u.strip_prefix("HARDWARE SET:"))
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+        else {
             i += 1;
             continue;
         };
@@ -817,14 +909,26 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             if first.is_empty() {
                 first = src(at);
             }
-            let mut f = Fact::new("openings.hardware_set", format!("set {id}: {openings} openings {size} {frame}").trim().to_string(), Some(*openings), &src(at), &format!("{size} {frame}"));
+            let mut f = Fact::new(
+                "openings.hardware_set",
+                format!("set {id}: {openings} openings {size} {frame}").trim().to_string(),
+                Some(*openings),
+                &src(at),
+                &format!("{size} {frame}"),
+            );
             f.scope = format!("{id}|{size}");
             out.push(f);
         }
         i = j.max(i + 1);
     }
     if total > 0.0 {
-        out.push(Fact::new("openings.doors_listed", format!("{total} openings in the hardware sets"), Some(total), &first, "the hardware schedule's sets"));
+        out.push(Fact::new(
+            "openings.doors_listed",
+            format!("{total} openings in the hardware sets"),
+            Some(total),
+            &first,
+            "the hardware schedule's sets",
+        ));
     }
     // The door list: each door number and its set (`201   11`, two pairs to a row).
     let mut in_list = false;
@@ -883,7 +987,10 @@ fn accessory_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> 
                 if let Some((tag, model)) = part.split_once(':')
                     && tag_ok(tag)
                 {
-                    out.push(Fact::new("specialties.accessory", format!("{} {}", tag.trim(), model.trim()), Some(n), &src(*at), l).scoped(&format!("{} for {rooms}", tag.trim())));
+                    out.push(
+                        Fact::new("specialties.accessory", format!("{} {}", tag.trim(), model.trim()), Some(n), &src(*at), l)
+                            .scoped(&format!("{} for {rooms}", tag.trim())),
+                    );
                 }
             }
             continue;
@@ -897,9 +1004,13 @@ fn accessory_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> 
                 }
                 let Some(qi) = rest.find("QTY") else { continue };
                 let model = rest.get(..qi).unwrap_or_default().trim().to_string();
-                let num: String = rest.get(qi + 3..).unwrap_or_default().trim_start_matches(['-', ':', ' ']).chars().take_while(char::is_ascii_digit).collect();
+                let num: String =
+                    rest.get(qi + 3..).unwrap_or_default().trim_start_matches(['-', ':', ' ']).chars().take_while(char::is_ascii_digit).collect();
                 if let Ok(n) = num.parse::<f64>() {
-                    out.push(Fact::new("specialties.accessory", format!("{} {model}", tag.trim()), Some(n), &src(*at), part).scoped(&format!("{} for {rooms}", tag.trim())));
+                    out.push(
+                        Fact::new("specialties.accessory", format!("{} {model}", tag.trim()), Some(n), &src(*at), part)
+                            .scoped(&format!("{} for {rooms}", tag.trim())),
+                    );
                 }
             }
         }
@@ -924,9 +1035,13 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
         let Some(n) = f.number else { continue };
         let (what, model, query) = match f.key.as_str() {
             "framing.joists_listed" => ("floor joists", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"})),
-            "framing.joists_material" => ("floor joists (the material list's pieces)", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"})),
+            "framing.joists_material" => {
+                ("floor joists (the material list's pieces)", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"}))
+            }
             "framing.trusses_listed" => ("roof trusses", q("framing", "truss", None).count as f64, json!({"trade": "framing", "kind": "truss"})),
-            "openings.doors_listed" => ("doors (hardware sets' openings)", q("openings", "door", None).count as f64, json!({"trade": "openings", "kind": "door"})),
+            "openings.doors_listed" => {
+                ("doors (hardware sets' openings)", q("openings", "door", None).count as f64, json!({"trade": "openings", "kind": "door"}))
+            }
             "specialties.accessory" => {
                 // By its tag and model: two submittals can use one tag.
                 let t = q("specialties", "accessory", Some(&f.value));
@@ -1055,7 +1170,8 @@ mod tests {
         // A set of two sizes is two groups; a row of another word than Single counts too.
         let two = "Hardware Set#: 9\n4 Single   X1   A\n4 Single   Size: 2-10 X 7-0   Wood Door X HM Frame\n1 Single   X2   B\n1 Single   Size: 3-0 X 7-0   Wood Door X HM Frame\nHardware Set#: 10\n3 Communicating   Size: 3-0 X 7-0   Wood Door X HM Frame\nTot Qty\n";
         let f2 = facts(two, "Sample Door Hardware");
-        let g: Vec<(Option<&str>, Option<f64>)> = f2.iter().filter(|x| x.key == "openings.hardware_set").map(|x| (x.scope.split('|').next(), x.number)).collect();
+        let g: Vec<(Option<&str>, Option<f64>)> =
+            f2.iter().filter(|x| x.key == "openings.hardware_set").map(|x| (x.scope.split('|').next(), x.number)).collect();
         assert_eq!(g, vec![(Some("9"), Some(4.0)), (Some("9"), Some(1.0)), (Some("10"), Some(3.0))]);
         assert_eq!(num(&f2, "openings.doors_listed"), Some(8.0));
         let list: Vec<(&str, &str)> = f.iter().filter(|x| x.key == "openings.door_set").map(|x| (x.scope.as_str(), x.value.as_str())).collect();

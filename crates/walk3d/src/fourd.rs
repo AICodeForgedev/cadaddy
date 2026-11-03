@@ -239,7 +239,9 @@ pub fn element_of(e: &Entity) -> Element {
                 "mesh" => "IfcReinforcingMesh",
                 "tendon" => "IfcTendon",
                 "anchor" => "IfcTendonAnchor",
-                "stud" | "track" | "plate" | "blocking" | "backing" | "furring" | "grid_main" | "grid_tee" | "wall_angle" | "rim" | "truss" => "IfcMember",
+                "stud" | "track" | "plate" | "blocking" | "backing" | "furring" | "grid_main" | "grid_tee" | "wall_angle" | "rim" | "truss" => {
+                    "IfcMember"
+                }
                 "header" | "joist" => "IfcBeam",
                 "sheathing" => "IfcPlate",
                 "sheet" | "tile" | "flooring" | "base" | "paint" | "vapor_barrier" => "IfcCovering",

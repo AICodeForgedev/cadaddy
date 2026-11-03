@@ -219,7 +219,9 @@ fn the_build_lays_out_every_trade_and_the_index_counts_it() {
         let doc = s.doc().unwrap();
         doc.model
             .iter()
-            .find(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("atom") && e.common.xdata.iter().any(|t| t.value == "part:atom:stud"))
+            .find(|e| {
+                cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("atom") && e.common.xdata.iter().any(|t| t.value == "part:atom:stud")
+            })
             .map(|e| e.handle.hex())
             .unwrap()
     };
@@ -240,7 +242,10 @@ fn docs_dir() -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let files = [
-        ("Sample Building Concrete Mix.txt", "--- page 1 of 1 ---\nCONCRETE MIX DESIGN\nMIX NUMBER:\n3500 - 5SK 3500PSI - Slab on Grade\n3500 psi at 28 days\n"),
+        (
+            "Sample Building Concrete Mix.txt",
+            "--- page 1 of 1 ---\nCONCRETE MIX DESIGN\nMIX NUMBER:\n3500 - 5SK 3500PSI - Slab on Grade\n3500 psi at 28 days\n",
+        ),
         (
             "Sample PT Slab Design.txt",
             "--- page 1 of 2 ---\nPOST-TENSIONING STEEL SHALL BE 1/2\" DIAMETER, SEVEN WIRE, 270 KSI STRAND\n--- page 2 of 2 ---\nTENDONS @ 6'-0\" O.C. EACH WAY\nTENDON SUPPORT CHAIRS @ 3'-0\" O.C.\n5\" SLAB ON 15 MIL VAPOR RETARDER\n",
@@ -359,7 +364,9 @@ fn the_documents_set_the_pieces_and_their_quantities_are_compared() {
     assert!(rep["answer_ms"]["studs"].as_f64().is_some());
     assert!(rep["levels"].as_array().unwrap().len() >= 2);
     assert!(rep["totals"]["concrete"]["pour"]["volume_cy"].as_f64().unwrap() > 0.0);
-    assert!(rep["totals"]["drywall"]["sheet"]["with_waste"]["area_sf"].as_f64().unwrap() > rep["totals"]["drywall"]["sheet"]["area_sf"].as_f64().unwrap());
+    assert!(
+        rep["totals"]["drywall"]["sheet"]["with_waste"]["area_sf"].as_f64().unwrap() > rep["totals"]["drywall"]["sheet"]["area_sf"].as_f64().unwrap()
+    );
     // The rules say where each value came from.
     let rules = s.execute("bim.atoms.rules", &json!({"section": "concrete"})).unwrap();
     assert_eq!(rules["rules"]["concrete"]["chair_spacing_ft"]["from"], json!("documents"), "{rules}");
@@ -384,7 +391,9 @@ fn project_rules_and_penetrations_change_the_pieces() {
         let mut m = cadaddy_doc::Mesh { vertices: Vec::new(), faces: Vec::new(), kind: cadaddy_doc::MeshKind::Polyface };
         // 12" x 12" duct at y=200, 9' up, from x=100 to x=400 on level 1.
         let (y0, y1, z0, z1) = (194.0, 206.0, 102.0, 114.0);
-        for (x, y, z) in [(100.0, y0, z0), (400.0, y0, z0), (400.0, y1, z0), (100.0, y1, z0), (100.0, y0, z1), (400.0, y0, z1), (400.0, y1, z1), (100.0, y1, z1)] {
+        for (x, y, z) in
+            [(100.0, y0, z0), (400.0, y0, z0), (400.0, y1, z0), (100.0, y1, z0), (100.0, y0, z1), (400.0, y0, z1), (400.0, y1, z1), (100.0, y1, z1)]
+        {
             m.vertices.push(cadaddy_geom::Vec3::new(x, y, z));
         }
         for f in [[3u32, 2, 1, 0], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]] {
@@ -401,7 +410,12 @@ fn project_rules_and_penetrations_change_the_pieces() {
             t("part:segment"),
             t("size:12x12"),
         ];
-        d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common { layer: "M-DUCT".into(), xdata: xdata.into(), ..Default::default() }, cadaddy_doc::EntityKind::Mesh(m)).unwrap();
+        d.add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common { layer: "M-DUCT".into(), xdata: xdata.into(), ..Default::default() },
+            cadaddy_doc::EntityKind::Mesh(m),
+        )
+        .unwrap();
     }
     s.execute("bim.atoms.build", &json!({"trades": ["firestopping"]})).unwrap();
     let fs = count(&mut s, json!({"trade": "firestopping", "kind": "firestop", "group_by": "type"}));

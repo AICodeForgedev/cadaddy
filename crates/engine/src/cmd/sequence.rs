@@ -508,8 +508,29 @@ fn contributions(c: &Ctx, e: &El, exterior: bool) -> Vec<Contribution> {
         "railing" => vec![one(Kind::Finishes, "Railing", "lf", ft(c, e.len), 0.3)],
         "device" => device(c, e),
         "mep" => mep(c, e),
+        "atom" => trade_piece(e),
         _ => Vec::new(),
     }
+}
+
+/// A trade's piece (Q6162): in its trade's activity, so the 4D view shows it going in then, with
+/// no quantity of its own (its wall's, slab's or room's quantity already carries the hours).
+fn trade_piece(e: &El) -> Vec<Contribution> {
+    let piece = e.tag("part").strip_prefix("atom:").unwrap_or_default().to_string();
+    let kind = match (e.tag("trade"), piece.as_str()) {
+        ("concrete", "underlayment") => Kind::Finishes,
+        ("concrete", _) => Kind::Slab,
+        ("framing", "joist" | "rim" | "truss") => Kind::Structure,
+        ("framing", "sheathing") if e.z[1] - e.z[0] < e.len * 0.1 => Kind::Structure,
+        ("framing" | "masonry", _) => Kind::Framing,
+        ("insulation", _) | ("firestopping", _) => Kind::Insulation,
+        ("drywall", _) => Kind::Drywall,
+        ("finishes", "tile" | "grid_main" | "grid_tee" | "wall_angle") => Kind::Ceilings,
+        ("finishes", _) => Kind::Finishes,
+        ("openings" | "specialties", _) => Kind::Casework,
+        _ => return Vec::new(),
+    };
+    vec![Contribution { kind, item: "Trade piece", size: String::new(), unit: "each", qty: 0.0, fallback: 0.0 }]
 }
 
 fn device(c: &Ctx, e: &El) -> Vec<Contribution> {

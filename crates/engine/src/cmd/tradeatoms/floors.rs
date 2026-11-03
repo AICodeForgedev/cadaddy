@@ -49,7 +49,8 @@ fn prism(polys: &[Vec<Vec2>], z0: f64, z1: f64) -> Mesh {
 /// A plan polygon clipped to the box `lo`–`hi` (Sutherland–Hodgman: the box is convex).
 pub(super) fn clip_box(poly: &[Vec2], lo: Vec2, hi: Vec2) -> Vec<Vec2> {
     let mut out: Vec<Vec2> = poly.to_vec();
-    let edges: [(Vec2, f64); 4] = [(Vec2::new(1.0, 0.0), lo.x), (Vec2::new(-1.0, 0.0), -hi.x), (Vec2::new(0.0, 1.0), lo.y), (Vec2::new(0.0, -1.0), -hi.y)];
+    let edges: [(Vec2, f64); 4] =
+        [(Vec2::new(1.0, 0.0), lo.x), (Vec2::new(-1.0, 0.0), -hi.x), (Vec2::new(0.0, 1.0), lo.y), (Vec2::new(0.0, -1.0), -hi.y)];
     for (nrm, c) in edges {
         let input = std::mem::take(&mut out);
         let n = input.len();
@@ -136,7 +137,11 @@ fn lines_across(polys: &[Vec<Vec2>], dir: Vec2, step: f64, edge: f64) -> Vec<Vec
     let mut n = 0;
     while a <= a1 - edge + 1e-9 && n < MAX_PER_ELEMENT {
         let origin = across * a + dir * d0;
-        let sp: Vec<(Vec2, Vec2)> = spans(polys, origin, dir).into_iter().map(|(t0, t1)| (origin + dir * t0, origin + dir * t1)).filter(|(p, q)| p.dist(*q) > edge * 0.5).collect();
+        let sp: Vec<(Vec2, Vec2)> = spans(polys, origin, dir)
+            .into_iter()
+            .map(|(t0, t1)| (origin + dir * t0, origin + dir * t1))
+            .filter(|(p, q)| p.dist(*q) > edge * 0.5)
+            .collect();
         if !sp.is_empty() {
             out.push(sp);
         }
@@ -283,8 +288,13 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
         d.model
             .iter()
             .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("mep"))
-            .filter(|e| super::super::bimlook::made_tag(e, "part").is_some_and(|p| p.starts_with("atom:conduit") || p.starts_with("segment") || p == "atom:cable"))
-            .filter_map(|e| super::super::fieldview::mesh_box(e).map(|(lo, hi)| (e.handle, super::super::bspec::made_level(e).unwrap_or_default(), lo, hi)))
+            .filter(|e| {
+                super::super::bimlook::made_tag(e, "part")
+                    .is_some_and(|p| p.starts_with("atom:conduit") || p.starts_with("segment") || p == "atom:cable")
+            })
+            .filter_map(|e| {
+                super::super::fieldview::mesh_box(e).map(|(lo, hi)| (e.handle, super::super::bspec::made_level(e).unwrap_or_default(), lo, hi))
+            })
             .take(MAX_ELEMENTS)
             .collect()
     } else {
@@ -352,7 +362,9 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
                 }
             }
         } else {
-            batch.missing.insert("roof framing".into(), "the documents read give no roof trusses or rafters: the roof's framing is not laid out".into());
+            batch
+                .missing
+                .insert("roof framing".into(), "the documents read give no roof trusses or rafters: the roof's framing is not laid out".into());
         }
         let _ = framed;
     }
@@ -375,7 +387,8 @@ fn spec_pour(e: &ConcreteElement, sp: &BuildingSpec, r: &Rules, cr: &super::supe
         batch.notes.push(format!("concrete element {}: its size is out of range, so it has no pieces", e.id.chars().take(40).collect::<String>()));
         return;
     }
-    let path: Vec<Vec2> = e.path.iter().take(MAX_PER_ELEMENT).filter(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e12)).map(|p| Vec2::new(p[0], p[1])).collect();
+    let path: Vec<Vec2> =
+        e.path.iter().take(MAX_PER_ELEMENT).filter(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e12)).map(|p| Vec2::new(p[0], p[1])).collect();
     let width = e.width_in / 12.0 * upf;
     let (plan_area, mut blocks) = if path.len() >= 2 {
         let len: f64 = path.windows(2).map(|w| if let [a, b] = w { a.dist(*b) } else { 0.0 }).sum();
@@ -391,7 +404,11 @@ fn spec_pour(e: &ConcreteElement, sp: &BuildingSpec, r: &Rules, cr: &super::supe
     blocks.truncate(MAX_BLOCKS);
     let volume_cf = plan_area * (e.depth_in / 12.0) / (upf * upf);
     let (mix, strength, mix_src) = mix_of(r);
-    let src = if e.source.is_empty() { Source::from_doc(SourceKind::Print, &format!("concrete element {}", e.id)) } else { Source::from_doc(doc_kind(&e.source), &e.source) };
+    let src = if e.source.is_empty() {
+        Source::from_doc(SourceKind::Print, &format!("concrete element {}", e.id))
+    } else {
+        Source::from_doc(doc_kind(&e.source), &e.source)
+    };
     let mut p = Piece::new("concrete", "pour", format!("concrete {}", e.kind.replace('_', " ")), &e.level, src.clone());
     p.ty = if strength.is_empty() { e.kind.replace('_', " ") } else { strength.clone() };
     p.size = inches_text(e.depth_in);
@@ -422,7 +439,13 @@ fn spec_pour(e: &ConcreteElement, sp: &BuildingSpec, r: &Rules, cr: &super::supe
     }
     for em in e.embeds.iter().take(256) {
         let at = em.at.map(|a| Vec2::new(a[0], a[1])).unwrap_or((lo + hi) * 0.5);
-        let mut q = Piece::new("concrete", "embed", format!("{} {}", em.size, em.kind.replace('_', " ")).trim().to_string(), &e.level, if em.source.is_empty() { src.clone() } else { Source::from_doc(doc_kind(&em.source), &em.source) });
+        let mut q = Piece::new(
+            "concrete",
+            "embed",
+            format!("{} {}", em.size, em.kind.replace('_', " ")).trim().to_string(),
+            &e.level,
+            if em.source.is_empty() { src.clone() } else { Source::from_doc(doc_kind(&em.source), &em.source) },
+        );
         q.ty = em.kind.clone();
         q.size = em.size.clone();
         q.qty = f64::from(em.count.clamp(1, 10_000));
@@ -475,7 +498,13 @@ fn bars(
             p.ty = format!("{} {}", b.direction.replace('_', " "), b.bar);
             p.length_ft = piece;
             p.weight_lb = piece * lb_ft;
-            p = p.with("lap_ft", num_text(if i + 1 < n { lap_ft } else { 0.0 }), Source::from_doc(SourceKind::Rule, &format!("lap {} bar diameters (concrete rules lap_db)", cr.lap_db))).with("stock_ft", num_text(stock), r.source("concrete.rebar_stock_ft"));
+            p = p
+                .with(
+                    "lap_ft",
+                    num_text(if i + 1 < n { lap_ft } else { 0.0 }),
+                    Source::from_doc(SourceKind::Rule, &format!("lap {} bar diameters (concrete rules lap_db)", cr.lap_db)),
+                )
+                .with("stock_ft", num_text(stock), r.source("concrete.rebar_stock_ft"));
             let dbu = db / 12.0 * upf;
             p.blocks.push(Block::new(pa, pc, dbu, z - dbu, z));
             let pi = batch.push(p);
@@ -549,7 +578,13 @@ fn bars(
             p.length_ft = b.length_in / 12.0 * p.qty;
             p.weight_lb = p.length_ft * lb_ft;
             let c = (lo + hi) * 0.5;
-            p.blocks.push(Block::new(c, c + Vec2::new(db / 12.0 * upf, 0.0), db / 12.0 * upf, z1 - b.length_in / 24.0 * upf, z1 + b.length_in / 24.0 * upf));
+            p.blocks.push(Block::new(
+                c,
+                c + Vec2::new(db / 12.0 * upf, 0.0),
+                db / 12.0 * upf,
+                z1 - b.length_in / 24.0 * upf,
+                z1 + b.length_in / 24.0 * upf,
+            ));
             let pi = batch.push(p);
             batch.link(pi, pour);
         }
@@ -589,7 +624,11 @@ fn mesh_sheets(polys: &[Vec<Vec2>], style: &str, src: Source, z: f64, level: &st
                 if let Some(w) = lb_sf {
                     p.weight_lb = sw * sl * w;
                 }
-                p = p.with("sheet_ft", format!("{}x{}", num_text(sw), num_text(sl)), r.source("concrete.mesh_sheet_ft")).with("lap_in", num_text(lap * 12.0), r.source("concrete.mesh_lap_in"));
+                p = p.with("sheet_ft", format!("{}x{}", num_text(sw), num_text(sl)), r.source("concrete.mesh_sheet_ft")).with(
+                    "lap_in",
+                    num_text(lap * 12.0),
+                    r.source("concrete.mesh_lap_in"),
+                );
                 let cy = (a.y + b.y) / 2.0;
                 p.blocks.push(Block::new(Vec2::new(a.x, cy), Vec2::new(b.x, cy), b.y - a.y, z - 0.1 / 12.0 * upf, z));
                 let pi = batch.push(p);
@@ -679,7 +718,10 @@ fn slab_on_grade(
         let lb_ft = strand_lb_ft(r, strand);
         let src_t = r.source("concrete.tendon_spacing_ft");
         let item = format!("{} 7-wire strand tendon", inches_text(strand));
-        for (axis, dir) in [("long", if long_x { Vec2::new(1.0, 0.0) } else { Vec2::new(0.0, 1.0) }), ("short", if long_x { Vec2::new(0.0, 1.0) } else { Vec2::new(1.0, 0.0) })] {
+        for (axis, dir) in [
+            ("long", if long_x { Vec2::new(1.0, 0.0) } else { Vec2::new(0.0, 1.0) }),
+            ("short", if long_x { Vec2::new(0.0, 1.0) } else { Vec2::new(1.0, 0.0) }),
+        ] {
             let z = top - t / 2.0;
             for line in lines_across(polys, dir, spacing, edge) {
                 for (a, b) in line {
@@ -694,12 +736,22 @@ fn slab_on_grade(
                     q.ty = "unbonded 270 ksi".into();
                     q.length_ft = len_ft;
                     q.weight_lb = len_ft * lb_ft;
-                    q = q.computed("direction", axis).with("strand", inches_text(strand), r.fact("concrete.strand_in").map_or_else(|| r.source("concrete.tendon_strand_in"), |f| f.source_of()));
+                    q = q.computed("direction", axis).with(
+                        "strand",
+                        inches_text(strand),
+                        r.fact("concrete.strand_in").map_or_else(|| r.source("concrete.tendon_strand_in"), |f| f.source_of()),
+                    );
                     q.blocks.push(Block::new(a, b, strand / 12.0 * upf, z - strand / 24.0 * upf, z + strand / 24.0 * upf));
                     let ti = batch.push(q);
                     batch.link(ti, pi);
                     for (end, at) in [("live", a), ("dead", b)] {
-                        let mut an = Piece::new("concrete", "anchor", format!("tendon anchor, {end} end"), level, Source::from_doc(SourceKind::Rule, "PTI: an anchor at each end of a tendon (stressing and fixed)"));
+                        let mut an = Piece::new(
+                            "concrete",
+                            "anchor",
+                            format!("tendon anchor, {end} end"),
+                            level,
+                            Source::from_doc(SourceKind::Rule, "PTI: an anchor at each end of a tendon (stressing and fixed)"),
+                        );
                         an.host = Some(host);
                         an.size = inches_text(strand);
                         an.ty = end.into();
@@ -708,7 +760,13 @@ fn slab_on_grade(
                         let ai = batch.push(an);
                         batch.link(ai, ti);
                     }
-                    let mut ch = Piece::new("concrete", "chair", "tendon support chair", level, r.fact("concrete.chair_spacing_ft").map_or_else(|| r.source("concrete.chair_spacing_ft"), |f| f.source_of()));
+                    let mut ch = Piece::new(
+                        "concrete",
+                        "chair",
+                        "tendon support chair",
+                        level,
+                        r.fact("concrete.chair_spacing_ft").map_or_else(|| r.source("concrete.chair_spacing_ft"), |f| f.source_of()),
+                    );
                     ch.host = Some(host);
                     ch.qty = (len_ft / chair).ceil().max(1.0);
                     ch.blocks.push(Block::new(a, b, 1.0 / 12.0 * upf, top - t, top - t + 1.0 / 12.0 * upf));
@@ -792,7 +850,20 @@ fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Ru
         p.blocks.push(Block::new(a, b, 1.25 / 12.0 * upf, z0, z1));
         batch.push(p);
     }
-    panels(polys, "framing", "sheathing", &format!("{} subfloor panel", inches_text(r.num("framing.subfloor_in", 0.75))), r, "framing.subfloor_in", level, host, z1, top, upf, batch);
+    panels(
+        polys,
+        "framing",
+        "sheathing",
+        &format!("{} subfloor panel", inches_text(r.num("framing.subfloor_in", 0.75))),
+        r,
+        "framing.subfloor_in",
+        level,
+        host,
+        z1,
+        top,
+        upf,
+        batch,
+    );
     if let Some(u) = r.fact("concrete.underlayment_in").and_then(|f| f.number.map(|n| (n, f.source_of()))) {
         let area = area_of(polys) / (upf * upf);
         let mut p = Piece::new("concrete", "underlayment", format!("{} gypsum cement underlayment", inches_text(u.0)), level, u.1);
@@ -807,7 +878,20 @@ fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Ru
 
 /// Panels (subfloor, roof sheathing) over polygons, each where it lands.
 #[allow(clippy::too_many_arguments)]
-fn panels(polys: &[Vec<Vec2>], trade: &'static str, kind: &'static str, item: &str, r: &Rules, thick_path: &str, level: &str, host: Handle, z0: f64, z1: f64, upf: f64, batch: &mut Batch) {
+fn panels(
+    polys: &[Vec<Vec2>],
+    trade: &'static str,
+    kind: &'static str,
+    item: &str,
+    r: &Rules,
+    thick_path: &str,
+    level: &str,
+    host: Handle,
+    z0: f64,
+    z1: f64,
+    upf: f64,
+    batch: &mut Batch,
+) {
     let Some((lo, hi)) = bounds_of(polys) else { return };
     let dims = r.nums("framing.panel_ft");
     let (pw, pl) = (dims.first().copied().unwrap_or(4.0) * upf, dims.get(1).copied().unwrap_or(8.0) * upf);
@@ -823,7 +907,11 @@ fn panels(polys: &[Vec<Vec2>], trade: &'static str, kind: &'static str, item: &s
                 p.host = Some(host);
                 p.size = inches_text(r.num(thick_path, 0.75));
                 p.area_sf = land / (upf * upf);
-                p = p.computed("cut", if land < pw * pl * 0.999 { "true" } else { "false" }).with("sheet_ft", format!("{}x{}", num_text(pw / upf), num_text(pl / upf)), r.source("framing.panel_ft"));
+                p = p.computed("cut", if land < pw * pl * 0.999 { "true" } else { "false" }).with(
+                    "sheet_ft",
+                    format!("{}x{}", num_text(pw / upf), num_text(pl / upf)),
+                    r.source("framing.panel_ft"),
+                );
                 let cy = (a.y + b.y) / 2.0;
                 p.blocks.push(Block::new(Vec2::new(a.x, cy), Vec2::new(b.x, cy), b.y - a.y, z0, z1));
                 batch.push(p);
@@ -852,13 +940,28 @@ fn trusses(level: &str, host: Handle, polys: &[Vec<Vec2>], z: f64, r: &Rules, up
             p.host = Some(host);
             p.length_ft = span;
             p.size = format!("{}' span", num_text(span.round()));
-            p = p.with("spacing_in", num_text(spacing), r.source("framing.truss_spacing_in")).computed("body", "span at the bearing, 2' deep (the profile is the truss submittal's)");
+            p = p
+                .with("spacing_in", num_text(spacing), r.source("framing.truss_spacing_in"))
+                .computed("body", "span at the bearing, 2' deep (the profile is the truss submittal's)");
             p.blocks.push(Block::new(a, b, w, z, z + depth));
             batch.push(p);
         }
     }
     let rt = r.num("framing.roof_sheathing_in", 0.625) / 12.0 * upf;
-    panels(polys, "framing", "sheathing", &format!("{} roof sheathing panel", inches_text(r.num("framing.roof_sheathing_in", 0.625))), r, "framing.roof_sheathing_in", level, host, z + depth, z + depth + rt, upf, batch);
+    panels(
+        polys,
+        "framing",
+        "sheathing",
+        &format!("{} roof sheathing panel", inches_text(r.num("framing.roof_sheathing_in", 0.625))),
+        r,
+        "framing.roof_sheathing_in",
+        level,
+        host,
+        z + depth,
+        z + depth + rt,
+        upf,
+        batch,
+    );
 }
 
 #[cfg(test)]

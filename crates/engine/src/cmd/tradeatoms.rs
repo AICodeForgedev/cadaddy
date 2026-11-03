@@ -59,7 +59,8 @@ pub(crate) use docs::Fact;
 /// The rules data.
 const RULES: &str = include_str!("tradeatoms.json");
 /// The trades, in the order a report lists them.
-pub(crate) const TRADES: &[&str] = &["concrete", "framing", "masonry", "drywall", "insulation", "firestopping", "finishes", "openings", "specialties"];
+pub(crate) const TRADES: &[&str] =
+    &["concrete", "framing", "masonry", "drywall", "insulation", "firestopping", "finishes", "openings", "specialties"];
 /// Most pieces one build makes, elements looked at (hostile models).
 const MAX_PIECES: usize = 1_500_000;
 const MAX_ELEMENTS: usize = 2_000_000;
@@ -218,7 +219,10 @@ impl Rules {
                 Some(i) => k.truncate(i),
                 None => {
                     // The section's own source, else the defaults'.
-                    return sec.and_then(|s| s.get("source")).and_then(Value::as_str).map_or_else(|| format!("company default (trade rules, {section})"), str::to_string);
+                    return sec
+                        .and_then(|s| s.get("source"))
+                        .and_then(Value::as_str)
+                        .map_or_else(|| format!("company default (trade rules, {section})"), str::to_string);
                 }
             }
         }
@@ -296,7 +300,13 @@ impl Block {
         Block { a, b, t, z0, z1 }
     }
     fn ok(&self) -> bool {
-        self.a.is_finite() && self.b.is_finite() && self.t.is_finite() && self.z0.is_finite() && self.z1.is_finite() && self.t > 0.0 && self.z1 > self.z0
+        self.a.is_finite()
+            && self.b.is_finite()
+            && self.t.is_finite()
+            && self.z0.is_finite()
+            && self.z1.is_finite()
+            && self.t > 0.0
+            && self.z1 > self.z0
     }
 }
 
@@ -536,7 +546,9 @@ fn piece_props(p: &Piece) -> Props {
     if !p.size.is_empty() {
         ps.set("size", Prop::new(p.size.clone(), p.source.clone()));
     }
-    for (k, v, unit) in [("length_ft", p.length_ft, "ft"), ("area_sf", p.area_sf, "sf"), ("volume_cf", p.volume_cf, "cf"), ("weight_lb", p.weight_lb, "lb")] {
+    for (k, v, unit) in
+        [("length_ft", p.length_ft, "ft"), ("area_sf", p.area_sf, "sf"), ("volume_cf", p.volume_cf, "cf"), ("weight_lb", p.weight_lb, "lb")]
+    {
         if v > 0.0 && v.is_finite() {
             ps.set(k, Prop::new(num_text(v), c()).with_unit(unit));
         }

@@ -74,13 +74,19 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             // Flooring by the room's finish; its pieces by the product the documents size.
             let finish = rm.finish.trim().to_string();
             let code = finish.to_ascii_uppercase();
-            let named = piece_sf.iter().find(|(f, _)| !code.is_empty() && (f.value.to_ascii_uppercase().contains(&code) || f.quote.to_ascii_uppercase().contains(&code)));
+            let named = piece_sf
+                .iter()
+                .find(|(f, _)| !code.is_empty() && (f.value.to_ascii_uppercase().contains(&code) || f.quote.to_ascii_uppercase().contains(&code)));
             let product = named.or_else(|| (piece_sf.len() == 1).then(|| piece_sf.first()).flatten());
             let (item, src) = match (&finish, product) {
                 (f, Some(_)) if !f.is_empty() => (format!("flooring {f}"), Source::from_doc(SourceKind::Print, "the room's finish code on the plan")),
                 (f, None) if !f.is_empty() => (format!("flooring {f}"), Source::from_doc(SourceKind::Print, "the room's finish code on the plan")),
-                (_, Some((fact, _))) => (format!("flooring: {} (the only flooring the documents size; no finish on the plan)", fact.value), fact.source_of()),
-                _ => ("flooring (no finish given)".into(), Source::from_doc(SourceKind::Default, "no finish code in the room or finish schedule read")),
+                (_, Some((fact, _))) => {
+                    (format!("flooring: {} (the only flooring the documents size; no finish on the plan)", fact.value), fact.source_of())
+                }
+                _ => {
+                    ("flooring (no finish given)".into(), Source::from_doc(SourceKind::Default, "no finish code in the room or finish schedule read"))
+                }
             };
             let mut p = Piece::new("finishes", "flooring", item, &rm.level, src);
             p.host = Some(rm.handle);
@@ -113,10 +119,17 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             }
             let len = ((per - cut) / upf).max(0.0);
             if len > 0.5 {
-                let base_item = sp.rooms.iter().find(|x| x.name.eq_ignore_ascii_case(&rm.name) && x.number.as_deref().unwrap_or("") == rm.number).and_then(|x| x.base.clone());
+                let base_item = sp
+                    .rooms
+                    .iter()
+                    .find(|x| x.name.eq_ignore_ascii_case(&rm.name) && x.number.as_deref().unwrap_or("") == rm.number)
+                    .and_then(|x| x.base.clone());
                 let (item, src) = match base_item {
                     Some(b) => (b, Source::from_doc(SourceKind::Schedule, "the room finish schedule's base")),
-                    None => (format!("{} {}", inches_text(r.num("finishes.base_height_in", 4.0)), r.text("finishes.base_item")), r.source("finishes.base_height_in")),
+                    None => (
+                        format!("{} {}", inches_text(r.num("finishes.base_height_in", 4.0)), r.text("finishes.base_item")),
+                        r.source("finishes.base_height_in"),
+                    ),
                 };
                 let mut b = Piece::new("finishes", "base", item, &rm.level, src);
                 b.host = Some(rm.handle);
@@ -178,9 +191,14 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
                 let v = r.nums("finishes.act_tile_in");
                 [v.first().copied().unwrap_or(24.0), v.get(1).copied().unwrap_or(24.0)]
             });
-            let t_src = if ct.and_then(|t| t.grid_in).is_some() { Source::from_doc(SourceKind::Legend, &format!("ceiling type {ty_name}")) } else { r.source("finishes.act_tile_in") };
+            let t_src = if ct.and_then(|t| t.grid_in).is_some() {
+                Source::from_doc(SourceKind::Legend, &format!("ceiling type {ty_name}"))
+            } else {
+                r.source("finishes.act_tile_in")
+            };
             let tile_sf = (tile[0] * tile[1] / 144.0).max(0.1);
-            let mut p = Piece::new("finishes", "tile", format!("acoustical ceiling tile {}x{}", num_text(tile[0]), num_text(tile[1])), &level, t_src.clone());
+            let mut p =
+                Piece::new("finishes", "tile", format!("acoustical ceiling tile {}x{}", num_text(tile[0]), num_text(tile[1])), &level, t_src.clone());
             p.host = Some(e.handle);
             p.room = room.clone();
             p.area_sf = area;
@@ -191,7 +209,11 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             let mains = area / r.num("finishes.grid_main_spacing_ft", 4.0).max(1.0);
             let short = tile[0].min(tile[1]) / 12.0;
             let tees = area / short.max(0.5);
-            for (kind, item, len) in [("grid_main", "ceiling grid main runner", mains), ("grid_tee", "ceiling grid cross tee", tees), ("wall_angle", "ceiling wall angle", per)] {
+            for (kind, item, len) in [
+                ("grid_main", "ceiling grid main runner", mains),
+                ("grid_tee", "ceiling grid cross tee", tees),
+                ("wall_angle", "ceiling wall angle", per),
+            ] {
                 let mut g = Piece::new("finishes", kind, item, &level, r.source("finishes.grid_main_spacing_ft"));
                 g.host = Some(e.handle);
                 g.room = room.clone();
@@ -203,14 +225,20 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             continue;
         }
         // Gypsum: its board layers (the ceiling type's, else one layer by rule).
-        let layers: Vec<(String, f64, Source)> = match ct.filter(|t| t.layers.iter().any(|l| l.category == "board" || l.material.to_ascii_uppercase().contains("GYP"))) {
+        let layers: Vec<(String, f64, Source)> = match ct
+            .filter(|t| t.layers.iter().any(|l| l.category == "board" || l.material.to_ascii_uppercase().contains("GYP")))
+        {
             Some(t) => t
                 .layers
                 .iter()
                 .filter(|l| l.category == "board" || l.material.to_ascii_uppercase().contains("GYP"))
                 .map(|l| (l.material.clone(), l.thickness_in.max(0.25), Source::from_doc(SourceKind::Legend, &format!("ceiling type {}", t.name))))
                 .collect(),
-            None => vec![("5/8\" gypsum board ceiling".into(), 0.625, Source::from_doc(SourceKind::Default, "company default: one layer of 5/8\" gypsum board where the ceiling has no type"))],
+            None => vec![(
+                "5/8\" gypsum board ceiling".into(),
+                0.625,
+                Source::from_doc(SourceKind::Default, "company default: one layer of 5/8\" gypsum board where the ceiling has no type"),
+            )],
         };
         if want("drywall") {
             let lengths = r.nums("drywall.sheet_lengths_ft");
@@ -341,7 +369,9 @@ fn unit_rooms<'a>(sp: &BuildingSpec, ctx: &'a Ctx) -> Vec<(&'a RoomEl, String)> 
         if rm.number.trim().is_empty() {
             continue;
         }
-        if let Some((_, _, ty)) = units.iter().find(|(lv, n, _)| n.eq_ignore_ascii_case(rm.number.trim()) && (lv.is_empty() || lv.eq_ignore_ascii_case(&rm.level))) {
+        if let Some((_, _, ty)) =
+            units.iter().find(|(lv, n, _)| n.eq_ignore_ascii_case(rm.number.trim()) && (lv.is_empty() || lv.eq_ignore_ascii_case(&rm.level)))
+        {
             out.push((rm, ty.clone()));
         }
     }

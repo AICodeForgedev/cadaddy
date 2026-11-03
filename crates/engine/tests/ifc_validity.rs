@@ -616,7 +616,22 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
     // A trade's pieces (Q6162): members, sheets, parts, accessories and reinforcement.
     m.insert(
         "IFCMEMBER",
-        element(&["BRACE", "CHORD", "COLLAR", "MEMBER", "MULLION", "PLATE", "POST", "PURLIN", "RAFTER", "STRINGER", "STRUT", "STUD", "USERDEFINED", "NOTDEFINED"]),
+        element(&[
+            "BRACE",
+            "CHORD",
+            "COLLAR",
+            "MEMBER",
+            "MULLION",
+            "PLATE",
+            "POST",
+            "PURLIN",
+            "RAFTER",
+            "STRINGER",
+            "STRUT",
+            "STUD",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ]),
     );
     m.insert("IFCPLATE", element(&["CURTAIN_PANEL", "SHEET", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCBUILDINGELEMENTPART", element(&["INSULATION", "PRECASTPANEL", "USERDEFINED", "NOTDEFINED"]));
@@ -640,7 +655,10 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
         ]),
     );
     m.insert("IFCREINFORCINGMESH", reinforcing(&[r, r, r, r, r, r, r, r, A::Enum { opt: true, of: &["MESH", "USERDEFINED", "NOTDEFINED"] }]));
-    m.insert("IFCTENDON", reinforcing(&[A::Enum { opt: true, of: &["BAR", "COATED", "STRAND", "WIRE", "USERDEFINED", "NOTDEFINED"] }, r, r, r, r, r, r, r]));
+    m.insert(
+        "IFCTENDON",
+        reinforcing(&[A::Enum { opt: true, of: &["BAR", "COATED", "STRAND", "WIRE", "USERDEFINED", "NOTDEFINED"] }, r, r, r, r, r, r, r]),
+    );
     m.insert("IFCTENDONANCHOR", reinforcing(&[A::Enum { opt: true, of: &["COUPLER", "FIXED_END", "TENSIONING_END", "USERDEFINED", "NOTDEFINED"] }]));
     m.insert("IFCGEOGRAPHICELEMENT", element(&["TERRAIN", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCDUCTSEGMENT", element(&["RIGIDSEGMENT", "FLEXIBLESEGMENT", "USERDEFINED", "NOTDEFINED"]));

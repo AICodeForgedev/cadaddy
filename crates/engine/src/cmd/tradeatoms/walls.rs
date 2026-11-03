@@ -60,7 +60,8 @@ fn boxes(m: &Mesh) -> Option<Vec<WBox>> {
 /// One box standing for a mesh that is not made of boxes: its extents along the longer side.
 fn extents_box(m: &Mesh) -> Option<WBox> {
     let pts: Vec<Vec3> = m.vertices.iter().copied().filter(|p| p.is_finite()).take(100_000).collect();
-    let (mut lo, mut hi) = (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
+    let (mut lo, mut hi) =
+        (Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY), Vec3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY));
     for p in &pts {
         lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
         hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
@@ -271,7 +272,8 @@ pub(super) fn text_spacing(text: &str) -> Option<f64> {
     let i = up.find("O.C").or_else(|| up.find(" OC"))?;
     let before = up.get(..i)?.trim_end().trim_end_matches('"').trim_end();
     // The number just before it (`@ 16`, `channels 24`).
-    let last: String = before.chars().rev().take_while(|c| c.is_ascii_digit() || matches!(c, '/' | ' ' | '.' | '-')).collect::<String>().chars().rev().collect();
+    let last: String =
+        before.chars().rev().take_while(|c| c.is_ascii_digit() || matches!(c, '/' | ' ' | '.' | '-')).collect::<String>().chars().rev().collect();
     text_inches(&format!("{}\"", last.trim()))
 }
 
@@ -314,7 +316,11 @@ fn lumber(depth_in: f64) -> String {
 pub(super) fn board_type(r: &Rules, material: &str) -> String {
     let up = format!(" {} ", material.to_ascii_uppercase());
     for t in r.list("drywall.types") {
-        let words: Vec<String> = t.get("words").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_uppercase).collect()).unwrap_or_default();
+        let words: Vec<String> = t
+            .get("words")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_ascii_uppercase).collect())
+            .unwrap_or_default();
         if words.iter().any(|w| up.contains(w.as_str())) {
             return t.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
         }
@@ -325,8 +331,13 @@ pub(super) fn board_type(r: &Rules, material: &str) -> String {
 /// The R-value a material names (`R-13`, `R13`), else the rules' for the cavity depth.
 pub(super) fn r_value(r: &Rules, material: &str, depth_in: f64) -> (String, Source) {
     let up = material.to_ascii_uppercase();
-    if let Some(i) = up.find("R-").or_else(|| up.find("R ")).or_else(|| up.find('R').filter(|i| up.get(i + 1..i + 2).is_some_and(|c| c.chars().all(|c| c.is_ascii_digit())))) {
-        let num: String = up.get(i + 1..).unwrap_or_default().trim_start_matches(['-', ' ']).chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    if let Some(i) = up
+        .find("R-")
+        .or_else(|| up.find("R "))
+        .or_else(|| up.find('R').filter(|i| up.get(i + 1..i + 2).is_some_and(|c| c.chars().all(|c| c.is_ascii_digit()))))
+    {
+        let num: String =
+            up.get(i + 1..).unwrap_or_default().trim_start_matches(['-', ' ']).chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
         if !num.is_empty() && num.parse::<f64>().is_ok_and(|v| v > 0.0 && v < 100.0) {
             return (format!("R-{num}"), Source::computed());
         }
@@ -397,7 +408,13 @@ fn joins(walls: &[Wall]) -> Vec<[EndJoin; 2]> {
 /// Lay out every built wall's pieces.
 pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Batch, want: &dyn Fn(&str) -> bool) {
     let k = ctx.upf / 12.0;
-    let walls: Vec<Wall> = d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall")).filter_map(|e| read_wall(e)).take(MAX_WALLS).collect();
+    let walls: Vec<Wall> = d
+        .model
+        .iter()
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall"))
+        .filter_map(|e| read_wall(e))
+        .take(MAX_WALLS)
+        .collect();
     // The ends of each level's walls.
     let mut by_level: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, w) in walls.iter().enumerate() {
@@ -528,7 +545,8 @@ fn lay_wall(
             let boards = face_layers(&placed, side, &["board"]);
             let n_boards = boards.len();
             for (li, pl) in boards.into_iter().enumerate() {
-                let (area, _) = sheets(w, pl, r, k, upf, batch, &base, &src, "drywall", "sheet", side, li + 1, ctx, if li == 0 { n_boards } else { 0 });
+                let (area, _) =
+                    sheets(w, pl, r, k, upf, batch, &base, &src, "drywall", "sheet", side, li + 1, ctx, if li == 0 { n_boards } else { 0 });
                 if li == 0 {
                     face_area[si] = area;
                 }
@@ -557,7 +575,13 @@ fn lay_wall(
                     let side_sign = if faces_with_board.get(b).copied().unwrap_or(0) == 0 { 1.0 } else { -1.0 };
                     let off = side_sign * w.t / 2.0;
                     let bk = 1.25 * k;
-                    let p = base(Piece::new("drywall", "corner_bead", r.text("drywall.corner_bead_item"), &w.level, r.source("drywall.corner_bead_item")));
+                    let p = base(Piece::new(
+                        "drywall",
+                        "corner_bead",
+                        r.text("drywall.corner_bead_item"),
+                        &w.level,
+                        r.source("drywall.corner_bead_item"),
+                    ));
                     let mut p = p.computed("at", if j.corner { "outside corner" } else { "free end" });
                     p.length_ft = height_ft;
                     p.room = face_room.get(faces_with_board.get(b).copied().unwrap_or(0)).cloned().unwrap_or_default();
@@ -623,7 +647,8 @@ fn frame(
     let wood = is_wood(r, &material);
     let depth_in = layer_depth(pl.layer).max(1.5);
     // Spacing: the layer's, its text's, the project's for the wall type, else the rules'.
-    let documented = pl.layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
+    let documented =
+        pl.layer.spacing_in.filter(|v| *v > 0.0).or_else(|| text_spacing(&material)).or_else(|| asm.notes.iter().find_map(|n| text_spacing(n)));
     let (spacing_in, sp_src) = match (r.stud_by_type.get(&wt.name.to_ascii_uppercase()), documented) {
         // A person's rule for the wall type wins over what the legend says.
         (Some((v, why)), _) => (*v, Source::from_doc(SourceKind::Rule, why)),
@@ -653,7 +678,10 @@ fn frame(
     };
     let f = if wood { r.num("framing.wood_thickness_in", 1.5) } else { r.num("framing.steel_flange_in", 1.25) } * k;
     let plates = r.nums(if wood { "framing.wood_plates" } else { "framing.steel_plates" });
-    let (n_bottom, n_top) = (plates.first().copied().unwrap_or(1.0).round().clamp(0.0, 4.0) as usize, plates.get(1).copied().unwrap_or(1.0).round().clamp(0.0, 4.0) as usize);
+    let (n_bottom, n_top) = (
+        plates.first().copied().unwrap_or(1.0).round().clamp(0.0, 4.0) as usize,
+        plates.get(1).copied().unwrap_or(1.0).round().clamp(0.0, 4.0) as usize,
+    );
     let plate_t = if wood { 1.5 * k } else { 0.0 };
     let (bottom_h, top_h) = (plate_t * n_bottom as f64, plate_t * n_top as f64);
     let short = if wood { 0.0 } else { r.num("framing.steel_stud_short_in", 0.5) * k };
@@ -767,7 +795,11 @@ fn frame(
             p.ty = ty.clone();
             p.size = size.clone();
             p.length_ft = len;
-            p = p.computed("role", role).computed("cut", if cut { "true" } else { "false" }).with("stock_ft", num_text(stock), r.source(if wood { "framing.plate_stock_ft" } else { "framing.track_stock_ft" }));
+            p = p.computed("role", role).computed("cut", if cut { "true" } else { "false" }).with(
+                "stock_ft",
+                num_text(stock),
+                r.source(if wood { "framing.plate_stock_ft" } else { "framing.track_stock_ft" }),
+            );
             p.blocks.push(w.block(sa, sb, pl.off, pl.depth, z, z + pt));
             // A plate's studs stand on it.
             let mine: Vec<usize> = out.iter().filter(|(s, i)| *s >= sa - f && *s <= sb + f && *i != usize::MAX).map(|(_, i)| *i).take(48).collect();
@@ -797,7 +829,13 @@ fn frame(
             } else {
                 (format!("{size} {gauge} track header"), 1.25 * k, r.num("framing.steel_header_bearing_in", 6.0) * k)
             };
-            let mut p = base(Piece::new("framing", "header", item, &w.level, r.source(if wood { "framing.wood_header_by_span" } else { "framing.header_bearing_in" })));
+            let mut p = base(Piece::new(
+                "framing",
+                "header",
+                item,
+                &w.level,
+                r.source(if wood { "framing.wood_header_by_span" } else { "framing.header_bearing_in" }),
+            ));
             p.ty = ty.clone();
             p.size = size.clone();
             p.length_ft = (h.s1 - h.s0 + 2.0 * bearing) / upf;
@@ -830,7 +868,13 @@ fn frame(
                 if b - a <= f * 1.01 || in_hole((a + b) / 2.0).is_some() {
                     continue;
                 }
-                let mut p = base(Piece::new("framing", "blocking", format!("{} fire blocking", named.clone().unwrap_or_else(|| lumber(depth_in))), &w.level, r.source("framing.fire_block_over_ft")));
+                let mut p = base(Piece::new(
+                    "framing",
+                    "blocking",
+                    format!("{} fire blocking", named.clone().unwrap_or_else(|| lumber(depth_in))),
+                    &w.level,
+                    r.source("framing.fire_block_over_ft"),
+                ));
                 p.ty = ty.clone();
                 p.size = size.clone();
                 p.length_ft = (b - a - f) / upf;
@@ -881,7 +925,8 @@ fn masonry(w: &Wall, pl: &Placed, r: &Rules, k: f64, upf: f64, batch: &mut Batch
     let mut n = 0usize;
     while z < w.zt - 1e-6 && n < MAX_PER_WALL {
         let zb = (z + uh).min(w.zt);
-        let open: f64 = w.holes.iter().filter(|h| h.z0 < zb - 1e-6 && h.z1 > z + 1e-6).map(|h| h.s1.min(w.s1) - h.s0.max(w.s0)).filter(|v| *v > 0.0).sum();
+        let open: f64 =
+            w.holes.iter().filter(|h| h.z0 < zb - 1e-6 && h.z1 > z + 1e-6).map(|h| h.s1.min(w.s1) - h.s0.max(w.s0)).filter(|v| *v > 0.0).sum();
         let len = (w.len() - open).max(0.0);
         if len > 1e-6 {
             let mut p = base(Piece::new("masonry", "cmu", item.clone(), &w.level, src.clone()));
@@ -890,7 +935,11 @@ fn masonry(w: &Wall, pl: &Placed, r: &Rules, k: f64, upf: f64, batch: &mut Batch
             p.length_ft = len / upf;
             p.qty = (len / ul).ceil().max(1.0);
             p.area_sf = len * (zb - z) / (upf * upf);
-            p = p.computed("course", (n + 1).to_string()).with("unit", format!("{}x{}", num_text(ul / k), num_text(uh / k)), r.source("masonry.unit_in"));
+            p = p.computed("course", (n + 1).to_string()).with(
+                "unit",
+                format!("{}x{}", num_text(ul / k), num_text(uh / k)),
+                r.source("masonry.unit_in"),
+            );
             p.blocks.push(w.block(w.s0, w.s1, pl.off, pl.depth, z, zb));
             batch.push(p);
         }
@@ -999,7 +1048,11 @@ fn sheets(
         (r.num("drywall.sheet_width_ft", 4.0), r.nums("drywall.sheet_lengths_ft"), r.source("drywall.sheet_lengths_ft"))
     } else {
         let p = r.nums(if trade == "insulation" { "insulation.board_sheet_ft" } else { "framing.panel_ft" });
-        (p.first().copied().unwrap_or(4.0), vec![p.get(1).copied().unwrap_or(8.0)], r.source(if trade == "insulation" { "insulation.board_sheet_ft" } else { "framing.panel_ft" }))
+        (
+            p.first().copied().unwrap_or(4.0),
+            vec![p.get(1).copied().unwrap_or(8.0)],
+            r.source(if trade == "insulation" { "insulation.board_sheet_ft" } else { "framing.panel_ft" }),
+        )
     };
     let vertical = r.text("drywall.orientation") != "horizontal" || trade != "drywall";
     let ty = if trade == "drywall" { board_type(r, &material) } else { String::new() };
@@ -1153,7 +1206,18 @@ fn sheets(
 
 /// Furring rows (resilient channel, hat channel) across a face at their spacing.
 #[allow(clippy::too_many_arguments)]
-fn furring(w: &Wall, pl: &Placed, r: &Rules, k: f64, upf: f64, batch: &mut Batch, base: &dyn Fn(Piece) -> Piece, src: &Source, side: LayerSide, room: &str) {
+fn furring(
+    w: &Wall,
+    pl: &Placed,
+    r: &Rules,
+    k: f64,
+    upf: f64,
+    batch: &mut Batch,
+    base: &dyn Fn(Piece) -> Piece,
+    src: &Source,
+    side: LayerSide,
+    room: &str,
+) {
     let (spacing, sp_src) = match pl.layer.spacing_in.or_else(|| text_spacing(&pl.layer.material)) {
         Some(v) => (v, src.clone()),
         None => (24.0, Source::from_doc(SourceKind::Default, "company default: furring rows 24\" o.c. (GA-600 resilient channel)")),
@@ -1183,7 +1247,10 @@ fn furring(w: &Wall, pl: &Placed, r: &Rules, k: f64, upf: f64, batch: &mut Batch
                 p.size = inches_text(pl.layer.thickness_in);
                 p.length_ft = len;
                 p.room = room.to_string();
-                p = p.with("spacing_in", num_text(spacing), sp_src.clone()).computed("cut", if cut { "true" } else { "false" }).computed("face", if side == LayerSide::Side1 { "side 1" } else { "side 2" });
+                p = p
+                    .with("spacing_in", num_text(spacing), sp_src.clone())
+                    .computed("cut", if cut { "true" } else { "false" })
+                    .computed("face", if side == LayerSide::Side1 { "side 1" } else { "side 2" });
                 p.blocks.push(w.block(sa, sb, pl.off, pl.depth, z - 0.75 * k, z + 0.75 * k));
                 batch.push(p);
                 sa = sb;
@@ -1208,7 +1275,11 @@ fn backing(w: &Wall, r: &Rules, ctx: &Ctx, k: f64, upf: f64, batch: &mut Batch, 
         if s < w.s0 || s > w.s1 || off.abs() > w.t / 2.0 + 8.0 * k {
             continue;
         }
-        let Some(rule) = rules.iter().find(|x| x.get("kinds").and_then(Value::as_array).is_some_and(|a| a.iter().filter_map(Value::as_str).any(|kk| kk.eq_ignore_ascii_case(kind)))) else { continue };
+        let Some(rule) = rules.iter().find(|x| {
+            x.get("kinds").and_then(Value::as_array).is_some_and(|a| a.iter().filter_map(Value::as_str).any(|kk| kk.eq_ignore_ascii_case(kind)))
+        }) else {
+            continue;
+        };
         let item = rule.get("item").and_then(Value::as_str).unwrap_or("backing").to_string();
         let src = Source::from_doc(SourceKind::Default, rule.get("source").and_then(Value::as_str).unwrap_or("company default"));
         let width = rule.get("width_in").and_then(Value::as_f64).filter(|v| *v > 0.0).unwrap_or(24.0) * k;
@@ -1308,7 +1379,13 @@ mod tests {
     }
 
     fn lay(w: &Wall, asm: Assembly, r: &Rules) -> Vec<Piece> {
-        let wt = cadaddy_walk3d::WallType { name: "P9".into(), height_ft: None, thickness_in: 4.875, from: cadaddy_walk3d::WallFrom::Pairs, assembly: Some(asm.clone()) };
+        let wt = cadaddy_walk3d::WallType {
+            name: "P9".into(),
+            height_ft: None,
+            thickness_in: 4.875,
+            from: cadaddy_walk3d::WallFrom::Pairs,
+            assembly: Some(asm.clone()),
+        };
         let ctx = Ctx { upf: 12.0, rooms: Vec::new(), devices: Vec::new() };
         let mut batch = Batch::default();
         let all = |_: &str| true;
@@ -1426,7 +1503,8 @@ mod tests {
 
     #[test]
     fn a_projects_stud_rule_for_the_wall_type_wins() {
-        let asm = Assembly { layers: vec![layer("3 5/8\" metal studs", 3.625, LayerSide::Core, "framing", false, Some(16.0))], ..Assembly::default() };
+        let asm =
+            Assembly { layers: vec![layer("3 5/8\" metal studs", 3.625, LayerSide::Core, "framing", false, Some(16.0))], ..Assembly::default() };
         let mut r = Rules::default();
         r.stud_by_type.insert("P9".into(), (24.0, "project rule stud_layout/P9: 24".into()));
         let p = lay(&wall(20.0, Vec::new()), asm, &r);

@@ -54,7 +54,13 @@ pub(super) fn lay_out(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, 
 #[allow(clippy::too_many_arguments)]
 fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Batch, upf: f64, k: f64) {
     // The walls by level, to know a door's wall and so its frame.
-    let walls: Vec<super::walls::Wall> = d.model.iter().filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall")).filter_map(|e| super::walls::read_wall(e)).take(200_000).collect();
+    let walls: Vec<super::walls::Wall> = d
+        .model
+        .iter()
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("wall"))
+        .filter_map(|e| super::walls::read_wall(e))
+        .take(200_000)
+        .collect();
     let sets: Vec<(&Fact, Option<(f64, f64)>)> = r.facts_of("openings.hardware_set").map(|f| (f, set_size(&f.quote))).collect();
     // Each set's openings left to hand out.
     let mut left: Vec<f64> = sets.iter().map(|(f, _)| f.number.unwrap_or(0.0)).collect();
@@ -80,7 +86,12 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         let (c, width, along) = match (wall, &e.kind) {
             (Some(w), EntityKind::Mesh(m)) => {
                 // The frame and leaf in the wall's thickness: their extent along it.
-                let inside: Vec<f64> = m.vertices.iter().filter(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.n).abs() <= w.t).map(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.u)).collect();
+                let inside: Vec<f64> = m
+                    .vertices
+                    .iter()
+                    .filter(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.n).abs() <= w.t)
+                    .map(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.u))
+                    .collect();
                 let (a, b) = inside.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| (lo.min(*s), hi.max(*s)));
                 if b > a {
                     let mid = (a + b) / 2.0;
@@ -109,7 +120,8 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         let wood_wall = wt.and_then(|t| t.assembly.as_ref()).is_some_and(|a| {
             a.layers.iter().filter(|l| l.category == "framing").any(|l| {
                 let u = l.material.to_ascii_uppercase();
-                r.words("framing.wood_words").iter().any(|w| u.contains(w.as_str())) && !r.words("framing.steel_words").iter().any(|w| u.contains(w.as_str()))
+                r.words("framing.wood_words").iter().any(|w| u.contains(w.as_str()))
+                    && !r.words("framing.steel_words").iter().any(|w| u.contains(w.as_str()))
             })
         });
         // Its hardware set: the door list's for its number; else one of the schedule's of its
@@ -123,23 +135,30 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
                 // The set's group of the door's size, else its first.
                 let of_set = |f: &Fact| f.scope.split('|').next().is_some_and(|id| id.eq_ignore_ascii_case(&set));
                 let fits = |sz: &Option<(f64, f64)>| sz.is_some_and(|(w, hh)| (w - wf).abs() < 0.35 && (hh - hf).abs() < 0.6);
-                sets.iter().enumerate().find(|(_, (f, sz))| of_set(f) && fits(sz)).or_else(|| sets.iter().enumerate().find(|(_, (f, _))| of_set(f))).map(|(i, x)| (i, x.0))
+                sets.iter()
+                    .enumerate()
+                    .find(|(_, (f, sz))| of_set(f) && fits(sz))
+                    .or_else(|| sets.iter().enumerate().find(|(_, (f, _))| of_set(f)))
+                    .map(|(i, x)| (i, x.0))
             });
         let by_list = listed.is_some();
-        let pick = listed.or_else(|| sets
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0))
-            .find(|(_, (_, sz))| sz.is_some_and(|(w, hh)| (w - wf).abs() < 0.35 && (hh - hf).abs() < 0.6))
-            .or_else(|| sets.iter().enumerate().find(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0)))
-            .map(|(i, x)| (i, x.0)));
+        let pick = listed.or_else(|| {
+            sets.iter()
+                .enumerate()
+                .filter(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0))
+                .find(|(_, (_, sz))| sz.is_some_and(|(w, hh)| (w - wf).abs() < 0.35 && (hh - hf).abs() < 0.6))
+                .or_else(|| sets.iter().enumerate().find(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0)))
+                .map(|(i, x)| (i, x.0))
+        });
         if let Some((i, _)) = pick
             && let Some(n) = left.get_mut(i)
         {
             *n -= 1.0;
         }
         // The set's door and frame (`… WOOD DOOR X HM FRAME`): the part that names a frame.
-        let named_frame = pick.map(|(_, f)| f.quote.to_ascii_uppercase()).and_then(|q| q.split(" X ").find(|x| x.contains("FRAME")).map(|x| x.split_whitespace().take(4).collect::<Vec<_>>().join(" ")));
+        let named_frame = pick
+            .map(|(_, f)| f.quote.to_ascii_uppercase())
+            .and_then(|q| q.split(" X ").find(|x| x.contains("FRAME")).map(|x| x.split_whitespace().take(4).collect::<Vec<_>>().join(" ")));
         let (frame, f_src) = match named_frame {
             Some(fr) => (fr.to_ascii_lowercase(), pick.map_or_else(|| r.source("openings.frame_source"), |(_, f)| f.source_of())),
             None => (if wood_wall { r.text("openings.frame_wood") } else { r.text("openings.frame_steel") }, r.source("openings.frame_steel")),
@@ -161,7 +180,11 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
                 let id = f.scope.split('|').next().unwrap_or_default().to_string();
                 (format!("{} {id}", r.text("openings.hardware_item")), f.source_of(), id)
             }
-            None => (format!("{} (no hardware schedule read)", r.text("openings.hardware_item")), Source::from_doc(SourceKind::Default, "no door hardware schedule in the documents read"), String::new()),
+            None => (
+                format!("{} (no hardware schedule read)", r.text("openings.hardware_item")),
+                Source::from_doc(SourceKind::Default, "no door hardware schedule in the documents read"),
+                String::new(),
+            ),
         };
         let mut hp = Piece::new("openings", "hardware_set", item, &level, h_src);
         hp.host = Some(h);
@@ -170,7 +193,11 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         if !set_id.is_empty() {
             hp = hp.computed("set", set_id.clone()).computed(
                 "assigned",
-                if by_list { "the hardware schedule's door list, by the door's number" } else { "by the door's size among the schedule's sets (the door has no number in the door list)" },
+                if by_list {
+                    "the hardware schedule's door list, by the door's number"
+                } else {
+                    "by the door's size among the schedule's sets (the door has no number in the door list)"
+                },
             );
         }
         let lever = c + half * 0.8;
@@ -181,9 +208,10 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
             p.touches.push(h);
         }
         if let Some(w) = wall
-            && let Some(p) = batch.pieces.get_mut(fi) {
-                p.touches.push(w.handle);
-            }
+            && let Some(p) = batch.pieces.get_mut(fi)
+        {
+            p.touches.push(w.handle);
+        }
         if !set_id.is_empty() {
             props.push(("hardware_set", set_id, Source::computed()));
         }
@@ -308,11 +336,21 @@ fn firestops(d: &Drawing, sp: &BuildingSpec, r: &Rules, batch: &mut Batch, upf: 
                     if w.holes.iter().any(|hh| s > hh.s0 && s < hh.s1 && z > hh.z0 && z < hh.z1) {
                         continue;
                     }
-                    let mut p = Piece::new("firestopping", "firestop", format!("{}, {} wall, {} {}", r.text("firestopping.item"), rating, size, kind).replace("  ", " "), level, src.clone());
+                    let mut p = Piece::new(
+                        "firestopping",
+                        "firestop",
+                        format!("{}, {} wall, {} {}", r.text("firestopping.item"), rating, size, kind).replace("  ", " "),
+                        level,
+                        src.clone(),
+                    );
                     p.host = Some(w.handle);
                     p.ty = rating.clone();
                     p.size = size.clone();
-                    p = p.computed("penetrant", kind.clone()).with("assembly", w.wall_type.clone(), Source::from_doc(SourceKind::Legend, &format!("wall type {}", w.wall_type)));
+                    p = p.computed("penetrant", kind.clone()).with(
+                        "assembly",
+                        w.wall_type.clone(),
+                        Source::from_doc(SourceKind::Legend, &format!("wall type {}", w.wall_type)),
+                    );
                     p.touches = vec![*h, w.handle];
                     let r0 = 3.0 * k;
                     p.blocks.push(Block::new(at - w.n * (w.t / 2.0), at + w.n * (w.t / 2.0), r0 * 2.0, z - r0, z + r0));
@@ -332,7 +370,13 @@ fn firestops(d: &Drawing, sp: &BuildingSpec, r: &Rules, batch: &mut Batch, upf: 
         let (z0, z1) = (a.z.min(b.z), a.z.max(b.z));
         for (name, z) in floors.iter().skip(1) {
             if *z > z0 + 1e-6 && *z < z1 - 1e-6 {
-                let mut p = Piece::new("firestopping", "firestop", format!("{}, floor, {} {}", r.text("firestopping.item"), size, kind).replace("  ", " "), name, src.clone());
+                let mut p = Piece::new(
+                    "firestopping",
+                    "firestop",
+                    format!("{}, floor, {} {}", r.text("firestopping.item"), size, kind).replace("  ", " "),
+                    name,
+                    src.clone(),
+                );
                 p.size = size.clone();
                 p.ty = "floor (its rating not read)".into();
                 p = p.computed("penetrant", kind.clone()).computed("riser_level", level.clone());
