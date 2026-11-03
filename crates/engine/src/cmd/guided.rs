@@ -4986,6 +4986,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // the equipment the room's mechanical plan puts there, not a device of its own.
                 let reach = CONNECT_REACH_FT * upf_dev;
                 let mut connected = connect_to_equipment(&sp.mep.equipment, &mut stamped, reach);
+                // A mechanical plan's mark of a typical room's fan or unit is that equipment (built
+                // from the mechanical plans with the room), no electrical device of its own.
+                let marks = drop_equipment_marks(&mut stamped);
+                if marks > 0 {
+                    progress_line(&format!("  typical rooms: mechanical plans' equipment marks (the equipment itself), not devices: {marks}"));
+                }
                 // One thing two trades' plans of a typical room show is one device.
                 merged = super::unitmarks::merge_across_trades(&mut stamped, TRADES_MERGE_FT * upf_dev);
                 if !merged.is_empty() {
@@ -8201,6 +8207,29 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
     out
 }
 
+/// The devices read off a mechanical plan whose mark names its equipment (a fan's `EF`): that
+/// equipment, built from the mechanical plans, not an electrical device beside it (the electrical
+/// plan's mark of the same fan is its connection). How many went.
+fn drop_equipment_marks(devices: &mut Vec<super::readers::ReadDevice>) -> usize {
+    let before = devices.len();
+    devices.retain(|dv| {
+        !(cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&dv.sheet)).eq_ignore_ascii_case("M") && equipment_tag_kind(&dv.tag).is_some())
+    });
+    before - devices.len()
+}
+
+/// The mechanical equipment kind a device's tag names (`EF`, `PTAC`), if it names one.
+fn equipment_tag_kind(tag: &str) -> Option<&'static str> {
+    let tag = tag.trim().to_ascii_uppercase();
+    if tag == "EF" || tag.starts_with("EF-") {
+        Some("exhaust_fan")
+    } else if tag == "PTAC" || tag.starts_with("PTAC-") {
+        Some("ptac")
+    } else {
+        None
+    }
+}
+
 /// Each stamped device whose tag names mechanical equipment (`EF`, `PTAC`) moved to that
 /// equipment in its room: an exhaust fan's connection in the ceiling at the fan, a PTAC's at the
 /// unit (its printed height kept, else a foot up). How many moved.
@@ -8208,14 +8237,7 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
     let mut moved = 0usize;
     let centre = |e: &cadaddy_walk3d::MepEquipment| [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
     for dv in devices.iter_mut() {
-        let tag = dv.tag.trim().to_ascii_uppercase();
-        let kind = if tag == "EF" || tag.starts_with("EF-") {
-            "exhaust_fan"
-        } else if tag == "PTAC" || tag.starts_with("PTAC-") {
-            "ptac"
-        } else {
-            continue;
-        };
+        let Some(kind) = equipment_tag_kind(&dv.tag) else { continue };
         // Its room's, else (a tag on the overall plan, in no room yet) the nearest within reach.
         // (A device read off its sheet may still carry the sheet's level code: `3` is Level 3.)
         let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
@@ -17087,6 +17109,18 @@ mod tests {
         assert_eq!(tv(&unit_type_table(&job, &typical, &fewer, &[gone])), Some(0));
         // Read again with what it read: nothing new.
         assert!(typical_view_marks(d, &job, &pages).added.is_empty());
+    }
+
+    /// Q6159: a mechanical plan's mark of a fan is the fan (built as equipment), not a device; the
+    /// electrical plan's mark of it is its connection and stays, as do the mechanical plan's other
+    /// devices.
+    #[test]
+    fn a_mechanical_plans_fan_mark_is_no_device() {
+        let dv = |tag: &str, sheet: &str| super::super::readers::ReadDevice { tag: tag.into(), sheet: sheet.into(), ..Default::default() };
+        let mut v = vec![dv("EF", "M-9"), dv("EF-2", "M-9/1"), dv("PTAC-1", "M-9"), dv("T", "M-9"), dv("EF", "E-9"), dv("REC", "E-9")];
+        assert_eq!(drop_equipment_marks(&mut v), 3);
+        let left: Vec<String> = v.iter().map(|d| format!("{} {}", d.tag, d.sheet)).collect();
+        assert_eq!(left, ["T M-9", "EF E-9", "REC E-9"]);
     }
 
     /// Q6159: a device the floor's plans show in a typical room stands for the typical plan's copy
