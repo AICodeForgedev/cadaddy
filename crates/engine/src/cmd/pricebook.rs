@@ -747,13 +747,20 @@ pub(crate) fn invoice_quotes(text: &str) -> Vec<Quote> {
             let (Some(maker), Some(product)) = (cells.get(1), cells.get(2)) else { continue };
             let description = cells.get(3..p - 1).map(|d| d.join(" ")).unwrap_or_default();
             let up = format!(" {} {} ", description, product).to_ascii_uppercase();
-            let length =
-                ["CONDUIT", "EMT", "SCH 40", "SCH 80", "/LIFT", "THHN", "XHHW", "WIRE", "CABLE", "STRUT", " MC "].iter().any(|w| up.contains(w));
+            // By the foot: conduit, wire, cable, strut; a price said per foot (`#.106/FT`); an NM / MC /
+            // AC cable's code (`NM12/2WG`).
+            let code = product.to_ascii_uppercase();
+            let cable = ["NM", "MC", "AC"].iter().any(|c| {
+                code.starts_with(c) && code.get(c.len()..).is_some_and(|r| r.starts_with(|ch: char| ch.is_ascii_digit()) && r.contains('/'))
+            });
+            let length = cable
+                || up.contains("/FT")
+                || ["CONDUIT", "EMT", "SCH 40", "SCH 80", "/LIFT", "THHN", "XHHW", "WIRE", "CABLE", "STRUT", " MC "].iter().any(|w| up.contains(w));
             let fitting =
                 ["ELL", "ELBOW", "COUP", "CONN", "ADAPT", "BODY", "STRAP", "BOX", "CLAMP", "BUSHING", "LOCKNUT", "CAP", "TAPE", "PULL LINE"]
                     .iter()
                     .any(|w| up.contains(w));
-            let unit = if div > 1.0 && length && !fitting { "ft" } else { "each" };
+            let unit = if (div > 1.0 || cable) && length && !fitting { "ft" } else { "each" };
             let q = Quote {
                 key: format!("{maker}:{product}").to_ascii_uppercase(),
                 description,
@@ -1004,10 +1011,12 @@ mod tests {
                     ORDER QTY   PRODUCT   CODE   DESCRIPTION   CODE   SHIP QTY   PRICE PER   DISC   EXTENSION   C/D   TAX   TY\n\
                     500   ALLIED   34EMT   3/4 EMT CONDUIT 10FT   500   95.00   C   N   475.00   0.0 %   Y   S\n\
                     10   BRIDGE   231   3/4 EMT SS CONNECTOR   10   48.00   C   N   4.80   0.0 %   Y   S\n\
+                    250   WIRE   NM12/2WG   250' ROLL   250   0.61   E   N   152.50   0.0 %   Y   S\n\
                     4   LEV   TBR20   20A TR DUPLEX   0   8.10   E   N   0.00   0.0 %   Y   B\n\
                     2   BAD   X1   WRONG EXTENSION   2   10.00   E   N   99.00   0.0 %   Y   S\n";
         let q = invoice_quotes(text);
-        assert_eq!(q.len(), 3, "{q:#?}");
+        assert_eq!(q.len(), 4, "{q:#?}");
+        assert_eq!(q.iter().find(|x| x.key == "WIRE:NM12/2WG").map(|x| x.unit.as_str()), Some("ft"));
         let emt = q.iter().find(|x| x.key == "ALLIED:34EMT").expect("emt");
         assert_eq!(
             (emt.unit.as_str(), emt.unit_price, emt.vendor.as_str(), emt.location.as_str(), emt.date.as_str()),
