@@ -28,6 +28,20 @@ pub(crate) struct Seg {
     pub a: Vec2,
     pub b: Vec2,
     pub layer: String,
+    /// The mean width of the closed outline the segment is a side of (twice its area over its
+    /// perimeter: a thin rectangle's short side), infinite for an open line.
+    pub outline_width: f64,
+}
+
+/// The mean width of a closed outline: twice its area over its perimeter (a `w × l` rectangle
+/// gives `w·l / (w + l)`, about `w` when it is long and thin). Infinite when it is no outline.
+pub(crate) fn outline_width(pts: &[Vec2]) -> f64 {
+    if pts.len() < 3 {
+        return f64::INFINITY;
+    }
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+    let area = cadaddy_geom::shoelace(pts).abs();
+    if perimeter.is_finite() && perimeter > 1e-12 && area.is_finite() { 2.0 * area / perimeter } else { f64::INFINITY }
 }
 
 /// The straight segments of the space's lines and polylines.
@@ -38,11 +52,21 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
             break;
         }
         match &e.kind {
-            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string() }),
+            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string(), outline_width: f64::INFINITY }),
             EntityKind::LwPolyline(p) => {
+                // A closed outline (flagged closed, or ending where it starts): how wide it is.
+                let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+                let ends_at_start = pts.len() >= 4 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+                let width = if p.closed && p.vertices.iter().all(|v| v.bulge == 0.0) {
+                    outline_width(&pts)
+                } else if ends_at_start && p.vertices.iter().all(|v| v.bulge == 0.0) {
+                    outline_width(&pts[..pts.len() - 1])
+                } else {
+                    f64::INFINITY
+                };
                 for sg in (Polyline { vertices: p.vertices.clone(), closed: p.closed }).segments() {
                     if let Segment::Line(l) = sg {
-                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string() });
+                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string(), outline_width: width });
                     }
                 }
             }
@@ -128,6 +152,12 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
                     continue;
                 }
                 let (i, j) = (g[x].1, g[y].1);
+                // A side of a closed outline narrower than a stud (a trim piece, a shelf, a jamb
+                // drawn beside a wall) is no wall's face: paired with the wall's real face it made
+                // a wall the plan doesn't show.
+                if segs[i].outline_width < lim.min_thick || segs[j].outline_width < lim.min_thick {
+                    continue;
+                }
                 let turn = (angs[i] - angs[j]).abs();
                 if turn.min(PI - turn) > half_degree {
                     continue;
@@ -932,6 +962,34 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_thin_outline_beside_a_wall_is_no_wall_face() {
+        // Inches. A 5" wall (faces y 0 and y 5, 10' long) and, 3" off its face, a closed
+        // rectangle 1.8" wide and 3' long (a trim piece, a shelf drawn beside the wall).
+        let line =
+            |a: (f64, f64), b: (f64, f64), w: f64| Seg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), outline_width: w };
+        let rect = [Vec2::new(10.0, 8.0), Vec2::new(46.0, 8.0), Vec2::new(46.0, 9.8), Vec2::new(10.0, 9.8)];
+        let w = outline_width(&rect);
+        assert!((1.6..1.8).contains(&w), "{w}");
+        assert!(outline_width(&rect[..2]).is_infinite());
+        let mut segs = vec![line((0.0, 0.0), (120.0, 0.0), f64::INFINITY), line((0.0, 5.0), (120.0, 5.0), f64::INFINITY)];
+        for i in 0..4 {
+            let (a, b) = (rect[i], rect[(i + 1) % 4]);
+            segs.push(line((a.x, a.y), (b.x, b.y), w));
+        }
+        let lim = Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 };
+        let d = Drawing::default();
+        let found = pairs(&d, &segs, &lim);
+        // The wall only: its face never pairs with the rectangle's side into a 3" or 8" "wall".
+        assert_eq!(found.len(), 1, "{:?}", found.iter().map(|p| p.thickness).collect::<Vec<_>>());
+        assert!((found[0].thickness - 5.0).abs() < 1e-6);
+        // The same rectangle as open lines (no outline) still pairs: the rule is the outline's.
+        for sg in segs.iter_mut().skip(2) {
+            sg.outline_width = f64::INFINITY;
+        }
+        assert!(pairs(&d, &segs, &lim).len() > 1);
+    }
 
     #[test]
     fn a_short_room_name_is_no_device_mark() {

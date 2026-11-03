@@ -542,6 +542,52 @@ impl Floors {
         }
         done.into_iter().filter_map(|n| self.rooms.get(n).map(|r| (n, r.as_slice()))).collect()
     }
+
+    /// A traced room's rectangles now.
+    pub(crate) fn rects(&self, n: usize) -> Option<&[[Vec2; 2]]> {
+        self.rooms.get(n).map(Vec::as_slice)
+    }
+
+    /// The part of traced room `n` inside `outline` (a closed room the trace got into: its own
+    /// walls drawn, its door gap wider than the trace closes) made a room of its own: which one.
+    /// None when either part would be smaller than a room ([`ROOM_SF`]); nothing changes then.
+    pub(crate) fn carve(&mut self, n: usize, outline: &[Vec2]) -> Option<usize> {
+        let (nx, ny, cell) = (self.nx, self.ny, self.cell);
+        let id = u32::try_from(n + 1).ok()?;
+        let new = self.rooms.len();
+        let new_id = u32::try_from(new + 1).ok()?;
+        if self.rooms.get(n).is_none() || outline.len() < 3 {
+            return None;
+        }
+        let centre = |k: usize| Vec2::new(self.origin.x + ((k % nx) as f64 + 0.5) * cell, self.origin.y + ((k / nx) as f64 + 0.5) * cell);
+        let moved: Vec<usize> =
+            (0..nx * ny).filter(|&k| self.owner.get(k) == Some(&id) && cadaddy_geom::point_in_polygon(outline, centre(k))).collect();
+        let kept = self.owner.iter().filter(|o| **o == id).count().saturating_sub(moved.len());
+        let sf = cell * cell / (self.upf * self.upf);
+        if (moved.len() as f64 * sf) < ROOM_SF.0 || (kept as f64 * sf) < ROOM_SF.0 {
+            return None;
+        }
+        let (ox, oy) = (self.origin.x, self.origin.y);
+        let mut fill_new = vec![false; nx * ny];
+        for &k in &moved {
+            if let Some(f) = fill_new.get_mut(k) {
+                *f = true;
+            }
+        }
+        let fill_old: Vec<bool> = self.owner.iter().enumerate().map(|(k, o)| *o == id && !fill_new.get(k).copied().unwrap_or(false)).collect();
+        let rects_new = rects_of(&fill_new, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell)?;
+        let rects_old = rects_of(&fill_old, nx, ny, |i| ox + i as f64 * cell, |j| oy + j as f64 * cell)?;
+        for &k in &moved {
+            if let Some(o) = self.owner.get_mut(k) {
+                *o = new_id;
+            }
+        }
+        if let Some(slot) = self.rooms.get_mut(n) {
+            *slot = rects_old;
+        }
+        self.rooms.push(rects_new);
+        Some(new)
+    }
 }
 
 /// Cells a pocket's floor must keep from the walls to reach on ([`Floors::join_pockets`]).
@@ -909,6 +955,36 @@ mod tests {
         assert!(after > before + 50.0 && after < 30.0 * 20.0, "{before} → {after} sf");
         // The bath is the room's now: its label there finds the room.
         assert_eq!(f.room_at(p(26.0, 4.0)).unwrap().0, n);
+    }
+
+    #[test]
+    fn a_closet_the_trace_got_into_is_carved_out_of_the_room() {
+        let p = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        // A room 30' × 20' with a closet (x 22–30, y 0–8) whose opening (y 2–8, 6') is wider
+        // than the trace closes: the room's trace takes the closet in.
+        let mut walls = ring(&[(0.0, 0.0), (30.0, 0.0), (30.0, 20.0), (0.0, 20.0)]);
+        walls.push((p(22.0, 0.0), p(22.0, 2.0), 6.0));
+        walls.push((p(22.0, 8.0), p(30.0, 8.0), 6.0));
+        let shell = vec![[p(0.0, 0.0), p(30.0, 20.0)]];
+        let mut f = Floors::new(&walls, &shell, 12.0, &[]).unwrap();
+        let (n, rects) = f.room_at(p(10.0, 12.0)).unwrap();
+        let before = sf_of(rects);
+        assert_eq!(f.room_at(p(26.0, 4.0)).unwrap().0, n, "the closet is in the room's trace");
+        // Its drawn outline carved out: a room of its own, the room's floor less it.
+        let closet = [p(22.0, 0.0), p(30.0, 0.0), p(30.0, 8.0), p(22.0, 8.0)];
+        let c = f.carve(n, &closet).expect("carved");
+        assert_ne!(c, n);
+        let (room, cl) = (sf_of(f.rects(n).unwrap()), sf_of(f.rects(c).unwrap()));
+        assert!((40.0..=64.0).contains(&cl), "closet {cl} sf");
+        assert!((room + cl - before).abs() < 1.0 && room < before - 40.0, "{before} → {room} + {cl}");
+        assert_eq!(f.room_at(p(26.0, 4.0)).unwrap().0, c, "its label finds the closet");
+        assert_eq!(f.room_at(p(10.0, 12.0)).unwrap().0, n);
+        // Carving all of a room, or a sliver smaller than a room, changes nothing.
+        let all = [p(-1.0, -1.0), p(31.0, -1.0), p(31.0, 21.0), p(-1.0, 21.0)];
+        assert_eq!(f.carve(n, &all), None);
+        let sliver = [p(1.0, 10.0), p(3.0, 10.0), p(3.0, 12.0), p(1.0, 12.0)];
+        assert_eq!(f.carve(n, &sliver), None);
+        assert!((sf_of(f.rects(n).unwrap()) - room).abs() < 1e-9);
     }
 
     #[test]
