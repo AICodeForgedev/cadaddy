@@ -43,7 +43,7 @@ const MAX_ELEMENTS: usize = cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS;
 pub(crate) struct Said {
     pub value: String,
     pub kind: SourceKind,
-    /// The document and where in it (`E-2 LIGHT FIXTURE SCHEDULE type A`, `Lighting Package p.3`).
+    /// The document and where in it (`E-9 LIGHT FIXTURE SCHEDULE type Q1`, `Lighting Package p.3`).
     pub doc: String,
 }
 
@@ -523,7 +523,7 @@ pub(crate) struct Emergency {
 pub(crate) struct Conflict {
     /// Which check found it (`catalog number`, `switch leg with no fixture`).
     pub topic: String,
-    /// What it is about (`lighting type F1`, `room 101 leg a`).
+    /// What it is about (`lighting type Q1`, `room A12 leg a`).
     pub about: String,
     pub issue: String,
     /// Each document's word: (document, what it says).
@@ -1353,7 +1353,7 @@ pub(crate) fn sensor_conflicts(
 pub(crate) struct PlanDiff {
     pub room: String,
     pub level: String,
-    /// The typical view (`E-6 UNIT ELECTRICAL PLAN - …`).
+    /// The typical view (`E-9 UNIT ELECTRICAL PLAN - …`).
     pub view: String,
     pub kind: String,
     pub floor_tag: String,
@@ -1430,15 +1430,15 @@ mod tests {
 
     #[test]
     fn catalog_numbers_and_lines_give_their_values() {
-        assert_eq!(cct_of("CSVT L48 4000LM MVOLT 40K 80CRI"), Some(4000));
-        assert_eq!(cct_of("FMLWL 48 840"), Some(4000));
-        assert_eq!(cct_of("WL4 40L GZ1 LP830"), Some(3000));
+        assert_eq!(cct_of("AB12 L48 4000LM MVOLT 40K 80CRI"), Some(4000));
+        assert_eq!(cct_of("QRL 48 840"), Some(4000));
+        assert_eq!(cct_of("QW4 40L GZ1 LP830"), Some(3000));
         assert_eq!(cct_of("CRI of minimum 80. CCT of 3500 K."), Some(3500));
-        assert_eq!(cct_of("D-10413-08 L3G9D2527K"), None, "a wattage run into a CCT is no CCT");
-        assert_eq!(cct_of("SMX6RLSFS010"), None);
-        assert_eq!(lumens_of("CSVT L48 4000LM MVOLT"), Some(4000));
+        assert_eq!(cct_of("PX-1234-08 L2B9D2530K"), None, "a wattage run into a CCT is no CCT");
+        assert_eq!(cct_of("QX6RLSFS010"), None);
+        assert_eq!(lumens_of("AB12 L48 4000LM MVOLT"), Some(4000));
         assert_eq!(lumens_of("6000 LUMENS"), Some(6000));
-        assert_eq!(volts_of("CSVT L48 MVOLT"), Some((120, 277)));
+        assert_eq!(volts_of("AB12 L48 MVOLT"), Some((120, 277)));
         assert_eq!(volts_of("120-277V"), Some((120, 277)));
         assert_eq!(volts_of("120"), Some((120, 120)));
         assert_eq!(volts_of("Nominal Operating Voltage: 120 V ac."), Some((120, 120)));
@@ -1509,7 +1509,7 @@ mod tests {
         let e = row("Q8", "MAKER", "EM2", "LED 1VA", "7'-6\" AFF", "EMERGENCY LIGHT");
         assert!(emergency_type(&e).is_some_and(|w| w.why.contains("EMERGENCY") && !w.switched));
         assert!(!interior(&e), "an emergency unit is the emergency lighting section's");
-        let b = row("Q6", "MAKER", "WL4 40L LP830", "LED 39VA", "TBD", "LINEAR STAIR LIGHT *PROVIDE WITH EMERGENCY BATTERY BACK-UP");
+        let b = row("Q6", "MAKER", "QW4 40L LP830", "LED 39VA", "TBD", "LINEAR STAIR LIGHT *PROVIDE WITH EMERGENCY BATTERY BACK-UP");
         assert!(interior(&b), "a luminaire with a battery is an interior luminaire");
         assert!(emergency_type(&b).is_some_and(|w| w.switched));
     }
@@ -1520,14 +1520,14 @@ mod tests {
         a.quantity = Some(3);
         let schedule = vec![
             a,
-            row("Q3", "MAKER TWO", "CS71SD", "LED 1VA", "CEILING", "EXIT SIGN"),
+            row("Q3", "MAKER TWO", "EX20S", "LED 1VA", "CEILING", "EXIT SIGN"),
             row("Q4", "MAKER TWO", "EM2", "LED", "WALL", "EMERGENCY LIGHT"),
             row("Q5", "MAKER", "X1", "LED", "SURFACE", "LOBBY"),
         ];
         let mut submitted = BTreeMap::new();
         submitted.insert("Q1".to_string(), ("Maker One".to_string(), "AB12".to_string(), "Package p.2".to_string()));
-        submitted.insert("Q3".to_string(), ("Maker Two".to_string(), "CX71SD".to_string(), "Package p.9".to_string()));
-        submitted.insert("Q4".to_string(), ("Maker Two".to_string(), "CX71SD".to_string(), "Package p.7".to_string()));
+        submitted.insert("Q3".to_string(), ("Maker Two".to_string(), "EX20X".to_string(), "Package p.9".to_string()));
+        submitted.insert("Q4".to_string(), ("Maker Two".to_string(), "EX20X".to_string(), "Package p.7".to_string()));
         submitted.insert("Q7".to_string(), ("Maker Three".to_string(), "ZZ1".to_string(), "Package p.12".to_string()));
         let mut on_plans = BTreeMap::new();
         on_plans.insert("Q1".to_string(), vec!["a1".to_string(), "a2".to_string()]);
@@ -1569,28 +1569,28 @@ mod tests {
 
     #[test]
     fn controls_link_both_ways_and_each_gap_is_a_conflict_citing_both_sides() {
-        let mut dim = dev("d1", "luminaire", "Q4", "101", "b", [5.0, 5.0]);
+        let mut dim = dev("d1", "luminaire", "Q4", "A1", "b", [5.0, 5.0]);
         dim.dimming = "phase".into();
         let mut contacted = dev("k1", "luminaire", "Q1", "", "", [300.0, 0.0]);
         contacted.circuit = ("P".into(), "7".into());
         let lums = vec![
-            dev("l1", "luminaire", "Q1", "101", "a", [0.0, 0.0]),
-            dev("l2", "luminaire", "Q1", "101", "a", [10.0, 0.0]),
+            dev("l1", "luminaire", "Q1", "A1", "a", [0.0, 0.0]),
+            dev("l2", "luminaire", "Q1", "A1", "a", [10.0, 0.0]),
             dim,
-            dev("e1", "luminaire", "Q8", "101", "", [8.0, 8.0]),
-            dev("l3", "luminaire", "Q1", "103", "c", [100.0, 0.0]),
-            dev("l4", "luminaire", "Q1", "105", "", [200.0, 0.0]),
-            dev("l5", "luminaire", "Q1", "107", "e", [400.0, 0.0]),
+            dev("e1", "luminaire", "Q8", "A1", "", [8.0, 8.0]),
+            dev("l3", "luminaire", "Q1", "A3", "c", [100.0, 0.0]),
+            dev("l4", "luminaire", "Q1", "A5", "", [200.0, 0.0]),
+            dev("l5", "luminaire", "Q1", "A7", "e", [400.0, 0.0]),
             contacted,
         ];
-        let mut sd = dev("s3", "dimmer", "SD", "101", "b", [6.0, 1.0]);
+        let mut sd = dev("s3", "dimmer", "SD", "A1", "b", [6.0, 1.0]);
         sd.product = "0-10V DIMMER".into();
         let ctrls = vec![
-            dev("s1", "3way_switch", "S3", "101", "a", [2.0, 0.0]),
-            dev("s2", "3way_switch", "S3", "101", "a", [30.0, 0.0]),
+            dev("s1", "3way_switch", "S3", "A1", "a", [2.0, 0.0]),
+            dev("s2", "3way_switch", "S3", "A1", "a", [30.0, 0.0]),
             sd,
-            dev("s4", "switch", "S", "102", "d", [600.0, 0.0]),
-            dev("s5", "3way_switch", "S3", "107", "e", [402.0, 0.0]),
+            dev("s4", "switch", "S", "A2", "d", [600.0, 0.0]),
+            dev("s5", "3way_switch", "S3", "A7", "e", [402.0, 0.0]),
         ];
         let mut codes = BTreeMap::new();
         codes.insert(("P".to_string(), "7".to_string()), vec!["C".to_string()]);
@@ -1598,14 +1598,14 @@ mod tests {
         emergency.insert("Q8".to_string(), Emergency { why: "E-9 LIGHT FIXTURE SCHEDULE type Q8: EMERGENCY LIGHT".into(), switched: false });
         // The room next door uses the same letters: its switches are its own.
         let mut lums = lums;
-        lums.push(dev("n1", "luminaire", "Q1", "103A", "a", [14.0, 3.0]));
+        lums.push(dev("n1", "luminaire", "Q1", "A3N", "a", [14.0, 3.0]));
         let mut ctrls = ctrls;
-        ctrls.push(dev("n2", "3way_switch", "S3", "103A", "a", [16.0, 3.0]));
-        ctrls.push(dev("n3", "3way_switch", "S3", "103A", "a", [24.0, 3.0]));
+        ctrls.push(dev("n2", "3way_switch", "S3", "A3N", "a", [16.0, 3.0]));
+        ctrls.push(dev("n3", "3way_switch", "S3", "A3N", "a", [24.0, 3.0]));
         // A bath light of the room next door, its own room's switches lettered otherwise: not this
         // room's 3-way (its letter lights this room).
-        lums.push(dev("n4", "luminaire", "Q2", "103B", "a", [12.0, -3.0]));
-        ctrls.push(dev("n5", "switch", "S", "103B", "b", [12.0, -6.0]));
+        lums.push(dev("n4", "luminaire", "Q2", "A3S", "a", [12.0, -3.0]));
+        ctrls.push(dev("n5", "switch", "S", "A3S", "b", [12.0, -6.0]));
         let links = link_controls(&lums, &ctrls, &[], &ControlDocs { codes: &codes, emergency: &emergency, plans: "the plans" });
         assert_eq!(links.controlled_by["n1"], vec!["n2".to_string(), "n3".to_string()]);
         assert!(!links.controlled_by.contains_key("n4"), "{:?}", links.controlled_by.get("n4"));
@@ -1637,12 +1637,12 @@ mod tests {
         assert_eq!(energy_code_year(["2015 IECC"]), Some("2015".into()));
         assert_eq!(energy_code_year(["2018 INTERNATIONAL BUILDING CODE"]), None);
         let rooms = vec![
-            SensorRoom { number: "110".into(), name: "STORAGE".into(), level: "L1".into(), unit_type: None },
-            SensorRoom { number: "111".into(), name: "CORRIDOR".into(), level: "L1".into(), unit_type: None },
-            SensorRoom { number: "112".into(), name: "MEN'S RESTROOM".into(), level: "L1".into(), unit_type: None },
-            SensorRoom { number: "201".into(), name: "TYPE 7A".into(), level: "L2".into(), unit_type: Some("TYPE 7A".into()) },
-            SensorRoom { number: "202".into(), name: "TYPE 7A".into(), level: "L2".into(), unit_type: Some("TYPE 7A".into()) },
-            SensorRoom { number: "203".into(), name: "TYPE 7B".into(), level: "L2".into(), unit_type: Some("TYPE 7B".into()) },
+            SensorRoom { number: "B10".into(), name: "STORAGE".into(), level: "L1".into(), unit_type: None },
+            SensorRoom { number: "B11".into(), name: "CORRIDOR".into(), level: "L1".into(), unit_type: None },
+            SensorRoom { number: "B12".into(), name: "MEN'S RESTROOM".into(), level: "L1".into(), unit_type: None },
+            SensorRoom { number: "C1".into(), name: "TYPE 7A".into(), level: "L2".into(), unit_type: Some("TYPE 7A".into()) },
+            SensorRoom { number: "C2".into(), name: "TYPE 7A".into(), level: "L2".into(), unit_type: Some("TYPE 7A".into()) },
+            SensorRoom { number: "C3".into(), name: "TYPE 7B".into(), level: "L2".into(), unit_type: Some("TYPE 7B".into()) },
         ];
         let l = |h: &str, room: &str, level: &str| Dev {
             h: h.into(),
@@ -1652,7 +1652,7 @@ mod tests {
             level: level.into(),
             ..Dev::default()
         };
-        let lums = vec![l("a", "110", "L1"), l("b", "111", "L1"), l("c", "112", "L1"), l("d", "201", "L2"), l("e", "202", "L2"), l("f", "203", "L2")];
+        let lums = vec![l("a", "B10", "L1"), l("b", "B11", "L1"), l("c", "B12", "L1"), l("d", "C1", "L2"), l("e", "C2", "L2"), l("f", "C3", "L2")];
         let c = |h: &str, kind: &str, mark: &str, room: &str, level: &str| Dev {
             h: h.into(),
             kind: kind.into(),
@@ -1662,11 +1662,11 @@ mod tests {
             ..Dev::default()
         };
         let ctrls = vec![
-            c("s1", "switch", "S", "110", "L1"),
-            c("o1", "occupancy_sensor", "OS1", "111", "L1"),
-            c("o2", "occupancy_sensor", "OS2", "112", "L1"),
-            c("s2", "switch", "S", "201", "L2"),
-            c("o3", "occupancy_sensor", "OS1", "203", "L2"),
+            c("s1", "switch", "S", "B10", "L1"),
+            c("o1", "occupancy_sensor", "OS1", "B11", "L1"),
+            c("o2", "occupancy_sensor", "OS2", "B12", "L1"),
+            c("s2", "switch", "S", "C1", "L2"),
+            c("o3", "occupancy_sensor", "OS1", "C3", "L2"),
         ];
         let spec_lines = vec![("Provide occupancy sensors in all storage rooms.".to_string(), "26 09 23 p.4".to_string())];
         let spec = spec_sensor_spaces(&rule, &spec_lines);
@@ -1679,10 +1679,7 @@ mod tests {
         let need = cs.iter().find(|c| c.topic == "sensor required, none shown").unwrap();
         assert!(need.sides.iter().any(|(d, _)| d == "IECC 2018 C405.2.1") && need.sides.iter().any(|(d, _)| d.starts_with("26 09 23")), "{need:?}");
         let guest = cs.iter().find(|c| c.topic == "guest room master control").unwrap();
-        assert!(
-            guest.issue.starts_with("2 TYPE 7A guest rooms (201, 202)") && guest.sides.iter().any(|(d, _)| d == "IECC 2018 C405.2.4"),
-            "{guest:?}"
-        );
+        assert!(guest.issue.starts_with("2 TYPE 7A guest rooms (C1, C2)") && guest.sides.iter().any(|(d, _)| d == "IECC 2018 C405.2.4"), "{guest:?}");
         // No edition named: the rule's section, said so.
         let cs = sensor_conflicts(&rule, None, &[], &rooms, &lums, &ctrls, "the plans");
         assert!(cs.iter().any(|c| c.sides.iter().any(|(d, _)| d.contains("edition not named"))));
@@ -1696,14 +1693,14 @@ mod tests {
             view: "E-9 UNIT PLAN TYPE 7A".into(),
             kind: "luminaire".into(),
             floor_tag: "Q1".into(),
-            floor_sheet: "E-3".into(),
+            floor_sheet: "E-8".into(),
             enlarged_tag: et.map(str::to_string),
             at: [0.0, 0.0],
         };
-        let cs = plan_diff_conflicts(&[d("201", Some("Q2")), d("202", Some("Q2")), d("203", None)]);
+        let cs = plan_diff_conflicts(&[d("C1", Some("Q2")), d("C2", Some("Q2")), d("C3", None)]);
         assert_eq!(cs.len(), 2);
         let tag = cs.iter().find(|c| c.topic.contains("tag differs")).unwrap();
-        assert!(tag.issue.contains("in 2 rooms") && tag.issue.contains("201, 202"), "{}", tag.issue);
+        assert!(tag.issue.contains("in 2 rooms") && tag.issue.contains("C1, C2"), "{}", tag.issue);
         assert_eq!(tag.sides.len(), 2);
         assert!(lighting_kind("wall luminaire") && lighting_kind("3way_switch") && !lighting_kind("receptacle"));
     }

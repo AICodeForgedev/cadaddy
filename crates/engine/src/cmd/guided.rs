@@ -19715,20 +19715,20 @@ mod tests {
             row("Q8", "EM2", "LED 1VA", "7'-6\" AFF", "EMERGENCY LIGHT"),
             row("Q5", "X1", "LED 5VA", "SURFACE", "LOBBY DECORATIVE"),
         ];
-        sp.unit_instances = json!([{"number": "201", "type": "TYPE 7A"}]);
+        sp.unit_instances = json!([{"number": "C1", "type": "TYPE 7A"}]);
         s.doc_mut().unwrap().building_spec = Some(sp.to_json());
         let sub = [("manufacturer", "Maker One Lighting"), ("catalog_number", "AB12 L48 4000LM MVOLT 40K")];
-        let l1 = lit_device(&mut s, "luminaire", "Q1", "101", "a", [0.0, 0.0], &sub);
-        let l2 = lit_device(&mut s, "luminaire", "Q1", "101", "a", [10.0, 0.0], &sub);
-        let w1 = lit_device(&mut s, "3way_switch", "S3", "101", "a", [2.0, 0.0], &[]);
-        let w2 = lit_device(&mut s, "3way_switch", "S3", "101", "a", [30.0, 0.0], &[]);
-        let em = lit_device(&mut s, "luminaire", "Q8", "101", "", [8.0, 8.0], &[]);
-        lit_device(&mut s, "luminaire", "Q9", "102", "b", [200.0, 0.0], &[]);
-        lit_device(&mut s, "luminaire", "Q1", "201", "c", [400.0, 0.0], &sub);
-        lit_device(&mut s, "switch", "S", "201", "c", [402.0, 0.0], &[]);
+        let l1 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [0.0, 0.0], &sub);
+        let l2 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [10.0, 0.0], &sub);
+        let w1 = lit_device(&mut s, "3way_switch", "S3", "A1", "a", [2.0, 0.0], &[]);
+        let w2 = lit_device(&mut s, "3way_switch", "S3", "A1", "a", [30.0, 0.0], &[]);
+        let em = lit_device(&mut s, "luminaire", "Q8", "A1", "", [8.0, 8.0], &[]);
+        lit_device(&mut s, "luminaire", "Q9", "A2", "b", [200.0, 0.0], &[]);
+        lit_device(&mut s, "luminaire", "Q1", "C1", "c", [400.0, 0.0], &sub);
+        lit_device(&mut s, "switch", "S", "C1", "c", [402.0, 0.0], &[]);
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         if let Some(st) = job.stage_mut(StageName::Rooms) {
-            st.result = Some(json!({"rooms": [{"name": "TYPE 7A", "level": "1", "number": "201", "outline": [[0, 0], [10, 0], [10, 10]]}]}));
+            st.result = Some(json!({"rooms": [{"name": "TYPE 7A", "level": "1", "number": "C1", "outline": [[0, 0], [10, 0], [10, 10]]}]}));
         }
         let mut result = json!({
             "submittal_products": {
