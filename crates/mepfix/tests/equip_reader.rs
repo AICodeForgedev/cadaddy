@@ -495,3 +495,22 @@ fn hostile_drawings_dont_panic() {
     let empty = equip_reader::read_equipment(&[], &[]);
     assert!(empty.placed.is_empty() && empty.scheduled.is_empty());
 }
+
+/// Q6172: the cells of a drawing's tables, keyed or not (a panel schedule has no MARK column):
+/// each grid cell comes out, holding its lettering; a page of no lettering has none.
+#[test]
+fn table_cells_are_every_grid_cell() {
+    let mut d = Drawing::default();
+    let rows: &[&[&str]] = &[&["CKT", "LOAD", "VA"], &["1", "SPACE ONLY", ""], &["3", "RECEPT", "180"]];
+    grid_table(&mut d, "E-ANNO-SCHD", [0.0, 50.0], "PANEL QP", &[5.0, 20.0, 8.0], rows);
+    let cells = equip_reader::table_cells(&d);
+    // Three rows of three columns, and the merged title row above them.
+    assert!(cells.len() >= 9, "{cells:?}");
+    let holds = |x: f64, y: f64| cells.iter().filter(|c| x >= c[0] && x <= c[2] && y >= c[1] && y <= c[3] && c[3] - c[1] <= 3.5).count();
+    // "SPACE ONLY" at row 2, column 2.
+    assert_eq!(holds(5.5, 50.0 - 6.0 + 1.0), 1);
+    assert_eq!(holds(-10.0, 0.0), 0, "outside the table");
+    let mut blank = Drawing::default();
+    line(&mut blank, "0", [0.0, 0.0], [10.0, 0.0]);
+    assert!(equip_reader::table_cells(&blank).is_empty());
+}

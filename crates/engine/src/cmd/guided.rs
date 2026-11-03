@@ -651,6 +651,29 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
     out
 }
 
+/// A page read on its own (a sheet the job didn't load) as a sheet region: its extents, and the
+/// border and title block its frame lines show. `None` for a page of no extents.
+pub(crate) fn page_region(page: &cadaddy_doc::Drawing, number: &str, discipline: &str) -> Option<SheetRegion> {
+    let b = page.extents(&cadaddy_doc::Space::Model);
+    if b.is_empty() || !(b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite()) {
+        return None;
+    }
+    let rect = [b.min.x, b.min.y, b.max.x, b.max.y];
+    let frame = sheet_frames(page, &[rect]).into_iter().next()?;
+    Some(SheetRegion {
+        number: number.to_string(),
+        level: String::new(),
+        discipline: discipline.to_string(),
+        kind: String::new(),
+        rect,
+        area: frame.border.then_some(frame.area).or(frame.title_block.map(|_| frame.area)),
+        title_block: frame.title_block,
+        not_built: String::new(),
+        levels: Vec::new(),
+        view: None,
+    })
+}
+
 /// Straight lines longer than this share of a sheet's shorter side are measured for its frame.
 const FRAME_RULE_SHARE: f64 = 0.25;
 
@@ -16711,6 +16734,39 @@ mod tests {
             let common = Common { layer: "SHADE".into(), ..Common::default() };
             page.add(&Space::Model, common, EntityKind::Solid(cadaddy_doc::Solid { corners })).unwrap_or_else(|e| panic!("{e}"));
         }
+        // Its frame: a border and a title-block rule; lettering in the title block is the block's.
+        let border = cadaddy_doc::LwPolyline {
+            vertices: [(0.0, -50.0), (2000.0, -50.0), (2000.0, 1200.0), (0.0, 1200.0)]
+                .iter()
+                .map(|(x, y)| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                .collect(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        };
+        page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(border)).unwrap_or_else(|e| panic!("{e}"));
+        let rule = cadaddy_doc::Line { a: Vec3::new(1800.0, -50.0, 0.0), b: Vec3::new(1800.0, 1200.0, 0.0) };
+        page.add(&Space::Model, Common::default(), EntityKind::Line(rule)).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("PROJECT #:", 1850.0, 100.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // A schedule's cell (a box) holding lettering no other rule explains.
+        let cell = cadaddy_doc::LwPolyline {
+            vertices: [(100.0, 500.0), (200.0, 500.0), (200.0, 510.0), (100.0, 510.0)]
+                .iter()
+                .map(|(x, y)| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                .collect(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        };
+        page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(cell)).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("SPACE ONLY", 110.0, 503.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // The same words outside any cell: nothing explains them.
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("SPARE ONLY", 110.0, 700.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // The lettering, the fills, the frame's and the cell's line work, the title block's and
+        // the two cells' lettering.
+        let n = lettering.len() + 5;
         // The index lists a view of a loaded sheet by its own number: that sheet is read already.
         if let Some(list) = job.sheets.as_mut().and_then(|v| v.get_mut("sheets")).and_then(Value::as_array_mut) {
             list.push(json!({"number": "E-1/2", "title": "A VIEW OF E-1", "discipline": "E", "type": "plan"}));
@@ -16730,12 +16786,16 @@ mod tests {
         let inv = inventory::take(d, &job, &pages, &fates, Some(&mut reader));
         assert_eq!(asked, vec!["E-0", "E-2", "A-101"]);
         let sheet = |n: &str| inv.sheets_not_read.iter().find(|x| x.number == n).unwrap_or_else(|| panic!("{n}: {:?}", inv.sheets_not_read));
-        assert!(sheet("E-0").read && sheet("E-0").marks == lettering.len() + 1, "{:?}", sheet("E-0"));
+        assert!(sheet("E-0").read && sheet("E-0").marks == n, "{:?}", sheet("E-0"));
         assert!(inv.sheets_not_read.iter().all(|x| x.number != "E-1/2"), "a view of a loaded sheet is no sheet not read");
         assert!(sheet("E-2").read && sheet("E-2").marks == 0);
         assert_eq!((sheet("A-101").read, sheet("A-101").why.as_str()), (false, "a made-up page that can't be read"));
         let on_e0: Vec<&inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-0").collect();
-        assert_eq!(on_e0.len(), lettering.len() + 1);
+        assert_eq!(on_e0.len(), n);
+        assert_eq!(on_e0.iter().find(|m| m.text == "PROJECT #:").map(|m| m.reason.as_str()), Some("title block"), "{on_e0:#?}");
+        let said = |t: &str| on_e0.iter().find(|m| m.text == t).map(|m| (m.status.clone(), m.reason.clone())).unwrap_or_default();
+        assert_eq!(said("SPACE ONLY"), (NOT_OBJECT.to_string(), "a table's cell (a schedule's or a diagram's lettering)".to_string()));
+        assert_eq!(said("SPARE ONLY").0, inventory::UNEXPLAINED);
         let fills = on_e0.iter().find(|m| m.what == "hatch").unwrap_or_else(|| panic!("no fills: {on_e0:#?}"));
         assert_eq!((fills.count, fills.status.as_str(), fills.text.as_str()), (2, NOT_OBJECT, "fills on layer SHADE"), "{fills:?}");
         assert!(on_e0.iter().all(|m| m.end_read && m.handle.is_empty() && m.trade == "E"), "{on_e0:#?}");
@@ -16754,7 +16814,7 @@ mod tests {
         assert_eq!((mark("ALL WORK SHALL MEET THE ADOPTED CODE").reason.as_str(), mark("3'-0\"").reason.as_str()), ("note", "dimension"));
         // Coverage: the loaded sheets and the end-read ones apart; the unreadable page named.
         let v = inv.summary(true);
-        let n = lettering.len() as u64 + 1;
+        let n = n as u64;
         assert_eq!(v["coverage_by_read"]["end_read"]["marks"].as_u64(), Some(n), "{v:#}");
         let loaded = v["coverage_by_read"]["loaded"]["marks"].as_u64().unwrap_or(0);
         assert_eq!(Some(loaded + n), v["coverage"]["marks"].as_u64());

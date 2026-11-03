@@ -392,6 +392,46 @@ struct Sheet<'a> {
     rooms: Vec<(String, String)>,
     /// Every room number and name the job read (upper case): on another sheet, a copy.
     all_rooms: &'a BTreeSet<String>,
+    /// The cells of its tables (a page read at the end: its schedules), by their left side.
+    cells: Cells,
+}
+
+/// Table cells `[x0, y0, x1, y1]` sorted by their left side, and the widest one's width.
+#[derive(Default)]
+struct Cells {
+    cells: Vec<[f64; 4]>,
+    widest: f64,
+}
+
+/// A cell holds a line of lettering when it is at most this many of its heights tall (a sheet's
+/// border or a detail's frame is no cell).
+const CELL_H: f64 = 4.0;
+
+impl Cells {
+    fn new(cells: Vec<[f64; 4]>) -> Self {
+        let mut cells: Vec<[f64; 4]> = cells
+            .into_iter()
+            .map(|c| [c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])])
+            .filter(|c| c.iter().all(|v| v.is_finite()) && c[2] > c[0] && c[3] > c[1])
+            .collect();
+        cells.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let widest = cells.iter().map(|c| c[2] - c[0]).fold(0.0, f64::max);
+        Self { cells, widest }
+    }
+
+    /// Whether lettering `height` tall at `at` sits in a cell no more than [`CELL_H`] of its
+    /// heights tall.
+    fn holds(&self, at: [f64; 2], height: f64) -> bool {
+        if self.cells.is_empty() || !(height.is_finite() && height > 0.0) {
+            return false;
+        }
+        let from = self.cells.partition_point(|c| c[0] < at[0] - self.widest);
+        self.cells
+            .iter()
+            .skip(from)
+            .take_while(|c| c[0] <= at[0])
+            .any(|c| at[0] <= c[2] && at[1] >= c[1] && at[1] <= c[3] && c[3] - c[1] <= CELL_H * height)
+    }
 }
 
 impl Sheet<'_> {
@@ -539,6 +579,9 @@ fn lettering(
     }
     if super::readers::switch_designation(t).is_some() {
         return ("text", Some("switch leg letter".into()));
+    }
+    if sheet.cells.holds(at, height) {
+        return ("text", Some("a table's cell (a schedule's or a diagram's lettering)".into()));
     }
     if t.chars().all(|c| c.is_ascii_digit()) && (1..=3).contains(&t.len()) {
         return ("text", Some("keynote or view number".into()));
@@ -695,6 +738,7 @@ pub(crate) fn take(
                 legend: texts.get(g).map(|t| device_types::read_legend(t)).unwrap_or_default(),
                 rooms,
                 all_rooms: &all_rooms,
+                cells: Cells::default(),
             }
         })
         .collect();
@@ -783,15 +827,18 @@ const MAX_PAGE_TEXTS: usize = 200_000;
 fn page_marks(inv: &mut Inventory, cx: &Ctx, page: &Drawing, number: &str, trade: &str, all_rooms: &BTreeSet<String>) -> usize {
     let mut texts = sheet_facts::texts(page);
     texts.truncate(MAX_PAGE_TEXTS);
+    // Its border and title block, from its own frame lines.
+    let region = super::guided::page_region(page, number, trade);
     let sheet = Sheet {
         name: number.to_string(),
         base: number.to_string(),
         trade: trade.to_string(),
-        regions: Vec::new(),
+        regions: region.iter().collect(),
         page: None,
         legend: device_types::read_legend(&texts),
         rooms: Vec::new(),
         all_rooms,
+        cells: Cells::new(cadaddy_mepfix::equip_reader::table_cells(page)),
     };
     drop(texts);
     let members: Vec<&Entity> = page.model.iter().map(|e| &**e).collect();
