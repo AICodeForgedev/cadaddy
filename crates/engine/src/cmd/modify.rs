@@ -1631,6 +1631,53 @@ fn run_chamfer(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------------- explode / array / order / break / join ----------------
 
+/// `ell` placed by `m` as an ELLIPSE at elevation `z`; `None` when `m` flattens it.
+fn placed_ellipse(ell: cadaddy_geom::Ellipse, m: &Mat3, z: f64) -> Option<EntityKind> {
+    let g = ell.transformed(m);
+    let len = g.major.len();
+    (len.is_finite() && len > 0.0 && g.ratio.is_finite() && g.ratio > 0.0).then(|| {
+        EntityKind::Ellipse(cadaddy_doc::Ellipse { center: g.center.to3(z), major: g.major.to3(0.0), ratio: g.ratio, start: g.start, end: g.end })
+    })
+}
+
+/// The pieces of block object `be` placed by `m`, a transform that stretches unevenly (a block
+/// reference whose X and Y scales differ), where its own kind can't hold the result: a circle
+/// or an arc becomes an ellipse or an elliptical arc, a polyline with arc segments (and no
+/// widths) its lines and elliptical arcs. `None`: the object transforms as itself.
+fn stretched_pieces(be: &Entity, m: &Mat3) -> Option<Vec<Entity>> {
+    let circular = |center: Vec2, radius: f64, start: f64, end: f64| cadaddy_geom::Ellipse { center, major: Vec2::X * radius, ratio: 1.0, start, end };
+    let kinds = match &be.kind {
+        EntityKind::Circle(c) => vec![placed_ellipse(cadaddy_geom::Ellipse::full(c.center.xy(), Vec2::X * c.radius, 1.0), m, c.center.z)?],
+        EntityKind::Arc(a) => vec![placed_ellipse(circular(a.center.xy(), a.radius, a.start, a.end), m, a.center.z)?],
+        EntityKind::Ellipse(el) => {
+            let g = cadaddy_geom::Ellipse { center: el.center.xy(), major: el.major.xy(), ratio: el.ratio, start: el.start, end: el.end };
+            vec![placed_ellipse(g, m, el.center.z)?]
+        }
+        EntityKind::LwPolyline(p)
+            if p.vertices.iter().any(|v| v.bulge != 0.0)
+                && p.const_width == 0.0
+                && p.vertices.iter().all(|v| v.start_width == 0.0 && v.end_width == 0.0) =>
+        {
+            let z = p.elevation;
+            let pl = Polyline { vertices: p.vertices.clone(), closed: p.closed };
+            pl.segments()
+                .into_iter()
+                .map(|s| match s {
+                    Segment::Line(l) => Some(EntityKind::Line(cadaddy_doc::Line { a: m.apply(l.a).to3(z), b: m.apply(l.b).to3(z) })),
+                    Segment::Arc { arc: a, .. } => placed_ellipse(circular(a.center, a.radius, a.start, a.end), m, z),
+                })
+                .collect::<Option<Vec<_>>>()?
+        }
+        _ => return None,
+    };
+    // The pieces of a polyline are new objects, as when it explodes itself: its xdata goes.
+    let mut common = be.common.clone();
+    if matches!(be.kind, EntityKind::LwPolyline(_)) {
+        common.xdata.clear();
+    }
+    Some(kinds.into_iter().map(|kind| Entity { handle: Handle(0), common: common.clone(), kind }).collect())
+}
+
 pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<Entity>> {
     // An annotative object explodes into plain objects as it draws at the current annotation scale.
     if cadaddy_doc::is_annotative(e) {
@@ -1667,15 +1714,19 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
             // hides as invisible: they are not part of what the reference shows, so they don't
             // come out (BURST does the same).
             let evaluated = blk.anonymous && blk.name.starts_with("*U");
+            let stretched = m.similarity_scale().is_none();
             Some(
                 blk.entities
                     .iter()
                     .filter(|be| !evaluated || be.common.visible)
-                    .map(|be| {
-                        let mut ne = (**be).clone();
-                        // AutoCAD's EXPLODE keeps layer 0 and ByBlock properties as defined.
-                        ne.kind.transform(&m);
-                        ne
+                    .flat_map(|be| {
+                        // A reference stretched unevenly turns circles and arcs into ellipses.
+                        stretched.then(|| stretched_pieces(be, &m)).flatten().unwrap_or_else(|| {
+                            let mut ne = (**be).clone();
+                            // AutoCAD's EXPLODE keeps layer 0 and ByBlock properties as defined.
+                            ne.kind.transform(&m);
+                            vec![ne]
+                        })
                     })
                     .collect(),
             )
