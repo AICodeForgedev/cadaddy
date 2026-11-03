@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1212,
-    "count": 1212,
+    "callableAsJson": 1217,
+    "count": 1217,
     "ids": [
       "-attedit",
       "-block",
@@ -123,11 +123,19 @@
       "bim.clash.status",
       "bim.coderules",
       "bim.colour",
+      "bim.completeness",
       "bim.count",
       "bim.dimming",
       "bim.element",
       "bim.estimate",
       "bim.field.link",
+      "bim.form.create",
+      "bim.form.field",
+      "bim.form.log",
+      "bim.form.promote",
+      "bim.form.record",
+      "bim.form.revert",
+      "bim.forms",
       "bim.from_pdf",
       "bim.get_spec",
       "bim.identity",
@@ -1136,9 +1144,6 @@
       "view.back",
       "view.bottom",
       "view.dir",
-      "view.fidelity",
-      "view.fidelity.report",
-      "view.fidelity.rules",
       "view.front",
       "view.get",
       "view.left",
@@ -1216,7 +1221,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 530,
+    "inMenus": 529,
     "typed": 564
   },
   "features": {

@@ -1,0 +1,50 @@
+{
+  "trade": "structural",
+  "about": "Standard object forms for structural kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "concrete_pour",
+      "label": "Concrete pour",
+      "aliases": ["pour", "footing", "slab_on_grade"],
+      "fields": [
+        {"key": "element", "type": "text", "required": true, "note": "slab, footing, grade beam, pier"},
+        {"key": "volume", "type": "number", "unit": "cf", "required": true},
+        {"key": "area", "type": "number", "unit": "sf", "required": false},
+        {"key": "thickness", "type": "number", "unit": "in", "required": true},
+        {"key": "strength", "type": "number", "unit": "psi", "required": true, "aliases": ["fc", "psi"]},
+        {"key": "mix", "type": "text", "required": false},
+        {"key": "reinforcement", "type": "text", "required": true, "aliases": ["rebar", "mesh"]},
+        {"key": "vapor_barrier", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "reinforcement",
+      "label": "Reinforcement",
+      "aliases": ["rebar", "slab_mesh", "wire_mesh"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "note": "bar or welded wire mesh"},
+        {"key": "size", "type": "text", "required": true},
+        {"key": "spacing", "type": "text", "unit": "in", "required": true},
+        {"key": "quantity", "type": "number", "required": true, "aliases": ["length", "area"]},
+        {"key": "lap", "type": "text", "required": false},
+        {"key": "cover", "type": "number", "unit": "in", "required": false},
+        {"key": "pour", "type": "ref", "required": true},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "column",
+      "label": "Column",
+      "aliases": [],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "aliases": ["type_mark", "mark"]},
+        {"key": "size", "type": "text", "required": true},
+        {"key": "material", "type": "text", "required": true},
+        {"key": "height", "type": "number", "unit": "ft", "required": false},
+        {"key": "grid", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

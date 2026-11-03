@@ -50,6 +50,7 @@ pub mod fidelity;
 mod field;
 pub mod file;
 pub mod find;
+pub mod forms;
 mod frames;
 pub mod grids;
 mod gripcmds;
@@ -858,6 +859,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(rooms3d::specs());
         v.extend(bimprops::specs());
         v.extend(elemprops::specs());
+        v.extend(forms::specs());
         v.extend(propfill::specs());
         v.extend(propuse::specs());
         v.extend(identity::specs());
