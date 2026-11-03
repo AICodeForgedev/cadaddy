@@ -4933,9 +4933,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             s.echo(line);
             let places = gfci_places(&v);
             if !places.is_empty() {
+                // Its cost: a GFCI receptacle for a standard one on each.
+                let n = places.len() as f64;
+                let change = s
+                    .execute(
+                        "estimate.change",
+                        &json!({"lines": [{"item": "GFCI receptacle", "qty": n}, {"item": "Duplex receptacle", "qty": -n}], "why": "GFCI places"}),
+                    )
+                    .ok();
+                let cost = change.as_ref().map_or_else(String::new, |c| {
+                    format!(
+                        " (change: ${:.2} material, {:.2} labor hours)",
+                        c.pointer("/totals/material").and_then(Value::as_f64).unwrap_or(0.0),
+                        c.pointer("/totals/labor_hours").and_then(Value::as_f64).unwrap_or(0.0)
+                    )
+                });
                 job.add_finding(
                     StageName::BimBuild,
-                    &format!("{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {}", places.len(), places.join("; ")),
+                    &format!(
+                        "{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {}{cost}",
+                        places.len(),
+                        places.join("; ")
+                    ),
                     "a receptacle in an elevator pit, car or hoistway, on a roof, outdoors, in a garage, bathroom or laundry needs GFCI (NEC 620.6, 210.8); the breaker isn't, so the first receptacle on the circuit is a GFCI device",
                     3,
                     vec!["Build (and buy) a GFCI receptacle first on each, or confirm the breaker is GFCI".into()],
