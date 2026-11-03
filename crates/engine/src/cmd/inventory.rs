@@ -782,7 +782,7 @@ pub(crate) fn take(
         }
     }
     // The sheets of the set the job didn't load: each page read again, its marks inventoried.
-    // A sheet the job loaded is read, by its number or by one of its views' (`A411/1`).
+    // A sheet the job loaded is read, by its number or by one of its views' (`Q-9/2`).
     let read: BTreeSet<String> = sheets.iter().flat_map(|s| [s.base.to_ascii_uppercase(), s.name.to_ascii_uppercase()]).collect();
     let base_of = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
     let (no_built, no_fates) = (HashMap::new(), HashMap::new());

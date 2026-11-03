@@ -17349,7 +17349,7 @@ mod tests {
         page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(border)).unwrap_or_else(|e| panic!("{e}"));
         let rule = cadaddy_doc::Line { a: Vec3::new(1800.0, -50.0, 0.0), b: Vec3::new(1800.0, 1200.0, 0.0) };
         page.add(&Space::Model, Common::default(), EntityKind::Line(rule)).unwrap_or_else(|e| panic!("{e}"));
-        page.add(&Space::Model, Common::default(), EntityKind::Text(text("PROJECT #:", 1850.0, 100.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("JOB REF:", 1850.0, 100.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
         // A schedule's cell (a box) holding lettering no other rule explains.
         let cell = cadaddy_doc::LwPolyline {
             vertices: [(100.0, 500.0), (200.0, 500.0), (200.0, 510.0), (100.0, 510.0)]
@@ -17362,9 +17362,9 @@ mod tests {
             plinegen: false,
         };
         page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(cell)).unwrap_or_else(|e| panic!("{e}"));
-        page.add(&Space::Model, Common::default(), EntityKind::Text(text("SPACE ONLY", 110.0, 503.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("VACANT ROW", 110.0, 503.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
         // The same words outside any cell: nothing explains them.
-        page.add(&Space::Model, Common::default(), EntityKind::Text(text("SPARE ONLY", 110.0, 700.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("UNUSED ROW", 110.0, 700.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
         // The lettering, the fills, the frame's and the cell's line work, the title block's and
         // the two cells' lettering.
         let n = lettering.len() + 5;
@@ -17393,10 +17393,10 @@ mod tests {
         assert_eq!((sheet("A-101").read, sheet("A-101").why.as_str()), (false, "a made-up page that can't be read"));
         let on_e0: Vec<&inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-0").collect();
         assert_eq!(on_e0.len(), n);
-        assert_eq!(on_e0.iter().find(|m| m.text == "PROJECT #:").map(|m| m.reason.as_str()), Some("title block"), "{on_e0:#?}");
+        assert_eq!(on_e0.iter().find(|m| m.text == "JOB REF:").map(|m| m.reason.as_str()), Some("title block"), "{on_e0:#?}");
         let said = |t: &str| on_e0.iter().find(|m| m.text == t).map(|m| (m.status.clone(), m.reason.clone())).unwrap_or_default();
-        assert_eq!(said("SPACE ONLY"), (NOT_OBJECT.to_string(), "a table's cell (a schedule's or a diagram's lettering)".to_string()));
-        assert_eq!(said("SPARE ONLY").0, inventory::UNEXPLAINED);
+        assert_eq!(said("VACANT ROW"), (NOT_OBJECT.to_string(), "a table's cell (a schedule's or a diagram's lettering)".to_string()));
+        assert_eq!(said("UNUSED ROW").0, inventory::UNEXPLAINED);
         let fills = on_e0.iter().find(|m| m.what == "hatch").unwrap_or_else(|| panic!("no fills: {on_e0:#?}"));
         assert_eq!((fills.count, fills.status.as_str(), fills.text.as_str()), (2, NOT_OBJECT, "fills on layer SHADE"), "{fills:?}");
         assert!(on_e0.iter().all(|m| m.end_read && m.handle.is_empty() && m.trade == "E"), "{on_e0:#?}");
