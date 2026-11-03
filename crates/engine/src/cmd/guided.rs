@@ -4875,6 +4875,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["feeders_error"] = json!(e.to_string());
     }
     bim_step(s, job, "feeder routes", t);
+    // Buried work the set issues no plan for: its underground sheets generated.
+    let t = web_time::Instant::now();
+    if let Err(e) = underground_step(s, job, &pages, &mut result) {
+        result["underground_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "underground", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -8053,6 +8059,10 @@ const KEYNOTE_REACH: f64 = 8.0;
 const RISER_REACH_FT: f64 = 15.0;
 /// How far a stub goes into the space it is stubbed into, feet.
 const STUB_INTO_FT: f64 = 1.5;
+/// Buried conduit a keynote calls for runs this far under the slab to its top, feet, and comes up
+/// this far in the wall it reaches.
+const UNDER_SLAB_FT: f64 = 1.5;
+const STUB_UP_FT: f64 = 1.5;
 /// Most boxes the keynotes add.
 const MAX_KEYNOTE_BOXES: usize = 400;
 
@@ -8162,7 +8172,15 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
             let nearest = |junction: bool| {
                 on_sheet.iter().filter(|d| !junction || d.junction).map(|d| ((d.doc - at).len(), *d)).min_by(|a, b| a.0.total_cmp(&b.0))
             };
-            let (level, plan, device) = match nearest(true).filter(|(dd, _)| *dd <= reach && w.box_in.is_some()) {
+            // A box note's tag points at its junction box; a buried note's at what it serves (a floor box).
+            let anchor = if w.box_in.is_some() {
+                nearest(true)
+            } else if w.buried {
+                nearest(false)
+            } else {
+                None
+            };
+            let (level, plan, device) = match anchor.filter(|(dd, _)| *dd <= reach) {
                 Some((_, dv)) => (dv.level.clone(), dv.plan, Some(dv.i)),
                 None => {
                     // The tag's place on its level: the nearest devices' offset from sheet to plan.
@@ -8298,6 +8316,39 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                     let end = edge + dir * (STUB_INTO_FT * upf / dir.len());
                     r.points = vec![[b.plan.x, b.plan.y], [end.x, end.y]];
                 }
+                Route::UnderSlab => {
+                    // Under the slab from it to the nearest wall of its room (else of any room on
+                    // its level), into it from below and stubbed up in the wall.
+                    let on_level: Vec<&Vec<Vec2>> =
+                        rooms.iter().filter(|(l, _, o)| l.eq_ignore_ascii_case(&b.level) && o.len() >= 3).map(|(_, _, o)| o).collect();
+                    let own: Vec<&Vec<Vec2>> = on_level.iter().copied().filter(|o| cadaddy_geom::point_in_polygon(o, b.plan)).collect();
+                    let near = (if own.is_empty() { &on_level } else { &own })
+                        .iter()
+                        .flat_map(|o| (0..o.len()).filter_map(move |i| Some((*o.get(i)?, *o.get((i + 1) % o.len())?))))
+                        .map(|(a, c)| {
+                            let ab = c - a;
+                            let t = if ab.len() > 1e-9 { ((b.plan - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0) } else { 0.0 };
+                            a + ab * t
+                        })
+                        .min_by(|p, q| (*p - b.plan).len().total_cmp(&(*q - b.plan).len()));
+                    let Some(wall) = near else { continue };
+                    if (wall - b.plan).len() < 1e-6 {
+                        continue;
+                    }
+                    let called = format!("note: {} keynote {} (under the slab)", b.sheet, b.number);
+                    let size_from = if b.work.size_assumed { "rule: smallest trade size (the note gives none)" } else { "note" };
+                    r.points = vec![[b.plan.x, b.plan.y], [wall.x, wall.y]];
+                    r.bottoms_ft = vec![-UNDER_SLAB_FT];
+                    r.height_source = called.clone();
+                    r.size_source = size_from.into();
+                    for (at, top) in [(b.plan, 0.0), (wall, STUB_UP_FT)] {
+                        let mut up = super::printcond::run(&sys, &b.level, &b.sheet, vec![[at.x, at.y]], *size, -UNDER_SLAB_FT);
+                        up.top_ft = Some(top);
+                        up.height_source = called.clone();
+                        up.size_source = size_from.into();
+                        runs.push(up);
+                    }
+                }
                 Route::ToRiser => {
                     // To its system's riser box on its level.
                     let riser = boxes
@@ -8339,6 +8390,125 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
         );
     }
     result["keynotes"] = json!({"boxes": boxes.len(), "on_devices": on_devices, "added": at_tags, "runs": run_count, "risers": risers});
+    Ok(())
+}
+
+/// The sheet number the generated underground sheets start at.
+const UNDERGROUND_SHEET: &str = "E-UG1";
+
+/// Buried work (Q6148). When the model has conduit under the slab (the keynotes' called runs,
+/// the feeders proposed under it) or the documents' notes call for buried work, and the set
+/// issues no plan of it (no title names buried work and a plan), the underground sheets are
+/// generated (`ugsheets.build`): called runs solid, proposed ones dashed, every note calling for
+/// buried work that no plan locates listed. The runs CADaddy proposes under the slab get an RFI
+/// before the pour.
+fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let mut issued: Option<String> = None;
+    let mut called: Vec<Value> = Vec::new();
+    for (number, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        // A view title: short, taller than the sheet's usual text, naming buried work and a plan.
+        let mut hs: Vec<f64> = texts.iter().map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
+        hs.sort_by(f64::total_cmp);
+        let usual = hs.get(hs.len() / 2).copied().unwrap_or(0.0);
+        if issued.is_none()
+            && texts.iter().any(|t| {
+                let up = t.value.to_ascii_uppercase();
+                t.height > usual * 1.2
+                    && up.len() <= 60
+                    && super::keynotes::buried(&up)
+                    && up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "PLAN")
+            })
+        {
+            issued = Some(number.clone());
+        }
+        for (n, text) in super::keynotes::buried_notes(&texts) {
+            // A keynote the keynotes step built is located; the rest are listed.
+            if let Some(n) = &n {
+                let built = format!("{number} keynote {n} ");
+                if sp.mep.runs.iter().any(|r| r.height_source.contains(&built)) {
+                    continue;
+                }
+            }
+            let text = match &n {
+                Some(n) => format!("KEYNOTE {n}: {text}"),
+                None => text,
+            };
+            if !called.iter().any(|c| c["text"] == text.as_str()) {
+                called.push(json!({"sheet": number, "text": text}));
+            }
+        }
+    }
+    let below = |r: &&cadaddy_walk3d::MepRun| r.points.len() >= 2 && r.bottoms_ft.iter().any(|b| b.is_finite() && *b < 0.0);
+    let buried: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(below).collect();
+    let proposed: BTreeSet<String> =
+        buried.iter().filter(|r| r.height_source.eq_ignore_ascii_case("proposed")).map(|r| r.source_sheet.clone()).collect();
+    let called_runs = buried.len() - buried.iter().filter(|r| r.height_source.eq_ignore_ascii_case("proposed")).count();
+    if buried.is_empty() && called.is_empty() {
+        return Ok(());
+    }
+    if let Some(sheet) = &issued {
+        let line = format!("  underground: the set issues its plan ({sheet}); {} buried runs in the model", buried.len());
+        report_progress(s, json!({"step": "underground"}), &line);
+        s.echo(line);
+        result["underground"] = json!({"issued": sheet, "runs": buried.len()});
+        return Ok(());
+    }
+    // An RFI for what CADaddy proposes under the slab, before the pour.
+    let mut rfis = Vec::new();
+    if !proposed.is_empty() {
+        let list = proposed.iter().take(20).cloned().collect::<Vec<_>>().join("; ");
+        let issue = format!(
+            "The documents issue no underground plan. CADaddy proposes these under the slab (shortest from gear that leaves its bottom, or rising to another level): {list}."
+        );
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in issue.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-U{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::PourHold;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: "underground plan".into(),
+                issue: issue.clone(),
+                assumed: "The generated underground sheet shows them dashed, as proposed, until answered.".into(),
+                proposed: Some("Confirm each run under the slab (or route it overhead) before the pour".into()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    let built = s.execute("ugsheets.build", &json!({"number": UNDERGROUND_SHEET, "called": called}));
+    let _ = s.execute("layout.set", &json!({"name": "Model"}));
+    let built = built?;
+    let sheets: Vec<String> = built["sheets"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|x| Some(format!("{} {}", x["number"].as_str()?, x["level"].as_str().unwrap_or_default()))).collect())
+        .unwrap_or_default();
+    let line = format!(
+        "  underground: no plan issued; generated {} ({called_runs} called runs solid, {} proposed feeders dashed, {} notes calling for buried work listed{})",
+        if sheets.is_empty() { "nothing".to_string() } else { sheets.join(", ") },
+        proposed.len(),
+        called.len(),
+        if rfis.is_empty() { String::new() } else { format!("; RFI {}", rfis.join(", ")) }
+    );
+    report_progress(s, json!({"step": "underground"}), &line);
+    s.echo(line.clone());
+    job.add_finding(
+        StageName::BimBuild,
+        line.trim(),
+        "work the documents call for under the slab or in the ground needs a plan before the pour; none is issued",
+        2,
+        vec!["Have the engineer review the generated sheet; answer the RFI".into()],
+        None,
+        false,
+    );
+    result["underground"] = json!({"sheets": sheets, "called_runs": called_runs, "proposed": proposed, "called_notes": called, "rfis": rfis});
     Ok(())
 }
 
