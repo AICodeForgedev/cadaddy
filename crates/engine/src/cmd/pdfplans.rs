@@ -568,7 +568,7 @@ mod tests {
         for _ in 0..2_000 {
             let a = Vec2::new(rnd(), rnd());
             let b = if rnd() < 500.0 { a + Vec2::new(rnd() / 50.0, rnd() / 50.0) } else { Vec2::new(rnd(), rnd()) };
-            let sg = Seg { a, b, layer: String::new() };
+            let sg = Seg { a, b, layer: String::new(), outline_width: f64::INFINITY };
             let cand: Vec<usize> = grid.near(a, b).collect();
             for (i, pr) in pairs.iter().enumerate() {
                 if near(&sg, pr) {

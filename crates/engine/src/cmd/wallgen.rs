@@ -1170,6 +1170,7 @@ pub(crate) fn fit_families(
                     block: Some(ins.block.clone()),
                     confidence: 1.0,
                     leaf: false,
+                    open_end: None,
                 });
             }
         }
@@ -1328,8 +1329,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
-    let segs = segments(&pair_ents);
+    let mut segs = segments(&pair_ents);
+    // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
+    let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);
+    if dashes > 0 {
+        notes.push(format!("{}: {dashes} dashes of dashed lines (overhead, hidden) not taken for wall faces.", level.name));
+    }
     let mut found = pairs(d, &segs, &lim);
+    // A thin outline's side paired with another wall's face is the air beside that wall.
+    let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
+    if slivers > 0 {
+        notes.push(format!("{}: {slivers} line pairs between a thin outline (trim, a shelf) and another wall's face left out.", level.name));
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // window's glazing drawn lighter): it is wall too.
     if !screened_ents.is_empty() && !found.is_empty() {
@@ -1469,22 +1480,46 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .take(MAX_OBJECTS)
         .map(|o| {
             let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
-            let (wi, _) = open_grid
-                .at(o.at)
-                .iter()
-                .filter_map(|&i| {
-                    let w = &pl.walls[i];
-                    let len = w.a.dist(w.b);
-                    if len <= 1e-9 {
-                        return None;
+            // The wall it opens in: the hinge (or the block) on its centreline within its
+            // thickness, a swing shutting along it (`ends`: the arc ends it may shut at).
+            let pick = |ends: Option<[Vec2; 2]>| -> Option<(usize, f64)> {
+                // The walls by the hinge, and by the ends it may shut at (the opening's other
+                // jamb).
+                let mut near: Vec<usize> = open_grid.at(o.at).to_vec();
+                for e in ends.into_iter().flatten() {
+                    for &i in open_grid.at(e) {
+                        if !near.contains(&i) {
+                            near.push(i);
+                        }
                     }
-                    let u = (w.b - w.a) * (1.0 / len);
-                    let off = u.perp().dot(o.at - w.a).abs();
-                    let s = u.dot(o.at - w.a);
-                    let fits = drawn_swing.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
-                    (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1))?;
+                }
+                near.iter()
+                    .filter_map(|&i| {
+                        let w = pl.walls.get(i)?;
+                        let len = w.a.dist(w.b);
+                        if len <= 1e-9 {
+                            return None;
+                        }
+                        let u = (w.b - w.a) * (1.0 / len);
+                        let off = u.perp().dot(o.at - w.a).abs();
+                        let s = u.dot(o.at - w.a);
+                        let fits = ends.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
+                        // A hinge up to a leaf (and a frame: the wall's thickness) past the wall's
+                        // end: the door shuts onto that end (its other jamb too short to be a wall
+                        // piece).
+                        let reach = o.width + w.thickness.max(2.0 * k);
+                        (fits && off <= w.thickness.max(2.0 * k) && s >= -reach && s <= len + reach).then_some((i, off))
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            // A leaf drawn to one end most often stands open there (against the wall beside the
+            // door), so the wall at the other end comes first; a plan drawing the leaf shut in
+            // its wall still finds it by either end.
+            let shut_end = drawn_swing.zip(o.open_end).map(|(ends, open)| {
+                let closed = if ends[0].dist(open) <= ends[1].dist(open) { ends[1] } else { ends[0] };
+                [closed, closed]
+            });
+            let (wi, _) = shut_end.and_then(|e| pick(Some(e))).or_else(|| pick(drawn_swing))?;
             Some((wi, drawn_swing.is_some_and(|ends| solid_through_grid(&pl.walls, Some(&open_grid), wi, o.at, ends, k))))
         })
         .collect();
@@ -1625,8 +1660,9 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
             // in a corridor's air (two units' entry or bath walls lined up across it): no header
             // spans it. A door swing hung there or the outside beyond it still make it a door or
             // a window (Q6160).
-            let no_header = gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) || in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
-            gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header));
+            let in_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+            let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap);
+            gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header, in_air));
         }
     }
     // Outside: no other wall across one side of it.
@@ -1648,35 +1684,85 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The swings drawn on the level (arcs and flattened arcs of a door's sweep and radius), for
     // the gaps to hang doors from.
     let swings = drawn_swings(&ents, k);
-    for (wi, g0, g1, t, no_header) in gaps {
+    for (wi, g0, g1, t, no_header, in_air) in gaps {
         let width = g0.dist(g1);
         let u = (g1 - g0) * (1.0 / width.max(1e-12));
-        // A door swing (an arc, or a polyline of chords) hung from a jamb: its hinge there, its
-        // leaf the gap wide (or half of it, a pair's). Not any curve about that far from it
-        // (furniture, text, a fixture by a wide opening) (Q5273).
-        let mut leaf = None;
-        for sw in &swings {
-            for jamb in [g0, g1] {
-                let leaf_fits = (sw.r - width).abs() <= 0.2 * width + t || (sw.r - width / 2.0).abs() <= 0.1 * width + t;
-                if sw.c.dist(jamb) <= t + 2.0 * k && leaf_fits {
-                    // The open end: the end farthest from the wall line.
-                    let open = if u.perp().dot(sw.ends[0] - jamb).abs() >= u.perp().dot(sw.ends[1] - jamb).abs() { sw.ends[0] } else { sw.ends[1] };
-                    let along = if jamb == g0 { u } else { -u };
-                    let inset = along * (LEAF_IN * k / 2.0);
-                    leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (width / open.dist(jamb).max(1e-12)), sw.handle, along));
+        // A wall meeting the gap end-on (a demising wall between two rooms' windows) parts it: a
+        // pier the wall's width, full height, and an opening each side of it. Inside, a wall
+        // running across the gap parts it too (a demising wall between two units' entry doors);
+        // across an outside wall's gap it is a mullion's or the frame's.
+        let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
+        let crossing_parts = !is_outside;
+        let mut piers: Vec<(f64, f64)> = pl
+            .walls
+            .iter()
+            .enumerate()
+            .filter(|(ci, c)| *ci != wi && u.cross(c.b - c.a).abs() > 0.5 * c.a.dist(c.b))
+            .filter_map(|(_, c)| {
+                // Where its centreline crosses the gap's line, else the end that meets it.
+                let n = u.perp();
+                let (da, db) = (n.dot(c.a - g0), n.dot(c.b - g0));
+                let hit = if da * db < 0.0 && crossing_parts {
+                    Some(c.a + (c.b - c.a) * (da / (da - db)))
+                } else {
+                    [c.a, c.b].into_iter().find(|e| seg_dist(*e, g0, g1) <= c.thickness / 2.0 + t)
+                };
+                hit.and_then(|e| {
+                    let s = u.dot(e - g0);
+                    (s > 0.1 * width && s < 0.9 * width).then(|| ((s - c.thickness / 2.0).max(0.0), (s + c.thickness / 2.0).min(width)))
+                })
+            })
+            .take(16)
+            .collect();
+        piers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let mut from = 0.0;
+        for (p0, p1) in &piers {
+            if *p0 > from {
+                spans.push((from, *p0));
+            }
+            from = from.max(*p1);
+        }
+        spans.push((from, width));
+        // A door swing (an arc, or a polyline of chords) hung from a jamb of the gap or of an
+        // opening a pier parts off: its hinge there, its leaf that opening wide (or half of it, a
+        // pair's). Not any curve about that far from it (furniture, text, a fixture by a wide
+        // opening) (Q5273).
+        let mut leaves = Vec::new();
+        for &(s0, s1) in &spans {
+            let (j0, j1) = (g0 + u * s0, g0 + u * s1);
+            let span = s1 - s0;
+            let mut leaf = None;
+            for sw in &swings {
+                for (jamb, along) in [(j0, u), (j1, -u)] {
+                    let leaf_fits = (sw.r - span).abs() <= 0.2 * span + t || (sw.r - span / 2.0).abs() <= 0.1 * span + t;
+                    // It shuts across this opening: an end of its arc on the gap's line, a leaf
+                    // from the hinge into the opening (not a swing hinged by the jamb that shuts
+                    // along another wall, or whose open leaf rests along this line's other way).
+                    let shuts = sw.ends.iter().any(|e| u.perp().dot(*e - jamb).abs() <= t + 2.0 * k && along.dot(*e - sw.c) >= 0.7 * sw.r);
+                    if sw.c.dist(jamb) <= t + 2.0 * k && leaf_fits && shuts {
+                        // The open end: the end farthest from the wall line.
+                        let open =
+                            if u.perp().dot(sw.ends[0] - jamb).abs() >= u.perp().dot(sw.ends[1] - jamb).abs() { sw.ends[0] } else { sw.ends[1] };
+                        let inset = along * (LEAF_IN * k / 2.0);
+                        leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (span / open.dist(jamb).max(1e-12)), sw.handle, along, (j0, j1)));
+                    }
                 }
             }
+            leaves.extend(leaf);
         }
         // Covered by a door found from its swing already.
         let covered = pl.leaves.iter().any(|l| !l.window && (seg_dist(l.a, g0, g1) <= t || l.a.dist(g0) <= t || l.a.dist(g1) <= t));
         let Some(w) = pl.walls.get(wi) else { continue };
         let source = w.source;
-        let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
         let (z0, top) = (pl.z0, w.top);
         let mut extra = Vec::new();
-        if leaf.is_some() || covered {
+        if !leaves.is_empty() || covered {
             extra.push((g0, g1, z0 + pl.door_head, top));
-            if let Some((a, b, h, along)) = leaf.filter(|_| !covered) {
+            if !leaves.is_empty() {
+                extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
+            }
+            for (a, b, h, along, frame) in leaves.into_iter().filter(|_| !covered) {
                 pl.leaves.push(Leaf {
                     a,
                     b,
@@ -1687,38 +1773,13 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     sill: None,
                     along: Some(along),
                     pair: None,
-                    frame: Some((g0, g1)),
+                    frame: Some(frame),
                 });
                 doors += 1;
             }
-        } else if is_outside {
-            // A wall meeting the gap end-on (a demising wall between two rooms' windows) parts
-            // it: a pier the wall's width, full height, and a window each side of it.
-            let mut piers: Vec<(f64, f64)> = pl
-                .walls
-                .iter()
-                .enumerate()
-                .filter(|(ci, c)| *ci != wi && u.cross(c.b - c.a).abs() > 0.5 * c.a.dist(c.b))
-                .filter_map(|(_, c)| {
-                    [c.a, c.b].into_iter().find_map(|e| {
-                        let s = u.dot(e - g0);
-                        (seg_dist(e, g0, g1) <= c.thickness / 2.0 + t && s > 0.1 * width && s < 0.9 * width)
-                            .then(|| ((s - c.thickness / 2.0).max(0.0), (s + c.thickness / 2.0).min(width)))
-                    })
-                })
-                .take(16)
-                .collect();
-            piers.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut spans: Vec<(f64, f64)> = Vec::new();
-            let mut from = 0.0;
-            for (p0, p1) in &piers {
-                if *p0 > from {
-                    spans.push((from, *p0));
-                }
-                extra.push((g0 + u * *p0, g0 + u * *p1, z0, top));
-                from = from.max(*p1);
-            }
-            spans.push((from, width));
+        } else if is_outside && !in_air {
+            // (A gap in a corridor's air is inside the building, whatever a ray finds.)
+            extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
             for (s0, s1) in spans {
                 let (a, b) = (g0 + u * s0, g0 + u * s1);
                 if s1 - s0 < MIN_WINDOW_IN * k {
