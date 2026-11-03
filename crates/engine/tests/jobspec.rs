@@ -193,6 +193,23 @@ fn without_a_specification_the_job_asks_for_its_path_or_none() {
     let _ = std::fs::remove_dir_all(&elsewhere);
 }
 
+#[test]
+fn started_with_specs_false_the_job_asks_nothing_and_says_so() {
+    real_pdf_reader();
+    let root = unique("declined");
+    prints(&root.join("Plans"));
+    for none in [json!(false), json!("none")] {
+        let (s, r) = start(&root.join("Plans"), json!({"auto": false, "specs": none}));
+        r.expect("job.start");
+        let job = job_state(&s);
+        assert!(spec_question(&job).is_none(), "no question: {none}");
+        assert_eq!(job["specs_declined"], json!(true));
+        assert_eq!(no_spec_findings(&job).len(), 1);
+        assert!(job["specs_how"][0].as_str().is_some_and(|h| h.contains("started with specs: none")), "{}", job["specs_how"]);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// (checkpoint, copy): the sink copies the checkpoint aside when the rooms stage starts.
 static COPY_AT_ROOMS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
 
