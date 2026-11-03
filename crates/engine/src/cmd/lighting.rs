@@ -908,11 +908,19 @@ fn three_way_mates<'a>(c: &Dev, ctrls: &'a [Dev]) -> Vec<&'a Dev> {
 }
 
 fn where_of(d: &Dev) -> String {
-    match (d.level.is_empty(), d.room.is_empty()) {
-        (_, false) => format!("{} room {}", d.level, d.room).trim().to_string(),
-        (false, true) => format!("{} (no room)", d.level),
-        _ => "no room".into(),
-    }
+    let level = if d.level.is_empty() { String::new() } else { format!("level {} ", d.level) };
+    if d.room.is_empty() { format!("{level}(no room)") } else { format!("{level}room {}", d.room) }
+}
+
+/// Where a group of devices is: their room (or none) and their levels.
+fn place_of(room: &str, devs: &[&Dev]) -> String {
+    let levels = distinct(devs.iter().map(|d| d.level.clone()).filter(|l| !l.is_empty()));
+    let on = match levels.len() {
+        0 => String::new(),
+        1 => format!(" on level {}", levels.join("")),
+        _ => format!(" on levels {}", levels.join(", ")),
+    };
+    if room.is_empty() { format!("(no room){on}") } else { format!("room {room}{on}") }
 }
 
 /// What the controls check reads besides the elements: each circuit's panel-schedule codes (`C`
@@ -933,7 +941,8 @@ pub(crate) struct ControlDocs<'a> {
 pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &ControlDocs) -> Links {
     let mut out = Links::default();
     // (topic) → the places, for one conflict per topic and room.
-    let mut issues: BTreeMap<(&'static str, String, String), Vec<&Dev>> = BTreeMap::new();
+    // One conflict per topic and room (a stair's or a corridor's on every level together).
+    let mut issues: BTreeMap<(&'static str, String), Vec<&Dev>> = BTreeMap::new();
     for l in lums {
         let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
         let by_leg = leg_controls(l, ctrls, lums);
@@ -992,7 +1001,7 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         }
         if how == "none" {
             let topic = if l.leg.is_empty() { "fixture with no control" } else { "fixture leg with no switch" };
-            issues.entry((topic, l.level.clone(), l.room.clone())).or_default().push(l);
+            issues.entry((topic, l.room.clone())).or_default().push(l);
         }
         // A dimmer over a fixture that doesn't dim, or dims another way.
         for c in linked.iter().filter(|c| is_dimmer(c)) {
@@ -1037,12 +1046,12 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         // Unlettered fixtures near it are presumed its (a stamped unit's fixtures carry none).
         let presumed = lums.iter().any(|l| l.leg.is_empty() && near(l, c, CONTROL_REACH_FT));
         if !c.leg.is_empty() && lettered.is_empty() && !presumed {
-            issues.entry(("switch leg with no fixture", c.level.clone(), c.room.clone())).or_default().push(c);
+            issues.entry(("switch leg with no fixture", c.room.clone())).or_default().push(c);
         }
         if is_three_way(c) {
             let mates = three_way_mates(c, ctrls);
             if mates.is_empty() {
-                issues.entry(("3-way switch without its mate", c.level.clone(), c.room.clone())).or_default().push(c);
+                issues.entry(("3-way switch without its mate", c.room.clone())).or_default().push(c);
             } else {
                 out.three_way_with.insert(c.h.clone(), mates.iter().map(|m| m.h.clone()).collect());
             }
@@ -1052,8 +1061,10 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         v.sort();
         v.dedup();
     }
-    for ((topic, level, room), devs) in issues {
-        let place = if room.is_empty() { format!("{level} (no room)") } else { format!("{level} room {room}") }.trim().to_string();
+    for ((topic, room), devs) in issues {
+        let place = place_of(&room, &devs);
+        let levels = distinct(devs.iter().map(|d| d.level.clone()));
+        let level = if levels.len() == 1 { levels.join("") } else { String::new() };
         let marks: Vec<String> = devs.iter().map(|d| if d.leg.is_empty() { d.mark.clone() } else { format!("{} leg {}", d.mark, d.leg) }).collect();
         let (issue, fix, plan_says, other) = match topic {
             "fixture with no control" => (
