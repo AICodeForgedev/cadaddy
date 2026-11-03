@@ -21,6 +21,18 @@ const MIN_ROOM_WIDTH_IN: f64 = 36.0;
 const MAX_ROOMS_PER_REGION: usize = 250;
 /// Rooms traced at most over all the sheet regions (a whole print set).
 const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
+/// A habitable room's least floor area, square feet (IBC 1208.3, IRC R304.1: 70 sf): a smaller
+/// loop round a bedroom's or a unit's name is the furniture the name is printed on.
+const HABITABLE_MIN_SF: f64 = 70.0;
+/// Words of a room to sleep or live in (a unit type, a bedroom), for [`HABITABLE_MIN_SF`].
+const HABITABLE_WORDS: &[&str] = &["Q", "K", "QUEEN", "KING", "SUITE", "STUDIO", "UNIT", "BEDROOM", "BED", "LIVING", "APT", "APARTMENT", "DWELLING"];
+/// How far from its name a room's number tag may be when it isn't inside the traced outline,
+/// in the name's text heights (a tag's two or three lines, the number printed on furniture).
+const NUMBER_REACH_HEIGHTS: f64 = 6.0;
+/// A room tag's number text height to its name's: at least, at most.
+const TAG_SIZE_BAND: (f64, f64) = (0.75, 1.33);
+/// Two traced outlines are one room when their areas and bounds agree within this share.
+const SAME_OUTLINE_SHARE: f64 = 0.02;
 
 /// A straight segment of a line or polyline.
 #[derive(Clone, Debug)]
@@ -673,10 +685,6 @@ pub(crate) fn room_name_score(t: &str) -> u8 {
     }
 }
 
-fn polygon(l: &cadaddy_doc::HatchLoop) -> Vec<Vec2> {
-    Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)
-}
-
 /// A room found from its name label: the closed outline around the label (the hatch boundary
 /// search), its number (a number text inside), area and perimeter.
 #[derive(Clone, Debug)]
@@ -871,11 +879,27 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
+    // Rooms whose only number inside is another size than their name (taken when no tag is near).
+    let mut any_size: Vec<(usize, String)> = Vec::new();
+    // Whether each room in `out` was traced from round what its name is printed on.
+    let mut out_probed: Vec<bool> = Vec::new();
     let mut outline_cache = None;
+    let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     for (h, name, at, height, _) in names {
+        // A room to live in is at least a habitable room's size; any room at least the least
+        // room's. A smaller loop round the name is what it is printed on (a bed, a tag's box):
+        // the room is the loop round that.
+        let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
         let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let poly = polygon(outer);
+        let first = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+        let probed = cadaddy_geom::shoelace(&first).abs() < least;
+        let poly = if probed {
+            let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
+            p
+        } else {
+            first
+        };
         if poly.len() < 3 {
             continue;
         }
@@ -884,30 +908,111 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
             continue;
         }
         // One room per outline: a second label in the same room is its number or a note.
-        if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+        // (Traced again from round the furniture its name is on, it may start at another corner.)
+        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
+        if out.iter().zip(&out_probed).any(|(q, q_probed)| {
+            let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
+            (q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6))
+                || ((probed || *q_probed)
+                    && (q.area - area).abs() <= SAME_OUTLINE_SHARE * area
+                    && qb.min.dist(b.min) <= tol
+                    && qb.max.dist(b.max) <= tol)
+        }) {
             continue;
         }
         // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
-        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
         if regions.is_some() && b.width().min(b.height()) < MIN_ROOM_WIDTH_IN * k {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
-        // The room number: a number inside the outline, the one in the name's tag block, else the
-        // nearest to the name.
-        let number = numbers
-            .iter()
-            .filter(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q))
-            .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
-            .map(|(_, t, _, _, _)| t.clone());
+        // The room number: the one in the name's tag block, else a number inside the outline of
+        // the name's size, nearest the name (an OCR copy's or a note's digits inside the room are
+        // another size); else the tag nearest the name ([`number_from_nearest_tag`]); else one
+        // of any size inside.
+        let inside_numbers = |sized: bool| {
+            numbers
+                .iter()
+                .filter(|(nh, _, q, qh, _)| {
+                    cadaddy_geom::point_in_polygon(&poly, *q)
+                        && (!sized || *nh == h || (*qh >= TAG_SIZE_BAND.0 * height && *qh <= TAG_SIZE_BAND.1 * height))
+                })
+                .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, t, _, _, _)| t.clone())
+        };
+        let number = inside_numbers(true);
+        if number.is_none()
+            && let Some(any) = inside_numbers(false)
+        {
+            any_size.push((out.len(), any));
+        }
         let share = area / sheet;
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })
         .clamp(0.0, 1.0);
         out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
+        out_probed.push(probed);
     }
-    phase(&format!("tracing {} rooms", out.len()));
+    let taken = number_from_nearest_tag(&mut out, &numbers, regions);
+    for (i, t) in any_size {
+        if let Some(r) = out.get_mut(i).filter(|r| r.number.is_none()) {
+            r.number = Some(t);
+        }
+    }
+    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
     Ok(out)
+}
+
+/// Each room traced without a number takes the number tag nearest its name that no room has (in
+/// its sheet region) and that lies in no other room, within [`NUMBER_REACH_HEIGHTS`] of the
+/// name's height: a tag printed on the room's furniture or in a notch of its outline. Nearest
+/// pairs first, so two rooms never share a tag. Returns how many took one.
+fn number_from_nearest_tag(rooms: &mut [FoundRoom], numbers: &[Label], regions: Option<&[[f64; 4]]>) -> usize {
+    let region_of = |p: Vec2| {
+        regions
+            .and_then(|rs| rs.iter().position(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, r) in rooms.iter().enumerate().filter(|(_, r)| r.number.is_none()) {
+        let reach = NUMBER_REACH_HEIGHTS * r.text_height;
+        if !(reach.is_finite() && reach > 0.0) {
+            continue;
+        }
+        let region = region_of(r.at);
+        for (j, (_, t, q, qh, _)) in numbers.iter().enumerate() {
+            // A tag prints its number at its name's size (a note's, a dimension's or an OCR
+            // copy's digits are another size).
+            let same_size = *qh >= TAG_SIZE_BAND.0 * r.text_height && *qh <= TAG_SIZE_BAND.1 * r.text_height;
+            if !same_size || q.dist(r.at) > reach || region_of(*q) != region {
+                continue;
+            }
+            // Another room's: its number already, or inside its outline.
+            let held = rooms.iter().enumerate().any(|(o, x)| {
+                o != i
+                    && ((x.number.as_deref().map(str::trim) == Some(t.trim()) && region_of(x.at) == region)
+                        || cadaddy_geom::point_in_polygon(&x.outline, *q))
+            });
+            if !held {
+                pairs.push((q.dist(r.at), i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut taken = 0;
+    for (_, i, j) in pairs {
+        let Some(t) = numbers.get(j).map(|n| n.1.trim().to_string()) else { continue };
+        let Some(region) = rooms.get(i).filter(|r| r.number.is_none()).map(|r| region_of(r.at)) else { continue };
+        // A number one room took (the same tag, or its copy on the sheet) no other takes.
+        if rooms.iter().any(|x| x.number.as_deref() == Some(t.as_str()) && region_of(x.at) == region) {
+            continue;
+        }
+        if let Some(r) = rooms.get_mut(i) {
+            r.number = Some(t);
+            r.confidence = (r.confidence + 0.1).min(1.0);
+            taken += 1;
+        }
+    }
+    taken
 }
 
 pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {

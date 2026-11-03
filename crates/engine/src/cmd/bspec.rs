@@ -745,7 +745,21 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     let mut texts = room_texts_sized(sp, &ents);
     // Untagged, the plan's room tag size: a number or room name in it that the spec's rooms
     // don't list is still a room's tag (Q6160: a closet tagged with its number only).
-    let tag_h = if tagged { None } else { tag_height(sp, &texts) };
+    // Measured on the levels' own plans: the other trades' sheets print the same rooms' numbers
+    // at their own sizes.
+    let tag_h = if tagged {
+        None
+    } else {
+        let on_plans: Vec<(Handle, String, Vec2, f64)> = texts
+            .iter()
+            .filter(|(_, _, at, _)| {
+                regions.is_empty()
+                    || regions.iter().any(|r| at.x >= r[0].min(r[2]) && at.x <= r[0].max(r[2]) && at.y >= r[1].min(r[3]) && at.y <= r[1].max(r[3]))
+            })
+            .cloned()
+            .collect();
+        tag_height(sp, &on_plans)
+    };
     // A room another trade's plan tags (none of the plans' labels does): traced from its tag.
     for r in &sp.rooms {
         if let (Some(at), Some(n)) = (r.at, r.number.as_deref().filter(|n| !n.trim().is_empty())) {
@@ -759,6 +773,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         .iter()
         .filter(|(_, t, _, _)| super::perceive::geometry::room_number(t))
         .filter(|(_, t, _, h)| tagged || spec_number(t) || plan_room_tag(t, *h, tag_h.as_ref()))
+        .map(|(_, t, at, _)| (t.trim().to_string(), *at))
+        .take(MAX_ROOMS * 10)
+        .collect();
+    // The plans' room names (a unit type's label in every room of it), in the plan's tag size, for
+    // a room the spec knows by number alone.
+    let name_labels: Vec<(String, Vec2)> = texts
+        .iter()
+        .filter(|(_, t, _, h)| {
+            !super::perceive::geometry::room_number(t)
+                && room_tag_text(t)
+                && super::perceive::geometry::room_name_score(t) > 0
+                && super::autospec::room_like_name(t)
+                && tag_h.as_ref().is_none_or(|st| h.is_finite() && *h >= TAG_HEIGHT_BAND.0 * st.height && *h <= TAG_HEIGHT_BAND.1 * st.height)
+        })
         .map(|(_, t, at, _)| (t.trim().to_string(), *at))
         .take(MAX_ROOMS * 10)
         .collect();
@@ -1011,6 +1039,10 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
     }
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let numbered = number_unnumbered(&mut out, &number_tags, &sp.levels, NUMBER_REACH_FT * upf);
+    let named = name_from_labels(&mut out, &name_labels, sp);
+    if named > 0 {
+        notes.push(format!("{named} room(s) the spec knows by number alone took their name from the room label inside them."));
+    }
     if numbered > 0 {
         notes.push(format!("{numbered} room(s) without a number took the plan's number tag nearest their middle."));
     }
@@ -1032,7 +1064,7 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
 /// The closed outline drawn round a room label at `at`: the smallest loop holding it, or, when
 /// that is smaller than a room (`min_area`: the box a tag is drawn in), the smallest room-sized
 /// loop round that box (traced from just outside each of its sides). None when nothing closes.
-fn outline_round_label(plan: &Session, at: Vec2, cache: &mut Option<super::hatch::Outlines>, min_area: f64) -> Option<Vec<Vec2>> {
+pub(crate) fn outline_round_label(plan: &Session, at: Vec2, cache: &mut Option<super::hatch::Outlines>, min_area: f64) -> Option<Vec<Vec2>> {
     let trace = |p: Vec2, cache: &mut Option<super::hatch::Outlines>| {
         let loops = super::hatch::loops_at_lazy(plan, p, cache).ok()?;
         let outer = loops.iter().find(|l| l.outer).or(loops.first())?;
@@ -1142,6 +1174,34 @@ fn carve_rooms(
 
 /// How far outside its outline a room's number tag may sit, feet (a tag set in the doorway).
 const NUMBER_REACH_FT: f64 = 3.0;
+
+/// Each traced room (not circulation) without a name of its own, whose spec room is known by its
+/// number alone (the rooms of a unit type: the type is every one's name), takes the best room
+/// label inside its outline on its level (`labels`: text, place): a room or unit-type word
+/// first, then the one nearest its tag. How many were named.
+fn name_from_labels(rooms: &mut [Traced], labels: &[(String, Vec2)], sp: &BuildingSpec) -> usize {
+    let mut named = 0;
+    for t in rooms.iter_mut().filter(|t| !t.circulation && t.name.is_none()) {
+        if t.room.and_then(|i| sp.rooms.get(i)).is_some_and(|r| !r.name.trim().is_empty()) {
+            continue;
+        }
+        let best = labels
+            .iter()
+            .filter(|(_, at)| {
+                level_at(&sp.levels, at.x, at.y).is_none_or(|l| l.name.eq_ignore_ascii_case(&t.level))
+                    && cadaddy_geom::point_in_polygon(&t.outline, *at)
+            })
+            .max_by(|a, b| {
+                let score = |s: &str| super::perceive::geometry::room_name_score(s);
+                score(&a.0).cmp(&score(&b.0)).then(b.1.dist(t.at).total_cmp(&a.1.dist(t.at)))
+            });
+        if let Some((name, _)) = best {
+            t.name = Some(name.clone());
+            named += 1;
+        }
+    }
+    named
+}
 
 /// Each traced room (not circulation) with no number takes the number tag (`tags`: text, place)
 /// on its level nearest its middle that no room on the level has: inside its outline first, else
@@ -2404,6 +2464,36 @@ mod tests {
         // The corridor is circulation: no number from a room's tag.
         assert_eq!(rooms[3].number, None);
         assert_eq!(n, 2);
+    }
+
+    #[test]
+    fn a_room_the_spec_knows_by_number_takes_the_label_inside_it() {
+        // Two rooms of one unit type, the spec has them by number only; a lobby by name.
+        let sp = BuildingSpec {
+            rooms: vec![
+                cadaddy_walk3d::SpecRoom { number: Some("5101".into()), ..Default::default() },
+                cadaddy_walk3d::SpecRoom { name: "LOBBY".into(), number: Some("5100".into()), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let mut a = traced("Level 1", [0.0, 0.0, 120.0, 240.0], [60.0, 40.0], None, Some("5101"), false);
+        a.room = Some(0);
+        let mut lobby = traced("Level 1", [120.0, 0.0, 360.0, 240.0], [200.0, 120.0], None, Some("5100"), false);
+        lobby.room = Some(1);
+        let other = traced("Level 1", [360.0, 0.0, 480.0, 240.0], [420.0, 40.0], None, Some("5102"), false);
+        let mut rooms = vec![a, lobby, other];
+        let labels = vec![
+            ("CLOSET".to_string(), Vec2::new(20.0, 220.0)),
+            ("KING SUITE".to_string(), Vec2::new(60.0, 60.0)),
+            ("KING SUITE".to_string(), Vec2::new(420.0, 60.0)),
+            ("KING SUITE".to_string(), Vec2::new(200.0, 140.0)),
+        ];
+        assert_eq!(name_from_labels(&mut rooms, &labels, &sp), 2);
+        // The unit type's word beats a closet's label in the same trace.
+        assert_eq!(rooms[0].name.as_deref(), Some("KING SUITE"));
+        // The spec's own name stays the lobby's (the build names it from the spec).
+        assert_eq!(rooms[1].name, None);
+        assert_eq!(rooms[2].name.as_deref(), Some("KING SUITE"));
     }
 
     #[test]
