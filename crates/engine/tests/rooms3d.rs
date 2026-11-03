@@ -338,3 +338,28 @@ fn a_room_is_traced_past_the_furniture_under_its_name_and_numbered_off_its_bed()
     assert_eq!(q["number"], "205", "{r}");
     assert!(q["areaSqFt"].as_f64().unwrap() > 200.0, "the room, not the desk: {q}");
 }
+
+/// A two-line name (`SINGLE Q ADA` over `(TUB)`) with its number a third line down, on the bed:
+/// the number is still the room's.
+#[test]
+fn a_two_line_names_number_three_lines_down_is_its_rooms() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 140.0], [180.0, 140.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [90.0, 160.0], "SINGLE Q ADA");
+    text(&mut s, [100.0, 151.0], "(TUB)");
+    text(&mut s, [104.0, 137.0], "220");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let q = r["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"].as_str().is_some_and(|n| n.starts_with("SINGLE Q ADA")))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(q["number"], "220", "{r}");
+}

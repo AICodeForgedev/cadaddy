@@ -640,9 +640,11 @@ fn write_identities(
             e.common.xdata = props::write(&e.common.xdata, &store).into();
         });
     }
-    for h in drop_objects {
-        d.model.remove(h);
+    for h in &drop_objects {
+        d.model.remove(*h);
     }
+    // A merged copy's trade pieces (its studs, sheets, paint) go with it (Q6162).
+    super::tradeatoms::drop_hosted(d, &drop_objects);
     if (!drop_tags.is_empty() || !tag_sheets.is_empty())
         && let Some(mut sp) = spec_of(d)
     {

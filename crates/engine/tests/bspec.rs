@@ -146,8 +146,17 @@ fn model(s: &Session) -> Vec<String> {
         .iter()
         .filter(|e| made_as(e).is_some())
         .map(|e| {
-            // The source handle (fourth tag) names plan objects, the same in both sessions.
-            let tags: Vec<&str> = e.common.xdata.iter().map(|t| t.value.as_str()).collect();
+            // The source handle (fourth tag) names plan objects, the same in both sessions. A
+            // trade piece's references to other built elements (its host, what it connects to)
+            // are their handles, new with each build.
+            let mut x = e.common.xdata.to_vec();
+            if made_as(e).as_deref() == Some("atom") {
+                let mut ps = cadaddy_doc::props::read(&x);
+                ps.remove("host");
+                ps.remove("connects");
+                x = cadaddy_doc::props::write(&x, &ps);
+            }
+            let tags: Vec<&str> = x.iter().map(|t| t.value.as_str()).collect();
             format!("{} {:?} {:?}", e.common.layer, tags, e.kind)
         })
         .collect()
