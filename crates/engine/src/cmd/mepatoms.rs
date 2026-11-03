@@ -49,7 +49,7 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|offset|strap|locknut|bushing|box|ring|cable|wire|<device kind> (receptacle, switch, luminaire…), size?: 1\"|#12|4\" square, type?: EMT|NM 12/2|THHN… (part of the type), level?, room?, circuit?: D-7, system?, group_by?: kind|size|type|level|room|circuit|system, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), rows?: [{<group_by>, count, length_ft}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|<device kind> (receptacle, switch, luminaire…), size?: 1\"|#12|4\" square, type?: EMT|NM 12/2|THHN… (part of the type), level?, room?, circuit?: D-7, system?, group_by?: kind|size|type|level|room|circuit|system, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), rows?: [{<group_by>, count, length_ft}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {…}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
@@ -79,6 +79,15 @@ pub(crate) struct Raceway {
     pub elbow: String,
     pub offset: String,
     pub strap: String,
+    /// Trade sizes up to this (inches) are bent by hand (a field bend, no fitting); 0: always
+    /// elbows.
+    pub field_bend_max_in: f64,
+    pub field_bend: String,
+    pub field_offset: String,
+    pub field_bend_source: String,
+    /// The most degrees of bends between pull points.
+    pub max_bends_deg: f64,
+    pub max_bends_source: String,
 }
 
 impl Raceway {
@@ -264,6 +273,9 @@ pub(crate) struct Pieces {
     pub atoms: Vec<Atom>,
     pub ends: [Option<usize>; 2],
     pub length_ft: f64,
+    /// The degrees it turns between its ends (NEC 358.26 and its kin: 360 at most between pull
+    /// points).
+    pub bend_deg: f64,
 }
 
 /// A trade size as printed: `3/4"`, `1"`, `1-1/4"`.
@@ -355,6 +367,20 @@ fn along(path: &[Vec3], upf: f64, s: f64) -> (Vec3, usize) {
     (path.first().copied().unwrap_or(Vec3::ZERO), 0)
 }
 
+/// The part of a path from `s0` to `s1` feet along it: its two points and the corners between.
+fn sub_path(path: &[Vec3], upf: f64, s0: f64, s1: f64) -> Vec<Vec3> {
+    let (a, i) = along(path, upf, s0);
+    let (b, j) = along(path, upf, s1);
+    let mut out = vec![a];
+    for k in i + 1..=j {
+        if let Some(p) = path.get(k).copied().filter(|p| dist(*p, a) > 1e-9 && dist(*p, b) > 1e-9) {
+            out.push(p);
+        }
+    }
+    out.push(b);
+    out
+}
+
 /// Where supports go along a run `total` feet long: within `from_end` of each end and at most
 /// `spacing` apart (feet along it).
 pub(crate) fn support_stations(total: f64, from_end: f64, spacing: f64) -> Vec<f64> {
@@ -403,47 +429,34 @@ pub(crate) fn raceway_pieces(
     for i in 1..legs.len().saturating_sub(1) {
         let (Some(p), Some(l), Some(n)) = (legs.get(i - 1), legs.get(i), legs.get(i + 1)) else { continue };
         let parallel = bend_deg(p.1 - p.0, n.1 - n.0) < 1.0;
-        if parallel && dist(l.0, l.1) <= offset_max && bend_deg(p.1 - p.0, l.1 - l.0) >= 1.0 {
-            offset_leg[i] = true;
+        if parallel
+            && dist(l.0, l.1) <= offset_max
+            && bend_deg(p.1 - p.0, l.1 - l.0) >= 1.0
+            && let Some(o) = offset_leg.get_mut(i)
+        {
+            *o = true;
         }
     }
-    // The pieces in order along the run (sticks, elbows, offsets), with the stretch of the run
-    // (feet) each stick covers.
+    // A trade size bent by hand turns without a fitting: its sticks run on through the bend.
+    let field = rw.field_bend_max_in > 0.0 && size_in <= rw.field_bend_max_in + 1e-9;
+    // The pieces in order along the run (sticks, elbows, factory offsets), with the stretch of
+    // the run (feet) each stick covers; a field bend or offset is marked on the stick it is in.
     let mut chain: Vec<usize> = Vec::new();
     let mut spans: Vec<(f64, f64, usize)> = Vec::new();
+    let mut marks: Vec<(f64, Atom)> = Vec::new();
     let mut s0 = 0.0;
-    for (i, (a, b)) in legs.iter().enumerate() {
-        let len_ft = dist(*a, *b) / upf;
-        if offset_leg.get(i).copied().unwrap_or(false) {
-            let mid = (*a + *b) * 0.5;
-            let mut at = Atom::fitting("offset", rw.offset.clone(), material, &size, mid, *b - *a, size_in, &rw.stock_source);
-            at.angle_deg = bend_deg(legs.get(i - 1).map_or(Vec3::Z, |p| p.1 - p.0), *b - *a);
-            at.extra.push(("offset_in", format!("{:.2}", dist(*a, *b) / upf * 12.0), "computed".into()));
-            at.length_ft = len_ft;
-            chain.push(out.atoms.len());
-            out.atoms.push(at);
-            s0 += len_ft;
-            continue;
-        }
-        if i > 0 && !offset_leg.get(i - 1).copied().unwrap_or(false) {
-            let prev = legs.get(i - 1).map_or(Vec3::Z, |p| p.1 - p.0);
-            let deg = bend_deg(prev, *b - *a);
-            let ang = stock_angle(deg);
-            let mut at =
-                Atom::fitting("elbow", rw.elbow.replace("{angle}", &angle_text(ang)), material, &size, *a, *b - *a, size_in, &rw.stock_source);
-            at.angle_deg = ang;
-            at.extra.push(("turn_deg", format!("{deg:.1}"), "computed".into()));
-            chain.push(out.atoms.len());
-            out.atoms.push(at);
-        }
-        // Full sticks, then the cut piece.
-        let dir = if len_ft > 0.0 { (*b - *a) * (1.0 / (len_ft * upf)) } else { X3 };
+    // The stretch of straight and field-bent legs since the last fitting: its points and where
+    // it starts along the run.
+    let mut group: Vec<Vec3> = pts.first().copied().into_iter().collect();
+    let mut group_s0 = 0.0;
+    let flush = |group: &mut Vec<Vec3>, group_s0: f64, out: &mut Pieces, chain: &mut Vec<usize>, spans: &mut Vec<(f64, f64, usize)>| {
+        let total = path_ft(group, upf);
         let mut done = 0.0;
-        while len_ft - done > tiny_ft && out.atoms.len() < MAX_PIECES {
-            let piece = (len_ft - done).min(stock);
+        while total - done > tiny_ft && out.atoms.len() < MAX_PIECES {
+            let piece = (total - done).min(stock);
             let cut = piece < stock - tiny_ft;
-            let pa = *a + dir * (done * upf);
-            let pb = *a + dir * ((done + piece) * upf);
+            let sub = sub_path(group, upf, done, done + piece);
+            let (Some(pa), Some(pb)) = (sub.first().copied(), sub.last().copied()) else { break };
             let st = Atom {
                 kind: "conduit",
                 item: rw.stick.clone(),
@@ -453,16 +466,93 @@ pub(crate) fn raceway_pieces(
                 length_ft: piece,
                 a: pa,
                 b: pb,
+                path: if sub.len() > 2 { sub } else { Vec::new() },
                 cut,
                 source: rw.stock_source.clone(),
                 ..Atom::default()
             };
-            spans.push((s0 + done, s0 + done + piece, out.atoms.len()));
+            spans.push((group_s0 + done, group_s0 + done + piece, out.atoms.len()));
             chain.push(out.atoms.len());
             out.atoms.push(st);
             done += piece;
         }
+        let last = group.last().copied();
+        group.clear();
+        group.extend(last);
+    };
+    for (i, (a, b)) in legs.iter().enumerate() {
+        let len_ft = dist(*a, *b) / upf;
+        let prev = i.checked_sub(1).and_then(|j| legs.get(j)).map(|p| p.1 - p.0);
+        if offset_leg.get(i).copied().unwrap_or(false) {
+            let mid = (*a + *b) * 0.5;
+            let mut at = Atom::fitting("offset", rw.offset.clone(), material, &size, mid, *b - *a, size_in, &rw.stock_source);
+            at.angle_deg = bend_deg(prev.unwrap_or(Vec3::Z), *b - *a);
+            at.extra.push(("offset_in", format!("{:.2}", dist(*a, *b) / upf * 12.0), "computed".into()));
+            out.bend_deg += 2.0 * at.angle_deg;
+            if field {
+                at.item = rw.field_offset.clone();
+                at.source = rw.field_bend_source.clone();
+                marks.push((s0 + len_ft / 2.0, at));
+                group.push(*b);
+            } else {
+                flush(&mut group, group_s0, &mut out, &mut chain, &mut spans);
+                at.length_ft = len_ft;
+                chain.push(out.atoms.len());
+                out.atoms.push(at);
+                group = vec![*b];
+                group_s0 = s0 + len_ft;
+            }
+            s0 += len_ft;
+            continue;
+        }
+        if let Some(prev) = prev.filter(|_| i > 0 && !offset_leg.get(i - 1).copied().unwrap_or(false)) {
+            let deg = bend_deg(prev, *b - *a);
+            let ang = stock_angle(deg);
+            out.bend_deg += deg;
+            if field {
+                let mut at = Atom::fitting(
+                    "bend",
+                    rw.field_bend.replace("{angle}", &angle_text(ang)),
+                    material,
+                    &size,
+                    *a,
+                    *b - *a,
+                    size_in,
+                    &rw.field_bend_source,
+                );
+                at.angle_deg = ang;
+                at.extra.push(("turn_deg", format!("{deg:.1}"), "computed".into()));
+                marks.push((s0, at));
+            } else {
+                flush(&mut group, group_s0, &mut out, &mut chain, &mut spans);
+                let mut at =
+                    Atom::fitting("elbow", rw.elbow.replace("{angle}", &angle_text(ang)), material, &size, *a, *b - *a, size_in, &rw.stock_source);
+                at.angle_deg = ang;
+                at.extra.push(("turn_deg", format!("{deg:.1}"), "computed".into()));
+                chain.push(out.atoms.len());
+                out.atoms.push(at);
+                group = vec![*a];
+                group_s0 = s0;
+            }
+        }
+        group.push(*b);
         s0 += len_ft;
+    }
+    flush(&mut group, group_s0, &mut out, &mut chain, &mut spans);
+    // The field bends and offsets, each on the stick it is bent into.
+    for (st, mut at) in marks {
+        if out.atoms.len() >= MAX_PIECES {
+            break;
+        }
+        let held = spans.iter().find(|(a, b, _)| st >= *a - 1e-9 && st <= *b + 1e-9).map(|(_, _, i)| *i);
+        let mi = out.atoms.len();
+        if let Some(h) = held {
+            at.connects = vec![h];
+        }
+        out.atoms.push(at);
+        if let Some(a) = held.and_then(|h| out.atoms.get_mut(h)) {
+            a.connects.push(mi);
+        }
     }
     out.length_ft = s0;
     // A coupling at every joint between two pieces.
@@ -495,7 +585,9 @@ pub(crate) fn raceway_pieces(
         if let Some(a) = out.atoms.get_mut(p) {
             a.connects.push(ci);
         }
-        out.ends[end] = Some(ci);
+        if let Some(x) = out.ends.get_mut(end) {
+            *x = Some(ci);
+        }
         let mut nut = Atom::fitting("locknut", rules.locknut_item.clone(), material, &size, at, dir, size_in * 1.6, &rules.locknut_source);
         nut.connects = vec![ci];
         let ni = out.atoms.len();
@@ -642,7 +734,9 @@ pub(crate) fn cable_pieces(path: &[Vec3], upf: f64, kind: &str, cr: &CableRule, 
             if let Some(c) = out.atoms.first_mut() {
                 c.connects.push(i);
             }
-            out.ends[end] = Some(i);
+            if let Some(x) = out.ends.get_mut(end) {
+                *x = Some(i);
+            }
         }
     } else {
         out.ends = [Some(0), Some(0)];
@@ -834,9 +928,40 @@ impl Index {
 pub(crate) const PIECES: &[&str] =
     &["conduit", "coupling", "connector", "elbow", "offset", "strap", "locknut", "bushing", "box", "ring", "cable", "wire"];
 
+/// Whether a piece is the trade's work, not something bought (a field bend or offset).
+pub(crate) fn is_labor_item(item: &str) -> bool {
+    rules().raceways.values().any(|r| {
+        let bend = r.field_bend.split("{angle}").next().unwrap_or_default();
+        (!bend.is_empty() && item.starts_with(bend)) || (!r.field_offset.is_empty() && item == r.field_offset)
+    })
+}
+
 /// The drawing's stored index, if it has one.
 pub(crate) fn stored(d: &Drawing) -> Option<Index> {
     d.embedded.get(INDEX_FILE).and_then(|b| Index::from_bytes(b))
+}
+
+/// FNV-1a of bytes (which stored index the cache holds).
+fn fnv(b: &[u8]) -> u64 {
+    b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| (h ^ u64::from(*x)).wrapping_mul(0x0100_0000_01b3))
+}
+
+thread_local! {
+    /// The last stored index read, by its bytes' hash and length: a count is a lookup, not a
+    /// parse of the index each time.
+    static CACHE: std::cell::RefCell<Option<(u64, usize, std::rc::Rc<Index>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The drawing's stored index, read once per version of it.
+fn stored_cached(d: &Drawing) -> Option<std::rc::Rc<Index>> {
+    let b = d.embedded.get(INDEX_FILE)?;
+    let key = (fnv(b), b.len());
+    if let Some(ix) = CACHE.with(|c| c.borrow().as_ref().filter(|(h, n, _)| (*h, *n) == key).map(|(_, _, ix)| std::rc::Rc::clone(ix))) {
+        return Some(ix);
+    }
+    let ix = std::rc::Rc::new(Index::from_bytes(b)?);
+    CACHE.with(|c| *c.borrow_mut() = Some((key.0, key.1, std::rc::Rc::clone(&ix))));
+    Some(ix)
 }
 
 /// Store an index in the drawing.
@@ -878,7 +1003,8 @@ fn norm_kind(s: &str) -> String {
     let k = s.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     match k.as_str() {
         "stick" | "sticks" | "conduit_stick" | "raceway" => "conduit".into(),
-        "ell" | "bend" | "elbows" => "elbow".into(),
+        "ell" | "ells" | "elbows" => "elbow".into(),
+        "bends" | "field_bend" | "field_bends" => "bend".into(),
         "couplings" => "coupling".into(),
         "connectors" => "connector".into(),
         "straps" | "support" | "supports" | "staple" => "strap".into(),
@@ -979,9 +1105,9 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
         s.touch();
     }
     let d = s.doc()?;
-    let (ix, from) = match stored(d) {
+    let (ix, from) = match stored_cached(d) {
         Some(ix) => (ix, "index"),
-        None => (Index::of(d), "recount"),
+        None => (std::rc::Rc::new(Index::of(d)), "recount"),
     };
     let (total, groups) = ix.query(&f, group_by.as_deref());
     let ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -1003,12 +1129,15 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
         );
     }
     if bool_or(p, "verify", false) {
+        let t0 = std::time::Instant::now();
         let full = Index::of(s.doc()?);
         let (t, _) = full.query(&f, None);
+        let recount_ms = t0.elapsed().as_secs_f64() * 1000.0;
         out["verify"] = json!({
             "count": t.count,
             "length_ft": (t.length_ft * 100.0).round() / 100.0,
-            "matches": t.count == total.count && (t.length_ft - total.length_ft).abs() < 0.01 && full == ix,
+            "matches": t.count == total.count && (t.length_ft - total.length_ft).abs() < 0.01 && full == *ix,
+            "recount_ms": (recount_ms * 10.0).round() / 10.0,
         });
     }
     if from == "recount" && total.count == 0 && ix.rows.is_empty() {
@@ -1247,7 +1376,21 @@ pub(crate) fn element_detail(d: &Drawing, e: &Entity) -> Option<Value> {
         if let Some(l) = ps.get("length_ft").map(Prop::text).and_then(|v| v.parse::<f64>().ok()) {
             j["length_ft"] = json!(l);
         }
-        for k in ["angle_deg", "cubic_in", "color", "conductor", "conductors", "cut", "depth_in", "box_of", "source_rule"] {
+        for k in [
+            "angle_deg",
+            "cubic_in",
+            "color",
+            "conductor",
+            "conductors",
+            "cut",
+            "depth_in",
+            "box_of",
+            "source_rule",
+            "bends_deg",
+            "review",
+            "entry_gap_ft",
+            "junction",
+        ] {
             if let Some(v) = ps.get(k) {
                 j[k] = json!(v.text());
             }
@@ -1341,19 +1484,37 @@ mod tests {
     fn a_turn_is_an_elbow_by_its_angle_and_a_short_step_is_an_offset() {
         let r = rules();
         let (name, emt) = r.raceway_named("EMT").unwrap();
-        // 12' east, then 8' north: an elbow (90°), sticks 10 + 2 and 8.
+        // 12' east, then 8' north in 1-1/4" EMT: a factory elbow (90°), sticks 10 + 2 and 8.
         let path = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(144.0, 0.0, 0.0), Vec3::new(144.0, 96.0, 0.0)];
-        let p = raceway_pieces(&path, 12.0, 0.75, name, emt, false, r);
+        let p = raceway_pieces(&path, 12.0, 1.25, name, emt, false, r);
         assert_eq!(count(&p, "elbow"), 1);
         let el = p.atoms.iter().find(|a| a.kind == "elbow").unwrap();
-        assert_eq!((el.angle_deg, el.item.as_str(), el.size.as_str()), (90.0, "EMT 90° elbow", "3/4\""));
+        assert_eq!((el.angle_deg, el.item.as_str(), el.size.as_str()), (90.0, "EMT 90° elbow", "1-1/4\""));
         assert_eq!(count(&p, "conduit"), 3);
         // couplings: stick-stick, stick-elbow, elbow-stick.
         assert_eq!(count(&p, "coupling"), 3);
-        // 10' along, a 6" step up, 10' on: an offset, no elbows.
-        let path = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 6.0), Vec3::new(240.0, 0.0, 6.0)];
+        assert!((p.bend_deg - 90.0).abs() < 1e-6);
+        // The same turn in 3/4": bent by hand, the sticks run on through it (10' and 10').
         let p = raceway_pieces(&path, 12.0, 0.75, name, emt, false, r);
+        assert_eq!((count(&p, "elbow"), count(&p, "bend"), count(&p, "conduit"), count(&p, "coupling")), (0, 1, 2, 1));
+        let bend = p.atoms.iter().find(|a| a.kind == "bend").unwrap();
+        assert_eq!(bend.item, "EMT field bend 90°");
+        assert!(is_labor_item(&bend.item) && !is_labor_item("EMT 90° elbow"));
+        let bent = p.atoms.iter().find(|a| a.kind == "conduit" && !a.path.is_empty()).unwrap();
+        assert!((bent.length_ft - 10.0).abs() < 1e-9 && bent.path.len() == 3, "the first stick turns the corner: {bent:?}");
+        assert_eq!(bend.connects.len(), 1);
+        assert!(std::ptr::eq(&p.atoms[bend.connects[0]], bent));
+        // 10' along, a 6" step up, 10' on: an offset, no elbows (1-1/4": a factory offset).
+        let path = vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 0.0), Vec3::new(120.0, 0.0, 6.0), Vec3::new(240.0, 0.0, 6.0)];
+        let p = raceway_pieces(&path, 12.0, 1.25, name, emt, false, r);
         assert_eq!((count(&p, "offset"), count(&p, "elbow"), count(&p, "conduit")), (1, 0, 2));
+        let p = raceway_pieces(&path, 12.0, 0.75, name, emt, false, r);
+        assert_eq!((count(&p, "offset"), count(&p, "bend"), count(&p, "conduit")), (1, 0, 3));
+        assert_eq!(p.atoms.iter().find(|a| a.kind == "offset").map(|a| a.item.as_str()), Some("EMT field offset"));
+        // Four 90s and a fifth: over the 360° between pull points.
+        let zig: Vec<Vec3> = (0..7).map(|i| Vec3::new(f64::from(i / 2) * 60.0, f64::from((i + 1) / 2 % 2) * 60.0, 0.0)).collect();
+        let p = raceway_pieces(&zig, 12.0, 0.75, name, emt, false, r);
+        assert!(p.bend_deg > emt.max_bends_deg, "{}", p.bend_deg);
         // Large conductors: a bushing at each end.
         let p = raceway_pieces(&line(20.0), 12.0, 2.0, name, emt, large_conductors("4#2 + 1#6G", r.bushing_min_awg), r);
         assert_eq!(count(&p, "bushing"), 2);

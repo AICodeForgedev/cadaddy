@@ -484,6 +484,10 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
             "cable" | "wire" => ("wire", "ft"),
             _ => continue,
         };
+        // A field bend or offset is the trade's work, nothing bought.
+        if super::mepatoms::is_labor_item(&k.item) {
+            continue;
+        }
         let net = if unit == "ft" { t.length_ft } else { t.count as f64 };
         // A cable's line is by its type (`NM-B cable`, `12/2 w/G`).
         let size = if k.kind == "cable" { k.ty.split_once(' ').map_or_else(|| k.size.clone(), |(_, r)| r.to_string()) } else { k.size.clone() };

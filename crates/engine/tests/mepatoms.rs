@@ -168,6 +168,9 @@ fn an_estimated_emt_route_has_its_wires_and_lands_in_the_box() {
     assert!(rows.iter().any(|r| r["size"] == json!("#1") && r["count"] == json!(8)), "{f}");
     assert!(count(&mut s, json!({"kind": "connector", "system": "F1", "size": "1-1/2\""}))["count"].as_u64().unwrap_or(0) >= 2);
     assert_eq!(count(&mut s, json!({"kind": "bushing", "system": "F1"}))["count"], json!(4), "#1 conductors: a bushing at each end");
+    // The home run turns down into the drop: 3/4" EMT is bent by hand there, no elbow.
+    assert_eq!(count(&mut s, json!({"kind": "bend", "circuit": "LP1-3"}))["count"], json!(1));
+    assert_eq!(count(&mut s, json!({"kind": "elbow", "circuit": "LP1-3"}))["count"], json!(0));
     // A 4" square box and its plaster ring? No wall here: the box, no ring.
     let b = count(&mut s, json!({"kind": "box", "type": "4\" square"}));
     assert_eq!(b["count"], json!(1), "{b}");

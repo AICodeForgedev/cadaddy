@@ -14,7 +14,13 @@
       "connector": "EMT connector",
       "elbow": "EMT {angle}° elbow",
       "offset": "EMT offset",
-      "strap": "Conduit strap"
+      "strap": "Conduit strap",
+      "field_bend_max_in": 1.0,
+      "field_bend": "EMT field bend {angle}°",
+      "field_offset": "EMT field offset",
+      "field_bend_source": "the trade bends EMT 1 in and smaller with a hand bender (company default; NEC 358.24: bends made without damage)",
+      "max_bends_deg": 360.0,
+      "max_bends_source": "NEC 358.26: no more than 360° of bends between pull points"
     },
     "RMC": {
       "words": ["RMC", "RGS", "GRC", "RIGID"],
@@ -28,7 +34,13 @@
       "connector": "RMC locknut and bushing",
       "elbow": "RMC {angle}° elbow",
       "offset": "RMC offset nipple",
-      "strap": "Conduit strap"
+      "strap": "Conduit strap",
+      "field_bend_max_in": 1.0,
+      "field_bend": "RMC field bend {angle}°",
+      "field_offset": "RMC field offset",
+      "field_bend_source": "the trade bends RMC 1 in and smaller with a hand bender (company default; NEC 344.24)",
+      "max_bends_deg": 360.0,
+      "max_bends_source": "NEC 344.26: no more than 360° of bends between pull points"
     },
     "IMC": {
       "words": ["IMC", "INTERMEDIATE METAL"],
@@ -42,7 +54,13 @@
       "connector": "IMC locknut and bushing",
       "elbow": "IMC {angle}° elbow",
       "offset": "IMC offset nipple",
-      "strap": "Conduit strap"
+      "strap": "Conduit strap",
+      "field_bend_max_in": 1.0,
+      "field_bend": "IMC field bend {angle}°",
+      "field_offset": "IMC field offset",
+      "field_bend_source": "the trade bends IMC 1 in and smaller with a hand bender (company default; NEC 342.24)",
+      "max_bends_deg": 360.0,
+      "max_bends_source": "NEC 342.26: no more than 360° of bends between pull points"
     },
     "PVC": {
       "words": ["PVC", "RNC", "SCH 40", "SCH 80", "SCHEDULE 40", "SCHEDULE 80"],
@@ -57,7 +75,13 @@
       "connector": "PVC terminal adapter",
       "elbow": "PVC {angle}° elbow",
       "offset": "PVC offset",
-      "strap": "Conduit strap"
+      "strap": "Conduit strap",
+      "field_bend_max_in": 0.0,
+      "field_bend": "PVC field bend {angle}°",
+      "field_offset": "PVC field offset",
+      "field_bend_source": "PVC turns on factory elbows (company default)",
+      "max_bends_deg": 360.0,
+      "max_bends_source": "NEC 352.26: no more than 360° of bends between pull points"
     }
   },
   "cables": {

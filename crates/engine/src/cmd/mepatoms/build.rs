@@ -275,11 +275,21 @@ fn body(a: &Atom, upf: f64) -> Mesh {
     let dir = if dir3.len() > 1e-12 { dir3 * (1.0 / dir3.len()) } else { X3 };
     let plan = Vec2::new(dir.x, dir.y);
     match a.kind {
-        "conduit" => tube(&mut m, a.a, a.b, r, SIDES),
-        "cable" | "wire" => {
+        "conduit" if a.path.len() < 2 => tube(&mut m, a.a, a.b, r, SIDES),
+        "conduit" | "cable" | "wire" => {
             for w in a.path.windows(2).take(super::MAX_PIECES) {
                 if let [p, q] = w {
-                    tube(&mut m, *p, *q, r, if a.kind == "wire" { 3 } else { 6 });
+                    tube(
+                        &mut m,
+                        *p,
+                        *q,
+                        r,
+                        match a.kind {
+                            "wire" => 3,
+                            "cable" => 6,
+                            _ => SIDES,
+                        },
+                    );
                 }
             }
         }
@@ -289,6 +299,8 @@ fn body(a: &Atom, upf: f64) -> Mesh {
         }
         "strap" => block(&mut m, a.a, plan, 0.75 / 12.0 * upf, r * 2.4, r * 2.4),
         "elbow" | "offset" => tube(&mut m, a.a - dir * (r * 1.5), a.a + dir * (r * 1.5), r * 1.15, SIDES),
+        // A field bend is part of its stick: a thin band marks it.
+        "bend" => tube(&mut m, a.a - dir * (r * 0.3), a.a + dir * (r * 0.3), r * 1.05, SIDES),
         _ => {}
     }
     m
@@ -611,6 +623,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut over_bends = 0usize;
+    let mut bend_notes: Vec<(usize, [Option<usize>; 2], String, String)> = Vec::new();
     // The box a run end at `p` lands in: on its level, within reach of the box's entry; a box
     // of its own circuit first, else the nearest one no other circuit took.
     // `own_only`: a box of its own circuit at any height under or over it (a route the readers
@@ -677,10 +691,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // What each free end lands in: a device's box (an estimated route moves onto it), a
             // panel, else nothing (an open end).
             let mut lands: [Option<Land>; 2] = [None, None];
-            for end in 0..2 {
+            for (end, land) in lands.iter_mut().enumerate() {
                 let n = c.ends.get(end).copied().unwrap_or(usize::MAX);
                 if let Some(&j) = junction_at.get(&n) {
-                    lands[end] = Some(Land::Atom(j));
+                    *land = Some(Land::Atom(j));
                     continue;
                 }
                 let at_box = brk.get(n).copied().unwrap_or(false);
@@ -700,7 +714,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     } else if m.estimated {
                         land_on(&mut c.pts, end, entry, upf);
                     }
-                    lands[end] = Some(Land::Atom(atom));
+                    *land = Some(Land::Atom(atom));
                     continue;
                 }
                 let g = gear.iter().filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp)).min_by(|a, b| {
@@ -709,7 +723,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     (pa, a.plan.center().dist(pp)).partial_cmp(&(pb, b.plan.center().dist(pp))).unwrap_or(std::cmp::Ordering::Equal)
                 });
                 if let Some(g) = g {
-                    lands[end] = Some(Land::Gear(g.handle));
+                    *land = Some(Land::Gear(g.handle));
                 }
             }
             let run_id = format!("{}#{}", c.runs.first().and_then(|i| sp.mep.runs.get(*i)).map_or_else(String::new, super::super::mep::run_base), ci);
@@ -727,7 +741,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let Some(rw) = rl.raceways.get(&m.name) else { continue };
                 raceway_pieces(&c.pts, upf, size_in, &m.name, rw, large_conductors(&m.conductors, rl.bushing_min_awg), rl)
             };
+            // More bends between its ends than the code allows between pull points.
+            let max_bends = if m.cable { 0.0 } else { rl.raceways.get(&m.name).map_or(0.0, |r| r.max_bends_deg) };
+            let over = max_bends > 0.0 && pieces.bend_deg > max_bends + 1.0;
             let base = atoms.len();
+            if over {
+                over_bends += 1;
+                let cite = rl.raceways.get(&m.name).map(|r| r.max_bends_source.clone()).unwrap_or_default();
+                bend_notes.push((base, pieces.ends, format!("{:.0}", pieces.bend_deg), cite));
+            }
             let ctx = AtomCtx {
                 level: key.level.clone(),
                 system: key.system.clone(),
@@ -797,6 +819,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
+    for (base, ends, deg, cite) in bend_notes {
+        for e in ends.iter().flatten() {
+            if let Some(a) = atoms.get_mut(base + e) {
+                a.0.extra.push(("bends_deg", deg.clone(), cite.clone()));
+                a.0.extra.push(("review", format!("{deg}° of bends between this run's ends: a pull point is needed"), cite.clone()));
+            }
+        }
+    }
     // -- Feeders where they enter their gear: each raceway's pieces and one set's conductors,
     // landing on the gear. --
     let mut feeder_stubs = 0usize;
@@ -1067,6 +1097,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "endsAtPanels": to_gear,
         "openEnds": open_ends,
         "endsWithNoDrop": entry_gaps,
+        "runsOverBendLimit": over_bends,
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
         "atomIndexRows": rows,
