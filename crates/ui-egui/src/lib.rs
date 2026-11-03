@@ -533,6 +533,8 @@ pub struct CadApp {
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    /// The notice shown while autosave fails (see [`autosave::failure_notice`]).
+    pub autosave_notice: Option<autosave::AutosaveNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The last Automation ▸ Takeoff (`automation.takeoff`'s answer), shown in its window ([`takeoffwin`]).
@@ -643,6 +645,7 @@ impl CadApp {
             save_loss_accepted: None,
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            autosave_notice: None,
             hatch_dlg: None,
             takeoff_table: None,
             extract_dlg: None,
@@ -1415,6 +1418,7 @@ impl CadApp {
         save_loss::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
+        autosave::failure_notice(self, ui.ctx());
         update::tick(self);
         update::corner(self, ui.ctx());
         if let Some(url) = self.pending_url.take() {

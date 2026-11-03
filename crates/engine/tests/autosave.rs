@@ -181,6 +181,7 @@ fn recovery_offers_files_of_apps_that_stopped() {
 
 #[test]
 fn autosave_files_are_written_in_the_background_and_removed_on_exit() {
+    let _turn = folder_turn();
     hooks();
     let dir = temp_dir("write");
     let mut s = Session::new();
@@ -268,6 +269,42 @@ fn a_new_autosave_folder_is_owner_only() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// SAVEFILEPATH is process-wide: the tests that set it take turns.
+static FOLDER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn folder_turn() -> std::sync::MutexGuard<'static, ()> {
+    FOLDER.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Run autosave once in `dir`, so `a` writes a file and takes its lock, and wait for the file.
+fn autosave_once(a: &mut Autosaver, s: &Session, dir: &std::path::Path) -> String {
+    autosave::set_savefilepath(&dir.to_string_lossy());
+    assert_eq!(a.save_now(s), 1);
+    for _ in 0..500 {
+        a.reap();
+        if !a.writing() && !a.files().is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    a.files().pop().unwrap()
+}
+
+#[test]
+fn a_normal_exit_removes_the_lock_file() {
+    hooks();
+    let _turn = folder_turn();
+    let dir = temp_dir("exit");
+    let mut s = Session::new();
+    draw(&mut s);
+    let mut a = Autosaver::new("42-e");
+    autosave_once(&mut a, &s, &dir);
+    assert!(dir.join("42-e.lock").exists());
+    a.shutdown();
+    assert!(!dir.join("42-e.lock").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_failed_autosave_is_tried_again_without_another_change() {
     hooks();
@@ -296,6 +333,7 @@ fn a_failed_autosave_is_tried_again_without_another_change() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(rearmed, "a failed autosave must be tried again");
+    assert!(a.failure().is_some_and(|m| m.contains("out")), "{:?}", a.failure());
 
     std::fs::remove_file(&out).unwrap();
     let jobs = a.plan(&s, 180.0, 1, &dir);
@@ -316,6 +354,36 @@ fn a_failed_autosave_is_tried_again_without_another_change() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(a.next_due(1e4, 1), None);
+    assert_eq!(a.failure(), None, "a write that worked clears the failure");
+    a.shutdown();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_failure_ends_when_the_drawing_no_longer_needs_a_copy() {
+    hooks();
+    let root = temp_dir("failed-close");
+    let out = root.join("out");
+    std::fs::write(&out, b"not a folder").unwrap();
+    let dir = out.to_string_lossy().to_string();
+    let mut s = Session::new();
+    draw(&mut s);
+    let mut a = Autosaver::new("32-e");
+    a.plan(&s, 0.0, 1, &dir);
+    let jobs = a.plan(&s, 60.0, 1, &dir);
+    a.perform(jobs);
+    for _ in 0..500 {
+        a.reap();
+        if a.failure().is_some() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(a.failure().is_some());
+    let i = s.active;
+    s.execute("close", &json!({ "index": i })).unwrap();
+    a.plan(&s, 120.0, 1, &dir);
+    assert_eq!(a.failure(), None);
     a.shutdown();
     let _ = std::fs::remove_dir_all(&root);
 }
