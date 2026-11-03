@@ -262,21 +262,7 @@ pub(super) fn text_inches(text: &str) -> Option<f64> {
     let tail: String = head.chars().rev().take_while(|c| c.is_ascii_digit() || *c == '/' || *c == ' ' || *c == '-' || *c == '.').collect();
     let s: String = tail.chars().rev().collect();
     let s = s.trim().replace('-', " ");
-    let mut total = 0.0;
-    let mut any = false;
-    for part in s.split_whitespace().take(3) {
-        if let Some((a, b)) = part.split_once('/') {
-            let (a, b) = (a.parse::<f64>().ok()?, b.parse::<f64>().ok()?);
-            if b > 0.0 {
-                total += a / b;
-                any = true;
-            }
-        } else if let Ok(v) = part.parse::<f64>() {
-            total += v;
-            any = true;
-        }
-    }
-    (any && total.is_finite() && total > 0.0 && total < 100.0).then_some(total)
+    super::docs::whole_and_fraction(&s).filter(|v| *v > 0.0 && *v < 100.0)
 }
 
 /// The spacing a text names (`@ 16" o.c.`, `24" OC`), inches.

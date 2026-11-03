@@ -70,7 +70,27 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         .collect();
     for (h, part, level) in els {
         let Some(e) = d.model.get(h) else { continue };
-        let Some((c, width, height, bottom, along)) = opening_of(e) else { continue };
+        let Some((c0, width0, height, bottom, along0)) = opening_of(e) else { continue };
+        // Its wall: the one whose line it sits on; its width along that wall (an open leaf
+        // stands out across it).
+        let wall = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(&level)).find(|w| {
+            let s = (c0 - w.o).dot(w.u);
+            s >= w.s0 - 1e-6 && s <= w.s1 + 1e-6 && (c0 - w.o).dot(w.n).abs() < w.t.max(width0)
+        });
+        let (c, width, along) = match (wall, &e.kind) {
+            (Some(w), EntityKind::Mesh(m)) => {
+                // The frame and leaf in the wall's thickness: their extent along it.
+                let inside: Vec<f64> = m.vertices.iter().filter(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.n).abs() <= w.t).map(|v| (Vec2::new(v.x, v.y) - w.o).dot(w.u)).collect();
+                let (a, b) = inside.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), s| (lo.min(*s), hi.max(*s)));
+                if b > a {
+                    let mid = (a + b) / 2.0;
+                    (w.o + w.u * mid + w.n * (c0 - w.o).dot(w.n), b - a, w.u)
+                } else {
+                    (c0, width0, along0)
+                }
+            }
+            _ => (c0, width0, along0),
+        };
         let (wf, hf) = (width / upf, height / upf);
         let size = format!("{} x {}", ft_in(wf), ft_in(hf));
         let room = ctx.room_at(&level, c).map(Ctx::room_label).unwrap_or_default();
@@ -85,11 +105,6 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
             updates.push((h, props));
             continue;
         }
-        // Its wall: the one whose line it sits on.
-        let wall = walls.iter().filter(|w| w.level.eq_ignore_ascii_case(&level)).find(|w| {
-            let s = (c - w.o).dot(w.u);
-            s >= w.s0 - 1e-6 && s <= w.s1 + 1e-6 && (c - w.o).dot(w.n).abs() < w.t
-        });
         let wt = wall.and_then(|w| sp.wall_types.iter().find(|t| t.name.eq_ignore_ascii_case(&w.wall_type)));
         let wood_wall = wt.and_then(|t| t.assembly.as_ref()).is_some_and(|a| {
             a.layers.iter().filter(|l| l.category == "framing").any(|l| {
@@ -111,7 +126,9 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         {
             *n -= 1.0;
         }
-        let (frame, f_src) = match pick.map(|(_, f)| f.quote.to_ascii_uppercase()).and_then(|q| q.split(" X ").nth(1).map(|x| x.split_whitespace().take(3).collect::<Vec<_>>().join(" "))).filter(|x| x.contains("FRAME")) {
+        // The set's door and frame (`… WOOD DOOR X HM FRAME`): the part that names a frame.
+        let named_frame = pick.map(|(_, f)| f.quote.to_ascii_uppercase()).and_then(|q| q.split(" X ").find(|x| x.contains("FRAME")).map(|x| x.split_whitespace().take(4).collect::<Vec<_>>().join(" ")));
+        let (frame, f_src) = match named_frame {
             Some(fr) => (fr.to_ascii_lowercase(), pick.map_or_else(|| r.source("openings.frame_source"), |(_, f)| f.source_of())),
             None => (if wood_wall { r.text("openings.frame_wood") } else { r.text("openings.frame_steel") }, r.source("openings.frame_steel")),
         };

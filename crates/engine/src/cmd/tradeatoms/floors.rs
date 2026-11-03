@@ -145,6 +145,67 @@ fn lines_across(polys: &[Vec<Vec2>], dir: Vec2, step: f64, edge: f64) -> Vec<Vec
     out
 }
 
+/// The outline of polygons that share edges (a plate cut into strips): the edges no two of them
+/// share, joined into straight runs.
+pub(super) fn outline_runs(polys: &[Vec<Vec2>], tol: f64) -> Vec<(Vec2, Vec2)> {
+    let mut edges: Vec<(Vec2, Vec2)> = Vec::new();
+    for poly in polys.iter().take(2000) {
+        let n = poly.len();
+        for i in 0..n {
+            if let (Some(a), Some(b)) = (poly.get(i).copied(), poly.get((i + 1) % n).copied())
+                && a.dist(b) > tol
+            {
+                edges.push((a, b));
+            }
+        }
+    }
+    edges.truncate(20_000);
+    let same = |p: Vec2, q: Vec2| p.dist(q) <= tol;
+    let mut keep = vec![true; edges.len()];
+    for i in 0..edges.len() {
+        for j in i + 1..edges.len() {
+            let (Some(e), Some(f)) = (edges.get(i), edges.get(j)) else { continue };
+            if (same(e.0, f.1) && same(e.1, f.0)) || (same(e.0, f.0) && same(e.1, f.1)) {
+                if let Some(k) = keep.get_mut(i) {
+                    *k = false;
+                }
+                if let Some(k) = keep.get_mut(j) {
+                    *k = false;
+                }
+            }
+        }
+    }
+    let mut runs: Vec<(Vec2, Vec2)> = edges.into_iter().zip(keep).filter(|(_, k)| *k).map(|(e, _)| e).collect();
+    // Join collinear runs that meet end to end.
+    let collinear = |a: (Vec2, Vec2), b: (Vec2, Vec2)| {
+        let (u, v) = (a.1 - a.0, b.1 - b.0);
+        (u.x * v.y - u.y * v.x).abs() <= tol * (u.len() + v.len()) && u.dot(v) > 0.0
+    };
+    let mut joined = true;
+    let mut guard = 0;
+    while joined && guard < 10_000 {
+        joined = false;
+        guard += 1;
+        'outer: for i in 0..runs.len() {
+            for j in 0..runs.len() {
+                if i == j {
+                    continue;
+                }
+                let (Some(a), Some(b)) = (runs.get(i).copied(), runs.get(j).copied()) else { continue };
+                if same(a.1, b.0) && collinear(a, b) {
+                    if let Some(x) = runs.get_mut(i) {
+                        x.1 = b.1;
+                    }
+                    runs.remove(j);
+                    joined = true;
+                    break 'outer;
+                }
+            }
+        }
+    }
+    runs
+}
+
 /// A run of `len` feet cut into stock pieces lapped `lap` feet: the pieces' lengths.
 pub(super) fn lapped_pieces(len: f64, stock: f64, lap: f64) -> Vec<f64> {
     if !(len.is_finite() && len > 1e-6 && stock.is_finite() && stock > lap + 0.5 && lap >= 0.0) {
@@ -703,21 +764,14 @@ fn framed_floor(level: &str, host: Handle, polys: &[Vec<Vec2>], top: f64, r: &Ru
             batch.push(p);
         }
     }
-    // Rim board round the outline.
-    for poly in polys.iter().take(1000) {
-        let n = poly.len();
-        for i in 0..n {
-            let (Some(a), Some(b)) = (poly.get(i).copied(), poly.get((i + 1) % n).copied()) else { continue };
-            if a.dist(b) < 1e-6 {
-                continue;
-            }
-            let mut p = Piece::new("framing", "rim", format!("{} {}", inches_text(depth), r.text("framing.rim_item")), level, j_src.clone());
-            p.host = Some(host);
-            p.size = inches_text(depth);
-            p.length_ft = a.dist(b) / upf;
-            p.blocks.push(Block::new(a, b, 1.25 / 12.0 * upf, z0, z1));
-            batch.push(p);
-        }
+    // Rim board round the outline: one piece per straight run of its edge.
+    for (a, b) in outline_runs(polys, upf * 1e-3) {
+        let mut p = Piece::new("framing", "rim", format!("{} {}", inches_text(depth), r.text("framing.rim_item")), level, j_src.clone());
+        p.host = Some(host);
+        p.size = inches_text(depth);
+        p.length_ft = a.dist(b) / upf;
+        p.blocks.push(Block::new(a, b, 1.25 / 12.0 * upf, z0, z1));
+        batch.push(p);
     }
     panels(polys, "framing", "sheathing", &format!("{} subfloor panel", inches_text(r.num("framing.subfloor_in", 0.75))), r, "framing.subfloor_in", level, host, z1, top, upf, batch);
     if let Some(u) = r.fact("concrete.underlayment_in").and_then(|f| f.number.map(|n| (n, f.source_of()))) {
@@ -805,6 +859,11 @@ mod tests {
         assert!((cadaddy_geom::shoelace(&c).abs() - 25.0).abs() < 1e-9);
         let lines = lines_across(&[sq.clone()], Vec2::new(1.0, 0.0), 2.0, 1.0);
         assert_eq!(lines.len(), 5);
+        // A plate cut in three strips: its outline is four runs.
+        let strip = |y0: f64, y1: f64| vec![Vec2::new(0.0, y0), Vec2::new(10.0, y0), Vec2::new(10.0, y1), Vec2::new(0.0, y1)];
+        let runs = outline_runs(&[strip(0.0, 1.0), strip(1.0, 9.0), strip(9.0, 10.0)], 1e-6);
+        assert_eq!(runs.len(), 4, "{runs:?}");
+        assert!((runs.iter().map(|(a, b)| a.dist(*b)).sum::<f64>() - 40.0).abs() < 1e-9);
         let r = Rules::default();
         assert!((strand_lb_ft(&r, 0.5) - 0.52).abs() < 1e-9);
         assert_eq!(mesh_lb_sf(&r, "6x6-W2.9xW2.9"), Some(0.42));

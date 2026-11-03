@@ -73,9 +73,11 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             }
             // Flooring by the room's finish; its pieces by the product the documents size.
             let finish = rm.finish.trim().to_string();
-            let product = piece_sf.iter().find(|(f, _)| !finish.is_empty() && f.value.to_ascii_uppercase().contains(&finish.to_ascii_uppercase())).or_else(|| (piece_sf.len() == 1).then(|| piece_sf.first()).flatten());
+            let code = finish.to_ascii_uppercase();
+            let named = piece_sf.iter().find(|(f, _)| !code.is_empty() && (f.value.to_ascii_uppercase().contains(&code) || f.quote.to_ascii_uppercase().contains(&code)));
+            let product = named.or_else(|| (piece_sf.len() == 1).then(|| piece_sf.first()).flatten());
             let (item, src) = match (&finish, product) {
-                (f, Some((fact, _))) if !f.is_empty() => (format!("flooring {f}: {}", fact.value), fact.source_of()),
+                (f, Some(_)) if !f.is_empty() => (format!("flooring {f}"), Source::from_doc(SourceKind::Print, "the room's finish code on the plan")),
                 (f, None) if !f.is_empty() => (format!("flooring {f}"), Source::from_doc(SourceKind::Print, "the room's finish code on the plan")),
                 (_, Some((fact, _))) => (format!("flooring: {} (the only flooring the documents size; no finish on the plan)", fact.value), fact.source_of()),
                 _ => ("flooring (no finish given)".into(), Source::from_doc(SourceKind::Default, "no finish code in the room or finish schedule read")),
@@ -87,7 +89,10 @@ pub(super) fn lay_out(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batc
             p.area_sf = area_sf;
             if let Some((fact, sf)) = product.filter(|(_, sf)| *sf > 0.01) {
                 p.qty = (area_sf / sf).ceil();
-                p = p.with("piece_sf", num_text(*sf), fact.source_of());
+                p = p.with("piece_sf", num_text(*sf), fact.source_of()).with("product", fact.value.clone(), fact.source_of());
+                if named.is_none() {
+                    p = p.computed("product_match", "the only flooring the documents size (its finish code not in them)");
+                }
             }
             p.custom = Some(plate(&rm.outline, rm.z, 0.25 * k));
             batch.push(p);

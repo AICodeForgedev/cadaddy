@@ -266,21 +266,24 @@ fn page_at(text: &str, at: usize) -> Option<usize> {
 fn tail_number(s: &str) -> Option<f64> {
     let tail: String = s.trim_end().chars().rev().take_while(|c| c.is_ascii_digit() || matches!(c, '/' | ' ' | '.' | '-')).collect::<String>().chars().rev().collect();
     let tail = tail.trim().replace('-', " ");
-    let mut total = 0.0;
-    let mut any = false;
-    for part in tail.split_whitespace().rev().take(2).collect::<Vec<_>>().into_iter().rev() {
-        if let Some((a, b)) = part.split_once('/') {
-            let (a, b) = (a.parse::<f64>().ok()?, b.parse::<f64>().ok()?);
-            if b <= 0.0 {
-                return None;
-            }
-            total += a / b;
-        } else {
-            total += part.parse::<f64>().ok()?;
-        }
-        any = true;
-    }
-    (any && total.is_finite()).then_some(total)
+    whole_and_fraction(&tail)
+}
+
+/// The number the last words of `t` make: a whole number, a fraction, or a whole number and a
+/// fraction (`6`, `5/8`, `11 7/8`); a number before a whole number is another number (`1 6`: 6).
+pub(super) fn whole_and_fraction(t: &str) -> Option<f64> {
+    let parts: Vec<&str> = t.split_whitespace().collect();
+    let last = *parts.last()?;
+    let frac = |p: &str| -> Option<f64> {
+        let (a, b) = p.split_once('/')?;
+        let (a, b) = (a.parse::<f64>().ok()?, b.parse::<f64>().ok()?);
+        (b > 0.0).then(|| a / b)
+    };
+    let v = match frac(last) {
+        Some(f) => f + parts.len().checked_sub(2).and_then(|i| parts.get(i)).and_then(|w| w.parse::<f64>().ok()).filter(|w| w.fract() == 0.0).unwrap_or(0.0),
+        None => last.parse::<f64>().ok()?,
+    };
+    v.is_finite().then_some(v)
 }
 
 /// Feet and inches as printed (`4'-0"`, `4'`, `18"`), in feet.
@@ -407,7 +410,8 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
         if (u.contains("SEVEN WIRE") || u.contains("7-WIRE") || u.contains("7 WIRE") || u.contains("STRAND")) && u.contains('"') {
             if let Some(q) = u.find('"') {
                 let head = u.get(..q).unwrap_or_default();
-                let v = tail_number(head).map(|v| if (v - 3.0).abs() < 1e-9 && head.trim_end().ends_with("1 2") { 0.5 } else { v });
+                let lost_slash = head.trim_end().ends_with(" 1 2") || head.trim_end() == "1 2";
+                let v = if lost_slash { Some(0.5) } else { tail_number(head) };
                 if let Some(v) = v.filter(|v| [0.375, 0.5, 0.6].iter().any(|s| (s - v).abs() < 1e-6)) {
                     out.push(Fact::new("concrete.strand_in", format!("{}\" strand", num_text(v)), Some(v), &src(*at), l));
                 }
@@ -864,6 +868,8 @@ mod tests {
         assert_eq!(feet_inches("3'-6\""), Some(3.5));
         assert_eq!(feet_inches("18\""), Some(1.5));
         assert_eq!(tail_number("x 11 7/8"), Some(11.875));
+        assert_eq!(tail_number("PLANK LVT-1 6"), Some(6.0));
+        assert_eq!(tail_number("x 5/8"), Some(0.625));
         assert_eq!(wire_style("WWF 6X6-W2.9XW2.9 TYP"), Some("6x6-W2.9xW2.9".into()));
         assert_eq!(wire_style("ROOM 6X6 NOTHING"), None);
         assert!(trades_of("Sample Toilet Accessories").contains(&"specialties"));
