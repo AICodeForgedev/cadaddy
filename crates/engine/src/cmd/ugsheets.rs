@@ -532,7 +532,7 @@ fn crew_rate(sp: &BuildingSpec) -> f64 {
 }
 
 /// A trade size as the estimator writes it (`2"`, `1-1/4"`).
-fn trade_size(inches: f64) -> String {
+pub(crate) fn trade_size(inches: f64) -> String {
     let whole = inches.floor();
     let frac = inches - whole;
     let f = [(0.25, "1/4"), (0.5, "1/2"), (0.75, "3/4")].into_iter().find(|(v, _)| (frac - v).abs() < 0.01).map(|(_, t)| t);
@@ -544,7 +544,7 @@ fn trade_size(inches: f64) -> String {
 }
 
 /// A conductor size as the estimator writes it (`#4/0`, `500 kcmil`).
-fn wire_size(size: &str) -> String {
+pub(crate) fn wire_size(size: &str) -> String {
     let t = size.trim();
     if t.is_empty() || t.starts_with('#') || t.to_ascii_lowercase().contains("kcmil") || t.to_ascii_lowercase().contains("mcm") {
         t.to_string()
