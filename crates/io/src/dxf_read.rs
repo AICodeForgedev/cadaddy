@@ -1678,6 +1678,16 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
     for (i, x) in d.layers.iter().enumerate() {
         layer_index.entry(x.name.to_ascii_lowercase()).or_insert(i);
     }
+    // The same for linetypes (the first of equal names) and text styles (last definition wins):
+    // many distinct names made the name scans quadratic (CWE-407).
+    let mut linetype_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in d.linetypes.iter().enumerate() {
+        linetype_index.entry(x.name.to_ascii_lowercase()).or_insert(i);
+    }
+    let mut style_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in d.text_styles.iter().enumerate() {
+        style_index.entry(x.name.to_ascii_lowercase()).or_insert(i);
+    }
     for (kind, tg) in recs {
         let t = T(&tg);
         match kind.as_str() {
@@ -1734,14 +1744,17 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 let lt = Linetype { name, description: t.s(3).unwrap_or_default(), pattern };
                 // The file's record wins over a default of the same name (its "CONTINUOUS"
                 // spelling and description), as layers do; a later duplicate in the file doesn't.
-                match d.linetypes.iter().position(|x| x.name.eq_ignore_ascii_case(&lt.name)) {
+                match linetype_index.get(&lt.name.to_ascii_lowercase()).copied() {
                     Some(i) if !seen_ltypes.contains(&lt.name.to_ascii_uppercase()) => {
                         if let Some(x) = d.linetypes.get_mut(i) {
                             *x = lt.clone();
                         }
                     }
                     Some(_) => continue,
-                    None => d.linetypes.push(lt.clone()),
+                    None => {
+                        linetype_index.insert(lt.name.to_ascii_lowercase(), d.linetypes.len());
+                        d.linetypes.push(lt.clone());
+                    }
                 }
                 seen_ltypes.insert(lt.name.to_ascii_uppercase());
             }
@@ -1781,9 +1794,12 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                     vertical: t.i(70).unwrap_or(0) & 4 != 0,
                     annotative: annotative(&tg),
                 };
-                match d.text_styles.iter_mut().find(|s| s.name.eq_ignore_ascii_case(&name)) {
+                match style_index.get(&name.to_ascii_lowercase()).and_then(|&i| d.text_styles.get_mut(i)) {
                     Some(x) => *x = st,
-                    None => d.text_styles.push(st),
+                    None => {
+                        style_index.insert(name.to_ascii_lowercase(), d.text_styles.len());
+                        d.text_styles.push(st);
+                    }
                 }
             }
             // The first *ACTIVE viewport holds the current snap/grid settings.
@@ -2292,12 +2308,21 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     let first_tab = d.layouts.iter().min_by_key(|l| l.tab_order).map(|l| l.name.clone());
     d.active_layout = active.clone().filter(|a| Some(a) != first_tab.as_ref());
     let first_layout = active.or_else(|| d.layouts.first().map(|l| l.name.clone())).unwrap_or_else(|| "Layout1".into());
+    // The drawing's layer names (lower-cased), so adding the layer an entity names is a set
+    // lookup rather than a scan of the layer table per entity: many distinct names made that
+    // quadratic (CWE-407).
+    let mut layer_names: std::collections::HashSet<String> = d.layers.iter().map(|l| l.name.to_ascii_lowercase()).collect();
+    let mut ensure_layer = |d: &mut Drawing, name: &str| {
+        if layer_names.insert(name.to_ascii_lowercase()) {
+            d.layers.push(cadaddy_doc::Layer::new(name));
+        }
+    };
     // Blocks: model/paper space blocks hold entities in newer files.
     for (name, base, description, ents, xref) in blocks {
         let up = name.to_ascii_uppercase();
         if up == "*MODEL_SPACE" {
             for (_, _, e) in ents {
-                d.ensure_layer(&e.common.layer);
+                ensure_layer(&mut d, &e.common.layer);
                 d.model.push(*e);
             }
             continue;
@@ -2345,7 +2370,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     }
     // ENTITIES section: model space, or paper space when flagged (67=1).
     for (owner, paper, e) in entities {
-        d.ensure_layer(&e.common.layer);
+        ensure_layer(&mut d, &e.common.layer);
         let owner_name = owner.and_then(|o| rx.brs.get(&o.trim().to_ascii_uppercase()).cloned()).map(|n| n.to_ascii_uppercase());
         let to_paper = paper || owner_name.as_deref().is_some_and(|n| n.starts_with("*PAPER_SPACE"));
         if to_paper {
