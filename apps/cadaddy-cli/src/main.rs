@@ -1643,10 +1643,20 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
         .take()
         .or_else(|| std::env::var_os("CADADDY_CORPUS_DIR").map(Into::into))
         .ok_or("roundtrip: give a FILE or FOLDER, or set CADADDY_CORPUS_DIR")?;
+    // What the walk couldn't look at, so the report isn't taken for the whole corpus: said on
+    // stderr, and failures of a strict run.
+    let mut missed: Vec<String> = Vec::new();
     let (root, files, out) = if path.is_dir() {
         let out = a.out.take().unwrap_or_else(|| path.join("report"));
-        let files = corpus::corpus_files(&path, std::slice::from_ref(&out));
-        (path, files, out)
+        let walk = corpus::walk(&path, std::slice::from_ref(&out));
+        missed = walk.unreadable.iter().map(|u| format!("not read: {u}")).collect();
+        if walk.truncated {
+            missed.push("left out: files or folders past the harness limits".to_string());
+        }
+        for m in &missed {
+            eprintln!("roundtrip: {m}");
+        }
+        (path, walk.files, out)
     } else if path.is_file() {
         let root = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let out = a.out.take().unwrap_or_else(|| root.join("report"));
@@ -1655,6 +1665,10 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
         return Err(format!("roundtrip: no such file or folder: {}", path.display()));
     };
     if files.is_empty() {
+        // A folder it couldn't read isn't an empty one.
+        if !missed.is_empty() {
+            return Err(format!("roundtrip: {} strict failures:\n{}", missed.len(), missed.join("\n")));
+        }
         return Err(format!("roundtrip: no DXF or DWG files in {}", root.display()));
     }
     if a.keep_saved {
@@ -1685,7 +1699,8 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
     // CADADDY_CORPUS_STRICT=1: a file that doesn't open, save or reopen, or records a writer
     // leaves out, fail the run (the report is written first).
     if std::env::var("CADADDY_CORPUS_STRICT").is_ok_and(|v| v == "1") {
-        let failed = report.strict_failures();
+        let mut failed = report.strict_failures();
+        failed.extend(missed);
         if !failed.is_empty() {
             return Err(format!("roundtrip: {} strict failures:\n{}", failed.len(), failed.join("\n")));
         }

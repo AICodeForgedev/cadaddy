@@ -412,6 +412,10 @@ fn cmd_roundtrip(args: &[&str]) -> Result<(), String> {
                 let v = it.next().ok_or_else(|| format!("{a} needs a value"))?;
                 pass.extend([a.to_string(), v.to_string()]);
             }
+            s if s.starts_with("--out=") => {
+                let v = s.trim_start_matches("--out=");
+                pass.extend(["--out".to_string(), here.join(v).display().to_string()]);
+            }
             s if s.starts_with("--") => pass.push(s.to_string()),
             s if dir.is_none() => dir = Some(s.to_string()),
             _ => return Err("roundtrip takes one DIR".into()),
