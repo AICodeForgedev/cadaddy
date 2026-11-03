@@ -8040,11 +8040,12 @@ const ROOM_PIPE_DRAWN_SHARE: f64 = 0.6;
 const ROOM_SIZE_SHARE: f64 = 0.2;
 
 /// The pipes of the guest rooms the plumbing plans show (an enlarged plan draws one or two rooms
-/// a floor with their waste, vent and water lines): each room of the same type that holds no pipe
-/// of a system gets that system's pipes of the room of its type that has the most, laid in as its
-/// fixtures are ([`copy_room_fixtures`]: turned and mirrored as each room is). Only a pipe wholly
-/// in its room (walls included) is copied: where a branch goes on to the main outside, that is the
-/// floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
+/// a floor with their waste, vent and water lines): each room of the same type and size that
+/// holds no pipe of a system gets that system's pipes of the room of its type that has the most,
+/// laid in as its fixtures are ([`copy_room_fixtures`]: turned and mirrored as each room is). A
+/// type is a typical room's when it repeats on a floor (not a corridor, one a floor). Only a pipe
+/// wholly in its room (walls included) is copied: where a branch goes on to the main outside,
+/// that is the floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
 /// The copies, and per type what was copied and into how many rooms.
 fn copy_room_pipes(
     d: &cadaddy_doc::Drawing,
@@ -8137,36 +8138,43 @@ fn copy_room_pipes(
     for words in &types {
         let Some(vs) = views.get(words) else { continue };
         let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
-        // The type's pipes, system by system from the room with the most of it, taken back into
-        // the view that goes into its room.
+        // A typical room repeats on a floor; a space one of a floor (its corridor) runs the floor's
+        // own pipes.
+        let mut per_storey: BTreeMap<String, usize> = BTreeMap::new();
+        for i in &of_type {
+            if let Some((_, level, _, _)) = rooms.get(*i) {
+                *per_storey.entry(digits(level)).or_default() += 1;
+            }
+        }
+        if per_storey.values().all(|n| *n < 2) {
+            continue;
+        }
+        // The type's pipes, system by system from the room with the most of it, each taken back
+        // into the view (by its index in `vs`) that goes into its room: the type's rooms of one
+        // hand fit one of its views, of the other hand another.
         let mut by_len: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
         by_len.sort_by(|a, b| {
             let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(|r| length(r)).sum::<f64>());
             l(b).total_cmp(&l(a))
         });
-        let mut set: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+        let mut set: Vec<(usize, cadaddy_walk3d::MepRun)> = Vec::new();
         let mut systems: BTreeSet<String> = BTreeSet::new();
-        let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
         let mut sources: Vec<String> = Vec::new();
         let mut source_boxes: Vec<[f64; 4]> = Vec::new();
         for src in by_len {
-            let Some((v, fit_src)) = vs.iter().filter(|v| v_used.is_none_or(|u| std::ptr::eq(u, *v))).find_map(|v| fit(v, src).map(|f| (v, f)))
-            else {
-                continue;
-            };
             let mine: Vec<&cadaddy_walk3d::MepRun> =
                 in_room.get(src).into_iter().flatten().copied().filter(|r| !systems.contains(&r.system)).collect();
             if mine.is_empty() {
                 continue;
             }
-            v_used = Some(v);
+            let Some((vi, fit_src)) = vs.iter().enumerate().find_map(|(i, v)| fit(v, src).map(|f| (i, f))) else { continue };
             for r in mine {
                 let Some(points) = r.points.iter().map(|p| view_point(*p, fit_src)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
                 let mut copy = r.clone();
                 copy.points = points;
-                set.push(copy);
+                set.push((vi, copy));
             }
-            systems.extend(set.iter().map(|r| r.system.clone()));
+            systems.extend(set.iter().map(|(_, r)| r.system.clone()));
             if let Some((_, _, _, number)) = rooms.get(src) {
                 sources.push(number.clone());
             }
@@ -8174,11 +8182,12 @@ fn copy_room_pipes(
                 source_boxes.push(*b);
             }
         }
-        let Some(v) = v_used else { continue };
+        if set.is_empty() {
+            continue;
+        }
         // Each room of the type: the systems it holds none of.
         let mut took = 0usize;
         for ri in of_type.iter().copied() {
-            let Some(fit_t) = fit(v, ri) else { continue };
             let Some((_, level, _, _)) = rooms.get(ri) else { continue };
             let b = room_boxes.get(ri).copied().unwrap_or_default();
             if !source_boxes.iter().all(|s| same_size(s, &b)) {
@@ -8186,13 +8195,16 @@ fn copy_room_pipes(
             }
             let storey = digits(level);
             let core = grown(&b, -upf);
+            let mut fits: BTreeMap<usize, Option<RoomFit>> = BTreeMap::new();
             let mut added = false;
             for system in &systems {
                 let placed: Vec<&cadaddy_walk3d::MepRun> = pipes.iter().copied().chain(out.iter()).collect();
                 if inside_len(&placed, &storey, system, &core) >= ROOM_HAS_PIPE_FT * upf {
                     continue;
                 }
-                for r in set.iter().filter(|r| r.system == *system) {
+                for (vi, r) in set.iter().filter(|(_, r)| r.system == *system) {
+                    let Some(v) = vs.get(*vi) else { continue };
+                    let Some(fit_t) = *fits.entry(*vi).or_insert_with(|| fit(v, ri)) else { continue };
                     let Some(points) = r.points.iter().map(|p| place_in_room(*p, v.0, b, fit_t)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
                     let mut copy = r.clone();
                     copy.points = points;
@@ -16665,6 +16677,9 @@ mod tests {
         room_lines(&mut s, 4534.0, 200.0);
         s.execute("text", &json!({"at": [4534.0, 181.0], "text": "ENLARGED TWIN SUITE", "height": 7.4})).unwrap();
         s.execute("text", &json!({"at": [4534.0, 172.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        room_lines(&mut s, 4834.0, 200.0);
+        s.execute("text", &json!({"at": [4834.0, 181.0], "text": "ENLARGED HALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [4834.0, 172.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
         let hi = s.doc().unwrap().handseed;
         job.sheet_regions = vec![SheetRegion {
             number: "P-9".into(),
@@ -16680,7 +16695,7 @@ mod tests {
         }];
         job.sheet_spans = vec![SheetSpan { sheet: "P-9".into(), lo, hi }];
         // Three rooms of the type on the floor's plan (their level written "3").
-        for x in [10_000.0, 10_200.0, 10_400.0, 10_600.0, 10_744.0] {
+        for x in [10_000.0, 10_200.0, 10_400.0, 10_600.0, 10_744.0, 11_000.0] {
             room_lines(&mut s, x, 0.0);
         }
         let room = |n: &str, x: f64| json!({"name": "TWIN SUITE", "number": n, "level": "3", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
@@ -16688,7 +16703,11 @@ mod tests {
             // A fourth of the name twice as wide (a corridor's or a suite's layout): not the type's.
             let wide =
                 json!({"name": "TWIN SUITE", "number": "304", "level": "3", "outline": [[10_600, 0], [10_888, 0], [10_888, 288], [10_600, 288]]});
-            st.result = Some(json!({"rooms": [room("301", 10_000.0), room("302", 10_200.0), room("303", 10_400.0), wide]}));
+            // A hall, one on each floor, the same on both: none of the type's pipes go from one
+            // to the other.
+            let hall = |n: &str, level: &str| json!({"name": "HALL", "number": n, "level": level, "outline": [[11_000, 0], [11_144, 0], [11_144, 288], [11_000, 288]]});
+            st.result =
+                Some(json!({"rooms": [room("301", 10_000.0), room("302", 10_200.0), room("303", 10_400.0), wide, hall("H3", "3"), hall("H4", "4")]}));
         }
         let run = |system: &str, points: Vec<[f64; 2]>| cadaddy_walk3d::MepRun {
             system: system.into(),
@@ -16716,6 +16735,8 @@ mod tests {
             run("SAN", vec![[10_220.0, 30.0], [10_220.0, 200.0]]),
             // Not a pipe.
             run("SA", vec![[10_430.0, 30.0], [10_430.0, 200.0]]),
+            // The third floor's hall's water line.
+            run("CW", vec![[11_020.0, 20.0], [11_020.0, 260.0]]),
         ];
         let (copies, report) = copy_room_pipes(s.doc().unwrap(), &job, &runs, &|r| r.system != "SA");
         let got: Vec<(String, f64)> = copies.iter().map(|r| (r.system.clone(), (r.points[0][0] / 200.0).floor() * 200.0)).collect();
