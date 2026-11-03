@@ -595,7 +595,13 @@ fn enlarged_regions(items: &[Item], sp: Option<&cadaddy_walk3d::BuildingSpec>, u
     out
 }
 
+/// One undo step for the set, however many entities draw it (a step of each kept a copy of the
+/// drawing).
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| run_inner(s, p))
+}
+
+fn run_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let ask = ask(p)?;
     let mut notes: Vec<String> = Vec::new();
     let spec = super::bspec::current(s, CMD).ok().map(|(sp, _)| sp);

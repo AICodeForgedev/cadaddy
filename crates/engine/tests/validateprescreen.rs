@@ -140,6 +140,11 @@ struct Job {
 }
 
 fn job() -> Job {
+    job_with(&[]).0
+}
+
+/// [`job`] with more receptacles at building points (feet): their handles.
+fn job_with(extra: &[[f64; 2]]) -> (Job, Vec<String>) {
     let mut s = Session::new();
     // A 100' × 12' shell of 6" walls; partitions at 15' and 30'.
     layer(&mut s, "A-WALL");
@@ -171,12 +176,14 @@ fn job() -> Job {
     // The model: in room 101 a receptacle on the south wall's face, one 2 ft off the north
     // wall, a switch; in room 102 the king layout turned 180° (receptacle by the north wall near
     // the east end, PTAC by the south wall near the west end).
-    let (s, recs) = place(s, "RECEP", "E-POWR", &[[10.0, 0.5], [6.0, 9.5], [27.0, 11.5]], "DUPLEX");
+    let mut pts = vec![[10.0, 0.5], [6.0, 9.5], [27.0, 11.5]];
+    pts.extend_from_slice(extra);
+    let (s, recs) = place(s, "RECEP", "E-POWR", &pts, "DUPLEX");
     let (s, sws) = place(s, "SWITCH", "E-POWR", &[[14.5, 6.0]], "SW");
     let (mut s, ptacs) = place(s, "PTACU", "M-EQPM", &[[18.0, 0.5]], "PTAC");
     s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
-    for (h, kind) in [(&recs[0], "receptacle"), (&recs[1], "receptacle"), (&recs[2], "receptacle"), (&sws[0], "switch"), (&ptacs[0], "ptac")] {
+    for (h, kind) in recs.iter().map(|h| (h, "receptacle")).chain([(&sws[0], "switch"), (&ptacs[0], "ptac")]) {
         s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "E-101", "kind": kind})).unwrap();
     }
     // The king unit type (its layout as read from its enlarged plan) and room 102 its instance.
@@ -186,7 +193,8 @@ fn job() -> Job {
         "source": {"sheet": "M-401"}}]);
     sp["unit_instances"] = json!([{"type": "ut-king", "room": "102", "number": "102", "level": "L1", "hand": "normal", "at_ft": [15.0, 0.5]}]);
     s.doc_mut().unwrap().building_spec = Some(sp.to_string());
-    Job { s, on_wall: recs[0].clone(), off_wall: recs[1].clone(), switch: sws[0].clone(), ptac: ptacs[0].clone() }
+    let more = recs.get(3..).map(<[String]>::to_vec).unwrap_or_default();
+    (Job { s, on_wall: recs[0].clone(), off_wall: recs[1].clone(), switch: sws[0].clone(), ptac: ptacs[0].clone() }, more)
 }
 
 fn rule(s: &mut Session, domain: &str, key: &str, value: &str) -> Result<Value, String> {
@@ -250,6 +258,35 @@ fn a_device_two_feet_off_its_wall_fails_g_host_with_the_distance() {
     let r = j.s.execute("validate.prescreen", &json!({"room": "101", "all": true, "limit": 50})).unwrap();
     assert!(findings(&r).iter().all(|f| f["rule"] != "G-HOST"), "{r}");
     assert!(r["disabled"].as_array().unwrap().iter().any(|x| x == "G-HOST"), "{r}");
+}
+
+#[test]
+fn a_device_in_its_rooms_wall_is_the_rooms_and_one_outside_every_room_is_listed() {
+    // In the south wall of room 101 (the wall's inside face is y 0.5', the device 0.3' into the
+    // wall, outside the room's outline); and one 10' south of the building.
+    let (mut j, more) = job_with(&[[8.0, 0.2], [50.0, -10.0]]);
+    let (in_wall, outside) = (more[0].clone(), more[1].clone());
+    let room = area_of(&mut j.s, "101");
+    let folder = dir("noroom");
+    std::fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("prescreen.json");
+    let r = j.s.execute("validate.prescreen", &json!({"all": true, "limit": 50, "path": path.to_string_lossy()})).unwrap();
+    let body = read_json(&path);
+    let fs = body["findings"].as_array().cloned().unwrap_or_default();
+    let mine: Vec<&Value> = fs.iter().filter(|f| f["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&in_wall))).collect();
+    assert!(!mine.is_empty(), "the device in the wall is checked: {r}");
+    assert!(mine.iter().all(|f| f["area"] == room.as_str()), "the device in its room's wall is the room's ({room}): {mine:?}");
+    // The one outside every room: listed with the nearest area and how far off it is.
+    let listed = body["no_room"].as_array().cloned().unwrap_or_default();
+    let it = listed
+        .iter()
+        .find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&outside)))
+        .unwrap_or_else(|| panic!("the device outside every room is listed: {listed:?}"));
+    assert_eq!(it["level"], "L1", "{it}");
+    assert!(it["nearest_area"].as_str().is_some(), "{it}");
+    assert!(it["off_ft"].as_f64().unwrap() > 9.0, "{it}");
+    assert!(!listed.iter().any(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&in_wall))), "{listed:?}");
+    assert_eq!(r["no_room"]["elements"].as_u64(), Some(listed.len() as u64), "{r}");
 }
 
 /// A built device: a box the build made from plan object `src`, 4" wide, 2" deep and 4" tall,

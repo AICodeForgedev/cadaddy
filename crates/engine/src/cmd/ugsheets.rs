@@ -485,13 +485,9 @@ fn dim_from(lines: &[(String, f64)], v: f64, edge: Option<(&str, f64)>, upf: f64
     }
 }
 
-/// The level's edges (its slab's exterior walls, else its region, else the extent of its
-/// equipment and runs): west and south.
+/// The level's edges when it has no shell (its region, else the extent of its equipment and
+/// runs): west and south.
 fn edges(sp: &BuildingSpec, level: &str, pts: &[[f64; 2]]) -> Option<[f64; 2]> {
-    // The slab's own edges: its exterior walls (the field measures from the slab's corners).
-    if let Some(sh) = shell_of(sp, level) {
-        return Some([sh[0], sh[1]]);
-    }
     if let Some(r) = sp.level(level).and_then(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite())) {
         return Some([r[0].min(r[2]), r[1].min(r[3])]);
     }
@@ -789,10 +785,19 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
                 .collect()
         };
         for (at, feeds) in ends {
-            let edge = edges(sp, &r.level, &r.points);
-            let slab = shell_of(sp, &r.level).is_some();
-            let x = dim_from(&g.x, at[0], edge.map(|e| (if slab { "west slab edge" } else { "west edge" }, e[0])), u);
-            let y = dim_from(&g.y, at[1], edge.map(|e| (if slab { "south slab edge" } else { "south edge" }, e[1])), u);
+            // From the nearer of the slab's edges (its exterior walls), else the level's west and south.
+            let (ex, ey) = match shell_of(sp, &r.level) {
+                Some(sh) => (
+                    Some(if (at[0] - sh[0]).abs() <= (sh[2] - at[0]).abs() { ("slab W", sh[0]) } else { ("slab E", sh[2]) }),
+                    Some(if (at[1] - sh[1]).abs() <= (sh[3] - at[1]).abs() { ("slab S", sh[1]) } else { ("slab N", sh[3]) }),
+                ),
+                None => {
+                    let edge = edges(sp, &r.level, &r.points);
+                    (edge.map(|e| ("west edge", e[0])), edge.map(|e| ("south edge", e[1])))
+                }
+            };
+            let x = dim_from(&g.x, at[0], ex, u);
+            let y = dim_from(&g.y, at[1], ey, u);
             let height_in = sp
                 .mep
                 .equipment
@@ -1244,7 +1249,13 @@ fn sheet_number(first: &str, i: usize) -> String {
     }
 }
 
+/// One undo step for the sheets, however many lines and texts draw them (a step of each kept a
+/// copy of the drawing).
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| run_build_inner(s, p))
+}
+
+fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "ugsheets.build";
     let sp = spec_of(cmd, s)?;
     let t = today_of(cmd, p)?;

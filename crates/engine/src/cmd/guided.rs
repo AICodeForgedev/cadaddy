@@ -3362,8 +3362,147 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         }
     }
 
+    // The keys the documents state (a cover sheet's or code analysis's "96 KEY HOTEL") against
+    // the guest rooms read: a gate.
+    let read: Vec<Value> = rooms_result.get("rooms").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut stated: Vec<(u32, String, String)> = {
+        let refs = job_sheet_refs(job);
+        cadaddy_mepfix::sheet_facts::texts(s.doc()?)
+            .into_iter()
+            .filter_map(|t| {
+                let n = stated_keys(&t.value)?;
+                let sheet = refs
+                    .iter()
+                    .find(|r| t.at.x >= r.rect[0] && t.at.x <= r.rect[2] && t.at.y >= r.rect[1] && t.at.y <= r.rect[3])
+                    .map_or_else(String::new, |r| r.number.clone());
+                Some((n, sheet, t.value.chars().take(120).collect()))
+            })
+            .take(MAX_KEY_STATEMENTS)
+            .collect()
+    };
+    // The cover sheet and code analysis the job didn't import: the general sheets read off their files.
+    if stated.is_empty() {
+        for (number, page) in non_plan_pages(job, "G") {
+            for t in cadaddy_mepfix::sheet_facts::texts(&page) {
+                if let Some(n) = stated_keys(&t.value)
+                    && stated.len() < MAX_KEY_STATEMENTS
+                {
+                    stated.push((n, number.clone(), t.value.chars().take(120).collect()));
+                }
+            }
+        }
+    }
+    if let Some(gate) = keys_gate(&stated, &read) {
+        if gate["gate"] == "fail" {
+            job.add_finding(
+                StageName::Rooms,
+                "Guest rooms read differ from the keys the documents state",
+                &format!(
+                    "The documents state {} keys ({} {:?}); the plans gave {} guest rooms ({} numbered). Missing or merged guest rooms lose their devices, panels and circuits.",
+                    gate["stated"], gate["source"]["sheet"].as_str().unwrap_or(""), gate["source"]["text"].as_str().unwrap_or(""), gate["guest_rooms"], gate["numbered"]
+                ),
+                3,
+                vec!["Check the guest-room labels on the architectural plans (a label on furniture, a merged outline)".into()],
+                None,
+                false,
+            );
+        }
+        progress_line(&format!(
+            "  keys: stated {} ({}), guest rooms read {} ({} numbered): {}",
+            gate["stated"],
+            gate["source"]["sheet"].as_str().unwrap_or(""),
+            gate["guest_rooms"],
+            gate["numbered"],
+            gate["gate"].as_str().unwrap_or("")
+        ));
+        if let Some(o) = rooms_result.as_object_mut() {
+            o.insert("keys".into(), gate);
+        }
+    }
+
     job.audit("stage_run", "pipeline", None, Some(StageName::Rooms), Some(json!({"rooms_found": room_count})));
     Ok(rooms_result)
+}
+
+/// Statements of the key count read at most (every text of a print set is looked at).
+const MAX_KEY_STATEMENTS: usize = 50;
+/// The most keys (guest rooms) a stated count may give.
+const MAX_KEYS: u32 = 10_000;
+
+/// The number of keys (guest rooms) a text states: "NEW 96 KEY HOTEL", "96-KEY", "96 GUEST
+/// ROOMS", "GUEST ROOMS: 96", "TOTAL KEYS 96". A count of keys for a lock or a panel ("PROVIDE
+/// 2 KEYS PER LOCK") is none: "n KEY(S)" counts only in a text about the building.
+fn stated_keys(text: &str) -> Option<u32> {
+    let up = text.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let about_building = words.iter().any(|w| ["HOTEL", "MOTEL", "INN", "RESORT", "LODGING", "SCOPE", "PROJECT", "BUILDING"].contains(w))
+        && !words
+            .iter()
+            .any(|w| ["PER", "LOCK", "LOCKS", "CYLINDER", "PANEL", "PANELS", "PANELBOARD", "PANELBOARDS", "CABINET", "DOOR", "DOORS"].contains(w));
+    let at = |i: usize| words.get(i).copied();
+    for (i, w) in words.iter().enumerate() {
+        let Some(n) = w.parse::<u32>().ok().filter(|n| (2..=MAX_KEYS).contains(n)) else { continue };
+        let (next, next2) = (at(i + 1), at(i + 2));
+        let (prev, prev2) = (i.checked_sub(1).and_then(at), i.checked_sub(2).and_then(at));
+        let guest_rooms_after =
+            matches!(next, Some("GUESTROOM" | "GUESTROOMS")) || (next == Some("GUEST") && matches!(next2, Some("ROOM" | "ROOMS")));
+        let guest_rooms_before = prev == Some("GUESTROOMS") || (prev == Some("ROOMS") && prev2 == Some("GUEST"));
+        let keys_after = about_building && matches!(next, Some("KEY" | "KEYS"));
+        let keys_before = prev == Some("KEYS") && matches!(prev2, Some("TOTAL" | "OF"));
+        if guest_rooms_after || guest_rooms_before || keys_after || keys_before {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Whether a room's name names a guest room or dwelling unit (a key): a sleeping room's type
+/// ([`sleeping_room`]: QUEEN, KING, SUITE, UNIT…), GUEST only as GUEST ROOM or GUEST SUITE (a
+/// GUEST LAUNDRY is none), in a name of a few words (a note naming guest rooms is none).
+fn guest_room_name(name: &str) -> bool {
+    if name.split_whitespace().count() > MAX_ROOM_NAME_WORDS {
+        return false;
+    }
+    let mut w = type_words(name, None);
+    let guest = w.remove("GUEST");
+    sleeping_room(&w) || (guest && (w.contains("ROOM") || w.contains("ROOMS"))) || w.contains("GUESTROOM") || w.contains("GUESTROOMS")
+}
+
+/// The most words a room's name has (a longer label is a note).
+const MAX_ROOM_NAME_WORDS: usize = 4;
+
+/// The keys gate: the count the documents state most often (`stated`: count, sheet, text) against
+/// the guest rooms among `rooms` (the rooms stage's: those [`guest_room_name`] names).
+/// None when no document states a count.
+fn keys_gate(stated: &[(u32, String, String)], rooms: &[Value]) -> Option<Value> {
+    let mut votes: BTreeMap<u32, usize> = BTreeMap::new();
+    for (n, _, _) in stated {
+        *votes.entry(*n).or_default() += 1;
+    }
+    let (&keys, _) = votes.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
+    let source = stated.iter().find(|(n, _, _)| *n == keys)?;
+    let guest: Vec<&Value> = rooms
+        .iter()
+        .filter(|r| r.get("other_trade").and_then(Value::as_bool) != Some(true))
+        .filter(|r| r.get("name").and_then(Value::as_str).is_some_and(guest_room_name))
+        .collect();
+    let mut numbers: BTreeSet<(String, String)> = BTreeSet::new();
+    for r in &guest {
+        if let Some(n) = r.get("number").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) {
+            numbers.insert((r.get("level").and_then(Value::as_str).unwrap_or("").to_string(), n.to_string()));
+        }
+    }
+    let numbered = numbers.len();
+    let pass = numbered == keys as usize && guest.len() == keys as usize;
+    Some(json!({
+        "stated": keys,
+        "source": {"sheet": source.1, "text": source.2},
+        "other_counts": votes.keys().filter(|n| **n != keys).collect::<Vec<_>>(),
+        "guest_rooms": guest.len(),
+        "numbered": numbered,
+        "unnumbered": guest.iter().filter(|r| r.get("number").and_then(Value::as_str).is_none_or(|n| n.trim().is_empty())).count(),
+        "gate": if pass { "pass" } else { "fail" },
+    }))
 }
 
 /// Take out what was read as rooms but is not the building's (MUST 1-3): labels in a sheet's
@@ -13754,7 +13893,13 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
 // ─── Command implementations ────────────────────────────────────────────────
 
 /// `job.start {pdfs, goal}` — create and start a guided job.
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_start_inner(s, p))
+}
+
+fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let pdfs = str_param(p, "pdfs").ok_or_else(|| bad("job.start", "`pdfs` (path) is required"))?;
     let goal_str = p.get("goal").and_then(Value::as_str).unwrap_or("estimate");
     let goal = JobGoal::from_str(goal_str)
@@ -13917,7 +14062,13 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// `job.next` — return the next question, or "done".
-fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
+fn cmd_next(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_next_inner(s, p))
+}
+
+fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut job = load_job(s)?.ok_or_else(|| bad("job.next", "no job running — call job.start first"))?;
 
     // Answers given with `rerun: false`: their stages run again now, once.
@@ -14128,7 +14279,13 @@ fn rerun_changes(job: &GuidedJob, reset: &[(StageName, BTreeMap<String, Value>)]
 /// answer stands alone: one whose question is gone (merged, or not asked again after a re-run)
 /// is a warning and the others are kept and saved. The stages the answers change run again
 /// once, from the first of them (`rerun: false` holds that until the next answer or job.next).
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_answer_inner(s, p))
+}
+
+fn cmd_answer_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<(String, Value)> = Vec::new();
     match p.get("answers") {
         Some(Value::Array(list)) => {
@@ -14299,7 +14456,13 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `job.set_mode {auto}` — switch a job between interactive and unattended. Answers already
 /// given are kept; going to auto takes the defaults of the open questions and runs on.
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_set_mode(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_set_mode_inner(s, p))
+}
+
+fn cmd_set_mode_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let auto = p.get("auto").and_then(Value::as_bool).ok_or_else(|| bad("job.set_mode", "`auto` (true or false) is required"))?;
     let mut job = load_job(s)?.ok_or_else(|| bad("job.set_mode", "no job running — job.start {pdfs, auto: true} starts one unattended"))?;
     let was = job.auto;
@@ -15061,6 +15224,53 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_documents_key_count_is_read_and_gates_the_guest_rooms() {
+        assert_eq!(stated_keys("NEW 120 KEY HOTEL"), Some(120));
+        assert_eq!(stated_keys("A 4-STORY, 96-KEY MOTEL"), Some(96));
+        assert_eq!(stated_keys("GUEST ROOMS: 58"), Some(58));
+        assert_eq!(stated_keys("TOTAL KEYS 40"), Some(40));
+        assert_eq!(stated_keys("40 GUESTROOMS ON 3 FLOORS"), Some(40));
+        // Keys for locks and panels, a room count of something else: none.
+        assert_eq!(stated_keys("PROVIDE 2 KEYS PER LOCK"), None);
+        assert_eq!(stated_keys("PANELBOARD DOOR WITH 2 KEYS - HOTEL STANDARD"), None);
+        assert_eq!(stated_keys("2 ROOMS"), None);
+        assert_eq!(stated_keys("SEE SHEET A-901"), None);
+        let room = |name: &str, number: &str, level: &str| json!({"name": name, "number": number, "level": level});
+        let rooms = vec![
+            room("KING", "5001", "1"),
+            room("DOUBLE KING", "5002", "1"),
+            room("SUITE ADA", "5003", "1"),
+            room("LOBBY", "5004", "1"),
+            room("CORRIDOR", "5000", "1"),
+            // A laundry for the guests and a note naming the guest rooms are no keys.
+            room("GUEST", "5005", "1"),
+            room("FOR GUEST ROOM LAYOUTS SEE", "", "1"),
+        ];
+        assert!(guest_room_name("GUEST ROOM") && guest_room_name("GUESTROOM 2") && guest_room_name("KING SUITE"));
+        assert!(!guest_room_name("GUEST LAUNDRY") && !guest_room_name("LOBBY"));
+        let stated = vec![
+            (3, "G-901".to_string(), "NEW 3 KEY INN".to_string()),
+            (3, "A-901".to_string(), "3 GUEST ROOMS".to_string()),
+            (4, "X".to_string(), "4 GUEST ROOMS".to_string()),
+        ];
+        let g = keys_gate(&stated, &rooms).unwrap_or_default();
+        assert_eq!(g["stated"], 3, "{g}");
+        assert_eq!(g["source"]["sheet"], "G-901");
+        assert_eq!(g["other_counts"], json!([4]));
+        assert_eq!(g["guest_rooms"], 3);
+        assert_eq!(g["gate"], "pass");
+        // A guest room merged into its neighbour or left unnumbered fails the gate.
+        let mut short = rooms.clone();
+        short.remove(0);
+        short.push(room("KING", "", "1"));
+        let g = keys_gate(&stated[..1], &short).unwrap_or_default();
+        assert_eq!((g["guest_rooms"].as_u64(), g["numbered"].as_u64(), g["unnumbered"].as_u64()), (Some(3), Some(2), Some(1)), "{g}");
+        assert_eq!(g["gate"], "fail");
+        assert!(keys_gate(&[], &rooms).is_none());
+    }
+
     /// Q6003 MUST 4: the job's report lists the property coverage per kind.
     #[test]
     fn job_report_lists_property_coverage_per_kind() {
