@@ -117,6 +117,9 @@ fn job(extra_objects: bool) -> Session {
         device(5.0 + 2.9 / 12.0, 9.4, "G2", "receptacle", "1FF", json!({})),
         device(7.0, 9.4, "G3", "receptacle", "200", json!({})),
         device(7.0 + 3.5 / 12.0, 9.4, "G4", "receptacle", "201", json!({})),
+        // One spot read with two heights 3" apart: plates overlap, not one height.
+        device(3.0, 9.4, "H1", "receptacle", "202", json!({"mount_height_in": "18", "mount_height_note": "18\" AFF on A-900"})),
+        device(3.0, 9.4, "H2", "receptacle", "203", json!({"mount_height_in": "21", "mount_height_note": "21\" AFF on A-901"})),
     ];
     s.execute("bspec.set", &json!({"replace": true, "spec": spec(tags)})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
@@ -414,6 +417,10 @@ fn plates_that_would_overlap_are_one_ganged_box() {
         let plate = verdict(&layout_findings(&mut s, m), "plate");
         assert!(!plate.is_empty() && plate.iter().all(|v| v.starts_with("pass")), "{m}: {plate:?}");
     }
+    // Overlapping plates at two heights are not ganged: a fail naming both heights.
+    assert_ne!(props(&mut s, "H1")["plate_group"]["value"], props(&mut s, "H2")["plate_group"]["value"]);
+    let ph = verdict(&layout_findings(&mut s, "H1"), "plate");
+    assert!(ph.iter().any(|v| v.starts_with("fail") && v.contains("centre 18 in AFF") && v.contains("centre 21 in AFF")), "{ph:?}");
 }
 
 #[test]

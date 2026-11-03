@@ -1726,14 +1726,23 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
             .collect();
         for q in others {
             let (Some(dp), Some(dq)) = (devs.get(p.idx), devs.get(q.idx)) else { continue };
-            for (me, other) in [(dp, dq), (dq, dp)] {
+            // Plates at one height were ganged; these stand at different heights (a spot read
+            // twice with two heights, or two boxes stacked too close): say both.
+            let zc = |r: &Rect| (r.z0 + r.z1) / 2.0;
+            for ((me, mr), (other, or)) in [((dp, &p.rect), (dq, &q.rect)), ((dq, &q.rect), (dp, &p.rect))] {
                 out.entry(me.h.hex().to_ascii_uppercase()).or_default().push(check(
                     "plate",
                     "fail",
-                    format!("its plate overlaps the plate of {} on {}", other.h.hex(), p.face),
+                    format!(
+                        "its plate (centre {} AFF) overlaps the plate of {} (centre {} AFF) on {}: not one height, so not one ganged box; which height do the documents mean?",
+                        in_text(zc(mr)),
+                        other.h.hex(),
+                        in_text(zc(or)),
+                        p.face
+                    ),
                     "plates apart (ganged devices share one plate)".into(),
                     "overlapping plates".into(),
-                    json!({"other": other.h.hex()}),
+                    json!({"other": other.h.hex(), "centre_in": r2(zc(mr)), "other_centre_in": r2(zc(or))}),
                 ));
             }
         }
