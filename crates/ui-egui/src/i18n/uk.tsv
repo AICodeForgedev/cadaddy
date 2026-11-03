@@ -3511,6 +3511,9 @@
 	Object Form	Форма об'єкта
 	Price a Change	Оцінити зміну
 	Value Engineering	Інженерна оптимізація вартості
-Wall Faces	Грані стін
-Place Devices on Wall Faces	Розмістити пристрої на гранях стін
-Devices Follow Their Walls	Пристрої слідують за стінами
+	Wall Faces	Грані стін
+	Place Devices on Wall Faces	Розмістити пристрої на гранях стін
+	Devices Follow Their Walls	Пристрої слідують за стінами
+	Room Layout	Планування приміщення
+	Tie a Device to an Object	Прив'язати пристрій до об'єкта
+	Add Casework or Appliance Object	Додати об'єкт меблів або побутового приладу

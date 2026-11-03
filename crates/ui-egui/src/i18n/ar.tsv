@@ -3364,6 +3364,9 @@ menu	View	عرض
 	Promote Object Form to Template	ترقية نموذج الكائن إلى قالب
 	Object Completeness	اكتمال الكائنات
 	Object Form	نموذج الكائن
-Wall Faces	واجهات الجدران
-Place Devices on Wall Faces	وضع الأجهزة على واجهات الجدران
-Devices Follow Their Walls	الأجهزة تتبع جدرانها
+	Wall Faces	واجهات الجدران
+	Place Devices on Wall Faces	وضع الأجهزة على واجهات الجدران
+	Devices Follow Their Walls	الأجهزة تتبع جدرانها
+	Room Layout	تخطيط الغرفة
+	Tie a Device to an Object	ربط جهاز بكائن
+	Add Casework or Appliance Object	إضافة كائن خزائن أو جهاز منزلي

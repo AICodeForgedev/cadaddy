@@ -3533,6 +3533,9 @@ menu	Modify	Ändra
 	Promote Object Form to Template	Gör objektformulär till mall
 	Object Completeness	Objektens fullständighet
 	Object Form	Objektformulär
-Wall Faces	Väggsidor
-Place Devices on Wall Faces	Placera enheter på väggsidor
-Devices Follow Their Walls	Enheter följer sina väggar
+	Wall Faces	Väggsidor
+	Place Devices on Wall Faces	Placera enheter på väggsidor
+	Devices Follow Their Walls	Enheter följer sina väggar
+	Room Layout	Rumslayout
+	Tie a Device to an Object	Knyt en enhet till ett objekt
+	Add Casework or Appliance Object	Lägg till inrednings- eller vitvaruobjekt

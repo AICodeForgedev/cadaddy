@@ -3157,6 +3157,9 @@
 	Promote Object Form to Template	Promouvoir le formulaire d'objet en modèle
 	Object Completeness	Complétude des objets
 	Object Form	Formulaire d'objet
-Wall Faces	Faces de mur
-Place Devices on Wall Faces	Placer les appareils sur les faces de mur
-Devices Follow Their Walls	Les appareils suivent leurs murs
+	Wall Faces	Faces de mur
+	Place Devices on Wall Faces	Placer les appareils sur les faces de mur
+	Devices Follow Their Walls	Les appareils suivent leurs murs
+	Room Layout	Disposition de la pièce
+	Tie a Device to an Object	Lier un appareil à un objet
+	Add Casework or Appliance Object	Ajouter un objet mobilier ou appareil ménager

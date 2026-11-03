@@ -3158,6 +3158,9 @@
 	Promote Object Form to Template	Сделать форму объекта шаблоном
 	Object Completeness	Полнота объектов
 	Object Form	Форма объекта
-Wall Faces	Грани стен
-Place Devices on Wall Faces	Разместить устройства на гранях стен
-Devices Follow Their Walls	Устройства следуют за стенами
+	Wall Faces	Грани стен
+	Place Devices on Wall Faces	Разместить устройства на гранях стен
+	Devices Follow Their Walls	Устройства следуют за стенами
+	Room Layout	Планировка помещения
+	Tie a Device to an Object	Привязать устройство к объекту
+	Add Casework or Appliance Object	Добавить объект мебели или бытового прибора
