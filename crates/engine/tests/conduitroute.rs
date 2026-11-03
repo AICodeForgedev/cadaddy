@@ -855,3 +855,43 @@ fn a_room_ceiling_up_in_the_joists_puts_its_branches_through_their_webs() {
         assert!(st.1[2] >= 8.75 + 0.25 - 1e-6, "a horizontal piece over the room's ceiling: {st:?}");
     }
 }
+
+#[test]
+fn a_breaker_that_feeds_a_panel_is_left_to_the_feeders_and_its_estimate_goes() {
+    // LP1-7 feeds the unit panels U (the schedule's row names them; a feeder from LP1 lands on U):
+    // its tag stands where the plan prints it, with no device, and the reading estimated a branch
+    // route to it. It is the feeder (its schedule's 1/0 in 1-1/2"), not a branch circuit to route
+    // or to list as unrouted, and its estimate is not taken off beside the feeder.
+    let (mut s, _) = building(|_| {});
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get_mut("spec").cloned().unwrap_or(spec);
+    spec["tags"].as_array_mut().expect("tags").push(circuit("LP1-7"));
+    spec["mep"]["panel_schedules"] = json!([{"panel": "LP1", "source": "E-101", "circuits": [
+        {"number": "7", "description": "PANELBOARD U (3 UNITS)", "breaker": "100", "poles": 2, "load_va": 30000.0, "source": "E-101"},
+        {"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 500.0, "source": "E-101"}
+    ]}]);
+    spec["mep"]["feeders"] = json!([{"tag": "F7", "from": "LP1", "to": "U", "sets": 1, "phases": 2, "size": "1/0", "material": "cu",
+        "conduits": 1, "conduit_in": 1.5, "source": "FEEDER SCHEDULE E-101"}]);
+    let systems = spec["mep"]["systems"].as_array_mut().expect("systems");
+    if !systems.iter().any(|y| y["name"] == json!("E-CIRCUIT-EST")) {
+        systems.push(json!({"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}));
+    }
+    spec["mep"]["runs"].as_array_mut().expect("runs").push(json!({"system": "E-CIRCUIT-EST", "level": "L1", "id": "circuit:L1:E-101:LP1-7#home",
+        "points": [[-14, 0], [-14, 600], [480, 600]], "size_in": [0.75, 0], "bottoms_ft": [9.25, 9.25], "size_source": "default", "height_source": "default"}));
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(r["feeder_circuits"], json!(1), "{r}");
+    let fed = &r["fed_as_feeders"][0];
+    assert_eq!((fed["circuit"].as_str(), fed["feeder"].as_str(), fed["to"].as_str()), (Some("LP1-7"), Some("F7"), Some("U")), "{r}");
+    let unrouted = r["unrouted"].as_array().cloned().unwrap_or_default();
+    assert!(!unrouted.iter().any(|u| u["circuit"] == json!("LP1-7")), "a feeder is not an unrouted branch circuit: {r}");
+    assert_eq!(r["routed_circuits"], json!(3), "the branch circuits still route: {r}");
+    let est = count(&mut s, json!({"kind": "conduit", "circuit": "LP1-7"}));
+    assert_eq!(est["count"], json!(0), "the feeder's estimated branch route is gone from the model and the takeoff: {est}");
+    // A reroute leaves it so.
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let r2 = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(r2["feeder_circuits"], json!(1), "{r2}");
+    assert_eq!(count(&mut s, json!({"kind": "conduit", "circuit": "LP1-7"}))["count"], json!(0));
+}

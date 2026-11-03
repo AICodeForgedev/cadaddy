@@ -4623,7 +4623,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
                 // much of them: where a registration is missing.
                 let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-                let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+                // By (an estimated route's piece, sheet on level).
+                let mut unplaced: BTreeMap<(bool, String), (usize, f64)> = BTreeMap::new();
                 // A circuit's estimated route drawn in a view of rooms (a typical-room plan) that
                 // can't be placed: each room's own circuits go in instead (with the devices
                 // stamped into the rooms), so it isn't a missing registration.
@@ -4639,7 +4640,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let mut in_views = 0usize;
                 // The runs no registration places, with what the report says of them: a typical
                 // room's plan's go into its rooms below.
-                let mut lost_runs: Vec<(String, f64, cadaddy_walk3d::MepRun)> = Vec::new();
+                let mut lost_runs: Vec<((bool, String), f64, cadaddy_walk3d::MepRun)> = Vec::new();
                 sp.mep.runs.retain_mut(|r| {
                     let start = r.points.first().and_then(|p| sim(*p, &r.level));
                     let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
@@ -4658,7 +4659,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         _ => {
                             let why = if start.is_some() { " one end" } else { "" };
                             let ft = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
-                            let key = format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level);
+                            // An estimated route's piece is not drawn conduit: said apart, so a
+                            // count of unplaced runs is never read as drawn work left out.
+                            let key =
+                                (estimated(r), format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level));
                             if lost_runs.len() < MAX_STAMPED {
                                 lost_runs.push((key, ft, r.clone()));
                             } else {
@@ -4690,19 +4694,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     ));
                     sp.mep.runs.extend(typical.runs);
                 }
-                if !unplaced.is_empty() {
-                    let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
-                    progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
+                let (lines, out) = unplaced_runs_report(&unplaced);
+                for l in lines {
+                    progress_line(&l);
                 }
-                for (k, (n, ft)) in unplaced.iter().take(MAX_LEFT_OUT) {
-                    left_out.push(json!({
-                        "what": "mep_runs",
-                        "where": k,
-                        "count": n,
-                        "feet": (ft * 10.0).round() / 10.0,
-                        "why": "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates",
-                    }));
-                }
+                left_out.extend(out.into_iter().take(MAX_LEFT_OUT));
                 if in_views > 0 {
                     progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
                 }
@@ -4728,18 +4724,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     None => false,
                 });
-                let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                // The drawn runs left out (an estimated route's pieces are counted apart: drawn on no
+                // print), the terminals and equipment.
+                let left = |est: bool| unplaced.iter().filter(|((e, _), _)| *e == est).map(|(_, (n, _))| *n).sum::<usize>();
+                let est_left = left(true);
+                let dropped = (left(false), before.1.saturating_sub(sp.mep.terminals.len()), before.2.saturating_sub(sp.mep.equipment.len()));
                 for (what, n) in [("mep_terminals", dropped.1), ("mep_equipment", dropped.2)] {
                     if n > 0 {
                         left_out.push(json!({"what": what, "count": n, "why": "no registration puts their sheet's view onto its level's architectural plan: kept out of the model"}));
                     }
                 }
                 progress_line(&format!(
-                    "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
+                    "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} drawn runs, {} estimated circuit route pieces (drawn on no print), {} terminals, {} equipment",
                     sp.mep.runs.len(),
                     sp.mep.terminals.len(),
                     sp.mep.equipment.len(),
                     dropped.0,
+                    est_left,
                     dropped.1,
                     dropped.2
                 ));
@@ -4900,7 +4901,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     job.add_finding(
                         StageName::BimBuild,
                         "MEP items not placed",
-                        &format!("{} runs, {} terminals and {} pieces of equipment are on sheets that don't line up with an architectural plan; they are not drawn", dropped.0, dropped.1, dropped.2),
+                        &format!(
+                            "{} drawn runs, {} terminals and {} pieces of equipment are on sheets that don't line up with an architectural plan; they are not drawn{}",
+                            dropped.0,
+                            dropped.1,
+                            dropped.2,
+                            if est_left > 0 { format!(" ({est_left} pieces of estimated circuit routes, drawn on no print, are left out too)") } else { String::new() }
+                        ),
                         2,
                         vec!["Register those sheets onto their level's plan".into()],
                         None,
@@ -12880,6 +12887,37 @@ fn shell_holds_rooms(rects: &[[cadaddy_geom::Vec2; 2]], rooms: &[[f64; 2]]) -> (
 
 /// How far outside its level's shell (feet) a placed point may still be: what is mounted on the
 /// building's outside walls or stands by them.
+/// The runs no registration placed, by (an estimated route's piece, sheet on level): the job's
+/// progress lines and its `left_out` entries. An estimated circuit route's pieces (chained through
+/// the circuit's tags, drawn on no print) are said apart from the drawn runs, so a count of
+/// unplaced runs is never read as drawn work left out.
+fn unplaced_runs_report(unplaced: &BTreeMap<(bool, String), (usize, f64)>) -> (Vec<String>, Vec<Value>) {
+    let mut lines = Vec::new();
+    for (est, what) in [(false, "MEP runs"), (true, "estimated circuit route pieces (drawn on no print)")] {
+        let list: Vec<String> = unplaced.iter().filter(|((e, _), _)| *e == est).map(|((_, k), (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
+        if !list.is_empty() {
+            lines.push(format!("  {what} not placeable by sheet: {}", list.join(", ")));
+        }
+    }
+    let out = unplaced
+        .iter()
+        .map(|((est, k), (n, ft))| {
+            json!({
+                "what": if *est { "estimated_circuit_routes" } else { "mep_runs" },
+                "where": k,
+                "count": n,
+                "feet": (ft * 10.0).round() / 10.0,
+                "why": if *est {
+                    "pieces of an estimated circuit route (drawn on no print: chained through the circuit's tags) where no registration of their level places them (another level's view of a several-level sheet, or tags off the building): kept out of the model; the router routes the circuit from its devices, or lists it as unrouted or as a feeder"
+                } else {
+                    "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates"
+                },
+            })
+        })
+        .collect();
+    (lines, out)
+}
+
 const SHELL_REACH_FT: f64 = 5.0;
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
@@ -17776,6 +17814,33 @@ mod tests {
         assert!(!in_room_view(&run(est, "E-6", [800.0, 300.0]), &regions), "between the views");
         assert!(!in_room_view(&run(est, "E-3", [300.0, 300.0]), &regions), "another sheet");
         assert!(!in_room_view(&run(super::super::printcond::DRAWN_SYSTEM, "E-6", [300.0, 300.0]), &regions), "drawn conduit");
+    }
+
+    #[test]
+    fn unplaced_estimated_route_pieces_are_said_apart_from_drawn_runs() {
+        let mut unplaced: BTreeMap<(bool, String), (usize, f64)> = BTreeMap::new();
+        unplaced.insert((false, "M-201 on Level 1".into()), (2, 30.04));
+        unplaced.insert((true, "E-201 on Level 1".into()), (5, 120.0));
+        unplaced.insert((true, "E-201 on Level 2 one end".into()), (1, 9.0));
+        let (lines, out) = unplaced_runs_report(&unplaced);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with("  MEP runs not placeable by sheet: M-201 on Level 1: 2 (30 ft)"), "{lines:?}");
+        assert!(!lines[0].contains("E-201"), "no estimated piece among the drawn runs: {lines:?}");
+        assert!(
+            lines[1].starts_with("  estimated circuit route pieces (drawn on no print) not placeable by sheet: E-201 on Level 1: 5 (120 ft)"),
+            "{lines:?}"
+        );
+        assert_eq!(out.len(), 3);
+        let what = |w: &str| out.iter().filter(|o| o["where"] == json!(w)).map(|o| o["what"].as_str().unwrap_or("")).collect::<Vec<_>>();
+        assert_eq!(what("M-201 on Level 1"), ["mep_runs"]);
+        assert_eq!(what("E-201 on Level 2 one end"), ["estimated_circuit_routes"]);
+        assert!(out.iter().all(|o| o["why"].as_str().is_some_and(|w| !w.is_empty())));
+        assert_eq!(out.iter().find(|o| o["what"] == json!("mep_runs")).map(|o| o["feet"].clone()), Some(json!(30.0)));
+        // Only estimated pieces left out: no line about drawn runs at all.
+        let only: BTreeMap<(bool, String), (usize, f64)> = [((true, "E-201 on Level 1".to_string()), (1, 1.0))].into_iter().collect();
+        let (lines, _) = unplaced_runs_report(&only);
+        assert!(lines.len() == 1 && lines[0].contains("estimated circuit route pieces"), "{lines:?}");
+        assert!(unplaced_runs_report(&BTreeMap::new()).0.is_empty());
     }
 
     #[test]

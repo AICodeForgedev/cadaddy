@@ -1360,6 +1360,39 @@ pub(crate) struct Routed {
     pub runs: Vec<MepRun>,
     pub tags: Vec<ElementTag>,
     pub report: Value,
+    /// The circuit tags (ids) that are feeders to gear, not branch circuits: the feeder's own
+    /// routing carries them, so their estimated branch routes go too.
+    pub feeders: BTreeSet<String>,
+}
+
+/// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
+/// circuit names the gear a feeder from that panel lands on (`PANELBOARD U (6 UNITS)` with a
+/// feeder from the panel to `U`), or the row's wire is that feeder (`feeder 7: …`). Such a
+/// circuit is the feeder (its schedule's conductors and raceway, routed with the feeders), not a
+/// branch homerun to devices.
+pub(crate) fn feeder_of<'a>(sp: &'a BuildingSpec, panel: &str, label: &str) -> Option<&'a cadaddy_walk3d::Feeder> {
+    let panel = panel.trim();
+    if panel.is_empty() {
+        return None;
+    }
+    let num = super::printcond::parse_circuit(label)?.1;
+    let first = num.split(',').next()?.trim().to_string();
+    let sched = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel))?;
+    let row = sched.circuits.iter().find(|c| c.number.trim() == first)?;
+    let words: Vec<String> = row
+        .description
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '/'))
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_uppercase)
+        .take(64)
+        .collect();
+    let wire = row.wire.trim().to_ascii_uppercase();
+    sp.mep.feeders.iter().filter(|f| f.from.trim().eq_ignore_ascii_case(panel) && !f.to.trim().is_empty()).find(|f| {
+        let to = f.to.trim().to_ascii_uppercase();
+        let tag = f.tag.trim().to_ascii_uppercase();
+        words.contains(&to)
+            || (!tag.is_empty() && wire.strip_prefix("FEEDER ").is_some_and(|w| w.split([':', ' ', ',']).next() == Some(tag.as_str())))
+    })
 }
 
 /// One circuit being routed.
@@ -1715,6 +1748,27 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             part: String::new(),
         })
         .collect();
+    // A circuit whose breaker feeds gear is that feeder (routed with the feeders, by the feeder
+    // schedule's conductors and raceway), not a branch circuit to devices.
+    let mut fed_as_feeders: Vec<Value> = Vec::new();
+    circs.retain(|c| {
+        let Some(f) = feeder_of(sp, &c.panel, &c.label) else { return true };
+        if let Some(t) = sp.tags.get(c.tag) {
+            out.feeders.insert(t.id.clone());
+        }
+        if fed_as_feeders.len() < MAX_ITEMS {
+            fed_as_feeders.push(json!({
+                "circuit": c.label,
+                "level": c.level,
+                "feeder": f.tag,
+                "from": f.from,
+                "to": f.to,
+                "source": f.source,
+            }));
+        }
+        false
+    });
+    let feeder_circuits = out.feeders.len();
     let mut by_label: HashMap<(String, String), Vec<usize>> = HashMap::new();
     for (ci, c) in circs.iter().enumerate() {
         by_label.entry((c.level.to_ascii_lowercase(), c.label.to_ascii_uppercase())).or_default().push(ci);
@@ -2912,6 +2966,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "fill": fill_rows,
         "derated": derated,
         "unrouted": unrouted,
+        "feeder_circuits": feeder_circuits,
+        "fed_as_feeders": fed_as_feeders,
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
     });
@@ -3098,9 +3154,11 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
     // A split circuit's own tag gives way to its parts'.
     routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
+    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it.
     let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
-        r.system == BRANCH_SYSTEM || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c)))
+        r.system == BRANCH_SYSTEM
+            || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c)))
     };
     replaced.runs = sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));

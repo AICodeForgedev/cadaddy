@@ -292,3 +292,44 @@ fn hostile_framing_never_panics() {
     let _ = field.bays_near(Vec2::new(0.0, 0.0), UPF);
     let _ = route_leg(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), &[0.5], 0.375, &field, UPF, &[], rules());
 }
+
+#[test]
+fn a_breaker_that_feeds_gear_is_its_feeder_not_a_branch_circuit() {
+    let row = |n: &str, desc: &str, wire: &str| cadaddy_walk3d::PanelCircuit {
+        number: n.into(),
+        description: desc.into(),
+        breaker: "100".into(),
+        poles: 2,
+        wire: wire.into(),
+        ..Default::default()
+    };
+    let feeder = |tag: &str, from: &str, to: &str| cadaddy_walk3d::Feeder { tag: tag.into(), from: from.into(), to: to.into(), ..Default::default() };
+    let mut sp = BuildingSpec::default();
+    sp.mep.panel_schedules = vec![
+        cadaddy_walk3d::PanelSchedule {
+            panel: "P2".into(),
+            circuits: vec![
+                // The gear named in the description (either word order, any punctuation).
+                row("3", "PANELBOARD U (6 UNITS)", ""),
+                row("4", "RECEPTACLES - LOBBY", ""),
+                // The feeder named in the wire column, the description saying nothing of it.
+                row("5", "SPARE", "feeder 7: 1 set of 3 #1 cu in 1-1/2\" conduit"),
+                row("6", "Unit sub-panel: X-2", ""),
+            ],
+            ..Default::default()
+        },
+        cadaddy_walk3d::PanelSchedule { panel: "Q".into(), circuits: vec![row("3", "PANELBOARD U", "")], ..Default::default() },
+    ];
+    sp.mep.feeders = vec![feeder("12", "P2", "U"), feeder("7", "P2", "W"), feeder("9", "p2", "x-2"), feeder("1", "MSB", "P2")];
+    assert_eq!(feeder_of(&sp, "P2", "P2-3").map(|f| f.to.as_str()), Some("U"));
+    assert_eq!(feeder_of(&sp, "P2", "P2-5").map(|f| f.tag.as_str()), Some("7"), "by the wire column's feeder tag");
+    assert_eq!(feeder_of(&sp, "p2", "P2-6").map(|f| f.tag.as_str()), Some("9"), "case and punctuation don't matter");
+    assert!(feeder_of(&sp, "P2", "P2-4").is_none(), "a branch circuit");
+    assert!(feeder_of(&sp, "P2", "P2-8").is_none(), "no schedule row");
+    assert!(feeder_of(&sp, "Q", "Q-3").is_none(), "no feeder from Q: a word alike is not a feeder");
+    assert!(feeder_of(&sp, "", "P2-3").is_none());
+    assert!(feeder_of(&sp, "P2", "not a circuit").is_none());
+    // Hostile text never panics.
+    sp.mep.panel_schedules[0].circuits.push(row("9", &"U ".repeat(10_000), &"FEEDER ".repeat(5_000)));
+    let _ = feeder_of(&sp, "P2", "P2-9");
+}
