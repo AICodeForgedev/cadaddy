@@ -61,13 +61,13 @@ fn find_root(parent: &mut [usize], mut i: usize) -> usize {
 
 /// The legend rows' symbols among the loose strokes of the objects with handles in `lo..hi` (one
 /// sheet), each no bigger than `max_size` across, outside `exclude` (the legend tables
-/// themselves), for the rows `wanted` takes.
+/// themselves), for the rows `wanted` takes (by their words and their legend's sheet).
 pub(crate) fn find(
     d: &Drawing,
     lo: u64,
     hi: u64,
     legend: &BTreeMap<Shape, (String, String)>,
-    wanted: &dyn Fn(&str) -> bool,
+    wanted: &dyn Fn(&str, &str) -> bool,
     max_size: f64,
     exclude: &[[f64; 4]],
 ) -> Vec<Found> {
@@ -151,7 +151,7 @@ pub(crate) fn find(
                         k
                     })
                     .collect();
-                if let Some(row) = shape_of(turned.iter()).and_then(|s| legend.get(&s)).filter(|(w, _)| wanted(w)) {
+                if let Some(row) = shape_of(turned.iter()).and_then(|s| legend.get(&s)).filter(|(w, sheet)| wanted(w, sheet)) {
                     hit = Some(row);
                     break 'turns;
                 }
@@ -213,17 +213,17 @@ mod tests {
         push(&mut d, EntityKind::Circle(Circle { center: Vec3::new(200.0, 10.0, 0.0), radius: 2.0 }));
         push(&mut d, EntityKind::Line(Line { a: Vec3::new(198.0, 10.0, 0.0), b: Vec3::new(202.0, 10.0, 0.0) }));
         let hi = d.handseed;
-        let found = find(&d, lo, hi, &legend, &|w| w.contains("STROBE"), 12.0, &[[490.0, 490.0, 510.0, 510.0]]);
+        let found = find(&d, lo, hi, &legend, &|w, _| w.contains("STROBE"), 12.0, &[[490.0, 490.0, 510.0, 510.0]]);
         let at: Vec<(i64, i64)> = found.iter().map(|f| (f.at.x.round() as i64, f.at.y.round() as i64)).collect();
         assert_eq!(at.len(), 3, "the three copies, not the sample in the legend: {found:?}");
         assert!(at.contains(&(9, 10)) && at.iter().any(|a| a.0 == 60) && at.iter().any(|a| a.0 == 109), "{at:?}");
         assert!(found.iter().all(|f| f.row == "WALL STROBE" && f.legend_sheet == "E-313" && f.handles.len() == 5), "{found:?}");
         // Rows not wanted: none.
-        assert!(find(&d, lo, hi, &legend, &|w| w.contains("SMOKE"), 12.0, &[]).is_empty());
+        assert!(find(&d, lo, hi, &legend, &|w, _| w.contains("SMOKE"), 12.0, &[]).is_empty());
         // Hostile sizes and empty legends never panic.
         for s in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            let _ = find(&d, lo, hi, &legend, &|_| true, s, &[]);
+            let _ = find(&d, lo, hi, &legend, &|_, _| true, s, &[]);
         }
-        assert!(find(&d, lo, hi, &BTreeMap::new(), &|_| true, 12.0, &[]).is_empty());
+        assert!(find(&d, lo, hi, &BTreeMap::new(), &|_, _| true, 12.0, &[]).is_empty());
     }
 }

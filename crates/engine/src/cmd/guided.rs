@@ -10386,7 +10386,16 @@ fn fa_loose_devices(
             })
             .collect();
         let max_size = 6.0 * h;
-        let found = super::loosesym::find(d, span.lo, span.hi, legend, &|w| r.fa_kind_of(w).is_some(), max_size, &tables);
+        // A fire alarm row: its words say so, or a fire alarm plan's legend holds it (an
+        // electrical legend's `SPEAKER` or `AUDIO/VISUAL OUTLET` is a low voltage device).
+        let fa_row = |w: &str, sheet: &str| {
+            let u = w.to_ascii_uppercase();
+            r.fa_kind_of(w).is_some()
+                && (u.contains("FIRE ALARM")
+                    || u.contains("F.A.")
+                    || fire_alarm.contains(&sheet.split('/').next().unwrap_or(sheet).trim().to_ascii_uppercase()))
+        };
+        let found = super::loosesym::find(d, span.lo, span.hi, legend, &fa_row, max_size, &tables);
         for f in found {
             let at = [f.at.x, f.at.y];
             let Some(region) = job.level_at(at).filter(|g| super::printmep::building_level(&g.level)) else { continue };
@@ -16375,6 +16384,9 @@ mod tests {
             .collect();
         let mut legend = BTreeMap::new();
         legend.insert(shape_of(sample.iter()).unwrap(), ("WALL STROBE".to_string(), "E-313".to_string()));
+        // The same shape in another legend, a low voltage row: not a fire alarm device.
+        let mut av = BTreeMap::new();
+        av.insert(shape_of(sample.iter()).unwrap(), ("AUDIO/VISUAL OUTLET".to_string(), "E-314".to_string()));
         job.sheet_regions = vec![SheetRegion {
             number: "E-313".into(),
             level: "6".into(),
@@ -16402,6 +16414,7 @@ mod tests {
         // One already read there is not read twice; a sheet that isn't a fire alarm plan has none.
         let have = vec![super::super::readers::ReadDevice { tag: "X".into(), at: [100.0, 100.0], ..Default::default() }];
         assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have).len(), 1);
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &av, &[]).is_empty(), "an electrical legend's audio/visual outlet");
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "POWER PLAN"}]}));
         assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]).is_empty());
     }
