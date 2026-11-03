@@ -36,7 +36,7 @@ pub use cadaddy_color as color;
 pub use cadaddy_geom as geom;
 pub use constraint::*;
 pub use entity::*;
-pub use extents::{MAX_BLOCK_DEPTH, entity_bounds};
+pub use extents::{BlockBoundsCache, MAX_BLOCK_DEPTH, entity_bounds, entity_bounds_cached};
 pub use gdt::*;
 pub use header::{HVal, Header};
 pub use plotstyle::*;
@@ -530,10 +530,13 @@ impl Drawing {
     /// Bounds of all visible entities in a space.
     pub fn extents(&self, space: &Space) -> cadaddy_geom::Bounds2 {
         let mut b = cadaddy_geom::Bounds2::EMPTY;
+        // One block-bounds cache for the whole space: every reference to a block reuses its
+        // measured contents instead of measuring the definition again.
+        let mut cache = BlockBoundsCache::default();
         if let Some(store) = self.space(space) {
             for e in store.iter() {
                 if self.is_visible(e) {
-                    b = b.union(&entity_bounds(self, e, 0));
+                    b = b.union(&entity_bounds_cached(self, e, 0, &mut cache));
                 }
             }
         }

@@ -78,15 +78,35 @@ fn mtext_box(t: &crate::MText) -> Bounds2 {
 }
 
 pub fn entity_bounds(d: &Drawing, e: &Entity, depth: usize) -> Bounds2 {
+    entity_bounds_with(d, e, depth, &mut HashMap::new())
+}
+
+/// The bounds of block contents measured so far, kept across the entities of one unchanged
+/// drawing. Measuring many entities with [`entity_bounds_cached`] and one cache measures each
+/// block definition once per depth for all of them; a fresh cache per entity would measure a
+/// block again for every reference to it, R references to a block of B entities costing R x B
+/// (CWE-407). Use a cache only while the drawing it measured is unchanged.
+#[derive(Default)]
+pub struct BlockBoundsCache<'a> {
+    /// By block name and depth.
+    drawn: HashMap<(&'a str, usize), Bounds2>,
+}
+
+/// [`entity_bounds`] reusing the block bounds `cache` holds from earlier calls on drawing `d`.
+pub fn entity_bounds_cached<'a>(d: &'a Drawing, e: &Entity, depth: usize, cache: &mut BlockBoundsCache<'a>) -> Bounds2 {
+    entity_bounds_with(d, e, depth, &mut cache.drawn)
+}
+
+fn entity_bounds_with<'a>(d: &'a Drawing, e: &Entity, depth: usize, blocks: &mut HashMap<(&'a str, usize), Bounds2>) -> Bounds2 {
     // A top-level annotative object measures as it draws at the current annotation scale.
     if depth == 0 {
         match d.anno_draw(e) {
             crate::AnnoDraw::Plain => {}
             crate::AnnoDraw::Hidden => return Bounds2::EMPTY,
-            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, &mut HashMap::new()),
+            crate::AnnoDraw::Scaled(f) => return bounds_in(d, &crate::anno_scaled(e, f), 0, blocks),
         }
     }
-    bounds_in(d, e, depth, &mut HashMap::new())
+    bounds_in(d, e, depth, blocks)
 }
 
 /// [`entity_bounds`] with the bounds of block contents (in block coordinates) already computed,
@@ -499,5 +519,56 @@ mod tests {
         let mut empty = ml;
         empty.text = Some(crate::MText { contents: " ".into(), ..mtext });
         assert!(bounds(EntityKind::MLeader(Box::new(empty))).max.x < 26.0);
+    }
+
+    #[test]
+    fn a_shared_block_cache_measures_as_a_fresh_one_for_each_entity() {
+        // Our block store keeps one entity per handle: each line gets its own.
+        let line = |h: u64, a: (f64, f64), b: (f64, f64), layer: &str| {
+            let mut e = Entity::new(crate::Handle(h), EntityKind::Line(crate::Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }));
+            e.common.layer = layer.into();
+            e
+        };
+        let ins = |block: &str, at: f64| {
+            Entity::new(
+                crate::Handle(2),
+                EntityKind::Insert(crate::Insert {
+                    block: block.into(),
+                    insert: Vec3::new(at, at, 0.0),
+                    scale: Vec3::new(1.0, 1.0, 1.0),
+                    rotation: 0.0,
+                    attribs: Vec::new(),
+                    cols: 1,
+                    rows: 1,
+                    col_spacing: 0.0,
+                    row_spacing: 0.0,
+                    clip: None,
+                }),
+            )
+        };
+        let mut d = Drawing::new_imperial();
+        d.ensure_layer("OFF");
+        if let Some(l) = d.layer_mut("OFF") {
+            l.on = false;
+        }
+        // A block with a part on a layer turned off (left out when drawn), and a block that
+        // nests it.
+        let mut b = crate::Block::new("B");
+        b.entities.push(line(0x10, (0.0, 0.0), (1.0, 1.0), "0"));
+        b.entities.push(line(0x11, (0.0, 0.0), (5.0, 5.0), "OFF"));
+        d.blocks.insert("B".into(), std::sync::Arc::new(b));
+        let mut n = crate::Block::new("N");
+        n.entities.push(ins("B", 10.0));
+        d.blocks.insert("N".into(), std::sync::Arc::new(n));
+        let ents: Vec<Entity> = (0..50).map(|i| ins(if i % 2 == 0 { "B" } else { "N" }, f64::from(i))).collect();
+        // One cache for all the references, plain and nested.
+        let mut cache = BlockBoundsCache::default();
+        for e in &ents {
+            let drawn = entity_bounds_cached(&d, e, 0, &mut cache);
+            let want = entity_bounds(&d, e, 0);
+            assert_eq!((drawn.min, drawn.max), (want.min, want.max));
+            // The part on the layer turned off is left out, nested or not.
+            assert!((drawn.width() - 1.0).abs() < 1e-9, "{drawn:?}");
+        }
     }
 }
