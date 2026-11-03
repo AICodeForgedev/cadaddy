@@ -231,6 +231,23 @@ pub fn element_of(e: &Entity) -> Element {
                     _ => "IfcBuildingElementProxy",
                 }
             }
+            // A trade's piece (Q6162), as the IFC export writes it.
+            "atom" => match mep_part.strip_prefix("atom:").unwrap_or_default() {
+                "pour" => "IfcBuildingElementPart",
+                "underlayment" => "IfcCovering",
+                "rebar" => "IfcReinforcingBar",
+                "mesh" => "IfcReinforcingMesh",
+                "tendon" => "IfcTendon",
+                "anchor" => "IfcTendonAnchor",
+                "stud" | "track" | "plate" | "blocking" | "backing" | "furring" | "grid_main" | "grid_tee" | "wall_angle" | "rim" | "truss" => {
+                    "IfcMember"
+                }
+                "header" | "joist" => "IfcBeam",
+                "sheathing" => "IfcPlate",
+                "sheet" | "tile" | "flooring" | "base" | "paint" | "vapor_barrier" => "IfcCovering",
+                "batt" | "board" | "cmu" | "frame" => "IfcBuildingElementPart",
+                _ => "IfcDiscreteAccessory",
+            },
             // A piece of an electrical run (Q6157), as the IFC export writes it.
             "mep" if mep_part.starts_with("atom:") => match mep_part.strip_prefix("atom:").unwrap_or_default() {
                 "conduit" => "IfcCableCarrierSegment",

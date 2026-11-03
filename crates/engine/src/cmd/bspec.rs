@@ -2057,6 +2057,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     mark("concrete");
+    // Every trade's pieces (Q6162): pours and reinforcement, studs and plates, sheets, batts,
+    // firestops, paint, flooring, frames and hardware, accessories; counted in the index.
+    let trade_pieces = super::tradeatoms::build(d, &sp, None);
+    mark("trade pieces");
     // Takeoff tables linked to the model count it again.
     let qty_tables = super::mepqty::refresh(d, &sp);
     mark("takeoff tables");
@@ -2115,6 +2119,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         o.extend(x.clone());
     }
     if let (Some(o), Some(x)) = (r.as_object_mut(), atoms.as_object()) {
+        o.extend(x.clone());
+    }
+    if let (Some(o), Some(x)) = (r.as_object_mut(), trade_pieces.as_object()) {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);

@@ -4329,6 +4329,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
     // The circuits whose estimated routes were all in typical-room views (their tags not stored).
     let mut room_view_circuits: BTreeSet<String> = BTreeSet::new();
+    // The trades' documents read before (a resumed job): the draft starts the spec again.
+    let prev_trades = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp).filter(super::tradeatoms::has_facts).map(|sp| sp.trades);
     let draft_result = s.execute("bspec.draft", &draft_params);
     match &draft_result {
         Ok(spec) => {
@@ -5390,6 +5392,27 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             t_notes.elapsed().as_secs_f64()
         ));
         sp.mount_notes = notes;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    // The trades' documents (Q6162): the submittals' and specification sections' facts every
+    // trade's pieces are laid out from (concrete mix, PT design, joists, trusses, hardware sets,
+    // accessories…). Read once: a resumed job keeps what it read.
+    if !job.submittals.is_empty()
+        && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+    {
+        let t_docs = web_time::Instant::now();
+        let line = match prev_trades {
+            Some(prev) => {
+                sp.trades = prev;
+                "kept from the job's earlier read".to_string()
+            }
+            None => {
+                let mut paths = job.submittals.clone();
+                paths.extend(job_specs(job));
+                super::tradeatoms::read_documents(s, &mut sp, &paths)
+            }
+        };
+        progress_line(&format!("  trade documents: {line} ({:.1} s)", t_docs.elapsed().as_secs_f64()));
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     let budget_s = super::bspec::BUILD_BUDGET_S;

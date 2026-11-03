@@ -764,13 +764,18 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         b.list.sheet = paper::sheet(d, name);
     }
     if let Some(store) = d.space(space) {
+        // A large model space is built in parallel; the overlays below (layer lines) go on it
+        // the same.
         #[cfg(not(target_arch = "wasm32"))]
-        if !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK {
+        let parallel = !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK;
+        #[cfg(target_arch = "wasm32")]
+        let parallel = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if parallel {
             build_parallel(&mut b, d, store);
-            return b.list;
         }
         let mut viewports = 0usize;
-        for e in store.iter() {
+        for e in store.iter().filter(|_| !parallel) {
             if paper && let EntityKind::Viewport(vp) = &e.kind {
                 if viewports < MAX_VIEWPORTS {
                     viewports += 1;

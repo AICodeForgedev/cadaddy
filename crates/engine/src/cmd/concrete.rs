@@ -217,7 +217,7 @@ impl Rules {
         r
     }
 
-    fn cover(&self, kind: &str) -> f64 {
+    pub(crate) fn cover(&self, kind: &str) -> f64 {
         self.cover_in.get(kind).copied().unwrap_or(1.5)
     }
 
