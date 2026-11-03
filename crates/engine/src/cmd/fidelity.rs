@@ -47,6 +47,8 @@ const MAX_RULES: usize = 500;
 const MAX_PICK: usize = 200_000;
 /// Most handles `of` classifies.
 const MAX_OF: usize = 1_000;
+/// Milliseconds a frame of the 3D view spends streaming cells in (as the view does).
+const FRAME_STREAM_MS: f64 = 12.0;
 /// Bytes a vertex takes in the 3D view's GPU buffers (for the report's estimate).
 const GPU_VERTEX: usize = 68;
 
@@ -64,7 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{rules?: [{kinds?, trades?, categories?, parts?, words?, atoms?: bool, min_size_in?, max_size_in?, min_extent_ft?, max_extent_ft?, tier: building|floor|room|detail, line_from?: tier (below its tier its run draws as a line from this one), why?}] (first match wins; replaces the project's), auto?: {building_ft?, floor_ft?, room_ft?, margin?} (view heights at which Auto changes tier, and the hysteresis), default_tier?, reset?: bool (back to the built-in rules)} → {source: project|default, auto, default_tier, rules}: which tier each element draws at, kept in the drawing",
         ),
         CommandSpec::new(REPORT, "Model Fidelity Report", run_report)
-            .params("{width?: px (1600), height?: px (1000), room?: name or number (the room to zoom into, by its devices' room; default the most typical room: the commonest receptacle count), dir?: [x, y, z] (view direction; default from the south-west, above), compare?: bool (also build the model without fidelity and measure it)} → {elements, tiers: {tier: {elements, tris, base, instanced, streamed, streamed_tris}}, build_ms, model_mb, instances, prototypes, whole: {height_ft, auto, at: {tier: {tris_drawn, chunks, instances, stream_cells, stream_tris, held_mb, visible_ms, stream_ms, raster_ms}}}, room: {height_ft, auto, receptacles, receptacles_drawn, ms, stream_cells}, everything_tris, without?: {build_ms, model_mb, tris_drawn, visible_ms, raster_ms, gpu_mb_est}}: what each fidelity tier holds and draws on this model, measured")
+            .params("{width?: px (1600), height?: px (1000), room?: name or number (the room to zoom into, by its devices' room; default the most typical room: the commonest receptacle count), dir?: [x, y, z] (view direction; default from the south-west, above), compare?: bool (also build the model without fidelity and measure it)} → {elements, tiers: {tier: {elements, tris, base, instanced, streamed, streamed_tris}}, build_ms, model_mb, instances, prototypes, whole: {height_ft, auto, at: {tier: {tris_drawn, chunks, instances, stream_cells, stream_tris, held_mb, visible_ms, stream_ms, raster_ms}}}, room: {height_ft, auto, receptacles, receptacles_drawn_first_frame, receptacles_drawn, first_frame_ms, all_streamed_ms, frames_to_stream, stream_cells}, everything_tris, without?: {build_ms, model_mb, tris_drawn, visible_ms, raster_ms, gpu_mb_est}}: what each fidelity tier holds and draws on this model, measured")
             .noundo(),
     ]
 }
@@ -735,18 +737,30 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             let ft = v.height / upf;
             // Zoomed in from the whole building: Auto steps down to the room's tier.
             let tier = auto.tier(ft, Some(auto.tier(whole_ft, None)));
+            // As the 3D view does it: the first frame streams for at most its budget (the
+            // receptacles are instances, already loaded), the next frames bring the rest.
             let mut st = Stream::default();
             let t1 = web_time::Instant::now();
-            let step = st.update(&m, &v, tier, f64::INFINITY);
-            let vis = m.visible_at(&v, tier, None);
-            let show_ms = ms(t1);
+            let first = st.update(&m, &v, tier, FRAME_STREAM_MS);
+            let first_vis = m.visible_at(&v, tier, None);
+            let first_ms = ms(t1);
             let in_room: Vec<usize> = recs.iter().copied().filter(|i| f.elems.get(*i).is_some_and(|e| inside(&b, e))).collect();
+            let drawn_first = in_room.iter().filter(|i| drawn(&m, &st, &first_vis, &v, **i)).count();
+            let mut frames = 1;
+            let mut pending = first.pending;
+            while pending > 0 && frames < 10_000 {
+                pending = st.update(&m, &v, tier, FRAME_STREAM_MS).pending;
+                frames += 1;
+            }
+            let vis = m.visible_at(&v, tier, None);
+            let all_ms = ms(t1);
             let shown = in_room.iter().filter(|i| drawn(&m, &st, &vis, &v, **i)).count();
             let (lt, ll) = m.loaded_at(tier);
             let gpu = (lt + st.tris()) * 3 * GPU_VERTEX + (ll + st.cells.values().map(|c| c.scene.lines.len()).sum::<usize>()) * 2 * GPU_VERTEX;
             json!({
                 "height_ft": (ft * 10.0).round() / 10.0, "auto": tier.name(),
-                "receptacles": n, "receptacles_in_view_box": in_room.len(), "receptacles_drawn": shown, "ms": show_ms, "stream_cells": step.added,
+                "receptacles": n, "receptacles_in_view_box": in_room.len(), "receptacles_drawn_first_frame": drawn_first, "receptacles_drawn": shown,
+                "first_frame_ms": first_ms, "all_streamed_ms": all_ms, "frames_to_stream": frames, "stream_cells": st.cells.len(),
                 "tris_drawn": vis.tris + st.tris(), "held_mb": mb(m.bytes() + st.bytes), "gpu_mb_est": mb(gpu),
                 "rooms_grouped": rooms.len(),
             })
