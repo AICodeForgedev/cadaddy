@@ -7265,13 +7265,19 @@ fn copy_room_fixtures(
             [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
         })
     };
-    // Each typed room's fixtures.
+    // Each typed room's fixtures: in its outline, or booked to it (its bath, outside the outline
+    // its label traced, by the unit's footprint).
     let in_room: Vec<Vec<&super::readers::ReadDevice>> = rooms
         .iter()
-        .map(|(_, level, outline, _)| {
+        .enumerate()
+        .map(|(i, (name, level, outline, number))| {
+            let booked = stamped_room(name, number, i);
             fixtures
                 .iter()
-                .filter(|f| digits(&f.level) == digits(level) && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(f.at[0], f.at[1])))
+                .filter(|f| {
+                    digits(&f.level) == digits(level)
+                        && (f.room == booked || cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(f.at[0], f.at[1])))
+                })
                 .copied()
                 .collect()
         })
