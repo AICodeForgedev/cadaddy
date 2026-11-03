@@ -18,13 +18,17 @@
 //! Graphics, 1993); view-volume culling of bounding boxes and front-to-back ordering as in
 //! Akenine-Möller, Haines and Hoffman, *Real-Time Rendering*, 4th ed. (2018), chapter 19.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadaddy_color::Rgb;
-use cadaddy_doc::{Drawing, EntityKind, EntityStore, Space};
+use cadaddy_doc::{Drawing, Entity, EntityKind, EntityStore, Handle, Space};
 use cadaddy_geom::{Mat4, Vec3};
 
 use crate::shade::{Line3, Scene, ShadeView, Tri, scene, scene_clipped};
+
+mod fid;
+pub use fid::{AutoTiers, Elem, ElemClass, Fid, Force, Grid, GridCell, Held, MAX_MARKERS, NO_GROUP, STREAM_BUDGET, Show, Stream, StreamCell, StreamStep, Tier, TierCount};
 
 /// A box in space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -86,6 +90,8 @@ pub struct Chunk {
     pub tris: std::ops::Range<usize>,
     pub lines: std::ops::Range<usize>,
     pub bounds: Aabb,
+    /// The fidelity tiers it draws at ([`Show::ALWAYS`] in a model built without fidelity).
+    pub show: Show,
 }
 
 /// A block's surfaces at three levels of detail (full, simplified, box), in block coordinates.
@@ -103,6 +109,8 @@ pub struct Instance {
     /// Block coordinates to the drawing's.
     pub m: Mat4,
     pub bounds: Aabb,
+    /// The fidelity tiers it draws at.
+    pub show: Show,
 }
 
 /// The 3D view's model.
@@ -114,6 +122,8 @@ pub struct Model3 {
     pub protos: Vec<Proto>,
     pub instances: Vec<Instance>,
     pub bounds: Aabb,
+    /// The elements by fidelity tier, when built with a classifier ([`build_fid`]).
+    pub fid: Option<std::sync::Arc<Fid>>,
 }
 
 impl Default for Aabb {
@@ -129,6 +139,11 @@ pub struct Visible {
     /// (prototype, level, instance indices).
     pub instances: Vec<(u32, u8, Vec<u32>)>,
     pub tris: usize,
+    /// The fidelity tier drawn.
+    pub tier: Tier,
+    /// Elements shown as markers (indices in [`Fid::elems`]): the ones a search forces into the
+    /// view that its tier doesn't draw.
+    pub markers: Vec<u32>,
 }
 
 /// Pixels a prototype covers below which it draws simplified, and below which as a box.
@@ -136,17 +151,29 @@ pub const LOD_SIMPLE_PX: f64 = 48.0;
 pub const LOD_BOX_PX: f64 = 6.0;
 
 impl Model3 {
-    /// What the view `v` shows, levels of detail chosen and nearest first.
+    /// What the view `v` shows, levels of detail chosen and nearest first (every tier).
     pub fn visible(&self, v: &ShadeView) -> Visible {
+        self.visible_at(v, Tier::Detail, None)
+    }
+
+    /// What the view `v` shows at fidelity `tier`: the chunks and instances of that tier in view,
+    /// levels of detail chosen, nearest first; elements `force` names that the tier hides, as
+    /// markers.
+    pub fn visible_at(&self, v: &ShadeView, tier: Tier, force: Option<&Force>) -> Visible {
         let px = v.height / f64::from(v.height_px.max(1));
         let depth = |b: &Aabb| -b.center().dot(v.dir);
-        let mut chunks: Vec<(f64, usize)> =
-            self.chunks.iter().enumerate().filter(|(_, c)| in_view(&c.bounds, v)).map(|(i, c)| (depth(&c.bounds), i)).collect();
+        let mut chunks: Vec<(f64, usize)> = self
+            .chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.show.at(tier) && in_view(&c.bounds, v))
+            .map(|(i, c)| (depth(&c.bounds), i))
+            .collect();
         chunks.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut tris = chunks.iter().filter_map(|(_, i)| self.chunks.get(*i)).map(|c| c.tris.len()).sum::<usize>();
         let mut groups: std::collections::BTreeMap<(u32, u8), Vec<(f64, u32)>> = std::collections::BTreeMap::new();
         for (i, inst) in self.instances.iter().enumerate() {
-            if !in_view(&inst.bounds, v) {
+            if !inst.show.at(tier) || !in_view(&inst.bounds, v) {
                 continue;
             }
             let size = inst.bounds.diag() / px;
@@ -172,7 +199,26 @@ impl Model3 {
             let near = |g: &(u32, u8, Vec<u32>)| g.2.first().and_then(|i| self.instances.get(*i as usize)).map_or(0.0, |x| depth(&x.bounds));
             near(a).total_cmp(&near(b))
         });
-        Visible { chunks: chunks.into_iter().map(|c| c.1).collect(), instances, tris }
+        let markers = match (&self.fid, force) {
+            (Some(f), Some(force)) => f.forced(v, tier, force),
+            _ => Vec::new(),
+        };
+        Visible { chunks: chunks.into_iter().map(|c| c.1).collect(), instances, tris, tier, markers }
+    }
+
+    /// What a GPU holds for drawing up to `tier`: the triangles and lines of the base chunks that
+    /// draw at or below it, and of every prototype's levels of detail (streamed cells come on top).
+    pub fn loaded_at(&self, tier: Tier) -> (usize, usize) {
+        let (mut t, mut l) = (0, 0);
+        for c in self.chunks.iter().filter(|c| c.show.from <= tier) {
+            t += c.tris.len();
+            l += c.lines.len();
+        }
+        for p in &self.protos {
+            t += p.lods.iter().map(|s| s.tris.len()).sum::<usize>();
+            l += p.lods.iter().map(|s| s.lines.len()).sum::<usize>();
+        }
+        (t, l)
     }
 
     /// Triangles in the whole model, instances counted as placed.
@@ -180,12 +226,12 @@ impl Model3 {
         self.base.tris.len() + self.instances.iter().filter_map(|i| self.protos.get(i.proto as usize)).map(|p| p.lods[0].tris.len()).sum::<usize>()
     }
 
-    /// Bytes the model holds (triangles, lines, matrices).
+    /// Bytes the model holds (triangles, lines, matrices; the fidelity index).
     pub fn bytes(&self) -> usize {
-        let scene = |s: &Scene| s.tris.len() * std::mem::size_of::<Tri>() + s.lines.len() * std::mem::size_of::<Line3>();
-        scene(&self.base)
-            + self.protos.iter().map(|p| p.lods.iter().map(scene).sum::<usize>()).sum::<usize>()
+        scene_bytes(&self.base)
+            + self.protos.iter().map(|p| p.lods.iter().map(scene_bytes).sum::<usize>()).sum::<usize>()
             + self.instances.len() * std::mem::size_of::<Instance>()
+            + self.fid.as_ref().map_or(0, |f| f.bytes())
     }
 
     /// The model as one flat scene (every instance placed): for the CPU rasterizer.
@@ -331,8 +377,14 @@ fn bounds_of(s: &Scene) -> Aabb {
     b
 }
 
-/// The base scene's triangles and lines regrouped into a grid of chunks over the plan.
-fn chunked(mut s: Scene) -> (Scene, Vec<Chunk>) {
+/// Bytes a scene's triangles and lines take.
+pub(crate) fn scene_bytes(s: &Scene) -> usize {
+    s.tris.len() * std::mem::size_of::<Tri>() + s.lines.len() * std::mem::size_of::<Line3>()
+}
+
+/// The base scene's triangles and lines regrouped into a grid of chunks over the plan: by the tiers they draw at
+/// (`tri_show`, `line_show`, parallel to them; missing: always), then by a grid over the plan.
+fn chunked_by(mut s: Scene, tri_show: &[Show], line_show: &[Show]) -> (Scene, Vec<Chunk>) {
     let b = bounds_of(&s);
     if b.is_empty() {
         return (s, Vec::new());
@@ -344,39 +396,60 @@ fn chunked(mut s: Scene) -> (Scene, Vec<Chunk>) {
         let j = (((p.y - b.lo.y) / h * n as f64) as usize).min(n - 1);
         j * n + i
     };
-    // The triangles' owners (LIGHTBAKE's lookup) move with them.
+    let shows: Vec<Show> = {
+        let mut v: Vec<Show> = tri_show.iter().chain(line_show).copied().collect();
+        v.push(Show::ALWAYS);
+        v.sort();
+        v.dedup();
+        v
+    };
+    let band = |sh: Show| shows.binary_search(&sh).unwrap_or(0);
+    let key = |sh: Option<&Show>, c: usize| band(sh.copied().unwrap_or(Show::ALWAYS)) * n * n + c;
+    // The triangles' owners (LIGHTBAKE's lookup) move with them, the lines' too.
     let owners = std::mem::take(&mut s.owners);
     let keep_owners = owners.len() == s.tris.len();
+    let line_owners = std::mem::take(&mut s.line_owners);
+    let keep_line_owners = line_owners.len() == s.lines.len();
     let mut tris: Vec<(usize, Tri, cadaddy_doc::Handle)> = s
         .tris
         .drain(..)
         .enumerate()
-        .map(|(k, t)| (cell((t.p[0] + t.p[1] + t.p[2]) * (1.0 / 3.0)), t, owners.get(k).copied().unwrap_or_default()))
+        .map(|(k, t)| (key(tri_show.get(k), cell((t.p[0] + t.p[1] + t.p[2]) * (1.0 / 3.0))), t, owners.get(k).copied().unwrap_or_default()))
         .collect();
     tris.sort_by_key(|x| x.0);
-    let mut lines: Vec<(usize, Line3)> = s.lines.drain(..).map(|l| (cell((l.a + l.b) * 0.5), l)).collect();
+    let mut lines: Vec<(usize, Line3, cadaddy_doc::Handle)> = s
+        .lines
+        .drain(..)
+        .enumerate()
+        .map(|(k, l)| (key(line_show.get(k), cell((l.a + l.b) * 0.5)), l, line_owners.get(k).copied().unwrap_or_default()))
+        .collect();
     lines.sort_by_key(|x| x.0);
-    let mut chunks: Vec<Chunk> = (0..n * n).map(|_| Chunk { tris: 0..0, lines: 0..0, bounds: Aabb::EMPTY }).collect();
+    let mut chunks: Vec<Chunk> = (0..shows.len() * n * n)
+        .map(|k| Chunk { tris: 0..0, lines: 0..0, bounds: Aabb::EMPTY, show: shows.get(k / (n * n)).copied().unwrap_or(Show::ALWAYS) })
+        .collect();
     let (mut ti, mut li) = (0usize, 0usize);
     for (c, chunk) in chunks.iter_mut().enumerate() {
         let start = ti;
-        while ti < tris.len() && tris[ti].0 == c {
-            for p in tris[ti].1.p {
+        while let Some(t) = tris.get(ti).filter(|t| t.0 == c) {
+            for p in t.1.p {
                 chunk.bounds.grow(p);
             }
             ti += 1;
         }
         chunk.tris = start..ti;
         let start = li;
-        while li < lines.len() && lines[li].0 == c {
-            chunk.bounds.grow(lines[li].1.a);
-            chunk.bounds.grow(lines[li].1.b);
+        while let Some(l) = lines.get(li).filter(|l| l.0 == c) {
+            chunk.bounds.grow(l.1.a);
+            chunk.bounds.grow(l.1.b);
             li += 1;
         }
         chunk.lines = start..li;
     }
     if keep_owners {
         s.owners = tris.iter().map(|x| x.2).collect();
+    }
+    if keep_line_owners {
+        s.line_owners = lines.iter().map(|x| x.2).collect();
     }
     s.tris = tris.into_iter().map(|x| x.1).collect();
     s.lines = lines.into_iter().map(|x| x.1).collect();
@@ -439,6 +512,127 @@ pub fn build_clipped(
     total: &AtomicUsize,
     extra_planes: &[cadaddy_doc::SectionPlane],
 ) -> Model3 {
+    build_impl(d, space, tol, bg, progress, total, extra_planes, None)
+}
+
+/// What a model element is for fidelity ([`build_fid`]); `None`: not an element (drawn always).
+pub type Classifier<'a> = dyn Fn(&Drawing, &Entity) -> Option<ElemClass> + Sync + 'a;
+
+/// How [`build_fid`] holds a model's elements.
+#[derive(Clone, Copy, Debug)]
+pub struct FidOptions {
+    /// Elements of this tier and finer are streamed ([`Stream`]) rather than held, unless
+    /// repeated (then they are instances).
+    pub stream_from: Tier,
+    /// Identical meshes repeated this many times or more are drawn as instances of one prototype.
+    pub min_repeat: usize,
+}
+
+impl Default for FidOptions {
+    fn default() -> Self {
+        FidOptions { stream_from: Tier::Room, min_repeat: 4 }
+    }
+}
+
+/// Like [`build_clipped`], with each element of the model given a fidelity tier by `classify`
+/// ([`Model3::fid`]): its chunks and instances draw at their tiers ([`Model3::visible_at`]);
+/// identical meshes repeated [`FidOptions::min_repeat`] times become instances of one prototype;
+/// the meshes of the finer tiers stay out of the model until a view streams their cells in
+/// ([`Stream`]); a run's pieces finer than the view draw as one line along the run, from the
+/// tier the classifier says.
+#[allow(clippy::too_many_arguments)]
+pub fn build_fid(
+    d: Arc<Drawing>,
+    space: &Space,
+    tol: f64,
+    bg: Rgb,
+    progress: &AtomicUsize,
+    total: &AtomicUsize,
+    extra_planes: &[cadaddy_doc::SectionPlane],
+    classify: &Classifier<'_>,
+    opts: FidOptions,
+) -> Model3 {
+    build_impl(&d, space, tol, bg, progress, total, extra_planes, Some((classify, opts)))
+}
+
+/// A mesh's shape up to where it stands: its layer, colour and material, faces and corners
+/// relative to its first (to 1e-4 units). Equal keys draw alike once moved into place.
+fn mesh_key(e: &Entity, m: &cadaddy_doc::Mesh) -> Option<(u64, Vec3)> {
+    use std::hash::{Hash, Hasher};
+    let o = *m.vertices.first()?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    e.common.layer.to_ascii_lowercase().hash(&mut h);
+    e.common.color.hash(&mut h);
+    format!("{:?}|{:?}", e.common.material, e.common.transparency).hash(&mut h);
+    m.vertices.len().hash(&mut h);
+    for v in &m.vertices {
+        let q = |x: f64| (x / 1e-4).round();
+        let dv = *v - o;
+        if !dv.is_finite() {
+            return None;
+        }
+        [q(dv.x) as i64, q(dv.y) as i64, q(dv.z) as i64].hash(&mut h);
+    }
+    for f in &m.faces {
+        f.v.hash(&mut h);
+    }
+    Some((h.finish(), o))
+}
+
+/// A mesh's corners' box.
+fn mesh_bounds(m: &cadaddy_doc::Mesh) -> Aabb {
+    let mut b = Aabb::EMPTY;
+    for v in m.vertices.iter().filter(|v| v.is_finite()) {
+        b.grow(*v);
+    }
+    b
+}
+
+/// A mesh's faces as triangles.
+fn mesh_tris(m: &cadaddy_doc::Mesh) -> u32 {
+    m.faces.iter().map(|f| f.v.len().saturating_sub(2) as u32).fold(0u32, u32::saturating_add)
+}
+
+/// A translation by `o`.
+fn translation(o: Vec3) -> Mat4 {
+    Mat4 { m: [[1.0, 0.0, 0.0, o.x], [0.0, 1.0, 0.0, o.y], [0.0, 0.0, 1.0, o.z], [0.0, 0.0, 0.0, 1.0]] }
+}
+
+/// The line a run's piece shows as: along its box's longest side, through its middle.
+fn run_line(b: &Aabb) -> Option<(Vec3, Vec3)> {
+    if b.is_empty() {
+        return None;
+    }
+    let (c, h) = (b.center(), (b.hi - b.lo) * 0.5);
+    let axis = if h.x >= h.y && h.x >= h.z {
+        Vec3::new(h.x, 0.0, 0.0)
+    } else if h.y >= h.z {
+        Vec3::new(0.0, h.y, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, h.z)
+    };
+    (axis.len() > 1e-9).then_some((c - axis, c + axis))
+}
+
+/// An element's colour as set on it (the BIM view colours elements by trade).
+fn own_rgb(e: &Entity) -> Rgb {
+    match e.common.color {
+        cadaddy_color::Color::True(c) => c,
+        _ => Rgb(160, 160, 160),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_impl(
+    d: &Drawing,
+    space: &Space,
+    tol: f64,
+    bg: Rgb,
+    progress: &AtomicUsize,
+    total: &AtomicUsize,
+    extra_planes: &[cadaddy_doc::SectionPlane],
+    fid: Option<(&Classifier<'_>, FidOptions)>,
+) -> Model3 {
     let Some(store) = d.space(space) else { return Model3::default() };
     // The blocks referenced from the space, each built once.
     let mut names: Vec<String> = Vec::new();
@@ -450,7 +644,7 @@ pub fn build_clipped(
             names.push(i.block.clone());
         }
     }
-    total.store(names.len() + 2, Ordering::Relaxed);
+    total.store(names.len() + 2 + usize::from(fid.is_some()), Ordering::Relaxed);
     let mut protos: Vec<Proto> = Vec::new();
     let mut proto_of: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     for n in &names {
@@ -472,11 +666,35 @@ pub fn build_clipped(
         proto_of.insert(n.to_ascii_lowercase(), protos.len() as u32);
         protos.push(Proto { name: n.clone(), lods: [full, simple, boxed], bounds });
     }
+    // The elements by fidelity, as they are met.
+    let mut elems: Vec<Elem> = Vec::new();
+    let (mut kinds, mut levels, mut groups) = (fid::Names::default(), fid::Names::default(), fid::Names::default());
+    // Each element's run line: from the tier it shows from.
+    let mut line_from: Vec<Option<Tier>> = Vec::new();
+    // Meshes by shape (instancing candidates): (element, entity, first corner).
+    let mut shapes: std::collections::HashMap<u64, Vec<(u32, Arc<Entity>, Vec3)>> = std::collections::HashMap::new();
     let mut instances = Vec::new();
     let mut rest = Vec::new();
+    // The tiers of the objects in `rest` that draw at some only.
+    let mut rest_show: std::collections::HashMap<Handle, Show> = std::collections::HashMap::new();
     // Placements the section box cuts through: (reference, prototype, placement).
     let mut cut_through: Vec<(cadaddy_doc::Handle, u32, Mat4)> = Vec::new();
     for e in store.iter() {
+        let class = match fid {
+            Some((classify, _)) if d.is_visible(e) => classify(d, e),
+            _ => None,
+        };
+        let show = class.as_ref().map_or(Show::ALWAYS, |c| Show::from(c.tier));
+        let mut elem = class.as_ref().map(|c| Elem {
+            handle: e.handle,
+            tier: c.tier,
+            kind: kinds.id(&c.kind),
+            level: levels.id(&c.level),
+            group: c.group.as_deref().filter(|g| !g.is_empty()).map_or(NO_GROUP, |g| groups.id(g)),
+            bounds: Aabb::EMPTY,
+            held: Held::Base,
+            tris: 0,
+        });
         if let EntityKind::Insert(i) = &e.kind
             && let Some(&p) = proto_of.get(&i.block.to_ascii_lowercase())
             && let Some(b) = d.block(&i.block)
@@ -492,17 +710,97 @@ pub fn build_clipped(
                     let (dx, dy) = (f64::from(c) * i.col_spacing, f64::from(r) * i.row_spacing);
                     let at = i.insert + Vec3::new(co * dx - s * dy, s * dx + co * dy, 0.0);
                     let m = insert_matrix(b.base, at, i.scale, i.rotation);
-                    let bounds = protos.get(p as usize).map_or(Aabb::EMPTY, |pr| pr.bounds.placed(&m));
+                    let pr = protos.get(p as usize);
+                    let bounds = pr.map_or(Aabb::EMPTY, |pr| pr.bounds.placed(&m));
+                    if let Some(el) = elem.as_mut() {
+                        el.bounds.grow(bounds.lo);
+                        el.bounds.grow(bounds.hi);
+                        el.tris = el.tris.saturating_add(pr.map_or(0, |pr| pr.lods[0].tris.len() as u32));
+                        el.held = Held::Instance;
+                    }
                     match box_side(&bounds, extra_planes) {
-                        Side::Inside => instances.push(Instance { proto: p, m, bounds }),
+                        Side::Inside => instances.push(Instance { proto: p, m, bounds, show }),
                         Side::Outside => {}
                         Side::Cut => cut_through.push((e.handle, p, m)),
                     }
                 }
             }
+            if let (Some(el), Some(c)) = (elem, class) {
+                elems.push(el);
+                line_from.push(c.line_from);
+            }
             continue;
         }
+        if let (Some(mut el), Some(c)) = (elem, class.as_ref()) {
+            let idx = elems.len() as u32;
+            if let EntityKind::Mesh(m) = &e.kind
+                && let Some((key, o)) = mesh_key(e, m)
+            {
+                el.bounds = mesh_bounds(m);
+                el.tris = mesh_tris(m);
+                elems.push(el);
+                line_from.push(c.line_from);
+                shapes.entry(key).or_default().push((idx, Arc::clone(e), o));
+                continue;
+            }
+            elems.push(el);
+            line_from.push(c.line_from);
+            if c.tier != Tier::Building {
+                rest_show.insert(e.handle, Show::from(c.tier));
+            }
+        }
         rest.push((**e).clone());
+    }
+    // Meshes: repeated shapes are instances of one prototype; the finer tiers' others stream;
+    // the rest (and what the section box cuts) are triangles in the base.
+    let mut streamed: Vec<Arc<Entity>> = Vec::new();
+    if let Some((_, opts)) = fid {
+        progress.fetch_add(1, Ordering::Relaxed);
+        let mut shapes: Vec<(u64, Vec<(u32, Arc<Entity>, Vec3)>)> = shapes.into_iter().collect();
+        shapes.sort_by_key(|(_, list)| list.first().map_or(0, |x| x.0));
+        for (_, list) in shapes {
+            let repeated = list.len() >= opts.min_repeat.max(2) && instances.len() + list.len() <= MAX_INSTANCES;
+            let mut proto: Option<u32> = None;
+            if repeated && let Some((_, first, o)) = list.first() {
+                // The prototype: the first one moved so its first corner is at the origin.
+                let mut moved = (**first).clone();
+                if let EntityKind::Mesh(m) = &mut moved.kind {
+                    for v in &mut m.vertices {
+                        *v = *v - *o;
+                    }
+                }
+                let full = scene(&with_model(d, std::iter::once(moved)), &Space::Model, tol, bg);
+                if !full.tris.is_empty() {
+                    let bounds = bounds_of(&full);
+                    let simple = simplify(&full, &bounds, 5.0);
+                    let boxed = box_of(&full, &bounds);
+                    proto = Some(protos.len() as u32);
+                    protos.push(Proto { name: format!("*mesh{}", first.handle.0), lods: [full, simple, boxed], bounds });
+                }
+            }
+            for (idx, e, o) in list {
+                let Some(el) = elems.get_mut(idx as usize) else { continue };
+                let side = box_side(&el.bounds, extra_planes);
+                if side == Side::Outside {
+                    el.held = Held::Outside;
+                    continue;
+                }
+                if let (Some(p), Side::Inside) = (proto, side) {
+                    let m = translation(o);
+                    let bounds = protos.get(p as usize).map_or(el.bounds, |pr| pr.bounds.placed(&m));
+                    instances.push(Instance { proto: p, m, bounds, show: Show::from(el.tier) });
+                    el.held = Held::Instance;
+                } else if el.tier >= opts.stream_from && side == Side::Inside {
+                    el.held = Held::Streamed;
+                    streamed.push(e);
+                } else {
+                    if el.tier != Tier::Building {
+                        rest_show.insert(e.handle, Show::from(el.tier));
+                    }
+                    rest.push((*e).clone());
+                }
+            }
+        }
     }
     progress.fetch_add(1, Ordering::Relaxed);
     // The base scene is clipped by the section box planes (if any).
@@ -526,13 +824,57 @@ pub fn build_clipped(
             }
         }
     }
-    let (mut base, chunks) = chunked(base);
+    // Every triangle and line at its object's tiers; then each run's pieces, from the tier the
+    // classifier says up to the one below their own, as lines along the run.
+    let tri_show: Vec<Show> = if rest_show.is_empty() { Vec::new() } else { base.owners.iter().map(|h| rest_show.get(h).copied().unwrap_or(Show::ALWAYS)).collect() };
+    let mut line_show: Vec<Show> =
+        if rest_show.is_empty() { Vec::new() } else { base.line_owners.iter().map(|h| rest_show.get(h).copied().unwrap_or(Show::ALWAYS)).collect() };
+    if fid.is_some() {
+        // Elements not meshes: their bounds from their triangles.
+        let mut tb: std::collections::HashMap<Handle, (Aabb, u32)> = std::collections::HashMap::new();
+        for (t, h) in base.tris.iter().zip(&base.owners) {
+            let e = tb.entry(*h).or_insert((Aabb::EMPTY, 0));
+            for p in t.p {
+                e.0.grow(p);
+            }
+            e.1 += 1;
+        }
+        for el in elems.iter_mut().filter(|el| el.bounds.is_empty()) {
+            if let Some((b, n)) = tb.get(&el.handle) {
+                el.bounds = *b;
+                el.tris = *n;
+            }
+        }
+        if line_show.len() != base.lines.len() {
+            line_show.resize(base.lines.len(), Show::ALWAYS);
+        }
+        let mut runs = 0usize;
+        for (el, from) in elems.iter().zip(&line_from) {
+            let (Some(from), Some(below)) = (*from, el.tier.coarser()) else { continue };
+            if el.group == NO_GROUP || from > below || el.held == Held::Outside || runs >= crate::shade::MAX_SCENE {
+                continue;
+            }
+            let Some((a, b)) = run_line(&el.bounds) else { continue };
+            let color = store.get(el.handle).map_or(Rgb(160, 160, 160), |e| own_rgb(e));
+            base.owner_now = el.handle;
+            crate::shade::push_line(&mut base, Line3 { a, b, color, edge: false, faint: false });
+            if line_show.len() < base.lines.len() {
+                line_show.push(Show { from, to: below });
+                runs += 1;
+            }
+        }
+    }
+    let (mut base, chunks) = chunked_by(base, &tri_show, &line_show);
     let mut bounds = bounds_of(&base);
     for i in &instances {
         if !i.bounds.is_empty() {
             bounds.grow(i.bounds.lo);
             bounds.grow(i.bounds.hi);
         }
+    }
+    for el in elems.iter().filter(|el| el.held == Held::Streamed) {
+        bounds.grow(el.bounds.lo);
+        bounds.grow(el.bounds.hi);
     }
     progress.fetch_add(1, Ordering::Relaxed);
     // Fog distances start at the front of the whole model (instances included).
@@ -541,7 +883,23 @@ pub fn build_clipped(
     {
         lit.bounds = Some((bounds.lo, bounds.hi));
     }
-    Model3 { base, chunks, protos, instances, bounds }
+    let fid = fid.map(|_| {
+        let mut f = Fid::new(elems, kinds.list, levels.list, groups.list, &bounds);
+        if !streamed.is_empty() {
+            let mut src = d.clone();
+            let mut st = EntityStore::new();
+            for e in streamed {
+                st.push_shared(e);
+            }
+            src.model = st;
+            f.source = Some(Arc::new(src));
+        }
+        f.tol = tol;
+        f.bg = bg;
+        f.planes = extra_planes.to_vec();
+        Arc::new(f)
+    });
+    Model3 { base, chunks, protos, instances, bounds, fid }
 }
 
 #[cfg(test)]
@@ -745,5 +1103,249 @@ mod tests {
         assert_eq!(v.height_px, 600);
         // Empty bounds: no view.
         assert!(crate::shade::fit_bounds(&Aabb::EMPTY, None, 800, 600).is_none());
+    }
+
+    /// A made-up storey for fidelity: a slab (building tier), four walls (floor), 120 identical
+    /// receptacle boxes (room), a run of 12 conduit sticks of different lengths with a coupling
+    /// between each (room, couplings detail), and one big unit (building).
+    fn storey() -> Drawing {
+        let mut d = Drawing::new_metric();
+        let mut put = |layer: &str, lo: Vec3, hi: Vec3, rgb: Rgb| {
+            let c = Common { layer: layer.into(), color: cadaddy_color::Color::True(rgb), ..Common::default() };
+            d.add(&Space::Model, c, EntityKind::Mesh(boxmesh(lo, hi))).unwrap();
+        };
+        put("SLAB", Vec3::new(0.0, 0.0, -1.0), Vec3::new(400.0, 200.0, 0.0), Rgb(200, 200, 200));
+        put("WALL", Vec3::new(0.0, 0.0, 0.0), Vec3::new(400.0, 1.0, 10.0), Rgb(210, 210, 200));
+        put("WALL", Vec3::new(0.0, 199.0, 0.0), Vec3::new(400.0, 200.0, 10.0), Rgb(210, 210, 200));
+        put("WALL", Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 200.0, 10.0), Rgb(210, 210, 200));
+        put("WALL", Vec3::new(399.0, 0.0, 0.0), Vec3::new(400.0, 200.0, 10.0), Rgb(210, 210, 200));
+        put("UNIT", Vec3::new(300.0, 150.0, 0.0), Vec3::new(320.0, 170.0, 8.0), Rgb(180, 180, 190));
+        for i in 0..12 {
+            for j in 0..10 {
+                let (x, y) = (10.0 + f64::from(i) * 30.0, 10.0 + f64::from(j) * 18.0);
+                put("DEV", Vec3::new(x, y, 1.5), Vec3::new(x + 0.2, y + 0.33, 1.83), Rgb(250, 212, 40));
+            }
+        }
+        let mut x = 5.0;
+        for k in 0..12 {
+            let len = 9.0 + f64::from(k) * 0.05;
+            put("COND", Vec3::new(x, 100.0, 9.0), Vec3::new(x + len, 100.06, 9.06), Rgb(246, 166, 24));
+            x += len;
+            put("CPLG", Vec3::new(x - 0.05, 99.99, 8.99), Vec3::new(x + 0.05, 100.07, 9.07), Rgb(246, 166, 24));
+        }
+        d
+    }
+
+    fn storey_class(_: &Drawing, e: &Entity) -> Option<ElemClass> {
+        let layer = e.common.layer.to_ascii_uppercase();
+        let (tier, kind, group, line_from) = match layer.as_str() {
+            "SLAB" => (Tier::Building, "floor", None, None),
+            "UNIT" => (Tier::Building, "equipment", None, None),
+            "WALL" => (Tier::Floor, "wall", None, None),
+            "DEV" => (Tier::Room, "receptacle", None, None),
+            "COND" => (Tier::Room, "conduit", Some("run 1"), Some(Tier::Floor)),
+            "CPLG" => (Tier::Detail, "coupling", Some("run 1"), None),
+            _ => return None,
+        };
+        Some(ElemClass { tier, kind: kind.into(), level: "Level 1".into(), group: group.map(str::to_string), line_from })
+    }
+
+    fn fid_model(d: Drawing) -> Model3 {
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let m = build_fid(Arc::new(d), &Space::Model, 0.01, Rgb(255, 255, 255), &p, &t, &[], &storey_class, FidOptions::default());
+        assert_eq!(p.load(Ordering::Relaxed), t.load(Ordering::Relaxed));
+        m
+    }
+
+    /// Drawn at a tier: the elements whose triangles (base chunks, instances or streamed cells)
+    /// the view draws, by layer.
+    fn drawn(m: &Model3, d: &Drawing, v: &ShadeView, tier: Tier) -> std::collections::BTreeMap<String, usize> {
+        let vis = m.visible_at(v, tier, None);
+        let mut st = Stream::default();
+        st.update(m, v, tier, f64::INFINITY);
+        let mut handles: std::collections::BTreeSet<Handle> = std::collections::BTreeSet::new();
+        for ci in &vis.chunks {
+            let c = &m.chunks[*ci];
+            handles.extend(m.base.owners[c.tris.clone()].iter().copied());
+        }
+        let f = m.fid.as_ref().unwrap();
+        for (_, _, list) in &vis.instances {
+            for i in list {
+                let inst = &m.instances[*i as usize];
+                // The element placed there: the one whose box it is.
+                if let Some(e) = f.elems.iter().find(|e| e.held == Held::Instance && (e.bounds.lo - inst.bounds.lo).len() < 1e-6) {
+                    handles.insert(e.handle);
+                }
+            }
+        }
+        for k in st.visible(v) {
+            handles.extend(st.cells[&k].scene.owners.iter().copied());
+        }
+        let mut out = std::collections::BTreeMap::new();
+        for h in handles {
+            if let Some(e) = d.model.get(h) {
+                *out.entry(e.common.layer.to_string()).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn fidelity_tiers_by_kind_and_zoom() {
+        let d = storey();
+        let m = fid_model(d.clone());
+        let f = m.fid.as_ref().unwrap();
+        // Every element indexed once, at its tier; counts don't depend on the view.
+        let per = f.per_tier();
+        assert_eq!(per.iter().map(|c| c.elements).sum::<usize>(), d.model.len());
+        assert_eq!([per[0].elements, per[1].elements, per[2].elements, per[3].elements], [2, 4, 120 + 12, 12]);
+        let far = view(Vec2::new(200.0, 100.0), 260.0, 800, 520);
+        let near = view(Vec2::new(40.0, 28.0), 12.0, 800, 520);
+        // Far at the building tier: the slab and the unit only, no device, no wall.
+        let b = drawn(&m, &d, &far, Tier::Building);
+        assert_eq!(b.get("SLAB"), Some(&1));
+        assert_eq!(b.get("UNIT"), Some(&1));
+        assert!(!b.contains_key("DEV") && !b.contains_key("WALL") && !b.contains_key("COND"), "{b:?}");
+        // At the floor tier the walls join; the devices still don't; the run is a line.
+        let fl = m.visible_at(&far, Tier::Floor, None);
+        assert!(drawn(&m, &d, &far, Tier::Floor).get("WALL") == Some(&4));
+        assert!(!drawn(&m, &d, &far, Tier::Floor).contains_key("DEV"));
+        let run_lines: usize = fl.chunks.iter().map(|c| &m.chunks[*c]).filter(|c| c.show == Show { from: Tier::Floor, to: Tier::Floor }).map(|c| c.lines.len()).sum();
+        assert_eq!(run_lines, 12, "each stick a line along the run at the floor tier");
+        // Near at the room tier: this room's devices, not the far ones; the run lines give way.
+        let r = drawn(&m, &d, &near, Tier::Room);
+        let devs = r.get("DEV").copied().unwrap_or(0);
+        assert!((1..=6).contains(&devs), "{r:?}");
+        let rv = m.visible_at(&near, Tier::Room, None);
+        assert!(rv.chunks.iter().all(|c| m.chunks[*c].show.at(Tier::Room)));
+        assert!(!rv.chunks.iter().any(|c| m.chunks[*c].show == Show { from: Tier::Floor, to: Tier::Floor }));
+        // Detail: the couplings appear; at room they don't.
+        let run_view = view(Vec2::new(30.0, 100.0), 30.0, 800, 520);
+        assert!(!drawn(&m, &d, &run_view, Tier::Room).contains_key("CPLG"));
+        assert!(drawn(&m, &d, &run_view, Tier::Detail).contains_key("CPLG"));
+        assert!(drawn(&m, &d, &run_view, Tier::Room).contains_key("COND"));
+        // The far view draws far fewer triangles at the building tier than with everything.
+        assert!(m.visible_at(&far, Tier::Building, None).tris * 4 < m.visible(&far).tris + drawn_stream_tris(&m, &far));
+    }
+
+    fn drawn_stream_tris(m: &Model3, v: &ShadeView) -> usize {
+        let mut st = Stream::default();
+        st.update(m, v, Tier::Detail, f64::INFINITY);
+        st.tris()
+    }
+
+    #[test]
+    fn identical_atoms_are_instances_and_unique_ones_stream() {
+        let d = storey();
+        let m = fid_model(d);
+        let f = m.fid.as_ref().unwrap();
+        // 120 identical boxes: one prototype, 120 placements; the 12 identical couplings too.
+        let devs: Vec<&Elem> = f.elems.iter().filter(|e| f.kind_of(e) == "receptacle").collect();
+        assert!(devs.iter().all(|e| e.held == Held::Instance));
+        let cplg: Vec<&Elem> = f.elems.iter().filter(|e| f.kind_of(e) == "coupling").collect();
+        assert!(cplg.iter().all(|e| e.held == Held::Instance), "{:?}", cplg.iter().map(|e| e.held).collect::<Vec<_>>());
+        assert_eq!(m.protos.len(), 2);
+        assert_eq!(m.instances.len(), 132);
+        assert_eq!(m.protos.iter().map(|p| p.lods[0].tris.len()).sum::<usize>(), 24);
+        // Twelve sticks all of a different length: not repeated, room tier ⟹ held back.
+        let sticks: Vec<&Elem> = f.elems.iter().filter(|e| f.kind_of(e) == "conduit").collect();
+        assert_eq!(sticks.len(), 12);
+        assert!(sticks.iter().all(|e| e.held == Held::Streamed));
+        assert!(m.base.owners.iter().all(|h| !sticks.iter().any(|s| s.handle == *h)), "a streamed stick isn't in the base");
+        // The slab, walls and unit are in the base.
+        assert_eq!(f.elems.iter().filter(|e| e.held == Held::Base).count(), 6);
+        // Instances draw from their tier only.
+        let far = view(Vec2::new(200.0, 100.0), 260.0, 800, 520);
+        assert!(m.visible_at(&far, Tier::Floor, None).instances.is_empty());
+        assert_eq!(m.visible_at(&far, Tier::Room, None).instances.iter().map(|g| g.2.len()).sum::<usize>(), 120);
+        assert_eq!(m.visible_at(&far, Tier::Detail, None).instances.iter().map(|g| g.2.len()).sum::<usize>(), 132);
+    }
+
+    #[test]
+    fn stream_brings_cells_in_and_lets_them_go() {
+        let d = storey();
+        let m = fid_model(d);
+        let mut st = Stream::default();
+        let run_view = view(Vec2::new(30.0, 100.0), 30.0, 800, 520);
+        // Floor tier: nothing streamed.
+        let s0 = st.update(&m, &run_view, Tier::Floor, f64::INFINITY);
+        assert_eq!((s0.added, st.cells.len()), (0, 0));
+        // Room tier, looking at the start of the run: its sticks come in.
+        let s1 = st.update(&m, &run_view, Tier::Room, f64::INFINITY);
+        assert!(s1.added > 0 && st.tris() > 0 && st.bytes > 0);
+        let g1 = st.generation;
+        // The same view again: nothing new.
+        let s2 = st.update(&m, &run_view, Tier::Room, f64::INFINITY);
+        assert_eq!((s2.added, s2.dropped, st.generation), (0, 0, g1));
+        // Zoomed out to the floor tier: the cells go, the memory with them.
+        let s3 = st.update(&m, &run_view, Tier::Floor, f64::INFINITY);
+        assert!(s3.dropped > 0);
+        assert_eq!((st.cells.len(), st.bytes), (0, 0));
+        // A budget of one byte keeps only what the view sees.
+        st.budget = 1;
+        st.update(&m, &view(Vec2::new(30.0, 100.0), 30.0, 800, 520), Tier::Room, f64::INFINITY);
+        let here = st.cells.len();
+        st.update(&m, &view(Vec2::new(330.0, 100.0), 30.0, 800, 520), Tier::Room, f64::INFINITY);
+        assert!(st.cells.len() <= here.max(1) + 1, "{}", st.cells.len());
+        // A model built without fidelity streams nothing and draws everything at every tier.
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(0));
+        let plain = build(&storey(), &Space::Model, 0.01, Rgb(0, 0, 0), &p, &t);
+        let far = view(Vec2::new(200.0, 100.0), 260.0, 800, 520);
+        assert!(plain.fid.is_none());
+        assert_eq!(plain.visible_at(&far, Tier::Building, None).tris, plain.visible(&far).tris);
+        assert_eq!(Stream::default().update(&plain, &far, Tier::Detail, 1.0).added, 0);
+    }
+
+    #[test]
+    fn auto_tier_holds_until_past_the_margin() {
+        let a = AutoTiers { building_ft: 240.0, floor_ft: 90.0, room_ft: 12.0, margin: 0.15 };
+        assert_eq!(a.raw(500.0), Tier::Building);
+        assert_eq!(a.raw(100.0), Tier::Floor);
+        assert_eq!(a.raw(30.0), Tier::Room);
+        assert_eq!(a.raw(5.0), Tier::Detail);
+        // Zooming in from the building tier: it holds until 15 % under 240 ft.
+        assert_eq!(a.tier(230.0, Some(Tier::Building)), Tier::Building);
+        assert_eq!(a.tier(200.0, Some(Tier::Building)), Tier::Floor);
+        // Back out: the floor tier holds until 15 % over 240 ft.
+        assert_eq!(a.tier(250.0, Some(Tier::Floor)), Tier::Floor);
+        assert_eq!(a.tier(280.0, Some(Tier::Floor)), Tier::Building);
+        // Wavering about the room threshold doesn't flicker.
+        let mut t = Some(Tier::Floor);
+        let mut changes = 0;
+        for k in 0..40 {
+            let h = 90.0 + if k % 2 == 0 { 5.0 } else { -5.0 };
+            let nt = a.tier(h, t);
+            if Some(nt) != t {
+                changes += 1;
+            }
+            t = Some(nt);
+        }
+        assert_eq!(changes, 0);
+        assert_eq!(a.tier(f64::NAN, Some(Tier::Room)), Tier::Room);
+        assert_eq!(Tier::parse("Room"), Some(Tier::Room));
+        assert_eq!(Tier::parse("x"), None);
+    }
+
+    #[test]
+    fn coarse_pick_takes_the_run_and_search_forces_markers() {
+        let d = storey();
+        let m = fid_model(d.clone());
+        let f = m.fid.as_ref().unwrap();
+        let stick = f.elems.iter().find(|e| f.kind_of(e) == "conduit").unwrap().handle;
+        // At the floor tier a stick is drawn as part of its run: a click picks all of it.
+        let run = f.pick(stick, Tier::Floor);
+        assert_eq!(run.len(), 24, "12 sticks and 12 couplings");
+        // Zoomed in to the room tier: the stick itself.
+        assert_eq!(f.pick(stick, Tier::Room), vec![stick]);
+        let wall = f.elems.iter().find(|e| f.kind_of(e) == "wall").unwrap().handle;
+        assert_eq!(f.pick(wall, Tier::Building), vec![wall]);
+        // "Show all receptacles on Level 1" at the building tier: markers for the 120 boxes.
+        let far = view(Vec2::new(200.0, 100.0), 260.0, 800, 520);
+        let force = Force { kind: "RECEPTACLE".into(), level: Some("level 1".into()) };
+        let vis = m.visible_at(&far, Tier::Building, Some(&force));
+        assert_eq!(vis.markers.len(), 120);
+        assert!(m.visible_at(&far, Tier::Room, Some(&force)).markers.is_empty(), "drawn already: no markers");
+        let other = Force { kind: "receptacle".into(), level: Some("Level 9".into()) };
+        assert!(m.visible_at(&far, Tier::Building, Some(&other)).markers.is_empty());
     }
 }

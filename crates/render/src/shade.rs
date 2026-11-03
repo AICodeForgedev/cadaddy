@@ -134,6 +134,8 @@ pub struct Scene {
     pub lighting: Option<crate::light::Lighting>,
     /// The object each triangle belongs to (as [`scene`] builds it; parallel to `tris`).
     pub owners: Vec<Handle>,
+    /// The object each line belongs to (as [`scene`] builds it; parallel to `lines`).
+    pub line_owners: Vec<Handle>,
     /// Baked indirect light ([`crate::lightmap`]) for the triangles that have it.
     pub baked: Option<crate::lightmap::Baked>,
     /// The object whose triangles are being added.
@@ -423,6 +425,7 @@ pub(crate) fn push_tri(s: &mut Scene, t: Tri) {
 pub(crate) fn push_line(s: &mut Scene, l: Line3) {
     if s.lines.len() < MAX_SCENE && l.a.is_finite() && l.b.is_finite() {
         s.lines.push(l);
+        s.line_owners.push(s.owner_now);
     }
 }
 
