@@ -5280,13 +5280,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A fire alarm plan's symbols with no mark (strobes, horn/strobes): loose strokes, each
         // its legend row's by its drawn sample's shape (Q6167).
         if !legend.is_empty() {
-            let loose = fa_loose_devices(s.doc()?, job, &legend, &devices);
-            if !loose.is_empty() {
+            let (loose, st) = fa_loose_devices(s.doc()?, job, &legend, &devices);
+            if !st.sheets.is_empty() {
                 let mut by: BTreeMap<&str, usize> = BTreeMap::new();
                 for dv in &loose {
                     *by.entry(dv.tag.as_str()).or_default() += 1;
                 }
-                progress_line(&format!("  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?}", loose.len()));
+                progress_line(&format!(
+                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, fire alarm legend rows {}, copies found {}, off every level {}, a device read there {})",
+                    loose.len(),
+                    st.sheets,
+                    st.rows,
+                    st.found,
+                    st.off_level,
+                    st.read_already
+                ));
                 devices.extend(loose);
             }
         }
@@ -6331,12 +6339,12 @@ fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope:
         .filter(|x| x["elements"].as_u64().unwrap_or(0) > 0)
         .map(|x| {
             format!(
-                "{} {}: {} ({}), ours {:?} ({})",
+                "{} {}: {} ({}), ours [{}] ({})",
                 x["elements"],
                 x["class"].as_str().unwrap_or(""),
                 x["party"].as_str().unwrap_or(""),
                 x["party_from"].as_str().unwrap_or(""),
-                x["ours"],
+                x["ours"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
                 x["ours_from"].as_str().unwrap_or("")
             )
         })
@@ -10910,6 +10918,17 @@ fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk
     out
 }
 
+/// What [`fa_loose_devices`] looked at: the fire alarm plans, their legends' fire alarm rows,
+/// the copies of a row's sample found, and those left out (off every level, or a device read there).
+#[derive(Debug, Default)]
+struct LooseStats {
+    sheets: Vec<String>,
+    rows: usize,
+    found: usize,
+    off_level: usize,
+    read_already: usize,
+}
+
 /// The symbols with no mark on the fire alarm plans (Q6167): the loose strokes of each copy of
 /// a fire alarm legend row's drawn sample, outside the legend tables and away from the devices
 /// already read, each a fire alarm device of its row (`STROBE`, `HORN/STROBE`), the row its source.
@@ -10918,8 +10937,9 @@ fn fa_loose_devices(
     job: &GuidedJob,
     legend: &BTreeMap<Shape, (String, String)>,
     have: &[super::readers::ReadDevice],
-) -> Vec<super::readers::ReadDevice> {
+) -> (Vec<super::readers::ReadDevice>, LooseStats) {
     let r = super::scope::rules();
+    let mut stats = LooseStats::default();
     let fire_alarm: BTreeSet<String> = job
         .index
         .as_ref()
@@ -10934,6 +10954,7 @@ fn fa_loose_devices(
     let mut out: Vec<super::readers::ReadDevice> = Vec::new();
     for span in job.sheet_spans.iter().filter(|sp| fire_alarm.contains(&sp.sheet.split('/').next().unwrap_or(&sp.sheet).trim().to_ascii_uppercase()))
     {
+        stats.sheets.push(span.sheet.clone());
         // The sheet's text: its letters' height sizes a symbol; its legend tables are left out.
         let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = d
             .model
@@ -10989,11 +11010,17 @@ fn fa_loose_devices(
                     || u.contains("F.A.")
                     || fire_alarm.contains(&sheet.split('/').next().unwrap_or(sheet).trim().to_ascii_uppercase()))
         };
+        stats.rows = stats.rows.max(legend.values().filter(|(w, sheet)| fa_row(w, sheet)).count());
         let found = super::loosesym::find(d, span.lo, span.hi, legend, &fa_row, max_size, &tables);
+        stats.found += found.len();
         for f in found {
             let at = [f.at.x, f.at.y];
-            let Some(region) = job.level_at(at).filter(|g| super::printmep::building_level(&g.level)) else { continue };
+            let Some(region) = job.level_at(at).filter(|g| super::printmep::building_level(&g.level)) else {
+                stats.off_level += 1;
+                continue;
+            };
             if have.iter().chain(out.iter()).any(|dv| (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= 0.5 * max_size) {
+                stats.read_already += 1;
                 continue;
             }
             let Some(kind) = r.fa_kind_of(&f.row) else { continue };
@@ -11009,7 +11036,7 @@ fn fa_loose_devices(
             });
         }
     }
-    out
+    (out, stats)
 }
 
 /// One sheet's legend rows into `out` ([`legend_symbols`]).
@@ -17233,7 +17260,8 @@ mod tests {
         }];
         job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo, hi }];
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
-        let found = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]);
+        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]);
+        assert_eq!((st.sheets.len(), st.rows, st.found), (1, 1, 2), "{st:?}");
         let mut at: Vec<f64> = found.iter().map(|d| d.at[0].round()).collect();
         at.sort_by(f64::total_cmp);
         assert_eq!(at, [99.0, 199.0], "the plan's two copies, not the legend's sample: {found:?}");
@@ -17245,10 +17273,10 @@ mod tests {
         );
         // One already read there is not read twice; a sheet that isn't a fire alarm plan has none.
         let have = vec![super::super::readers::ReadDevice { tag: "X".into(), at: [100.0, 100.0], ..Default::default() }];
-        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have).len(), 1);
-        assert!(fa_loose_devices(s.doc().unwrap(), &job, &av, &[]).is_empty(), "an electrical legend's audio/visual outlet");
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have).0.len(), 1);
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &av, &[]).0.is_empty(), "an electrical legend's audio/visual outlet");
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "POWER PLAN"}]}));
-        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]).is_empty());
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]).0.is_empty());
     }
 
     #[test]

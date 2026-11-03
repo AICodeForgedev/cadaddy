@@ -1372,6 +1372,20 @@ pub(crate) fn record(d: &mut cadaddy_doc::Drawing, decisions: &[Decision], by: &
     n
 }
 
+/// The readings of `read` the drawing keeps none of yet: a kept reading's aspect is left as it is.
+fn unsettled(d: &cadaddy_doc::Drawing, mut read: Vec<Decision>) -> Vec<Decision> {
+    let kept = |class: &str, aspect: &str| d.project_rules.resolve(RuleDomain::Custom, &key(class, aspect)).is_some();
+    for x in &mut read {
+        if kept(&x.class, "party") {
+            x.party_from = "kept".into();
+        }
+        if kept(&x.class, "ours") {
+            x.ours_from = "kept".into();
+        }
+    }
+    read
+}
+
 /// The source text kept with a rule into a citation.
 fn cite_of_rule(source: &str, tier: SourceTier) -> Cite {
     let first = source.split(" | ").next().unwrap_or_default();
@@ -1873,7 +1887,7 @@ pub(crate) fn summary(decisions: &[Decision], sp: &cadaddy_walk3d::BuildingSpec)
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Scope by Trade", run)
-        .params("{specs?: [path] (specification section PDFs or text, or folders of them: Divisions 01, 21-28 are read), submittals?: [path] (files or folders: those of another trade's section or naming a class), text?: string | [{document, text, tier?: drawing_revision|spec|submittal, trade?: party}] (notes given as text), pdfs?: [path] (drawing PDFs: each page's notes), set?: [{class, party? | furnish?, install?, ours?: [box|ring|conduit|pull string|sleeve|power] | \"none\", reason}] (a person's decision), sheets?: bool (read the drawing's own sheets; default true), kinds?: bool (give the fire alarm devices their kinds from the legends; default true), panels?: bool (place the fire alarm panels the documents locate; default true), explain?: bool (list each statement read), explain_documents?: [name] (and those documents' paragraphs)} → {decisions: [{class, label, furnish, install, party, by_others, party_from: documents|answer|default, party_sources: [{document, at, text, tier}], ours: [{item, size, bought_as}], ours_from, ours_sources, design_build?, also: [{party, source}], reason}], elements: [{class, elements, party, party_from, ours, ours_from}], statements: n, documents: n, fire_alarm: {resolved, unresolved: {mark: [kinds]}}, panels: {placed, not_placed}, questions: [{class, aspect, elements, default}], read?: [{class, says, source}], paragraphs?: [{document, at, heading, text}], unread}: who furnishes and installs each class of element another trade may own (thermostats, fire alarm devices, low voltage devices) and what of its rough-in is ours, read from the notes, specifications, submittals and responsibility matrices with the words that say so; kept in the project rules (scope.<class>.party|ours) at the documents' tier; bim.bom lists those elements in by_others and keeps only our rough-in")
+        .params("{specs?: [path] (specification section PDFs or text, or folders of them: Divisions 01, 21-28 are read), submittals?: [path] (files or folders: those of another trade's section or naming a class), text?: string | [{document, text, tier?: drawing_revision|spec|submittal, trade?: party}] (notes given as text), pdfs?: [path] (drawing PDFs: each page's notes), set?: [{class, party? | furnish?, install?, ours?: [box|ring|conduit|pull string|sleeve|power] | \"none\", reason}] (a person's decision), sheets?: bool (read the drawing's own sheets; default true), reread?: bool (with no documents given, a kept reading stays unless true), kinds?: bool (give the fire alarm devices their kinds from the legends; default true), panels?: bool (place the fire alarm panels the documents locate; default true), explain?: bool (list each statement read), explain_documents?: [name] (and those documents' paragraphs)} → {decisions: [{class, label, furnish, install, party, by_others, party_from: documents|answer|default, party_sources: [{document, at, text, tier}], ours: [{item, size, bought_as}], ours_from, ours_sources, design_build?, also: [{party, source}], reason}], elements: [{class, elements, party, party_from, ours, ours_from}], statements: n, documents: n, fire_alarm: {resolved, unresolved: {mark: [kinds]}}, panels: {placed, not_placed}, questions: [{class, aspect, elements, default}], read?: [{class, says, source}], paragraphs?: [{document, at, heading, text}], unread}: who furnishes and installs each class of element another trade may own (thermostats, fire alarm devices, low voltage devices) and what of its rough-in is ours, read from the notes, specifications, submittals and responsibility matrices with the words that say so; kept in the project rules (scope.<class>.party|ours) at the documents' tier; bim.bom lists those elements in by_others and keeps only our rough-in")
         .menu(&["Tools", "Building", "Scope by Trade"])]
 }
 
@@ -1957,6 +1971,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         docs.extend(model_docs(s.doc()?, sp));
     }
     let (stmts, read) = read_docs(&docs);
+    // Only the drawing's own sheets read: what an earlier reading of more documents (the job's
+    // pages, specifications and submittals) decided stays, unless asked; this one fills what it left open.
+    let given = !(specs.is_empty() && submittals.is_empty() && pdfs.is_empty() && p.get("text").is_none())
+        || p.get("reread").and_then(Value::as_bool).unwrap_or(false);
+    let read = if given { read } else { unsettled(s.doc()?, read) };
     record(s.doc_mut()?, &read, "bim.scope");
     let kept = decisions(s.doc()?);
     let explain = p.get("explain").and_then(Value::as_bool).unwrap_or(false);

@@ -257,3 +257,27 @@ fn hostile_scope_params_never_panic() {
     }
     let _ = s.execute("bim.bom", &json!({}));
 }
+
+#[test]
+fn a_bare_reread_of_the_drawing_keeps_what_more_documents_decided() {
+    let mut s = office();
+    s.execute("bim.scope", &json!({"text": notes(), "panels": false})).expect("scope");
+    let ours = |r: &Value| -> Vec<String> {
+        let lv = r["decisions"].as_array().unwrap().iter().find(|d| d["class"] == "low voltage").unwrap();
+        lv["ours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| format!("{} {}", i["item"].as_str().unwrap(), i["size"].as_str().unwrap()).trim().to_string())
+            .collect()
+    };
+    let first = ours(&s.execute("bim.scope", &json!({"sheets": false, "panels": false})).expect("scope"));
+    assert!(first.iter().any(|i| i.starts_with("box")), "{first:?}");
+    // The drawing itself says less than the notes read: reading it again alone changes nothing.
+    text(&mut s, [3000.0, 600.0], "THE ELECTRICAL CONTRACTOR SHALL PROVIDE A 1\" CONDUIT WITH PULL STRING FOR EACH LOW VOLTAGE DEVICE.");
+    assert_eq!(ours(&s.execute("bim.scope", &json!({"panels": false})).expect("scope")), first);
+    // Asked to, the drawing's reading replaces it.
+    let r = s.execute("bim.scope", &json!({"panels": false, "reread": true, "explain": true})).expect("scope");
+    let again = ours(&r);
+    assert!(again.iter().any(|i| i.starts_with("pull string")) && !again.iter().any(|i| i.starts_with("box")), "{again:?} {:#}", r["read"]);
+}
