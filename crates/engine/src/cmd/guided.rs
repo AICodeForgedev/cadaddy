@@ -8068,7 +8068,7 @@ fn end_pieces(points: &[[f64; 2]], inside: &dyn Fn(&[f64; 2]) -> bool) -> Vec<(u
     };
     let mut out = Vec::new();
     if let Some(head) = from(points) {
-        if head.len() == points.len() && points.last().is_some_and(|p| inside(p)) {
+        if head.len() == points.len() && points.last().is_some_and(inside) {
             return vec![(0, points.to_vec())];
         }
         out.push((0, head));
@@ -8219,7 +8219,7 @@ fn copy_room_pipes(
         // hand fit one of its views, of the other hand another.
         let mut by_len: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
         by_len.sort_by(|a, b| {
-            let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(|r| length(r)).sum::<f64>());
+            let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(&length).sum::<f64>());
             l(b).total_cmp(&l(a))
         });
         let mut set: Vec<(usize, [f64; 4], cadaddy_walk3d::MepRun)> = Vec::new();
