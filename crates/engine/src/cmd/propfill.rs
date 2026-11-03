@@ -468,10 +468,12 @@ impl Seat {
     fn store(&self, store: &mut Props, upf: f64) {
         store.set("host_wall", Prop::new(self.wall.hex(), Source::computed()).with_note(HOST_NOTE));
         store.set(
-            "host_face",
+            "face_normal",
             Prop::new(format!("{:.3},{:.3}", self.out.x, self.out.y), Source::computed())
                 .with_note("the face's outward direction (plan): toward its room"),
         );
+        // Its named face (`1201/S`) is given by bim.layout.rehost, once the rooms are traced.
+        store.remove("host_face");
         let side_said = match self.side_why {
             "circuit" => "the side its circuit's other devices are on",
             "left" => "its symbol on the wall's centreline, nothing else said a side",
@@ -622,6 +624,7 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             None => {
                 store.remove("host_wall");
                 store.remove("host_face");
+                store.remove("face_normal");
                 store.set(
                     "placement",
                     Prop::new("review: its wall was merged into another; no wall there at its height within 6'", Source::computed()),
@@ -1661,7 +1664,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         .min_by(|a, b| a.1.total_cmp(&b.1))
                 });
                 // A box set in a wall serves the room past its face.
-                let face_dir = store.get("host_face").and_then(|p| {
+                let face_dir = store.get("face_normal").or_else(|| store.get("host_face")).and_then(|p| {
                     let t = p.text();
                     let (a, b) = t.split_once(',')?;
                     let v = Vec2::new(a.trim().parse().ok()?, b.trim().parse().ok()?);

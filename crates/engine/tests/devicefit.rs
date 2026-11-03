@@ -148,7 +148,7 @@ fn a_wall_device_is_set_in_its_wall_flush_with_the_face_of_the_room_it_serves() 
     assert!((a[0] - face_in(19.75)).abs() <= 0.25 && a[2] <= face_in(20.25) + 1e-6, "A in the partition's west face: {a:?}");
     let pa = props(&mut s, "A");
     assert!(pa["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "its host wall is stored: {pa:#}");
-    assert_eq!(pa["host_face"]["value"], "-1.000,0.000", "{pa:#}");
+    assert_eq!(pa["face_normal"]["value"], "-1.000,0.000", "{pa:#}");
     assert!(pa["placement"]["value"].as_str().is_some_and(|p| p.contains("flush") && p.contains("its symbol is drawn on")), "{pa:#}");
     // B: in the east face (20.25').
     let (b, _, _) = extent(&mut s, "B");
