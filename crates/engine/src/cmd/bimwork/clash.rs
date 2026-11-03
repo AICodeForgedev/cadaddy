@@ -18,9 +18,10 @@ use crate::cmd::{CommandSpec, bad, bool_or, str_param};
 use crate::{Result, Session};
 
 /// The model's elements that take up room: not its rooms (spaces, Q5291), which every element
-/// inside them would clash with.
+/// inside them would clash with, nor the trades' pieces (Q6162: studs, sheets, bars), which are
+/// the inside of the walls and slabs that clash for them.
 fn solid_elements(d: &Drawing) -> Vec<El> {
-    elements(d).into_iter().filter(|e| e.category != "room").collect()
+    elements(d).into_iter().filter(|e| e.category != "room" && !e.category.starts_with("piece:")).collect()
 }
 
 const CMD: &str = "bim.clash";
