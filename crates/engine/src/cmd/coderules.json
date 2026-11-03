@@ -90,6 +90,59 @@
         2.0,
         1.5
       ]
+    },
+    {
+      "id": "E-EQUIP-ELEC",
+      "cite": "NEC 110.3(B), 110.10, 240.4, 409.22, 430.22, 440.33, 620.13, 620.16",
+      "kinds": [
+        "equipment_connection"
+      ],
+      "sets": "equipment_electrical",
+      "rule": "An equipment connection follows its approved submittal: its protection no larger than the maker's maximum (fuse class as named), its conductors' ampacity at least 125% of its nameplate / full-load current (its minimum circuit amps when given), its controller's short-circuit current rating at least the available fault current where it is installed. Where the drawings differ, the build reports both values and the fix.",
+      "conductor_factor": 1.25,
+      "ampacity_75c": {
+        "cu": {
+          "14": 20,
+          "12": 25,
+          "10": 35,
+          "8": 50,
+          "6": 65,
+          "4": 85,
+          "3": 100,
+          "2": 115,
+          "1": 130,
+          "1/0": 150,
+          "2/0": 175,
+          "3/0": 200,
+          "4/0": 230,
+          "250": 255,
+          "300": 285,
+          "350": 310,
+          "400": 335,
+          "500": 380,
+          "600": 420
+        },
+        "al": {
+          "12": 20,
+          "10": 30,
+          "8": 40,
+          "6": 50,
+          "4": 65,
+          "3": 75,
+          "2": 90,
+          "1": 100,
+          "1/0": 120,
+          "2/0": 135,
+          "3/0": 155,
+          "4/0": 180,
+          "250": 205,
+          "300": 230,
+          "350": 250,
+          "400": 270,
+          "500": 310,
+          "600": 340
+        }
+      }
     }
   ]
 }
