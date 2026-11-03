@@ -21,6 +21,18 @@ const MIN_ROOM_WIDTH_IN: f64 = 36.0;
 const MAX_ROOMS_PER_REGION: usize = 250;
 /// Rooms traced at most over all the sheet regions (a whole print set).
 const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
+/// A habitable room's least floor area, square feet (IBC 1208.3, IRC R304.1: 70 sf): a smaller
+/// loop round a bedroom's or a unit's name is the furniture the name is printed on.
+const HABITABLE_MIN_SF: f64 = 70.0;
+/// Words of a room to sleep or live in (a unit type, a bedroom), for [`HABITABLE_MIN_SF`].
+const HABITABLE_WORDS: &[&str] = &["Q", "K", "QUEEN", "KING", "SUITE", "STUDIO", "UNIT", "BEDROOM", "BED", "LIVING", "APT", "APARTMENT", "DWELLING"];
+/// How far from its name a room's number tag may be when it isn't inside the traced outline,
+/// in the name's text heights (a tag's two or three lines, the number printed on furniture).
+const NUMBER_REACH_HEIGHTS: f64 = 6.0;
+/// A room tag's number text height to its name's: at least, at most.
+const TAG_SIZE_BAND: (f64, f64) = (0.75, 1.33);
+/// Two traced outlines are one room when their areas and bounds agree within this share.
+const SAME_OUTLINE_SHARE: f64 = 0.02;
 
 /// A straight segment of a line or polyline.
 #[derive(Clone, Debug)]
@@ -28,6 +40,20 @@ pub(crate) struct Seg {
     pub a: Vec2,
     pub b: Vec2,
     pub layer: String,
+    /// The mean width of the closed outline the segment is a side of (see [`outline_width`]),
+    /// infinite for an open line.
+    pub outline_width: f64,
+}
+
+/// The mean width of a closed outline: twice its area over its perimeter (a `w × l` rectangle
+/// gives `w·l / (w + l)`, about `w` when it is long and thin). Infinite when it is no outline.
+pub(crate) fn outline_width(pts: &[Vec2]) -> f64 {
+    if pts.len() < 3 {
+        return f64::INFINITY;
+    }
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+    let area = cadaddy_geom::shoelace(pts).abs();
+    if perimeter.is_finite() && perimeter > 1e-12 && area.is_finite() { 2.0 * area / perimeter } else { f64::INFINITY }
 }
 
 /// The straight segments of the space's lines and polylines.
@@ -38,11 +64,20 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
             break;
         }
         match &e.kind {
-            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string() }),
+            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string(), outline_width: f64::INFINITY }),
             EntityKind::LwPolyline(p) => {
+                // A closed outline (flagged closed, or ending where it starts): how wide it is.
+                let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+                let straight = p.vertices.iter().all(|v| v.bulge == 0.0);
+                let ends_at_start = pts.len() >= 4 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+                let width = match (straight, p.closed, ends_at_start) {
+                    (true, true, _) => outline_width(&pts),
+                    (true, false, true) => outline_width(pts.get(..pts.len() - 1).unwrap_or_default()),
+                    _ => f64::INFINITY,
+                };
                 for sg in (Polyline { vertices: p.vertices.clone(), closed: p.closed }).segments() {
                     if let Segment::Line(l) = sg {
-                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string() });
+                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string(), outline_width: width });
                     }
                 }
             }
@@ -152,6 +187,157 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
     out
 }
 
+/// A dash of a dashed line is at most this long, inches (a plan's hidden or overhead line drawn
+/// as separate pieces: about ⅛" of paper at the coarsest plan scale).
+const DASH_MAX_IN: f64 = 30.0;
+/// The space between two dashes is at most this, inches (narrower than any door or window).
+const DASH_GAP_MAX_IN: f64 = 12.0;
+/// Dashes in a row, at least, before pieces of a line are read as a dashed line.
+const DASH_RUN: usize = 3;
+/// Dashed lines looked at, at most (hostile drawings).
+const MAX_DASH_LINES: usize = 200_000;
+
+/// Takes out the dashes of dashed lines (hidden or overhead lines a print flattens into separate
+/// pieces: a soffit, a header or a wall above). Three or more pieces on one line, each at most
+/// [`DASH_MAX_IN`] long and about as long as the next, with about equal gaps of at most
+/// [`DASH_GAP_MAX_IN`] between them, are a dashed line: no wall's face (paired with another line
+/// it made a wall across a door's opening). A wall's face broken by other walls (pieces much
+/// longer) or by doors and windows (gaps wider) is kept. `k` is drawing units per inch. Returns
+/// how many pieces were taken out.
+pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
+    use std::f64::consts::PI;
+    if !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let (max_len, max_gap, line_tol) = (DASH_MAX_IN * k, DASH_GAP_MAX_IN * k, 0.5 * k);
+    // Short pieces grouped by line: direction (half-degree buckets) and offset across it.
+    let mut lines: std::collections::HashMap<(i64, i64), Vec<(f64, f64, usize)>> = std::collections::HashMap::new();
+    for (i, sg) in segs.iter().enumerate() {
+        let d = sg.b - sg.a;
+        let len = d.len();
+        if !(len > 1e-9 && len <= max_len) {
+            continue;
+        }
+        let ang = d.y.atan2(d.x).rem_euclid(PI);
+        let bucket = ((ang.to_degrees() * 2.0).round() as i64).rem_euclid(360);
+        let u = Vec2::new((bucket as f64 / 2.0).to_radians().cos(), (bucket as f64 / 2.0).to_radians().sin());
+        let n = u.perp();
+        let off = (n.dot(sg.a.mid(sg.b)) / line_tol).round() as i64;
+        let (s0, s1) = minmax(u.dot(sg.a), u.dot(sg.b));
+        if lines.len() < MAX_DASH_LINES || lines.contains_key(&(bucket, off)) {
+            lines.entry((bucket, off)).or_default().push((s0, s1, i));
+        }
+    }
+    let mut dash = vec![false; segs.len()];
+    let close = |a: f64, b: f64, share: f64, slack: f64| (a - b).abs() <= share * a.max(b) + slack;
+    for run in lines.values_mut() {
+        if run.len() < DASH_RUN {
+            continue;
+        }
+        run.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Grow rows of dashes: each piece about as long as the last, each gap about as wide.
+        let mut start = 0usize;
+        let mut last_gap: Option<f64> = None;
+        let mark = |from: usize, to: usize, dash: &mut Vec<bool>| {
+            if to + 1 - from >= DASH_RUN {
+                for r in run.get(from..=to).into_iter().flatten() {
+                    if let Some(d) = dash.get_mut(r.2) {
+                        *d = true;
+                    }
+                }
+            }
+        };
+        let rows: Vec<(f64, f64, usize)> = run.clone();
+        for j in 1..rows.len() {
+            let (Some(prev), Some(cur)) = (rows.get(j - 1), rows.get(j)) else { continue };
+            let gap = cur.0 - prev.1;
+            let steady = gap > 0.05 * k
+                && gap <= max_gap
+                && close(prev.1 - prev.0, cur.1 - cur.0, 0.15, 0.25 * k)
+                && last_gap.is_none_or(|g| close(g, gap, 0.25, 0.5 * k));
+            if steady {
+                last_gap = Some(gap);
+            } else {
+                mark(start, j - 1, &mut dash);
+                start = j;
+                last_gap = None;
+            }
+        }
+        mark(start, rows.len() - 1, &mut dash);
+    }
+    let before = segs.len();
+    let mut it = dash.iter();
+    segs.retain(|_| !it.next().copied().unwrap_or(false));
+    before - segs.len()
+}
+
+/// Drops the pairs a thin outline's side makes with another wall's face. A side of a closed
+/// outline thinner than any wall (a trim piece, a shelf or a jamb drawn beside a wall) paired
+/// with a line that is already the face of a wall on its far side is no wall: one line can't be
+/// a wall's face on both of its sides, so the space between them is air the plan leaves open.
+/// A thin outline's side paired with a line that bounds no other wall stays (real faces are drawn
+/// as thin closed outlines too), and so does one whose far wall has a thin outline's side for a
+/// face itself (two walls drawn with thin finish layers, side by side). Returns how many were
+/// dropped.
+pub(crate) fn drop_sliver_pairs(segs: &[Seg], found: &mut Vec<Pair>, lim: &Limits) -> usize {
+    let thin = |i: usize| segs.get(i).is_some_and(|s| s.outline_width < lim.min_thick);
+    if !found.iter().any(|p| thin(p.faces[0]) || thin(p.faces[1])) {
+        return 0;
+    }
+    // Which pairs each line is a face of.
+    let mut by_face: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for (k, p) in found.iter().enumerate() {
+        for f in p.faces {
+            by_face.entry(f).or_default().push(k);
+        }
+    }
+    // The side of the line `f` a segment's middle is on (+1 / −1, 0 on it).
+    let side = |f: &Seg, s: &Seg| {
+        let d = f.b - f.a;
+        let len = d.len();
+        if len <= 1e-12 {
+            return 0.0;
+        }
+        let v = d.cross(s.a.mid(s.b) - f.a) / len;
+        if v.abs() <= 1e-9 { 0.0 } else { v.signum() }
+    };
+    // How far two pairs run side by side along the first one's centreline.
+    let overlap = |p: &Pair, q: &Pair| {
+        let len = p.c0.dist(p.c1);
+        if len <= 1e-12 {
+            return 0.0;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        let (a, b) = minmax(u.dot(q.c0 - p.c0), u.dot(q.c1 - p.c0));
+        (b.min(len) - a.max(0.0)).max(0.0)
+    };
+    let mut drop = vec![false; found.len()];
+    for (k, p) in found.iter().enumerate() {
+        for (t, f) in [(p.faces[0], p.faces[1]), (p.faces[1], p.faces[0])] {
+            if !thin(t) {
+                continue;
+            }
+            let (Some(ts), Some(fs)) = (segs.get(t), segs.get(f)) else { continue };
+            let here = side(fs, ts);
+            let far_wall = by_face.get(&f).into_iter().flatten().any(|&q| {
+                q != k
+                    && found.get(q).is_some_and(|qp| {
+                        let other = if qp.faces[0] == f { qp.faces[1] } else { qp.faces[0] };
+                        !thin(other) && segs.get(other).is_some_and(|os| side(fs, os) * here < 0.0) && overlap(p, qp) > 0.5 * p.length
+                    })
+            });
+            if far_wall {
+                drop[k] = true;
+                break;
+            }
+        }
+    }
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
 /// Two faces measured as a wall: the gap between their lines, their overlap and the centreline.
 struct FacePair {
     gap: f64,
@@ -235,6 +421,21 @@ pub(crate) struct Opening {
     pub confidence: f64,
     /// A swing whose leaf is drawn too (a line from the hinge to an end of the arc).
     pub leaf: bool,
+    /// The arc's end the drawn leaf reaches: the door's open end (the other one is where it
+    /// shuts).
+    pub open_end: Option<Vec2>,
+}
+
+/// The end of a swing (hinged at `c`, its arc ending at `ends`) its leaf is drawn to: a line
+/// from the hinge to that end, within `tol`. A leaf drawn as a thin outline has a side along it.
+/// Whether a leaf is drawn at all, and the end when it is drawn to one only.
+fn leaf_end(segs: &[Seg], c: Vec2, ends: [Vec2; 2], tol: f64) -> (bool, Option<Vec2>) {
+    let to = |e: Vec2| segs.iter().any(|g| (g.a.dist(c) < tol && g.b.dist(e) < tol) || (g.b.dist(c) < tol && g.a.dist(e) < tol));
+    match (to(ends[0]), to(ends[1])) {
+        (true, false) => (true, Some(ends[0])),
+        (false, true) => (true, Some(ends[1])),
+        (a, b) => (a || b, None),
+    }
 }
 
 /// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
@@ -256,10 +457,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                 let c = a.center.xy();
                 let ends = [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius];
                 let tol = a.radius * 0.05;
-                let leaf = segs.iter().any(|g| {
-                    let (p, q) = (g.a, g.b);
-                    ends.iter().any(|e| (p.dist(c) < tol && q.dist(*e) < tol) || (q.dist(c) < tol && p.dist(*e) < tol))
-                });
+                let (leaf, open_end) = leaf_end(segs, c, ends, tol);
                 let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
                 let confidence = (0.5 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
                 items.push(Opening {
@@ -272,6 +470,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: None,
                     confidence,
                     leaf,
+                    open_end,
                 });
             }
             // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
@@ -282,10 +481,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     continue;
                 }
                 let tol = r * 0.05;
-                let leaf = segs.iter().any(|g| {
-                    let (p, q) = (g.a, g.b);
-                    ends.iter().any(|e| (p.dist(c) < tol && q.dist(*e) < tol) || (q.dist(c) < tol && p.dist(*e) < tol))
-                });
+                let (leaf, open_end) = leaf_end(segs, c, ends, tol);
                 let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
                 let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
                 items.push(Opening {
@@ -298,6 +494,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: None,
                     confidence,
                     leaf,
+                    open_end,
                 });
             }
             EntityKind::Insert(i) => {
@@ -321,6 +518,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: Some(i.block.clone()),
                     confidence: 0.75,
                     leaf: false,
+                    open_end: None,
                 });
             }
             _ => {}
@@ -673,10 +871,6 @@ pub(crate) fn room_name_score(t: &str) -> u8 {
     }
 }
 
-fn polygon(l: &cadaddy_doc::HatchLoop) -> Vec<Vec2> {
-    Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)
-}
-
 /// A room found from its name label: the closed outline around the label (the hatch boundary
 /// search), its number (a number text inside), area and perimeter.
 #[derive(Clone, Debug)]
@@ -871,11 +1065,27 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
+    // Rooms whose only number inside is another size than their name (taken when no tag is near).
+    let mut any_size: Vec<(usize, String)> = Vec::new();
+    // Whether each room in `out` was traced from round what its name is printed on.
+    let mut out_probed: Vec<bool> = Vec::new();
     let mut outline_cache = None;
+    let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     for (h, name, at, height, _) in names {
+        // A room to live in is at least a habitable room's size; any room at least the least
+        // room's. A smaller loop round the name is what it is printed on (a bed, a tag's box):
+        // the room is the loop round that.
+        let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
         let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
         let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let poly = polygon(outer);
+        let first = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
+        let probed = cadaddy_geom::shoelace(&first).abs() < least;
+        let poly = if probed {
+            let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
+            p
+        } else {
+            first
+        };
         if poly.len() < 3 {
             continue;
         }
@@ -884,30 +1094,111 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
             continue;
         }
         // One room per outline: a second label in the same room is its number or a note.
-        if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+        // (Traced again from round the furniture its name is on, it may start at another corner.)
+        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
+        if out.iter().zip(&out_probed).any(|(q, q_probed)| {
+            let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
+            (q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6))
+                || ((probed || *q_probed)
+                    && (q.area - area).abs() <= SAME_OUTLINE_SHARE * area
+                    && qb.min.dist(b.min) <= tol
+                    && qb.max.dist(b.max) <= tol)
+        }) {
             continue;
         }
         // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
-        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
         if regions.is_some() && b.width().min(b.height()) < MIN_ROOM_WIDTH_IN * k {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
-        // The room number: a number inside the outline, the one in the name's tag block, else the
-        // nearest to the name.
-        let number = numbers
-            .iter()
-            .filter(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q))
-            .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
-            .map(|(_, t, _, _, _)| t.clone());
+        // The room number: the one in the name's tag block, else a number inside the outline of
+        // the name's size, nearest the name (an OCR copy's or a note's digits inside the room are
+        // another size); else the tag nearest the name ([`number_from_nearest_tag`]); else one
+        // of any size inside.
+        let inside_numbers = |sized: bool| {
+            numbers
+                .iter()
+                .filter(|(nh, _, q, qh, _)| {
+                    cadaddy_geom::point_in_polygon(&poly, *q)
+                        && (!sized || *nh == h || (*qh >= TAG_SIZE_BAND.0 * height && *qh <= TAG_SIZE_BAND.1 * height))
+                })
+                .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, t, _, _, _)| t.clone())
+        };
+        let number = inside_numbers(true);
+        if number.is_none()
+            && let Some(any) = inside_numbers(false)
+        {
+            any_size.push((out.len(), any));
+        }
         let share = area / sheet;
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })
         .clamp(0.0, 1.0);
         out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
+        out_probed.push(probed);
     }
-    phase(&format!("tracing {} rooms", out.len()));
+    let taken = number_from_nearest_tag(&mut out, &numbers, regions);
+    for (i, t) in any_size {
+        if let Some(r) = out.get_mut(i).filter(|r| r.number.is_none()) {
+            r.number = Some(t);
+        }
+    }
+    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
     Ok(out)
+}
+
+/// Each room traced without a number takes the number tag nearest its name that no room has (in
+/// its sheet region) and that lies in no other room, within [`NUMBER_REACH_HEIGHTS`] of the
+/// name's height: a tag printed on the room's furniture or in a notch of its outline. Nearest
+/// pairs first, so two rooms never share a tag. Returns how many took one.
+fn number_from_nearest_tag(rooms: &mut [FoundRoom], numbers: &[Label], regions: Option<&[[f64; 4]]>) -> usize {
+    let region_of = |p: Vec2| {
+        regions
+            .and_then(|rs| rs.iter().position(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, r) in rooms.iter().enumerate().filter(|(_, r)| r.number.is_none()) {
+        let reach = NUMBER_REACH_HEIGHTS * r.text_height;
+        if !(reach.is_finite() && reach > 0.0) {
+            continue;
+        }
+        let region = region_of(r.at);
+        for (j, (_, t, q, qh, _)) in numbers.iter().enumerate() {
+            // A tag prints its number at its name's size (a note's, a dimension's or an OCR
+            // copy's digits are another size).
+            let same_size = *qh >= TAG_SIZE_BAND.0 * r.text_height && *qh <= TAG_SIZE_BAND.1 * r.text_height;
+            if !same_size || q.dist(r.at) > reach || region_of(*q) != region {
+                continue;
+            }
+            // Another room's: its number already, or inside its outline.
+            let held = rooms.iter().enumerate().any(|(o, x)| {
+                o != i
+                    && ((x.number.as_deref().map(str::trim) == Some(t.trim()) && region_of(x.at) == region)
+                        || cadaddy_geom::point_in_polygon(&x.outline, *q))
+            });
+            if !held {
+                pairs.push((q.dist(r.at), i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut taken = 0;
+    for (_, i, j) in pairs {
+        let Some(t) = numbers.get(j).map(|n| n.1.trim().to_string()) else { continue };
+        let Some(region) = rooms.get(i).filter(|r| r.number.is_none()).map(|r| region_of(r.at)) else { continue };
+        // A number one room took (the same tag, or its copy on the sheet) no other takes.
+        if rooms.iter().any(|x| x.number.as_deref() == Some(t.as_str()) && region_of(x.at) == region) {
+            continue;
+        }
+        if let Some(r) = rooms.get_mut(i) {
+            r.number = Some(t);
+            r.confidence = (r.confidence + 0.1).min(1.0);
+            taken += 1;
+        }
+    }
+    taken
 }
 
 pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
@@ -932,6 +1223,84 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seg(a: (f64, f64), b: (f64, f64), w: f64) -> Seg {
+        Seg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), outline_width: w }
+    }
+
+    fn rect_sides(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Seg> {
+        let r = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+        let w = outline_width(&r);
+        (0..4).map(|i| (r[i], r[(i + 1) % 4])).map(|(a, b)| seg((a.x, a.y), (b.x, b.y), w)).collect()
+    }
+
+    #[test]
+    fn a_dashed_line_is_no_wall_face_but_a_wall_broken_by_walls_or_windows_is() {
+        // Inches (k = 1). An overhead line across a 40" opening drawn as 18" dashes with 9" gaps.
+        let mut segs: Vec<Seg> = (0..5).map(|i| f64::from(i) * 27.0).map(|x| seg((x, 3.3), (x + 18.0, 3.3), f64::INFINITY)).collect();
+        // A corridor face broken every 25' by 7" party walls; a facade with 36" windows between
+        // 24" piers; a wall face drawn in two pieces.
+        segs.extend((0..4).map(|i| f64::from(i) * 307.0).map(|x| seg((x, 100.0), (x + 300.0, 100.0), f64::INFINITY)));
+        segs.extend((0..4).map(|i| f64::from(i) * 60.0).map(|x| seg((x, 200.0), (x + 24.0, 200.0), f64::INFINITY)));
+        segs.extend([seg((0.0, 300.0), (20.0, 300.0), f64::INFINITY), seg((26.0, 300.0), (46.0, 300.0), f64::INFINITY)]);
+        // The dashes drawn right to left, and a vertical dashed line.
+        segs.extend((0..4).map(|i| f64::from(i) * 15.0).map(|y| seg((500.0, y + 10.0), (500.0, y), f64::INFINITY)));
+        let n = segs.len();
+        assert_eq!(drop_dashes(&mut segs, 1.0), 9);
+        assert_eq!(segs.len(), n - 9);
+        assert!(segs.iter().all(|s| (s.a.y - 3.3).abs() > 1e-9 && s.a.x != 500.0));
+        assert_eq!(segs.iter().filter(|s| s.a.y == 100.0).count(), 4);
+        assert_eq!(segs.iter().filter(|s| s.a.y == 200.0).count(), 4);
+        assert_eq!(segs.iter().filter(|s| s.a.y == 300.0).count(), 2);
+        // No units: nothing taken.
+        assert_eq!(drop_dashes(&mut segs, 0.0), 0);
+    }
+
+    #[test]
+    fn a_thin_outline_beside_another_walls_face_is_no_wall_but_a_thin_outline_face_is() {
+        // Inches. A 7" party wall (faces y 0 and y 7, 10' long) with a closed 1.8" × 3' rectangle
+        // 4" off each face (trim drawn beside it at a unit's entry).
+        let rect = [Vec2::new(10.0, 11.0), Vec2::new(46.0, 11.0), Vec2::new(46.0, 12.8), Vec2::new(10.0, 12.8)];
+        let w = outline_width(&rect);
+        assert!((1.6..1.8).contains(&w), "{w}");
+        assert!(outline_width(&rect[..2]).is_infinite());
+        let mut segs = vec![seg((0.0, 0.0), (120.0, 0.0), f64::INFINITY), seg((0.0, 7.0), (120.0, 7.0), f64::INFINITY)];
+        segs.extend(rect_sides(10.0, 11.0, 46.0, 12.8));
+        segs.extend(rect_sides(10.0, -5.8, 46.0, -4.0));
+        let lim = Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 };
+        let d = Drawing::default();
+        let mut found = pairs(&d, &segs, &lim);
+        let between = |p: &Pair| {
+            let y = (p.c0.y + p.c1.y) / 2.0;
+            y - p.thickness / 2.0 >= 7.0 - 1e-6 || y + p.thickness / 2.0 <= 1e-6
+        };
+        // Before: the wall's faces pair with the rectangles' sides into 4"/5.8" "walls" in the air.
+        assert!(found.iter().filter(|p| between(p)).count() >= 4, "{:?}", found.iter().map(|p| p.thickness).collect::<Vec<_>>());
+        let dropped = drop_sliver_pairs(&segs, &mut found, &lim);
+        assert!(dropped >= 4, "{dropped}");
+        assert!(!found.iter().any(between), "{:?}", found.iter().map(|p| (p.c0, p.thickness)).collect::<Vec<_>>());
+        // The party wall itself stays.
+        assert!(found.iter().any(|p| (p.thickness - 7.0).abs() < 1e-6));
+
+        // A wall whose one face is a thin outline (a jamb or a finish layer drawn closed) and
+        // whose other face bounds nothing else: it stays.
+        let mut segs = rect_sides(0.0, 0.0, 48.0, 1.5);
+        segs.push(seg((0.0, 6.0), (48.0, 6.0), f64::INFINITY));
+        let mut found = pairs(&d, &segs, &lim);
+        assert!(!found.is_empty());
+        assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+        assert!(found.iter().any(|p| (p.thickness - 6.0).abs() < 1e-6));
+
+        // Two walls drawn with thin finish layers, side by side 5" apart: neither is dropped.
+        let mut segs = rect_sides(0.0, 0.0, 48.0, 0.6);
+        segs.extend(rect_sides(0.0, 4.1, 48.0, 4.7));
+        segs.extend(rect_sides(0.0, 9.7, 48.0, 10.3));
+        segs.extend(rect_sides(0.0, 13.8, 48.0, 14.4));
+        let mut found = pairs(&d, &segs, &lim);
+        let n = found.len();
+        assert!(n > 4);
+        assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+    }
 
     #[test]
     fn a_short_room_name_is_no_device_mark() {
