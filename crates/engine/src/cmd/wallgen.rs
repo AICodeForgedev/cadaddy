@@ -1617,23 +1617,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     }
                 }
             });
+            if between {
+                continue;
+            }
             // Another wall running across the gap (a corridor's walls between two rooms' walls
-            // that happen to line up, a demising wall between two units' bath walls): the two
-            // pieces are two walls, the gap no opening; nothing the plan draws spans it (Q6160).
-            if between || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) {
-                continue;
-            }
-            // Two walls ending at a corridor's two sides, lined up across it (two units' entry
-            // or bath walls): the gap is the corridor's floor, no opening in a wall (Q6160).
-            if in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness) {
-                corridor_gaps += 1;
-                continue;
-            }
-            gaps.push((i, a.b, a.b + u * gap, a.thickness));
+            // that happen to line up, a demising wall between two units' bath walls), or the gap
+            // in a corridor's air (two units' entry or bath walls lined up across it): no header
+            // spans it. A door swing hung there or the outside beyond it still make it a door or
+            // a window (Q6160).
+            let no_header = gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap) || in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+            gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header));
         }
-    }
-    if corridor_gaps > 0 {
-        notes.push(format!("{}: {corridor_gaps} gaps across a corridor between lined-up walls left open (no header).", level.name));
     }
     // Outside: no other wall across one side of it.
     let outside = |p: Vec2, nrm: Vec2, walls: &[PlanWall]| {
@@ -1654,7 +1648,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The swings drawn on the level (arcs and flattened arcs of a door's sweep and radius), for
     // the gaps to hang doors from.
     let swings = drawn_swings(&ents, k);
-    for (wi, g0, g1, t) in gaps {
+    for (wi, g0, g1, t, no_header) in gaps {
         let width = g0.dist(g1);
         let u = (g1 - g0) * (1.0 / width.max(1e-12));
         // A door swing (an arc, or a polyline of chords) hung from a jamb: its hinge there, its
@@ -1747,12 +1741,20 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                 });
                 windows += 1;
             }
+        } else if no_header {
+            corridor_gaps += 1;
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));
         }
         if let Some(w) = pl.walls.get_mut(wi) {
             w.extra.extend(extra.into_iter().filter(|(_, _, lo, hi)| hi > lo));
         }
+    }
+    if corridor_gaps > 0 {
+        notes.push(format!(
+            "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
+            level.name
+        ));
     }
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
     let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k));
@@ -1765,7 +1767,8 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
 
 /// Whether a wall other than `i` and `j` (the two pieces either side of the gap `g0`–`g1`) runs
 /// across the gap: its centreline crosses the gap's line between the gap's ends, away from them by
-/// more than half its thickness (a wall meeting a jamb end-on is the jamb's return, not across).
+/// more than half its thickness (a wall meeting a jamb end-on is the jamb's return, not across),
+/// and goes on past the line on both sides.
 fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bool {
     let width = g0.dist(g1);
     if !(width.is_finite() && width > 1e-9) {
@@ -1786,7 +1789,11 @@ fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bo
         let s = (c.a - g0).cross(d) / den;
         let t = (c.a - g0).cross(u) / den;
         let margin = c.thickness / 2.0;
-        s > margin && s < width - margin && (0.0..=1.0).contains(&t)
+        // Through the gap's line, past it both sides by half its thickness: a wall that only
+        // ends on the line (a partition meeting an outside wall in a window's gap) runs up to the
+        // opening, not across it.
+        let past = margin / d.len().max(1e-9);
+        s > margin && s < width - margin && t > past && t < 1.0 - past
     })
 }
 
@@ -2353,6 +2360,10 @@ mod tests {
         assert!(!gap_crossed(&walls, 0, 1, g0, g1));
         // A wall that lies along the gap's line is no wall across it either.
         walls.push(plan_wall((110.0, 0.0), (160.0, 0.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A partition ending on the gap's line from one side (meeting an outside wall in a
+        // window's gap) runs up to the opening, not across it.
+        walls.push(plan_wall((136.0, 0.0), (136.0, 120.0)));
         assert!(!gap_crossed(&walls, 0, 1, g0, g1));
         // A demising wall running across the gap's middle: two walls lined up, no opening.
         walls.push(plan_wall((136.0, -120.0), (136.0, 120.0)));
