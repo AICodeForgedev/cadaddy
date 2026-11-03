@@ -17,6 +17,8 @@ use cadaddy_walk3d::concrete::{ConcreteElement, Rebar};
 
 /// Most bars, tendons, sheets or joists one element gets.
 const MAX_PER_ELEMENT: usize = 20_000;
+/// The largest a concrete element is laid out at (feet across, deep).
+const MAX_ELEMENT_FT: f64 = 5_000.0;
 
 /// A prism over plan polygons from `z0` up to `z1`.
 fn prism(polys: &[Vec<Vec2>], z0: f64, z1: f64) -> Mesh {
@@ -208,7 +210,7 @@ pub(super) fn outline_runs(polys: &[Vec<Vec2>], tol: f64) -> Vec<(Vec2, Vec2)> {
 
 /// A run of `len` feet cut into stock pieces lapped `lap` feet: the pieces' lengths.
 pub(super) fn lapped_pieces(len: f64, stock: f64, lap: f64) -> Vec<f64> {
-    if !(len.is_finite() && len > 1e-6 && stock.is_finite() && stock > lap + 0.5 && lap >= 0.0) {
+    if !(len.is_finite() && len > 1e-6 && stock.is_finite() && stock > lap + 0.5 && lap >= 0.0) || len > (stock - lap) * 1_000.0 {
         return Vec::new();
     }
     let mut out = Vec::new();
@@ -367,7 +369,13 @@ fn spec_pour(e: &ConcreteElement, sp: &BuildingSpec, r: &Rules, cr: &super::supe
     }
     let lo = Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1]));
     let hi = Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1]));
-    let path: Vec<Vec2> = e.path.iter().take(MAX_PER_ELEMENT).filter(|p| p.iter().all(|v| v.is_finite())).map(|p| Vec2::new(p[0], p[1])).collect();
+    // Sizes no building has (hostile specs): left out and said.
+    let span = MAX_ELEMENT_FT * upf;
+    if !(lo.is_finite() && hi.is_finite()) || hi.x - lo.x > span || hi.y - lo.y > span || e.depth_in > MAX_ELEMENT_FT * 12.0 {
+        batch.notes.push(format!("concrete element {}: its size is out of range, so it has no pieces", e.id.chars().take(40).collect::<String>()));
+        return;
+    }
+    let path: Vec<Vec2> = e.path.iter().take(MAX_PER_ELEMENT).filter(|p| p.iter().all(|v| v.is_finite() && v.abs() < 1e12)).map(|p| Vec2::new(p[0], p[1])).collect();
     let width = e.width_in / 12.0 * upf;
     let (plan_area, mut blocks) = if path.len() >= 2 {
         let len: f64 = path.windows(2).map(|w| if let [a, b] = w { a.dist(*b) } else { 0.0 }).sum();
@@ -450,7 +458,11 @@ fn bars(
     let src = Source::from_doc(doc_kind(&e.source), if e.source.is_empty() { "the element's rebar callout" } else { &e.source });
     let item = format!("{} rebar", b.bar);
     let mut chairs_area = 0.0;
+    let made = std::cell::Cell::new(0usize);
     let add_run = |batch: &mut Batch, a: Vec2, c: Vec2, z: f64| {
+        if made.get() >= MAX_PER_ELEMENT {
+            return;
+        }
         let len_ft = a.dist(c) / upf;
         let dir = if a.dist(c) > 1e-9 { (c - a) * (1.0 / a.dist(c)) } else { Vec2::new(1.0, 0.0) };
         let mut at = 0.0;
@@ -468,6 +480,7 @@ fn bars(
             p.blocks.push(Block::new(pa, pc, dbu, z - dbu, z));
             let pi = batch.push(p);
             batch.link(pi, pour);
+            made.set(made.get() + 1);
             at += piece - lap_ft;
         }
     };
@@ -484,7 +497,7 @@ fn bars(
                 let mut n = 0;
                 if b.direction != "y" {
                     let mut y = y0;
-                    while y <= y1 + 1e-9 && n < MAX_PER_ELEMENT {
+                    while y <= y1 + 1e-9 && n < MAX_PER_ELEMENT && made.get() < MAX_PER_ELEMENT {
                         add_run(batch, Vec2::new(x0, y), Vec2::new(x1, y), z);
                         y += step;
                         n += 1;
@@ -492,7 +505,7 @@ fn bars(
                 }
                 if b.direction != "x" {
                     let mut x = x0;
-                    while x <= x1 + 1e-9 && n < MAX_PER_ELEMENT {
+                    while x <= x1 + 1e-9 && n < MAX_PER_ELEMENT && made.get() < MAX_PER_ELEMENT {
                         add_run(batch, Vec2::new(x, y0), Vec2::new(x, y1), z - db / 12.0 * upf);
                         x += step;
                         n += 1;

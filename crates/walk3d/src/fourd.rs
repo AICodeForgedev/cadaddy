@@ -233,7 +233,8 @@ pub fn element_of(e: &Entity) -> Element {
             }
             // A trade's piece (Q6162), as the IFC export writes it.
             "atom" => match mep_part.strip_prefix("atom:").unwrap_or_default() {
-                "pour" | "underlayment" => "IfcSlab",
+                "pour" => "IfcBuildingElementPart",
+                "underlayment" => "IfcCovering",
                 "rebar" => "IfcReinforcingBar",
                 "mesh" => "IfcReinforcingMesh",
                 "tendon" => "IfcTendon",

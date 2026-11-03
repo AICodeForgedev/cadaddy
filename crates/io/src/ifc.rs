@@ -302,7 +302,9 @@ fn size_label_in(s: [f64; 2]) -> String {
 /// (for `USERDEFINED`).
 fn trade_piece_class(kind: &str) -> (Class, &'static str, &'static str) {
     match kind {
-        "pour" | "underlayment" => (Class::Slab, "BASESLAB", ""),
+        // A pour is a part of its slab (the slab is the floor element).
+        "pour" => (Class::BuildingElementPart, "USERDEFINED", "CONCRETE POUR"),
+        "underlayment" => (Class::Ceiling, "FLOORING", ""),
         "rebar" => (Class::ReinforcingBar, "MAIN", ""),
         "mesh" => (Class::ReinforcingMesh, "MESH", ""),
         "tendon" => (Class::Tendon, "STRAND", ""),
@@ -421,7 +423,14 @@ fn class_of(e: &Entity) -> Kind {
             "atom" => {
                 let piece = mep_part.as_deref().and_then(|p| p.strip_prefix("atom:")).unwrap_or_default();
                 let (class, pre, object_type) = trade_piece_class(piece);
-                let mut k = kind(class, t.get(1).cloned(), extra("type:").unwrap_or_else(|| piece.to_string()), String::new());
+                let item = extra("type:").unwrap_or_else(|| piece.to_string());
+                // A tendon's anchors: the stressing (live) end and the fixed (dead) end.
+                let pre = match (class, item.contains("live"), item.contains("dead")) {
+                    (Class::TendonAnchor, true, _) => "TENSIONING_END",
+                    (Class::TendonAnchor, _, true) => "FIXED_END",
+                    _ => pre,
+                };
+                let mut k = kind(class, t.get(1).cloned(), item, String::new());
                 k.predefined = pre;
                 k.object_type = object_type;
                 k.description = extra("trade:").unwrap_or_default();
@@ -2529,6 +2538,13 @@ fn class_name(upper: &str) -> String {
         "BuildingElementPart",
         "TransportElement",
         "VirtualElement",
+        // Reinforcement and accessories (concrete, a trade's pieces).
+        "ReinforcingBar",
+        "ReinforcingMesh",
+        "Tendon",
+        "TendonAnchor",
+        "MechanicalFastener",
+        "DiscreteAccessory",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(

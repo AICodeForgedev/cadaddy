@@ -780,60 +780,45 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             i += 1;
             continue;
         };
-        // The openings it lists (`63 Single`, `2 Pair`) until its item table, its size and frame:
-        // the count on the size's row (or just before a `Size:` line) is the set's total, the
-        // rows above it its doors by hand.
-        let mut openings = 0.0;
-        let mut size = String::new();
-        let mut frame = String::new();
+        // Its size groups (`117 Single   Size: 2-10 X 7-0 …   PC Wood Door X CRS Frame`): the
+        // count on a size's row (or just before a `Size:` line) is that size's openings, the
+        // rows above it its doors by hand. A set can list several sizes.
+        let mut groups: Vec<(f64, String, String)> = Vec::new();
         let mut j = i + 1;
-        while j < lines.len() && j < i + 120 {
+        while j < lines.len() && j < i + 200 {
             let t = lines.get(j).map_or("", |x| x.1).trim();
             let tu = t.to_ascii_uppercase();
             if tu.starts_with("HARDWARE SET") || tu.starts_with("TOT QTY") {
                 break;
             }
-            let mut it = tu.split_whitespace();
-            let count = match (it.next(), it.next()) {
-                (Some(n), Some(w)) if w == "SINGLE" || w == "PAIR" => n.parse::<f64>().ok(),
-                _ => None,
-            };
+            let first = tu.split_whitespace().next().and_then(|n| n.parse::<f64>().ok());
             if let Some(si) = tu.find("SIZE:") {
-                // `117 Single   Size: 3-0 X 7-0 X 1 3/4   PC Wood Door X CRS Frame`: the cells
-                // after it, split where the columns are.
                 let rest = t.get(si + 5..).unwrap_or_default().trim();
                 let cells: Vec<&str> = rest.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
-                match cells.as_slice() {
-                    [] => {
-                        size = lines.get(j + 1).map_or("", |x| x.1).trim().to_string();
-                        frame = lines.get(j + 2).map_or("", |x| x.1).trim().to_string();
-                    }
-                    [a] => {
-                        size = (*a).to_string();
-                        frame = lines.get(j + 1).map_or("", |x| x.1).trim().to_string();
-                    }
-                    [a, b, ..] => {
-                        size = (*a).to_string();
-                        frame = (*b).to_string();
-                    }
+                let (size, frame) = match cells.as_slice() {
+                    [] => (lines.get(j + 1).map_or("", |x| x.1).trim().to_string(), lines.get(j + 2).map_or("", |x| x.1).trim().to_string()),
+                    [a] => ((*a).to_string(), lines.get(j + 1).map_or("", |x| x.1).trim().to_string()),
+                    [a, b, ..] => ((*a).to_string(), (*b).to_string()),
+                };
+                // The count before `Size:` on its row, else the row above's (`2 Single` then a
+                // `Size:` line).
+                let count = first.filter(|_| si > 0).or_else(|| {
+                    let above = lines.get(j.wrapping_sub(1)).map_or("", |x| x.1).trim().to_ascii_uppercase();
+                    above.split_whitespace().next().and_then(|n| n.parse::<f64>().ok())
+                });
+                if let Some(n) = count.filter(|n| (1.0..=10_000.0).contains(n)) {
+                    groups.push((n, size, frame));
                 }
-                if let Some(n) = count {
-                    openings = n;
-                }
-            } else if let Some(n) = count
-                && lines.get(j + 1).is_some_and(|x| x.1.trim().eq_ignore_ascii_case("size:"))
-            {
-                openings = n;
             }
             j += 1;
         }
-        if openings > 0.0 {
+        for (openings, size, frame) in &groups {
             total += openings;
             if first.is_empty() {
                 first = src(at);
             }
-            let mut f = Fact::new("openings.hardware_set", format!("set {id}: {openings} openings {size} {frame}").trim().to_string(), Some(openings), &src(at), &format!("{size} {frame}"));
-            f.scope = id.clone();
+            let mut f = Fact::new("openings.hardware_set", format!("set {id}: {openings} openings {size} {frame}").trim().to_string(), Some(*openings), &src(at), &format!("{size} {frame}"));
+            f.scope = format!("{id}|{size}");
             out.push(f);
         }
         i = j.max(i + 1);
@@ -943,9 +928,9 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
             "framing.trusses_listed" => ("roof trusses", q("framing", "truss", None).count as f64, json!({"trade": "framing", "kind": "truss"})),
             "openings.doors_listed" => ("doors (hardware sets' openings)", q("openings", "door", None).count as f64, json!({"trade": "openings", "kind": "door"})),
             "specialties.accessory" => {
-                let tag = f.value.split_whitespace().next().unwrap_or_default().to_string();
-                let t = q("specialties", "accessory", Some(&tag));
-                ("toilet accessory", t.pieces(), json!({"trade": "specialties", "kind": "accessory", "item": tag}))
+                // By its tag and model: two submittals can use one tag.
+                let t = q("specialties", "accessory", Some(&f.value));
+                ("toilet accessory", t.pieces(), json!({"trade": "specialties", "kind": "accessory", "item": f.value}))
             }
             _ => continue,
         };
@@ -1057,16 +1042,22 @@ mod tests {
         let sets: Vec<&Fact> = f.iter().filter(|x| x.key == "openings.hardware_set").collect();
         assert_eq!(sets.len(), 2);
         assert_eq!(sets[0].number, Some(15.0));
-        assert_eq!(sets[0].scope, "3");
+        assert_eq!(sets[0].scope.split('|').next(), Some("3"));
         assert_eq!(num(&f, "openings.doors_listed"), Some(17.0));
         // A schedule whose rows come joined, with its door list before the sets.
         let joined = "Door List   Door List\nDoor#   Hardware Set#   Door#   Hardware Set#\nA1   5   B7   6\nA2   5\n--- page 2 of 3 ---\nHardware Set#: 5\nQty Units   Door#\n2 Single   A1   East\n--------------------------\n2 Single   Size: 3-0 X 7-0 X 1 3/4   Wood Door X HM Frame\nTot Qty Qty   UOM\nHardware Set#: 6\n1 Pair   Size: 6-0 X 7-0   HM Door X HM Frame\nTot Qty\n";
         let f = facts(joined, "Sample Door Hardware");
         let sets: Vec<&Fact> = f.iter().filter(|x| x.key == "openings.hardware_set").collect();
         assert_eq!(sets.len(), 2, "{f:?}");
-        assert_eq!((sets[0].scope.as_str(), sets[0].number), ("5", Some(2.0)));
+        assert_eq!((sets[0].scope.split('|').next(), sets[0].number), (Some("5"), Some(2.0)));
         assert!(sets[0].quote.contains("3-0 X 7-0") && sets[0].quote.contains("HM Frame"), "{:?}", sets[0]);
-        assert_eq!((sets[1].scope.as_str(), sets[1].number), ("6", Some(1.0)));
+        assert_eq!((sets[1].scope.split('|').next(), sets[1].number), (Some("6"), Some(1.0)));
+        // A set of two sizes is two groups; a row of another word than Single counts too.
+        let two = "Hardware Set#: 9\n4 Single   X1   A\n4 Single   Size: 2-10 X 7-0   Wood Door X HM Frame\n1 Single   X2   B\n1 Single   Size: 3-0 X 7-0   Wood Door X HM Frame\nHardware Set#: 10\n3 Communicating   Size: 3-0 X 7-0   Wood Door X HM Frame\nTot Qty\n";
+        let f2 = facts(two, "Sample Door Hardware");
+        let g: Vec<(Option<&str>, Option<f64>)> = f2.iter().filter(|x| x.key == "openings.hardware_set").map(|x| (x.scope.split('|').next(), x.number)).collect();
+        assert_eq!(g, vec![(Some("9"), Some(4.0)), (Some("9"), Some(1.0)), (Some("10"), Some(3.0))]);
+        assert_eq!(num(&f2, "openings.doors_listed"), Some(8.0));
         let list: Vec<(&str, &str)> = f.iter().filter(|x| x.key == "openings.door_set").map(|x| (x.scope.as_str(), x.value.as_str())).collect();
         assert_eq!(list, vec![("A1", "door A1: set 5"), ("B7", "door B7: set 6"), ("A2", "door A2: set 5")]);
         let acc = "Robe Hook\nRH-10:  AB123   QTY-40\n4 EACH - GB-1: CD18 / GB-2: CD24\nTB-5: XY1 QTY-2 / TB-6: XY2 QTY-3";

@@ -1130,7 +1130,7 @@ fn sheets(
     let ti = batch.push(tape);
     let mut mud = base(Piece::new("drywall", "compound", r.text("drywall.compound_item"), &w.level, r.source("drywall.compound_lb_per_sf")));
     mud.weight_lb = net_total * r.num("drywall.compound_lb_per_sf", 0.14);
-    mud.area_sf = net_total;
+    mud.extra.push(("finished_sf", num_text(net_total), Source::computed()));
     mud.room = room.clone();
     mud = mud.computed("face", face).with("finish_level", r.text("drywall.finish_level"), r.source("drywall.finish_level"));
     mud.blocks.push(marker(mid));

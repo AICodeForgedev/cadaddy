@@ -358,7 +358,8 @@ fn the_documents_set_the_pieces_and_their_quantities_are_compared() {
     assert_eq!(row("doors (hardware sets' openings)")["documents"], json!(1.0));
     assert!(rep["answer_ms"]["studs"].as_f64().is_some());
     assert!(rep["levels"].as_array().unwrap().len() >= 2);
-    assert!(rep["totals"]["concrete"]["volume_cy"].as_f64().unwrap() > 0.0);
+    assert!(rep["totals"]["concrete"]["pour"]["volume_cy"].as_f64().unwrap() > 0.0);
+    assert!(rep["totals"]["drywall"]["sheet"]["with_waste"]["area_sf"].as_f64().unwrap() > rep["totals"]["drywall"]["sheet"]["area_sf"].as_f64().unwrap());
     // The rules say where each value came from.
     let rules = s.execute("bim.atoms.rules", &json!({"section": "concrete"})).unwrap();
     assert_eq!(rules["rules"]["concrete"]["chair_spacing_ft"]["from"], json!("documents"), "{rules}");

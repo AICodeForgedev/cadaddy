@@ -237,8 +237,8 @@ fn ceilings(d: &Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Ba
             let mut mud = Piece::new("drywall", "compound", r.text("drywall.compound_item"), &level, r.source("drywall.compound_lb_per_sf"));
             mud.host = Some(e.handle);
             mud.room = room.clone();
-            mud.area_sf = area;
             mud.weight_lb = area * r.num("drywall.compound_lb_per_sf", 0.14);
+            mud.extra.push(("finished_sf", num_text(area), Source::computed()));
             mud.blocks.push(marker(c0 + Vec2::new(3.0 * k, 0.0), 1.0 * k, z - 3.0 * k, 1.0 * k));
             batch.push(mud);
             let mut sc = Piece::new("drywall", "screws", r.text("drywall.screw_item"), &level, r.source("drywall.screws_per_sf"));

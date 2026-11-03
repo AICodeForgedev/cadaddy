@@ -73,13 +73,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.atoms.build", "Lay Out Trade Pieces", run_build)
             .params("{trades?: [concrete|framing|masonry|drywall|insulation|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
         CommandSpec::new("bim.atoms.report", "Trade Pieces Report", run_report)
-            .params("{level?, trade?, group_by?: kind|item (default kind)} → {levels: [{level, trades: [{trade, rows: [{kind, item?, count, pieces?, length_ft, area_sf?, volume_cf?, volume_cy?, weight_lb?}], waste_factor?, with_waste?}]}], totals: {trade: {count, length_ft, area_sf?, volume_cy?, weight_lb?}}, compare: [{what, documents, source, model, model_query, difference_pct?}], answer_ms: {query: ms}, rules_from: {documents, defaults, project}}: per level and trade the pieces and their totals from the count index, beside the quantities the documents give")
+            .params("{level?, trade?, group_by?: kind|item (default kind)} → {levels: [{level, trades: [{trade, rows: [{kind, item?, count, pieces?, length_ft, area_sf?, volume_cf?, volume_cy?, weight_lb?}], waste_factor?}]}], totals: {trade: {kind: {count, pieces?, length_ft, area_sf?, volume_cy?, weight_lb?, with_waste?: {pieces, area_sf?, volume_cy?}}}}, compare: [{what, documents, source, model, model_query, difference_pct?}], answer_ms: {query: ms}, rules_from: {documents, defaults, project}}: per level and trade the pieces and their totals from the count index, beside the quantities the documents give")
             .noundo(),
         CommandSpec::new("bim.atoms.rules", "Trade Piece Rules", run_rules)
             .params("{section?: framing|drywall|insulation|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
             .noundo(),
         CommandSpec::new("bim.atoms.docs", "Read Trade Documents", run_docs).params(
-            "{paths: [file or folder] (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
+            "{paths: [file or folder] or one path (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
         ),
     ]
 }
@@ -476,11 +476,14 @@ pub(crate) fn emit(d: &mut Drawing, batch: &Batch) -> Emitted {
                 ..cadaddy_doc::Layer::default()
             });
         }
+        // Its source: its host's (the plan object the wall or slab was built from), the same
+        // from build to build.
+        let source = p.host.and_then(|h| d.model.get(h)).and_then(|e| host_tag(e).map(str::to_string)).unwrap_or_else(|| Handle(0).hex());
         let tags = vec![
             t(1001, super::wallgen::APP.into()),
             t(1000, "atom".into()),
             t(1000, p.level.clone()),
-            t(1000, p.host.unwrap_or(Handle(0)).hex()),
+            t(1000, source),
             t(1000, format!("trade:{}", p.trade)),
             t(1000, format!("part:atom:{}", p.kind)),
             t(1000, format!("type:{}", p.item)),
@@ -587,7 +590,7 @@ pub(crate) fn remove(d: &mut Drawing, trades: Option<&BTreeSet<String>>) -> usiz
     hs.len()
 }
 
-/// The host handle a piece's tag names (the WALLGEN tag's source).
+/// The source handle a built element's tag names (the WALLGEN tag's fourth).
 fn host_tag(e: &cadaddy_doc::Entity) -> Option<&str> {
     let x = &e.common.xdata;
     let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(super::wallgen::APP))?;
@@ -622,7 +625,7 @@ pub(crate) fn drop_hosted(d: &mut Drawing, gone: &[Handle]) -> usize {
         .model
         .iter()
         .filter(|e| is_trade_piece(e))
-        .filter(|e| host_tag(e).is_some_and(|h| gone.contains(h)))
+        .filter(|e| props::read(&e.common.xdata).get("host").is_some_and(|h| gone.contains(h.text().trim())))
         .map(|e| e.handle)
         .take(MAX_ELEMENTS)
         .collect();
@@ -824,7 +827,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     let ix = super::mepatoms::stored(d).unwrap_or_else(|| super::mepatoms::Index::of(d));
     // Per level, trade and kind (or item).
     let mut tree: BTreeMap<String, BTreeMap<String, BTreeMap<(String, String), super::mepatoms::Tally>>> = BTreeMap::new();
-    let mut totals: BTreeMap<String, super::mepatoms::Tally> = BTreeMap::new();
+    let mut totals: BTreeMap<String, BTreeMap<String, super::mepatoms::Tally>> = BTreeMap::new();
     for (k, t) in &ix.rows {
         if k.trade.is_empty() {
             continue;
@@ -834,7 +837,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let key = (k.kind.clone(), if by_item { k.item.clone() } else { String::new() });
         tree.entry(k.level.clone()).or_default().entry(k.trade.clone()).or_default().entry(key).or_default().merge(t);
-        totals.entry(k.trade.clone()).or_default().merge(t);
+        totals.entry(k.trade.clone()).or_default().entry(k.kind.clone()).or_default().merge(t);
     }
     let order = |t: &str| TRADES.iter().position(|x| *x == t).unwrap_or(TRADES.len());
     let levels: Vec<Value> = tree
@@ -865,17 +868,29 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             })
         })
         .collect();
+    // The whole model's by trade and kind; a trade's waste factor on the kinds it buys by the
+    // piece, area or volume.
     let mut tot = serde_json::Map::new();
-    for (t, tally) in &totals {
-        let mut j = super::mepatoms::tally_json(tally);
-        if let Some((f, _)) = waste_of(&rules, t) {
-            j["with_waste"] = json!({
-                "area_sf": (tally.area_sf * (1.0 + f) * 100.0).round() / 100.0,
-                "volume_cy": (tally.volume_cf / 27.0 * (1.0 + f) * 100.0).round() / 100.0,
-                "pieces": (tally.pieces() * (1.0 + f)).ceil(),
-            });
+    for (t, kinds) in &totals {
+        let waste = waste_of(&rules, t);
+        let mut m = serde_json::Map::new();
+        for (kind, tally) in kinds {
+            let mut j = super::mepatoms::tally_json(tally);
+            let buys = matches!(kind.as_str(), "sheet" | "pour" | "batt" | "board" | "cmu" | "flooring");
+            if let Some((f, _)) = waste.as_ref().filter(|_| buys) {
+                let r2 = |v: f64| (v * 100.0).round() / 100.0;
+                let mut w = json!({"pieces": (tally.pieces() * (1.0 + f)).ceil()});
+                if tally.area_sf > 0.0 {
+                    w["area_sf"] = json!(r2(tally.area_sf * (1.0 + f)));
+                }
+                if tally.volume_cf > 0.0 {
+                    w["volume_cy"] = json!(r2(tally.volume_cf / 27.0 * (1.0 + f)));
+                }
+                j["with_waste"] = w;
+            }
+            m.insert(kind.clone(), j);
         }
-        tot.insert(t.clone(), j);
+        tot.insert(t.clone(), Value::Object(m));
     }
     // The quantities the documents give, beside the model's.
     let compare = docs::compare(&rules.facts, &ix, level.as_deref());
@@ -940,7 +955,7 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.atoms.docs";
-    let paths: Vec<String> = match p.get("paths").or_else(|| p.get("path")) {
+    let paths: Vec<String> = match p.get("paths") {
         Some(Value::String(x)) => vec![x.clone()],
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(str::to_string).take(64).collect(),
         _ => return Err(bad(CMD, "`paths` (the submittal and specification files or folders) is required")),
@@ -1112,6 +1127,29 @@ mod tests {
         // A source key can't be set as a value.
         r.set("framing.stud_spacing_in_source", json!("x"), "y", "project");
         assert!(r.source_text("framing.stud_spacing_in").starts_with("project rule"));
+    }
+
+    #[test]
+    fn a_dropped_hosts_pieces_go_with_it() {
+        let mut d = Drawing::default();
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), 1.0, 0.0, 1.0);
+        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Wall, "L1", Handle(0x77));
+        let wall = d.add(&Space::Model, Common { xdata: tags.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
+        let mut batch = Batch::default();
+        for host in [Some(wall), None] {
+            let mut p = Piece::new("framing", "stud", "a stud", "L1", Source::computed());
+            p.host = host;
+            p.blocks.push(Block::new(Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), 1.0, 0.0, 1.0));
+            batch.push(p);
+        }
+        let e = emit(&mut d, &batch);
+        assert_eq!(e.by_trade.get("framing").and_then(|m| m.get("stud")), Some(&2));
+        // Its source tag is its host's source: the same from build to build.
+        assert!(d.model.iter().filter(|x| is_trade_piece(x)).any(|x| host_tag(x) == Some("77")));
+        assert_eq!(drop_hosted(&mut d, &[wall]), 1);
+        assert_eq!(d.model.iter().filter(|x| is_trade_piece(x)).count(), 1);
+        assert_eq!(drop_hosted(&mut d, &[]), 0);
     }
 
     #[test]

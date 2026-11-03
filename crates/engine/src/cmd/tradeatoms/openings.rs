@@ -119,7 +119,12 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
             .then(|| r.facts_of("openings.door_set").find(|f| f.scope.eq_ignore_ascii_case(number.trim())))
             .flatten()
             .and_then(|f| f.value.rsplit("set ").next().map(str::to_string))
-            .and_then(|set| sets.iter().enumerate().find(|(_, (f, _))| f.scope.eq_ignore_ascii_case(&set)).map(|(i, x)| (i, x.0)));
+            .and_then(|set| {
+                // The set's group of the door's size, else its first.
+                let of_set = |f: &Fact| f.scope.split('|').next().is_some_and(|id| id.eq_ignore_ascii_case(&set));
+                let fits = |sz: &Option<(f64, f64)>| sz.is_some_and(|(w, hh)| (w - wf).abs() < 0.35 && (hh - hf).abs() < 0.6);
+                sets.iter().enumerate().find(|(_, (f, sz))| of_set(f) && fits(sz)).or_else(|| sets.iter().enumerate().find(|(_, (f, _))| of_set(f))).map(|(i, x)| (i, x.0))
+            });
         let by_list = listed.is_some();
         let pick = listed.or_else(|| sets
             .iter()
@@ -152,7 +157,10 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         fp.blocks.push(Block::new(c - half, c + half, t + 1.5 * k, bottom + height - fw, bottom + height));
         let fi = batch.push(fp);
         let (item, h_src, set_id) = match pick {
-            Some((_, f)) => (format!("{} {}", r.text("openings.hardware_item"), f.scope), f.source_of(), f.scope.clone()),
+            Some((_, f)) => {
+                let id = f.scope.split('|').next().unwrap_or_default().to_string();
+                (format!("{} {id}", r.text("openings.hardware_item")), f.source_of(), id)
+            }
             None => (format!("{} (no hardware schedule read)", r.text("openings.hardware_item")), Source::from_doc(SourceKind::Default, "no door hardware schedule in the documents read"), String::new()),
         };
         let mut hp = Piece::new("openings", "hardware_set", item, &level, h_src);
