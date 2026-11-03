@@ -2041,7 +2041,8 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
-    r["deviceElements"] = json!(devices);
+    r["deviceElements"] = json!(devices.built);
+    r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
     // One building: the levels' 3D moved off their plans onto the lowest level's.

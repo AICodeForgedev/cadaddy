@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1198,
-    "count": 1198,
+    "callableAsJson": 1206,
+    "count": 1206,
     "ids": [
       "-attedit",
       "-block",
@@ -128,6 +128,7 @@
       "bim.from_pdf",
       "bim.get_spec",
       "bim.identity",
+      "bim.inventory",
       "bim.issue.create",
       "bim.issue.list",
       "bim.issue.marks",
@@ -724,6 +725,7 @@
       "pan.left",
       "pan.right",
       "pan.up",
+      "panels.schedule",
       "paramconstraint",
       "paramconstraint.todimension",
       "parameters",
@@ -791,6 +793,12 @@
       "polygon",
       "presspull",
       "preview",
+      "pricebook.import",
+      "pricebook.list",
+      "pricebook.map",
+      "pricebook.remove",
+      "pricebook.set",
+      "pricebook.settings",
       "printers",
       "printrev.compare",
       "printrev.log",
@@ -1202,7 +1210,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 527,
+    "inMenus": 529,
     "typed": 564
   },
   "features": {

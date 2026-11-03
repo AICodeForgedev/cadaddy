@@ -280,7 +280,16 @@ fn a_jobs_other_sheets_are_theirs_not_outside_every_level() {
         set.truth.sheets.iter().map(|sh| (set.file(&sh.pdf).unwrap().to_vec(), format!("{} {}", sh.number, sh.title), String::new())).collect();
     std::fs::write(dir.join("Full Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).unwrap()).unwrap();
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).unwrap();
+    let mut st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).unwrap();
+    // Its electrical plan prints no device marks (the letters by its symbols are the grids'
+    // bubbles, no devices: Q6165), which the job asks about even in auto mode: none, it says.
+    if st["done"] != json!(true) {
+        let next = s.execute("job.next", &json!({})).unwrap();
+        let q = &next["question"];
+        assert!(q["question"].as_str().is_some_and(|t| t.contains("No device symbols counted on the electrical plans")), "{next}");
+        s.execute("job.answer", &json!({"id": q["id"], "answer": "No devices on these sheets"})).unwrap();
+        st = s.execute("job.status", &json!({})).unwrap();
+    }
     assert_eq!(st["done"], json!(true), "{st}");
     let _ = std::fs::remove_dir_all(&dir);
 

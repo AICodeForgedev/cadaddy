@@ -206,6 +206,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 aff_note: String::new(),
                 kind_source: String::new(),
                 ifc_class: String::new(),
+                equipment: f("equipment"),
+                near: String::new(),
             }
         })
         .collect();
@@ -1401,6 +1403,13 @@ pub struct ReadDevice {
     pub kind_source: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub ifc_class: String,
+    /// The equipment it connects (`HP-3`), when its mark is that equipment's tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub equipment: String,
+    /// The text printed round its mark on its sheet (a question about a mark nothing resolved
+    /// shows it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub near: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1464,13 +1473,17 @@ fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
     cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).or_else(|| sp.levels.first()).map_or_else(String::new, |l| l.name.clone())
 }
 
-/// What a device's BOM line calls it: `switch S3`, `device type A`.
+/// What a device's BOM line calls it: `switch S3`; a mark no legend, schedule or known list
+/// resolved says so (`UNRESOLVED device mark A`): a person answers its review question.
 fn device_item(tag: &str) -> String {
     match device_kind(tag) {
-        "device" => format!("device type {tag}"),
+        "device" => format!("{UNRESOLVED} {tag}"),
         k => format!("{k} {tag}"),
     }
 }
+
+/// The start of an unresolved device's BOM item.
+pub(crate) const UNRESOLVED: &str = "UNRESOLVED device mark";
 
 /// Put `devices` in the drawing's building model as element tags on their levels (`kind`,
 /// `type`, `device_type`, `circuit` when known, `sheet`, `symbol`), replacing the devices an
@@ -1513,7 +1526,7 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
         let item = match read {
-            "" => device_item(tag),
+            "" | "device" => device_item(tag),
             "wall luminaire" => format!("luminaire {tag}"),
             "receptacle" => receptacle_item(tag),
             _ => format!("{read} {tag}"),
@@ -1533,6 +1546,14 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         }
         if !dv.kind_source.is_empty() {
             e.set("kind_source", dv.kind_source.clone(), "legend");
+        }
+        if !dv.equipment.is_empty() {
+            e.set("equipment", dv.equipment.clone(), "plan");
+        }
+        // A mark nothing resolved: what a person is asked about (its sheet, symbol and the text
+        // printed round it).
+        if kind == "device" && matches!(read, "" | "device") {
+            e.set("unresolved", if dv.near.is_empty() { "no text near it" } else { dv.near.as_str() }, "plan");
         }
         // A luminaire stays a `device` element by its mark; what it is, said for its readers.
         if luminaire {

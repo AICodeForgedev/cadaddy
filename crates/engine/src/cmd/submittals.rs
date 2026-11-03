@@ -337,7 +337,7 @@ fn product_packages(dir: &std::path::Path, out: &mut Vec<String>, depth: usize) 
     }
 }
 
-fn pdf_files(paths: &[String]) -> Vec<String> {
+pub(crate) fn pdf_files(paths: &[String]) -> Vec<String> {
     let is_pdf = |p: &std::path::Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
     let mut out = Vec::new();
     for given in paths {

@@ -579,6 +579,15 @@ impl Workbook {
     /// The cells of sheet `name` (default the first), limited to `range` (`A1:C5`), as rows of
     /// text, empty cells as empty strings.
     pub fn cells(&self, sheet: Option<&str>, range: Option<&str>) -> Result<Vec<Vec<String>>, String> {
+        self.read_cells(sheet, range, true)
+    }
+
+    /// As [`Self::cells`], numbers unformatted (full precision: a price, not its two decimals).
+    pub fn values(&self, sheet: Option<&str>, range: Option<&str>) -> Result<Vec<Vec<String>>, String> {
+        self.read_cells(sheet, range, false)
+    }
+
+    fn read_cells(&self, sheet: Option<&str>, range: Option<&str>, formatted: bool) -> Result<Vec<Vec<String>>, String> {
         let (name, path) = match sheet {
             Some(n) => self.sheets.iter().find(|(s, _)| s.eq_ignore_ascii_case(n.trim())).ok_or_else(|| format!("no sheet \"{n}\""))?,
             None => self.sheets.first().ok_or("the workbook has no sheets")?,
@@ -626,10 +635,11 @@ impl Workbook {
                         }
                     }
                     _ => match v.and_then(|s| s.trim().parse::<f64>().ok()).filter(|n| n.is_finite()) {
-                        Some(n) => {
+                        Some(n) if formatted => {
                             let style = c.attr("s").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
                             format_number(n, self.formats.get(style).map_or("General", String::as_str))
                         }
+                        Some(n) => format!("{n}"),
                         None => String::new(),
                     },
                 };

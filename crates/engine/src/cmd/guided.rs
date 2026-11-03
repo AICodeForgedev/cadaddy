@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::inventory::MarkFate;
 use super::{CommandSpec, bad, str_param};
 use crate::{Result, Session};
 
@@ -24,6 +25,8 @@ const MAX_QUESTIONS_PER_STAGE: usize = 500;
 const MAX_VERIFY_SAMPLES: usize = 20;
 /// Most texts read per sheet when looking for its legends and schedules.
 const MAX_SHEET_TEXTS: usize = 200_000;
+/// Objects of one sheet looked at for its grid bubbles, at most.
+const MAX_SHEET_OBJECTS: usize = 2_000_000;
 /// Most rules a job may learn.
 const MAX_RULES: usize = 5_000;
 /// Most audit entries kept (oldest trimmed).
@@ -505,6 +508,10 @@ pub struct GuidedJob {
     /// callouts resolved, enlarged plans registered, match lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Value>,
+    /// What the BIM build did with the marks it read, by the mark's handle (hex): left out and
+    /// why, or one with another sheet's. The print inventory ([`super::inventory`]) takes it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mark_fates: BTreeMap<String, super::inventory::MarkFate>,
 }
 
 /// A level as an answer gave it: the elevation and name the user typed, or "Correct".
@@ -644,6 +651,29 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
     out
 }
 
+/// A page read on its own (a sheet the job didn't load) as a sheet region: its extents, and the
+/// border and title block its frame lines show. `None` for a page of no extents.
+pub(crate) fn page_region(page: &cadaddy_doc::Drawing, number: &str, discipline: &str) -> Option<SheetRegion> {
+    let b = page.extents(&cadaddy_doc::Space::Model);
+    if b.is_empty() || !(b.min.x.is_finite() && b.min.y.is_finite() && b.max.x.is_finite() && b.max.y.is_finite()) {
+        return None;
+    }
+    let rect = [b.min.x, b.min.y, b.max.x, b.max.y];
+    let frame = sheet_frames(page, &[rect]).into_iter().next()?;
+    Some(SheetRegion {
+        number: number.to_string(),
+        level: String::new(),
+        discipline: discipline.to_string(),
+        kind: String::new(),
+        rect,
+        area: frame.border.then_some(frame.area).or(frame.title_block.map(|_| frame.area)),
+        title_block: frame.title_block,
+        not_built: String::new(),
+        levels: Vec::new(),
+        view: None,
+    })
+}
+
 /// Straight lines longer than this share of a sheet's shorter side are measured for its frame.
 const FRAME_RULE_SHARE: f64 = 0.25;
 
@@ -765,6 +795,7 @@ impl GuidedJob {
             cancelled: None,
             carry: Vec::new(),
             links: None,
+            mark_fates: BTreeMap::new(),
         }
     }
 
@@ -2267,6 +2298,9 @@ struct DeviceCensus {
     legend_tables: usize,
     /// Each device counted in `by_type`, for the model.
     placed: Vec<super::readers::ReadDevice>,
+    /// What each symbol (and each switch designation read as a switch) is, by its handle: the
+    /// print inventory's verdicts.
+    fates: Vec<(u64, super::inventory::MarkFate)>,
 }
 
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
@@ -2296,11 +2330,20 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
     };
     let groups = spans.len() + 1;
     let mut texts: Vec<Vec<TextItem>> = vec![Vec::new(); groups];
+    // Each text's handle (0: a symbol's tag put back among the texts).
+    let mut text_handles: Vec<Vec<u64>> = vec![Vec::new(); groups];
+    // Each sheet's objects, for its grid bubbles.
+    let mut objects: Vec<Vec<&std::sync::Arc<cadaddy_doc::Entity>>> = vec![Vec::new(); groups];
     // Each symbol: its tag, where it is, its handle, and where its tag is printed (and how tall).
     type Symbol = (String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>);
     let mut symbols: Vec<Vec<Symbol>> = vec![Vec::new(); groups];
     for e in store.iter() {
         let g = group_of(e.handle.0);
+        if let Some(v) = objects.get_mut(g)
+            && v.len() < MAX_SHEET_OBJECTS
+        {
+            v.push(e);
+        }
         match &e.kind {
             cadaddy_doc::EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
                 let attr = ins.attribs.iter().find(|a| a.tag == "TAG");
@@ -2321,6 +2364,9 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                     && !t.value.trim().is_empty()
                 {
                     v.push(TextItem { value: t.value.trim().to_string(), at: t.insert.xy(), height: t.height, rotation: t.rotation });
+                    if let Some(hs) = text_handles.get_mut(g) {
+                        hs.push(e.handle.0);
+                    }
                 }
             }
             _ => {}
@@ -2335,6 +2381,9 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 && (sheet_facts::is_circuit_label(tag) || super::readers::switch_designation(tag).is_some())
             {
                 v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
+                if let Some(hs) = text_handles.get_mut(g) {
+                    hs.push(0);
+                }
             }
         }
     }
@@ -2354,6 +2403,51 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         c.legend_types.extend(l.types.iter().cloned());
         legends.push(l);
     }
+    // The legends that speak for a sheet besides its own: on an electrical sheet every device
+    // legend of the set (its legend sheet, the reflected ceiling plans' fixture legends); on
+    // another trade's sheet that trade's (a mechanical plan's marks are the mechanical legend's,
+    // a grid bubble's `C` no lighting schedule's); a general sheet (life safety, a cover) its own.
+    let sheet_of = |g: usize| spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
+    let trade_of = |sheet: &str| {
+        let number = sheet.split('/').next().unwrap_or(sheet);
+        job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(number)).map_or_else(
+            || number.trim().chars().take_while(char::is_ascii_alphabetic).collect::<String>().to_ascii_uppercase(),
+            |r| r.discipline.to_ascii_uppercase(),
+        )
+    };
+    let mut every_legend = Legend::default();
+    let mut every_row: BTreeMap<String, (String, device_types::LegendRow)> = BTreeMap::new();
+    let mut trade_legends: BTreeMap<String, (Legend, BTreeMap<String, (String, device_types::LegendRow)>)> = BTreeMap::new();
+    for (g, l) in legends.iter().enumerate() {
+        let sheet = sheet_of(g);
+        let trade = trade_of(&sheet);
+        for (k, row) in &l.rows {
+            every_row.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+        }
+        every_legend.merge(l.clone());
+        if !trade.is_empty() && trade != "G" {
+            let (tl, rows) = trade_legends.entry(trade).or_default();
+            for (k, row) in &l.rows {
+                rows.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+            tl.merge(l.clone());
+        }
+    }
+    // A table whose heading names a trade speaks for that trade's sheets wherever it is printed
+    // (a CASEWORK AND PLUMBING FIXTURE SCHEDULE on an architectural sheet types the plumbing
+    // plans' fixtures).
+    let trades: BTreeSet<String> = (0..spans.len()).map(|g| trade_of(&sheet_of(g))).collect();
+    for trade in trades.iter().filter(|t| !trade_names(t).is_empty()) {
+        for (g, l) in legends.iter().enumerate() {
+            let sheet = sheet_of(g);
+            for (k, row) in l.rows.iter().filter(|(_, r)| trade_names(trade).iter().any(|w| r.table.to_ascii_uppercase().contains(w))) {
+                let (tl, rows) = trade_legends.entry(trade.clone()).or_default();
+                tl.types.insert(k.clone());
+                rows.entry(k.clone()).or_insert_with(|| (sheet.clone(), row.clone()));
+            }
+        }
+    }
+    let k_in = super::perceive::units_per_inch(d);
     // Tags an answer made device types.
     let learned: std::collections::BTreeSet<String> = job
         .rules
@@ -2391,13 +2485,29 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
     // A reflected ceiling plan is loaded for its ceiling heights: its fixtures are the electrical
     // plans' (counted there), and it isn't registered onto the plans.
     let ceiling_plans: BTreeSet<&str> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.number.as_str()).collect();
+    // The symbols of unlisted tags, by handle: stray lettering or a question, by their count.
+    let mut unlisted: Vec<(u64, String)> = Vec::new();
     for (g, syms) in symbols.iter().enumerate() {
         if spans.get(g).is_some_and(|sp| ceiling_plans.contains(sp.sheet.split('/').next().unwrap_or(&sp.sheet))) {
+            for (_, _, h, _) in syms {
+                c.fates.push((h.0, MarkFate::not_object("a reflected ceiling plan's symbol: the electrical plans count it")));
+            }
             continue;
         }
         let legend = legends.get(g).unwrap_or(&none);
         let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
+        // The types this sheet's legends list, and their rows with the sheet each is on.
+        let no_rows = BTreeMap::new();
+        let (shared, shared_rows) = if electrical(&sheet) {
+            (&every_legend, &every_row)
+        } else {
+            trade_legends.get(&trade_of(&sheet)).map_or((&none, &no_rows), |(l, r)| (l, r))
+        };
+        let listed: BTreeSet<String> = legend.types.iter().chain(shared.types.iter()).cloned().collect();
+        let plumbing = trade_of(&sheet) == "P";
+        // Its grid bubbles (read when a symbol may be one).
+        let mut bubbles_here: Option<Vec<(cadaddy_geom::Vec2, f64, String)>> = None;
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
         let learned = if electrical(&sheet) { &learned_electrical } else { &learned };
         let fire_alarm_sheet = fire_alarm.contains(&sheet.split('/').next().unwrap_or(&sheet).trim().to_ascii_uppercase());
@@ -2414,14 +2524,30 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         for (tag, at, h, tag_at) in syms {
             if legend.covers(*at) {
                 c.legend_samples += 1;
+                c.fates.push((h.0, MarkFate::not_object("a legend or schedule's sample symbol")));
             } else if tag.is_empty() {
                 c.untagged += 1;
+                c.fates.push((h.0, MarkFate::unexplained("a repeated symbol with no mark by it: nothing says what it is")));
             } else if is_circuit_tag(tag) {
                 c.circuit += 1;
                 // On an electrical plan a symbol only its circuit labels is a receptacle on that
                 // circuit (a GFCI one when GFCI is printed by it): receptacles carry no type mark.
                 let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
                 let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
+                let fate = if bubble {
+                    MarkFate::not_object("a callout bubble: its sheet reference reads like a circuit")
+                } else if !electrical(&sheet) {
+                    MarkFate::not_object("a circuit-like label on a sheet that isn't electrical")
+                } else if !kind.is_empty() {
+                    MarkFate::not_object("a circuit label on a fire alarm plan")
+                } else if !circuit_text(tag, &sheet_numbers) {
+                    MarkFate::not_object("a sheet number by a symbol")
+                } else if !building {
+                    MarkFate::left_out("receptacle", super::inventory::OUT_OF_SCOPE, "on a sheet of no building level")
+                } else {
+                    MarkFate::object("receptacle", "a symbol its circuit labels: a receptacle")
+                };
+                c.fates.push((h.0, fate));
                 if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
                     // Its designations printed by it (GFCI, WP, USB…), else a plain one.
                     let near: Vec<&str> = tag_at
@@ -2446,38 +2572,81 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         aff_note: String::new(),
                         kind_source: String::new(),
                         ifc_class: String::new(),
+                        equipment: String::new(),
+                        near: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
+                c.fates.push((h.0, MarkFate::not_object("answered: not a device")));
             } else {
-                match device_types::tag_verdict(tag, &c.legend_types, learned, &sheet_numbers) {
+                let verdict = match device_types::tag_verdict_listed(tag, &listed, !c.legend_types.is_empty(), learned, &sheet_numbers) {
+                    // A fire alarm plan's marks are its devices, listed or not: the sheet says
+                    // what they are.
+                    TagVerdict::Unlisted(t) if fire_alarm_sheet => TagVerdict::Device(t),
+                    // On an electrical plan a mechanical equipment's tag by its number (`HP` over
+                    // `3`, not a room's name by its room number) is that equipment's connection.
+                    TagVerdict::Unlisted(t)
+                        if electrical(&sheet)
+                            && equipment_of(&t, texts.get(g).map_or(&[][..], Vec::as_slice), *tag_at).is_some_and(|e| e.contains('-')) =>
+                    {
+                        TagVerdict::Device(t)
+                    }
+                    v => v,
+                };
+                match verdict {
                     // A sheet of no level (uncertain, not answered) or on the site datum is a
                     // reference sheet: nothing on it is a model element.
-                    TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
+                    TagVerdict::Device(t) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {
                         *c.not_device.entry("on a sheet of no building level").or_default() += 1;
+                        let k = kind_of_tag(&t);
+                        let k = if k.is_empty() { super::readers::device_kind(&t).to_string() } else { k };
+                        c.fates.push((h.0, MarkFate::left_out(&k, super::inventory::OUT_OF_SCOPE, "on a sheet of no building level")));
+                    }
+                    TagVerdict::Device(t)
+                        if bubbles_here
+                            .get_or_insert_with(|| {
+                                super::grids::grid_bubbles(d, objects.get(g).map_or(&[][..], Vec::as_slice), k_in, electrical(&sheet))
+                            })
+                            .iter()
+                            .any(|(o, r, label)| label.eq_ignore_ascii_case(&t) && o.dist(*at) <= 1.3 * r) =>
+                    {
+                        *c.not_device.entry("a grid bubble").or_default() += 1;
                     }
                     TagVerdict::Device(t) => {
-                        c.placed.push(super::readers::ReadDevice {
+                        let sheet_texts = texts.get(g).map_or(&[][..], Vec::as_slice);
+                        let mut dv = super::readers::ReadDevice {
                             tag: t.clone(),
                             at: [at.x, at.y],
                             sheet: sheet.clone(),
                             level: job.level_at([at.x, at.y]).map_or_else(String::new, |r| r.level.clone()),
-                            circuit: super::readers::circuit_of(texts.get(g).map_or(&[][..], Vec::as_slice), &circuits, tag, *tag_at, *at),
+                            circuit: super::readers::circuit_of(sheet_texts, &circuits, tag, *tag_at, *at),
                             handle: h.hex(),
                             kind: kind_of_tag(&t),
-                            leg: String::new(),
-                            room: String::new(),
-                            aff_in: None,
-                            aff_note: String::new(),
-                            kind_source: String::new(),
-                            ifc_class: String::new(),
-                        });
+                            ..super::readers::ReadDevice::default()
+                        };
+                        if dv.kind.is_empty() && super::readers::device_kind(&t) == "device" {
+                            let own = legend.rows.get(&t).map(|row| (sheet.as_str(), row));
+                            let other = shared_rows.get(&t).map(|(sh, row)| (sh.as_str(), row));
+                            resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
+                        }
+                        let k = if dv.kind.is_empty() { super::readers::device_kind(&t).to_string() } else { dv.kind.clone() };
+                        c.fates.push((h.0, MarkFate::object(&k, &format!("its mark {t} is a device type")).with_source(&dv.kind_source)));
+                        c.placed.push(dv);
                         *c.by_type.entry(t).or_default() += 1;
                     }
-                    TagVerdict::NotDevice(why) => *c.not_device.entry(why).or_default() += 1,
+                    TagVerdict::NotDevice(why) => {
+                        *c.not_device.entry(why).or_default() += 1;
+                        let said = if why == "lettering" {
+                            "its tag is lettering, not a type mark".to_string()
+                        } else {
+                            format!("its tag is a {why}, not a type mark")
+                        };
+                        c.fates.push((h.0, MarkFate::not_object(&said)));
+                    }
                     TagVerdict::Unlisted(t) => {
+                        unlisted.push((h.0, t.clone()));
                         let u = c.unlisted.entry(t).or_insert_with(|| UnlistedTag {
                             at: [at.x, at.y],
                             sheet: sheet.clone(),
@@ -2496,8 +2665,9 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // (`D,b` a dimmer on leg b, `3,a` a 3-way on leg a, a lone `c`): the switch and the leg
         // of fixtures it controls. A lone leg letter by an occupancy sensor is the sensor's leg.
         if electrical(&sheet) && kind.is_empty() {
-            for t in texts.get(g).into_iter().flatten() {
+            for (i, t) in texts.get(g).into_iter().flatten().enumerate() {
                 let Some((tag, leg)) = super::readers::switch_designation(&t.value) else { continue };
+                let text_handle = text_handles.get(g).and_then(|v| v.get(i)).copied().unwrap_or(0);
                 let level = job.level_at([t.at.x, t.at.y]);
                 if legend.covers(t.at) || level.is_some_and(|r| !super::printmep::building_level(&r.level)) {
                     continue;
@@ -2513,16 +2683,32 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         .min_by(|a, b| gap(a).total_cmp(&gap(b)));
                     if let Some(dv) = sensor {
                         dv.leg = leg;
+                        if text_handle != 0 {
+                            c.fates.push((text_handle, MarkFate::not_object("an occupancy sensor's switch leg letter")));
+                        }
                         continue;
                     }
                 }
                 let tag = if tag.is_empty() { "S".to_string() } else { tag };
+                if text_handle != 0 {
+                    c.fates.push((text_handle, MarkFate::object("switch", "a switch's designation printed by its symbol")));
+                }
+                // A designation the known marks don't name (`G1,a`: `SG1`) is still a switch's:
+                // the switch symbol printed it.
+                let (kind, kind_source) = if super::readers::device_kind(&tag) == "device" {
+                    ("switch".to_string(), format!("{sheet} switch designation {}", t.value.trim()))
+                } else {
+                    (String::new(), String::new())
+                };
                 c.placed.push(super::readers::ReadDevice {
                     tag: tag.clone(),
                     at: [t.at.x, t.at.y],
                     sheet: sheet.clone(),
                     level: level.map_or_else(String::new, |r| r.level.clone()),
                     leg,
+                    handle: if text_handle == 0 { String::new() } else { cadaddy_doc::Handle(text_handle).hex() },
+                    kind,
+                    kind_source,
                     ..super::readers::ReadDevice::default()
                 });
                 *c.by_type.entry(tag).or_default() += 1;
@@ -2530,6 +2716,17 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         }
     }
     // Unlisted marks printed once or twice are stray lettering.
+    for (h, t) in unlisted {
+        let n = c.unlisted.get(&t).map_or(0, |u| u.count);
+        c.fates.push((
+            h,
+            if n < MIN_REPEATED_TAG {
+                MarkFate::not_object("an unlisted mark printed once or twice: stray lettering")
+            } else {
+                MarkFate::unexplained(&format!("a mark no legend or schedule lists, printed {n} times (asked)"))
+            },
+        ));
+    }
     let stray: usize = c.unlisted.values().filter(|u| u.count < MIN_REPEATED_TAG).map(|u| u.count).sum();
     c.unlisted.retain(|_, u| u.count >= MIN_REPEATED_TAG);
     if stray > 0 {
@@ -2562,6 +2759,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
 /// The job's sheet map, read off the sheets it loaded: each sheet's own objects (its handles)
 /// as a page, a few pages at a time.
 fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks::SheetLinks> {
+    let (sheets, pages, _) = job_link_pages(s, job)?;
+    Some(cadaddy_mepfix::printlinks::link_set(&sheets, &pages))
+}
+
+/// The set's sheets and each loaded sheet's page as the sheet map reads it, with the sheet's name
+/// in the job (its span's).
+fn job_link_pages(
+    s: &Session,
+    job: &GuidedJob,
+) -> Option<(Vec<cadaddy_mepfix::printlinks::SetSheet>, Vec<cadaddy_mepfix::printlinks::LinkPage>, Vec<String>)> {
     use cadaddy_mepfix::printlinks::{self, LinkPage, SetSheet};
     let d = s.doc().ok()?;
     let store = d.space(&s.space())?;
@@ -2619,7 +2826,8 @@ fn job_links(s: &Session, job: &GuidedJob) -> Option<cadaddy_mepfix::printlinks:
         #[cfg(target_arch = "wasm32")]
         pages.extend(chunk.iter().zip(parts).map(read));
     }
-    Some(printlinks::link_set(&sheets, &pages))
+    let names = spans.iter().map(|sp| sp.sheet.clone()).collect();
+    Some((sheets, pages, names))
 }
 
 /// A view of a typical room or of one room (stamped into its rooms, not placed as a part of the
@@ -2678,12 +2886,12 @@ const MAX_ENLARGED_FITS: usize = 500;
 /// enlarged plan that shows no devices leaves the overall plan's alone. Returns (moved, left out).
 fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::SheetLinks, census: &mut DeviceCensus) -> (usize, usize) {
     let mut moves: BTreeMap<&str, &cadaddy_mepfix::printlinks::Enlarged> = BTreeMap::new();
-    let mut ignored: BTreeSet<&str> = BTreeSet::new();
+    let mut ignored: BTreeMap<&str, &cadaddy_mepfix::printlinks::Enlarged> = BTreeMap::new();
     for e in links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0) {
         for h in &e.device_handles {
             moves.insert(h.as_str(), e);
         }
-        ignored.extend(e.ignored_handles.iter().map(String::as_str));
+        ignored.extend(e.ignored_handles.iter().map(|h| (h.as_str(), e)));
     }
     // A registered view's other devices, by where they are: the types its own sheet's legend
     // doesn't list (a submittal's), the switches read at their designations. Not a typical room's
@@ -2699,6 +2907,10 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
     };
     let (mut moved, mut dropped) = (0usize, 0usize);
     let mut keep = Vec::with_capacity(census.placed.len());
+    // The devices moved off each enlarged plan (its sheet, tag, where on the overall plan, handle),
+    // and the overall plan's copies left out (with their enlarged plan): one object each.
+    let mut moved_off: Vec<(&str, String, [f64; 2], String)> = Vec::new();
+    let mut left_out: Vec<(super::readers::ReadDevice, &str)> = Vec::new();
     for mut dv in std::mem::take(&mut census.placed) {
         if let Some(e) = moves.get(dv.handle.as_str()).copied().or_else(|| by_place(&dv))
             && let Some(at) = e.place(dv.at)
@@ -2706,14 +2918,31 @@ fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::Sheet
             dv.at = at;
             dv.level = job.level_at(at).map_or_else(|| e.level.clone(), |r| r.level.clone());
             moved += 1;
-        } else if ignored.contains(dv.handle.as_str()) {
+            moved_off.push((e.sheet.as_str(), dv.tag.clone(), at, dv.handle.clone()));
+        } else if let Some(e) = ignored.get(dv.handle.as_str()) {
             if let Some(n) = census.by_type.get_mut(&dv.tag) {
                 *n = n.saturating_sub(1);
             }
             dropped += 1;
+            left_out.push((dv, e.sheet.as_str()));
             continue;
         }
         keep.push(dv);
+    }
+    for (dv, sheet) in left_out {
+        let Ok(h) = u64::from_str_radix(&dv.handle, 16) else { continue };
+        let gap = |at: &[f64; 2]| (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]);
+        let kept = moved_off.iter().filter(|(s, t, _, _)| *s == sheet && *t == dv.tag).min_by(|a, b| gap(&a.2).total_cmp(&gap(&b.2)));
+        let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
+        let f = match kept {
+            Some(k) => MarkFate::duplicate(kind, &k.3, &format!("the enlarged plan {sheet} shows it: the overall plan's copy is left out")),
+            None => MarkFate::left_out(
+                kind,
+                super::inventory::NOT_BUILT,
+                &format!("the enlarged plan {sheet} is the authority there but shows no {}: the overall plan's is left out", dv.tag),
+            ),
+        };
+        census.fates.push((h, f));
     }
     census.by_type.retain(|_, n| *n > 0);
     census.placed = keep;
@@ -2735,9 +2964,16 @@ fn device_identity(s: &Session, job: &GuidedJob, census: &mut DeviceCensus) -> u
     if drop.is_empty() {
         return 0;
     }
+    for (i, k) in &drop {
+        let (Some(dv), Some(kept)) = (census.placed.get(*i), census.placed.get(*k)) else { continue };
+        let Ok(h) = u64::from_str_radix(&dv.handle, 16) else { continue };
+        let kind = if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { dv.kind.as_str() };
+        let why = format!("one device with the one on {}: the same type and circuit at one spot", kept.sheet);
+        census.fates.push((h, MarkFate::duplicate(kind, &kept.handle, &why)));
+    }
     let mut keep = Vec::with_capacity(census.placed.len());
     for (i, dv) in std::mem::take(&mut census.placed).into_iter().enumerate() {
-        if drop.contains(&i) {
+        if drop.contains_key(&i) {
             if let Some(n) = census.by_type.get_mut(&dv.tag) {
                 *n = n.saturating_sub(1);
             }
@@ -3930,6 +4166,7 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    job.mark_fates.clear();
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
     let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
@@ -3938,6 +4175,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut shells: Option<Vec<(String, Vec<[cadaddy_geom::Vec2; 2]>)>> = None;
     // Then the corridors, stairs and elevator hoistways inside it, before the rooms.
     let mut circulation: Vec<cadaddy_walk3d::Circulation> = Vec::new();
+    // What no registration could put onto the plans, kept out of the model: listed with why in
+    // the job's summary (Q6158).
+    let mut left_out: Vec<Value> = Vec::new();
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -4199,6 +4439,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
                     progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
                 }
+                for (k, (n, ft)) in unplaced.iter().take(MAX_LEFT_OUT) {
+                    left_out.push(json!({
+                        "what": "mep_runs",
+                        "where": k,
+                        "count": n,
+                        "feet": (ft * 10.0).round() / 10.0,
+                        "why": "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates",
+                    }));
+                }
                 if in_views > 0 {
                     progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
                 }
@@ -4225,6 +4474,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     None => false,
                 });
                 let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                for (what, n) in [("mep_terminals", dropped.1), ("mep_equipment", dropped.2)] {
+                    if n > 0 {
+                        left_out.push(json!({"what": what, "count": n, "why": "no registration puts their sheet's view onto its level's architectural plan: kept out of the model"}));
+                    }
+                }
                 progress_line(&format!(
                     "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
                     sp.mep.runs.len(),
@@ -4432,6 +4686,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(sch) = &schedule {
         let fixtures = plumbing_fixtures(s.doc()?, job, sch);
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
+        for f in &fixtures {
+            fate(job, &f.handle, MarkFate::object("plumbing fixture", &format!("a tag the plumbing fixture schedule lists ({})", f.tag)));
+        }
         all_devices.extend(fixtures);
     }
     if schedule.is_some() || job.sheet_spans.iter().any(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sp.sheet).eq_ignore_ascii_case("P")) {
@@ -4476,10 +4733,26 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // Nothing more than 5' outside its storey's shell (as for the MEP).
                 let upf_dev = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
                 let placed_n = out.len();
-                let out: Vec<_> = out.into_iter().filter(|dv| !outside_shell(shells.as_deref().unwrap_or(&[]), &dv.level, dv.at, upf_dev)).collect();
+                let out: Vec<_> = out
+                    .into_iter()
+                    .filter(|dv| {
+                        let outside = outside_shell(shells.as_deref().unwrap_or(&[]), &dv.level, dv.at, upf_dev);
+                        if outside {
+                            let why =
+                                format!("lands more than {OUTSIDE_SHELL_FT} ft outside its storey's walls (site work, or its sheet placed wrong)");
+                            fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_BUILT, &why));
+                        }
+                        !outside
+                    })
+                    .collect();
                 if out.len() < placed_n {
                     let n = placed_n - out.len();
                     progress_line(&format!("  devices outside the building (more than {OUTSIDE_SHELL_FT}' past its storey's shell), left out: {n}"));
+                    left_out.push(json!({
+                        "what": "devices",
+                        "count": n,
+                        "why": format!("placed more than {OUTSIDE_SHELL_FT} ft outside their storey's exterior walls (site lighting, or a sheet placed wrong): kept out of the model"),
+                    }));
                     job.add_finding(
                         StageName::BimBuild,
                         "Devices outside the building",
@@ -4500,7 +4773,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
+                for (k, n) in why.iter().take(MAX_LEFT_OUT) {
+                    left_out.push(json!({
+                        "what": "devices",
+                        "where": k,
+                        "count": n,
+                        "why": "no registration puts this sheet's view onto its level's architectural plan: kept out of the model (a typical room's plan stamps its devices into the rooms of its type instead)",
+                    }));
+                }
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
+                for dv in &unplaced {
+                    let why = format!(
+                        "its sheet {} doesn't line up with an architectural plan of level {} (and no typical-room plan takes it)",
+                        if dv.sheet.is_empty() { "?" } else { &dv.sheet },
+                        if dv.level.is_empty() { "?" } else { &dv.level }
+                    );
+                    fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
+                }
                 let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 // The heights the typical rooms' plans print by their devices.
@@ -4522,20 +4811,28 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
                 // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
-                let mut kept: Vec<(String, String, [f64; 2])> = Vec::new();
+                let mut kept: Vec<(String, String, [f64; 2], String, String)> = Vec::new();
                 let before_dupes = out.len();
                 let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+                let mut twice: Vec<(String, MarkFate)> = Vec::new();
                 out.retain(|dv| {
                     if dv.kind != "plumbing fixture" && dv.kind != "plumbing stack" {
                         return true;
                     }
                     let key = (dv.tag.clone(), digits(&dv.level));
-                    if kept.iter().any(|(t, l, at)| *t == key.0 && *l == key.1 && (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near) {
+                    if let Some(k) =
+                        kept.iter().find(|(t, l, at, _, _)| *t == key.0 && *l == key.1 && (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near)
+                    {
+                        let why = format!("one fixture with the {} tag on {}: tagged on two plans", k.0, k.4);
+                        twice.push((dv.handle.clone(), MarkFate::duplicate(device_kind_of(dv), &k.3, &why)));
                         return false;
                     }
-                    kept.push((key.0, key.1, dv.at));
+                    kept.push((key.0, key.1, dv.at, dv.handle.clone(), dv.sheet.clone()));
                     true
                 });
+                for (h, f) in twice {
+                    fate(job, &h, f);
+                }
                 if out.len() < before_dupes {
                     progress_line(&format!("  plumbing fixtures tagged on two plans, one kept: {}", before_dupes - out.len()));
                 }
@@ -4549,11 +4846,43 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if connected > 0 {
                     progress_line(&format!("  equipment connections (EF, PTAC tags) put at their equipment: {connected}"));
                 }
+                let mut shown: Vec<(String, MarkFate)> = Vec::new();
                 out.retain(|dv| {
-                    !authority.iter().any(|(level, outline)| {
-                        dv.level == *level && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
-                    })
+                    let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+                    let Some((level, outline)) =
+                        authority.iter().find(|(level, outline)| dv.level == *level && cadaddy_geom::point_in_polygon(outline, p))
+                    else {
+                        return true;
+                    };
+                    // The room plan's own copy: the stamped device of its mark nearest it in the room.
+                    let gap = |o: &super::readers::ReadDevice| (o.at[0] - dv.at[0]).hypot(o.at[1] - dv.at[1]);
+                    let kept = stamped
+                        .iter()
+                        .filter(|o| {
+                            o.level == *level && o.tag == dv.tag && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(o.at[0], o.at[1]))
+                        })
+                        .min_by(|a, b| gap(a).total_cmp(&gap(b)));
+                    let f = match kept {
+                        Some(k) => MarkFate::duplicate(
+                            device_kind_of(dv),
+                            &k.handle,
+                            "an enlarged plan of its room shows it: the overall plan's copy is left out",
+                        ),
+                        None => MarkFate::left_out(
+                            device_kind_of(dv),
+                            super::inventory::NOT_BUILT,
+                            &format!(
+                                "an enlarged plan of its room is the authority there but shows no {} in it: the overall plan's is left out",
+                                dv.tag
+                            ),
+                        ),
+                    };
+                    shown.push((dv.handle.clone(), f));
+                    false
                 });
+                for (h, f) in shown {
+                    fate(job, &h, f);
+                }
                 if out.len() < before {
                     progress_line(&format!("  rooms an enlarged plan shows: {} of the overall plans' devices in them left out", before - out.len()));
                 }
@@ -4597,6 +4926,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         {
             let d = s.doc()?;
             let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
+            let mut boxed: Vec<String> = Vec::new();
             devices.retain(|dv| {
                 if dv.kind != "receptacle" {
                     return true;
@@ -4606,8 +4936,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 else {
                     return true;
                 };
-                !*shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block).is_some_and(|sh| plain_box(&sh)))
+                let keynote = *shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(d, &ins.block).is_some_and(|sh| plain_box(&sh)));
+                if keynote {
+                    boxed.push(dv.handle.clone());
+                }
+                !keynote
             });
+            for h in boxed {
+                fate(job, &h, MarkFate::not_object("a circuit or panel name in a keynote's box (its number drawn in it): not a receptacle"));
+            }
         }
         if devices.len() < before_boxes {
             progress_line(&format!(
@@ -4636,6 +4973,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             if !unknown.is_empty() {
                 progress_line(&format!("  devices of no kind (their mark is in no legend row or known list): {unknown:?}"));
             }
+        }
+        // Still of no kind: the electrical and mechanical sheets that aren't plans (the legend
+        // sheet, the fixture and equipment schedules, the panel schedules' load names).
+        if devices.iter().any(unresolved_mark) {
+            let n = kinds_from_pages(job, &mut devices);
+            progress_line(&format!("  device marks resolved off the legend, schedule and panel schedule pages: {n}"));
+        }
+        let report = designation_report(&devices);
+        if !report.is_empty() {
+            progress_line(&format!("  device designations (mark: kind from source, count): {}", report.join("; ")));
         }
         // The stacks are pipes through the storey, not devices.
         let (stacks, devices): (Vec<super::readers::ReadDevice>, Vec<super::readers::ReadDevice>) =
@@ -4880,11 +5227,35 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             s.doc_mut()?.building_spec = Some(sp.to_json());
         }
     }
+    // The mounting heights the notes of the sheets it didn't import list (a legend sheet's
+    // general notes, an accessibility sheet): the devices' heights after their own notes, the
+    // elevations, the enlarged plans and the legends (Q6158).
+    let t_notes = web_time::Instant::now();
+    let notes = mount_notes(job);
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let sheets: BTreeSet<&str> = notes.iter().map(|n| n.sheet.as_str()).collect();
+        progress_line(&format!(
+            "  mounting heights the sheets' notes list: {} on {} ({:.1} s)",
+            notes.len(),
+            if sheets.is_empty() { "no sheet".to_string() } else { sheets.into_iter().collect::<Vec<_>>().join(", ") },
+            t_notes.elapsed().as_secs_f64()
+        ));
+        sp.mount_notes = notes;
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
+    result["left_out"] = json!(left_out);
+    if let Some(db) = result.get("deviceBuild") {
+        let line = format!(
+            "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; outside their level's footprint: {}",
+            db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["misplaced"]
+        );
+        progress_line(&line);
+    }
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
         if n > 0 || !missed.is_empty() {
@@ -4956,7 +5327,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     bim_step(s, job, "room volumes built", t);
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
-    let schedules = s.doc().map(|d| panel_schedules(d, job)).unwrap_or_default();
+    let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
+    let schedules = panel_schedules(&pages);
     if !schedules.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
@@ -4972,6 +5344,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     bim_step(s, job, "panel schedules", t);
+    // The electrical gear the plans don't place, from the schedules, the one-line and the gear
+    // submittals, in its rooms; the feeders between; the gear checked (entry, lugs) and reviewed.
+    let t = web_time::Instant::now();
+    if let Err(e) = gear_step(s, job, &pages, &mut result) {
+        result["gear_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "electrical gear", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -5019,16 +5398,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
+    // The devices whose wall the identity merge removed: set in the wall there now.
+    if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
+        let n = super::propfill::rehost_devices(s.doc_mut()?, &sp);
+        if n > 0 {
+            progress_line(&format!("  devices set in their walls again (their walls merged): {n}"));
+        }
+        result["devices_reseated"] = json!(n);
+    }
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
-    // The specifications' product data (and the submittals' as applied) onto the elements.
-    let t = web_time::Instant::now();
-    products_step(s, job, &mut result);
-    bim_step(s, job, "product data", t);
-    // The code rules on the devices (tamper-resistant in guest rooms, GFCI by circuit), the
+    // The code rules on the devices first (their product follows the decision: a GFCI built standard is a receptacle,
+    // a guest room's is the tamper-resistant one; tamper-resistant in guest rooms, GFCI by circuit), the
     // decisions the documents can't make left `undecided` and asked.
     let t = web_time::Instant::now();
     match s.execute("bim.coderules", &json!({})) {
@@ -5059,6 +5443,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Err(e) => result["code_rules_error"] = json!(e.to_string()),
     }
     bim_step(s, job, "code rules", t);
+    // The specifications' product data (and the submittals' as applied) onto the elements.
+    let t = web_time::Instant::now();
+    products_step(s, job, &mut result);
+    bim_step(s, job, "product data", t);
+    // The light fixture schedule on each luminaire, and the lighting documents checked against
+    // each other (plans, schedule, submittal).
+    let t = web_time::Instant::now();
+    if let Err(e) = lighting_step(s, job, &pages, &mut result) {
+        result["lighting_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "lighting", t);
+    // Nothing outside the building unsaid: every element outside its level's footprint flagged and
+    // listed with why.
+    let t = web_time::Instant::now();
+    misplaced_step(s, job, &mut result);
+    bim_step(s, job, "elements outside the floors flagged", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -5191,6 +5591,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         o.insert("level_answers".into(), json!(level_changes));
     }
 
+    // Every mark on the sheets read, and what became of it.
+    let t = web_time::Instant::now();
+    inventory_step(s, job, &mut result);
+    bim_step(s, job, "print inventory", t);
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     // The counts are the model's as the stage ends (B4-022: tag identity merges a wall or door
     // read off several sheets into one after the build; the summary kept the build's 2,977
@@ -5198,6 +5602,116 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     super::bspec::recount_built(s.doc()?, &mut result);
     progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
     Ok(result)
+}
+
+/// Most marks the build notes a fate for.
+const MAX_FATES: usize = 500_000;
+
+/// Note what the build did with a mark it read (by its handle, hex; none: nothing to note).
+fn fate(job: &mut GuidedJob, handle: &str, f: MarkFate) {
+    let h = handle.trim();
+    if !h.is_empty() && job.mark_fates.len() < MAX_FATES {
+        job.mark_fates.insert(h.to_ascii_uppercase(), f);
+    }
+}
+
+/// What a read device is: its sheet's or legend's kind, else its mark's.
+fn device_kind_of(dv: &super::readers::ReadDevice) -> &str {
+    if dv.kind.is_empty() { super::readers::device_kind(&dv.tag) } else { &dv.kind }
+}
+
+/// What the readers decided about each mark (by handle): the device census again (each symbol's
+/// verdict, the enlarged plans' and other sheets' copies), then what the BIM build did with them.
+/// Also the sheet map's page reads, by sheet.
+fn mark_fates(s: &Session, job: &GuidedJob) -> (std::collections::HashMap<u64, MarkFate>, BTreeMap<String, cadaddy_mepfix::printlinks::PageRead>) {
+    let mut fates: std::collections::HashMap<u64, MarkFate> = std::collections::HashMap::new();
+    let pages = job_link_pages(s, job);
+    let links = pages.as_ref().map(|(sheets, pages, _)| cadaddy_mepfix::printlinks::link_set(sheets, pages));
+    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let mut census = device_census(s, job, &bubbles);
+    if let Some(links) = &links {
+        enlarged_authority(job, links, &mut census);
+    }
+    device_identity(s, job, &mut census);
+    fates.extend(census.fates);
+    for (h, f) in &job.mark_fates {
+        if let Ok(h) = u64::from_str_radix(h, 16) {
+            fates.insert(h, f.clone());
+        }
+    }
+    let by_sheet = pages.map(|(_, pages, names)| names.into_iter().zip(pages).map(|(n, p)| (n, p.read)).collect()).unwrap_or_default();
+    (fates, by_sheet)
+}
+
+/// The print inventory of the job's sheets as the drawing is now.
+/// The set's sheets the job didn't load are read again off their files, one page at a time.
+pub(crate) fn job_inventory(s: &Session, job: &GuidedJob) -> super::inventory::Inventory {
+    let (fates, pages) = mark_fates(s, job);
+    let Ok(d) = s.doc() else { return super::inventory::Inventory::default() };
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    match super::file::io().and_then(|h| h.read_pdf) {
+        Some(read_pdf) => {
+            let mut reader = |sheet: &Value| sheet_page(job, sheet, &mut files, read_pdf);
+            super::inventory::take(d, job, &pages, &fates, Some(&mut reader))
+        }
+        None => super::inventory::take(d, job, &pages, &fates, None),
+    }
+}
+
+/// The PDF reader the build's I/O offers (`cadaddy_io::pdf_read`).
+type ReadPdf = super::file::PdfHook;
+
+/// One sheet of the set's index (`printset.sheets`' entry: its file and page), read off its file
+/// (`files` keeps the files read so far), or why it can't be.
+fn sheet_page(
+    job: &GuidedJob,
+    c: &Value,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    read_pdf: ReadPdf,
+) -> std::result::Result<cadaddy_doc::Drawing, String> {
+    let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else {
+        return Err("the sheet index gives it no file and page".into());
+    };
+    if !files.contains_key(file) {
+        let bytes = crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)).map_err(|e| format!("{file}: {e}"))?;
+        files.insert(file.to_string(), bytes);
+    }
+    let bytes = files.get(file).ok_or_else(|| format!("{file}: not read"))?;
+    read_pdf(bytes, &json!({"page": page, "text": true, "images": false})).map(|(d, _)| d).map_err(|e| format!("{file} page {page}: {e}"))
+}
+
+/// Take the print inventory, keep it in the drawing, and give its coverage in the stage result.
+fn inventory_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let inv = job_inventory(s, job);
+    let summary = inv.summary(false);
+    let c = &summary["coverage"];
+    progress_line(&format!(
+        "  print inventory: {} marks, {} classified ({}%); {} object marks, {} built ({}%); {} unexplained; {} sheets not loaded, {} read at the end ({} marks, {} unexplained)",
+        c["marks"],
+        c["classified"],
+        c["classified_pct"],
+        c["object_marks"],
+        c["objects_built"],
+        c["built_pct"],
+        c["unexplained"],
+        summary["sheets_not_read"],
+        summary["sheets_end_read"],
+        summary["coverage_by_read"]["end_read"]["marks"],
+        summary["coverage_by_read"]["end_read"]["unexplained"]
+    ));
+    if let Ok(d) = s.doc_mut()
+        && let Err(e) = super::inventory::store(d, &inv)
+    {
+        progress_line(&format!("  print inventory not kept: {e}"));
+    }
+    result["inventory"] = json!({
+        "coverage": summary["coverage"],
+        "coverage_by_read": summary["coverage_by_read"],
+        "by_trade": summary["by_trade"],
+        "sheets_not_read": summary["sheets_not_read"],
+        "sheets_end_read": summary["sheets_end_read"],
+        "sheets_unreadable": summary["sheets_unreadable"],
+    });
 }
 
 /// The plan sheets never built into a building level, as `A010: not built: site/civil`.
@@ -5347,6 +5861,57 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         );
     }
     result["products"] = v;
+}
+
+/// Groups of elements kept out of the model listed in the job's summary, at most.
+const MAX_LEFT_OUT: usize = 200;
+/// Elements outside their level's footprint listed one by one in the job's summary, at most.
+const MAX_MISPLACED_LISTED: usize = 200;
+
+/// Every built element outside its level's footprint (its floor and exterior walls) gets a `misplaced` property saying how far and
+/// why, and the job's result lists them (by part, the farthest first). Never stops the job.
+fn misplaced_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let Ok(d) = s.doc() else { return };
+    let found = super::propfill::outside_floors(d, &sp);
+    let mut by_part: BTreeMap<String, usize> = BTreeMap::new();
+    for o in &found {
+        *by_part.entry(o.part.clone()).or_default() += 1;
+    }
+    if let Ok(d) = s.doc_mut() {
+        for o in &found {
+            let why = format!(
+                "{:.1} ft outside {}'s footprint (its floor and exterior walls): placed where its sheet put it (check that sheet's registration onto the plan), or outside the building (a site item)",
+                o.outside_ft, o.level
+            );
+            let _ = d.modify_entity(o.handle, |e| {
+                let mut store = cadaddy_doc::props::read(&e.common.xdata);
+                store.set("misplaced", cadaddy_doc::props::Prop::new(why.clone(), cadaddy_doc::props::Source::computed()));
+                e.common.xdata = cadaddy_doc::props::write(&e.common.xdata, &store).into();
+            });
+        }
+    }
+    if !found.is_empty() {
+        progress_line(&format!("  elements outside their level's footprint (flagged misplaced): {} {by_part:?}", found.len()));
+        job.add_finding(
+            StageName::BimBuild,
+            "Elements outside the building's footprint",
+            &format!(
+                "{} elements lie more than 2 ft outside their level's footprint, its floor and exterior walls ({}); each is flagged `misplaced` with how far",
+                found.len(),
+                by_part.iter().map(|(k, n)| format!("{k}: {n}")).collect::<Vec<_>>().join(", ")
+            ),
+            2,
+            vec!["Check the registration of the sheets they were read from; a site item stays as it is".into()],
+            None,
+            false,
+        );
+    }
+    result["misplaced"] = json!({
+        "count": found.len(),
+        "by_part": by_part,
+        "first": found.iter().take(MAX_MISPLACED_LISTED).map(super::propfill::Outlier::to_json).collect::<Vec<_>>(),
+    });
 }
 
 /// The submittals' products onto the built elements (BUILD ORDER: after the architecture and the
@@ -6021,19 +6586,22 @@ fn rigid_room_fit(
         // Its best few offsets (ties to the smaller key: a hash map's order differs run to run).
         let mut ranked: Vec<((i64, i64), usize)> = votes.into_iter().collect();
         ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        for (o, _) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
+        for (o, votes) in ranked.into_iter().take(FIT_OFFSETS_TRIED) {
             let to = cadaddy_geom::Vec2::new(o.0 as f64 * tol, o.1 as f64 * tol);
             let placed: Vec<cadaddy_geom::Vec2> = turned.iter().map(|t| to + *t).collect();
             let on_lines = placed.iter().filter(|p| hit(&floor_grid, **p)).count();
             let placed_grid = grid_of(&placed);
             let explained = inside.iter().filter(|f| hit(&placed_grid, **f)).count();
             let score = on_lines + explained * few.len() / inside.len().max(1);
-            if best.as_ref().is_none_or(|b| score > b.2) {
-                best = Some((RoomFit { k, from, to, rigid: true }, on_lines, score));
+            // Only an offset enough samples agree on counts (the vote the fit was always accepted
+            // by): the two-way score ranks those, it never turns a fit away.
+            let enough = votes * 100 >= few.len() * MIN_FIT_SHARE_PCT;
+            if enough && best.as_ref().is_none_or(|b| score > b.2) {
+                best = Some((RoomFit { k, from, to, rigid: true }, votes, score));
             }
         }
     }
-    best.map(|(f, on, _)| (f, on)).filter(|(_, n)| *n * 100 >= few.len() * MIN_FIT_SHARE_PCT)
+    best.map(|(f, on, _)| (f, on))
 }
 
 /// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
@@ -7340,6 +7908,310 @@ const TITLE_BLOCK_SHARE: f64 = 0.12;
 /// The views of one unit type kept at most.
 const MAX_UNIT_VIEWS: usize = 40;
 
+/// Marks that tag mechanical equipment (`HP` over its number: heat pump 3). A device so marked is
+/// that equipment's electrical connection.
+const EQUIPMENT_TAGS: &[&str] =
+    &["HP", "AHU", "RTU", "CU", "ACU", "ERV", "HRV", "MAU", "MUA", "UH", "EUH", "CUH", "EWH", "VAV", "VRF", "KEF", "TEF", "GEF"];
+
+/// The words a table's heading names a trade by (`PLUMBING` for the plumbing sheets).
+fn trade_names(trade: &str) -> &'static [&'static str] {
+    match trade {
+        "P" => &["PLUMBING"],
+        "M" => &["MECHANICAL", "HVAC"],
+        "FP" | "F" => &["FIRE PROTECTION", "SPRINKLER"],
+        "L" | "T" => &["LOW VOLTAGE", "TECHNOLOGY", "TELECOM", "SECURITY"],
+        _ => &[],
+    }
+}
+
+/// How far round a mark its sheet's text is quoted for a question about it, in text heights.
+const NEAR_TEXT_H: f64 = 8.0;
+/// Texts quoted round a mark, at most, and the quote's length.
+const NEAR_TEXTS: usize = 6;
+const NEAR_TEXT_LEN: usize = 160;
+
+/// What a legend or schedule row makes a device marked with its type: a plumbing fixture when
+/// its table is a plumbing fixture schedule; its description's kind ([`legend_kind`]); else a
+/// luminaire when the row or its table is a light fixture's (`LIGHT FIXTURE SCHEDULE`, `6" LED
+/// DOWNLIGHT`); else an equipment connection when its table schedules equipment. None: the row
+/// names no device.
+/// The kind a legend's or schedule's row names: a known kind ([`row_kind`]), else one minted from
+/// the row's text ([`super::inventory::legend_kind`]).
+pub(crate) fn kind_of_row(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<String> {
+    row_kind(row, plumbing).map(|(k, _)| k.to_string()).or_else(|| super::inventory::legend_kind(&row.description))
+}
+
+fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<(&'static str, &'static str)> {
+    let table = row.table.to_ascii_uppercase();
+    // A plumbing fixture schedule's row: a plumbing fixture (its own schedule names it later).
+    if table.contains("PLUMBING") || (plumbing && table.contains("FIXTURE")) {
+        return Some(("plumbing fixture", "IfcSanitaryTerminal"));
+    }
+    if let Some(k) = legend_kind(&row.description) {
+        return Some(k);
+    }
+    let desc = row.description.to_ascii_uppercase();
+    let fixtures = !plumbing
+        && !table.contains("PLUMBING")
+        && ["LUMINAIRE", "LIGHT FIXTURE", "LIGHTING FIXTURE", "LIGHTING SCHEDULE", "FIXTURE SCHEDULE"].iter().any(|w| table.contains(w));
+    if fixtures || ["LUMINAIRE", "DOWNLIGHT", "TROFFER", "SCONCE", "PENDANT", "LIGHT FIXTURE", "LED FIXTURE"].iter().any(|w| desc.contains(w)) {
+        return Some(("luminaire", "IfcLightFixture"));
+    }
+    if ["EQUIPMENT", "FAN", "PUMP", "HEATER", "UNIT SCHEDULE"].iter().any(|w| table.contains(w)) {
+        return Some(("equipment connection", ""));
+    }
+    None
+}
+
+/// The mechanical equipment a mark tags (`HP`, `HP3`) with its number (`HP-3`): the mark's own
+/// digits, else a one- or two-digit number printed by the mark (an equipment tag's number under
+/// its letters; a room's three-digit number by its name is none).
+/// None for a mark that tags no equipment.
+fn equipment_of(tag: &str, texts: &[cadaddy_mepfix::sheet_facts::TextItem], tag_at: Option<(cadaddy_geom::Vec2, f64)>) -> Option<String> {
+    let t = tag.trim().to_ascii_uppercase();
+    let letters: String = t.chars().take_while(char::is_ascii_alphabetic).collect();
+    if !EQUIPMENT_TAGS.contains(&letters.as_str()) {
+        return None;
+    }
+    let digits: String = t.chars().skip(letters.len()).collect();
+    if !digits.is_empty() {
+        return Some(format!("{letters}-{digits}"));
+    }
+    let number = tag_at.and_then(|(p, h)| {
+        texts
+            .iter()
+            .filter(|x| {
+                let v = x.value.trim();
+                (1..=2).contains(&v.len()) && v.chars().all(|c| c.is_ascii_digit()) && x.at.dist(p) <= 3.0 * h
+            })
+            .min_by(|a, b| a.at.dist(p).total_cmp(&b.at.dist(p)))
+            .map(|x| x.value.trim().to_string())
+    });
+    Some(number.map_or(letters.clone(), |n| format!("{letters}-{n}")))
+}
+
+/// The text printed round a mark (nearest first, the mark itself left out), for a question.
+fn near_text(texts: &[cadaddy_mepfix::sheet_facts::TextItem], tag: &str, at: cadaddy_geom::Vec2, h: f64) -> String {
+    let reach = NEAR_TEXT_H * h;
+    let mut near: Vec<(f64, &str)> = texts
+        .iter()
+        .filter(|t| t.at.dist(at) <= reach && !t.value.trim().eq_ignore_ascii_case(tag.trim()))
+        .map(|t| (t.at.dist(at), t.value.trim()))
+        .filter(|(_, v)| !v.is_empty())
+        .collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = near.iter().take(NEAR_TEXTS).map(|(_, v)| *v).collect::<Vec<_>>().join(" | ");
+    if out.len() > NEAR_TEXT_LEN {
+        let cut = (0..=NEAR_TEXT_LEN).rev().find(|i| out.is_char_boundary(*i)).unwrap_or(0);
+        out.truncate(cut);
+    }
+    out
+}
+
+/// A device whose mark no known list names: its kind from the row of a legend or schedule that
+/// speaks for its sheet (`row`: the sheet it is on and the row), else from the equipment its mark
+/// tags; still nothing, the text printed round it, for the question it becomes.
+fn resolve_mark(
+    dv: &mut super::readers::ReadDevice,
+    row: Option<(&str, &cadaddy_mepfix::device_types::LegendRow)>,
+    plumbing: bool,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    tag_at: Option<(cadaddy_geom::Vec2, f64)>,
+) {
+    if let Some((sheet, r)) = row
+        && let Some((kind, ifc)) = row_kind(r, plumbing)
+    {
+        dv.kind = kind.into();
+        dv.ifc_class = ifc.into();
+        dv.kind_source = format!("{sheet} {}: {} {}", r.table, dv.tag, r.description).trim().to_string();
+        return;
+    }
+    if let Some(equipment) = equipment_of(&dv.tag, texts, tag_at) {
+        dv.kind = "equipment connection".into();
+        dv.kind_source = format!("{} mechanical equipment tag {equipment}", dv.sheet);
+        dv.equipment = equipment;
+        return;
+    }
+    // A row names it, but no known kind: the kind is the row's own words.
+    if let Some((sheet, r)) = row
+        && mint_kind(dv, sheet, r)
+    {
+        return;
+    }
+    let (at, h) = tag_at.unwrap_or((cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]), NEAR_TEXT_DEFAULT_H));
+    dv.near = near_text(texts, &dv.tag, at, h);
+}
+
+/// A device whose legend or schedule row names no known kind takes the row's own words as its
+/// kind (`legend:night light`), the row as its source. Whether it did.
+fn mint_kind(dv: &mut super::readers::ReadDevice, sheet: &str, r: &cadaddy_mepfix::device_types::LegendRow) -> bool {
+    let Some(kind) = super::inventory::legend_kind(&r.description) else { return false };
+    dv.kind = kind;
+    dv.kind_source = format!("{sheet} {}: {} {}", r.table, dv.tag.trim(), r.description).trim().to_string();
+    true
+}
+
+/// Whether a device's mark is still of no kind: no reader, legend or known list said what it is.
+fn unresolved_mark(dv: &super::readers::ReadDevice) -> bool {
+    matches!(dv.kind.as_str(), "" | "device") && super::readers::device_kind(&dv.tag) == "device"
+}
+
+/// Load names a mark is looked for among, at most per page.
+const MAX_LOAD_TEXTS: usize = 20_000;
+/// How far right of a load name its row's description reaches, in text heights.
+const LOAD_ROW_H: f64 = 40.0;
+
+/// The devices still of no kind, resolved off the pages of the electrical and mechanical sheets
+/// that aren't plans: a legend's or schedule's row for the mark (the electrical legend sheet, the
+/// light fixture and equipment schedules; an electrical sheet's marks by both, a mechanical
+/// sheet's by the mechanical), else the load a panel schedule names with it (`HP-3 HEAT PUMP`).
+/// How many took a kind.
+fn kinds_from_pages(job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> usize {
+    use cadaddy_mepfix::device_types::{LegendRow, read_legend};
+    type Rows = BTreeMap<String, (String, LegendRow)>;
+    let read = |discipline: &str| -> (Rows, Vec<(String, Vec<cadaddy_mepfix::sheet_facts::TextItem>)>) {
+        let mut rows = Rows::new();
+        let mut pages = Vec::new();
+        for (number, page) in non_plan_pages(job, discipline) {
+            let texts = cadaddy_mepfix::sheet_facts::texts(&page);
+            for (k, row) in read_legend(&texts).rows {
+                rows.entry(k).or_insert_with(|| (number.clone(), row));
+            }
+            if texts.iter().any(|t| t.value.to_ascii_uppercase().contains("PANEL")) {
+                pages.push((number, texts.into_iter().take(MAX_LOAD_TEXTS).collect()));
+            }
+        }
+        (rows, pages)
+    };
+    let electrical_sheet = |dv: &super::readers::ReadDevice| {
+        let number = dv.sheet.split('/').next().unwrap_or(&dv.sheet);
+        job.sheet_regions
+            .iter()
+            .find(|r| r.number.eq_ignore_ascii_case(number))
+            .map_or_else(|| number.trim().to_ascii_uppercase().starts_with('E'), |r| r.discipline.eq_ignore_ascii_case("E"))
+    };
+    let mechanical_sheet = |dv: &super::readers::ReadDevice| {
+        let number = dv.sheet.split('/').next().unwrap_or(&dv.sheet);
+        job.sheet_regions
+            .iter()
+            .find(|r| r.number.eq_ignore_ascii_case(number))
+            .map_or_else(|| number.trim().to_ascii_uppercase().starts_with('M'), |r| r.discipline.eq_ignore_ascii_case("M"))
+    };
+    if !devices.iter().any(|dv| unresolved_mark(dv) && (electrical_sheet(dv) || mechanical_sheet(dv))) {
+        return 0;
+    }
+    let (e_rows, panels) = read("E");
+    let (m_rows, _) = read("M");
+    let mut n = 0usize;
+    for dv in devices.iter_mut().filter(|dv| unresolved_mark(dv)) {
+        let (e, m) = (electrical_sheet(dv), mechanical_sheet(dv));
+        let tag = dv.tag.trim().to_string();
+        let row = if e {
+            e_rows.get(&tag).or_else(|| m_rows.get(&tag))
+        } else if m {
+            m_rows.get(&tag)
+        } else {
+            None
+        };
+        if let Some((sheet, r)) = row
+            && let Some((kind, ifc)) = row_kind(r, false)
+        {
+            dv.kind = kind.into();
+            dv.ifc_class = ifc.into();
+            dv.kind_source = format!("{sheet} {}: {tag} {}", r.table, r.description).trim().to_string();
+            n += 1;
+            continue;
+        }
+        if !e {
+            if let Some((sheet, r)) = row
+                && mint_kind(dv, sheet, r)
+            {
+                n += 1;
+            }
+            continue;
+        }
+        // A panel schedule's load named by the mark (or its equipment's tag): that load's row.
+        let names: Vec<String> = if dv.equipment.is_empty() { vec![tag.clone()] } else { vec![dv.equipment.clone(), tag.clone()] };
+        let load = panels.iter().find_map(|(sheet, texts)| {
+            names.iter().find_map(|name| {
+                let t = texts.iter().find(|t| t.value.split(|c: char| c.is_whitespace() || c == ',').any(|w| w.trim().eq_ignore_ascii_case(name)))?;
+                let h = t.height.max(1e-6);
+                let mut row: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+                    texts.iter().filter(|x| (x.at.y - t.at.y).abs() <= 0.5 * h && x.at.x >= t.at.x && x.at.x - t.at.x <= LOAD_ROW_H * h).collect();
+                row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                let description = row.iter().map(|x| x.value.trim()).collect::<Vec<_>>().join(" ");
+                Some((sheet.clone(), description))
+            })
+        });
+        if let Some((sheet, description)) = load {
+            let row = LegendRow { table: "panel schedule".into(), description: description.clone() };
+            let kind = row_kind(&row, false).or_else(|| equipment_load(&description).then_some(("equipment connection", "")));
+            if let Some((kind, ifc)) = kind {
+                dv.kind = kind.into();
+                dv.ifc_class = ifc.into();
+                dv.kind_source = format!("{sheet} panel schedule load: {description}");
+                n += 1;
+                continue;
+            }
+        }
+        // A legend's row names it, in words no known kind fits.
+        if let Some((sheet, r)) = row
+            && mint_kind(dv, sheet, r)
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Whether a panel schedule's load is a piece of equipment (its connection is the device).
+fn equipment_load(description: &str) -> bool {
+    let u = description.to_ascii_uppercase();
+    [
+        "HEAT PUMP",
+        "HP-",
+        "AHU",
+        "RTU",
+        "CONDENS",
+        "WATER HEATER",
+        "PUMP",
+        "FAN",
+        "UNIT",
+        "MOTOR",
+        "SIGN",
+        "GATE",
+        "OPERATOR",
+        "COMPRESSOR",
+        "HEATER",
+        "ELEVATOR",
+        "DOOR",
+    ]
+    .iter()
+    .any(|w| u.contains(w))
+}
+
+/// What each mark that needed resolving resolved to and from where (`HP: equipment connection
+/// from E-5 mechanical equipment tag HP-3, 1`), and the marks still unresolved (`C: UNRESOLVED,
+/// 12`), for the job's report.
+fn designation_report(devices: &[super::readers::ReadDevice]) -> Vec<String> {
+    let mut by: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    for dv in devices {
+        if unresolved_mark(dv) {
+            *by.entry((dv.tag.clone(), "UNRESOLVED".into(), dv.sheet.clone())).or_default() += 1;
+        } else if super::readers::device_kind(&dv.tag) == "device" && !dv.kind_source.is_empty() {
+            let source = dv.kind_source.split(':').next().unwrap_or("").to_string();
+            *by.entry((dv.tag.clone(), dv.kind.clone(), source)).or_default() += 1;
+        }
+    }
+    by.into_iter().take(MAX_REPORTED_MARKS).map(|((tag, kind, source), n)| format!("{tag}: {kind} from {source}, {n}")).collect()
+}
+
+/// Designations listed in the job's report, at most.
+const MAX_REPORTED_MARKS: usize = 200;
+
+/// The text height assumed round a mark whose own tag kept no height.
+const NEAR_TEXT_DEFAULT_H: f64 = 6.0;
+
 /// A legend row's device kind and IFC class from its description (`DUPLEX RECEPTACLE - NEMA
 /// 5-20R`: a receptacle, `IfcOutlet`). None for a row that names no device (a mounting height
 /// note, a circuit designation, a fixture that the luminaire schedule types).
@@ -7488,9 +8360,850 @@ fn legend_symbols(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> BTreeMap<Shape, 
     out
 }
 
-/// The panel schedules on the electrical sheets (the job's drawing's and those it didn't import),
-/// each panel once (the first sheet's).
-fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_walk3d::PanelSchedule> {
+/// The gear words a submittal's file name carries when it is a gear submittal.
+const GEAR_SUBMITTAL_WORDS: [&str; 4] = ["GEAR", "SWITCHGEAR", "PANELBOARD", "SWITCHBOARD"];
+
+/// The electrical gear from the documents ([`super::gearbuild`]): feeder types (the feeder
+/// schedule), each panel's incoming type (the one-line), the gear's box and lugs (the gear
+/// submittals); the gear laid out in its rooms (proposed), built, and checked by `gear.review`.
+fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    if sp.mep.panel_schedules.is_empty() {
+        return Ok(());
+    }
+    let tags: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
+    let mut types: Vec<super::gearbuild::FeederType> = Vec::new();
+    for (number, d) in pages {
+        for f in super::gearbuild::feeder_types(&cadaddy_mepfix::sheet_facts::texts(d), number) {
+            if !types.iter().any(|t| t.tag.eq_ignore_ascii_case(&f.tag)) {
+                types.push(f);
+            }
+        }
+    }
+    let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
+    let mut incoming: BTreeMap<String, String> = BTreeMap::new();
+    for (_, d) in pages {
+        for (k, v) in super::gearbuild::oneline_incoming(&cadaddy_mepfix::sheet_facts::texts(d), &tags, &type_tags) {
+            incoming.entry(k).or_insert(v);
+        }
+    }
+    let mut gear: BTreeMap<String, super::gearbuild::SubmittedGear> = BTreeMap::new();
+    // The gear submittals read (file, name, text): their drawing pages are read again by position.
+    let mut read_files: Vec<(String, String, String)> = Vec::new();
+    for f in super::submittals::pdf_files(&job.submittals).into_iter().take(MAX_GEAR_SUBMITTALS) {
+        let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
+        let up = name.to_ascii_uppercase();
+        if !GEAR_SUBMITTAL_WORDS.iter().any(|w| up.contains(w)) {
+            continue;
+        }
+        let Ok(text) =
+            crate::readfile::read(&f).map_err(|e| e.to_string()).and_then(|b| super::spec_import::pdf_text(&b, &f).map_err(|e| e.to_string()))
+        else {
+            continue;
+        };
+        for (k, v) in super::gearbuild::submittal_gear(&text, &tags, &name) {
+            gear.entry(k).or_insert(v);
+        }
+        read_files.push((f.clone(), name, text));
+    }
+    // Gear the text gives no size for: its elevation drawing (a page naming it and its sections),
+    // read by position; else an agent's answer; else a question for the agent.
+    let wanted: Vec<String> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|p| p.typical_of.is_none() && !sp.mep.equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&p.panel)))
+        .map(|p| p.panel.clone())
+        .filter(|t| gear.get(t).is_none_or(|g| g.size_in == [0.0; 3]))
+        .collect();
+    let read_pdf = super::file::io().and_then(|h| h.read_pdf);
+    let mut looked: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for tag in &wanted {
+        let up = tag.to_ascii_uppercase();
+        'files: for (f, name, text) in &read_files {
+            for page in text.split("--- page ").skip(1) {
+                let n: u32 = page.split_whitespace().next().and_then(|n| n.parse().ok()).unwrap_or(0);
+                let words: Vec<String> = page.split(|c: char| !(c.is_ascii_alphanumeric() || c == '#')).map(str::to_ascii_uppercase).collect();
+                if n == 0 || !words.iter().any(|w| w == "SECTION#") || !words.contains(&up) {
+                    continue;
+                }
+                looked.entry(tag.clone()).or_default().push(format!("{name} p.{n}"));
+                let Some(read) = read_pdf else { continue };
+                let Ok(bytes) = crate::readfile::read(f) else { continue };
+                let Ok((d, _)) = read(&bytes, &json!({"page": n, "text": true, "images": false})) else { continue };
+                if let Some(e) = super::gearbuild::elevation_at(&cadaddy_mepfix::sheet_facts::texts(&d)) {
+                    let g = gear.entry(tag.clone()).or_default();
+                    g.size_in = e.size_in;
+                    g.top_plate_in = e.top_plate_in;
+                    g.bottom_plate_in = e.bottom_plate_in;
+                    if g.kind.is_empty() {
+                        g.kind = e.kind;
+                    }
+                    g.source = format!("{name} p.{n} (elevation drawing)");
+                    break 'files;
+                }
+            }
+        }
+    }
+    for tag in &wanted {
+        if gear.get(tag).is_some_and(|g| g.size_in != [0.0; 3]) {
+            continue;
+        }
+        // An agent's answer to an earlier question.
+        if let Some(a) = job
+            .rules
+            .iter()
+            .find(|r| r.key == format!("gear:{}", tag.to_ascii_uppercase()))
+            .and_then(|r| serde_json::from_str::<Value>(&r.value).ok())
+        {
+            let n = |k: &str| a.get(k).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+            let pair = |k: &str| a.get(k).and_then(Value::as_array).and_then(|v| Some([v.first()?.as_f64()?, v.get(1)?.as_f64()?]));
+            if let (Some(h), Some(w), Some(dp)) = (n("height_in"), n("width_in"), n("depth_in")) {
+                let g = gear.entry(tag.clone()).or_default();
+                g.size_in = [h, w, dp];
+                g.top_plate_in = pair("top_entry_in").or(g.top_plate_in);
+                g.bottom_plate_in = pair("bottom_entry_in").or(g.bottom_plate_in);
+                if let Some(feed) = a.get("feed").and_then(Value::as_str) {
+                    g.feed = feed.to_ascii_lowercase();
+                }
+                g.source = "an agent's reading of the submittal (job answer)".into();
+                continue;
+            }
+        }
+        gear_question(job, tag, looked.get(tag).cloned().unwrap_or_default(), &read_files.iter().map(|(_, n, _)| n.clone()).collect::<Vec<_>>());
+    }
+    let rooms: Vec<super::gearbuild::RoomBox> = {
+        let d = s.doc()?;
+        let offsets: BTreeMap<cadaddy_doc::Handle, cadaddy_geom::Vec2> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+            .map(|e| (e.handle, super::bspec::stacked_by(e)))
+            .collect();
+        super::bspec::room_elements(d)
+            .into_iter()
+            .map(|r| super::gearbuild::RoomBox {
+                offset: offsets.get(&r.handle).copied().unwrap_or(cadaddy_geom::Vec2::ZERO),
+                level: r.level,
+                number: r.number.unwrap_or_default(),
+                name: r.name,
+                outline: r.outline,
+            })
+            .collect()
+    };
+    let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
+    let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let placed: Vec<String> =
+        planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
+    sp.mep.equipment.extend(planned.equipment);
+    // The one-line's feeders replace those read the same way before (a rerun).
+    sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
+    let feeders = planned.feeders.len();
+    sp.mep.feeders.extend(planned.feeders);
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    // The new gear built, then moved as the build moved its level to stack it.
+    let d = s.doc_mut()?;
+    let built = super::mep::build_equipment(d, &sp, Some(&new_tags));
+    for h in built {
+        let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
+        let off = level.and_then(|l| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(&l)).map(|r| r.offset)).unwrap_or(cadaddy_geom::Vec2::ZERO);
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    s.touch();
+    // The gear checked against what lands on it; each failure an RFI.
+    let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
+    let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
+    let line = format!(
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; gear submittals give {} panels; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        types.len(),
+        type_tags.join(", "),
+        incoming.len(),
+        gear.len(),
+        placed.len(),
+        placed.join("; "),
+        planned.unplaced,
+        findings.len()
+    );
+    report_progress(s, json!({"step": "electrical gear"}), &line);
+    s.echo(line);
+    for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
+        let msg = f.get("message").and_then(Value::as_str).unwrap_or_default();
+        let fix = f.get("fix").and_then(Value::as_str).unwrap_or_default();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Gear {}: {msg}", f.get("gear").and_then(Value::as_str).unwrap_or_default()),
+            "gear.check against the feeders that land on it",
+            2,
+            vec![fix.to_string()],
+            None,
+            false,
+        );
+    }
+    result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
+    equipment_step(s, job, pages, &types, &tags, result)
+}
+
+/// The lighting step ([`super::lightsched`]): the fixture schedule (by its grid) into the spec and
+/// onto each luminaire of its type; RFIs where the plans, the schedule and the submittal disagree.
+fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    use super::lightsched;
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
+    let mut no_subs = false;
+    for (number, d) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        if !texts
+            .iter()
+            .any(|t| t.value.to_ascii_uppercase().contains("FIXTURE SCHEDULE") || t.value.to_ascii_uppercase().contains("LUMINAIRE SCHEDULE"))
+        {
+            continue;
+        }
+        let segs = super::gridtable::segments(d);
+        for title in ["LIGHT FIXTURE SCHEDULE", "LIGHTING FIXTURE SCHEDULE", "LUMINAIRE SCHEDULE"] {
+            for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
+                let (rows, ns) = lightsched::fixture_types(&tb);
+                no_subs |= ns;
+                for r in rows {
+                    if !types.iter().any(|t| t.tag == r.tag) {
+                        types.push(r);
+                    }
+                }
+            }
+        }
+    }
+    if types.is_empty() {
+        return Ok(());
+    }
+    // Each luminaire: its type's row; what was submitted for it.
+    let d = s.doc()?;
+    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let mut on_plans: BTreeMap<String, usize> = BTreeMap::new();
+    let mut submitted: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
+        let kind = super::elemprops::reported_kind(e, base.clone());
+        if !matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture") {
+            continue;
+        }
+        let mut store = props::read(&e.common.xdata);
+        let text = |st: &props::Props, k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = {
+            let m = text(&store, "type_mark");
+            if m.is_empty() { text(&store, "type") } else { m }
+        };
+        let ty = lightsched::type_of(&mark);
+        if ty.is_empty() {
+            continue;
+        }
+        *on_plans.entry(ty.clone()).or_default() += 1;
+        let (maker, cat) = (text(&store, "manufacturer"), text(&store, "catalog_number"));
+        if !maker.is_empty() || !cat.is_empty() {
+            submitted.entry(ty.clone()).or_default().insert((maker, cat));
+        }
+        let Some(row) = types.iter().find(|t| t.tag == ty) else { continue };
+        let before = store.clone();
+        let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
+        for (k, v) in [
+            ("basis_of_design", format!("{} {}", row.manufacturer, row.model).trim().to_string()),
+            ("lamp", row.lamp.clone()),
+            ("voltage", row.voltage.clone()),
+            ("installation", row.installation.clone()),
+            ("fixture_description", row.description.clone()),
+            ("schedule_notes", row.notes.clone()),
+        ] {
+            let keep = store.get(k).is_some_and(|old| old.source.kind == SourceKind::User);
+            if !keep && !v.is_empty() {
+                store.set(k, Prop::new(v, src.clone()));
+            }
+        }
+        if let Some(va) = row.va
+            && !store.get("fixture_va").is_some_and(|o| o.source.kind == SourceKind::User)
+        {
+            store.set("fixture_va", Prop::new(va, src.clone()).with_unit("VA"));
+        }
+        if store != before {
+            changes.push((e.handle, store));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, store) in changes.iter() {
+        let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, store).into());
+    }
+    // The documents against each other.
+    let mut issues: Vec<(String, String, String)> = Vec::new();
+    for (ty, n) in &on_plans {
+        if !types.iter().any(|t| &t.tag == ty) {
+            issues.push((
+                ty.clone(),
+                format!("{n} luminaires of type {ty} on the plans; the light fixture schedule has no type {ty}"),
+                "Add the type to the schedule (basis of design, lamp, voltage, mounting) or correct the plans' tags".into(),
+            ));
+        }
+    }
+    for t in &types {
+        let Some(subs) = submitted.get(&t.tag) else { continue };
+        for (maker, cat) in subs {
+            let other_maker = !maker.is_empty() && !t.manufacturer.is_empty() && !lightsched::same_maker(&t.manufacturer, maker);
+            let other_product = !cat.is_empty() && !t.model.is_empty() && !lightsched::same_product(&t.model, cat);
+            if other_maker || other_product {
+                let note = if no_subs { "; the schedule's notes allow no substitutions unless approved" } else { "" };
+                issues.push((
+                    t.tag.clone(),
+                    format!(
+                        "type {}: the schedule's basis of design is {} {}; the submittal gives {} {}{note}",
+                        t.tag, t.manufacturer, t.model, maker, cat
+                    ),
+                    "Confirm the substitution is approved (or resubmit the basis of design)".into(),
+                ));
+            }
+        }
+    }
+    let unshown: Vec<String> = types.iter().filter(|t| !on_plans.contains_key(&t.tag)).map(|t| t.tag.clone()).collect();
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let mut rfis = Vec::new();
+    for (ty, issue, fix) in &issues {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in issue.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-L{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::Lighting;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("lighting type {ty}"),
+                issue: issue.clone(),
+                assumed: "The model keeps the plans' type and the submitted product until answered.".into(),
+                proposed: Some(fix.clone()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(StageName::BimBuild, issue, "the lighting documents disagree", 1, vec![fix.clone()], None, false);
+    }
+    sp.mep.fixture_schedule = types.clone();
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.touch();
+    let line = format!(
+        "  lighting: fixture schedule {} types ({}){}; luminaires given their row {}; on the plans {:?}; scheduled but not on the plans {:?}; conflicts {}",
+        types.len(),
+        types.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", "),
+        if no_subs { ", no substitutions" } else { "" },
+        changes.len(),
+        on_plans,
+        unshown,
+        issues.len()
+    );
+    report_progress(s, json!({"step": "lighting"}), &line);
+    s.echo(line);
+    result["lighting"] = json!({"types": types.len(), "luminaires": changes.len(), "conflicts": issues.len(), "rfis": rfis, "unshown": unshown});
+    controls_step(s, job, &types, result)
+}
+
+/// Lighting controls: each luminaire's control by its room and switch leg (the plans' letters on
+/// fixtures and switches), else its circuit's (a contactor or time switch per the panel schedule's
+/// codes), else none; emergency and exit fixtures unswitched by design. Conflicts: a leg no
+/// switch in the room has, a switch leg no fixture has, a 3-way without its pair, a dimmer over
+/// a fixture whose driver doesn't dim (or dims another way), a fixture with no control at all.
+fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::FixtureType], result: &mut Value) -> crate::Result<()> {
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    // Each circuit's codes (C, TS, EM...) by panel and number.
+    let mut codes: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for p in &sp.mep.panel_schedules {
+        for c in &p.circuits {
+            codes.insert((p.panel.to_ascii_uppercase(), c.number.clone()), c.protection.clone());
+        }
+    }
+    struct Dev {
+        h: cadaddy_doc::Handle,
+        room: String,
+        leg: String,
+        mark: String,
+        kind: String,
+        dimming: String,
+        product: String,
+        circuit: (String, String),
+        level: String,
+        at: Option<[f64; 2]>,
+    }
+    let d = s.doc()?;
+    let mut lums: Vec<Dev> = Vec::new();
+    let mut ctrls: Vec<Dev> = Vec::new();
+    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
+        let kind = super::elemprops::reported_kind(e, base.clone());
+        let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
+        let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
+        if !is_lum && !is_ctl {
+            continue;
+        }
+        let st = props::read(&e.common.xdata);
+        let text = |k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+        let mark = {
+            let m = text("type_mark");
+            if m.is_empty() { super::lightsched::type_of(&text("type")) } else { m.to_ascii_uppercase() }
+        };
+        let circuit = text("circuit");
+        let number = circuit.rsplit_once(['-', '/', '.']).map_or(String::new(), |(_, n)| n.trim().to_string());
+        let dv = Dev {
+            h: e.handle,
+            room: text("room").to_ascii_uppercase(),
+            leg: text("switch_leg").to_ascii_lowercase(),
+            mark,
+            kind,
+            dimming: text("dimming").to_ascii_uppercase(),
+            product: format!("{} {} {}", text("product"), text("configuration"), text("required_features")).to_ascii_uppercase(),
+            circuit: (text("panel").to_ascii_uppercase(), number),
+            level: text("level").to_ascii_uppercase(),
+            at: {
+                let v: Vec<f64> = text("location").split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
+                (v.len() >= 2).then(|| [v[0], v[1]])
+            },
+        };
+        if is_lum { lums.push(dv) } else { ctrls.push(dv) }
+    }
+    let emergency = |mark: &str| {
+        types.iter().find(|t| t.tag == mark).is_some_and(|t| {
+            let u = format!("{} {}", t.description, t.notes).to_ascii_uppercase();
+            u.contains("EXIT") || u.contains("EMERGENCY")
+        })
+    };
+    let is_dimmer = |c: &Dev| c.mark.starts_with("SD") || c.mark.starts_with("D") && c.mark.len() <= 3 || c.product.contains("DIMMER");
+    let dim_kind = |text: &str| -> &'static str {
+        if text.contains("0-10") {
+            "0-10V"
+        } else if ["ELV", "MLV", "PHASE", "FORWARD", "REVERSE", "TRIAC"].iter().any(|w| text.contains(w)) {
+            "phase"
+        } else if text.contains("NON-DIM") || text == "NONE" || text.contains("NO DIM") {
+            "none"
+        } else {
+            ""
+        }
+    };
+    // Within reach on one level (a leg's switch is often across a door, in the next space).
+    let near = |a: &Dev, b: &Dev, reach: f64| {
+        let same_level = a.level.is_empty() || b.level.is_empty() || a.level == b.level;
+        same_level
+            && match (a.at, b.at) {
+                (Some(p), Some(q)) => ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= reach,
+                _ => !a.room.is_empty() && a.room == b.room,
+            }
+    };
+    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let mut issues: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
+    let mut tally: BTreeMap<&'static str, usize> = BTreeMap::new();
+    for l in &lums {
+        let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
+        let by_leg: Vec<&Dev> = ctrls.iter().filter(|c| !l.leg.is_empty() && c.leg == l.leg && near(l, c, CONTROL_REACH_FT)).collect();
+        let circuit_codes = codes.get(&l.circuit).cloned().unwrap_or_default();
+        let (control, src, how): (String, Source, &'static str) = if !by_leg.is_empty() {
+            (
+                format!("switch leg {}: {}", l.leg, by_leg.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
+                Source::from_doc(SourceKind::Print, "switch leg letters on the plan"),
+                "leg",
+            )
+        } else if circuit_codes.iter().any(|c| c == "C" || c == "TS") {
+            (
+                format!(
+                    "{} (panel {} circuit {}: {})",
+                    if circuit_codes.iter().any(|c| c == "TS") { "time switch" } else { "contactor" },
+                    l.circuit.0,
+                    l.circuit.1,
+                    circuit_codes.join("/")
+                ),
+                Source::from_doc(SourceKind::Schedule, "panel schedule codes"),
+                "contactor",
+            )
+        } else if emergency(&l.mark) || circuit_codes.iter().any(|c| c == "EM") {
+            ("unswitched: emergency / exit".to_string(), Source::from_doc(SourceKind::Schedule, "light fixture schedule"), "emergency")
+        } else if !in_room.is_empty() && l.leg.is_empty() {
+            (
+                format!("the room's switches: {}", in_room.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
+                Source::computed(),
+                "room",
+            )
+        } else {
+            ("none found".to_string(), Source::computed(), "none")
+        };
+        *tally.entry(how).or_default() += 1;
+        if how == "none" {
+            let what = if l.leg.is_empty() { "fixture with no control" } else { "switch leg with no switch" };
+            issues.entry(what).or_default().push(format!("{} {} in {}", l.mark, l.h.hex(), if l.room.is_empty() { "no room" } else { &l.room }));
+        }
+        // A dimmer over a fixture that doesn't dim, or dims another way.
+        for c in by_leg.iter().filter(|c| is_dimmer(c)) {
+            let (dk, lk) = (dim_kind(&c.product), dim_kind(&l.dimming));
+            if lk == "none" || (!dk.is_empty() && !lk.is_empty() && dk != lk) {
+                issues.entry("dimmer over a fixture that doesn't dim that way").or_default().push(format!(
+                    "{} {} ({}) under {} {} ({}) in {}",
+                    l.mark,
+                    l.h.hex(),
+                    if lk.is_empty() { "?" } else { lk },
+                    c.mark,
+                    c.h.hex(),
+                    if dk.is_empty() { "?" } else { dk },
+                    l.room
+                ));
+            }
+        }
+        if let Some(e) = d.model.iter().find(|e| e.handle == l.h) {
+            let mut st = props::read(&e.common.xdata);
+            if !st.get("control").is_some_and(|o| o.source.kind == SourceKind::User) {
+                st.set("control", Prop::new(control, src));
+                changes.push((l.h, st));
+            }
+        }
+    }
+    // Switches: a leg no fixture near it has; a 3-way with no other 3-way of its leg within reach
+    // (its pair is usually at the other door or the other end of a corridor or stair).
+    let three = |c: &Dev| c.mark.starts_with("S3") || c.kind == "3way_switch" || c.product.contains("THREE WAY");
+    for c in &ctrls {
+        if c.kind == "occupancy_sensor" {
+            continue;
+        }
+        if !c.leg.is_empty() && !lums.iter().any(|l| l.leg == c.leg && near(l, c, CONTROL_REACH_FT)) {
+            issues.entry("switch leg with no fixture").or_default().push(format!("{} {} leg {} in {}", c.mark, c.h.hex(), c.leg, c.room));
+        }
+        if three(c) && !ctrls.iter().any(|o| o.h != c.h && three(o) && o.leg == c.leg && near(o, c, THREE_WAY_REACH_FT)) {
+            issues.entry("3-way switch without its pair").or_default().push(format!(
+                "{} {} leg {} in {}",
+                c.mark,
+                c.h.hex(),
+                if c.leg.is_empty() { "-" } else { &c.leg },
+                c.room
+            ));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, st) in &changes {
+        let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, st).into());
+    }
+    let mut rfis = Vec::new();
+    for (what, list) in &issues {
+        let shown: Vec<&String> = list.iter().take(12).collect();
+        let more = if list.len() > shown.len() { format!(" and {} more", list.len() - shown.len()) } else { String::new() };
+        let issue = format!("Lighting controls: {} {what}: {}{more}", list.len(), shown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join("; "));
+        let fix = match *what {
+            "fixture with no control" => "Show its switch leg (or its contactor / sensor), or note it unswitched",
+            "switch leg with no switch" => "Add the switch for that leg, or correct the fixture's leg letter",
+            "switch leg with no fixture" => "Correct the switch's leg letter, or add the fixtures it controls",
+            "3-way switch without its pair" => "Show the second 3-way switch, or make it single pole",
+            _ => "Match the dimmer to the driver (0-10V dimmer for 0-10V drivers, phase dimmer for phase-dimmable), or the fixture to the dimmer",
+        };
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in issue.bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-L{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::Lighting;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("lighting controls ({what})"),
+                issue: issue.clone(),
+                assumed: "The model links what the plans' letters link; the rest is held.".into(),
+                proposed: Some(fix.into()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(StageName::BimBuild, &issue, "lighting controls on the plans", 1, vec![fix.into()], None, false);
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.touch();
+    let line = format!(
+        "  lighting controls: {} luminaires by {:?}; {} controls; conflicts {}",
+        lums.len(),
+        tally,
+        ctrls.len(),
+        issues.iter().map(|(k, v)| format!("{k}: {}", v.len())).collect::<Vec<_>>().join(", ")
+    );
+    report_progress(s, json!({"step": "lighting controls"}), &line);
+    s.echo(line);
+    result["lighting_controls"] =
+        json!({"by": tally, "issues": issues.iter().map(|(k, v)| (k.to_string(), v.len())).collect::<BTreeMap<_, _>>(), "rfis": rfis});
+    Ok(())
+}
+
+/// How far a switch leg's switch may be from its fixtures, and a 3-way from its pair, feet.
+const CONTROL_REACH_FT: f64 = 40.0;
+const THREE_WAY_REACH_FT: f64 = 150.0;
+
+/// What an equipment question begins with (its tag follows).
+const EQUIP_QUESTION: &str = "Equipment electrical data: ";
+
+/// The loads the one-line feeds (not panels) against their submittals ([`super::equipsub`]):
+/// each one's data from its latest submittal's text, else an agent's reading (a job answer), else
+/// a question; the checks' failures RFIs and findings; the data kept in `mep.equipment_electrical`.
+fn equipment_step(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    types: &[super::gearbuild::FeederType],
+    panels: &[String],
+    result: &mut Value,
+) -> crate::Result<()> {
+    use super::equipsub;
+    let type_tags: Vec<String> = types.iter().map(|t| t.tag.clone()).collect();
+    let mut loads: Vec<equipsub::OnelineLoad> = Vec::new();
+    for (_, d) in pages {
+        for l in equipsub::oneline_loads(&cadaddy_mepfix::sheet_facts::texts(d), panels, &type_tags) {
+            if !loads.iter().any(|x| x.tag.eq_ignore_ascii_case(&l.tag)) {
+                loads.push(l);
+            }
+        }
+    }
+    if loads.is_empty() {
+        return Ok(());
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
+    // Every submittal PDF, in any folder under those given (revision folders: `Rev 1-1`).
+    let mut files: Vec<String> = Vec::new();
+    for root in &job.submittals {
+        all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
+    }
+    let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
+    let mut asked = 0usize;
+    let mut conflicts_all: Vec<(String, equipsub::Conflict)> = Vec::new();
+    for l in loads.iter().take(MAX_EQUIPMENT_LOADS) {
+        let (description, source_panel) = equipsub::schedule_row(&sp, &l.tag).unwrap_or_default();
+        let mut e = cadaddy_walk3d::EquipmentElectrical {
+            tag: l.tag.clone(),
+            description,
+            source_panel,
+            drawing_ocpd: l.ocpd.clone(),
+            feeder: l.feeder.clone(),
+            ..Default::default()
+        };
+        // Its submittals, the latest revision first.
+        let Some(st) = equipsub::stem(&l.tag) else { continue };
+        let mut mine: Vec<&String> = files
+            .iter()
+            .filter(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
+            .collect();
+        mine.sort_by(|a, b| equipsub::revision(b).cmp(&equipsub::revision(a)).then(a.cmp(b)));
+        let mut scanned: Vec<String> = Vec::new();
+        for f in mine.iter().take(MAX_GEAR_SUBMITTALS) {
+            let name = std::path::Path::new(f.as_str()).file_name().map_or_else(|| f.to_string(), |n| n.to_string_lossy().to_string());
+            let Ok(text) = crate::readfile::read(f.as_str())
+                .map_err(|e| e.to_string())
+                .and_then(|b| super::spec_import::pdf_text(&b, f).map_err(|e| e.to_string()))
+            else {
+                continue;
+            };
+            if e.status.is_empty() {
+                e.status = equipsub::review_status(&text);
+            }
+            let got = equipsub::text_electrical(&text);
+            if equipsub::has_data(&got) {
+                equipsub::merge(&mut e, &got);
+                e.source = format!("submittal {name}");
+                break;
+            }
+            scanned.push(name);
+        }
+        if !equipsub::has_data(&e) {
+            let key = format!("equip:{}", l.tag.to_ascii_uppercase());
+            match job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()) {
+                Some(a) => equipsub::merge(&mut e, &equipsub::from_answer(&a)),
+                None if !scanned.is_empty() => {
+                    equipment_question(job, &l.tag, &e, &scanned);
+                    asked += 1;
+                }
+                None => {}
+            }
+        }
+        // The checks: the drawings' feeder conductors and the source's fault current.
+        let ft = types.iter().find(|t| t.tag.eq_ignore_ascii_case(&l.feeder));
+        let afc = sp
+            .mep
+            .panel_schedules
+            .iter()
+            .find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel))
+            .and_then(|p| p.header.get("afc value"))
+            .and_then(|v| v.replace([',', 'A', 'a'], "").trim().parse::<f64>().ok());
+        for c in equipsub::check(&e, ft.map(|t| (t.size.as_str(), t.material.as_str())), afc, &rule) {
+            conflicts_all.push((l.tag.clone(), c));
+        }
+        rows.push(e);
+    }
+    // Each failure an RFI (once) and a finding.
+    let mut rfis = Vec::new();
+    for (tag, c) in &conflicts_all {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-E{:08x}", h as u32);
+        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+            let kind = cadaddy_walk3d::RfiKind::EquipmentElectrical;
+            sp.rfis.push(cadaddy_walk3d::Rfi {
+                id: id.clone(),
+                kind: Some(kind),
+                severity: kind.severity(),
+                about: format!("{tag} ({})", c.check),
+                issue: format!("Submittal against the drawings: {}", c.message),
+                assumed: "The model follows the submittal; the drawings' value is kept beside it until answered.".into(),
+                proposed: Some(c.fix.clone()),
+                ..cadaddy_walk3d::Rfi::default()
+            });
+            rfis.push(id);
+        }
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Equipment {tag} ({}): {}", c.check, c.message),
+            "its approved submittal differs from the drawings",
+            2,
+            vec![c.fix.clone()],
+            None,
+            false,
+        );
+    }
+    let line = format!(
+        "  equipment connections: {} on the one-line ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
+        rows.len(),
+        rows.iter().map(|r| format!("{} {} {}", r.tag, r.drawing_ocpd, r.feeder)).collect::<Vec<_>>().join(", "),
+        rows.iter().filter(|r| super::equipsub::has_data(r)).count(),
+        conflicts_all.len(),
+        conflicts_all.iter().map(|(t, c)| format!("{t} {}", c.check)).collect::<Vec<_>>().join(", ")
+    );
+    sp.mep.equipment_electrical = rows;
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    report_progress(s, json!({"step": "equipment connections"}), &line);
+    s.echo(line);
+    result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "rfis": rfis, "asked": asked});
+    Ok(())
+}
+
+/// Equipment connections looked at, at most.
+const MAX_EQUIPMENT_LOADS: usize = 200;
+
+/// The PDFs under `p` (a file, or a folder searched down a few levels), at most a few thousand.
+fn all_pdfs(p: &std::path::Path, out: &mut Vec<String>, depth: usize) {
+    if out.len() >= 5_000 || depth > 6 {
+        return;
+    }
+    if p.is_file() {
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
+            out.push(p.to_string_lossy().to_string());
+        }
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(p) else { return };
+    let mut entries: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for e in entries {
+        all_pdfs(&e, out, depth + 1);
+    }
+}
+
+/// A question for the agent: the electrical data of a load whose submittal is scanned (no text),
+/// with the files to read; answered, the build checks the drawings against it. Its default keeps
+/// the drawings' values, so a job on its own goes on.
+fn equipment_question(job: &mut GuidedJob, tag: &str, e: &cadaddy_walk3d::EquipmentElectrical, files: &[String]) {
+    let text = format!("{EQUIP_QUESTION}{tag}");
+    if job.stages.iter().flat_map(|st| &st.questions).any(|q| q.question.starts_with(&text)) {
+        return;
+    }
+    let qid = job.next_qid(StageName::BimBuild);
+    let q = Question {
+        id: qid,
+        stage: StageName::BimBuild,
+        question: format!(
+            "{text}: its submittal is scanned (no text). Read its electrical data from {} (the latest approved revision; the data sheet: volts/phase, nameplate or full-load amps, minimum circuit amps, the most protection it allows and fuse class, acceleration amps, HP/kW, the controller's SCCR) and answer {{volts, phase, nameplate_a, fla, mca, max_ocpd_a, fuse_class, accel_a, hp, kw, sccr_a, source: \"<file> p.<n>\"}}. The drawings give it {} on feeder {} from {}.",
+            files.join("; "),
+            if e.drawing_ocpd.is_empty() { "no protection read" } else { &e.drawing_ocpd },
+            if e.feeder.is_empty() { "?" } else { &e.feeder },
+            if e.source_panel.is_empty() { "?" } else { &e.source_panel }
+        ),
+        why: "An equipment connection follows its approved submittal: protection, conductors and the controller's short-circuit rating are checked against it".into(),
+        choices: vec!["Keep the drawings' values".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"equipment": tag, "files": files, "drawings": {"ocpd": e.drawing_ocpd, "feeder": e.feeder, "source": e.source_panel}})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some("Keep the drawings' values".into()),
+        answer_schema: Some(json!({"type": "object", "properties": {
+            "volts": {"type": "number"}, "phase": {"type": "number"}, "nameplate_a": {"type": "number"}, "fla": {"type": "number"}, "mca": {"type": "number"},
+            "max_ocpd_a": {"type": "number"}, "fuse_class": {"type": "string"}, "accel_a": {"type": "number"}, "hp": {"type": "number"}, "kw": {"type": "number"},
+            "sccr_a": {"type": "number"}, "source": {"type": "string"}}})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Completeness,
+    };
+    job.add_question_to_worklist(&q);
+    if let Some(st) = job.stage_mut(StageName::BimBuild) {
+        st.questions.push(q);
+    }
+}
+
+/// Gear submittals read, at most.
+const MAX_GEAR_SUBMITTALS: usize = 40;
+
+/// What a gear question begins with (its tag follows), for its answer to be learned.
+const GEAR_QUESTION: &str = "Gear size: ";
+
+/// A question for the agent: the size (and conduit entry) of gear the documents give but the job
+/// couldn't read, with where to look; answered, the build lays the gear out with it. Its default
+/// leaves the gear unplaced, so a job running on its own goes on.
+fn gear_question(job: &mut GuidedJob, tag: &str, pages: Vec<String>, files: &[String]) {
+    let text = format!("{GEAR_QUESTION}{tag}");
+    let asked = job.stages.iter().flat_map(|st| &st.questions).any(|q| q.question.starts_with(&text));
+    if asked {
+        return;
+    }
+    let qid = job.next_qid(StageName::BimBuild);
+    let look = if pages.is_empty() { files.join("; ") } else { pages.join("; ") };
+    let q = Question {
+        id: qid,
+        stage: StageName::BimBuild,
+        question: format!(
+            "{text}: its box size isn't in a table the job reads. Read it from {look} (its elevation or dimension drawing) and answer {{height_in, width_in, depth_in, feed: \"top\"|\"bottom\", top_entry_in?: [w, d], bottom_entry_in?: [w, d]}}"
+        ),
+        why: "The electrical room is laid out and each piece of gear checked (entry plates, lugs, working space) from its size; without it the gear stays out of the model".into(),
+        choices: vec!["Leave unplaced".into()],
+        evidence: Some(QuestionEvidence {
+            crop_png_path: None,
+            sheet: None,
+            at: None,
+            values: Some(json!({"panel": tag, "pages": pages, "files": files})),
+            handles: Vec::new(),
+            tiled_crops: None,
+            leftovers: Vec::new(),
+        }),
+        default: Some("Leave unplaced".into()),
+        answer_schema: Some(json!({"type": "object", "properties": {
+            "height_in": {"type": "number"}, "width_in": {"type": "number"}, "depth_in": {"type": "number"},
+            "feed": {"type": "string"}, "top_entry_in": {"type": "array"}, "bottom_entry_in": {"type": "array"}}})),
+        answer: None,
+        answered_by: None,
+        answered_at: None,
+        kind: QuestionKind::Completeness,
+    };
+    job.add_question_to_worklist(&q);
+    if let Some(st) = job.stage_mut(StageName::BimBuild) {
+        st.questions.push(q);
+    }
+}
+
+/// The electrical sheets' pages: the job's drawing's E sheets and those it didn't import.
+fn electrical_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut pages: Vec<(String, cadaddy_doc::Drawing)> = job_sheet_refs(job)
         .iter()
@@ -7504,11 +9217,21 @@ fn panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<cadaddy_wal
         })
         .collect();
     pages.extend(non_plan_pages(job, "E").into_iter().filter(|(n, _)| !seen.contains(n)));
+    pages
+}
+
+/// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
+/// schedule with more breakers read).
+fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
     let mut out: Vec<cadaddy_walk3d::PanelSchedule> = Vec::new();
-    for (number, sub) in &pages {
+    for (number, sub) in pages {
         for p in super::panelsched::read(&cadaddy_mepfix::sheet_facts::texts(sub), number) {
-            if !out.iter().any(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
-                out.push(p);
+            // A panel named twice: the schedule with more breakers read.
+            let read = |x: &cadaddy_walk3d::PanelSchedule| x.circuits.iter().filter(|c| !c.breaker.is_empty()).count();
+            match out.iter_mut().find(|o| o.panel.eq_ignore_ascii_case(&p.panel)) {
+                Some(o) if read(&p) > read(o) => *o = p,
+                Some(_) => {}
+                None => out.push(p),
             }
         }
     }
@@ -7885,6 +9608,29 @@ const MAX_LEGEND_TEXTS: usize = 5_000;
 /// Most electrical sheets read again for a legend the job's drawing doesn't hold.
 const MAX_LEGEND_SHEETS: usize = 6;
 
+/// The disciplines whose sheets that aren't plans may list mounting heights in their notes: the
+/// general (accessibility) sheets, the architecture's, the trades'.
+const MOUNT_NOTE_DISCIPLINES: [&str; 6] = ["G", "A", "E", "FA", "P", "M"];
+
+/// The mounting heights the notes of the set's sheets that aren't plans list (`9. WIRING
+/// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an accessibility sheet's `WATER
+/// CLOSETS (TO TOP OF SEAT): STANDARD = …`), each with its sheet.
+fn mount_notes(job: &GuidedJob) -> Vec<cadaddy_walk3d::MountNote> {
+    let mut out: Vec<cadaddy_walk3d::MountNote> = Vec::new();
+    for disc in MOUNT_NOTE_DISCIPLINES {
+        for (number, d) in non_plan_pages(job, disc) {
+            let texts = cadaddy_mepfix::sheet_facts::texts(&d);
+            for l in super::mountlist::read_lists(&texts) {
+                let n = l.to_note(&number);
+                if out.len() < super::mountlist::MAX_ENTRIES && !out.iter().any(|o| o.subject == n.subject && o.text == n.text) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The designations on the set's electrical sheets that aren't plans (a legend on the one-line
 /// diagram's sheet, or the schedules'; the job's drawing keeps the plans).
 fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
@@ -7922,22 +9668,12 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
     let mut missed: Vec<String> = Vec::new();
     for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
         // Its current copy's file and page (`printset.sheets`).
-        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
-        if !files.contains_key(file) {
-            match crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)) {
-                Ok(bytes) => {
-                    files.insert(file.to_string(), bytes);
-                }
-                Err(e) => {
-                    missed.push(format!("{number} ({file}: {e})"));
-                    continue;
-                }
-            }
+        if c.get("file").and_then(Value::as_str).is_none() || c.get("page").and_then(Value::as_u64).is_none() {
+            continue;
         }
-        let Some(bytes) = files.get(file) else { continue };
-        match read_pdf(bytes, &json!({"page": page, "text": true, "images": false})) {
-            Ok((d, _)) => out.push((number, d)),
-            Err(e) => missed.push(format!("{number} ({file} page {page}: {e})")),
+        match sheet_page(job, c, &mut files, read_pdf) {
+            Ok(d) => out.push((number, d)),
+            Err(e) => missed.push(format!("{number} ({e})")),
         }
     }
     if !missed.is_empty() {
@@ -8009,7 +9745,7 @@ fn plumbing_fixtures(
         sheet_numbers.contains(&value.to_ascii_uppercase())
             && view_numbers.iter().any(|(p, s)| *s == sheet && (p.x - t.insert.x).abs() <= 3.0 * h && p.y > t.insert.y && p.y - t.insert.y <= 4.0 * h)
     };
-    let mut found: Vec<(String, [f64; 2], f64, String)> = Vec::new();
+    let mut found: Vec<(String, [f64; 2], f64, String, cadaddy_doc::Handle)> = Vec::new();
     for e in d.model.iter() {
         // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
         let lettered: Vec<&cadaddy_doc::Text> = match &e.kind {
@@ -8026,7 +9762,7 @@ fn plumbing_fixtures(
             {
                 continue;
             }
-            found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string()));
+            found.push((value.to_string(), [t.insert.x, t.insert.y], t.height, sheet.to_string(), e.handle));
         }
         if found.len() >= MAX_FIXTURES {
             break;
@@ -8037,12 +9773,13 @@ fn plumbing_fixtures(
     let usual = heights.get(heights.len() / 2).copied().unwrap_or(0.0);
     found
         .into_iter()
-        .filter(|(_, _, h, _)| *h <= 2.0 * usual)
-        .map(|(tag, at, _, sheet)| super::readers::ReadDevice {
+        .filter(|(_, _, h, _, _)| *h <= 2.0 * usual)
+        .map(|(tag, at, _, sheet, handle)| super::readers::ReadDevice {
             level: job.level_at(at).map_or_else(String::new, |r| r.level.clone()),
             tag,
             at,
             sheet,
+            handle: handle.hex(),
             kind: "plumbing fixture".into(),
             ..Default::default()
         })
@@ -10190,6 +11927,12 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
     }
+    if q.stage == StageName::BimBuild && q.question.starts_with(EQUIP_QUESTION) && answer.is_object() {
+        return (Some(StageName::BimBuild), "the build checks the drawings against the submittal's data".into());
+    }
+    if q.stage == StageName::BimBuild && q.question.starts_with(GEAR_QUESTION) && answer.get("height_in").is_some() {
+        return (Some(StageName::BimBuild), "the build lays the gear out with its size".into());
+    }
     let values = q.evidence.as_ref().and_then(|e| e.values.clone()).unwrap_or(Value::Null);
     let value = |k: &str| values.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let other = !text.is_empty() && !q.choices.iter().any(|c| c == text);
@@ -11460,7 +13203,9 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "answers": answers_value(&job),
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
+        "inventory": inventory_coverage(s),
         "not_built": not_built_sheets(&job).join("; "),
+        "placement": placement_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
     }))
 }
@@ -11526,6 +13271,9 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         "answers": answers_value(job),
         "links": job.links,
     });
+    if job.is_done() {
+        v["placement"] = placement_summary(job);
+    }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
     }
@@ -11616,7 +13364,44 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         "answers": answers_value(job),
         // From the saved model, not the stage's own count.
         "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
+        "inventory": inventory_coverage(s),
+        "placement": placement_summary(job),
         "results": results,
+    })
+}
+
+/// The print inventory's coverage (all, by trade, by sheet), when the build took one.
+fn inventory_coverage(s: &Session) -> Value {
+    let Some(inv) = s.doc().ok().and_then(super::inventory::stored) else { return Value::Null };
+    let v = inv.summary(true);
+    json!({
+        "coverage": v["coverage"],
+        "coverage_by_read": v["coverage_by_read"],
+        "by_trade": v["by_trade"],
+        "by_sheet": v["by_sheet"],
+        "sheets_not_read": v["sheets_not_read"],
+        "sheets_end_read": v["sheets_end_read"],
+        "sheets_unreadable": v["sheets_unreadable"],
+        "more": "bim.inventory lists the marks"
+    })
+}
+
+/// What the build kept out of the model and what it put outside the floors, each with why, and
+/// where the devices' heights came from (Q6158): none until the build stage ran.
+fn placement_summary(job: &GuidedJob) -> Value {
+    let Some(r) = job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()) else { return Value::Null };
+    let db = r.get("deviceBuild").cloned().unwrap_or(Value::Null);
+    json!({
+        "left_out": r.get("left_out").cloned().unwrap_or(Value::Null),
+        "misplaced": r.get("misplaced").cloned().unwrap_or(Value::Null),
+        "devices": {
+            "heights_from": db.get("heights_from").cloned().unwrap_or(Value::Null),
+            "defaults_by_kind": db.get("defaults_by_kind").cloned().unwrap_or(Value::Null),
+            "in_wall": db.get("in_wall").cloned().unwrap_or(Value::Null),
+            "no_wall": db.get("no_wall").cloned().unwrap_or(Value::Null),
+            "no_wall_first": db.get("no_wall_first").cloned().unwrap_or(Value::Null),
+            "sides": db.get("sides").cloned().unwrap_or(Value::Null),
+        },
     })
 }
 
@@ -11635,6 +13420,24 @@ pub fn learn_from_answer(job: &mut GuidedJob, q: &Question) {
         && let Some(desc) = ev.values.as_ref().and_then(|v| v.get("description")).and_then(Value::as_str)
     {
         job.learn_rule(&format!("symbol:{desc}"), &format!("device:{device_type}"), &q.id, q.stage);
+    }
+
+    // Equipment data an agent read off a scanned submittal.
+    if q.stage == StageName::BimBuild
+        && q.question.starts_with(EQUIP_QUESTION)
+        && answer.is_object()
+        && let Some(tag) = q.evidence.as_ref().and_then(|e| e.values.as_ref()).and_then(|v| v.get("equipment")).and_then(Value::as_str)
+    {
+        job.learn_rule(&format!("equip:{}", tag.to_ascii_uppercase()), &answer.to_string(), &q.id, q.stage);
+    }
+
+    // Gear sizes an agent read off a drawing.
+    if q.stage == StageName::BimBuild
+        && q.question.starts_with(GEAR_QUESTION)
+        && answer.get("height_in").is_some()
+        && let Some(tag) = q.evidence.as_ref().and_then(|e| e.values.as_ref()).and_then(|v| v.get("panel")).and_then(Value::as_str)
+    {
+        job.learn_rule(&format!("gear:{}", tag.to_ascii_uppercase()), &answer.to_string(), &q.id, q.stage);
     }
 
     // Learn scale overrides.
@@ -11793,7 +13596,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {rules: [{key, value, from_question, stage, auto_applied}], count}")
             .noundo(),
         CommandSpec::new("job.report", "Job Report", cmd_report)
-            .params("{} → {job_id, goal, done, progress, stages, totals, rules_learned, audit_entries}")
+            .params("{} → {job_id, goal, done, progress, stages, totals, rules_learned, audit_entries, inventory: the print inventory's coverage once the BIM build took it — {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet, sheets_not_read} (bim.inventory lists the marks)}")
             .noundo(),
         CommandSpec::new("job.worklist", "Job Worklist", cmd_worklist)
             .params("{status?: \"pending\"|\"resolved\"|\"info\", stage?: name} → {items, total, pending, resolved}")
@@ -12033,6 +13836,239 @@ mod tests {
         }
     }
 
+    /// A grid bubble as a PDF import makes it: a symbol (a circle of 10, its label in its TAG
+    /// attribute) at `at`, and, with `line_off`, a 390-long line ending at its edge, that far off
+    /// its centre (0: the grid's own line, pointing through it; a wall's passes by).
+    fn add_bubble(s: &mut crate::Session, tag: &str, at: (f64, f64), line_off: Option<f64>) {
+        let Ok(d) = s.doc_mut() else { panic!("no drawing") };
+        if d.block("PDF-SYM-77").is_none() {
+            let mut b = Block::new("PDF-SYM-77");
+            b.entities.push(cadaddy_doc::Entity {
+                handle: d.new_handle(),
+                common: Common::default(),
+                kind: EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 10.0 }),
+            });
+            d.blocks.insert("PDF-SYM-77".into(), std::sync::Arc::new(b));
+        }
+        let common = || Common { layer: "PDF".into(), ..Common::default() };
+        let attrib = Attrib {
+            tag: "TAG".into(),
+            text: text(tag, at.0, at.1, 2.0),
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: AttribProps::default(),
+            multiline: None,
+            modes: AttribModes::default(),
+        };
+        let ins = Insert {
+            block: "PDF-SYM-77".into(),
+            insert: Vec3::new(at.0, at.1, 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![attrib],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        d.add(&Space::Model, common(), EntityKind::Insert(ins)).ok();
+        if let Some(off) = line_off {
+            let line = cadaddy_doc::Line { a: Vec3::new(at.0 + 10.0, at.1 + off, 0.0), b: Vec3::new(at.0 + 400.0, at.1 + off, 0.0) };
+            d.add(&Space::Model, common(), EntityKind::Line(line)).ok();
+        }
+    }
+
+    /// Q6165: a mark is a device type by the legends that speak for its sheet. The electrical
+    /// sheet's fixture schedule types its `A`s (luminaires, the row their source); a mechanical
+    /// sheet's `A`s (its grid bubbles, another trade's tags) are not that schedule's; a grid
+    /// bubble on the electrical sheet (in its row of bubbles, its line pointing through it) is no
+    /// device, while an `A` a wall line passes by, and a corridor's `A B A` each at a wire's end,
+    /// still are; a mechanical equipment's tag by its number is that equipment's connection.
+    #[test]
+    fn a_mark_is_a_device_type_by_the_legends_that_speak_for_its_sheet() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets =
+            Some(json!({"sheets": [{"number": "Q-1", "sheet_type": "plan", "level": "1"}, {"number": "QM-1", "sheet_type": "plan", "level": "1"}]}));
+        job.sheets_loaded = true;
+        let texts = [
+            ("LIGHTING FIXTURE SCHEDULE", 1000.0, 800.0, 8.0),
+            ("TYPE", 1000.0, 785.0, 5.0),
+            ("DESCRIPTION", 1030.0, 785.0, 5.0),
+            ("A", 1000.0, 772.0, 5.0),
+            ("2X4 LED TROFFER", 1030.0, 772.0, 5.0),
+            ("B", 1000.0, 760.0, 5.0),
+            ("LED DOWNLIGHT", 1030.0, 760.0, 5.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        let mut texts = texts.to_vec();
+        texts.push(("3", 600.0, 296.0, 2.0));
+        add_sheet(&mut s, &texts, &[("A", 100.0, 300.0), ("A", 140.0, 300.0), ("B", 180.0, 300.0), ("HP", 600.0, 300.0)]);
+        // The grids' column of bubbles, each its line's end; an A a wall line passes by.
+        for (tag, y) in [("A", 600.0), ("B", 700.0), ("C", 800.0)] {
+            add_bubble(&mut s, tag, (100.0, y), Some(0.0));
+        }
+        add_bubble(&mut s, "A", (400.0, 600.0), Some(9.0));
+        // A corridor's fixtures, alternating marks on one line, each a wire's end: no grid row.
+        for (tag, x) in [("A", 1100.0), ("B", 1200.0), ("A", 1300.0)] {
+            add_bubble(&mut s, tag, (x, 900.0), None);
+            let wire = cadaddy_doc::Line { a: Vec3::new(x, 910.0, 0.0), b: Vec3::new(x, 1300.0, 0.0) };
+            s.doc_mut().map(|d| d.add(&Space::Model, Common::default(), EntityKind::Line(wire)).ok()).ok();
+        }
+        // Fixtures of stacked plans lined up floor over floor, each a wire's end: their marks are
+        // not a grid's sequence.
+        for (tag, y) in [("A", 600.0), ("D", 700.0), ("B", 800.0)] {
+            add_bubble(&mut s, tag, (1600.0, y), Some(0.0));
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [0.0, 0.0, 2000.0, 1000.0], ..region("Q-1", "1", "E", "plan", 0.0) });
+        let lo = hi;
+        add_sheet(&mut s, &[("MECHANICAL PLAN", 3200.0, 900.0, 8.0)], &[("A", 3100.0, 300.0), ("A", 3140.0, 300.0), ("A", 3180.0, 300.0)]);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "QM-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion { rect: [3000.0, 0.0, 5000.0, 1000.0], ..region("QM-1", "1", "M", "plan", 3000.0) });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let on = |sheet: &str| job.devices.iter().filter(|d| d.sheet == sheet).collect::<Vec<_>>();
+        assert!(on("QM-1").is_empty(), "another trade's A: {:?}", on("QM-1"));
+        let a: Vec<_> = on("Q-1").into_iter().filter(|d| d.tag == "A").collect();
+        assert_eq!(a.len(), 6, "the two plan As, the one a wall passes, the corridor's two, the stacked one: {:?}", job.devices);
+        assert!(!a.iter().any(|d| d.at == [100.0, 600.0]), "the grid bubble: {a:?}");
+        assert!(a.iter().all(|d| d.kind == "luminaire" && d.ifc_class == "IfcLightFixture"), "{a:?}");
+        assert_eq!(a.first().map(|d| d.kind_source.as_str()), Some("Q-1 LIGHTING FIXTURE SCHEDULE: A 2X4 LED TROFFER"));
+        assert_eq!(r["device_types"]["not_devices"]["a grid bubble"], json!(2), "the A and B bubbles: {:#}", r["device_types"]);
+        let hp = on("Q-1").into_iter().find(|d| d.tag == "HP").unwrap_or_else(|| panic!("the heat pump's connection: {:?}", job.devices));
+        assert_eq!((hp.kind.as_str(), hp.equipment.as_str()), ("equipment connection", "HP-3"), "{hp:?}");
+        assert_eq!(r["device_types"]["unlisted_repeated"]["A"], json!(3), "the mechanical As are a question: {:#}", r["device_types"]);
+    }
+
+    /// Q6165: what a mark resolves to. A row's description (`legend_kind`), else its table (a
+    /// light fixture schedule's type is a luminaire, not on a plumbing sheet; an equipment
+    /// schedule's an equipment connection); a mechanical equipment tag is its equipment's
+    /// connection, numbered by the number printed under it; nothing: the text printed round it,
+    /// for the question.
+    #[test]
+    fn a_mark_resolves_to_its_rows_kind_its_equipment_or_a_question() {
+        use cadaddy_mepfix::device_types::LegendRow;
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let row = |table: &str, description: &str| LegendRow { table: table.into(), description: description.into() };
+        assert_eq!(row_kind(&row("SYMBOL LEGEND", "DUPLEX RECEPTACLE"), false), Some(("receptacle", "IfcOutlet")));
+        assert_eq!(row_kind(&row("LIGHT FIXTURE SCHEDULE", "2X2 FLAT PANEL 120V"), false), Some(("luminaire", "IfcLightFixture")));
+        assert_eq!(
+            row_kind(&row("FIXTURE SCHEDULE", "WALL HUNG LAVATORY"), true),
+            Some(("plumbing fixture", "IfcSanitaryTerminal")),
+            "a plumbing sheet's"
+        );
+        assert_eq!(
+            row_kind(&row("CASEWORK AND PLUMBING FIXTURE SCHEDULE", "WATER CLOSET 22 40 00"), false),
+            Some(("plumbing fixture", "IfcSanitaryTerminal"))
+        );
+        assert_eq!(row_kind(&row("LEGEND", "6\" LED DOWNLIGHT"), false), Some(("luminaire", "IfcLightFixture")));
+        assert_eq!(row_kind(&row("MECHANICAL EQUIPMENT SCHEDULE", "SPLIT SYSTEM 3 TON"), false), Some(("equipment connection", "")));
+        assert_eq!(row_kind(&row("LEGEND", "CONDUIT"), false), None);
+
+        let t = |v: &str, x: f64, y: f64| TextItem { value: v.into(), at: cadaddy_geom::Vec2::new(x, y), height: 2.0, rotation: 0.0 };
+        let texts = [t("HP", 100.0, 100.0), t("3", 100.0, 96.0), t("E-12,14", 110.0, 100.0), t("7", 300.0, 300.0), t("SAMPLE NOTE", 104.0, 104.0)];
+        let at = Some((cadaddy_geom::Vec2::new(100.0, 100.0), 2.0));
+        assert_eq!(equipment_of("HP", &texts, at).as_deref(), Some("HP-3"));
+        assert_eq!(equipment_of("AHU2", &texts, at).as_deref(), Some("AHU-2"));
+        assert_eq!(equipment_of("HP", &texts, Some((cadaddy_geom::Vec2::new(500.0, 500.0), 2.0))).as_deref(), Some("HP"), "no number by it");
+        assert_eq!(equipment_of("C", &texts, at), None);
+
+        let mut dv = super::super::readers::ReadDevice { tag: "HP".into(), sheet: "QE-5".into(), at: [100.0, 100.0], ..Default::default() };
+        resolve_mark(&mut dv, None, false, &texts, at);
+        assert_eq!(
+            (dv.kind.as_str(), dv.equipment.as_str(), dv.kind_source.as_str()),
+            ("equipment connection", "HP-3", "QE-5 mechanical equipment tag HP-3")
+        );
+        let mut dv = super::super::readers::ReadDevice { tag: "C".into(), sheet: "QE-5".into(), at: [100.0, 100.0], ..Default::default() };
+        let r = row("LIGHTING FIXTURE SCHEDULE", "LINEAR LED 4FT");
+        resolve_mark(&mut dv, Some(("QE-1", &r)), false, &texts, at);
+        assert_eq!((dv.kind.as_str(), dv.kind_source.as_str()), ("luminaire", "QE-1 LIGHTING FIXTURE SCHEDULE: C LINEAR LED 4FT"));
+        assert!(!unresolved_mark(&dv));
+        let mut dv = super::super::readers::ReadDevice { tag: "QZ".into(), sheet: "QE-5".into(), at: [100.0, 100.0], ..Default::default() };
+        resolve_mark(&mut dv, None, false, &texts, at);
+        assert!(unresolved_mark(&dv) && dv.kind.is_empty(), "{dv:?}");
+        assert_eq!(dv.near, "HP | 3 | SAMPLE NOTE | E-12,14", "nearest first, the far 7 left out");
+        let report = designation_report(&[dv]);
+        assert_eq!(report, vec!["QZ: UNRESOLVED from QE-5, 1".to_string()]);
+    }
+
+    /// Q6165: a device whose mark nothing resolved is UNRESOLVED in the BOM (not "device type")
+    /// and a review question naming its sheet, symbols and the text round it; the answer gives
+    /// the devices their kind, or takes them out of the model.
+    #[test]
+    fn an_unresolved_mark_is_a_review_question_and_an_unresolved_bom_line() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let dv = |tag: &str, x: f64, sheet: &str, near: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at: [x, 120.0],
+            sheet: sheet.into(),
+            level: "Level 1".into(),
+            handle: format!("{:X}", 0x100 + x as u64),
+            near: near.into(),
+            ..Default::default()
+        };
+        let devices =
+            [dv("QZ", 120.0, "QE-3", "W/B | 44\" AFF"), dv("QZ", 240.0, "QE-3", ""), dv("QY", 360.0, "QE-4", ""), dv("S3", 480.0, "QE-3", "")];
+        super::super::readers::place_devices(&mut s, &devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        let bom = s.execute("bim.bom", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let items: Vec<&str> = bom["lines"].as_array().into_iter().flatten().filter_map(|l| l["item"].as_str()).collect();
+        assert!(items.contains(&"UNRESOLVED device mark QZ") && items.contains(&"UNRESOLVED device mark QY"), "{items:?}");
+        assert!(!items.iter().any(|i| i.starts_with("device type")), "{items:?}");
+
+        let list = s.execute("review.list", &json!({"kind": "question"})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(list["total"], json!(2), "one per mark and sheet: {list:#}");
+        let id = list["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|i| i["title"].as_str().is_some_and(|t| t.contains("mark QZ on QE-3")))
+            .and_then(|i| i["id"].as_str())
+            .unwrap_or_else(|| panic!("{list:#}"))
+            .to_string();
+        let next = s.execute("review.next", &json!({"id": id})).unwrap_or_else(|e| panic!("{e}"));
+        let detail = &next["item"]["detail"];
+        assert_eq!((detail["mark"].as_str(), detail["sheet"].as_str(), detail["count"].as_u64()), (Some("QZ"), Some("QE-3"), Some(2)), "{next:#}");
+        assert_eq!(detail["symbols"], json!(["178", "1F0"]), "{next:#}");
+        assert!(detail["near_text"].as_array().is_some_and(|a| a.iter().any(|v| v == "W/B | 44\" AFF")), "{next:#}");
+
+        s.execute(
+            "review.resolve",
+            &json!({"id": id, "answer": "luminaire", "citation": {"kind": "schedule", "document": "QE-1", "ref": "light fixture schedule"}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        let qz: Vec<_> = sp.tags.iter().filter(|t| t.fields.get("type").is_some_and(|f| f.value == "QZ")).collect();
+        assert_eq!(qz.len(), 2);
+        assert!(
+            qz.iter().all(|t| t.kind == "luminaire" && !t.fields.contains_key("unresolved") && t.fields["device_type"].value == "luminaire QZ"),
+            "{qz:?}"
+        );
+        assert!(qz.iter().all(|t| t.fields["kind_source"].value.contains("QE-1")), "{qz:?}");
+        let list = s.execute("review.list", &json!({"kind": "question"})).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(list["total"], json!(1), "{list:#}");
+        let qy = list["items"][0]["id"].as_str().unwrap_or_default().to_string();
+        s.execute(
+            "review.resolve",
+            &json!({"id": qy, "answer": "not a device", "citation": {"kind": "drawing", "document": "QE-4", "ref": "a grid bubble"}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!sp.tags.iter().any(|t| t.fields.get("type").is_some_and(|f| f.value == "QY")));
+        assert_eq!(sp.tags.iter().filter(|t| t.id.starts_with("device:")).count(), 3, "the S3 and the two QZ stay");
+        assert!(s.execute("review.resolve", &json!({"id": "RV-Qnothing", "answer": 5})).is_err());
+    }
+
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
     /// sheet Q-2 lies over the same paper area with no legend. Its symbols over Q-1's schedule
     /// are devices; Q-1's own sample symbol in the schedule isn't.
@@ -12180,6 +14216,12 @@ mod tests {
 
         let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built["circuits"], json!(2), "{built:#}");
+        // Q6172: the build took the print inventory of the sheet and kept it.
+        assert!(built["inventory"]["coverage"]["marks"].as_u64().is_some_and(|n| n > 0), "{built:#}");
+        let inv = s.doc().ok().and_then(super::super::inventory::stored).unwrap_or_else(|| panic!("no inventory kept"));
+        let fixtures: Vec<&super::super::inventory::Mark> = inv.marks.iter().filter(|m| m.what == "symbol" && m.object).collect();
+        assert_eq!(fixtures.len(), 5, "{fixtures:#?}");
+        assert!(inv.marks.iter().any(|m| m.what == "legend_row"), "the schedule's rows");
         let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
         let sp = cadaddy_walk3d::BuildingSpec::from_json(d.building_spec.as_deref().unwrap_or("")).unwrap_or_else(|e| panic!("{e}"));
         let tags: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.kind == "circuit").collect();
@@ -13514,7 +15556,11 @@ mod tests {
         assert_eq!((units("Level 1"), units("Level 2")), (10.0, 8.0), "{lines:#?}");
         assert!(lines.iter().any(|l| l["item"] == "duplex receptacle"), "{lines:#?}");
         assert!(lines.iter().all(|l| l["trade"] == "electrical"));
-        assert!(lines.iter().any(|l| l["item"] == "device type A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
+        // A and B are the lighting fixture schedule's rows: luminaires, the row their source.
+        assert!(lines.iter().any(|l| l["item"] == "luminaire A" && l["level"] == "Level 2" && l["net"] == json!(4.0)), "{lines:#?}");
+        assert!(!lines.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("device type") || i.starts_with("UNRESOLVED"))), "{lines:#?}");
+        let a = devs.iter().find(|t| t.fields.get("type").is_some_and(|f| f.value == "A")).unwrap_or_else(|| panic!("no A"));
+        assert_eq!(a.fields["kind_source"].value, "Q-1 LIGHTING FIXTURE SCHEDULE: A 2X4 LED TROFFER", "{a:?}");
         // The takeoff stage uses the model takeoff (bim.takeoff) and reports a summary.
         let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let summary = &t["summary"];
@@ -15112,5 +17158,347 @@ mod tests {
         let (sp, _) = super::super::bspec::current(&s, "test").unwrap();
         let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
         assert_eq!(levels, vec![("Level 1".into(), 0.0), ("Level 2".into(), 12.0), ("Roof".into(), 24.0)]);
+    }
+
+    /// The made-up linked set's sheets in one job drawing (each sheet's objects its own handles;
+    /// not E-2, the other half of E-1's floor, which would lie over it), E-1 with a dimension and
+    /// a keynote marker added: the job, and E-1's span.
+    fn inventory_job() -> (Session, GuidedJob, (u64, u64)) {
+        use cadaddy_mepfix::linkset;
+        let mut s = Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let index: Vec<Value> = linkset::sheets()
+            .iter()
+            .map(|x| json!({"number": x.number, "title": x.title, "discipline": x.discipline, "type": x.sheet_type, "sheet_type": x.sheet_type, "level": x.level}))
+            .collect();
+        job.index = Some(json!({"sheets": index}));
+        job.sheets = job.index.clone();
+        job.sheets_loaded = true;
+        let mut e1 = (0, 0);
+        for (number, sheet) in linkset::drawings().into_iter().filter(|(n, _)| *n != "E-2") {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            for (name, b) in sheet.blocks.iter() {
+                d.blocks.insert(name.clone(), b.clone());
+            }
+            let lo = d.handseed;
+            for e in sheet.model.iter() {
+                d.add(&Space::Model, e.common.clone(), e.kind.clone()).unwrap_or_else(|e| panic!("{e}"));
+            }
+            if number == "E-1" {
+                // A dimension's value, and keynote 3 in its hexagon.
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text("12'-6\"", 2.0, 20.0, 0.1))).unwrap_or_else(|e| panic!("{e}"));
+                let hex: Vec<cadaddy_geom::PolyVertex> = (0..6)
+                    .map(|k| {
+                        let a = f64::from(k) * std::f64::consts::PI / 3.0;
+                        cadaddy_geom::PolyVertex {
+                            p: cadaddy_geom::Vec2::new(25.0 + 0.2 * a.cos(), 10.0 + 0.2 * a.sin()),
+                            bulge: 0.0,
+                            start_width: 0.0,
+                            end_width: 0.0,
+                        }
+                    })
+                    .collect();
+                let pl = cadaddy_doc::LwPolyline { vertices: hex, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false };
+                d.add(&Space::Model, Common::default(), EntityKind::LwPolyline(pl)).unwrap_or_else(|e| panic!("{e}"));
+                d.add(&Space::Model, Common::default(), EntityKind::Text(text("3", 24.95, 9.95, 0.1))).unwrap_or_else(|e| panic!("{e}"));
+            }
+            let hi = d.handseed;
+            if number == "E-1" {
+                e1 = (lo, hi);
+            }
+            job.sheet_spans.push(SheetSpan { sheet: number.into(), lo, hi });
+            let listed = linkset::sheets().into_iter().find(|x| x.number == number).unwrap_or_default();
+            job.sheet_regions.push(SheetRegion {
+                number: number.into(),
+                level: if listed.level.is_empty() { "1".into() } else { listed.level.clone() },
+                discipline: "E".into(),
+                kind: listed.sheet_type.clone(),
+                rect: [0.0, 0.0, 36.0, 24.0],
+                area: Some([0.5, 0.5, 31.5, 23.5]),
+                title_block: Some([31.5, 0.0, 36.0, 24.0]),
+                not_built: String::new(),
+                levels: Vec::new(),
+                view: None,
+            });
+        }
+        (s, job, e1)
+    }
+
+    /// A built device element made from the mark `source` (as the job's build makes them).
+    fn built_device(s: &mut Session, source: &str) {
+        let h = cadaddy_doc::Handle::parse_hex(source).unwrap_or_else(|| panic!("{source}"));
+        let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+        let mesh = cadaddy_doc::Mesh {
+            vertices: vec![Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)],
+            faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2], hidden: 0 }],
+            ..Default::default()
+        };
+        let xdata = crate::cmd::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 1", h);
+        d.add(&Space::Model, Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh))
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    /// Q6172: on one sheet a device, a dimension, a keynote marker and a detail bubble are one
+    /// object and three not-objects, each with its reason; the device's mark links to the element
+    /// it became. A device the enlarged plan shows and the overall plan shows too is one object
+    /// with two marks: the overall plan's copy says which mark it is.
+    #[test]
+    fn the_inventory_says_what_each_mark_is_and_what_became_of_it() {
+        let (mut s, mut job, (lo, hi)) = inventory_job();
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!job.devices.is_empty());
+        let handles: Vec<String> = job.devices.iter().map(|dv| dv.handle.clone()).filter(|h| !h.is_empty()).collect();
+        for h in &handles {
+            built_device(&mut s, h);
+        }
+        let inv = job_inventory(&s, &job);
+        let on_e1: Vec<&super::super::inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-1").collect();
+        let handle_in = |m: &super::super::inventory::Mark| u64::from_str_radix(&m.handle, 16).is_ok_and(|h| (lo..hi).contains(&h));
+        assert!(on_e1.iter().all(|m| m.handle.is_empty() || handle_in(m)), "E-1's marks are its own objects");
+        let find = |text: &str, near: [f64; 2]| {
+            on_e1
+                .iter()
+                .copied()
+                .filter(|m| m.text == text)
+                .min_by(|a, b| (a.at[0] - near[0]).hypot(a.at[1] - near[1]).total_cmp(&(b.at[0] - near[0]).hypot(b.at[1] - near[1])))
+                .unwrap_or_else(|| panic!("no {text} on E-1: {on_e1:#?}"))
+        };
+        // The device (an F receptacle outside the enlarged core): an object, built.
+        let device = find("F", [13.0, 15.5]);
+        assert_eq!((device.what.as_str(), device.object, device.status.as_str()), ("symbol", true, super::super::inventory::BUILT), "{device:?}");
+        assert_eq!(device.elements.len(), 1, "{device:?}");
+        assert_eq!((device.level.as_str(), device.trade.as_str()), ("1", "E"));
+        // The dimension, the keynote and the detail bubble 2/E-4: not objects, and why.
+        let dim = find("12'-6\"", [2.0, 20.0]);
+        assert_eq!((dim.object, dim.status.as_str(), dim.reason.as_str()), (false, super::super::inventory::NOT_OBJECT, "dimension"), "{dim:?}");
+        let keynote = find("3", [25.0, 10.0]);
+        assert_eq!((keynote.object, keynote.reason.as_str()), (false, "keynote or view number"), "{keynote:?}");
+        for text in ["2", "E-4"] {
+            let b = find(text, [14.2, 16.6]);
+            assert_eq!((b.what.as_str(), b.object), ("callout", false), "{b:?}");
+            assert!(b.reason.starts_with("view bubble (detail_bubble"), "{b:?}");
+        }
+        // The core's devices: the enlarged plan E-3's marks are the objects; the overall plan's
+        // copies are duplicates of them, and the kept mark lists its copy.
+        let copies: Vec<&super::super::inventory::Mark> =
+            on_e1.iter().copied().filter(|m| m.what == "symbol" && m.status == super::super::inventory::DUPLICATE).collect();
+        assert_eq!(copies.len(), 3, "{on_e1:#?}");
+        for c in &copies {
+            let kept = c.same_as.and_then(|i| inv.marks.get(i)).unwrap_or_else(|| panic!("no kept mark: {c:?}"));
+            assert_eq!((kept.sheet.as_str(), kept.text.as_str(), kept.status.as_str()), ("E-3", "A", super::super::inventory::BUILT), "{kept:?}");
+            assert!(kept.also_on.contains(&c.id), "{kept:?}");
+            assert!(c.object && c.elements.is_empty(), "{c:?}");
+        }
+        // Every object mark is built or says why not; the summary counts the core once.
+        let s2 = inv.summary(true);
+        let c = &s2["coverage"];
+        assert_eq!(c["objects"].as_u64().map(|n| n + 3), c["object_marks"].as_u64(), "{s2:#}");
+        assert!(
+            inv.marks.iter().filter(|m| m.object).all(|m| m.status != super::super::inventory::UNEXPLAINED),
+            "{:#?}",
+            inv.marks.iter().filter(|m| m.object && m.status == "unexplained").collect::<Vec<_>>()
+        );
+        // E-0 and A-101 are listed, not drawn: sheets not read.
+        let unread: Vec<&str> = inv.sheets_not_read.iter().map(|x| x.number.as_str()).collect();
+        assert_eq!(unread, vec!["E-0", "E-2", "A-101"]);
+    }
+
+    /// Q6172: the build notes what it left out and why, by the mark's handle.
+    #[test]
+    fn a_left_out_mark_keeps_the_builds_reason() {
+        let (mut s, mut job, _) = inventory_job();
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let dv = job.devices.iter().find(|dv| dv.tag == "F").cloned().unwrap_or_else(|| panic!("no F"));
+        fate(&mut job, &dv.handle, MarkFate::left_out("receptacle", super::super::inventory::NOT_PLACEABLE, "its sheet doesn't line up"));
+        let inv = job_inventory(&s, &job);
+        let m = inv.marks.iter().find(|m| m.handle == dv.handle).unwrap_or_else(|| panic!("no mark"));
+        assert_eq!((m.object, m.status.as_str(), m.reason.as_str()), (true, super::super::inventory::NOT_PLACEABLE, "its sheet doesn't line up"));
+        // The other devices built nothing and say nothing: unexplained, not hidden.
+        assert!(inv.marks.iter().any(|m| m.object && m.status == super::super::inventory::UNEXPLAINED));
+    }
+
+    /// Q6172 (answers 11-02): the sheets the job didn't load are read again at the end and their
+    /// marks inventoried: a legend row of a type the model has links to its devices, a row of a
+    /// kind nothing knows mints `legend:<its words>`, a note is a note; a page that can't be read
+    /// says why; the coverage counts the loaded and the end-read sheets apart.
+    #[test]
+    fn the_sheets_not_loaded_are_read_at_the_end() {
+        use super::super::inventory::{self, NOT_OBJECT};
+        let (mut s, mut job, _) = inventory_job();
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-1000, -1000, 1000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        super::super::readers::place_devices(&mut s, &job.devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        for h in job.devices.iter().map(|dv| dv.handle.clone()).filter(|h| !h.is_empty()).collect::<Vec<_>>() {
+            built_device(&mut s, &h);
+        }
+        let receptacles = job.devices.iter().filter(|dv| dv.tag == "F").count();
+        assert!(receptacles > 0);
+        // A made-up symbol legend page (heading, F and an unknown QG row), a note and a dimension.
+        let mut page = cadaddy_doc::Drawing::default();
+        let lettering = [
+            ("ELECTRICAL SYMBOL LEGEND", 1500.0, 1000.0, 8.0),
+            ("F", 1505.0, 985.0, 5.0),
+            ("DUPLEX RECEPTACLE", 1530.0, 985.0, 5.0),
+            ("QG", 1505.0, 973.0, 5.0),
+            ("NIGHT GLOW MARKER, 24V", 1530.0, 973.0, 5.0),
+            ("ALL WORK SHALL MEET THE ADOPTED CODE", 200.0, 300.0, 5.0),
+            ("3'-0\"", 600.0, 200.0, 5.0),
+        ];
+        for (v, x, y, h) in lettering {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).unwrap_or_else(|e| panic!("{e}"));
+        }
+        // Two fills on one layer: one mark of two pieces.
+        for x in [0.0, 50.0] {
+            let corners = [Vec3::new(x, 0.0, 0.0), Vec3::new(x + 10.0, 0.0, 0.0), Vec3::new(x, 10.0, 0.0), Vec3::new(x + 10.0, 10.0, 0.0)];
+            let common = Common { layer: "SHADE".into(), ..Common::default() };
+            page.add(&Space::Model, common, EntityKind::Solid(cadaddy_doc::Solid { corners })).unwrap_or_else(|e| panic!("{e}"));
+        }
+        // Its frame: a border and a title-block rule; lettering in the title block is the block's.
+        let border = cadaddy_doc::LwPolyline {
+            vertices: [(0.0, -50.0), (2000.0, -50.0), (2000.0, 1200.0), (0.0, 1200.0)]
+                .iter()
+                .map(|(x, y)| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                .collect(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        };
+        page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(border)).unwrap_or_else(|e| panic!("{e}"));
+        let rule = cadaddy_doc::Line { a: Vec3::new(1800.0, -50.0, 0.0), b: Vec3::new(1800.0, 1200.0, 0.0) };
+        page.add(&Space::Model, Common::default(), EntityKind::Line(rule)).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("JOB REF:", 1850.0, 100.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // A schedule's cell (a box) holding lettering no other rule explains.
+        let cell = cadaddy_doc::LwPolyline {
+            vertices: [(100.0, 500.0), (200.0, 500.0), (200.0, 510.0), (100.0, 510.0)]
+                .iter()
+                .map(|(x, y)| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 })
+                .collect(),
+            closed: true,
+            const_width: 0.0,
+            elevation: 0.0,
+            plinegen: false,
+        };
+        page.add(&Space::Model, Common::default(), EntityKind::LwPolyline(cell)).unwrap_or_else(|e| panic!("{e}"));
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("VACANT ROW", 110.0, 503.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // The same words outside any cell: nothing explains them.
+        page.add(&Space::Model, Common::default(), EntityKind::Text(text("UNUSED ROW", 110.0, 700.0, 5.0))).unwrap_or_else(|e| panic!("{e}"));
+        // The lettering, the fills, the frame's and the cell's line work, the title block's and
+        // the two cells' lettering.
+        let n = lettering.len() + 5;
+        // The index lists a view of a loaded sheet by its own number: that sheet is read already.
+        if let Some(list) = job.sheets.as_mut().and_then(|v| v.get_mut("sheets")).and_then(Value::as_array_mut) {
+            list.push(json!({"number": "E-1/2", "title": "A VIEW OF E-1", "discipline": "E", "type": "plan"}));
+        }
+        let (fates, pages) = mark_fates(&s, &job);
+        let mut asked: Vec<String> = Vec::new();
+        let mut reader = |sh: &Value| {
+            let number = sh.get("number").and_then(Value::as_str).unwrap_or("").to_string();
+            asked.push(number.clone());
+            match number.as_str() {
+                "E-0" => Ok(page.clone()),
+                "E-2" => Ok(cadaddy_doc::Drawing::default()),
+                _ => Err("a made-up page that can't be read".to_string()),
+            }
+        };
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let inv = inventory::take(d, &job, &pages, &fates, Some(&mut reader));
+        assert_eq!(asked, vec!["E-0", "E-2", "A-101"]);
+        let sheet = |n: &str| inv.sheets_not_read.iter().find(|x| x.number == n).unwrap_or_else(|| panic!("{n}: {:?}", inv.sheets_not_read));
+        assert!(sheet("E-0").read && sheet("E-0").marks == n, "{:?}", sheet("E-0"));
+        assert!(inv.sheets_not_read.iter().all(|x| x.number != "E-1/2"), "a view of a loaded sheet is no sheet not read");
+        assert!(sheet("E-2").read && sheet("E-2").marks == 0);
+        assert_eq!((sheet("A-101").read, sheet("A-101").why.as_str()), (false, "a made-up page that can't be read"));
+        let on_e0: Vec<&inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-0").collect();
+        assert_eq!(on_e0.len(), n);
+        assert_eq!(on_e0.iter().find(|m| m.text == "JOB REF:").map(|m| m.reason.as_str()), Some("title block"), "{on_e0:#?}");
+        let said = |t: &str| on_e0.iter().find(|m| m.text == t).map(|m| (m.status.clone(), m.reason.clone())).unwrap_or_default();
+        assert_eq!(said("VACANT ROW"), (NOT_OBJECT.to_string(), "a table's cell (a schedule's or a diagram's lettering)".to_string()));
+        assert_eq!(said("UNUSED ROW").0, inventory::UNEXPLAINED);
+        let fills = on_e0.iter().find(|m| m.what == "hatch").unwrap_or_else(|| panic!("no fills: {on_e0:#?}"));
+        assert_eq!((fills.count, fills.status.as_str(), fills.text.as_str()), (2, NOT_OBJECT, "fills on layer SHADE"), "{fills:?}");
+        assert!(on_e0.iter().all(|m| m.end_read && m.handle.is_empty() && m.trade == "E"), "{on_e0:#?}");
+        assert!(inv.marks.iter().filter(|m| m.sheet != "E-0").all(|m| !m.end_read));
+        let mark = |t: &str| on_e0.iter().copied().find(|m| m.text == t).unwrap_or_else(|| panic!("no {t}: {on_e0:#?}"));
+        // The F row: receptacles, the model's F devices linked.
+        let f = mark("F");
+        assert_eq!((f.what.as_str(), f.object, f.status.as_str(), f.kind.as_str()), ("legend_row", false, NOT_OBJECT, "receptacle"), "{f:?}");
+        assert_eq!(f.count, receptacles, "{f:?}");
+        assert!(!f.elements.is_empty() && f.elements.len() <= receptacles, "{f:?}");
+        assert_eq!(f.source, "E-0 ELECTRICAL SYMBOL LEGEND: F DUPLEX RECEPTACLE");
+        // The QG row: a kind of its own words, no device of it in the model.
+        let qg = mark("QG");
+        assert_eq!(qg.kind, "legend:night glow marker 24v", "{qg:?}");
+        assert!(qg.elements.is_empty() && qg.reason.contains("no device in the model"), "{qg:?}");
+        assert_eq!((mark("ALL WORK SHALL MEET THE ADOPTED CODE").reason.as_str(), mark("3'-0\"").reason.as_str()), ("note", "dimension"));
+        // Coverage: the loaded sheets and the end-read ones apart; the unreadable page named.
+        let v = inv.summary(true);
+        let n = n as u64;
+        assert_eq!(v["coverage_by_read"]["end_read"]["marks"].as_u64(), Some(n), "{v:#}");
+        let loaded = v["coverage_by_read"]["loaded"]["marks"].as_u64().unwrap_or(0);
+        assert_eq!(Some(loaded + n), v["coverage"]["marks"].as_u64());
+        assert_eq!(v["sheets_end_read"], 2);
+        assert_eq!(v["sheets_unreadable"][0]["sheet"], "A-101");
+        assert_eq!(v["by_sheet"]["E-0"]["marks"].as_u64(), Some(n));
+    }
+
+    /// Q6172 (answer 2): a mark whose legend row names no known kind takes the row's words as its
+    /// kind, the row as its source; a known kind and an equipment tag still win.
+    #[test]
+    fn a_legend_row_of_no_known_kind_mints_its_kind() {
+        use cadaddy_mepfix::device_types::LegendRow;
+        let dv = |tag: &str| super::super::readers::ReadDevice { tag: tag.into(), sheet: "QE-1".into(), ..Default::default() };
+        let row = |table: &str, description: &str| LegendRow { table: table.into(), description: description.into() };
+        let mut a = dv("QG");
+        resolve_mark(&mut a, Some(("QE-0", &row("SYMBOL LEGEND", "NIGHT GLOW MARKER, 24V"))), false, &[], None);
+        assert_eq!((a.kind.as_str(), a.kind_source.as_str()), ("legend:night glow marker 24v", "QE-0 SYMBOL LEGEND: QG NIGHT GLOW MARKER, 24V"));
+        assert!(!unresolved_mark(&a), "a minted kind is a kind");
+        let mut b = dv("QG");
+        resolve_mark(&mut b, Some(("QE-0", &row("SYMBOL LEGEND", "DUPLEX RECEPTACLE"))), false, &[], None);
+        assert_eq!(b.kind, "receptacle");
+        // Words of no letter mint nothing: still unresolved, a question.
+        let mut c = dv("QG");
+        resolve_mark(&mut c, Some(("QE-0", &row("SYMBOL LEGEND", "-- 24 --"))), false, &[], None);
+        assert!(unresolved_mark(&c), "{c:?}");
+        // No row: nothing minted.
+        let mut e = dv("QG");
+        resolve_mark(&mut e, None, false, &[], None);
+        assert!(e.kind.is_empty());
+        assert_eq!(kind_of_row(&row("LIGHTING FIXTURE SCHEDULE", "2X4 LED TROFFER"), false).as_deref(), Some("luminaire"));
+        assert_eq!(kind_of_row(&row("LEGEND", "Glow   Marker / Wall"), false).as_deref(), Some("legend:glow marker wall"));
+    }
+
+    /// Q6172: `bim.inventory` lists marks by sheet and status, pages within the answer size, and
+    /// keeps what it took in the drawing.
+    #[test]
+    fn bim_inventory_lists_and_filters_marks() {
+        let (mut s, mut job, _) = inventory_job();
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        save_job(&mut s, &job).unwrap_or_else(|e| panic!("{e}"));
+        let v = s.execute("bim.inventory", &json!({"sheet": "E-1", "status": "not_object", "limit": 200})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(v.to_string().len() <= super::super::agentready::ANSWER_MAX, "{}", v.to_string().len());
+        let marks = v["marks"].as_array().cloned().unwrap_or_default();
+        assert!(!marks.is_empty());
+        assert!(
+            marks.iter().all(|m| m["sheet"] == "E-1" && m["status"] == "not_object" && m["reason"].as_str().is_some_and(|r| !r.is_empty())),
+            "{v:#}"
+        );
+        assert!(v["total"].as_u64() >= Some(marks.len() as u64));
+        assert!(s.doc().is_ok_and(|d| super::super::inventory::stored(d).is_some()), "kept in the drawing");
+        // The job's report gives its coverage by trade and sheet.
+        let report = s.execute("job.report", &json!({})).unwrap_or_else(|e| panic!("{e}"));
+        let inv = &report["inventory"];
+        assert!(inv["coverage"]["marks"].as_u64().is_some_and(|n| n > 0), "{report:#}");
+        assert!(inv["by_sheet"]["E-1"]["marks"].as_u64().is_some_and(|n| n > 0) && inv["by_trade"]["E"].is_object(), "{inv:#}");
+        let objects = s.execute("bim.inventory", &json!({"object": true, "kind": "luminaire"})).unwrap_or_else(|e| panic!("{e}"));
+        assert!(objects["marks"].as_array().is_some_and(|a| a.iter().all(|m| m["object"] == true && m["kind"] == "luminaire")), "{objects:#}");
+        // No job: an error that says what to do.
+        let mut empty = Session::new();
+        let e = empty.execute("bim.inventory", &json!({})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains("job.start"), "{e}");
     }
 }
