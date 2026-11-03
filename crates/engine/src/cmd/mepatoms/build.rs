@@ -528,9 +528,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         })
         .take(MAX_DEVICES)
         .collect();
+    // The built walls' faces, for a wall box: its front on the face of its wall.
+    let walls = if devices.iter().any(|d| d.2.get("host_face").is_some()) { super::super::propfill::wall_footprints(d) } else { Vec::new() };
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
+        // A device placed outside its level's footprint is flagged for review: no box with it.
+        if ps.get("misplaced").is_some() {
+            continue;
+        }
         // A device of no known kind at the ceiling takes a ceiling box.
         let ceiling = sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
         let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling.is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
@@ -554,9 +560,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             ("floor", _) => (Vec3::new(c.x, c.y, floor - bd / 2.0), Vec3::new(c.x, c.y, floor - bd), Vec2::new(1.0, 0.0), bw),
             (_, Some(o)) => {
-                // Behind the device, in its wall: its front at the wall's face.
+                // In its wall, its front on the wall's face (where the device's is: on the face,
+                // or flush in it); with no face found, behind the device.
                 let depth_plan = (plan.max - plan.min).dot(Vec2::new(o.x.abs(), o.y.abs()));
-                let face = c - o * (depth_plan / 2.0);
+                let face = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf)
+                    .filter(|f| f.out.dot(o) > 0.5)
+                    .map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
                 let mid = face - o * (bd / 2.0);
                 let zc = (z0 + z1) / 2.0;
                 (Vec3::new(mid.x, mid.y, zc), Vec3::new(mid.x, mid.y, zc + bh / 2.0), o.perp(), bd)

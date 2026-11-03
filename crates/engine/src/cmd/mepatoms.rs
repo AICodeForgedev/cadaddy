@@ -1353,8 +1353,8 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
-/// How a device stands against the face of its wall: its back's distance from the face along
-/// the face's outward direction (inches; negative: recessed into the wall).
+/// How a device stands against the face of its wall: its front's distance from the face along
+/// the face's outward direction (inches; positive: proud of the wall, negative: recessed).
 fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let ps = props::read(&e.common.xdata);
     let t = ps.get("host_face")?.text();
@@ -1371,10 +1371,10 @@ fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let walls = super::propfill::wall_footprints(d);
     let centre = b.center();
     let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf)?;
-    // Its depth across the face, and its back: the side toward the wall.
+    // Its depth across the face, and its front: the side its room sees.
     let depth = (b.max - b.min).dot(cadaddy_geom::Vec2::new(out.x.abs(), out.y.abs()));
-    let back = centre - out * (depth / 2.0);
-    let off = (back - f.at).dot(f.out) / upf * 12.0;
+    let front = centre + out * (depth / 2.0);
+    let off = (front - f.at).dot(f.out) / upf * 12.0;
     let r = (off * 100.0).round() / 100.0;
     let as_ = if off.abs() < 0.125 {
         "flush"

@@ -13856,12 +13856,15 @@ mod tests {
         let lines: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["circuit"] == "D-7").collect();
         let get = |item: &str| lines.iter().find(|l| l["item"] == item).copied().unwrap_or(&Value::Null);
         let conduit = get("EMT conduit");
-        assert!((conduit["net"].as_f64().unwrap_or(0.0) - 1100.0 / 12.0).abs() < 0.01, "{lines:#?}");
+        // The route's 91.67', each end landing on its fixture's box (Q6157 mepatoms: an inch or
+        // so down to the box's top at each).
+        let ft = conduit["net"].as_f64().unwrap_or(0.0);
+        assert!((1100.0 / 12.0 - 0.01..1100.0 / 12.0 + 0.5).contains(&ft), "{lines:#?}");
         assert_eq!(conduit["status"], json!("rule"));
         assert!(conduit["rule"].as_str().unwrap_or_default().contains("estimated route"));
-        // 2#12 + 1#12G (the default) over 91.67' plus 1' at each end of 3 pulls.
+        // 2#12 + 1#12G (the default) over the conduit plus 1' at each end of 3 pulls.
         let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
-        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (1100.0 / 12.0 + 6.0)).abs() < 0.01, "{lines:#?}");
+        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0)).abs() < 0.02, "{lines:#?}");
         assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
         assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
 
@@ -13869,9 +13872,10 @@ mod tests {
         let t = run_takeoff(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let d9 = t["circuits"].as_array().into_iter().flatten().find(|c| c["circuit"] == "D-9").unwrap_or(&Value::Null);
         assert_eq!(d9["level"], json!("Level 1"), "{t:#}");
-        assert!((d9["conduit_ft"].as_f64().unwrap_or(0.0) - 1400.0 / 12.0).abs() < 0.1, "{d9:#}");
+        // The routes' feet, plus the landings on the boxes (Q6157 mepatoms).
+        assert!((1400.0 / 12.0 - 0.1..1400.0 / 12.0 + 0.5).contains(&d9["conduit_ft"].as_f64().unwrap_or(0.0)), "{d9:#}");
         assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
-        assert!((t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{:#}", t["summary"]);
+        assert!((2500.0 / 12.0 - 0.1..2500.0 / 12.0 + 1.0).contains(&t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0)), "{:#}", t["summary"]);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
 
