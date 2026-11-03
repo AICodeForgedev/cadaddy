@@ -7,7 +7,7 @@
 //! stays I/O-agnostic; the JSON forms never open dialogs (the UI asks for files when these
 //! commands come from a menu, the tool bar or the command line).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use cadaddy_color::Rgb;
@@ -800,16 +800,7 @@ fn read_file(_path: &str) -> Result<Vec<u8>> {
 /// Add the source's layers, linetypes and styles that this drawing doesn't have (a name that
 /// exists keeps this drawing's definition). Returns how many layers and how many other records were added.
 pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
-    fn merge<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) -> usize {
-        let mut n = 0;
-        for t in theirs {
-            if !ours.iter().any(|o| name(o).eq_ignore_ascii_case(name(t))) {
-                ours.push(t.clone());
-                n += 1;
-            }
-        }
-        n
-    }
+    use crate::cmd::merge::merge_named as merge;
     let layers = merge(&mut d.layers, &src.layers, |l| &l.name);
     let others = merge(&mut d.linetypes, &src.linetypes, |l| &l.name)
         + merge(&mut d.text_styles, &src.text_styles, |t| &t.name)
@@ -825,29 +816,7 @@ pub(crate) fn merge_tables(d: &mut Drawing, src: &Drawing) -> (usize, usize) {
 /// (not copied). Every page of a print set numbers its symbols from 1: another page's
 /// `PDF-SYM-1` is another symbol.
 pub(crate) fn block_names(d: &Drawing, src: &Drawing) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| k.to_ascii_uppercase()).collect();
-    for (name, b) in &src.blocks {
-        let upper = name.to_ascii_uppercase();
-        if upper.starts_with("*MODEL_SPACE") || upper.starts_with("*PAPER_SPACE") {
-            continue;
-        }
-        let anonymous = b.anonymous || name.starts_with('*') || upper.starts_with("PDF-SYM-");
-        let to = if !taken.contains(&upper) {
-            name.clone()
-        } else if anonymous {
-            let prefix: String = name.chars().take_while(|c| !c.is_ascii_digit()).collect();
-            match (1..=1_000_000).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&n.to_ascii_uppercase())) {
-                Some(n) => n,
-                None => continue,
-            }
-        } else {
-            continue;
-        };
-        taken.insert(to.to_ascii_uppercase());
-        out.insert(name.clone(), to);
-    }
-    out
+    crate::cmd::merge::block_renames_with(d, src, None, |upper| upper.starts_with("PDF-SYM-"))
 }
 
 /// A copy of a source entity for this drawing: a fresh handle, block references renamed, and

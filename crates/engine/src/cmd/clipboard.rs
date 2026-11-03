@@ -13,7 +13,7 @@
 //! the system clipboard ([`SystemContents`]: an image, text) pastes as a raster image saved beside
 //! the drawing (`paste_image`) or as multiline text (`paste_text`).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use cadaddy_doc::{Block, Drawing, Entity, EntityKind, HVal, Handle};
@@ -435,20 +435,14 @@ pub(crate) fn defs_for(src: &Drawing, ents: &[Entity]) -> Drawing {
 /// Add `defs`' table records and blocks that `d` doesn't have. Returns the blocks copied, from
 /// their name in `defs` to their name in `d`.
 pub(crate) fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String> {
-    fn add<T: Clone>(ours: &mut Vec<T>, theirs: &[T], name: fn(&T) -> &str) {
-        for t in theirs {
-            if !ours.iter().any(|o| name(o).eq_ignore_ascii_case(name(t))) {
-                ours.push(t.clone());
-            }
-        }
-    }
+    use crate::cmd::merge::merge_named as add;
     add(&mut d.layers, &defs.layers, |l| &l.name);
     add(&mut d.linetypes, &defs.linetypes, |l| &l.name);
     add(&mut d.text_styles, &defs.text_styles, |t| &t.name);
     add(&mut d.dim_styles, &defs.dim_styles, |t| &t.name);
     add(&mut d.mleader_styles, &defs.mleader_styles, |t| &t.name);
     add(&mut d.table_styles, &defs.table_styles, |t| &t.name);
-    let renames = block_names(d, defs);
+    let renames = crate::cmd::merge::block_renames(d, defs, None);
     for (from, to) in &renames {
         let Some(b) = defs.blocks.get(from) else { continue };
         let mut nb = (**b).clone();
@@ -462,34 +456,6 @@ pub(crate) fn merge(d: &mut Drawing, defs: &Drawing) -> BTreeMap<String, String>
         d.blocks.insert(to.clone(), Arc::new(nb));
     }
     renames
-}
-
-/// Which blocks of `defs` to copy, and under which name: a new name keeps its own, a generated
-/// (anonymous `*…`) block whose name is taken gets a fresh generated name, and a named block `d`
-/// already has keeps `d`'s definition (not copied).
-fn block_names(d: &Drawing, defs: &Drawing) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
-    let mut taken: BTreeSet<String> = d.blocks.keys().map(|k| up(k)).collect();
-    for (name, b) in &defs.blocks {
-        let upper = up(name);
-        if upper.starts_with("*MODEL_SPACE") || upper.starts_with("*PAPER_SPACE") {
-            continue;
-        }
-        let to = if !taken.contains(&upper) {
-            name.clone()
-        } else if b.anonymous || name.starts_with('*') {
-            let prefix: String = name.chars().take_while(|c| !c.is_ascii_digit()).collect();
-            match (1..=1_000_000).map(|i| format!("{prefix}{i}")).find(|n| !taken.contains(&up(n))) {
-                Some(n) => n,
-                None => continue,
-            }
-        } else {
-            continue;
-        };
-        taken.insert(up(&to));
-        out.insert(name.clone(), to);
-    }
-    out
 }
 
 /// A copy of a clipboard object for `d`: a fresh handle, block references renamed, and links to
