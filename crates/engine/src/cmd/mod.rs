@@ -135,6 +135,7 @@ mod measuregeom;
 pub(crate) mod memstat;
 pub mod mep;
 pub mod mepatoms;
+pub mod tradeatoms;
 pub mod mepqty;
 mod mleader_content;
 pub(crate) mod mleader_edit;
@@ -806,6 +807,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(mepatoms::specs());
+        v.extend(tradeatoms::specs());
         v.extend(ifcref::specs());
         v.extend(ifcmodel::specs());
         v.extend(bcf::specs());

@@ -355,6 +355,17 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
     }
     let p = part.to_ascii_lowercase();
     let typed = |fallback: &str| own_type.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| fallback.to_string());
+    // A trade's piece (Q6162): under its trade, by what it is, its type what it is bought as.
+    if p == "atom" {
+        let trade = made_tag(e, "trade").unwrap_or("other").to_string();
+        let kind = made_tag(e, "part").and_then(|x| x.strip_prefix("atom:")).unwrap_or("piece").replace('_', " ");
+        let key = match trade.as_str() {
+            "concrete" | "framing" | "masonry" => "structure",
+            "openings" => "openings",
+            _ => "architecture",
+        };
+        return mk(key, &format!("{} {}", title(&trade), title(&kind)), typed(&title(&kind)));
+    }
     match p.as_str() {
         "wall" => mk("architecture", "Walls", typed("Wall")),
         "floor" => mk("architecture", "Floors", typed("Floor")),
