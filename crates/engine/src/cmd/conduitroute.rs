@@ -1661,6 +1661,34 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         fields.insert(k, Field::with_framing(Vec::new(), fr, upf));
     }
     let member_source = members.first().map(|m| m.source.clone()).unwrap_or_default();
+    // The built ceilings by level (each room's from its elevations or RCP area, the RCPs'): their
+    // outline on the level's plan and height. A box's raceway rises into the ceiling space over
+    // its own room's ceiling, not over a level-wide default.
+    let mut ceilings: HashMap<String, Vec<(Vec<Vec2>, f64, f64)>> = HashMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("ceiling")).take(MAX_DEVICES) {
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let Some(level) = super::bspec::made_level(e) else { continue };
+        let off = super::bspec::stacked_by(e);
+        let z = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+        let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
+        let area = cadaddy_geom::shoelace(&hull).abs();
+        if hull.len() >= 3 && z.is_finite() && area > 0.0 {
+            ceilings.entry(level.to_ascii_lowercase()).or_default().push((hull, z, area));
+        }
+    }
+    // The ceiling over a plan point of a level: the smallest built ceiling round it (a room's
+    // inside a larger one's), else none.
+    let ceiling_at = |level: &str, p: Vec2| -> Option<f64> {
+        ceilings.get(&level.to_ascii_lowercase())?.iter().filter(|(h, _, _)| inside(p, h)).min_by(|a, b| a.2.total_cmp(&b.2)).map(|(_, z, _)| *z)
+    };
+    // A box's room's ceiling: at the box, else a little into the room before its face (a box in
+    // a wall stands between the rooms' outlines).
+    let box_ceiling = |level: &str, at: Vec2, face: Option<Vec2>| -> Option<f64> {
+        ceiling_at(level, at).or_else(|| {
+            let f = face?;
+            ceiling_at(level, at + f * (0.75 * upf)).or_else(|| ceiling_at(level, at - f * (0.75 * upf)))
+        })
+    };
     let empty = Field::default();
     // A point of `from`'s own plan on `to`'s.
     let carry = |p: Vec2, from: &str, to: &str| p + move_of(from) - move_of(to);
@@ -1772,10 +1800,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let circs = split;
 
     // -- What each level gives: floor, ceiling tiers, corridors. --
-    let tiers_of = |level: &str| -> (f64, Vec<f64>) {
+    // `over`: the highest built ceiling under the run (its rooms'), else the level's ceiling.
+    let tiers_of = |level: &str, over: Option<f64>| -> (f64, Vec<f64>) {
         let Some(l) = sp.level(level) else { return (0.0, vec![rl.route.default_ceiling_ft * upf]) };
         let floor = l.elevation_ft * upf;
         let ceiling = if l.ceiling_ft > 0.0 { l.ceiling_ft } else { rl.route.default_ceiling_ft };
+        let ceiling = over.map(|z| (z - floor) / upf).filter(|c| *c > 0.0 && *c < l.height_ft.max(ceiling + 1.0)).unwrap_or(ceiling);
         let z0 = floor + (ceiling + rl.route.above_ceiling_in / 12.0) * upf;
         let mut zmax = floor + (l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0) * upf;
         // The documents' framing over the level is its structure: the tiers go up through the
@@ -1969,7 +1999,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             continue;
         }
         let field = fields.get(&c.level.to_ascii_lowercase()).unwrap_or(&empty);
-        let (floor, tiers) = tiers_of(&c.level);
+        // Over the highest ceiling of its boxes' rooms.
+        let over = members.iter().filter_map(|m| box_ceiling(&c.level, m.at, m.face)).fold(None, |a: Option<f64>, z| Some(a.map_or(z, |a| a.max(z))));
+        let (floor, tiers) = tiers_of(&c.level, over);
         // The area: a typical room's own (a unit), an exposed room's, else concealed.
         let room_up = members.iter().map(|m| m.room.to_ascii_uppercase()).collect::<Vec<_>>().join(" ");
         let area = if tag.id.contains(":room-") || has(&room_up, &rl.methods.unit_words) {
@@ -2226,7 +2258,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let Some(gear_el) = lead_h.gear.and_then(|i| gear.get(i)) else { continue };
         let Some(lead_dev) = lead_c.devs.get(lead_h.root).and_then(|d| devs.get(*d)) else { continue };
         let field = fields.get(&lead_h.level.to_ascii_lowercase()).unwrap_or(&empty);
-        let (floor, tiers) = tiers_of(&lead_h.level);
+        let (floor, _) = tiers_of(&lead_h.level, None);
         // A panel on another storey: the homerun runs to the point over (or under) it on its own
         // level's plan, then rises through the floors between into the panel's top (from above)
         // or bottom (from below).
@@ -2253,6 +2285,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             }
             None => vec![lead_dev.at, gctr],
         };
+        // Over the highest ceiling along its way: its box's room's, the corridor's, the panel's room's.
+        let over = std::iter::once(box_ceiling(&lead_h.level, lead_dev.at, lead_dev.face))
+            .chain(plan.iter().skip(1).map(|p| ceiling_at(&lead_h.level, *p)))
+            .flatten()
+            .fold(None, |a: Option<f64>, z| Some(a.map_or(z, |a| a.max(z))));
+        let (_, tiers) = tiers_of(&lead_h.level, over);
 
         // Each square piece of the plan path seated clear of the obstacles (the gear itself is
         // the target, not an obstacle).
@@ -2882,6 +2920,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     out
 }
 
+/// An MEP run's piece (a stick, fitting, box, cable, wire): not a building trade's (studs,
+/// sheets, joists are atoms too, and a reroute keeps them).
+fn mep_piece(e: &Entity) -> bool {
+    super::mepatoms::is_atom(e) && !super::tradeatoms::is_trade_piece(e)
+}
+
 /// The sheet a circuit was read on (its tag's), for the run's source.
 fn tag_sheet(t: &ElementTag) -> String {
     field_of(t, "sheet").unwrap_or_default().to_string()
@@ -2996,7 +3040,7 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
     let mut boxes: HashMap<String, (String, f64)> = HashMap::new();
-    for e in d.model.iter().filter(|e| super::mepatoms::is_atom(e)) {
+    for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
             continue;
@@ -3216,7 +3260,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     let old: Vec<Handle> = d
         .model
         .iter()
-        .filter(|e| super::mepatoms::is_atom(e))
+        .filter(|e| mep_piece(e))
         .inspect(|e| {
             if let Some(sy) = super::bimlook::made_tag(e, "system") {
                 systems.insert(sy.to_string());
@@ -3275,7 +3319,7 @@ pub(crate) fn follow_reseated(s: &mut Session, moved: usize) -> Option<Result<Va
     if moved == 0 {
         return None;
     }
-    let has_atoms = s.doc().ok()?.model.iter().any(|e| super::mepatoms::is_atom(e));
+    let has_atoms = s.doc().ok()?.model.iter().any(|e| mep_piece(e));
     has_atoms.then(|| reroute(s))
 }
 
@@ -3407,7 +3451,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     let mut rows: BTreeMap<Key, (f64, Vec<Handle>)> = BTreeMap::new();
     {
         let d = s.doc()?;
-        for e in d.model.iter().filter(|e| super::mepatoms::is_atom(e)) {
+        for e in d.model.iter().filter(|e| mep_piece(e)) {
             let ps = props::read(&e.common.xdata);
             let g = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
             let kind = g(super::mepatoms::ATOM_KEY);

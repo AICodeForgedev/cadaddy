@@ -728,11 +728,23 @@ fn storey_walls(d: &mut Drawing, ox: f64) {
 /// runs from the panel at the west wall to receptacles across the building; `joists`: the floor
 /// over L1 framed with I-joists at 24" (a project rule, as a joist layout would give it).
 fn framed_building(joists: bool) -> (Session, Value) {
+    framed_building_with(joists, 9.0, None)
+}
+
+/// [`framed_building`] with L1's ceiling at `ceiling` ft, and (`room`) one room, 101, filling
+/// L1 with its own documented ceiling height.
+fn framed_building_with(joists: bool, ceiling: f64, room: Option<f64>) -> (Session, Value) {
     let mut d = Drawing::new_imperial();
     storey_walls(&mut d, 0.0);
     storey_walls(&mut d, 200.0);
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Floor Plan", None);
+    if room.is_some() {
+        if s.execute("layer.new", &json!({"name": "A-ROOM-NAME", "current": true})).is_err() {
+            s.execute("layer.current", &json!({"name": "A-ROOM-NAME"})).expect("layer");
+        }
+        s.execute("text", &json!({"at": [240.0, 144.0], "text": "101", "height": 6.0})).expect("room tag");
+    }
     if joists {
         s.execute("project.rules.set", &json!({"domain": "joist_layout", "key": "general", "value": "24", "reason": "sample joist layout"}))
             .expect("rule");
@@ -740,11 +752,12 @@ fn framed_building(joists: bool) -> (Session, Value) {
     let spec = json!({
         "version": 1, "units_per_foot": 12, "stack": true,
         "levels": [
-            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": ceiling, "region": [-100, -100, 1000, 1000], "base": [0, 0]},
             {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [1900, -100, 3400, 1000], "base": [2400, 0]}
         ],
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "X1"}],
         "wall_types": [{"name": "X1", "thickness_in": 7.25, "from": "pairs"}],
+        "rooms": room.map_or(json!([]), |c| json!([{"name": "OFFICE", "number": "101", "level": "L1", "ceiling_ft": c, "ceiling_source": "sample elevation"}])),
         "tags": [receptacle(1, 12.0, 6.0, "LP1-1"), receptacle(2, 34.0, 6.0, "LP1-1"), receptacle(3, 34.0, 18.0, "LP1-1"), circuit("LP1-1")],
         "mep": {"systems": [], "runs": [], "equipment": [
             {"tag": "LP1", "kind": "panel", "level": "L1", "min": [12, 120], "max": [32, 124], "height_ft": 4, "bottom_ft": 2.5,
@@ -797,8 +810,21 @@ fn the_branches_keep_to_the_joist_bays_and_bore_the_web_only_in_its_hole_zone() 
     assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members"].as_u64().unwrap(), "{joists} {fr}");
     // Rerouting with the trades' pieces built (studs, sheets, joists) is the same routing: the
     // pieces are not obstacles.
+    let pieces = |s: &mut Session| s.execute("bim.count", &json!({"group_by": "trade"})).expect("count")["rows"].clone();
+    let trades_before = pieces(&mut s);
+    assert!(trades_before.as_array().is_some_and(|r| r.iter().any(|r| r["trade"] == json!("framing"))), "{trades_before}");
     let again = s.execute("conduit.reroute", &json!({})).expect("reroute");
     assert_eq!(again["clashes"], json!(rep["clashes"].as_array().map_or(0, Vec::len)), "{again}");
+    // … and it cuts again only the electrical pieces: the trades' pieces stay.
+    assert_eq!(pieces(&mut s), trades_before);
+    let joists_after = s.execute("bim.count", &json!({"trade": "framing", "kind": "joist"})).expect("count");
+    assert_eq!(joists_after["count"], joists["count"], "{joists_after}");
+    // The conduit takeoff is the electrical pieces only.
+    let take2 = s.execute("conduit.takeoff", &json!({})).expect("takeoff");
+    assert!(
+        take2["lines"].as_array().unwrap().iter().all(|l| !matches!(l["kind"].as_str(), Some("stud" | "joist" | "sheet" | "plate" | "rim"))),
+        "{take2}"
+    );
     let rep2 = s.execute("conduit.route", &json!({"max": 2000})).expect("report");
     assert_eq!(rep2["bored_holes"].as_array().map_or(0, Vec::len), holes.len());
     assert_eq!(rep2["routed_ft"], rep["routed_ft"]);
@@ -811,4 +837,21 @@ fn without_framing_documents_nothing_is_bored_and_the_report_says_why() {
     assert_eq!(rep["framing"]["members"], json!(0), "{}", rep["framing"]);
     assert!(rep["framing"]["note"].as_str().unwrap().contains("no floor framing"));
     assert_eq!(rep["bored_holes"].as_array().map_or(0, Vec::len), 0);
+}
+
+#[test]
+fn a_room_ceiling_up_in_the_joists_puts_its_branches_through_their_webs() {
+    // L1's ceiling 7': the branches pass under the joists (8'-11 3/8" to 9'-11 1/4"), nothing bored.
+    let (mut s, _) = framed_building_with(true, 7.0, None);
+    let low = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(low["framing"]["bored_holes"], json!(0), "{}", low["framing"]);
+    // Room 101's own ceiling (its elevation's 8'-9") is the one under the run: the raceway rises
+    // over it into the joists' web and bores them, every piece over the room's ceiling.
+    let (mut s, built) = framed_building_with(true, 7.0, Some(8.75));
+    assert_eq!(built["rooms"], json!(1), "the room is traced");
+    let rep = s.execute("conduit.route", &json!({"max": 2000})).expect("report");
+    assert!(rep["framing"]["bored_holes"].as_u64().unwrap_or(0) > 0, "{}", rep["framing"]);
+    for st in sticks(&s).iter().filter(|st| (st.1[2] - st.2[2]).abs() < 1e-6) {
+        assert!(st.1[2] >= 8.75 + 0.25 - 1e-6, "a horizontal piece over the room's ceiling: {st:?}");
+    }
 }
