@@ -741,7 +741,21 @@ fn read_pipes_from_tags(
     let dark: Vec<&Arc<Entity>> =
         linework.iter().copied().filter(|e| !screened(&e.common.color) && !e.common.layer.eq_ignore_ascii_case("PDF-SHX-SOURCE")).collect();
     let (all_chains, widths) = twin_chains(&dark, upf).unwrap_or_else(|| {
-        let c = chains(&linework);
+        // Single lines: the trade's pen, not the grey background, when most of the plan's tags
+        // have its lines near them (a pipe printed dark over the screened architecture); else
+        // every line, as a plan printed all in one pen has to be read.
+        let pen: Vec<&Arc<Entity>> = linework.iter().copied().filter(|e| !screened(&e.common.color)).collect();
+        let pen_chains = chains(&pen);
+        let reach = 2.0 * upf;
+        let near = pipe_tags
+            .iter()
+            .filter(|t| {
+                pen_chains.iter().any(|(pts, _)| {
+                    pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() >= reach && pts.windows(2).any(|w| seg_dist(t.at, w[0], w[1]) <= reach)
+                })
+            })
+            .count();
+        let c = if !pipe_tags.is_empty() && 2 * near >= pipe_tags.len() && pen.len() < linework.len() { pen_chains } else { chains(&linework) };
         let n = c.len();
         (c, vec![None; n])
     });

@@ -32,7 +32,7 @@ const LONG_PAIRED_SHARE: f64 = 0.6;
 /// few feet of pipe is some), and the length past which its share of the long lines doesn't matter
 /// (a floor plan's long lines include its lettering's and symbols').
 const MIN_TWIN_FT: f64 = 8.0;
-const PLENTY_TWIN_FT: f64 = 100.0;
+const PLENTY_TWIN_FT: f64 = 50.0;
 /// A line across a pipe is square to it within this (cosine of its angle with the pipe).
 const SQUARE_COS: f64 = 0.2;
 /// The pieces across at one place (within this share of the pipe's width along it) together
