@@ -7761,6 +7761,8 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
         dimming: String,
         product: String,
         circuit: (String, String),
+        level: String,
+        at: Option<[f64; 2]>,
     }
     let d = s.doc()?;
     let mut lums: Vec<Dev> = Vec::new();
@@ -7789,6 +7791,11 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
             dimming: text("dimming").to_ascii_uppercase(),
             product: format!("{} {} {}", text("product"), text("configuration"), text("required_features")).to_ascii_uppercase(),
             circuit: (text("panel").to_ascii_uppercase(), number),
+            level: text("level").to_ascii_uppercase(),
+            at: {
+                let v: Vec<f64> = text("location").split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
+                (v.len() >= 2).then(|| [v[0], v[1]])
+            },
         };
         if is_lum { lums.push(dv) } else { ctrls.push(dv) }
     }
@@ -7810,12 +7817,21 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
             ""
         }
     };
+    // Within reach on one level (a leg's switch is often across a door, in the next space).
+    let near = |a: &Dev, b: &Dev, reach: f64| {
+        let same_level = a.level.is_empty() || b.level.is_empty() || a.level == b.level;
+        same_level
+            && match (a.at, b.at) {
+                (Some(p), Some(q)) => ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= reach,
+                _ => !a.room.is_empty() && a.room == b.room,
+            }
+    };
     let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
     let mut issues: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     let mut tally: BTreeMap<&'static str, usize> = BTreeMap::new();
     for l in &lums {
         let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
-        let by_leg: Vec<&Dev> = in_room.iter().copied().filter(|c| !l.leg.is_empty() && c.leg == l.leg).collect();
+        let by_leg: Vec<&Dev> = ctrls.iter().filter(|c| !l.leg.is_empty() && c.leg == l.leg && near(l, c, CONTROL_REACH_FT)).collect();
         let circuit_codes = codes.get(&l.circuit).cloned().unwrap_or_default();
         let (control, src, how): (String, Source, &'static str) = if !by_leg.is_empty() {
             (
@@ -7875,22 +7891,24 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
             }
         }
     }
-    // Switches: a leg no fixture in the room has; a 3-way without its pair.
-    let mut threeway: BTreeMap<(String, String), usize> = BTreeMap::new();
+    // Switches: a leg no fixture near it has; a 3-way with no other 3-way of its leg within reach
+    // (its pair is usually at the other door or the other end of a corridor or stair).
+    let three = |c: &Dev| c.mark.starts_with("S3") || c.kind == "3way_switch" || c.product.contains("THREE WAY");
     for c in &ctrls {
         if c.kind == "occupancy_sensor" {
             continue;
         }
-        if !c.leg.is_empty() && !lums.iter().any(|l| l.room == c.room && l.leg == c.leg) {
+        if !c.leg.is_empty() && !lums.iter().any(|l| l.leg == c.leg && near(l, c, CONTROL_REACH_FT)) {
             issues.entry("switch leg with no fixture").or_default().push(format!("{} {} leg {} in {}", c.mark, c.h.hex(), c.leg, c.room));
         }
-        if c.mark.starts_with("S3") || c.kind == "3way_switch" || c.product.contains("THREE WAY") {
-            *threeway.entry((c.room.clone(), c.leg.clone())).or_default() += 1;
-        }
-    }
-    for ((room, leg), n) in &threeway {
-        if *n == 1 {
-            issues.entry("3-way switch without its pair").or_default().push(format!("room {room} leg {}", if leg.is_empty() { "-" } else { leg }));
+        if three(c) && !ctrls.iter().any(|o| o.h != c.h && three(o) && o.leg == c.leg && near(o, c, THREE_WAY_REACH_FT)) {
+            issues.entry("3-way switch without its pair").or_default().push(format!(
+                "{} {} leg {} in {}",
+                c.mark,
+                c.h.hex(),
+                if c.leg.is_empty() { "-" } else { &c.leg },
+                c.room
+            ));
         }
     }
     let d = s.doc_mut()?;
@@ -7945,6 +7963,10 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
         json!({"by": tally, "issues": issues.iter().map(|(k, v)| (k.to_string(), v.len())).collect::<BTreeMap<_, _>>(), "rfis": rfis});
     Ok(())
 }
+
+/// How far a switch leg's switch may be from its fixtures, and a 3-way from its pair, feet.
+const CONTROL_REACH_FT: f64 = 40.0;
+const THREE_WAY_REACH_FT: f64 = 150.0;
 
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";
