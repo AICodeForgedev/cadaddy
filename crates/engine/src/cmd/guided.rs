@@ -8250,7 +8250,20 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
             .collect();
         let sheet = norm(number);
         let on_sheet: Vec<&Dev> = devs.iter().filter(|d| d.sheet == sheet).collect();
-        for (num, at) in keynotes::tags(&texts, &segs, &symbol_boxes, list) {
+        // Circles, and symbols (not keynote boxes, radius -1: a number right over one's middle is
+        // its own: a callout bubble the import made a block).
+        let rounds: Vec<(Vec2, f64)> = sub
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
+                cadaddy_doc::EntityKind::Insert(ins) if !shapes.get(&ins.block).copied().unwrap_or(false) => Some((ins.insert.xy(), -1.0)),
+                _ => None,
+            })
+            .collect();
+        let me = keynotes::subject(list);
+        let others: Vec<String> = lists.iter().map(keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
+        for (num, at) in keynotes::tags(&texts, &segs, &symbol_boxes, &rounds, &others, list) {
             let Some((note, w)) = actionable.iter().find(|(n, _)| n.number == num) else { continue };
             if boxes.len() >= MAX_KEYNOTE_BOXES {
                 break;
