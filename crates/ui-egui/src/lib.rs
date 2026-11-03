@@ -1022,6 +1022,11 @@ impl CadApp {
         for (path, outcome) in self.opening.poll() {
             let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             startup::mark(&format!("read {name}"));
+            // A recent file that is gone can never be opened again: drop it from the list. A path
+            // whose existence can't be checked (a folder that denies access) stays.
+            if outcome.is_err() && matches!(std::path::Path::new(&path).try_exists(), Ok(false)) {
+                self.ui.recent_files.retain(|p| *p != path);
+            }
             let r = match outcome {
                 Ok(f) => self.session.finish_open(f).map_err(|e| e.to_string()),
                 Err(e) => Err(e),
