@@ -3435,6 +3435,10 @@
 	Count Model Pieces	统计模型构件
 	Edit Model Piece	编辑模型构件
 	Walk the Feed	追溯供电
+	Lay Out Trade Pieces	布置各工种构件
+	Trade Pieces Report	各工种构件报告
+	Trade Piece Rules	各工种构件规则
+	Read Trade Documents	读取各工种文件
 	Object Forms	对象表单
 	Create Object Forms	创建对象表单
 	Edit Object Form Field	编辑对象表单字段
@@ -3444,3 +3448,9 @@
 	Promote Object Form to Template	将对象表单提升为模板
 	Object Completeness	对象完整度
 	Object Form	对象表单
+	Wall Faces	墙面
+	Place Devices on Wall Faces	将设备放置在墙面上
+	Devices Follow Their Walls	设备随墙移动
+	Room Layout	房间布局
+	Tie a Device to an Object	将设备关联到对象
+	Add Casework or Appliance Object	添加橱柜或电器对象

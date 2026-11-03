@@ -3341,6 +3341,10 @@ menu	Modify	Modifikace
 	Count Model Pieces	Spočítat díly modelu
 	Edit Model Piece	Upravit díl modelu
 	Walk the Feed	Projít napájení
+	Lay Out Trade Pieces	Rozvrhnout díly profesí
+	Trade Pieces Report	Přehled dílů profesí
+	Trade Piece Rules	Pravidla dílů profesí
+	Read Trade Documents	Načíst dokumenty profesí
 	Object Forms	Formuláře objektů
 	Create Object Forms	Vytvořit formuláře objektů
 	Edit Object Form Field	Upravit pole formuláře objektu
@@ -3350,3 +3354,9 @@ menu	Modify	Modifikace
 	Promote Object Form to Template	Povýšit formulář objektu na šablonu
 	Object Completeness	Úplnost objektů
 	Object Form	Formulář objektu
+	Wall Faces	Plochy stěn
+	Place Devices on Wall Faces	Umístit zařízení na plochy stěn
+	Devices Follow Their Walls	Zařízení následují své stěny
+	Room Layout	Rozvržení místnosti
+	Tie a Device to an Object	Svázat zařízení s objektem
+	Add Casework or Appliance Object	Přidat objekt nábytku nebo spotřebiče

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1223,
-    "count": 1223,
+    "callableAsJson": 1233,
+    "count": 1233,
     "ids": [
       "-attedit",
       "-block",
@@ -114,7 +114,11 @@
       "bcount",
       "bedit",
       "bextend",
+      "bim.atoms.build",
+      "bim.atoms.docs",
       "bim.atoms.edit",
+      "bim.atoms.report",
+      "bim.atoms.rules",
       "bim.bom",
       "bim.build",
       "bim.chain",
@@ -128,6 +132,7 @@
       "bim.dimming",
       "bim.element",
       "bim.estimate",
+      "bim.faces",
       "bim.field.link",
       "bim.form.create",
       "bim.form.field",
@@ -145,6 +150,11 @@
       "bim.issue.marks",
       "bim.issue.set",
       "bim.issue.show",
+      "bim.layout",
+      "bim.layout.follow",
+      "bim.layout.object",
+      "bim.layout.rehost",
+      "bim.layout.tie",
       "bim.look",
       "bim.prints",
       "bim.products",
@@ -1227,7 +1237,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 532,
+    "inMenus": 535,
     "typed": 564
   },
   "features": {

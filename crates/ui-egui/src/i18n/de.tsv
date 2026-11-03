@@ -3177,6 +3177,10 @@
 	Count Model Pieces	Modellteile zählen
 	Edit Model Piece	Modellteil bearbeiten
 	Walk the Feed	Einspeisung verfolgen
+	Lay Out Trade Pieces	Gewerkteile anordnen
+	Trade Pieces Report	Bericht Gewerkteile
+	Trade Piece Rules	Regeln für Gewerkteile
+	Read Trade Documents	Gewerkdokumente lesen
 	Object Forms	Objektformulare
 	Create Object Forms	Objektformulare erstellen
 	Edit Object Form Field	Objektformularfeld bearbeiten
@@ -3186,3 +3190,9 @@
 	Promote Object Form to Template	Objektformular zur Vorlage machen
 	Object Completeness	Objektvollständigkeit
 	Object Form	Objektformular
+	Wall Faces	Wandflächen
+	Place Devices on Wall Faces	Geräte auf Wandflächen platzieren
+	Devices Follow Their Walls	Geräte folgen ihren Wänden
+	Room Layout	Raumlayout
+	Tie a Device to an Object	Gerät an ein Objekt binden
+	Add Casework or Appliance Object	Einbaumöbel- oder Geräteobjekt hinzufügen

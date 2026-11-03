@@ -3500,6 +3500,10 @@
 	Count Model Pieces	Порахувати деталі моделі
 	Edit Model Piece	Змінити деталь моделі
 	Walk the Feed	Пройти живленням
+	Lay Out Trade Pieces	Розкласти деталі за видами робіт
+	Trade Pieces Report	Звіт про деталі видів робіт
+	Trade Piece Rules	Правила деталей видів робіт
+	Read Trade Documents	Прочитати документи видів робіт
 	Object Forms	Форми об'єктів
 	Create Object Forms	Створити форми об'єктів
 	Edit Object Form Field	Змінити поле форми об'єкта
@@ -3511,4 +3515,10 @@
 	Object Form	Форма об'єкта
 	Price a Change	Оцінити зміну
 	Value Engineering	Інженерна оптимізація вартості
+	Wall Faces	Грані стін
+	Place Devices on Wall Faces	Розмістити пристрої на гранях стін
+	Devices Follow Their Walls	Пристрої слідують за стінами
+	Room Layout	Планування приміщення
+	Tie a Device to an Object	Прив'язати пристрій до об'єкта
+	Add Casework or Appliance Object	Додати об'єкт меблів або побутового приладу
 	Scope by Trade	Обсяг робіт за фахом

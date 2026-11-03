@@ -184,6 +184,14 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 (t, cat.to_string(), system, level)
             }
             "device" => (long_trade(cadaddy_walk3d::field::trade_of("device", &layer)), "device".into(), layer, level),
+            // A trade's piece (Q6162): structure for concrete, framing and masonry, else the
+            // architecture's; its category the piece (`piece:stud`), its system its trade.
+            "atom" => {
+                let trade = super::fieldview::tag_value(&tags, "trade").unwrap_or("other").to_string();
+                let kind = super::fieldview::tag_value(&tags, "part").and_then(|p| p.strip_prefix("atom:")).unwrap_or("piece").to_string();
+                let t = if matches!(trade.as_str(), "concrete" | "framing" | "masonry") { "structure" } else { "architecture" };
+                (t, format!("piece:{kind}"), trade, level)
+            }
             other => {
                 let kind = super::fieldview::tag_value(&tags, "kind").unwrap_or(other);
                 (long_trade(cadaddy_walk3d::field::trade_of(kind, &layer)), other.to_string(), layer, level)

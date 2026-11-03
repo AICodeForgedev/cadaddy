@@ -314,3 +314,52 @@ fn a_name_on_the_furniture_and_a_number_outside_the_outline_still_make_the_room(
     assert!((b["area"].as_f64().unwrap() - (248.0 * 308.0 - 60.0 * 60.0)).abs() < 1.0, "{b}");
     assert!(!rooms.iter().any(|r| r["number"] == "5099"), "{r}");
 }
+
+/// A guest room as the hotel's mirrored units print it: the name's insertion point lands on a
+/// desk's outline, and the number lies on the bed drawn against the headboard wall (its outline
+/// cuts into the room's). The room is still traced and numbered.
+#[test]
+fn a_room_is_traced_past_the_furniture_under_its_name_and_numbered_off_its_bed() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    // A desk (2' x 2') under the name's start; a bed against the bottom wall: its outline
+    // touches the wall, so the room's traced boundary goes round it.
+    rect(&mut s, [96.0, 150.0], [120.0, 174.0]);
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 150.0], [180.0, 150.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 160.0], "DOUBLE Q");
+    text(&mut s, [110.0, 145.0], "205");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    let q = room(rooms, "DOUBLE Q");
+    assert_eq!(q["number"], "205", "{r}");
+    assert!(q["areaSqFt"].as_f64().unwrap() > 200.0, "the room, not the desk: {q}");
+}
+
+/// A two-line name (`SINGLE Q ADA` over `(TUB)`) with its number a third line down, on the bed:
+/// the number is still the room's.
+#[test]
+fn a_two_line_names_number_three_lines_down_is_its_rooms() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 140.0], [180.0, 140.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [90.0, 160.0], "SINGLE Q ADA");
+    text(&mut s, [100.0, 151.0], "(TUB)");
+    text(&mut s, [104.0, 137.0], "220");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let q = r["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"].as_str().is_some_and(|n| n.starts_with("SINGLE Q ADA")))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(q["number"], "220", "{r}");
+}

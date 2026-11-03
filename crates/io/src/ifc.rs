@@ -97,6 +97,14 @@ enum Class {
     Pile,
     ReinforcingBar,
     MechanicalFastener,
+    // A trade's pieces (Q6162).
+    Member,
+    Plate,
+    ReinforcingMesh,
+    Tendon,
+    TendonAnchor,
+    DiscreteAccessory,
+    BuildingElementPart,
 }
 
 impl Class {
@@ -146,6 +154,13 @@ impl Class {
             Class::Pile => ("IfcPile", "BORED"),
             Class::ReinforcingBar => ("IfcReinforcingBar", "MAIN"),
             Class::MechanicalFastener => ("IfcMechanicalFastener", "ANCHORBOLT"),
+            Class::Member => ("IfcMember", "MEMBER"),
+            Class::Plate => ("IfcPlate", "SHEET"),
+            Class::ReinforcingMesh => ("IfcReinforcingMesh", "MESH"),
+            Class::Tendon => ("IfcTendon", "STRAND"),
+            Class::TendonAnchor => ("IfcTendonAnchor", "NOTDEFINED"),
+            Class::DiscreteAccessory => ("IfcDiscreteAccessory", "USERDEFINED"),
+            Class::BuildingElementPart => ("IfcBuildingElementPart", "USERDEFINED"),
         }
     }
 
@@ -194,6 +209,13 @@ impl Class {
             "Pile" => Class::Pile,
             "ReinforcingBar" => Class::ReinforcingBar,
             "MechanicalFastener" => Class::MechanicalFastener,
+            "Member" => Class::Member,
+            "Plate" => Class::Plate,
+            "ReinforcingMesh" => Class::ReinforcingMesh,
+            "Tendon" => Class::Tendon,
+            "TendonAnchor" => Class::TendonAnchor,
+            "DiscreteAccessory" => Class::DiscreteAccessory,
+            "BuildingElementPart" => Class::BuildingElementPart,
             _ => return None,
         })
     }
@@ -274,6 +296,42 @@ fn size_label_in(s: [f64; 2]) -> String {
         t.trim_end_matches('0').trim_end_matches('.').to_string()
     };
     if s[1] > 0.0 { format!("{}\"x{}\"", n(s[0]), n(s[1])) } else { format!("{}\"Ø", n(s[0])) }
+}
+
+/// A trade's piece (`part:atom:<kind>`, Q6162): its IFC class, predefined type and object type
+/// (for `USERDEFINED`).
+fn trade_piece_class(kind: &str) -> (Class, &'static str, &'static str) {
+    match kind {
+        // A pour is a part of its slab (the slab is the floor element).
+        "pour" => (Class::BuildingElementPart, "USERDEFINED", "CONCRETE POUR"),
+        "underlayment" => (Class::Ceiling, "FLOORING", ""),
+        "rebar" => (Class::ReinforcingBar, "MAIN", ""),
+        "mesh" => (Class::ReinforcingMesh, "MESH", ""),
+        "tendon" => (Class::Tendon, "STRAND", ""),
+        "anchor" => (Class::TendonAnchor, "NOTDEFINED", ""),
+        "chair" | "embed" => (Class::DiscreteAccessory, "USERDEFINED", "SUPPORT"),
+        "vapor_barrier" => (Class::Ceiling, "MEMBRANE", ""),
+        "stud" => (Class::Member, "STUD", ""),
+        "track" | "plate" => (Class::Member, "PLATE", ""),
+        "blocking" | "backing" | "furring" | "grid_main" | "grid_tee" | "wall_angle" | "rim" => (Class::Member, "MEMBER", ""),
+        "truss" => (Class::Member, "CHORD", ""),
+        "header" => (Class::Beam, "LINTEL", ""),
+        "joist" => (Class::Beam, "JOIST", ""),
+        "sheathing" => (Class::Plate, "SHEET", ""),
+        "sheet" => (Class::Ceiling, "CLADDING", ""),
+        "tile" => (Class::Ceiling, "CEILING", ""),
+        "flooring" => (Class::Ceiling, "FLOORING", ""),
+        "base" => (Class::Ceiling, "SKIRTINGBOARD", ""),
+        "paint" => (Class::Ceiling, "USERDEFINED", "COATING"),
+        "batt" | "board" => (Class::BuildingElementPart, "INSULATION", ""),
+        "cmu" => (Class::BuildingElementPart, "USERDEFINED", "MASONRY UNIT"),
+        "frame" => (Class::BuildingElementPart, "USERDEFINED", "DOOR FRAME"),
+        "firestop" => (Class::DiscreteAccessory, "USERDEFINED", "FIRESTOP"),
+        "hardware_set" => (Class::DiscreteAccessory, "USERDEFINED", "DOOR HARDWARE"),
+        "accessory" => (Class::DiscreteAccessory, "USERDEFINED", "ACCESSORY"),
+        "corner_bead" | "tape" | "compound" | "screws" => (Class::DiscreteAccessory, "USERDEFINED", "FINISHING"),
+        _ => (Class::Proxy, "NOTDEFINED", ""),
+    }
 }
 
 fn class_of(e: &Entity) -> Kind {
@@ -358,6 +416,24 @@ fn class_of(e: &Entity) -> Kind {
                     .filter_map(|v| v.split_once('='))
                     .map(|(a, b)| (a.to_string(), b.to_string()))
                     .collect();
+                return k;
+            }
+            // A trade's piece (Q6162): a pour, a bar, a stud, a sheet, a batt, a firestop…, as
+            // the IFC class it is, named as what it is bought as.
+            "atom" => {
+                let piece = mep_part.as_deref().and_then(|p| p.strip_prefix("atom:")).unwrap_or_default();
+                let (class, pre, object_type) = trade_piece_class(piece);
+                let item = extra("type:").unwrap_or_else(|| piece.to_string());
+                // A tendon's anchors: the stressing (live) end and the fixed (dead) end.
+                let pre = match (class, item.contains("live"), item.contains("dead")) {
+                    (Class::TendonAnchor, true, _) => "TENSIONING_END",
+                    (Class::TendonAnchor, _, true) => "FIXED_END",
+                    _ => pre,
+                };
+                let mut k = kind(class, t.get(1).cloned(), item, String::new());
+                k.predefined = pre;
+                k.object_type = object_type;
+                k.description = extra("trade:").unwrap_or_default();
                 return k;
             }
             // A piece of an electrical run (Q6157): a stick, a fitting, a box, a support, cable or
@@ -800,7 +876,19 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             _ => {
                 let desc = if kd.description.is_empty() { "$".to_string() } else { step_str(&kd.description) };
                 let object_type = if kd.object_type.is_empty() { "$".to_string() } else { step_str(kd.object_type) };
-                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},.{pre}.)")
+                // The reinforcing elements' own attributes (IFC4) between the tag and the
+                // predefined type, not given here.
+                let (before, after) = match kd.class {
+                    // SteelGrade, NominalDiameter, CrossSectionArea, BarLength; BarSurface after.
+                    Class::ReinforcingBar => ("$,$,$,$,", ",$"),
+                    // SteelGrade, MeshLength, MeshWidth, the bars' diameters, areas and spacings.
+                    Class::ReinforcingMesh => ("$,$,$,$,$,$,$,$,$,", ""),
+                    // SteelGrade; after: diameter, area, force, prestress, friction, slip, radius.
+                    Class::Tendon => ("$,", ",$,$,$,$,$,$,$"),
+                    Class::TendonAnchor => ("$,", ""),
+                    _ => ("", ""),
+                };
+                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},{before}.{pre}.{after})")
             }
         };
         let product = o.add(line);
@@ -2450,6 +2538,13 @@ fn class_name(upper: &str) -> String {
         "BuildingElementPart",
         "TransportElement",
         "VirtualElement",
+        // Reinforcement and accessories (concrete, a trade's pieces).
+        "ReinforcingBar",
+        "ReinforcingMesh",
+        "Tendon",
+        "TendonAnchor",
+        "MechanicalFastener",
+        "DiscreteAccessory",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(

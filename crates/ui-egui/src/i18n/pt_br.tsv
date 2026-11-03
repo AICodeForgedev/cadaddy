@@ -3369,6 +3369,10 @@
 	Count Model Pieces	Contar peças do modelo
 	Edit Model Piece	Editar peça do modelo
 	Walk the Feed	Percorrer a alimentação
+	Lay Out Trade Pieces	Distribuir peças por ofício
+	Trade Pieces Report	Relatório de peças por ofício
+	Trade Piece Rules	Regras de peças por ofício
+	Read Trade Documents	Ler documentos dos ofícios
 	Object Forms	Formulários de objetos
 	Create Object Forms	Criar formulários de objetos
 	Edit Object Form Field	Editar campo do formulário de objeto
@@ -3378,3 +3382,9 @@
 	Promote Object Form to Template	Promover formulário de objeto a modelo
 	Object Completeness	Completude dos objetos
 	Object Form	Formulário de objeto
+	Wall Faces	Faces de parede
+	Place Devices on Wall Faces	Posicionar dispositivos nas faces de parede
+	Devices Follow Their Walls	Dispositivos acompanham suas paredes
+	Room Layout	Layout do cômodo
+	Tie a Device to an Object	Vincular um dispositivo a um objeto
+	Add Casework or Appliance Object	Adicionar objeto de marcenaria ou eletrodoméstico

@@ -9,6 +9,8 @@
     { "atoms": true, "kinds": ["conduit", "cable", "elbow", "bend", "offset"], "tier": "room", "line_from": "floor", "why": "raceway and cable pieces: at floor scale the run shows as a line" },
     { "atoms": true, "kinds": ["box"], "tier": "room", "why": "outlet and junction boxes" },
     { "kinds": ["stud", "track", "joist", "header", "sheet", "drywall", "rebar", "mesh", "block", "brick", "insulation"], "tier": "room", "why": "framing, sheets and reinforcement as pieces" },
+    { "atoms": true, "kinds": ["plate", "blocking", "backing", "furring", "sheathing", "batt", "board", "cmu", "rim", "truss", "tendon", "pour"], "tier": "room", "why": "the trades' pieces inside walls, floors and the roof" },
+    { "atoms": true, "kinds": ["paint", "flooring", "base", "tile", "grid_main", "grid_tee", "wall_angle", "vapor_barrier", "underlayment", "firestop", "frame", "hardware_set", "accessory", "compound", "screws", "corner_bead", "embed", "chair"], "tier": "detail", "why": "finishes, accessories and the trades' small pieces: only seen up close" },
     { "trades": ["equipment"], "words": ["switchboard", "switchgear", "transformer", "generator", "transfer switch", "distribution", "substation", "air handling", "air handler", "ahu", "rtu", "rooftop", "roof top", "exhaust fan", "chiller", "boiler", "cooling tower", "condensing", "condenser", "ptac", "vrf", "water heater", "pump", "makeup air", "make-up air", "elevator"], "tier": "building", "why": "big gear and rooftop/mechanical units show at building scale" },
     { "trades": ["equipment"], "min_extent_ft": 4, "tier": "building", "why": "equipment 4 ft or larger" },
     { "trades": ["equipment"], "tier": "floor", "why": "panels and other equipment" },

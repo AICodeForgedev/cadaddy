@@ -49,7 +49,7 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, or a device kind (receptacle, switch, luminaire and the like), size?: trade or conductor size (1\", #12, 4\" square), type?: part of the type (EMT, NM 12/2, THHN), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|size|type|level|room|circuit|system, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), rows?: [{value of the group_by dimension, count, length_ft, estimated}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
@@ -820,27 +820,87 @@ pub(crate) struct Key {
     pub room: String,
     pub circuit: String,
     pub system: String,
+    /// The trade a building piece belongs to (`concrete`, `framing`, `drywall`…, Q6162); empty
+    /// for the electrical pieces and devices.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub trade: String,
 }
 
-/// How many pieces of a key, their length, and how many are estimated.
+/// What one counted element measures: its length, area, volume, weight and pieces (a bag of
+/// screws or a run of chairs is one element of many pieces), and whether it is estimated.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Measure {
+    pub length_ft: f64,
+    pub area_sf: f64,
+    pub volume_cf: f64,
+    pub weight_lb: f64,
+    /// Pieces it stands for (1 when it is one piece).
+    pub qty: f64,
+    pub estimated: bool,
+}
+
+impl Measure {
+    /// One piece of `length_ft` (0 for a fitting).
+    pub(crate) fn length(length_ft: f64, estimated: bool) -> Measure {
+        Measure { length_ft, qty: 1.0, estimated, ..Measure::default() }
+    }
+}
+
+/// How many pieces of a key, their length, area, volume, weight and pieces, and how many are
+/// estimated.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Tally {
     pub count: u64,
     pub length_ft: f64,
     pub estimated: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub area_sf: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub volume_cf: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub weight_lb: f64,
+    /// Pieces (an element counts its `qty`); 0 in an index stored before trades: then `count`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub qty: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 impl Tally {
-    fn add(&mut self, len: f64, est: bool, sign: i64) {
+    fn add(&mut self, m: &Measure, sign: i64) {
         if sign >= 0 {
             self.count += 1;
-            self.length_ft += len;
-            self.estimated += u64::from(est);
+            self.length_ft += m.length_ft;
+            self.area_sf += m.area_sf;
+            self.volume_cf += m.volume_cf;
+            self.weight_lb += m.weight_lb;
+            self.qty += m.qty;
+            self.estimated += u64::from(m.estimated);
         } else {
             self.count = self.count.saturating_sub(1);
-            self.length_ft = (self.length_ft - len).max(0.0);
-            self.estimated = self.estimated.saturating_sub(u64::from(est));
+            self.length_ft = (self.length_ft - m.length_ft).max(0.0);
+            self.area_sf = (self.area_sf - m.area_sf).max(0.0);
+            self.volume_cf = (self.volume_cf - m.volume_cf).max(0.0);
+            self.weight_lb = (self.weight_lb - m.weight_lb).max(0.0);
+            self.qty = (self.qty - m.qty).max(0.0);
+            self.estimated = self.estimated.saturating_sub(u64::from(m.estimated));
         }
+    }
+    /// Another tally's totals added in.
+    pub(crate) fn merge(&mut self, t: &Tally) {
+        self.count += t.count;
+        self.length_ft += t.length_ft;
+        self.area_sf += t.area_sf;
+        self.volume_cf += t.volume_cf;
+        self.weight_lb += t.weight_lb;
+        self.qty += t.qty;
+        self.estimated += t.estimated;
+    }
+    /// The pieces it stands for: its `qty`, else (an older index) its count.
+    pub(crate) fn pieces(&self) -> f64 {
+        if self.qty > 0.0 { self.qty } else { self.count as f64 }
     }
 }
 
@@ -865,31 +925,31 @@ struct IndexFile {
 }
 
 impl Index {
-    pub(crate) fn add(&mut self, key: Key, len: f64, est: bool) {
+    pub(crate) fn add(&mut self, key: Key, m: &Measure) {
         if self.rows.len() < MAX_ROWS || self.rows.contains_key(&key) {
-            self.rows.entry(key).or_default().add(len, est, 1);
+            self.rows.entry(key).or_default().add(m, 1);
         }
     }
-    pub(crate) fn remove(&mut self, key: &Key, len: f64, est: bool) {
+    pub(crate) fn remove(&mut self, key: &Key, m: &Measure) {
         if let Some(t) = self.rows.get_mut(key) {
-            t.add(len, est, -1);
+            t.add(m, -1);
             if t.count == 0 {
                 self.rows.remove(key);
             }
         }
     }
-    /// The index of every counted element of a drawing (a full recount).
+    /// The index of every counted element of a drawing (a full recount). The built elements
+    /// come after the imported sheets (hundreds of thousands of objects): the cap applies to the
+    /// built ones.
     pub(crate) fn of(d: &Drawing) -> Index {
         let mut ix = Index::default();
-        for e in d.model.iter().take(MAX_ELEMENTS) {
-            if let Some((k, len, est)) = counted(e) {
-                ix.add(k, len, est);
-            }
+        for (k, m) in d.model.iter().filter_map(|e| counted(e)).take(MAX_ELEMENTS) {
+            ix.add(k, &m);
         }
         ix
     }
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let f = IndexFile { version: 1, rows: self.rows.iter().map(|(k, t)| Row { key: k.clone(), tally: *t }).collect() };
+        let f = IndexFile { version: 2, rows: self.rows.iter().map(|(k, t)| Row { key: k.clone(), tally: *t }).collect() };
         serde_json::to_vec(&f).unwrap_or_default()
     }
     pub(crate) fn from_bytes(b: &[u8]) -> Option<Index> {
@@ -901,23 +961,20 @@ impl Index {
         let mut total = Tally::default();
         let mut groups: BTreeMap<String, Tally> = BTreeMap::new();
         for (k, t) in self.rows.iter().filter(|(k, _)| f.matches(k)) {
-            total.count += t.count;
-            total.length_ft += t.length_ft;
-            total.estimated += t.estimated;
+            total.merge(t);
             if let Some(g) = group_by {
                 let v = match g {
                     "kind" => &k.kind,
+                    "item" => &k.item,
                     "size" => &k.size,
                     "type" => &k.ty,
                     "level" => &k.level,
                     "room" => &k.room,
                     "circuit" => &k.circuit,
+                    "trade" => &k.trade,
                     _ => &k.system,
                 };
-                let e = groups.entry(v.clone()).or_default();
-                e.count += t.count;
-                e.length_ft += t.length_ft;
-                e.estimated += t.estimated;
+                groups.entry(v.clone()).or_default().merge(t);
             }
         }
         (total, groups)
@@ -990,6 +1047,8 @@ pub(crate) struct Filter {
     pub room: Option<String>,
     pub circuit: Option<String>,
     pub system: Option<String>,
+    pub trade: Option<String>,
+    pub item: Option<String>,
 }
 
 /// Size text compared without quotes, spaces or `in`: `1"` = `1` = `1 in`.
@@ -1023,11 +1082,28 @@ impl Filter {
         let g = |k: &str| {
             p.get(k).and_then(|v| v.as_str().map(str::to_string).or_else(|| v.as_f64().map(|n| n.to_string()))).filter(|s| !s.trim().is_empty())
         };
-        Filter { kind: g("kind"), size: g("size"), ty: g("type"), level: g("level"), room: g("room"), circuit: g("circuit"), system: g("system") }
+        Filter {
+            kind: g("kind"),
+            size: g("size"),
+            ty: g("type"),
+            level: g("level"),
+            room: g("room"),
+            circuit: g("circuit"),
+            system: g("system"),
+            trade: g("trade"),
+            item: g("item"),
+        }
     }
     pub(crate) fn matches(&self, k: &Key) -> bool {
         let eq = |want: &Option<String>, have: &str| want.as_deref().is_none_or(|w| w.trim().eq_ignore_ascii_case(have.trim()));
-        self.kind.as_deref().is_none_or(|w| norm_kind(w) == k.kind.replace(' ', "_").to_ascii_lowercase())
+        let kind_eq = |w: &str| {
+            let (want, have) = (norm_kind(w), k.kind.replace(' ', "_").to_ascii_lowercase());
+            // `studs`, `sheets`, `trusses`: the plural of a kind is the kind.
+            want == have || want.strip_suffix("es").is_some_and(|x| x == have) || want.strip_suffix('s').is_some_and(|x| x == have)
+        };
+        self.kind.as_deref().is_none_or(kind_eq)
+            && self.trade.as_deref().is_none_or(|w| super::tradeatoms::trade_eq(w, &k.trade))
+            && self.item.as_deref().is_none_or(|w| k.item.to_ascii_lowercase().contains(&w.trim().to_ascii_lowercase()))
             && self.size.as_deref().is_none_or(|w| norm_size(w) == norm_size(&k.size))
             && self.ty.as_deref().is_none_or(|w| k.ty.to_ascii_lowercase().contains(&w.trim().to_ascii_lowercase()))
             && eq(&self.level, &k.level)
@@ -1039,14 +1115,21 @@ impl Filter {
 
 /// What an element is counted as in the index: an atom by its kind, a device by its own kind;
 /// with its length (feet) and whether it is on an estimated route. Nothing for other elements.
-pub(crate) fn counted(e: &Entity) -> Option<(Key, f64, bool)> {
+pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
     let part = super::wallgen::made_as(e)?;
     let level = super::bspec::made_level(e).unwrap_or_default();
     let ps = props::read(&e.common.xdata);
     let text = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
+    let num = |k: &str| ps.get(k).map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0);
     if let Some(kind) = ps.get(ATOM_KEY).map(Prop::text).filter(|k| !k.is_empty()) {
-        let len = ps.get("length_ft").map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0);
-        let est = text("estimated") == "true";
+        let m = Measure {
+            length_ft: num("length_ft").unwrap_or(0.0),
+            area_sf: num("area_sf").unwrap_or(0.0),
+            volume_cf: num("volume_cf").unwrap_or(0.0),
+            weight_lb: num("weight_lb").unwrap_or(0.0),
+            qty: num("qty").unwrap_or(1.0),
+            estimated: text("estimated") == "true",
+        };
         return Some((
             Key {
                 kind,
@@ -1057,9 +1140,9 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, f64, bool)> {
                 room: text("room"),
                 circuit: text("circuit"),
                 system: text("system"),
+                trade: text("trade"),
             },
-            len,
-            est,
+            m,
         ));
     }
     if part.eq_ignore_ascii_case("device") {
@@ -1074,9 +1157,43 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, f64, bool)> {
                 room: text("room"),
                 circuit: text("circuit"),
                 system: String::new(),
+                trade: String::new(),
             },
-            0.0,
-            false,
+            Measure::length(0.0, false),
+        ));
+    }
+    // Casework (Q6162): counted as itself, the specialties'.
+    if part.eq_ignore_ascii_case("casework") {
+        return Some((
+            Key {
+                kind: "casework".into(),
+                item: text("item"),
+                size: text("size"),
+                ty: text("type_mark"),
+                level,
+                room: text("room"),
+                circuit: String::new(),
+                system: String::new(),
+                trade: "specialties".into(),
+            },
+            Measure::length(0.0, false),
+        ));
+    }
+    // Doors and windows (Q6162): counted as themselves, with their opening's size.
+    if part.eq_ignore_ascii_case("door") || part.eq_ignore_ascii_case("window") {
+        return Some((
+            Key {
+                kind: part.to_ascii_lowercase(),
+                item: text("item"),
+                size: text("size"),
+                ty: text("type_mark"),
+                level,
+                room: text("room"),
+                circuit: String::new(),
+                system: String::new(),
+                trade: "openings".into(),
+            },
+            Measure { area_sf: num("area_sf").unwrap_or(0.0), ..Measure::length(0.0, false) },
         ));
     }
     None
@@ -1084,8 +1201,24 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, f64, bool)> {
 
 // ─── Commands ────────────────────────────────────────────────────────────────
 
-fn tally_json(t: &Tally) -> Value {
-    json!({ "count": t.count, "length_ft": (t.length_ft * 100.0).round() / 100.0, "estimated": t.estimated })
+pub(crate) fn tally_json(t: &Tally) -> Value {
+    let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    let mut j = json!({ "count": t.count, "length_ft": r2(t.length_ft), "estimated": t.estimated });
+    // A building piece's measures (Q6162): only what the counted pieces have.
+    if t.area_sf > 0.0 {
+        j["area_sf"] = json!(r2(t.area_sf));
+    }
+    if t.volume_cf > 0.0 {
+        j["volume_cf"] = json!(r2(t.volume_cf));
+        j["volume_cy"] = json!(r2(t.volume_cf / 27.0));
+    }
+    if t.weight_lb > 0.0 {
+        j["weight_lb"] = json!(r2(t.weight_lb));
+    }
+    if (t.pieces() - t.count as f64).abs() > 1e-9 {
+        j["pieces"] = json!(r2(t.pieces()));
+    }
+    j
 }
 
 fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1093,9 +1226,9 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     let started = web_time::Instant::now();
     let group_by = p.get("group_by").and_then(Value::as_str).map(str::to_ascii_lowercase);
     if let Some(g) = group_by.as_deref()
-        && !matches!(g, "kind" | "size" | "type" | "level" | "room" | "circuit" | "system")
+        && !matches!(g, "kind" | "item" | "size" | "type" | "level" | "room" | "circuit" | "system" | "trade")
     {
-        return Err(bad(CMD, format!("`group_by` must be kind, size, type, level, room, circuit or system, not `{g}`")));
+        return Err(bad(CMD, format!("`group_by` must be kind, item, size, type, level, room, circuit, system or trade, not `{g}`")));
     }
     let f = Filter::from_params(p);
     if bool_or(p, "refresh", false) {
@@ -1133,12 +1266,20 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
         let full = Index::of(s.doc()?);
         let (t, _) = full.query(&f, None);
         let recount_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        out["verify"] = json!({
-            "count": t.count,
-            "length_ft": (t.length_ft * 100.0).round() / 100.0,
-            "matches": t.count == total.count && (t.length_ft - total.length_ft).abs() < 0.01 && full == *ix,
-            "recount_ms": (recount_ms * 10.0).round() / 10.0,
-        });
+        let close = |a: f64, b: f64| (a - b).abs() <= 0.01 + 1e-9 * a.abs().max(b.abs());
+        let mut v = tally_json(&t);
+        v["matches"] = json!(
+            t.count == total.count
+                && close(t.length_ft, total.length_ft)
+                && close(t.area_sf, total.area_sf)
+                && close(t.volume_cf, total.volume_cf)
+                && close(t.weight_lb, total.weight_lb)
+                && close(t.qty, total.qty)
+                && full.rows.len() == ix.rows.len()
+                && full.rows.iter().zip(ix.rows.iter()).all(|((ka, ta), (kb, tb))| ka == kb && ta.count == tb.count)
+        );
+        v["recount_ms"] = json!((recount_ms * 10.0).round() / 10.0);
+        out["verify"] = v;
     }
     if from == "recount" && total.count == 0 && ix.rows.is_empty() {
         out["note"] = json!("the model has no pieces to count: build it (model.build) first");
@@ -1177,8 +1318,8 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let upf = super::bspec::current(s, CMD).map(|(sp, _)| sp.units_per_foot).ok().filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
     let d = s.doc()?;
     let e = d.model.get(h).cloned().ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
-    let (old_key, old_len, est) = counted(&e)
-        .filter(|(k, _, _)| !k.kind.is_empty())
+    let (old_key, old_m) = counted(&e)
+        .filter(|(k, _)| !k.kind.is_empty())
         .ok_or_else(|| bad(CMD, format!("{} is not a piece of a run (build the model's runs first)", h.hex())))?;
     let ps = props::read(&e.common.xdata);
     if ps.get(ATOM_KEY).is_none() {
@@ -1231,9 +1372,9 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let e2 = d.model.get(h).cloned();
     let mut ix = stored(d).unwrap_or_else(|| Index::of(d));
     if stored(d).is_some() {
-        ix.remove(&old_key, old_len, est);
-        if let Some((k, l, es)) = e2.as_deref().and_then(counted) {
-            ix.add(k, l, es);
+        ix.remove(&old_key, &old_m);
+        if let Some((k, m)) = e2.as_deref().and_then(counted) {
+            ix.add(k, &m);
         }
     }
     let rows = ix.rows.len();
@@ -1357,12 +1498,15 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
 /// the face's outward direction (inches; positive: proud of the wall, negative: recessed).
 fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let ps = props::read(&e.common.xdata);
-    let t = ps.get("host_face")?.text();
-    let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-    let out = match v[..] {
-        [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => cadaddy_geom::Vec2::new(x, y) * (1.0 / x.hypot(y)),
-        _ => return None,
-    };
+    // The face's direction is `face_normal` (older models kept it in `host_face`, now the face's name).
+    let out = ["face_normal", "host_face"].iter().find_map(|k| {
+        let t = ps.get(k)?.text();
+        let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(cadaddy_geom::Vec2::new(x, y) * (1.0 / x.hypot(y))),
+            _ => None,
+        }
+    })?;
     let b = cadaddy_doc::entity_bounds(d, e, 0);
     if b.is_empty() {
         return None;
@@ -1635,16 +1779,16 @@ mod tests {
         };
         let mut ix = Index::default();
         for _ in 0..3 {
-            ix.add(k("conduit", "1\"", "L1"), 10.0, false);
+            ix.add(k("conduit", "1\"", "L1"), &Measure::length(10.0, false));
         }
-        ix.add(k("conduit", "1\"", "L1"), 7.0, true);
-        ix.add(k("conduit", "3/4\"", "L2"), 5.0, false);
+        ix.add(k("conduit", "1\"", "L1"), &Measure::length(7.0, true));
+        ix.add(k("conduit", "3/4\"", "L2"), &Measure::length(5.0, false));
         let f = Filter { kind: Some("stick".into()), size: Some("1".into()), ..Filter::default() };
         let (t, _) = ix.query(&f, None);
         assert_eq!((t.count, t.length_ft, t.estimated), (4, 37.0, 1));
         let (_, g) = ix.query(&Filter { kind: Some("conduit".into()), ..Filter::default() }, Some("level"));
         assert_eq!(g.get("L2").map(|t| t.count), Some(1));
-        ix.remove(&k("conduit", "3/4\"", "L2"), 5.0, false);
+        ix.remove(&k("conduit", "3/4\"", "L2"), &Measure::length(5.0, false));
         assert!(!ix.rows.contains_key(&k("conduit", "3/4\"", "L2")));
         let back = Index::from_bytes(&ix.to_bytes()).unwrap();
         assert_eq!(back, ix);

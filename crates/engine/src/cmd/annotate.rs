@@ -158,6 +158,12 @@ fn dim(s: &Session, kind: DimKind, defpt: Vec2, p13: Vec2, p14: Vec2, p15: Vec2,
     }))
 }
 
+/// A linear dimension measuring `p13`–`p14` with its line through `at` (the wall layout sheet's
+/// dimension strings).
+pub(crate) fn layout_dim(s: &Session, kind: DimKind, at: Vec2, p13: Vec2, p14: Vec2) -> EntityKind {
+    dim(s, kind, at, p13, p14, Vec2::ZERO, Vec2::ZERO, "")
+}
+
 /// Horizontal (0) or vertical (90°) from where the dimension line is placed (AutoCAD's rule).
 fn auto_rotation(p1: Vec2, p2: Vec2, at: Vec2) -> f64 {
     let (x0, x1) = (p1.x.min(p2.x), p1.x.max(p2.x));

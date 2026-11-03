@@ -3524,6 +3524,10 @@ menu	Modify	Ändra
 	Count Model Pieces	Räkna modelldelar
 	Edit Model Piece	Redigera modelldel
 	Walk the Feed	Följ matningen
+	Lay Out Trade Pieces	Lägg ut yrkesdelar
+	Trade Pieces Report	Rapport över yrkesdelar
+	Trade Piece Rules	Regler för yrkesdelar
+	Read Trade Documents	Läs yrkesdokument
 	Object Forms	Objektformulär
 	Create Object Forms	Skapa objektformulär
 	Edit Object Form Field	Redigera fält i objektformulär
@@ -3533,3 +3537,9 @@ menu	Modify	Ändra
 	Promote Object Form to Template	Gör objektformulär till mall
 	Object Completeness	Objektens fullständighet
 	Object Form	Objektformulär
+	Wall Faces	Väggsidor
+	Place Devices on Wall Faces	Placera enheter på väggsidor
+	Devices Follow Their Walls	Enheter följer sina väggar
+	Room Layout	Rumslayout
+	Tie a Device to an Object	Knyt en enhet till ett objekt
+	Add Casework or Appliance Object	Lägg till inrednings- eller vitvaruobjekt

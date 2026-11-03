@@ -529,7 +529,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .take(MAX_DEVICES)
         .collect();
     // The built walls' faces, for a wall box: its front on the face of its wall.
-    let walls = if devices.iter().any(|d| d.2.get("host_face").is_some()) { super::super::propfill::wall_footprints(d) } else { Vec::new() };
+    // The face's direction is `face_normal` (older models kept it in `host_face`, now the face's name).
+    let walls = if devices.iter().any(|d| d.2.get("face_normal").or_else(|| d.2.get("host_face")).is_some()) {
+        super::super::propfill::wall_footprints(d)
+    } else {
+        Vec::new()
+    };
     // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
     let scope = super::super::scope::decisions(d);
     let sr = super::super::scope::rules();
@@ -556,7 +561,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
         let ring = ring && theirs.is_none_or(|(_, r)| r);
         let c = plan.center();
-        let out = ps.get("host_face").map(Prop::text).and_then(|t| {
+        let out = ["face_normal", "host_face"].iter().find_map(|k| {
+            let t = ps.get(k).map(Prop::text)?;
             let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
             match v[..] {
                 [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(Vec2::new(x, y) * (1.0 / x.hypot(y))),

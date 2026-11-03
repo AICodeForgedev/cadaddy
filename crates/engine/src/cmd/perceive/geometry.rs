@@ -871,6 +871,10 @@ pub(crate) fn room_name_score(t: &str) -> u8 {
     }
 }
 
+fn polygon(l: &cadaddy_doc::HatchLoop) -> Vec<Vec2> {
+    Polyline { vertices: l.vertices.clone(), closed: true }.tessellate(1e-3)
+}
+
 /// A room found from its name label: the closed outline around the label (the hatch boundary
 /// search), its number (a number text inside), area and perimeter.
 #[derive(Clone, Debug)]
@@ -933,6 +937,26 @@ fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn
     }
     per.into_iter().flatten().take(MAX_ROOMS_ALL_REGIONS).collect()
 }
+
+/// Two outlines are one loop: the same corners, whichever each starts at and whichever way it
+/// goes round.
+fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let area = |p: &[Vec2]| cadaddy_geom::shoelace(p).abs();
+    (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
+}
+
+/// A label's width per character, in its text height (a room tag's capitals).
+const LABEL_CHAR_WIDTH: f64 = 0.6;
+/// A tag's number is within this of its name, in the name's text height (under its last line:
+/// a two-line name, `DOUBLE Q ADA` over `(TUB)`, puts it about 5 heights from the first; the
+/// next room's tag is 10 or more away).
+const TAG_NUMBER_REACH: f64 = 5.5;
+/// The least a room its label doesn't fit inside may be, sq ft (a smaller loop under a label is a
+/// piece of furniture's linework).
+const OVERHUNG_ROOM_MIN_SQFT: f64 = 40.0;
 
 /// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
@@ -1072,34 +1096,80 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     let mut outline_cache = None;
     let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     for (h, name, at, height, _) in names {
+        // The room around the label: the first outline, traced from the label's point, its middle,
+        // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
+        // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
+        // before, the one its point traces.
+        let th = if height.is_finite() && height > 0.0 { height } else { 6.0 * k };
+        let wide = name.chars().count() as f64 * th * LABEL_CHAR_WIDTH;
+        let seeds = [
+            at,
+            at + Vec2::new(wide / 2.0, th / 2.0),
+            at + Vec2::new(wide / 2.0, 1.8 * th),
+            at + Vec2::new(wide / 2.0, -1.2 * th),
+            // Just outside the label's box, each side (a desk wider than the label's middle).
+            at + Vec2::new(-1.5 * th, th / 2.0),
+            at + Vec2::new(wide + 1.5 * th, th / 2.0),
+            at + Vec2::new(wide / 2.0, 4.0 * th),
+            at + Vec2::new(wide / 2.0, -3.0 * th),
+        ];
+        let corners = [
+            at + Vec2::new(0.05 * wide, 0.1 * th),
+            at + Vec2::new(0.95 * wide, 0.1 * th),
+            at + Vec2::new(0.05 * wide, 0.9 * th),
+            at + Vec2::new(0.95 * wide, 0.9 * th),
+        ];
+        let mut first: Option<(Vec<Vec2>, f64)> = None;
+        let mut holds: Option<(Vec<Vec2>, f64)> = None;
+        for (i, seed) in seeds.into_iter().enumerate() {
+            let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, seed, &mut outline_cache) else { continue };
+            let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
+            let poly = polygon(outer);
+            if poly.len() < 3 {
+                continue;
+            }
+            let area = cadaddy_geom::shoelace(&poly).abs();
+            // In the room: inside its outline or on one of its islands (furniture standing in it).
+            let islands: Vec<Vec<Vec2>> = loops.iter().filter(|l| !l.outer).map(polygon).filter(|p| p.len() >= 3).collect();
+            let in_room = |c: Vec2| cadaddy_geom::point_in_polygon(&poly, c) || islands.iter().any(|p| cadaddy_geom::point_in_polygon(p, c));
+            if area < min_area || !(i == 0 || in_room(at)) {
+                continue;
+            }
+            if corners.iter().all(|c| in_room(*c)) {
+                holds = Some((poly, area));
+                break;
+            }
+            // A loop the label overhangs is its room only when it is room-sized (not a desk).
+            if i == 0 && area >= OVERHUNG_ROOM_MIN_SQFT * 144.0 * k * k {
+                first = Some((poly, area));
+            }
+        }
         // A room to live in is at least a habitable room's size; any room at least the least
         // room's. A smaller loop round the name is what it is printed on (a bed, a tag's box):
         // the room is the loop round that.
         let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
-        let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
-        let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let first = Polyline { vertices: outer.vertices.clone(), closed: true }.tessellate(1e-3);
-        let probed = cadaddy_geom::shoelace(&first).abs() < least;
-        let poly = if probed {
-            let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
-            p
-        } else {
-            first
+        let (poly, area, probed) = match holds.or(first) {
+            Some((poly, area)) if area >= least => (poly, area, false),
+            _ => {
+                let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
+                if p.len() < 3 {
+                    continue;
+                }
+                let area = cadaddy_geom::shoelace(&p).abs();
+                if area < min_area {
+                    continue;
+                }
+                (p, area, true)
+            }
         };
-        if poly.len() < 3 {
-            continue;
-        }
-        let area = cadaddy_geom::shoelace(&poly).abs();
-        if area < min_area {
-            continue;
-        }
         // One room per outline: a second label in the same room is its number or a note.
-        // (Traced again from round the furniture its name is on, it may start at another corner.)
+        // (The same loop traced from another seed, or again from round the furniture its name is
+        // on, may start at another corner.)
         let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
         let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
         if out.iter().zip(&out_probed).any(|(q, q_probed)| {
             let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
-            (q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6))
+            same_loop(&q.outline, &poly)
                 || ((probed || *q_probed)
                     && (q.area - area).abs() <= SAME_OUTLINE_SHARE * area
                     && qb.min.dist(b.min) <= tol
@@ -1114,8 +1184,9 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
         // The room number: the one in the name's tag block, else a number inside the outline of
         // the name's size, nearest the name (an OCR copy's or a note's digits inside the room are
-        // another size); else the tag nearest the name ([`number_from_nearest_tag`]); else one
-        // of any size inside.
+        // another size); else the tag's own number just under or beside the name (on a bed's
+        // linework that cuts into the traced outline); else the tag nearest the name
+        // ([`number_from_nearest_tag`]); else one of any size inside.
         let inside_numbers = |sized: bool| {
             numbers
                 .iter()
@@ -1126,7 +1197,14 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
                 .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
                 .map(|(_, t, _, _, _)| t.clone())
         };
-        let number = inside_numbers(true);
+        let beside = || {
+            numbers
+                .iter()
+                .filter(|(_, _, q, _, _)| q.dist(at) <= TAG_NUMBER_REACH * th)
+                .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, t, _, _, _)| t.clone())
+        };
+        let number = inside_numbers(true).or_else(beside);
         if number.is_none()
             && let Some(any) = inside_numbers(false)
         {
@@ -1300,6 +1378,17 @@ mod tests {
         let n = found.len();
         assert!(n > 4);
         assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+    }
+
+    #[test]
+    fn one_loop_from_another_corner_or_the_other_way_round_is_the_same_room() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let a = [v(0.0, 0.0), v(10.0, 0.0), v(10.0, 5.0), v(0.0, 5.0)];
+        let b = [v(10.0, 5.0), v(0.0, 5.0), v(0.0, 0.0), v(10.0, 0.0)];
+        let c = [v(0.0, 5.0), v(10.0, 5.0), v(10.0, 0.0), v(0.0, 0.0)];
+        assert!(same_loop(&a, &b) && same_loop(&a, &c));
+        assert!(!same_loop(&a, &[v(0.0, 0.0), v(11.0, 0.0), v(11.0, 5.0), v(0.0, 5.0)]));
+        assert!(!same_loop(&a, &a[..3]));
     }
 
     #[test]
