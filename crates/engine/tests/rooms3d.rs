@@ -280,3 +280,27 @@ fn finish_detail_carries_source() {
     let od = office["finishDetail"].as_array().unwrap();
     assert!(od.iter().any(|d| d["slot"] == "floor" && d["source"] == "schedule"), "schedule finish source: {od:?}");
 }
+
+/// A guest room as the hotel's mirrored units print it: the name's insertion point lands on a
+/// desk's outline, and the number lies on the bed drawn against the headboard wall (its outline
+/// cuts into the room's). The room is still traced and numbered.
+#[test]
+fn a_room_is_traced_past_the_furniture_under_its_name_and_numbered_off_its_bed() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    // A desk (2' x 2') under the name's start; a bed against the bottom wall: its outline
+    // touches the wall, so the room's traced boundary goes round it.
+    rect(&mut s, [96.0, 150.0], [120.0, 174.0]);
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 150.0], [180.0, 150.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 160.0], "DOUBLE Q");
+    text(&mut s, [110.0, 145.0], "205");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    let q = room(rooms, "DOUBLE Q");
+    assert_eq!(q["number"], "205", "{r}");
+    assert!(q["areaSqFt"].as_f64().unwrap() > 200.0, "the room, not the desk: {q}");
+}
