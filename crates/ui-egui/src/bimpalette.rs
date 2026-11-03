@@ -292,7 +292,36 @@ fn properties(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     let num = |k: &str| q.get(k).and_then(Value::as_f64);
     let src = el.get("source").cloned().unwrap_or(Value::Null);
     let issues = el.get("issues").and_then(Value::as_array).map_or(0, Vec::len);
-    let rows: [(&str, Option<String>); 14] = [
+    // A piece of a run (Q6157): what it is bought as, its run and what it joins; a device: its
+    // heights, its wall, its box and what feeds it.
+    let piece = el.get("piece").cloned().unwrap_or(Value::Null);
+    let items = |v: Option<&Value>| -> Option<String> {
+        let list: Vec<String> = v?
+            .as_array()?
+            .iter()
+            .take(8)
+            .filter_map(|n| n.get("item").and_then(Value::as_str).filter(|t| !t.is_empty()).or_else(|| n.get("kind").and_then(Value::as_str)))
+            .map(str::to_string)
+            .collect();
+        (!list.is_empty()).then(|| list.join(", "))
+    };
+    let aff = match (
+        el.get("aff_in").and_then(Value::as_f64),
+        el.get("center_aff_in").and_then(Value::as_f64),
+        el.get("top_aff_in").and_then(Value::as_f64),
+    ) {
+        (Some(b), Some(c), Some(t)) => Some(format!("{b:.1} / {c:.1} / {t:.1} in")),
+        _ => None,
+    };
+    let face = el.get("wall_face").filter(|v| !v.is_null());
+    let wall = face.and_then(|f| f.get("wall")).or_else(|| el.get("host").and_then(|h| h.get("wall"))).and_then(Value::as_str).map(str::to_string);
+    let face_text = face.and_then(|f| Some(format!("{:+.2} in {}", f.get("inches")?.as_f64()?, f.get("as")?.as_str()?)));
+    let boxed = el.get("box").filter(|b| !b.is_null()).and_then(|b| {
+        let item = b.get("item").and_then(Value::as_str)?;
+        Some(format!("{item} {}", b.get("handle").and_then(Value::as_str).unwrap_or_default()).trim().to_string())
+    });
+    let rows: Vec<(&str, Option<String>)> = vec![
+        ("Piece", piece.get("item").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string)),
         ("Type", text("type")),
         ("Category", text("category")),
         ("Trade", text("trade_label")),
@@ -307,6 +336,13 @@ fn properties(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         ("Sheet", src.get("sheet").and_then(Value::as_str).or(src.get("sheet_file").and_then(Value::as_str)).map(str::to_string)),
         ("Source", src.get("kind").and_then(Value::as_str).map(|k| format!("{k} {}", src.get("handle").and_then(Value::as_str).unwrap_or("")))),
         ("Issues", (issues > 0).then(|| issues.to_string())),
+        ("Raceway run", piece.get("run").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_string)),
+        ("Connects to", items(piece.get("connects"))),
+        ("Height AFF", aff),
+        ("Host wall", wall),
+        ("Wall face", face_text),
+        ("Outlet box", boxed),
+        ("Fed by", items(el.get("fed_by"))),
     ];
     egui::Grid::new("bim-element").num_columns(2).striped(true).show(ui, |ui| {
         for (label, v) in rows {

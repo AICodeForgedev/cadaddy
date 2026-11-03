@@ -97,7 +97,9 @@ fn runs_build_per_system_and_clash() {
     let mut s = drawing();
     s.execute("mep.read", &json!({"apply": true})).unwrap();
     let r = s.execute("model.build", &json!({})).unwrap();
-    assert_eq!((r["mepRuns"].clone(), r["drops"].clone()), (json!(3), json!(1)), "{r}");
+    // The duct and pipe runs as run meshes; the conduit run as its pieces (Q6157 mepatoms).
+    assert_eq!((r["mepRuns"].clone(), r["drops"].clone()), (json!(2), json!(1)), "{r}");
+    assert!(r["atomsByKind"]["conduit"].as_u64().unwrap_or(0) >= 1, "{r}");
     let m = meshes(&s);
     // Layers are now per system per level: 3D-MEP-<system>-<level>.
     // Combine all meshes for the duct system (segments + fittings) for height check.
@@ -127,7 +129,8 @@ fn runs_build_per_system_and_clash() {
     // Hide the pipes: they aren't built, their layer stays to toggle.
     s.execute("bspec.set", &json!({"spec": {"mep": {"systems": [{"name": "P-DOMW-CW", "show": false}]}}})).unwrap();
     let r = s.execute("model.build", &json!({})).unwrap();
-    assert_eq!(r["mepRuns"], json!(2), "{r}");
+    // The duct run (the conduit is its pieces, Q6157 mepatoms).
+    assert_eq!(r["mepRuns"], json!(1), "{r}");
     assert!(meshes(&s).iter().all(|(l, _)| !l.starts_with("3D-MEP-P-DOMW-CW")));
     let sp = s.execute("bspec.get", &json!({})).unwrap();
     assert_eq!(sp["spec"]["mep"]["systems"].as_array().unwrap().len(), 3, "the merge kept the others");
@@ -154,7 +157,9 @@ fn fittings_are_separate_meshes_with_xdata_tags() {
     let parts = xdata_tag(&s, "part:");
     let segment_count = parts.iter().filter(|p| p.as_str() == "part:segment").count();
     let fitting_count = parts.iter().filter(|p| p.starts_with("part:fitting:")).count();
-    assert!(segment_count >= 3, "at least 3 segment meshes (duct+pipe+conduit): {segment_count}");
+    assert!(segment_count >= 2, "at least 2 segment meshes (duct+pipe): {segment_count}");
+    // The conduit run: its sticks, each a mesh of its own (Q6157 mepatoms).
+    assert!(parts.iter().any(|p| p.as_str() == "part:atom:conduit"), "{parts:?}");
     assert!(fitting_count >= 1, "at least 1 fitting mesh (the duct elbow): {fitting_count}");
 
     // Fitting tags name the fitting type. The duct corner also drops in height → drop fitting.

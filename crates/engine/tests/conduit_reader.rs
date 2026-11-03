@@ -326,5 +326,7 @@ fn read_conduit_build_clash_and_export() {
     let cables = text.lines().filter(|l| l.contains("IFCCABLESEGMENT(") && l.contains(".CABLESEGMENT.")).count();
     assert!(conduits >= r.conduits.len(), "{conduits} conduit segments");
     assert!(cables >= routed, "{cables} cable segments for {routed} homeruns");
-    assert!(text.contains("IFCCABLEFITTING("), "the homeruns' turns");
+    // A homerun's cable is one piece from source to box (no fittings at its turns); the
+    // conduits' couplings and connectors are carrier fittings.
+    assert!(text.contains("IFCCABLECARRIERFITTING("), "the conduits' fittings");
 }

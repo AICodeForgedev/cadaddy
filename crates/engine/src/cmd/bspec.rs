@@ -2035,11 +2035,15 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let rcp = super::ceilings::build(d, &sp);
     mark("reflected ceilings");
     // Duct, pipe and conduit runs of the shown systems.
-    let mep = super::mep::build(d, &sp);
+    let mep = super::mep::build_with(d, &sp, true);
     mark("MEP runs");
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
     mark("device elements");
+    // The electrical runs as their pieces (sticks, fittings, boxes, cable, wire) and the count
+    // index (Q6157).
+    let atoms = super::mepatoms::build::build(d, &sp);
+    mark("MEP atoms");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     mark("concrete");
@@ -2098,6 +2102,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         o.extend(x.clone());
     }
     if let (Some(o), Some(x)) = (r.as_object_mut(), concrete.as_object()) {
+        o.extend(x.clone());
+    }
+    if let (Some(o), Some(x)) = (r.as_object_mut(), atoms.as_object()) {
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);

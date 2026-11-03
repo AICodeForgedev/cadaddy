@@ -3342,3 +3342,14 @@ menu	Modify	수정
 	Validation Run Status	검증 실행 상태
 	Plant Validation Errors	검증용 오류 심기
 	Print Inventory	도면 목록
+	Piece	부재
+	Raceway run	전선관 구간
+	Connects to	연결 대상
+	Height AFF	마감 바닥 기준 높이
+	Host wall	호스트 벽
+	Wall face	벽면
+	Outlet box	아웃렛 박스
+	Fed by	급전원
+	Count Model Pieces	모델 부재 수 세기
+	Edit Model Piece	모델 부재 편집
+	Walk the Feed	급전 경로 따라가기
