@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1218,
-    "count": 1218,
+    "callableAsJson": 1222,
+    "count": 1222,
     "ids": [
       "-attedit",
       "-block",
@@ -1141,10 +1141,14 @@
       "validate.rules",
       "validate.rules.set",
       "validate.status",
+      "ve.study",
       "view",
       "view.back",
       "view.bottom",
       "view.dir",
+      "view.fidelity",
+      "view.fidelity.report",
+      "view.fidelity.rules",
       "view.front",
       "view.get",
       "view.left",
@@ -1222,7 +1226,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 529,
+    "inMenus": 531,
     "typed": 564
   },
   "features": {
