@@ -660,7 +660,7 @@ pub(crate) fn upf_of(sp: &BuildingSpec) -> f64 {
 /// Lay out the trades' pieces of the built model (`model.build` calls it after the MEP atoms);
 /// the counts. `only`: the trades to lay out (none: all).
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<String>>) -> Value {
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let rules = Rules::of(d, sp);
     let want = |t: &str| only.is_none_or(|o| o.contains(t));
     let mut batch = Batch::default();
@@ -914,7 +914,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         ("concrete by level", json!({"trade": "concrete", "kind": "pour", "group_by": "level"})),
         ("everything by trade", json!({"group_by": "trade"})),
     ] {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let f = super::mepatoms::Filter::from_params(&q);
         let _ = ix.query(&f, q.get("group_by").and_then(Value::as_str));
         answer_ms.insert(name.into(), json!((t0.elapsed().as_secs_f64() * 1e6).round() / 1000.0));
