@@ -2609,7 +2609,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                             resolve_mark(&mut dv, own.or(other), plumbing, sheet_texts, *tag_at);
                         }
                         let k = if dv.kind.is_empty() { super::readers::device_kind(&t).to_string() } else { dv.kind.clone() };
-                        c.fates.push((h.0, MarkFate::object(&k, &format!("its mark {t} is a device type"))));
+                        c.fates.push((h.0, MarkFate::object(&k, &format!("its mark {t} is a device type")).with_source(&dv.kind_source)));
                         c.placed.push(dv);
                         *c.by_type.entry(t).or_default() += 1;
                     }
@@ -5614,12 +5614,40 @@ fn mark_fates(s: &Session, job: &GuidedJob) -> (std::collections::HashMap<u64, M
 }
 
 /// The print inventory of the job's sheets as the drawing is now.
+/// The set's sheets the job didn't load are read again off their files, one page at a time.
 pub(crate) fn job_inventory(s: &Session, job: &GuidedJob) -> super::inventory::Inventory {
     let (fates, pages) = mark_fates(s, job);
-    match s.doc() {
-        Ok(d) => super::inventory::take(d, job, &pages, &fates),
-        Err(_) => super::inventory::Inventory::default(),
+    let Ok(d) = s.doc() else { return super::inventory::Inventory::default() };
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    match super::file::io().and_then(|h| h.read_pdf) {
+        Some(read_pdf) => {
+            let mut reader = |sheet: &Value| sheet_page(job, sheet, &mut files, read_pdf);
+            super::inventory::take(d, job, &pages, &fates, Some(&mut reader))
+        }
+        None => super::inventory::take(d, job, &pages, &fates, None),
     }
+}
+
+/// The PDF reader the build's I/O offers (`cadaddy_io::pdf_read`).
+type ReadPdf = super::file::PdfHook;
+
+/// One sheet of the set's index (`printset.sheets`' entry: its file and page), read off its file
+/// (`files` keeps the files read so far), or why it can't be.
+fn sheet_page(
+    job: &GuidedJob,
+    c: &Value,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    read_pdf: ReadPdf,
+) -> std::result::Result<cadaddy_doc::Drawing, String> {
+    let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else {
+        return Err("the sheet index gives it no file and page".into());
+    };
+    if !files.contains_key(file) {
+        let bytes = crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)).map_err(|e| format!("{file}: {e}"))?;
+        files.insert(file.to_string(), bytes);
+    }
+    let bytes = files.get(file).ok_or_else(|| format!("{file}: not read"))?;
+    read_pdf(bytes, &json!({"page": page, "text": true, "images": false})).map(|(d, _)| d).map_err(|e| format!("{file} page {page}: {e}"))
 }
 
 /// Take the print inventory, keep it in the drawing, and give its coverage in the stage result.
@@ -7867,6 +7895,12 @@ const NEAR_TEXT_LEN: usize = 160;
 /// luminaire when the row or its table is a light fixture's (`LIGHT FIXTURE SCHEDULE`, `6" LED
 /// DOWNLIGHT`); else an equipment connection when its table schedules equipment. None: the row
 /// names no device.
+/// The kind a legend's or schedule's row names: a known kind ([`row_kind`]), else one minted from
+/// the row's text ([`super::inventory::legend_kind`]).
+pub(crate) fn kind_of_row(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<String> {
+    row_kind(row, plumbing).map(|(k, _)| k.to_string()).or_else(|| super::inventory::legend_kind(&row.description))
+}
+
 fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Option<(&'static str, &'static str)> {
     let table = row.table.to_ascii_uppercase();
     // A plumbing fixture schedule's row: a plumbing fixture (its own schedule names it later).
@@ -7958,8 +7992,23 @@ fn resolve_mark(
         dv.equipment = equipment;
         return;
     }
+    // A row names it, but no known kind: the kind is the row's own words.
+    if let Some((sheet, r)) = row
+        && mint_kind(dv, sheet, r)
+    {
+        return;
+    }
     let (at, h) = tag_at.unwrap_or((cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]), NEAR_TEXT_DEFAULT_H));
     dv.near = near_text(texts, &dv.tag, at, h);
+}
+
+/// A device whose legend or schedule row names no known kind takes the row's own words as its
+/// kind (`legend:night light`), the row as its source. Whether it did.
+fn mint_kind(dv: &mut super::readers::ReadDevice, sheet: &str, r: &cadaddy_mepfix::device_types::LegendRow) -> bool {
+    let Some(kind) = super::inventory::legend_kind(&r.description) else { return false };
+    dv.kind = kind;
+    dv.kind_source = format!("{sheet} {}: {} {}", r.table, dv.tag.trim(), r.description).trim().to_string();
+    true
 }
 
 /// Whether a device's mark is still of no kind: no reader, legend or known list said what it is.
@@ -8034,6 +8083,11 @@ fn kinds_from_pages(job: &GuidedJob, devices: &mut [super::readers::ReadDevice])
             continue;
         }
         if !e {
+            if let Some((sheet, r)) = row
+                && mint_kind(dv, sheet, r)
+            {
+                n += 1;
+            }
             continue;
         }
         // A panel schedule's load named by the mark (or its equipment's tag): that load's row.
@@ -8057,7 +8111,14 @@ fn kinds_from_pages(job: &GuidedJob, devices: &mut [super::readers::ReadDevice])
                 dv.ifc_class = ifc.into();
                 dv.kind_source = format!("{sheet} panel schedule load: {description}");
                 n += 1;
+                continue;
             }
+        }
+        // A legend's row names it, in words no known kind fits.
+        if let Some((sheet, r)) = row
+            && mint_kind(dv, sheet, r)
+        {
+            n += 1;
         }
     }
     n
@@ -8963,22 +9024,12 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
     let mut missed: Vec<String> = Vec::new();
     for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
         // Its current copy's file and page (`printset.sheets`).
-        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
-        if !files.contains_key(file) {
-            match crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)) {
-                Ok(bytes) => {
-                    files.insert(file.to_string(), bytes);
-                }
-                Err(e) => {
-                    missed.push(format!("{number} ({file}: {e})"));
-                    continue;
-                }
-            }
+        if c.get("file").and_then(Value::as_str).is_none() || c.get("page").and_then(Value::as_u64).is_none() {
+            continue;
         }
-        let Some(bytes) = files.get(file) else { continue };
-        match read_pdf(bytes, &json!({"page": page, "text": true, "images": false})) {
-            Ok((d, _)) => out.push((number, d)),
-            Err(e) => missed.push(format!("{number} ({file} page {page}: {e})")),
+        match sheet_page(job, c, &mut files, read_pdf) {
+            Ok(d) => out.push((number, d)),
+            Err(e) => missed.push(format!("{number} ({e})")),
         }
     }
     if !missed.is_empty() {
@@ -16599,6 +16650,110 @@ mod tests {
         assert_eq!((m.object, m.status.as_str(), m.reason.as_str()), (true, super::super::inventory::NOT_PLACEABLE, "its sheet doesn't line up"));
         // The other devices built nothing and say nothing: unexplained, not hidden.
         assert!(inv.marks.iter().any(|m| m.object && m.status == super::super::inventory::UNEXPLAINED));
+    }
+
+    /// Q6172 (answers 11-02): the sheets the job didn't load are read again at the end and their
+    /// marks inventoried: a legend row of a type the model has links to its devices, a row of a
+    /// kind nothing knows mints `legend:<its words>`, a note is a note; a page that can't be read
+    /// says why; the coverage counts the loaded and the end-read sheets apart.
+    #[test]
+    fn the_sheets_not_loaded_are_read_at_the_end() {
+        use super::super::inventory::{self, NOT_OBJECT};
+        let (mut s, mut job, _) = inventory_job();
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-1000, -1000, 1000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        super::super::readers::place_devices(&mut s, &job.devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        for h in job.devices.iter().map(|dv| dv.handle.clone()).filter(|h| !h.is_empty()).collect::<Vec<_>>() {
+            built_device(&mut s, &h);
+        }
+        let receptacles = job.devices.iter().filter(|dv| dv.tag == "F").count();
+        assert!(receptacles > 0);
+        // A made-up symbol legend page (heading, F and an unknown QG row), a note and a dimension.
+        let mut page = cadaddy_doc::Drawing::default();
+        let lettering = [
+            ("ELECTRICAL SYMBOL LEGEND", 1500.0, 1000.0, 8.0),
+            ("F", 1505.0, 985.0, 5.0),
+            ("DUPLEX RECEPTACLE", 1530.0, 985.0, 5.0),
+            ("QG", 1505.0, 973.0, 5.0),
+            ("NIGHT GLOW MARKER, 24V", 1530.0, 973.0, 5.0),
+            ("ALL WORK SHALL MEET THE ADOPTED CODE", 200.0, 300.0, 5.0),
+            ("3'-0\"", 600.0, 200.0, 5.0),
+        ];
+        for (v, x, y, h) in lettering {
+            page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).unwrap_or_else(|e| panic!("{e}"));
+        }
+        let (fates, pages) = mark_fates(&s, &job);
+        let mut asked: Vec<String> = Vec::new();
+        let mut reader = |sh: &Value| {
+            let number = sh.get("number").and_then(Value::as_str).unwrap_or("").to_string();
+            asked.push(number.clone());
+            match number.as_str() {
+                "E-0" => Ok(page.clone()),
+                "E-2" => Ok(cadaddy_doc::Drawing::default()),
+                _ => Err("a made-up page that can't be read".to_string()),
+            }
+        };
+        let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+        let inv = inventory::take(d, &job, &pages, &fates, Some(&mut reader));
+        assert_eq!(asked, vec!["E-0", "E-2", "A-101"]);
+        let sheet = |n: &str| inv.sheets_not_read.iter().find(|x| x.number == n).unwrap_or_else(|| panic!("{n}: {:?}", inv.sheets_not_read));
+        assert!(sheet("E-0").read && sheet("E-0").marks == lettering.len(), "{:?}", sheet("E-0"));
+        assert!(sheet("E-2").read && sheet("E-2").marks == 0);
+        assert_eq!((sheet("A-101").read, sheet("A-101").why.as_str()), (false, "a made-up page that can't be read"));
+        let on_e0: Vec<&inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-0").collect();
+        assert_eq!(on_e0.len(), lettering.len());
+        assert!(on_e0.iter().all(|m| m.end_read && m.handle.is_empty() && m.trade == "E"), "{on_e0:#?}");
+        assert!(inv.marks.iter().filter(|m| m.sheet != "E-0").all(|m| !m.end_read));
+        let mark = |t: &str| on_e0.iter().copied().find(|m| m.text == t).unwrap_or_else(|| panic!("no {t}: {on_e0:#?}"));
+        // The F row: receptacles, the model's F devices linked.
+        let f = mark("F");
+        assert_eq!((f.what.as_str(), f.object, f.status.as_str(), f.kind.as_str()), ("legend_row", false, NOT_OBJECT, "receptacle"), "{f:?}");
+        assert_eq!(f.count, receptacles, "{f:?}");
+        assert!(!f.elements.is_empty() && f.elements.len() <= receptacles, "{f:?}");
+        assert_eq!(f.source, "E-0 ELECTRICAL SYMBOL LEGEND: F DUPLEX RECEPTACLE");
+        // The QG row: a kind of its own words, no device of it in the model.
+        let qg = mark("QG");
+        assert_eq!(qg.kind, "legend:night glow marker 24v", "{qg:?}");
+        assert!(qg.elements.is_empty() && qg.reason.contains("no device in the model"), "{qg:?}");
+        assert_eq!((mark("ALL WORK SHALL MEET THE ADOPTED CODE").reason.as_str(), mark("3'-0\"").reason.as_str()), ("note", "dimension"));
+        // Coverage: the loaded sheets and the end-read ones apart; the unreadable page named.
+        let v = inv.summary(true);
+        assert_eq!(v["coverage_by_read"]["end_read"]["marks"].as_u64(), Some(lettering.len() as u64), "{v:#}");
+        let loaded = v["coverage_by_read"]["loaded"]["marks"].as_u64().unwrap_or(0);
+        assert_eq!(Some(loaded + lettering.len() as u64), v["coverage"]["marks"].as_u64());
+        assert_eq!(v["sheets_end_read"], 2);
+        assert_eq!(v["sheets_unreadable"][0]["sheet"], "A-101");
+        assert!(v["by_sheet"]["E-0"]["marks"].as_u64() == Some(lettering.len() as u64));
+    }
+
+    /// Q6172 (answer 2): a mark whose legend row names no known kind takes the row's words as its
+    /// kind, the row as its source; a known kind and an equipment tag still win.
+    #[test]
+    fn a_legend_row_of_no_known_kind_mints_its_kind() {
+        use cadaddy_mepfix::device_types::LegendRow;
+        let dv = |tag: &str| super::super::readers::ReadDevice { tag: tag.into(), sheet: "QE-1".into(), ..Default::default() };
+        let row = |table: &str, description: &str| LegendRow { table: table.into(), description: description.into() };
+        let mut a = dv("QG");
+        resolve_mark(&mut a, Some(("QE-0", &row("SYMBOL LEGEND", "NIGHT GLOW MARKER, 24V"))), false, &[], None);
+        assert_eq!((a.kind.as_str(), a.kind_source.as_str()), ("legend:night glow marker 24v", "QE-0 SYMBOL LEGEND: QG NIGHT GLOW MARKER, 24V"));
+        assert!(!unresolved_mark(&a), "a minted kind is a kind");
+        let mut b = dv("QG");
+        resolve_mark(&mut b, Some(("QE-0", &row("SYMBOL LEGEND", "DUPLEX RECEPTACLE"))), false, &[], None);
+        assert_eq!(b.kind, "receptacle");
+        // Words of no letter mint nothing: still unresolved, a question.
+        let mut c = dv("QG");
+        resolve_mark(&mut c, Some(("QE-0", &row("SYMBOL LEGEND", "-- 24 --"))), false, &[], None);
+        assert!(unresolved_mark(&c), "{c:?}");
+        // No row: nothing minted.
+        let mut e = dv("QG");
+        resolve_mark(&mut e, None, false, &[], None);
+        assert!(e.kind.is_empty());
+        assert_eq!(kind_of_row(&row("LIGHTING FIXTURE SCHEDULE", "2X4 LED TROFFER"), false).as_deref(), Some("luminaire"));
+        assert_eq!(kind_of_row(&row("LEGEND", "Glow   Marker / Wall"), false).as_deref(), Some("legend:glow marker wall"));
     }
 
     /// Q6172: `bim.inventory` lists marks by sheet and status, pages within the answer size, and

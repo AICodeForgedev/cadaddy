@@ -79,6 +79,10 @@ pub struct MarkFate {
     /// For a duplicate: the handle (hex) of the mark kept.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub same_as: String,
+    /// Where its kind came from (`E-1 ELECTRICAL LEGEND: NL NIGHT LIGHT`), when a legend or
+    /// schedule row named it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
 }
 
 impl MarkFate {
@@ -94,7 +98,13 @@ impl MarkFate {
 
     /// The same object as the mark `of` (a handle) shows.
     pub fn duplicate(kind: &str, of: &str, reason: &str) -> Self {
-        Self { object: true, kind: kind.into(), status: DUPLICATE.into(), reason: reason.into(), same_as: of.into() }
+        Self { object: true, kind: kind.into(), status: DUPLICATE.into(), reason: reason.into(), same_as: of.into(), ..Self::default() }
+    }
+
+    /// The same, its kind from `source` (a legend or schedule row; empty: none).
+    pub fn with_source(mut self, source: &str) -> Self {
+        source.trim().clone_into(&mut self.source);
+        self
     }
 
     /// Not an object, and why.
@@ -145,19 +155,31 @@ pub struct Mark {
     /// The kept mark's duplicates on other sheets (their ids): one object, all its marks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_on: Vec<usize>,
-    /// A line-work mark: how many pieces, and how many of them became elements.
+    /// A line-work mark: how many pieces, and how many of them became elements. A legend or
+    /// schedule row: how many devices of its type the model holds.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub count: usize,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub built_count: usize,
+    /// Where its kind came from, when a legend or schedule row named it (the row's sheet, table,
+    /// type and text), and that row's own mark (its id), when the inventory holds it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_mark: Option<usize>,
+    /// A mark of a sheet the job didn't load, read at the end of the build for the inventory
+    /// (`at` is then on that sheet's own page).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub end_read: bool,
 }
 
 fn is_zero(n: &usize) -> bool {
     *n == 0
 }
 
-/// A sheet of the set the job didn't load (a schedule, a detail or a riser sheet): its marks are
-/// not in the inventory.
+/// A sheet of the set the job didn't load (a schedule, a detail or a riser sheet). The build
+/// reads its page again at its end and inventories its marks (`read`, how many marks); a page it
+/// can't read says why.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SheetNotRead {
     pub number: String,
@@ -165,6 +187,14 @@ pub struct SheetNotRead {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
+    /// Its page was read at the end and its marks are in the inventory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub marks: usize,
+    /// Why its page couldn't be read.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub why: String,
 }
 
 /// Every mark of the sheets the job read.
@@ -229,6 +259,7 @@ impl Inventory {
     /// kind and status; the commonest unexplained marks.
     pub fn summary(&self, by_sheet: bool) -> Value {
         let mut all = Coverage::default();
+        let (mut loaded, mut end_read) = (Coverage::default(), Coverage::default());
         let mut trades: BTreeMap<&str, Coverage> = BTreeMap::new();
         let mut sheets: BTreeMap<&str, Coverage> = BTreeMap::new();
         let mut not_object: BTreeMap<&str, usize> = BTreeMap::new();
@@ -236,6 +267,11 @@ impl Inventory {
         let mut unexplained: BTreeMap<(&str, &str, &str), usize> = BTreeMap::new();
         for m in &self.marks {
             all.add(m);
+            if m.end_read {
+                end_read.add(m)
+            } else {
+                loaded.add(m)
+            }
             trades.entry(if m.trade.is_empty() { "?" } else { &m.trade }).or_default().add(m);
             if by_sheet {
                 sheets.entry(&m.sheet).or_default().add(m);
@@ -259,7 +295,10 @@ impl Inventory {
             "not_object_by_reason": not_object.iter().map(|(r, n)| json!({"reason": r, "marks": n})).collect::<Vec<_>>(),
             "objects_by_kind": objects,
             "top_unexplained": top.iter().take(TOP_UNEXPLAINED).map(|((w, t, r), n)| json!({"what": w, "text": t, "reason": r, "marks": n})).collect::<Vec<_>>(),
+            "coverage_by_read": {"loaded": loaded.value(), "end_read": end_read.value()},
             "sheets_not_read": self.sheets_not_read.len(),
+            "sheets_end_read": self.sheets_not_read.iter().filter(|s| s.read).count(),
+            "sheets_unreadable": self.sheets_not_read.iter().filter(|s| !s.read).map(|s| json!({"sheet": s.number, "why": s.why})).take(TOP_UNEXPLAINED).collect::<Vec<_>>(),
         });
         if by_sheet {
             v["by_sheet"] = sheets.iter().map(|(t, c)| (t.to_string(), c.value())).collect::<serde_json::Map<String, Value>>().into();
@@ -283,17 +322,63 @@ pub fn store(d: &mut Drawing, inv: &Inventory) -> Result<()> {
     Ok(())
 }
 
-/// The elements the build made from each mark: by the mark's handle, (element handle, kind).
-fn elements_by_source(d: &Drawing) -> HashMap<u64, Vec<(cadaddy_doc::Handle, String)>> {
-    let mut out: HashMap<u64, Vec<(cadaddy_doc::Handle, String)>> = HashMap::new();
+/// An element the build made from a mark: its handle, its kind, where its kind came from.
+type Made = (cadaddy_doc::Handle, String, String);
+
+/// The elements the build made from each mark: by the mark's handle.
+fn elements_by_source(d: &Drawing) -> HashMap<u64, Vec<Made>> {
+    let mut out: HashMap<u64, Vec<Made>> = HashMap::new();
     for e in d.model.iter() {
         let Some(tags) = super::bimlook::made_tags(e) else { continue };
         let Some(source) = tags.get(2).and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok()).filter(|h| *h != 0) else { continue };
         let kind = super::elemprops::element_kind(e).or_else(|| tags.first().map(|t| t.value.clone())).unwrap_or_default();
-        out.entry(source).or_default().push((e.handle, kind));
+        let kind = super::elemprops::reported_kind(e, kind);
+        let props = cadaddy_doc::props::read(&e.common.xdata);
+        let from = props.get("kind_source").map(|p| p.text()).unwrap_or_default();
+        out.entry(source).or_default().push((e.handle, kind, from));
     }
     out
 }
+
+/// The model's devices by their type tag (upper case): the elements made from each one's symbol
+/// (the first [`MAX_ELEMENTS`]) and how many devices of that type the model holds.
+fn elements_by_type(d: &Drawing, built: &HashMap<u64, Vec<Made>>) -> HashMap<String, (Vec<String>, usize)> {
+    let mut out: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+    let Some(spec) = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) else { return out };
+    for t in spec.tags.iter().filter(|t| t.id.starts_with("device:")) {
+        let Some(ty) = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).filter(|v| !v.is_empty()) else { continue };
+        let e = out.entry(ty).or_default();
+        e.1 += 1;
+        let symbol = t.fields.get("symbol").and_then(|f| u64::from_str_radix(f.value.trim(), 16).ok());
+        for (h, _, _) in symbol.and_then(|h| built.get(&h)).into_iter().flatten() {
+            if e.0.len() < MAX_ELEMENTS {
+                e.0.push(h.hex());
+            }
+        }
+    }
+    out
+}
+
+/// A kind named by a legend or schedule row that no known kind fits: `legend:` and the row's
+/// description, lower case, its words only (`legend:night light 120v`). `None`: a row that says
+/// nothing in words.
+pub(crate) fn legend_kind(description: &str) -> Option<String> {
+    let clean: String = description.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '/' { c.to_ascii_lowercase() } else { ' ' }).collect();
+    let mut out = String::new();
+    for w in clean.split_whitespace().map(|w| w.trim_matches(|c| c == '-' || c == '/')).filter(|w| !w.is_empty()) {
+        if out.len() + w.len() + 1 > MAX_LEGEND_KIND {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
+    out.chars().any(char::is_alphabetic).then(|| format!("legend:{out}"))
+}
+
+/// Longest description kept in a kind minted from a legend row.
+const MAX_LEGEND_KIND: usize = 48;
 
 /// A sheet the job read: its objects (handles `lo..hi`), its regions, and what was read off it.
 struct Sheet<'a> {
@@ -518,11 +603,37 @@ fn rooms_by_level(job: &GuidedJob) -> BTreeMap<String, Vec<(String, String)>> {
     out
 }
 
+/// What a sheet's marks are read against: the build's elements by the mark each came from, the
+/// readers' decisions, the model's devices by type, the set's sheet numbers, the model's rooms.
+struct Ctx<'a> {
+    built: &'a HashMap<u64, Vec<Made>>,
+    fates: &'a HashMap<u64, MarkFate>,
+    types: &'a HashMap<String, (Vec<String>, usize)>,
+    sheet_numbers: &'a BTreeSet<String>,
+    room_numbers: &'a [(String, String, String)],
+    room_outlines: &'a [(String, Vec<Vec2>, String)],
+    /// The sheet is a page read at the end (its handles are its page's own, not the job's).
+    end_read: bool,
+}
+
+/// Reads one sheet of the set's index (`printset.sheets`' entry) off its file: its page, or why
+/// it can't.
+pub(crate) type PageReader<'a> = &'a mut dyn FnMut(&Value) -> std::result::Result<Drawing, String>;
+
 /// Take the inventory of the job's sheets: `pages` is what the sheet map read off each (by the
-/// sheet's name in the job), `fates` what the readers decided (by handle).
-pub(crate) fn take(d: &Drawing, job: &GuidedJob, pages: &BTreeMap<String, PageRead>, fates: &HashMap<u64, MarkFate>) -> Inventory {
+/// sheet's name in the job), `fates` what the readers decided (by handle). The set's sheets the
+/// job didn't load are read again with `read_page`, one at a time, and their marks inventoried
+/// too (`end_read`); with no reader they are listed only.
+pub(crate) fn take(
+    d: &Drawing,
+    job: &GuidedJob,
+    pages: &BTreeMap<String, PageRead>,
+    fates: &HashMap<u64, MarkFate>,
+    mut read_page: Option<PageReader>,
+) -> Inventory {
     let mut inv = Inventory::default();
     let built = elements_by_source(d);
+    let types = elements_by_type(d, &built);
     let mut spans = job.sheet_spans.clone();
     spans.sort_by_key(|sp| sp.lo);
     let group_of = |h: u64| -> Option<usize> {
@@ -587,226 +698,21 @@ pub(crate) fn take(d: &Drawing, job: &GuidedJob, pages: &BTreeMap<String, PageRe
             }
         })
         .collect();
+    drop(texts);
     let room_numbers = room_numbers(d);
     let room_outlines: Vec<(String, Vec<Vec2>, String)> =
         super::bspec::room_elements(d).into_iter().filter(|r| r.outline.len() >= 3).map(|r| (r.level, r.outline, r.handle.hex())).collect();
+    let cx = Ctx {
+        built: &built,
+        fates,
+        types: &types,
+        sheet_numbers: &sheet_numbers,
+        room_numbers: &room_numbers,
+        room_outlines: &room_outlines,
+        end_read: false,
+    };
     for (g, sheet) in sheets.iter().enumerate() {
-        // Line work by layer and line type: one mark each.
-        let mut lines: BTreeMap<(String, String), Mark> = BTreeMap::new();
-        for e in members.get(g).into_iter().flatten() {
-            let h = e.handle.0;
-            let made = built.get(&h);
-            let fate = fates.get(&h);
-            let line = matches!(
-                e.kind,
-                EntityKind::Line(_)
-                    | EntityKind::LwPolyline(_)
-                    | EntityKind::Polyline3d(_)
-                    | EntityKind::Arc(_)
-                    | EntityKind::Circle(_)
-                    | EntityKind::Ellipse(_)
-                    | EntityKind::Spline(_)
-            );
-            if line && fate.is_none() {
-                let at = centre(d, e);
-                let key = (e.common.layer.to_string(), e.common.linetype.to_string());
-                let m = lines.entry(key.clone()).or_insert_with(|| Mark {
-                    sheet: sheet.name.clone(),
-                    trade: sheet.trade.clone(),
-                    what: "line_type".into(),
-                    text: cut(&format!("{} on layer {}", if key.1.is_empty() { "BYLAYER" } else { &key.1 }, key.0), MAX_TEXT),
-                    at,
-                    view: sheet.view(at),
-                    level: sheet.level(at),
-                    status: NOT_OBJECT.into(),
-                    reason: if key.0.eq_ignore_ascii_case(SHX_SOURCE_LAYER) {
-                        "strokes of lettering the import read as text".into()
-                    } else {
-                        "line work no element was made from (outlines, leaders, hatching, furniture)".into()
-                    },
-                    ..Mark::default()
-                });
-                m.count += 1;
-                if let Some(made) = made {
-                    m.built_count += 1;
-                    m.object = true;
-                    m.status = BUILT.into();
-                    if m.kind.is_empty() {
-                        m.kind = made.first().map_or_else(String::new, |(_, k)| k.clone());
-                        m.reason = "line work the build traced into elements".into();
-                    }
-                    for (eh, _) in made {
-                        if m.elements.len() < MAX_ELEMENTS {
-                            m.elements.push(eh.hex());
-                        }
-                    }
-                }
-                continue;
-            }
-            let at = centre(d, e);
-            let (what, text, height) = match &e.kind {
-                EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
-                    let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
-                    ("symbol", tag, 1.0)
-                }
-                EntityKind::Insert(ins) => ("block", ins.block.clone(), 1.0),
-                EntityKind::Text(t) => ("text", t.value.trim().to_string(), t.height),
-                EntityKind::MText(t) => ("text", t.contents.trim().to_string(), t.height),
-                EntityKind::Dimension(_) => ("dimension", String::new(), 1.0),
-                EntityKind::Hatch(_) | EntityKind::Solid(_) | EntityKind::Trace(_) => ("hatch", String::new(), 1.0),
-                EntityKind::Wipeout(_) => ("mask", String::new(), 1.0),
-                EntityKind::Image(_) => ("image", String::new(), 1.0),
-                EntityKind::Leader(_) | EntityKind::MLeader(_) => ("leader", String::new(), 1.0),
-                EntityKind::Line(_)
-                | EntityKind::LwPolyline(_)
-                | EntityKind::Polyline3d(_)
-                | EntityKind::Arc(_)
-                | EntityKind::Circle(_)
-                | EntityKind::Ellipse(_)
-                | EntityKind::Spline(_) => ("line", String::new(), 1.0),
-                _ => ("other", String::new(), 1.0),
-            };
-            let mut m = Mark {
-                sheet: sheet.name.clone(),
-                trade: sheet.trade.clone(),
-                what: what.into(),
-                text: cut(&text, MAX_TEXT),
-                at,
-                view: sheet.view(at),
-                level: sheet.level(at),
-                handle: e.handle.hex(),
-                ..Mark::default()
-            };
-            if let Some(f) = fate {
-                m.object = f.object;
-                m.kind.clone_from(&f.kind);
-                m.status.clone_from(&f.status);
-                m.reason.clone_from(&f.reason);
-                if what == "text" && m.object {
-                    m.what = "tag".into();
-                }
-            } else if made.is_some() {
-                m.object = true;
-                m.reason = "the build made elements from it".into();
-            } else {
-                match what {
-                    "text" => {
-                        let style = match &e.kind {
-                            EntityKind::Text(t) => t.style.as_str(),
-                            EntityKind::MText(t) => t.style.as_str(),
-                            _ => "",
-                        };
-                        let (w, reason) = lettering(&text, at, height, style, &e.common.layer, sheet, &sheet_numbers);
-                        m.what = w.into();
-                        match reason {
-                            Some(r) => {
-                                m.status = NOT_OBJECT.into();
-                                m.reason = r;
-                            }
-                            None if w == "tag"
-                                && !text.is_empty()
-                                && sheet.rooms.iter().any(|(n, name)| n.eq_ignore_ascii_case(&text) || name.eq_ignore_ascii_case(&text)) =>
-                            {
-                                m.object = true;
-                                m.kind = "room".into();
-                                m.reason = "a room's tag".into();
-                            }
-                            None => {
-                                m.status = UNEXPLAINED.into();
-                                m.reason = if w == "tag" { "a tag no reader took".into() } else { "lettering no rule explains".into() };
-                            }
-                        }
-                    }
-                    "symbol" => {
-                        m.status = UNEXPLAINED.into();
-                        m.reason = "a symbol no reader decided".into();
-                    }
-                    "dimension" => {
-                        m.status = NOT_OBJECT.into();
-                        m.reason = "dimension".into();
-                    }
-                    "hatch" => {
-                        m.status = NOT_OBJECT.into();
-                        m.reason = "fill (a hatch or solid)".into();
-                    }
-                    "mask" => {
-                        m.status = NOT_OBJECT.into();
-                        m.reason = "mask (blanks out what is behind lettering)".into();
-                    }
-                    "image" => {
-                        m.status = NOT_OBJECT.into();
-                        m.reason = "raster piece of the print".into();
-                    }
-                    "leader" => {
-                        m.status = NOT_OBJECT.into();
-                        m.reason = "leader (points a note at its object)".into();
-                    }
-                    _ => {
-                        m.status = UNEXPLAINED.into();
-                        m.reason = format!("a {what} no rule explains");
-                    }
-                }
-            }
-            // A room's tag: the room element of that number on its level.
-            if m.object && m.kind == "room" && made.is_none() {
-                let level = digits(&m.level);
-                let rooms: Vec<String> = room_numbers
-                    .iter()
-                    .filter(|(n, l, _)| {
-                        n.eq_ignore_ascii_case(&m.text)
-                            && (level.is_empty() || level.split(',').any(|x| digits(l) == x) || m.level.split(',').any(|x| digits(l) == digits(x)))
-                    })
-                    .map(|(_, _, h)| h.clone())
-                    .take(MAX_ELEMENTS)
-                    .collect();
-                let rooms = if rooms.is_empty() {
-                    let p = Vec2::new(m.at[0], m.at[1]);
-                    room_outlines
-                        .iter()
-                        .filter(|(l, _, _)| m.level.split(',').any(|x| !digits(x).is_empty() && digits(l) == digits(x)))
-                        .filter(|(_, o, _)| cadaddy_geom::point_in_polygon(o, p))
-                        .map(|(_, _, h)| h.clone())
-                        .take(MAX_ELEMENTS)
-                        .collect()
-                } else {
-                    rooms
-                };
-                if rooms.is_empty() {
-                    m.status = NOT_BUILT.into();
-                    m.reason = "the rooms stage read it as a room's tag, but no room was built there".into();
-                } else {
-                    m.elements = rooms;
-                }
-            }
-            if let Some(made) = made {
-                m.elements = made.iter().take(MAX_ELEMENTS).map(|(h, _)| h.hex()).collect();
-                if m.kind.is_empty() {
-                    m.kind = made.first().map_or_else(String::new, |(_, k)| k.clone());
-                }
-                if m.object || fate.is_none_or(|f| f.status != NOT_OBJECT) {
-                    m.object = true;
-                    m.status = BUILT.into();
-                }
-            }
-            if m.object && m.status.is_empty() {
-                if m.elements.is_empty() {
-                    m.status = UNEXPLAINED.into();
-                    m.reason = format!("read as {} but in no element, and nothing says why", if m.kind.is_empty() { "an object" } else { &m.kind });
-                } else {
-                    m.status = BUILT.into();
-                }
-            }
-            if m.status.is_empty() {
-                m.status = UNEXPLAINED.into();
-            }
-            if m.object && m.kind == "room" && m.status == BUILT && m.what == "text" {
-                m.what = "tag".into();
-            }
-            push(&mut inv, m);
-        }
-        for (_, m) in lines {
-            push(&mut inv, m);
-        }
+        sheet_marks(&mut inv, &cx, d, sheet, members.get(g).map_or(&[][..], Vec::as_slice));
     }
     // Duplicates: each links to the mark kept, which lists them.
     let by_handle: HashMap<&str, usize> = inv.marks.iter().filter(|m| !m.handle.is_empty()).map(|m| (m.handle.as_str(), m.id)).collect();
@@ -831,8 +737,10 @@ pub(crate) fn take(d: &Drawing, job: &GuidedJob, pages: &BTreeMap<String, PageRe
             k.also_on.push(a);
         }
     }
-    // The sheets of the set the job didn't read.
+    // The sheets of the set the job didn't load: each page read again, its marks inventoried.
     let read: BTreeSet<String> = sheets.iter().map(|s| s.base.to_ascii_uppercase()).collect();
+    let (no_built, no_fates) = (HashMap::new(), HashMap::new());
+    let end = Ctx { built: &no_built, fates: &no_fates, end_read: true, ..cx };
     for sh in listed.into_iter().flatten() {
         let text = |k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
         let number = text("number");
@@ -840,9 +748,329 @@ pub(crate) fn take(d: &Drawing, job: &GuidedJob, pages: &BTreeMap<String, PageRe
             continue;
         }
         let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
-        inv.sheets_not_read.push(SheetNotRead { number, title: cut(&text("title"), MAX_TEXT), kind });
+        let mut entry = SheetNotRead { number: number.clone(), title: cut(&text("title"), MAX_TEXT), kind, ..SheetNotRead::default() };
+        match read_page.as_mut().map(|r| r(sh)) {
+            Some(Ok(page)) => {
+                let discipline = text("discipline");
+                let trade = if discipline.is_empty() { sheet_facts::discipline_of(&number) } else { discipline };
+                entry.marks = page_marks(&mut inv, &end, &page, &number, &trade.to_ascii_uppercase(), &all_rooms);
+                entry.read = true;
+            }
+            Some(Err(why)) => entry.why = cut(&why, MAX_WHY),
+            None => entry.why = "not read again: this run has no PDF reader".into(),
+        }
+        inv.sheets_not_read.push(entry);
     }
+    link_sources(&mut inv);
     inv
+}
+
+/// Longest reason kept for a page that couldn't be read.
+const MAX_WHY: usize = 160;
+/// Longest source kept on a mark (a legend row's sheet, table, type and text).
+const MAX_SOURCE: usize = 160;
+/// Most texts of one end-read page looked at for its legend.
+const MAX_PAGE_TEXTS: usize = 200_000;
+
+/// The marks of a page read at the end (a sheet the job didn't load): its marks, by the same
+/// rules, in its page's own coordinates. How many.
+fn page_marks(inv: &mut Inventory, cx: &Ctx, page: &Drawing, number: &str, trade: &str, all_rooms: &BTreeSet<String>) -> usize {
+    let mut texts = sheet_facts::texts(page);
+    texts.truncate(MAX_PAGE_TEXTS);
+    let sheet = Sheet {
+        name: number.to_string(),
+        base: number.to_string(),
+        trade: trade.to_string(),
+        regions: Vec::new(),
+        page: None,
+        legend: device_types::read_legend(&texts),
+        rooms: Vec::new(),
+        all_rooms,
+    };
+    drop(texts);
+    let members: Vec<&Entity> = page.model.iter().map(|e| &**e).collect();
+    let before = inv.marks.len() + inv.dropped;
+    sheet_marks(inv, cx, page, &sheet, &members);
+    (inv.marks.len() + inv.dropped).saturating_sub(before)
+}
+
+/// Each object mark whose kind a legend or schedule row named: the row's own mark (same sheet,
+/// its type cell the mark's tag).
+fn link_sources(inv: &mut Inventory) {
+    let base = |s: &str| s.split('/').next().unwrap_or(s).trim().to_ascii_uppercase();
+    let rows: HashMap<(String, String), usize> = inv
+        .marks
+        .iter()
+        .filter(|m| m.what == "legend_row" && !m.source.is_empty())
+        .map(|m| ((base(&m.sheet), m.text.trim().to_ascii_uppercase()), m.id))
+        .collect();
+    if rows.is_empty() {
+        return;
+    }
+    for m in inv.marks.iter_mut().filter(|m| m.object && !m.source.is_empty() && m.what != "legend_row") {
+        let sheet = base(m.source.split_whitespace().next().unwrap_or(""));
+        if let Some(id) = rows.get(&(sheet, m.text.trim().to_ascii_uppercase())) {
+            m.source_mark = Some(*id);
+        }
+    }
+}
+
+/// The marks of one sheet: each of `members` (the sheet's objects in `d`), its line work one
+/// mark per layer and line type.
+fn sheet_marks(inv: &mut Inventory, cx: &Ctx, d: &Drawing, sheet: &Sheet, members: &[&Entity]) {
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    // Line work by layer and line type: one mark each.
+    let mut lines: BTreeMap<(String, String), Mark> = BTreeMap::new();
+    for e in members {
+        let h = e.handle.0;
+        let made = cx.built.get(&h);
+        let fate = cx.fates.get(&h);
+        let line = matches!(
+            e.kind,
+            EntityKind::Line(_)
+                | EntityKind::LwPolyline(_)
+                | EntityKind::Polyline3d(_)
+                | EntityKind::Arc(_)
+                | EntityKind::Circle(_)
+                | EntityKind::Ellipse(_)
+                | EntityKind::Spline(_)
+        );
+        if line && fate.is_none() {
+            let at = centre(d, e);
+            let key = (e.common.layer.to_string(), e.common.linetype.to_string());
+            let m = lines.entry(key.clone()).or_insert_with(|| Mark {
+                sheet: sheet.name.clone(),
+                trade: sheet.trade.clone(),
+                what: "line_type".into(),
+                text: cut(&format!("{} on layer {}", if key.1.is_empty() { "BYLAYER" } else { &key.1 }, key.0), MAX_TEXT),
+                at,
+                view: sheet.view(at),
+                level: sheet.level(at),
+                status: NOT_OBJECT.into(),
+                reason: if key.0.eq_ignore_ascii_case(SHX_SOURCE_LAYER) {
+                    "strokes of lettering the import read as text".into()
+                } else {
+                    "line work no element was made from (outlines, leaders, hatching, furniture)".into()
+                },
+                end_read: cx.end_read,
+                ..Mark::default()
+            });
+            m.count += 1;
+            if let Some(made) = made {
+                m.built_count += 1;
+                m.object = true;
+                m.status = BUILT.into();
+                if m.kind.is_empty() {
+                    m.kind = made.first().map_or_else(String::new, |(_, k, _)| k.clone());
+                    m.reason = "line work the build traced into elements".into();
+                }
+                for (eh, _, _) in made {
+                    if m.elements.len() < MAX_ELEMENTS {
+                        m.elements.push(eh.hex());
+                    }
+                }
+            }
+            continue;
+        }
+        let at = centre(d, e);
+        let (what, text, height) = match &e.kind {
+            EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => {
+                let tag = ins.attribs.iter().find(|a| a.tag == "TAG").map(|a| a.text.value.trim().to_string()).unwrap_or_default();
+                ("symbol", tag, 1.0)
+            }
+            EntityKind::Insert(ins) => ("block", ins.block.clone(), 1.0),
+            EntityKind::Text(t) => ("text", t.value.trim().to_string(), t.height),
+            EntityKind::MText(t) => ("text", t.contents.trim().to_string(), t.height),
+            EntityKind::Dimension(_) => ("dimension", String::new(), 1.0),
+            EntityKind::Hatch(_) | EntityKind::Solid(_) | EntityKind::Trace(_) => ("hatch", String::new(), 1.0),
+            EntityKind::Wipeout(_) => ("mask", String::new(), 1.0),
+            EntityKind::Image(_) => ("image", String::new(), 1.0),
+            EntityKind::Leader(_) | EntityKind::MLeader(_) => ("leader", String::new(), 1.0),
+            EntityKind::Line(_)
+            | EntityKind::LwPolyline(_)
+            | EntityKind::Polyline3d(_)
+            | EntityKind::Arc(_)
+            | EntityKind::Circle(_)
+            | EntityKind::Ellipse(_)
+            | EntityKind::Spline(_) => ("line", String::new(), 1.0),
+            _ => ("other", String::new(), 1.0),
+        };
+        let mut m = Mark {
+            sheet: sheet.name.clone(),
+            trade: sheet.trade.clone(),
+            what: what.into(),
+            text: cut(&text, MAX_TEXT),
+            at,
+            view: sheet.view(at),
+            level: sheet.level(at),
+            handle: if cx.end_read { String::new() } else { e.handle.hex() },
+            end_read: cx.end_read,
+            ..Mark::default()
+        };
+        if let Some(f) = fate {
+            m.object = f.object;
+            m.kind.clone_from(&f.kind);
+            m.status.clone_from(&f.status);
+            m.reason.clone_from(&f.reason);
+            m.source = cut(&f.source, MAX_SOURCE);
+            if what == "text" && m.object {
+                m.what = "tag".into();
+            }
+        } else if made.is_some() {
+            m.object = true;
+            m.reason = "the build made elements from it".into();
+        } else {
+            match what {
+                "text" => {
+                    let style = match &e.kind {
+                        EntityKind::Text(t) => t.style.as_str(),
+                        EntityKind::MText(t) => t.style.as_str(),
+                        _ => "",
+                    };
+                    let (w, reason) = lettering(&text, at, height, style, &e.common.layer, sheet, cx.sheet_numbers);
+                    m.what = w.into();
+                    match reason {
+                        Some(r) => {
+                            m.status = NOT_OBJECT.into();
+                            m.reason = r;
+                        }
+                        None if w == "tag"
+                            && !text.is_empty()
+                            && sheet.rooms.iter().any(|(n, name)| n.eq_ignore_ascii_case(&text) || name.eq_ignore_ascii_case(&text)) =>
+                        {
+                            m.object = true;
+                            m.kind = "room".into();
+                            m.reason = "a room's tag".into();
+                        }
+                        None => {
+                            m.status = UNEXPLAINED.into();
+                            m.reason = if w == "tag" { "a tag no reader took".into() } else { "lettering no rule explains".into() };
+                        }
+                    }
+                    if m.what == "legend_row" {
+                        legend_row(&mut m, cx, sheet);
+                    }
+                }
+                "symbol" => {
+                    m.status = UNEXPLAINED.into();
+                    m.reason = "a symbol no reader decided".into();
+                }
+                "dimension" => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = "dimension".into();
+                }
+                "hatch" => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = "fill (a hatch or solid)".into();
+                }
+                "mask" => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = "mask (blanks out what is behind lettering)".into();
+                }
+                "image" => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = "raster piece of the print".into();
+                }
+                "leader" => {
+                    m.status = NOT_OBJECT.into();
+                    m.reason = "leader (points a note at its object)".into();
+                }
+                _ => {
+                    m.status = UNEXPLAINED.into();
+                    m.reason = format!("a {what} no rule explains");
+                }
+            }
+        }
+        // A room's tag: the room element of that number on its level.
+        if m.object && m.kind == "room" && made.is_none() {
+            let level = digits(&m.level);
+            let rooms: Vec<String> = cx
+                .room_numbers
+                .iter()
+                .filter(|(n, l, _)| {
+                    n.eq_ignore_ascii_case(&m.text)
+                        && (level.is_empty() || level.split(',').any(|x| digits(l) == x) || m.level.split(',').any(|x| digits(l) == digits(x)))
+                })
+                .map(|(_, _, h)| h.clone())
+                .take(MAX_ELEMENTS)
+                .collect();
+            let rooms = if rooms.is_empty() {
+                let p = Vec2::new(m.at[0], m.at[1]);
+                cx.room_outlines
+                    .iter()
+                    .filter(|(l, _, _)| m.level.split(',').any(|x| !digits(x).is_empty() && digits(l) == digits(x)))
+                    .filter(|(_, o, _)| cadaddy_geom::point_in_polygon(o, p))
+                    .map(|(_, _, h)| h.clone())
+                    .take(MAX_ELEMENTS)
+                    .collect()
+            } else {
+                rooms
+            };
+            if rooms.is_empty() {
+                m.status = NOT_BUILT.into();
+                m.reason = "the rooms stage read it as a room's tag, but no room was built there".into();
+            } else {
+                m.elements = rooms;
+            }
+        }
+        if let Some(made) = made {
+            m.elements = made.iter().take(MAX_ELEMENTS).map(|(h, _, _)| h.hex()).collect();
+            // The element's kind when the mark's own says no more than `device` (a later reader,
+            // a legend or schedule page, named it), and where that came from.
+            if let Some((_, k, from)) = made.iter().find(|(_, k, _)| !k.is_empty() && k != "device")
+                && matches!(m.kind.as_str(), "" | "device")
+            {
+                m.kind.clone_from(k);
+                if m.source.is_empty() {
+                    m.source = cut(from, MAX_SOURCE);
+                }
+            }
+            if m.kind.is_empty() {
+                m.kind = made.first().map_or_else(String::new, |(_, k, _)| k.clone());
+            }
+            if m.object || fate.is_none_or(|f| f.status != NOT_OBJECT) {
+                m.object = true;
+                m.status = BUILT.into();
+            }
+        }
+        if m.object && m.status.is_empty() {
+            if m.elements.is_empty() {
+                m.status = UNEXPLAINED.into();
+                m.reason = format!("read as {} but in no element, and nothing says why", if m.kind.is_empty() { "an object" } else { &m.kind });
+            } else {
+                m.status = BUILT.into();
+            }
+        }
+        if m.status.is_empty() {
+            m.status = UNEXPLAINED.into();
+        }
+        if m.object && m.kind == "room" && m.status == BUILT && m.what == "text" {
+            m.what = "tag".into();
+        }
+        push(inv, m);
+    }
+    for (_, m) in lines {
+        push(inv, m);
+    }
+}
+
+/// A legend's or schedule's row whose type cell this mark is (`NL` in its first column): the kind
+/// the row names (a known kind, else `legend:<its text>`), the row as its source, and the model's
+/// devices of that type (`count`, the first [`MAX_ELEMENTS`] linked). Not an object itself: the
+/// row says what the marks of its type are.
+fn legend_row(m: &mut Mark, cx: &Ctx, sheet: &Sheet) {
+    let t = m.text.trim();
+    let Some(row) = sheet.legend.rows.get(t).or_else(|| sheet.legend.rows.get(&t.to_ascii_uppercase())) else { return };
+    m.kind = super::guided::kind_of_row(row, sheet.trade == "P").unwrap_or_default();
+    m.source = cut(&format!("{} {}: {} {}", sheet.base, row.table, t, row.description).trim().replace("  ", " "), MAX_SOURCE);
+    match cx.types.get(&t.to_ascii_uppercase()) {
+        Some((elements, n)) => {
+            m.elements.clone_from(elements);
+            m.count = *n;
+            m.reason = "legend or schedule row naming a type: the model's devices of that type are linked".into();
+        }
+        None => m.reason = "legend or schedule row naming a type no device in the model has".into(),
+    }
 }
 
 /// The model's rooms by number: (number, level, element handle).
@@ -965,6 +1193,44 @@ mod tests {
         for t in ["Q-9", "X-12", "12", "NOTE 3", "A'B"] {
             assert!(!dimension_text(t), "{t}");
         }
+    }
+
+    #[test]
+    fn a_legend_kind_is_the_rows_words() {
+        assert_eq!(legend_kind("NIGHT LIGHT - 120V").as_deref(), Some("legend:night light 120v"));
+        assert_eq!(legend_kind("  Recessed  'Glow' marker, (typ.)").as_deref(), Some("legend:recessed glow marker typ"));
+        assert_eq!(legend_kind("-- 12 / 4 --"), None);
+        assert_eq!(legend_kind(""), None);
+        let long = legend_kind(&"WORD ".repeat(40)).unwrap_or_default();
+        assert!(long.len() <= "legend:".len() + MAX_LEGEND_KIND && long.ends_with("word"), "{long}");
+    }
+
+    #[test]
+    fn an_object_links_to_the_row_that_named_its_kind() {
+        let mut inv = Inventory::default();
+        let row = Mark {
+            sheet: "QE-0".into(),
+            what: "legend_row".into(),
+            text: "QG".into(),
+            status: NOT_OBJECT.into(),
+            source: "QE-0 SYMBOL LEGEND: QG GLOW MARKER".into(),
+            ..Mark::default()
+        };
+        let mark = |sheet: &str, source: &str| Mark {
+            sheet: sheet.into(),
+            what: "symbol".into(),
+            text: "QG".into(),
+            object: true,
+            kind: "legend:glow marker".into(),
+            status: BUILT.into(),
+            source: source.into(),
+            ..Mark::default()
+        };
+        push(&mut inv, row);
+        push(&mut inv, mark("QE-1/2", "QE-0 SYMBOL LEGEND: QG GLOW MARKER"));
+        push(&mut inv, mark("QE-1", "QE-9 SYMBOL LEGEND: QG GLOW MARKER"));
+        link_sources(&mut inv);
+        assert_eq!(inv.marks.iter().map(|m| m.source_mark).collect::<Vec<_>>(), vec![None, Some(0), None]);
     }
 
     #[test]
