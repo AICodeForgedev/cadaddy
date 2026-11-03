@@ -453,10 +453,11 @@ impl Field {
         }
         self.hit_span(p, p, z0.min(z1), z0.max(z1), r, upf, skip, &[], rl)
     }
-    /// A piece inside a wall (a drop, its jog), `a`–`b` from `z0` to `z1`: as [`Self::hit_column`],
-    /// but the gear's working space (the air before it) is not the wall's cavity.
+    /// A piece inside a wall (a drop, its jog) or over gear (into a panel's top), `a`–`b` from
+    /// `z0` to `z1`: as [`Self::hit_column`], but the gear's working space (the air before it) is
+    /// not the wall's cavity, nor the electrical space over the gear (NEC 110.26(E)).
     #[allow(clippy::too_many_arguments)]
-    fn hit_in_wall(&self, a: Vec2, b: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+    fn hit_unworked(&self, a: Vec2, b: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
         if (z1 - z0).abs() < 1e-9 && a.dist(b) < 1e-9 {
             return None;
         }
@@ -1109,7 +1110,7 @@ pub(crate) fn rise_point(
     rl: &RouteRules,
 ) -> (Vec2, f64, Option<usize>) {
     let zj = (top + rl.route.in_wall_above_box_in.max(0.0) / 12.0 * upf).min(z0);
-    let Some(first) = field.hit_in_wall(at, at, top, z0, r, upf, skip, rl) else { return (at, zj, None) };
+    let Some(first) = field.hit_unworked(at, at, top, z0, r, upf, skip, rl) else { return (at, zj, None) };
     let dirs: Vec<Vec2> = match face {
         Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
         Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
@@ -1121,7 +1122,7 @@ pub(crate) fn rise_point(
     for k in 1..=n {
         for dir in &dirs {
             let q = at + *dir * (step * k as f64);
-            if field.hit_in_wall(q, q, zj, z0, r, upf, skip, rl).is_none() && field.hit_in_wall(at, q, zj, zj, r, upf, skip, rl).is_none() {
+            if field.hit_unworked(q, q, zj, z0, r, upf, skip, rl).is_none() && field.hit_unworked(at, q, zj, zj, r, upf, skip, rl).is_none() {
                 return (q, zj, None);
             }
         }
@@ -2107,7 +2108,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 let last = home_z.last().copied().unwrap_or(z0);
                 let (lo_z, hi_z) =
                     if riser { if from_below { (gfloor, gear_z) } else { (gear_z, gtop) } } else { (gear_z.min(last), gear_z.max(last)) };
-                let clear = |p: Vec2| gfield.hit_column(carry(p, &lead_h.level, &gear_el.level), lo_z, hi_z, r_of(size_in), upf, &skip, rl).is_none();
+                let clear = |p: Vec2| {
+                    let q = carry(p, &lead_h.level, &gear_el.level);
+                    gfield.hit_unworked(q, q, lo_z, hi_z, r_of(size_in), upf, &skip, rl).is_none()
+                };
                 let free: Vec<usize> = (0..cap).filter(|i| !taken.contains(i)).collect();
                 let pick = free.iter().copied().find(|i| clear(pos(*i))).or_else(|| free.first().copied());
                 let i = match pick {
@@ -2180,7 +2184,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         } else {
             (gear_z.min(last_z), gear_z.max(last_z))
         };
-        if let Some(i) = field.hit_column(land, zlo_here, zhi_here, r_of(size_in), upf, &skip, rl) {
+        if let Some(i) = field.hit_unworked(land, land, zlo_here, zhi_here, r_of(size_in), upf, &skip, rl) {
             drop_clashes += 1;
             add_clash(
                 &mut clashes,
@@ -2196,7 +2200,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         if riser {
             let gland = carry(land, &lead_h.level, &gear_el.level);
             let (glo, ghi) = if from_below { (gfloor, gear_z) } else { (gear_z, gtop) };
-            if let Some(i) = gfield.hit_column(gland, glo, ghi, r_of(size_in), upf, &skip, rl) {
+            if let Some(i) = gfield.hit_unworked(gland, gland, glo, ghi, r_of(size_in), upf, &skip, rl) {
                 drop_clashes += 1;
                 add_clash(
                     &mut clashes,
