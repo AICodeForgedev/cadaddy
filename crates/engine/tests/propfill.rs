@@ -716,7 +716,7 @@ fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
     let (dx, dy) = xy(&device_of(&mut s, "D"));
     assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 - 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
     let a = device_of(&mut s, "A");
-    assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()) && a["host_face"]["value"].is_string(), "{a:#}");
+    assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()) && a["face_normal"]["value"].is_string(), "{a:#}");
     let e = device_of(&mut s, "E");
     assert_eq!(xy(&e), (10.0, 5.0));
     assert!(e["placement"]["value"].as_str().is_some_and(|p| p.starts_with("review")), "{e:#}");

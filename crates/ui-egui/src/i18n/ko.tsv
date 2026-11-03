@@ -3369,3 +3369,9 @@ menu	Modify	수정
 	Promote Object Form to Template	객체 양식을 템플릿으로 승격
 	Object Completeness	객체 완성도
 	Object Form	객체 양식
+	Wall Faces	벽면
+	Place Devices on Wall Faces	벽면에 장치 배치
+	Devices Follow Their Walls	장치가 벽을 따라 이동
+	Room Layout	실 배치
+	Tie a Device to an Object	장치를 객체에 연결
+	Add Casework or Appliance Object	캐비닛 또는 가전 객체 추가

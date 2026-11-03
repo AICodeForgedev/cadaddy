@@ -5751,6 +5751,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["lighting_error"] = json!(e.to_string());
     }
     bim_step(s, job, "lighting", t);
+    // Each wall device placed relative to its named wall face (Q6174 walllayout).
+    let t_layout = web_time::Instant::now();
+    match super::walllayout::rehost(s, 0.0, None) {
+        Ok(v) => {
+            progress_line(&format!(
+                "  wall faces named: {}; wall devices on a named face: {} of {} (offsets documented {}, from the plan {})",
+                v["faces"],
+                v["devices"]["on_face"],
+                v["devices"]["wall"],
+                v["offsets"]["documented"].as_u64().unwrap_or(0),
+                v["offsets"]["measured"].as_u64().unwrap_or(0)
+            ));
+            result["layout"] = v;
+        }
+        Err(e) => result["layout_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "devices placed on their wall faces", t_layout);
     // Nothing outside the building unsaid: every element outside its level's footprint flagged and
     // listed with why.
     let t = web_time::Instant::now();
