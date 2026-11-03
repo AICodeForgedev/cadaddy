@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1217,
-    "count": 1217,
+    "callableAsJson": 1218,
+    "count": 1218,
     "ids": [
       "-attedit",
       "-block",
@@ -413,6 +413,7 @@
       "erase",
       "erase.selection",
       "estimate.bid_summary",
+      "estimate.change",
       "estimate.compare",
       "estimate.explain",
       "estimate.export",
