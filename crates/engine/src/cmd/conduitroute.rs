@@ -56,6 +56,8 @@ const RULES: &str = include_str!("conduitroute.json");
 const HOME_PART: &str = ":home:";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
 const IN_WALL: &str = "in the wall";
+/// The obstacle category of a gear's working space (NEC 110.26(A)).
+const WORKING_SPACE: &str = "working space";
 
 /// Most circuits, devices, obstacles, runs and items one routing handles (hostile models).
 const MAX_CIRCUITS: usize = 20_000;
@@ -440,7 +442,7 @@ impl Field {
     /// The first obstacle a square piece `a`–`b` at height `z` (radius `r`) comes within its
     /// clearance of, skipping `skip`.
     fn hit(&self, a: Vec2, b: Vec2, z: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
-        self.hit_span(a, b, z, z, r, upf, skip, rl)
+        self.hit_span(a, b, z, z, r, upf, skip, &[], rl)
     }
     /// The first obstacle a vertical piece at `p` from `z0` to `z1` (radius `r`) comes within
     /// its clearance of, skipping `skip`: a drop, a riser, a change of tier.
@@ -449,10 +451,19 @@ impl Field {
         if (z1 - z0).abs() < 1e-9 {
             return None;
         }
-        self.hit_span(p, p, z0.min(z1), z0.max(z1), r, upf, skip, rl)
+        self.hit_span(p, p, z0.min(z1), z0.max(z1), r, upf, skip, &[], rl)
+    }
+    /// A piece inside a wall (a drop, its jog), `a`–`b` from `z0` to `z1`: as [`Self::hit_column`],
+    /// but the gear's working space (the air before it) is not the wall's cavity.
+    #[allow(clippy::too_many_arguments)]
+    fn hit_in_wall(&self, a: Vec2, b: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+        if (z1 - z0).abs() < 1e-9 && a.dist(b) < 1e-9 {
+            return None;
+        }
+        self.hit_span(a, b, z0.min(z1), z0.max(z1), r, upf, skip, &[WORKING_SPACE], rl)
     }
     #[allow(clippy::too_many_arguments)]
-    fn hit_span(&self, a: Vec2, b: Vec2, zlo: f64, zhi: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+    fn hit_span(&self, a: Vec2, b: Vec2, zlo: f64, zhi: f64, r: f64, upf: f64, skip: &[Handle], skip_cat: &[&str], rl: &RouteRules) -> Option<usize> {
         let z = zlo;
         let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y)));
         let pad = 6.0 * upf;
@@ -475,7 +486,7 @@ impl Field {
                         continue;
                     }
                     let Some(o) = self.obs.get(i) else { continue };
-                    if skip.contains(&o.handle) {
+                    if skip.contains(&o.handle) || skip_cat.contains(&o.category.as_str()) {
                         continue;
                     }
                     let c = rl.clearance_in(&o.category) / 12.0 * upf + r;
@@ -1084,7 +1095,7 @@ fn field_of<'a>(t: &'a ElementTag, k: &str) -> Option<&'a str> {
 /// what blocks it: over the box when that column is clear up to the lowest tier `z0`, else along
 /// its wall (a square wall only: the face on a plan axis, either axis when the face isn't known)
 /// in steps up to the rules' reach, jogging in the wall just above the box; none clear ⟹ over
-/// the box, with the obstacle.
+/// the box, with the obstacle. `skip`: the circuit's own panel (its boxes sit beside it).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn rise_point(
     at: Vec2,
@@ -1094,10 +1105,11 @@ pub(crate) fn rise_point(
     r: f64,
     field: &Field,
     upf: f64,
+    skip: &[Handle],
     rl: &RouteRules,
 ) -> (Vec2, f64, Option<usize>) {
     let zj = (top + rl.route.in_wall_above_box_in.max(0.0) / 12.0 * upf).min(z0);
-    let Some(first) = field.hit_column(at, top, z0, r, upf, &[], rl) else { return (at, zj, None) };
+    let Some(first) = field.hit_in_wall(at, at, top, z0, r, upf, skip, rl) else { return (at, zj, None) };
     let dirs: Vec<Vec2> = match face {
         Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
         Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
@@ -1109,7 +1121,7 @@ pub(crate) fn rise_point(
     for k in 1..=n {
         for dir in &dirs {
             let q = at + *dir * (step * k as f64);
-            if field.hit_column(q, zj, z0, r, upf, &[], rl).is_none() && field.hit(at, q, zj, r, upf, &[], rl).is_none() {
+            if field.hit_in_wall(q, q, zj, z0, r, upf, skip, rl).is_none() && field.hit_in_wall(at, q, zj, zj, r, upf, skip, rl).is_none() {
                 return (q, zj, None);
             }
         }
@@ -1288,7 +1300,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             handle: g.handle,
             lo: Vec3::new(g.lo.x - reach, g.lo.y - reach, floor),
             hi: Vec3::new(g.hi.x + reach, g.hi.y + reach, (floor + rl.gear.working_height_ft * upf).max(g.hi.z)),
-            category: "working space".into(),
+            category: WORKING_SPACE.into(),
             system: g.tag.clone(),
             trade: "electrical",
         });
@@ -1615,10 +1627,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i)
         });
-        // None of its panel on its level: that panel on another storey (the nearest), reached by a
-        // riser through the floors between (a unit's own circuit stays in its unit).
+        // None of its panel on its level: that panel (its own tag, not a unit's copy) on another
+        // storey, the nearest, reached by a riser through the floors between.
         let gi = gi.or_else(|| {
-            if room_circuit || panel_up.is_empty() {
+            if panel_up.is_empty() {
                 return None;
             }
             let here = elev(&c.level);
@@ -1669,8 +1681,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 ceiling_legs += 1;
                 // Each end rises over its box, or along its wall where that is blocked.
                 let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
-                let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, rl);
-                let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, rl);
+                let own: Vec<Handle> = gi.and_then(|i| gear.get(i)).map(|g| g.handle).into_iter().collect();
+                let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, rl);
+                let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, rl);
                 drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
                 let leg = route_leg(qa, qb, &tiers, r_of(size), field, upf, &[], rl);
                 for bl in &leg.blocked {
@@ -1741,8 +1754,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             .flatten();
         match (gi, gi_other) {
             (Some(_), _) => {}
-            (None, Some(other)) => unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("its panel {} is on {other} only: a unit's own circuit is not run to another storey", c.panel)})),
-            (None, None) => unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("panel {} is not in the model: no homerun", c.panel)})),
+            (None, Some(other)) => {
+                unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("its panel {} is on {other}: no riser to it", c.panel)}))
+            }
+            (None, None) => {
+                unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("panel {} is not in the model: no homerun", c.panel)}))
+            }
         }
         // The farthest device along the joints from the root: the voltage drop's length.
         let mut far = vec![f64::NAN; members.len()];
@@ -1866,7 +1883,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Each square piece of the plan path seated clear of the obstacles (the gear itself is
         // the target, not an obstacle).
         let z0 = tiers.first().copied().unwrap_or(lead_dev.top);
-        let (qa, ja, ba) = rise_point(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, rl);
+        let (qa, ja, ba) = rise_point(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], rl);
         drops_moved += usize::from(qa.dist(lead_dev.at) > upf / 96.0);
         let mut home_pts: Vec<Vec2> = vec![qa];
         let mut home_z: Vec<f64> = Vec::new();

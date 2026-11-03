@@ -490,7 +490,15 @@ fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash
     // third: no clear spot within 2' of it, so its drop is a clash item.
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
-    let tags = vec![receptacle(1, 20.0, 10.0, "LP1-1"), receptacle(2, 30.0, 10.0, "LP1-1"), receptacle(3, 60.0, 10.0, "LP1-1"), circuit("LP1-1")];
+    // A fourth sits in the wall between the panel and a second panel LP2 (2' off), inside LP2's
+    // working space: its drop is in the wall, not in that space.
+    let tags = vec![
+        receptacle(1, 20.0, 10.0, "LP1-1"),
+        receptacle(2, 30.0, 10.0, "LP1-1"),
+        receptacle(3, 60.0, 10.0, "LP1-1"),
+        receptacle(4, 1.0, 0.0, "LP1-1"),
+        circuit("LP1-1"),
+    ];
     let spec = json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
@@ -506,7 +514,8 @@ fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash
             ],
             "equipment": [
                 {"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
-                 "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+                 "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}},
+                {"tag": "LP2", "kind": "panel", "level": "L1", "min": [36, -6], "max": [56, 6], "height_ft": 4, "bottom_ft": 2.5}
             ]
         }
     });
@@ -517,6 +526,7 @@ fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash
     let all = r["clashes"].as_array().cloned().unwrap_or_default();
     // No clash with the pipe: the first box's drop stands clear of it.
     assert!(!all.iter().any(|c| c["b"]["system"] == json!("CW")), "{all:?}");
+    assert!(!all.iter().any(|c| c["b"]["category"] == json!("working space")), "{all:?}");
     // The third box's drop under the wide duct: a clash item of kind `drop`, with a fix.
     let drops: Vec<&Value> = all.iter().filter(|c| c["a"]["what"] == json!("drop")).collect();
     assert!(!drops.is_empty(), "{all:?}");
