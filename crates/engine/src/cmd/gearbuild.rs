@@ -965,3 +965,155 @@ mod tests {
         assert_eq!(place_along_walls(&closet, &[(20.0, 6.0)], 30.0, 36.0, 6.0), vec![None]);
     }
 }
+
+/// The system feeders route on.
+pub(crate) const FEEDER_SYSTEM: &str = "E-FEEDER";
+/// A feeder's route above its level's ceiling, feet over the ceiling; under its floor, feet below
+/// it (a bottom entry); a riser stands this far beside the gear it rises at, feet.
+const FEEDER_OVER_CEILING_FT: f64 = 1.0;
+const FEEDER_UNDER_FLOOR_FT: f64 = 1.5;
+const RISER_BESIDE_FT: f64 = 1.5;
+
+/// The feeders' conduit, proposed (Q6152): each conduit of each feeder from its gear's exit (top
+/// or bottom, as the feeder's entries say) up over the level's ceiling (or down under its floor),
+/// across in two legs to its other gear, rising floor to floor beside it when that gear is on
+/// another level, and into it (top or bottom). Parallel conduits a trade size and an inch apart.
+/// A feeder whose gear isn't one placed piece (a typical panel of many rooms) is left out, said
+/// why.
+pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_walk3d::MepRun>, Vec<String>) {
+    use cadaddy_geom::Vec2;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let mut runs = Vec::new();
+    let mut left = Vec::new();
+    let one = |tag: &str| {
+        let m: Vec<&cadaddy_walk3d::MepEquipment> = sp.mep.equipment.iter().filter(|e| e.tag.eq_ignore_ascii_case(tag)).collect();
+        (m.len() == 1).then(|| m[0])
+    };
+    let level = |name: &str| sp.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name));
+    let corner = |l: &cadaddy_walk3d::Level| l.region.map_or(Vec2::ZERO, |r| Vec2::new(r[0], r[1]));
+    let ceiling = |l: &cadaddy_walk3d::Level| if l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 { l.ceiling_ft } else { 9.0 };
+    for f in &sp.mep.feeders {
+        let (Some(a), Some(b)) = (one(&f.from), one(&f.to)) else {
+            left.push(format!("{} {}→{}: not one placed piece of gear at each end", f.tag, f.from, f.to));
+            continue;
+        };
+        let (Some(la), Some(lb)) = (level(&a.level), level(&b.level)) else {
+            left.push(format!("{} {}→{}: a level not in the model", f.tag, f.from, f.to));
+            continue;
+        };
+        let mid = |e: &cadaddy_walk3d::MepEquipment| Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
+        let (pa, pb) = (mid(a), mid(b));
+        // Its other end on this level's plan.
+        let pb_here = pb - corner(lb) + corner(la);
+        let a_bottom = f.from_entry.eq_ignore_ascii_case("bottom");
+        let b_bottom = f.entry.eq_ignore_ascii_case("bottom");
+        let h_a = if a_bottom { -FEEDER_UNDER_FLOOR_FT } else { ceiling(la) + FEEDER_OVER_CEILING_FT };
+        let (za_out, zb_in) =
+            (if a_bottom { a.bottom_ft } else { a.bottom_ft + a.height_ft }, if b_bottom { b.bottom_ft } else { b.bottom_ft + b.height_ft });
+        let same = la.name == lb.name;
+        let rise = lb.elevation_ft - la.elevation_ft;
+        let n = f.conduits.max(1);
+        let size = if f.conduit_in.is_finite() && f.conduit_in > 0.0 { f.conduit_in } else { 1.0 };
+        let gap = (size + 1.0) / 12.0 * upf;
+        let src = format!("feeder {} {}→{}", f.tag, f.from, f.to);
+        let riser = |lv: &str, at: Vec2, lo: f64, hi: f64, runs: &mut Vec<cadaddy_walk3d::MepRun>| {
+            if hi - lo > 0.05 {
+                let mut r = super::printcond::run(FEEDER_SYSTEM, lv, &src, vec![[at.x, at.y]], size, lo);
+                r.top_ft = Some(hi);
+                r.size_source = "feeder schedule".into();
+                r.height_source = "proposed".into();
+                runs.push(r);
+            }
+        };
+        for k in 0..n {
+            let off = Vec2::new(k as f64 * gap, k as f64 * gap);
+            let a0 = pa + off;
+            // Out of its gear to the route's height.
+            riser(&la.name, a0, za_out.min(h_a), za_out.max(h_a), &mut runs);
+            // Across to the other gear, or to the riser beside it.
+            let end = if same { pb_here + off } else { pb_here + Vec2::new(RISER_BESIDE_FT * upf, 0.0) + off };
+            let mut pts = vec![[a0.x, a0.y], [end.x, a0.y], [end.x, end.y]];
+            pts.dedup_by(|p, q| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6);
+            if pts.len() >= 2 {
+                let mut r = super::printcond::run(FEEDER_SYSTEM, &la.name, &src, pts, size, h_a);
+                r.size_source = "feeder schedule".into();
+                r.height_source = "proposed".into();
+                runs.push(r);
+            }
+            if same {
+                riser(&la.name, end, zb_in.min(h_a), zb_in.max(h_a), &mut runs);
+            } else {
+                // Floor to floor beside it, then over to it and into it on its level.
+                let h_b = if b_bottom { -FEEDER_UNDER_FLOOR_FT } else { ceiling(lb) + FEEDER_OVER_CEILING_FT };
+                let (lo, hi) = if rise >= 0.0 { (h_a, rise + h_b) } else { (rise + h_b, h_a) };
+                riser(&la.name, end, lo, hi, &mut runs);
+                let b0 = pb + off;
+                let beside = b0 + Vec2::new(RISER_BESIDE_FT * upf, 0.0);
+                let mut r = super::printcond::run(FEEDER_SYSTEM, &lb.name, &src, vec![[beside.x, beside.y], [b0.x, b0.y]], size, h_b);
+                r.size_source = "feeder schedule".into();
+                r.height_source = "proposed".into();
+                runs.push(r);
+                riser(&lb.name, b0, zb_in.min(h_b), zb_in.max(h_b), &mut runs);
+            }
+        }
+    }
+    (runs, left)
+}
+
+#[cfg(test)]
+mod feeder_route_tests {
+    use super::*;
+
+    fn gear(tag: &str, level: &str, at: [f64; 2], bottom: f64, height: f64) -> cadaddy_walk3d::MepEquipment {
+        cadaddy_walk3d::MepEquipment {
+            tag: tag.into(),
+            kind: "panel".into(),
+            level: level.into(),
+            min: [at[0] - 6.0, at[1] - 3.0],
+            max: [at[0] + 6.0, at[1] + 3.0],
+            bottom_ft: bottom,
+            height_ft: height,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_feeder_leaves_its_gear_crosses_and_rises_floor_to_floor_into_the_other() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        for (n, e, r) in [("Level 1", 0.0, [0.0, 0.0, 1200.0, 1200.0]), ("Level 3", 20.0, [5000.0, 0.0, 6200.0, 1200.0])] {
+            sp.levels.push(
+                serde_json::from_value(serde_json::json!({"name": n, "elevation_ft": e, "height_ft": 10.0, "ceiling_ft": 9.0, "region": r}))
+                    .expect("level"),
+            );
+        }
+        sp.mep.equipment = vec![
+            gear("MDP", "Level 1", [100.0, 100.0], 0.0, 7.5),
+            gear("DP1", "Level 1", [100.0, 400.0], 2.0, 4.0),
+            gear("DP2", "Level 3", [5300.0, 100.0], 2.0, 4.0),
+            gear("G", "Level 3", [5400.0, 100.0], 2.0, 3.0),
+            gear("G", "Level 3", [5500.0, 100.0], 2.0, 3.0),
+        ];
+        let feeder = |to: &str, conduits: u32| cadaddy_walk3d::Feeder {
+            tag: "604".into(),
+            from: "MDP".into(),
+            to: to.into(),
+            conduits,
+            conduit_in: 4.0,
+            from_entry: "bottom".into(),
+            entry: "top".into(),
+            ..Default::default()
+        };
+        sp.mep.feeders = vec![feeder("DP1", 2), feeder("DP2", 1), feeder("G", 1)];
+        let (runs, left) = feeder_runs(&sp);
+        assert_eq!(left.len(), 1, "G is two panels: {left:?}");
+        // DP1, same level, bottom out and top in: down, across under the floor, up into its top; twice.
+        let dp1: Vec<_> = runs.iter().filter(|r| r.source_sheet.contains("DP1")).collect();
+        assert_eq!(dp1.len(), 6, "{dp1:#?}");
+        let into = dp1.iter().find(|r| r.top_ft.is_some() && r.points[0][1] > 300.0).expect("up into DP1");
+        assert_eq!((into.bottoms_ft[0], into.top_ft), (-1.5, Some(6.0)));
+        // DP2, two levels up: the riser beside it reaches its level's route (20 + 9 + 1 ft).
+        let up = runs.iter().filter(|r| r.source_sheet.contains("DP2") && r.top_ft == Some(30.0)).count();
+        assert_eq!(up, 1, "{runs:#?}");
+        assert!(runs.iter().any(|r| r.source_sheet.contains("DP2") && r.level == "Level 3" && r.top_ft == Some(10.0)), "down into DP2's top");
+    }
+}

@@ -5359,6 +5359,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["gear_error"] = json!(e.to_string());
     }
     bim_step(s, job, "electrical gear", t);
+    // What the electrical keynotes ask built (a BDA system's boxes and conduit).
+    let t = web_time::Instant::now();
+    if let Err(e) = keynote_step(s, job, &pages, &mut result) {
+        result["keynotes_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "keynotes", t);
+    // The feeders' conduit, gear to gear (proposed).
+    let t = web_time::Instant::now();
+    if let Err(e) = feeder_step(s, job, &mut result) {
+        result["feeders_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "feeder routes", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -5426,14 +5438,46 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     match s.execute("bim.coderules", &json!({})) {
         Ok(v) => {
             let line = format!(
-                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}",
+                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}; receptacle circuits in GFCI places on breakers that aren't: {}",
                 v.get("receptacles").and_then(Value::as_u64).unwrap_or(0),
                 v.get("tamper_resistant").and_then(Value::as_u64).unwrap_or(0),
                 v.pointer("/tr_documented/stated").and_then(Value::as_u64).unwrap_or(0),
-                v.get("gfci").map(Value::to_string).unwrap_or_default()
+                v.get("gfci").map(Value::to_string).unwrap_or_default(),
+                gfci_places(&v).join("; ")
             );
             report_progress(s, json!({"step": "code rules"}), &line);
             s.echo(line);
+            let places = gfci_places(&v);
+            if !places.is_empty() {
+                // Its cost: a GFCI receptacle for a standard one on each.
+                let n = places.len() as f64;
+                let change = s
+                    .execute(
+                        "estimate.change",
+                        &json!({"lines": [{"item": "GFCI receptacle", "qty": n}, {"item": "Duplex receptacle", "qty": -n}], "why": "GFCI places"}),
+                    )
+                    .ok();
+                let cost = change.as_ref().map_or_else(String::new, |c| {
+                    format!(
+                        " (change: ${:.2} material, {:.2} labor hours)",
+                        c.pointer("/totals/material").and_then(Value::as_f64).unwrap_or(0.0),
+                        c.pointer("/totals/labor_hours").and_then(Value::as_f64).unwrap_or(0.0)
+                    )
+                });
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!(
+                        "{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {}{cost}",
+                        places.len(),
+                        places.join("; ")
+                    ),
+                    "a receptacle in an elevator pit, car or hoistway, on a roof, outdoors, in a garage, bathroom or laundry needs GFCI (NEC 620.6, 210.8); the breaker isn't, so the first receptacle on the circuit is a GFCI device",
+                    3,
+                    vec!["Build (and buy) a GFCI receptacle first on each, or confirm the breaker is GFCI".into()],
+                    None,
+                    false,
+                );
+            }
             let undecided = v.pointer("/gfci/undecided").and_then(Value::as_u64).unwrap_or(0);
             if undecided > 0 {
                 job.add_finding(
@@ -8993,6 +9037,419 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
 /// How far a switch leg's switch may be from its fixtures, and a 3-way from its pair, feet.
 const CONTROL_REACH_FT: f64 = 40.0;
 const THREE_WAY_REACH_FT: f64 = 150.0;
+
+/// `bim.coderules`' receptacle circuits in GFCI places on breakers that aren't: `A-13 RCPT - ELEVATOR PIT (NEC 620.6 …)`.
+fn gfci_places(v: &Value) -> Vec<String> {
+    v.get("gfci_circuits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let g = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default();
+            format!("{}-{} {} ({})", g("panel"), g("circuit"), g("description"), g("rule"))
+        })
+        .collect()
+}
+
+/// How far a keynote's tag may be from the symbol it points at (its leader), in its text heights.
+const KEYNOTE_REACH: f64 = 8.0;
+/// Two levels' riser boxes this close in plan (feet) are one riser.
+const RISER_REACH_FT: f64 = 15.0;
+/// How far a stub goes into the space it is stubbed into, feet.
+const STUB_INTO_FT: f64 = 1.5;
+/// Most boxes the keynotes add.
+const MAX_KEYNOTE_BOXES: usize = 400;
+
+/// One box a keynote asks for, where it is.
+struct KeynoteBox {
+    sheet: String,
+    number: String,
+    text: String,
+    work: super::keynotes::Work,
+    level: String,
+    /// On its level's plan (drawing units).
+    plan: cadaddy_geom::Vec2,
+    /// The device (its index in the spec's tags) it is, when its tag points at one.
+    device: Option<usize>,
+}
+
+/// The electrical keynotes' work ([`super::keynotes`]): each actionable note's boxes where its
+/// tags point (a junction box the plan shows takes its size and system; else a box of its size
+/// at the tag), and its conduit: between each of its boxes floor to floor (a riser), stubbed into
+/// the nearest room so named, or run to its system's riser box on the level. All at the level's
+/// ceiling; what the documents leave to a vendor ("as directed by the BDA system vendor") said so.
+fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    use super::keynotes::{self, Route};
+    use cadaddy_geom::Vec2;
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    // A sheet by its number (`E-4/3`: E-4's view of level 3).
+    let norm = |v: &str| cadaddy_mepfix::printlinks::norm_sheet(v.split('/').next().unwrap_or(v));
+    // The devices: where each one's symbol is on its sheet, and where it is on its level.
+    struct Dev {
+        i: usize,
+        sheet: String,
+        level: String,
+        doc: Vec2,
+        plan: Vec2,
+        junction: bool,
+    }
+    let devs: Vec<Dev> = {
+        let d = s.doc()?;
+        sp.tags
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.id.starts_with("device:"))
+            .filter_map(|(i, t)| {
+                let h = cadaddy_doc::Handle::parse_hex(&t.fields.get("symbol")?.value)?;
+                let b = cadaddy_doc::entity_bounds(d, d.model.get(h)?, 0);
+                (!b.is_empty()).then(|| Dev {
+                    i,
+                    sheet: norm(&t.fields.get("sheet").map(|f| f.value.clone()).unwrap_or_default()),
+                    level: t.level.clone(),
+                    doc: b.center(),
+                    plan: Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf),
+                    junction: t.kind.contains("junction"),
+                })
+            })
+            .collect()
+    };
+    let mut boxes: Vec<KeynoteBox> = Vec::new();
+    for (number, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        let lists = keynotes::lists(&texts);
+        let Some(list) = lists.iter().find(|l| l.heading.to_ascii_uppercase().contains("ELECTRICAL")).or_else(|| lists.first()) else { continue };
+        let actionable: Vec<(&keynotes::Note, keynotes::Work)> = list.notes.iter().filter_map(|n| keynotes::work(&n.text).map(|w| (n, w))).collect();
+        if actionable.is_empty() {
+            continue;
+        }
+        let rect = texts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |r, t| {
+            [r[0].min(t.at.x), r[1].min(t.at.y), r[2].max(t.at.x), r[3].max(t.at.y)]
+        });
+        let segs = keynotes::sheet_segments(sub, rect);
+        let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
+        let symbol_boxes: Vec<[f64; 4]> = sub
+            .model
+            .iter()
+            .filter(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Insert(ins) => {
+                    *shapes.entry(ins.block.clone()).or_insert_with(|| symbol_shape(sub, &ins.block).is_some_and(|sh| plain_box(&sh)))
+                }
+                _ => false,
+            })
+            .map(|e| cadaddy_doc::entity_bounds(sub, e, 0))
+            .filter(|b| !b.is_empty())
+            .map(|b| [b.min.x, b.min.y, b.max.x, b.max.y])
+            .collect();
+        let sheet = norm(number);
+        let on_sheet: Vec<&Dev> = devs.iter().filter(|d| d.sheet == sheet).collect();
+        // Circles, and symbols (not keynote boxes, radius -1: a number right over one's middle is
+        // its own: a callout bubble the import made a block).
+        let rounds: Vec<(Vec2, f64)> = sub
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
+                cadaddy_doc::EntityKind::Insert(ins) if !shapes.get(&ins.block).copied().unwrap_or(false) => Some((ins.insert.xy(), -1.0)),
+                _ => None,
+            })
+            .collect();
+        let me = keynotes::subject(list);
+        let others: Vec<String> = lists.iter().map(keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
+        for (num, at) in keynotes::tags(&texts, &segs, &symbol_boxes, &rounds, &others, list) {
+            let Some((note, w)) = actionable.iter().find(|(n, _)| n.number == num) else { continue };
+            if boxes.len() >= MAX_KEYNOTE_BOXES {
+                break;
+            }
+            let at = Vec2::new(at[0], at[1]);
+            let reach = KEYNOTE_REACH * list.number_h;
+            let nearest = |junction: bool| {
+                on_sheet.iter().filter(|d| !junction || d.junction).map(|d| ((d.doc - at).len(), *d)).min_by(|a, b| a.0.total_cmp(&b.0))
+            };
+            let (level, plan, device) = match nearest(true).filter(|(dd, _)| *dd <= reach && w.box_in.is_some()) {
+                Some((_, dv)) => (dv.level.clone(), dv.plan, Some(dv.i)),
+                None => {
+                    // The tag's place on its level: the nearest devices' offset from sheet to plan.
+                    let mut near: Vec<(f64, &&Dev)> = on_sheet.iter().map(|d| ((d.doc - at).len(), d)).collect();
+                    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    let Some((_, first)) = near.first() else { continue };
+                    let same: Vec<Vec2> = near.iter().filter(|(_, d)| d.level == first.level).take(3).map(|(_, d)| d.plan - d.doc).collect();
+                    let off = same.iter().fold(Vec2::ZERO, |a, b| a + *b) * (1.0 / same.len().max(1) as f64);
+                    (first.level.clone(), at + off, None)
+                }
+            };
+            boxes.push(KeynoteBox { sheet: number.clone(), number: num.clone(), text: note.text.clone(), work: w.clone(), level, plan, device });
+        }
+    }
+    if boxes.is_empty() {
+        return Ok(());
+    }
+    // One box per spot (a tag on two sheets of one level).
+    boxes.dedup_by(|a, b| a.level == b.level && (a.plan - b.plan).len() < 1.0 * upf && a.work.system == b.work.system);
+    let level_of = |name: &str| sp.levels.iter().find(|l| l.name.eq_ignore_ascii_case(name)).cloned();
+    let mount = |name: &str| level_of(name).map(|l| if l.ceiling_ft.is_finite() && l.ceiling_ft > 0.0 { l.ceiling_ft } else { 9.0 }).unwrap_or(9.0);
+    let fmt_in = |b: [f64; 3]| format!("{}\"x{}\"x{}\"", b[0], b[1], b[2]);
+    let mut new_equipment: BTreeSet<String> = BTreeSet::new();
+    let (mut on_devices, mut at_tags) = (0usize, 0usize);
+    for (k, b) in boxes.iter().enumerate() {
+        let why = format!("{} keynote {}: {}", b.sheet, b.number, b.text);
+        let size = b.work.box_in.map(fmt_in).unwrap_or_default();
+        match b.device.and_then(|i| sp.tags.get_mut(i)) {
+            Some(t) => {
+                t.set("keynote", why.clone(), "note");
+                if !b.work.system.is_empty() {
+                    t.set("system", b.work.system.clone(), "note");
+                }
+                if !size.is_empty() {
+                    t.set("box_size", size.clone(), "note");
+                }
+                on_devices += 1;
+            }
+            None => {
+                let Some(bx) = b.work.box_in else { continue };
+                let (w, dpt) = (bx[1] / 12.0 * upf, bx[2] / 12.0 * upf);
+                let tag = format!("{}-JB-{}", if b.work.system.is_empty() { "KN" } else { b.work.system.as_str() }, k + 1);
+                let mut props = BTreeMap::new();
+                props.insert("size".to_string(), size.clone());
+                props.insert("keynote".to_string(), why.clone());
+                let mut sources = BTreeMap::new();
+                sources.insert("position".to_string(), format!("{} keynote {} tag (the symbol it points at not read)", b.sheet, b.number));
+                sources.insert("size".to_string(), format!("{} keynote {}", b.sheet, b.number));
+                sources.insert("elevation".to_string(), "rule: at the level's ceiling".to_string());
+                sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+                    tag: tag.clone(),
+                    kind: "junction_box".into(),
+                    level: b.level.clone(),
+                    min: [b.plan.x - w / 2.0, b.plan.y - dpt / 2.0],
+                    max: [b.plan.x + w / 2.0, b.plan.y + dpt / 2.0],
+                    bottom_ft: (mount(&b.level) - bx[0] / 12.0).max(0.0),
+                    height_ft: bx[0] / 12.0,
+                    systems: vec![b.work.system.clone()],
+                    title: why,
+                    properties: props,
+                    sources,
+                    confidence: 0.6,
+                    ..Default::default()
+                });
+                new_equipment.insert(tag.to_ascii_uppercase());
+                at_tags += 1;
+            }
+        }
+    }
+    // The conduit.
+    let mut runs: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+    let rooms = {
+        let d = s.doc()?;
+        let offsets: BTreeMap<cadaddy_doc::Handle, Vec2> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+            .map(|e| (e.handle, super::bspec::stacked_by(e)))
+            .collect();
+        super::bspec::room_elements(d)
+            .into_iter()
+            .map(|r| {
+                let off = offsets.get(&r.handle).copied().unwrap_or(Vec2::ZERO);
+                (r.level, r.name.to_ascii_uppercase(), r.outline.iter().map(|p| *p - off).collect::<Vec<Vec2>>())
+            })
+            .collect::<Vec<_>>()
+    };
+    let system_of = |w: &keynotes::Work| format!("E-{}", if w.system.is_empty() { "KEYNOTE" } else { w.system.as_str() });
+    let mut risers = 0usize;
+    for b in &boxes {
+        let sys = system_of(&b.work);
+        let h = mount(&b.level);
+        for (size, route) in &b.work.conduits {
+            let mut r = super::printcond::run(&sys, &b.level, &b.sheet, Vec::new(), *size, h);
+            r.size_source = "note".into();
+            r.height_source = "rule".into();
+            match route {
+                Route::Riser => {
+                    // Up to the same note's box on the next level, when it is above this one.
+                    let Some(lv) = level_of(&b.level) else { continue };
+                    // Each level's plan has its own place in the drawing: compared from its corner.
+                    let corner = |l: &cadaddy_walk3d::Level| l.region.map_or(Vec2::ZERO, |r| Vec2::new(r[0], r[1]));
+                    let here = b.plan - corner(&lv);
+                    let above = boxes
+                        .iter()
+                        .filter(|o| o.text == b.text || (o.work.system == b.work.system && o.work.conduits.iter().any(|c| c.1 == Route::Riser)))
+                        .filter_map(|o| Some((o, level_of(&o.level)?)))
+                        .filter(|(o, ol)| ol.elevation_ft > lv.elevation_ft + 1.0 && (o.plan - corner(ol) - here).len() <= RISER_REACH_FT * upf)
+                        .min_by(|a, b| a.1.elevation_ft.total_cmp(&b.1.elevation_ft));
+                    let Some((o, ol)) = above else { continue };
+                    r.points = vec![[b.plan.x, b.plan.y]];
+                    r.bottoms_ft = vec![h];
+                    r.top_ft = Some(ol.elevation_ft - lv.elevation_ft + mount(&o.level));
+                    risers += 1;
+                }
+                Route::Stub(room) => {
+                    // To the nearest such room's edge on its level, and a little into it.
+                    let near = rooms
+                        .iter()
+                        .filter(|(l, n, o)| l.eq_ignore_ascii_case(&b.level) && n.contains(room.as_str()) && o.len() >= 3)
+                        .flat_map(|(_, _, o)| (0..o.len()).filter_map(move |i| Some((*o.get(i)?, *o.get((i + 1) % o.len())?))))
+                        .map(|(a, c)| {
+                            let ab = c - a;
+                            let t = if ab.len() > 1e-9 { ((b.plan - a).dot(ab) / ab.dot(ab)).clamp(0.0, 1.0) } else { 0.0 };
+                            a + ab * t
+                        })
+                        .min_by(|p, q| (*p - b.plan).len().total_cmp(&(*q - b.plan).len()));
+                    let Some(edge) = near else { continue };
+                    let dir = edge - b.plan;
+                    if dir.len() < 1e-6 {
+                        continue;
+                    }
+                    let end = edge + dir * (STUB_INTO_FT * upf / dir.len());
+                    r.points = vec![[b.plan.x, b.plan.y], [end.x, end.y]];
+                }
+                Route::ToRiser => {
+                    // To its system's riser box on its level.
+                    let riser = boxes
+                        .iter()
+                        .filter(|o| o.level == b.level && o.work.system == b.work.system && o.work.conduits.iter().any(|c| c.1 == Route::Riser))
+                        .min_by(|p, q| (p.plan - b.plan).len().total_cmp(&(q.plan - b.plan).len()));
+                    let Some(o) = riser else { continue };
+                    let corner = [o.plan.x, b.plan.y];
+                    r.points = vec![[b.plan.x, b.plan.y], corner, [o.plan.x, o.plan.y]];
+                    r.points.dedup();
+                    r.bottoms_ft = vec![h; r.points.len().saturating_sub(1).max(1)];
+                }
+            }
+            if !r.points.is_empty() {
+                runs.push(r);
+            }
+        }
+    }
+    let run_count = runs.len();
+    build_new_mep(s, sp, runs, &new_equipment)?;
+    let systems: BTreeSet<&str> = boxes.iter().map(|b| b.work.system.as_str()).filter(|v| !v.is_empty()).collect();
+    let line = format!(
+        "  keynotes: {} boxes ({} on the junction boxes the plans show, {at_tags} added at their tags; systems {:?}); conduit runs {run_count} ({risers} risers)",
+        boxes.len(),
+        on_devices,
+        systems
+    );
+    report_progress(s, json!({"step": "keynotes"}), &line);
+    s.echo(line);
+    if boxes.iter().any(|b| b.text.to_ascii_uppercase().contains("VENDOR")) {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} system boxes and conduit built from the keynotes; their notes leave locations and requirements to the system vendor", systems.into_iter().collect::<Vec<_>>().join(", ")),
+            "keynotes as the sheets print them: boxes where their tags point, conduit as the notes say (risers floor to floor, stubs, runs to the riser), at the level's ceiling",
+            3,
+            vec!["Confirm the box locations and the conduit with the system vendor (and where the corridor's ceiling is hard lid)".into()],
+            None,
+            false,
+        );
+    }
+    result["keynotes"] = json!({"boxes": boxes.len(), "on_devices": on_devices, "added": at_tags, "runs": run_count, "risers": risers});
+    Ok(())
+}
+
+/// The feeders' conduit ([`super::gearbuild::feeder_runs`]): proposed routes gear to gear, built.
+fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    if sp.mep.feeders.is_empty() {
+        return Ok(());
+    }
+    // A rerun: the feeders' earlier routes go (their 3D with them when the whole model rebuilds).
+    sp.mep.runs.retain(|r| r.system != super::gearbuild::FEEDER_SYSTEM);
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    let routed: BTreeSet<String> = runs.iter().map(|r| r.source_sheet.clone()).collect();
+    let feet: f64 = runs
+        .iter()
+        .map(|r| {
+            let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+            let flat: f64 = r.points.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt() / upf).sum();
+            flat + r.top_ft.map_or(0.0, |t| (t - r.bottoms_ft.first().copied().unwrap_or(t)).abs())
+        })
+        .sum();
+    let line = format!(
+        "  feeder routes (proposed): {} feeders routed, {} conduit runs, {feet:.0} ft of conduit; not routed {}: {}",
+        routed.len(),
+        runs.len(),
+        left.len(),
+        left.iter().take(6).cloned().collect::<Vec<_>>().join("; ")
+    );
+    let n = runs.len();
+    build_new_mep(s, sp, runs, &BTreeSet::new())?;
+    report_progress(s, json!({"step": "feeder routes"}), &line);
+    s.echo(line);
+    if !left.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} feeders not routed: {}", left.len(), left.iter().take(10).cloned().collect::<Vec<_>>().join("; ")),
+            "a feeder is routed gear to gear when each end is one placed piece of gear",
+            3,
+            vec!["Route them from the riser diagram, or name the panel each one feeds".into()],
+            None,
+            false,
+        );
+    }
+    result["feeder_routes"] = json!({"routed": routed.len(), "runs": n, "feet": feet, "not_routed": left});
+    Ok(())
+}
+
+/// New MEP runs and equipment into the spec and built (the rest of the model kept), moved as the
+/// build moved their level to stack it.
+fn build_new_mep(
+    s: &mut Session,
+    mut sp: cadaddy_walk3d::BuildingSpec,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    new_equipment: &BTreeSet<String>,
+) -> crate::Result<()> {
+    use cadaddy_geom::Vec2;
+    for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
+        if !sp.mep.systems.iter().any(|y| y.name == name) {
+            sp.mep.systems.push(cadaddy_walk3d::MepSystem {
+                name: name.clone(),
+                layer: name,
+                kind: cadaddy_walk3d::MepKind::Conduit,
+                size_in: [1.0, 0.0],
+                bottom_ft: 9.0,
+                show: true,
+                duct_type: None,
+                color_index: 0,
+            });
+        }
+    }
+    sp.mep.runs.extend(runs.iter().cloned());
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    let offsets: BTreeMap<String, Vec2> = {
+        let d = s.doc()?;
+        let mut m = BTreeMap::new();
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("room")) {
+            if let Some(l) = super::bspec::made_level(e) {
+                m.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+            }
+        }
+        m
+    };
+    let d = s.doc_mut()?;
+    let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
+    if !new_equipment.is_empty() {
+        let _ = super::mep::build_equipment(d, &sp, Some(new_equipment));
+    }
+    let mut part = sp.clone();
+    part.mep.runs = runs;
+    part.mep.terminals.clear();
+    part.mep.equipment.clear();
+    let _ = super::mep::build(d, &part);
+    let made: Vec<cadaddy_doc::Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
+    for h in made {
+        let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
+        let off = level.and_then(|l| offsets.get(&l.to_ascii_lowercase()).copied()).unwrap_or(Vec2::ZERO);
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    s.touch();
+    Ok(())
+}
 
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";

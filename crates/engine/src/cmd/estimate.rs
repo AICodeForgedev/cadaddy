@@ -119,6 +119,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("estimate.compare", "Compare Estimate What-If", run_compare)
             .params("{assembly?: {from, to}, scope?: {key: scope}, settings?: {…}} → {now, what_if, delta}")
             .noundo(),
+        CommandSpec::new("estimate.change", "Price a Change", run_change)
+            .params("{lines: [{item, size?, unit?: each (default), qty: added (negative: removed), trade?: electrical (default), category?}], why?} → {lines: [{item, size, qty, material, labor_hours, labor_cost, cost, via, priced}], totals: {material, labor_hours, labor_cost, cost}, unpriced, why}: what a change costs (an RFI's fix, a code rule's device), each line priced as the estimate prices it (the drawing's prices, the price book, the starter book); labor cost at the estimate's crew rate")
+            .noundo(),
         CommandSpec::new("estimate.export", "Export Estimate", run_export)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path: .xlsx or .csv file, format?: xlsx|csv (from the extension), columns?: [key|trade|category|item|size|unit|qty|net|level|material|labor_hours|labor_cost|cost|total|scope|status|via]} → {path, lines, total, columns}")
             .noundo(),
@@ -1449,6 +1452,51 @@ fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
     Err(bad("estimate.explain", "give a `line` key or `total: true`"))
 }
 
+/// Most lines one change prices.
+const MAX_CHANGE_LINES: usize = 200;
+
+fn run_change(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "estimate.change";
+    let lines = p.get("lines").and_then(Value::as_array).filter(|l| !l.is_empty()).ok_or_else(|| bad(C, "`lines` is required: [{item, qty}]"))?;
+    let (_, st) = state(s, C)?;
+    let mut out = Vec::new();
+    let (mut material, mut hours, mut labor, mut cost) = (0.0, 0.0, 0.0, 0.0);
+    let mut unpriced = Vec::new();
+    for l in lines.iter().take(MAX_CHANGE_LINES) {
+        let g = |k: &str, d: &str| l.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
+        let item = g("item", "");
+        let qty = l.get("qty").and_then(Value::as_f64).filter(|q| q.is_finite() && q.abs() <= 1e9).unwrap_or(0.0);
+        if item.is_empty() || qty == 0.0 {
+            return Err(bad(C, format!("each line needs an item and a qty: {l}")));
+        }
+        let line = json!({
+            "trade": g("trade", "electrical"), "category": g("category", ""), "item": item, "size": g("size", ""),
+            "unit": g("unit", "each"), "total": qty.abs(), "net": qty.abs(),
+        });
+        let (priced, _) = price_lines(&st, &json!({ "lines": [line] }));
+        let sign = qty.signum();
+        let Some(pr) = priced.first() else { continue };
+        let ok = !pr.match_kind.is_empty();
+        if !ok {
+            unpriced.push(format!("{item} {}", g("size", "")).trim().to_string());
+        }
+        material += sign * pr.material;
+        hours += sign * pr.labor_hours;
+        labor += sign * pr.labor_cost;
+        cost += sign * pr.cost;
+        out.push(json!({
+            "item": item, "size": g("size", ""), "qty": qty, "material": sign * pr.material, "labor_hours": sign * pr.labor_hours,
+            "labor_cost": sign * pr.labor_cost, "cost": sign * pr.cost, "via": pr.via, "priced": ok,
+        }));
+    }
+    Ok(json!({
+        "lines": out,
+        "totals": {"material": material, "labor_hours": hours, "labor_cost": labor, "cost": cost},
+        "unpriced": unpriced,
+        "why": p.get("why").cloned().unwrap_or(Value::Null),
+    }))
+}
+
 fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
     let (_, st) = state(s, "estimate.compare")?;
     let priced = price_job(s, &st, "estimate.compare", false)?.priced;
@@ -2059,6 +2107,23 @@ mod tests {
             assert!((0.0..1e6).contains(&m), "bad material in row: {r}");
             assert!(r["source"].as_str() == Some(STARTER_SOURCE), "wrong source in row: {r}");
         }
+    }
+
+    #[test]
+    fn a_change_is_priced_line_by_line_a_removal_negative() {
+        let mut s = Session::new();
+        job(&mut s);
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-10-21", "pricebook": false })).unwrap();
+        let c = s
+            .execute("estimate.change", &json!({"lines": [{"item": "GFCI receptacle", "qty": 3}, {"item": "Duplex receptacle", "qty": -3}]}))
+            .unwrap();
+        // The starter book: GFCI 19.00 + 0.50 h, duplex 2.50 + 0.40 h.
+        let m = c["totals"]["material"].as_f64().unwrap_or(0.0);
+        let h = c["totals"]["labor_hours"].as_f64().unwrap_or(0.0);
+        assert!((m - 3.0 * (19.0 - 2.5)).abs() < 0.01, "{c}");
+        assert!((h - 3.0 * (0.5 - 0.4)).abs() < 0.01, "{c}");
+        assert!(c["lines"][1]["material"].as_f64().unwrap_or(0.0) < 0.0);
+        assert!(s.execute("estimate.change", &json!({"lines": [{"item": "", "qty": 1}]})).is_err());
     }
 
     #[test]
