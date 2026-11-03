@@ -68,6 +68,7 @@ pub(crate) mod inquiry;
 pub mod inventory;
 mod layer;
 pub mod levels;
+pub(crate) mod loosesym;
 pub mod lowvolt;
 pub mod markup;
 pub mod mountlist;

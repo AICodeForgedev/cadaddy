@@ -5113,6 +5113,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 progress_line(&format!("  devices of no kind (their mark is in no legend row or known list): {unknown:?}"));
             }
         }
+        // A fire alarm plan's symbols with no mark (strobes, horn/strobes): loose strokes, each
+        // its legend row's by its drawn sample's shape (Q6167).
+        if !legend.is_empty() {
+            let loose = fa_loose_devices(s.doc()?, job, &legend, &devices);
+            if !loose.is_empty() {
+                let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+                for dv in &loose {
+                    *by.entry(dv.tag.as_str()).or_default() += 1;
+                }
+                progress_line(&format!("  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?}", loose.len()));
+                devices.extend(loose);
+            }
+        }
         // Still of no kind: the electrical and mechanical sheets that aren't plans (the legend
         // sheet, the fixture and equipment schedules, the panel schedules' load names).
         if devices.iter().any(unresolved_mark) {
@@ -8661,7 +8674,7 @@ pub(crate) fn symbol_shape(d: &cadaddy_doc::Drawing, block: &str) -> Option<Vec<
 }
 
 /// [`symbol_shape`] of some drawn objects (a symbol drawn once, as linework, in a legend row).
-fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
+pub(crate) fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
     let mut parts: Vec<(u8, [f64; 2], f64)> = Vec::new();
     for kind in objects.take(64) {
         match kind {
@@ -8690,7 +8703,7 @@ fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> O
 }
 
 /// A symbol's shape ([`symbol_shape`]).
-type Shape = Vec<(u8, i32, i32, i32)>;
+pub(crate) type Shape = Vec<(u8, i32, i32, i32)>;
 
 /// Whether a shape is a keynote's box: straight pieces only, drawn into all four corners of its
 /// extent (square or eased), with its number's strokes inside. A receptacle's symbol is round (a
@@ -10298,6 +10311,99 @@ fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk
                 Some(_) => {}
                 None => out.push(p),
             }
+        }
+    }
+    out
+}
+
+/// The symbols with no mark on the fire alarm plans (Q6167): the loose strokes of each copy of
+/// a fire alarm legend row's drawn sample, outside the legend tables and away from the devices
+/// already read, each a fire alarm device of its row (`STROBE`, `HORN/STROBE`), the row its source.
+fn fa_loose_devices(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    legend: &BTreeMap<Shape, (String, String)>,
+    have: &[super::readers::ReadDevice],
+) -> Vec<super::readers::ReadDevice> {
+    let r = super::scope::rules();
+    let fire_alarm: BTreeSet<String> = job
+        .index
+        .as_ref()
+        .or(job.sheets.as_ref())
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|sh| sh.get("title").and_then(Value::as_str).is_some_and(|t| t.to_ascii_uppercase().contains("FIRE ALARM")))
+        .filter_map(|sh| sh.get("number").and_then(Value::as_str).map(|n| n.trim().to_ascii_uppercase()))
+        .collect();
+    let mut out: Vec<super::readers::ReadDevice> = Vec::new();
+    for span in job.sheet_spans.iter().filter(|sp| fire_alarm.contains(&sp.sheet.split('/').next().unwrap_or(&sp.sheet).trim().to_ascii_uppercase()))
+    {
+        // The sheet's text: its letters' height sizes a symbol; its legend tables are left out.
+        let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = d
+            .model
+            .iter()
+            .filter(|e| e.handle.0 >= span.lo && e.handle.0 < span.hi)
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Text(t) if t.height.is_finite() && t.height > 0.0 => Some(cadaddy_mepfix::sheet_facts::TextItem {
+                    value: t.value.trim().to_string(),
+                    at: t.insert.xy(),
+                    height: t.height,
+                    rotation: t.rotation,
+                }),
+                _ => None,
+            })
+            .take(MAX_SHEET_TEXTS)
+            .collect();
+        let mut heights: Vec<f64> = texts.iter().filter(|t| t.value.chars().count() <= 3).map(|t| t.height).collect();
+        heights.sort_by(f64::total_cmp);
+        let Some(&h) = heights.get(heights.len() / 2) else { continue };
+        let tables: Vec<[f64; 4]> = texts
+            .iter()
+            .filter(|t| t.value.eq_ignore_ascii_case("SYMBOL"))
+            .take(20)
+            .map(|head| {
+                let th = head.height;
+                // Its rows: down its DESCRIPTION column (else its own) while they run on.
+                let desc_x = texts
+                    .iter()
+                    .filter(|t| t.value.to_ascii_uppercase().starts_with("DESCRIPTION") && (t.at.y - head.at.y).abs() <= th && t.at.x > head.at.x)
+                    .map(|t| t.at.x)
+                    .min_by(f64::total_cmp)
+                    .unwrap_or(head.at.x);
+                let col: Vec<f64> = texts.iter().filter(|t| t.at.y < head.at.y && (t.at.x - desc_x).abs() <= 3.0 * th).map(|t| t.at.y).collect();
+                let mut ys = col;
+                ys.sort_by(|a, b| b.total_cmp(a));
+                let mut bottom = head.at.y;
+                for y in ys {
+                    if bottom - y > 6.0 * th {
+                        break;
+                    }
+                    bottom = y;
+                }
+                [head.at.x - 4.0 * th, bottom - 2.0 * th, desc_x.max(head.at.x) + 120.0 * th, head.at.y + 2.0 * th]
+            })
+            .collect();
+        let max_size = 6.0 * h;
+        let found = super::loosesym::find(d, span.lo, span.hi, legend, &|w| r.fa_kind_of(w).is_some(), max_size, &tables);
+        for f in found {
+            let at = [f.at.x, f.at.y];
+            let Some(region) = job.level_at(at).filter(|g| super::printmep::building_level(&g.level)) else { continue };
+            if have.iter().chain(out.iter()).any(|dv| (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= 0.5 * max_size) {
+                continue;
+            }
+            let Some(kind) = r.fa_kind_of(&f.row) else { continue };
+            out.push(super::readers::ReadDevice {
+                tag: kind.to_ascii_uppercase(),
+                at,
+                sheet: span.sheet.clone(),
+                level: region.level.clone(),
+                handle: f.handles.first().map(|x| x.hex()).unwrap_or_default(),
+                kind: "fire alarm device".into(),
+                kind_source: format!("{} legend: {}", f.legend_sheet, f.row),
+                ..super::readers::ReadDevice::default()
+            });
         }
     }
     out
@@ -16231,6 +16337,73 @@ mod tests {
         ] {
             assert_eq!(legend_kind(row), want, "{row}");
         }
+    }
+
+    #[test]
+    fn a_fire_alarm_plans_symbols_with_no_mark_are_their_legend_rows() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // A made-up strobe: a circle with an X and a stem, at `c` (6 units across).
+        let strobe = |s: &mut crate::Session, c: [f64; 2]| {
+            s.execute("circle", &json!({"center": c, "radius": 1.8})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 1.2, c[1] - 1.2], [c[0] + 1.2, c[1] + 1.2]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 1.2, c[1] + 1.2], [c[0] + 1.2, c[1] - 1.2]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 3.0, c[1] - 1.5], [c[0] - 3.0, c[1] + 1.5]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 3.0, c[1]], [c[0] - 1.8, c[1]]]})).unwrap();
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 2.0})).unwrap();
+        };
+        // The symbol list: its strobe row's sample, and the plan's two copies and a pull station's mark.
+        text(&mut s, [500.0, 530.0], "SYMBOL");
+        text(&mut s, [530.0, 530.0], "DESCRIPTION");
+        strobe(&mut s, [503.0, 520.0]);
+        text(&mut s, [530.0, 519.0], "WALL STROBE");
+        strobe(&mut s, [100.0, 100.0]);
+        strobe(&mut s, [200.0, 100.0]);
+        text(&mut s, [300.0, 100.0], "P");
+        let hi = s.doc().unwrap().handseed;
+        let sample: Vec<cadaddy_doc::EntityKind> = s
+            .doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| e.handle.0 >= lo && e.handle.0 < hi && !matches!(e.kind, cadaddy_doc::EntityKind::Text(_)))
+            .take(5)
+            .map(|e| e.kind.clone())
+            .collect();
+        let mut legend = BTreeMap::new();
+        legend.insert(shape_of(sample.iter()).unwrap(), ("WALL STROBE".to_string(), "E-313".to_string()));
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-313".into(),
+            level: "6".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 1000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo, hi }];
+        job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
+        let found = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]);
+        let mut at: Vec<f64> = found.iter().map(|d| d.at[0].round()).collect();
+        at.sort_by(f64::total_cmp);
+        assert_eq!(at, [99.0, 199.0], "the plan's two copies, not the legend's sample: {found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|d| d.tag == "STROBE" && d.kind == "fire alarm device" && d.kind_source == "E-313 legend: WALL STROBE" && d.level == "6"),
+            "{found:?}"
+        );
+        // One already read there is not read twice; a sheet that isn't a fire alarm plan has none.
+        let have = vec![super::super::readers::ReadDevice { tag: "X".into(), at: [100.0, 100.0], ..Default::default() }];
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have).len(), 1);
+        job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "POWER PLAN"}]}));
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[]).is_empty());
     }
 
     #[test]

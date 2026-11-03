@@ -1545,7 +1545,13 @@ pub(crate) fn fa_kinds(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Buildi
     for t in sp.tags.iter_mut().filter(|t| ours(t)) {
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let mount = t.fields.get("mount").map(|f| f.value.to_ascii_uppercase()).unwrap_or_default();
-        let own = format!("{} {}", t.fields.get("fixture").map_or("", |f| f.value.as_str()), t.kind.replace('_', " "));
+        // Its own words: its name, what its legend row said it is (a symbol with no mark).
+        let own = format!(
+            "{} {} {}",
+            t.fields.get("fixture").map_or("", |f| f.value.as_str()),
+            t.fields.get("kind_source").map_or("", |f| f.value.as_str()),
+            t.kind.replace('_', " ")
+        );
         let mut cands: Vec<(String, String)> =
             rows.get(&mark).into_iter().flatten().filter_map(|w| r.fa_kind_of(w).map(|k| (k, w.clone()))).collect();
         if cands.is_empty()
