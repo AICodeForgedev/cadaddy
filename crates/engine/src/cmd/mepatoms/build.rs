@@ -388,7 +388,7 @@ fn wiring_method(d: &Drawing) -> Option<(String, Source)> {
 
 /// The atoms of the spec's electrical runs and its devices' boxes, into the model; the counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let rl = rules();
     let rooms = Rooms::of(d);
