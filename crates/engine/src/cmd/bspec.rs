@@ -1680,6 +1680,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // index (Q6157).
     let atoms = super::mepatoms::build::build(d, &sp);
     mark("MEP atoms");
+    // Each plumbing fixture connected to its waste, vent and water lines (Q6161).
+    let plumbing = super::plumbing::connect(d, &sp);
+    mark("plumbing connections");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     mark("concrete");
@@ -1743,6 +1746,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     if let (Some(o), Some(x)) = (r.as_object_mut(), atoms.as_object()) {
         o.extend(x.clone());
     }
+    r["plumbing"] = plumbing;
     r["gridColumns"] = json!(grid_columns);
     r["deviceElements"] = json!(devices.built);
     r["deviceBuild"] = devices.to_json();

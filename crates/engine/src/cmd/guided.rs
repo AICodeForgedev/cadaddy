@@ -4488,6 +4488,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     dropped.1,
                     dropped.2
                 ));
+                // A pipe both an enlarged plan and the floor's plan draw (or two views of one
+                // floor) is one pipe: the enlarged plan's stays.
+                let enlarged: BTreeSet<String> =
+                    job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
+                let pipes: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
+                let (twice, twice_ft) = super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
+                    u8::from(!enlarged.contains(&sheet_key(sheet)))
+                });
+                if twice > 0 {
+                    progress_line(&format!("  pipe runs drawn on two sheets, one kept: {twice} dropped ({twice_ft:.0} ft)"));
+                }
                 // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
                 // one is a clash.
                 let through = runs_through_hoistways(&sp.mep.runs, &circulation, upf_runs);
@@ -5000,6 +5012,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             progress_line(&format!("  waste and vent stacks as risers: {n} ({by:?})"));
         }
+        // The drainage as it is installed: falling at its code slope, the lowest floor's under
+        // its slab; each stack one riser through the floors it serves.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let drains = super::plumbing::drainage(&mut sp);
+            let stacks = super::plumbing::continuous_risers(&mut sp);
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+            progress_line(&format!("  drainage: {drains}; stacks through the floors: {stacks}"));
+        }
         match super::readers::place_devices(s, &devices, "guided job") {
             Ok(mut v) => {
                 // What the devices stage read and the model doesn't hold, and what typical-room
@@ -5393,6 +5413,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 );
             }
             result["props"] = v;
+            // The plumbing fixtures, now their kinds are filled: each connected to its lines.
+            if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
+                let c = super::plumbing::connect(s.doc_mut()?, &sp);
+                progress_line(&format!("  plumbing fixtures connected to their lines: {c}"));
+                result["plumbing"] = c;
+            }
         }
         Err(e) => job.add_finding(
             StageName::BimBuild,
@@ -15008,6 +15034,7 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: "M-1".into(),
+            slope_in_per_ft: 0.0,
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -15868,6 +15895,7 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: sheet.into(),
+            slope_in_per_ft: 0.0,
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![

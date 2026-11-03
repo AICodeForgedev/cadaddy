@@ -26,6 +26,8 @@ use super::perceive::{feet_inches, texts};
 use super::*;
 use crate::{Result, Session};
 
+mod twinline;
+
 /// Runs and segments handled, at most (hostile drawings).
 const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
@@ -356,6 +358,12 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
 
 /// The runs of the plan: systems (the spec's, else drafted from layer names) and their runs.
 pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
+    read_with(s, sp, only, None)
+}
+
+/// [`read`], with the system of a plan's untagged piping when the plan is of one system (a
+/// sanitary plan's: `SAN`; see [`plan_system`]).
+pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, untagged: Option<&'static str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
     let plan = super::verify::plan_session(s)?;
     let d: &Drawing = plan.doc()?;
     let ents = plan_objects(d);
@@ -377,7 +385,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
         // For PDF imports, the model units are paper inches. Detect this and use the right
         // units_per_foot for length computation and tag reach.
         let effective_upf = detect_paper_upf(d, upf);
-        let (tag_systems, tag_runs) = read_pipes_from_tags(&ents, &notes, sp, effective_upf, only);
+        let (tag_systems, tag_runs) = read_pipes_from_tags(&ents, &notes, sp, effective_upf, only, untagged);
         if !tag_systems.is_empty() {
             systems = tag_systems;
             runs = tag_runs;
@@ -465,6 +473,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 edited_by: String::new(),
                 top_ft: None,
                 source_sheet: String::new(),
+                slope_in_per_ft: 0.0,
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -584,6 +593,8 @@ pub(crate) fn is_outline(pts: &[Vec2], upf: f64) -> bool {
     false
 }
 
+/// How near (feet) a branch's end comes to the line of the pipe it comes off (its tee drawn between).
+const TEE_REACH_FT: f64 = 1.0;
 /// How near (feet) a callout's bubble its box's linework (its leader) comes.
 const CALLOUT_REACH_FT: f64 = 3.0;
 /// How far across both ways (feet) a loop of linework must go to be an outline, not a pipe's
@@ -591,6 +602,95 @@ const CALLOUT_REACH_FT: f64 = 3.0;
 const OUTLINE_ACROSS_FT: f64 = 3.0;
 /// The points of a chain looked at for a loop, at most (the check is quadratic).
 const MAX_OUTLINE_POINTS: usize = 2_000;
+
+/// Whether a colour is a print's screening: the grey the background (the architecture under a
+/// trade's work) is printed in. A light, even grey (true colour, or the grey ACI indexes 8, 9,
+/// 250–254); black, white and the trades' colours are not.
+pub(crate) fn screened(c: &cadaddy_doc::color::Color) -> bool {
+    match c {
+        cadaddy_doc::color::Color::True(rgb) => {
+            let (lo, hi) = (rgb.0.min(rgb.1).min(rgb.2), rgb.0.max(rgb.1).max(rgb.2));
+            lo >= 110 && hi - lo <= 24 && hi < 250
+        }
+        cadaddy_doc::color::Color::Index(i) => matches!(i, 8 | 9 | 250..=254),
+        _ => false,
+    }
+}
+
+/// The system a plumbing plan's title says all its untagged piping is: a sanitary (waste,
+/// soil, drainage) plan's `SAN`, a storm plan's `ST`, a gas plan's `G`, a vent plan's `V`. A plan
+/// of several systems (water: cold, hot and return) names none: its pipes need their tags.
+pub(crate) fn plan_system(title: &str) -> Option<&'static str> {
+    let up = title.to_ascii_uppercase();
+    let has = |w: &str| up.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w);
+    let systems: Vec<&'static str> = [
+        (["SANITARY", "WASTE", "SOIL", "DWV"].iter().any(|w| has(w)) || (has("DRAINAGE") && !has("STORM")), "SAN"),
+        (has("STORM"), "ST"),
+        (has("GAS"), "G"),
+        (has("VENT") && !has("WASTE") && !has("SANITARY"), "V"),
+        (has("WATER") || has("DOMESTIC"), "water"),
+    ]
+    .into_iter()
+    .filter_map(|(on, s)| on.then_some(s))
+    .collect();
+    match systems[..] {
+        [one] if one != "water" => Some(one),
+        _ => None,
+    }
+}
+
+/// The middle lines of a plan that draws its pipes as two lines ([`twinline`]), joined into runs,
+/// with the objects they came from and each run's drawn width (drawing units); `None` when the
+/// plan draws its pipes as single lines.
+#[allow(clippy::type_complexity)]
+fn twin_chains(linework: &[&Arc<Entity>], upf: f64) -> Option<(Vec<(Vec<Vec2>, Vec<Handle>)>, Vec<Option<f64>>)> {
+    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut owner: Vec<Handle> = Vec::new();
+    for e in linework {
+        let pts: Vec<Vec2> = match &e.kind {
+            EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
+            EntityKind::LwPolyline(p) => {
+                let mut v: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+                if p.closed
+                    && let Some(f) = v.first().copied()
+                {
+                    v.push(f);
+                }
+                v
+            }
+            _ => continue,
+        };
+        for w in pts.windows(2) {
+            if let [a, b] = w
+                && a.is_finite()
+                && b.is_finite()
+                && a.dist(*b) > 0.0
+            {
+                segs.push((*a, *b));
+                owner.push(e.handle);
+            }
+        }
+        if segs.len() >= MAX_SEGS {
+            break;
+        }
+    }
+    let mids = twinline::middles(&segs, upf);
+    if mids.is_empty() {
+        return None;
+    }
+    let mut chains = Vec::new();
+    let mut widths = Vec::new();
+    for (pts, took) in twinline::paths(&mids, upf) {
+        let mut hs: Vec<Handle> = took.iter().filter_map(|i| mids.get(*i)).flat_map(|m| m.edges).filter_map(|k| owner.get(k).copied()).collect();
+        hs.sort_unstable_by_key(|h| h.0);
+        hs.dedup();
+        // The run's width: its longest middle's.
+        let width = took.iter().filter_map(|i| mids.get(*i)).max_by(|a, b| a.a.dist(a.b).total_cmp(&b.a.dist(b.b))).map(|m| m.width);
+        chains.push((pts, hs));
+        widths.push(width);
+    }
+    Some((chains, widths))
+}
 
 /// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
 /// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
@@ -600,6 +700,7 @@ fn read_pipes_from_tags(
     sp: &BuildingSpec,
     upf: f64,
     only: Option<&str>,
+    untagged: Option<&'static str>,
 ) -> (Vec<MepSystem>, Vec<MepRun>) {
     // Step 1: find all pipe-system text tags and their positions.
     struct PipeTag {
@@ -617,25 +718,32 @@ fn read_pipes_from_tags(
             pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
         }
     }
-    if pipe_tags.is_empty() {
+    if pipe_tags.is_empty() && untagged.is_none() {
         return (Vec::new(), Vec::new());
     }
 
     // Step 2: collect line chains, excluding layers that are known to carry non-pipe geometry
     // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports.
-    let all_chains = chains(
-        &ents
-            .iter()
-            .copied()
-            .filter(|e| {
-                if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
-                    return false;
-                }
-                let up = e.common.layer.to_ascii_uppercase();
-                !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
-            })
-            .collect::<Vec<_>>(),
-    );
+    let linework: Vec<&Arc<Entity>> = ents
+        .iter()
+        .copied()
+        .filter(|e| {
+            if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+                return false;
+            }
+            let up = e.common.layer.to_ascii_uppercase();
+            !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+        })
+        .collect();
+    // A plan that draws its pipes as two lines, in the trade's pen over the screened background
+    // (the architecture printed grey under it): each pipe's middle line, as wide as it is drawn.
+    let dark: Vec<&Arc<Entity>> = linework.iter().copied().filter(|e| !screened(&e.common.color)).collect();
+    let (all_chains, widths) = twin_chains(&dark, upf).unwrap_or_else(|| {
+        let c = chains(&linework);
+        let n = c.len();
+        (c, vec![None; n])
+    });
+    let twin = widths.iter().any(Option::is_some);
 
     // The numbered tag bubbles: a sheet-number-shaped tag (`P-7`, `P-2`: a callout's, a fixture's;
     // lettered or a symbol's attribute) with a number (one or two digits) just over it.
@@ -675,11 +783,30 @@ fn read_pipes_from_tags(
     // generic layers; use a tighter reach to avoid associating walls near pipe tags.
     let has_pen_layers = ents.iter().any(|e| e.common.layer.to_ascii_uppercase().starts_with("PDF-BLACK"));
     let reach = if has_pen_layers { 6.0 * upf } else { 2.0 * upf }; // 6 or 2 feet
-    let min_chain_len = if has_pen_layers { 0.0 } else { 2.0 * upf }; // 2 feet minimum on content mode
+    // 2 feet minimum on content mode; a twin-drawn pipe's middle is a pipe from its first length.
+    let min_chain_len = if has_pen_layers || twin { 0.0 } else { 2.0 * upf };
     let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
     let mut runs = Vec::new();
 
-    for (pts, handles) in &all_chains {
+    // On a plan that draws its pipes as two lines, a run with no tag of its own takes the tag of
+    // the run it comes off (a branch off a tagged main).
+    let spread: Vec<Option<usize>> = if twin {
+        let near = |pts: &[Vec2]| {
+            pipe_tags
+                .iter()
+                .enumerate()
+                .map(|(k, t)| (k, pts.windows(2).filter_map(|w| Some(seg_dist(t.at, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min)))
+                .filter(|(_, d)| *d < reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(k, _)| k)
+        };
+        let seed: Vec<Option<usize>> = all_chains.iter().map(|(pts, _)| near(pts)).collect();
+        let paths: Vec<Vec<Vec2>> = all_chains.iter().map(|(pts, _)| pts.clone()).collect();
+        twinline::spread(&paths, &seed, TEE_REACH_FT * upf)
+    } else {
+        Vec::new()
+    };
+    for (ci, ((pts, handles), width)) in all_chains.iter().zip(&widths).enumerate() {
         if pts.len() < 2 {
             continue;
         }
@@ -723,16 +850,29 @@ fn read_pipes_from_tags(
                 best_tag = Some(tag);
             }
         }
-        let Some(tag) = best_tag else { continue };
-
-        let sys_code = tag.system;
+        // Untagged: the tag of the run it comes off, else the plan's own system (a sanitary
+        // plan's piping), else not a pipe.
+        let own_tag = best_tag;
+        let best_tag = best_tag.or_else(|| spread.get(ci).copied().flatten().and_then(|k| pipe_tags.get(k)));
+        // (Only a plan that draws its pipes to scale says which of its untagged lines are pipes.)
+        let Some(sys_code) = best_tag.map(|t| t.system).or(untagged.filter(|_| twin)) else { continue };
         systems_seen.insert(sys_code, true);
 
         let (_, _, _, default_size, default_bottom) =
             PIPE_SYSTEMS.iter().find(|(_, code, ..)| *code == sys_code).copied().unwrap_or(("", sys_code, "", 2.0, 10.0));
 
-        let size_in = tag.size_in.unwrap_or(default_size);
-        let size_from_tag = tag.size_in.is_some();
+        // Its own tag's size (a branch is not the size of the main whose tag it took).
+        let tag_size = own_tag.and_then(|t| t.size_in);
+        // A pipe drawn to scale is its size: its outside diameter, as wide as it is drawn.
+        let drawn = width.and_then(|w| twinline::nominal_from_width(w / upf * 12.0));
+        let size_in = tag_size.or(drawn).unwrap_or(default_size);
+        let size_source = if tag_size.is_some() {
+            "tag"
+        } else if drawn.is_some() {
+            "drawn width"
+        } else {
+            "default"
+        };
         let section_ft = size_in / 12.0;
 
         // Check for height tags near this run.
@@ -775,12 +915,13 @@ fn read_pipes_from_tags(
             objects: handles.iter().map(|h| h.hex()).collect(),
             id: String::new(),
             encased: false,
-            size_source: if size_from_tag { "tag" } else { "default" }.to_string(),
+            size_source: size_source.to_string(),
             height_source: if has_height_tag { "tag" } else { "default" }.to_string(),
             reviewed: false,
             edited_by: String::new(),
             top_ft: None,
             source_sheet: String::new(),
+            slope_in_per_ft: 0.0,
         });
         if runs.len() >= MAX_RUNS {
             break;
@@ -2686,6 +2827,30 @@ fn closest_mid(a: Vec2, b: Vec2, c: Vec2, e: Vec2) -> Vec2 {
 #[cfg(test)]
 mod outline_tests {
     use super::*;
+
+    #[test]
+    fn a_plans_title_names_the_system_of_its_untagged_piping() {
+        assert_eq!(plan_system("PLUMBING LEVEL 2 - SANITARY"), Some("SAN"));
+        assert_eq!(plan_system("Waste and Vent Plan"), Some("SAN"));
+        assert_eq!(plan_system("STORM DRAINAGE PLAN"), Some("ST"));
+        assert_eq!(plan_system("SANITARY AND STORM PLAN"), None, "two systems");
+        assert_eq!(plan_system("ROOF STORM PLAN"), Some("ST"));
+        assert_eq!(plan_system("VENT PLAN"), Some("V"));
+        // Water (cold, hot, return) needs its tags; a title of nothing names nothing.
+        assert_eq!(plan_system("PLUMBING LEVEL 1 - WATER"), None);
+        assert_eq!(plan_system("FLOOR PLAN"), None);
+    }
+
+    #[test]
+    fn a_prints_grey_background_is_screened_and_its_black_and_colours_are_not() {
+        use cadaddy_doc::color::{Color, Rgb};
+        assert!(screened(&Color::True(Rgb(171, 171, 171))));
+        assert!(screened(&Color::Index(253)));
+        assert!(!screened(&Color::Index(7)));
+        assert!(!screened(&Color::True(Rgb(0, 0, 0))));
+        assert!(!screened(&Color::True(Rgb(0, 0, 255))));
+        assert!(!screened(&Color::ByLayer));
+    }
 
     #[test]
     fn a_callout_box_is_an_outline_and_a_pipe_is_not() {

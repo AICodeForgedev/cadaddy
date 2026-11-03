@@ -443,6 +443,7 @@ pub(crate) fn run(system: &str, level: &str, sheet: &str, points: Vec<[f64; 2]>,
         edited_by: String::new(),
         top_ft: None,
         source_sheet: sheet.into(),
+        slope_in_per_ft: 0.0,
     }
 }
 

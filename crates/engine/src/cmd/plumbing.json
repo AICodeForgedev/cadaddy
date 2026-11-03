@@ -1,0 +1,19 @@
+{
+  "drainage_systems": ["SAN", "ST"],
+  "drainage_slope": [
+    {"max_size_in": 2.5, "in_per_ft": 0.25, "source": "IPC 704.1: horizontal drainage 2-1/2 inches or less, 1/4 inch per foot"},
+    {"max_size_in": 6.0, "in_per_ft": 0.125, "source": "IPC 704.1: horizontal drainage 3 to 6 inches, 1/8 inch per foot"},
+    {"max_size_in": 1000.0, "in_per_ft": 0.0625, "source": "IPC 704.1: horizontal drainage 8 inches or larger, 1/16 inch per foot"}
+  ],
+  "below_slab_invert_in": 18.0,
+  "below_slab_why": "company default: the invert of drainage under a slab on grade where the plans print none",
+  "stack_join_ft": 2.0,
+  "connect_reach_ft": 15.0,
+  "needs": [
+    {"words": ["WATER CLOSET", "TOILET", "URINAL"], "systems": ["SAN", "V", "CW"]},
+    {"words": ["LAVATORY", "SINK", "TUB", "SHOWER", "WASHING MACHINE", "LAUNDRY", "MOP", "SERVICE BASIN"], "systems": ["SAN", "V", "CW", "HW"]},
+    {"words": ["FLOOR DRAIN", "CLEANOUT", "CLEAN OUT", "INTERCEPTOR", "SUMP"], "systems": ["SAN"]},
+    {"words": ["HOSE", "EYEWASH", "MIXING VALVE", "WATER VALVE", "BOOSTER", "EXPANSION TANK"], "systems": ["CW"]}
+  ],
+  "system_names": {"SAN": "waste", "V": "vent", "CW": "cold_water", "HW": "hot_water"}
+}

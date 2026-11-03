@@ -282,6 +282,32 @@ fn reference_sheet(sub: &Drawing) -> Option<&'static str> {
     kinds.into_iter().flatten().next()
 }
 
+/// The one system a plumbing sheet's (or view's) titles give all its untagged piping
+/// ([`super::mep::plan_system`]): `SAN` for `PLUMBING LEVEL 1 - SANITARY`; none when its titles
+/// name no system, several, or water (whose cold, hot and return need their tags).
+fn untagged_system(sub: &Drawing) -> Option<&'static str> {
+    use cadaddy_mepfix::sheet_facts;
+    let texts = sheet_facts::texts(sub);
+    let mut titles: Vec<String> = sheet_facts::view_titles(sub, &texts).into_iter().map(|v| v.title).collect();
+    if titles.is_empty()
+        && let Some(id) = sheet_facts::identify_sheet(&texts)
+    {
+        titles.push(id.title);
+    }
+    let named: Vec<Option<&'static str>> = titles
+        .iter()
+        .filter(|t| {
+            let up = t.to_ascii_uppercase();
+            ["SANITARY", "WASTE", "SOIL", "DRAINAGE", "DWV", "STORM", "GAS", "VENT", "WATER", "DOMESTIC"].iter().any(|w| up.contains(w))
+        })
+        .map(|t| super::mep::plan_system(t))
+        .collect();
+    match named.first() {
+        Some(Some(first)) if named.iter().all(|n| *n == Some(*first)) => Some(*first),
+        _ => None,
+    }
+}
+
 /// Read one sheet's trade into spec parts in `d`'s units (`upf` per foot).
 fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf: f64) -> (Mep, SheetRead) {
     let level = level_name(&sh.level);
@@ -335,9 +361,10 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
             super::readers::duct_mep(&net, &level, &sh.number, &spec)
         }
         _ => {
+            let untagged = untagged_system(&sub);
             let mut t = Session::empty();
             t.open_drawing(sub, &sh.number, None);
-            match super::mep::read(&t, &spec, None) {
+            match super::mep::read_with(&t, &spec, None, untagged) {
                 Ok((systems, runs)) => {
                     let pipes: Vec<String> = systems.iter().filter(|s| s.kind == MepKind::Pipe).map(|s| s.name.clone()).collect();
                     let mut m = Mep {
@@ -776,6 +803,7 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: sheet.into(),
+            slope_in_per_ft: 0.0,
         }
     }
 

@@ -1,6 +1,6 @@
 {
   "floor_fixture_words": ["WATER CLOSET", "TOILET", "TUB", "SHOWER", "FLOOR", "MOP", "SERVICE BASIN", "WATER HEATER", "INTERCEPTOR", "PUMP", " FD ", " FCO ", " GCO ", "CLEANOUT", "CLEAN OUT"],
-  "wall_fixture_words": ["WALL"],
+  "wall_fixture_words": ["WALL", " WCO "],
   "defaults": [
     {"kind": "switch", "inches": 48, "to": "centre", "why": "the usual height of a switch (48\" to its middle), no document gives one"},
     {"kind": "thermostat", "inches": 48, "to": "centre", "why": "the usual height of a thermostat (48\" to its middle), no document gives one"},

@@ -220,6 +220,89 @@ pub(crate) fn drop_repeats(runs: &mut Vec<MepRun>, upf: f64, ducts: &dyn Fn(&Mep
     before - runs.len()
 }
 
+/// The share of a pipe run's length that must lie along another sheet's run of its system for it
+/// to be that run drawn again.
+const DRAWN_TWICE_SHARE: f64 = 0.8;
+/// How far apart (feet) two sheets' lines of one pipe may lie once both are on the plans (their
+/// registrations differ by a little).
+const DRAWN_TWICE_FT: f64 = 1.0;
+/// Most pipe runs compared.
+const MAX_TWICE_RUNS: usize = 100_000;
+
+/// Pipe runs drawn on two sheets (an enlarged plan and the floor's plan, or two views of one
+/// floor): once both are on the plans, a run (`pipe`) of one system and level that lies along
+/// runs of other sheets of that system and level (within a foot, or its size) over most of its
+/// length ([`DRAWN_TWICE_SHARE`]) is the same pipe drawn again, and is dropped. The runs of the
+/// sheets `rank` puts first (lower) stay; among one rank, the longer. Risers are left alone. How
+/// many were dropped and their length (feet).
+pub(crate) fn drop_drawn_twice(runs: &mut Vec<MepRun>, upf: f64, pipe: &dyn Fn(&MepRun) -> bool, rank: &dyn Fn(&str) -> u8) -> (usize, f64) {
+    let foot = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let len = |r: &MepRun| length(&r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>());
+    let mut order: Vec<usize> =
+        (0..runs.len()).filter(|i| runs.get(*i).is_some_and(|r| pipe(r) && r.top_ft.is_none() && r.points.len() >= 2)).take(MAX_TWICE_RUNS).collect();
+    order.sort_by(|a, b| {
+        let (Some(ra), Some(rb)) = (runs.get(*a), runs.get(*b)) else { return std::cmp::Ordering::Equal };
+        rank(&ra.source_sheet).cmp(&rank(&rb.source_sheet)).then(len(rb).total_cmp(&len(ra)))
+    });
+    let cell = 4.0 * foot;
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    // Kept runs' segments by (level, system, cell): (sheet, a, b).
+    let mut grid: std::collections::HashMap<(String, String, i64, i64), Vec<(String, Vec2, Vec2)>> = std::collections::HashMap::new();
+    let mut drop = vec![false; runs.len()];
+    let mut dropped_ft = 0.0;
+    for i in order {
+        let Some(r) = runs.get(i) else { continue };
+        let pts: Vec<Vec2> = r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+        let reach = (DRAWN_TWICE_FT * foot).max(r.size_in[0].max(0.0) / 12.0 * foot);
+        let total = length(&pts);
+        let mut covered = 0.0;
+        for w in pts.windows(2) {
+            let [a, b] = w else { continue };
+            let l = a.dist(*b);
+            let n = ((l / (0.5 * foot)).ceil() as usize).clamp(1, 2_000);
+            for k in 0..n {
+                let q = a.lerp(*b, (k as f64 + 0.5) / n as f64);
+                let (cx, cy) = key(q);
+                let hit = (-1..=1).any(|dx| {
+                    (-1..=1).any(|dy| {
+                        grid.get(&(r.level.clone(), r.system.clone(), cx + dx, cy + dy))
+                            .is_some_and(|segs| segs.iter().any(|(sheet, s0, s1)| *sheet != r.source_sheet && seg_dist(q, *s0, *s1) <= reach))
+                    })
+                });
+                if hit {
+                    covered += l / n as f64;
+                }
+            }
+        }
+        if total > 0.0 && covered >= DRAWN_TWICE_SHARE * total {
+            if let Some(d) = drop.get_mut(i) {
+                *d = true;
+            }
+            dropped_ft += total / foot;
+            continue;
+        }
+        for w in pts.windows(2) {
+            let [a, b] = w else { continue };
+            let n = ((a.dist(*b) / cell).ceil() as usize).clamp(1, 1_000);
+            let mut seen = std::collections::BTreeSet::new();
+            for k in 0..=n {
+                let (cx, cy) = key(a.lerp(*b, k as f64 / n as f64));
+                if seen.insert((cx, cy)) {
+                    grid.entry((r.level.clone(), r.system.clone(), cx, cy)).or_default().push((r.source_sheet.clone(), *a, *b));
+                }
+            }
+        }
+    }
+    let before = runs.len();
+    let mut i = 0;
+    runs.retain(|_| {
+        let keep = !drop.get(i).copied().unwrap_or(false);
+        i += 1;
+        keep
+    });
+    (before - runs.len(), dropped_ft)
+}
+
 /// [`tidy_run`] on every run of a reading.
 pub(crate) fn tidy_runs(runs: Vec<MepRun>, upf: f64) -> Vec<MepRun> {
     runs.iter().flat_map(|r| tidy_run(r, upf)).collect()
@@ -245,11 +328,36 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: "M-101".into(),
+            slope_in_per_ft: 0.0,
         }
     }
 
     fn turns(r: &MepRun) -> Vec<f64> {
         r.points.windows(3).map(|w| turn_deg(Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]), Vec2::new(w[2][0], w[2][1]))).collect()
+    }
+
+    #[test]
+    fn a_pipe_drawn_on_the_enlarged_plan_and_the_floor_plan_is_one_pipe() {
+        let pipe = |pts: &[[f64; 2]], sheet: &str, system: &str| MepRun {
+            system: system.into(),
+            source_sheet: sheet.into(),
+            size_in: [2.0, 0.0],
+            ..run(pts)
+        };
+        let mut runs = vec![
+            // The floor plan's line, and the enlarged plan's of the same pipe 4" off.
+            pipe(&[[0.0, 0.0], [240.0, 0.0]], "P-201", "SAN"),
+            pipe(&[[10.0, 4.0], [230.0, 4.0]], "P-601", "SAN"),
+            // Another system along it stays; so does a parallel pipe 3 ft away.
+            pipe(&[[0.0, 6.0], [240.0, 6.0]], "P-601", "V"),
+            pipe(&[[0.0, 36.0], [240.0, 36.0]], "P-201", "SAN"),
+        ];
+        let (n, ft) = drop_drawn_twice(&mut runs, 12.0, &|_| true, &|s| u8::from(s != "P-601"));
+        assert_eq!(n, 1);
+        assert!((ft - 20.0).abs() < 1e-9, "{ft}");
+        // The enlarged plan's (ranked first) stays.
+        assert_eq!(runs.iter().filter(|r| r.system == "SAN").map(|r| r.source_sheet.as_str()).collect::<Vec<_>>(), ["P-601", "P-201"]);
+        assert_eq!(runs.len(), 3);
     }
 
     #[test]

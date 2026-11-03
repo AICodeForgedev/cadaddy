@@ -2042,6 +2042,9 @@ mod tests {
         assert!(floor_fixture("floor drain FD"));
         assert!(!floor_fixture("LAVATORY P-2"));
         assert!(!floor_fixture("WALL CLEANOUT WCO"));
+        // A schedule that names it only CLEANOUT: its WCO mark says it is on the wall.
+        assert!(!floor_fixture("cleanout WCO"));
+        assert!(floor_fixture("cleanout FCO"));
         let (z, d, why) = rules_default("switch", "");
         assert_eq!((z, d), (48.0, super::super::mountlist::Datum::Centre));
         assert!(why.contains("no document"));
