@@ -380,3 +380,24 @@ fn a_typical_units_circuit_goes_to_each_units_own_panel() {
     let again = s.execute("conduit.reroute", &json!({})).expect("reroute");
     assert_eq!((again["homeruns"].clone(), again["circuits"].clone()), (json!(2), json!(2)), "{again}");
 }
+
+#[test]
+fn the_panel_schedules_load_sets_the_voltage_drop() {
+    // LP1-5 is 130' long: at 80% of a 20 A breaker it needs #8; its schedule says 500 VA (about
+    // 4 A), for which #12 holds the drop under 3%.
+    let (mut s, _) = building(|_| {});
+    let sched = json!({"panel_schedules": [{"panel": "LP1", "source": "E-101", "circuits": [
+        {"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 500.0, "source": "E-101"}
+    ]}]});
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let spec = spec.get_mut("spec").cloned().unwrap_or(spec);
+    let mut spec = spec;
+    spec["mep"]["panel_schedules"] = sched["panel_schedules"].clone();
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({"section": "conductors_upsized"})).expect("report");
+    let five = r["conductors_upsized"].as_array().and_then(|a| a.iter().find(|u| u["circuit"] == json!("LP1-5")).cloned());
+    assert!(five.is_none(), "500 VA over 130': #12 is enough: {r}");
+    let wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-5", "group_by": "size"}));
+    assert!(wires["rows"].as_array().is_some_and(|rows| rows.iter().all(|x| x["size"] == json!("#12"))), "{wires}");
+}

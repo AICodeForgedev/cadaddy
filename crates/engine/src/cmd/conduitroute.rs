@@ -1388,6 +1388,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         digits.parse::<f64>().ok().filter(|a| (5.0..=4000.0).contains(a))
     };
 
+    // The circuit's load from its panel's schedule (VA), for the voltage drop.
+    let load_of = |panel: &str, label: &str| -> Option<f64> {
+        let num = super::printcond::parse_circuit(label)?.1;
+        let first = num.split(',').next()?.trim().to_string();
+        let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
+        s.circuits.iter().find(|c| c.number.trim() == first)?.load_va.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6)
+    };
+
     // -- Route each circuit. --
     struct Home {
         circ: usize,
@@ -1754,8 +1762,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             longest = longest.max(ft);
             let mut parts = super::mepatoms::conductor_parts(&mk);
             let volts = rl.vdrop.voltage;
-            let amps = trip.unwrap_or(rl.vdrop.breaker_a) * rl.vdrop.load_pct / 100.0;
-            if let Some((need, why)) = size_for_length(ft, amps, volts, &len_table, rl) {
+            // The schedule's load, else most of the breaker (a default).
+            let (amps, load_src) = match load_of(&c.panel, &c.label) {
+                Some(va) => (va / volts.max(1.0), format!("panel {} schedule: {va:.0} VA", c.panel)),
+                None => (trip.unwrap_or(rl.vdrop.breaker_a) * rl.vdrop.load_pct / 100.0, format!("default: {}% of the breaker", rl.vdrop.load_pct)),
+            };
+            if let Some((need, why)) = size_for_length(ft, amps, volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}"))) {
                 let order = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
                 let mut changed = false;
                 for p in &mut parts {
