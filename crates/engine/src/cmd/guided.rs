@@ -6121,7 +6121,7 @@ fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope:
     (json!({"decisions": summary, "statements": stmts.len(), "documents": docs.len(), "fire_alarm": fa}), docs)
 }
 
-/// The fire alarm panels the documents locate (`… LOCATED IN MECHANICAL ROOM 160`), along a wall
+/// The fire alarm panels the documents locate (`… LOCATED IN ELECTRICAL ROOM 610`), along a wall
 /// of their rooms and built; one not placed is a finding.
 fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Doc], result: &mut Value) {
     let places = super::scope::panel_places(docs);

@@ -7,11 +7,11 @@
 //! legend), the specification sections (a section in Division 23 speaks for the mechanical
 //! trade), the submittals and any responsibility matrix (`ITEM | FURNISHED BY | INSTALLED BY`).
 //! A sentence says who does it by a party's name (`FIRE ALARM CONTRACTOR SHALL PROVIDE…`,
-//! `…FURNISHED BY THE MECHANICAL CONTRACTOR`, `…ARE THE RESPONSIBILITY OF THE PROJECT FIRE ALARM
+//! `…FURNISHED BY THE MECHANICAL CONTRACTOR`, `…ARE THE RESPONSIBILITY OF THE FIRE ALARM
 //! CONTRACTOR`), by the trade of its document when it gives an order with no one named
-//! (`Install wall-mounted thermostats…` in a Division 23 section), and what is ours by its
-//! rough-in words (`ROUGH-IN ONLY. PROVIDE … JUNCTION BOX AND 3/4" CONDUIT`, `NO CONDUIT OR
-//! JUNCTION BOX SHALL BE REQUIRED`). The words are data ([`scope_rules.json`]), never one job's.
+//! (`Install thermostats in outlet boxes…` in a Division 23 section), and what is ours by its
+//! rough-in words (`ROUGH-IN ONLY. PROVIDE A BOX AND 1" CONDUIT`, `NO BOX IS
+//! REQUIRED`). The words are data ([`scope_rules.json`]), never one job's.
 //!
 //! The decisions are kept in the project rules (`scope.<class>.party`, `scope.<class>.ours`) at
 //! the tier of the document that said them: a later reading replaces its own tier, a person's
@@ -42,8 +42,12 @@ const MAX_PARA_CHARS: usize = 4_000;
 /// Files read in one call, pages of one drawing PDF.
 const MAX_FILES: usize = 400;
 const MAX_PDF_PAGES: u64 = 500;
+/// Statements an `explain` answer lists.
+const MAX_EXPLAIN: usize = 300;
 /// Characters of a citation's quoted words.
 const QUOTE: usize = 240;
+/// Words of a sentence at most: more is a table's cells run together, not a note.
+const MAX_SENTENCE: usize = 50;
 /// Tokens a construct may reach over (a party's name to its verb, `NO` to its `REQUIRED`).
 const REACH: usize = 12;
 
@@ -136,7 +140,7 @@ impl Rules {
         self.parties.iter().find(|(_, p)| p.words.iter().any(|w| toks(w) == t) || p.label.eq_ignore_ascii_case(said.trim())).map(|(k, _)| k.clone())
     }
 
-    /// The trade a specification section speaks for, by its number (`23 82 39.19`).
+    /// The trade a specification section speaks for, by its number (`23 09 00`).
     fn division_party(&self, section: &str) -> Option<String> {
         let digits: String = section.chars().filter(char::is_ascii_digit).take(6).collect();
         if digits.len() < 2 {
@@ -186,16 +190,99 @@ impl Rules {
 // ─── Words ──────────────────────────────────────────────────────────────────
 
 /// A text's words: upper case, quotes straightened, the punctuation round each word dropped (a
-/// word's own dots, dashes, slashes and inch marks kept: `E.C`, `ROUGH-IN`, `3/4"`).
+/// word's own dots, dashes, slashes and inch marks kept: `E.C`, `ROUGH-IN`, `3/4"`); two words
+/// an import ran together (`REQUIREDFOR`, `VOLTAGEVENDOR`) apart again where both are words the
+/// rules read by.
 fn toks(t: &str) -> Vec<String> {
-    t.replace(['\u{201c}', '\u{201d}'], "\"")
+    let mut out = Vec::new();
+    for w in t
+        .replace(['\u{201c}', '\u{201d}'], "\"")
         .replace(['\u{2018}', '\u{2019}'], "'")
         .to_ascii_uppercase()
         .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '!' | '?' | '*'))
         .map(|w| w.trim_matches(|c: char| c == '.' || c == '\'' || c == '-' || c == '&').trim_start_matches('"'))
         .filter(|w| !w.is_empty())
-        .map(str::to_string)
-        .collect()
+    {
+        match unglue(w) {
+            Some((a, b)) => {
+                out.push(a.to_string());
+                out.push(b.to_string());
+            }
+            None => out.push(w.to_string()),
+        }
+    }
+    out
+}
+
+/// The words the rules read by (their phrases' words and the statement words).
+fn vocabulary() -> &'static std::collections::HashSet<String> {
+    static V: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let r = rules();
+        let mut v: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut put = |p: &str| {
+            for w in p.to_ascii_uppercase().split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '/')) {
+                if w.len() >= 2 && w.chars().all(|c| c.is_ascii_alphabetic()) {
+                    v.insert(w.to_string());
+                }
+            }
+        };
+        for p in r.parties.values() {
+            p.words.iter().for_each(|w| put(w));
+        }
+        for c in &r.classes {
+            c.words.iter().chain(c.system_words.iter()).for_each(|w| put(w));
+        }
+        r.items.values().flatten().chain(r.design_build.iter()).chain(r.rough_in_only.iter()).chain(r.whole_system.iter()).for_each(|w| put(w));
+        for w in VERBS.iter().chain(PARTICIPLES.iter()).chain(STOPS.iter()) {
+            put(w);
+        }
+        for w in [
+            "REQUIRED",
+            "NEEDED",
+            "SHALL",
+            "WILL",
+            "MUST",
+            "BY",
+            "THE",
+            "AND",
+            "OR",
+            "NOT",
+            "RESPONSIBILITY",
+            "OF",
+            "IS",
+            "ARE",
+            "BE",
+            "ONLY",
+            "NO",
+            "ALL",
+            "WITH",
+        ] {
+            put(w);
+        }
+        v
+    })
+}
+
+/// A word an import ran two of the rules' words together into, apart (`REQUIREDFOR`); a number
+/// and the word after it (`605AND`: a room's number, then AND).
+fn unglue(w: &str) -> Option<(&str, &str)> {
+    let v = vocabulary();
+    let digits = w.chars().take_while(char::is_ascii_digit).count();
+    if digits > 0 && w.len() - digits >= 2 {
+        let (n, rest) = (w.get(..digits)?, w.get(digits..)?);
+        return (rest.chars().all(|c| c.is_ascii_alphabetic()) && v.contains(rest)).then_some((n, rest));
+    }
+    if w.len() < 5 || !w.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    if v.contains(w) {
+        return None;
+    }
+    (2..=w.len() - 2).find_map(|i| {
+        let (a, b) = (w.get(..i)?, w.get(i..)?);
+        (v.contains(a) && v.contains(b) && a.len() + b.len() >= 5).then_some((a, b))
+    })
 }
 
 /// Where `phrase` starts among `words`.
@@ -301,7 +388,7 @@ pub(crate) struct Para {
 /// A document read for who does what.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Doc {
-    /// `E-7`, `23 82 39.19 Wall And Ceiling Unit Heaters`, a submittal's file name.
+    /// `E-301`, `23 09 00 Controls`, a submittal's file name.
     pub name: String,
     pub tier: SourceTier,
     /// The trade an order with no one named is given to (a mechanical sheet's, a Division 23
@@ -316,7 +403,8 @@ pub(crate) struct Doc {
 pub(crate) fn sheet_doc(number: &str, texts: &[TextItem]) -> Doc {
     let r = rules();
     let mut doc = Doc { name: number.to_string(), tier: SourceTier::DrawingRevision, trade: r.discipline_party(number), paras: Vec::new() };
-    let lists = super::keynotes::lists_under(texts, |u| u.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "NOTES" || w == "KEYNOTES"));
+    let runs = join_runs(texts);
+    let lists = super::keynotes::lists_under(&runs, |u| u.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "NOTES" || w == "KEYNOTES"));
     let mut listed: Vec<&str> = Vec::new();
     for l in &lists {
         for n in &l.notes {
@@ -333,14 +421,22 @@ pub(crate) fn sheet_doc(number: &str, texts: &[TextItem]) -> Doc {
     for p in &doc.paras {
         listed.push(p.text.as_str());
     }
-    let loose = loose_paragraphs(texts);
+    let loose = loose_paragraphs(&runs);
     let listed_owned: Vec<String> = listed.iter().map(|s| s.to_string()).collect();
     for (at, text) in loose {
         if doc.paras.len() >= MAX_PARAS {
             break;
         }
-        // A list's note read again line by line: once is enough.
-        let first: String = text.chars().take(40).collect();
+        // A list's note read again line by line (its number with it): once is enough.
+        let bare = {
+            let t = text.trim_start();
+            let n = t.chars().take_while(char::is_ascii_digit).count();
+            match t.get(n..) {
+                Some(r) if (1..=2).contains(&n) && (r.starts_with('.') || r.starts_with(')')) => r.get(1..).unwrap_or_default().trim_start(),
+                _ => t,
+            }
+        };
+        let first: String = bare.chars().take(40).collect();
         if listed_owned.iter().any(|n| n.contains(first.trim())) {
             continue;
         }
@@ -349,6 +445,33 @@ pub(crate) fn sheet_doc(number: &str, texts: &[TextItem]) -> Doc {
     doc.paras.extend(matrix_rows_of_sheet(texts));
     doc.paras.truncate(MAX_PARAS);
     doc
+}
+
+/// A sheet's text with the runs of one line joined (an import splits a line where its font or
+/// spacing changes: `PROVIDE WITH "X" THERMOSTAT.` and `NO CONDUIT … REQUIRED.`): the next run on
+/// the same baseline, as tall, starting about where the last one's letters end.
+pub(crate) fn join_runs(texts: &[TextItem]) -> Vec<TextItem> {
+    let mut flat: Vec<TextItem> =
+        texts.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.is_finite()).take(50_000).cloned().collect();
+    flat.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+    let mut out: Vec<TextItem> = Vec::with_capacity(flat.len());
+    for t in flat {
+        if let Some(last) = out.last_mut() {
+            let h = last.height;
+            let n = last.value.chars().count() as f64;
+            let same_line = (last.at.y - t.at.y).abs() <= 0.2 * h && (t.height - h).abs() <= 0.2 * h;
+            let from = last.at.x + 0.35 * h * n;
+            let to = last.at.x + 0.85 * h * n + 1.5 * h;
+            if same_line && t.at.x >= from && t.at.x <= to && last.value.len() + t.value.len() <= MAX_PARA_CHARS {
+                last.value.push(' ');
+                last.value.push_str(t.value.trim());
+                continue;
+            }
+        }
+        out.push(t);
+    }
+    out.extend(texts.iter().filter(|t| !(t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.is_finite())).cloned());
+    out
 }
 
 /// The loose notes of a sheet: each run of lines one under another (left-aligned, about a line
@@ -669,7 +792,17 @@ fn names_element(r: &Rules, class: &Class, words: &[String], context: bool) -> b
 fn items_in(r: &Rules, words: &[String]) -> Vec<(String, String, bool)> {
     let mut out: Vec<(String, String, bool)> = Vec::new();
     let found = spans(words, r.items.iter().flat_map(|(k, ws)| ws.iter().map(move |w| (w.as_str(), k.as_str()))));
+    // An element's own name (`MANUAL FIRE-ALARM BOX`): no rough-in.
+    let names_element = |s: usize| {
+        r.classes.iter().flat_map(|c| c.words.iter()).any(|w| {
+            let p = toks(w);
+            s >= p.len() && words.get(s - p.len()..s).is_some_and(|x| x == p.as_slice())
+        })
+    };
     for (s, _, item) in found {
+        if names_element(s) {
+            continue;
+        }
         let size = (s.saturating_sub(3)..s)
             .rev()
             .filter_map(|i| words.get(i))
@@ -724,6 +857,10 @@ pub(crate) fn statements(doc: &Doc, para: &Para) -> Vec<Statement> {
         }
         let cite = Cite { doc: doc.name.clone(), at: para.at.clone(), text: words.join(" ").chars().take(QUOTE).collect(), tier: doc.tier };
         let mut says: Vec<(Option<String>, Says)> = Vec::new();
+        // A table's cells read as one run of words (a shop drawing's legend) say nothing.
+        if words.len() > MAX_SENTENCE {
+            continue;
+        }
         // (party, furnish, install, object, explicit)
         let mut acts: Vec<(String, bool, bool, Vec<String>, bool)> = Vec::new();
         for (s, e, party) in &parties {
@@ -794,7 +931,8 @@ pub(crate) fn statements(doc: &Doc, para: &Para) -> Vec<Statement> {
                 acts.push((party.clone(), true, true, subject, true));
                 continue;
             }
-            if party != &r.ours {
+            // `COORDINATE … WITH OWNER` names who to ask, not who does it.
+            if party != &r.ours && party != "owner" && party != "others" {
                 says.push((None, Says::Mention { party: party.clone() }));
             }
         }
@@ -835,7 +973,14 @@ pub(crate) fn statements(doc: &Doc, para: &Para) -> Vec<Statement> {
                 {
                     says.push((Some(cname.clone()), Says::Element { party: party.clone(), furnish: f, install: i, explicit }));
                 }
-                let items = items_in(r, &object);
+                // What is ordered (`PROVIDE A CIRCUIT TO THE PANEL`: the circuit), and anything the
+                // words call electrical wherever it is (`… IN ELECTRICAL OUTLET BOXES`).
+                let mut items = items_in(r, head_words);
+                for x in items_in(r, &object).into_iter().filter(|x| x.2) {
+                    if !items.iter().any(|i| i.0 == x.0) {
+                        items.push(x);
+                    }
+                }
                 if !items.is_empty() {
                     let mut ours_items = Vec::new();
                     let mut theirs = Vec::new();
@@ -1006,10 +1151,17 @@ impl Decision {
     }
 }
 
-/// Precedence of a statement: a named party before an order of a document's trade, then the
-/// document's tier (an approved submittal, a drawing, the specification).
-fn rank(explicit: bool, c: &Cite) -> (usize, usize) {
-    (usize::from(!explicit), c.tier as usize)
+/// Precedence of a statement: a named party before an order of a document's trade, a general
+/// note before a keynote (it says what is done where its marker is, not for every element),
+/// then the document's tier (an approved submittal, a drawing, the specification).
+fn rank(explicit: bool, c: &Cite) -> (usize, usize, usize) {
+    (usize::from(!explicit), usize::from(keyed(c)), c.tier as usize)
+}
+
+/// Is it a keynote's (a note of a `KEYNOTES` list)?
+fn keyed(c: &Cite) -> bool {
+    let u = c.at.to_ascii_uppercase();
+    u.contains("KEYNOTE") || u.contains("KEYED NOTE")
 }
 
 /// The default decision of a class.
@@ -1103,9 +1255,9 @@ pub(crate) fn decide(stmts: &[Statement]) -> Vec<Decision> {
             }
         }
         // What of its rough-in is ours: each item by its best statement.
-        let mut best: BTreeMap<String, ((usize, usize), bool, String, Cite)> = BTreeMap::new();
+        let mut best: BTreeMap<String, ((usize, usize, usize), bool, String, Cite)> = BTreeMap::new();
         for s in &mine {
-            let mut put = |item: &str, ours: bool, size: &str, k: (usize, usize)| {
+            let mut put = |item: &str, ours: bool, size: &str, k: (usize, usize, usize)| {
                 let better = best.get(item).is_none_or(|b| k < b.0);
                 if better {
                     best.insert(item.to_string(), (k, ours, size.to_string(), s.cite.clone()));
@@ -1120,7 +1272,7 @@ pub(crate) fn decide(stmts: &[Statement]) -> Vec<Decision> {
                 // A document saying it isn't needed outranks one ordering it at the same tier.
                 Says::NotRequired { items } => {
                     for it in items {
-                        put(it, false, "", (0, s.cite.tier as usize));
+                        put(it, false, "", (0, usize::from(keyed(&s.cite)), s.cite.tier as usize));
                     }
                 }
                 _ => {}
@@ -1129,8 +1281,11 @@ pub(crate) fn decide(stmts: &[Statement]) -> Vec<Decision> {
         if !best.is_empty() {
             d.ours_from = "documents".into();
             d.ours = best.iter().filter(|(_, b)| b.1).map(|(k, b)| OurItem { item: k.clone(), size: b.2.clone() }).collect();
+            // The deciding words first (the best-ranked).
+            let mut ranked: Vec<&((usize, usize, usize), bool, String, Cite)> = best.values().collect();
+            ranked.sort_by_key(|b| b.0);
             let mut cites: Vec<Cite> = Vec::new();
-            for b in best.values() {
+            for b in ranked {
                 if !cites.contains(&b.3) {
                     cites.push(b.3.clone());
                 }
@@ -1166,9 +1321,20 @@ fn key(class: &str, aspect: &str) -> String {
     format!("scope.{}.{aspect}", class.replace(' ', "_"))
 }
 
-/// The tier a decision's sources give it (its best source's).
+/// The tier a decision's sources give it: its deciding source's (the first).
 fn tier_of(cites: &[Cite]) -> SourceTier {
-    cites.iter().map(|c| c.tier).min().unwrap_or(SourceTier::BuiltIn)
+    cites.first().map_or(SourceTier::BuiltIn, |c| c.tier)
+}
+
+/// The tiers a reading of the documents keeps a decision at: a new reading replaces them all
+/// (a person's answer, an RFI or the field stays).
+const READ_TIERS: [SourceTier; 4] = [SourceTier::Submittal, SourceTier::DrawingRevision, SourceTier::Spec, SourceTier::BuiltIn];
+
+fn replace_reading(d: &mut cadaddy_doc::Drawing, key: &str, value: RuleValue) {
+    for t in READ_TIERS {
+        d.project_rules.remove_tier(RuleDomain::Custom, key, t);
+    }
+    d.project_rules.set(RuleDomain::Custom, key, value, "read from the documents (bim.scope)");
 }
 
 /// Keep the documents' decisions in the project rules (defaults aren't kept: they are what holds
@@ -1180,28 +1346,26 @@ pub(crate) fn record(d: &mut cadaddy_doc::Drawing, decisions: &[Decision], by: &
             let v = json!({"furnish": x.furnish, "install": x.install, "design_build": x.design_build.as_ref().map(Cite::words),
                            "also": x.also.iter().map(|(p, c)| json!({"party": p, "source": c.words()})).collect::<Vec<_>>()});
             let src = x.party_cites.iter().map(Cite::words).collect::<Vec<_>>().join(" | ");
-            d.project_rules.set(
-                RuleDomain::Custom,
+            replace_reading(
+                d,
                 &key(&x.class, "party"),
                 RuleValue::new(v.to_string())
                     .with_source(src.chars().take(1_200).collect::<String>())
                     .with_tier(tier_of(&x.party_cites))
                     .with_set_by(by),
-                "read from the documents (bim.scope)",
             );
             n += 1;
         }
         if x.ours_from == "documents" {
             let v = json!(x.ours.iter().map(|i| json!({"item": i.item, "size": i.size})).collect::<Vec<_>>());
             let src = x.ours_cites.iter().map(Cite::words).collect::<Vec<_>>().join(" | ");
-            d.project_rules.set(
-                RuleDomain::Custom,
+            replace_reading(
+                d,
                 &key(&x.class, "ours"),
                 RuleValue::new(v.to_string())
                     .with_source(src.chars().take(1_200).collect::<String>())
                     .with_tier(tier_of(&x.ours_cites))
                     .with_set_by(by),
-                "read from the documents (bim.scope)",
             );
         }
     }
@@ -1359,8 +1523,8 @@ pub(crate) fn questions(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingS
 }
 
 /// The fire alarm devices given their kinds: each by its legend row (its mark's words in the
-/// sheets' legends), else its own name; a mark two rows give (a hexagon `H` heat detector and a
-/// square `H` horn/strobe) by its mounting, else left for a question. Returns (resolved,
+/// sheets' legends), else its own name; a mark two rows give (a detector and a horn/strobe drawn
+/// with one letter) by its mounting, else left for a question. Returns (resolved,
 /// unresolved marks with the kinds they might be).
 pub(crate) fn fa_kinds(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec) -> (usize, BTreeMap<String, Vec<String>>) {
     let r = rules();
@@ -1428,7 +1592,7 @@ pub(crate) fn fa_kinds(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Buildi
 }
 
 /// A fire alarm panel's room as the documents name it (`THE FIRE ALARM CONTROL PANEL … LOCATED …
-/// IN MECHANICAL ROOM 160 … WITH AN ANNUNCIATOR IN VESTIBULE 140`).
+/// IN ELECTRICAL ROOM 610 … WITH AN ANNUNCIATOR IN LOBBY 605`).
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct PanelPlace {
     pub kind: String,
@@ -1703,7 +1867,7 @@ pub(crate) fn summary(decisions: &[Decision], sp: &cadaddy_walk3d::BuildingSpec)
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Scope by Trade", run)
-        .params("{specs?: [path] (specification section PDFs or text, or folders of them: Divisions 01, 21-28 are read), submittals?: [path] (files or folders: those of another trade's section or naming a class), text?: string | [{document, text, tier?: drawing_revision|spec|submittal, trade?: party}] (notes given as text), pdfs?: [path] (drawing PDFs: each page's notes), set?: [{class, party? | furnish?, install?, ours?: [box|ring|conduit|pull string|sleeve|power] | \"none\", reason}] (a person's decision), sheets?: bool (read the drawing's own sheets; default true), kinds?: bool (give the fire alarm devices their kinds from the legends; default true), panels?: bool (place the fire alarm panels the documents locate; default true)} → {decisions: [{class, label, furnish, install, party, by_others, party_from: documents|answer|default, party_sources: [{document, at, text, tier}], ours: [{item, size, bought_as}], ours_from, ours_sources, design_build?, also: [{party, source}], reason}], elements: [{class, elements, party, party_from, ours, ours_from}], statements: n, documents: n, fire_alarm: {resolved, unresolved: {mark: [kinds]}}, panels: {placed, not_placed}, questions: [{class, aspect, elements, default}], unread}: who furnishes and installs each class of element another trade may own (thermostats, fire alarm devices, low voltage devices) and what of its rough-in is ours, read from the notes, specifications, submittals and responsibility matrices with the words that say so; kept in the project rules (scope.<class>.party|ours) at the documents' tier; bim.bom lists those elements in by_others and keeps only our rough-in")
+        .params("{specs?: [path] (specification section PDFs or text, or folders of them: Divisions 01, 21-28 are read), submittals?: [path] (files or folders: those of another trade's section or naming a class), text?: string | [{document, text, tier?: drawing_revision|spec|submittal, trade?: party}] (notes given as text), pdfs?: [path] (drawing PDFs: each page's notes), set?: [{class, party? | furnish?, install?, ours?: [box|ring|conduit|pull string|sleeve|power] | \"none\", reason}] (a person's decision), sheets?: bool (read the drawing's own sheets; default true), kinds?: bool (give the fire alarm devices their kinds from the legends; default true), panels?: bool (place the fire alarm panels the documents locate; default true), explain?: bool (list each statement read), explain_documents?: [name] (and those documents' paragraphs)} → {decisions: [{class, label, furnish, install, party, by_others, party_from: documents|answer|default, party_sources: [{document, at, text, tier}], ours: [{item, size, bought_as}], ours_from, ours_sources, design_build?, also: [{party, source}], reason}], elements: [{class, elements, party, party_from, ours, ours_from}], statements: n, documents: n, fire_alarm: {resolved, unresolved: {mark: [kinds]}}, panels: {placed, not_placed}, questions: [{class, aspect, elements, default}], read?: [{class, says, source}], paragraphs?: [{document, at, heading, text}], unread}: who furnishes and installs each class of element another trade may own (thermostats, fire alarm devices, low voltage devices) and what of its rough-in is ours, read from the notes, specifications, submittals and responsibility matrices with the words that say so; kept in the project rules (scope.<class>.party|ours) at the documents' tier; bim.bom lists those elements in by_others and keeps only our rough-in")
         .menu(&["Tools", "Building", "Scope by Trade"])]
 }
 
@@ -1789,10 +1953,33 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (stmts, read) = read_docs(&docs);
     record(s.doc_mut()?, &read, "bim.scope");
     let kept = decisions(s.doc()?);
+    let explain = p.get("explain").and_then(Value::as_bool).unwrap_or(false);
     let mut out = json!({
         "decisions": kept.iter().map(Decision::to_json).collect::<Vec<_>>(),
         "statements": stmts.len(), "documents": docs.len(), "unread": unread,
     });
+    if explain {
+        out["read"] = json!(
+            stmts
+                .iter()
+                .take(MAX_EXPLAIN)
+                .map(|x| json!({"class": x.class, "says": format!("{:?}", x.says), "source": x.cite.json()}))
+                .collect::<Vec<_>>()
+        );
+        // The paragraphs of the documents asked about, as read.
+        let want: Vec<&str> = p.get("explain_documents").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).take(8).collect();
+        out["paragraphs"] = json!(
+            docs.iter()
+                .filter(|d| want.iter().any(|w| d.name.eq_ignore_ascii_case(w)))
+                .flat_map(|d| d
+                    .paras
+                    .iter()
+                    .take(MAX_EXPLAIN)
+                    .map(move |x| json!({"document": d.name, "at": x.at, "heading": x.heading, "text": x.text})))
+                .take(MAX_EXPLAIN)
+                .collect::<Vec<_>>()
+        );
+    }
     if let Some(mut sp) = sp {
         if flag("kinds") {
             let (n, open) = fa_kinds(s.doc()?, &mut sp);
@@ -1852,19 +2039,19 @@ mod tests {
     fn a_numbered_notes_list_names_the_fire_alarm_contractor_for_the_system() {
         // A made-up electrical sheet: its fire alarm notes as a list under their heading.
         let texts = vec![
-            t(100.0, 100.0, "FIRE ALARM GENERAL NOTES"),
-            t(100.0, 98.0, "1. ALL DEVICES AND WIRING NECESSARY FOR A COMPLETE SYSTEM ARE THE"),
+            t(100.0, 100.0, "FIRE ALARM NOTES"),
+            t(100.0, 98.0, "1. THE DEVICES AND CABLING OF THE WHOLE SYSTEM ARE THE"),
             t(101.0, 96.6, "RESPONSIBILITY OF THE FIRE ALARM CONTRACTOR."),
-            t(100.0, 95.0, "2. THE ELECTRICIAN SHALL PROVIDE A DEDICATED 120 VAC BRANCH CIRCUIT TO"),
+            t(100.0, 95.0, "2. THE ELECTRICIAN SHALL PROVIDE A 120V BRANCH CIRCUIT FOR"),
             t(101.0, 93.6, "THE FIRE ALARM CONTROL PANEL."),
-            t(100.0, 92.0, "3. DEVICE LAYOUT IS A DEFERRED SUBMITTAL."),
+            t(100.0, 92.0, "3. THE SYSTEM IS A DEFERRED SUBMITTAL."),
         ];
-        let doc = sheet_doc("E-501", &texts);
+        let doc = sheet_doc("E-301", &texts);
         let (_, ds) = read_docs(&[doc]);
         let fa = decision(&ds, "fire alarm");
         assert_eq!((fa.furnish.as_str(), fa.install.as_str(), fa.party_from.as_str()), ("fire alarm", "fire alarm", "documents"), "{fa:?}");
         assert!(fa.party_cites[0].text.contains("RESPONSIBILITY OF THE FIRE ALARM CONTRACTOR"), "{fa:?}");
-        assert_eq!(fa.party_cites[0].doc, "E-501");
+        assert_eq!(fa.party_cites[0].doc, "E-301");
         assert_eq!(items(fa), ["power"], "the panel's circuit is ours: {fa:?}");
         assert!(fa.design_build.is_some(), "{fa:?}");
         // The circuit is for the panel, not each detector.
@@ -1877,13 +2064,13 @@ mod tests {
         // A legend's loose note over three lines (the second starts mid-word), and a vendor
         // named elsewhere on another sheet.
         let legend = vec![
-            t(10.0, 50.0, "NOTE: LOW VOLTAGE DEVICES TO BE ROUGH-IN ONLY. PROVIDE EACH ROUGH-"),
+            t(10.0, 50.0, "NOTE: ALL LOW VOLTAGE DEVICES ARE ROUGH-IN ONLY. PROVIDE EACH ROUGH-"),
             t(10.0, 48.6, "IN WITH A 4\" SQUARE BOX AND 1\" CONDUIT STUBBED INTO THE"),
             t(10.0, 47.2, "ACCESSIBLE CEILING SPACE ABOVE."),
             t(60.0, 30.0, "DATA OUTLET"),
         ];
         let plan = vec![t(0.0, 0.0, "COORDINATE TV OUTLET LOCATIONS WITH THE LOW VOLTAGE VENDOR BEFORE ROUGH-IN.")];
-        let (_, ds) = read_docs(&[sheet_doc("E-001", &legend), sheet_doc("E-201", &plan)]);
+        let (_, ds) = read_docs(&[sheet_doc("E-302", &legend), sheet_doc("E-303", &plan)]);
         let lv = decision(&ds, "low voltage");
         assert_eq!((lv.furnish.as_str(), lv.party_from.as_str()), ("low voltage", "documents"), "{lv:?}");
         assert!(lv.by_others());
@@ -1896,14 +2083,12 @@ mod tests {
     fn a_mechanical_sheet_order_furnishes_the_thermostat_and_no_box_is_required() {
         // A unit schedule's note on a mechanical sheet (an order: the sheet's trade's), and a
         // specification section of Division 23 putting it in an electrical box.
-        let sheet = sheet_doc(
-            "M-601",
-            &[t(0.0, 0.0, "PROVIDE WITH WIRED WALL THERMOSTAT. NO CONDUIT OR JUNCTION BOX SHALL BE REQUIRED FOR THERMOSTAT INSTALLATION.")],
-        );
+        let sheet =
+            sheet_doc("M-701", &[t(0.0, 0.0, "FURNISH EACH UNIT WITH ITS WALL THERMOSTAT. NO CONDUIT OR BACK BOX IS REQUIRED FOR THE THERMOSTAT.")]);
         assert_eq!(sheet.trade.as_deref(), Some("mechanical"));
         let spec = spec_doc(
             "23 99 00 - Units.pdf",
-            "SECTION 239900 - UNITS\n\nPART 3 - EXECUTION\n\nA.\nInstall wall-mounted thermostats in electrical outlet boxes at heights to match lighting controls.\n",
+            "SECTION 239900 - UNITS\n\nPART 3 - EXECUTION\n\nA.\nInstall the thermostats in electrical outlet boxes.\n",
         );
         assert_eq!(spec.trade.as_deref(), Some("mechanical"), "{spec:?}");
         let (_, ds) = read_docs(std::slice::from_ref(&spec));
@@ -1916,7 +2101,7 @@ mod tests {
         assert_eq!((th.furnish.as_str(), th.install.as_str()), ("mechanical", "mechanical"), "{th:?}");
         assert!(th.ours.is_empty(), "{th:?}");
         assert_eq!(th.ours_from, "documents");
-        assert!(th.ours_cites.iter().any(|c| c.text.contains("NO CONDUIT OR JUNCTION BOX")), "{th:?}");
+        assert!(th.ours_cites.iter().any(|c| c.text.contains("NO CONDUIT OR BACK BOX")), "{th:?}");
     }
 
     #[test]
@@ -1939,7 +2124,7 @@ mod tests {
             t(20.0, 18.0, "TCC"),
             t(40.0, 18.0, "OWNER"),
         ];
-        let (_, ds) = read_docs(&[sheet_doc("M-001", &texts)]);
+        let (_, ds) = read_docs(&[sheet_doc("M-702", &texts)]);
         let th = decision(&ds, "thermostat");
         assert_eq!((th.furnish.as_str(), th.install.as_str()), ("owner", "mechanical"), "{th:?}");
     }
@@ -1947,13 +2132,13 @@ mod tests {
     #[test]
     fn furnished_by_constructions_and_by_others() {
         let text = "CARD READERS SHALL BE FURNISHED BY THE OWNER AND INSTALLED BY THE SECURITY CONTRACTOR. ELECTRICAL CONTRACTOR SHALL FURNISH AND INSTALL BACK BOXES AND 3/4\" CONDUIT WITH PULL STRING FOR CARD READERS.";
-        let (_, ds) = read_docs(&[text_doc("E-002", SourceTier::DrawingRevision, Some("electrical".into()), text)]);
+        let (_, ds) = read_docs(&[text_doc("E-304", SourceTier::DrawingRevision, Some("electrical".into()), text)]);
         let lv = decision(&ds, "low voltage");
         assert_eq!((lv.furnish.as_str(), lv.install.as_str()), ("owner", "low voltage"), "{lv:?}");
         assert_eq!(items(lv), ["box", "conduit", "pull string"], "{lv:?}");
         assert_eq!(lv.ours.iter().find(|i| i.item == "conduit").map(|i| i.size.as_str()), Some("3/4\""));
         // `BY OTHERS`: the party the documents name beside it, else the class's.
-        let (_, ds) = read_docs(&[text_doc("E-003", SourceTier::DrawingRevision, Some("electrical".into()), "THERMOSTATS BY OTHERS.")]);
+        let (_, ds) = read_docs(&[text_doc("E-305", SourceTier::DrawingRevision, Some("electrical".into()), "THERMOSTATS BY OTHERS.")]);
         let th = decision(&ds, "thermostat");
         assert_eq!((th.furnish.as_str(), th.party_from.as_str(), th.ours_from.as_str()), ("mechanical", "documents", "default"), "{th:?}");
     }
@@ -1962,8 +2147,9 @@ mod tests {
     fn our_own_orders_and_refusals_never_give_the_element_to_us() {
         // An electrical sheet's orders name the devices only as where our work goes; `SHALL NOT
         // LOCATE` is no responsibility.
-        let text = "PROVIDE A STROBE ABOVE THE FIRE DEPARTMENT CONNECTION. ELECTRICAL CONTRACTOR SHALL NOT LOCATE SMOKE DETECTORS CLOSER THAN 3 FEET FROM A DIFFUSER.";
-        let (st, ds) = read_docs(&[text_doc("E-7", SourceTier::DrawingRevision, Some("electrical".into()), text)]);
+        let text =
+            "PROVIDE A STROBE OVER THE SIAMESE CONNECTION. THE ELECTRICAL CONTRACTOR SHALL NOT LOCATE ANY SMOKE DETECTOR WITHIN 3 FEET OF A GRILLE.";
+        let (st, ds) = read_docs(&[text_doc("E-306", SourceTier::DrawingRevision, Some("electrical".into()), text)]);
         assert!(!st.iter().any(|s| matches!(&s.says, Says::Element { .. })), "{st:?}");
         assert_eq!(decision(&ds, "fire alarm").party_from, "default");
         // Nothing said: each class its default, for a question.
@@ -1975,27 +2161,27 @@ mod tests {
     fn fire_alarm_kinds_by_legend_words() {
         let r = rules();
         let k = |w: &str| r.fa_kind_of(w);
-        assert_eq!(k("RESIDENT ROOM SMOKE DETECTOR AND SOUNDER BASE CEIL./WALL").as_deref(), Some("smoke detector"));
-        assert_eq!(k("ADDRESSABLE SMOKE/CARBON MONOXIDE COMBO DETECTOR").as_deref(), Some("smoke/CO detector"));
+        assert_eq!(k("GUEST ROOM SMOKE DETECTOR WITH SOUNDER BASE").as_deref(), Some("smoke detector"));
+        assert_eq!(k("SMOKE/CARBON MONOXIDE DETECTOR").as_deref(), Some("smoke/CO detector"));
         assert_eq!(k("DUCT SMOKE DETECTOR").as_deref(), Some("duct detector"));
-        assert_eq!(k("AREA HEAT DETECTOR").as_deref(), Some("heat detector"));
-        assert_eq!(k("FIRE ALARM MANUAL PULL STATION").as_deref(), Some("pull station"));
-        assert_eq!(k("COMBINATION F.A. HORN & STROBE SIGNAL").as_deref(), Some("horn/strobe"));
-        assert_eq!(k("FIRE ALARM STROBE SIGNAL").as_deref(), Some("strobe"));
-        assert_eq!(k("MAGNETIC DOOR HOLD OPEN").as_deref(), Some("door holder"));
-        assert_eq!(k("ADDRESSABLE RELAY MODULE").as_deref(), Some("relay/module"));
+        assert_eq!(k("HEAT DETECTOR, RATE OF RISE").as_deref(), Some("heat detector"));
+        assert_eq!(k("DUAL ACTION PULL STATION").as_deref(), Some("pull station"));
+        assert_eq!(k("F.A. HORN/STROBE, WALL").as_deref(), Some("horn/strobe"));
+        assert_eq!(k("WALL STROBE").as_deref(), Some("strobe"));
+        assert_eq!(k("DOOR HOLDER, MAGNETIC").as_deref(), Some("door holder"));
+        assert_eq!(k("CONTROL RELAY MODULE").as_deref(), Some("relay/module"));
         assert_eq!(k("REMOTE ANNUNCIATOR").as_deref(), Some("annunciator"));
         assert_eq!(k("RECEPTACLE"), None);
     }
 
     #[test]
     fn a_panels_room_comes_from_the_notes() {
-        let text = "THE FIRE ALARM CONTROL PANEL WILL BE LOCATED ON THE 2ND FLOOR IN ELECTRICAL ROOM 210 WITH A REMOTE ANNUNCIATOR IN LOBBY 101.";
-        let ps = panel_places(&[text_doc("FA-001", SourceTier::Submittal, Some("fire alarm".into()), text)]);
+        let text = "THE FIRE ALARM CONTROL PANEL WILL BE LOCATED ON THE 6TH FLOOR IN ELECTRICAL ROOM 610 WITH A REMOTE ANNUNCIATOR IN LOBBY 605AND ITS DEVICES THROUGHOUT.";
+        let ps = panel_places(&[text_doc("FA-501", SourceTier::Submittal, Some("fire alarm".into()), text)]);
         assert_eq!(ps.len(), 2, "{ps:?}");
-        assert_eq!((ps[0].tag.as_str(), ps[0].room.as_str(), ps[0].floor), ("FACP", "210", Some(2)));
+        assert_eq!((ps[0].tag.as_str(), ps[0].room.as_str(), ps[0].floor), ("FACP", "610", Some(6)));
         assert_eq!(ps[0].words, "ELECTRICAL ROOM");
-        assert_eq!((ps[1].kind.as_str(), ps[1].room.as_str()), ("annunciator", "101"));
+        assert_eq!((ps[1].kind.as_str(), ps[1].room.as_str()), ("annunciator", "605"));
         // Placed along a wall of its room.
         let room = |n: &str, level: &str, x: f64| super::super::gearbuild::RoomBox {
             level: level.into(),
@@ -2005,14 +2191,14 @@ mod tests {
             offset: Vec2::ZERO,
         };
         let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
-        let (placed, not) = place_panels(&mut sp, &ps, &[room("210", "Level 2", 0.0), room("110", "Level 1", 500.0)]);
+        let (placed, not) = place_panels(&mut sp, &ps, &[room("610", "Level 6", 0.0), room("510", "Level 5", 500.0)]);
         assert_eq!(placed, ["FACP"], "{not:?}");
-        assert_eq!(not.len(), 1, "no room 101: {not:?}");
+        assert_eq!(not.len(), 1, "no room 605: {not:?}");
         let e = &sp.mep.equipment[0];
-        assert_eq!((e.kind.as_str(), e.level.as_str()), ("fire alarm panel", "Level 2"));
+        assert_eq!((e.kind.as_str(), e.level.as_str()), ("fire alarm panel", "Level 6"));
         assert!(e.min[0] >= 0.0 && e.max[0] <= 120.0 && e.min[1] >= 0.0 && e.max[1] <= 96.0, "{e:?}");
         assert!((e.bottom_ft + e.height_ft - 6.0).abs() < 1e-9, "its top at 72\": {e:?}");
-        assert!(e.sources["position"].contains("ELECTRICAL ROOM 210"));
+        assert!(e.sources["position"].contains("ELECTRICAL ROOM 610"));
     }
 
     #[test]
@@ -2025,7 +2211,109 @@ mod tests {
             let _ = panel_places(&[text_doc("x", SourceTier::Spec, None, &format!("FACP {text}"))]);
         }
         let texts: Vec<TextItem> = (0..2_000).map(|i| t(0.0, -f64::from(i) * 1.4, "FIRE ALARM CONTRACTOR SHALL PROVIDE")).collect();
-        let d = sheet_doc("E-1", &texts);
+        let d = sheet_doc("E-307", &texts);
         assert!(!d.paras.is_empty());
+    }
+
+    #[test]
+    fn a_line_split_into_runs_is_read_whole() {
+        // An import's runs of one line: the quoted model number in a run of its own.
+        let runs = vec![
+            TextItem { value: "PROVIDE WITH WIRED WALL \"".into(), at: Vec2::new(10.0, 20.0), height: 0.1, rotation: 0.0 },
+            TextItem { value: "XY-1\" THERMOSTAT.".into(), at: Vec2::new(11.4, 20.0), height: 0.1, rotation: 0.0 },
+            TextItem { value: "NO CONDUIT OR JUNCTION BOX SHALL BE REQUIRED FOR".into(), at: Vec2::new(12.5, 20.0), height: 0.1, rotation: 0.0 },
+            TextItem { value: "THERMOSTAT INSTALLATION.".into(), at: Vec2::new(15.4, 20.0), height: 0.1, rotation: 0.0 },
+            // Another column far to the right stays apart.
+            TextItem { value: "REFER TO THE SCHEDULE".into(), at: Vec2::new(40.0, 20.0), height: 0.1, rotation: 0.0 },
+        ];
+        let joined = join_runs(&runs);
+        assert_eq!(joined.len(), 2, "{joined:?}");
+        let (_, ds) = read_docs(&[sheet_doc("M-703", &runs)]);
+        let th = decision(&ds, "thermostat");
+        assert_eq!((th.ours_from.as_str(), th.ours.len()), ("documents", 0), "{th:?}");
+    }
+
+    #[test]
+    fn an_elements_own_name_a_coordination_and_a_tables_run_of_cells_say_nothing() {
+        let r = rules();
+        // A manual fire-alarm box is the pull station, not a back box.
+        assert!(items_in(r, &toks("MANUAL FIRE-ALARM BOX ON A CONTRASTING BACKGROUND")).is_empty());
+        assert_eq!(items_in(r, &toks("A 4\" SQUARE BACK BOX")).first().map(|i| (i.0.as_str(), i.1.as_str())), Some(("box", "4\"")));
+        // `CONFIRM … WITH OWNER`: who to ask, not who furnishes.
+        let text = "ALL LOW VOLTAGE DEVICES ARE ROUGH-IN ONLY. COORDINATE THE LOW VOLTAGE LAYOUT WITH THE OWNER.";
+        let (_, ds) = read_docs(&[text_doc("E-308", SourceTier::DrawingRevision, Some("electrical".into()), text)]);
+        assert_eq!(decision(&ds, "low voltage").furnish, "low voltage");
+        // A shop drawing's legend run together: no statement from its words.
+        let cells = format!("DEVICE LEGEND {} PROVIDED BY OTHERS STROBE BACK BOX", "4\" SQUARE DEEP BOX CEILING STROBE ".repeat(12));
+        let (st, _) = read_docs(&[text_doc("FA-502", SourceTier::Submittal, Some("fire alarm".into()), &cells)]);
+        assert!(st.is_empty(), "{st:?}");
+        // The circuit ordered, not the panel it goes to.
+        let (st, _) = read_docs(&[text_doc(
+            "FA-502",
+            SourceTier::Submittal,
+            Some("fire alarm".into()),
+            "THE ELECTRICIAN SHALL FURNISH A 120V CIRCUIT TO THE PANEL OF THE FIRE ALARM SYSTEM IN ITS BACK BOX.",
+        )]);
+        assert!(
+            st.iter().any(|s| matches!(&s.says, Says::Items { items, .. } if items.iter().map(|i| i.0.as_str()).collect::<Vec<_>>() == ["power"])),
+            "{st:?}"
+        );
+    }
+
+    #[test]
+    fn words_an_import_ran_together_are_read_apart() {
+        assert_eq!(toks("SHALL BE REQUIREDFOR THE"), ["SHALL", "BE", "REQUIRED", "FOR", "THE"]);
+        assert_eq!(toks("WITH LOW VOLTAGEVENDOR"), ["WITH", "LOW", "VOLTAGE", "VENDOR"]);
+        assert_eq!(toks("LOBBY 605AND ROOM 601B"), ["LOBBY", "605", "AND", "ROOM", "601B"]);
+        // A word of its own stays whole.
+        assert_eq!(toks("BOXES CONDUITS THERMOSTAT INSTALLATION"), ["BOXES", "CONDUITS", "THERMOSTAT", "INSTALLATION"]);
+        let (_, ds) = read_docs(&[text_doc(
+            "M-704",
+            SourceTier::DrawingRevision,
+            Some("mechanical".into()),
+            "PROVIDE WITH WIRED WALL THERMOSTAT. NO CONDUIT OR JUNCTION BOX SHALL BE REQUIREDFOR THERMOSTAT INSTALLATION.",
+        )]);
+        assert!(decision(&ds, "thermostat").ours.is_empty());
+    }
+
+    #[test]
+    fn a_new_reading_replaces_the_last_whatever_its_tier_and_keeps_an_answer() {
+        let mut d = cadaddy_doc::Drawing::new_imperial();
+        // First read: a submittal says the thermostat's box is ours.
+        let sub = text_doc(
+            "Submittal 1",
+            SourceTier::Submittal,
+            Some("mechanical".into()),
+            "ELECTRICAL CONTRACTOR SHALL PROVIDE BACK BOXES FOR THERMOSTATS.",
+        );
+        record(&mut d, &read_docs(&[sub]).1, "test");
+        assert_eq!(items(decision(&decisions(&d), "thermostat")), ["box"]);
+        // Read again with a drawing that says none is needed: it holds now.
+        let dwg = text_doc("M-705", SourceTier::DrawingRevision, Some("mechanical".into()), "NO JUNCTION BOX IS REQUIRED FOR THE THERMOSTAT.");
+        record(&mut d, &read_docs(std::slice::from_ref(&dwg)).1, "test");
+        let th = decisions(&d);
+        let th = decision(&th, "thermostat");
+        assert!(th.ours.is_empty() && th.ours_from == "documents", "{th:?}");
+        // A person's answer to the party stays through a reading that says nothing of it.
+        answer(&mut d, "thermostat", &json!({"furnish": "owner", "install": "mechanical"}), "answered (user)").unwrap();
+        record(&mut d, &read_docs(&[dwg]).1, "test");
+        let th = decisions(&d);
+        assert_eq!((decision(&th, "thermostat").furnish.as_str(), decision(&th, "thermostat").party_from.as_str()), ("owner", "answer"));
+    }
+
+    #[test]
+    fn a_general_note_outranks_a_keynote_for_every_element() {
+        // The keynote (a guest room's run) read first, the legend's blanket note after.
+        let key = sheet_doc(
+            "E-309",
+            &[t(100.0, 100.0, "ELECTRICAL KEYNOTES"), t(100.0, 98.0, "4. PROVIDE A 1\" LOW VOLTAGE CONDUIT WITH PULL STRING UP TO THE HALL.")],
+        );
+        let legend =
+            sheet_doc("E-310", &[t(0.0, 0.0, "NOTE: ALL LOW VOLTAGE DEVICES ARE ROUGH-IN ONLY. PROVIDE EACH WITH A BOX AND 3/4\" CONDUIT.")]);
+        let (_, ds) = read_docs(&[key, legend]);
+        let lv = decision(&ds, "low voltage");
+        assert_eq!(lv.ours.iter().find(|i| i.item == "conduit").map(|i| i.size.as_str()), Some("3/4\""), "{lv:?}");
+        assert_eq!(items(lv), ["box", "conduit", "pull string"], "the keynote's pull string still ours: {lv:?}");
+        assert_eq!(lv.ours_cites[0].doc, "E-310");
     }
 }

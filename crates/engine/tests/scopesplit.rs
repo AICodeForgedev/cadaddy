@@ -29,7 +29,7 @@ fn device(x: f64, y: f64, mark: &str, kind: &str, extra: Value) -> Value {
     let mut fields = json!({
         "type": {"value": mark, "source": "plan"},
         "device_type": {"value": format!("{} {mark}", kind.replace('_', " ")), "source": "plan"},
-        "sheet": {"value": "E-101", "source": "plan"},
+        "sheet": {"value": "E-311", "source": "plan"},
         "symbol": {"value": format!("{:X}", 0x1F0 + (x * 10.0 + y) as u64), "source": "plan"},
     });
     if let (Some(f), Some(x)) = (fields.as_object_mut(), extra.as_object()) {
@@ -40,7 +40,7 @@ fn device(x: f64, y: f64, mark: &str, kind: &str, extra: Value) -> Value {
     json!({"id": format!("device:L1:{x:.1},{y:.1}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": fields})
 }
 
-/// A made-up office: two rooms (OFFICE 101, STORAGE 102), a receptacle, a thermostat, four fire
+/// A made-up office: two rooms (OFFICE 601, STORAGE 602), a receptacle, a thermostat, four fire
 /// alarm devices, a TV outlet; a fire alarm symbol list on the sheet (an `H` two rows give).
 fn office() -> Session {
     let mut d = Drawing::new_imperial();
@@ -52,7 +52,7 @@ fn office() -> Session {
     }
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Office", None);
-    for (at, t) in [([110.0, 64.0], "OFFICE"), ([116.0, 52.0], "101"), ([350.0, 64.0], "STORAGE"), ([356.0, 52.0], "102")] {
+    for (at, t) in [([110.0, 64.0], "OFFICE"), ([116.0, 52.0], "601"), ([350.0, 64.0], "STORAGE"), ([356.0, 52.0], "602")] {
         if s.execute("layer.new", &json!({"name": "A-ROOM-TAG", "current": true})).is_err() {
             s.execute("layer.current", &json!({"name": "A-ROOM-TAG"})).expect("layer");
         }
@@ -60,10 +60,10 @@ fn office() -> Session {
     }
     text(&mut s, [3000.0, 900.0], "FIRE ALARM SYMBOL LIST");
     for (y, mark, words, mount) in [
-        (870.0, "S", "AREA SMOKE DETECTOR", "CEILING"),
-        (850.0, "P", "MANUAL PULL STATION", "48\" AFF TO TOP"),
-        (830.0, "H", "AREA HEAT DETECTOR", "CEIL./WALL"),
-        (810.0, "H", "HEARING IMPAIRED HORN & STROBE SIGNAL", "WALL 80\" AFF"),
+        (870.0, "S", "SPOT SMOKE DETECTOR", "CEILING"),
+        (850.0, "P", "DUAL ACTION PULL STATION", "48\" AFF TO TOP"),
+        (830.0, "H", "HEAT DETECTOR, RATE OF RISE", "CEILING OR WALL"),
+        (810.0, "H", "ADA HORN/STROBE", "WALL, 80\" AFF"),
     ] {
         text(&mut s, [2950.0, y], mark);
         text(&mut s, [2980.0, y], words);
@@ -94,9 +94,9 @@ fn office() -> Session {
 /// fire alarm notes list, as text.
 fn notes() -> Value {
     json!([
-        {"document": "M-601", "text": "PROVIDE WITH WIRED WALL THERMOSTAT. NO CONDUIT OR JUNCTION BOX SHALL BE REQUIRED FOR THERMOSTAT INSTALLATION."},
-        {"document": "E-001", "text": "NOTE: LOW VOLTAGE DEVICES TO BE ROUGH-IN ONLY. PROVIDE EACH ROUGH-IN WITH A JUNCTION BOX AND 3/4\" CONDUIT STUBBED INTO THE CEILING SPACE ABOVE. VERIFY TV OUTLETS WITH THE LOW VOLTAGE VENDOR."},
-        {"document": "E-500", "text": "FIRE ALARM NOTES: ALL ELEMENTS OF THE FIRE ALARM SYSTEM ARE THE RESPONSIBILITY OF THE FIRE ALARM CONTRACTOR. THE ELECTRICIAN SHALL PROVIDE A DEDICATED 120 VAC BRANCH CIRCUIT TO THE FIRE ALARM CONTROL PANEL. THE FIRE ALARM CONTROL PANEL WILL BE LOCATED IN STORAGE ROOM 102."}
+        {"document": "M-701", "text": "FURNISH EACH UNIT WITH ITS WALL THERMOSTAT. NO CONDUIT OR BACK BOX IS REQUIRED FOR THE THERMOSTAT."},
+        {"document": "E-302", "text": "NOTE: ALL LOW VOLTAGE DEVICES ARE ROUGH-IN ONLY. PROVIDE EACH WITH A 4\" SQUARE BOX AND A 3/4\" CONDUIT STUBBED UP INTO THE CEILING. VERIFY TV OUTLETS WITH THE LOW VOLTAGE VENDOR."},
+        {"document": "E-312", "text": "FIRE ALARM NOTES: THE DEVICES AND CABLING OF THE FIRE ALARM SYSTEM ARE THE RESPONSIBILITY OF THE FIRE ALARM CONTRACTOR. THE ELECTRICIAN SHALL PROVIDE A 120V BRANCH CIRCUIT FOR THE FIRE ALARM CONTROL PANEL. THE FIRE ALARM CONTROL PANEL IS TO BE MOUNTED IN STORAGE ROOM 602."}
     ])
 }
 
@@ -154,7 +154,7 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
         "{th:#}"
     );
     assert_eq!(th["ours"], json!([]), "no box or conduit: {th:#}");
-    assert_eq!(th["party_sources"][0]["document"], "M-601");
+    assert_eq!(th["party_sources"][0]["document"], "M-701");
     let lv = dec("low voltage");
     assert_eq!((lv["furnish"].as_str(), lv["ours_from"].as_str()), (Some("low voltage"), Some("documents")), "{lv:#}");
     let fa = dec("fire alarm");
@@ -169,7 +169,7 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
     assert_eq!(kind_of(5.0, 5.0).as_deref(), Some("smoke detector"));
     assert_eq!(kind_of(12.0, 5.0).as_deref(), Some("heat detector"));
     assert_eq!(kind_of(18.0, 0.8).as_deref(), Some("pull station"));
-    // The panel where the notes put it, in room 102.
+    // The panel where the notes put it, in room 602.
     assert_eq!(r["panels"]["placed"], json!(["FACP"]), "{r:#}");
     assert_eq!(r["panels"]["built"], 1, "{r:#}");
 
@@ -179,7 +179,7 @@ fn other_trades_devices_are_listed_by_others_and_the_documents_decide_our_part()
     assert!(by.iter().all(|x| x["decided"] == "documents"), "{by:#?}");
     let of = |e: &str| by.iter().find(|x| x["element"] == e).copied().unwrap_or_else(|| panic!("{e}: {by:#?}"));
     assert_eq!(of(&id(5.0, 5.0))["kind"], "smoke detector S");
-    assert!(of(&id(5.0, 5.0))["source"].as_str().unwrap().starts_with("E-500"), "{:#}", of(&id(5.0, 5.0)));
+    assert!(of(&id(5.0, 5.0))["source"].as_str().unwrap().starts_with("E-312"), "{:#}", of(&id(5.0, 5.0)));
     assert_eq!(of("FACP")["kind"], "control panel FACP");
     // Ours: the thermostat nothing; the TV outlet its box and 3/4" conduit stub; the panel its
     // circuit; a detector nothing.
