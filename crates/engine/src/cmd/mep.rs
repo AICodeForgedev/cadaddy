@@ -1786,6 +1786,93 @@ fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
     }
 }
 
+/// The spec's equipment as model elements: a box (or an upright cylinder) per scheduled item,
+/// tagged with its kind, tag, systems and schedule row for IFC; `only` (upper-case tags) limits it
+/// to those (gear added to a built model). The handles built.
+pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<Handle> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
+    // tag, systems and schedule row for IFC. --
+    let mut built: Vec<Handle> = Vec::new();
+    let t = |code: i32, v: String| RawTag { code, value: v };
+    // Equipment on a housekeeping pad stands on it.
+    let pads = super::concrete::elements(sp, &d.bim_types);
+    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
+    // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
+    let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
+    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
+    for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
+        let Some(level) = sp.level(&e.level) else { continue };
+        let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
+        if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
+            continue;
+        }
+        let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
+        ensure_layer(d, &layer, 30);
+        let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+        let z0 = (level.elevation_ft + on_pad(e)) * upf;
+        let z1 = z0 + e.height_ft * upf;
+        let mut m = super::wallgen::empty_mesh();
+        // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
+        // wall) when its mounting says so, else on the face; turned with the wall.
+        let face = if panel(&e.kind) && !e.round {
+            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf)
+        } else {
+            None
+        };
+        let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+        if let Some(f) = &face {
+            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+            let along = f.along * (w / 2.0);
+            // The box's middle line, half its depth from the face (into the wall when recessed).
+            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
+            super::wallgen::add_box(&mut m, mid - along, mid + along, dp, z0, z1);
+        } else if e.round {
+            add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
+        } else {
+            let cy = (lo.y + hi.y) / 2.0;
+            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
+        }
+        if m.faces.is_empty() {
+            continue;
+        }
+        let cap = |v: String| -> String { v.chars().take(250).collect() };
+        let mut xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, level.name.clone()),
+            t(1000, Handle(0).hex()),
+            t(1000, "kind:equipment".into()),
+            t(1000, cap(format!("part:equipment:{}", sanitise(&e.kind, 40)))),
+            t(1000, cap(format!("tag:{}", e.tag))),
+        ];
+        for sy in e.systems.iter().take(32) {
+            xdata.push(t(1000, cap(format!("system:{sy}"))));
+        }
+        if !e.title.is_empty() {
+            xdata.push(t(1000, cap(format!("title:{}", e.title))));
+        }
+        for (k, v) in e.properties.iter().take(64) {
+            xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
+        }
+        for (k, v) in e.sources.iter().take(8) {
+            xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
+        }
+        match &face {
+            Some(f) => {
+                xdata.push(t(1000, format!("prop:HOST_WALL={}", f.wall.hex())));
+                xdata.push(t(1000, format!("prop:HOST_FACE={:.3},{:.3}", f.out.x, f.out.y)));
+            }
+            None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
+            None => {}
+        }
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
+            built.push(h);
+        }
+    }
+    built
+}
+
 /// Sanitise a name for use in a layer name (alphanumeric, dash, underscore only).
 pub(crate) fn sanitise(name: &str, max: usize) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(max).collect()
@@ -2152,84 +2239,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         }
     }
 
-    // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
-    // tag, systems and schedule row for IFC. --
-    let mut total_equipment = 0usize;
-    // Equipment on a housekeeping pad stands on it.
-    let pads = super::concrete::elements(sp, &d.bim_types);
-    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
-    // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
-    let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
-    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
-    for e in sp.mep.equipment.iter().take(MAX_RUNS) {
-        let Some(level) = sp.level(&e.level) else { continue };
-        let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
-        if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
-            continue;
-        }
-        let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
-        ensure_layer(d, &layer, 30);
-        let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
-        let z0 = (level.elevation_ft + on_pad(e)) * upf;
-        let z1 = z0 + e.height_ft * upf;
-        let mut m = super::wallgen::empty_mesh();
-        // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
-        // wall) when its mounting says so, else on the face; turned with the wall.
-        let face = if panel(&e.kind) && !e.round {
-            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf)
-        } else {
-            None
-        };
-        let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
-        if let Some(f) = &face {
-            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
-            let along = f.along * (w / 2.0);
-            // The box's middle line, half its depth from the face (into the wall when recessed).
-            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
-            super::wallgen::add_box(&mut m, mid - along, mid + along, dp, z0, z1);
-        } else if e.round {
-            add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
-        } else {
-            let cy = (lo.y + hi.y) / 2.0;
-            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
-        }
-        if m.faces.is_empty() {
-            continue;
-        }
-        let cap = |v: String| -> String { v.chars().take(250).collect() };
-        let mut xdata = vec![
-            t(1001, super::wallgen::APP.into()),
-            t(1000, "mep".into()),
-            t(1000, level.name.clone()),
-            t(1000, Handle(0).hex()),
-            t(1000, "kind:equipment".into()),
-            t(1000, cap(format!("part:equipment:{}", sanitise(&e.kind, 40)))),
-            t(1000, cap(format!("tag:{}", e.tag))),
-        ];
-        for sy in e.systems.iter().take(32) {
-            xdata.push(t(1000, cap(format!("system:{sy}"))));
-        }
-        if !e.title.is_empty() {
-            xdata.push(t(1000, cap(format!("title:{}", e.title))));
-        }
-        for (k, v) in e.properties.iter().take(64) {
-            xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
-        }
-        for (k, v) in e.sources.iter().take(8) {
-            xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
-        }
-        match &face {
-            Some(f) => {
-                xdata.push(t(1000, format!("prop:HOST_WALL={}", f.wall.hex())));
-                xdata.push(t(1000, format!("prop:HOST_FACE={:.3},{:.3}", f.out.x, f.out.y)));
-            }
-            None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
-            None => {}
-        }
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
-            total_equipment += 1;
-        }
-    }
+    let total_equipment = build_equipment(d, sp, None).len();
 
     // -- Feeders: their raceways where they come in through each gear's entry plates (rows
     // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate

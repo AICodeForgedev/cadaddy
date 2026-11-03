@@ -68,28 +68,42 @@ fn job() -> Session {
 
 /// The job's spec tags as a job with no legend kinds leaves them: every device of kind `device`,
 /// with only the plan tag as its type (no legend words), and no kind stored on its built device
-/// (Q6130 stores one). The marks' counts.
+/// (Q6130 stores one). The made-up set's marks by symbols are REC and S (its A and B are grid
+/// bubbles, no devices: Q6165), so two receptacles are marked QA (the project will name it) and
+/// two QB (nothing names it). The built devices' marks and counts.
 fn generic_tags(s: &mut Session) -> BTreeMap<String, u64> {
     use cadaddy_engine::doc::props;
     let d = s.doc_mut().unwrap();
     let built: Vec<_> = d.model.iter().filter(|e| made_as(e).as_deref() == Some("device")).map(|e| e.handle).collect();
+    let mut marks = BTreeMap::new();
+    let mut relabelled = 0;
     for h in built {
         d.modify_entity(h, |e| {
             let mut p = props::read(&e.common.xdata);
             for key in ["kind", "legend_kind", "device_kind", "kind_source", "ifc_class"] {
                 p.remove(key);
             }
+            let mark = p.get("type_mark").map(|m| m.text().trim().to_string()).unwrap_or_default();
+            let mark = if mark == "REC" && relabelled < 4 {
+                relabelled += 1;
+                let m = if relabelled <= 2 { "QA" } else { "QB" };
+                p.set("type_mark", props::Prop::new(m, props::Source::print("E-201", None)));
+                m.to_string()
+            } else {
+                mark
+            };
+            if !mark.is_empty() {
+                *marks.entry(mark).or_default() += 1;
+            }
             e.common.xdata = props::write(&e.common.xdata, &p).into();
         })
         .unwrap();
     }
     let mut sp: Value = serde_json::from_str(d.building_spec.as_deref().unwrap()).unwrap();
-    let mut marks = BTreeMap::new();
     for t in sp["tags"].as_array_mut().unwrap().iter_mut().filter(|t| t["id"].as_str().unwrap_or("").starts_with("device:")) {
         t["kind"] = json!("device");
         let f = t["fields"].as_object_mut().unwrap();
         f.retain(|k, _| matches!(k.as_str(), "type" | "sheet" | "symbol"));
-        *marks.entry(f["type"]["value"].as_str().unwrap().to_string()).or_default() += 1;
     }
     d.building_spec = Some(sp.to_string());
     marks
@@ -136,15 +150,17 @@ fn generic_job_devices_get_g_host_and_g_height_by_their_legend_and_project_rules
     let mut s = job();
     let marks = generic_tags(&mut s);
     let n = |m: &str| marks.get(m).copied().unwrap_or(0);
-    assert!(n("REC") >= 10 && n("S") >= 5 && n("A") >= 1 && n("B") >= 1, "the made-up set's marks: {marks:?}");
+    assert!(n("REC") >= 10 && n("S") >= 5 && n("QA") == 2 && n("QB") == 2, "the made-up set's marks: {marks:?}");
     let devices: u64 = marks.values().sum();
 
     // As the job leaves it: no rule naming kinds applies, and the prescreen says so.
     let r = s.execute("validate.prescreen", &json!({})).unwrap();
     assert_eq!(r["checked"]["G-HOST"], json!({"pass": 0, "fail": 0}), "every rule run is listed, with 0: {r}");
-    // G-HEIGHT measures nothing against a document yet; the job's usual heights (no document
-    // gives them) are reported as the defaults they are.
-    assert_eq!((r["checked"]["G-HEIGHT"]["pass"].as_u64(), r["checked"]["G-HEIGHT"]["fail"].as_u64()), (Some(0), Some(0)), "{r}");
+    // G-HEIGHT: the devices whose plan prints a height by them (`+48" AFF` by each switch) were
+    // built at it (Q6158); the job's usual heights for the rest (no document gives them) are
+    // reported as the defaults they are.
+    assert_eq!(r["checked"]["G-HEIGHT"]["fail"].as_u64(), Some(0), "{r}");
+    assert!(r["checked"]["G-HEIGHT"]["pass"].as_u64().is_some_and(|p| p >= n("S")), "{r}");
     assert!(r["checked"]["G-HEIGHT"]["default"].as_u64().is_some_and(|n| n > 0), "{r}");
     assert!(r["checked"]["G-PRESENT"].is_object(), "{r}");
     assert_eq!(r["unmatched"]["elements"].as_u64(), Some(devices), "{r}");
@@ -152,29 +168,35 @@ fn generic_job_devices_get_g_host_and_g_height_by_their_legend_and_project_rules
     assert_eq!(r["unmatched"]["marks"]["REC"].as_u64(), Some(n("REC")), "{r}");
     assert!(r["unmatched"]["why"].as_str().unwrap().contains("validate.kind.<mark>"), "{r}");
 
-    // The job's legend names REC and S; the project names A; B stays unnamed. A project rule
+    // The job's legend names REC and S; the project names QA; QB stays unnamed. A project rule
     // never overrides the legend (REC stays a receptacle).
     legend(&mut s, &[("REC", "DUPLEX RECEPTACLE, 18\" AFF"), ("S", "SINGLE POLE SWITCH"), ("SD", "SMOKE DETECTOR")]);
-    rule(&mut s, "custom", "validate.kind.A", "thermostat");
+    rule(&mut s, "custom", "validate.kind.QA", "thermostat");
     rule(&mut s, "custom", "validate.kind.REC", "switch");
     rule(&mut s, "mounting_height", "receptacle", "18");
     rule(&mut s, "mounting_height", "switch", "54");
     let (r, found) = all_findings(&mut s);
     let host = verdicts(&r, "G-HOST");
-    assert!(host >= n("REC") + n("S") + n("A") - 2, "G-HOST runs on the named devices ({host} of {devices}): {r}");
-    assert!(host < devices, "B is not wall-hosted by any rule: {r}");
+    assert!(host >= n("REC") + n("S") + n("QA") - 2, "G-HOST runs on the named devices ({host} of {devices}): {r}");
+    assert!(host < devices, "QB is not wall-hosted by any rule: {r}");
     assert!(verdicts(&r, "G-HEIGHT") >= n("REC"), "G-HEIGHT runs on them: {r}");
-    assert_eq!(r["unmatched"]["elements"].as_u64(), Some(n("B")), "{r}");
-    assert_eq!(r["unmatched"]["marks"], json!({"B": n("B")}), "{r}");
+    assert_eq!(r["unmatched"]["elements"].as_u64(), Some(n("QB")), "{r}");
+    assert_eq!(r["unmatched"]["marks"], json!({"QB": n("QB")}), "{r}");
     let of = |rule: &str, mark: &str| -> Vec<&Value> { found.iter().filter(|f| f["rule"] == rule && f["mark"] == mark).collect() };
     let rec = of("G-HOST", "REC");
     assert!(rec.len() as u64 >= n("REC") - 1, "{r}");
     assert!(rec.iter().all(|f| f["kind"] == "receptacle" && f["kind_from"] == "legend"), "{rec:?}");
     assert!(of("G-HOST", "S").iter().all(|f| f["kind"] == "switch" && f["kind_from"] == "legend"));
-    assert!(of("G-HOST", "A").iter().all(|f| f["kind"] == "thermostat" && f["kind_from"] == "project_rule"));
-    // Switches are built at 48" and the project says 54": G-HEIGHT measures that.
+    assert!(!of("G-HOST", "QA").is_empty() && of("G-HOST", "QA").iter().all(|f| f["kind"] == "thermostat" && f["kind_from"] == "project_rule"));
+    // The switches are built at the +48" their plan prints by them (a project's 54" is no
+    // document of theirs over that note); one with no note by it is built at 48" (a default) and
+    // the project says 54": G-HEIGHT measures that.
     let sw = of("G-HEIGHT", "S");
-    assert!(!sw.is_empty() && sw.iter().all(|f| f["verdict"] == "fail" && (f["measured"]["off_in"].as_f64().unwrap() + 6.0).abs() < 0.5), "{sw:?}");
+    let noted = |f: &&Value| f["verdict"] == "pass" && f["measured"]["expected_from"].as_str().is_some_and(|w| w.contains("+48"));
+    let short = |f: &&Value| {
+        f["verdict"] == "fail" && f["measured"]["model_height_from"] == "default" && (f["measured"]["off_in"].as_f64().unwrap() + 6.0).abs() < 0.5
+    };
+    assert!(sw.iter().any(noted) && sw.iter().all(|f| noted(f) || short(f)), "{sw:?}");
     assert!(of("G-HEIGHT", "REC").iter().any(|f| f["verdict"] == "pass"));
 }
 

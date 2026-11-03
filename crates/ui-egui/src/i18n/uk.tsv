@@ -3415,6 +3415,14 @@
 	Apply Submittals	Застосувати погоджену документацію
 	Apply Product Data	Застосувати дані про вироби
 	Apply Code Rules	Застосувати норми
+	Panel Schedules	Розклади щитів
+	Estimate	Кошторис
+	Price Book	Довідник цін
+	Add Material Quote	Додати пропозицію ціни
+	Remove Material Quote	Вилучити пропозицію ціни
+	Price Book Settings	Параметри довідника цін
+	Map Item to Price	Зіставити позицію з ціною
+	Import Price Book	Імпортувати довідник цін
 	Dimming Check	Перевірка регулювання яскравості
 	Read Partition Type Legend	Прочитати легенду типів перегородок
 	 ({n} shown; Export writes them all)	 (показано {n}; експорт запише всі)
