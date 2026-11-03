@@ -64,6 +64,7 @@ mod imageattach;
 mod imageclip;
 pub mod import_check;
 pub(crate) mod inquiry;
+pub mod inventory;
 mod layer;
 pub mod levels;
 pub mod lowvolt;
@@ -858,6 +859,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(propfill::specs());
         v.extend(propuse::specs());
         v.extend(identity::specs());
+        v.extend(inventory::specs());
         v.extend(bimlook::specs());
         v.extend(fidelity::specs());
         v.extend(projrules::specs());
