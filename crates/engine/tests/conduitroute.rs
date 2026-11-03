@@ -401,3 +401,148 @@ fn the_panel_schedules_load_sets_the_voltage_drop() {
     let wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-5", "group_by": "size"}));
     assert!(wires["rows"].as_array().is_some_and(|rows| rows.iter().all(|x| x["size"] == json!("#12"))), "{wires}");
 }
+
+/// Every conduit stick's ends (feet) with its circuit, filtered by circuit.
+fn sticks_of<'a>(st: &'a [(String, [f64; 3], [f64; 3])], circuit: &str) -> Vec<&'a (String, [f64; 3], [f64; 3])> {
+    st.iter().filter(|(c, _, _)| c == circuit).collect()
+}
+
+#[test]
+fn a_circuit_whose_panel_is_on_the_storey_below_rises_through_the_rated_floor_into_its_top() {
+    // Two storeys drawn side by side (L2's plan 200' east), stacked by the build. Panel P1 is on
+    // L1 only; L2's circuit P1-3 is fed from it: its homerun runs on L2 to the point over P1,
+    // drops through L2's floor (a 1-hour floor/ceiling: L1's ceiling there is rated) into P1's
+    // top entry window.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let dev = |n: usize, level: &str, x: f64, y: f64, c: &str| {
+        json!({"id": format!("device:{level}:{n}"), "kind": "receptacle", "level": level, "at_ft": [x, y], "fields": {
+            "type": {"value": "A", "source": "plan"}, "symbol": {"value": format!("{:X}", 0x3F0 + n), "source": "plan"},
+            "circuit": {"value": c, "source": "plan"}, "mount_height_in": {"value": "18", "source": "note"}}})
+    };
+    let ckt = |level: &str, label: &str| {
+        json!({"id": format!("circuit:{level}:E-1:{label}"), "kind": "circuit", "level": level, "at_ft": [0.0, 0.0], "fields": {
+            "circuit": {"value": label, "source": "plan"}, "panel": {"value": "P1", "source": "plan"},
+            "conductors": {"value": "2#12 + 1#12G", "source": "default"}}})
+    };
+    let sq = |x0: f64, y0: f64, x1: f64, y1: f64| json!([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12, "stack": true,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "base": [2400, 0]}
+        ],
+        "tags": [dev(1, "L1", 20.0, 10.0, "P1-1"), dev(2, "L1", 30.0, 10.0, "P1-1"), dev(3, "L2", 220.0, 10.0, "P1-3"), dev(4, "L2", 230.0, 10.0, "P1-3"),
+                 ckt("L1", "P1-1"), ckt("L2", "P1-3")],
+        "ceiling_types": [{"name": "C1", "kind": "gypsum", "fire_rating": "1 HR", "layers": []}],
+        "rcp": {"ceilings": [{"level": "L1", "outline": sq(-240.0, -240.0, 480.0, 480.0), "height_ft": 9, "ceiling_type": "C1"}]},
+        "mep": {"equipment": [
+            {"tag": "P1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
+             "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let rr = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    assert_eq!(rr["circuits"], json!(2), "{rr}");
+    assert_eq!(rr["unrouted"], json!(0), "the riser is routed: {rr}");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    let risers = r["risers"].as_array().cloned().unwrap_or_default();
+    assert_eq!(risers.len(), 1, "{r}");
+    assert_eq!((risers[0]["panel"].clone(), risers[0]["panel_level"].clone(), risers[0]["level"].clone()), (json!("P1"), json!("L1"), json!("L2")));
+    assert_eq!((risers[0]["floors"].clone(), risers[0]["side"].clone()), (json!(["L2"]), json!("top")));
+    // L2's floor penetration, rated from L1's ceiling under it, with its firestop.
+    let floors: Vec<Value> = r["penetrations"].as_array().into_iter().flatten().filter(|p| p.get("floor").is_some()).cloned().collect();
+    assert_eq!(floors.len(), 1, "{r}");
+    assert_eq!((floors[0]["floor"].clone(), floors[0]["rating"].clone()), (json!("L2"), json!("1 HR")));
+    assert!(floors[0]["firestop"].as_str().is_some_and(|f| f.contains("through the L2 floor")), "{}", floors[0]);
+    // The pieces: P1-3's raceway reaches P1's top (stacked plan: x -2'..-0.33', y ±0.5', top 6.5')
+    // and one stick passes the 12' floor.
+    let st = sticks(&s);
+    let p13 = sticks_of(&st, "P1-3");
+    assert!(!p13.is_empty(), "{:?}", st.iter().map(|x| &x.0).collect::<std::collections::BTreeSet<_>>());
+    let at_panel = |p: &[f64; 3]| (-2.01..=-0.32).contains(&p[0]) && (-0.51..=0.51).contains(&p[1]) && (p[2] - 6.5).abs() < 0.05;
+    assert!(p13.iter().any(|(_, a, b)| at_panel(a) || at_panel(b)), "{p13:?}");
+    assert!(p13.iter().any(|(_, a, b)| a[2].min(b[2]) < 12.0 && a[2].max(b[2]) > 12.0), "{p13:?}");
+    // Every device fed; the takeoff has the floor's firestop.
+    let devices: Vec<String> = {
+        let d = s.doc().expect("doc");
+        d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle.hex()).collect()
+    };
+    assert_eq!(devices.len(), 4);
+    for h in &devices {
+        let el = s.execute("bim.element", &json!({"handle": h})).expect("element");
+        assert!(el["fed_by"].as_array().is_some_and(|f| !f.is_empty()), "{h}: {el}");
+    }
+    let tk = s.execute("conduit.takeoff", &json!({})).expect("takeoff");
+    let fs: Vec<&Value> =
+        tk["lines"].as_array().into_iter().flatten().filter(|l| l["kind"] == json!("firestop") && l["type"] == json!("1 HR")).collect();
+    assert_eq!(fs.len(), 1, "{tk}");
+    // Rerouting again is stable.
+    let rr2 = s.execute("conduit.reroute", &json!({})).expect("again");
+    assert_eq!((rr2["atoms"].clone(), rr2["routed_ft"].clone()), (rr["atoms"].clone(), rr["routed_ft"].clone()));
+}
+
+#[test]
+fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash() {
+    // Three receptacles on LP1-1. A pipe runs along x right over the first, at the ceiling (in
+    // its drop's way): that drop moves along the wall to clear it. A wide duct hangs low over the
+    // third: no clear spot within 2' of it, so its drop is a clash item.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let tags = vec![receptacle(1, 20.0, 10.0, "LP1-1"), receptacle(2, 30.0, 10.0, "LP1-1"), receptacle(3, 60.0, 10.0, "LP1-1"), circuit("LP1-1")];
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {
+            "systems": [
+                {"name": "CW", "layer": "P-CW", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 9.0},
+                {"name": "SA", "layer": "M-SA", "kind": "duct", "size_in": [72, 12], "bottom_ft": 8.5}
+            ],
+            "runs": [
+                {"system": "CW", "level": "L1", "points": [[180, 120], [300, 120]], "size_in": [2, 0], "bottoms_ft": [9.0], "size_source": "tag", "height_source": "tag"},
+                {"system": "SA", "level": "L1", "points": [[660, 120], [780, 120]], "size_in": [72, 12], "bottoms_ft": [8.5], "size_source": "tag", "height_source": "tag"}
+            ],
+            "equipment": [
+                {"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
+                 "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+            ]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert!(r["drops_moved_along_wall"].as_u64().is_some_and(|n| n >= 1), "{r}");
+    let all = r["clashes"].as_array().cloned().unwrap_or_default();
+    // No clash with the pipe: the first box's drop stands clear of it.
+    assert!(!all.iter().any(|c| c["b"]["system"] == json!("CW")), "{all:?}");
+    // The third box's drop under the wide duct: a clash item of kind `drop`, with a fix.
+    let drops: Vec<&Value> = all.iter().filter(|c| c["a"]["what"] == json!("drop")).collect();
+    assert!(!drops.is_empty(), "{all:?}");
+    assert!(drops.iter().all(|c| c["b"]["system"] == json!("SA") && c["b"]["category"] == json!("duct")), "{drops:?}");
+    assert!(drops[0]["fix"].as_str().is_some_and(|f| f.contains("along its wall")), "{}", drops[0]);
+    assert!((drops[0]["at"][0].as_f64().unwrap_or(0.0) - 720.0).abs() < 1.0, "at the third box: {}", drops[0]);
+    // The moved drop: from the first box (x 20', y 10') the raceway jogs in the wall off the
+    // pipe's line (y 10') before it rises: every stick leaving that box ends off it.
+    let st = sticks(&s);
+    let at_box = |p: &[f64; 3]| (p[0] - 20.0).abs() < 0.01 && (p[1] - 10.0).abs() < 0.01 && p[2] < 3.0;
+    let leaving: Vec<[f64; 3]> = st
+        .iter()
+        .filter_map(|(_, a, b)| {
+            if at_box(a) {
+                Some(*b)
+            } else if at_box(b) {
+                Some(*a)
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert!(!leaving.is_empty(), "{st:?}");
+    assert!(leaving.iter().all(|p| (p[1] - 10.0).abs() >= 0.4), "{leaving:?}");
+    // Still square, every box fed, no drop short of its box.
+    assert_eq!(r["diagonal_pieces"], json!(0), "{r}");
+    let d = s.doc().expect("doc");
+    assert_eq!(d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count(), 0);
+}

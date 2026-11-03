@@ -9,9 +9,11 @@
     "in_wall_max_ft": 12.0,
     "in_wall_above_box_in": 6,
     "drop_spacing_in": 1.5,
+    "drop_reach_ft": 2.0,
+    "drop_step_in": 6,
     "bend_penalty_ft": 3.0,
     "max_detour_ft": 8.0,
-    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart"
+    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear"
   },
   "clearance_in": {
     "duct": 1.0,
@@ -91,6 +93,7 @@
   },
   "firestop": {
     "item": "Firestop system, through-penetration (UL listed)",
+    "floor_unrated": "not given (confirm the floor/ceiling assembly; an unrated floor still needs its annular space sealed, IBC 714.6)",
     "source": "IBC 714 / NEC 300.21: penetrations of fire-rated assemblies firestopped with a listed system"
   },
   "entry": {

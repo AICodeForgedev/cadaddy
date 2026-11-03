@@ -112,6 +112,8 @@ pub(crate) struct RouteGeom {
     pub corridor_min_ft: f64,
     pub in_wall_max_ft: f64,
     pub in_wall_above_box_in: f64,
+    pub drop_reach_ft: f64,
+    pub drop_step_in: f64,
     pub bend_penalty_ft: f64,
     pub max_detour_ft: f64,
     pub source: String,
@@ -212,6 +214,7 @@ impl MethodRules {
 #[serde(default)]
 pub(crate) struct Firestop {
     pub item: String,
+    pub floor_unrated: String,
     pub source: String,
 }
 
@@ -437,12 +440,26 @@ impl Field {
     /// The first obstacle a square piece `a`–`b` at height `z` (radius `r`) comes within its
     /// clearance of, skipping `skip`.
     fn hit(&self, a: Vec2, b: Vec2, z: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+        self.hit_span(a, b, z, z, r, upf, skip, rl)
+    }
+    /// The first obstacle a vertical piece at `p` from `z0` to `z1` (radius `r`) comes within
+    /// its clearance of, skipping `skip`: a drop, a riser, a change of tier.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn hit_column(&self, p: Vec2, z0: f64, z1: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+        if (z1 - z0).abs() < 1e-9 {
+            return None;
+        }
+        self.hit_span(p, p, z0.min(z1), z0.max(z1), r, upf, skip, rl)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn hit_span(&self, a: Vec2, b: Vec2, zlo: f64, zhi: f64, r: f64, upf: f64, skip: &[Handle], rl: &RouteRules) -> Option<usize> {
+        let z = zlo;
         let (lo, hi) = (Vec2::new(a.x.min(b.x), a.y.min(b.y)), Vec2::new(a.x.max(b.x), a.y.max(b.y)));
         let pad = 6.0 * upf;
         let (x0, y0, x1, y1) =
             (Self::c(lo.x - pad, self.cell), Self::c(lo.y - pad, self.cell), Self::c(hi.x + pad, self.cell), Self::c(hi.y + pad, self.cell));
         let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-        if !(a.is_finite() && b.is_finite() && z.is_finite())
+        if !(a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite())
             || !(0..=4096).contains(&w)
             || !(0..=4096).contains(&h)
             || w.saturating_mul(h) > 1_000_000
@@ -463,7 +480,7 @@ impl Field {
                     }
                     let c = rl.clearance_in(&o.category) / 12.0 * upf + r;
                     let meets =
-                        lo.x <= o.hi.x + c && hi.x >= o.lo.x - c && lo.y <= o.hi.y + c && hi.y >= o.lo.y - c && z >= o.lo.z - c && z <= o.hi.z + c;
+                        lo.x <= o.hi.x + c && hi.x >= o.lo.x - c && lo.y <= o.hi.y + c && hi.y >= o.lo.y - c && zhi >= o.lo.z - c && z <= o.hi.z + c;
                     if meets {
                         // The nearest along the piece first.
                         let along = Vec2::new((o.lo.x + o.hi.x) / 2.0, (o.lo.y + o.hi.y) / 2.0).dist(a);
@@ -1063,6 +1080,88 @@ fn field_of<'a>(t: &'a ElementTag, k: &str) -> Option<&'a str> {
 
 /// The circuits' routes for `sp` over the model in `d` (its devices built, their boxes not yet):
 /// the runs (replacing the estimated ones), the circuits' tags as routed, and the report.
+/// Where a box's raceway rises into the ceiling space, the height of its jog in the wall, and
+/// what blocks it: over the box when that column is clear up to the lowest tier `z0`, else along
+/// its wall (a square wall only: the face on a plan axis, either axis when the face isn't known)
+/// in steps up to the rules' reach, jogging in the wall just above the box; none clear ⟹ over
+/// the box, with the obstacle.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rise_point(
+    at: Vec2,
+    top: f64,
+    face: Option<Vec2>,
+    z0: f64,
+    r: f64,
+    field: &Field,
+    upf: f64,
+    rl: &RouteRules,
+) -> (Vec2, f64, Option<usize>) {
+    let zj = (top + rl.route.in_wall_above_box_in.max(0.0) / 12.0 * upf).min(z0);
+    let Some(first) = field.hit_column(at, top, z0, r, upf, &[], rl) else { return (at, zj, None) };
+    let dirs: Vec<Vec2> = match face {
+        Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+        Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
+        Some(_) => Vec::new(),
+        None => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+    };
+    let step = rl.route.drop_step_in.max(1.0) / 12.0 * upf;
+    let n = ((rl.route.drop_reach_ft.max(0.0) * upf) / step).floor().clamp(0.0, 48.0) as usize;
+    for k in 1..=n {
+        for dir in &dirs {
+            let q = at + *dir * (step * k as f64);
+            if field.hit_column(q, zj, z0, r, upf, &[], rl).is_none() && field.hit(at, q, zj, r, upf, &[], rl).is_none() {
+                return (q, zj, None);
+            }
+        }
+    }
+    (at, zj, Some(first))
+}
+
+/// A run's start at box `a` (its top `top`): the box, the jog in the wall to its rise point when
+/// that is off the box, then the seated path (`leg`, from the rise point); plan points and each
+/// segment's height above `floor` (feet).
+fn from_box(a: Vec2, top: f64, rise: (Vec2, f64), leg: &Leg, floor: f64, upf: f64) -> (Vec<[f64; 2]>, Vec<f64>) {
+    let mut pts = vec![[a.x, a.y]];
+    let mut bot = vec![(top - floor) / upf];
+    if rise.0.dist(a) > upf / 96.0 {
+        pts.push([a.x, a.y]);
+        bot.push((rise.1 - floor) / upf);
+    }
+    pts.extend(leg.pts.iter().map(|p| [p.x, p.y]));
+    bot.extend(leg.z.iter().map(|z| (z - floor) / upf));
+    (pts, bot)
+}
+
+/// A run's end at box `b`: the jog in the wall from its rise point when that is off the box, then
+/// the box.
+fn to_box(pts: &mut Vec<[f64; 2]>, bot: &mut Vec<f64>, b: Vec2, top: f64, rise: (Vec2, f64), floor: f64, upf: f64) {
+    if rise.0.dist(b) > upf / 96.0 {
+        pts.push([b.x, b.y]);
+        bot.push((rise.1 - floor) / upf);
+    }
+    pts.push([b.x, b.y]);
+    bot.push((top - floor) / upf);
+}
+
+/// The vertical pieces of a seated leg that meet an obstacle: from the lowest tier `z0` up to its
+/// first piece at its start and end, and each change of tier at a corner.
+#[allow(clippy::too_many_arguments)]
+fn leg_columns(leg: &Leg, z0: f64, r: f64, field: &Field, upf: f64, skip: &[Handle], rl: &RouteRules, out: &mut Vec<Blocked>) {
+    let mut check = |p: Option<&Vec2>, za: f64, zb: f64| {
+        if let Some(p) = p
+            && let Some(i) = field.hit_column(*p, za, zb, r, upf, skip, rl)
+        {
+            out.push(Blocked { obstacle: i, at: Vec3::new(p.x, p.y, za.max(zb)), z: za.max(zb) });
+        }
+    };
+    check(leg.pts.first(), z0, leg.z.first().copied().unwrap_or(z0));
+    for i in 1..leg.z.len() {
+        let (za, zb) = (leg.z.get(i - 1).copied().unwrap_or(z0), leg.z.get(i).copied().unwrap_or(z0));
+        check(leg.pts.get(i), za, zb);
+    }
+    check(leg.pts.last(), z0, leg.z.last().copied().unwrap_or(z0));
+}
+
 pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let rl = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -1196,6 +1295,21 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let fields: BTreeMap<String, Field> = obstacles.into_iter().map(|(k, v)| (k, Field::new(v, upf))).collect();
     let empty = Field::default();
+    // Each level's stacking move (a level's built objects all moved by the same): a riser to a
+    // panel on another level stands where the stacked building has that panel.
+    let mut level_off: HashMap<String, Vec2> = HashMap::new();
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).is_some()
+            && let Some(l) = super::bspec::made_level(e)
+        {
+            level_off.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+        }
+    }
+    let off_of = |l: &str| level_off.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    // A point of `from`'s own plan on `to`'s.
+    let carry = |p: Vec2, from: &str, to: &str| p + off_of(from) - off_of(to);
+    let gear_ctr = |g: &GearEl| Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0);
+    let elev = |l: &str| sp.level(l).map_or(0.0, |x| x.elevation_ft);
 
     // -- Each circuit's devices: those of its label near its earlier route (a typical room's own
     // circuits first), then the rest of its label on its level. --
@@ -1421,6 +1535,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut box_in: HashMap<usize, Vec<(u32, String)>> = HashMap::new();
     let mut in_wall_legs = 0usize;
     let mut ceiling_legs = 0usize;
+    let mut drops_moved = 0usize;
+    let mut drop_clashes = 0usize;
     let r_of = |size_in: f64| size_in / 24.0 * upf;
     let add_clash = |clashes: &mut Vec<Value>, field: &Field, b: &Blocked, what: &str, circuit: &str, level: &str, size_in: f64| {
         if clashes.len() >= MAX_ITEMS {
@@ -1446,10 +1562,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "level": level,
             "at": [r2(b.at.x), r2(b.at.y), r2((b.z - floor) / upf)],
             "clearance_in": need,
-            "fix": format!(
-                "no square route at the level's tiers clears the {} {}: offset under it (bottom of conduit {:.2} ft AFF) or over it ({:.2} ft AFF), or coordinate a sleeve with the {} trade",
-                o.category, o.system, under, over, o.trade
-            ),
+            "fix": if matches!(what, "drop" | "vertical conduit" | "riser") {
+                format!(
+                    "the {what} can't stand clear of the {} {} (over its box or within {} ft along its wall): move the box or the {} sideways, or coordinate a sleeve with the {} trade",
+                    o.category, o.system, rl.route.drop_reach_ft, o.category, o.trade
+                )
+            } else {
+                format!(
+                    "no square route at the level's tiers clears the {} {}: offset under it (bottom of conduit {:.2} ft AFF) or over it ({:.2} ft AFF), or coordinate a sleeve with the {} trade",
+                    o.category, o.system, under, over, o.trade
+                )
+            },
         }));
     };
     for (ci, c) in circs.iter().enumerate() {
@@ -1492,7 +1615,21 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i)
         });
-        let panel_at = gi.and_then(|i| gear.get(i)).map(|g| Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0));
+        // None of its panel on its level: that panel on another storey (the nearest), reached by a
+        // riser through the floors between (a unit's own circuit stays in its unit).
+        let gi = gi.or_else(|| {
+            if room_circuit || panel_up.is_empty() {
+                return None;
+            }
+            let here = elev(&c.level);
+            gear.iter()
+                .enumerate()
+                .filter(|(_, g)| !same_level(&g.level, &c.level) && g.tag.eq_ignore_ascii_case(&c.panel))
+                .map(|(i, g)| (i, (elev(&g.level) - here).abs(), carry(gear_ctr(g), &g.level, &c.level).dist(centre)))
+                .min_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(i, _, _)| i)
+        });
+        let panel_at = gi.and_then(|i| gear.get(i)).map(|g| carry(gear_ctr(g), &g.level, &c.level));
         let pts: Vec<Vec2> = members.iter().map(|m| m.at).collect();
         let root = panel_at
             .and_then(|p| pts.iter().enumerate().min_by(|a, b| manhattan(*a.1, p).total_cmp(&manhattan(*b.1, p))).map(|(i, _)| i))
@@ -1530,21 +1667,40 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 tree_len += a.at.dist(b.at) / upf + 2.0 * (zw - a.top.min(b.top)).abs() / upf;
             } else {
                 ceiling_legs += 1;
-                let leg = route_leg(a.at, b.at, &tiers, r_of(size), field, upf, &[], rl);
+                // Each end rises over its box, or along its wall where that is blocked.
+                let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
+                let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, rl);
+                let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, rl);
+                drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
+                let leg = route_leg(qa, qb, &tiers, r_of(size), field, upf, &[], rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "branch conduit", &c.label, &c.level, size);
                 }
-                let mut pts = vec![[a.at.x, a.at.y]];
-                pts.extend(leg.pts.iter().map(|p| [p.x, p.y]));
-                pts.push([b.at.x, b.at.y]);
-                let mut bot = vec![(a.top - floor) / upf];
-                bot.extend(leg.z.iter().map(|z| (z - floor) / upf));
-                bot.push((b.top - floor) / upf);
+                for (blk, q) in [(ba, qa), (bb, qb)] {
+                    if let Some(i) = blk {
+                        drop_clashes += 1;
+                        add_clash(
+                            &mut clashes,
+                            field,
+                            &Blocked { obstacle: i, at: Vec3::new(q.x, q.y, z0), z: z0 },
+                            "drop",
+                            &c.label,
+                            &c.level,
+                            size,
+                        );
+                    }
+                }
+                let mut cols = Vec::new();
+                leg_columns(&leg, z0, r_of(size), field, upf, &[], rl, &mut cols);
+                for bl in &cols {
+                    drop_clashes += 1;
+                    add_clash(&mut clashes, field, bl, "vertical conduit", &c.label, &c.level, size);
+                }
+                let (mut pts, mut bot) = from_box(a.at, a.top, (qa, ja), &leg, floor, upf);
+                to_box(&mut pts, &mut bot, b.at, b.top, (qb, jb), floor, upf);
                 r.points = pts;
                 r.bottoms_ft = bot;
-                let up = leg.z.first().copied().unwrap_or(a.top);
-                let down = leg.z.last().copied().unwrap_or(b.top);
-                tree_len += poly_len(&leg.pts) / upf + ((up - a.top).abs() + (down - b.top).abs()) / upf;
+                tree_len += run_ft(&r, upf);
                 penetrate(&mut penetrations, &rated, &c.level, &leg, &c.label, size, upf, floor, rl);
             }
             edge_ft.push((*u, *v, tree_len - before));
@@ -1585,7 +1741,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             .flatten();
         match (gi, gi_other) {
             (Some(_), _) => {}
-            (None, Some(other)) => unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("its panel {} is on {other}: the riser to it is not routed", c.panel)})),
+            (None, Some(other)) => unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("its panel {} is on {other} only: a unit's own circuit is not run to another storey", c.panel)})),
             (None, None) => unrouted.push(json!({"circuit": c.label, "level": c.level, "reason": format!("panel {} is not in the model: no homerun", c.panel)})),
         }
         // The farthest device along the joints from the root: the voltage drop's length.
@@ -1620,7 +1776,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
 
     // -- Homeruns: grouped by panel and nearness, each from its lead's box to the panel's top. --
-    let mut slots_used: HashMap<usize, f64> = HashMap::new();
+    let mut slots_used: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     let mut conflicts: Vec<Value> = Vec::new();
     let mut entry_unknown: BTreeSet<String> = BTreeSet::new();
     let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -1629,7 +1785,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let root_at = |h: &Home| circs.get(h.circ).and_then(|c| c.devs.get(h.root)).and_then(|d| devs.get(*d)).map(|d| d.at);
         // By panel and method, the root nearest its panel first: it leads its group.
         let to_gear = |h: &Home| {
-            let g = h.gear.and_then(|i| gear.get(i)).map(|g| Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0));
+            let g = h.gear.and_then(|i| gear.get(i)).map(|g| carry(gear_ctr(g), &g.level, &h.level));
             match (root_at(h), g) {
                 (Some(p), Some(q)) => manhattan(p, q),
                 _ => f64::INFINITY,
@@ -1637,7 +1793,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         };
         order.sort_by(|a, b| {
             let (Some(ha), Some(hb)) = (homes.get(*a), homes.get(*b)) else { return std::cmp::Ordering::Equal };
-            (ha.gear, ha.method.as_str()).cmp(&(hb.gear, hb.method.as_str())).then(to_gear(ha).total_cmp(&to_gear(hb)))
+            (ha.gear, ha.level.to_ascii_lowercase(), ha.method.as_str())
+                .cmp(&(hb.gear, hb.level.to_ascii_lowercase(), hb.method.as_str()))
+                .then(to_gear(ha).total_cmp(&to_gear(hb)))
         });
         let reach = rl.grouping.reach_ft.max(0.0) * upf;
         for i in order {
@@ -1649,6 +1807,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     && !lead.cable
                     && g.len() < max_group
                     && lead.gear == h.gear
+                    && lead.level.eq_ignore_ascii_case(&h.level)
                     && lead.method == h.method
                     && match (root_at(lead), here) {
                         (Some(p), Some(q)) => manhattan(p, q) <= reach,
@@ -1666,6 +1825,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut fill_rows: Vec<Value> = Vec::new();
     let mut derated: Vec<Value> = Vec::new();
     let mut corridor_homes = 0usize;
+    let mut risers: Vec<Value> = Vec::new();
     for (gn, g) in groups.iter().enumerate() {
         if runs.len() >= MAX_RUNS {
             break;
@@ -1676,7 +1836,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let Some(lead_dev) = lead_c.devs.get(lead_h.root).and_then(|d| devs.get(*d)) else { continue };
         let field = fields.get(&lead_h.level.to_ascii_lowercase()).unwrap_or(&empty);
         let (floor, tiers) = tiers_of(&lead_h.level);
-        let gctr = Vec2::new((gear_el.lo.x + gear_el.hi.x) / 2.0, (gear_el.lo.y + gear_el.hi.y) / 2.0);
+        // A panel on another storey: the homerun runs to the point over (or under) it on its own
+        // level's plan, then rises through the floors between into the panel's top (from above)
+        // or bottom (from below).
+        let gfield = fields.get(&gear_el.level.to_ascii_lowercase()).unwrap_or(&empty);
+        let riser = !same_level(&gear_el.level, &lead_h.level);
+        let from_below = riser && elev(&gear_el.level) > elev(&lead_h.level);
+        let gear_z = if from_below { gear_el.lo.z } else { gear_el.hi.z };
+        let gfloor = elev(&gear_el.level) * upf;
+        let gtop = gfloor + sp.level(&gear_el.level).map_or(12.0, |l| l.height_ft) * upf;
+        let gctr = carry(gear_ctr(gear_el), &gear_el.level, &lead_h.level);
         // Members tap into the lead's box.
         let mut labels: Vec<String> = Vec::new();
         let mut group_parts: Vec<Part> = Vec::new();
@@ -1686,22 +1855,33 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // The path to the panel first (its length sizes the conductors).
         let lane = corridors(&lead_h.level);
         let far = manhattan(lead_dev.at, gctr) >= rl.route.corridor_min_ft * upf;
-        let plan: Vec<Vec2> = match (far && !lane.is_empty()).then(|| corridor_path(&lane, lead_dev.at, gctr, upf)).flatten() {
+        let mut plan: Vec<Vec2> = match (far && !lane.is_empty()).then(|| corridor_path(&lane, lead_dev.at, gctr, upf)).flatten() {
             Some(p) => {
                 corridor_homes += 1;
                 p
             }
             None => vec![lead_dev.at, gctr],
         };
+
         // Each square piece of the plan path seated clear of the obstacles (the gear itself is
         // the target, not an obstacle).
-        let mut home_pts: Vec<Vec2> = vec![lead_dev.at];
+        let z0 = tiers.first().copied().unwrap_or(lead_dev.top);
+        let (qa, ja, ba) = rise_point(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, rl);
+        drops_moved += usize::from(qa.dist(lead_dev.at) > upf / 96.0);
+        let mut home_pts: Vec<Vec2> = vec![qa];
         let mut home_z: Vec<f64> = Vec::new();
         let mut blocked: Vec<Blocked> = Vec::new();
+        let mut vertical: Vec<Blocked> = Vec::new();
+        if let Some(i) = ba {
+            vertical.push(Blocked { obstacle: i, at: Vec3::new(qa.x, qa.y, z0), z: z0 });
+        }
+        if let Some(p0) = plan.first_mut() {
+            *p0 = qa;
+        }
         // The panel's own entry raceways (its feeder's, on its top): not in the homerun's way, and
         // their slots in the window taken.
         let pad = upf / 6.0;
-        let entries: Vec<Handle> = field
+        let entries: Vec<Handle> = gfield
             .obs
             .iter()
             .filter(|o| {
@@ -1710,7 +1890,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     && o.hi.x <= gear_el.hi.x + pad
                     && o.lo.y >= gear_el.lo.y - pad
                     && o.hi.y <= gear_el.hi.y + pad
-                    && o.lo.z >= gear_el.hi.z - pad
+                    && if from_below { o.hi.z <= gear_el.lo.z + pad } else { o.lo.z >= gear_el.hi.z - pad }
             })
             .map(|o| o.handle)
             .take(64)
@@ -1866,7 +2046,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
         // The panel's top entry window: each raceway at its own slot along it.
         let eq = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&gear_el.tag) && same_level(&e.level, &gear_el.level));
-        let given = eq.and_then(|e| e.enclosure.as_ref()).map(|en| en.top_entry_in).filter(|w| w[0] > 0.0 && w[1] > 0.0);
+        let side = if from_below { "bottom" } else { "top" };
+        let given = eq
+            .and_then(|e| e.enclosure.as_ref())
+            .map(|en| if from_below { en.bottom_entry_in } else { en.top_entry_in })
+            .filter(|w| w[0] > 0.0 && w[1] > 0.0);
         // None given: the box's top less its margins, derived (and asked).
         let derived = given
             .is_none()
@@ -1877,34 +2061,54 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             })
             .filter(|w| w[0] > 0.0 && w[1] > 0.0);
         let window = given.or(derived);
-        let area_text = eq.and_then(|e| e.properties.get("TOP CONDUIT AREA")).cloned();
-        let bottom_fed = eq.and_then(|e| e.properties.get("INCOMING LOCATION")).is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("bottom"));
+        let area_text = eq.and_then(|e| e.properties.get(if from_below { "BOTTOM CONDUIT AREA" } else { "TOP CONDUIT AREA" })).cloned();
+        let bottom_fed = !from_below
+            && eq.and_then(|e| e.properties.get("INCOMING LOCATION")).is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("bottom"));
         let od = rl.entry.locknut_od_in.get(&format!("{size_in:?}")).copied().unwrap_or(size_in + 1.0);
         let pitch = (od + rl.entry.spacing_in) / 12.0 * upf;
         let land = match window {
             Some([w, dpt]) => {
                 // Slots row by row across the window (W along the box's long side, D across it).
                 let (w_u, d_u) = (w / 12.0 * upf, dpt / 12.0 * upf);
-                let k = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert(entries.len() as f64);
+                let taken = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert_with(|| (0..entries.len()).collect());
                 if given.is_none() {
                     entry_unknown.insert(format!("{} on {}", gear_el.tag, gear_el.level));
                 }
-                let per_row = (w_u / pitch).floor().max(1.0);
-                let rows = (d_u / pitch).floor().max(1.0);
-                let (col, row) = (*k % per_row, (*k / per_row).floor());
-                if row >= rows && conflicts.len() < MAX_ITEMS {
-                    conflicts.push(json!({
-                        "kind": "conflict", "gear": gear_el.tag, "level": gear_el.level, "side": "top",
-                        "window_in": [w, dpt], "window": area_text.clone().unwrap_or_default(),
-                        "raceways": *k + 1.0, "holds": per_row * rows, "pitch_in": r2(pitch / upf * 12.0),
-                        "fix": "the top entry window can't hold another raceway: add an extension gutter or wireway, a pull box above the panel, a larger can, or split the entry",
-                    }));
-                }
-                *k += 1.0;
-                let along = (-w_u / 2.0 + pitch * (col + 0.5)).min(w_u / 2.0);
-                let across = (-d_u / 2.0 + pitch * (row.min(rows - 1.0) + 0.5)).min(d_u / 2.0);
+                let per_row = (w_u / pitch).floor().clamp(1.0, 64.0);
+                let rows = (d_u / pitch).floor().clamp(1.0, 64.0);
+                let cap = (per_row * rows) as usize;
                 let wide = (gear_el.hi.x - gear_el.lo.x) >= (gear_el.hi.y - gear_el.lo.y);
-                if wide { Vec2::new(gctr.x + along, gctr.y + across) } else { Vec2::new(gctr.x + across, gctr.y + along) }
+                let pos = |i: usize| {
+                    let (col, row) = ((i as f64) % per_row, ((i as f64) / per_row).floor().min(rows - 1.0));
+                    let along = (-w_u / 2.0 + pitch * (col + 0.5)).min(w_u / 2.0);
+                    let across = (-d_u / 2.0 + pitch * (row + 0.5)).min(d_u / 2.0);
+                    if wide { Vec2::new(gctr.x + along, gctr.y + across) } else { Vec2::new(gctr.x + across, gctr.y + along) }
+                };
+                // The first free slot whose raceway reaches the panel clear of what is around it
+                // on the panel's level (a pipe over the panel takes the slots under it), else the
+                // first free one.
+                let last = home_z.last().copied().unwrap_or(z0);
+                let (lo_z, hi_z) =
+                    if riser { if from_below { (gfloor, gear_z) } else { (gear_z, gtop) } } else { (gear_z.min(last), gear_z.max(last)) };
+                let clear = |p: Vec2| gfield.hit_column(carry(p, &lead_h.level, &gear_el.level), lo_z, hi_z, r_of(size_in), upf, &skip, rl).is_none();
+                let free: Vec<usize> = (0..cap).filter(|i| !taken.contains(i)).collect();
+                let pick = free.iter().copied().find(|i| clear(pos(*i))).or_else(|| free.first().copied());
+                let i = match pick {
+                    Some(i) => i,
+                    None => {
+                        if conflicts.len() < MAX_ITEMS {
+                            conflicts.push(json!({
+                                "kind": "conflict", "gear": gear_el.tag, "level": gear_el.level, "side": side,
+                                "window_in": [w, dpt], "window": area_text.clone().unwrap_or_default(),
+                                "raceways": taken.len() + 1, "holds": cap, "pitch_in": r2(pitch / upf * 12.0),
+                                "fix": format!("the {side} entry window can't hold another raceway: add an extension gutter or wireway, a pull box {} the panel, a larger can, or split the entry", if from_below { "below" } else { "above" }),
+                            }));
+                        }
+                        cap.saturating_add(taken.len())
+                    }
+                };
+                taken.insert(i);
+                pos(i.min(cap.saturating_sub(1)))
             }
             None => {
                 entry_unknown.insert(format!("{} on {}", gear_el.tag, gear_el.level));
@@ -1931,6 +2135,104 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         for bl in &blocked {
             add_clash(&mut clashes, field, bl, "homerun", &labels.join(","), &lead_h.level, size_in);
         }
+        // The vertical pieces: the changes of tier along it, then the last piece down (or up)
+        // onto the panel, through the floors between when it is on another storey.
+        let last_z = home_z.last().copied().unwrap_or(z0);
+        let seat_leg = Leg { pts: home_pts.clone(), z: home_z.clone(), blocked: Vec::new() };
+        let mut cols = Vec::new();
+        leg_columns(&seat_leg, z0, r_of(size_in), field, upf, &skip, rl, &mut cols);
+        // (its end column is the panel's drop, checked next, against the panel's own skip list)
+        cols.retain(|b| Vec2::new(b.at.x, b.at.y).dist(land) > upf / 96.0);
+        vertical.extend(cols);
+        let what_end = if riser { "riser" } else { "vertical conduit" };
+        for bl in &vertical {
+            drop_clashes += 1;
+            add_clash(
+                &mut clashes,
+                field,
+                bl,
+                if bl.at.z <= z0 + 1e-9 && Vec2::new(bl.at.x, bl.at.y).dist(qa) <= upf / 96.0 { "drop" } else { "vertical conduit" },
+                &labels.join(","),
+                &lead_h.level,
+                size_in,
+            );
+        }
+        // Its own level's part of the last piece, then (a riser) the panel level's.
+        let (zlo_here, zhi_here) = if riser {
+            if from_below { (last_z, floor + sp.level(&lead_h.level).map_or(12.0, |l| l.height_ft) * upf) } else { (floor, last_z) }
+        } else {
+            (gear_z.min(last_z), gear_z.max(last_z))
+        };
+        if let Some(i) = field.hit_column(land, zlo_here, zhi_here, r_of(size_in), upf, &skip, rl) {
+            drop_clashes += 1;
+            add_clash(
+                &mut clashes,
+                field,
+                &Blocked { obstacle: i, at: Vec3::new(land.x, land.y, zhi_here), z: zhi_here },
+                what_end,
+                &labels.join(","),
+                &lead_h.level,
+                size_in,
+            );
+        }
+        let mut floors: Vec<Value> = Vec::new();
+        if riser {
+            let gland = carry(land, &lead_h.level, &gear_el.level);
+            let (glo, ghi) = if from_below { (gfloor, gear_z) } else { (gear_z, gtop) };
+            if let Some(i) = gfield.hit_column(gland, glo, ghi, r_of(size_in), upf, &skip, rl) {
+                drop_clashes += 1;
+                add_clash(
+                    &mut clashes,
+                    gfield,
+                    &Blocked { obstacle: i, at: Vec3::new(gland.x, gland.y, ghi), z: ghi },
+                    "riser",
+                    &labels.join(","),
+                    &gear_el.level,
+                    size_in,
+                );
+            }
+            // Each floor it passes: a penetration with its firestop, rated by the floor/ceiling
+            // assembly under that floor where the documents give one.
+            let (zl, zh) = ((last_z / upf).min(gear_z / upf), (last_z / upf).max(gear_z / upf));
+            let mut levels: Vec<_> = sp.levels.iter().collect();
+            levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
+            for (li, l) in levels.iter().enumerate() {
+                if !(l.elevation_ft > zl && l.elevation_ft <= zh) || penetrations.len() >= MAX_ITEMS {
+                    continue;
+                }
+                let below = li.checked_sub(1).and_then(|j| levels.get(j));
+                let rating = below.and_then(|b| {
+                    let p = carry(land, &lead_h.level, &b.name);
+                    sp.rcp
+                        .ceilings
+                        .iter()
+                        .filter(|ca| same_level(&ca.level, &b.name) && ca.outline.len() >= 3)
+                        .find(|ca| inside(p, &ca.outline.iter().map(|q| Vec2::new(q[0], q[1])).collect::<Vec<_>>()))
+                        .and_then(|ca| ca.ceiling_type.as_ref())
+                        .and_then(|t| sp.ceiling_types.iter().find(|ct| ct.name.eq_ignore_ascii_case(t)))
+                        .and_then(|ct| ct.fire_rating.clone())
+                        .filter(|r| !r.trim().is_empty())
+                });
+                let fl = json!({
+                    "floor": l.name, "rating": rating.clone().unwrap_or_else(|| "not given".into()), "level": lead_h.level,
+                    "circuit": labels.join(","), "raceway_in": size_in,
+                    "at": [r2(land.x), r2(land.y), r2((l.elevation_ft * upf - floor) / upf)],
+                    "firestop": match &rating {
+                        Some(r) => format!("{} for {} raceway through the {} floor ({r})", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name),
+                        None => format!("{} for {} raceway through the {} floor: rating {}", rl.firestop.item, super::mepatoms::trade_size(size_in), l.name, rl.firestop.floor_unrated),
+                    },
+                    "source": rl.firestop.source,
+                });
+                floors.push(json!(l.name));
+                penetrations.push(fl);
+            }
+            if risers.len() < MAX_ITEMS {
+                risers.push(json!({
+                    "panel": gear_el.tag, "panel_level": gear_el.level, "level": lead_h.level, "circuits": labels, "side": side,
+                    "floors": floors, "at": [r2(land.x), r2(land.y)],
+                }));
+            }
+        }
         let gid = format!(
             "{}{}{HOME_PART}{}:{gn}",
             super::printcond::CIRCUIT_TAG,
@@ -1943,13 +2245,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         pts.push([land.x, land.y]);
         let mut bot = vec![(lead_dev.top - floor) / upf];
         bot.extend(home_z.iter().map(|z| (z - floor) / upf));
-        bot.push((gear_el.hi.z - floor) / upf);
+        bot.push((gear_z - floor) / upf);
+        // A jog in the wall from the box to its rise point.
+        if qa.dist(lead_dev.at) > upf / 96.0 {
+            pts.insert(1, [lead_dev.at.x, lead_dev.at.y]);
+            bot.insert(1, (ja - floor) / upf);
+        }
         r.points = pts;
         r.bottoms_ft = bot;
         r.id = format!("{gid}#home");
         r.size_source = ssrc.clone();
         r.height_source = ROUTED.into();
-        let seat_leg = Leg { pts: home_pts.clone(), z: home_z.clone(), blocked: Vec::new() };
         penetrate(&mut penetrations, &rated, &lead_h.level, &seat_leg, &labels.join(","), size_in, upf, floor, rl);
         runs.push(r);
         box_in
@@ -1972,12 +2278,28 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             format!(
                 "to panel {} ({})",
                 gear_el.tag,
-                if window.is_some() { "in its top entry window" } else { "entry window unknown: centred on its top, derived (centered)" }
+                if window.is_some() {
+                    format!("in its {side} entry window")
+                } else {
+                    format!("entry window unknown: centred on its {side}, derived (centered)")
+                }
             ),
             "computed",
         );
         t.set("max_circuits", format!("{max_group}: {group_src}"), if methods.max_circuits.is_some() { "spec" } else { "rule" });
         t.set("homerun_ft", format!("{longest:.1}"), "computed");
+        if riser {
+            t.set(
+                "riser",
+                format!(
+                    "to panel {} on {} through the {} floor(s), into its {side}",
+                    gear_el.tag,
+                    gear_el.level,
+                    floors.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")
+                ),
+                "computed",
+            );
+        }
         tags.push(t);
     }
 
@@ -2054,6 +2376,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "ceiling_legs": ceiling_legs,
         "homeruns": groups.len(),
         "homeruns_by_corridor": corridor_homes,
+        "risers": risers,
+        "drops_moved_along_wall": drops_moved,
+        "vertical_clashes": drop_clashes,
         "grouped_circuits": grouped_circuits,
         "routed_ft": r1(routed_ft),
         "diagonal_pieces": diagonal,
