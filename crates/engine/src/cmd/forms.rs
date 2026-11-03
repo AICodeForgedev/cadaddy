@@ -1318,9 +1318,11 @@ fn run_promote(s: &mut Session, p: &Value) -> Result<Value> {
     };
     file.templates.retain(|t| !t.kind.eq_ignore_ascii_case(&name));
     file.templates.push(template);
+    // Through writefile: a dry run (or a system folder) writes nothing, not even the folder.
+    crate::writefile::check(&path).map_err(|e| bad(PROMOTE, format!("{}: {e}", path.display())))?;
     std::fs::create_dir_all(&dir).map_err(|e| bad(PROMOTE, format!("{}: {e}", dir.display())))?;
     let text = serde_json::to_string_pretty(&file).map_err(|e| bad(PROMOTE, e.to_string()))?;
-    std::fs::write(&path, text).map_err(|e| bad(PROMOTE, format!("{}: {e}", path.display())))?;
+    crate::writefile::write(&path, text).map_err(|e| bad(PROMOTE, format!("{}: {e}", path.display())))?;
     st.log(Change {
         who: author_of(p),
         why: format!("promoted to the {trade} templates"),
