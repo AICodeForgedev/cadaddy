@@ -1500,8 +1500,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let level = device_level(&sp, dv);
         let at_ft = [dv.at[0] / upf, dv.at[1] / upf];
         let base = format!("device:{level}:{:.1},{:.1}", at_ft[0], at_ft[1]);
-        // Two marks on one symbol spot (a switch and its sensor) are two devices.
+        // Two marks on one symbol spot (a switch and its sensor) are two devices; so are one mark's
+        // devices of two rooms there (mirrored units' thermostats on the wall they share).
         let id = if ids.contains(&base) { format!("{base}:{tag}") } else { base };
+        let id = match (ids.contains(&id), dv.room.trim()) {
+            (true, room) if !room.is_empty() => format!("{id}:{room}"),
+            _ => id,
+        };
         if !ids.insert(id.clone()) {
             continue;
         }
