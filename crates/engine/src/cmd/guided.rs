@@ -2770,7 +2770,9 @@ const MAX_ENLARGED_FITS: usize = 500;
 fn enlarged_authority(job: &GuidedJob, links: &cadaddy_mepfix::printlinks::SheetLinks, census: &mut DeviceCensus) -> (usize, usize) {
     let mut moves: BTreeMap<&str, &cadaddy_mepfix::printlinks::Enlarged> = BTreeMap::new();
     let mut ignored: BTreeSet<&str> = BTreeSet::new();
-    for e in links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0) {
+    // (Not a typical room's or one room's view: those are stamped into their rooms, every room of
+    // the type; moved onto the one room a callout points at, the rest would go without them.)
+    for e in links.enlarged.iter().filter(|e| e.registered && e.fit.is_some() && e.devices > 0 && !room_view(&e.title)) {
         for h in &e.device_handles {
             moves.insert(h.as_str(), e);
         }
@@ -13865,6 +13867,38 @@ mod tests {
         );
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
+    }
+
+    /// A registered enlarged view's devices move onto the overall plan where its callout points;
+    /// a typical room's view's don't: they are stamped into every room of the type.
+    #[test]
+    fn a_typical_rooms_view_keeps_its_devices_for_every_room_of_its_type() {
+        let job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let view = |title: &str, h: &str| cadaddy_mepfix::printlinks::Enlarged {
+            sheet: "E-6".into(),
+            title: title.into(),
+            registered: true,
+            devices: 1,
+            device_handles: vec![h.into()],
+            fit: Some(cadaddy_mepfix::tagid::Sim { tx: 1000.0, ..cadaddy_mepfix::tagid::Sim::IDENTITY }),
+            ..Default::default()
+        };
+        let links = cadaddy_mepfix::printlinks::SheetLinks {
+            enlarged: vec![view("ENLARGED DOUBLE QUEEN", "A1"), view("ENLARGED FLOOR PLAN - LOBBY", "B2")],
+            ..Default::default()
+        };
+        let dev = |h: &str| super::super::readers::ReadDevice {
+            tag: "H".into(),
+            at: [10.0, 10.0],
+            sheet: "E-6".into(),
+            handle: h.into(),
+            ..Default::default()
+        };
+        let mut census = DeviceCensus { placed: vec![dev("A1"), dev("B2")], ..Default::default() };
+        let (moved, _) = enlarged_authority(&job, &links, &mut census);
+        assert_eq!(moved, 1);
+        let at = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| d.at);
+        assert_eq!((at("A1"), at("B2")), (Some([10.0, 10.0]), Some([1010.0, 10.0])));
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
