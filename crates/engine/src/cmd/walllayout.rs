@@ -1418,11 +1418,14 @@ fn run_follow(s: &mut Session, _p: &Value) -> Result<Value> {
         let (blen, bw, bh) = (bx[0].as_f64().unwrap_or(4.0) * inch, bx[1].as_f64().unwrap_or(2.0) * inch, bx[2].as_f64().unwrap_or(4.0) * inch);
         // A device tied to an object moves with it; else it keeps its offset from its reference.
         let tie = ties_of(&dv.store).into_iter().find(|t| t.follow && t.axis != "vertical");
-        let t_along = match tie.as_ref().and_then(|t| objs.iter().find(|o| o.h == t.ref_handle).map(|o| (t, o))) {
-            Some((t, o)) => {
+        let tied = tie.as_ref().and_then(|t| {
+            objs.iter().find(|o| o.h == t.ref_handle).map(|o| {
                 let (t0, t1) = span(&o.pts, a, u);
-                Some((t0 + t1) / 2.0 + t.rel_in * inch)
-            }
+                (t0 + t1) / 2.0 + t.rel_in * inch
+            })
+        });
+        let t_along = match tied {
+            Some(along) => Some(along),
             None => reference.along_for(&pieces, a, u, off, c),
         };
         let Some(t_along) = t_along.filter(|t| t.is_finite()) else {
