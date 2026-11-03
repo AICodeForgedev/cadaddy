@@ -8365,8 +8365,14 @@ fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crat
         routed.len(),
         runs.len(),
         left.len(),
-        left.iter().take(6).cloned().collect::<Vec<_>>().join("; ")
+        super::gearbuild::tally(&left).into_iter().take(6).collect::<Vec<_>>().join("; ")
     );
+    let short: Vec<String> = super::gearbuild::typical_placed(&sp)
+        .into_iter()
+        .filter(|(_, placed, of)| *placed < *of as usize)
+        .map(|(tag, placed, of)| format!("{tag}: {placed} of the {of} its schedule is typical of are placed"))
+        .collect();
+    let line = if short.is_empty() { line } else { format!("{line}; {}", short.join("; ")) };
     let n = runs.len();
     build_new_mep(s, sp, runs, &BTreeSet::new())?;
     report_progress(s, json!({"step": "feeder routes"}), &line);
@@ -8374,7 +8380,7 @@ fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crat
     if !left.is_empty() {
         job.add_finding(
             StageName::BimBuild,
-            &format!("{} feeders not routed: {}", left.len(), left.iter().take(10).cloned().collect::<Vec<_>>().join("; ")),
+            &format!("{} feeders not routed: {}", left.len(), super::gearbuild::tally(&left).into_iter().take(10).collect::<Vec<_>>().join("; ")),
             "a feeder is routed gear to gear when each end is one placed piece of gear",
             3,
             vec!["Route them from the riser diagram, or name the panel each one feeds".into()],
