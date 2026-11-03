@@ -938,10 +938,22 @@ fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn
     per.into_iter().flatten().take(MAX_ROOMS_ALL_REGIONS).collect()
 }
 
+/// Two outlines are one loop: the same corners, whichever each starts at and whichever way it
+/// goes round.
+fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let area = |p: &[Vec2]| cadaddy_geom::shoelace(p).abs();
+    (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
+}
+
 /// A label's width per character, in its text height (a room tag's capitals).
 const LABEL_CHAR_WIDTH: f64 = 0.6;
-/// A tag's number is within this of its name, in the name's text height (one line under it).
-const TAG_NUMBER_REACH: f64 = 3.5;
+/// A tag's number is within this of its name, in the name's text height (under its last line:
+/// a two-line name, `DOUBLE Q ADA` over `(TUB)`, puts it about 5 heights from the first; the
+/// next room's tag is 10 or more away).
+const TAG_NUMBER_REACH: f64 = 5.5;
 /// The least a room its label doesn't fit inside may be, sq ft (a smaller loop under a label is a
 /// piece of furniture's linework).
 const OVERHUNG_ROOM_MIN_SQFT: f64 = 40.0;
@@ -1151,12 +1163,13 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
             }
         };
         // One room per outline: a second label in the same room is its number or a note.
-        // (Traced again from round the furniture its name is on, it may start at another corner.)
+        // (The same loop traced from another seed, or again from round the furniture its name is
+        // on, may start at another corner.)
         let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
         let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
         if out.iter().zip(&out_probed).any(|(q, q_probed)| {
             let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
-            (q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6))
+            same_loop(&q.outline, &poly)
                 || ((probed || *q_probed)
                     && (q.area - area).abs() <= SAME_OUTLINE_SHARE * area
                     && qb.min.dist(b.min) <= tol
@@ -1365,6 +1378,17 @@ mod tests {
         let n = found.len();
         assert!(n > 4);
         assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+    }
+
+    #[test]
+    fn one_loop_from_another_corner_or_the_other_way_round_is_the_same_room() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let a = [v(0.0, 0.0), v(10.0, 0.0), v(10.0, 5.0), v(0.0, 5.0)];
+        let b = [v(10.0, 5.0), v(0.0, 5.0), v(0.0, 0.0), v(10.0, 0.0)];
+        let c = [v(0.0, 5.0), v(10.0, 5.0), v(10.0, 0.0), v(0.0, 0.0)];
+        assert!(same_loop(&a, &b) && same_loop(&a, &c));
+        assert!(!same_loop(&a, &[v(0.0, 0.0), v(11.0, 0.0), v(11.0, 5.0), v(0.0, 5.0)]));
+        assert!(!same_loop(&a, &a[..3]));
     }
 
     #[test]

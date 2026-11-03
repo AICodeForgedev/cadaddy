@@ -159,7 +159,15 @@ fn the_sequence_goes_in_the_order_a_building_goes_up() {
     assert_eq!(duct["rate"], json!(["cost book: Duct"]));
     let dw = act(&r, "Level 1/Z1/drywall");
     assert_eq!(dw["quantity"], 1980.0, "outside walls one face (1386 sf), the partition both (2 × 297): {dw}");
-    assert_eq!((dw["hours"].as_f64(), dw["days"].as_i64(), dw["elements"].as_u64()), (Some(39.6), Some(2), Some(6)), "39.6 h ÷ (4 × 8 h) → 2 days");
+    // Its elements: the six walls and their board's pieces (sheets, tape, bead: Q6162), which go
+    // in with it at no hours of their own.
+    let pieces = s.execute("bim.count", &json!({"trade": "drywall", "level": "Level 1"})).unwrap()["count"].as_u64().unwrap();
+    assert!(pieces > 0);
+    assert_eq!(
+        (dw["hours"].as_f64(), dw["days"].as_i64(), dw["elements"].as_u64()),
+        (Some(39.6), Some(2), Some(6 + pieces)),
+        "39.6 h ÷ (4 × 8 h) → 2 days"
+    );
     assert_eq!(act(&r, "Level 1/Z1/exterior_walls")["elements"], 4, "the four outside walls");
     assert_eq!(act(&r, "Level 1/Z1/framing")["elements"], 2, "the partition's two pieces");
     assert_eq!(act(&r, "Level 1/Z1/inwall_electrical")["quantity"], 2.0, "the receptacles' boxes");
@@ -235,7 +243,12 @@ fn the_model_is_shown_as_built_on_a_date() {
     }
     assert!(v["upcoming"][0]["id"].as_str().is_some(), "{v}");
     let end = s.execute("schedule.view", &json!({"date": r["span"][1]})).unwrap();
-    assert_eq!((end["counts"]["notYet"].as_u64(), end["counts"]["inProgress"].as_u64()), (Some(0), Some(1)), "{end}");
+    // The last activity's room and its finishes' pieces (paint, flooring, base).
+    let finishing: u64 = ["paint", "flooring", "base"]
+        .iter()
+        .map(|k| s.execute("bim.count", &json!({"trade": "finishes", "kind": k, "level": "Level 2"})).unwrap()["count"].as_u64().unwrap())
+        .sum();
+    assert_eq!((end["counts"]["notYet"].as_u64(), end["counts"]["inProgress"].as_u64()), (Some(0), Some(1 + finishing)), "{end}");
     assert_eq!(end["in_progress"], json!(["Level 2/Z1/finishes"]));
     let dir = std::env::temp_dir().join(format!("cadaddy-seq-view-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

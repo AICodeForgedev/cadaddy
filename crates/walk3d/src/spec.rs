@@ -131,6 +131,11 @@ pub struct BuildingSpec {
     /// Concrete: slabs, footings, piers, equipment pads, encasement; pad decisions and pours.
     #[serde(default, skip_serializing_if = "crate::concrete::Concrete::is_empty")]
     pub concrete: crate::concrete::Concrete,
+    /// What the trades' documents say (`trades.read`, Q6162: concrete mixes, the PT design,
+    /// joist and truss layouts, door hardware sets, accessories…, each fact with its file and
+    /// page) and the project's trade rules: the engine's trade atoms are laid out from them.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub trades: serde_json::Value,
     /// Columns at structural grid intersections (`grids.columns`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<GridColumn>,
@@ -2750,6 +2755,7 @@ impl BuildingSpec {
             rcp: Rcp::default(),
             mep: Mep::default(),
             concrete: crate::concrete::Concrete::default(),
+            trades: serde_json::Value::Null,
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
