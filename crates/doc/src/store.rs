@@ -124,6 +124,12 @@ impl EntityStore {
     pub fn len(&self) -> usize {
         self.len
     }
+    /// Whether this store is a copy of `other` nothing has changed since: the same chunks, shared.
+    /// A cheap test (one pointer per chunk) before comparing contents; false says only that
+    /// something may have changed.
+    pub fn unchanged_from(&self, other: &EntityStore) -> bool {
+        self.len == other.len && self.chunks.len() == other.chunks.len() && self.chunks.iter().zip(&other.chunks).all(|(a, b)| Arc::ptr_eq(a, b))
+    }
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -517,6 +523,20 @@ impl EntityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_copy_is_unchanged_until_one_of_its_chunks_changes() {
+        let mut s = EntityStore::new();
+        s.push_chunk((1..=3000).map(ent).collect());
+        let held = s.clone();
+        assert!(s.unchanged_from(&held) && held.unchanged_from(&s));
+        s.modify(Handle(2), |e| e.kind = ent(3).kind);
+        assert!(!s.unchanged_from(&held));
+        let held = s.clone();
+        s.push(ent(9000));
+        assert!(!s.unchanged_from(&held));
+        assert!(!EntityStore::new().unchanged_from(&held));
+    }
 
     #[test]
     fn kinds_are_found_by_chunk_and_follow_every_change() {

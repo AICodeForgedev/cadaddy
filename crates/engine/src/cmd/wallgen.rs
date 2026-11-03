@@ -800,7 +800,9 @@ pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
     let Some(g) = st.wallgen.clone().filter(|g| g.auto) else { return };
-    if Arc::ptr_eq(before, &st.doc) || plan(before, &g) == plan(&st.doc, &g) {
+    // Model space untouched (a command that drew on a sheet's paper space): no plan object
+    // changed, and comparing the plans (each read from the whole model) isn't needed.
+    if Arc::ptr_eq(before, &st.doc) || st.doc.model.unchanged_from(&before.model) || plan(before, &g) == plan(&st.doc, &g) {
         return;
     }
     // Built during this command (a guided job builds as one of its steps) from the plan as it

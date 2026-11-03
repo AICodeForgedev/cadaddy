@@ -19,7 +19,7 @@
 //!
 //! Every value records where it came from; nothing is known about one job.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cadaddy_geom::Vec2;
 use cadaddy_mepfix::sheet_facts::TextItem;
@@ -1024,16 +1024,17 @@ impl RouteCtx<'_> {
         }
     }
 
-    /// One conduit `k` of a feeder from gear `a` to gear `b`: out of `a` (top or bottom) to the
-    /// route over its level's ceiling (or under its floor), across in two legs to `b` or to a
-    /// riser beside it, floor to floor, and into `b` (top or bottom).
+    /// One conduit of a feeder from gear `a` to gear `b`, out of `a` at `a0` and into `b` at `b0`
+    /// (each in its conduit area, [`entry_slots`]): out of `a` (top or bottom) to the route over
+    /// its level's ceiling (or under its floor), across in two legs to `b` or to a riser beside
+    /// it, floor to floor, and into `b` (top or bottom).
     #[allow(clippy::too_many_arguments)]
     fn gear_to_gear(
         &self,
         a: &Gear,
         b: &Gear,
         (a_bottom, b_bottom): (bool, bool),
-        k: u32,
+        (a0, b0): (Vec2, Vec2),
         size: f64,
         src: &str,
         runs: &mut Vec<cadaddy_walk3d::MepRun>,
@@ -1041,17 +1042,13 @@ impl RouteCtx<'_> {
         let (Some(la), Some(lb)) = (self.level(&a.level), self.level(&b.level)) else {
             return Err("a level not in the model".into());
         };
-        let gap = (size + 1.0) / 12.0 * self.upf;
-        let off = Vec2::new(f64::from(k) * gap, f64::from(k) * gap);
-        let (pa, pb) = (Self::mid(a), Self::mid(b));
-        let pb_here = pb - self.corner(&lb.name) + self.corner(&la.name);
+        let pb_here = b0 - self.corner(&lb.name) + self.corner(&la.name);
         let h_a = if a_bottom { -FEEDER_UNDER_FLOOR_FT } else { self.ceiling(&la.name) + FEEDER_OVER_CEILING_FT };
         let za_out = if a_bottom { a.bottom_ft } else { a.bottom_ft + a.height_ft };
         let zb_in = if b_bottom { b.bottom_ft } else { b.bottom_ft + b.height_ft };
         let same = la.name == lb.name;
-        let a0 = pa + off;
         self.riser(&la.name, src, a0, za_out.min(h_a), za_out.max(h_a), size, runs);
-        let end = if same { pb_here + off } else { pb_here + Vec2::new(RISER_BESIDE_FT * self.upf, 0.0) + off };
+        let end = if same { pb_here } else { pb_here + Vec2::new(RISER_BESIDE_FT * self.upf, 0.0) };
         let mut pts = vec![[a0.x, a0.y], [end.x, a0.y], [end.x, end.y]];
         pts.dedup_by(|p, q| (p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6);
         if pts.len() >= 2 {
@@ -1065,7 +1062,6 @@ impl RouteCtx<'_> {
         let h_b = if b_bottom { -FEEDER_UNDER_FLOOR_FT } else { self.ceiling(&lb.name) + FEEDER_OVER_CEILING_FT };
         let (lo, hi) = if rise >= 0.0 { (h_a, rise + h_b) } else { (rise + h_b, h_a) };
         self.riser(&la.name, src, end, lo, hi, size, runs);
-        let b0 = pb + off;
         let beside = b0 + Vec2::new(RISER_BESIDE_FT * self.upf, 0.0);
         runs.push(self.run(&lb.name, src, vec![[beside.x, beside.y], [b0.x, b0.y]], size, h_b, None));
         self.riser(&lb.name, src, b0, zb_in.min(h_b), zb_in.max(h_b), size, runs);
@@ -1078,7 +1074,7 @@ impl RouteCtx<'_> {
     /// level.
     fn feed_through(&self, a: &Gear, b: &Gear, size: f64, src: &str, runs: &mut Vec<cadaddy_walk3d::MepRun>) -> Result<(), String> {
         if a.level.eq_ignore_ascii_case(&b.level) {
-            return self.gear_to_gear(a, b, (false, false), 0, size, src, runs);
+            return self.gear_to_gear(a, b, (false, false), (Self::mid(a), Self::mid(b)), size, src, runs);
         }
         let rise = self.elevation(&b.level) - self.elevation(&a.level);
         let up = rise > 0.0;
@@ -1093,6 +1089,96 @@ impl RouteCtx<'_> {
         }
         Ok(())
     }
+}
+
+/// One conduit of a feeder: from gear `a` to gear `b`.
+struct Leg<'a> {
+    feeder: usize,
+    a: &'a Gear,
+    b: &'a Gear,
+    ends: (bool, bool),
+    size: f64,
+    src: String,
+    what: String,
+}
+
+/// A conduit's outside diameter by its trade size (EMT), inches.
+fn conduit_od_in(trade: f64) -> f64 {
+    const OD: [(f64, f64); 10] =
+        [(0.5, 0.706), (0.75, 0.922), (1.0, 1.163), (1.25, 1.51), (1.5, 1.74), (2.0, 2.197), (2.5, 2.875), (3.0, 3.5), (3.5, 4.0), (4.0, 4.5)];
+    OD.iter().min_by(|a, b| (a.0 - trade).abs().total_cmp(&(b.0 - trade).abs())).map_or(trade + 0.5, |o| if trade > 4.25 { trade + 0.5 } else { o.1 })
+}
+
+/// Clear space between two conduits entering side by side (locknuts and bushings), inches.
+const CONDUIT_CLEAR_IN: f64 = 0.5;
+/// The margin from a box's edges where its conduit area isn't given, inches.
+const PLATE_MARGIN_IN: f64 = 2.0;
+
+/// A gear side's conduit area, inches (width along the box's long side, depth): its
+/// `TOP|BOTTOM CONDUIT AREA` property (`16 W x 4.25 D in…`), else the box less margins.
+fn conduit_area(ctx: &RouteCtx<'_>, g: &Gear, bottom: bool) -> [f64; 2] {
+    let key = if bottom { "BOTTOM CONDUIT AREA" } else { "TOP CONDUIT AREA" };
+    let given = g.properties.get(key).and_then(|v| {
+        let nums: Vec<f64> = v
+            .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .filter_map(|w| w.parse::<f64>().ok())
+            .filter(|n| n.is_finite() && *n > 0.0)
+            .take(2)
+            .collect();
+        (nums.len() == 2 && v.contains(" W x ")).then(|| [nums[0], nums[1]])
+    });
+    given.unwrap_or_else(|| {
+        let inch = ctx.upf / 12.0;
+        let (w, d) = ((g.max[0] - g.min[0]).abs() / inch, (g.max[1] - g.min[1]).abs() / inch);
+        let (long, short) = if w >= d { (w, d) } else { (d, w) };
+        [(long - 2.0 * PLATE_MARGIN_IN).max(1.0), (short - PLATE_MARGIN_IN).max(1.0)]
+    })
+}
+
+/// Where each leg's conduit leaves its source and enters its target: each gear side's conduits
+/// laid in rows across its conduit area, a trade size and a half inch apart, in the order of where
+/// they go (so they leave without crossing), rows from the back. Past the area's depth the rows go
+/// on (the gear check says the can is too small).
+fn entry_slots(ctx: &RouteCtx<'_>, legs: &[Leg<'_>]) -> Vec<(Vec2, Vec2)> {
+    let mut out: Vec<(Vec2, Vec2)> = legs.iter().map(|l| (RouteCtx::mid(l.a), RouteCtx::mid(l.b))).collect();
+    // Each gear side's conduits: (leg, its source end?, size, order along the side).
+    let mut sides: BTreeMap<(String, String, bool), (&Gear, Vec<(usize, bool, f64, f64)>)> = BTreeMap::new();
+    for (j, l) in legs.iter().enumerate() {
+        for (g, other, bottom, is_a) in [(l.a, l.b, l.ends.0, true), (l.b, l.a, l.ends.1, false)] {
+            let wide = (g.max[0] - g.min[0]).abs() >= (g.max[1] - g.min[1]).abs();
+            let toward = ctx.plan(other) - ctx.plan(g);
+            let along = if wide { toward.x } else { toward.y };
+            sides.entry((g.tag.to_ascii_uppercase(), g.level.clone(), bottom)).or_insert_with(|| (g, Vec::new())).1.push((j, is_a, l.size, along));
+        }
+    }
+    let inch = ctx.upf / 12.0;
+    for ((_, _, bottom), (g, mut list)) in sides {
+        list.sort_by(|a, b| a.3.total_cmp(&b.3).then(a.0.cmp(&b.0)));
+        let [w, d] = conduit_area(ctx, g, bottom);
+        let wide = (g.max[0] - g.min[0]).abs() >= (g.max[1] - g.min[1]).abs();
+        let mid = RouteCtx::mid(g);
+        let (mut x, mut row_y, mut row_h) = (-w / 2.0, -d / 2.0, 0.0_f64);
+        for (j, is_a, size, _) in list {
+            let od = conduit_od_in(size);
+            if x > -w / 2.0 && x + od > w / 2.0 {
+                x = -w / 2.0;
+                row_y += row_h + CONDUIT_CLEAR_IN;
+                row_h = 0.0;
+            }
+            let (u, v) = (x + od / 2.0, row_y + od / 2.0);
+            x += od + CONDUIT_CLEAR_IN;
+            row_h = row_h.max(od);
+            let at = if wide { mid + Vec2::new(u * inch, v * inch) } else { mid + Vec2::new(v * inch, u * inch) };
+            if let Some(o) = out.get_mut(j) {
+                if is_a {
+                    o.0 = at;
+                } else {
+                    o.1 = at;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The units a feeder serves from its source's schedule (`PANELBOARD G (4 UNITS)` → 4): the
@@ -1198,50 +1284,69 @@ pub(crate) fn feeder_runs(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<cadaddy_wal
             }
         }
     }
+    // Each conduit's leg, gear to gear; a chain's feed-throughs after its first leg.
+    let mut legs: Vec<Leg> = Vec::new();
+    let mut chained: Vec<(usize, Vec<&Gear>, f64, String, String)> = Vec::new();
     for (i, f) in sp.mep.feeders.iter().enumerate() {
-        let n = f.conduits.max(1);
+        let n = f.conduits.clamp(1, 64);
         let size = if f.conduit_in.is_finite() && f.conduit_in > 0.0 { f.conduit_in } else { 1.0 };
         let ends = (f.from_entry.eq_ignore_ascii_case("bottom"), f.entry.eq_ignore_ascii_case("bottom"));
+        let what = format!("{} {}→{}", f.tag, f.from, f.to);
         let Some(a) = one(&f.from) else {
-            left.push(format!("{} {}→{}: not one placed piece of gear at its source", f.tag, f.from, f.to));
+            left.push(format!("{what}: not one placed piece of gear at its source"));
             continue;
         };
-        if let Some(b) = one(&f.to) {
-            let src = format!("feeder {} {}→{}", f.tag, f.from, f.to);
-            for k in 0..n {
-                if let Err(e) = ctx.gear_to_gear(a, b, ends, k, size, &src, &mut runs) {
-                    left.push(format!("{} {}→{}: {e}", f.tag, f.from, f.to));
-                    break;
-                }
-            }
-            continue;
-        }
-        let Some(mut chain) = chain_of.get(&i).cloned() else {
-            let why = if typical.contains_key(&f.to.to_ascii_uppercase()) && !family(&f.to).is_empty() {
-                "no placed copy of it left to feed"
-            } else {
-                "not one placed piece of gear at its end"
+        let (b, src) = if let Some(b) = one(&f.to) {
+            (b, format!("feeder {what}"))
+        } else {
+            let Some(mut chain) = chain_of.get(&i).cloned() else {
+                let why = if typical.contains_key(&f.to.to_ascii_uppercase()) && !family(&f.to).is_empty() {
+                    "no placed copy of it left to feed"
+                } else {
+                    "not one placed piece of gear at its end"
+                };
+                left.push(format!("{what}: {why}"));
+                continue;
             };
-            left.push(format!("{} {}→{}: {why}", f.tag, f.from, f.to));
-            continue;
-        };
-        // From the chain's end nearer the source.
-        if let (Some(first), Some(last)) = (chain.first(), chain.last())
-            && ctx.apart(a, last) < ctx.apart(a, first)
-        {
-            chain.reverse();
-        }
-        let names = chain.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>().join("→");
-        let src = format!("feeder {} {}→{}", f.tag, f.from, names);
-        let Some(&b) = chain.first() else { continue };
-        let mut ok = (0..n).try_for_each(|k| ctx.gear_to_gear(a, b, ends, k, size, &src, &mut runs));
-        for w in chain.windows(2) {
-            if let (Ok(()), [x, y]) = (&ok, w) {
-                ok = ctx.feed_through(x, y, size, &src, &mut runs);
+            // From the chain's end nearer the source.
+            if let (Some(first), Some(last)) = (chain.first(), chain.last())
+                && ctx.apart(a, last) < ctx.apart(a, first)
+            {
+                chain.reverse();
             }
+            let names = chain.iter().map(|e| e.tag.as_str()).collect::<Vec<_>>().join("→");
+            let src = format!("feeder {} {}→{}", f.tag, f.from, names);
+            let Some(&b) = chain.first() else { continue };
+            chained.push((i, chain, size, src.clone(), what.clone()));
+            (b, src)
+        };
+        for _ in 0..n {
+            legs.push(Leg { feeder: i, a, b, ends, size, src: src.clone(), what: what.clone() });
         }
-        if let Err(e) = ok {
-            left.push(format!("{} {}→{}: {e}", f.tag, f.from, f.to));
+    }
+    // Where each conduit comes out of and goes into its gear: its place in the side's conduit area.
+    let slots = entry_slots(&ctx, &legs);
+    let mut failed: BTreeSet<usize> = BTreeSet::new();
+    for (leg, at) in legs.iter().zip(slots) {
+        if failed.contains(&leg.feeder) {
+            continue;
+        }
+        if let Err(e) = ctx.gear_to_gear(leg.a, leg.b, leg.ends, at, leg.size, &leg.src, &mut runs) {
+            left.push(format!("{}: {e}", leg.what));
+            failed.insert(leg.feeder);
+        }
+    }
+    for (i, chain, size, src, what) in chained {
+        if failed.contains(&i) {
+            continue;
+        }
+        for w in chain.windows(2) {
+            if let [x, y] = w
+                && let Err(e) = ctx.feed_through(x, y, size, &src, &mut runs)
+            {
+                left.push(format!("{what}: {e}"));
+                break;
+            }
         }
     }
     (runs, left)
@@ -1381,5 +1486,62 @@ mod feeder_route_tests {
         assert_eq!(tally(&[left.clone(), left.clone(), left.clone()].concat()), vec!["123 DP1→G: no placed copy of it left to feed ×3".to_string()]);
         sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(124), ..Default::default() });
         assert_eq!(typical_placed(&sp), vec![("G".to_string(), 4, 124)]);
+    }
+
+    #[test]
+    fn conduits_enter_side_by_side_in_the_conduit_area_ordered_by_where_they_go() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.levels.push(
+            serde_json::from_value(
+                serde_json::json!({"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "region": [0, 0, 1200, 1200]}),
+            )
+            .expect("level"),
+        );
+        // DP1 a 20" x 6" box (along x); its top area 16" x 4.25".
+        let mut dp1 = gear("DP1", "Level 1", [500.0, 500.0], 2.0, 4.0);
+        (dp1.min, dp1.max) = ([490.0, 497.0], [510.0, 503.0]);
+        dp1.properties.insert("TOP CONDUIT AREA".into(), "16 W x 4.25 D in, 68 sq in; derived".into());
+        sp.mep.equipment = vec![
+            dp1,
+            gear("W", "Level 1", [100.0, 500.0], 2.0, 4.0),
+            gear("E", "Level 1", [900.0, 500.0], 2.0, 4.0),
+            gear("MDP", "Level 1", [500.0, 900.0], 0.0, 7.5),
+        ];
+        let feeder = |tag: &str, from: &str, to: &str, conduits: u32| cadaddy_walk3d::Feeder {
+            tag: tag.into(),
+            from: from.into(),
+            to: to.into(),
+            conduits,
+            conduit_in: 2.0,
+            entry: "top".into(),
+            from_entry: "top".into(),
+            ..Default::default()
+        };
+        sp.mep.feeders = vec![feeder("1", "DP1", "E", 1), feeder("2", "DP1", "W", 1), feeder("3", "MDP", "DP1", 5)];
+        let (runs, left) = feeder_runs(&sp);
+        assert!(left.is_empty(), "{left:?}");
+        // The risers out of and into DP1's top: seven, each its own place in the area.
+        let at_dp1: Vec<[f64; 2]> = runs
+            .iter()
+            .filter(|r| r.top_ft.is_some() && r.points.first().is_some_and(|p| (p[0] - 500.0).abs() < 10.0 && (p[1] - 500.0).abs() < 5.0))
+            .filter_map(|r| r.points.first().copied())
+            .collect();
+        assert_eq!(at_dp1.len(), 7, "{runs:#?}");
+        for (k, p) in at_dp1.iter().enumerate() {
+            assert!(p[0] >= 492.0 && p[0] <= 508.0 && p[1] >= 497.0 && p[1] <= 503.0, "in the 16 x 4.25 area: {p:?}");
+            for q in at_dp1.iter().skip(k + 1) {
+                assert!(((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() >= 2.197 - 1e-6, "a 2\" conduit's width apart: {p:?} {q:?}");
+            }
+        }
+        // In the order of where they go: the one going west first (the front row's west end),
+        // the one going east last (the back row, after the five from MDP straight north).
+        let out_of =
+            |src: &str| runs.iter().find(|r| r.source_sheet == src && r.top_ft.is_some()).and_then(|r| r.points.first().copied()).expect(src);
+        let (w, e) = (out_of("feeder 2 DP1→W"), out_of("feeder 1 DP1→E"));
+        assert!(at_dp1.iter().all(|p| w[0] <= p[0] + 1e-9 && w[1] <= p[1] + 1e-9), "{w:?} {at_dp1:?}");
+        assert!(at_dp1.iter().all(|p| e[1] >= p[1] - 1e-9), "{e:?} {at_dp1:?}");
+        // Seven 2" conduits don't fit one 16" row (six do): a second row behind the first.
+        let ys: BTreeSet<i64> = at_dp1.iter().map(|p| (p[1] * 100.0).round() as i64).collect();
+        assert_eq!(ys.len(), 2, "{at_dp1:?}");
     }
 }

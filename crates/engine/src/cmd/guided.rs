@@ -13214,7 +13214,13 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
 // ─── Command implementations ────────────────────────────────────────────────
 
 /// `job.start {pdfs, goal}` — create and start a guided job.
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_start_inner(s, p))
+}
+
+fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let pdfs = str_param(p, "pdfs").ok_or_else(|| bad("job.start", "`pdfs` (path) is required"))?;
     let goal_str = p.get("goal").and_then(Value::as_str).unwrap_or("estimate");
     let goal = JobGoal::from_str(goal_str)
@@ -13377,7 +13383,13 @@ fn cmd_start(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// `job.next` — return the next question, or "done".
-fn cmd_next(s: &mut Session, _p: &Value) -> Result<Value> {
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
+fn cmd_next(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_next_inner(s, p))
+}
+
+fn cmd_next_inner(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut job = load_job(s)?.ok_or_else(|| bad("job.next", "no job running — call job.start first"))?;
 
     // Answers given with `rerun: false`: their stages run again now, once.
@@ -13588,7 +13600,13 @@ fn rerun_changes(job: &GuidedJob, reset: &[(StageName, BTreeMap<String, Value>)]
 /// answer stands alone: one whose question is gone (merged, or not asked again after a re-run)
 /// is a warning and the others are kept and saved. The stages the answers change run again
 /// once, from the first of them (`rerun: false` holds that until the next answer or job.next).
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_answer_inner(s, p))
+}
+
+fn cmd_answer_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let mut items: Vec<(String, Value)> = Vec::new();
     match p.get("answers") {
         Some(Value::Array(list)) => {
@@ -13759,7 +13777,13 @@ fn cmd_answer(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// `job.set_mode {auto}` — switch a job between interactive and unattended. Answers already
 /// given are kept; going to auto takes the defaults of the open questions and runs on.
+/// One undo step however many commands the job runs: its stages draw through hundreds of
+/// commands, and a step of each kept a copy of the drawing (gigabytes on a large set).
 fn cmd_set_mode(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| cmd_set_mode_inner(s, p))
+}
+
+fn cmd_set_mode_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let auto = p.get("auto").and_then(Value::as_bool).ok_or_else(|| bad("job.set_mode", "`auto` (true or false) is required"))?;
     let mut job = load_job(s)?.ok_or_else(|| bad("job.set_mode", "no job running — job.start {pdfs, auto: true} starts one unattended"))?;
     let was = job.auto;
