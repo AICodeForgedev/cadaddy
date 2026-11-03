@@ -449,3 +449,24 @@ fn hostile_form_params_never_panic() {
     assert!(!nested.holds(&|_| Some("x".into()), 0));
     assert!(!nested.describe(0).is_empty());
 }
+
+#[test]
+fn a_schedule_field_on_a_few_stray_elements_stays_optional() {
+    let mut d = Drawing::new_imperial();
+    // One switch of three carries a panel schedule row's fields (read onto it by mistake, or a
+    // switch that really has its own breaker): the kind doesn't owe them.
+    let sw = |d: &mut Drawing, x: f64, extra: &[(&str, Value, SourceKind, &str)]| {
+        let mut p: Vec<(&str, Value, SourceKind, &str)> = vec![("kind", json!("switch"), SourceKind::Print, "Sheet P1")];
+        p.extend(extra.iter().cloned());
+        element(d, "device", (x, 5.0), &p)
+    };
+    sw(&mut d, 1.0, &[("poles", json!(1), SourceKind::Schedule, "Panel PA schedule")]);
+    sw(&mut d, 2.0, &[]);
+    sw(&mut d, 3.0, &[]);
+    let mut s = session(d);
+    let out = job_pass(&mut s, "job: test").unwrap();
+    assert_eq!(out["added"][0]["key"], json!("poles"));
+    assert_eq!(out["added"][0]["required"], json!(false), "{out}");
+    let c = s.execute(COMPLETENESS, &json!({"kind": "switch", "field": "poles"})).unwrap();
+    assert_eq!(c["kinds"]["switch"]["fields"]["poles"]["required"], json!(0));
+}

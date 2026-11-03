@@ -787,8 +787,8 @@ fn kinds_found(d: &Drawing) -> BTreeSet<String> {
 }
 
 /// Whether a source names a document that defines a kind's attributes (a legend, schedule, spec
-/// or submittal: the field is required of every element of the kind) or only one element's (a
-/// sheet or a note: the field is optional).
+/// or submittal: the field is required of every element of the kind when it gives it to at least
+/// half of them) or only one element's (a sheet or a note: the field is optional).
 fn defines_kind(k: SourceKind) -> Option<bool> {
     match k {
         SourceKind::Legend | SourceKind::Schedule | SourceKind::Spec | SourceKind::Submittal => Some(true),
@@ -808,12 +808,16 @@ fn source_text(s: &Source) -> String {
 fn grow(st: &mut Store, d: &Drawing, who: &str, only: Option<&BTreeSet<String>>) -> Vec<Value> {
     // Per kind: key → (first document giving it, whether a kind-defining document gives it).
     let mut seen: BTreeMap<String, BTreeMap<String, (Source, bool, Value)>> = BTreeMap::new();
+    // Per kind: its elements, and how many carry each key from a kind-defining document.
+    let mut total: BTreeMap<String, usize> = BTreeMap::new();
+    let mut carried: BTreeMap<(String, String), usize> = BTreeMap::new();
     for (e, base) in super::elemprops::elements(d) {
         let kind = form_kind(e, base);
         if only.is_some_and(|o| !o.contains(&kind)) {
             continue;
         }
         let Some(form) = st.forms.get(&kind) else { continue };
+        *total.entry(kind.clone()).or_insert(0) += 1;
         for (key, p) in props::read(&e.common.xdata).iter() {
             let Some(defines) = defines_kind(p.source.kind) else { continue };
             if !p.has_value() || BOOKKEEPING.iter().any(|b| b.eq_ignore_ascii_case(key)) || form.field(key).is_some() || key.chars().count() > MAX_KEY
@@ -825,11 +829,19 @@ fn grow(st: &mut Store, d: &Drawing, who: &str, only: Option<&BTreeSet<String>>)
             if defines && !slot.1 {
                 *slot = (p.source.clone(), true, p.value.clone());
             }
+            if defines {
+                *carried.entry((kind.clone(), key.to_ascii_lowercase())).or_insert(0) += 1;
+            }
         }
     }
     let mut out = Vec::new();
     for (kind, keys) in seen {
         for (key, (src, defines, sample)) in keys {
+            // Required of every element of the kind only when a kind-defining document gives it
+            // to at least half of them (a schedule row read onto one stray element doesn't make
+            // the whole kind owe it).
+            let n = carried.get(&(kind.clone(), key.clone())).copied().unwrap_or(0);
+            let defines = defines && n.saturating_mul(2) >= total.get(&kind).copied().unwrap_or(0).max(1);
             let Some(form) = st.forms.get_mut(&kind) else { continue };
             if form.fields.len() >= MAX_FIELDS {
                 break;
