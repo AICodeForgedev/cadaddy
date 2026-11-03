@@ -26,6 +26,10 @@ const CMD: &str = "bim.coderules";
 const MAX_ELEMENTS: usize = 500_000;
 /// The rules (shared with Validate).
 const RULES: &str = include_str!("coderules.json");
+/// Half a sink's width: a fixture's location is its middle, the reach is from its edge.
+const SINK_HALF_FT: f64 = 1.0;
+/// Two elements whose heights differ by no more than this are on one storey (a level not stored).
+const SAME_STOREY_FT: f64 = 8.0;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -44,6 +48,18 @@ pub(crate) struct CodeRule {
     pub rule: String,
     pub rooms: RoomScope,
     pub tags: Vec<String>,
+    /// GFCI where a receptacle is within this far of a sink's edge (NEC 210.8), feet.
+    pub sink_reach_ft: Option<f64>,
+    /// The words that name a sink (a fixture's type, description or mark).
+    pub sink_words: Vec<String>,
+    /// Working space (NEC 110.26): rows of [volts to ground up to, depth for condition 1, 2, 3]
+    /// inches; its least width and its height; where a panel's top is mounted; an entry plate's
+    /// margins inside the box (sides, front and back) when its usable size isn't given.
+    pub depth_in: Vec<[f64; 4]>,
+    pub width_in: Option<f64>,
+    pub height_in: Option<f64>,
+    pub mount_top_in: Option<f64>,
+    pub plate_margin_in: Option<[f64; 2]>,
 }
 
 /// The rooms a rule applies in: a typical unit's rooms (guest rooms), or rooms named so.
@@ -70,6 +86,9 @@ struct Rec {
     handle: Handle,
     store: props::Props,
     tagged: bool,
+    /// Why its location needs GFCI though the print doesn't tag it (beside a sink).
+    needs: Option<String>,
+    level: String,
     /// Its breaker is GFCI (`Some(true)`), isn't (`Some(false)`), or not known.
     gfci_breaker: Option<bool>,
     breaker_src: Option<Source>,
@@ -124,14 +143,34 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         let name = names.get(&key).cloned().unwrap_or_else(|| key.clone());
         tr.rooms.name_words.iter().find(|w| name.contains(w.as_str())).map(|w| format!("room {room} ({name}) is a guest room or dwelling ({w})"))
     };
+    let upf = sp.as_ref().map(|sp| sp.units_per_foot).filter(|u| u.is_finite() && *u > 0.0).unwrap_or(12.0);
     let d = s.doc()?;
     // Where each panel element is (the first device on a circuit is the one nearest it).
     let mut panel_at: BTreeMap<String, [f64; 3]> = BTreeMap::new();
     let mut recs: Vec<Rec> = Vec::new();
+    // Sinks: (where, level, handle).
+    let mut sinks: Vec<([f64; 3], String, Handle)> = Vec::new();
     for (e, base) in super::elemprops::elements(d).take(MAX_ELEMENTS) {
         let store = props::read(&e.common.xdata);
+        if base == "fixture" || base == "plumbing_fixture" {
+            let name = format!("{} {} {} {}", text(&store, "type_mark"), text(&store, "type"), text(&store, "description"), text(&store, "name"))
+                .to_ascii_uppercase();
+            let words: BTreeSet<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).collect();
+            if gf.sink_words.iter().any(|w| words.contains(w.as_str()))
+                && let Some(at) = xyz(&text(&store, "location"))
+            {
+                sinks.push((at, text(&store, "level"), e.handle));
+            }
+            continue;
+        }
         if base == "equipment" || base == "gear" || base == "panel" {
-            if let Some(at) = xyz(&text(&store, "location")) {
+            // Where it is: its location, else its geometry's middle (a room's panel placed by the
+            // build carries no location).
+            let at = xyz(&text(&store, "location")).or_else(|| {
+                super::propfill::extent(d, e)
+                    .map(|(b, z0, z1)| [(b.min.x + b.max.x) / 2.0 / upf, (b.min.y + b.max.y) / 2.0 / upf, (z0 + z1) / 2.0 / upf])
+            });
+            if let Some(at) = at {
                 panel_at.insert(e.handle.hex(), at);
             }
             continue;
@@ -156,6 +195,8 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         recs.push(Rec {
             handle: e.handle,
             at: xyz(&text(&store, "location")),
+            level: text(&store, "level"),
+            needs: None,
             store,
             tagged,
             gfci_breaker,
@@ -164,6 +205,26 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             room,
         });
     }
+    // Where the location needs GFCI though the print doesn't tag it: within reach of a sink on its
+    // level (a fixture's location is its middle: half a sink's width is added).
+    if let Some(reach) = gf.sink_reach_ft {
+        for r in recs.iter_mut().filter(|r| !r.tagged) {
+            let Some(a) = r.at else { continue };
+            let near =
+                sinks
+                    .iter()
+                    // The same level; a level not stored, the same storey by height.
+                    .filter(|(p, lvl, _)| {
+                        if lvl.is_empty() || r.level.is_empty() { (p[2] - a[2]).abs() <= SAME_STOREY_FT } else { lvl.eq_ignore_ascii_case(&r.level) }
+                    })
+                    .map(|(p, _, h)| (((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt(), *h))
+                    .filter(|(d, _)| *d <= reach + SINK_HALF_FT)
+                    .min_by(|x, y| x.0.total_cmp(&y.0));
+            if let Some((dist, h)) = near {
+                r.needs = Some(format!("{dist:.1} ft from sink {} (within {reach} ft of its edge)", h.hex()));
+            }
+        }
+    }
     let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
     let mut tr_count = 0usize;
     let (mut stated, mut not_stated) = (0usize, 0usize);
@@ -171,7 +232,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
     // GFCI: the tagged receptacles on a circuit whose breaker isn't GFCI, the first one the GFCI.
     let mut by_circuit: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
     for (i, r) in recs.iter().enumerate() {
-        if r.tagged
+        if (r.tagged || r.needs.is_some())
             && r.gfci_breaker == Some(false)
             && let Some(c) = &r.circuit
         {
@@ -242,13 +303,20 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         // GFCI by circuit.
         let circuit = r.circuit.as_ref().map_or_else(|| "its circuit".to_string(), |c| format!("circuit {}", c.1));
         let breaker_src = r.breaker_src.clone().unwrap_or_else(Source::computed);
-        match (r.tagged, r.gfci_breaker) {
-            (tagged, Some(true)) => {
-                let note = if tagged {
+        let why = match (&r.needs, r.tagged) {
+            (_, true) => "tagged GFCI".to_string(),
+            (Some(n), false) => format!("needs GFCI ({n})"),
+            (None, false) => String::new(),
+        };
+        match (r.tagged || r.needs.is_some(), r.gfci_breaker) {
+            (needs, Some(true)) => {
+                let note = if r.tagged {
                     *tally.entry("double_protection_avoided").or_default() += 1;
                     format!(
                         "the print tags it GFCI, but {circuit}'s breaker is GFCI: a GFCI receptacle there would be double protection, so it is built standard"
                     )
+                } else if needs {
+                    format!("{why}; {circuit}'s breaker is GFCI, which protects it")
                 } else {
                     format!("{circuit}'s breaker is GFCI")
                 };
@@ -259,28 +327,27 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             }
             (true, Some(false)) => match first_of.get(&i) {
                 Some(None) => {
-                    let note = format!("tagged GFCI on {circuit}, whose breaker isn't GFCI: the first device on the circuit (nearest its panel)");
+                    let note = format!("{why} on {circuit}, whose breaker isn't GFCI: the first device on the circuit (nearest its panel)");
                     set("gfci", json!("device"), rule_src(&gf, &note), None);
                     set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
                     *tally.entry("device").or_default() += 1;
                 }
                 Some(Some(first)) => {
-                    let note = format!("tagged GFCI on {circuit}: on the load side of the circuit's first GFCI receptacle ({})", first.hex());
+                    let note = format!("{why} on {circuit}: on the load side of the circuit's first GFCI receptacle ({})", first.hex());
                     set("gfci", json!("load side"), rule_src(&gf, &note), None);
                     set("receptacle_type", json!("standard"), rule_src(&gf, &note), None);
                     set("protected_by", json!(format!("GFCI receptacle {}", first.hex())), rule_src(&gf, &note), None);
                     *tally.entry("load_side").or_default() += 1;
                 }
                 None => {
-                    let note = format!(
-                        "tagged GFCI on {circuit}, whose breaker isn't GFCI, with other tagged ones: which is first on the circuit isn't known"
-                    );
+                    let note =
+                        format!("{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known");
                     set("gfci", json!("undecided"), rule_src(&gf, &note), None);
                     *tally.entry("undecided").or_default() += 1;
                 }
             },
             (true, None) => {
-                let note = format!("tagged GFCI; {circuit}'s breaker type isn't in the panel schedule");
+                let note = format!("{why}; {circuit}'s breaker type isn't in the panel schedule");
                 set("gfci", json!("undecided"), rule_src(&gf, &note), None);
                 *tally.entry("undecided").or_default() += 1;
             }

@@ -247,9 +247,9 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     let el = s.execute("bim.element", &json!({"handle": ha[0]})).unwrap();
     assert_eq!(el["host"]["wall"], a["host_wall"]["value"], "{el:#}");
     assert!(el["host"]["stored_wall"].is_null(), "the same wall: {el:#}");
-    // Read at 5', 0.8' on the plan: on the south wall's inside face (0.5'; its box's middle 1" off
-    // it), 20" up.
-    assert_eq!(a["location"]["value"], "5.00, 0.58, 1.67", "{a:#}");
+    // Read at 5', 0.8' on the plan: set in the south wall, its face flush with the wall's inside
+    // face (0.5'; its box's middle 1" behind it), 20" up.
+    assert_eq!(a["location"]["value"], "5.00, 0.42, 1.67", "{a:#}");
     assert_eq!(a["location"]["unit"], "ft");
     // A bare circuit number names no panel.
     let sw = device_of(&mut s, "S");
@@ -279,6 +279,19 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
     // The breaker itself still from the panel's own row.
     assert_eq!(a["breaker"]["value"], "20A");
+    // The schedule as data: each circuit's breaker type and the model's devices on it; as CSV;
+    // as a CADaddy table.
+    let csv = std::env::temp_dir().join(format!("cadaddy-panels-{}.csv", std::process::id()));
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1", "csv": csv.to_string_lossy(), "place": {"panel": "LP1", "at": [0, -100]}})).unwrap();
+    let c3 = r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == "3").cloned().unwrap();
+    assert_eq!(c3["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c3["protection"]["meaning"][1], "GF: GROUND FAULT INTERRUPTER");
+    assert_eq!(c3["breaker_amps"], json!(20.0));
+    assert!(c3["devices"]["count"].as_u64().unwrap_or(0) >= 1, "{c3:#}");
+    assert!(std::fs::read_to_string(&csv).unwrap().contains("LP1,,E-601,3,RECEPTACLES OFFICE 101,20,1,,,AF/GF,true,true,"));
+    let _ = std::fs::remove_file(&csv);
+    assert!(!r["placed"].is_null(), "{r:#}");
+    s.execute("undo", &json!({})).unwrap();
     // The code rules: under a GFCI breaker it is a standard receptacle, protected by its breaker;
     // the office is no guest room (no TR rule), and the documents don't say TR.
     let ha = find(&mut s, "device", json!({"type_mark": "A"}));
@@ -298,6 +311,46 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     let a = device_of(&mut s, "A");
     assert_eq!(a["tamper_resistant"]["value"], "yes", "{a:#}");
     assert!(a["tamper_resistant"]["source"]["doc"].as_str().is_some_and(|d| d.contains("406.12") && d.contains("101")), "{a:#}");
+    // Its product follows: the section's tamper-resistant receptacle, where the documents say TR.
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-tr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.2 STRAIGHT-BLADE RECEPTACLES\nA. Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\n\
+         B. Tamper-Resistant Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    let product: Value = serde_json::from_str(a["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["product"].as_str().is_some_and(|p| p.to_ascii_uppercase().contains("TAMPER")), "{product:#}");
+    assert!(product["resolved"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "TR")), "{product:#}");
+    assert!(a["tr_documented"]["value"].as_str().is_some_and(|d| d.starts_with("26 27 26") && d.to_ascii_uppercase().contains("TAMPER")), "{a:#}");
+    assert_eq!(a["tr_documented"]["source"]["kind"], "spec");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Beside a sink on an AFCI-only breaker, the untagged receptacle needs GFCI: the circuit's
+    // first (here its only one) is the GFCI device.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "no", "{a:#}");
+    let at: Vec<f64> = a["location"]["value"].as_str().unwrap().split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let sink = find(&mut s, "fixture", json!({}));
+    assert!(!sink.is_empty(), "the plan's diffuser");
+    let level = a["level"]["value"].clone();
+    for (k, v) in [("type", json!("SINK")), ("location", json!(format!("{:.2}, {:.2}, 3.00", at[0] + 4.0, at[1]))), ("level", level)] {
+        s.execute("bim.props.set", &json!({"handle": sink[0], "key": k, "value": v})).unwrap();
+    }
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    let a = device_of(&mut s, "A");
+    let sk = get(&mut s, &sink[0]);
+    assert_eq!(a["gfci"]["value"], "device", "{r:#} {a:#} SINK {sk:#}");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI");
+    assert!(a["receptacle_type"]["source"]["doc"].as_str().is_some_and(|d| d.contains("needs GFCI") && d.contains("sink")), "{a:#}");
 }
 
 #[test]
@@ -385,8 +438,8 @@ fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
     // Where it was read stays its source.
     assert_eq!(b["circuit"]["source"]["doc"], "E-101");
     assert_eq!(b["circuit"]["source"]["at"], json!([3300.0, 60.0]));
-    // Devices read on the plan itself stay where they are, on their wall's face.
-    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.58, 1.67");
+    // Devices read on the plan itself stay where they are, in their wall's face.
+    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.42, 1.67");
 }
 
 #[test]
@@ -650,17 +703,18 @@ fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
     assert_eq!(device_of(&mut s, "B")["room"]["value"], "102", "its east face");
     assert_eq!(device_of(&mut s, "C")["room"]["value"], "102", "the outer wall's inside face");
     assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
-    // Each wall device on its wall's face (its box's middle 1" off it), where it was along the
-    // wall: A on the partition's west face (19.75'), D read 1.5' into the room on the south
-    // wall's inside face (0.5'); E mid-room, 4.5' from any wall, stays for review.
+    // Each wall device set in its wall, its box's face flush with the wall's face (its middle 1"
+    // inside), where it was along the wall: A in the partition's west face (19.75'), D read 1.5'
+    // into the room in the south wall's inside face (0.5'); E, a device of no known kind mid-room
+    // 4.5' from any wall, stays for review.
     let xy = |el: &Value| -> (f64, f64) {
         let v: Vec<f64> = el["location"]["value"].as_str().unwrap_or("").split(',').filter_map(|p| p.trim().parse().ok()).collect();
         (v.first().copied().unwrap_or(f64::NAN), v.get(1).copied().unwrap_or(f64::NAN))
     };
     let (ax, ay) = xy(&device_of(&mut s, "A"));
-    assert!((ax - (19.75 - 1.0 / 12.0)).abs() < 0.02 && (ay - 5.0).abs() < 0.02, "A at {ax}, {ay}");
+    assert!((ax - (19.75 + 1.0 / 12.0)).abs() < 0.02 && (ay - 5.0).abs() < 0.02, "A at {ax}, {ay}");
     let (dx, dy) = xy(&device_of(&mut s, "D"));
-    assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 + 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
+    assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 - 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
     let a = device_of(&mut s, "A");
     assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()) && a["host_face"]["value"].is_string(), "{a:#}");
     let e = device_of(&mut s, "E");

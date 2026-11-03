@@ -35,6 +35,8 @@ use cadaddy_walk3d::validate::{self as v, Prints};
 use cadaddy_walk3d::{BuildingSpec, SheetLink};
 use serde_json::{Value, json};
 
+use super::mountlist;
+pub use super::mountlist::Datum;
 use super::validate_kind::{below_heading, looks_like_mark, model_kind_in, rows_under, words};
 use super::validate_packet::{r2, trade_of_discipline};
 
@@ -84,6 +86,9 @@ pub struct Found {
     pub at: Option<[f64; 2]>,
     /// The words read.
     pub text: Option<String>,
+    /// What the height is measured to on the item (its middle unless the words say its top or
+    /// bottom: `3'-10" AFF TO TOP`).
+    pub datum: Datum,
 }
 
 impl Found {
@@ -95,6 +100,7 @@ impl Found {
             "sheet": self.sheet,
             "at": self.at.map(|p| json!([r2(p[0]), r2(p[1])])),
             "text": self.text,
+            "to": self.datum.name(),
         })
     }
 }
@@ -108,6 +114,9 @@ pub struct Record {
     /// Not read from a document: a default, a rule, a kind's usual height (`rule: on the floor,
     /// 16" high` written as a print's).
     pub assumed: bool,
+    /// What the height is measured to on the element (`mount_datum`: its top for a switch
+    /// `3'-10" AFF TO TOP`, a water closet's seat); its middle when not said.
+    pub datum: Datum,
 }
 
 /// Does a record's document text say it was assumed, not read?
@@ -135,7 +144,8 @@ pub fn record_of(e: &Entity) -> Option<Record> {
         p.source.kind,
         SourceKind::Print | SourceKind::Legend | SourceKind::Schedule | SourceKind::Spec | SourceKind::Submittal | SourceKind::Note
     ) || says_assumed(p.source.doc.as_deref().unwrap_or_default());
-    Some(Record { inches: z, kind: p.source.kind, doc: p.source.doc.clone().unwrap_or(doc), assumed })
+    let datum = props.get("mount_datum").map_or(Datum::Centre, |d| Datum::parse(&d.text()));
+    Some(Record { inches: z, kind: p.source.kind, doc: p.source.doc.clone().unwrap_or(doc), assumed, datum })
 }
 
 /// Where an element's model height comes from, by its record: `document`, `default` (a
@@ -330,6 +340,13 @@ fn is_notes_heading(t: &str) -> bool {
         && !cadaddy_mepfix::device_types::is_device_table_heading(&u)
 }
 
+/// Is `t` a legend's heading: a device legend or schedule's (`ELECTRICAL LEGEND`), or a symbol
+/// list's (`FIRE ALARM DEVICE SYMBOL LIST`)?
+fn is_legend_heading(t: &str) -> bool {
+    let u = t.trim().to_ascii_uppercase();
+    cadaddy_mepfix::device_types::is_device_table_heading(&u) || (u.len() <= 60 && u.contains("SYMBOL") && u.contains("LIST"))
+}
+
 /// The room numbers a view's title names (`ROOM 214`, `RM 105A`, `UNIT 3`, `SUITE 12`).
 fn title_rooms(t: &str) -> Vec<String> {
     let toks: Vec<String> = t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
@@ -349,6 +366,11 @@ struct Entry {
     rooms: Vec<String>,
     trade: &'static str,
     found: Found,
+    /// A list's item (`WATER CLOSETS`, `LIGHT SWITCH`): what it names, matched by its words
+    /// ([`mountlist::names_item`]); a legend row's words after its mark.
+    subject: Option<String>,
+    /// The height a list gives an accessible room's item (`ADA = 34" MAX.`).
+    ada: Option<f64>,
 }
 
 /// A height note on a plan (`18" AFF`, `GFCI RECEPTACLE @ 42" AFF`), not yet tied to a symbol.
@@ -363,6 +385,7 @@ struct PlanNote {
     inches: f64,
     text: String,
     sheet: Option<String>,
+    datum: Datum,
 }
 
 /// What an element is, for its height.
@@ -376,6 +399,11 @@ pub struct Ask<'a> {
     /// Its trade (`electrical`, `mechanical`…).
     pub trade: &'a str,
     pub record: Option<&'a Record>,
+    /// What it is in words (`water closet WC-1`, `GFCI receptacle`): a list's item names it by
+    /// these too.
+    pub name: Option<&'a str>,
+    /// It is an accessible room's (an `ADA` fixture): a list's `ADA =` height is its.
+    pub ada: bool,
 }
 
 /// The heights the job's documents give.
@@ -389,6 +417,8 @@ pub struct DocHeights {
     tied: HashMap<String, Found>,
     /// `validate.height.*`: what it names, inches, the key.
     project: Vec<(String, f64, String)>,
+    /// Each legend row's mark and its words (a row with no height too).
+    legend_rows: Vec<(String, String)>,
 }
 
 impl DocHeights {
@@ -451,8 +481,11 @@ impl DocHeights {
                 what: format!("interior elevation {}{}", short(&title.value), sheet_no(title.at).map_or_else(String::new, |s| format!(" on {s}"))),
                 sheet: sheet_no(at),
                 at: Some([at.x, at.y]),
+                datum: Datum::of(&text),
                 text: Some(short(&text)),
             },
+            subject: None,
+            ada: None,
         };
         for (&ti, members) in &in_view {
             let Some(title) = all.get(ti) else { continue };
@@ -536,8 +569,7 @@ impl DocHeights {
         }
 
         // Legends and notes blocks: their rows.
-        let legend_heads: Vec<&TextItem> =
-            all.iter().filter(|t| cadaddy_mepfix::device_types::is_device_table_heading(&t.value)).take(MAX_HEADINGS).collect();
+        let legend_heads: Vec<&TextItem> = all.iter().filter(|t| is_legend_heading(&t.value)).take(MAX_HEADINGS).collect();
         let notes_heads: Vec<&TextItem> = all.iter().filter(|t| is_notes_heading(&t.value)).take(MAX_HEADINGS).collect();
         let under = |heads: &[&TextItem], used: &[bool]| -> Vec<TextItem> {
             all.iter()
@@ -553,31 +585,65 @@ impl DocHeights {
                     break;
                 }
                 let joined = row.iter().map(|t| t.value.as_str()).collect::<Vec<_>>().join(" ");
-                let Some(z) = aff_inches(&joined) else { continue };
                 let i = row.iter().position(|t| looks_like_mark(&t.value) && aff_inches(&t.value).is_none());
-                let mark = i.and_then(|i| row.get(i)).map(|t| t.value.trim().to_ascii_uppercase());
-                let said: Vec<&str> = row.iter().skip(i.map_or(0, |i| i + 1)).map(|t| t.value.as_str()).collect();
-                let kind = kind_in(&said.join(" ")).map(str::to_string);
+                // A symbol's letter and the mark printed small beside it (`S` with `R`: the mark
+                // is either): each a mark of the row.
+                let mut marks_here: Vec<String> = Vec::new();
+                if let Some(i) = i {
+                    let mut j = i;
+                    while let Some(t) =
+                        row.get(j).filter(|t| looks_like_mark(&t.value) && t.value.trim().len() <= 3 && aff_inches(&t.value).is_none())
+                    {
+                        if j > i && row.get(j - 1).is_none_or(|p| t.at.x - p.at.x > 2.0 * t.height.max(p.height)) {
+                            break;
+                        }
+                        marks_here.push(t.value.trim().to_ascii_uppercase());
+                        j += 1;
+                        if marks_here.len() >= 3 {
+                            break;
+                        }
+                    }
+                    if marks_here.is_empty() {
+                        marks_here.extend(row.get(i).map(|t| t.value.trim().to_ascii_uppercase()));
+                    }
+                }
+                let skip = i.map_or(0, |i| i + marks_here.len().max(1));
+                let said: Vec<&str> = row.iter().skip(skip).map(|t| t.value.as_str()).collect();
+                let words_said = said.join(" ");
+                for m in &marks_here {
+                    if out.legend_rows.len() < MAX_ENTRIES {
+                        out.legend_rows.push((m.clone(), short(&words_said)));
+                    }
+                }
+                let Some(z) = aff_inches(&joined) else { continue };
+                let kind = kind_in(&words_said).map(str::to_string);
                 let at = row.first().map_or(h.at, |t| t.at);
-                out.legend.push(Entry {
-                    mark: mark.clone(),
-                    kind,
-                    rooms: Vec::new(),
-                    trade: trade_at(h.at),
-                    found: Found {
-                        inches: z,
-                        from: "legend",
-                        what: format!(
-                            "legend {}{}{}",
-                            short(&h.value),
-                            mark.as_deref().map_or_else(String::new, |m| format!(", row {m}")),
-                            sheet_no(h.at).map_or_else(String::new, |s| format!(" on {s}"))
-                        ),
-                        sheet: sheet_no(at),
-                        at: Some([at.x, at.y]),
-                        text: Some(short(&joined)),
-                    },
-                });
+                let marks_or_none: Vec<Option<String>> =
+                    if marks_here.is_empty() { vec![None] } else { marks_here.iter().cloned().map(Some).collect() };
+                for mark in marks_or_none {
+                    out.legend.push(Entry {
+                        mark: mark.clone(),
+                        kind: kind.clone(),
+                        rooms: Vec::new(),
+                        trade: trade_at(h.at),
+                        found: Found {
+                            inches: z,
+                            from: "legend",
+                            what: format!(
+                                "legend {}{}{}",
+                                short(&h.value),
+                                mark.as_deref().map_or_else(String::new, |m| format!(", row {m}")),
+                                sheet_no(h.at).map_or_else(String::new, |s| format!(" on {s}"))
+                            ),
+                            sheet: sheet_no(at),
+                            at: Some([at.x, at.y]),
+                            datum: Datum::of(&joined),
+                            text: Some(short(&joined)),
+                        },
+                        subject: Some(words_said.clone()).filter(|w| !w.trim().is_empty()),
+                        ada: None,
+                    });
+                }
             }
         }
         // Rows read by a legend are no notes.
@@ -603,8 +669,11 @@ impl DocHeights {
                 ),
                 sheet: sheet_no(at),
                 at: Some([at.x, at.y]),
+                datum: Datum::of(text),
                 text: Some(short(text)),
             },
+            subject: None,
+            ada: None,
         };
         let near_notes = under(&notes_heads, &used);
         for h in &notes_heads {
@@ -626,6 +695,22 @@ impl DocHeights {
                 *u = true;
             }
         }
+        // A notes list of heights (`9. WIRING DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an
+        // accessibility sheet's `WATER CLOSETS (TO TOP OF SEAT): STANDARD = …`): its items.
+        for l in mountlist::read_lists_marking(&all, &mut used) {
+            if out.notes.len() >= MAX_ENTRIES {
+                break;
+            }
+            out.notes.push(list_entry(&l.to_note(&sheet_no(l.at).unwrap_or_default()), trade_at(l.at), Some([l.at.x, l.at.y])));
+        }
+        // The lists the job read off sheets the drawing doesn't hold.
+        for n in sp.mount_notes.iter().take(mountlist::MAX_ENTRIES) {
+            if out.notes.len() >= MAX_ENTRIES {
+                break;
+            }
+            let disc: String = n.sheet.trim().chars().take_while(char::is_ascii_alphabetic).collect();
+            out.notes.push(list_entry(n, trade_of_discipline(&disc), None));
+        }
         // The rest: a short height note is a plan note for the symbol beside it (of the kind it
         // names, if it names one); a longer line naming a kind and a height is a general note.
         for (i, t) in all.iter().enumerate() {
@@ -645,6 +730,7 @@ impl DocHeights {
                         inches: z,
                         text: t.value.clone(),
                         sheet: sheet_no(t.at),
+                        datum: Datum::of(&t.value),
                     });
                 }
             } else if let Some(k) = kind
@@ -715,6 +801,7 @@ impl DocHeights {
                     sheet: n.sheet.clone(),
                     at: Some([n.at.x, n.at.y]),
                     text: Some(n.text.clone()),
+                    datum: n.datum,
                 },
             );
         }
@@ -735,7 +822,10 @@ impl DocHeights {
                     sheet: n.sheet.clone(),
                     at: Some([n.at.x, n.at.y]),
                     text: Some(n.text.clone()),
+                    datum: n.datum,
                 },
+                subject: None,
+                ada: None,
             });
         }
     }
@@ -754,9 +844,6 @@ impl DocHeights {
 
     /// The height the documents give an element, first that gives one (see the module doc).
     pub fn expected(&self, a: &Ask, prints: Option<&Prints>, pr: &ProjectRules) -> Option<Found> {
-        let kind_ok =
-            |k: &Option<String>| k.as_deref().is_some_and(|k| cadaddy_walk3d::validate_kinds::kind_matches(k, a.kind) || has_words(a.kind, k));
-        let mark_ok = |m: &Option<String>| m.as_deref().zip(a.mark).is_some_and(|(x, y)| x.eq_ignore_ascii_case(y.trim()));
         let record = a.record.filter(|r| !r.assumed);
         let from_record = |r: &Record, from: &'static str| Found {
             inches: r.inches,
@@ -765,67 +852,136 @@ impl DocHeights {
             sheet: None,
             at: None,
             text: (!r.doc.is_empty()).then(|| r.doc.chars().take(160).collect()),
+            datum: r.datum,
         };
         // 1. An AFF note tied to it on its plan.
         if let Some(r) = record.filter(|r| matches!(r.kind, SourceKind::Print | SourceKind::Note)) {
             return Some(from_record(r, "plan_note"));
         }
-        if let Some(f) = self.tied.get(&a.handle.to_ascii_uppercase()) {
-            return Some(f.clone());
+        if let Some(f) = self.own_note(a.handle) {
+            return Some(f);
         }
-        // 2. The interior elevation that shows it: its room's first, its mark before its kind.
-        let room_is = |e: &Entry| e.rooms.is_empty() || a.room_number.is_some_and(|n| e.rooms.iter().any(|r| r.eq_ignore_ascii_case(n.trim())));
-        let pick = self
-            .elevation
-            .iter()
-            .filter(|e| room_is(e) && (mark_ok(&e.mark) || (e.mark.is_none() && kind_ok(&e.kind))))
-            .min_by_key(|e| (e.rooms.is_empty(), !mark_ok(&e.mark)));
-        if let Some(e) = pick {
-            return Some(e.found.clone());
+        // 2. The interior elevation that shows it.
+        if let Some(f) = self.elevation_of(a, false) {
+            return Some(f);
         }
         // 3. The legend row of its mark, else of its kind.
         if let Some(r) = record.filter(|r| r.kind == SourceKind::Legend) {
             return Some(from_record(r, "legend"));
         }
-        if let Some(e) = self.legend.iter().find(|e| mark_ok(&e.mark)).or_else(|| self.legend.iter().find(|e| e.mark.is_none() && kind_ok(&e.kind))) {
-            return Some(e.found.clone());
+        if let Some(f) = self.legend_of(a) {
+            return Some(f);
         }
         // 4. The schedule row of its mark.
         if let Some(r) = record.filter(|r| matches!(r.kind, SourceKind::Schedule | SourceKind::Submittal)) {
             return Some(from_record(r, "schedule"));
         }
-        if let Some(p) = prints {
-            if let Some(row) =
-                p.schedule.iter().find(|r| a.mark.is_some_and(|m| r.mark.eq_ignore_ascii_case(m)) && r.mounting_in.is_some_and(f64::is_finite))
-                && let Some(z) = row.mounting_in
-            {
-                return Some(Found {
-                    inches: z,
-                    from: "schedule",
-                    what: format!("schedule {} on {}, mark {}", row.schedule, row.sheet, row.mark),
-                    sheet: Some(row.sheet.clone()).filter(|s| !s.is_empty()),
-                    at: None,
-                    text: None,
-                });
-            }
-            if let Some(h) = p.rules.heights.iter().find(|h| mark_ok(&h.mark)).filter(|h| h.mounting_in.is_finite()) {
-                return Some(prints_rule(h));
-            }
+        if let Some(f) = schedule_of(a, prints) {
+            return Some(f);
         }
         // 5. The general notes of its trade (or of the whole set).
         if let Some(r) = record.filter(|r| r.kind == SourceKind::Spec) {
             return Some(from_record(r, "general_note"));
         }
-        let note = |trades: &[&str]| self.notes.iter().find(|e| trades.contains(&e.trade) && kind_ok(&e.kind));
-        if let Some(e) = note(&[a.trade]).or_else(|| note(&["general", "architecture"])) {
-            return Some(e.found.clone());
+        if let Some(f) = self.notes_of(a, prints) {
+            return Some(f);
         }
-        if let Some(h) = prints.and_then(|p| {
-            p.rules.heights.iter().find(|h| h.mark.is_none() && h.kind.as_deref().is_some_and(|k| has_words(a.kind, k)) && h.mounting_in.is_finite())
-        }) {
-            return Some(prints_rule(h));
+        // 6. The project's rules.
+        self.rule_of(a, pr)
+    }
+
+    /// The AFF note tied to the element's symbol on its plan (`handle`: the plan element's, or
+    /// the symbol's a built part was read from).
+    pub fn own_note(&self, handle: &str) -> Option<Found> {
+        self.tied.get(&handle.to_ascii_uppercase()).cloned()
+    }
+
+    /// The interior elevation that shows it: its room's first, its mark before its kind.
+    /// `own_room`: only an elevation titled with its room (the build: an elevation of one room
+    /// is no other room's).
+    pub fn elevation_of(&self, a: &Ask, own_room: bool) -> Option<Found> {
+        let kind_ok = |k: &Option<String>| kind_names(k.as_deref(), a);
+        let mark_ok = |m: &Option<String>| m.as_deref().zip(a.mark).is_some_and(|(x, y)| x.eq_ignore_ascii_case(y.trim()));
+        let room_is = |e: &Entry| {
+            if e.rooms.is_empty() {
+                return !own_room;
+            }
+            a.room_number.is_some_and(|n| e.rooms.iter().any(|r| r.eq_ignore_ascii_case(n.trim())))
+        };
+        self.elevation
+            .iter()
+            .filter(|e| room_is(e) && (mark_ok(&e.mark) || (e.mark.is_none() && kind_ok(&e.kind))))
+            .min_by_key(|e| (e.rooms.is_empty(), !mark_ok(&e.mark)))
+            .map(|e| e.found.clone())
+    }
+
+    /// The legend row of its mark (one that describes its kind of item), else of its kind.
+    pub fn legend_of(&self, a: &Ask) -> Option<Found> {
+        let mark_ok = |m: &Option<String>| m.as_deref().zip(a.mark).is_some_and(|(x, y)| x.eq_ignore_ascii_case(y.trim()));
+        // A row of another kind of item under the same mark (a fire alarm strobe's `S` is no
+        // switch's): its words name a kind or an item that isn't this one.
+        let fits = |e: &Entry| {
+            if e.kind.is_some() && kind_names(e.kind.as_deref(), a) {
+                return true;
+            }
+            let said = e.subject.as_deref().unwrap_or_default();
+            let topics = mountlist::topics(said);
+            if topics.is_empty() {
+                return e.kind.is_none();
+            }
+            mountlist::names_item(said, a.kind, a.name, a.mark)
+        };
+        self.legend
+            .iter()
+            .find(|e| mark_ok(&e.mark) && fits(e))
+            .or_else(|| self.legend.iter().find(|e| e.mark.is_none() && kind_names(e.kind.as_deref(), a)))
+            .map(|e| e.found.clone())
+    }
+
+    /// The general notes of its trade (or of the whole set): a note naming its kind, a list's
+    /// item naming it; an accessible room's height for an accessible item (a list that gives
+    /// only that one gives it to every item, said so).
+    pub fn notes_of(&self, a: &Ask, prints: Option<&Prints>) -> Option<Found> {
+        let fits = |e: &Entry| match &e.subject {
+            Some(sub) => mountlist::names_item(sub, a.kind, a.name, a.mark),
+            None => kind_names(e.kind.as_deref(), a),
+        };
+        let pick = |e: &Entry| -> Option<Found> {
+            if e.subject.is_none() {
+                return Some(e.found.clone());
+            }
+            let standard = (e.found.inches.is_finite() && e.found.inches > 0.0).then_some(e.found.inches);
+            let (inches, said) = match (a.ada, standard, e.ada) {
+                (true, _, Some(z)) => (z, " (ADA)"),
+                (false, Some(z), _) | (true, Some(z), None) => (z, ""),
+                (false, None, Some(z)) => (z, " (the ADA height: the note gives no other)"),
+                _ => return None,
+            };
+            let mut f = e.found.clone();
+            f.inches = inches;
+            f.what = format!("{}{said}", f.what);
+            Some(f)
+        };
+        let note = |trades: &[&str]| self.notes.iter().filter(|e| trades.contains(&e.trade) && fits(e)).find_map(pick);
+        if let Some(f) = note(&[a.trade]).or_else(|| note(&["general", "architecture"])) {
+            return Some(f);
         }
-        // 6. The project's rules: `validate.height.<mark>`, `.<kind>`, then `mounting_height`.
+        let any_trade = self.notes.iter().filter(|e| e.subject.is_some() && fits(e)).find_map(pick);
+        if any_trade.is_some() {
+            return any_trade;
+        }
+        prints
+            .and_then(|p| {
+                p.rules
+                    .heights
+                    .iter()
+                    .find(|h| h.mark.is_none() && h.kind.as_deref().is_some_and(|k| has_words(a.kind, k)) && h.mounting_in.is_finite())
+            })
+            .map(prints_rule)
+    }
+
+    /// The project's rules: `validate.height.<mark>`, `.<kind>`, then `mounting_height`.
+    pub fn rule_of(&self, a: &Ask, pr: &ProjectRules) -> Option<Found> {
         let by_mark = self.project.iter().find(|(w, _, _)| a.mark.is_some_and(|m| m.trim().eq_ignore_ascii_case(w)));
         let by_kind = || {
             self.project
@@ -834,9 +990,99 @@ impl DocHeights {
                 .max_by_key(|(w, _, _)| words(w).len())
         };
         if let Some((_, z, key)) = by_mark.or_else(by_kind) {
-            return Some(Found { inches: *z, from: "project_rule", what: format!("project rule {key}"), sheet: None, at: None, text: None });
+            return Some(Found {
+                inches: *z,
+                from: "project_rule",
+                what: format!("project rule {key}"),
+                sheet: None,
+                at: None,
+                text: None,
+                datum: Datum::Centre,
+            });
         }
         mounting_rule(a, pr)
+    }
+
+    /// The words of the legend rows of `mark` (what the legend says it is: `SLEEPING ROOM SMOKE
+    /// DETECTOR …  CEILING OR WALL`).
+    pub fn legend_words(&self, mark: &str) -> Vec<&str> {
+        self.legend_rows.iter().filter(|(m, _)| m.eq_ignore_ascii_case(mark.trim())).map(|(_, w)| w.as_str()).collect()
+    }
+
+    /// The list notes read (the sheets' general notes lists), for the job's report.
+    pub fn list_notes(&self) -> usize {
+        self.notes.iter().filter(|e| e.subject.is_some()).count()
+    }
+}
+
+/// Is an item an accessible room's: its type says ADA (`ADA WATER CLOSET`, `accessible
+/// lavatory`), or its mark is a fixture tag with the accessible `H` after its number (`P-1H`).
+pub fn is_ada(mark: Option<&str>, name: Option<&str>) -> bool {
+    let named = name.is_some_and(|n| {
+        let w = format!("_{}_", words(n));
+        ["_ada_", "_accessible_", "_handicap_", "_handicapped_"].iter().any(|x| w.contains(x))
+    });
+    let tagged = mark.is_some_and(|m| {
+        let m = m.trim().to_ascii_uppercase();
+        m.split_once('-').is_some_and(|(_, n)| {
+            n.len() >= 2 && n.ends_with('H') && n.get(..n.len() - 1).is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit()))
+        })
+    });
+    named || tagged
+}
+
+/// Whether a kind `k` an entry names is the element's: the rule kinds' families, its kind's
+/// words.
+fn kind_names(k: Option<&str>, a: &Ask) -> bool {
+    use cadaddy_walk3d::validate_kinds::kind_matches;
+    // A fire alarm device of no known kind takes a note for any fire alarm device (`MOUNT ALL
+    // HORN/STROBES AT 80" AFF`), as its sheet only says it is one.
+    k.is_some_and(|k| kind_matches(k, a.kind) || has_words(a.kind, k) || (a.kind == "fire_alarm_device" && kind_matches(a.kind, k)))
+}
+
+/// The schedule row of its mark (the prints' schedules, a prints height rule for its mark).
+fn schedule_of(a: &Ask, prints: Option<&Prints>) -> Option<Found> {
+    let p = prints?;
+    let mark_ok = |m: &Option<String>| m.as_deref().zip(a.mark).is_some_and(|(x, y)| x.eq_ignore_ascii_case(y.trim()));
+    if let Some(row) = p.schedule.iter().find(|r| a.mark.is_some_and(|m| r.mark.eq_ignore_ascii_case(m)) && r.mounting_in.is_some_and(f64::is_finite))
+        && let Some(z) = row.mounting_in
+    {
+        return Some(Found {
+            inches: z,
+            from: "schedule",
+            what: format!("schedule {} on {}, mark {}", row.schedule, row.sheet, row.mark),
+            sheet: Some(row.sheet.clone()).filter(|s| !s.is_empty()),
+            at: None,
+            text: None,
+            datum: Datum::Centre,
+        });
+    }
+    p.rules.heights.iter().find(|h| mark_ok(&h.mark)).filter(|h| h.mounting_in.is_finite()).map(prints_rule)
+}
+
+/// A list note's entry: the standard height as the entry's, the accessible one kept beside it.
+fn list_entry(n: &cadaddy_walk3d::MountNote, trade: &'static str, at: Option<[f64; 2]>) -> Entry {
+    let sheet = Some(n.sheet.clone()).filter(|s| !s.trim().is_empty());
+    Entry {
+        mark: None,
+        kind: kind_in(&n.subject).map(str::to_string),
+        rooms: Vec::new(),
+        trade,
+        found: Found {
+            inches: n.inches.unwrap_or(f64::NAN),
+            from: "general_note",
+            what: format!(
+                "general notes' heights, {}{}",
+                n.subject.chars().take(60).collect::<String>(),
+                sheet.as_deref().map_or_else(String::new, |s| format!(" on {s}"))
+            ),
+            sheet,
+            at,
+            text: Some(n.text.chars().take(160).collect()),
+            datum: Datum::parse(&n.datum),
+        },
+        subject: Some(n.subject.clone()),
+        ada: n.ada_inches.filter(|z| z.is_finite()),
     }
 }
 
@@ -849,6 +1095,7 @@ fn prints_rule(h: &v::HeightRule) -> Found {
         sheet: None,
         at: None,
         text: (!h.source.is_empty()).then(|| h.source.clone()),
+        datum: Datum::Centre,
     }
 }
 
@@ -879,7 +1126,7 @@ fn mounting_rule(a: &Ask, pr: &ProjectRules) -> Option<Found> {
             best = Some((rank, key.1, z, format!("project rule mounting_height/{}", e.key)));
         }
     }
-    best.map(|(_, _, z, what)| Found { inches: z, from: "project_rule", what, sheet: None, at: None, text: None })
+    best.map(|(_, _, z, what)| Found { inches: z, from: "project_rule", what, sheet: None, at: None, text: None, datum: Datum::Centre })
 }
 
 /// The symbol point on the sheet of a plan element (its insertion, else its box's centre).
