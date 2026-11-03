@@ -9642,7 +9642,7 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         let p = std::path::Path::new(&ck);
         let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
         let file = p.with_file_name(format!("{stem}-conduit-takeoff.csv")).to_string_lossy().to_string();
-        match s.execute("conduit.takeoff", &json!({"group_by": ["level", "area", "circuit"], "file": file})) {
+        match s.execute("conduit.takeoff", &json!({"group_by": ["level", "area", "circuit"], "file": file, "force": true})) {
             Ok(v) => {
                 progress_line(&format!("  conduit takeoff: {} lines, {} firestop; written to {}", v["line_count"], v["firestop"], file));
                 result["conduit_takeoff"] = json!({"file": file, "lines": v["line_count"], "totals": v["totals"]});
@@ -15180,6 +15180,9 @@ mod tests {
         // D-7: 400 units of chain + 700 of home run; D-9: 200 + 1200 (12 units a foot).
         assert!((c["estimated_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{c:#}");
 
+        // The estimate as Q6007 reads it (routing it through the model is Q6152's, switched off
+        // here; tests/conduitroute.rs routes).
+        super::super::conduitroute::set_enabled(s.doc_mut().unwrap_or_else(|e| panic!("{e}")), false);
         let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built["circuits"], json!(2), "{built:#}");
         // Q6172: the build took the print inventory of the sheet and kept it.

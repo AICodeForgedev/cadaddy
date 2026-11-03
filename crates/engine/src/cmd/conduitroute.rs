@@ -308,11 +308,14 @@ fn count_word(w: &str) -> Option<usize> {
 pub(crate) fn spec_limits(text: &str, section: &str, m: &mut Methods) {
     for line in text.lines().take(200_000) {
         let up = line.to_ascii_uppercase();
-        if m.min_size_in.is_none() && up.contains("MINIMUM") && (up.contains("RACEWAY") || up.contains("CONDUIT")) && up.contains("SIZE") {
-            if let Some(v) = trade_size_in(&up) {
-                m.min_size_in = Some(v);
-                m.min_size_source = format!("spec {section}: {}", line.trim().chars().take(160).collect::<String>());
-            }
+        if m.min_size_in.is_none()
+            && up.contains("MINIMUM")
+            && (up.contains("RACEWAY") || up.contains("CONDUIT"))
+            && up.contains("SIZE")
+            && let Some(v) = trade_size_in(&up)
+        {
+            m.min_size_in = Some(v);
+            m.min_size_source = format!("spec {section}: {}", line.trim().chars().take(160).collect::<String>());
         }
         if m.max_circuits.is_none() && (up.contains("HOMERUN") || up.contains("HOME RUN")) && up.contains("CIRCUIT") {
             let words: Vec<&str> = up.split_whitespace().collect();
@@ -354,11 +357,13 @@ pub(crate) fn length_table(texts: &[String]) -> (Vec<(f64, String)>, String) {
                 .filter(|v| v.is_finite() && *v >= 0.0 && *v < 5000.0)
                 .collect();
             let joined = range.contains('-') || range.contains(" TO ");
-            if let (true, [_, hi, ..]) = (joined, nums.as_slice()) {
-                if *hi > 0.0 && !bands.iter().any(|(h, _)| (h - hi).abs() < 0.5) && bands.len() < 16 {
-                    bands.push((*hi, size));
-                    found = true;
-                }
+            if let (true, [_, hi, ..]) = (joined, nums.as_slice())
+                && *hi > 0.0
+                && !bands.iter().any(|(h, _)| (h - hi).abs() < 0.5)
+                && bands.len() < 16
+            {
+                bands.push((*hi, size));
+                found = true;
             }
         }
         if found && said.len() < 4 {
@@ -1251,7 +1256,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
 
-    // -- A circuit of a panel there is one of per unit (`G` → G-101, G-103 …): its devices split
+    // -- A circuit of a panel there is one of per unit (`P` → P-1A, P-1B …): its devices split
     // by the nearest copy on their level, each part to its own panel. --
     let mut split: Vec<Circ> = Vec::new();
     for c in circs.drain(..) {
@@ -1597,11 +1602,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                         *x = du + ft;
                         changed = true;
                     }
-                } else if dv.is_finite() && !du.is_finite() {
-                    if let Some(x) = far.get_mut(*u) {
-                        *x = dv + ft;
-                        changed = true;
-                    }
+                } else if dv.is_finite()
+                    && !du.is_finite()
+                    && let Some(x) = far.get_mut(*u)
+                {
+                    *x = dv + ft;
+                    changed = true;
                 }
             }
             if !changed {
@@ -2317,7 +2323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {routed, removed, atoms, seconds, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
-            .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the estimate's rate), price?: bool (default true)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
+            .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the estimate's rate), price?: bool (default true)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
             .noundo(),
     ]
 }
@@ -2419,8 +2425,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let price = bool_or(p, "price", true);
     let rate = p.get("labor_rate").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0);
+    // The table's file: never a drawing's, never replacing one without `force`.
+    if let Some(path) = str_param(p, "file").filter(|x| !x.trim().is_empty()) {
+        super::exchange::guard_output(s, C, p, path)?;
+    }
     let cost_db = match str_param(p, "cost_db") {
-        Some(path) => Some(read_cost_db(&path)?),
+        Some(path) => Some(read_cost_db(path)?),
         None => None,
     };
     // Every piece of the model, grouped.
@@ -2603,7 +2613,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             csv.push_str(&row.join(","));
             csv.push('\n');
         }
-        std::fs::write(&path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
+        std::fs::write(path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
         file_out = json!(path);
     }
     let shown: Vec<Value> = lines

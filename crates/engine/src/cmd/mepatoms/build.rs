@@ -77,7 +77,7 @@ struct Method {
 }
 
 /// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
-/// (`A-1,3,5` holds `A-3`).
+/// (`LP1-1,3,5` holds `LP1-3`).
 fn on_circuit(boxc: &str, circuit: &str) -> bool {
     if boxc == circuit {
         return true;
