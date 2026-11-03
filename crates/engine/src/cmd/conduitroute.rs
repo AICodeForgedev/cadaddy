@@ -52,6 +52,10 @@ pub(crate) const REPORT_FILE: &str = "route/report.json";
 /// The specification's wiring methods as the job read them (the router's input).
 pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
+/// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
+const HOME_PART: &str = ":home:";
+/// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
+const IN_WALL: &str = "in the wall";
 
 /// Most circuits, devices, obstacles, runs and items one routing handles (hostile models).
 const MAX_CIRCUITS: usize = 20_000;
@@ -64,6 +68,8 @@ const MAX_TEXTS: usize = 400_000;
 const NEAR_RUN_FT: f64 = 3.0;
 /// A typical room's own panel this close (feet) at most.
 const ROOM_PANEL_FT: f64 = 60.0;
+/// Where across a corridor its branch homerun lane runs (a fraction of its width).
+const LANE_AT: f64 = 0.25;
 /// Bucket size of the obstacle grid, feet.
 const CELL_FT: f64 = 8.0;
 
@@ -578,44 +584,52 @@ pub(crate) fn route_leg(a: Vec2, b: Vec2, tiers: &[f64], r: f64, field: &Field, 
     best.map(|(_, l)| l).unwrap_or_default()
 }
 
-/// A rectilinear spanning tree over `pts` (Prim, square distance): its joints, from `root`.
+/// A rectilinear spanning tree over `pts` (Prim, square distance) as an electrician chains the
+/// boxes: the root (where the homerun lands) takes one joint, every other box at most two (a
+/// box in, a box out), so no box collects more raceways than its fill allows. Its joints, from
+/// `root`.
 pub(crate) fn spanning_tree(pts: &[Vec2], root: usize) -> Vec<(usize, usize)> {
     let n = pts.len();
-    if n < 2 || root >= n {
+    if n < 2 || root >= n || n > 20_000 {
         return Vec::new();
     }
+    let cap = |i: usize| if i == root { 1 } else { 2 };
     let mut inside = vec![false; n];
-    let mut best = vec![(f64::INFINITY, root); n];
+    let mut degree = vec![0usize; n];
     if let Some(r) = inside.get_mut(root) {
         *r = true;
     }
-    for (i, b) in best.iter_mut().enumerate() {
-        if let (Some(p), Some(q)) = (pts.get(i), pts.get(root)) {
-            *b = (manhattan(*p, *q), root);
-        }
-    }
+    let mut members = vec![root];
     let mut out = Vec::new();
     for _ in 1..n {
-        let Some((next, &(_, from))) =
-            best.iter().enumerate().filter(|(i, _)| !inside.get(*i).copied().unwrap_or(true)).min_by(|a, b| a.1.0.total_cmp(&b.1.0))
-        else {
-            break;
-        };
-        if let Some(x) = inside.get_mut(next) {
-            *x = true;
-        }
-        out.push((from, next));
-        for (i, b) in best.iter_mut().enumerate() {
-            if inside.get(i).copied().unwrap_or(true) {
+        // The nearest box outside to a box inside that can still take a joint.
+        let mut best: Option<(f64, usize, usize)> = None;
+        for &f in &members {
+            if degree.get(f).copied().unwrap_or(usize::MAX) >= cap(f) {
                 continue;
             }
-            if let (Some(p), Some(q)) = (pts.get(i), pts.get(next)) {
-                let d = manhattan(*p, *q);
-                if d < b.0 {
-                    *b = (d, next);
+            let Some(pf) = pts.get(f) else { continue };
+            for (i, p) in pts.iter().enumerate() {
+                if inside.get(i).copied().unwrap_or(true) {
+                    continue;
+                }
+                let d = manhattan(*p, *pf);
+                if best.is_none_or(|(bd, _, _)| d < bd) {
+                    best = Some((d, f, i));
                 }
             }
         }
+        let Some((_, from, next)) = best else { break };
+        for x in [from, next] {
+            if let Some(dg) = degree.get_mut(x) {
+                *dg += 1;
+            }
+        }
+        if let Some(x) = inside.get_mut(next) {
+            *x = true;
+        }
+        members.push(next);
+        out.push((from, next));
     }
     out
 }
@@ -639,11 +653,13 @@ impl Lane {
         if !(lo.x.is_finite() && lo.y.is_finite() && hi.x.is_finite() && hi.y.is_finite()) || hi.x - lo.x <= 0.0 || hi.y - lo.y <= 0.0 {
             return None;
         }
+        // A quarter of the way across: branch homeruns keep beside the centre line, where the
+        // feeders and mains run.
         let (a, b) = if hi.x - lo.x >= hi.y - lo.y {
-            let y = (lo.y + hi.y) / 2.0;
+            let y = lo.y + (hi.y - lo.y) * LANE_AT;
             (Vec2::new(lo.x, y), Vec2::new(hi.x, y))
         } else {
-            let x = (lo.x + hi.x) / 2.0;
+            let x = lo.x + (hi.x - lo.x) * LANE_AT;
             (Vec2::new(x, lo.y), Vec2::new(x, hi.y))
         };
         Some(Lane { a, b, lo, hi })
@@ -1032,7 +1048,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let methods = Methods::stored(d);
     let est = super::printcond::CIRCUIT_SYSTEM;
     let mut out = Routed::default();
-    let circuit_tags: Vec<(usize, &ElementTag)> = sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit").take(MAX_CIRCUITS).collect();
+    let circuit_tags: Vec<(usize, &ElementTag)> =
+        sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
     if circuit_tags.is_empty() {
         out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route"});
         return out;
@@ -1058,6 +1075,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     continue;
                 }
                 let Some((lo, hi)) = mesh_box(e) else { continue };
+                let off = super::bspec::stacked_by(e);
+                let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
                 let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
                 let yoke = matches!(kind.replace('_', " ").as_str(), "receptacle" | "switch" | "dimmer" | "occupancy sensor");
                 devs.push(Dev {
@@ -1077,7 +1096,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 let Some(r) = rating_of(t) else { continue };
                 let Some((_, hi)) = mesh_box(e) else { continue };
                 let EntityKind::Mesh(m) = &e.kind else { continue };
-                let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy()).collect::<Vec<_>>());
+                let off = super::bspec::stacked_by(e);
+                let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
                 if hull.len() >= 3 {
                     rated.push(Rated {
                         handle: e.handle,
@@ -1095,6 +1115,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             && gear.len() < MAX_DEVICES
             && let Some((lo, hi)) = mesh_box(e)
         {
+            let off = super::bspec::stacked_by(e);
+            let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
             gear.push(GearEl {
                 handle: e.handle,
                 level: super::bspec::made_level(e).unwrap_or_default(),
@@ -1119,13 +1141,30 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             continue;
         }
         n_obs += 1;
+        let off = d.model.get(el.handle).map_or(Vec2::new(0.0, 0.0), |e| super::bspec::stacked_by(e));
+        let off3 = Vec3::new(off.x, off.y, 0.0);
         obstacles.entry(el.level.to_ascii_lowercase()).or_default().push(Obs {
             handle: el.handle,
-            lo: el.lo,
-            hi: el.hi,
+            lo: el.lo - off3,
+            hi: el.hi - off3,
             category: el.category.clone(),
             system: el.system.clone(),
             trade: el.trade,
+        });
+    }
+    // Each panel's working space (NEC 110.26(A): 3 ft deep before it, 6'-6" high; which side is its
+    // front the model doesn't say, so all round): no branch piece through it. A panel's own
+    // homerun skips it (by the panel's handle).
+    for g in &gear {
+        let floor = sp.level(&g.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let reach = 3.0 * upf;
+        obstacles.entry(g.level.to_ascii_lowercase()).or_default().push(Obs {
+            handle: g.handle,
+            lo: Vec3::new(g.lo.x - reach, g.lo.y - reach, floor),
+            hi: Vec3::new(g.hi.x + reach, g.hi.y + reach, (floor + 6.5 * upf).max(g.hi.z)),
+            category: "working space".into(),
+            system: g.tag.clone(),
+            trade: "electrical",
         });
     }
     let fields: BTreeMap<String, Field> = obstacles.into_iter().map(|(k, v)| (k, Field::new(v, upf))).collect();
@@ -1306,6 +1345,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             return;
         }
         let Some(o) = field.obs.get(b.obstacle) else { return };
+        let (hx, at) = (o.handle.hex(), [r2(b.at.x), r2(b.at.y)]);
+        if clashes
+            .iter()
+            .any(|c| c["b"]["handle"] == json!(hx) && c["a"]["circuit"] == json!(circuit) && c["at"][0] == json!(at[0]) && c["at"][1] == json!(at[1]))
+        {
+            return;
+        }
         let need = rl.clearance_in(&o.category);
         let floor = sp.level(level).map_or(0.0, |l| l.elevation_ft * upf);
         let over = (o.hi.z + (need + size_in / 2.0) / 12.0 * upf - floor) / upf;
@@ -1394,6 +1440,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 in_wall_legs += 1;
                 let zw = a.top.max(b.top) + rl.route.in_wall_above_box_in / 12.0 * upf;
                 r.points = vec![[a.at.x, a.at.y], [a.at.x, a.at.y], [b.at.x, b.at.y], [b.at.x, b.at.y]];
+                // Along its wall, whichever way the wall runs.
+                r.source_sheet = IN_WALL.into();
                 r.bottoms_ft = vec![(a.top - floor) / upf, (zw - floor) / upf, (b.top - floor) / upf];
                 tree_len += a.at.dist(b.at) / upf + 2.0 * (zw - a.top.min(b.top)).abs() / upf;
             } else {
@@ -1713,22 +1761,25 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let pitch = (od + rl.entry.spacing_in) / 12.0 * upf;
         let land = match window {
             Some([w, dpt]) => {
-                let w_u = w / 12.0 * upf;
-                let used = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert(0.0);
-                let wide = (gear_el.hi.x - gear_el.lo.x) >= (gear_el.hi.y - gear_el.lo.y);
-                let start = -w_u / 2.0 + pitch / 2.0 + *used;
-                let fits = *used + pitch <= w_u + 1e-9 && pitch <= w_u + (dpt / 12.0 * upf);
-                if !fits && conflicts.len() < MAX_ITEMS {
+                // Slots row by row across the window (W along the box's long side, D across it).
+                let (w_u, d_u) = (w / 12.0 * upf, dpt / 12.0 * upf);
+                let k = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert(0.0);
+                let per_row = (w_u / pitch).floor().max(1.0);
+                let rows = (d_u / pitch).floor().max(1.0);
+                let (col, row) = (*k % per_row, (*k / per_row).floor());
+                if row >= rows && conflicts.len() < MAX_ITEMS {
                     conflicts.push(json!({
                         "kind": "conflict", "gear": gear_el.tag, "level": gear_el.level, "side": "top",
                         "window_in": [w, dpt], "window": area_text.clone().unwrap_or_default(),
-                        "needed_in": r2((*used + pitch) / upf * 12.0),
+                        "raceways": *k + 1.0, "holds": per_row * rows, "pitch_in": r2(pitch / upf * 12.0),
                         "fix": "the top entry window can't hold another raceway: add an extension gutter or wireway, a pull box above the panel, a larger can, or split the entry",
                     }));
                 }
-                *used += pitch;
-                let off = start.min(w_u / 2.0);
-                if wide { Vec2::new(gctr.x + off, gctr.y) } else { Vec2::new(gctr.x, gctr.y + off) }
+                *k += 1.0;
+                let along = (-w_u / 2.0 + pitch * (col + 0.5)).min(w_u / 2.0);
+                let across = (-d_u / 2.0 + pitch * (row.min(rows - 1.0) + 0.5)).min(d_u / 2.0);
+                let wide = (gear_el.hi.x - gear_el.lo.x) >= (gear_el.hi.y - gear_el.lo.y);
+                if wide { Vec2::new(gctr.x + along, gctr.y + across) } else { Vec2::new(gctr.x + across, gctr.y + along) }
             }
             None => {
                 entry_unknown.insert(format!("{} on {}", gear_el.tag, gear_el.level));
@@ -1756,7 +1807,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             add_clash(&mut clashes, field, bl, "homerun", &labels.join(","), &lead_h.level, size_in);
         }
         let gid = format!(
-            "{}{}:home:{}:{gn}",
+            "{}{}{HOME_PART}{}:{gn}",
             super::printcond::CIRCUIT_TAG,
             lead_h.level.replace(['/', '#', '@'], "-"),
             gear_el.tag.replace(['/', '#', '@'], "-")
@@ -1805,33 +1856,44 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         tags.push(t);
     }
 
-    // -- Box fill at each device box (314.16): what enters it, a ground, its device. --
-    let mut box_over: Vec<Value> = Vec::new();
-    let ar = super::mepatoms::rules();
-    let mut boxes_checked = 0usize;
-    for (di, conds) in &box_in {
-        let Some(dv) = devs.get(*di) else { continue };
-        let kind = dv.kind.replace('_', " ");
-        let bk = match kind.as_str() {
-            "luminaire" | "exit sign" => "luminaire",
-            "receptacle" | "switch" | "dimmer" => "device",
-            _ => "device",
-        };
-        let Some((br, _)) = ar.box_for(bk, false) else { continue };
-        boxes_checked += 1;
-        let need = box_volume(conds, true, dv.yoke, rl);
-        if need > br.cubic_in + 1e-9 && box_over.len() < MAX_ITEMS {
-            let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| br.size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, _)| to.clone());
-            box_over.push(json!({
-                "kind": "box_fill", "device": dv.handle.hex(), "level": dv.level, "circuit": dv.circuit,
-                "box": br.size, "cubic_in": br.cubic_in, "needed_cu_in": r2(need),
-                "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.unwrap_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".into()),
-                "source": rl.box_fill.source,
-            }));
+    // -- The gear's dedicated space (NEC 110.26(E)(1)): its footprint from its top 6 ft up (or to
+    // the structure) is the electrical installation's; another trade's duct or pipe there is a
+    // clash item. --
+    let mut gear_space = 0usize;
+    for g in gear.iter().take(MAX_DEVICES) {
+        let field = fields.get(&g.level.to_ascii_lowercase()).unwrap_or(&empty);
+        let top = g.hi.z + 6.0 * upf;
+        let mut seen: BTreeSet<Handle> = BTreeSet::new();
+        for o in &field.obs {
+            let foreign = matches!(o.trade, "mechanical" | "plumbing" | "fire");
+            let over = o.lo.x < g.hi.x && o.hi.x > g.lo.x && o.lo.y < g.hi.y && o.hi.y > g.lo.y && o.hi.z > g.hi.z && o.lo.z < top;
+            if foreign && over && seen.insert(o.handle) && clashes.len() < MAX_ITEMS {
+                gear_space += 1;
+                let floor = sp.level(&g.level).map_or(0.0, |l| l.elevation_ft * upf);
+                clashes.push(json!({
+                    "kind": "clash",
+                    "a": {"what": "gear dedicated space", "circuit": "", "trade": "electrical", "gear": g.tag, "handle": g.handle.hex()},
+                    "b": {"handle": o.handle.hex(), "category": o.category, "system": o.system, "trade": o.trade},
+                    "pair": format!("electrical × {}", o.trade),
+                    "level": g.level,
+                    "at": [r2((g.lo.x + g.hi.x) / 2.0), r2((g.lo.y + g.hi.y) / 2.0), r2((o.lo.z.max(g.hi.z) - floor) / upf)],
+                    "clearance_in": 0.0,
+                    "fix": format!("the {} {} is in panel {}'s dedicated electrical space (its footprint to 6 ft above it, NEC 110.26(E)(1)): move it out of that column, or add the protection 110.26(E)(1)(b) asks for", o.category, o.system, g.tag),
+                }));
+            }
         }
     }
+
+    // -- Box fill (314.16): what enters each device's box, checked against the box the pieces
+    // give it ([`check_box_fill`], once they are cut). --
+    let box_conductors: Vec<Value> = box_in
+        .iter()
+        .filter_map(|(di, conds)| {
+            let dv = devs.get(*di)?;
+            Some(json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": conds.iter().map(|(n, s)| json!([n, s])).collect::<Vec<_>>()}))
+        })
+        .take(MAX_DEVICES)
+        .collect();
 
     // -- The runs and tags out; the report. --
     let mut by_pair: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
@@ -1849,10 +1911,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let estimated_ft: f64 = sp.mep.runs.iter().filter(|r| r.system == est).map(|r| run_ft(r, upf)).sum();
     // Pieces off both plan axes (none, by construction: checked, not assumed).
+    let hair = upf / 12.0;
     let diagonal = runs
         .iter()
+        .filter(|r| r.source_sheet != IN_WALL)
         .flat_map(|r| r.points.windows(2))
-        .filter(|w| matches!(w, [a, b] if (a[0] - b[0]).abs() > 1e-6 && (a[1] - b[1]).abs() > 1e-6))
+        .filter(|w| matches!(w, [a, b] if (a[0] - b[0]).abs() > hair && (a[1] - b[1]).abs() > hair))
         .count();
     out.report = json!({
         "circuits": circs.len(),
@@ -1878,10 +1942,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "max_circuits_source": group_src,
         "clashes": clashes,
         "clashes_by_pair_level": by_pair,
+        "gear_space_clashes": gear_space,
         "conflicts": conflicts,
         "entry_unknown": entry_unknown,
         "penetrations": penetrations,
-        "box_fill": {"checked": boxes_checked, "over": box_over},
+        "box_fill": {"checked": 0, "over": [], "pending": box_conductors},
         "conductors_upsized": upsized,
         "fill": fill_rows,
         "derated": derated,
@@ -1942,6 +2007,48 @@ fn r3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
 }
 
+/// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
+/// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
+pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
+    let rl = rules();
+    let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
+    let mut boxes: HashMap<String, (String, f64)> = HashMap::new();
+    for e in d.model.iter().filter(|e| super::mepatoms::is_atom(e)) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
+            continue;
+        }
+        let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
+            continue;
+        };
+        boxes.insert(of.to_ascii_uppercase(), (ps.get("size").map(Prop::text).unwrap_or_default(), cu));
+    }
+    let (mut checked, mut over) = (0usize, Vec::new());
+    for p in &pending {
+        let Some((size, cu)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
+        checked += 1;
+        let conds: Vec<(u32, String)> = p["conductors"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
+            .collect();
+        let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
+        if need > cu + 1e-9 && over.len() < MAX_ITEMS {
+            let bigger =
+                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, _)| to.clone());
+            over.push(json!({
+                "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
+                "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
+                "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
+                "fix": bigger.unwrap_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".into()),
+                "source": rl.box_fill.source,
+            }));
+        }
+    }
+    report["box_fill"] = json!({"checked": checked, "over": over});
+}
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
 /// runs and the routed tags come in (the drawn conduit stays as it is).
 pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) {
@@ -1954,7 +2061,7 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) {
         !(r.system == BRANCH_SYSTEM || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c))))
     });
     sp.mep.runs.extend(routed.runs.iter().cloned());
-    sp.tags.retain(|t| !routed_tags.contains(t.id.as_str()));
+    sp.tags.retain(|t| !routed_tags.contains(t.id.as_str()) && !t.id.contains(HOME_PART));
     sp.tags.extend(routed.tags.iter().cloned());
     if !sp.mep.systems.iter().any(|s| s.name == BRANCH_SYSTEM) {
         sp.mep.systems.push(MepSystem {
@@ -1996,6 +2103,86 @@ pub(crate) fn stored_report(d: &Drawing) -> Option<Value> {
     d.embedded.get(REPORT_FILE).and_then(|b| serde_json::from_slice(b).ok())
 }
 
+/// Route the circuits again over the model as it stands now (after the job placed its gear and
+/// feeders, the levels stacked): the routed runs into the stored spec (each level's own plan),
+/// the pieces cut again where the model's are (the stacking move kept on them), the report stored.
+pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
+    const C: &str = "conduit.reroute";
+    let (mut sp, stored) = super::bspec::current(s, C)?;
+    if !stored {
+        return Err(bad(C, "the drawing has no building spec: model.build first"));
+    }
+    if !enabled(s.doc()?) {
+        return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
+    }
+    let t0 = web_time::Instant::now();
+    let routed = route(s.doc()?, &sp);
+    apply(&mut sp, &routed);
+    let d = s.doc_mut()?;
+    // Each level's stacking move (a level's built objects all moved by the same).
+    let mut offsets: BTreeMap<String, Vec2> = BTreeMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).is_some()) {
+        if let Some(l) = super::bspec::made_level(e) {
+            offsets.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+        }
+    }
+    let off_of = |level: &str| offsets.get(&level.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    // The pieces there are now, and their systems: only those are cut again (runs the job built
+    // as whole runs stay whole).
+    let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string()]);
+    let old: Vec<Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::mepatoms::is_atom(e))
+        .inspect(|e| {
+            if let Some(sy) = super::bimlook::made_tag(e, "system") {
+                systems.insert(sy.to_string());
+            }
+        })
+        .map(|e| e.handle)
+        .collect();
+    let mut shifted = sp.clone();
+    shifted.mep.runs.retain(|r| systems.contains(&r.system));
+    // A feeder's entry stubs are cut again only where they were pieces already.
+    shifted.mep.feeders.retain(|f| systems.contains(&f.tag));
+    for r in &mut shifted.mep.runs {
+        let o = off_of(&r.level);
+        r.points.iter_mut().for_each(|p| *p = [p[0] + o.x, p[1] + o.y]);
+    }
+    for e in &mut shifted.mep.equipment {
+        let o = off_of(&e.level);
+        e.min = [e.min[0] + o.x, e.min[1] + o.y];
+        e.max = [e.max[0] + o.x, e.max[1] + o.y];
+    }
+    for h in &old {
+        d.remove_entity(*h);
+    }
+    let before: BTreeSet<Handle> = d.model.handles().into_iter().collect();
+    let atoms = super::mepatoms::build::build(d, &shifted);
+    let made: Vec<Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
+    for h in made {
+        let level = d.model.get(h).and_then(|e| super::bspec::made_level(e)).unwrap_or_default();
+        let o = off_of(&level);
+        if o.len() > 1e-9 {
+            let _ = d.modify_entity(h, |e| e.common.xdata = super::bspec::with_stacked(&e.common.xdata, o).into());
+        }
+    }
+    let mut report = routed.report.clone();
+    check_box_fill(d, &mut report);
+    store_report(d, &report);
+    d.building_spec = Some(sp.to_json());
+    s.touch();
+    Ok(json!({
+        "routed": true, "removed": old.len(), "atoms": atoms["atoms"], "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+        "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
+        "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
+    }))
+}
+
+fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
+    reroute(s)
+}
+
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -2004,6 +2191,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Draw", "BIM", "Conduit Routing Report"])
             .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, box_fill, conductors_upsized, fill, derated, unrouted}")
             .noundo(),
+        CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
+            .menu(&["Draw", "BIM", "Reroute Conduit"])
+            .params("{} → {routed, removed, atoms, seconds, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the estimate's rate), price?: bool (default true)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
@@ -2121,7 +2311,8 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             let ps = props::read(&e.common.xdata);
             let g = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
             let kind = g(super::mepatoms::ATOM_KEY);
-            if kind.is_empty() || super::mepatoms::is_labor_item(&g("item")) {
+            // Field bends are labor, not material: listed (a count where the route turns) all the same.
+            if kind.is_empty() {
                 continue;
             }
             let length = g("length_ft").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0);

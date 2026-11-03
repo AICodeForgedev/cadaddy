@@ -1698,6 +1698,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The electrical runs as their pieces (sticks, fittings, boxes, cable, wire) and the count
     // index (Q6157).
     let atoms = super::mepatoms::build::build(d, &sp_routed);
+    let mut report = routed.report.clone();
+    super::conduitroute::check_box_fill(d, &mut report);
+    super::conduitroute::store_report(d, &report);
     mark("MEP atoms");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);

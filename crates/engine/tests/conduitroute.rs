@@ -53,14 +53,18 @@ fn building(extra: impl FnOnce(&mut Session)) -> (Session, Value) {
         "mep": {
             "systems": [
                 {"name": "SA", "layer": "M-SA", "kind": "duct", "size_in": [12, 6], "bottom_ft": 9.25},
-                {"name": "RA", "layer": "M-RA", "kind": "duct", "size_in": [24, 24], "bottom_ft": 9.0}
+                {"name": "RA", "layer": "M-RA", "kind": "duct", "size_in": [24, 24], "bottom_ft": 9.0},
+                {"name": "CW", "layer": "P-CW", "kind": "pipe", "size_in": [2, 0], "bottom_ft": 8.0}
             ],
             "runs": [
                 // A 6" deep supply duct along y at x = 25': the conduit goes over it.
                 {"system": "SA", "level": "L1", "points": [[300, -60], [300, 400]], "size_in": [12, 6], "bottoms_ft": [9.25], "size_source": "tag", "height_source": "tag"},
                 // A return duct 24" deep from 9' to 11', along x at y = -5' from 0 to 50': it fills
                 // the ceiling space; nothing passes over it or round it within 8'.
-                {"system": "RA", "level": "L1", "points": [[0, -60], [600, -60]], "size_in": [24, 24], "bottoms_ft": [9.0], "size_source": "tag", "height_source": "tag"}
+                {"system": "RA", "level": "L1", "points": [[0, -60], [600, -60]], "size_in": [24, 24], "bottoms_ft": [9.0], "size_source": "tag", "height_source": "tag"},
+                // A cold water pipe over the panel, in its dedicated space (to 6' above its top).
+                {"system": "CW", "level": "L1", "points": [[-14, -120], [-14, -24]], "size_in": [2, 0], "bottoms_ft": [8.0], "size_source": "tag", "height_source": "tag"},
+                {"system": "CW", "level": "L1", "points": [[-14, -24], [-14, 24]], "size_in": [2, 0], "bottoms_ft": [8.0], "size_source": "tag", "height_source": "tag"}
             ],
             "equipment": [
                 {"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
@@ -130,9 +134,20 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     let d = s.doc().expect("doc");
     let gaps = d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count();
     assert_eq!(gaps, 0, "every drop reaches its box");
+    // Box fill checked at every box a raceway enters, against the box it has: none over here
+    // (boxes chained in and out).
+    assert_eq!(r["box_fill"]["checked"], json!(6), "{r}");
+    assert_eq!(r["box_fill"]["over"], json!([]), "{r}");
     // Over the shallow supply duct: no clash there. The deep return duct can't be passed by
     // LP1-3's homerun tap: one clash, with both objects, the clearance and a fix.
-    let clashes = r["clashes"].as_array().cloned().unwrap_or_default();
+    let all = r["clashes"].as_array().cloned().unwrap_or_default();
+    // The pipe over the panel is in its dedicated space: a clash item of its own.
+    let space: Vec<&Value> = all.iter().filter(|c| c["a"]["what"] == json!("gear dedicated space")).collect();
+    assert_eq!(space.len(), 1, "{all:?}");
+    assert_eq!((space[0]["b"]["system"].clone(), space[0]["a"]["gear"].clone()), (json!("CW"), json!("LP1")));
+    assert!(space[0]["fix"].as_str().is_some_and(|f| f.contains("110.26(E)")), "{:?}", space[0]);
+    assert_eq!(r["gear_space_clashes"], json!(1));
+    let clashes: Vec<Value> = all.iter().filter(|c| c["a"]["what"] != json!("gear dedicated space")).cloned().collect();
     assert!(!clashes.is_empty(), "{r}");
     assert!(clashes.iter().all(|c| c["b"]["system"] == json!("RA")), "{clashes:?}");
     let c = &clashes[0];
@@ -142,6 +157,7 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     assert!(c["fix"].as_str().is_some_and(|f| f.contains("offset under it")), "{c}");
     assert_eq!(c["pair"], json!("electrical × mechanical"));
     assert!(r["clashes_by_pair_level"]["electrical × mechanical"]["L1"].as_u64().is_some_and(|n| n >= 1), "{r}");
+    assert_eq!(r["clashes_by_pair_level"]["electrical × plumbing"]["L1"], json!(1), "{r}");
 }
 
 #[test]
@@ -266,4 +282,65 @@ fn routing_can_be_switched_off_and_hostile_params_never_panic() {
         let _ = s.execute("conduit.takeoff", &p);
     }
     assert!(s.execute("model.build", &json!({"route": "yes"})).is_err());
+}
+
+#[test]
+fn rerouting_after_the_build_works_on_stacked_levels_and_is_stable() {
+    // Two storeys drawn side by side (L2's plan 200' east), stacked by the build: L2's circuit
+    // and panel move onto L1's plan; the reroute routes on L2's own plan and cuts the pieces where
+    // the stacked model has them.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let dev = |n: usize, level: &str, x: f64, y: f64, c: &str| {
+        json!({"id": format!("device:{level}:{n}"), "kind": "receptacle", "level": level, "at_ft": [x, y], "fields": {
+            "type": {"value": "A", "source": "plan"}, "symbol": {"value": format!("{:X}", 0x2F0 + n), "source": "plan"},
+            "circuit": {"value": c, "source": "plan"}, "mount_height_in": {"value": "18", "source": "note"}}})
+    };
+    let ckt = |level: &str, label: &str, panel: &str| {
+        json!({"id": format!("circuit:{level}:E-1:{label}"), "kind": "circuit", "level": level, "at_ft": [0.0, 0.0], "fields": {
+            "circuit": {"value": label, "source": "plan"}, "panel": {"value": panel, "source": "plan"},
+            "conductors": {"value": "2#12 + 1#12G", "source": "default"}}})
+    };
+    let spec = json!({
+        "version": 1, "units_per_foot": 12, "stack": true,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "base": [2400, 0]}
+        ],
+        "tags": [dev(1, "L1", 20.0, 10.0, "P1-1"), dev(2, "L1", 30.0, 10.0, "P1-1"), dev(3, "L2", 220.0, 10.0, "P2-1"), dev(4, "L2", 230.0, 10.0, "P2-1"),
+                 ckt("L1", "P1-1", "P1"), ckt("L2", "P2-1", "P2")],
+        "mep": {"equipment": [
+            {"tag": "P1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5},
+            {"tag": "P2", "kind": "panel", "level": "L2", "min": [2376, -6], "max": [2396, 6], "height_ft": 4, "bottom_ft": 2.5}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    assert_eq!(built["conduitRoute"]["circuits"], json!(2), "{built}");
+    let before = count(&mut s, json!({"kind": "conduit"}));
+    let r1 = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    assert_eq!(r1["circuits"], json!(2), "{r1}");
+    assert_eq!(r1["unrouted"], json!(0), "{r1}");
+    let after = count(&mut s, json!({"kind": "conduit"}));
+    assert_eq!(after["count"], before["count"], "{before} {after}");
+    assert!((after["length_ft"].as_f64().unwrap_or(0.0) - before["length_ft"].as_f64().unwrap_or(0.0)).abs() < 0.05);
+    // Every device still has its raceway landing in its box (L2's on the stacked plan).
+    let d = s.doc().expect("doc");
+    let devices: Vec<String> =
+        d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle.hex()).collect();
+    assert_eq!(devices.len(), 4);
+    assert_eq!(d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count(), 0);
+    for h in &devices {
+        let el = s.execute("bim.element", &json!({"handle": h})).expect("element");
+        assert!(el["fed_by"].as_array().is_some_and(|f| !f.is_empty()), "{h}: {el}");
+    }
+    // Again: the same, no doubled homerun tags.
+    let r2 = s.execute("conduit.reroute", &json!({})).expect("again");
+    assert_eq!((r2["atoms"].clone(), r2["routed_ft"].clone()), (r1["atoms"].clone(), r1["routed_ft"].clone()));
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let homes = spec["spec"]["tags"]
+        .as_array()
+        .or_else(|| spec["tags"].as_array())
+        .map_or(0, |t| t.iter().filter(|t| t["id"].as_str().is_some_and(|i| i.contains(":home:"))).count());
+    assert_eq!(homes, 2, "one homerun per panel");
 }

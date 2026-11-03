@@ -90,9 +90,10 @@ fn a_homerun_follows_the_corridor_lanes() {
     let to = Vec2::new(1152.0, 24.0);
     let p = corridor_path(&rects, from, to, UPF).expect("a path");
     assert!(p.windows(2).all(|w| matches!(w, [a, b] if (a.x - b.x).abs() < 1e-6 || (a.y - b.y).abs() < 1e-6)), "{p:?}");
-    // It runs along the first lane's centre (y 528) and the second's (x 1152).
-    assert!(p.iter().any(|q| (q.y - 528.0).abs() < 1e-6), "{p:?}");
-    assert!(p.iter().any(|q| (q.x - 1152.0).abs() < 1e-6), "{p:?}");
+    // It runs along each corridor's branch lane, a quarter of the way across (beside the centre
+    // line the feeders take): y 504 in the first, x 1128 in the second.
+    assert!(p.iter().any(|q| (q.y - 504.0).abs() < 1e-6), "{p:?}");
+    assert!(p.iter().any(|q| (q.x - 1128.0).abs() < 1e-6), "{p:?}");
     assert_eq!(p.first().copied(), Some(from));
     assert_eq!(p.last().copied(), Some(to));
     assert!(corridor_path(&[], from, to, UPF).is_none());

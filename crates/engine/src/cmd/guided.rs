@@ -5261,7 +5261,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     route_methods_step(s, job);
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
-    route_report_step(s, job, &mut result);
     result["left_out"] = json!(left_out);
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
@@ -5375,6 +5374,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["feeders_error"] = json!(e.to_string());
     }
     bim_step(s, job, "feeder routes", t);
+    // The circuits routed again now their panels and feeders stand (Q6152), and what it found.
+    let t = web_time::Instant::now();
+    match s.execute("conduit.reroute", &json!({})) {
+        Ok(v) => progress_line(&format!("  conduit rerouted with the gear placed: {v}")),
+        Err(e) => result["conduit_reroute_error"] = json!(e.to_string()),
+    }
+    route_report_step(s, job, &mut result);
+    bim_step(s, job, "conduit routes", t);
     // Buried work the set issues no plan for: its underground sheets generated.
     let t = web_time::Instant::now();
     if let Err(e) = underground_step(s, job, &pages, &mut result) {
