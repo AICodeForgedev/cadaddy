@@ -280,7 +280,9 @@ pub(crate) fn load(folder: Option<&str>) -> Book {
 
 /// A key's price by the book's rule.
 pub(crate) fn choose(b: &Book, key: &str) -> Option<Chosen> {
-    let all = b.quotes.get(key).filter(|v| !v.is_empty())?;
+    // `a|b`: either of them, their quotes pooled (a web price and an invoice's for one thing).
+    let pooled: Vec<Quote> = key.split('|').filter_map(|k| b.quotes.get(k.trim())).flatten().cloned().collect();
+    let all = Some(&pooled).filter(|v| !v.is_empty())?;
     let current: Vec<&Quote> = all.iter().filter(|q| days_between(&q.date, &b.today).is_some_and(|a| a <= b.rule.stale_days)).collect();
     let pool: Vec<&Quote> = if current.is_empty() { all.iter().collect() } else { current.clone() };
     let mut by_price = pool.clone();
@@ -452,7 +454,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Estimate", "Price Book"]),
         CommandSpec::new("pricebook.set", "Add Material Quote", run_set).params("{key, unit_price?: $ per unit | pack_price + pack_qty, vendor, location?: branch, store or page (one quote per vendor and location), unit?, description?, catalog?, url?, date? (default today), source_type? (QUOTE default; WEB, BOOK, BID), note?, folder?} → {key, unit_price, quotes: n for the key, replaced?: the same vendor and location's earlier quote (kept in history.csv), price: the quote the rule now picks}"),
         CommandSpec::new("pricebook.remove", "Remove Material Quote", run_remove).params("{key, vendor, location?, folder?} → {removed: n (kept in history.csv)}: a local quote out of the book"),
-        CommandSpec::new("pricebook.map", "Map Item to Price", run_map).params("{item: bill-of-materials item, size?, keys?: [price key] (added: a fixture and its trim), exclude?: reason, note?, folder?} → {item, size, keys | exclude}: how a bill-of-materials line is priced from the price book"),
+        CommandSpec::new("pricebook.map", "Map Item to Price", run_map).params("{item: bill-of-materials item, size?, keys?: [price key] (added: a fixture and its trim; `a|b` either of them, their quotes pooled for the rule to pick: a web price and an invoice's), exclude?: reason, note?, folder?} → {item, size, keys | exclude}: how a bill-of-materials line is priced from the price book"),
         CommandSpec::new("pricebook.settings", "Price Book Settings", run_settings).params("{pick?: \"lowest\" (default: the lowest current quote)|\"latest\"|\"median\"|\"vendor\", vendor?: the vendor whose quote `vendor` picks, stale_days?: n (default 180: older quotes count only when no current one is left), folder?} → {pick, vendor, stale_days}: how the book picks a key's price among its quotes"),
         CommandSpec::new("pricebook.import", "Import Price Book", run_import).params("{path: .pdf (a distributor's invoices: each line a quote, maker:product its key, the branch its location) | .xlsx (sheets \"Price List\": key, description, catalog / basis, unit, pack, pack price $, unit price $, source type, vendor / book, location?, URL, price date, note; \"Item Map\": CADaddy item, size, action, price key 1, price key 2, note) or .csv (the quote columns), folder?} → {quotes: {added, updated, kept_newer}, map: n, history: n replaced, folder}: quotes into the local price database (one per key, vendor and location; an older quote than the one held is kept out)"),
     ]
@@ -627,7 +629,7 @@ fn run_map(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "give `keys` (the prices it adds) or `exclude` (why it isn't priced)"));
     }
     let book = load(Some(&dir.to_string_lossy()));
-    if let Some(k) = keys.iter().find(|k| !book.quotes.contains_key(*k)) {
+    if let Some(k) = keys.iter().flat_map(|k| k.split('|')).map(str::trim).find(|k| !book.quotes.contains_key(*k)) {
         return Err(bad(C, format!("no price key {k} (pricebook.set a quote for it first)")));
     }
     let mut map = local_map(&dir);
@@ -976,6 +978,24 @@ mod tests {
         assert_eq!(choose(&b, "dupTR").unwrap().quote.unit_price, 7.90);
         b.rule = Rule { pick: "median".into(), ..Rule::default() };
         assert_eq!(choose(&b, "dupTR").unwrap().quote.unit_price, 8.20);
+        // Either of two keys: their quotes pooled.
+        b.rule = Rule::default();
+        b.quotes.insert(
+            "LEV:TBR20".into(),
+            vec![Quote {
+                key: "LEV:TBR20".into(),
+                unit: "each".into(),
+                unit_price: 6.75,
+                vendor: "CED".into(),
+                location: "Ponder, TX".into(),
+                date: "2026-10-01".into(),
+                source_type: "INVOICE".into(),
+                origin: "local",
+                ..Quote::default()
+            }],
+        );
+        let c = choose(&b, "dupTR|LEV:TBR20").unwrap();
+        assert_eq!((c.quote.vendor.as_str(), c.quote.unit_price, c.quotes), ("CED", 6.75, 5));
     }
 
     #[test]
