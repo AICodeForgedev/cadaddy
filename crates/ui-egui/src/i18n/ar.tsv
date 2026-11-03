@@ -3348,3 +3348,12 @@ menu	View	عرض
 	Count Model Pieces	عدّ قطع النموذج
 	Edit Model Piece	تحرير قطعة النموذج
 	Walk the Feed	تتبّع التغذية
+	Object Forms	نماذج الكائنات
+	Create Object Forms	إنشاء نماذج الكائنات
+	Edit Object Form Field	تحرير حقل نموذج الكائن
+	Record Object Field Value	تسجيل قيمة حقل الكائن
+	Object Form Log	سجل نماذج الكائنات
+	Revert Object Form Change	التراجع عن تغيير نموذج الكائن
+	Promote Object Form to Template	ترقية نموذج الكائن إلى قالب
+	Object Completeness	اكتمال الكائنات
+	Object Form	نموذج الكائن

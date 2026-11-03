@@ -3142,3 +3142,12 @@
 	Count Model Pieces	Подсчитать детали модели
 	Edit Model Piece	Изменить деталь модели
 	Walk the Feed	Пройти по питанию
+	Object Forms	Формы объектов
+	Create Object Forms	Создать формы объектов
+	Edit Object Form Field	Изменить поле формы объекта
+	Record Object Field Value	Записать значение поля объекта
+	Object Form Log	Журнал форм объектов
+	Revert Object Form Change	Отменить изменение формы объекта
+	Promote Object Form to Template	Сделать форму объекта шаблоном
+	Object Completeness	Полнота объектов
+	Object Form	Форма объекта

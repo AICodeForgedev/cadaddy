@@ -3353,3 +3353,12 @@ menu	Modify	수정
 	Count Model Pieces	모델 부재 수 세기
 	Edit Model Piece	모델 부재 편집
 	Walk the Feed	급전 경로 따라가기
+	Object Forms	객체 양식
+	Create Object Forms	객체 양식 만들기
+	Edit Object Form Field	객체 양식 필드 편집
+	Record Object Field Value	객체 필드 값 기록
+	Object Form Log	객체 양식 기록
+	Revert Object Form Change	객체 양식 변경 되돌리기
+	Promote Object Form to Template	객체 양식을 템플릿으로 승격
+	Object Completeness	객체 완성도
+	Object Form	객체 양식
