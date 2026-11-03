@@ -122,6 +122,7 @@ pub mod guided;
 pub mod ifcmodel;
 pub mod ifcref;
 pub mod imagetrace;
+pub mod keynotes;
 pub mod labels;
 pub(crate) mod layout;
 pub mod lightbake;
