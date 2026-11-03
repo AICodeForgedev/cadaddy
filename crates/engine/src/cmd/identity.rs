@@ -188,8 +188,16 @@ fn elements(d: &Drawing, sp: Option<&BuildingSpec>, sheets: &[SheetBox]) -> Vec<
             let field = |k: &str| t.fields.get(k).map(|f| f.value.trim().to_string()).filter(|v| !v.is_empty());
             let ty = field("type").unwrap_or_else(|| t.kind.clone());
             // A device's identity: its type and circuit (a circuit names one run of devices, so
-            // the type and the spot tell them apart).
-            let number = field("circuit").map(|c| format!("{ty} {c}"));
+            // the type and the spot tell them apart), in its room when it has one: two rooms'
+            // devices are two however near (back to back across the wall two guest rooms share,
+            // their panels' circuits named alike).
+            let room = field("room");
+            let in_room = |v: String| match &room {
+                Some(r) => format!("{v} @{r}"),
+                None => v,
+            };
+            let number = field("circuit").map(|c| in_room(format!("{ty} {c}")));
+            let ty = in_room(ty);
             let sheet = field("sheet").and_then(|n| sheets.iter().position(|s| s.number.eq_ignore_ascii_case(&n))).or_else(|| sheet_at(sheets, at));
             out.push(Element {
                 handle: None,
@@ -788,6 +796,55 @@ mod tests {
         let lv = f.iter().find(|x| x["kind"] == "doors_vs_schedule").expect("level 1 short");
         assert_eq!((lv["placed"].as_u64(), lv["scheduled"].as_u64()), (Some(1), Some(6)));
         assert!(schedule_findings(&[], &doors).is_empty(), "no schedule, no findings");
+    }
+
+    /// Two guest rooms' thermostats back to back on the wall they share (inches apart, no circuit)
+    /// and their receptacles on circuits named alike are two each; one room's device read off two
+    /// sheets at one spot is one.
+    #[test]
+    fn two_rooms_devices_at_one_spot_are_two() {
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        let tag = |id: &str, ty: &str, circuit: Option<&str>, room: &str, x: f64| {
+            let mut t = cadaddy_walk3d::tags::ElementTag {
+                id: id.into(),
+                kind: "device".into(),
+                level: "Level 1".into(),
+                at_ft: [x, 10.0],
+                ..Default::default()
+            };
+            t.set("type", ty, "plan");
+            if let Some(c) = circuit {
+                t.set("circuit", c, "plan");
+            }
+            if !room.is_empty() {
+                t.set("room", room, "rule");
+            }
+            t
+        };
+        sp.tags = vec![
+            tag("device:a", "T", None, "101", 41.4),
+            tag("device:b", "T", None, "103", 41.6),
+            tag("device:c", "REC", Some("G-1"), "101", 30.0),
+            tag("device:d", "REC", Some("G-1"), "103", 30.2),
+            tag("device:e", "S", None, "105", 50.0),
+            tag("device:f", "S", None, "105", 50.1),
+        ];
+        let els = elements(&Drawing::default(), Some(&sp), &[]);
+        let items: Vec<IdItem> = els
+            .iter()
+            .map(|el| IdItem {
+                kind: el.kind.clone(),
+                level: el.level.clone(),
+                key: el.number.clone().unwrap_or_default(),
+                sort: el.sort.clone(),
+                at: Some(el.at),
+                sheet: String::new(),
+                rank: 1,
+            })
+            .collect();
+        let (groups, _) = tagid::merge_identities(&items, &|_| 12.0);
+        let gone: usize = groups.iter().map(|g| g.merged.len()).sum();
+        assert_eq!(gone, 1, "only the one room's switch read twice: {groups:?}");
     }
 
     #[test]
