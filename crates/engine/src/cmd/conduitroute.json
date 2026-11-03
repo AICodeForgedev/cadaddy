@@ -98,6 +98,14 @@
     "locknut_od_in": {"0.5": 1.375, "0.75": 1.75, "1.0": 2.0, "1.25": 2.5, "1.5": 2.75, "2.0": 3.375, "2.5": 3.875, "3.0": 4.625, "3.5": 5.25, "4.0": 5.75},
     "source": "locknut/bushing outside diameters by trade size plus 1/2 in between them (company default; manufacturers' data)"
   },
+  "gear": {
+    "kinds": ["panel", "switchboard", "switchgear", "transformer", "disconnect", "load center", "loadcenter", "mcc", "motor control", "meter", "distribution", "ats", "transfer switch"],
+    "working_depth_ft": 3.0,
+    "working_height_ft": 6.5,
+    "dedicated_above_ft": 6.0,
+    "window_margin_in": 1.5,
+    "source": "NEC 110.26(A) working space (3 ft deep for 0-150 V to ground, condition 1; 6-1/2 ft high), 110.26(E)(1) dedicated electrical space (the footprint to 6 ft above the equipment); a window the submittal doesn't give is the box's top less 1-1/2 in margins (derived)"
+  },
   "takeoff": {
     "wire_makeup_ft": 1.0,
     "panel_makeup_ft": 3.0,

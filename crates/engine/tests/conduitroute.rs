@@ -344,3 +344,39 @@ fn rerouting_after_the_build_works_on_stacked_levels_and_is_stable() {
         .map_or(0, |t| t.iter().filter(|t| t["id"].as_str().is_some_and(|i| i.contains(":home:"))).count());
     assert_eq!(homes, 2, "one homerun per panel");
 }
+
+#[test]
+fn a_typical_units_circuit_goes_to_each_units_own_panel() {
+    // Two units 40' apart, each with its own panel of the typical schedule G (G-1A, G-1B), and
+    // circuit G-1 printed in both: two circuits in fact, each routed to its own unit's panel.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let mut tags =
+        vec![receptacle(1, 5.0, 5.0, "G-1"), receptacle(2, 12.0, 5.0, "G-1"), receptacle(3, 45.0, 5.0, "G-1"), receptacle(4, 52.0, 5.0, "G-1")];
+    let mut c = circuit("G-1");
+    c["fields"]["panel"] = json!({"value": "G", "source": "plan"});
+    tags.push(c);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {"equipment": [
+            {"tag": "G-1A", "kind": "panel", "level": "L1", "min": [0, 100], "max": [14, 104], "height_ft": 2, "bottom_ft": 4.5},
+            {"tag": "G-1B", "kind": "panel", "level": "L1", "min": [480, 100], "max": [494, 104], "height_ft": 2, "bottom_ft": 4.5}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(r["homeruns"], json!(2), "{r}");
+    assert_eq!(r["routed_circuits"], json!(2), "{r}");
+    // No joint between the units: each part is its 7' joint (up from one box at 9'-3", down into
+    // the next: about 22') and its homerun (about 18'), some 81' in all; one chain through both
+    // units would add the 33' between them and two more drops (some 110').
+    assert!(r["routed_ft"].as_f64().is_some_and(|f| f > 70.0 && f < 95.0), "{}", r["routed_ft"]);
+    // Their panels' boxes give no conduit area: the top less its margins, asked about.
+    assert_eq!(r["entry_unknown"], json!(["G-1A on L1", "G-1B on L1"]), "{r}");
+    // Rerouting from the stored parts keeps them apart.
+    let again = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    assert_eq!((again["homeruns"].clone(), again["circuits"].clone()), (json!(2), json!(2)), "{again}");
+}

@@ -88,6 +88,18 @@ pub(crate) struct RouteRules {
     pub methods: MethodRules,
     pub firestop: Firestop,
     pub entry: Entry,
+    pub gear: GearRules,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct GearRules {
+    pub kinds: Vec<String>,
+    pub working_depth_ft: f64,
+    pub working_height_ft: f64,
+    pub dedicated_above_ft: f64,
+    pub window_margin_in: f64,
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1034,6 +1046,10 @@ struct Circ {
     panel: String,
     level: String,
     devs: Vec<usize>,
+    /// Its panel, when the circuit was split among a typical panel's copies (one per unit).
+    gear: Option<usize>,
+    /// That panel's tag (its part's id suffix), empty when not split.
+    part: String,
 }
 
 fn field_of<'a>(t: &'a ElementTag, k: &str) -> Option<&'a str> {
@@ -1155,13 +1171,19 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // Each panel's working space (NEC 110.26(A): 3 ft deep before it, 6'-6" high; which side is its
     // front the model doesn't say, so all round): no branch piece through it. A panel's own
     // homerun skips it (by the panel's handle).
-    for g in &gear {
+    let electrical = |g: &GearEl| {
+        sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&g.tag)).is_some_and(|e| {
+            let k = format!("{} {}", e.kind, e.title).to_ascii_lowercase();
+            rl.gear.kinds.iter().any(|w| k.contains(w.as_str()))
+        })
+    };
+    for g in gear.iter().filter(|g| electrical(g)) {
         let floor = sp.level(&g.level).map_or(0.0, |l| l.elevation_ft * upf);
-        let reach = 3.0 * upf;
+        let reach = rl.gear.working_depth_ft.max(0.0) * upf;
         obstacles.entry(g.level.to_ascii_lowercase()).or_default().push(Obs {
             handle: g.handle,
             lo: Vec3::new(g.lo.x - reach, g.lo.y - reach, floor),
-            hi: Vec3::new(g.hi.x + reach, g.hi.y + reach, (floor + 6.5 * upf).max(g.hi.z)),
+            hi: Vec3::new(g.hi.x + reach, g.hi.y + reach, (floor + rl.gear.working_height_ft * upf).max(g.hi.z)),
             category: "working space".into(),
             system: g.tag.clone(),
             trade: "electrical",
@@ -1186,6 +1208,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             panel: field_of(t, "panel").unwrap_or_default().to_string(),
             level: t.level.clone(),
             devs: Vec::new(),
+            gear: None,
+            part: String::new(),
         })
         .collect();
     let mut by_label: HashMap<(String, String), Vec<usize>> = HashMap::new();
@@ -1226,6 +1250,51 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             None => no_tag += 1,
         }
     }
+
+    // -- A circuit of a panel there is one of per unit (`G` → G-101, G-103 …): its devices split
+    // by the nearest copy on their level, each part to its own panel. --
+    let mut split: Vec<Circ> = Vec::new();
+    for c in circs.drain(..) {
+        let up = c.panel.to_ascii_uppercase();
+        let copies: Vec<usize> = gear
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| same_level(&g.level, &c.level) && !up.is_empty() && g.tag.to_ascii_uppercase().starts_with(&format!("{up}-")))
+            .map(|(i, _)| i)
+            .collect();
+        if copies.len() < 2 || c.devs.len() < 2 {
+            split.push(c);
+            continue;
+        }
+        let mut parts: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for di in &c.devs {
+            let Some(dv) = devs.get(*di) else { continue };
+            let near = copies.iter().copied().min_by(|a, b| {
+                let d = |i: usize| gear.get(i).map_or(f64::INFINITY, |g| Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(dv.at));
+                d(*a).total_cmp(&d(*b))
+            });
+            if let Some(g) = near {
+                parts.entry(g).or_default().push(*di);
+            }
+        }
+        if parts.len() < 2 {
+            split.push(c);
+            continue;
+        }
+        for (g, ds) in parts {
+            let tag = gear.get(g).map(|x| x.tag.replace(['/', '#', '@'], "-")).unwrap_or_default();
+            split.push(Circ {
+                tag: c.tag,
+                label: c.label.clone(),
+                panel: c.panel.clone(),
+                level: c.level.clone(),
+                devs: ds,
+                gear: Some(g),
+                part: tag,
+            });
+        }
+    }
+    let circs = split;
 
     // -- What each level gives: floor, ceiling tiers, corridors. --
     let tiers_of = |level: &str| -> (f64, Vec<f64>) {
@@ -1398,17 +1467,18 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let centre = members.iter().fold(Vec2::new(0.0, 0.0), |s, m| s + m.at) * (1.0 / members.len() as f64);
         let room_circuit = tag.id.contains(":room-");
         let panel_up = c.panel.to_ascii_uppercase();
-        let gi = gear
-            .iter()
-            .enumerate()
-            .filter(|(_, g)| {
-                let t = g.tag.to_ascii_uppercase();
-                same_level(&g.level, &c.level) && !panel_up.is_empty() && (t == panel_up || t.starts_with(&format!("{panel_up}-")))
-            })
-            .map(|(i, g)| (i, Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre)))
-            .filter(|(_, dd)| !room_circuit || *dd <= ROOM_PANEL_FT * upf)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(i, _)| i);
+        let gi = c.gear.or_else(|| {
+            gear.iter()
+                .enumerate()
+                .filter(|(_, g)| {
+                    let t = g.tag.to_ascii_uppercase();
+                    same_level(&g.level, &c.level) && !panel_up.is_empty() && (t == panel_up || t.starts_with(&format!("{panel_up}-")))
+                })
+                .map(|(i, g)| (i, Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre)))
+                .filter(|(_, dd)| !room_circuit || *dd <= ROOM_PANEL_FT * upf)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+        });
         let panel_at = gi.and_then(|i| gear.get(i)).map(|g| Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0));
         let pts: Vec<Vec2> = members.iter().map(|m| m.at).collect();
         let root = panel_at
@@ -1416,7 +1486,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             .unwrap_or(0);
         let tree = spanning_tree(&pts, root);
         let size = min_in;
-        let cid = tag.id.clone();
+        // A part of a split circuit is its own (the circuit's id and its panel's).
+        let cid = if c.part.is_empty() { tag.id.clone() } else { format!("{}@{}", tag.id, c.part) };
         let mut leg_n = 0usize;
         let mut tree_len = 0.0;
         let mut edge_ft: Vec<(usize, usize, f64)> = Vec::new();
@@ -1472,6 +1543,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             box_in.entry(c.devs.get(*v).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
         }
         let mut t = tag.clone();
+        if !c.part.is_empty() {
+            t.id = cid.clone();
+            t.set("split_of", tag.id.clone(), "computed");
+            t.set("panel_copy", c.part.clone(), "computed");
+        }
         t.set("route", ROUTED, "computed");
         t.set(
             "conduit",
@@ -1608,7 +1684,25 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut home_pts: Vec<Vec2> = vec![lead_dev.at];
         let mut home_z: Vec<f64> = Vec::new();
         let mut blocked: Vec<Blocked> = Vec::new();
-        let skip = [gear_el.handle];
+        // The panel's own entry raceways (its feeder's, on its top): not in the homerun's way, and
+        // their slots in the window taken.
+        let pad = upf / 6.0;
+        let entries: Vec<Handle> = field
+            .obs
+            .iter()
+            .filter(|o| {
+                matches!(o.category.as_str(), "conduit" | "fitting" | "cable")
+                    && o.lo.x >= gear_el.lo.x - pad
+                    && o.hi.x <= gear_el.hi.x + pad
+                    && o.lo.y >= gear_el.lo.y - pad
+                    && o.hi.y <= gear_el.hi.y + pad
+                    && o.lo.z >= gear_el.hi.z - pad
+            })
+            .map(|o| o.handle)
+            .take(64)
+            .collect();
+        let mut skip = vec![gear_el.handle];
+        skip.extend(entries.iter().copied());
         // The raceway's size comes after the fill: route at the minimum's radius (fill rarely
         // makes a branch homerun more than 1").
         for w in plan.windows(2) {
@@ -1754,7 +1848,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
         // The panel's top entry window: each raceway at its own slot along it.
         let eq = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&gear_el.tag) && same_level(&e.level, &gear_el.level));
-        let window = eq.and_then(|e| e.enclosure.as_ref()).map(|en| en.top_entry_in).filter(|w| w[0] > 0.0 && w[1] > 0.0);
+        let given = eq.and_then(|e| e.enclosure.as_ref()).map(|en| en.top_entry_in).filter(|w| w[0] > 0.0 && w[1] > 0.0);
+        // None given: the box's top less its margins, derived (and asked).
+        let derived = given
+            .is_none()
+            .then(|| {
+                let (dx, dy) = ((gear_el.hi.x - gear_el.lo.x) / upf * 12.0, (gear_el.hi.y - gear_el.lo.y) / upf * 12.0);
+                let m = 2.0 * rl.gear.window_margin_in;
+                [dx.max(dy) - m, dx.min(dy) - m]
+            })
+            .filter(|w| w[0] > 0.0 && w[1] > 0.0);
+        let window = given.or(derived);
         let area_text = eq.and_then(|e| e.properties.get("TOP CONDUIT AREA")).cloned();
         let bottom_fed = eq.and_then(|e| e.properties.get("INCOMING LOCATION")).is_some_and(|v| v.trim().to_ascii_lowercase().starts_with("bottom"));
         let od = rl.entry.locknut_od_in.get(&format!("{size_in:?}")).copied().unwrap_or(size_in + 1.0);
@@ -1763,7 +1867,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             Some([w, dpt]) => {
                 // Slots row by row across the window (W along the box's long side, D across it).
                 let (w_u, d_u) = (w / 12.0 * upf, dpt / 12.0 * upf);
-                let k = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert(0.0);
+                let k = slots_used.entry(lead_h.gear.unwrap_or(usize::MAX)).or_insert(entries.len() as f64);
+                if given.is_none() {
+                    entry_unknown.insert(format!("{} on {}", gear_el.tag, gear_el.level));
+                }
                 let per_row = (w_u / pitch).floor().max(1.0);
                 let rows = (d_u / pitch).floor().max(1.0);
                 let (col, row) = (*k % per_row, (*k / per_row).floor());
@@ -1860,9 +1967,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // the structure) is the electrical installation's; another trade's duct or pipe there is a
     // clash item. --
     let mut gear_space = 0usize;
-    for g in gear.iter().take(MAX_DEVICES) {
+    for g in gear.iter().filter(|g| electrical(g)).take(MAX_DEVICES) {
         let field = fields.get(&g.level.to_ascii_lowercase()).unwrap_or(&empty);
-        let top = g.hi.z + 6.0 * upf;
+        let top = g.hi.z + rl.gear.dedicated_above_ft * upf;
         let mut seen: BTreeSet<Handle> = BTreeSet::new();
         for o in &field.obs {
             let foreign = matches!(o.trade, "mechanical" | "plumbing" | "fire");
@@ -2055,7 +2162,9 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) {
     if routed.runs.is_empty() {
         return;
     }
-    let routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
+    let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
+    // A split circuit's own tag gives way to its parts'.
+    routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
     sp.mep.runs.retain(|r| {
         let c = super::printcond::circuit_of_run(r);
         !(r.system == BRANCH_SYSTEM || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c))))
