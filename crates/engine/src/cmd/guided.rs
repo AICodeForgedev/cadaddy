@@ -5603,6 +5603,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     inventory_step(s, job, &mut result);
     bim_step(s, job, "print inventory", t);
+    // Every kind's object form, and how much of each the model knows (Q6173).
+    let t = web_time::Instant::now();
+    forms_step(s, &mut result);
+    bim_step(s, job, "object forms", t);
     job.audit("stage_run", "pipeline", None, Some(StageName::BimBuild), Some(json!({"built_count": built_count})));
     // The counts are the model's as the stage ends (B4-022: tag identity merges a wall or door
     // read off several sheets into one after the build; the summary kept the build's 2,977
@@ -5720,6 +5724,28 @@ fn inventory_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         "sheets_end_read": summary["sheets_end_read"],
         "sheets_unreadable": summary["sheets_unreadable"],
     });
+}
+
+/// Make the project's object forms (from the templates, a generic form where none fits), add
+/// the fields the documents give that a form lacks, and give the completeness in the stage
+/// result.
+fn forms_step(s: &mut Session, result: &mut Value) {
+    match super::forms::job_pass(s, "job: BIM build") {
+        Ok(f) => {
+            progress_line(&format!(
+                "  object forms: {} kinds ({} new: {} from templates, {} generic), {} fields added from the documents; required fields filled {}% (documented {}%)",
+                f["forms"], f["created"], f["from_template"], f["generic"], f["fields_added"], f["overall"]["pct"], f["overall"]["documented_pct"]
+            ));
+            if let Some(w) = f["next_work"].as_array().filter(|w| !w.is_empty()) {
+                progress_line(&format!(
+                    "  lowest-filled required fields: {}",
+                    w.iter().take(5).filter_map(Value::as_str).collect::<Vec<_>>().join("; ")
+                ));
+            }
+            result["forms"] = f;
+        }
+        Err(e) => progress_line(&format!("  object forms not made: {e}")),
+    }
 }
 
 /// The plan sheets never built into a building level, as `A010: not built: site/civil`.
@@ -13234,6 +13260,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "rules_learned": job.rules.len(),
         "audit_entries": job.audit.len(),
         "inventory": inventory_coverage(s),
+        "completeness": completeness_summary(s),
         "not_built": not_built_sheets(&job).join("; "),
         "placement": placement_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
@@ -13395,8 +13422,25 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
         // From the saved model, not the stage's own count.
         "devices": s.doc().map_or(Value::Null, super::readers::model_device_counts),
         "inventory": inventory_coverage(s),
+        "completeness": completeness_summary(s),
         "placement": placement_summary(job),
         "results": results,
+    })
+}
+
+/// The object forms' fill (overall and per kind, the lowest required fields), when the build
+/// made the project's forms (Q6173).
+fn completeness_summary(s: &Session) -> Value {
+    let Ok(d) = s.doc() else { return Value::Null };
+    if super::forms::stored(d).forms.is_empty() {
+        return Value::Null;
+    }
+    let c = super::forms::completeness(d, &super::forms::Query::default());
+    json!({
+        "overall": c["overall"],
+        "by_kind": c["kinds"].as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v["required_fill_pct"].clone())).collect::<serde_json::Map<_, _>>()).unwrap_or_default(),
+        "next_work": c["next_work"],
+        "more": "bim.completeness gives each kind's fields and levels"
     })
 }
 

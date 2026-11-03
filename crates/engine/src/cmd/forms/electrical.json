@@ -1,0 +1,212 @@
+{
+  "trade": "electrical",
+  "about": "Standard object forms for electrical kinds. Each field: key (the property name the readers store), type (text, number, bool, enum, ref), unit, allowed (enum values), required, when (a condition on the element's other fields: {key, in | not_in | exists} or {any | all: [...]}), aliases (other property names that hold the same value). Editable: a copy in the settings folder's forms/ folder overrides a kind; a project form overrides the template.",
+  "templates": [
+    {
+      "kind": "receptacle",
+      "label": "Receptacle",
+      "aliases": ["outlet"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "submittal"], "note": "submittal number, maker and catalog number"},
+        {"key": "manufacturer", "type": "text", "required": false, "aliases": ["maker"]},
+        {"key": "approved_makers", "type": "text", "required": false},
+        {"key": "color", "type": "text", "required": true},
+        {"key": "configuration", "type": "text", "required": true, "aliases": ["receptacle_type", "nema"], "note": "duplex, quad, single; NEMA configuration"},
+        {"key": "rating", "type": "text", "required": true, "aliases": ["amps", "voltage_rating"], "note": "amps and volts"},
+        {"key": "gfci", "type": "enum", "allowed": ["breaker", "device", "load side", "none", "undecided"], "required": true, "aliases": ["gfci_protection"]},
+        {"key": "protected_by", "type": "text", "required": true, "when": {"key": "gfci", "not_in": ["none", "no"]}, "note": "the GFCI breaker or upstream GFCI device"},
+        {"key": "tamper_resistant", "type": "enum", "allowed": ["yes", "no"], "required": true, "aliases": ["tr"]},
+        {"key": "weather_resistant", "type": "enum", "allowed": ["yes", "no"], "required": true, "when": {"any": [{"key": "wet_location", "in": ["yes", "true", "damp", "wet"]}, {"key": "placement", "in": ["exterior", "outdoor", "outside"]}]}, "note": "damp and wet locations only"},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"], "note": "above the finished floor; its source says where it was read"},
+        {"key": "height_ref", "type": "text", "required": false, "note": "what the height is measured to: center, bottom, top"},
+        {"key": "host_wall", "type": "ref", "required": true, "aliases": ["host"]},
+        {"key": "host_face", "type": "text", "required": true},
+        {"key": "offset_from", "type": "text", "required": false, "note": "the wall the along-wall offset is measured from"},
+        {"key": "offset_along", "type": "number", "unit": "in", "required": false, "aliases": ["offset"]},
+        {"key": "offset_depth", "type": "number", "unit": "in", "required": false},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "breaker_type", "type": "text", "required": true, "aliases": ["breaker"]},
+        {"key": "box_type", "type": "text", "required": false, "aliases": ["box"]},
+        {"key": "mud_ring", "type": "text", "required": false},
+        {"key": "feed", "type": "text", "required": false, "aliases": ["cable", "wiring_method"], "note": "cable or conduit and its size"},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "switch",
+      "label": "Switch / dimmer",
+      "aliases": ["dimmer", "wall_switch"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type", "switch_type"], "note": "single pole, 3-way, 4-way, dimmer"},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "submittal"]},
+        {"key": "color", "type": "text", "required": true},
+        {"key": "dimming", "type": "text", "required": false, "aliases": ["protocol"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "host_wall", "type": "ref", "required": true, "aliases": ["host"]},
+        {"key": "host_face", "type": "text", "required": false},
+        {"key": "switch_leg", "type": "text", "required": true, "aliases": ["control_zone"]},
+        {"key": "controlled_luminaires", "type": "text", "required": false, "aliases": ["controls"]},
+        {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "occupancy_sensor",
+      "label": "Occupancy / vacancy sensor",
+      "aliases": ["sensor"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "submittal"]},
+        {"key": "color", "type": "text", "required": false},
+        {"key": "technology", "type": "text", "required": false, "note": "PIR, dual technology, ultrasonic"},
+        {"key": "mounting", "type": "enum", "allowed": ["wall", "ceiling"], "required": true, "aliases": ["placement"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "switch_leg", "type": "text", "required": true, "aliases": ["control_zone"]},
+        {"key": "circuit", "type": "text", "required": false},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "panel",
+      "label": "Panel / gear",
+      "aliases": ["panelboard", "load_center", "switchboard", "transformer", "disconnect"],
+      "fields": [
+        {"key": "name", "type": "text", "required": true, "aliases": ["panel", "type_mark", "tag"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "submittal"]},
+        {"key": "enclosure", "type": "text", "unit": "in", "required": true, "aliases": ["size"], "note": "width x height x depth; NEMA type"},
+        {"key": "voltage", "type": "text", "required": true, "aliases": ["volts"]},
+        {"key": "phase", "type": "text", "required": true, "aliases": ["phases", "wire"]},
+        {"key": "bus_amps", "type": "number", "unit": "A", "required": true, "aliases": ["bus", "amps"]},
+        {"key": "main", "type": "text", "required": true, "aliases": ["main_size", "main_type"], "note": "main breaker size or main lugs only"},
+        {"key": "aic", "type": "text", "required": false, "aliases": ["kaic"]},
+        {"key": "mounting", "type": "enum", "allowed": ["surface", "flush", "floor"], "required": true},
+        {"key": "fed_from", "type": "text", "required": true, "aliases": ["feeder"]},
+        {"key": "schedule", "type": "text", "required": true, "aliases": ["schedule_sheet"]},
+        {"key": "working_space", "type": "text", "required": false, "note": "clear depth, width and height in front"},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "junction_box",
+      "label": "Box",
+      "aliases": ["box", "outlet_box", "floor_box", "device_box"],
+      "fields": [
+        {"key": "box_type", "type": "text", "required": true, "aliases": ["type", "box"]},
+        {"key": "size", "type": "text", "unit": "in", "required": true},
+        {"key": "depth", "type": "number", "unit": "in", "required": false},
+        {"key": "material", "type": "text", "required": false},
+        {"key": "mud_ring", "type": "text", "required": false},
+        {"key": "host_wall", "type": "ref", "required": false, "aliases": ["host"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "serves", "type": "ref", "required": false, "aliases": ["device"]},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "conduit",
+      "label": "Conduit stick",
+      "aliases": ["conduit_stick", "raceway"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "aliases": ["material", "conduit_type"], "note": "EMT, PVC, RMC, MC"},
+        {"key": "size", "type": "text", "unit": "in", "required": true},
+        {"key": "length", "type": "number", "unit": "ft", "required": true},
+        {"key": "system", "type": "text", "required": true},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["bottom_height"]},
+        {"key": "connections", "type": "text", "required": false, "aliases": ["from", "to"]},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "fitting",
+      "label": "Fitting",
+      "aliases": ["coupling", "connector", "elbow", "conduit_fitting"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "note": "coupling, connector, elbow, strap"},
+        {"key": "size", "type": "text", "unit": "in", "required": true},
+        {"key": "material", "type": "text", "required": true},
+        {"key": "run", "type": "ref", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "cable",
+      "label": "Cable run",
+      "aliases": ["cable_run", "romex", "mc_cable"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "note": "NM, MC, low voltage"},
+        {"key": "conductors", "type": "text", "required": true, "note": "count and size, e.g. 12/2 with ground"},
+        {"key": "length", "type": "number", "unit": "ft", "required": true},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "from", "type": "ref", "required": false},
+        {"key": "to", "type": "ref", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "wire",
+      "label": "Wire",
+      "aliases": ["conductor"],
+      "fields": [
+        {"key": "size", "type": "text", "required": true, "note": "AWG or kcmil"},
+        {"key": "insulation", "type": "text", "required": true, "note": "THHN, XHHW"},
+        {"key": "color", "type": "text", "required": false},
+        {"key": "length", "type": "number", "unit": "ft", "required": true},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "raceway", "type": "ref", "required": false},
+        {"key": "level", "type": "text", "required": false}
+      ]
+    },
+    {
+      "kind": "data_outlet",
+      "label": "Data / TV outlet",
+      "aliases": ["low_voltage_outlet", "telecom_outlet"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "jacks", "type": "text", "required": true, "note": "count and kind of jacks"},
+        {"key": "product", "type": "text", "required": false, "aliases": ["catalog_number", "submittal"]},
+        {"key": "color", "type": "text", "required": false},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "host_wall", "type": "ref", "required": true, "aliases": ["host"]},
+        {"key": "box_type", "type": "text", "required": false, "aliases": ["box", "mud_ring"]},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "equipment_connection",
+      "label": "Equipment connection",
+      "aliases": [],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "serves", "type": "text", "required": true, "aliases": ["equipment"]},
+        {"key": "connection", "type": "text", "required": true, "note": "receptacle, disconnect, junction box, hard wired"},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": false, "aliases": ["height_aff"]},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    }
+  ]
+}
