@@ -423,11 +423,11 @@ const LABEL_FAR_H: f64 = 12.0;
 /// Marks of one view read at most.
 const MAX_VIEW_MARKS: usize = 2_000;
 
-/// Whether a label is a circuit: `G-1`, `LP-3,5`, `G-1,a` (its leg after it), never a sheet
+/// Whether a label is a circuit: `LP-1`, `LP-3,5`, `LP-1,a` (its leg after it), never a sheet
 /// number.
 fn circuit_label(t: &str, sheet_numbers: &BTreeSet<String>) -> Option<(String, Option<char>)> {
     let t = t.trim();
-    // The leg letter after it: `G-1,a`.
+    // The leg letter after it: `LP-1,a`.
     let (head, leg) = match t.rsplit_once(',') {
         Some((h, l)) if l.trim().len() == 1 && l.trim().chars().all(|c| c.is_ascii_lowercase()) => (h.trim(), l.trim().chars().next()),
         _ => (t, None),
@@ -951,7 +951,7 @@ mod tests {
         assert_eq!(tags("4, M ,c"), ["S4:c", "SM:c"]);
         assert_eq!(tags("c"), [":c"]);
         assert!(tags("3,3,a").is_empty(), "the same switch twice is no reading");
-        assert!(tags("G-1,b").is_empty() && tags("1,2,3,4,5,a").is_empty() && tags("3,D").is_empty());
+        assert!(tags("Q-1,b").is_empty() && tags("1,2,3,4,5,a").is_empty() && tags("3,D").is_empty());
     }
 
     fn text(v: &str, at: [f64; 2]) -> TextItem {
