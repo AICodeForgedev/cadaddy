@@ -290,7 +290,8 @@ pub(crate) struct SpecsFound {
 
 /// The project's specifications near a job's documents: in the prints folder and the folders
 /// beside it, and beside the submittals' folder. A folder or file named like a specification or
-/// project manual (`03_Specifications`, `Project Manual.pdf`); else, with `sniff`, the PDF and
+/// project manual (`03_Specifications`, `Project Manual.pdf`; a folder over files named like
+/// one elsewhere, an RFI's attachment); else, with `sniff`, the PDF and
 /// text files there (not the prints themselves, nor the submittals) whose first pages carry CSI
 /// section headers. Searched three folders down, capped; beside a folder that sits in a crowded
 /// one (more than [`MAX_BESIDE`] entries: downloads, a temporary folder), by name only.
@@ -326,6 +327,8 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
     }
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
     let mut out = SpecsFound::default();
+    // Named like a specification: folders (a project's specifications folder), and files.
+    let (mut folders, mut files): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut looked = 0usize;
     // Folders and files to walk: (path, depth, its name counts, may it be opened, how deep).
@@ -333,7 +336,7 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
         roots.into_iter().rev().map(|(p, named, open, deep)| (p, 0, named, open, deep)).collect();
     while let Some((p, depth, named, open, deep)) = stack.pop() {
         looked += 1;
-        if looked > MAX_SEARCHED || out.paths.len() >= MAX_SPEC_FILES {
+        if looked > MAX_SEARCHED || folders.len() + files.len() >= MAX_SPEC_FILES {
             break;
         }
         let k = key(&p);
@@ -351,8 +354,8 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
                 is_doc(&p)
             };
             if has_docs {
-                out.paths.push(p.to_string_lossy().to_string());
-                out.how.push(format!("{}: named like a specification", p.to_string_lossy()));
+                let to = if p.is_dir() { &mut folders } else { &mut files };
+                to.push(p.to_string_lossy().to_string());
                 continue;
             }
         }
@@ -366,7 +369,12 @@ pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: boo
             candidates.push(p);
         }
     }
-    if !out.paths.is_empty() || !sniff {
+    // A specifications folder is the project's specification: files named like one elsewhere
+    // (an RFI's attachment, a product's spec sheet) count only without one.
+    let named = if folders.is_empty() { files } else { folders };
+    if !named.is_empty() || !sniff {
+        out.how = named.iter().map(|p| format!("{p}: named like a specification")).collect();
+        out.paths = named;
         return out;
     }
     let mut opened = 0usize;
@@ -1078,6 +1086,11 @@ PART 1 - GENERAL
         // A folder beside the prints, named like one (any number prefix, any depth of sections).
         let r = tree("beside", &["01 Drawings/E.pdf", "03 Specifications/By Division/26 Electrical/26 27 26 - Wiring Devices.pdf", "RFI/rfi 1.pdf"]);
         assert_eq!(found(&r, "01 Drawings", &[]), ["03 Specifications"]);
+        // A specifications folder over files named like one elsewhere (an RFI's attachment).
+        let r = tree("rfi", &["01 Drawings/E.pdf", "RFI/Open/Attachment A - Spec 26 27 26.pdf", "RFI/pole_spec.pdf", "Specs/26 27 26.pdf"]);
+        assert_eq!(found(&r, "01 Drawings", &[]), ["Specs"]);
+        let r = tree("rfionly", &["01 Drawings/E.pdf", "RFI/Open/Attachment A - Spec 26 27 26.pdf"]);
+        assert_eq!(found(&r, "01 Drawings", &[]), ["RFI/Open/Attachment A - Spec 26 27 26.pdf"], "without a folder, the file named like one");
         // A manual in the prints folder itself, named like one.
         let r = tree("inprints", &["Prints/E.pdf", "Prints/Project Manual.pdf"]);
         assert_eq!(found(&r, "Prints", &[]), ["Prints/Project Manual.pdf"]);
