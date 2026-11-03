@@ -4986,6 +4986,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["keynotes_error"] = json!(e.to_string());
     }
     bim_step(s, job, "keynotes", t);
+    // The feeders' conduit, gear to gear (proposed).
+    let t = web_time::Instant::now();
+    if let Err(e) = feeder_step(s, job, &mut result) {
+        result["feeders_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "feeder routes", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -8427,55 +8433,8 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
             }
         }
     }
-    for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
-        if !sp.mep.systems.iter().any(|y| y.name == name) {
-            sp.mep.systems.push(cadaddy_walk3d::MepSystem {
-                name: name.clone(),
-                layer: name,
-                kind: cadaddy_walk3d::MepKind::Conduit,
-                size_in: [1.0, 0.0],
-                bottom_ft: 9.0,
-                show: true,
-                duct_type: None,
-                color_index: 0,
-            });
-        }
-    }
     let run_count = runs.len();
-    sp.mep.runs.extend(runs.iter().cloned());
-    s.doc_mut()?.building_spec = Some(sp.to_json());
-    // Built: the new boxes and the conduit, moved as the build moved their level.
-    let offsets: BTreeMap<String, Vec2> = {
-        let d = s.doc()?;
-        let mut m = BTreeMap::new();
-        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("room")) {
-            if let Some(l) = super::bspec::made_level(e) {
-                m.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
-            }
-        }
-        m
-    };
-    let d = s.doc_mut()?;
-    let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
-    let _ = super::mep::build_equipment(d, &sp, Some(&new_equipment));
-    let mut part = sp.clone();
-    part.mep.runs = runs;
-    part.mep.terminals.clear();
-    part.mep.equipment.clear();
-    let _ = super::mep::build(d, &part);
-    let made: Vec<cadaddy_doc::Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
-    for h in made {
-        let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
-        let off = level.and_then(|l| offsets.get(&l.to_ascii_lowercase()).copied()).unwrap_or(Vec2::ZERO);
-        if off.len() > 1e-9 {
-            let m = cadaddy_geom::Mat3::translate(off);
-            let _ = d.modify_entity(h, |e| {
-                e.kind.transform(&m);
-                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
-            });
-        }
-    }
-    s.touch();
+    build_new_mep(s, sp, runs, &new_equipment)?;
     let systems: BTreeSet<&str> = boxes.iter().map(|b| b.work.system.as_str()).filter(|v| !v.is_empty()).collect();
     let line = format!(
         "  keynotes: {} boxes ({} on the junction boxes the plans show, {at_tags} added at their tags; systems {:?}); conduit runs {run_count} ({risers} risers)",
@@ -8497,6 +8456,111 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
         );
     }
     result["keynotes"] = json!({"boxes": boxes.len(), "on_devices": on_devices, "added": at_tags, "runs": run_count, "risers": risers});
+    Ok(())
+}
+
+/// The feeders' conduit ([`super::gearbuild::feeder_runs`]): proposed routes gear to gear, built.
+fn feeder_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    if sp.mep.feeders.is_empty() {
+        return Ok(());
+    }
+    // A rerun: the feeders' earlier routes go (their 3D with them when the whole model rebuilds).
+    sp.mep.runs.retain(|r| r.system != super::gearbuild::FEEDER_SYSTEM);
+    let (runs, left) = super::gearbuild::feeder_runs(&sp);
+    let routed: BTreeSet<String> = runs.iter().map(|r| r.source_sheet.clone()).collect();
+    let feet: f64 = runs
+        .iter()
+        .map(|r| {
+            let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+            let flat: f64 = r.points.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt() / upf).sum();
+            flat + r.top_ft.map_or(0.0, |t| (t - r.bottoms_ft.first().copied().unwrap_or(t)).abs())
+        })
+        .sum();
+    let line = format!(
+        "  feeder routes (proposed): {} feeders routed, {} conduit runs, {feet:.0} ft of conduit; not routed {}: {}",
+        routed.len(),
+        runs.len(),
+        left.len(),
+        left.iter().take(6).cloned().collect::<Vec<_>>().join("; ")
+    );
+    let n = runs.len();
+    build_new_mep(s, sp, runs, &BTreeSet::new())?;
+    report_progress(s, json!({"step": "feeder routes"}), &line);
+    s.echo(line);
+    if !left.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} feeders not routed: {}", left.len(), left.iter().take(10).cloned().collect::<Vec<_>>().join("; ")),
+            "a feeder is routed gear to gear when each end is one placed piece of gear",
+            3,
+            vec!["Route them from the riser diagram, or name the panel each one feeds".into()],
+            None,
+            false,
+        );
+    }
+    result["feeder_routes"] = json!({"routed": routed.len(), "runs": n, "feet": feet, "not_routed": left});
+    Ok(())
+}
+
+/// New MEP runs and equipment into the spec and built (the rest of the model kept), moved as the
+/// build moved their level to stack it.
+fn build_new_mep(
+    s: &mut Session,
+    mut sp: cadaddy_walk3d::BuildingSpec,
+    runs: Vec<cadaddy_walk3d::MepRun>,
+    new_equipment: &BTreeSet<String>,
+) -> crate::Result<()> {
+    use cadaddy_geom::Vec2;
+    for name in runs.iter().map(|r| r.system.clone()).collect::<BTreeSet<_>>() {
+        if !sp.mep.systems.iter().any(|y| y.name == name) {
+            sp.mep.systems.push(cadaddy_walk3d::MepSystem {
+                name: name.clone(),
+                layer: name,
+                kind: cadaddy_walk3d::MepKind::Conduit,
+                size_in: [1.0, 0.0],
+                bottom_ft: 9.0,
+                show: true,
+                duct_type: None,
+                color_index: 0,
+            });
+        }
+    }
+    sp.mep.runs.extend(runs.iter().cloned());
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    let offsets: BTreeMap<String, Vec2> = {
+        let d = s.doc()?;
+        let mut m = BTreeMap::new();
+        for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("room")) {
+            if let Some(l) = super::bspec::made_level(e) {
+                m.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+            }
+        }
+        m
+    };
+    let d = s.doc_mut()?;
+    let before: BTreeSet<cadaddy_doc::Handle> = d.model.handles().into_iter().collect();
+    if !new_equipment.is_empty() {
+        let _ = super::mep::build_equipment(d, &sp, Some(new_equipment));
+    }
+    let mut part = sp.clone();
+    part.mep.runs = runs;
+    part.mep.terminals.clear();
+    part.mep.equipment.clear();
+    let _ = super::mep::build(d, &part);
+    let made: Vec<cadaddy_doc::Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
+    for h in made {
+        let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
+        let off = level.and_then(|l| offsets.get(&l.to_ascii_lowercase()).copied()).unwrap_or(Vec2::ZERO);
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    s.touch();
     Ok(())
 }
 
