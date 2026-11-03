@@ -1357,12 +1357,15 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
 /// the face's outward direction (inches; positive: proud of the wall, negative: recessed).
 fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let ps = props::read(&e.common.xdata);
-    let t = ps.get("host_face")?.text();
-    let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-    let out = match v[..] {
-        [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => cadaddy_geom::Vec2::new(x, y) * (1.0 / x.hypot(y)),
-        _ => return None,
-    };
+    // The face's direction is `face_normal` (older models kept it in `host_face`, now the face's name).
+    let out = ["face_normal", "host_face"].iter().find_map(|k| {
+        let t = ps.get(k)?.text();
+        let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(cadaddy_geom::Vec2::new(x, y) * (1.0 / x.hypot(y))),
+            _ => None,
+        }
+    })?;
     let b = cadaddy_doc::entity_bounds(d, e, 0);
     if b.is_empty() {
         return None;
