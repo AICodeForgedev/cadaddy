@@ -624,6 +624,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    let mut landing_ft = 0.0_f64;
     let mut bend_notes: Vec<(usize, [Option<usize>; 2], String, String)> = Vec::new();
     // The box a run end at `p` lands in: on its level, within reach of the box's entry; a box
     // of its own circuit first, else the nearest one no other circuit took.
@@ -712,7 +713,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         // Not moved: the route gives no drop to it; the gap is said for review.
                         gaps.push((ci, end, gap / upf));
                     } else if m.estimated {
+                        let before = super::path_ft(&c.pts, upf);
                         land_on(&mut c.pts, end, entry, upf);
+                        landing_ft += super::path_ft(&c.pts, upf) - before;
                     }
                     *land = Some(Land::Atom(atom));
                     continue;
@@ -969,6 +972,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if a.body_in > 0.0 {
             ps.set("body_in", Prop::new(format!("{}", a.body_in), computed()).with_unit("in"));
         }
+        // Straight up or down (a drop in a wall's cavity, its fittings).
+        let dir = a.b - a.a;
+        if a.path.is_empty() && dir.len() > 1e-9 && dir.z.abs() > 0.9 * dir.len() {
+            ps.set("vertical", Prop::new("true", computed()));
+        }
         if a.angle_deg > 0.0 {
             ps.set("angle_deg", Prop::new(format!("{}", a.angle_deg), computed()).with_unit("deg"));
         }
@@ -1098,12 +1106,49 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "openEnds": open_ends,
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
+        "landingFt": (landing_ft * 10.0).round() / 10.0,
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
         "atomIndexRows": rows,
         "atomsMs": (started.elapsed().as_secs_f64() * 1000.0).round(),
         "atomNotes": notes,
     })
+}
+
+/// The plaster rings as their devices' walls need them (`mud_ring`, which `bim.props.fill`
+/// reads from the partition legend after the build, or a person sets): each ring's depth and
+/// size from its box's device. How many changed.
+pub(crate) fn sync_rings(d: &mut Drawing) -> usize {
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    for e in d.model.iter().take(super::MAX_ELEMENTS) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::ATOM_KEY).map(Prop::text).as_deref() != Some("ring") {
+            continue;
+        }
+        let device = super::connects_of(e)
+            .into_iter()
+            .filter_map(|b| d.model.get(b))
+            .find_map(|b| props::read(&b.common.xdata).get("box_of").map(Prop::text).and_then(|h| Handle::parse_hex(h.trim())))
+            .and_then(|h| d.model.get(h));
+        let Some(dev) = device else { continue };
+        let dps = props::read(&dev.common.xdata);
+        let Some(ring) = dps.get("mud_ring") else { continue };
+        let Some(depth) = ring.text().trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v < 6.0) else { continue };
+        let now = ps.get("depth_in").map(Prop::text).and_then(|t| t.parse::<f64>().ok());
+        if now.is_some_and(|v| (v - depth).abs() < 1e-6) {
+            continue;
+        }
+        let rl = rules();
+        let mut ps2 = ps.clone();
+        ps2.set("depth_in", Prop::new(format!("{depth}"), ring.source.clone()).with_unit("in"));
+        ps2.set("size", Prop::new(format!("{}, {} deep", rl.ring.size, super::super::walltypes::frac(depth)), ring.source.clone()));
+        changes.push((e.handle, ps2));
+    }
+    let n = changes.len();
+    for (h, ps) in changes {
+        let _ = d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &ps).into());
+    }
+    n
 }
 
 /// What a run end lands in.

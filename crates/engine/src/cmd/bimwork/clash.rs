@@ -212,7 +212,12 @@ fn meet(d: &Drawing, a: &El, b: &El, tol: f64, clearance: f64, cache: &mut BTree
 
 /// Elements that join or are hosted: never clashes.
 fn exempt(a: &El, b: &El, hosted: bool) -> bool {
-    let mep = |e: &El| matches!(e.category.as_str(), "duct" | "pipe" | "conduit" | "tray" | "cable" | "fitting" | "terminal" | "equipment");
+    let mep = |e: &El| {
+        matches!(
+            e.category.as_str(),
+            "duct" | "pipe" | "conduit" | "tray" | "cable" | "fitting" | "terminal" | "equipment" | "box" | "support" | "wire"
+        )
+    };
     if mep(a) && mep(b) && !a.system.is_empty() && a.system == b.system {
         return true;
     }
@@ -224,7 +229,7 @@ fn exempt(a: &El, b: &El, hosted: bool) -> bool {
         return true;
     }
     let host = |e: &El| e.trade == "architecture" && matches!(e.category.as_str(), "wall" | "ceiling" | "floor");
-    let guest = |e: &El| matches!(e.category.as_str(), "device" | "terminal");
+    let guest = |e: &El| matches!(e.category.as_str(), "device" | "terminal") || e.in_wall;
     (host(a) && guest(b)) || (host(b) && guest(a))
 }
 
@@ -258,6 +263,7 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
     });
     let mut out = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut run_pairs: BTreeMap<String, usize> = BTreeMap::new();
     let mut cache: BTreeMap<Handle, (Vec<Tri>, bool)> = BTreeMap::new();
     let mut tested = 0usize;
     let mut active: Vec<usize> = Vec::new();
@@ -279,6 +285,18 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
             if seen.contains(&id) {
                 continue;
             }
+            // A run's pieces against one element: one clash, named by a stick of the run where
+            // one meets it (else the piece that does).
+            let side = |x: &El| if x.run.is_empty() { x.handle.hex() } else { format!("run:{}", x.run) };
+            let pair = if side(e) <= side(o) { format!("{}|{}", side(e), side(o)) } else { format!("{}|{}", side(o), side(e)) };
+            let by_run = !e.run.is_empty() || !o.run.is_empty();
+            let had = by_run.then(|| run_pairs.get(&pair).copied()).flatten();
+            let stick = |x: &El| !x.run.is_empty() && x.category == "conduit";
+            if let Some(k) = had
+                && (out.get(k).is_some_and(|f: &Found| stick(&f.a) || stick(&f.b)) || !(stick(e) || stick(o)))
+            {
+                continue;
+            }
             // The `a` side first.
             let (x, y) = if ab { (e, o) } else { (o, e) };
             if let Some(hard) = meet(d, x, y, tol, clearance, &mut cache) {
@@ -286,7 +304,16 @@ fn detect(d: &Drawing, els: &[El], sa: &[String], sb: Option<&[String]>, tol: f6
                 let hi = Vec3::new(x.hi.x.min(y.hi.x), x.hi.y.min(y.hi.y), x.hi.z.min(y.hi.z));
                 let depth = (hi.x - lo.x).min(hi.y - lo.y).min(hi.z - lo.z);
                 seen.insert(id.clone());
-                out.push(Found { id, hard, a: x.clone(), b: y.clone(), at: (lo + hi) * 0.5, depth });
+                let f = Found { id, hard, a: x.clone(), b: y.clone(), at: (lo + hi) * 0.5, depth };
+                match had.and_then(|k| out.get_mut(k)) {
+                    Some(old) => *old = f,
+                    None => {
+                        if by_run {
+                            run_pairs.insert(pair, out.len());
+                        }
+                        out.push(f);
+                    }
+                }
             }
         }
         active.push(i);
@@ -566,11 +593,17 @@ fn run_fix(s: &mut Session, p: &Value) -> Result<Value> {
         "id": id, "mover": mover.json(), "stays": stays.json(), "why": why, "strategy": strategy, "how": how,
         "move": [r3(mv.x), r3(mv.y), r3(mv.z)], "move_in": r3(mv.len() / inch), "new_clashes_expected": expect_new, "applied": false,
     });
+    // A piece of a run moves with its run (its sticks, fittings, straps and wire).
+    let movers: Vec<Handle> =
+        if mover.run.is_empty() { vec![mover.handle] } else { els.iter().filter(|e| e.run == mover.run).map(|e| e.handle).take(100_000).collect() };
+    out["pieces_moved"] = json!(movers.len());
     if bool_or(p, "approve", false) {
         let m = Mat4 { m: [[1.0, 0.0, 0.0, mv.x], [0.0, 1.0, 0.0, mv.y], [0.0, 0.0, 1.0, mv.z], [0.0, 0.0, 0.0, 1.0]] };
-        s.doc_mut()?.modify_entity(mover.handle, |e| {
-            e.kind.transform3(&m);
-        })?;
+        for h in &movers {
+            s.doc_mut()?.modify_entity(*h, |e| {
+                e.kind.transform3(&m);
+            })?;
+        }
         // Check again: the pair, and the moved element against the rest.
         let d = s.doc()?;
         let els = solid_elements(d);
@@ -649,6 +682,8 @@ mod tests {
             level: String::new(),
             lo: Vec3::ZERO,
             hi: Vec3::ZERO,
+            run: String::new(),
+            in_wall: false,
         };
         let conduit = el("electrical", "conduit", "E-COND");
         let duct = el("mechanical", "duct", "M-SUPPLY");

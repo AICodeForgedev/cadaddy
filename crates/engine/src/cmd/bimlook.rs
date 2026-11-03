@@ -323,6 +323,20 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
             "equipment" => ("equipment", "Equipment"),
             _ => ("equipment", "Equipment"),
         };
+        // A piece of a run (Q6157): its category by what it is, its type what it is bought as.
+        if let Some(piece) = mpart.strip_prefix("atom:") {
+            let category = match piece {
+                "conduit" => noun.to_string(),
+                "box" | "ring" => "Boxes".into(),
+                "strap" => format!("{noun} Supports"),
+                "cable" => "Cable".into(),
+                "wire" => "Wire".into(),
+                "bend" => format!("{noun} Bends"),
+                _ => format!("{noun} Fittings"),
+            };
+            let ty = own_type.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| title(piece));
+            return mk(key, &category, sized(&ty));
+        }
         if let Some(term) = mpart.strip_prefix("terminal:") {
             let (key, cat) = match kind.as_str() {
                 "duct" => ("terminals", "Air Terminals"),
@@ -883,6 +897,13 @@ fn span(pts: &[Vec3], flat: bool) -> f64 {
 }
 
 fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
+    // A piece of a run knows its own length (a bent stick's, a cable's along its path).
+    if super::mepatoms::is_atom(e)
+        && let Some(l) =
+            cadaddy_doc::props::read(&e.common.xdata).get("length_ft").and_then(|p| p.text().parse::<f64>().ok()).filter(|v| v.is_finite())
+    {
+        return json!({ "count": 1, "length_ft": (l * 100.0).round() / 100.0 });
+    }
     let EntityKind::Mesh(m) = &e.kind else { return json!({ "count": 1 }) };
     let pts: Vec<Vec3> = m.vertices.iter().take(200_000).copied().filter(|p| p.is_finite()).collect();
     let (z0, z1) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
@@ -1105,7 +1126,7 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let place = placement(s, &e, &c);
-    let piece = super::mepatoms::element_detail(s.doc()?, &e);
+    let piece = super::mepatoms::element_detail(s.doc()?, &e, upf);
     let mut out = json!({
         "handle": hex,
         "trade": c.key,
@@ -1136,9 +1157,6 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
                 o.extend(x);
             }
         }
-    }
-    if let Some(f) = out.get("host").and_then(super::mepatoms::face_offset) {
-        out["wall_face"] = f;
     }
     if bool_or(p, "open_source", false) {
         let Some(se) = src else { return Err(bad(CMD, format!("{hex} has no source object on the sheet"))) };

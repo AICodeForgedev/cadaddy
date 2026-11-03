@@ -3,7 +3,8 @@
 //! connects to, and counts are lookups in the model's stored index.
 
 use cadaddy_engine::Session;
-use cadaddy_engine::doc::Drawing;
+use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line};
+use cadaddy_engine::geom::Vec3;
 use serde_json::{Value, json};
 
 /// A made-up one-storey building: panel LP1 (fed from MDP), a drawn 37' run of 1" conduit, and
@@ -246,4 +247,61 @@ fn hostile_count_and_chain_params_never_panic() {
     }
     let r: Value = s.execute("bim.count", &json!({"kind": "nothing-like-this"})).expect("count");
     assert_eq!(r["count"], json!(0));
+}
+
+fn wall_line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
+    let p = |(x, y): (f64, f64)| Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+    let h = Handle(d.handseed.max(0x100));
+    d.handseed = h.0 + 1;
+    let mut e = Entity::new(h, EntityKind::Line(Line { a: p(a), b: p(b) }));
+    e.common.layer = "A-WALL".into();
+    d.model.push(e);
+}
+
+#[test]
+fn a_wall_box_takes_its_ring_and_the_ring_follows_the_wall() {
+    // A 20' x 10' room of 6" walls; a receptacle on its south wall on circuit LP1-3.
+    let mut d = Drawing::new_imperial();
+    let o = [((0., 0.), (20., 0.)), ((20., 0.), (20., 10.)), ((20., 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let i = [((0.5, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    for (a, b) in o.into_iter().chain(i) {
+        wall_line(&mut d, a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [{"id": "device:L1:5.0,0.8", "kind": "receptacle", "level": "L1", "at_ft": [5.0, 0.8], "fields": {
+            "type": {"value": "A", "source": "plan"}, "symbol": {"value": "1F0", "source": "plan"},
+            "sheet": {"value": "E-101", "source": "plan"}, "circuit": {"value": "LP1-3", "source": "plan"}
+        }}]
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let ring = count(&mut s, json!({"kind": "ring", "group_by": "size"}));
+    assert_eq!(ring["count"], json!(1), "a 4\" square box on a wall takes a 1 gang ring: {ring}");
+    assert_eq!(ring["rows"][0]["size"], json!("1 gang, 1/2\" deep"), "{ring}");
+    // The device: in its box, its face against the wall's.
+    let dev = {
+        let d = s.doc().expect("doc");
+        d.model.iter().find(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle.hex()).expect("device")
+    };
+    let el = s.execute("bim.element", &json!({"handle": dev})).expect("element");
+    assert!(el["box"]["handle"].is_string(), "{el}");
+    // Set on the wall's face: its back flush with it.
+    assert_eq!(el["wall_face"]["as"], json!("flush"), "{el}");
+    assert!(el["wall_face"]["inches"].as_f64().is_some_and(|v| v.abs() < 0.125), "{el}");
+    // A person says the wall's board needs a 5/8" ring: the fill carries it onto the ring.
+    s.execute("bim.props.set", &json!({"handle": dev, "key": "mud_ring", "value": 0.625, "unit": "in"})).expect("set");
+    s.execute("bim.props.fill", &json!({})).expect("fill");
+    let ring = count(&mut s, json!({"kind": "ring", "group_by": "size", "verify": true}));
+    assert_eq!(ring["rows"][0]["size"], json!("1 gang, 5/8\" deep"), "{ring}");
+    assert_eq!(ring["verify"]["matches"], json!(true), "{ring}");
+    let bom = s.execute("bim.bom", &json!({})).expect("bom");
+    let rings: Vec<&Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["item"] == json!("Plaster ring")).collect();
+    assert_eq!(rings.len(), 1, "{rings:?}");
+    assert_eq!(rings[0]["size"], json!("1 gang, 5/8\" deep"));
 }

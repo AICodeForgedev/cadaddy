@@ -1251,8 +1251,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
             changed += 1;
         }
     }
-    // The count index follows (a device's room, Q6157).
+    // The pieces follow (Q6157): a wall box's ring by its wall, and the count index (a device's
+    // room, a ring's size).
     if changed > 0 && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        super::mepatoms::build::sync_rings(d);
         super::mepatoms::reindex(d);
     }
     filled.retain(|_, m| !m.is_empty());

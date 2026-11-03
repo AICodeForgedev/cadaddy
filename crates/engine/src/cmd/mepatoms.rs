@@ -49,10 +49,10 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|<device kind> (receptacle, switch, luminaire…), size?: 1\"|#12|4\" square, type?: EMT|NM 12/2|THHN… (part of the type), level?, room?, circuit?: D-7, system?, group_by?: kind|size|type|level|room|circuit|system, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), rows?: [{<group_by>, count, length_ft}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, or a device kind (receptacle, switch, luminaire and the like), size?: trade or conductor size (1\", #12, 4\" square), type?: part of the type (EMT, NM 12/2, THHN), level?, room?, circuit?: panel and circuit (D-7), system?, group_by?: kind|size|type|level|room|circuit|system, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), rows?: [{value of the group_by dimension, count, length_ft, estimated}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
-            .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {…}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
+            .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
             .params("{handle, limit?: elements (2000)} → {from, path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
             .noundo(),
@@ -1353,9 +1353,42 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// How a device stands against the face of its wall: its back's distance from the face along
+/// the face's outward direction (inches; negative: recessed into the wall).
+fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
+    let ps = props::read(&e.common.xdata);
+    let t = ps.get("host_face")?.text();
+    let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+    let out = match v[..] {
+        [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => cadaddy_geom::Vec2::new(x, y) * (1.0 / x.hypot(y)),
+        _ => return None,
+    };
+    let b = cadaddy_doc::entity_bounds(d, e, 0);
+    if b.is_empty() {
+        return None;
+    }
+    let level = super::bspec::made_level(e).unwrap_or_default();
+    let walls = super::propfill::wall_footprints(d);
+    let centre = b.center();
+    let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf)?;
+    // Its depth across the face, and its back: the side toward the wall.
+    let depth = (b.max - b.min).dot(cadaddy_geom::Vec2::new(out.x.abs(), out.y.abs()));
+    let back = centre - out * (depth / 2.0);
+    let off = (back - f.at).dot(f.out) / upf * 12.0;
+    let r = (off * 100.0).round() / 100.0;
+    let as_ = if off.abs() < 0.125 {
+        "flush"
+    } else if off > 0.0 {
+        "proud"
+    } else {
+        "recessed"
+    };
+    Some(json!({ "inches": r, "as": as_, "wall": f.wall.hex() }))
+}
+
 /// What `bim.element` adds for an atom or a device: what it is as a piece, and its
-/// neighbours; a device's box and what feeds it.
-pub(crate) fn element_detail(d: &Drawing, e: &Entity) -> Option<Value> {
+/// neighbours; a device's box and what feeds it, and how it stands on its wall's face.
+pub(crate) fn element_detail(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let ps = props::read(&e.common.xdata);
     let t = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
     let neighbours = |hs: &[Handle]| -> Vec<Value> { hs.iter().take(64).filter_map(|h| d.model.get(*h)).map(|n| node_json(n)).collect() };
@@ -1398,26 +1431,17 @@ pub(crate) fn element_detail(d: &Drawing, e: &Entity) -> Option<Value> {
         return Some(j);
     }
     let boxed = ps.get("box").map(Prop::text).and_then(|b| Handle::parse_hex(b.trim()));
-    boxed.map(|b| {
-        let fed: Vec<Handle> =
-            ps.get("fed_by").map(Prop::text).map(|t| t.split([',', ' ']).filter_map(Handle::parse_hex).take(16).collect()).unwrap_or_default();
-        json!({ "box": d.model.get(b).map(|n| node_json(n)), "fed_by": neighbours(&fed) })
-    })
-}
-
-/// A device's face as built against its wall: how far its back stands off the wall's face
-/// (inches; negative: recessed into it).
-pub(crate) fn face_offset(host: &Value) -> Option<Value> {
-    let off = host.get("off_face_in").and_then(Value::as_f64)?;
-    let r = (off * 100.0).round() / 100.0;
-    let as_ = if off.abs() < 0.25 {
-        "flush"
-    } else if off > 0.0 {
-        "proud"
-    } else {
-        "recessed"
-    };
-    Some(json!({ "inches": r, "as": as_ }))
+    let face = wall_face_of(d, e, upf);
+    if boxed.is_none() && face.is_none() {
+        return None;
+    }
+    let fed: Vec<Handle> =
+        ps.get("fed_by").map(Prop::text).map(|t| t.split([',', ' ']).filter_map(Handle::parse_hex).take(16).collect()).unwrap_or_default();
+    let mut j = json!({ "box": boxed.and_then(|b| d.model.get(b)).map(|n| node_json(n)), "fed_by": neighbours(&fed) });
+    if let Some(f) = face {
+        j["wall_face"] = f;
+    }
+    Some(j)
 }
 
 /// Mark a source kind a rule (`company default`) as `default`, a code citation as `code`.
