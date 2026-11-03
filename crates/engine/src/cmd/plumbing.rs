@@ -264,8 +264,8 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     for (i, p) in pipes.iter().enumerate() {
         let (x0, y0) = key(p.b.min);
         let (x1, y1) = key(p.b.max);
-        for x in x0..=x1.min(x0 + 64) {
-            for y in y0..=y1.min(y0 + 64) {
+        for x in x0..=x1.min(x0.saturating_add(64)) {
+            for y in y0..=y1.min(y0.saturating_add(64)) {
                 grid.entry((p.level.clone(), x, y)).or_default().push(i);
             }
         }
@@ -275,7 +275,7 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let mut best: Option<(f64, usize)> = None;
         for dx in -1..=1 {
             for dy in -1..=1 {
-                for &i in grid.get(&(level.to_string(), kx + dx, ky + dy)).into_iter().flatten() {
+                for &i in grid.get(&(level.to_string(), kx.saturating_add(dx), ky.saturating_add(dy))).into_iter().flatten() {
                     let Some(p) = pipes.get(i) else { continue };
                     if !ok(p) {
                         continue;

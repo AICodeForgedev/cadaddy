@@ -80,8 +80,8 @@ fn cells(a: Vec2, b: Vec2, pad: f64, cell: f64) -> impl Iterator<Item = (i64, i6
     let y0 = ((lo.y - pad) / cell).floor() as i64;
     let y1 = ((hi.y + pad) / cell).floor() as i64;
     // A very long edge spans many cells: capped (it is still found from its partners' cells).
-    let x1 = x1.min(x0 + 256);
-    let y1 = y1.min(y0 + 256);
+    let x1 = x1.min(x0.saturating_add(256));
+    let y1 = y1.min(y0.saturating_add(256));
     (x0..=x1).flat_map(move |x| (y0..=y1).map(move |y| (x, y)))
 }
 
@@ -260,7 +260,7 @@ pub(crate) fn paths(mids: &[Middle], upf: f64) -> Vec<(Vec<Vec2>, Vec<usize>)> {
         let mut best: Option<(f64, usize, bool)> = None;
         for dx in -1..=1 {
             for dy in -1..=1 {
-                for &(i, at_b) in ends.get(&(kx + dx, ky + dy)).into_iter().flatten() {
+                for &(i, at_b) in ends.get(&(kx.saturating_add(dx), ky.saturating_add(dy))).into_iter().flatten() {
                     if used.get(i).copied().unwrap_or(true) {
                         continue;
                     }
