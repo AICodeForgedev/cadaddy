@@ -1748,7 +1748,7 @@ pub(crate) fn spec_doc(file: &str, text: &str) -> Doc {
     text_doc(&name, SourceTier::Spec, trade, text)
 }
 
-/// A submittal file's document: its trade by the section number in its name (`#283111-2`), else
+/// A submittal file's document: its trade by the section number in its name (`#283100-1`), else
 /// its words (`Fire Alarm`).
 pub(crate) fn submittal_doc(file: &str, text: &str) -> Doc {
     let r = rules();
