@@ -4511,6 +4511,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
                 // the equipment the room's mechanical plan puts there, not a device of its own.
                 let reach = CONNECT_REACH_FT * upf_dev;
+                // Equipment in a unit room no plan connects (its feed only a keynote): its
+                // connection on the circuit the room's panel schedule names it on.
+                let scheduled = scheduled_connections(&sp, &stamped);
+                if !scheduled.is_empty() {
+                    progress_line(&format!("  equipment connections from the unit panel's schedule: {}", scheduled.len()));
+                    stamped.extend(scheduled);
+                }
                 let mut connected = connect_to_equipment(&sp.mep.equipment, &mut stamped, reach);
                 room_panels = panels;
                 panel_rooms = rooms;
@@ -7097,6 +7104,54 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
         moved += 1;
     }
     moved
+}
+
+/// Each unit room's equipment (PTAC, exhaust fan) that no device connects: a connection on the
+/// circuit the typical panel's schedule names it on (`GUESTROOM PTAC-1` on 13, two poles:
+/// `G-13,15`), placed at the equipment by [`connect_to_equipment`].
+fn scheduled_connections(sp: &cadaddy_walk3d::BuildingSpec, devices: &[super::readers::ReadDevice]) -> Vec<super::readers::ReadDevice> {
+    // The typical panel (one schedule for many rooms) when there is one.
+    let typical: Vec<&cadaddy_walk3d::PanelSchedule> = sp.mep.panel_schedules.iter().filter(|p| p.typical_of.is_some()).collect();
+    let [panel] = typical.as_slice() else { return Vec::new() };
+    let words = |kind: &str| -> &'static [&'static str] {
+        match kind {
+            "ptac" => &["PTAC"],
+            "exhaust_fan" => &["EXHAUST FAN", "BATH FAN"],
+            _ => &[],
+        }
+    };
+    let mut out = Vec::new();
+    for e in sp.mep.equipment.iter().take(MAX_STAMPED) {
+        let Some(room) = e.properties.get("room").filter(|r| !r.is_empty()) else { continue };
+        let tag = match e.kind.as_str() {
+            "ptac" => "PTAC",
+            "exhaust_fan" => "EF",
+            _ => continue,
+        };
+        // Connected already: a connection of its kind in its room.
+        if devices.iter().chain(&out).any(|dv| dv.room == *room && dv.tag.to_ascii_uppercase().starts_with(tag)) {
+            continue;
+        }
+        let Some(c) = panel.circuits.iter().find(|c| {
+            let up = c.description.to_ascii_uppercase();
+            words(&e.kind).iter().any(|w| up.contains(w)) && !c.number.trim().is_empty()
+        }) else {
+            continue;
+        };
+        let Ok(n) = c.number.trim().parse::<u32>() else { continue };
+        let poles: Vec<String> = (0..c.poles.clamp(1, 3)).map(|i| (n + 2 * i).to_string()).collect();
+        out.push(super::readers::ReadDevice {
+            tag: tag.into(),
+            at: [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0],
+            sheet: panel.source.clone(),
+            level: e.level.clone(),
+            circuit: format!("{}-{}", panel.panel, poles.join(",")),
+            room: room.clone(),
+            kind_source: format!("panel {} schedule circuit {}: {}", panel.panel, c.number, c.description),
+            ..super::readers::ReadDevice::default()
+        });
+    }
+    out
 }
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
@@ -13627,6 +13682,40 @@ mod tests {
         assert_eq!(moved, 1);
         let at = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| d.at);
         assert_eq!((at("A1"), at("B2")), (Some([10.0, 10.0]), Some([1010.0, 10.0])));
+    }
+
+    /// A unit's PTAC no plan connects (its feed only a keynote) takes its connection on the circuit
+    /// the typical panel's schedule names it on; a fan the plans connect gets no second one.
+    #[test]
+    fn a_unit_ptac_is_connected_on_its_panel_schedules_circuit() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        sp.mep.panel_schedules = vec![cadaddy_walk3d::PanelSchedule {
+            panel: "G".into(),
+            typical_of: Some(124),
+            source: "E-2".into(),
+            circuits: vec![
+                cadaddy_walk3d::PanelCircuit { number: "11".into(), description: "RANGE EXHAUST (ADA ONLY)".into(), poles: 1, ..Default::default() },
+                cadaddy_walk3d::PanelCircuit { number: "13".into(), description: "GUESTROOM PTAC-1".into(), poles: 2, ..Default::default() },
+            ],
+            ..Default::default()
+        }];
+        let unit = |kind: &str, at: f64| {
+            let mut e = cadaddy_walk3d::MepEquipment {
+                kind: kind.into(),
+                level: "Level 2".into(),
+                min: [at, 0.0],
+                max: [at + 40.0, 12.0],
+                ..Default::default()
+            };
+            e.properties.insert("room".into(), "202".into());
+            e
+        };
+        sp.mep.equipment = vec![unit("ptac", 100.0), unit("exhaust_fan", 300.0)];
+        let fan = super::super::readers::ReadDevice { tag: "EF".into(), room: "202".into(), ..Default::default() };
+        let got = scheduled_connections(&sp, &[fan]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!((got[0].tag.as_str(), got[0].circuit.as_str(), got[0].room.as_str(), got[0].at), ("PTAC", "G-13,15", "202", [120.0, 6.0]));
+        assert!(got[0].kind_source.contains("GUESTROOM PTAC-1"));
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
