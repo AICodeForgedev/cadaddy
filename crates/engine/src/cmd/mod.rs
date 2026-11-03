@@ -196,6 +196,7 @@ pub mod valueeng;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
+pub mod walllayout;
 pub(crate) mod walltypes;
 pub use props::MatchProps;
 pub(crate) use props::{current_color_value, set_current_color_value};
@@ -866,6 +867,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(elemprops::specs());
         v.extend(forms::specs());
         v.extend(propfill::specs());
+        v.extend(walllayout::specs());
         v.extend(propuse::specs());
         v.extend(identity::specs());
         v.extend(inventory::specs());
