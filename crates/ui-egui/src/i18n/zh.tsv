@@ -3444,3 +3444,6 @@
 	Promote Object Form to Template	将对象表单提升为模板
 	Object Completeness	对象完整度
 	Object Form	对象表单
+Wall Faces	墙面
+Place Devices on Wall Faces	将设备放置在墙面上
+Devices Follow Their Walls	设备随墙移动
