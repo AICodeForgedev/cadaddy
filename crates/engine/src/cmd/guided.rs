@@ -7521,6 +7521,16 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             })
             .collect()
     };
+    // The schedules' breakers left to the one-line (`OL`): the one-line's breaker and feeder.
+    let mut feeds: Vec<super::equipsub::OnelineLoad> = Vec::new();
+    for (_, d) in pages {
+        for f in super::equipsub::oneline_loads(&cadaddy_mepfix::sheet_facts::texts(d), &[], &type_tags) {
+            if !feeds.iter().any(|x| x.tag.eq_ignore_ascii_case(&f.tag)) {
+                feeds.push(f);
+            }
+        }
+    }
+    let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
     let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
     let placed: Vec<String> =
@@ -7550,7 +7560,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let review = s.execute("gear.review", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
     let findings: Vec<&Value> = review.get("findings").and_then(Value::as_array).into_iter().flatten().collect();
     let line = format!(
-        "  electrical gear: feeder types {} ({}); one-line feeds {}; gear submittals give {} panels; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
+        "  electrical gear: feeder types {} ({}); one-line feeds {}; schedule circuits given the one-line's breaker/feeder {from_oneline}; gear submittals give {} panels; laid out {}: {}; feeders {feeders}; unplaced {:?}; gear review: {} findings",
         types.len(),
         type_tags.join(", "),
         incoming.len(),
