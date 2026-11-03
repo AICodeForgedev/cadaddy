@@ -3158,4 +3158,31 @@
 	Report Validation Findings	Prüfergebnisse melden
 	Validation Run Status	Status des Prüflaufs
 	Plant Validation Errors	Prüffehler einbauen
+	Model Fidelity	Modell-Detailtreue
+	Model Fidelity Rules	Regeln der Modell-Detailtreue
+	Model Fidelity Report	Bericht zur Modell-Detailtreue
+	Fidelity	Detailtreue
+	Auto	Automatisch
+	Floor	Geschoss
+	Detail	Detail
 	Print Inventory	Planinventar
+	Piece	Bauteil
+	Raceway run	Rohrstrecke
+	Connects to	Verbunden mit
+	Height AFF	Höhe über OKFF
+	Host wall	Zugehörige Wand
+	Wall face	Wandfläche
+	Outlet box	Unterputzdose
+	Fed by	Gespeist von
+	Count Model Pieces	Modellteile zählen
+	Edit Model Piece	Modellteil bearbeiten
+	Walk the Feed	Einspeisung verfolgen
+	Object Forms	Objektformulare
+	Create Object Forms	Objektformulare erstellen
+	Edit Object Form Field	Objektformularfeld bearbeiten
+	Record Object Field Value	Objektfeldwert erfassen
+	Object Form Log	Protokoll der Objektformulare
+	Revert Object Form Change	Objektformularänderung zurücknehmen
+	Promote Object Form to Template	Objektformular zur Vorlage machen
+	Object Completeness	Objektvollständigkeit
+	Object Form	Objektformular

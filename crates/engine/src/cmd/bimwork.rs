@@ -82,6 +82,10 @@ pub(crate) struct El {
     pub level: String,
     pub lo: Vec3,
     pub hi: Vec3,
+    /// A piece of a run (Q6157): the run it is part of (one clash per run, not per stick).
+    pub run: String,
+    /// Set in a wall as its trade sets it there: a box, its ring, a drop in the wall's cavity.
+    pub in_wall: bool,
 }
 
 impl El {
@@ -144,7 +148,19 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 let kind = super::fieldview::tag_value(&tags, "kind").unwrap_or("mep");
                 let system = super::fieldview::tag_value(&tags, "system").unwrap_or_default().to_string();
                 let p = super::fieldview::tag_value(&tags, "part").unwrap_or_default();
-                let cat = if p.starts_with("fitting") {
+                // A piece of a run (Q6157): sticks are its conduit, the rest its fittings, boxes,
+                // supports, cable and wire.
+                let piece = p.strip_prefix("atom:").map(|k| match k {
+                    "conduit" => "conduit",
+                    "box" | "ring" => "box",
+                    "strap" => "support",
+                    "cable" => "cable",
+                    "wire" => "wire",
+                    _ => "fitting",
+                });
+                let cat = if let Some(piece) = piece {
+                    piece
+                } else if p.starts_with("fitting") {
                     "fitting"
                 } else if p.starts_with("terminal") {
                     "terminal"
@@ -161,6 +177,7 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 });
                 let t = match kind {
                     "tray" | "cable" | "grounding" => "electrical",
+                    _ if piece.is_some() => "electrical",
                     "equipment" if gear => "electrical",
                     _ => long_trade(cadaddy_walk3d::field::trade_of(kind, &system)),
                 };
@@ -204,7 +221,24 @@ pub(crate) fn elements(d: &Drawing) -> Vec<El> {
         .filter_map(|e| {
             let (lo, hi) = super::fieldview::mesh_box(e)?;
             let (trade, category, system, level) = classify(e)?;
-            Some(El { handle: e.handle, trade, category, system, level, lo: Vec3::new(lo[0], lo[1], lo[2]), hi: Vec3::new(hi[0], hi[1], hi[2]) })
+            let (run, in_wall) = if super::mepatoms::is_atom(e) {
+                let ps = cadaddy_doc::props::read(&e.common.xdata);
+                let t = |k: &str| ps.get(k).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
+                (t("run"), matches!(t("atom").as_str(), "box" | "ring") || t("vertical") == "true")
+            } else {
+                (String::new(), false)
+            };
+            Some(El {
+                handle: e.handle,
+                trade,
+                category,
+                system,
+                level,
+                lo: Vec3::new(lo[0], lo[1], lo[2]),
+                hi: Vec3::new(hi[0], hi[1], hi[2]),
+                run,
+                in_wall,
+            })
         })
         .take(MAX_ELEMENTS)
         .collect()

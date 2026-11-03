@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cadaddy_color::Rgb;
 use cadaddy_geom::Vec3;
-use cadaddy_render::model3::{self, Model3};
+use cadaddy_render::model3::{self, Force, Model3, Stream, Tier};
 use cadaddy_render::shade::{self, Scene, ShadeView, VisualStyle};
 use egui_wgpu::wgpu;
 use egui_wgpu::wgpu::util::DeviceExt;
@@ -67,6 +67,18 @@ pub struct Stats {
     pub bench_frames: u32,
     /// Triangles lit by baked light (LIGHTBAKE).
     pub baked: usize,
+    /// The fidelity tier drawn (none: the model has no tiers), and whether Auto chose it.
+    pub tier: Option<&'static str>,
+    pub auto: bool,
+    /// Streamed cells held, their bytes and triangles, cells still to come, and the last
+    /// update's milliseconds.
+    pub stream_cells: usize,
+    pub stream_bytes: usize,
+    pub stream_tris: usize,
+    pub stream_pending: usize,
+    pub stream_ms: f64,
+    /// Elements a search marks that the tier doesn't draw.
+    pub markers: usize,
 }
 
 /// An orbit benchmark under way: frames left, the azimuth reached, when it started.
@@ -103,6 +115,11 @@ pub struct State {
     bench: Option<Bench>,
     /// The section box while one of its faces is dragged (min, max), set when let go.
     sbox_drag: Option<([f64; 3], [f64; 3])>,
+    /// Fidelity: the tier Auto chose last (its hysteresis), the streamed cells, and Auto's
+    /// thresholds and the drawing's units per foot (for the drawing they were read from).
+    auto_tier: Option<Tier>,
+    stream: Stream,
+    auto_for: Option<((usize, u64), model3::AutoTiers, f64)>,
 }
 
 impl State {
@@ -110,6 +127,11 @@ impl State {
     pub(crate) fn reset_gpu(&mut self) {
         self.gpu = None;
         self.uploaded = None;
+    }
+
+    /// The fidelity tier the view drew last (none: everything).
+    pub fn tier(&self) -> Option<&'static str> {
+        self.stats.tier
     }
 
     /// The size the GPU drew the last frame at (the render target's), if it did.
@@ -151,10 +173,26 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     st.last_frame = Some(now);
     let height = f64::from(xf.rect.height()) / xf.scale.max(1e-300);
     let view = ShadeView::new(xf.proj, xf.center, height, w, h);
+    // Fidelity: the tier fixed, else the one the zoom calls for (with hysteresis); the cells of
+    // streamed elements that tier needs in view (a few milliseconds a frame, the rest next).
+    let (tier, force) = fidelity(app, &model, height);
+    let st = &mut app.canvas.shade;
+    let step = st.stream.update(&model, &view, tier, STREAM_MS);
+    if step.pending > 0 {
+        ui.ctx().request_repaint();
+    }
+    st.stats.stream_cells = st.stream.cells.len();
+    st.stats.stream_bytes = st.stream.bytes;
+    st.stats.stream_tris = st.stream.tris();
+    st.stats.stream_pending = step.pending;
+    if step.added + step.dropped > 0 {
+        st.stats.stream_ms = step.ms;
+    }
     // The model's lighting with the render environment (RENDERENVIRONMENT) applied: background,
     // fog, exposure, white balance, the environment map's sky. A file gone since leaves the rest.
     let lit = environment_lighting(app, &model);
     let mut drawn = false;
+    let mut markers: Vec<u32> = Vec::new();
     // On the GPU unless it can't (see `gpucaps`): at most the size its limits and memory allow
     // (shown scaled up), with its multisampling.
     let caps = app.gpu_caps.clone();
@@ -171,11 +209,16 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         let up = Some((key, style, [bg.0, bg.1, bg.2]));
         if st.uploaded != up {
             g.upload(&rs.device, &rs.queue, &model, style, bg);
+            g.stream_gen = None;
             st.uploaded = up;
         }
+        g.load_tiers(&rs.device, &model, tier);
+        g.upload_stream(&rs.device, &st.stream, style, bg);
         g.set_lighting(&rs.device, &rs.queue, lit.as_ref());
         let t0 = web_time::Instant::now();
-        let vis = g.render(&rs.device, &rs.queue, &view, style, bg);
+        let vis = g.render(&rs.device, &rs.queue, &view, style, bg, tier, force.as_ref(), &st.stream);
+        st.stats.markers = vis.markers.len();
+        markers = vis.markers;
         st.stats.encode_ms = t0.elapsed().as_secs_f64() * 1000.0;
         st.stats.tris_drawn = vis.tris;
         st.stats.instances_drawn = vis.instances.iter().map(|g| g.2.len()).sum();
@@ -183,8 +226,11 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         // Buffers and textures, plus the render targets (4× colour and depth, the resolved image,
         // the pre-pass depth) and the shadow map.
         let (tw, th) = (u64::from(w), u64::from(h));
-        st.stats.gpu_bytes =
-            g.bytes + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
+        st.stats.gpu_bytes = g.bytes
+            + g.tier_bytes.iter().sum::<usize>()
+            + g.stream_bytes
+            + (tw * th * (u64::from(g.samples) * 8 + 8)) as usize
+            + (u64::from(SHADOW_PX) * u64::from(SHADOW_PX) * 4) as usize;
         if let Some(tv) = g.view() {
             let mut r = rs.renderer.write();
             match st.texture {
@@ -199,18 +245,45 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
     }
     if !drawn {
         // The CPU rasterizer, redrawn when the view, model or style changes.
-        let flat = match &app.canvas.shade.flat {
-            Some((k, f)) if *k == key => Arc::clone(f),
-            _ => {
-                let f = Arc::new(model.flatten());
-                app.canvas.shade.flat = Some((key, Arc::clone(&f)));
-                f
-            }
-        };
         let env = app.session.state().ok().map(|st| format!("{:?}", st.render_environment)).unwrap_or_default();
-        let ck = format!("{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}|{env}", key, view.center, view.height, w, h, view.dir, view.right, (style, bg));
+        let ck = format!(
+            "{:?}|{:?}|{:?}|{}x{}|{:?}|{:?}|{:?}|{env}|{tier:?}|{}|{force:?}",
+            key,
+            view.center,
+            view.height,
+            w,
+            h,
+            view.dir,
+            view.right,
+            (style, bg),
+            app.canvas.shade.stream.generation
+        );
         let fresh = app.canvas.shade.cpu.as_ref().is_some_and(|(k, _)| *k == ck);
         if !fresh {
+            // With fidelity: what the tier draws in view and the streamed cells; else the whole
+            // model, kept.
+            let flat = if model.fid.is_some() {
+                let vis = model.visible_at(&view, tier, force.as_ref());
+                app.canvas.shade.stats.markers = vis.markers.len();
+                let mut f = model.flatten_visible(&vis);
+                let stream = &app.canvas.shade.stream;
+                for k in stream.visible(&view) {
+                    if let Some(c) = stream.cells.get(&k) {
+                        f.tris.extend_from_slice(&c.scene.tris);
+                        f.lines.extend_from_slice(&c.scene.lines);
+                    }
+                }
+                Arc::new(f)
+            } else {
+                match &app.canvas.shade.flat {
+                    Some((k, f)) if *k == key => Arc::clone(f),
+                    _ => {
+                        let f = Arc::new(model.flatten());
+                        app.canvas.shade.flat = Some((key, Arc::clone(&f)));
+                        f
+                    }
+                }
+            };
             let r = shade::rasterize_lit(&flat, &view, style, bg, lit.as_ref().or(flat.lighting.as_ref()));
             let img = egui::ColorImage::from_rgba_unmultiplied([r.width as usize, r.height as usize], &r.rgba);
             let tex = ui.ctx().load_texture("shaded_view", img, egui::TextureOptions::LINEAR);
@@ -222,6 +295,15 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         }
     }
     building_note(app, ui, painter, xf);
+    if model.fid.is_some() {
+        if markers.is_empty()
+            && let Some(force) = force.as_ref()
+        {
+            markers = model.visible_at(&view, tier, Some(force)).markers;
+        }
+        draw_markers(painter, xf, &model, &markers);
+        fidelity_bar(app, ui, xf, tier);
+    }
     // An orbit benchmark: the next frame's view, and another frame straight away.
     if let Some(mut b) = app.canvas.shade.bench {
         b.frames += 1;
@@ -239,6 +321,123 @@ pub fn paint(app: &mut CadApp, ui: &egui::Ui, painter: &egui::Painter, xf: &Xf, 
         }
     }
     drawn
+}
+
+/// Milliseconds a frame spends bringing streamed cells in (the rest come in the next frames).
+const STREAM_MS: f64 = 12.0;
+
+/// The fidelity tier the view draws `model` at, `height` drawing units tall, and the elements a
+/// search marks: the session's fixed tier, else Auto's for the zoom (the last one held until the
+/// zoom is past the margin). The session hears which tier was drawn: a click on a piece drawn
+/// only as part of its run picks the run. A model without tiers draws everything.
+fn fidelity(app: &mut CadApp, model: &Model3, height: f64) -> (Tier, Option<Force>) {
+    if model.fid.is_none() {
+        app.canvas.shade.stats.tier = None;
+        app.canvas.shade.stats.auto = false;
+        return (Tier::Detail, None);
+    }
+    let Ok(st) = app.session.state() else { return (Tier::Detail, None) };
+    let (mode, force) = (st.fidelity.mode, st.fidelity.force.clone());
+    let doc_key = (Arc::as_ptr(&st.doc) as usize, st.revision);
+    let (auto, upf) = match app.canvas.shade.auto_for {
+        Some((k, a, u)) if k == doc_key => (a, u),
+        _ => {
+            let a = cadaddy_engine::cmd::fidelity::Rules::of(&st.doc).0.auto.tiers();
+            let u = cadaddy_engine::cmd::fidelity::units_per_foot(&st.doc);
+            app.canvas.shade.auto_for = Some((doc_key, a, u));
+            (a, u)
+        }
+    };
+    let tier = mode.unwrap_or_else(|| auto.tier(height / upf.max(1e-9), app.canvas.shade.auto_tier));
+    let shade = &mut app.canvas.shade;
+    shade.auto_tier = Some(tier);
+    shade.stats.tier = Some(tier.name());
+    shade.stats.auto = mode.is_none();
+    if let Ok(st) = app.session.state_mut()
+        && st.fidelity.shown != Some(tier)
+    {
+        st.fidelity.shown = Some(tier);
+    }
+    (tier, force)
+}
+
+/// The elements a search marks (`view.fidelity {show}`) that the tier doesn't draw: a ring at
+/// each.
+fn draw_markers(painter: &egui::Painter, xf: &Xf, model: &Model3, markers: &[u32]) {
+    let Some(f) = model.fid.as_ref() else { return };
+    let t = crate::theme::Tokens::get();
+    for i in markers.iter().take(model3::MAX_MARKERS) {
+        let Some(e) = f.elems.get(*i as usize) else { continue };
+        let c = e.bounds.center();
+        let at = match xf.proj {
+            Some(pr) => xf.to_screen(pr.project(c)),
+            None => xf.to_screen(cadaddy_geom::Vec2::new(c.x, c.y)),
+        };
+        if xf.rect.contains(at) {
+            painter.circle_stroke(at, 5.0, egui::Stroke::new(2.0, t.accent));
+        }
+    }
+}
+
+/// A tier's name in the view's menu.
+fn tier_label(t: Tier) -> &'static str {
+    match t {
+        Tier::Building => crate::i18n::t("Building"),
+        Tier::Floor => crate::i18n::t("Floor"),
+        Tier::Room => crate::i18n::t("Room"),
+        Tier::Detail => crate::i18n::t("Detail"),
+    }
+}
+
+/// The view's fidelity in its top left corner, Auto (and the tier it chose) or the fixed tier,
+/// with a menu to fix a tier or go back to Auto (`view.fidelity {level}`).
+fn fidelity_bar(app: &mut CadApp, ui: &egui::Ui, xf: &Xf, tier: Tier) {
+    let auto = app.canvas.shade.stats.auto;
+    let label = if auto {
+        format!("{}: {} · {}", crate::i18n::t("Fidelity"), crate::i18n::t("Auto"), tier_label(tier))
+    } else {
+        format!("{}: {}", crate::i18n::t("Fidelity"), tier_label(tier))
+    };
+    let mut pick: Option<Option<Tier>> = None;
+    egui::Area::new(ui.id().with("fidelity-bar")).order(egui::Order::Middle).fixed_pos(xf.rect.left_top() + egui::vec2(8.0, 8.0)).show(
+        ui.ctx(),
+        |ui| {
+            egui::ComboBox::from_id_salt("fidelity-level").selected_text(label).show_ui(ui, |ui| {
+                if ui.selectable_label(auto, crate::i18n::t("Auto")).clicked() {
+                    pick = Some(None);
+                }
+                for t in Tier::ALL {
+                    if ui.selectable_label(!auto && t == tier, tier_label(t)).clicked() {
+                        pick = Some(Some(t));
+                    }
+                }
+            });
+        },
+    );
+    if let Some(p) = pick
+        && let Err(e) = app.run("view.fidelity", serde_json::json!({ "level": p.map_or("auto", Tier::name) }))
+    {
+        app.set_status(format!("{}: {e}", crate::i18n::t("Fidelity")));
+    }
+}
+
+/// The model of `doc`: with fidelity tiers when it is the built model (the BIM view's drawing).
+#[allow(clippy::too_many_arguments)]
+fn build3(
+    doc: &Arc<cadaddy_doc::Drawing>,
+    bim: bool,
+    tol: f64,
+    bg: Rgb,
+    progress: &AtomicUsize,
+    total: &AtomicUsize,
+    planes: &[cadaddy_doc::SectionPlane],
+) -> Model3 {
+    if bim {
+        let classify = cadaddy_engine::cmd::fidelity::classifier(doc);
+        model3::build_fid(Arc::clone(doc), &cadaddy_doc::Space::Model, tol, bg, progress, total, planes, &classify, model3::FidOptions::default())
+    } else {
+        model3::build_clipped(doc, &cadaddy_doc::Space::Model, tol, bg, progress, total, planes)
+    }
 }
 
 /// The box's 12 edges, as pairs of corner numbers (bit 0: max x, bit 1: max y, bit 2: max z).
@@ -348,9 +547,12 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     // Read section box planes from coordination state for 3D clipping.
     let crs = cadaddy_engine::cmd::coordination::coord_render_state(&doc);
     let sbox_planes = crs.sbox_planes();
-    // The BIM view: only the built model, in trade colours, the shell ghosted.
-    if let Some(bim) = cadaddy_engine::cmd::bimlook::display(&doc) {
-        doc = Arc::new(bim);
+    // The BIM view: only the built model, in trade colours, the shell ghosted; drawn in
+    // fidelity tiers.
+    let mut bim = false;
+    if let Some(d) = cadaddy_engine::cmd::bimlook::display(&doc) {
+        doc = Arc::new(d);
+        bim = true;
     }
     if let Some(f) = key.fourd
         && let Ok((staged, _)) = cadaddy_engine::cmd::fourd::staged(&doc, f.day, f.ghost)
@@ -368,17 +570,15 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
             let (p2, t2) = (Arc::clone(&progress), Arc::clone(&total));
             let planes = sbox_planes.clone();
             let doc_t = Arc::clone(&doc);
-            let handle = std::thread::Builder::new()
-                .name("cadaddy-3d-model".into())
-                .spawn(move || model3::build_clipped(&doc_t, &cadaddy_doc::Space::Model, tol, bg, &p2, &t2, &planes))
-                .ok();
+            let handle =
+                std::thread::Builder::new().name("cadaddy-3d-model".into()).spawn(move || build3(&doc_t, bim, tol, bg, &p2, &t2, &planes)).ok();
             match handle {
                 Some(handle) => shade_st.pending = Some(Pending { key, progress, total, started: web_time::Instant::now(), handle }),
                 // No thread: build here.
                 None => {
                     let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
                     let started = web_time::Instant::now();
-                    let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
+                    let m = Arc::new(build3(&doc, bim, tol, bg, &p, &t, &sbox_planes));
                     return Some(finish(app, key, m, started));
                 }
             }
@@ -400,7 +600,7 @@ fn model(app: &mut CadApp, band: i32) -> Option<(SceneKey, Arc<Model3>)> {
     {
         let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
         let started = web_time::Instant::now();
-        let m = Arc::new(model3::build_clipped(&doc, &cadaddy_doc::Space::Model, tol, bg, &p, &t, &sbox_planes));
+        let m = Arc::new(build3(&doc, bim, tol, bg, &p, &t, &sbox_planes));
         Some(finish(app, key, m, started))
     }
 }
@@ -485,8 +685,20 @@ struct Gpu {
     lines: Option<Buffer>,
     /// Vertex ranges in the three buffers (opaque, see-through, lines): each base chunk's, and
     /// each prototype's at each level of detail.
-    chunk_ranges: Vec<[std::ops::Range<u32>; 3]>,
+    /// Each chunk's buffers (0: the main ones; 1 to 3: its fidelity tier's) and its ranges there.
+    chunk_ranges: Vec<(usize, [std::ops::Range<u32>; 3])>,
     proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]>,
+    /// The floor, room and detail tiers' chunks (opaque, see-through, lines), loaded while the view
+    /// shows the tier; their bytes; how the main upload packed (the tiers pack alike).
+    tier_bufs: [Option<[Option<Buffer>; 3]>; 3],
+    tier_bytes: [usize; 3],
+    packing: Option<Packing>,
+    /// The streamed cells' triangles and lines (opaque, see-through, lines), each cell's vertex
+    /// ranges in them, and the stream generation they hold.
+    stream_bufs: [Option<Buffer>; 3],
+    stream_ranges: std::collections::BTreeMap<(u8, u32), [std::ops::Range<u32>; 3]>,
+    stream_gen: Option<u64>,
+    stream_bytes: usize,
     /// The frame's instance placements (slot 0: the identity, for the base geometry).
     instances: Option<Tracked>,
     instance_cap: u64,
@@ -739,6 +951,13 @@ impl Gpu {
             lines: None,
             chunk_ranges: Vec::new(),
             proto_ranges: Vec::new(),
+            tier_bufs: Default::default(),
+            tier_bytes: [0; 3],
+            packing: None,
+            stream_bufs: [None, None, None],
+            stream_ranges: std::collections::BTreeMap::new(),
+            stream_gen: None,
+            stream_bytes: 0,
             instances: None,
             instance_cap: 0,
             model: None,
@@ -762,8 +981,8 @@ impl Gpu {
     }
 
     /// The model's triangles (none for Wireframe), the lines `style` shows, and the textures:
-    /// the base chunk by chunk, then each prototype at each level of detail, with the ranges
-    /// each takes.
+    /// the base chunk by chunk (the chunks of fidelity tiers finer than `loaded` left out: they
+    /// aren't drawn), then each prototype at each level of detail, with the ranges each takes.
     fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, model: &Arc<Model3>, style: VisualStyle, bg: Rgb) {
         let b = model.bounds;
         self.origin = if b.is_empty() { Vec3::ZERO } else { b.center() };
@@ -778,55 +997,19 @@ impl Gpu {
             offsets.push(layers.len());
             layers.extend(sc.textures.iter().take(MAX_LAYERS.saturating_sub(layers.len())));
         }
-        let edges = matches!(style, VisualStyle::Wireframe | VisualStyle::Hidden | VisualStyle::ShadedEdges);
-        let dark = edge_ink(bg);
-        let srgb = |c: f32| (c.max(0.0).powf(1.0 / 2.2) * 255.0).round().clamp(0.0, 255.0) as u8;
-        let (mut tris, mut clear, mut lines): (Vec<u8>, Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new(), Vec::new());
-        let count = |v: &Vec<u8>| (v.len() as u64 / VERTEX_SIZE) as u32;
-        // One scene's triangles and lines in the given ranges into the buffers: their vertex ranges.
-        let mut emit = |sc: &Scene, offset: usize, tr: std::ops::Range<usize>, lr: std::ops::Range<usize>, o: Vec3| -> [std::ops::Range<u32>; 3] {
-            let rel = |p: Vec3| [(p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32];
-            let (t0, c0, l0) = (count(&tris), count(&clear), count(&lines));
-            let first = tr.start;
-            if style != VisualStyle::Wireframe {
-                for (k, t) in sc.tris.get(tr).unwrap_or(&[]).iter().enumerate() {
-                    // Baked light (LIGHTBAKE): the cells of its front and back, per corner.
-                    let lm = match sc.baked.as_ref().filter(|_| physical).and_then(|b| b.corner_uv(first + k)) {
-                        Some([f, b]) => [0, 1, 2].map(|c| [f[c][0], f[c][1], b[c][0], b[c][1]]),
-                        None => [[-1.0; 4]; 3],
-                    };
-                    let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
-                    let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
-                    let surface = sc.surfaces.get(t.mat as usize).filter(|_| physical);
-                    let (color, m) = match surface {
-                        Some(sm) => {
-                            let layer = sm.texture.map(|i| i as usize + offset).filter(|i| *i < layers.len()).map_or(-1.0, |i| i as f32);
-                            (Rgb(srgb(sm.base[0]), srgb(sm.base[1]), srgb(sm.base[2])), [sm.roughness, sm.metallic, layer, sm.opacity])
-                        }
-                        // Unlit styles: its own colour, see-through as its material is (a
-                        // ghosted shell).
-                        None => (t.color, [0.6, 0.0, -1.0, sc.surfaces.get(t.mat as usize).map_or(1.0, |sm| sm.opacity.clamp(0.0, 1.0))]),
-                    };
-                    let out = if m[3] < 0.99 { &mut clear } else { &mut tris };
-                    for ((p, uv), l) in t.p.iter().zip(t.uv).zip(lm) {
-                        push_vertex(out, rel(*p), n, color, uv, m, l);
-                    }
-                }
-            }
-            for l in sc.lines.get(lr).unwrap_or(&[]).iter().filter(|l| !l.edge || edges) {
-                let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
-                    (true, true) => cadaddy_render::shade::faint_ink(dark, bg),
-                    (true, false) => dark,
-                    _ => l.color,
-                };
-                push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
-                push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
-            }
-            [t0..count(&tris), c0..count(&clear), l0..count(&lines)]
-        };
+        let how = Packing { style, bg, physical, layers: layers.len() };
+        let mut pack = Pack::default();
         let o = self.origin;
-        let chunk_ranges: Vec<[std::ops::Range<u32>; 3]> =
-            model.chunks.iter().map(|c| emit(&model.base, 0, c.tris.clone(), c.lines.clone(), o)).collect();
+        // The building tier's chunks (and everything of a model without tiers) here; the finer
+        // tiers' in their own buffers, when a view needs them (`load_tiers`).
+        let chunk_ranges: Vec<(usize, [std::ops::Range<u32>; 3])> = model
+            .chunks
+            .iter()
+            .map(|c| match c.show.from {
+                Tier::Building => (0, pack.emit(&how, &model.base, 0, c.tris.clone(), c.lines.clone(), o)),
+                t => (t.index(), [0..0, 0..0, 0..0]),
+            })
+            .collect();
         let mut k = 1;
         let proto_ranges: Vec<[[std::ops::Range<u32>; 3]; 3]> = model
             .protos
@@ -835,19 +1018,22 @@ impl Gpu {
                 let r = [0, 1, 2].map(|l| {
                     let sc = &p.lods[l];
                     let off = offsets.get(k + l).copied().unwrap_or(0);
-                    emit(sc, off, 0..sc.tris.len(), 0..sc.lines.len(), Vec3::ZERO)
+                    pack.emit(&how, sc, off, 0..sc.tris.len(), 0..sc.lines.len(), Vec3::ZERO)
                 });
                 k += 3;
                 r
             })
             .collect();
-        self.bytes = tris.len() + clear.len() + lines.len() + layers.len().max(1) * (TEX_PX * TEX_PX * 4) as usize;
-        self.tris = buffer(device, "shaded_tris", &tris);
-        self.clear_tris = buffer(device, "shaded_glass", &clear);
-        self.lines = buffer(device, "shaded_lines", &lines);
+        self.bytes = pack.tris.len() + pack.clear.len() + pack.lines.len() + layers.len().max(1) * (TEX_PX * TEX_PX * 4) as usize;
+        self.tris = buffer(device, "shaded_tris", &pack.tris);
+        self.clear_tris = buffer(device, "shaded_glass", &pack.clear);
+        self.lines = buffer(device, "shaded_lines", &pack.lines);
         self.chunk_ranges = chunk_ranges;
         self.proto_ranges = proto_ranges;
         self.model = Some(Arc::clone(model));
+        self.packing = Some(how);
+        self.tier_bufs = Default::default();
+        self.tier_bytes = [0; 3];
         // The textures, one layer each, resized to the layer size (at least one layer).
         let count = layers.len().max(1) as u32;
         let tex = Tracked::new(device.create_texture(&wgpu::TextureDescriptor {
@@ -959,6 +1145,104 @@ impl Gpu {
             self.bind_group = None;
         }
         self.lighting = Some(lit.clone());
+    }
+
+    /// The chunks of the tiers up to `tier` that aren't on the GPU yet, each tier in its own
+    /// buffers; the finer tiers' let go (a zoom out frees what it no longer draws).
+    fn load_tiers(&mut self, device: &wgpu::Device, model: &Model3, tier: Tier) {
+        let Some(how) = self.packing else { return };
+        let o = self.origin;
+        for slot in 1..=3usize {
+            let t = Tier::from_index(slot);
+            let Some(have) = self.tier_bufs.get_mut(slot - 1) else { continue };
+            if t > tier {
+                if have.take().is_some() {
+                    for (s, r) in self.chunk_ranges.iter_mut() {
+                        if *s == slot {
+                            *r = [0..0, 0..0, 0..0];
+                        }
+                    }
+                    if let Some(b) = self.tier_bytes.get_mut(slot - 1) {
+                        *b = 0;
+                    }
+                }
+                continue;
+            }
+            if have.is_some() {
+                continue;
+            }
+            let mut pack = Pack::default();
+            for (c, (s, r)) in model.chunks.iter().zip(self.chunk_ranges.iter_mut()) {
+                if *s == slot {
+                    *r = pack.emit(&how, &model.base, 0, c.tris.clone(), c.lines.clone(), o);
+                }
+            }
+            if let Some(b) = self.tier_bytes.get_mut(slot - 1) {
+                *b = pack.tris.len() + pack.clear.len() + pack.lines.len();
+            }
+            *have = Some([
+                buffer(device, "shaded_tier_tris", &pack.tris),
+                buffer(device, "shaded_tier_glass", &pack.clear),
+                buffer(device, "shaded_tier_lines", &pack.lines),
+            ]);
+        }
+    }
+
+    /// The vertex buffer of `kind` (0 opaque, 1 see-through, 2 lines) in buffer set `slot` (0: the
+    /// main ones, 1 to 3: a tier's).
+    fn buffer_of(&self, slot: usize, kind: usize) -> Option<&Buffer> {
+        match slot {
+            0 => [&self.tris, &self.clear_tris, &self.lines].get(kind).and_then(|b| b.as_ref()),
+            s => self.tier_bufs.get(s - 1).and_then(Option::as_ref).and_then(|set| set.get(kind)).and_then(Option::as_ref),
+        }
+    }
+
+    /// The streamed cells' triangles and lines (in their own colours, unlit by materials), each
+    /// cell's ranges; again only when the stream changed.
+    fn upload_stream(&mut self, device: &wgpu::Device, stream: &Stream, style: VisualStyle, bg: Rgb) {
+        if self.stream_gen == Some(stream.generation) {
+            return;
+        }
+        let o = self.origin;
+        let rel = |p: Vec3| [(p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32];
+        let edges = matches!(style, VisualStyle::Wireframe | VisualStyle::Hidden | VisualStyle::ShadedEdges);
+        let dark = edge_ink(bg);
+        let (mut tris, mut clear, mut lines): (Vec<u8>, Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new(), Vec::new());
+        let count = |v: &Vec<u8>| (v.len() as u64 / VERTEX_SIZE) as u32;
+        let mut ranges = std::collections::BTreeMap::new();
+        for (k, c) in &stream.cells {
+            let sc = &c.scene;
+            let (t0, c0, l0) = (count(&tris), count(&clear), count(&lines));
+            if style != VisualStyle::Wireframe {
+                for t in &sc.tris {
+                    let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
+                    let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
+                    let opacity = sc.surfaces.get(t.mat as usize).map_or(1.0, |sm| sm.opacity.clamp(0.0, 1.0));
+                    let out = if opacity < 0.99 { &mut clear } else { &mut tris };
+                    for (p, uv) in t.p.iter().zip(t.uv) {
+                        push_vertex(out, rel(*p), n, t.color, uv, [0.6, 0.0, -1.0, opacity], [-1.0; 4]);
+                    }
+                }
+            }
+            for l in sc.lines.iter().filter(|l| !l.edge || edges) {
+                let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
+                    (true, true) => cadaddy_render::shade::faint_ink(dark, bg),
+                    (true, false) => dark,
+                    _ => l.color,
+                };
+                push_vertex(&mut lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
+                push_vertex(&mut lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
+            }
+            ranges.insert(*k, [t0..count(&tris), c0..count(&clear), l0..count(&lines)]);
+        }
+        self.stream_bytes = tris.len() + clear.len() + lines.len();
+        self.stream_bufs = [
+            buffer(device, "shaded_stream_tris", &tris),
+            buffer(device, "shaded_stream_glass", &clear),
+            buffer(device, "shaded_stream_lines", &lines),
+        ];
+        self.stream_ranges = ranges;
+        self.stream_gen = Some(stream.generation);
     }
 
     /// The frame's placements: the identity, then each visible group's instances in order
@@ -1182,7 +1466,18 @@ impl Gpu {
     }
 
     /// Draw into the offscreen target sized like the view: what it shows, nearest first.
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, v: &ShadeView, style: VisualStyle, bg: Rgb) -> model3::Visible {
+    #[allow(clippy::too_many_arguments)]
+    fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        v: &ShadeView,
+        style: VisualStyle,
+        bg: Rgb,
+        tier: Tier,
+        force: Option<&Force>,
+        stream: &Stream,
+    ) -> model3::Visible {
         let size = (v.width_px, v.height_px);
         if self.target.as_ref().is_none_or(|t| t.size != size) {
             self.target = Some(target(device, size, self.samples));
@@ -1192,7 +1487,12 @@ impl Gpu {
             self.bind_group = self.target.as_ref().and_then(|t| self.group(device, t));
         }
         let Some(model) = self.model.clone() else { return model3::Visible::default() };
-        let vis = model.visible(v);
+        let vis = model.visible_at(v, tier, force);
+        // The streamed cells in view: their ranges in the stream buffers (opaque, see-through,
+        // lines).
+        let cells: Vec<[std::ops::Range<u32>; 3]> = stream.visible(v).iter().filter_map(|k| self.stream_ranges.get(k).cloned()).collect();
+        let stream_draws =
+            |kind: usize| -> Vec<std::ops::Range<u32>> { cells.iter().filter_map(|r| r.get(kind).cloned()).filter(|r| !r.is_empty()).collect() };
         let (inst, groups) = self.placements(&model, &vis);
         let need = inst.len() as u64;
         if self.instances.is_none() || self.instance_cap < need {
@@ -1214,10 +1514,16 @@ impl Gpu {
         // The draws of one buffer (0 opaque, 1 see-through, 2 lines): the visible chunks with
         // the identity placement, then each group's prototype with its placements (a group's
         // lines only at full detail).
-        let draws = |kind: usize| -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
-            let mut d: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> =
-                vis.chunks.iter().filter_map(|c| self.chunk_ranges.get(*c)).map(|r| (r[kind].clone(), 0..1)).collect();
-            for ((p, lod, _), ir) in vis.instances.iter().zip(&groups) {
+        let draws = |kind: usize, slot: usize| -> Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> {
+            let mut d: Vec<(std::ops::Range<u32>, std::ops::Range<u32>)> = vis
+                .chunks
+                .iter()
+                .filter_map(|c| self.chunk_ranges.get(*c))
+                .filter(|(s, _)| *s == slot)
+                .filter_map(|(_, r)| r.get(kind).cloned())
+                .map(|r| (r, 0..1))
+                .collect();
+            for ((p, lod, _), ir) in vis.instances.iter().zip(&groups).filter(|_| slot == 0) {
                 if kind == 2 && *lod != 0 {
                     continue;
                 }
@@ -1244,12 +1550,22 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.shadow_group, &[]);
-            if let Some(m) = &self.tris {
+            for slot in 0..4 {
+                if let Some(m) = self.buffer_of(slot, 0) {
+                    pass.set_pipeline(&self.depth_pipeline);
+                    pass.set_vertex_buffer(0, m.buffer.slice(..));
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    for (r, i) in draws(0, slot) {
+                        pass.draw(r, i);
+                    }
+                }
+            }
+            if let Some(m) = &self.stream_bufs[0] {
                 pass.set_pipeline(&self.depth_pipeline);
                 pass.set_vertex_buffer(0, m.buffer.slice(..));
                 pass.set_vertex_buffer(1, ib.slice(..));
-                for (r, i) in draws(0) {
-                    pass.draw(r, i);
+                for r in stream_draws(0) {
+                    pass.draw(r, 0..1);
                 }
             }
         }
@@ -1268,12 +1584,22 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.shadow_group, &[]);
-            if let Some(m) = &self.tris {
+            for slot in 0..4 {
+                if let Some(m) = self.buffer_of(slot, 0) {
+                    pass.set_pipeline(&self.shadow_pipeline);
+                    pass.set_vertex_buffer(0, m.buffer.slice(..));
+                    pass.set_vertex_buffer(1, ib.slice(..));
+                    for (r, i) in draws(0, slot) {
+                        pass.draw(r, i);
+                    }
+                }
+            }
+            if let Some(m) = &self.stream_bufs[0] {
                 pass.set_pipeline(&self.shadow_pipeline);
                 pass.set_vertex_buffer(0, m.buffer.slice(..));
                 pass.set_vertex_buffer(1, ib.slice(..));
-                for (r, i) in draws(0) {
-                    pass.draw(r, i);
+                for r in stream_draws(0) {
+                    pass.draw(r, 0..1);
                 }
             }
         }
@@ -1303,15 +1629,24 @@ impl Gpu {
                 pass.set_pipeline(&self.bg_pipeline);
                 pass.draw(0..3, 0..1);
             }
-            for (kind, pipeline, m) in
-                [(0, &self.tri_pipeline, &self.tris), (2, &self.line_pipeline, &self.lines), (1, &self.clear_pipeline, &self.clear_tris)]
-            {
-                if let Some(m) = m {
+            for (kind, pipeline) in [(0, &self.tri_pipeline), (2, &self.line_pipeline), (1, &self.clear_pipeline)] {
+                for slot in 0..4 {
+                    if let Some(m) = self.buffer_of(slot, kind) {
+                        pass.set_pipeline(pipeline);
+                        pass.set_vertex_buffer(0, m.buffer.slice(..));
+                        pass.set_vertex_buffer(1, ib.slice(..));
+                        for (r, i) in draws(kind, slot) {
+                            pass.draw(r, i);
+                        }
+                    }
+                }
+                // The streamed cells of the same kind, placed as they are.
+                if let Some(m) = self.stream_bufs.get(kind).and_then(Option::as_ref) {
                     pass.set_pipeline(pipeline);
                     pass.set_vertex_buffer(0, m.buffer.slice(..));
                     pass.set_vertex_buffer(1, ib.slice(..));
-                    for (r, i) in draws(kind) {
-                        pass.draw(r, i);
+                    for r in stream_draws(kind) {
+                        pass.draw(r, 0..1);
                     }
                 }
             }
@@ -1322,6 +1657,85 @@ impl Gpu {
 
     fn view(&self) -> Option<&wgpu::TextureView> {
         self.target.as_ref().map(|t| &t.view)
+    }
+}
+
+/// How scenes' vertices are packed: the style and background, whether lit physically (materials,
+/// textures, baked light), the texture layers there are.
+#[derive(Clone, Copy, Debug)]
+struct Packing {
+    style: VisualStyle,
+    bg: Rgb,
+    physical: bool,
+    layers: usize,
+}
+
+/// Vertex bytes being packed for the three buffers (opaque, see-through, lines).
+#[derive(Default)]
+struct Pack {
+    tris: Vec<u8>,
+    clear: Vec<u8>,
+    lines: Vec<u8>,
+}
+
+impl Pack {
+    fn count(v: &[u8]) -> u32 {
+        (v.len() as u64 / VERTEX_SIZE) as u32
+    }
+
+    /// One scene's triangles and lines in the given ranges (`offset`: its first texture's layer;
+    /// `o`: the origin vertices are stored from): their vertex ranges in the three buffers.
+    fn emit(
+        &mut self,
+        how: &Packing,
+        sc: &Scene,
+        offset: usize,
+        tr: std::ops::Range<usize>,
+        lr: std::ops::Range<usize>,
+        o: Vec3,
+    ) -> [std::ops::Range<u32>; 3] {
+        let (style, bg, physical) = (how.style, how.bg, how.physical);
+        let edges = matches!(style, VisualStyle::Wireframe | VisualStyle::Hidden | VisualStyle::ShadedEdges);
+        let dark = edge_ink(bg);
+        let srgb = |c: f32| (c.max(0.0).powf(1.0 / 2.2) * 255.0).round().clamp(0.0, 255.0) as u8;
+        let rel = |p: Vec3| [(p.x - o.x) as f32, (p.y - o.y) as f32, (p.z - o.z) as f32];
+        let (t0, c0, l0) = (Pack::count(&self.tris), Pack::count(&self.clear), Pack::count(&self.lines));
+        let first = tr.start;
+        if style != VisualStyle::Wireframe {
+            for (k, t) in sc.tris.get(tr).unwrap_or(&[]).iter().enumerate() {
+                // Baked light (LIGHTBAKE): the cells of its front and back, per corner.
+                let lm = match sc.baked.as_ref().filter(|_| physical).and_then(|b| b.corner_uv(first + k)) {
+                    Some([f, b]) => [0, 1, 2].map(|c| [f[c][0], f[c][1], b[c][0], b[c][1]]),
+                    None => [[-1.0; 4]; 3],
+                };
+                let n = (t.p[1] - t.p[0]).cross(t.p[2] - t.p[0]).normalized();
+                let n = if n.is_finite() { [n.x as f32, n.y as f32, n.z as f32] } else { [0.0, 0.0, 1.0] };
+                let surface = sc.surfaces.get(t.mat as usize).filter(|_| physical);
+                let (color, m) = match surface {
+                    Some(sm) => {
+                        let layer = sm.texture.map(|i| i as usize + offset).filter(|i| *i < how.layers).map_or(-1.0, |i| i as f32);
+                        (Rgb(srgb(sm.base[0]), srgb(sm.base[1]), srgb(sm.base[2])), [sm.roughness, sm.metallic, layer, sm.opacity])
+                    }
+                    // Unlit styles: its own colour, see-through as its material is (a
+                    // ghosted shell).
+                    None => (t.color, [0.6, 0.0, -1.0, sc.surfaces.get(t.mat as usize).map_or(1.0, |sm| sm.opacity.clamp(0.0, 1.0))]),
+                };
+                let out = if m[3] < 0.99 { &mut self.clear } else { &mut self.tris };
+                for ((p, uv), l) in t.p.iter().zip(t.uv).zip(lm) {
+                    push_vertex(out, rel(*p), n, color, uv, m, l);
+                }
+            }
+        }
+        for l in sc.lines.get(lr).unwrap_or(&[]).iter().filter(|l| !l.edge || edges) {
+            let c = match (l.edge && style == VisualStyle::ShadedEdges, l.faint) {
+                (true, true) => cadaddy_render::shade::faint_ink(dark, bg),
+                (true, false) => dark,
+                _ => l.color,
+            };
+            push_vertex(&mut self.lines, rel(l.a), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
+            push_vertex(&mut self.lines, rel(l.b), [0.0, 0.0, 1.0], c, [0.0; 2], [0.6, 0.0, -1.0, 1.0], [-1.0; 4]);
+        }
+        [t0..Pack::count(&self.tris), c0..Pack::count(&self.clear), l0..Pack::count(&self.lines)]
     }
 }
 
@@ -1341,7 +1755,9 @@ fn push_vertex(out: &mut Vec<u8>, p: [f32; 3], n: [f32; 3], c: Rgb, uv: [f32; 2]
 }
 
 fn buffer(device: &wgpu::Device, label: &str, bytes: &[u8]) -> Option<Buffer> {
-    if bytes.is_empty() {
+    // Nothing, or more than the device takes in one buffer (that would be a validation error,
+    // which stops the app): none, and what it held isn't drawn.
+    if bytes.is_empty() || bytes.len() as u64 > device.limits().max_buffer_size {
         return None;
     }
     let buffer = Tracked::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1462,8 +1878,9 @@ mod tests {
             let cpu = shade::rasterize_lit(&flat, &view, VisualStyle::Realistic, bg, Some(&lit));
             let mut g = Gpu::new(device, 1);
             g.upload(device, queue, &model, VisualStyle::Realistic, bg);
+            g.load_tiers(device, &model, Tier::Detail);
             g.set_lighting(device, queue, Some(&lit));
-            g.render(device, queue, &view, VisualStyle::Realistic, bg);
+            g.render(device, queue, &view, VisualStyle::Realistic, bg, Tier::Detail, None, &Stream::default());
             // The frame, read back (rows of 512 bytes: 256-aligned).
             let frame = &g.target.as_ref().unwrap().frame;
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1509,5 +1926,276 @@ mod tests {
             let (clear, fogged) = (mean(&gpu, (21, 30)), mean(&gpu, (103, 30)));
             assert!((0..3).any(|c| (clear[c] - fogged[c]).abs() > 10.0), "{clear:?} {fogged:?}");
         }
+    }
+
+    /// The last frame of `g`, read back (RGBA rows; `w * 4` a multiple of 256).
+    fn read_frame(g: &super::Gpu, device: &super::wgpu::Device, queue: &super::wgpu::Queue, w: u32, h: u32) -> Vec<u8> {
+        use super::wgpu;
+        let frame = &g.target.as_ref().unwrap().frame;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(w * 4 * h),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        enc.copy_texture_to_buffer(
+            frame.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        queue.submit([enc.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(10)) }).unwrap();
+        buffer.slice(..).get_mapped_range().unwrap().to_vec()
+    }
+
+    /// On the GPU: at the building tier a room's devices and a conduit stick aren't drawn (only
+    /// the slab); at the room tier the devices (instances) and the stick (a streamed cell) are,
+    /// and the base buffers hold only what their tier draws.
+    #[test]
+    fn fidelity_tiers_on_the_gpu() {
+        use super::*;
+        use cadaddy_doc::{Common, EntityKind, Mesh, MeshFace, MeshKind};
+        use cadaddy_geom::Vec2;
+        let boxmesh = |lo: Vec3, hi: Vec3| {
+            let v = |x: bool, y: bool, z: bool| Vec3::new(if x { hi.x } else { lo.x }, if y { hi.y } else { lo.y }, if z { hi.z } else { lo.z });
+            let f = |a: [u32; 4]| MeshFace { v: a.to_vec(), hidden: 0 };
+            Mesh {
+                vertices: vec![
+                    v(false, false, false),
+                    v(true, false, false),
+                    v(true, true, false),
+                    v(false, true, false),
+                    v(false, false, true),
+                    v(true, false, true),
+                    v(true, true, true),
+                    v(false, true, true),
+                ],
+                faces: vec![f([0, 3, 2, 1]), f([4, 5, 6, 7]), f([0, 1, 5, 4]), f([1, 2, 6, 5]), f([2, 3, 7, 6]), f([3, 0, 4, 7])],
+                kind: MeshKind::Subd,
+            }
+        };
+        let mut d = cadaddy_doc::Drawing::new_metric();
+        let mut put = |layer: &str, lo: Vec3, hi: Vec3, rgb: Rgb| {
+            let c = Common { layer: layer.into(), color: cadaddy_doc::color::Color::True(rgb), ..Common::default() };
+            d.add(&cadaddy_doc::Space::Model, c, EntityKind::Mesh(boxmesh(lo, hi))).unwrap();
+        };
+        put("SLAB", Vec3::new(0.0, 0.0, -1.0), Vec3::new(100.0, 100.0, 0.0), Rgb(200, 200, 200));
+        for (x, y) in [(20.0, 20.0), (5.0, 80.0), (40.0, 5.0), (45.0, 45.0), (10.0, 50.0)] {
+            put("DEV", Vec3::new(x, y, 0.0), Vec3::new(x + 10.0, y + 10.0, 3.0), Rgb(250, 30, 30));
+        }
+        put("COND", Vec3::new(60.0, 58.0, 0.0), Vec3::new(92.0, 64.0, 2.0), Rgb(30, 30, 250));
+        put("WALL", Vec3::new(0.0, 96.0, 0.0), Vec3::new(100.0, 97.0, 9.0), Rgb(120, 120, 120));
+        let classify = |_: &cadaddy_doc::Drawing, e: &cadaddy_doc::Entity| {
+            let tier = match e.common.layer.to_ascii_uppercase().as_str() {
+                "SLAB" => Tier::Building,
+                "WALL" => Tier::Floor,
+                "DEV" | "COND" => Tier::Room,
+                _ => return None,
+            };
+            Some(model3::ElemClass { tier, kind: e.common.layer.to_ascii_lowercase(), level: "L1".into(), group: None, line_from: None })
+        };
+        let bg = Rgb(255, 255, 255);
+        let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+        let model =
+            Arc::new(model3::build_fid(Arc::new(d), &cadaddy_doc::Space::Model, 0.05, bg, &p, &t, &[], &classify, model3::FidOptions::default()));
+        let f = model.fid.as_ref().unwrap();
+        assert_eq!(f.elems.iter().filter(|e| e.held == model3::Held::Instance).count(), 5);
+        assert_eq!(f.elems.iter().filter(|e| e.held == model3::Held::Streamed).count(), 1);
+        let (w, h) = (128u32, 128u32);
+        let view = ShadeView::new(None, Vec2::new(50.0, 50.0), 100.0, w, h);
+        // A plan point's pixel.
+        let px = |x: f64, y: f64| ((x / 100.0 * f64::from(w)) as u32, ((100.0 - y) / 100.0 * f64::from(h)) as u32);
+        let at = |img: &[u8], (x, y): (u32, u32)| {
+            let i = (y * w + x) as usize * 4;
+            [img[i], img[i + 1], img[i + 2]]
+        };
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let mut g = Gpu::new(device, 1);
+        let mut stream = Stream::default();
+        // The building tier: nothing streamed, the slab only.
+        stream.update(&model, &view, Tier::Building, f64::INFINITY);
+        g.upload(device, queue, &model, VisualStyle::Shaded, bg);
+        g.load_tiers(device, &model, Tier::Building);
+        g.upload_stream(device, &stream, VisualStyle::Shaded, bg);
+        let vis = g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Building, None, &stream);
+        assert!(vis.instances.is_empty());
+        assert_eq!(g.tier_bytes, [0, 0, 0], "the wall's tier isn't on the GPU");
+        let far = read_frame(&g, device, queue, w, h);
+        let (dev, stick) = (px(25.0, 25.0), px(76.0, 61.0));
+        for (what, c) in [("device", at(&far, dev)), ("stick", at(&far, stick))] {
+            assert!(c[0].abs_diff(c[1]) < 30 && c[1].abs_diff(c[2]) < 30, "{what} not drawn at the building tier: {c:?}");
+        }
+        let marked = model.visible_at(&view, Tier::Building, Some(&Force { kind: "dev".into(), level: None })).markers;
+        assert_eq!(marked.len(), 5);
+        // The room tier: the devices (instances) and the stick (streamed in) are drawn.
+        let step = stream.update(&model, &view, Tier::Room, f64::INFINITY);
+        assert!(step.added >= 1);
+        g.load_tiers(device, &model, Tier::Room);
+        g.upload_stream(device, &stream, VisualStyle::Shaded, bg);
+        let vis = g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Room, None, &stream);
+        assert_eq!(vis.instances.iter().map(|x| x.2.len()).sum::<usize>(), 5);
+        let near = read_frame(&g, device, queue, w, h);
+        let c = at(&near, dev);
+        assert!(c[0] > c[1].saturating_add(60), "a device at the room tier: {c:?}");
+        let c = at(&near, stick);
+        assert!(c[2] > c[0].saturating_add(60), "the streamed stick at the room tier: {c:?}");
+        assert!(g.stream_bytes > 0);
+        assert!(g.tier_bytes[0] > 0, "the floor tier (the wall) loaded");
+        // Back out: the stream lets the stick go, the floor tier's buffers go, the GPU follows.
+        stream.update(&model, &view, Tier::Building, f64::INFINITY);
+        g.upload_stream(device, &stream, VisualStyle::Shaded, bg);
+        g.load_tiers(device, &model, Tier::Building);
+        assert_eq!(g.stream_bytes, 0);
+        assert_eq!(g.tier_bytes, [0, 0, 0]);
+        g.render(device, queue, &view, VisualStyle::Shaded, bg, Tier::Building, None, &stream);
+        let again = read_frame(&g, device, queue, w, h);
+        assert_eq!(at(&again, dev), at(&far, dev), "back to the building tier's picture");
+    }
+
+    /// The hotel-scale numbers on this machine's wgpu (a benchmark, run by hand):
+    /// `CADADDY_FIDELITY_BENCH=model.cdy cargo test -p cadaddy-ui-egui --lib fidelity_bench -- --ignored --nocapture`.
+    /// The whole building at each tier, and without fidelity: build, upload and frame times, the
+    /// buffers' bytes; then a zoom into the room round one receptacle: the time until it is drawn.
+    #[test]
+    #[ignore = "a benchmark: set CADADDY_FIDELITY_BENCH to a built model"]
+    fn fidelity_bench() {
+        use super::*;
+        let Ok(path) = std::env::var("CADADDY_FIDELITY_BENCH") else { return };
+        let (w, h) = (1600u32, 1000u32);
+        let doc = Arc::new(cadaddy_io::cdy::read_cdy(&std::fs::read(&path).unwrap()).unwrap());
+        let md = Arc::new(cadaddy_engine::cmd::bimlook::display(&doc).unwrap());
+        let ext = md.extents(&cadaddy_doc::Space::Model);
+        let tol = ext.width().max(ext.height()) / 1500.0;
+        let bg = Rgb(255, 255, 255);
+        let upf = cadaddy_engine::cmd::fidelity::units_per_foot(&md);
+        let rs = egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), Default::default());
+        let (device, queue) = (&rs.device, &rs.queue);
+        let wait = || {
+            device.poll(wgpu::PollType::Wait { submission_index: None, timeout: Some(std::time::Duration::from_secs(120)) }).unwrap();
+        };
+        let proj = cadaddy_geom::view3::Projection::new(Vec3::new(-1.0, -1.0, 1.0));
+        let style = VisualStyle::ShadedEdges;
+        let mut out = serde_json::Map::new();
+        for fid in [false, true] {
+            let (p, t) = (AtomicUsize::new(0), AtomicUsize::new(1));
+            let t0 = web_time::Instant::now();
+            let model = Arc::new(build3(&md, fid, tol, bg, &p, &t, &[]));
+            let build_ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let whole = shade::fit_bounds(&model.bounds, proj, w, h).unwrap();
+            let tiers: Vec<Tier> = if fid { Tier::ALL.to_vec() } else { vec![Tier::Detail] };
+            let (lt, ll) = model.loaded_at(Tier::Detail);
+            let need = (lt * 3 + ll * 2) as u64 * VERTEX_SIZE;
+            if !fid && need > device.limits().max_buffer_size {
+                out.insert(
+                    "without".into(),
+                    serde_json::json!({
+                        "build_ms": build_ms.round(), "tris": model.total_tris(), "model_mb": (model.bytes() as f64 / 1048576.0).round(),
+                        "gpu": format!("needs {} MB of vertex buffers, over this device's {} MB buffer limit: not drawn", need >> 20, device.limits().max_buffer_size >> 20),
+                    }),
+                );
+                continue;
+            }
+            for tier in tiers {
+                let mut g = Gpu::new(device, 4);
+                let mut stream = Stream::default();
+                let t1 = web_time::Instant::now();
+                stream.update(&model, &whole, tier, f64::INFINITY);
+                g.upload(device, queue, &model, style, bg);
+                g.load_tiers(device, &model, tier);
+                g.upload_stream(device, &stream, style, bg);
+                let vis = g.render(device, queue, &whole, style, bg, tier, None, &stream);
+                wait();
+                let first_ms = t1.elapsed().as_secs_f64() * 1000.0;
+                let n = 5;
+                let t2 = web_time::Instant::now();
+                for _ in 0..n {
+                    g.render(device, queue, &whole, style, bg, tier, None, &stream);
+                    wait();
+                }
+                let frame_ms = t2.elapsed().as_secs_f64() * 1000.0 / f64::from(n);
+                let key = if fid { tier.name().to_string() } else { "without".to_string() };
+                out.insert(
+                    key,
+                    serde_json::json!({
+                        "build_ms": build_ms.round(), "upload_and_first_frame_ms": first_ms.round(), "frame_ms": (frame_ms * 10.0).round() / 10.0,
+                        "fps": (1000.0 / frame_ms * 10.0).round() / 10.0, "tris_drawn": vis.tris + stream.tris(),
+                        "gpu_buffers_mb": ((g.bytes + g.tier_bytes.iter().sum::<usize>() + g.stream_bytes) as f64 / 1048576.0).round(), "model_mb": ((model.bytes() + stream.bytes) as f64 / 1048576.0).round(),
+                    }),
+                );
+            }
+            if !fid {
+                continue;
+            }
+            // Zoom into the room round the middle receptacle, from the whole building.
+            let f = model.fid.as_ref().unwrap();
+            let recs: Vec<&model3::Elem> = f.elems.iter().filter(|e| f.kind_of(e).contains("receptacle")).collect();
+            let Some(r) = recs.get(recs.len() / 2) else { continue };
+            let pad = Vec3::new(10.0 * upf, 10.0 * upf, 4.0 * upf);
+            let b = model3::Aabb { lo: r.bounds.lo - pad, hi: r.bounds.hi + pad };
+            let room = shade::fit_bounds(&b, proj, w, h).unwrap();
+            let auto = cadaddy_engine::cmd::fidelity::Rules::of(&md).0.auto.tiers();
+            let whole_tier = auto.tier(whole.height / upf, None);
+            let tier = auto.tier(room.height / upf, Some(whole_tier));
+            let mut g = Gpu::new(device, 4);
+            let mut stream = Stream::default();
+            g.upload(device, queue, &model, style, bg);
+            g.load_tiers(device, &model, whole_tier);
+            g.render(device, queue, &whole, style, bg, whole_tier, None, &stream);
+            wait();
+            // The wheel passes the floor scale first: a view of the room's floor round it.
+            let fb = model3::Aabb {
+                lo: r.bounds.lo - Vec3::new(60.0 * upf, 40.0 * upf, 4.0 * upf),
+                hi: r.bounds.hi + Vec3::new(60.0 * upf, 40.0 * upf, 4.0 * upf),
+            };
+            let floor_view = shade::fit_bounds(&fb, proj, w, h).unwrap();
+            let floor_tier = auto.tier(floor_view.height / upf, Some(whole_tier));
+            let tf = web_time::Instant::now();
+            stream.update(&model, &floor_view, floor_tier, STREAM_MS);
+            g.load_tiers(device, &model, floor_tier);
+            g.upload_stream(device, &stream, style, bg);
+            let floor_cpu_ms = tf.elapsed().as_secs_f64() * 1000.0;
+            g.render(device, queue, &floor_view, style, bg, floor_tier, None, &stream);
+            wait();
+            let floor_ms = tf.elapsed().as_secs_f64() * 1000.0;
+            // Then the room: the CPU's share (stream, tiers, buffers, what is visible), then the frame.
+            let t3 = web_time::Instant::now();
+            let step = stream.update(&model, &room, tier, STREAM_MS);
+            g.load_tiers(device, &model, tier);
+            g.upload_stream(device, &stream, style, bg);
+            let vis_only = model.visible_at(&room, tier, None);
+            let cpu_ms = t3.elapsed().as_secs_f64() * 1000.0;
+            let vis = g.render(device, queue, &room, style, bg, tier, None, &stream);
+            wait();
+            let zoom_ms = t3.elapsed().as_secs_f64() * 1000.0;
+            // The room's receptacles (instances) drawn on that first frame.
+            let near: Vec<&&model3::Elem> =
+                recs.iter().filter(|e| model3::in_view(&e.bounds, &room) && (e.bounds.center() - r.bounds.center()).len() < 12.0 * upf).collect();
+            let drawn = near
+                .iter()
+                .filter(|e| {
+                    vis.instances.iter().any(|(_, _, l)| {
+                        l.iter().filter_map(|k| model.instances.get(*k as usize)).any(|x| (x.bounds.center() - e.bounds.center()).len() < 1e-6)
+                    })
+                })
+                .count();
+            out.insert(
+                "room".into(),
+                serde_json::json!({
+                    "height_ft": (room.height / upf).round(), "tier": tier.name(), "from": floor_tier.name(), "floor_view_ft": (floor_view.height / upf).round(),
+                    "floor_step_cpu_ms": floor_cpu_ms.round(), "floor_step_ms": floor_ms.round(),
+                    "stream_cells": step.added, "stream_ms": step.ms.round(), "stream_pending": step.pending,
+                    "cpu_ms": (cpu_ms * 10.0).round() / 10.0, "zoom_to_drawn_ms": zoom_ms.round(), "tris_drawn": vis.tris + stream.tris(),
+                    "instances_drawn": vis.instances.iter().map(|x| x.2.len()).sum::<usize>(), "receptacles_within_12ft": near.len(), "receptacles_drawn_first_frame": drawn,
+                    "visible_tris": vis_only.tris,
+                }),
+            );
+        }
+        println!("FIDELITY_BENCH {}", serde_json::Value::Object(out));
     }
 }

@@ -1,0 +1,73 @@
+{
+  "trade": "plumbing",
+  "about": "Standard object forms for plumbing and fire protection kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "fixture",
+      "label": "Plumbing fixture",
+      "aliases": ["plumbing_fixture"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "rough_in", "type": "text", "unit": "in", "required": true, "aliases": ["rough_in_height"], "note": "rough-in heights of its connections"},
+        {"key": "waste", "type": "text", "unit": "in", "required": true, "aliases": ["waste_size"]},
+        {"key": "vent", "type": "text", "unit": "in", "required": true, "aliases": ["vent_size"]},
+        {"key": "cold_water", "type": "text", "unit": "in", "required": true, "aliases": ["cw", "cw_size"]},
+        {"key": "hot_water", "type": "text", "unit": "in", "required": false, "aliases": ["hw", "hw_size"]},
+        {"key": "mounting", "type": "text", "required": false, "aliases": ["placement"]},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "pipe",
+      "label": "Pipe",
+      "aliases": ["piping"],
+      "fields": [
+        {"key": "system", "type": "text", "required": true},
+        {"key": "size", "type": "text", "unit": "in", "required": true},
+        {"key": "material", "type": "text", "required": true},
+        {"key": "slope", "type": "text", "required": false, "note": "drainage lines"},
+        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["invert", "bottom_height"]},
+        {"key": "insulation", "type": "text", "required": false},
+        {"key": "connections", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "water_heater",
+      "label": "Water heater",
+      "aliases": ["wh"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "capacity", "type": "text", "required": true, "aliases": ["gallons", "size"]},
+        {"key": "fuel", "type": "text", "required": true, "note": "electric, gas"},
+        {"key": "voltage", "type": "text", "required": false, "when": {"key": "fuel", "in": ["electric"]}},
+        {"key": "kw", "type": "number", "unit": "kW", "required": false},
+        {"key": "circuit", "type": "text", "required": false, "when": {"key": "fuel", "in": ["electric"]}},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "sprinkler",
+      "label": "Sprinkler head",
+      "aliases": ["sprinkler_head"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "note": "pendent, upright, sidewall, concealed"},
+        {"key": "k_factor", "type": "number", "required": false},
+        {"key": "temperature", "type": "text", "required": false},
+        {"key": "finish", "type": "text", "required": false},
+        {"key": "elevation", "type": "number", "unit": "ft", "required": false},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

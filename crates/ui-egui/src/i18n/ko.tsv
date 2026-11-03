@@ -3341,4 +3341,31 @@ menu	Modify	수정
 	Report Validation Findings	검증 결과 보고
 	Validation Run Status	검증 실행 상태
 	Plant Validation Errors	검증용 오류 심기
+	Model Fidelity	모델 충실도
+	Model Fidelity Rules	모델 충실도 규칙
+	Model Fidelity Report	모델 충실도 보고서
+	Fidelity	충실도
+	Auto	자동
+	Floor	층
+	Detail	세부
 	Print Inventory	도면 목록
+	Piece	부재
+	Raceway run	전선관 구간
+	Connects to	연결 대상
+	Height AFF	마감 바닥 기준 높이
+	Host wall	호스트 벽
+	Wall face	벽면
+	Outlet box	아웃렛 박스
+	Fed by	급전원
+	Count Model Pieces	모델 부재 수 세기
+	Edit Model Piece	모델 부재 편집
+	Walk the Feed	급전 경로 따라가기
+	Object Forms	객체 양식
+	Create Object Forms	객체 양식 만들기
+	Edit Object Form Field	객체 양식 필드 편집
+	Record Object Field Value	객체 필드 값 기록
+	Object Form Log	객체 양식 기록
+	Revert Object Form Change	객체 양식 변경 되돌리기
+	Promote Object Form to Template	객체 양식을 템플릿으로 승격
+	Object Completeness	객체 완성도
+	Object Form	객체 양식
