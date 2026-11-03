@@ -108,6 +108,7 @@ pub mod casework;
 pub mod clashreport;
 pub mod cobie;
 pub mod concrete;
+pub mod conduitroute;
 pub mod dgn;
 pub mod dimmodes;
 pub mod drywall;
@@ -811,6 +812,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(mepatoms::specs());
+        v.extend(conduitroute::specs());
         v.extend(ifcref::specs());
         v.extend(ifcmodel::specs());
         v.extend(bcf::specs());

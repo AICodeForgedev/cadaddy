@@ -5256,8 +5256,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
+    // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
+    // the build routes the circuits by (Q6152).
+    route_methods_step(s, job);
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
+    route_report_step(s, job, &mut result);
     result["left_out"] = json!(left_out);
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
@@ -9493,6 +9497,156 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     s.echo(line);
     result["value_engineering"] = json!({"construction_type": construction.map(|c| c.0), "scenarios": scenarios, "rfis": rfis});
     Ok(())
+}
+
+/// The specification's wiring-methods tables (26 05 19), its minimum raceway size and the
+/// circuits a homerun may share, stored in the drawing for the router (Q6152).
+fn route_methods_step(s: &mut Session, job: &GuidedJob) {
+    let specs = job_specs(job);
+    let mut m = super::conduitroute::Methods::default();
+    for (section, text) in super::valueeng::spec_texts(&specs) {
+        m.applications.extend(super::valueeng::wiring_applications(&text, &section).into_iter().map(|a| super::conduitroute::MethodApp {
+            section: a.section,
+            item: a.item,
+            application: a.application,
+            methods: a.methods,
+        }));
+        super::conduitroute::spec_limits(&text, &section, &mut m);
+    }
+    progress_line(&format!(
+        "  wiring methods for routing: {} application(s) from {} spec file(s); minimum raceway {}; circuits per homerun {}",
+        m.applications.len(),
+        specs.len(),
+        m.min_size_in.map_or_else(|| "not said".to_string(), |v| format!("{v} in")),
+        m.max_circuits.map_or_else(|| "not said".to_string(), |v| v.to_string())
+    ));
+    if let Ok(d) = s.doc_mut() {
+        m.store(d);
+    }
+}
+
+/// What routing the circuits found (Q6152): its line, the clashes by trade pair and level, the
+/// entry windows the submittals don't give (a question), the windows too small, the boxes
+/// overfilled; the takeoff written beside the job's drawing.
+fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let Some(r) = s.doc().ok().and_then(super::conduitroute::stored_report) else { return };
+    if r["routed"] == json!(false) || r["routed_circuits"].as_u64().unwrap_or(0) == 0 {
+        return;
+    }
+    let n = |k: &str| r[k].as_array().map_or(0, Vec::len);
+    let pairs: Vec<String> = r["clashes_by_pair_level"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(pair, levels)| {
+            let per: Vec<String> = levels.as_object().into_iter().flatten().map(|(l, c)| format!("{l} {c}")).collect();
+            format!("{pair}: {}", per.join(", "))
+        })
+        .collect();
+    let line = format!(
+        "  conduit routed: {} circuits, {} homeruns ({} by corridor, {} circuits sharing), {} ft (the estimate was {} ft) {}; clashes {} [{}]; entry conflicts {}; rated penetrations {}; boxes overfilled {} of {}; conductors upsized {}; unrouted {}",
+        r["routed_circuits"],
+        r["homeruns"],
+        r["homeruns_by_corridor"],
+        r["grouped_circuits"],
+        r["routed_ft"],
+        r["estimated_ft_before"],
+        r["ft_by_method_size"],
+        n("clashes"),
+        pairs.join("; "),
+        n("conflicts"),
+        n("penetrations"),
+        r["box_fill"]["over"].as_array().map_or(0, Vec::len),
+        r["box_fill"]["checked"],
+        n("conductors_upsized"),
+        n("unrouted"),
+    );
+    progress_line(&line);
+    if n("clashes") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} conduit clash(es) the router could not route around: {}", n("clashes"), pairs.join("; ")),
+            "each is a review item of kind clash with both objects, the spot, the clearance needed and a fix (conduit.route {section: \"clashes\"})",
+            2,
+            vec!["Coordinate each clash with the other trade, or accept the suggested offset".into()],
+            None,
+            false,
+        );
+    }
+    if n("conflicts") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} panel entry conflict(s): the raceways don't fit the allowed entry window", n("conflicts")),
+            "the router never squeezes raceways outside a gear's allowed conduit area (conduit.route {section: \"conflicts\"})",
+            2,
+            vec!["Add a gutter, wireway or pull box, a larger can, or split the entry".into()],
+            None,
+            false,
+        );
+    }
+    let unknown: Vec<String> = r["entry_unknown"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+    if !unknown.is_empty() {
+        let qid = job.next_qid(StageName::BimBuild);
+        let q = Question {
+            id: qid,
+            stage: StageName::BimBuild,
+            question: format!(
+                "Where may the branch raceways enter these panels? Their submittals give no conduit area: {}",
+                unknown.iter().take(12).cloned().collect::<Vec<_>>().join(", ")
+            ),
+            why: "the router lands each homerun in its panel's allowed entry window; without one it centres them on the top (derived)".into(),
+            choices: vec!["Top, centred (as routed)".into(), "Give the conduit areas".into()],
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(json!({"panels": unknown})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("Top, centred (as routed)".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        if let Some(st) = job.stage_mut(StageName::BimBuild) {
+            st.questions.push(q);
+        }
+    }
+    let over = r["box_fill"]["over"].as_array().map_or(0, Vec::len);
+    if over > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{over} device box(es) over their NEC 314.16 fill with the routed conductors"),
+            "each lists the conductors, the volume needed and a bigger box (conduit.route {section: \"box_fill\"})",
+            2,
+            vec!["Use the bigger box or an extension ring, or move a raceway to a junction box".into()],
+            None,
+            false,
+        );
+    }
+    // The takeoff beside the job's own drawing.
+    if job.checkpoint_given
+        && let Some(ck) = job.checkpoint.clone()
+    {
+        let p = std::path::Path::new(&ck);
+        let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
+        let file = p.with_file_name(format!("{stem}-conduit-takeoff.csv")).to_string_lossy().to_string();
+        match s.execute("conduit.takeoff", &json!({"group_by": ["level", "area", "circuit"], "file": file})) {
+            Ok(v) => {
+                progress_line(&format!("  conduit takeoff: {} lines, {} firestop; written to {}", v["line_count"], v["firestop"], file));
+                result["conduit_takeoff"] = json!({"file": file, "lines": v["line_count"], "totals": v["totals"]});
+            }
+            Err(e) => result["conduit_takeoff_error"] = json!(e.to_string()),
+        }
+    }
+    result["conduit_route"] = json!({
+        "circuits": r["routed_circuits"], "homeruns": r["homeruns"], "routed_ft": r["routed_ft"],
+        "clashes": n("clashes"), "conflicts": n("conflicts"), "penetrations": n("penetrations"), "unrouted": n("unrouted"),
+    });
 }
 
 /// The sheet number the generated underground sheets start at.
