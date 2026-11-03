@@ -59,7 +59,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let lower = path.to_ascii_lowercase();
         if lower.ends_with(".pdf") {
             // Extract text from PDF via the host's pdf reader.
-            extract_pdf_text(&bytes, path)?
+            extract_pdf_text(&bytes, path, 200)?
         } else {
             // Assume UTF-8 text.
             String::from_utf8(bytes).map_err(|e| bad(CMD_IMPORT, format!("{path}: {e}")))?
@@ -149,16 +149,20 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// A PDF's text as a person reads it, page by page (`--- page N of M ---` between pages).
 pub(crate) fn pdf_text(bytes: &[u8], path: &str) -> Result<String> {
-    extract_pdf_text(bytes, path)
+    extract_pdf_text(bytes, path, 200)
 }
 
-fn extract_pdf_text(bytes: &[u8], path: &str) -> Result<String> {
+/// A PDF's text as [`pdf_text`] gives it, its first `max_pages` pages (a project manual's
+/// hundreds; the first few to tell what a file is).
+pub(crate) fn pdf_text_pages(bytes: &[u8], path: &str, max_pages: u32) -> Result<String> {
+    extract_pdf_text(bytes, path, max_pages.max(1))
+}
+
+fn extract_pdf_text(bytes: &[u8], path: &str, max_pages: u32) -> Result<String> {
     let hooks = super::file::io().ok_or_else(|| bad(CMD_IMPORT, "PDF reading is not available in this build"))?;
     let read_pdf = hooks.read_pdf.ok_or_else(|| bad(CMD_IMPORT, "PDF import is not available in this build"))?;
 
-    // Read up to 200 pages.
     let mut all_text = String::new();
-    let max_pages = 200u32;
 
     // Try reading page 1 first to discover page count.
     let opts = json!({"page": 1, "text": true, "images": false});
