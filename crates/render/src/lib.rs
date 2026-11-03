@@ -2495,12 +2495,14 @@ fn insert_contents(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::In
                 sub.xf = Mat3::translate(p.project(cadaddy_geom::Vec3::new(0.0, 0.0, ins.insert.z))).then_before(sub.xf);
             }
             for be in blk.entities.iter() {
+                // Every visit is charged, drawn or not, so a block of definitions can't make the
+                // copies loop free.
+                if !b.expand() {
+                    break 'copies;
+                }
                 // Constant/visible attribute definitions inside blocks are not drawn; attribs are.
                 if matches!(be.kind, EntityKind::AttDef(_)) || depth.is_some_and(|c| c.beyond_depth(&be.kind)) {
                     continue;
-                }
-                if !b.expand() {
-                    break 'copies;
                 }
                 entity(b, &sub, be);
             }
@@ -2564,6 +2566,17 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
         // The reference's transparency; each attribute draws with its own.
         let reference = b.transparency;
         let mut vals = field_values(ctx.d, e.handle);
+        // The block's first definition per tag (without case), built once for all the attributes.
+        let mut defs: std::collections::HashMap<String, &Entity> = std::collections::HashMap::new();
+        if !ins.attribs.is_empty()
+            && let Some(blk) = ctx.d.block(&ins.block)
+        {
+            for be in blk.entities.iter() {
+                if let EntityKind::AttDef(d) = &be.kind {
+                    defs.entry(d.tag.to_ascii_lowercase()).or_insert(be.as_ref());
+                }
+            }
+        }
         for a in &ins.attribs {
             // Field values are counted over every attribute, shown or not.
             let with = with_fields(&a.text.value, &mut vals, false).map(|value| {
@@ -2581,7 +2594,7 @@ fn insert(b: &mut Builder, ctx: &Ctx, e: &Entity, ins: &cadaddy_doc::Insert, rgb
             // Properties of the attribute's definition (as AutoCAD copies them to the attribute
             // on insertion), except those set on the attribute itself: ByBlock = the reference's,
             // layer 0 = the reference's layer.
-            let def = ctx.d.block(&ins.block).and_then(|blk| blk.entities.iter().find(|be| attdef_tag(be, &a.tag)));
+            let def = defs.get(&a.tag.to_ascii_lowercase()).copied();
             let (ink, lw, shown, t) = match (def, a.props.is_empty()) {
                 (None, true) => (rgb, resolve(ctx, e, b.plotting).1, true, reference),
                 (def, _) => {
@@ -2624,11 +2637,6 @@ fn by_block() -> cadaddy_doc::Common {
         transparency: cadaddy_doc::Transparency::ByBlock,
         ..cadaddy_doc::Common::default()
     }
-}
-
-/// The attribute definition with tag `tag` (any case).
-fn attdef_tag(e: &Entity, tag: &str) -> bool {
-    matches!(&e.kind, EntityKind::AttDef(d) if d.tag.eq_ignore_ascii_case(tag))
 }
 
 /// The overall scale of a leader drawn with dimension style `st`: its DIMSCALE, else the
