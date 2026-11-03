@@ -1644,13 +1644,16 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
             let Some(o) = found else {
                 // No object to check against (not placed yet, or deleted): never pass or fail.
                 let mut t = tie.clone();
-                if t.pending.is_empty() {
+                let issue = if t.pending.is_empty() {
                     t.pending = pending_kind(&rules, &t);
-                }
+                    format!("{}: {} is not in the model any more; checked once it is placed again", t.pending_text(), t.reference)
+                } else {
+                    format!("{}: no {} object in the model yet; checked once it is placed", t.pending_text(), t.pending.replace('_', " "))
+                };
                 list.push(check(
                     "constraint",
                     "unsure",
-                    format!("{}: {} is not in the model; checked once it is placed", t.pending_text(), t.reference),
+                    issue,
                     format!("{}{}", tie.zone, if tie.derived { " (rules data, derived)" } else { "" }),
                     t.pending_text(),
                     t.to_json(),
