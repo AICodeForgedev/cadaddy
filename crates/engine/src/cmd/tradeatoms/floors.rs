@@ -249,8 +249,14 @@ fn mesh_lb_sf(r: &Rules, style: &str) -> Option<f64> {
 
 /// The documents' mix for a slab or pour: its text and strength, with where it was read.
 fn mix_of(r: &Rules) -> (String, String, Source) {
-    let mix = r.fact("concrete.mix");
-    let psi = r.fact("concrete.strength_psi");
+    // The building's mix (a site or utility mix is for what is outside): the one that names a
+    // slab, else the first; its strength from the same submittal.
+    let building = |f: &&Fact| !f.scope.starts_with("site");
+    let mixes: Vec<&Fact> = r.facts_of("concrete.mix").filter(building).collect();
+    let mix = mixes.iter().find(|f| f.value.to_ascii_uppercase().contains("SLAB")).or(mixes.first()).copied();
+    let psi = mix
+        .and_then(|m| r.facts_of("concrete.strength_psi").find(|f| f.scope == m.scope))
+        .or_else(|| r.facts_of("concrete.strength_psi").find(building));
     let text = mix.map(|f| f.value.clone()).unwrap_or_default();
     let strength = psi.and_then(|f| f.number).map(|v| format!("{} psi", v.round())).unwrap_or_default();
     let src = mix.or(psi).map_or_else(|| Source::from_doc(SourceKind::Default, "no concrete mix in the documents read"), |f| f.source_of());
@@ -857,7 +863,7 @@ mod tests {
         let sq = vec![Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), Vec2::new(10.0, 10.0), Vec2::new(0.0, 10.0)];
         let c = clip_box(&sq, Vec2::new(5.0, 5.0), Vec2::new(20.0, 20.0));
         assert!((cadaddy_geom::shoelace(&c).abs() - 25.0).abs() < 1e-9);
-        let lines = lines_across(&[sq.clone()], Vec2::new(1.0, 0.0), 2.0, 1.0);
+        let lines = lines_across(std::slice::from_ref(&sq), Vec2::new(1.0, 0.0), 2.0, 1.0);
         assert_eq!(lines.len(), 5);
         // A plate cut in three strips: its outline is four runs.
         let strip = |y0: f64, y1: f64| vec![Vec2::new(0.0, y0), Vec2::new(10.0, y0), Vec2::new(10.0, y1), Vec2::new(0.0, y1)];

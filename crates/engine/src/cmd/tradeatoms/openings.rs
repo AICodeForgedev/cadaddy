@@ -35,7 +35,7 @@ fn set_size(text: &str) -> Option<(f64, f64)> {
     let mut it = u.split('X').map(str::trim);
     let parse = |s: &str| {
         let (f, i) = s.split_once('-')?;
-        Some(f.trim().parse::<f64>().ok()? + i.trim().split_whitespace().next()?.parse::<f64>().ok()? / 12.0)
+        Some(f.trim().parse::<f64>().ok()? + i.split_whitespace().next()?.parse::<f64>().ok()? / 12.0)
     };
     Some((parse(it.next()?)?, parse(it.next()?)?))
 }
@@ -112,15 +112,22 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
                 r.words("framing.wood_words").iter().any(|w| u.contains(w.as_str())) && !r.words("framing.steel_words").iter().any(|w| u.contains(w.as_str()))
             })
         });
-        // Its hardware set: one of the schedule's of its size with openings left, else the
-        // first with openings left.
-        let pick = sets
+        // Its hardware set: the door list's for its number; else one of the schedule's of its
+        // size with openings left, else the first with openings left.
+        let number = props::read(&e.common.xdata).get("number").map(Prop::text).unwrap_or_default();
+        let listed = (!number.trim().is_empty())
+            .then(|| r.facts_of("openings.door_set").find(|f| f.scope.eq_ignore_ascii_case(number.trim())))
+            .flatten()
+            .and_then(|f| f.value.rsplit("set ").next().map(str::to_string))
+            .and_then(|set| sets.iter().enumerate().find(|(_, (f, _))| f.scope.eq_ignore_ascii_case(&set)).map(|(i, x)| (i, x.0)));
+        let by_list = listed.is_some();
+        let pick = listed.or_else(|| sets
             .iter()
             .enumerate()
             .filter(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0))
             .find(|(_, (_, sz))| sz.is_some_and(|(w, hh)| (w - wf).abs() < 0.35 && (hh - hf).abs() < 0.6))
             .or_else(|| sets.iter().enumerate().find(|(i, _)| left.get(*i).is_some_and(|n| *n >= 1.0)))
-            .map(|(i, x)| (i, x.0));
+            .map(|(i, x)| (i, x.0)));
         if let Some((i, _)) = pick
             && let Some(n) = left.get_mut(i)
         {
@@ -153,7 +160,10 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         hp.room = room.clone();
         hp.size = size.clone();
         if !set_id.is_empty() {
-            hp = hp.computed("set", set_id.clone()).computed("assigned", "by the door's size among the schedule's sets (the door schedule's link to the set was not read)");
+            hp = hp.computed("set", set_id.clone()).computed(
+                "assigned",
+                if by_list { "the hardware schedule's door list, by the door's number" } else { "by the door's size among the schedule's sets (the door has no number in the door list)" },
+            );
         }
         let lever = c + half * 0.8;
         hp.blocks.push(Block::new(lever - along * (1.0 * k), lever + along * (1.0 * k), t + 3.0 * k, bottom + 36.0 * k, bottom + 40.0 * k));
@@ -162,11 +172,10 @@ fn doors_and_windows(d: &mut Drawing, sp: &BuildingSpec, r: &Rules, ctx: &Ctx, b
         if let Some(p) = batch.pieces.get_mut(fi) {
             p.touches.push(h);
         }
-        if let Some(w) = wall {
-            if let Some(p) = batch.pieces.get_mut(fi) {
+        if let Some(w) = wall
+            && let Some(p) = batch.pieces.get_mut(fi) {
                 p.touches.push(w.handle);
             }
-        }
         if !set_id.is_empty() {
             props.push(("hardware_set", set_id, Source::computed()));
         }

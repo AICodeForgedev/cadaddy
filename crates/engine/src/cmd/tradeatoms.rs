@@ -79,7 +79,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{section?: framing|drywall|insulation|masonry|concrete|finishes|firestopping|openings|specialties} → {rules: {section: {key: {value, source}}}, facts: [{trade, key, value, source}], how_to_override}: the trade rules the layouts use, each value with where it came from (the documents, a project rule, the defaults)")
             .noundo(),
         CommandSpec::new("bim.atoms.docs", "Read Trade Documents", run_docs).params(
-            "{paths: [file or folder] (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts)} → {files: [{file, facts, trades}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
+            "{paths: [file or folder] (submittals, specification sections; PDF or text), store?: bool (default true: keep the facts in the building spec for the layouts), show_text?: characters (each file's text as it was read, up to this many: to check a document that gave nothing)} → {files: [{file, facts, trades, text?}], facts: [{trade, key, value, number?, source, quote}], by_trade: {trade: n}, unread: [{file, why}]}: what the trades' documents say that the pieces are laid out from: concrete mixes and strengths, slab thickness, post-tensioning strand, tendon and chair spacing, vapor barrier, joist and truss spacing, depth and listed quantities, insulation R-values, paint coats, flooring sizes, finish level, door hardware sets and their doors, toilet accessories and their quantities",
         ),
     ]
 }
@@ -949,7 +949,8 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`paths` is empty: give the submittal and specification files or folders"));
     }
     let store = bool_or(p, "store", true);
-    let read = docs::read(s, &paths);
+    let show = p.get("show_text").and_then(Value::as_u64).map_or(0, |n| n.min(20_000) as usize);
+    let read = docs::read(s, &paths, show);
     if read.files.is_empty() && read.unread.is_empty() {
         return Err(bad(CMD, "no PDF or text files at the paths given"));
     }

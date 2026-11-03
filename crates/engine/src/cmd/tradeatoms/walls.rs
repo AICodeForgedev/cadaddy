@@ -31,7 +31,7 @@ struct WBox {
 /// made of such boxes (then its extents stand for one box along its longer side).
 fn boxes(m: &Mesh) -> Option<Vec<WBox>> {
     let v = &m.vertices;
-    if v.is_empty() || v.len() % 8 != 0 || m.faces.len() != v.len() / 8 * 6 {
+    if v.is_empty() || !v.len().is_multiple_of(8) || m.faces.len() != v.len() / 8 * 6 {
         return None;
     }
     let mut out = Vec::with_capacity(v.len() / 8);
@@ -134,7 +134,7 @@ pub(super) fn read_wall(e: &cadaddy_doc::Entity) -> Option<Wall> {
     let bx = boxes(m).filter(|b| !b.is_empty()).or_else(|| extents_box(m).map(|b| vec![b]))?;
     let main = bx.iter().copied().max_by(|x, y| x.a.dist(x.b).total_cmp(&y.a.dist(y.b)))?;
     let len = main.a.dist(main.b);
-    if !(len > 1e-9) {
+    if len.is_nan() || len <= 1e-9 {
         return None;
     }
     let u = (main.b - main.a) * (1.0 / len);
@@ -863,7 +863,7 @@ fn header_name(r: &Rules, width_ft: f64) -> String {
 /// A wood header's depth (inches) by the opening's width: its lumber's actual depth.
 fn header_depth(r: &Rules, width_ft: f64) -> f64 {
     let name = header_name(r, width_ft);
-    match name.split('x').nth(1).and_then(|n| n.trim().split_whitespace().next()).and_then(|n| n.parse::<u32>().ok()) {
+    match name.split('x').nth(1).and_then(|n| n.split_whitespace().next()).and_then(|n| n.parse::<u32>().ok()) {
         Some(n) if n >= 8 => f64::from(n) - 0.75,
         Some(n) => f64::from(n) - 0.5,
         None => 11.875,

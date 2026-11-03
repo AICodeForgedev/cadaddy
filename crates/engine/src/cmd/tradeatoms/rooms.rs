@@ -18,7 +18,7 @@ fn perimeter(poly: &[Vec2]) -> f64 {
 fn plate(poly: &[Vec2], z: f64, t: f64) -> Mesh {
     let mut m = super::super::wallgen::empty_mesh();
     let n = poly.len();
-    if n < 3 || !(t > 0.0) {
+    if n < 3 || t.is_nan() || t <= 0.0 {
         return m;
     }
     for p in poly {

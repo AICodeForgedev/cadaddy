@@ -196,7 +196,7 @@ fn text_of(path: &str) -> std::result::Result<String, String> {
 }
 
 /// Read the trades' facts from the files at `paths`.
-pub(crate) fn read(_s: &mut Session, paths: &[String]) -> Read {
+pub(crate) fn read(_s: &mut Session, paths: &[String], show_text: usize) -> Read {
     let mut out = Read::default();
     let files = files_under(paths);
     let mut read_n = 0usize;
@@ -226,19 +226,45 @@ pub(crate) fn read(_s: &mut Session, paths: &[String]) -> Read {
         let title = format!("{name} {parent}");
         facts_from(&text, &label, &title, &trades, &mut out.facts);
         let got = out.facts.len() - before;
-        out.files.push(json!({"file": label, "trades": trades, "facts": got}));
+        let mut fj = json!({"file": label, "trades": trades, "facts": got});
+        if show_text > 0 {
+            fj["text"] = json!(text.chars().take(show_text).collect::<String>());
+        }
+        out.files.push(fj);
     }
     out.facts = keep_latest(std::mem::take(&mut out.facts));
     out.facts.truncate(MAX_FACTS);
     out
 }
 
-/// One fact per thing (key and scope): the last file's (the latest revision read).
+/// A submittal's number in a file's name (`#033000-5.1`): its base (`033000-5`) and revision (1).
+pub(crate) fn submittal_number(text: &str) -> Option<(String, u32)> {
+    let i = text.find('#')?;
+    let tok: String = text.get(i + 1..)?.chars().take_while(|c| c.is_ascii_digit() || *c == '-' || *c == '.').collect();
+    let tok = tok.trim_end_matches(['.', '-']);
+    if !tok.contains('-') || !tok.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    match tok.rsplit_once('.') {
+        Some((base, rev)) if base.contains('-') => Some((base.to_string(), rev.parse().unwrap_or(0))),
+        _ => Some((tok.to_string(), 0)),
+    }
+}
+
+/// One fact per thing (key and scope): the latest revision's (a submittal's number), else the
+/// last file's read.
 fn keep_latest(facts: Vec<Fact>) -> Vec<Fact> {
     let mut by: BTreeMap<(String, String), (usize, Fact)> = BTreeMap::new();
+    let rev = |f: &Fact| submittal_number(&f.source).map_or(0, |(_, r)| r);
     for (i, f) in facts.into_iter().enumerate() {
         let k = (f.key.clone(), f.scope.clone());
-        // The same document read twice (a reviewed copy beside it): the later file wins whole.
+        // The same document read twice (a reviewed copy beside it): the later file wins whole,
+        // unless the one kept is a later revision of its submittal.
+        if let Some((_, old)) = by.get(&k)
+            && rev(old) > rev(&f)
+        {
+            continue;
+        }
         by.insert(k, (i, f));
     }
     let mut v: Vec<(usize, Fact)> = by.into_values().collect();
@@ -349,6 +375,7 @@ fn facts_from(text: &str, label: &str, title: &str, trades: &[&str], out: &mut V
             let mut rest = u.as_str();
             while let Some(i) = rest.find("R-") {
                 let num: String = rest.get(i + 2..).unwrap_or_default().chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+                let num = num.trim_end_matches('.').to_string();
                 if let Ok(v) = num.parse::<f64>()
                     && (3.0..=60.0).contains(&v)
                     && rs.iter().all(|(x, _)| (x - v).abs() > 1e-6)
@@ -369,8 +396,17 @@ fn facts_from(text: &str, label: &str, title: &str, trades: &[&str], out: &mut V
 }
 
 fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> String, out: &mut Vec<Fact>) {
-    // Strength: the most named `NNNN PSI` of 2500-10000 in a mix document.
-    let mixdoc = title.contains("MIX") || up.contains("MIX DESIGN");
+    // Strength: the most named `NNNN PSI` of 2500-10000 in a mix document. A site's or a
+    // utility's mix (paving, curbs, structures outside) is its own, not the building's.
+    // A mix document says so in its title (a specification section names many strengths, for
+    // many things).
+    let mixdoc = title.contains("MIX");
+    let _ = up;
+    let site = ["SITE", "UTILITY", "PAVING", "SIDEWALK", "CURB"].iter().any(|w| title.contains(w));
+    // Each mix submittal is its own mix (its revisions replace it): scoped by its number.
+    let number = submittal_number(title).map(|(base, _)| base).unwrap_or_default();
+    let scope_text = format!("{}{number}", if site { "site " } else { "" });
+    let scope = scope_text.as_str();
     if mixdoc {
         let mut psis: Vec<(f64, String)> = Vec::new();
         let mut mix_line: Option<(usize, String)> = None;
@@ -393,10 +429,10 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
         }
         if let Some((v, q, _)) = most_common(&psis) {
             let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
-            out.push(Fact::new("concrete.strength_psi", format!("{} psi", v.round()), Some(v), s, quote));
+            out.push(Fact::new("concrete.strength_psi", format!("{} psi", v.round()), Some(v), s, quote).scoped(scope));
         }
         if let Some((at, l)) = mix_line {
-            out.push(Fact::new("concrete.mix", l.clone(), None, &src(at), &l));
+            out.push(Fact::new("concrete.mix", l.clone(), None, &src(at), &l).scoped(scope));
         }
     }
     // Post-tensioning.
@@ -407,8 +443,8 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
     for (at, l) in lines {
         let u = l.to_ascii_uppercase().replace(['”', '″'], "\"").replace(['’', '′'], "'");
         // Strand: `1/2" DIAMETER, SEVEN WIRE` (a text copy can lose the slash: `1 2"`).
-        if (u.contains("SEVEN WIRE") || u.contains("7-WIRE") || u.contains("7 WIRE") || u.contains("STRAND")) && u.contains('"') {
-            if let Some(q) = u.find('"') {
+        if (u.contains("SEVEN WIRE") || u.contains("7-WIRE") || u.contains("7 WIRE") || u.contains("STRAND")) && u.contains('"')
+            && let Some(q) = u.find('"') {
                 let head = u.get(..q).unwrap_or_default();
                 let lost_slash = head.trim_end().ends_with(" 1 2") || head.trim_end() == "1 2";
                 let v = if lost_slash { Some(0.5) } else { tail_number(head) };
@@ -416,19 +452,16 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
                     out.push(Fact::new("concrete.strand_in", format!("{}\" strand", num_text(v)), Some(v), &src(*at), l));
                 }
             }
-        }
         // Chairs: `CHAIRS @ 4'-0" O.C.`, `CHAIR SPACING SHALL BE 4'-0" MAX`.
-        if u.contains("CHAIR") && let Some(v) = spacing_after(&u, &["CHAIRS @", "CHAIR SPACING SHALL BE", "CHAIRS AT", "CHAIR SPACING"]) {
-            if (1.0..=10.0).contains(&v) {
+        if u.contains("CHAIR") && let Some(v) = spacing_after(&u, &["CHAIRS @", "CHAIR SPACING SHALL BE", "CHAIRS AT", "CHAIR SPACING"])
+            && (1.0..=10.0).contains(&v) {
                 out.push(Fact::new("concrete.chair_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
             }
-        }
         // Tendon spacing: `TENDONS @ 4'-0" O.C.`.
-        if u.contains("TENDON") && u.contains("O.C") && let Some(v) = spacing_after(&u, &["TENDONS @", "TENDONS AT", "TENDON SPACING"]) {
-            if (1.0..=30.0).contains(&v) {
+        if u.contains("TENDON") && u.contains("O.C") && let Some(v) = spacing_after(&u, &["TENDONS @", "TENDONS AT", "TENDON SPACING"])
+            && (1.0..=30.0).contains(&v) {
                 out.push(Fact::new("concrete.tendon_spacing_ft", format!("{}' o.c.", num_text(v)), Some(v), &src(*at), l));
             }
-        }
         // Vapor barrier: `15 MIL` beside VAPOR.
         if u.contains("VAPOR") && u.contains("MIL") && let Some(i) = u.find("MIL") {
             let num: String = u.get(..i).unwrap_or_default().trim_end().trim_end_matches('-').chars().rev().take_while(char::is_ascii_digit).collect::<String>().chars().rev().collect();
@@ -439,21 +472,19 @@ fn concrete_facts(text: &str, up: &str, lines: &[(usize, &str)], title: &str, sr
             }
         }
         // Slab thickness: `5" SLAB`, `5" THICK SLAB`, `SLAB THICKNESS = 5"`.
-        if u.contains("SLAB") && u.contains('"') {
-            if let Some(v) = slab_inches(&u) {
+        if u.contains("SLAB") && u.contains('"')
+            && let Some(v) = slab_inches(&u) {
                 out.push(Fact::new("concrete.slab_thickness_in", format!("{}\" slab", num_text(v)), Some(v), &src(*at), l));
             }
-        }
         // Welded wire: `6x6-W2.9xW2.9`.
         if let Some(st) = wire_style(&u) {
             out.push(Fact::new("concrete.mesh", st, None, &src(*at), l));
         }
         // Gypsum underlayment thickness.
-        if u.contains("UNDERLAYMENT") && u.contains('"') && let Some(q) = u.find('"') {
-            if let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| (0.25..=3.0).contains(v)) {
+        if u.contains("UNDERLAYMENT") && u.contains('"') && let Some(q) = u.find('"')
+            && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| (0.25..=3.0).contains(v)) {
                 out.push(Fact::new("concrete.underlayment_in", format!("{}\" underlayment", num_text(v)), Some(v), &src(*at), l));
             }
-        }
     }
 }
 
@@ -522,30 +553,32 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
         let mut listed: BTreeMap<String, f64> = BTreeMap::new();
         let mut listed_src = String::new();
         let mut depths: Vec<(f64, String)> = Vec::new();
+        let mut material: Vec<(String, String, f64, f64, String, String)> = Vec::new();
         for (at, l) in lines {
             let u = l.trim().to_ascii_uppercase().replace(['”', '″'], "\"");
-            // A layout's label: `J1 - 14 @ 24"`: 14 joists of mark J1 at 24".
-            if let Some((mark, rest)) = u.split_once(" - ")
-                && mark.len() <= 6
-                && mark.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                && mark.chars().any(|c| c.is_ascii_digit())
-                && let Some((n, sp)) = rest.split_once('@')
-                && let Ok(n) = n.trim().parse::<f64>()
-                && let Some(spv) = sp.trim().strip_suffix('"').and_then(|x| x.trim().parse::<f64>().ok())
-                && (1.0..=500.0).contains(&n)
-            {
-                *listed.entry(mark.trim().to_string()).or_default() += n;
-                spacings.push((spv, format!("{}|{}", src(*at), l.trim())));
+            // A layout's labels: `J1 - 14 @ 24"`, `J7- 14 @ 24"`: 14 joists of mark J7 at 24"
+            // (a row of the text can hold several).
+            let labels = layout_labels(&u);
+            for (mark, n, spv) in &labels {
+                *listed.entry(mark.clone()).or_default() += n;
+                spacings.push((*spv, format!("{}|{mark}- {n} @ {spv}\"", src(*at))));
                 if listed_src.is_empty() {
                     listed_src = src(*at);
                 }
+            }
+            if !labels.is_empty() {
                 continue;
             }
-            if (u.contains("O.C") || u.contains(" OC")) && let Some(q) = u.find('"') {
-                if let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6)) {
+            // A material list's row: mark, product, width, depth, quantity (plies and the pieces
+            // they make), length (`J7   BLI 40   2.5   16   323   14-0-0`).
+            if let Some((mark, product, depth, pieces)) = material_row(l) {
+                material.push((mark, product, depth, pieces, src(*at), l.trim().to_string()));
+                continue;
+            }
+            if (u.contains("O.C") || u.contains(" OC")) && let Some(q) = u.find('"')
+                && let Some(v) = tail_number(u.get(..q).unwrap_or_default()).filter(|v| [12.0, 16.0, 19.2, 24.0].iter().any(|s| (s - v).abs() < 1e-6)) {
                     spacings.push((v, format!("{}|{}", src(*at), l.trim())));
                 }
-            }
             for d in [9.5, 11.875, 14.0, 16.0, 18.0, 20.0, 24.0] {
                 let txt = inches_text(d);
                 if u.contains(&txt) && (u.contains("JOIST") || u.contains("TJI") || u.contains("BCI") || u.contains("LPI") || u.trim() == txt) {
@@ -557,9 +590,43 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
             let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
             out.push(Fact::new("framing.joist_spacing_in", format!("{}\" o.c.", num_text(v)), Some(v), s, quote));
         }
-        if let Some((v, q, _)) = most_common(&depths) {
+        // The material list's joists: the marks the layout labels (its beams and blocking are
+        // other marks).
+        if !listed.is_empty() {
+            material.retain(|m| listed.contains_key(&m.0));
+        }
+        // The depth and series the material list gives (by its pieces), else the depth named
+        // most beside the joists.
+        let mut by_depth: Vec<(f64, f64, String)> = Vec::new();
+        for m in &material {
+            match by_depth.iter_mut().find(|x| (x.0 - m.2).abs() < 1e-6) {
+                Some(x) => x.1 += m.3,
+                None => by_depth.push((m.2, m.3, format!("{}|{}", m.4, m.5))),
+            }
+        }
+        let heaviest = by_depth.into_iter().max_by(|a, b| a.1.total_cmp(&b.1)).map(|(d, _, q)| (d, q));
+        if let Some((v, q)) = heaviest.or_else(|| most_common(&depths).map(|(v, q, _)| (v, q))) {
             let (s, quote) = q.split_once('|').unwrap_or((&q, ""));
             out.push(Fact::new("framing.joist_depth_in", inches_text(v), Some(v), s, quote));
+        }
+        let mut series: BTreeMap<String, f64> = BTreeMap::new();
+        for m in &material {
+            *series.entry(m.1.clone()).or_default() += m.3;
+        }
+        if let Some((name, _)) = series.iter().max_by(|a, b| a.1.total_cmp(b.1))
+            && let Some(m) = material.iter().find(|m| &m.1 == name)
+        {
+            out.push(Fact::new("framing.joist_series", name.clone(), None, &m.4, &m.5));
+        }
+        if !material.is_empty() {
+            let total: f64 = material.iter().map(|m| m.3).sum();
+            let mut by: BTreeMap<String, f64> = BTreeMap::new();
+            for m in &material {
+                *by.entry(m.0.clone()).or_default() += m.3;
+            }
+            let marks = by.iter().map(|(m, n)| format!("{m} {n}")).collect::<Vec<_>>().join(", ");
+            let first = material.first().map(|m| m.4.clone()).unwrap_or_default();
+            out.push(Fact::new("framing.joists_material", format!("{total} pieces ({marks})"), Some(total), &first, "the material list's quantities"));
         }
         if !listed.is_empty() {
             let total: f64 = listed.values().sum();
@@ -573,23 +640,22 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
         let mut spacings: Vec<(f64, String)> = Vec::new();
         let mut qty = 0.0;
         let mut q_src = String::new();
+        // The number just after a label anywhere in a row (`Ply: 1   Qty: 2`).
+        let after = |u: &str, label: &str| -> Option<f64> {
+            let i = u.find(label)?;
+            let rest = u.get(i + label.len()..)?.trim_start();
+            let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            num.parse::<f64>().ok()
+        };
         for (at, l) in lines {
             let u = l.trim().to_ascii_uppercase();
-            if let Some(rest) = u.strip_prefix("SPACING:") {
-                if let Ok(v) = rest.trim().trim_end_matches('"').trim().parse::<f64>()
-                    && (12.0..=96.0).contains(&v)
-                {
-                    spacings.push((v, format!("{}|{}", src(*at), l.trim())));
-                }
+            if let Some(v) = after(&u, "SPACING:").filter(|v| (12.0..=96.0).contains(v)) {
+                spacings.push((v, format!("{}|{}", src(*at), l.trim())));
             }
-            if let Some(rest) = u.strip_prefix("QTY:") {
-                if let Ok(v) = rest.trim().parse::<f64>()
-                    && (1.0..=500.0).contains(&v)
-                {
-                    qty += v;
-                    if q_src.is_empty() {
-                        q_src = src(*at);
-                    }
+            if let Some(v) = after(&u, "QTY:").filter(|v| (1.0..=500.0).contains(v)) {
+                qty += v;
+                if q_src.is_empty() {
+                    q_src = src(*at);
                 }
             }
         }
@@ -601,6 +667,61 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
             out.push(Fact::new("framing.trusses_listed", format!("{qty} trusses"), Some(qty), &q_src, "the truss designs' Qty"));
         }
     }
+}
+
+/// Whether a word is a framing mark (`J7`, `J14`, `T01`): letters then digits, short.
+fn is_mark(w: &str) -> bool {
+    let w = w.trim();
+    (2..=6).contains(&w.len()) && w.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && w.chars().any(|c| c.is_ascii_digit()) && w.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// A layout's labels in a row: `J7- 14 @ 24"`, `J1 - 14 @ 24"`: (mark, count, spacing).
+fn layout_labels(u: &str) -> Vec<(String, f64, f64)> {
+    let mut out = Vec::new();
+    for (i, _) in u.match_indices('@').take(200) {
+        let left = u.get(..i).unwrap_or_default().trim_end();
+        let n: String = left.chars().rev().take_while(char::is_ascii_digit).collect::<String>().chars().rev().collect();
+        let Ok(count) = n.parse::<f64>() else { continue };
+        let left = left.get(..left.len() - n.len()).unwrap_or_default().trim_end();
+        let Some(left) = left.strip_suffix('-') else { continue };
+        let left = left.trim_end();
+        let mark: String = left.chars().rev().take_while(char::is_ascii_alphanumeric).collect::<String>().chars().rev().collect();
+        if !is_mark(&mark) || !(1.0..=500.0).contains(&count) {
+            continue;
+        }
+        let right = u.get(i + 1..).unwrap_or_default().trim_start();
+        let sp: String = right.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        if !right.get(sp.len()..).unwrap_or_default().trim_start().starts_with('"') {
+            continue;
+        }
+        if let Ok(v) = sp.parse::<f64>().map(|v| v.clamp(4.0, 96.0)) {
+            out.push((mark, count, v));
+        }
+    }
+    out
+}
+
+/// A material list's row (`J7   BLI 40   2.5   16   323   14-0-0`): mark, product, depth
+/// (inches) and pieces (the last count before the length: plies' pieces when given).
+fn material_row(line: &str) -> Option<(String, String, f64, f64)> {
+    let cells: Vec<&str> = line.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
+    let length_cell = |c: &str| {
+        let p: Vec<&str> = c.split('-').collect();
+        p.len() == 3 && p.iter().all(|x| !x.is_empty() && x.chars().all(|ch| ch.is_ascii_digit()))
+    };
+    let last = cells.len().checked_sub(1)?;
+    if !length_cell(cells.get(last)?) {
+        return None;
+    }
+    let k = (0..last).find(|&k| cells.get(k).is_some_and(|c| is_mark(c)) && cells.get(k + 1).is_some_and(|c| c.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())))?;
+    let nums: Vec<f64> = cells.get(k + 2..last)?.iter().map(|c| c.parse::<f64>().ok()).collect::<Option<Vec<f64>>>()?;
+    if nums.len() < 3 {
+        return None;
+    }
+    let depth = *nums.get(1)?;
+    let pieces = *nums.last()?;
+    let (mark, product) = ((*cells.get(k)?).to_string(), (*cells.get(k + 1)?).to_string());
+    ((4.0..=48.0).contains(&depth) && (1.0..=100_000.0).contains(&pieces)).then_some((mark, product, depth, pieces))
 }
 
 fn finish_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> String, out: &mut Vec<Fact>) {
@@ -659,7 +780,9 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             i += 1;
             continue;
         };
-        // The openings it lists (`63 Single`, `2 Pair`) until its item table, its size and frame.
+        // The openings it lists (`63 Single`, `2 Pair`) until its item table, its size and frame:
+        // the count on the size's row (or just before a `Size:` line) is the set's total, the
+        // rows above it its doors by hand.
         let mut openings = 0.0;
         let mut size = String::new();
         let mut frame = String::new();
@@ -671,19 +794,36 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
                 break;
             }
             let mut it = tu.split_whitespace();
-            if let (Some(n), Some(w)) = (it.next(), it.next())
-                && (w == "SINGLE" || w == "PAIR")
-                && let Ok(n) = n.parse::<f64>()
-            {
-                // The last count before `Size:` is the set's total (the rows above it are its
-                // doors by hand).
-                if lines.get(j + 1).is_some_and(|x| x.1.trim().eq_ignore_ascii_case("size:")) {
+            let count = match (it.next(), it.next()) {
+                (Some(n), Some(w)) if w == "SINGLE" || w == "PAIR" => n.parse::<f64>().ok(),
+                _ => None,
+            };
+            if let Some(si) = tu.find("SIZE:") {
+                // `117 Single   Size: 3-0 X 7-0 X 1 3/4   PC Wood Door X CRS Frame`: the cells
+                // after it, split where the columns are.
+                let rest = t.get(si + 5..).unwrap_or_default().trim();
+                let cells: Vec<&str> = rest.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
+                match cells.as_slice() {
+                    [] => {
+                        size = lines.get(j + 1).map_or("", |x| x.1).trim().to_string();
+                        frame = lines.get(j + 2).map_or("", |x| x.1).trim().to_string();
+                    }
+                    [a] => {
+                        size = (*a).to_string();
+                        frame = lines.get(j + 1).map_or("", |x| x.1).trim().to_string();
+                    }
+                    [a, b, ..] => {
+                        size = (*a).to_string();
+                        frame = (*b).to_string();
+                    }
+                }
+                if let Some(n) = count {
                     openings = n;
                 }
-            }
-            if tu == "SIZE:" {
-                size = lines.get(j + 1).map_or("", |x| x.1).trim().to_string();
-                frame = lines.get(j + 2).map_or("", |x| x.1).trim().to_string();
+            } else if let Some(n) = count
+                && lines.get(j + 1).is_some_and(|x| x.1.trim().eq_ignore_ascii_case("size:"))
+            {
+                openings = n;
             }
             j += 1;
         }
@@ -700,6 +840,39 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
     }
     if total > 0.0 {
         out.push(Fact::new("openings.doors_listed", format!("{total} openings in the hardware sets"), Some(total), &first, "the hardware schedule's sets"));
+    }
+    // The door list: each door number and its set (`201   11`, two pairs to a row).
+    let mut in_list = false;
+    let mut listed = 0usize;
+    for (at, l) in lines {
+        let u = l.trim().to_ascii_uppercase();
+        if u.starts_with("DOOR LIST") || (u.contains("DOOR#") && u.contains("HARDWARE SET#") && !u.starts_with("HARDWARE SET#:")) {
+            in_list = true;
+            continue;
+        }
+        if !in_list {
+            continue;
+        }
+        if u.starts_with("HARDWARE SET#:") || u.starts_with("HARDWARE SET #:") {
+            in_list = false;
+            continue;
+        }
+        if u.starts_with("---") || u.is_empty() {
+            continue;
+        }
+        let cells: Vec<&str> = l.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
+        // Door numbers and sets are short codes with digits.
+        let code = |c: &str| c.len() <= 12 && c.chars().any(|x| x.is_ascii_digit()) && !c.contains(' ');
+        let mut k = 0;
+        while k + 1 < cells.len() && listed < 5_000 {
+            let (Some(door), Some(set)) = (cells.get(k), cells.get(k + 1)) else { break };
+            let set = set.split_whitespace().next().unwrap_or_default();
+            if code(door) && code(set) {
+                out.push(Fact::new("openings.door_set", format!("door {door}: set {set}"), None, &src(*at), l).scoped(door));
+                listed += 1;
+            }
+            k += 2;
+        }
     }
 }
 
@@ -766,6 +939,7 @@ pub(crate) fn compare(facts: &[Fact], ix: &super::super::mepatoms::Index, level:
         let Some(n) = f.number else { continue };
         let (what, model, query) = match f.key.as_str() {
             "framing.joists_listed" => ("floor joists", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"})),
+            "framing.joists_material" => ("floor joists (the material list's pieces)", q("framing", "joist", None).count as f64, json!({"trade": "framing", "kind": "joist"})),
             "framing.trusses_listed" => ("roof trusses", q("framing", "truss", None).count as f64, json!({"trade": "framing", "kind": "truss"})),
             "openings.doors_listed" => ("doors (hardware sets' openings)", q("openings", "door", None).count as f64, json!({"trade": "openings", "kind": "door"})),
             "specialties.accessory" => {
@@ -800,6 +974,43 @@ mod tests {
 
     fn num(f: &[Fact], key: &str) -> Option<f64> {
         f.iter().find(|x| x.key == key).and_then(|x| x.number)
+    }
+
+    #[test]
+    fn a_site_mix_is_not_the_buildings() {
+        let f = facts("CONCRETE MIX DESIGN\nMIX NUMBER: 3000 - 5SK 3000PSI - Paving", "Sample Site Concrete Mix");
+        assert!(f.iter().any(|x| x.key == "concrete.strength_psi" && x.scope == "site "));
+        // A specification section's strengths are not a mix.
+        let f = facts("joint filler 3000 psi at 28 days\nmix design", "Sample Cast-In-Place Concrete");
+        assert!(!f.iter().any(|x| x.key == "concrete.strength_psi"));
+        assert_eq!(submittal_number("Submittal #033000-5.1 Building Mix.pdf"), Some(("033000-5".into(), 1)));
+        assert_eq!(submittal_number("Submittal #033000-7 Second Mix"), Some(("033000-7".into(), 0)));
+        assert_eq!(submittal_number("no number"), None);
+        // A later revision of a submittal stays over an earlier one read after it.
+        let a = Fact::new("concrete.mix", "new", None, "submittal B / #033000-5.1 p.2", "");
+        let b = Fact::new("concrete.mix", "old", None, "submittal C / #033000-5 p.2", "");
+        assert_eq!(keep_latest(vec![a, b])[0].value, "new");
+    }
+
+    #[test]
+    fn rows_joined_in_the_text_still_read() {
+        let f = facts("PLAN   J1 - 14 @ 24\"   J2 - 3 @ 24\"   NOTE\nR1   R1 J3- 2 @ 19.2\" R1\n", "Sample I-Joist");
+        assert_eq!(num(&f, "framing.joists_listed"), Some(19.0));
+        // A material list: pieces by mark (a 2-ply mark counts its plies' pieces), its depth and
+        // series.
+        let ml = "MARK   PRODUCT   W   D   QTY   PLY   PCS   LENGTH\nnotes here.   A1   XJ 40   2.5   16   30   12-0-0\nA2   XJ 65   3.5   16   4   2   8   18-0-0\nA3   XJ 40   2.5   16   10   14-0-0\nB1   LV 1   1.75   11.875   2   1   2   10-0-0\nB2   LV 1   1.75   11.875   2   1   2   10-0-0\nB3   LV 1   1.75   11.875   2   1   2   10-0-0\n";
+        let f = facts(ml, "Sample I-Joist");
+        assert_eq!(num(&f, "framing.joists_material"), Some(54.0));
+        // By pieces the joists are 16" deep (more rows of beams are 11 7/8").
+        assert_eq!(num(&f, "framing.joist_depth_in"), Some(16.0));
+        assert_eq!(f.iter().find(|x| x.key == "framing.joist_series").map(|x| x.value.as_str()), Some("XJ 40"));
+        // With layout labels, only the marks they name are joists.
+        let f = facts(&format!("{ml}A1- 30 @ 24\"   A3- 10 @ 24\"\n"), "Sample I-Joist");
+        assert_eq!(num(&f, "framing.joists_material"), Some(40.0));
+        assert_eq!(num(&f, "framing.joists_listed"), Some(40.0));
+        let f = facts("Truss: T01   Ply: 1   Qty: 3   Job: X\nSpacing: 24.0 \"\nTruss: T02   Qty: 2", "Sample Roof Trusses");
+        assert_eq!(num(&f, "framing.trusses_listed"), Some(5.0));
+        assert_eq!(num(&f, "framing.truss_spacing_in"), Some(24.0));
     }
 
     #[test]
@@ -848,6 +1059,16 @@ mod tests {
         assert_eq!(sets[0].number, Some(15.0));
         assert_eq!(sets[0].scope, "3");
         assert_eq!(num(&f, "openings.doors_listed"), Some(17.0));
+        // A schedule whose rows come joined, with its door list before the sets.
+        let joined = "Door List   Door List\nDoor#   Hardware Set#   Door#   Hardware Set#\nA1   5   B7   6\nA2   5\n--- page 2 of 3 ---\nHardware Set#: 5\nQty Units   Door#\n2 Single   A1   East\n--------------------------\n2 Single   Size: 3-0 X 7-0 X 1 3/4   Wood Door X HM Frame\nTot Qty Qty   UOM\nHardware Set#: 6\n1 Pair   Size: 6-0 X 7-0   HM Door X HM Frame\nTot Qty\n";
+        let f = facts(joined, "Sample Door Hardware");
+        let sets: Vec<&Fact> = f.iter().filter(|x| x.key == "openings.hardware_set").collect();
+        assert_eq!(sets.len(), 2, "{f:?}");
+        assert_eq!((sets[0].scope.as_str(), sets[0].number), ("5", Some(2.0)));
+        assert!(sets[0].quote.contains("3-0 X 7-0") && sets[0].quote.contains("HM Frame"), "{:?}", sets[0]);
+        assert_eq!((sets[1].scope.as_str(), sets[1].number), ("6", Some(1.0)));
+        let list: Vec<(&str, &str)> = f.iter().filter(|x| x.key == "openings.door_set").map(|x| (x.scope.as_str(), x.value.as_str())).collect();
+        assert_eq!(list, vec![("A1", "door A1: set 5"), ("B7", "door B7: set 6"), ("A2", "door A2: set 5")]);
         let acc = "Robe Hook\nRH-10:  AB123   QTY-40\n4 EACH - GB-1: CD18 / GB-2: CD24\nTB-5: XY1 QTY-2 / TB-6: XY2 QTY-3";
         let f = facts(acc, "Sample Guest Bath Accessories");
         let a: Vec<&Fact> = f.iter().filter(|x| x.key == "specialties.accessory").collect();
