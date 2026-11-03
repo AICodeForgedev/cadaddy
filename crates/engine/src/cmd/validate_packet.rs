@@ -299,6 +299,49 @@ fn cell_touches(poly: &[[f64; 2]], cell: [f64; 4]) -> bool {
     point_in(poly, c) || poly.iter().any(|p| inside(cell, *p)) || corners(cell).iter().any(|q| point_in(poly, *q))
 }
 
+/// The part of the polygon `poly` inside the rectangle `r` ([x0, y0, x1, y1]): the polygon
+/// clipped against each of the rectangle's four sides in turn.
+pub(crate) fn clip_to_rect(poly: &[[f64; 2]], r: [f64; 4]) -> Vec<[f64; 2]> {
+    // Each side: which coordinate, the bound, and whether inside is above it.
+    let sides = [(0usize, r[0], true), (0, r[2], false), (1, r[1], true), (1, r[3], false)];
+    let mut pts: Vec<[f64; 2]> = poly.to_vec();
+    for (axis, bound, above) in sides {
+        let inside = |p: &[f64; 2]| if above { p[axis] >= bound } else { p[axis] <= bound };
+        let cross = |p: &[f64; 2], q: &[f64; 2]| {
+            let (pa, qa) = (p[axis], q[axis]);
+            let t = if (qa - pa).abs() > 1e-12 { (bound - pa) / (qa - pa) } else { 0.0 };
+            [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+        };
+        let n = pts.len();
+        let mut next = Vec::with_capacity(n + 4);
+        for i in 0..n {
+            let (Some(p), Some(q)) = (pts.get(i), pts.get((i + 1) % n)) else { continue };
+            match (inside(p), inside(q)) {
+                (true, true) => next.push(*q),
+                (true, false) => next.push(cross(p, q)),
+                (false, true) => {
+                    next.push(cross(p, q));
+                    next.push(*q);
+                }
+                (false, false) => {}
+            }
+        }
+        pts = next;
+        if pts.is_empty() {
+            break;
+        }
+    }
+    // Drop repeated points (a corner on the rectangle's side).
+    pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+    pts
+}
+
+/// A polygon's area (absolute), its points' units squared.
+fn polygon_area(poly: &[[f64; 2]]) -> f64 {
+    let n = poly.len();
+    (0..n).filter_map(|i| Some((poly.get(i)?, poly.get((i + 1) % n)?))).map(|(a, b)| a[0] * b[1] - b[0] * a[1]).sum::<f64>().abs() / 2.0
+}
+
 /// The model's rooms as areas, long ones in stretches (sorted by level, then id).
 pub(crate) fn model_areas(d: &Drawing, frame: &Frame) -> Vec<Area> {
     let mut rooms = super::bspec::room_elements(d);
@@ -351,15 +394,19 @@ pub(crate) fn model_areas(d: &Drawing, frame: &Frame) -> Vec<Area> {
                     }
                 }
             }
-            let total = cells.len();
-            for (k, cell) in cells.into_iter().enumerate() {
-                out.push(Area {
-                    id: format!("{id}#{}", k + 1),
-                    stretch: Some([k + 1, total]),
-                    outline: corners(cell).iter().map(|p| [r4(p[0]), r4(p[1])]).collect(),
-                    bbox: cell,
-                    ..base.clone()
-                });
+            // Each stretch is the room's floor in its cell, not the cell: a cell of a big room's
+            // box reaches over its neighbours, and an element there is theirs (Q6160).
+            let pieces: Vec<(Vec<[f64; 2]>, [f64; 4])> = cells
+                .into_iter()
+                .filter_map(|cell| {
+                    let piece: Vec<[f64; 2]> = clip_to_rect(&outline, cell).into_iter().map(|p| [r4(p[0]), r4(p[1])]).collect();
+                    let b = bbox(&piece)?;
+                    (piece.len() >= 3 && polygon_area(&piece) > 1e-6).then_some((piece, b))
+                })
+                .collect();
+            let total = pieces.len();
+            for (k, (piece, b)) in pieces.into_iter().enumerate() {
+                out.push(Area { id: format!("{id}#{}", k + 1), stretch: Some([k + 1, total]), outline: piece, bbox: b, ..base.clone() });
             }
         }
         if out.len() >= MAX_AREAS {
@@ -3853,6 +3900,21 @@ mod tests {
         let a = window_area("L1", [10.0, 4.0, 2.0, 0.0]);
         assert_eq!(a.id, "L1/win:2.00,0.00,10.00,4.00");
         assert_eq!(a.bbox, [2.0, 0.0, 10.0, 4.0]);
+    }
+
+    #[test]
+    fn a_stretch_is_the_room_in_its_cell_not_the_cell() {
+        // An L: 40 × 10 with a 10 × 20 leg up from its left end.
+        let l = [[0.0, 0.0], [40.0, 0.0], [40.0, 10.0], [10.0, 10.0], [10.0, 30.0], [0.0, 30.0]];
+        // The cell over the leg's corner holds the room's leg and floor, not the cell's empty part.
+        let piece = clip_to_rect(&l, [0.0, 0.0, 20.0, 20.0]);
+        assert!((polygon_area(&piece) - (20.0 * 10.0 + 10.0 * 10.0)).abs() < 1e-6, "{piece:?}");
+        assert!(!point_in(&piece, [15.0, 15.0]), "the cell's corner off the room is no room");
+        assert!(point_in(&piece, [5.0, 15.0]) && point_in(&piece, [15.0, 5.0]));
+        // A cell off the room clips to nothing.
+        assert!(polygon_area(&clip_to_rect(&l, [20.0, 20.0, 40.0, 30.0])) < 1e-9);
+        // A cell wholly inside is the cell.
+        assert!((polygon_area(&clip_to_rect(&l, [20.0, 0.0, 30.0, 10.0])) - 100.0).abs() < 1e-9);
     }
 
     #[test]

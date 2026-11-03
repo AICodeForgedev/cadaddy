@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "source": "rules data (layout defaults): typical industry values, used only where no document gives one; every use is marked derived",
+  "height_tolerance_in": 0.25,
+  "height_tolerance_why": "a documented AFF is a hard number: the box is set to it within a quarter inch",
+  "along_band_in": {
+    "default": 6,
+    "receptacle": 6,
+    "gfci_receptacle": 6,
+    "data_outlet": 6,
+    "low_voltage_outlet": 6,
+    "switch": 2,
+    "dimmer": 2,
+    "occupancy_sensor": 2,
+    "thermostat": 4,
+    "fire_alarm_device": 2,
+    "why": "how far along the wall a box may drift from its drawn position to find a stud side (a switch stays by its door; a receptacle may move to the next stud)"
+  },
+  "along_band_kinds": {
+    "receptacle": ["RECEPT", "OUTLET", "DUPLEX", "GFCI", "GFI", "QUAD"],
+    "switch": ["SWITCH", "DIMMER"],
+    "data_outlet": ["DATA", "TEL", "VOICE", "LOW VOLTAGE", "LOW_VOLTAGE", "TV", "CATV"],
+    "thermostat": ["THERMOSTAT", "TSTAT", "T-STAT"],
+    "fire_alarm_device": ["FIRE", "STROBE", "HORN", "PULL"],
+    "occupancy_sensor": ["OCCUPANCY", "VACANCY", "SENSOR"]
+  },
+  "faceplates": {
+    "standard": {"w_one_gang_in": 2.75, "h_in": 4.5, "per_gang_in": 1.81},
+    "midsize": {"w_one_gang_in": 3.13, "h_in": 4.88, "per_gang_in": 1.81},
+    "jumbo": {"w_one_gang_in": 3.5, "h_in": 5.25, "per_gang_in": 1.81}
+  },
+  "faceplates_why": "typical outer plate sizes by style (standard, mid-size, jumbo) and the added width per gang",
+  "default_plate_style": "standard",
+  "plate_kinds": ["RECEPT", "OUTLET", "DUPLEX", "QUAD", "GFCI", "GFI", "SWITCH", "DIMMER", "DATA", "TEL", "VOICE", "TV", "CATV", "USB", "JUNCTION", "OCCUPANCY", "VACANCY", "LOW VOLTAGE"],
+  "plate_kinds_why": "the devices that take a cover plate on the wall; a fixture, a luminaire or an alarm device is its own housing",
+  "box": {"w_one_gang_in": 2.25, "per_gang_in": 1.81, "why": "a device box's width along the wall, one gang and each added gang"},
+  "gang": {"gap_in": 0.25, "same_height_in": 1.0, "why": "plates can't overlap: two devices at one height whose own plates (the plate width of their style) would come closer than gap_in are one ganged box under one plate; the spacing is plate width + gap_in"},
+  "plate_clearance_in": 0.0,
+  "inside_cabinet_band_in": 2,
+  "inside_cabinet_why": "a box inside a cabinet is centred in it",
+  "casing_in": 2.5,
+  "casing_why": "a door or window casing's width beside its opening: a plate must stay off it",
+  "stud": {"width_in": 1.5, "why": "a stud's face width"},
+  "abbrev": [
+    {"words": ["GFCI", "GFI"], "say": "GFCI REC"},
+    {"words": ["RECEPT", "OUTLET", "DUPLEX", "QUAD"], "say": "REC"},
+    {"words": ["DIMMER"], "say": "DIM"},
+    {"words": ["SWITCH"], "say": "SW"},
+    {"words": ["DATA", "TEL", "VOICE"], "say": "DATA"},
+    {"words": ["TV", "CATV"], "say": "TV"},
+    {"words": ["THERMOSTAT", "TSTAT"], "say": "T-STAT"},
+    {"words": ["OCCUPANCY", "VACANCY", "SENSOR"], "say": "OS"},
+    {"words": ["FIRE", "STROBE", "HORN"], "say": "FA"},
+    {"words": ["JUNCTION"], "say": "JB"}
+  ],
+  "default_heights_in": {
+    "base_cabinet": [0, 34.5],
+    "vanity": [0, 34.5],
+    "sink_base": [0, 34.5],
+    "upper_cabinet": [54, 84],
+    "refrigerator": [0, 70],
+    "range": [0, 36],
+    "dishwasher": [0, 34],
+    "microwave": [54, 70],
+    "washer": [0, 40],
+    "dryer": [0, 40],
+    "tv": [36, 72],
+    "appliance": [0, 70],
+    "why": "an object read without a height: its usual bottom and top above the floor (inches)"
+  },
+  "concealed": [
+    {
+      "id": "refrigerator",
+      "words": ["REFRIGERATOR", "FRIDGE", "REF"],
+      "zone": "behind",
+      "band_in": 6,
+      "why": "a refrigerator's receptacle is hidden behind it: the whole plate inside its back footprint on the wall, below its top, within the band of its centre line"
+    },
+    {
+      "id": "range",
+      "words": ["RANGE", "OVEN", "COOKTOP"],
+      "zone": "behind",
+      "band_in": 6,
+      "why": "a range's receptacle is behind the range, inside its footprint"
+    },
+    {
+      "id": "washer_dryer",
+      "words": ["WASHER", "DRYER", "W/D"],
+      "zone": "behind",
+      "band_in": 12,
+      "why": "a washer's or dryer's receptacle is behind the unit"
+    },
+    {
+      "id": "tv",
+      "words": ["TV", "TELEVISION"],
+      "zone": "behind",
+      "band_in": 6,
+      "why": "a wall TV's receptacle and data outlet are behind the screen"
+    },
+    {
+      "id": "microwave",
+      "words": ["MICROWAVE", "MW"],
+      "zone": "inside",
+      "band_in": 2,
+      "why": "a microwave's receptacle is inside its cabinet, centred"
+    },
+    {
+      "id": "dishwasher",
+      "words": ["DISHWASHER", "DW"],
+      "zone": "adjacent",
+      "host_words": ["SINK"],
+      "band_in": 6,
+      "why": "a dishwasher's (and disposal's) receptacle is in the sink base beside it, not behind the dishwasher"
+    }
+  ]
+}

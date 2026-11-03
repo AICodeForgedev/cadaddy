@@ -3348,6 +3348,13 @@
 	Report Validation Findings	Informar de los hallazgos de validación
 	Validation Run Status	Estado de la ejecución de validación
 	Plant Validation Errors	Plantar errores de validación
+	Model Fidelity	Fidelidad del modelo
+	Model Fidelity Rules	Reglas de fidelidad del modelo
+	Model Fidelity Report	Informe de fidelidad del modelo
+	Fidelity	Fidelidad
+	Auto	Automático
+	Floor	Planta
+	Detail	Detalle
 	Print Inventory	Inventario de planos
 	Piece	Pieza
 	Raceway run	Tramo de canalización
@@ -3369,3 +3376,9 @@
 	Promote Object Form to Template	Convertir formulario de objeto en plantilla
 	Object Completeness	Completitud de objetos
 	Object Form	Formulario de objeto
+	Wall Faces	Caras de muro
+	Place Devices on Wall Faces	Colocar dispositivos en caras de muro
+	Devices Follow Their Walls	Los dispositivos siguen a sus muros
+	Room Layout	Distribución de la habitación
+	Tie a Device to an Object	Vincular un dispositivo a un objeto
+	Add Casework or Appliance Object	Agregar objeto de mueble empotrado o electrodoméstico

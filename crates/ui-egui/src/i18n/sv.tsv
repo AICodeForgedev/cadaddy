@@ -3505,6 +3505,13 @@ menu	Modify	Ändra
 	Report Validation Findings	Rapportera valideringsfynd
 	Validation Run Status	Status för valideringskörning
 	Plant Validation Errors	Plantera valideringsfel
+	Model Fidelity	Modellens detaljnivå
+	Model Fidelity Rules	Regler för modellens detaljnivå
+	Model Fidelity Report	Rapport om modellens detaljnivå
+	Fidelity	Detaljnivå
+	Auto	Auto
+	Floor	Våning
+	Detail	Detalj
 	Print Inventory	Ritningsinventering
 	Piece	Del
 	Raceway run	Rörsträcka
@@ -3526,3 +3533,9 @@ menu	Modify	Ändra
 	Promote Object Form to Template	Gör objektformulär till mall
 	Object Completeness	Objektens fullständighet
 	Object Form	Objektformulär
+	Wall Faces	Väggsidor
+	Place Devices on Wall Faces	Placera enheter på väggsidor
+	Devices Follow Their Walls	Enheter följer sina väggar
+	Room Layout	Rumslayout
+	Tie a Device to an Object	Knyt en enhet till ett objekt
+	Add Casework or Appliance Object	Lägg till inrednings- eller vitvaruobjekt

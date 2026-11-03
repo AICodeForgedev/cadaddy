@@ -3341,6 +3341,13 @@ menu	Modify	수정
 	Report Validation Findings	검증 결과 보고
 	Validation Run Status	검증 실행 상태
 	Plant Validation Errors	검증용 오류 심기
+	Model Fidelity	모델 충실도
+	Model Fidelity Rules	모델 충실도 규칙
+	Model Fidelity Report	모델 충실도 보고서
+	Fidelity	충실도
+	Auto	자동
+	Floor	층
+	Detail	세부
 	Print Inventory	도면 목록
 	Piece	부재
 	Raceway run	전선관 구간
@@ -3362,3 +3369,9 @@ menu	Modify	수정
 	Promote Object Form to Template	객체 양식을 템플릿으로 승격
 	Object Completeness	객체 완성도
 	Object Form	객체 양식
+	Wall Faces	벽면
+	Place Devices on Wall Faces	벽면에 장치 배치
+	Devices Follow Their Walls	장치가 벽을 따라 이동
+	Room Layout	실 배치
+	Tie a Device to an Object	장치를 객체에 연결
+	Add Casework or Appliance Object	캐비닛 또는 가전 객체 추가

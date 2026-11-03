@@ -3158,6 +3158,13 @@
 	Report Validation Findings	Prüfergebnisse melden
 	Validation Run Status	Status des Prüflaufs
 	Plant Validation Errors	Prüffehler einbauen
+	Model Fidelity	Modell-Detailtreue
+	Model Fidelity Rules	Regeln der Modell-Detailtreue
+	Model Fidelity Report	Bericht zur Modell-Detailtreue
+	Fidelity	Detailtreue
+	Auto	Automatisch
+	Floor	Geschoss
+	Detail	Detail
 	Print Inventory	Planinventar
 	Piece	Bauteil
 	Raceway run	Rohrstrecke
@@ -3179,3 +3186,9 @@
 	Promote Object Form to Template	Objektformular zur Vorlage machen
 	Object Completeness	Objektvollständigkeit
 	Object Form	Objektformular
+	Wall Faces	Wandflächen
+	Place Devices on Wall Faces	Geräte auf Wandflächen platzieren
+	Devices Follow Their Walls	Geräte folgen ihren Wänden
+	Room Layout	Raumlayout
+	Tie a Device to an Object	Gerät an ein Objekt binden
+	Add Casework or Appliance Object	Einbaumöbel- oder Geräteobjekt hinzufügen

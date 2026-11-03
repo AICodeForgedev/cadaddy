@@ -568,3 +568,82 @@ fn a_short_hop_with_trenching_is_cheaper_overhead() {
     let all = texts_of(&s, b["sheets"][0]["layout"].as_str().unwrap()).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
     assert!(!all.contains("ROUTE F-HAB"), "{all}");
 }
+
+#[test]
+fn called_runs_are_solid_proposed_ones_dashed_and_notes_without_a_place_are_listed() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // One feeder CADaddy proposes under the slab; the rest the documents call for.
+    let runs = sp["mep"]["runs"].as_array_mut().unwrap();
+    let first = runs.iter_mut().find(|r| r["system"] == "E-UG").unwrap();
+    first["height_source"] = json!("proposed");
+    first["source_sheet"] = json!("feeder 604 MSB→P1");
+    let id = first["id"].as_str().unwrap().to_string();
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"today": "2026-11-01"})).unwrap();
+    let mine = r["runs"].as_array().unwrap().iter().find(|x| x["id"] == id.as_str()).unwrap().clone();
+    assert_eq!((mine["proposed"].clone(), mine["basis"].clone()), (json!(true), json!("feeder 604 MSB→P1; proposed")), "{mine}");
+    assert!(r["runs"].as_array().unwrap().iter().filter(|x| x["proposed"] == false).count() > 1, "{r}");
+    let called = json!([{"sheet": "E-1", "text": "TWO (2) 5\" SCH. 40 PVC CONDUIT, MIN. 48\" BELOW GRADE."}]);
+    let b = s.execute("ugsheets.build", &json!({"number": "E-030", "called": called})).unwrap();
+    let layout = b["sheets"][0]["layout"].as_str().unwrap().to_string();
+    let d = s.doc().unwrap();
+    let paper: Vec<_> = d.space(&cadaddy_engine::doc::Space::Paper(layout.clone())).unwrap().iter().cloned().collect();
+    let on = |layer: &str| {
+        paper
+            .iter()
+            .filter(|e| {
+                e.common.layer == layer && matches!(e.kind, cadaddy_engine::doc::EntityKind::LwPolyline(_) | cadaddy_engine::doc::EntityKind::Line(_))
+            })
+            .count()
+    };
+    assert!(on("E-UG-PROP") >= 1 && on("E-UG-COND") >= 1, "proposed and called runs on their own layers");
+    let lt = |name: &str| d.layers.iter().find(|l| l.name == name).map(|l| l.linetype.clone()).unwrap_or_default();
+    assert_eq!(lt("E-UG-PROP").to_ascii_uppercase(), "DASHED");
+    assert_ne!(lt("E-UG-COND").to_ascii_uppercase(), "DASHED");
+    let all = texts_of(&s, &layout).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
+    for want in
+        ["(PROPOSED)", "PROPOSED - RFI", "CALLED, NOT LOCATED ON ANY PLAN (E-1)", "REQUIRES ENGINEER OF RECORD REVIEW", "DASHED RUNS ARE NOT CALLED"]
+    {
+        assert!(all.contains(want), "{want} on the sheet: {all}");
+    }
+}
+
+#[test]
+fn stub_ups_are_measured_from_the_nearer_slab_edge_when_there_are_no_grids() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // No grid lines (the grid is read from the columns): the slab's exterior walls give the edges.
+    sp["columns"] = json!([]);
+    let r0 = {
+        let s = &mut session_with(sp.clone());
+        s.execute("ugsheets.check", &json!({"today": "2026-11-01"})).unwrap()
+    };
+    assert!(r0["stubups"].as_array().unwrap().iter().all(|st| !st["x"]["from"].as_str().unwrap_or_default().starts_with("grid ")), "{r0}");
+    let stubs: Vec<[f64; 2]> =
+        r0["stubups"].as_array().unwrap().iter().map(|st| [st["at"][0].as_f64().unwrap(), st["at"][1].as_f64().unwrap()]).collect();
+    let (x0, x1) = stubs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(p[0]), a.1.max(p[0])));
+    let (y0, y1) = stubs.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(p[1]), a.1.max(p[1])));
+    // A slab around them, its east wall nearer the eastmost stub-up than its west wall.
+    let lvl = sp["mep"]["runs"][0]["level"].as_str().unwrap().to_string();
+    sp["shells"] = json!({ lvl.clone(): [[x0 - 2400.0, y0 - 120.0, x1 + 60.0, y1 + 2400.0]] });
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"today": "2026-11-01"})).unwrap();
+    let east = r["stubups"].as_array().unwrap().iter().max_by(|a, b| a["at"][0].as_f64().unwrap().total_cmp(&b["at"][0].as_f64().unwrap())).unwrap();
+    assert_eq!(east["x"]["from"], "slab E", "{east}");
+    assert!((east["x"]["ft"].as_f64().unwrap() + 5.0).abs() < 0.01, "5 ft west of the east slab edge: {east}");
+    assert_eq!(east["y"]["from"], "slab S", "{east}");
+}
+
+#[test]
+fn building_the_sheets_is_one_undo_step() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut s = session(&t);
+    let layouts = s.doc().unwrap().layouts.len();
+    let b = s.execute("ugsheets.build", &json!({"number": "E-040"})).unwrap();
+    assert!(b["sheets"].as_array().is_some_and(|a| !a.is_empty()), "{b}");
+    assert!(s.doc().unwrap().layouts.len() > layouts);
+    // One U takes the whole sheet away (its hundreds of lines and texts aren't steps of their own).
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().layouts.len(), layouts);
+}
