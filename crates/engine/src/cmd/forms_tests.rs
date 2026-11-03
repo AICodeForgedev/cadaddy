@@ -111,6 +111,12 @@ fn the_shipped_templates_parse_and_cover_every_trade_listed() {
     for k in [
         "circuit",
         "panel",
+        "breaker",
+        "poles",
+        "gfci_breaker",
+        "circuit_description",
+        "tr_documented",
+        "required_features",
         "breaker_type",
         "gfci",
         "protected_by",
