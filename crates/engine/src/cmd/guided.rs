@@ -5032,8 +5032,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         .get(&sheet_key(&dv.sheet))
                         .is_some_and(|rs| rs.iter().any(|r| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3]))
                 };
-                let placeable =
-                    |dv: &super::readers::ReadDevice| if typical.holds(dv) || in_view(dv) { None } else { sim_sheet(dv.at, &dv.level) };
+                let placeable = |dv: &super::readers::ReadDevice| if typical.holds(dv) || in_view(dv) { None } else { sim_sheet(dv.at, &dv.level) };
                 let out: Vec<_> = all_devices
                     .iter()
                     .filter_map(|dv| {
