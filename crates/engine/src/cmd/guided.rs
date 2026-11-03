@@ -5039,14 +5039,46 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     match s.execute("bim.coderules", &json!({})) {
         Ok(v) => {
             let line = format!(
-                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}",
+                "  code rules: {} receptacles; tamper-resistant {} (TR stated in the documents for {}); GFCI by circuit {}; receptacle circuits in GFCI places on breakers that aren't: {}",
                 v.get("receptacles").and_then(Value::as_u64).unwrap_or(0),
                 v.get("tamper_resistant").and_then(Value::as_u64).unwrap_or(0),
                 v.pointer("/tr_documented/stated").and_then(Value::as_u64).unwrap_or(0),
-                v.get("gfci").map(Value::to_string).unwrap_or_default()
+                v.get("gfci").map(Value::to_string).unwrap_or_default(),
+                gfci_places(&v).join("; ")
             );
             report_progress(s, json!({"step": "code rules"}), &line);
             s.echo(line);
+            let places = gfci_places(&v);
+            if !places.is_empty() {
+                // Its cost: a GFCI receptacle for a standard one on each.
+                let n = places.len() as f64;
+                let change = s
+                    .execute(
+                        "estimate.change",
+                        &json!({"lines": [{"item": "GFCI receptacle", "qty": n}, {"item": "Duplex receptacle", "qty": -n}], "why": "GFCI places"}),
+                    )
+                    .ok();
+                let cost = change.as_ref().map_or_else(String::new, |c| {
+                    format!(
+                        " (change: ${:.2} material, {:.2} labor hours)",
+                        c.pointer("/totals/material").and_then(Value::as_f64).unwrap_or(0.0),
+                        c.pointer("/totals/labor_hours").and_then(Value::as_f64).unwrap_or(0.0)
+                    )
+                });
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!(
+                        "{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {}{cost}",
+                        places.len(),
+                        places.join("; ")
+                    ),
+                    "a receptacle in an elevator pit, car or hoistway, on a roof, outdoors, in a garage, bathroom or laundry needs GFCI (NEC 620.6, 210.8); the breaker isn't, so the first receptacle on the circuit is a GFCI device",
+                    3,
+                    vec!["Build (and buy) a GFCI receptacle first on each, or confirm the breaker is GFCI".into()],
+                    None,
+                    false,
+                );
+            }
             let undecided = v.pointer("/gfci/undecided").and_then(Value::as_u64).unwrap_or(0);
             if undecided > 0 {
                 job.add_finding(
@@ -8106,6 +8138,19 @@ fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::
 /// How far a switch leg's switch may be from its fixtures, and a 3-way from its pair, feet.
 const CONTROL_REACH_FT: f64 = 40.0;
 const THREE_WAY_REACH_FT: f64 = 150.0;
+
+/// `bim.coderules`' receptacle circuits in GFCI places on breakers that aren't: `A-13 RCPT - ELEVATOR PIT (NEC 620.6 …)`.
+fn gfci_places(v: &Value) -> Vec<String> {
+    v.get("gfci_circuits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            let g = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or_default();
+            format!("{}-{} {} ({})", g("panel"), g("circuit"), g("description"), g("rule"))
+        })
+        .collect()
+}
 
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";

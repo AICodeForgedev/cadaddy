@@ -52,6 +52,10 @@ pub(crate) struct CodeRule {
     pub sink_reach_ft: Option<f64>,
     /// The words that name a sink (a fixture's type, description or mark).
     pub sink_words: Vec<String>,
+    /// Places a receptacle needs GFCI wherever it is in them, and the words that make a panel
+    /// schedule's circuit a receptacle circuit.
+    pub places: Vec<Place>,
+    pub receptacle_words: Vec<String>,
     /// Working space (NEC 110.26): rows of [volts to ground up to, depth for condition 1, 2, 3]
     /// inches; its least width and its height; where a panel's top is mounted; an entry plate's
     /// margins inside the box (sides, front and back) when its usable size isn't given.
@@ -64,6 +68,21 @@ pub(crate) struct CodeRule {
     /// ampacities by material and size (75 C column).
     pub conductor_factor: Option<f64>,
     pub ampacity_75c: BTreeMap<String, BTreeMap<String, f64>>,
+}
+
+/// A place by the words its name has (all of them), and the rule's article.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct Place {
+    pub all: Vec<String>,
+    pub cite: String,
+}
+
+/// The place a name is in (`RCPT - ELEVATOR PIT` → elevator pit), if any.
+pub(crate) fn place_of<'a>(places: &'a [Place], name: &str) -> Option<&'a Place> {
+    let up = name.to_ascii_uppercase();
+    let words: BTreeSet<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    places.iter().find(|p| !p.all.is_empty() && p.all.iter().all(|w| words.contains(w.as_str())))
 }
 
 /// The rooms a rule applies in: a typical unit's rooms (guest rooms), or rooms named so.
@@ -81,7 +100,7 @@ pub(crate) fn rules() -> Vec<CodeRule> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Code Rules", run)
-        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided}, rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
+        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided}, gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
         .menu(&["Tools", "Building", "Apply Code Rules"])]
 }
 
@@ -226,6 +245,45 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                     .min_by(|x, y| x.0.total_cmp(&y.0));
             if let Some((dist, h)) = near {
                 r.needs = Some(format!("{dist:.1} ft from sink {} (within {reach} ft of its edge)", h.hex()));
+            }
+        }
+    }
+    // In a place that needs GFCI (its circuit's description, else its room's name).
+    let circuit_desc = |panel: &str, number: &str| -> String {
+        sp.as_ref()
+            .and_then(|sp| {
+                sp.mep
+                    .panel_schedules
+                    .iter()
+                    .find(|p| p.panel.eq_ignore_ascii_case(panel))
+                    .and_then(|p| p.circuits.iter().find(|c| c.number == number))
+            })
+            .map(|c| c.description.clone())
+            .unwrap_or_default()
+    };
+    for r in recs.iter_mut().filter(|r| !r.tagged && r.needs.is_none()) {
+        let desc = circuit_desc(&text(&r.store, "panel"), &text(&r.store, "circuit"));
+        let room_name = names.get(&r.room.trim().to_ascii_uppercase()).cloned().unwrap_or_default();
+        if let Some(pl) = place_of(&gf.places, &desc) {
+            r.needs = Some(format!("{}: its circuit is {desc}", pl.cite));
+        } else if let Some(pl) = place_of(&gf.places, &room_name) {
+            r.needs = Some(format!("{}: in room {} ({room_name})", pl.cite, r.room));
+        }
+    }
+    // The schedules' receptacle circuits in such a place whose breaker isn't GFCI: their first
+    // receptacle is a GFCI device (modelled or not).
+    let mut gfci_circuits: Vec<Value> = Vec::new();
+    for p in sp.as_ref().map(|sp| sp.mep.panel_schedules.as_slice()).unwrap_or_default() {
+        for c in &p.circuits {
+            let up = c.description.to_ascii_uppercase();
+            let receptacles = up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| gf.receptacle_words.iter().any(|r| r == w));
+            let Some(pl) = place_of(&gf.places, &c.description).filter(|_| receptacles) else { continue };
+            let breaker_gf = c.protection.iter().any(|code| gf.tags.iter().any(|t| t.eq_ignore_ascii_case(code)));
+            if !breaker_gf {
+                gfci_circuits.push(json!({
+                    "panel": p.panel, "circuit": c.number, "description": c.description, "rule": pl.cite,
+                    "needs": "a GFCI receptacle (the first on the circuit): its breaker isn't GFCI",
+                }));
             }
         }
     }
@@ -381,6 +439,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         "tamper_resistant": tr_count,
         "tr_documented": {"stated": stated, "not_stated": not_stated},
         "gfci": tally,
+        "gfci_circuits": gfci_circuits,
         "rules": all.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
     }))
 }
@@ -394,5 +453,16 @@ mod tests {
         let r = rules();
         assert!(r.iter().any(|r| r.sets == "tamper_resistant" && r.cite == "NEC 406.12" && r.rooms.unit_rooms));
         assert!(r.iter().any(|r| r.sets == "gfci" && r.tags.iter().any(|t| t == "GFCI")));
+    }
+
+    #[test]
+    fn an_elevator_pit_or_a_roof_is_a_place_needing_gfci_but_a_kitchen_is_not() {
+        let gf = rules().into_iter().find(|r| r.sets == "gfci").unwrap_or_default();
+        assert!(place_of(&gf.places, "RCPT - ELEVATOR PIT").is_some_and(|p| p.cite.contains("620")));
+        assert!(place_of(&gf.places, "RCPT - ELEVATOR CAB").is_some());
+        assert!(place_of(&gf.places, "RCPT - ROOF").is_some_and(|p| p.cite.contains("210.8")));
+        assert!(place_of(&gf.places, "KITCHEN").is_none());
+        assert!(place_of(&gf.places, "PITCH ELEVATOR").is_none(), "whole words");
+        assert!(gf.receptacle_words.iter().any(|w| w == "RCPT"));
     }
 }
