@@ -4579,11 +4579,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         .clone();
                     placer = Some(Box::new(arch_placer(s.doc()?, &sp, &shell, enlarged_fits(job))));
                 }
-                let Some(sim) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
+                let Some(sim_sheet) = placer.as_deref() else { return Err(bad("bim_build", "device placer missing".to_string())) };
+                // A device in a typical room's view (or one room's) is that view's: stamped into the
+                // rooms, never put where its sheet's registration (another view's, the core plan
+                // beside it) would take it.
+                let device_sheets: BTreeSet<String> = all_devices.iter().map(|dv| sheet_key(&dv.sheet)).collect();
+                let views = room_view_regions(s.doc()?, job, &device_sheets);
+                let in_view = |dv: &super::readers::ReadDevice| {
+                    views
+                        .get(&sheet_key(&dv.sheet))
+                        .is_some_and(|rs| rs.iter().any(|r| dv.at[0] >= r[0] && dv.at[0] <= r[2] && dv.at[1] >= r[1] && dv.at[1] <= r[3]))
+                };
+                let sim = |dv: &super::readers::ReadDevice| if in_view(dv) { None } else { sim_sheet(dv.at, &dv.level) };
                 let out: Vec<_> = all_devices
                     .iter()
                     .filter_map(|dv| {
-                        let m = sim(dv.at, &dv.level)?;
+                        let m = sim(dv)?;
                         let mut dv = dv.clone();
                         dv.at = m.apply(dv.at);
                         Some(dv)
@@ -4608,7 +4619,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     );
                 }
                 let mut why: BTreeMap<String, usize> = BTreeMap::new();
-                for dv in all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()) {
+                for dv in all_devices.iter().filter(|dv| sim(dv).is_none()) {
                     *why.entry(format!(
                         "{} on {}",
                         if dv.sheet.is_empty() { "?" } else { &dv.sheet },
@@ -4617,7 +4628,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     .or_default() += 1;
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
-                let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv.at, &dv.level).is_none()).collect();
+                let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv).is_none()).collect();
                 let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 // The heights the typical rooms' plans print by their devices.
