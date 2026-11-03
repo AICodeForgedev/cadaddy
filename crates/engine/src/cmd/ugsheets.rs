@@ -1249,7 +1249,13 @@ fn sheet_number(first: &str, i: usize) -> String {
     }
 }
 
+/// One undo step for the sheets, however many lines and texts draw them (a step of each kept a
+/// copy of the drawing).
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
+    s.as_one_undo_step(|s| run_build_inner(s, p))
+}
+
+fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "ugsheets.build";
     let sp = spec_of(cmd, s)?;
     let t = today_of(cmd, p)?;

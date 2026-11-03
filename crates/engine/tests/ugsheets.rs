@@ -634,3 +634,16 @@ fn stub_ups_are_measured_from_the_nearer_slab_edge_when_there_are_no_grids() {
     assert!((east["x"]["ft"].as_f64().unwrap() + 5.0).abs() < 0.01, "5 ft west of the east slab edge: {east}");
     assert_eq!(east["y"]["from"], "slab S", "{east}");
 }
+
+#[test]
+fn building_the_sheets_is_one_undo_step() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut s = session(&t);
+    let layouts = s.doc().unwrap().layouts.len();
+    let b = s.execute("ugsheets.build", &json!({"number": "E-040"})).unwrap();
+    assert!(b["sheets"].as_array().is_some_and(|a| !a.is_empty()), "{b}");
+    assert!(s.doc().unwrap().layouts.len() > layouts);
+    // One U takes the whole sheet away (its hundreds of lines and texts aren't steps of their own).
+    s.undo().unwrap();
+    assert_eq!(s.doc().unwrap().layouts.len(), layouts);
+}
