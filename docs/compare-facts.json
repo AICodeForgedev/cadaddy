@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1206,
-    "count": 1206,
+    "callableAsJson": 1214,
+    "count": 1214,
     "ids": [
       "-attedit",
       "-block",
@@ -121,10 +121,18 @@
       "bim.clash.status",
       "bim.coderules",
       "bim.colour",
+      "bim.completeness",
       "bim.dimming",
       "bim.element",
       "bim.estimate",
       "bim.field.link",
+      "bim.form.create",
+      "bim.form.field",
+      "bim.form.log",
+      "bim.form.promote",
+      "bim.form.record",
+      "bim.form.revert",
+      "bim.forms",
       "bim.from_pdf",
       "bim.get_spec",
       "bim.identity",

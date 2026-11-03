@@ -323,6 +323,50 @@ fn properties(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         }
         st.element = None;
     }
+    form_section(ui, el.get("form"));
+}
+
+/// The element's object form (`bim.element`'s `form`): each field's value and status, missing
+/// required fields and conflicts highlighted.
+fn form_section(ui: &mut egui::Ui, form: Option<&Value>) {
+    let Some(form) = form.filter(|f| f.is_object()) else { return };
+    let fields: Vec<&Value> = form.get("fields").and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default();
+    if fields.is_empty() {
+        return;
+    }
+    let n = |k: &str| form.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let title = format!("{} ({}/{})", crate::i18n::t("Object Form"), n("filled"), n("required"));
+    let tokens = Tokens::get();
+    egui::CollapsingHeader::new(title).id_salt("bim-element-form").default_open(true).show(ui, |ui| {
+        egui::Grid::new("bim-element-form-grid").num_columns(3).striped(true).show(ui, |ui| {
+            for f in fields.into_iter().take(200) {
+                let key = f.get("key").and_then(Value::as_str).unwrap_or("");
+                let status = f.get("status").and_then(Value::as_str).unwrap_or("");
+                let required = f.get("required").and_then(Value::as_bool).unwrap_or(false);
+                let value = match f.get("value") {
+                    Some(Value::String(t)) => t.clone(),
+                    Some(Value::Null) | None => String::new(),
+                    Some(v) => v.to_string(),
+                };
+                let colour = match status {
+                    "conflict" => tokens.warn,
+                    "missing" | "default" if required => tokens.warn,
+                    "n/a" => tokens.text_faint,
+                    _ => tokens.text,
+                };
+                let label = if required { format!("{key} *") } else { key.to_string() };
+                ui.label(RichText::new(label).color(tokens.text_dim));
+                ui.label(RichText::new(value).color(colour));
+                let mut st = RichText::new(status).color(colour);
+                if status == "conflict" || (required && matches!(status, "missing" | "default")) {
+                    st = st.strong();
+                }
+                let reason = f.get("reason").and_then(Value::as_str).unwrap_or("");
+                ui.label(st).on_hover_text(reason);
+                ui.end_row();
+            }
+        });
+    });
 }
 
 // ─── Colours tab ──────────────────────────────────────────────────────────────

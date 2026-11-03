@@ -568,6 +568,39 @@ fn question_items(s: &Session) -> Vec<Item> {
         .collect()
 }
 
+/// Fields whose documents disagree (`bim.form.record` met a different document's value): a
+/// conflict per element and field, its values with their sources; the answer is the value that
+/// holds, citing the document that settles it.
+fn conflict_items(s: &Session) -> Vec<Item> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    super::forms::open_conflicts(d)
+        .into_iter()
+        .take(MAX_QUEUED_FAILURES)
+        .map(|c| {
+            let level = d.model.get(cadaddy_doc::Handle(u64::from_str_radix(&c.handle, 16).unwrap_or(0))).and_then(|e| super::elemprops::level_of(e)).unwrap_or_default();
+            let said: Vec<String> = c
+                .values
+                .iter()
+                .take(4)
+                .map(|g| format!("{} ({}{})", g.value.as_str().map_or_else(|| g.value.to_string(), str::to_string), g.source.kind.as_str(), g.source.doc.as_deref().map(|x| format!(" {x}")).unwrap_or_default()))
+                .collect();
+            Item {
+                id: format!("RV-F{}", hash(&format!("conflict|{}", c.id))),
+                kind: "conflict",
+                level,
+                title: cut(&format!("{} {} {}: the documents disagree: {}", c.kind, c.handle, c.key, said.join(" vs ")), 120),
+                detail: json!({"conflict": c.id, "handle": c.handle, "kind": c.kind, "key": c.key, "values": c.values}),
+                candidates: c.values.iter().take(4).map(|g| json!({"answer": g.value, "from": format!("{} {}", g.source.kind.as_str(), g.source.doc.clone().unwrap_or_default()).trim().to_string()})).collect(),
+                documents: c.values.iter().filter_map(|g| g.source.doc.clone()).take(8).collect(),
+                documented: true,
+                rank: 1.2,
+                key: json!({"conflict": c.id}),
+                system: String::new(),
+            }
+        })
+        .collect()
+}
+
 /// An answered device-mark question into the model: its devices take the kind (`not a device`
 /// takes them out), the answer and its citation their source.
 fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, who: &str) -> Result<()> {
@@ -612,6 +645,7 @@ fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     v.extend(validation_items(s));
     v.extend(judged_items(s));
     v.extend(question_items(s));
+    v.extend(conflict_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -633,6 +667,9 @@ fn how(i: &Item) -> Value {
         }
         "clash" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "coordinated: sprinkler main drops below the duct per FP-101"}, "or": "review.defer {id, reason}"})
+        }
+        "conflict" => {
+            json!({"call": "review.resolve", "example": {"id": i.id, "answer": "20A 125V", "citation": {"kind": "submittal", "document": "the approved product data", "ref": "page 2"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
         }
         "question" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "luminaire", "citation": {"kind": "schedule", "document": "E-001", "ref": "light fixture schedule, type C"}}, "or": "answer \"not a device\" for a grid bubble or another trade's tag"})
@@ -867,8 +904,8 @@ fn run_note(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let st = load(s.doc()?);
     let kind = str_param(p, "kind");
-    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern", "validation", "question"].contains(&k)) {
-        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash, concern, validation or question"));
+    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern", "validation", "question", "conflict"].contains(&k)) {
+        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash, concern, validation, question or conflict"));
     }
     let status = str_param(p, "status").unwrap_or("open");
     if !["open", "deferred", "resolved", "orphaned", "all"].contains(&status) {
@@ -1055,6 +1092,10 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
             super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
         }
         "question" => answer_question(s, item, answer, cite, who),
+        "conflict" => {
+            let id = item.key["conflict"].as_str().unwrap_or_default();
+            super::forms::resolve_conflict(s, id, answer, &cite.map(Citation::text).unwrap_or_default(), who)
+        }
         // Clashes and concerns: the decision is the record.
         _ => Ok(()),
     }
