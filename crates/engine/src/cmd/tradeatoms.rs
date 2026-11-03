@@ -1002,6 +1002,23 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
+/// Read the trades' documents at `paths` into `sp` (the job's step before the build); a line
+/// of what was read.
+pub(crate) fn read_documents(s: &mut Session, sp: &mut BuildingSpec, paths: &[String]) -> String {
+    let read = docs::read(s, paths, 0);
+    docs::store(sp, &read);
+    let mut by = BTreeMap::<&str, usize>::new();
+    for f in &read.facts {
+        *by.entry(f.trade.as_str()).or_default() += 1;
+    }
+    format!("{} files, {} facts {by:?}, {} unread", read.files.len(), read.facts.len(), read.unread.len())
+}
+
+/// Whether a spec holds the trades' documents' facts.
+pub(crate) fn has_facts(sp: &BuildingSpec) -> bool {
+    sp.trades.get("facts").and_then(Value::as_array).is_some_and(|a| !a.is_empty())
+}
+
 /// Shared geometry helpers for the layouts.
 pub(crate) mod geo {
     use super::*;

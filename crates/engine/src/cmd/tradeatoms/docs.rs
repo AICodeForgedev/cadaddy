@@ -163,11 +163,24 @@ fn files_under(paths: &[String]) -> Vec<String> {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
         let mut items: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
         items.sort();
-        for p in items {
-            if p.is_dir() {
-                walk(&p, depth + 1, out);
-            } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt")) {
-                out.push(p.to_string_lossy().to_string());
+        let dirs: Vec<&std::path::PathBuf> = items.iter().filter(|p| p.is_dir()).collect();
+        // A package exported a folder per revision (`Rev 1-0`, `Rev 1-1`): the latest replaces
+        // the others.
+        let revs: Vec<(Vec<u32>, &std::path::PathBuf)> = dirs.iter().filter_map(|p| revision(p).map(|r| (r, *p))).collect();
+        let latest =
+            (revs.len() > 1 && revs.len() == dirs.len()).then(|| revs.iter().max_by(|a, b| a.0.cmp(&b.0)).map(|(_, p)| (*p).clone())).flatten();
+        let files: Vec<&std::path::PathBuf> = items
+            .iter()
+            .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt")))
+            .collect();
+        // A reviewed or stamped copy beside its plain one: the plain one.
+        let plain: Vec<&&std::path::PathBuf> = files.iter().filter(|p| !review_copy(p)).collect();
+        for f in files.iter().filter(|p| plain.is_empty() || !review_copy(p)) {
+            out.push(f.to_string_lossy().to_string());
+        }
+        for d in dirs {
+            if latest.as_ref().is_none_or(|l| l == d) {
+                walk(d, depth + 1, out);
             }
         }
     }
@@ -183,6 +196,20 @@ fn files_under(paths: &[String]) -> Vec<String> {
     out.sort();
     out.dedup();
     out
+}
+
+/// A revision folder's number (`Rev 5-1` → [5, 1], `REV 2` → [2]).
+fn revision(p: &std::path::Path) -> Option<Vec<u32>> {
+    let name = p.file_name()?.to_string_lossy().to_ascii_uppercase();
+    let rest = name.strip_prefix("REV")?.trim_start_matches(['.', ' ', '_']);
+    let nums: Vec<u32> = rest.split(['-', '.', ' ', '_']).filter(|x| !x.is_empty()).map(|x| x.parse::<u32>().ok()).collect::<Option<Vec<u32>>>()?;
+    (!nums.is_empty()).then_some(nums)
+}
+
+/// Whether a file is a reviewed, stamped or marked-up copy (by its name).
+fn review_copy(p: &std::path::Path) -> bool {
+    let n = p.file_stem().map(|s| s.to_string_lossy().to_ascii_uppercase()).unwrap_or_default();
+    ["REVIEWED", "REVIEW", "STAMPED", "MARKUP", "MARKED UP", "COMMENTS", "RETURNED"].iter().any(|w| n.contains(w))
 }
 
 /// A file's text: a text file as it is, a PDF's pages (`--- page N of M ---` between them).
@@ -1183,6 +1210,32 @@ mod tests {
         assert!(a.iter().any(|x| x.value == "RH-10 AB123" && x.number == Some(40.0) && x.scope.contains("unit rooms")));
         assert!(a.iter().any(|x| x.value.starts_with("GB-2") && x.number == Some(4.0)));
         assert!(a.iter().any(|x| x.value.starts_with("TB-6") && x.number == Some(3.0)));
+    }
+
+    #[test]
+    fn only_the_latest_revision_and_the_plain_copy_are_read() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-tradedocs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (sub, files) in
+            [("Pkg/Rev 1-0", vec!["a.txt"]), ("Pkg/Rev 1-2", vec!["b.txt", "b - Reviewed.txt"]), ("Pkg/Rev 1-10", vec!["c Reviewed.txt"])]
+        {
+            let d = dir.join(sub);
+            std::fs::create_dir_all(&d).unwrap();
+            for f in files {
+                std::fs::write(d.join(f), "x").unwrap();
+            }
+        }
+        let got: Vec<String> =
+            files_under(&[dir.to_string_lossy().to_string()]).iter().map(|f| f.rsplit(['/', '\\']).next().unwrap_or_default().to_string()).collect();
+        // Rev 1-10 is the latest; its only file is a reviewed copy, so it is read.
+        assert_eq!(got, vec!["c Reviewed.txt".to_string()]);
+        std::fs::remove_dir_all(dir.join("Pkg/Rev 1-10")).unwrap();
+        let got: Vec<String> =
+            files_under(&[dir.to_string_lossy().to_string()]).iter().map(|f| f.rsplit(['/', '\\']).next().unwrap_or_default().to_string()).collect();
+        assert_eq!(got, vec!["b.txt".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(revision(std::path::Path::new("x/Rev 5-1")), Some(vec![5, 1]));
+        assert_eq!(revision(std::path::Path::new("x/Reviews")), None);
     }
 
     #[test]
