@@ -556,3 +556,104 @@ fn a_drop_blocked_over_its_box_rises_along_the_wall_and_one_that_cant_is_a_clash
     let d = s.doc().expect("doc");
     assert_eq!(d.model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count(), 0);
 }
+
+/// A line on `layer` from `a` to `b` (feet).
+fn wall_line(d: &mut Drawing, a: (f64, f64), b: (f64, f64)) {
+    let p = |(x, y): (f64, f64)| cadaddy_engine::geom::Vec3 { x: x * 12.0, y: y * 12.0, z: 0.0 };
+    let h = d.new_handle();
+    let mut e = cadaddy_engine::doc::Entity::new(h, cadaddy_engine::doc::EntityKind::Line(cadaddy_engine::doc::Line { a: p(a), b: p(b) }));
+    e.common.layer = "A-WALL".into();
+    d.model.push(e);
+}
+
+/// A mesh's plan box (feet): [x0, y0, x1, y1].
+fn plan_box(e: &cadaddy_engine::doc::Entity) -> [f64; 4] {
+    let cadaddy_engine::doc::EntityKind::Mesh(m) = &e.kind else { return [f64::NAN; 4] };
+    m.vertices.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+        [b[0].min(v.x / 12.0), b[1].min(v.y / 12.0), b[2].max(v.x / 12.0), b[3].max(v.y / 12.0)]
+    })
+}
+
+#[test]
+fn a_device_set_in_its_wall_again_after_a_merge_takes_its_box_and_its_drop_along() {
+    // Two rooms, a 6" partition between them (19.75'–20.25'). A receptacle on LP1-1 by the
+    // partition's west face; the panel in the west room. The job's identity merge then keeps a
+    // copy of the partition 12" west of it (the same wall read off two sheets): the device goes in
+    // the wall there now, and its box and the raceway's drop must go with it, not stay in the room.
+    let mut d = Drawing::new_imperial();
+    let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let west = [((0.5, 0.5), (19.75, 0.5)), ((19.75, 0.5), (19.75, 9.5)), ((19.75, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let east = [((20.25, 0.5), (40.0, 0.5)), ((40.0, 0.5), (40.0, 9.5)), ((40.0, 9.5), (20.25, 9.5)), ((20.25, 9.5), (20.25, 0.5))];
+    for (a, b) in outer.into_iter().chain(west).chain(east) {
+        wall_line(&mut d, a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [receptacle(1, 19.6, 5.0, "LP1-1"), circuit("LP1-1")],
+        "mep": {"systems": [], "runs": [], "equipment": [
+            {"tag": "LP1", "kind": "panel", "level": "L1", "min": [12, 7], "max": [32, 11], "height_ft": 4, "bottom_ft": 2.5,
+             "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let dev = {
+        let d = s.doc().expect("doc");
+        d.model.iter().find(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle).expect("device")
+    };
+    let host = |s: &Session| {
+        let d = s.doc().expect("doc");
+        let ps = cadaddy_engine::doc::props::read(&d.model.get(dev).expect("device").common.xdata);
+        ps.get("host_wall").map(|p| p.text()).unwrap_or_default()
+    };
+    let wall = cadaddy_engine::doc::Handle::parse_hex(host(&s).trim()).expect("a host wall");
+    // The box of the device, and the conduit ends at it (feet).
+    let box_of = |s: &Session| -> [f64; 4] {
+        let d = s.doc().expect("doc");
+        d.model
+            .iter()
+            .find(|e| {
+                let ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+                ps.get("atom").map(|p| p.text()).as_deref() == Some("box") && ps.get("box_of").map(|p| p.text()) == Some(dev.hex())
+            })
+            .map(|e| plan_box(e))
+            .expect("its box")
+    };
+    let centre = |b: [f64; 4]| ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
+    let (dx0, _) = centre(plan_box(s.doc().expect("doc").model.get(dev).expect("device")));
+    let (bx0, _) = centre(box_of(&s));
+    assert!((bx0 - dx0).abs() < 0.25, "built: the box behind its device ({bx0} vs {dx0})");
+    // The merge: the partition replaced by its copy 12" west.
+    {
+        let d = s.doc_mut().expect("doc");
+        let mut e = (**d.entity(wall).expect("wall")).clone();
+        if let cadaddy_engine::doc::EntityKind::Mesh(m) = &mut e.kind {
+            m.vertices.iter_mut().for_each(|v| v.x -= 12.0);
+        }
+        e.handle = d.new_handle();
+        d.model.push(e);
+        d.model.remove(wall);
+    }
+    let r = s.execute("bim.props.fill", &json!({})).expect("fill");
+    assert_eq!(r["reseated"], json!(1), "{r:#}");
+    let (dx, dy) = centre(plan_box(s.doc().expect("doc").model.get(dev).expect("device")));
+    assert!((dx - dx0).abs() > 0.3, "the device moved with its wall: {dx0} → {dx}");
+    let b = box_of(&s);
+    let (bx, by) = centre(b);
+    assert!(
+        ((bx - bx0) - (dx - dx0)).abs() < 0.05 && (by - dy).abs() < 0.25,
+        "its box went with it: box {bx0} → ({bx}, {by}), device {dx0} → ({dx}, {dy})"
+    );
+    // The raceway still lands on the box: a stick ends over it, and none ends where the box was.
+    let st = sticks(&s);
+    let on = |p: &[f64; 3], x: f64| (p[0] - x).abs() < 0.1 && (p[1] - by).abs() < 0.1 && p[2] < 3.0;
+    assert!(st.iter().any(|(_, a, e)| on(a, bx) || on(e, bx)), "a stick ends at the box: {st:?}");
+    assert!(!st.iter().any(|(_, a, e)| on(a, bx0) || on(e, bx0)), "no stick left at the box's old spot: {st:?}");
+    let left = s.doc().expect("doc").model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count();
+    assert_eq!(left, 0, "every drop reaches its box");
+}

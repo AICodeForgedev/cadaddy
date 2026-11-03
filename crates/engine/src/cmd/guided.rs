@@ -5519,7 +5519,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         Ok(v) => progress_line(&format!("  conduit rerouted with the gear placed: {v}")),
         Err(e) => result["conduit_reroute_error"] = json!(e.to_string()),
     }
-    route_report_step(s, job, &mut result);
     bim_step(s, job, "conduit routes", t);
     // Buried work the set issues no plan for: its underground sheets generated.
     let t = web_time::Instant::now();
@@ -5587,7 +5586,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             progress_line(&format!("  devices set in their walls again (their walls merged): {n}"));
         }
         result["devices_reseated"] = json!(n);
+        // Their boxes and the raceways' drops go with them (else they stay where the merged wall was).
+        match super::conduitroute::follow_reseated(s, n) {
+            Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
+            Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
+            None => {}
+        }
     }
+    // The routing as it stands now, and what it found (once, after the last reroute).
+    route_report_step(s, job, &mut result);
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
         submittals_step(s, job, &mut result);

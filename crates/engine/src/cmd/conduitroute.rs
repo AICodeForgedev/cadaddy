@@ -2656,6 +2656,18 @@ fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
     reroute(s)
 }
 
+/// After `moved` devices were set in their walls again (a merge removed the walls they were in):
+/// their boxes, rings and the raceways' drops are pieces built where the devices stood, so the
+/// circuits are routed again and the pieces cut again where the devices are now. Nothing to do
+/// when none moved or the model has no pieces yet (the build makes them where the devices are).
+pub(crate) fn follow_reseated(s: &mut Session, moved: usize) -> Option<Result<Value>> {
+    if moved == 0 {
+        return None;
+    }
+    let has_atoms = s.doc().ok()?.model.iter().any(|e| super::mepatoms::is_atom(e));
+    has_atoms.then(|| reroute(s))
+}
+
 // ─── Commands ────────────────────────────────────────────────────────────────
 
 pub fn specs() -> Vec<CommandSpec> {
