@@ -2156,6 +2156,9 @@ struct DeviceCensus {
     placed: Vec<super::readers::ReadDevice>,
 }
 
+/// The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection
+/// and alarm, technology).
+const DEVICE_DISCIPLINES: &[&str] = &["E", "M", "P", "FP", "FA", "F", "T", "LV", "EL", "ME", "MEP"];
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
 const MIN_REPEATED_TAG: usize = 3;
 /// Most crops drawn for unlisted tags.
@@ -2281,11 +2284,27 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
     // A reflected ceiling plan is loaded for its ceiling heights: its fixtures are the electrical
     // plans' (counted there), and it isn't registered onto the plans.
     let ceiling_plans: BTreeSet<&str> = job.sheet_regions.iter().filter(|r| r.kind == "rcp").map(|r| r.number.as_str()).collect();
+    // A trade's devices are on its own sheets: another trade's (architectural, civil, landscape,
+    // structural) letters wall types and keys with the same marks, unless the sheet has a legend
+    // of devices of its own.
+    let device_trade = |sheet: &str| {
+        let number = sheet.split('/').next().unwrap_or(sheet);
+        job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(number)).is_none_or(|r| {
+            let d = r.discipline.trim().to_ascii_uppercase();
+            d.is_empty() || DEVICE_DISCIPLINES.contains(&d.as_str())
+        })
+    };
     for (g, syms) in symbols.iter().enumerate() {
         if spans.get(g).is_some_and(|sp| ceiling_plans.contains(sp.sheet.split('/').next().unwrap_or(&sp.sheet))) {
             continue;
         }
         let legend = legends.get(g).unwrap_or(&none);
+        let sheet_of_g = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
+        let fire_alarm_g = fire_alarm.contains(&sheet_of_g.split('/').next().unwrap_or(&sheet_of_g).trim().to_ascii_uppercase());
+        if !device_trade(&sheet_of_g) && !fire_alarm_g && legend.regions.is_empty() {
+            *c.not_device.entry("on another trade's sheet (no device legend of its own)").or_default() += syms.len();
+            continue;
+        }
         let circuits: Vec<&TextItem> = texts.get(g).into_iter().flatten().filter(|t| circuit_text(&t.value, &sheet_numbers)).collect();
         let sheet = spans.get(g).map_or_else(String::new, |sp| sp.sheet.clone());
         let span = spans.get(g).map_or((0, u64::MAX), |sp| (sp.lo, sp.hi));
@@ -4545,7 +4564,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let mut out = out;
                 // A device of the plans in no room but in a unit's footprint (its bath, its entry:
                 // the unit's label's room leaves them out) is that unit's.
-                let booked = book_into_units(&mut out, &footprints);
+                // (What a unit's own plans show: its stamped tags; and plumbing, which its plumbing
+                // plans give. A corridor's sconce by the unit's door is the corridor's.)
+                let mut own: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                for dv in &stamped {
+                    own.entry(dv.room.clone()).or_default().insert(dv.tag.trim().to_ascii_uppercase());
+                }
+                let booked = book_into_units(&mut out, &footprints, &own);
                 if booked > 0 {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
@@ -7240,20 +7265,26 @@ fn scheduled_connections(
 /// A stamped unit's footprint: level, room, the footprint, the room's own (label-traced) outline.
 type Footprint = (String, String, Vec<cadaddy_geom::Vec2>, Vec<cadaddy_geom::Vec2>);
 
-/// Books each device in no room that stands in a unit's footprint to that unit (its level by the
-/// digits of its name: a device read off its sheet may carry the sheet's level code); in two
+/// Books each device in no room that stands in a unit's footprint to that unit, when it is a
+/// plumbing fixture or a tag the unit's own plans show (`own`: by room, the tags stamped into it)
+/// (its level by the digits of its name: a device read off its sheet may carry the sheet's level
+/// code); in two
 /// footprints (units back to back, their plans' linework past the wall they share), the one whose
 /// own room is nearer. How many.
-fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Footprint]) -> usize {
+fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Footprint], own: &BTreeMap<String, BTreeSet<String>>) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
+        let plumbing = dv.kind.starts_with("plumbing");
+        let tag = dv.tag.trim().to_ascii_uppercase();
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
         let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
         if let Some((_, room, _, _)) = footprints
             .iter()
-            .filter(|(l, _, poly, _)| here(l) && cadaddy_geom::point_in_polygon(poly, p))
+            .filter(|(l, room, poly, _)| {
+                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && cadaddy_geom::point_in_polygon(poly, p)
+            })
             .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
         {
             dv.room = room.clone();
@@ -13765,6 +13796,12 @@ mod tests {
         let hi = s.doc().map_or(0, |d| d.handseed);
         job.sheet_spans.push(SheetSpan { sheet: "P-1".into(), lo, hi });
         job.sheet_regions.push(region("P-1", "P", 3000.0));
+        // L-1: a landscape plan's key `H` by a symbol (no device legend of its own): no device.
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &[], &[("H", 6000.0, 500.0)]);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "L-1".into(), lo, hi });
+        job.sheet_regions.push(region("L-1", "L", 6000.0));
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let on = |sheet: &str| -> Vec<(String, String)> {
             let mut v: Vec<(String, String)> =
@@ -13784,6 +13821,7 @@ mod tests {
         );
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
+        assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
     }
 
     /// A registered enlarged view's devices move onto the overall plan where its callout points;
@@ -13877,7 +13915,12 @@ mod tests {
             wc(150.0, 60.0, "Level 2"),
             wc(138.0, 60.0, "Level 2"),
         ];
-        assert_eq!(book_into_units(&mut devices, &foot), 3);
+        let own: BTreeMap<String, BTreeSet<String>> =
+            [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
+        assert_eq!(book_into_units(&mut devices, &foot, &own), 3);
+        // A corridor's sconce by the door, no tag the unit's plans show, stays out.
+        let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
+        assert_eq!(book_into_units(&mut g, &foot, &own), 0);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
