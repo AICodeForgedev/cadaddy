@@ -763,9 +763,12 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         // A room traced from its own tag (`at`) is found by its number only: the plans' unit-type
         // label elsewhere names other rooms.
         let is_number = super::perceive::geometry::room_number(&text);
+        // A spec room with a number and no level is claimed by its number only: its name (a unit
+        // type every floor prints) would take a room of another floor and give it this one's
+        // number.
         let room = sp.rooms.iter().position(|r| {
             names_room(r, &text)
-                && (is_number || r.at.is_none())
+                && (is_number || (r.at.is_none() && (r.number.is_none() || r.level.is_some())))
                 && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
         });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name

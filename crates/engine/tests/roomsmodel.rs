@@ -310,3 +310,32 @@ fn a_corridor_of_the_circulation_is_its_floors_room_whatever_lines_cross_it() {
     assert!(rooms.iter().any(|x| x["number"] == json!("101")), "{list}");
     assert_eq!(rooms.len(), 2, "{list}");
 }
+
+/// Rooms as a guided job's rooms stage hands them on (no level, no place): the second floor's
+/// SINGLE Q ADA 220, and the first floor's 118 known only by its number. The first floor's room
+/// printed SINGLE Q ADA 118 is 118: the other floor's room of that name doesn't take it.
+#[test]
+fn a_unit_type_name_on_two_floors_takes_no_number_from_the_other_floor() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-AREA-IDEN"})).unwrap();
+    floor(&mut s, 0.0, 0.0, 1.0, &["SINGLE Q ADA", "118"], &[]);
+    floor(&mut s, 0.0, 2000.0, 1.0, &["SINGLE Q ADA", "220"], &[]);
+    draft(&mut s);
+    let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    sp["rooms"] = json!([{"name": "", "number": "118"}, {"name": "SINGLE Q ADA", "number": "220"}]);
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.execute("model.build", &json!({})).unwrap();
+    let list = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let on = |level: &str| -> Vec<String> {
+        list["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["level"] == json!(level))
+            .filter_map(|r| r["number"].as_str().map(str::to_string))
+            .collect()
+    };
+    assert_eq!(on("Level 1"), vec!["118".to_string()], "{list}");
+    assert_eq!(on("Level 2"), vec!["220".to_string()], "{list}");
+}
