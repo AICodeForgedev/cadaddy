@@ -28,8 +28,11 @@ const TWIN_SHARE: f64 = 0.25;
 /// lines has in pairs.
 const LONG_LINE_FT: f64 = 3.0;
 const LONG_PAIRED_SHARE: f64 = 0.6;
-/// The least paired length (feet) of a plan that draws its pipes as two lines.
-const MIN_TWIN_FT: f64 = 50.0;
+/// The least paired length (feet) of a plan that draws its pipes as two lines (an enlarged room's
+/// few feet of pipe is some), and the length past which its share of the long lines doesn't matter
+/// (a floor plan's long lines include its lettering's and symbols').
+const MIN_TWIN_FT: f64 = 8.0;
+const PLENTY_TWIN_FT: f64 = 100.0;
 /// A line across a pipe is square to it within this (cosine of its angle with the pipe).
 const SQUARE_COS: f64 = 0.2;
 /// The pieces across at one place (within this share of the pipe's width along it) together
@@ -146,7 +149,10 @@ pub(crate) fn middles(segs: &[(Vec2, Vec2)], upf: f64) -> Vec<Middle> {
     }
     let tol = 1e-6 * upf.max(1.0);
     let kept: Vec<&Pair> = all.iter().filter(|p| [p.i, p.j].iter().all(|k| best.get(k).is_some_and(|g| p.gap <= g * SAME_GAP + tol))).collect();
-    if !is_twin_drawn(segs, &kept, upf) || !mostly_paired(segs, &kept, upf) {
+    // Pipes drawn to scale: closed across by their fittings, and either plenty of them or most of
+    // the plan's long lines.
+    let paired: f64 = kept.iter().map(|p| p.t1 - p.t0).sum();
+    if !is_twin_drawn(segs, &kept, upf) || (paired < PLENTY_TWIN_FT * upf && !mostly_paired(segs, &kept, upf)) {
         return Vec::new();
     }
     kept.iter()
@@ -483,9 +489,16 @@ mod tests {
 
     #[test]
     fn a_few_short_pairs_are_not_a_plan_of_pipes_drawn_to_scale() {
-        // 10 ft of a pair closed across (a symbol's sides, a short sleeve): the plan's single lines stay.
-        let segs = vec![(v(0.0, 0.0), v(120.0, 0.0)), (v(0.0, 3.0), v(120.0, 3.0)), (v(60.0, 0.0), v(60.0, 3.0))];
+        // 6 ft of a pair closed across (a symbol's sides, a short sleeve): the plan's single lines stay.
+        let segs = vec![(v(0.0, 0.0), v(72.0, 0.0)), (v(0.0, 3.0), v(72.0, 3.0)), (v(36.0, 0.0), v(36.0, 3.0))];
         assert!(middles(&segs, UPF).is_empty());
+        // 10 ft of one among long single lines (40 ft each side by side, a plan of single-line pipes).
+        let mut more = vec![(v(0.0, 0.0), v(120.0, 0.0)), (v(0.0, 3.0), v(120.0, 3.0)), (v(60.0, 0.0), v(60.0, 3.0))];
+        more.extend([(v(0.0, 200.0), v(480.0, 200.0)), (v(0.0, 300.0), v(480.0, 300.0))]);
+        assert!(middles(&more, UPF).is_empty());
+        // An enlarged room's 12 ft of pipe drawn to scale, its plan's only long lines: a pipe.
+        let room = vec![(v(0.0, 0.0), v(144.0, 0.0)), (v(0.0, 2.4), v(144.0, 2.4)), (v(72.0, 0.0), v(72.0, 2.4))];
+        assert_eq!(middles(&room, UPF).len(), 1);
     }
 
     #[test]

@@ -737,7 +737,9 @@ fn read_pipes_from_tags(
         .collect();
     // A plan that draws its pipes as two lines, in the trade's pen over the screened background
     // (the architecture printed grey under it): each pipe's middle line, as wide as it is drawn.
-    let dark: Vec<&Arc<Entity>> = linework.iter().copied().filter(|e| !screened(&e.common.color)).collect();
+    // Not the strokes the import took for lettering (their pairs are letters' sides).
+    let dark: Vec<&Arc<Entity>> =
+        linework.iter().copied().filter(|e| !screened(&e.common.color) && !e.common.layer.eq_ignore_ascii_case("PDF-SHX-SOURCE")).collect();
     let (all_chains, widths) = twin_chains(&dark, upf).unwrap_or_else(|| {
         let c = chains(&linework);
         let n = c.len();
