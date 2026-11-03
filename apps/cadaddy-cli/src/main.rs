@@ -1648,7 +1648,8 @@ fn roundtrip(args: &[String]) -> Result<(), String> {
     let mut missed: Vec<String> = Vec::new();
     let (root, files, out) = if path.is_dir() {
         let out = a.out.take().unwrap_or_else(|| path.join("report"));
-        let walk = corpus::walk(&path, std::slice::from_ref(&out));
+        // The report folder, and the saved copies in it, are never read back as corpus files.
+        let walk = corpus::walk(&path, &[out.clone(), out.join("saved")]);
         missed = walk.unreadable.iter().map(|u| format!("not read: {u}")).collect();
         if walk.truncated {
             missed.push("left out: files or folders past the harness limits".to_string());
