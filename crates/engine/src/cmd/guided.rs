@@ -5580,21 +5580,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
     // The devices whose wall the identity merge removed: set in the wall there now.
+    let mut reseated = 0usize;
     if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
         let n = super::propfill::rehost_devices(s.doc_mut()?, &sp);
         if n > 0 {
             progress_line(&format!("  devices set in their walls again (their walls merged): {n}"));
         }
         result["devices_reseated"] = json!(n);
-        // Their boxes and the raceways' drops go with them (else they stay where the merged wall was).
-        match super::conduitroute::follow_reseated(s, n) {
-            Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
-            Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
-            None => {}
-        }
+        reseated = n;
     }
-    // The routing as it stands now, and what it found (once, after the last reroute).
-    route_report_step(s, job, &mut result);
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
         submittals_step(s, job, &mut result);
@@ -5697,6 +5691,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     misplaced_step(s, job, &mut result);
     bim_step(s, job, "elements outside the floors flagged", t);
+    // The devices set in their walls again: the circuits routed again to where they stand now
+    // (their boxes and drops with them, else left where the merged wall was), once the model's
+    // devices are final; then what the routing found (once, after the last reroute).
+    let t = web_time::Instant::now();
+    match super::conduitroute::follow_reseated(s, reseated) {
+        Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
+        Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
+        None => {}
+    }
+    route_report_step(s, job, &mut result);
+    bim_step(s, job, "conduit routes final", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {

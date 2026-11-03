@@ -2551,8 +2551,37 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     sp.mep.runs.extend(routed.runs.iter().cloned());
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of");
     replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
-    sp.tags.retain(|t| !routed_tags.contains(t.id.as_str()) && !t.id.contains(HOME_PART));
-    sp.tags.extend(routed.tags.iter().cloned());
+    // Each circuit's routed tag (or its parts) where its tag was read, so the spec keeps its order
+    // (the order a later routing reads the circuits in); the homerun tags after them.
+    let mut by_read: HashMap<&str, Vec<&ElementTag>> = HashMap::new();
+    for t in routed.tags.iter().filter(|t| !t.id.contains(HOME_PART)) {
+        let of = t.fields.get("split_of").map_or(t.id.as_str(), |f| f.value.as_str());
+        by_read.entry(of).or_default().push(t);
+    }
+    let mut placed: BTreeSet<String> = BTreeSet::new();
+    let mut tags = Vec::with_capacity(sp.tags.len() + routed.tags.len());
+    for t in sp.tags.drain(..) {
+        if t.id.contains(HOME_PART) {
+            continue;
+        }
+        if !routed_tags.contains(t.id.as_str()) {
+            tags.push(t);
+            continue;
+        }
+        if let Some(rs) = by_read.get(t.id.as_str())
+            && placed.insert(t.id.clone())
+        {
+            tags.extend(rs.iter().map(|r| (*r).clone()));
+        }
+    }
+    tags.extend(
+        routed
+            .tags
+            .iter()
+            .filter(|t| t.id.contains(HOME_PART) || !placed.contains(t.fields.get("split_of").map_or(t.id.as_str(), |f| f.value.as_str())))
+            .cloned(),
+    );
+    sp.tags = tags;
     if !sp.mep.systems.iter().any(|s| s.name == BRANCH_SYSTEM) {
         sp.mep.systems.push(MepSystem {
             name: BRANCH_SYSTEM.into(),
