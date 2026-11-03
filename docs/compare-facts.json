@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1228,
-    "count": 1228,
+    "callableAsJson": 1232,
+    "count": 1232,
     "ids": [
       "-attedit",
       "-block",
@@ -114,7 +114,11 @@
       "bcount",
       "bedit",
       "bextend",
+      "bim.atoms.build",
+      "bim.atoms.docs",
       "bim.atoms.edit",
+      "bim.atoms.report",
+      "bim.atoms.rules",
       "bim.bom",
       "bim.build",
       "bim.chain",
