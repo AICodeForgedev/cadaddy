@@ -29,7 +29,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "fixture", "equipmen
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; a person's values stay")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; a person's values stay")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -207,6 +207,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                     "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
                     "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
                     "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
+                    "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
                     "doc": p.doc,
                 }),
             )

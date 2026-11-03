@@ -9387,6 +9387,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let spec_says = spec_light.says();
     // The submittal's products by type (every type it has, on a plan or not).
     let mut submitted: BTreeMap<String, (String, String, String)> = BTreeMap::new();
+    let mut submitted_qty: BTreeMap<String, (u32, String)> = BTreeMap::new();
     for (mark, p) in result["submittal_products"].as_object().into_iter().flatten() {
         let m = mark.trim().to_ascii_uppercase();
         // A type is a short tag (`A`, `F1`, `XA`); a word the reader took for one (a column's
@@ -9402,6 +9403,9 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             || g("doc").to_ascii_uppercase().contains("LIGHT");
         if !lighting {
             continue;
+        }
+        if let Some(q) = p.get("quantity").and_then(Value::as_u64).and_then(|q| u32::try_from(q).ok()) {
+            submitted_qty.insert(m.clone(), (q, g("doc")));
         }
         submitted.insert(m, (g("manufacturer"), g("catalog_number"), g("doc")));
     }
@@ -9454,7 +9458,11 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             )
             .to_ascii_uppercase(),
             circuit: (text(&store, "panel").to_ascii_uppercase(), number),
-            level: level_key(&text(&store, "level")),
+            // Its level (a built device's is the level it was made on).
+            level: level_key(&{
+                let l = text(&store, "level");
+                if l.is_empty() { super::bspec::made_level(e).unwrap_or_default() } else { l }
+            }),
             at: {
                 let v: Vec<f64> = text(&store, "location").split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
                 (v.len() >= 2).then(|| [v[0], v[1]])
@@ -9533,7 +9541,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         schedule: &types,
         submitted: &submitted,
         on_plans: &on_plans,
-        submitted_qty: &BTreeMap::new(),
+        submitted_qty: &submitted_qty,
         submittal_name: &submittal_name,
     });
     for (ty, fcs) in &field_conflicts {
@@ -9611,7 +9619,9 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let d = s.doc()?;
     let mut writes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
     let joined = |v: &[String]| v.iter().take(60).cloned().collect::<Vec<_>>().join(", ");
-    let linked: BTreeSet<&String> = links.control.keys().chain(links.controls.keys()).chain(links.three_way_with.keys()).collect();
+    let ctrl_hexes: BTreeSet<&String> = ctrls.iter().map(|c| &c.h).collect();
+    let linked: BTreeSet<&String> =
+        links.control.keys().chain(links.controls.keys()).chain(links.three_way_with.keys()).chain(ctrl_hexes.iter().copied()).collect();
     for hex in linked {
         let Some(h) = handles.get(hex) else { continue };
         let Some(e) = d.model.get(*h) else { continue };
@@ -9637,6 +9647,15 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         }
         if let Some(why) = links.unswitched.get(hex) {
             put(&mut st, "unswitched", "yes".into(), Source::from_doc(SourceKind::Schedule, why));
+        }
+        // A control's catalog number its legend line names (no submittal for it).
+        if links.controls.contains_key(hex) || links.three_way_with.contains_key(hex) || ctrl_hexes.contains(hex) {
+            let ty = st.get("type").filter(|p| p.has_value() && p.source.kind == SourceKind::Print).map(|p| p.text());
+            if let Some(cat) = ty.as_deref().and_then(lt::legend_catalog)
+                && st.get("catalog_number").is_none_or(|p| !p.has_value())
+            {
+                put(&mut st, "catalog_number", cat, Source::from_doc(SourceKind::Legend, &format!("the legend: {}", ty.unwrap_or_default())));
+            }
         }
         if let Some(why) = links.emergency.get(hex) {
             put(&mut st, "emergency", "yes".into(), Source::from_doc(SourceKind::Schedule, why));
@@ -9712,13 +9731,59 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     for c in &ctrls {
         built.entry(c.level.clone()).or_default().1 += 1;
     }
+    // Each guest-room type's enlarged views' luminaires and controls (the typical rooms' table),
+    // and so what each level's typical rooms should hold.
+    let mut views: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for t in result["devices"]["unit_devices"].as_array().into_iter().flatten() {
+        let Some(name) = t.get("unit_type").and_then(Value::as_str) else { continue };
+        let mut n = (0usize, 0usize);
+        for (k, v) in t.get("kinds").and_then(Value::as_object).into_iter().flatten() {
+            let c = v.get("sheets").and_then(Value::as_u64).map_or(0, |c| usize::try_from(c).unwrap_or(0));
+            if is_lum_kind(k) {
+                n.0 += c;
+            } else if is_ctl_kind(k) {
+                n.1 += c;
+            }
+        }
+        views.insert(name.to_string(), n);
+    }
+    let room_level: BTreeMap<String, String> = job_rooms(job)
+        .into_iter()
+        .filter(|r| !r.3.is_empty())
+        .map(|(_, level, _, number)| (number.to_ascii_uppercase(), level_key(&level)))
+        .collect();
+    let mut typical: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for (number, t) in &units {
+        if let (Some(level), Some(v)) = (room_level.get(number), views.get(t)) {
+            let e = typical.entry(level.clone()).or_default();
+            e.0 += v.0;
+            e.1 += v.1;
+        }
+    }
+    let in_units = |d: &Dev| units.contains_key(&d.room);
+    let mut built_units: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for l in lums.iter().filter(|d| in_units(d)) {
+        built_units.entry(l.level.clone()).or_default().0 += 1;
+    }
+    for c in ctrls.iter().filter(|d| in_units(d)) {
+        built_units.entry(c.level.clone()).or_default().1 += 1;
+    }
     let levels: BTreeSet<&String> = symbols.keys().chain(built.keys()).collect();
     let by_level: BTreeMap<String, Value> = levels
         .into_iter()
         .map(|l| {
             let (sl, sc) = symbols.get(l).copied().unwrap_or_default();
             let (bl, bc) = built.get(l).copied().unwrap_or_default();
-            (l.clone(), json!({"luminaires": bl, "luminaire_symbols": sl, "switches": bc, "switch_symbols": sc}))
+            let (tl, tc) = typical.get(l).copied().unwrap_or_default();
+            let (ul, uc) = built_units.get(l).copied().unwrap_or_default();
+            (
+                l.clone(),
+                json!({
+                    "luminaires": bl, "switches": bc,
+                    "plan_luminaire_symbols": sl, "plan_switch_symbols": sc,
+                    "guest_rooms": {"luminaires": ul, "switches": uc, "enlarged_views_luminaires": tl, "enlarged_views_switches": tc},
+                }),
+            )
         })
         .collect();
     // Per guest-room type: each room's luminaires and controls (fewest..most), the rooms.
@@ -9741,7 +9806,15 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         .into_iter()
         .map(|(t, v)| {
             let range = |f: fn(&(usize, usize)) -> usize| json!([v.iter().map(f).min().unwrap_or(0), v.iter().map(f).max().unwrap_or(0)]);
-            (t, json!({"rooms": v.len(), "luminaires": range(|x| x.0), "switches": range(|x| x.1), "rooms_without_luminaires": v.iter().filter(|x| x.0 == 0).count()}))
+            let (vl, vc) = views.get(&t).copied().unwrap_or_default();
+            (
+                t,
+                json!({
+                    "rooms": v.len(), "luminaires": range(|x| x.0), "switches": range(|x| x.1),
+                    "views_luminaires": vl, "views_switches": vc,
+                    "rooms_without_luminaires": v.iter().filter(|x| x.0 == 0).count(),
+                }),
+            )
         })
         .collect();
     let line = format!(

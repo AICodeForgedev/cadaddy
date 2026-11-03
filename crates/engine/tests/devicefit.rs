@@ -409,3 +409,23 @@ fn the_job_says_where_each_devices_height_came_from_and_what_it_kept_out() {
     assert_eq!(report["placement"], *p, "the report says the same");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_luminaires_height_comes_from_its_fixture_schedule_row() {
+    let _g = serial();
+    let mut s = Session::empty();
+    s.open_drawing(two_rooms(), "Schedule heights", None);
+    let tags = vec![device(5.0, 0.8, "Q8", "luminaire", "1F1", json!({})), device(11.0, 0.8, "Q1", "luminaire", "1F2", json!({}))];
+    let extra = json!({"mep": {"fixture_schedule": [
+        {"tag": "Q8", "installation": "7'-6\" AFF", "description": "EMERGENCY LIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "Q1", "installation": "RECESSED", "description": "DOWNLIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"}
+    ]}});
+    build(&mut s, spec(tags, extra));
+    let p = props(&mut s, "Q8");
+    assert_eq!(p["mount_height"]["value"], json!(90.0), "{p:#}");
+    assert_eq!(p["mount_height"]["source"]["kind"], "schedule", "{p:#}");
+    assert_eq!(p["mount_height_from"]["value"], "fixture_schedule");
+    assert!(p["mount_height"]["source"]["doc"].as_str().is_some_and(|d| d.contains("type Q8")), "{p:#}");
+    // A row that gives no height isn't the height's document.
+    assert_ne!(props(&mut s, "Q1")["mount_height_from"]["value"], "fixture_schedule");
+}

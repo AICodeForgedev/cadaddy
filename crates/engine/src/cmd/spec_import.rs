@@ -1426,6 +1426,9 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
     }
 }
 
+/// A submitted product's field: how many were ordered.
+pub(crate) const QUANTITY: &str = "quantity";
+
 fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, stamps: &mut Vec<String>, page: &str) {
     let lower = line.to_ascii_lowercase();
 
@@ -1510,6 +1513,19 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
             }
         }
         return;
+    }
+
+    // The quantity ordered (a shop drawing's title block `QUANTITY: 12`); a blank one is none.
+    for prefix in &["quantity:", "qty:", "qty."] {
+        if lower.starts_with(prefix) {
+            let val = line[prefix.len()..].trim();
+            if let Some(n) = val.split_whitespace().next().and_then(|w| w.parse::<u32>().ok()).filter(|n| *n > 0 && *n < 100_000)
+                && let Some(ty) = types.last_mut()
+            {
+                ty.bim_type.set_field(QUANTITY, SpecField::new(n.to_string()).with_source(page));
+            }
+            return;
+        }
     }
 
     // Ratings.
@@ -2499,6 +2515,27 @@ Mounting: Surface
     }
 
     // ── MUST 1: per-block submittal application ───────────────────────────
+
+    #[test]
+    fn a_cut_sheets_quantity_is_its_types_and_a_blank_one_is_none() {
+        let mut s = session();
+        let submittal = "\
+Type Q1: Recessed LED downlight
+Manufacturer: Apex Lighting
+Catalog No: A-1
+QUANTITY: 12
+
+Type Q2: Wall sconce
+Manufacturer: Apex Lighting
+Catalog No: B-2
+QUANTITY:
+";
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let q = |m: &str| proposals.iter().find(|p| p["mark"] == m).map(|p| p["fields"]["quantity"]["value"].clone()).unwrap_or_default();
+        assert_eq!(q("Q1"), json!("12"));
+        assert_eq!(q("Q2"), Value::Null, "a blank quantity is none");
+    }
 
     #[test]
     fn submittal_per_block_no_cross_contamination() {

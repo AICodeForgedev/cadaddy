@@ -334,10 +334,10 @@ pub(crate) fn read_spec_lighting(text: &str, file: &str) -> SpecLighting {
             continue;
         }
         let has = |said: &[(&'static str, String, String)], k: &str| said.iter().any(|(f, _, _)| *f == k);
-        if up.contains("CCT") || up.contains("COLOR TEMPERATURE") {
-            if let Some(k) = cct_of(&up).filter(|_| !has(&out.said, "cct")) {
-                out.said.push(("cct", format!("{k}K"), page.clone()));
-            }
+        if (up.contains("CCT") || up.contains("COLOR TEMPERATURE"))
+            && let Some(k) = cct_of(&up).filter(|_| !has(&out.said, "cct"))
+        {
+            out.said.push(("cct", format!("{k}K"), page.clone()));
         }
         if up.contains("CRI") || up.contains("COLOR RENDERING") {
             let after = up.split("CRI").nth(1).or_else(|| up.split("COLOR RENDERING").nth(1)).unwrap_or("");
@@ -350,10 +350,11 @@ pub(crate) fn read_spec_lighting(text: &str, file: &str) -> SpecLighting {
                 out.said.push(("cri", format!("{n} minimum"), page.clone()));
             }
         }
-        if up.contains("VOLTAGE") && !has(&out.said, "voltage") {
-            if let Some((lo, hi)) = volts_of(&up) {
-                out.said.push(("voltage", if lo == hi { format!("{lo}") } else { format!("{lo}-{hi}") }, page.clone()));
-            }
+        if up.contains("VOLTAGE")
+            && !has(&out.said, "voltage")
+            && let Some((lo, hi)) = volts_of(&up)
+        {
+            out.said.push(("voltage", if lo == hi { format!("{lo}") } else { format!("{lo}-{hi}") }, page.clone()));
         }
     }
     out
@@ -474,7 +475,7 @@ pub(crate) fn resolve(docs: &[&Sayings]) -> (Sayings, Vec<FieldConflict>) {
             }
         }
         if sides.len() >= 2 {
-            conflicts.push(FieldConflict { field: *k, sides });
+            conflicts.push(FieldConflict { field: k, sides });
         }
     }
     (chosen, conflicts)
@@ -870,6 +871,42 @@ fn near(a: &Dev, b: &Dev, reach: f64) -> bool {
         }
 }
 
+/// The controls of a luminaire's leg: those of its letter in its room; else, the nearest one of
+/// its letter within reach whose own room has no fixture of that letter (a switch by a door
+/// controls the space through it; rooms side by side use the same letters, and a switch whose
+/// letter lights its own room isn't the next room's), with that one's 3-way mates.
+fn leg_controls<'a>(l: &Dev, ctrls: &'a [Dev], lums: &[Dev]) -> Vec<&'a Dev> {
+    if l.leg.is_empty() {
+        return Vec::new();
+    }
+    let lettered: Vec<&Dev> = ctrls.iter().filter(|c| c.leg == l.leg && near(l, c, CONTROL_REACH_FT)).collect();
+    let mine: Vec<&Dev> = lettered.iter().copied().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
+    if !mine.is_empty() {
+        return mine;
+    }
+    let busy = |c: &Dev| !c.room.is_empty() && lums.iter().any(|o| o.h != l.h && o.leg == c.leg && o.room == c.room);
+    let lettered: Vec<&Dev> = lettered.into_iter().filter(|c| !busy(c)).collect();
+    let gap = |c: &Dev| dist(l.at, c.at).unwrap_or(f64::INFINITY);
+    let Some(first) = lettered.iter().copied().min_by(|a, b| gap(a).total_cmp(&gap(b))) else { return Vec::new() };
+    let mut out = vec![first];
+    if is_three_way(first) {
+        out.extend(three_way_mates(first, ctrls));
+    }
+    out
+}
+
+/// A 3-way switch's mates: the other 3-way switches of its letter in its room; else the nearest
+/// one of its letter within reach (its pair at the other door, the other end of a corridor).
+fn three_way_mates<'a>(c: &Dev, ctrls: &'a [Dev]) -> Vec<&'a Dev> {
+    let others: Vec<&Dev> = ctrls.iter().filter(|o| o.h != c.h && is_three_way(o) && o.leg == c.leg && near(o, c, THREE_WAY_REACH_FT)).collect();
+    let mine: Vec<&Dev> = others.iter().copied().filter(|o| !c.room.is_empty() && o.room == c.room).collect();
+    if !mine.is_empty() {
+        return mine;
+    }
+    let gap = |o: &Dev| dist(c.at, o.at).unwrap_or(f64::INFINITY);
+    others.into_iter().min_by(|a, b| gap(a).total_cmp(&gap(b))).into_iter().collect()
+}
+
 fn where_of(d: &Dev) -> String {
     match (d.level.is_empty(), d.room.is_empty()) {
         (_, false) => format!("{} room {}", d.level, d.room).trim().to_string(),
@@ -899,7 +936,7 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
     let mut issues: BTreeMap<(&'static str, String, String), Vec<&Dev>> = BTreeMap::new();
     for l in lums {
         let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
-        let by_leg: Vec<&Dev> = ctrls.iter().filter(|c| !l.leg.is_empty() && c.leg == l.leg && near(l, c, CONTROL_REACH_FT)).collect();
+        let by_leg = leg_controls(l, ctrls, lums);
         let circuit_codes = docs.codes.get(&l.circuit).cloned().unwrap_or_default();
         let em = docs.emergency.get(&l.mark).cloned().or_else(|| {
             circuit_codes
@@ -1003,8 +1040,7 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
             issues.entry(("switch leg with no fixture", c.level.clone(), c.room.clone())).or_default().push(c);
         }
         if is_three_way(c) {
-            let mates: Vec<&Dev> =
-                ctrls.iter().filter(|o| o.h != c.h && is_three_way(o) && o.leg == c.leg && near(o, c, THREE_WAY_REACH_FT)).collect();
+            let mates = three_way_mates(c, ctrls);
             if mates.is_empty() {
                 issues.entry(("3-way switch without its mate", c.level.clone(), c.room.clone())).or_default().push(c);
             } else {
@@ -1054,6 +1090,23 @@ pub(crate) fn link_controls(lums: &[Dev], ctrls: &[Dev], others: &[Dev], docs: &
         out.conflicts.push(x);
     }
     out
+}
+
+/// The catalog number a legend line names for its device (`WALL MOUNTED OCCUPANCY SENSOR
+/// AB-XY2`): its last word when that is a part number (letters and digits joined by dashes, or
+/// both), not a word or a rating (`3-WAY`, `0-10V`, `20A`).
+pub(crate) fn legend_catalog(text: &str) -> Option<String> {
+    let last = text.split_whitespace().last()?.trim_matches(|c: char| matches!(c, ',' | '.' | ';' | ')' | '('));
+    let up = last.to_ascii_uppercase();
+    let letters = up.chars().filter(char::is_ascii_alphabetic).count();
+    let digits = up.chars().filter(char::is_ascii_digit).count();
+    let dashed = up.contains('-') && up.split('-').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric()));
+    let rating = ["WAY", "POLE", "V", "A", "AMP", "VOLT", "VAC", "W"]
+        .iter()
+        .any(|r| up.split('-').next_back().is_some_and(|t| t.trim_start_matches(|c: char| c.is_ascii_digit()) == *r));
+    let part =
+        up.len() >= 5 && letters >= 2 && (dashed || digits >= 1) && !rating && up.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '/');
+    part.then_some(up)
 }
 
 // ─── Sensors the energy code or the specification asks for ───────────────────────────────────
@@ -1397,6 +1450,12 @@ mod tests {
         assert_eq!(mounting_of("7'-6\" AFF"), Some("wall"));
         assert_eq!(mounting_of("CEILING/VARIES"), None);
         assert_eq!(finish_of("POWDER COATED MATTE BLACK"), Some("black"));
+        assert_eq!(legend_catalog("WALL MOUNTED OCCUPANCY SENSOR AB-XY2"), Some("AB-XY2".into()));
+        assert_eq!(legend_catalog("WALL MOUNTED OCCUPANCY SENSOR WSQ-PDT"), Some("WSQ-PDT".into()));
+        assert_eq!(legend_catalog("switch, 3-way"), None);
+        assert_eq!(legend_catalog("DIMMER, 0-10V"), None);
+        assert_eq!(legend_catalog("SINGLE POLE WALL SWITCH"), None);
+        assert_eq!(legend_catalog("SWITCH 20A"), None);
     }
 
     #[test]
@@ -1537,7 +1596,20 @@ mod tests {
         codes.insert(("P".to_string(), "7".to_string()), vec!["C".to_string()]);
         let mut emergency = BTreeMap::new();
         emergency.insert("Q8".to_string(), Emergency { why: "E-9 LIGHT FIXTURE SCHEDULE type Q8: EMERGENCY LIGHT".into(), switched: false });
+        // The room next door uses the same letters: its switches are its own.
+        let mut lums = lums;
+        lums.push(dev("n1", "luminaire", "Q1", "103A", "a", [14.0, 3.0]));
+        let mut ctrls = ctrls;
+        ctrls.push(dev("n2", "3way_switch", "S3", "103A", "a", [16.0, 3.0]));
+        ctrls.push(dev("n3", "3way_switch", "S3", "103A", "a", [24.0, 3.0]));
+        // A bath light of the room next door, its own room's switches lettered otherwise: not this
+        // room's 3-way (its letter lights this room).
+        lums.push(dev("n4", "luminaire", "Q2", "103B", "a", [12.0, -3.0]));
+        ctrls.push(dev("n5", "switch", "S", "103B", "b", [12.0, -6.0]));
         let links = link_controls(&lums, &ctrls, &[], &ControlDocs { codes: &codes, emergency: &emergency, plans: "the plans" });
+        assert_eq!(links.controlled_by["n1"], vec!["n2".to_string(), "n3".to_string()]);
+        assert!(!links.controlled_by.contains_key("n4"), "{:?}", links.controlled_by.get("n4"));
+        assert_eq!(links.three_way_with["n2"], vec!["n3".to_string()]);
         // Both ways: the leg's fixtures and its 3-way pair.
         assert_eq!(links.controlled_by["l1"], vec!["s1".to_string(), "s2".to_string()]);
         assert_eq!(links.controls["s1"], vec!["l1".to_string(), "l2".to_string()]);
@@ -1547,7 +1619,7 @@ mod tests {
         assert!(links.unswitched["e1"].contains("EMERGENCY"));
         let topics = by_topic(&links.conflicts);
         assert_eq!(topics.get("dimmer over a driver that doesn't dim that way"), Some(&1), "{topics:?}");
-        assert_eq!(topics.get("fixture leg with no switch"), Some(&1), "l3");
+        assert_eq!(topics.get("fixture leg with no switch"), Some(&2), "l3, and n4 (its room has no switch of its letter)");
         assert_eq!(topics.get("fixture with no control"), Some(&1), "l4");
         assert_eq!(topics.get("switch leg with no fixture"), Some(&1), "s4");
         assert_eq!(topics.get("3-way switch without its mate"), Some(&1), "s5");
