@@ -568,3 +568,43 @@ fn a_short_hop_with_trenching_is_cheaper_overhead() {
     let all = texts_of(&s, b["sheets"][0]["layout"].as_str().unwrap()).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
     assert!(!all.contains("ROUTE F-HAB"), "{all}");
 }
+
+#[test]
+fn called_runs_are_solid_proposed_ones_dashed_and_notes_without_a_place_are_listed() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // One feeder CADaddy proposes under the slab; the rest the documents call for.
+    let runs = sp["mep"]["runs"].as_array_mut().unwrap();
+    let first = runs.iter_mut().find(|r| r["system"] == "E-UG").unwrap();
+    first["height_source"] = json!("proposed");
+    first["source_sheet"] = json!("feeder 604 MSB→P1");
+    let id = first["id"].as_str().unwrap().to_string();
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"today": "2026-11-01"})).unwrap();
+    let mine = r["runs"].as_array().unwrap().iter().find(|x| x["id"] == id.as_str()).unwrap().clone();
+    assert_eq!((mine["proposed"].clone(), mine["basis"].clone()), (json!(true), json!("feeder 604 MSB→P1; proposed")), "{mine}");
+    assert!(r["runs"].as_array().unwrap().iter().filter(|x| x["proposed"] == false).count() > 1, "{r}");
+    let called = json!([{"sheet": "E-1", "text": "TWO (2) 5\" SCH. 40 PVC CONDUIT, MIN. 48\" BELOW GRADE."}]);
+    let b = s.execute("ugsheets.build", &json!({"number": "E-030", "called": called})).unwrap();
+    let layout = b["sheets"][0]["layout"].as_str().unwrap().to_string();
+    let d = s.doc().unwrap();
+    let paper: Vec<_> = d.space(&cadaddy_engine::doc::Space::Paper(layout.clone())).unwrap().iter().cloned().collect();
+    let on = |layer: &str| {
+        paper
+            .iter()
+            .filter(|e| {
+                e.common.layer == layer && matches!(e.kind, cadaddy_engine::doc::EntityKind::LwPolyline(_) | cadaddy_engine::doc::EntityKind::Line(_))
+            })
+            .count()
+    };
+    assert!(on("E-UG-PROP") >= 1 && on("E-UG-COND") >= 1, "proposed and called runs on their own layers");
+    let lt = |name: &str| d.layers.iter().find(|l| l.name == name).map(|l| l.linetype.clone()).unwrap_or_default();
+    assert_eq!(lt("E-UG-PROP").to_ascii_uppercase(), "DASHED");
+    assert_ne!(lt("E-UG-COND").to_ascii_uppercase(), "DASHED");
+    let all = texts_of(&s, &layout).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
+    for want in
+        ["(PROPOSED)", "PROPOSED - RFI", "CALLED, NOT LOCATED ON ANY PLAN (E-1)", "REQUIRES ENGINEER OF RECORD REVIEW", "DASHED RUNS ARE NOT CALLED"]
+    {
+        assert!(all.contains(want), "{want} on the sheet: {all}");
+    }
+}
