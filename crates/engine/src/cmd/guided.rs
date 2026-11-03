@@ -7383,7 +7383,8 @@ fn scheduled_connections(
 type Footprint = (String, String, Vec<cadaddy_geom::Vec2>, Vec<cadaddy_geom::Vec2>);
 
 /// Books each device in no room that stands in a unit's footprint to that unit, when it is a
-/// plumbing fixture or a tag the unit's own plans show (`own`: by room, the tags stamped into it)
+/// plumbing fixture or fire alarm device (another system's plan of the unit) or a tag the unit's
+/// own plans show (`own`: by room, the tags stamped into it)
 /// (its level by the digits of its name: a device read off its sheet may carry the sheet's level
 /// code); in two
 /// footprints (units back to back, their plans' linework past the wall they share), the one whose
@@ -7392,7 +7393,8 @@ fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Foo
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
-        let plumbing = dv.kind.starts_with("plumbing");
+        // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
+        let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
         let tag = dv.tag.trim().to_ascii_uppercase();
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
@@ -14205,7 +14207,16 @@ mod tests {
         let own: BTreeMap<String, BTreeSet<String>> =
             [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
         assert_eq!(book_into_units(&mut devices, &foot, &own), 3);
-        // A corridor's sconce by the door, no tag the unit's plans show, stays out.
+        // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
+        // no tag the unit's plans show, stays out.
+        let mut fa = vec![super::super::readers::ReadDevice {
+            tag: "S".into(),
+            kind: "fire alarm device".into(),
+            at: [40.0, 30.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        }];
+        assert_eq!(book_into_units(&mut fa, &foot, &own), 1);
         let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
         assert_eq!(book_into_units(&mut g, &foot, &own), 0);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
