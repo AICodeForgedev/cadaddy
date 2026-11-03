@@ -107,7 +107,13 @@ fn tiers_by_kind_and_size() {
     assert_eq!(find("pipe", 2.0), vec!["floor"], "{els:?}");
     assert_eq!(find("pipe", 0.75), vec!["room"]);
     assert!(els.iter().filter(|e| e["kind"] == "pipe" && e["size_in"] == json!(0.75)).all(|e| e["line_from"] == "floor"));
-    assert_eq!(find("conduit", 1.0), vec!["floor"]);
+    // The conduit run is cut into pieces (atoms): its sticks at the room tier, drawn as one line
+    // at the floor tier; its fittings and supports at detail.
+    assert_eq!(find("conduit", 1.0), vec!["room"]);
+    assert!(els.iter().filter(|e| e["kind"] == "conduit").all(|e| e["line_from"] == "floor" && e["run"].is_string()), "{els:?}");
+    let fittings: Vec<&Value> =
+        els.iter().filter(|e| ["connector", "coupling", "strap", "locknut"].contains(&e["kind"].as_str().unwrap_or(""))).collect();
+    assert!(!fittings.is_empty() && fittings.iter().all(|e| e["tier"] == "detail"), "{fittings:?}");
     let walls: Vec<&Value> = els.iter().filter(|e| e["kind"] == "wall").collect();
     assert!(!walls.is_empty() && walls.iter().all(|e| e["tier"] == "floor"), "{walls:?}");
     // Every element names the rule that placed it.
