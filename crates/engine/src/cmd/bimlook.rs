@@ -896,7 +896,7 @@ fn span(pts: &[Vec3], flat: bool) -> f64 {
     if d.is_finite() { d } else { 0.0 }
 }
 
-fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
+pub(crate) fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
     // A piece of a run knows its own length (a bent stick's, a cable's along its path).
     if super::mepatoms::is_atom(e)
         && let Some(l) =
