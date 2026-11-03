@@ -28,6 +28,12 @@
 //!   by bar size, welded wire, anchor bolts, embeds and stub-ups by size, finish and curing, each
 //!   line carrying its element ids; every other element is listed in `by_others` as
 //!   `by others (<owner>)` or `unassigned`, at no cost to us.
+//! - **Other trades' elements** (Q6167): each thermostat, fire alarm device or panel and low
+//!   voltage device whose class the documents (`bim.scope`, kept in the project rules) give to
+//!   another party is listed in `by_others` with its party, why and the words that say so; the
+//!   electrical lines keep only our part of it (its box, ring, conduit stub, pull string, a
+//!   panel's circuit, as the documents say; the default where they don't, which `review.list`
+//!   asks about).
 //! - **Sanity gates** (Q5243): wall area vs footprint × height × plausible ratio; per-room
 //!   quantity bounds; furniture/text linework walls rejected. Out-of-bounds → `suspect`.
 //! - **Waste** per category (defaults below; project rules `custom` `waste.<category>` or the
@@ -81,7 +87,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.bom", "Bill of Materials", run)
             .alias(&["bom"])
             .params(
-                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
+                "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",
             ),
     ]
 }
@@ -159,6 +165,70 @@ fn merge(x: &mut Line, l: Line) {
     x.elements.extend(l.elements);
 }
 
+/// Another trade's element in `by_others`: its party, why, the words that say so, and our part.
+fn others_entry(others: &mut Vec<Value>, dec: &super::scope::Decision, id: &str, what: &str, level: &str, ours: &[super::scope::OurItem]) {
+    if others.len() >= MAX_LINES {
+        return;
+    }
+    let r = super::scope::rules();
+    let decided = if dec.party_from == "default" { "default" } else { dec.party_from.as_str() };
+    others.push(json!({
+        "trade": dec.class, "element": id, "kind": what, "level": level,
+        "owner": dec.party_label(), "furnish": dec.furnish, "install": dec.install,
+        "scope": format!("by others ({})", dec.party_label()),
+        "reason": if dec.party_from == "default" { format!("no document says; the default: {}", dec.reason) } else { format!("the documents give {} to {}", dec.label, dec.party_label()) },
+        "source": dec.party_source(),
+        "ours": ours.iter().map(|i| if i.size.is_empty() { r.item_name(&i.item) } else { format!("{} {}", i.size, r.item_name(&i.item)) }).collect::<Vec<_>>(),
+        "ours_source": dec.ours_source(),
+        "decided": decided,
+        "cost_to_us": 0.0,
+    }));
+}
+
+/// Our part of another trade's element: each rough-in item the documents (or the default) give
+/// us, one per element (a box and ring only when the model's pieces don't count them).
+fn rough_in_lines(
+    lines: &mut Vec<Line>,
+    dec: &super::scope::Decision,
+    ours: &[super::scope::OurItem],
+    by_atoms: bool,
+    id: &str,
+    level: &str,
+    circuit: &str,
+) {
+    let r = super::scope::rules();
+    let rule = format!("{} ({}): {}", dec.label, dec.party_label(), dec.ours_source());
+    for i in ours {
+        if by_atoms && matches!(i.item.as_str(), "box" | "ring") {
+            continue;
+        }
+        let (category, size) = match i.item.as_str() {
+            "box" => ("boxes", if i.size.is_empty() { "2-1/8\" deep".to_string() } else { i.size.clone() }),
+            "ring" => ("boxes", "1 gang".to_string()),
+            "conduit" | "sleeve" => ("conduit", i.size.clone()),
+            "power" => ("wire", String::new()),
+            _ => ("conduit fittings", i.size.clone()),
+        };
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: category.into(),
+                item: r.item_name(&i.item),
+                size,
+                unit: "each",
+                net: 1.0,
+                status: if dec.ours_from == "default" { "rule" } else { "firm" },
+                rule: Some(rule.chars().take(400).collect()),
+                level: level.to_string(),
+                elements: vec![id.to_string()],
+                waste_qty: None,
+                circuit: circuit.to_string(),
+            },
+        );
+    }
+}
+
 /// A run's plan length, feet.
 pub(super) fn run_length_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     points.windows(2).map(|w| if let [a, b] = w { (b[0] - a[0]).hypot(b[1] - a[1]) } else { 0.0 }).sum::<f64>() / upf
@@ -186,8 +256,11 @@ fn large_conductor(size: &str) -> bool {
     size.contains('/') || size.parse::<u32>().is_ok_and(|n| n <= 4)
 }
 
-fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
+fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Result<()> {
     let (sp, _) = current(s, "bim.bom")?;
+    // Whose each class of element is (Q6167): another trade's leave our lines but our part.
+    let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
+    let sr = super::scope::rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // A luminaire type's schedule description, from whichever tag carries it.
     let mut described: BTreeMap<String, String> = BTreeMap::new();
@@ -212,6 +285,19 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
         // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
         let on = f("circuit").map(|c| c.0).filter(|c| super::printcond::parse_circuit(c).is_some()).unwrap_or_default();
+        // Another trade's element: listed by others, our part of it on our lines.
+        if let Some(dec) = super::scope::tag_class(sr, t).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others()) {
+            let fa_kind = f("fa_kind").map(|v| v.0).unwrap_or_default();
+            let ours = dec.ours_for(&t.kind, &fa_kind);
+            let what = if fa_kind.is_empty() {
+                f("device_type").map_or_else(|| t.kind.replace('_', " "), |v| v.0)
+            } else {
+                format!("{fa_kind} {}", f("type").map(|v| v.0).unwrap_or_default()).trim().to_string()
+            };
+            others_entry(others, dec, &t.id, &what, &t.level, &ours);
+            rough_in_lines(lines, dec, &ours, by_atoms, &t.id, &t.level, &on);
+            continue;
+        }
         match t.kind.as_str() {
             "luminaire" => {
                 let (ty, src) = f("type").unwrap_or_else(|| ("UNTAGGED".into(), "default".into()));
@@ -1377,7 +1463,9 @@ fn trade_size(v: f64) -> String {
 }
 
 /// Mechanical and plumbing from `mep.qty` (conduit is counted above, from the runs).
-fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
+fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
+    let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
+    let sr = super::scope::rules();
     // Raceway and cable systems are taken off above, with their own fittings and supports.
     let raceway: Vec<String> = current(s, "bim.bom")
         .map(|(sp, _)| {
@@ -1509,6 +1597,15 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>) {
         }
     }
     for e in equipment {
+        // Another trade's equipment (a fire alarm panel): by others, its circuit ours if so.
+        let fa_kind = e["properties"]["FA_KIND"].as_str().unwrap_or_default().to_string();
+        if let Some(dec) = sr.class_of(&st(&e, "kind"), &fa_kind).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others()) {
+            let ours = dec.ours_for(&st(&e, "kind"), &fa_kind);
+            let what = if fa_kind.is_empty() { st(&e, "kind") } else { format!("{fa_kind} {}", st(&e, "tag")) };
+            others_entry(others, dec, &st(&e, "tag"), &what, &st(&e, "level"), &ours);
+            rough_in_lines(lines, dec, &ours, false, &st(&e, "tag"), &st(&e, "level"), "");
+            continue;
+        }
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
@@ -1974,9 +2071,10 @@ fn required(lines: &[Line], levels: usize) -> Vec<(String, f64, &'static str, St
 /// element it counts (`bim.bom` lists at most 500): what progress marks resolve against (Q332).
 pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     let mut lines: Vec<Line> = Vec::new();
-    electrical(s, &mut lines)?;
+    let mut others = Vec::new();
+    electrical(s, &mut lines, &mut others)?;
     zero_ten_pairs(s, &mut lines);
-    mechanical(s, &mut lines);
+    mechanical(s, &mut lines, &mut others);
     Ok(lines
         .into_iter()
         .map(|l| {
@@ -1999,18 +2097,21 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut lines: Vec<Line> = Vec::new();
     // Built model: walls, doors, ceilings, floors, rooms (Q5243).
     let (built_missing, built_suspects, model_has_elements) = built_model(s, &mut lines)?;
-    electrical(s, &mut lines)?;
+    let mut others: Vec<Value> = Vec::new();
+    electrical(s, &mut lines, &mut others)?;
     zero_ten_pairs(s, &mut lines);
     // Devices from symbol clusters on the drawing (Q5243), when the model has none of its own: a
     // guided job puts the devices its readers found into the model, and counting both doubled them.
     if !lines.iter().any(|l| l.category == "devices") {
         devices_from_drawing(s, &mut lines)?;
     }
-    mechanical(s, &mut lines);
+    mechanical(s, &mut lines, &mut others);
     drywall(s, &mut lines);
     let framing_bits = framing(s, &mut lines)?;
     grounding(s, &mut lines);
-    let by_others = concrete(s, &mut lines);
+    let mut by_others = concrete(s, &mut lines);
+    by_others.extend(others);
+    by_others.truncate(MAX_LINES);
     // Waivers: recorded in the project rules, with the reason.
     if let Some(ws) = p.get("waive").and_then(Value::as_array) {
         for w in ws.iter().take(1_000) {

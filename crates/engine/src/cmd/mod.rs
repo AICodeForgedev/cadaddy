@@ -86,6 +86,7 @@ pub mod propuse;
 mod rasterout;
 pub mod rfi;
 pub mod schedules;
+pub mod scope;
 mod setbylayer;
 pub mod spec_import;
 pub mod submittals;
@@ -874,6 +875,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spec_import::specs());
         v.extend(submittals::specs());
         v.extend(products::specs());
+        v.extend(scope::specs());
     v.extend(coderules::specs());
     v.extend(pricebook::specs());
     v.extend(panelsched::specs());

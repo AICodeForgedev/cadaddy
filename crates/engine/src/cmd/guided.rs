@@ -5392,10 +5392,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         sp.mount_notes = notes;
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
+    // Whose work each element is (Q6167): the notes, specifications and submittals read for who
+    // furnishes and installs what another trade may own, the fire alarm devices given their kinds
+    // by the legends. Before the build: its pieces leave out a box that isn't ours.
+    let t_scope = web_time::Instant::now();
+    let (scope_summary, scope_docs) = scope_step(s, job);
+    progress_line(&format!("  whose work: read in {:.1} s", t_scope.elapsed().as_secs_f64()));
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
+    result["scope"] = scope_summary;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     if let Some(db) = result.get("deviceBuild") {
@@ -5498,6 +5505,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["gear_error"] = json!(e.to_string());
     }
     bim_step(s, job, "electrical gear", t);
+    // The fire alarm panels where the documents put them (proposed, in their rooms).
+    let t = web_time::Instant::now();
+    fa_panels_step(s, job, &scope_docs, &mut result);
+    bim_step(s, job, "fire alarm panels", t);
     // What the electrical keynotes ask built (a BDA system's boxes and conduit).
     let t = web_time::Instant::now();
     if let Err(e) = keynote_step(s, job, &pages, &mut result) {
@@ -6012,6 +6023,134 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The documents read for whose work each element is: the sheets of the trades another trade's
+/// work is on (and the general sheets), those the drawing holds and the others' pages, the
+/// specifications and the submittals of those trades.
+fn scope_docs(s: &Session, job: &GuidedJob) -> Vec<super::scope::Doc> {
+    let r = super::scope::rules();
+    let wanted = |disc: &str| disc.eq_ignore_ascii_case("G") || r.disciplines.contains_key(&disc.trim().to_ascii_uppercase());
+    let mut docs = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    if let Ok(d) = s.doc() {
+        for sh in job_sheet_refs(job).iter().filter(|r| wanted(&r.discipline)).take(MAX_LEGEND_SHEETS * 4) {
+            let number = sh.number.split('/').next().unwrap_or("").to_string();
+            if !seen.insert(number.clone()) {
+                continue;
+            }
+            let sub = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            docs.push(super::scope::sheet_doc(&number, &cadaddy_mepfix::sheet_facts::texts(&sub)));
+        }
+    }
+    let mut discs: Vec<String> = r.disciplines.keys().cloned().collect();
+    discs.push("G".into());
+    for disc in discs {
+        for (number, page) in non_plan_pages(job, &disc) {
+            if seen.insert(number.clone()) {
+                docs.push(super::scope::sheet_doc(&number, &cadaddy_mepfix::sheet_facts::texts(&page)));
+            }
+        }
+    }
+    let mut unread = Vec::new();
+    docs.extend(super::scope::file_docs(&job_specs(job), &job.submittals, &mut unread));
+    if !unread.is_empty() {
+        progress_line(&format!("  whose work: {} files not read", unread.len()));
+    }
+    docs
+}
+
+/// Whose work each class of element is (Q6167), read and kept; the fire alarm devices' kinds.
+/// A class no document speaks for keeps its default and is a finding (`review.list` asks).
+fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope::Doc>) {
+    let docs = scope_docs(s, job);
+    let (stmts, read) = super::scope::read_docs(&docs);
+    if let Ok(d) = s.doc_mut() {
+        super::scope::record(d, &read, "guided job");
+    }
+    let mut fa = Value::Null;
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        && let Ok(d) = s.doc()
+    {
+        let (n, open) = super::scope::fa_kinds(d, &mut sp);
+        let mut by: BTreeMap<String, usize> = BTreeMap::new();
+        for t in &sp.tags {
+            if let Some(k) = t.fields.get("fa_kind") {
+                *by.entry(k.value.clone()).or_default() += 1;
+            }
+        }
+        progress_line(&format!("  fire alarm devices by their legends: {n} given their kind {by:?}; marks left open {open:?}"));
+        fa = json!({"resolved": n, "by_kind": by, "unresolved": open});
+        if let Ok(d) = s.doc_mut() {
+            d.building_spec = Some(sp.to_json());
+        }
+    }
+    let kept = s.doc().map(super::scope::decisions).unwrap_or_default();
+    let sp = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp).unwrap_or_default();
+    let summary = super::scope::summary(&kept, &sp);
+    let line: Vec<String> = summary
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["elements"].as_u64().unwrap_or(0) > 0)
+        .map(|x| {
+            format!(
+                "{} {}: {} ({}), ours {:?} ({})",
+                x["elements"],
+                x["class"].as_str().unwrap_or(""),
+                x["party"].as_str().unwrap_or(""),
+                x["party_from"].as_str().unwrap_or(""),
+                x["ours"],
+                x["ours_from"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    progress_line(&format!("  whose work: {} documents, {} statements; {}", docs.len(), stmts.len(), line.join("; ")));
+    for (class, aspect, n, default) in s.doc().ok().map(|d| super::scope::questions(d, &sp)).unwrap_or_default() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!(
+                "{n} {class} elements: no document says {} ({default})",
+                if aspect == "party" { "who furnishes and installs them" } else { "what of their rough-in is ours" }
+            ),
+            "the notes, the specification's sections and the submittals were read for it; the BOM lists them by the default until answered",
+            2,
+            vec!["Answer the review question (review.list kind question), citing the document that settles it".into()],
+            None,
+            false,
+        );
+    }
+    (json!({"decisions": summary, "statements": stmts.len(), "documents": docs.len(), "fire_alarm": fa}), docs)
+}
+
+/// The fire alarm panels the documents locate (`… LOCATED IN MECHANICAL ROOM 160`), along a wall
+/// of their rooms and built; one not placed is a finding.
+fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Doc], result: &mut Value) {
+    let places = super::scope::panel_places(docs);
+    if places.is_empty() {
+        return;
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let rooms = s.doc().map(super::scope::room_boxes).unwrap_or_default();
+    let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
+    let Ok(d) = s.doc_mut() else { return };
+    d.building_spec = Some(sp.to_json());
+    let built = super::scope::build_panels(d, &sp, &placed, &rooms);
+    s.touch();
+    progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
+    for (tag, why) in &not {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Fire alarm panel {tag} not placed: {why}"),
+            "the documents name its room",
+            2,
+            Vec::new(),
+            None,
+            false,
+        );
+    }
+    result["fire_alarm_panels"] =
+        json!({"placed": placed, "built": built, "not_placed": not.iter().map(|(t, w)| json!({"tag": t, "why": w})).collect::<Vec<_>>()});
+}
+
 /// The specifications the job reads: those given, else a project's specifications folder beside
 /// its submittals (`…\\03_Specifications` next to `…\\02_Submittals`).
 fn job_specs(job: &GuidedJob) -> Vec<String> {
