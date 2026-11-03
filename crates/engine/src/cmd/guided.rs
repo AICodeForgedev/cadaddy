@@ -8028,6 +8028,59 @@ fn copy_room_fixtures(
     (out, report)
 }
 
+/// The pieces of a polyline inside a region (`inside`) that hold one of its ends, cut where it
+/// leaves: the part of a branch that ends in a room, not a main passing by (both ends outside).
+/// Each with the index of its first segment in `points`; all of it when it never leaves.
+fn end_pieces(points: &[[f64; 2]], inside: &dyn Fn(&[f64; 2]) -> bool) -> Vec<(usize, Vec<[f64; 2]>)> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+    // The last point of `a`→`b` still inside (`a` inside, `b` not).
+    let cut = |a: [f64; 2], b: [f64; 2]| {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..12 {
+            let m = (lo + hi) / 2.0;
+            if inside(&[a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m]) {
+                lo = m;
+            } else {
+                hi = m;
+            }
+        }
+        [a[0] + (b[0] - a[0]) * lo, a[1] + (b[1] - a[1]) * lo]
+    };
+    // From the start: the points inside, then the cut where it leaves.
+    let from = |pts: &[[f64; 2]]| -> Option<Vec<[f64; 2]>> {
+        let first = *pts.first()?;
+        if !inside(&first) {
+            return None;
+        }
+        let mut out = vec![first];
+        for w in pts.windows(2) {
+            let [a, b] = w else { continue };
+            if inside(b) {
+                out.push(*b);
+            } else {
+                out.push(cut(*a, *b));
+                break;
+            }
+        }
+        Some(out)
+    };
+    let mut out = Vec::new();
+    if let Some(head) = from(points) {
+        if head.len() == points.len() && points.last().is_some_and(|p| inside(p)) {
+            return vec![(0, points.to_vec())];
+        }
+        out.push((0, head));
+    }
+    let back: Vec<[f64; 2]> = points.iter().rev().copied().collect();
+    if let Some(mut tail) = from(&back) {
+        tail.reverse();
+        out.push((points.len() - tail.len(), tail));
+    }
+    out
+}
+
 /// A pipe within this of its room's box (feet) is the room's: in its walls.
 const ROOM_PIPE_MARGIN_FT: f64 = 1.5;
 /// A room already has a system's pipe when this much of it (feet) lies inside the room, a foot in
@@ -8043,9 +8096,9 @@ const ROOM_SIZE_SHARE: f64 = 0.2;
 /// a floor with their waste, vent and water lines): each room of the same type and size that
 /// holds no pipe of a system gets that system's pipes of the room of its type that has the most,
 /// laid in as its fixtures are ([`copy_room_fixtures`]: turned and mirrored as each room is). A
-/// type is a typical room's when it repeats on a floor (not a corridor, one a floor). Only a pipe
-/// wholly in its room (walls included) is copied: where a branch goes on to the main outside,
-/// that is the floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
+/// type is a typical room's when it repeats on a floor (not a corridor, one a floor). Only the
+/// room's part of a pipe is copied (walls included, [`end_pieces`]): where a branch goes on to the
+/// main outside, that is the floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
 /// The copies, and per type what was copied and into how many rooms.
 fn copy_room_pipes(
     d: &cadaddy_doc::Drawing,
@@ -8103,16 +8156,28 @@ fn copy_room_pipes(
         cadaddy_geom::point_in_polygon(o, q)
             || o.iter().zip(o.iter().cycle().skip(1)).any(|(a, b)| super::runtidy::seg_dist(q, *a, *b) <= ROOM_PIPE_MARGIN_FT * upf)
     };
-    let in_room: Vec<Vec<&cadaddy_walk3d::MepRun>> = rooms
+    // A branch that ends in the room and goes on out to its main: the room's part of it.
+    let in_room: Vec<Vec<cadaddy_walk3d::MepRun>> = rooms
         .iter()
         .zip(&room_boxes)
         .map(|((_, level, outline, _), b)| {
             let g = grown(b, ROOM_PIPE_MARGIN_FT * upf);
-            pipes
-                .iter()
-                .filter(|r| digits(&r.level) == digits(level) && r.points.iter().all(|p| within(&g, p) && near_outline(outline, p)))
-                .copied()
-                .collect()
+            let inside = |p: &[f64; 2]| within(&g, p) && near_outline(outline, p);
+            let mut mine = Vec::new();
+            for r in pipes.iter().filter(|r| digits(&r.level) == digits(level)) {
+                for (first, points) in end_pieces(&r.points, &inside) {
+                    let mut part = (*r).clone();
+                    if points.len() != r.points.len() {
+                        part.bottoms_ft =
+                            (first..first + points.len() - 1).map(|i| r.bottoms_ft.get(i).or(r.bottoms_ft.last()).copied().unwrap_or(0.0)).collect();
+                    }
+                    part.points = points;
+                    if length(&part) >= upf {
+                        mine.push(part);
+                    }
+                }
+            }
+            mine
         })
         .collect();
     // A typical room's layout goes only into a room of its size (either way round).
@@ -8157,29 +8222,25 @@ fn copy_room_pipes(
             let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(|r| length(r)).sum::<f64>());
             l(b).total_cmp(&l(a))
         });
-        let mut set: Vec<(usize, cadaddy_walk3d::MepRun)> = Vec::new();
+        let mut set: Vec<(usize, [f64; 4], cadaddy_walk3d::MepRun)> = Vec::new();
         let mut systems: BTreeSet<String> = BTreeSet::new();
         let mut sources: Vec<String> = Vec::new();
-        let mut source_boxes: Vec<[f64; 4]> = Vec::new();
         for src in by_len {
-            let mine: Vec<&cadaddy_walk3d::MepRun> =
-                in_room.get(src).into_iter().flatten().copied().filter(|r| !systems.contains(&r.system)).collect();
+            let mine: Vec<&cadaddy_walk3d::MepRun> = in_room.get(src).into_iter().flatten().filter(|r| !systems.contains(&r.system)).collect();
             if mine.is_empty() {
                 continue;
             }
             let Some((vi, fit_src)) = vs.iter().enumerate().find_map(|(i, v)| fit(v, src).map(|f| (i, f))) else { continue };
+            let Some(src_box) = room_boxes.get(src).copied() else { continue };
             for r in mine {
                 let Some(points) = r.points.iter().map(|p| view_point(*p, fit_src)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
                 let mut copy = r.clone();
                 copy.points = points;
-                set.push((vi, copy));
+                set.push((vi, src_box, copy));
             }
-            systems.extend(set.iter().map(|(_, r)| r.system.clone()));
+            systems.extend(set.iter().map(|(_, _, r)| r.system.clone()));
             if let Some((_, _, _, number)) = rooms.get(src) {
                 sources.push(number.clone());
-            }
-            if let Some(b) = room_boxes.get(src) {
-                source_boxes.push(*b);
             }
         }
         if set.is_empty() {
@@ -8190,9 +8251,6 @@ fn copy_room_pipes(
         for ri in of_type.iter().copied() {
             let Some((_, level, _, _)) = rooms.get(ri) else { continue };
             let b = room_boxes.get(ri).copied().unwrap_or_default();
-            if !source_boxes.iter().all(|s| same_size(s, &b)) {
-                continue;
-            }
             let storey = digits(level);
             let core = grown(&b, -upf);
             let mut fits: BTreeMap<usize, Option<RoomFit>> = BTreeMap::new();
@@ -8202,7 +8260,7 @@ fn copy_room_pipes(
                 if inside_len(&placed, &storey, system, &core) >= ROOM_HAS_PIPE_FT * upf {
                     continue;
                 }
-                for (vi, r) in set.iter().filter(|(_, r)| r.system == *system) {
+                for (vi, _, r) in set.iter().filter(|(_, src_box, r)| r.system == *system && same_size(src_box, &b)) {
                     let Some(v) = vs.get(*vi) else { continue };
                     let Some(fit_t) = *fits.entry(*vi).or_insert_with(|| fit(v, ri)) else { continue };
                     let Some(points) = r.points.iter().map(|p| place_in_room(*p, v.0, b, fit_t)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
@@ -16649,8 +16707,9 @@ mod tests {
 
     /// The pipes an enlarged plan draws in one room of a type go into the other rooms of the type
     /// that hold none of that system, laid in as the room's linework lies: a room with its own
-    /// line of a system keeps it alone, a pipe going on out of the room isn't copied, the room
-    /// the plan draws gets no second copy, and a room of the name but another size gets none.
+    /// line of a system keeps it alone, a pipe going on out of the room goes in up to its wall, a
+    /// main passing by isn't the room's, the room the plan draws gets no second copy, and a room of
+    /// the name but another size gets none.
     #[test]
     fn a_typical_rooms_drawn_pipes_go_into_the_rooms_of_its_type() {
         let mut s = crate::Session::new();
@@ -16731,6 +16790,8 @@ mod tests {
             run("SAN", vec![[10_020.0, 20.0], [10_020.0, 260.0]]),
             run("V", vec![[10_030.0, 100.0], [10_060.0, 100.0]]),
             run("CW", vec![[10_100.0, 50.0], [10_100.0, 400.0]]),
+            // The main along the rooms' walls, its ends outside them all: none of it is a room's.
+            run("HW", vec![[9_900.0, -10.0], [11_400.0, -10.0]]),
             // Room 302's own waste line.
             run("SAN", vec![[10_220.0, 30.0], [10_220.0, 200.0]]),
             // Not a pipe.
@@ -16740,14 +16801,45 @@ mod tests {
         ];
         let (copies, report) = copy_room_pipes(s.doc().unwrap(), &job, &runs, &|r| r.system != "SA");
         let got: Vec<(String, f64)> = copies.iter().map(|r| (r.system.clone(), (r.points[0][0] / 200.0).floor() * 200.0)).collect();
-        assert_eq!(got.len(), 3, "{got:?} {report:?}");
-        assert!(got.contains(&("V".into(), 10_200.0)) && got.contains(&("V".into(), 10_400.0)) && got.contains(&("SAN".into(), 10_400.0)), "{got:?}");
+        assert_eq!(got.len(), 5, "{got:?} {report:?}");
+        for want in [("V", 10_200.0), ("CW", 10_200.0), ("SAN", 10_400.0), ("V", 10_400.0), ("CW", 10_400.0)] {
+            assert!(got.contains(&(want.0.into(), want.1)), "{want:?} {got:?}");
+        }
+        // The water line's part in the room, cut at its wall (and the margin round it).
+        let cw = copies.iter().find(|r| r.system == "CW" && r.points[0][0] > 10_400.0).unwrap();
+        let top = cw.points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        assert!(top > 288.0 && top <= 288.0 + 18.0 + 7.0, "{:?}", cw.points);
+        assert_eq!(cw.bottoms_ft.len(), cw.points.len() - 1);
         assert_eq!(report.values().copied().collect::<Vec<_>>(), vec![2], "{report:?}");
         let san = copies.iter().find(|r| r.system == "SAN").unwrap();
         assert_eq!((san.level.as_str(), san.id.as_str(), san.source_sheet.as_str()), ("Level 3", "", "P-9"));
         for (p, q) in san.points.iter().zip([[10_420.0, 20.0], [10_420.0, 260.0]]) {
             assert!((p[0] - q[0]).abs() < 7.0 && (p[1] - q[1]).abs() < 7.0, "{:?}", san.points);
         }
+    }
+
+    #[test]
+    fn a_branchs_part_in_a_room_is_cut_where_it_leaves() {
+        let inside = |p: &[f64; 2]| p[0] >= 0.0 && p[0] <= 100.0 && p[1] >= 0.0 && p[1] <= 100.0;
+        // Whole: one piece, as it is.
+        let all = [[10.0, 10.0], [90.0, 10.0], [90.0, 90.0]];
+        assert_eq!(end_pieces(&all, &inside), vec![(0, all.to_vec())]);
+        // Out at its far end: up to the edge.
+        let out = end_pieces(&[[10.0, 10.0], [50.0, 10.0], [150.0, 10.0]], &inside);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 0);
+        assert_eq!(out[0].1.len(), 3);
+        assert!((out[0].1[2][0] - 100.0).abs() < 0.1, "{out:?}");
+        // In from outside at its start: the piece from the edge, its first segment the second.
+        let back = end_pieces(&[[-50.0, 50.0], [-10.0, 50.0], [60.0, 50.0], [60.0, 80.0]], &inside);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].0, 1);
+        assert!(back[0].1[0][0].abs() < 0.1 && back[0].1.len() == 3, "{back:?}");
+        // Passing by (both ends outside), a point, nothing at all, NaN: nothing.
+        assert!(end_pieces(&[[-50.0, 50.0], [150.0, 50.0]], &inside).is_empty());
+        assert!(end_pieces(&[[50.0, 50.0]], &inside).is_empty());
+        assert!(end_pieces(&[], &inside).is_empty());
+        assert!(end_pieces(&[[f64::NAN, 50.0], [150.0, 50.0]], &inside).is_empty());
     }
 
     #[test]
