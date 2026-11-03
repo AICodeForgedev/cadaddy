@@ -393,7 +393,7 @@ mod tests {
             t(1000.0, 840.0, "8.", 9.0),
             t(1020.0, 840.0, "CIRCUIT TO FACTORY MOUNTED DISCONNECT SWITCH.", 9.0),
             // Beside the list on its lines: a title block's text.
-            t(1700.0, 958.0, "300 20th Street N, Ste 100", 9.0),
+            t(1700.0, 958.0, "300 Sample Street N, Ste 100", 9.0),
             // On the plan: 7 in a box, a 7 that is a circuit number (no box), 3 in a symbol box.
             t(200.0, 200.0, "7", 9.0),
             t(400.0, 200.0, "7", 9.0),
