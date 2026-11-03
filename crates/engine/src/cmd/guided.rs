@@ -4541,7 +4541,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
                 // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
-                let mut kept: Vec<(String, String, [f64; 2])> = Vec::new();
+                // (And one tag in one unit from two sheets, the enlarged plan's and the floor's,
+                // is one fixture however far apart their registrations put it.)
+                let mut kept: Vec<(String, String, [f64; 2], String, String)> = Vec::new();
                 let before_dupes = out.len();
                 let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
                 out.retain(|dv| {
@@ -4549,10 +4551,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         return true;
                     }
                     let key = (dv.tag.clone(), digits(&dv.level));
-                    if kept.iter().any(|(t, l, at)| *t == key.0 && *l == key.1 && (at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near) {
+                    let same_unit = |room: &str, sheet: &str| !dv.room.is_empty() && room == dv.room && sheet != dv.sheet;
+                    if kept.iter().any(|(t, l, at, room, sheet)| {
+                        *t == key.0 && *l == key.1 && ((at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near || same_unit(room, sheet))
+                    }) {
                         return false;
                     }
-                    kept.push((key.0, key.1, dv.at));
+                    kept.push((key.0, key.1, dv.at, dv.room.clone(), dv.sheet.clone()));
                     true
                 });
                 if out.len() < before_dupes {
