@@ -360,6 +360,29 @@ fn class_of(e: &Entity) -> Kind {
                     .collect();
                 return k;
             }
+            // A piece of an electrical run (Q6157): a stick, a fitting, a box, a support, cable or
+            // a conductor.
+            "mep" if mep_part.as_deref().is_some_and(|p| p.starts_with("atom:")) => {
+                let piece = mep_part.as_deref().and_then(|p| p.strip_prefix("atom:")).unwrap_or_default();
+                let (class, pre) = match piece {
+                    "conduit" => (Class::Conduit, "CONDUITSEGMENT"),
+                    "elbow" | "bend" | "offset" => (Class::ConduitFitting, "BEND"),
+                    "box" | "ring" => (Class::JunctionBox, "NOTDEFINED"),
+                    // A support of the raceway: a carrier fitting of its own kind (it reads back).
+                    "strap" => (Class::ConduitFitting, "USERDEFINED"),
+                    "cable" => (Class::Cable, "CABLESEGMENT"),
+                    "wire" => (Class::Cable, "CONDUCTORSEGMENT"),
+                    _ => (Class::ConduitFitting, "NOTDEFINED"),
+                };
+                let sys_name = extra("system:");
+                let mut k = kind(class, t.get(1).cloned(), extra("type:").unwrap_or_else(|| piece.to_string()), String::new());
+                k.predefined = pre;
+                if piece == "strap" {
+                    k.object_type = "SUPPORT";
+                }
+                k.system_name = sys_name;
+                return k;
+            }
             "mep" => {
                 let is_fitting = mep_part.as_deref().is_some_and(|p| p.starts_with("fitting:"));
                 let is_terminal = mep_part.as_deref().is_some_and(|p| p.starts_with("terminal:"));

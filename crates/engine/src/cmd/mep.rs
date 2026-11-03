@@ -1927,6 +1927,88 @@ pub(crate) fn run_base(r: &MepRun) -> String {
     format!("{src}@{at}")
 }
 
+/// A feeder's raceway where it comes in through a gear's entry plate: one of `conduits` in rows
+/// across the gear from one corner (what doesn't fit runs past its edge, so a crowded plate
+/// shows), up to the ceiling (a top entry) or down into the slab.
+pub(crate) struct FeederStub {
+    /// The feeder (`Feeder::tag`), its index, and the gear it enters.
+    pub feeder: String,
+    pub index: usize,
+    pub gear: String,
+    pub level: String,
+    pub at: Vec2,
+    /// From and to, sheet units; `gear_end_low`: the end at the gear is `z0` (a top entry).
+    pub z0: f64,
+    pub z1: f64,
+    pub gear_end_low: bool,
+    pub trade_in: f64,
+    pub od_in: f64,
+}
+
+/// The feeders' raceways at the gear they enter (both ends of each feeder).
+pub(crate) fn feeder_stubs(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, upf: f64) -> Vec<FeederStub> {
+    let rules = super::gear::Rules::of(sp);
+    let pads = super::concrete::elements(sp, types);
+    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
+    let mut out = Vec::new();
+    for (fi, f) in sp.mep.feeders.iter().enumerate().take(MAX_RUNS) {
+        if !(f.conduit_in.is_finite() && f.conduit_in > 0.0) || f.conduits == 0 {
+            continue;
+        }
+        for (tag, side) in
+            [(&f.to, f.entry.as_str()), (&f.from, if f.from_entry.trim().is_empty() { f.entry.as_str() } else { f.from_entry.as_str() })]
+        {
+            let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(tag.trim())) else { continue };
+            let Some(level) = sp.level(&g.level) else { continue };
+            let top = side.trim().eq_ignore_ascii_case("top");
+            let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
+            let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
+            let z_floor = level.elevation_ft * upf;
+            let z_top = (level.elevation_ft + on_pad(g) + g.height_ft) * upf;
+            let (z0, z1) = if top {
+                (z_top, ((level.elevation_ft + level.height_ft.max(on_pad(g) + g.height_ft + 1.0)) * upf).max(z_top + upf))
+            } else {
+                (z_floor - upf, (level.elevation_ft + on_pad(g)) * upf)
+            };
+            if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
+                continue;
+            }
+            // Where this feeder's raceways start on the plate: after the ones placed before it.
+            let before: u32 = sp
+                .mep
+                .feeders
+                .iter()
+                .take_while(|x| !std::ptr::eq(*x, f))
+                .filter(|x| {
+                    let here_to = x.to.trim().eq_ignore_ascii_case(tag.trim()) && x.entry.trim().eq_ignore_ascii_case(side.trim());
+                    let xs = if x.from_entry.trim().is_empty() { &x.entry } else { &x.from_entry };
+                    let here_from = x.from.trim().eq_ignore_ascii_case(tag.trim()) && xs.trim().eq_ignore_ascii_case(side.trim());
+                    here_to || here_from
+                })
+                .fold(0u32, |a, x| a.saturating_add(x.conduits.min(400)));
+            let pitch = (rules.od(f.conduit_in) + rules.spacing_in) / 12.0 * upf;
+            let per_row = (((hi.x - lo.x) / pitch).floor() as u32).max(1);
+            for k in 0..f.conduits.min(400) {
+                let n = before.saturating_add(k);
+                let c = Vec2::new(lo.x + pitch * (f64::from(n % per_row) + 0.5), lo.y + pitch * (f64::from(n / per_row) + 0.5));
+                out.push(FeederStub {
+                    feeder: f.tag.clone(),
+                    index: fi,
+                    gear: g.tag.clone(),
+                    level: level.name.clone(),
+                    at: c,
+                    z0,
+                    z1,
+                    gear_end_low: top,
+                    trade_in: f.conduit_in,
+                    od_in: rules.od(f.conduit_in),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
 pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
@@ -1937,6 +2019,12 @@ pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
 /// The shown systems' runs into model space (sheet units), one mesh per run on its system's
 /// layer per level. The counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
+    build_with(d, sp, false)
+}
+
+/// [`build`]; with `atoms`, conduit and cable runs are left to [`super::mepatoms`], which makes
+/// each of their pieces an element of its own.
+pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut total_runs = 0usize;
     let mut total_elbows = 0usize;
@@ -1961,6 +2049,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .take(MAX_RUNS)
         .filter_map(|r| {
             let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
+            if atoms && matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
+                return None;
+            }
             let level = sp.level(&r.level)?;
             Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
         })
@@ -2149,76 +2240,31 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
 
     let total_equipment = build_equipment(d, sp, None).len();
-    // Equipment on a housekeeping pad stands on it (the feeders' raceways below start there).
-    let pads = super::concrete::elements(sp, &d.bim_types);
-    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
 
     // -- Feeders: their raceways where they come in through each gear's entry plates (rows
     // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate
     // shows), up to the ceiling or down into the slab. --
-    let rules = super::gear::Rules::of(sp);
     let mut total_stubs = 0usize;
-    for f in sp.mep.feeders.iter().take(MAX_RUNS) {
-        if !(f.conduit_in.is_finite() && f.conduit_in > 0.0) || f.conduits == 0 {
+    let stubs = if atoms { Vec::new() } else { feeder_stubs(sp, &d.bim_types, upf) };
+    for st in stubs {
+        let layer = format!("3D-ELEC-RACEWAY-{}", sanitise(&st.level, 16));
+        ensure_layer(d, &layer, 1);
+        let mut m = super::wallgen::empty_mesh();
+        add_upright_cylinder(&mut m, st.at, st.od_in / 24.0 * upf, st.z0, st.z1);
+        if m.faces.is_empty() {
             continue;
         }
-        for (tag, side) in
-            [(&f.to, f.entry.as_str()), (&f.from, if f.from_entry.trim().is_empty() { f.entry.as_str() } else { f.from_entry.as_str() })]
-        {
-            let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(tag.trim())) else { continue };
-            let Some(level) = sp.level(&g.level) else { continue };
-            let top = side.trim().eq_ignore_ascii_case("top");
-            let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
-            let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
-            let z_floor = level.elevation_ft * upf;
-            let z_top = (level.elevation_ft + on_pad(g) + g.height_ft) * upf;
-            let (z0, z1) = if top {
-                (z_top, ((level.elevation_ft + level.height_ft.max(on_pad(g) + g.height_ft + 1.0)) * upf).max(z_top + upf))
-            } else {
-                (z_floor - upf, (level.elevation_ft + on_pad(g)) * upf)
-            };
-            if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
-                continue;
-            }
-            // Where this feeder's raceways start on the plate: after the ones placed before it.
-            let before: u32 = sp
-                .mep
-                .feeders
-                .iter()
-                .take_while(|x| !std::ptr::eq(*x, f))
-                .filter(|x| {
-                    let here_to = x.to.trim().eq_ignore_ascii_case(tag.trim()) && x.entry.trim().eq_ignore_ascii_case(side.trim());
-                    let xs = if x.from_entry.trim().is_empty() { &x.entry } else { &x.from_entry };
-                    let here_from = x.from.trim().eq_ignore_ascii_case(tag.trim()) && xs.trim().eq_ignore_ascii_case(side.trim());
-                    here_to || here_from
-                })
-                .fold(0u32, |a, x| a.saturating_add(x.conduits.min(400)));
-            let pitch = (rules.od(f.conduit_in) + rules.spacing_in) / 12.0 * upf;
-            let per_row = (((hi.x - lo.x) / pitch).floor() as u32).max(1);
-            let layer = format!("3D-ELEC-RACEWAY-{}", sanitise(&level.name, 16));
-            ensure_layer(d, &layer, 1);
-            for k in 0..f.conduits.min(400) {
-                let n = before.saturating_add(k);
-                let c = Vec2::new(lo.x + pitch * (f64::from(n % per_row) + 0.5), lo.y + pitch * (f64::from(n / per_row) + 0.5));
-                let mut m = super::wallgen::empty_mesh();
-                add_upright_cylinder(&mut m, c, rules.od(f.conduit_in) / 24.0 * upf, z0, z1);
-                if m.faces.is_empty() {
-                    continue;
-                }
-                let xdata = vec![
-                    t(1001, super::wallgen::APP.into()),
-                    t(1000, "mep".into()),
-                    t(1000, level.name.clone()),
-                    t(1000, Handle(0).hex()),
-                    t(1000, format!("system:{}", f.tag.chars().take(60).collect::<String>())),
-                    t(1000, "kind:conduit".into()),
-                    t(1000, "part:segment".into()),
-                ];
-                if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
-                {
-                    total_stubs += 1;
-                }
-            }
+        let xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, st.level.clone()),
+            t(1000, Handle(0).hex()),
+            t(1000, format!("system:{}", st.feeder.chars().take(60).collect::<String>())),
+            t(1000, "kind:conduit".into()),
+            t(1000, "part:segment".into()),
+        ];
+        if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            total_stubs += 1;
         }
     }
 

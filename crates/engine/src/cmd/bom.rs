@@ -202,6 +202,11 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
     // The plaster ring each built wall box takes (its wall type's finish on the box's face).
     let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
+    // The model's pieces (Q6157): when it was built with them, its boxes, rings, conduit,
+    // fittings, cable and wire are counted from its index, not worked out by rule here.
+    let atoms =
+        s.doc().ok().and_then(super::mepatoms::stored).filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
+    let by_atoms = atoms.is_some();
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
@@ -258,7 +263,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                         ("Box, 4\" square", "2-1/8\" deep".to_string()),
                         ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
                         ("Device plate", "1 gang".into()),
-                    ] {
+                    ]
+                    .into_iter()
+                    .filter(|(item, _)| !by_atoms || *item == "Device plate")
+                    {
                         let by_wall = item == "Plaster ring" && ring.is_some();
                         add(
                             lines,
@@ -282,7 +290,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
                             },
                         );
                     }
-                } else if !on.is_empty() {
+                } else if !on.is_empty() && !by_atoms {
                     // Any other device wired on a circuit: its outlet box.
                     add(
                         lines,
@@ -319,6 +327,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
         let id = format!("run:{i}");
         let circuit = super::printcond::circuit_of_run(r).and_then(|c| circuits.get_key_value(c));
         match kind_of(&r.system) {
+            Some(cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable) if by_atoms => {}
             Some(cadaddy_walk3d::MepKind::Conduit) => {
                 let size = format!("{}\"", trade_size(r.size_in[0]));
                 let el = vec![id.clone()];
@@ -457,7 +466,57 @@ fn electrical(s: &Session, lines: &mut Vec<Line>) -> Result<()> {
             );
         }
     }
+    // The model's pieces, from its count index.
+    if let Some(ix) = atoms {
+        atom_lines(lines, &ix);
+    }
     Ok(())
+}
+
+/// The BOM lines of a model built with its pieces (Q6157): each counted piece of its index by
+/// what it is bought as, size, level and circuit; lengths for conduit, cable and wire.
+fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
+    for (k, t) in ix.rows.iter().take(MAX_LINES * 4) {
+        let (category, unit) = match k.kind.as_str() {
+            "conduit" => ("conduit", "ft"),
+            "coupling" | "connector" | "elbow" | "offset" | "strap" | "locknut" | "bushing" => ("conduit fittings", "each"),
+            "box" | "ring" => ("boxes", "each"),
+            "cable" | "wire" => ("wire", "ft"),
+            _ => continue,
+        };
+        // A field bend or offset is the trade's work, nothing bought.
+        if super::mepatoms::is_labor_item(&k.item) {
+            continue;
+        }
+        let net = if unit == "ft" { t.length_ft } else { t.count as f64 };
+        // A cable's line is by its type (`NM-B cable`, `12/2 w/G`).
+        let size = if k.kind == "cable" { k.ty.split_once(' ').map_or_else(|| k.size.clone(), |(_, r)| r.to_string()) } else { k.size.clone() };
+        let estimated = t.estimated > 0;
+        let rule = if estimated && k.kind == "conduit" {
+            "estimated route: the circuit's devices chained nearest-neighbour, run square just above the ceiling, a drop to each wall box (Q6007); its sticks counted in the model"
+        } else if estimated {
+            "counted in the model (bim.count), on an estimated route"
+        } else {
+            "counted in the model (bim.count)"
+        };
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: category.into(),
+                item: if k.item.is_empty() { k.kind.clone() } else { k.item.clone() },
+                size,
+                unit,
+                net,
+                status: if estimated { "rule" } else { "model" },
+                rule: Some(rule.to_string()),
+                level: k.level.clone(),
+                elements: Vec::new(),
+                waste_qty: None,
+                circuit: k.circuit.clone(),
+            },
+        );
+    }
 }
 
 /// Each switch leg's 0-10V control pair (`dimcheck::zero_ten_pairs`): its 0-10V fixtures (by
