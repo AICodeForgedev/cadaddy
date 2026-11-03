@@ -4550,6 +4550,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
+                // One connection per piece of equipment: the electrical plan's and the mechanical
+                // plan's tags of one fan, both put at it, are one.
+                let doubled = one_connection_each(&mut stamped, &mut out);
+                if doubled > 0 {
+                    progress_line(&format!("  equipment connections two plans tag, one kept: {doubled}"));
+                }
                 // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
                 // (And one tag in one unit from two sheets, the enlarged plan's and the floor's,
@@ -7255,6 +7261,21 @@ fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Foo
         }
     }
     n
+}
+
+/// Leaves one equipment connection (EF, PTAC) per room and tag, the first (stamped before placed),
+/// where two plans tag one piece of equipment; how many went.
+fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>) -> usize {
+    let connection = |dv: &super::readers::ReadDevice| {
+        let t = dv.tag.trim().to_ascii_uppercase();
+        !dv.room.trim().is_empty() && (t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-"))
+    };
+    let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+    let before = stamped.len() + placed.len();
+    for list in [&mut *stamped, &mut *placed] {
+        list.retain(|dv| !connection(dv) || seen.insert((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())));
+    }
+    before - stamped.len() - placed.len()
 }
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
@@ -13858,6 +13879,22 @@ mod tests {
         ];
         assert_eq!(book_into_units(&mut devices, &foot), 3);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
+    }
+
+    /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection
+    /// per room; two rooms' fans are two.
+    #[test]
+    fn one_connection_per_rooms_equipment() {
+        let dv = |tag: &str, room: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            room: room.into(),
+            level: "Level 1".into(),
+            ..Default::default()
+        };
+        let mut stamped = vec![dv("EF", "103"), dv("EF", "105"), dv("REC", "103"), dv("REC", "103")];
+        let mut placed = vec![dv("EF", "103"), dv("PTAC", "103")];
+        assert_eq!(one_connection_each(&mut stamped, &mut placed), 1);
+        assert_eq!((stamped.len(), placed.len()), (4, 1));
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
