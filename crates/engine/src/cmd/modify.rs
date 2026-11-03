@@ -1708,6 +1708,10 @@ pub(crate) fn explode_kind(d: &cadaddy_doc::Drawing, e: &Entity) -> Option<Vec<E
             if let Some(items) = super::array::explode_array(d, e) {
                 return Some(items);
             }
+            // A MINSERT grid stays whole, as in AutoCAD 2024 (see `explode`).
+            if minserted(ins) {
+                return None;
+            }
             let blk = d.block(&ins.block)?;
             let m = ins.transform(blk.base.xy());
             // A dynamic reference's evaluated copy (`*U…`) keeps the objects its visibility state
@@ -1909,6 +1913,10 @@ pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, us
             continue;
         }
         let Some(e) = s.doc()?.entity(*h).map(|e| (**e).clone()) else { continue };
+        // AutoCAD 2024 refuses a MINSERT grid: "The object is minserted."
+        if matches!(&e.kind, EntityKind::Insert(i) if minserted(i)) {
+            s.echo("The object is minserted.");
+        }
         let Some(parts) = explode_kind(s.doc()?, &e) else {
             not += 1;
             continue;
@@ -1931,6 +1939,11 @@ pub(crate) fn explode(s: &mut Session, hs: &[Handle]) -> Result<(Vec<Handle>, us
     }
     s.set_selection(Vec::new());
     Ok((out, not))
+}
+
+/// A block reference with more than one row or column (MINSERT).
+fn minserted(i: &cadaddy_doc::Insert) -> bool {
+    i.rows > 1 || i.cols > 1
 }
 
 /// AutoCAD's report of objects EXPLODE left as they were.

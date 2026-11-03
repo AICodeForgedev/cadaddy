@@ -2004,6 +2004,8 @@ impl EntityKind {
                 i.rotation = cadaddy_geom::norm_angle(i.rotation + rot);
                 if mirror {
                     i.scale.y = -i.scale.y;
+                    // A MINSERT grid's rows run the other way (Y is the mirrored axis here).
+                    i.row_spacing = -i.row_spacing;
                     i.rotation = cadaddy_geom::norm_angle(rot - (i.rotation - rot));
                 }
                 // Attributes are text: mirrored, they keep reading left to right (MIRRTEXT 0),
