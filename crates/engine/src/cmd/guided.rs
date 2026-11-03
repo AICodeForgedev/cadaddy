@@ -5656,7 +5656,7 @@ fn inventory_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     let summary = inv.summary(false);
     let c = &summary["coverage"];
     progress_line(&format!(
-        "  print inventory: {} marks, {} classified ({}%); {} object marks, {} built ({}%); {} unexplained; {} sheets not read",
+        "  print inventory: {} marks, {} classified ({}%); {} object marks, {} built ({}%); {} unexplained; {} sheets not loaded, {} read at the end ({} marks, {} unexplained)",
         c["marks"],
         c["classified"],
         c["classified_pct"],
@@ -5664,14 +5664,24 @@ fn inventory_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         c["objects_built"],
         c["built_pct"],
         c["unexplained"],
-        summary["sheets_not_read"]
+        summary["sheets_not_read"],
+        summary["sheets_end_read"],
+        summary["coverage_by_read"]["end_read"]["marks"],
+        summary["coverage_by_read"]["end_read"]["unexplained"]
     ));
     if let Ok(d) = s.doc_mut()
         && let Err(e) = super::inventory::store(d, &inv)
     {
         progress_line(&format!("  print inventory not kept: {e}"));
     }
-    result["inventory"] = json!({"coverage": summary["coverage"], "by_trade": summary["by_trade"], "sheets_not_read": summary["sheets_not_read"]});
+    result["inventory"] = json!({
+        "coverage": summary["coverage"],
+        "coverage_by_read": summary["coverage_by_read"],
+        "by_trade": summary["by_trade"],
+        "sheets_not_read": summary["sheets_not_read"],
+        "sheets_end_read": summary["sheets_end_read"],
+        "sheets_unreadable": summary["sheets_unreadable"],
+    });
 }
 
 /// The plan sheets never built into a building level, as `A010: not built: site/civil`.
@@ -12727,7 +12737,16 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
 fn inventory_coverage(s: &Session) -> Value {
     let Some(inv) = s.doc().ok().and_then(super::inventory::stored) else { return Value::Null };
     let v = inv.summary(true);
-    json!({"coverage": v["coverage"], "by_trade": v["by_trade"], "by_sheet": v["by_sheet"], "sheets_not_read": v["sheets_not_read"], "more": "bim.inventory lists the marks"})
+    json!({
+        "coverage": v["coverage"],
+        "coverage_by_read": v["coverage_by_read"],
+        "by_trade": v["by_trade"],
+        "by_sheet": v["by_sheet"],
+        "sheets_not_read": v["sheets_not_read"],
+        "sheets_end_read": v["sheets_end_read"],
+        "sheets_unreadable": v["sheets_unreadable"],
+        "more": "bim.inventory lists the marks"
+    })
 }
 
 /// What the build kept out of the model and what it put outside the floors, each with why, and
@@ -16686,6 +16705,16 @@ mod tests {
         for (v, x, y, h) in lettering {
             page.add(&Space::Model, Common::default(), EntityKind::Text(text(v, x, y, h))).unwrap_or_else(|e| panic!("{e}"));
         }
+        // Two fills on one layer: one mark of two pieces.
+        for x in [0.0, 50.0] {
+            let corners = [Vec3::new(x, 0.0, 0.0), Vec3::new(x + 10.0, 0.0, 0.0), Vec3::new(x, 10.0, 0.0), Vec3::new(x + 10.0, 10.0, 0.0)];
+            let common = Common { layer: "SHADE".into(), ..Common::default() };
+            page.add(&Space::Model, common, EntityKind::Solid(cadaddy_doc::Solid { corners })).unwrap_or_else(|e| panic!("{e}"));
+        }
+        // The index lists a view of a loaded sheet by its own number: that sheet is read already.
+        if let Some(list) = job.sheets.as_mut().and_then(|v| v.get_mut("sheets")).and_then(Value::as_array_mut) {
+            list.push(json!({"number": "E-1/2", "title": "A VIEW OF E-1", "discipline": "E", "type": "plan"}));
+        }
         let (fates, pages) = mark_fates(&s, &job);
         let mut asked: Vec<String> = Vec::new();
         let mut reader = |sh: &Value| {
@@ -16701,11 +16730,14 @@ mod tests {
         let inv = inventory::take(d, &job, &pages, &fates, Some(&mut reader));
         assert_eq!(asked, vec!["E-0", "E-2", "A-101"]);
         let sheet = |n: &str| inv.sheets_not_read.iter().find(|x| x.number == n).unwrap_or_else(|| panic!("{n}: {:?}", inv.sheets_not_read));
-        assert!(sheet("E-0").read && sheet("E-0").marks == lettering.len(), "{:?}", sheet("E-0"));
+        assert!(sheet("E-0").read && sheet("E-0").marks == lettering.len() + 1, "{:?}", sheet("E-0"));
+        assert!(inv.sheets_not_read.iter().all(|x| x.number != "E-1/2"), "a view of a loaded sheet is no sheet not read");
         assert!(sheet("E-2").read && sheet("E-2").marks == 0);
         assert_eq!((sheet("A-101").read, sheet("A-101").why.as_str()), (false, "a made-up page that can't be read"));
         let on_e0: Vec<&inventory::Mark> = inv.marks.iter().filter(|m| m.sheet == "E-0").collect();
-        assert_eq!(on_e0.len(), lettering.len());
+        assert_eq!(on_e0.len(), lettering.len() + 1);
+        let fills = on_e0.iter().find(|m| m.what == "hatch").unwrap_or_else(|| panic!("no fills: {on_e0:#?}"));
+        assert_eq!((fills.count, fills.status.as_str(), fills.text.as_str()), (2, NOT_OBJECT, "fills on layer SHADE"), "{fills:?}");
         assert!(on_e0.iter().all(|m| m.end_read && m.handle.is_empty() && m.trade == "E"), "{on_e0:#?}");
         assert!(inv.marks.iter().filter(|m| m.sheet != "E-0").all(|m| !m.end_read));
         let mark = |t: &str| on_e0.iter().copied().find(|m| m.text == t).unwrap_or_else(|| panic!("no {t}: {on_e0:#?}"));
@@ -16722,12 +16754,13 @@ mod tests {
         assert_eq!((mark("ALL WORK SHALL MEET THE ADOPTED CODE").reason.as_str(), mark("3'-0\"").reason.as_str()), ("note", "dimension"));
         // Coverage: the loaded sheets and the end-read ones apart; the unreadable page named.
         let v = inv.summary(true);
-        assert_eq!(v["coverage_by_read"]["end_read"]["marks"].as_u64(), Some(lettering.len() as u64), "{v:#}");
+        let n = lettering.len() as u64 + 1;
+        assert_eq!(v["coverage_by_read"]["end_read"]["marks"].as_u64(), Some(n), "{v:#}");
         let loaded = v["coverage_by_read"]["loaded"]["marks"].as_u64().unwrap_or(0);
-        assert_eq!(Some(loaded + lettering.len() as u64), v["coverage"]["marks"].as_u64());
+        assert_eq!(Some(loaded + n), v["coverage"]["marks"].as_u64());
         assert_eq!(v["sheets_end_read"], 2);
         assert_eq!(v["sheets_unreadable"][0]["sheet"], "A-101");
-        assert!(v["by_sheet"]["E-0"]["marks"].as_u64() == Some(lettering.len() as u64));
+        assert_eq!(v["by_sheet"]["E-0"]["marks"].as_u64(), Some(n));
     }
 
     /// Q6172 (answer 2): a mark whose legend row names no known kind takes the row's words as its

@@ -155,7 +155,7 @@ pub struct Mark {
     /// The kept mark's duplicates on other sheets (their ids): one object, all its marks.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub also_on: Vec<usize>,
-    /// A line-work mark: how many pieces, and how many of them became elements. A legend or
+    /// A line-work or fill mark: how many pieces, and how many of them became elements. A legend or
     /// schedule row: how many devices of its type the model holds.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub count: usize,
@@ -738,13 +738,19 @@ pub(crate) fn take(
         }
     }
     // The sheets of the set the job didn't load: each page read again, its marks inventoried.
-    let read: BTreeSet<String> = sheets.iter().map(|s| s.base.to_ascii_uppercase()).collect();
+    // A sheet the job loaded is read, by its number or by one of its views' (`A411/1`).
+    let read: BTreeSet<String> = sheets.iter().flat_map(|s| [s.base.to_ascii_uppercase(), s.name.to_ascii_uppercase()]).collect();
+    let base_of = |n: &str| n.split('/').next().unwrap_or(n).trim().to_ascii_uppercase();
     let (no_built, no_fates) = (HashMap::new(), HashMap::new());
     let end = Ctx { built: &no_built, fates: &no_fates, end_read: true, ..cx };
     for sh in listed.into_iter().flatten() {
         let text = |k: &str| sh.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
         let number = text("number");
-        if number.is_empty() || read.contains(&number.to_ascii_uppercase()) || inv.sheets_not_read.iter().any(|s| s.number == number) {
+        if number.is_empty()
+            || read.contains(&number.to_ascii_uppercase())
+            || read.contains(&base_of(&number))
+            || inv.sheets_not_read.iter().any(|s| s.number == number)
+        {
             continue;
         }
         let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
@@ -816,11 +822,11 @@ fn link_sources(inv: &mut Inventory) {
 }
 
 /// The marks of one sheet: each of `members` (the sheet's objects in `d`), its line work one
-/// mark per layer and line type.
+/// mark per layer and line type, its fills one per layer.
 fn sheet_marks(inv: &mut Inventory, cx: &Ctx, d: &Drawing, sheet: &Sheet, members: &[&Entity]) {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
-    // Line work by layer and line type: one mark each.
-    let mut lines: BTreeMap<(String, String), Mark> = BTreeMap::new();
+    // Line work by layer and line type, fills by layer: one mark each (with how many pieces).
+    let mut lines: BTreeMap<(String, String, String), Mark> = BTreeMap::new();
     for e in members {
         let h = e.handle.0;
         let made = cx.built.get(&h);
@@ -835,19 +841,40 @@ fn sheet_marks(inv: &mut Inventory, cx: &Ctx, d: &Drawing, sheet: &Sheet, member
                 | EntityKind::Ellipse(_)
                 | EntityKind::Spline(_)
         );
-        if line && fate.is_none() {
+        // A fill no reader took and no element came from: one mark per layer, like line work.
+        let fill = matches!(e.kind, EntityKind::Hatch(_) | EntityKind::Solid(_) | EntityKind::Trace(_)) && fate.is_none() && made.is_none();
+        if fill {
             let at = centre(d, e);
-            let key = (e.common.layer.to_string(), e.common.linetype.to_string());
-            let m = lines.entry(key.clone()).or_insert_with(|| Mark {
+            let layer = e.common.layer.to_string();
+            let m = lines.entry(("hatch".into(), layer.clone(), String::new())).or_insert_with(|| Mark {
                 sheet: sheet.name.clone(),
                 trade: sheet.trade.clone(),
-                what: "line_type".into(),
-                text: cut(&format!("{} on layer {}", if key.1.is_empty() { "BYLAYER" } else { &key.1 }, key.0), MAX_TEXT),
+                what: "hatch".into(),
+                text: cut(&format!("fills on layer {layer}"), MAX_TEXT),
                 at,
                 view: sheet.view(at),
                 level: sheet.level(at),
                 status: NOT_OBJECT.into(),
-                reason: if key.0.eq_ignore_ascii_case(SHX_SOURCE_LAYER) {
+                reason: "fill (a hatch or solid)".into(),
+                end_read: cx.end_read,
+                ..Mark::default()
+            });
+            m.count += 1;
+            continue;
+        }
+        if line && fate.is_none() {
+            let at = centre(d, e);
+            let key = ("line_type".to_string(), e.common.layer.to_string(), e.common.linetype.to_string());
+            let m = lines.entry(key.clone()).or_insert_with(|| Mark {
+                sheet: sheet.name.clone(),
+                trade: sheet.trade.clone(),
+                what: "line_type".into(),
+                text: cut(&format!("{} on layer {}", if key.2.is_empty() { "BYLAYER" } else { &key.2 }, key.1), MAX_TEXT),
+                at,
+                view: sheet.view(at),
+                level: sheet.level(at),
+                status: NOT_OBJECT.into(),
+                reason: if key.1.eq_ignore_ascii_case(SHX_SOURCE_LAYER) {
                     "strokes of lettering the import read as text".into()
                 } else {
                     "line work no element was made from (outlines, leaders, hatching, furniture)".into()
@@ -1113,7 +1140,7 @@ fn round1(v: f64) -> f64 {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Print Inventory", run)
-            .params("{sheet?: \"E-101\", level?: \"2\", kind?: \"receptacle\", status?: \"built\"|\"not_placeable\"|\"duplicate\"|\"out_of_scope\"|\"not_built\"|\"not_object\"|\"unexplained\", what?: \"symbol\"|\"tag\"|\"text\"|\"dimension\"|\"hatch\"|\"callout\"|\"legend_row\"|\"line_type\"|…, object?: bool, reason?: text in the reason, cursor?: n, limit?: 1-200 (25), by_sheet?: bool (coverage per sheet too), rebuild?: bool (take it again from the job's sheets now)} → {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet?, not_object_by_reason, objects_by_kind: {kind: {status: n}}, top_unexplained, sheets_not_read, total (marks matching), marks: [{id, sheet, trade, what, text, at, view, level, handle, object, kind, status, reason, elements, same_as?, also_on?, count?}], next?}: every mark on every sheet the job read — each an object of a kind (and the model elements it became, or why none) or not an object (and why)")
+            .params("{sheet?: \"E-101\", level?: \"2\", kind?: \"receptacle\", status?: \"built\"|\"not_placeable\"|\"duplicate\"|\"out_of_scope\"|\"not_built\"|\"not_object\"|\"unexplained\", what?: \"symbol\"|\"tag\"|\"text\"|\"dimension\"|\"hatch\"|\"callout\"|\"legend_row\"|\"line_type\"|…, object?: bool, reason?: text in the reason, cursor?: n, limit?: 1-200 (25), by_sheet?: bool (coverage per sheet too), rebuild?: bool (take it again from the job's sheets now)} → {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet?, not_object_by_reason, objects_by_kind: {kind: {status: n}}, top_unexplained, coverage_by_read: {loaded, end_read}, sheets_not_read, sheets_end_read, sheets_unreadable: [{sheet, why}], total (marks matching), marks: [{id, sheet, trade, what, text, at, view, level, handle, object, kind, status, reason, elements, same_as?, also_on?, count?, source?, source_mark?, end_read?}], next?}: every mark on every sheet of the set (the ones the job didn't load read again at the build's end) — each an object of a kind (and the model elements it became, or why none) or not an object (and why)")
             .noundo(),
     ]
 }
