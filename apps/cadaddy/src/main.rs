@@ -122,7 +122,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         self.fit_first_window(ctx);
-        self.cad.logic(ctx);
+        self.cad.guarded_logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
         if std::mem::take(&mut self.cad.quit_requested) {
@@ -135,7 +135,7 @@ impl eframe::App for App {
         cadaddy_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.cad.ui(ui);
+        self.cad.guarded_ui(ui);
         self.persist_workspace(false);
     }
     /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a

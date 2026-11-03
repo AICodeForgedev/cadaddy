@@ -64,6 +64,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+pub mod fault;
 pub mod hatchdlg;
 pub mod hyperlinks;
 pub mod materials;
@@ -533,6 +534,8 @@ pub struct CadApp {
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    /// Panics caught around the frame ([`fault`]).
+    pub fault: fault::UiFault,
     /// The notice shown while autosave fails (see [`autosave::failure_notice`]).
     pub autosave_notice: Option<autosave::AutosaveNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
@@ -645,6 +648,7 @@ impl CadApp {
             save_loss_accepted: None,
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            fault: fault::UiFault::default(),
             autosave_notice: None,
             hatch_dlg: None,
             takeoff_table: None,

@@ -194,6 +194,10 @@ impl CadApp {
 
     /// The app closes normally: this app's autosave files are not needed any more.
     pub fn shutdown_autosave(&mut self) {
+        // After the interface gave up, the recovery copies are all that's left of the work.
+        if self.fault.broken {
+            return;
+        }
         if autosave::store::store().is_some() {
             if let Some(s) = &mut self.autosave {
                 s.shutdown_store();
