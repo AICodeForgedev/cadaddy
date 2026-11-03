@@ -4881,6 +4881,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["underground_error"] = json!(e.to_string());
     }
     bim_step(s, job, "underground", t);
+    // The wiring-method alternatives the code and the spec allow, priced from the model.
+    let t = web_time::Instant::now();
+    if let Err(e) = value_step(s, job, &mut result) {
+        result["value_engineering_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "value engineering", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -8390,6 +8396,101 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
         );
     }
     result["keynotes"] = json!({"boxes": boxes.len(), "on_devices": on_devices, "added": at_tags, "runs": run_count, "risers": risers});
+    Ok(())
+}
+
+/// Value engineering (Q6154, [`super::valueeng`]): the building's construction type from its
+/// code sheet (the general sheets', else the architectural ones'), the specs' wiring-methods
+/// tables, each alternative tiered and priced from the model; one needing an RFI gets its draft.
+fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
+    if !matches!(super::bspec::current(s, "bim_build"), Ok((_, true))) {
+        return Ok(());
+    }
+    let specs = job_specs(job);
+    let mut construction: Option<(String, String)> = None;
+    'find: for disc in ["G", "A"] {
+        for (number, sub) in non_plan_pages(job, disc) {
+            let mut texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+            // Reading order: down the sheet, then across.
+            texts.sort_by(|a, b| {
+                (b.at.y / a.height.max(1e-6)).round().total_cmp(&(a.at.y / a.height.max(1e-6)).round()).then(a.at.x.total_cmp(&b.at.x))
+            });
+            let words: Vec<String> = texts.into_iter().map(|t| t.value).collect();
+            if let Some(c) = super::valueeng::construction_type(&words) {
+                construction = Some((c, number));
+                break 'find;
+            }
+        }
+    }
+    let v = s.execute("ve.study", &json!({"specs": specs, "construction_type": construction.as_ref().map(|c| c.0.clone())}))?;
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let scenarios = v["scenarios"].as_array().cloned().unwrap_or_default();
+    let mut lines = Vec::new();
+    let mut rfis = Vec::new();
+    for sc in &scenarios {
+        let tier = sc["tier"].as_str().unwrap_or_default();
+        let name = sc["name"].as_str().unwrap_or_default();
+        let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["labor_hours"].as_f64()) {
+            (Some(c), Some(h)) => format!(
+                "; saves ${c:.0} and {h:.0} labor hours over {} feeders, {:.0} ft{}",
+                sc["quantity"]["feeders"],
+                sc["quantity"]["feet"].as_f64().unwrap_or(0.0),
+                sc["unpriced"]
+                    .as_array()
+                    .filter(|u| !u.is_empty())
+                    .map(|u| format!(" (unpriced: {})", u.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")))
+                    .unwrap_or_default()
+            ),
+            _ => String::new(),
+        };
+        lines.push(format!("{name}: {tier}{money}"));
+        if !matches!(tier, "allowed_now" | "needs_rfi") {
+            continue;
+        }
+        if let (true, Some(issue)) = (tier == "needs_rfi", sc["rfi"]["issue"].as_str()) {
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in sc["id"].as_str().unwrap_or_default().bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            let id = format!("RFI-V{:08x}", h as u32);
+            sp.rfis.retain(|r| r.id != id);
+            if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+                let kind = cadaddy_walk3d::RfiKind::MethodChoice;
+                sp.rfis.push(cadaddy_walk3d::Rfi {
+                    id: id.clone(),
+                    kind: Some(kind),
+                    severity: kind.severity(),
+                    about: name.to_string(),
+                    issue: issue.to_string(),
+                    assumed: "The model stays as designed; the alternative is a priced scenario until the RFI is approved.".into(),
+                    proposed: sc["rfi"]["proposed"].as_str().map(str::to_string),
+                    ..cadaddy_walk3d::Rfi::default()
+                });
+                rfis.push(id);
+            }
+        }
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Value engineering ({}): {name}{money}", tier.replace('_', " ")),
+            "a wiring method the code allows saves material and labor; the model stays as designed until approved",
+            3,
+            vec![if tier == "needs_rfi" { "Send the drafted RFI".into() } else { "Price it into the bid as allowed".into() }],
+            None,
+            false,
+        );
+    }
+    if !rfis.is_empty() {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    let line = format!(
+        "  value engineering: construction type {}; {} wiring-method applications read; {}",
+        construction.as_ref().map(|(c, n)| format!("{c} ({n})")).unwrap_or_else(|| "not found".into()),
+        v["applications"].as_array().map_or(0, Vec::len),
+        lines.join("; ")
+    );
+    report_progress(s, json!({"step": "value engineering"}), &line);
+    s.echo(line);
+    result["value_engineering"] = json!({"construction_type": construction.map(|c| c.0), "scenarios": scenarios, "rfis": rfis});
     Ok(())
 }
 

@@ -181,6 +181,7 @@ pub mod validate_packet;
 pub mod validate_prescreen;
 pub mod validate_rules;
 pub mod validate_run;
+pub mod valueeng;
 pub mod verify;
 pub mod walkpub;
 pub mod wallgen;
@@ -791,6 +792,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(clashreport::specs());
         v.extend(concrete::specs());
     v.extend(ugsheets::specs());
+    v.extend(valueeng::specs());
     v.extend(sheetsout::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
