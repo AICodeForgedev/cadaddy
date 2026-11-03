@@ -298,7 +298,8 @@ pub(crate) struct SpecsFound {
 pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: bool) -> SpecsFound {
     use std::path::{Path, PathBuf};
     let is_doc = |p: &Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
-    let dir_of = |p: &Path| if p.is_dir() { Some(p.to_path_buf()) } else { p.parent().map(Path::to_path_buf) };
+    // A folder that is there (a path from another machine, `C:\\…` here, is none).
+    let dir_of = |p: &Path| if p.is_dir() { Some(p.to_path_buf()) } else { p.parent().filter(|d| d.is_dir()).map(Path::to_path_buf) };
     let key = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let entries = |d: &Path| -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
@@ -1118,6 +1119,10 @@ PART 1 - GENERAL
         std::fs::create_dir_all(r.join("Job Specs")).unwrap();
         std::fs::write(r.join("Job Specs").join("26 27 26.txt"), "made-up text").unwrap();
         assert_eq!(found(&r, "Plans", &[]), ["Job Specs"]);
+        // Submittals from another machine (a resumed job's) hide nothing.
+        let r = tree("elsewhere", &["Plans/E.pdf", "Specs/26 27 26.pdf"]);
+        let f = find_project_specs(&r.join("Plans").to_string_lossy(), &["C:\\Jobs\\Sample\\Submittals".into(), String::new()], true);
+        assert_eq!(f.paths, [r.join("Specs").to_string_lossy().to_string()]);
         // A single print file's folder is the prints folder.
         let r = tree("onefile", &["set/E.pdf", "Specifications/26 27 26.pdf"]);
         assert_eq!(found(&r, "set/E.pdf", &[]), ["Specifications"]);
