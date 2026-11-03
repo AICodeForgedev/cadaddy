@@ -454,7 +454,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("pricebook.remove", "Remove Material Quote", run_remove).params("{key, vendor, location?, folder?} → {removed: n (kept in history.csv)}: a local quote out of the book"),
         CommandSpec::new("pricebook.map", "Map Item to Price", run_map).params("{item: bill-of-materials item, size?, keys?: [price key] (added: a fixture and its trim), exclude?: reason, note?, folder?} → {item, size, keys | exclude}: how a bill-of-materials line is priced from the price book"),
         CommandSpec::new("pricebook.settings", "Price Book Settings", run_settings).params("{pick?: \"lowest\" (default: the lowest current quote)|\"latest\"|\"median\"|\"vendor\", vendor?: the vendor whose quote `vendor` picks, stale_days?: n (default 180: older quotes count only when no current one is left), folder?} → {pick, vendor, stale_days}: how the book picks a key's price among its quotes"),
-        CommandSpec::new("pricebook.import", "Import Price Book", run_import).params("{path: .xlsx (sheets \"Price List\": key, description, catalog / basis, unit, pack, pack price $, unit price $, source type, vendor / book, location?, URL, price date, note; \"Item Map\": CADaddy item, size, action, price key 1, price key 2, note) or .csv (the quote columns), folder?} → {quotes: {added, updated, kept_newer}, map: n, history: n replaced, folder}: quotes into the local price database (one per key, vendor and location; an older quote than the one held is kept out)"),
+        CommandSpec::new("pricebook.import", "Import Price Book", run_import).params("{path: .pdf (a distributor's invoices: each line a quote, maker:product its key, the branch its location) | .xlsx (sheets \"Price List\": key, description, catalog / basis, unit, pack, pack price $, unit price $, source type, vendor / book, location?, URL, price date, note; \"Item Map\": CADaddy item, size, action, price key 1, price key 2, note) or .csv (the quote columns), folder?} → {quotes: {added, updated, kept_newer}, map: n, history: n replaced, folder}: quotes into the local price database (one per key, vendor and location; an older quote than the one held is kept out)"),
     ]
 }
 
@@ -638,6 +638,148 @@ fn run_map(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"item": item, "size": size, "keys": keys, "exclude": exclude}))
 }
 
+/// A distributor invoice's lines as quotes: each line's maker and product code (`PVC:400`), its
+/// description, its price per unit (its per-code: E each, C per hundred, M per thousand), the
+/// invoice's vendor, branch (its city) and date. A line whose price and quantity don't give its
+/// extension is left out (a back order's zero extension keeps its price).
+pub(crate) fn invoice_quotes(text: &str) -> Vec<Quote> {
+    let mut out: Vec<Quote> = Vec::new();
+    let num = |v: &str| v.trim().replace(',', "").parse::<f64>().ok().filter(|x| x.is_finite());
+    let (mut vendor, mut branch, mut date, mut invoice) = (String::new(), String::new(), String::new(), String::new());
+    for page in text.split("--- page ") {
+        let lines: Vec<&str> = page.lines().collect();
+        // The header: `<vendor>` alone on a line before `<no>   <mm/dd/yy>`, the branch city after.
+        for (i, l) in lines.iter().enumerate() {
+            let cells: Vec<&str> = l.split("   ").map(str::trim).filter(|c| !c.is_empty()).collect();
+            // `<no>   <date>`, or `<vendor's last word>   <no>   <date>`.
+            let (lead, no, d) = match cells.as_slice() {
+                [no, d] => ("", *no, *d),
+                [lead, no, d] => (*lead, *no, *d),
+                _ => continue,
+            };
+            let is_no = no.len() >= 6 && no.contains('-') && no.chars().all(|c| c.is_ascii_digit() || c == '-');
+            let parts: Vec<&str> = d.split('/').collect();
+            let [m, dd, y] = parts.as_slice() else { continue };
+            if !is_no || d.len() != 8 {
+                continue;
+            }
+            invoice = no.to_string();
+            date = format!("20{y}-{m}-{dd}");
+            if let Some(v) = i
+                .checked_sub(1)
+                .and_then(|j| lines.get(j))
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty() && v.len() <= 40 && v.chars().all(|c| c.is_ascii_alphabetic() || c == ' ' || c == '&'))
+            {
+                vendor = if lead.is_empty() { v.to_string() } else { format!("{v} {lead}") };
+            }
+            // The branch: the first `City, ST 12345` after it.
+            let city = lines.iter().skip(i + 1).take(4).flat_map(|l| l.split("   ")).find_map(|c| {
+                let (city, rest) = c.trim().split_once(", ")?;
+                let mut w = rest.split_whitespace();
+                let (st, zip) = (w.next()?, w.next()?);
+                (st.len() == 2 && st.chars().all(|x| x.is_ascii_uppercase()) && zip.len() >= 5 && zip.chars().take(5).all(|x| x.is_ascii_digit()))
+                    .then(|| format!("{city}, {st}"))
+            });
+            if let Some(c) = city {
+                branch = c;
+            }
+        }
+        let mut lot: Option<Quote> = None;
+        for l in &lines {
+            let cells: Vec<&str> = l.split("   ").map(str::trim).filter(|c| !c.is_empty()).collect();
+            // A lot's contents: its designations and its unpriced lines, until the next priced line.
+            if let Some(q) = lot.as_mut() {
+                let t = l.trim();
+                if let Some(d) = t.strip_prefix("TYPE/DESIGNATION:") {
+                    q.description.push_str(&format!("; {}", d.trim()));
+                    continue;
+                }
+                if cells.len() >= 6 && cells.contains(&"0.00") {
+                    q.note.push_str(&format!("; {} {}", cells.first().unwrap_or(&""), cells.get(3).unwrap_or(&"")));
+                    continue;
+                }
+            }
+            if l.contains("LOT BILLING") {
+                if let Some(q) = lot.take() {
+                    let _ = add(&mut out, q);
+                }
+                let price = cells.iter().find(|c| c.contains('.') && c.contains(|ch: char| ch.is_ascii_digit())).and_then(|c| num(c));
+                if let Some(price) = price.filter(|p| *p > 0.0) {
+                    lot = Some(Quote {
+                        key: format!("LOT:{invoice}"),
+                        description: "lot".into(),
+                        catalog: String::new(),
+                        unit: "lot".into(),
+                        pack: String::new(),
+                        pack_price: None,
+                        unit_price: price,
+                        source_type: "INVOICE".into(),
+                        vendor: if vendor.is_empty() { "distributor".into() } else { vendor.clone() },
+                        location: branch.clone(),
+                        url: String::new(),
+                        date: date.clone(),
+                        note: format!("invoice {invoice}; consists of"),
+                        origin: "local",
+                    });
+                }
+                continue;
+            }
+            // `qty  maker  product  description  ship  price  per  tax  extension  disc ...`
+            let Some(p) = (3..cells.len().saturating_sub(3)).find(|&k| {
+                cells.get(k).is_some_and(|c| c.contains('.') && num(c).is_some()) && matches!(cells.get(k + 1).copied(), Some("E" | "C" | "M"))
+            }) else {
+                continue;
+            };
+            let (Some(price), Some(per)) = (cells.get(p).and_then(|c| num(c)), cells.get(p + 1)) else { continue };
+            let div = match *per {
+                "C" => 100.0,
+                "M" => 1000.0,
+                _ => 1.0,
+            };
+            let ship = cells.get(p - 1).and_then(|c| num(c)).unwrap_or(0.0);
+            let ext = cells.get(p + 3).and_then(|c| num(c)).unwrap_or(0.0);
+            if price <= 0.0 || (ext > 0.0 && (price * ship / div - ext).abs() > 0.02f64.max(ext * 0.005)) {
+                continue;
+            }
+            let (Some(maker), Some(product)) = (cells.get(1), cells.get(2)) else { continue };
+            let description = cells.get(3..p - 1).map(|d| d.join(" ")).unwrap_or_default();
+            let up = format!(" {} {} ", description, product).to_ascii_uppercase();
+            let length =
+                ["CONDUIT", "EMT", "SCH 40", "SCH 80", "/LIFT", "THHN", "XHHW", "WIRE", "CABLE", "STRUT", " MC "].iter().any(|w| up.contains(w));
+            let fitting =
+                ["ELL", "ELBOW", "COUP", "CONN", "ADAPT", "BODY", "STRAP", "BOX", "CLAMP", "BUSHING", "LOCKNUT", "CAP", "TAPE", "PULL LINE"]
+                    .iter()
+                    .any(|w| up.contains(w));
+            let unit = if div > 1.0 && length && !fitting { "ft" } else { "each" };
+            let q = Quote {
+                key: format!("{maker}:{product}").to_ascii_uppercase(),
+                description,
+                catalog: (*product).to_string(),
+                unit: unit.into(),
+                pack: if div > 1.0 { format!("per {div}") } else { String::new() },
+                pack_price: (div > 1.0).then_some(price),
+                unit_price: (price / div * 1e6).round() / 1e6,
+                source_type: "INVOICE".into(),
+                vendor: if vendor.is_empty() { "distributor".into() } else { vendor.clone() },
+                location: branch.clone(),
+                url: String::new(),
+                date: date.clone(),
+                note: format!("invoice {invoice}, {ship} shipped"),
+                origin: "local",
+            };
+            if let Some(lq) = lot.take() {
+                let _ = add(&mut out, lq);
+            }
+            let _ = add(&mut out, q);
+        }
+        if let Some(q) = lot.take() {
+            let _ = add(&mut out, q);
+        }
+    }
+    out
+}
+
 /// The header's columns by name (`unit price $` → `unit_price`).
 fn header_key(h: &str) -> Option<&'static str> {
     let u = h.trim().to_ascii_lowercase();
@@ -699,7 +841,20 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "`path` (a .xlsx or .csv price book) is required"))?;
     let dir = need_folder(s, C, p)?;
     let bytes = crate::readfile::read(path).map_err(|e| bad(C, format!("{path}: {e}")))?;
-    let (quote_rows, map_rows) = if path.to_ascii_lowercase().ends_with(".xlsx") {
+    // A distributor's invoices (a PDF): each line a quote.
+    let invoice_rows: Vec<Quote> = if path.to_ascii_lowercase().ends_with(".pdf") {
+        let text = super::spec_import::pdf_text(&bytes, path).map_err(|e| bad(C, format!("{path}: {e}")))?;
+        let q = invoice_quotes(&text);
+        if q.is_empty() {
+            return Err(bad(C, format!("{path}: no invoice lines read (a PDF is read as a distributor's invoices)")));
+        }
+        q
+    } else {
+        Vec::new()
+    };
+    let (quote_rows, map_rows) = if !invoice_rows.is_empty() {
+        (Vec::new(), Vec::new())
+    } else if path.to_ascii_lowercase().ends_with(".xlsx") {
         let wb = super::table::xlsx::open(&bytes).map_err(|e| bad(C, format!("{path}: {e}")))?;
         let read = |name: Option<&str>| (wb.cells(name, None).unwrap_or_default(), wb.values(name, None).unwrap_or_default());
         let (shown, raw) = read(Some("Price List"));
@@ -718,8 +873,8 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let book = load(Some(&dir.to_string_lossy()));
     let mut mine = local_quotes(&dir);
     let (mut added, mut updated, mut kept_newer, mut history) = (0usize, 0usize, 0usize, 0usize);
-    for r in &quote_rows {
-        let Some(q) = quote_of(r, "local") else { continue };
+    let read: Vec<Quote> = quote_rows.iter().filter_map(|r| quote_of(r, "local")).chain(invoice_rows).collect();
+    for q in read {
         let held = book.quotes.get(&q.key).and_then(|v| v.iter().find(|o| o.same_source(&q)).cloned());
         match held {
             Some(old) if !old.date.is_empty() && q.date < old.date => kept_newer += 1,
@@ -821,6 +976,35 @@ mod tests {
         assert_eq!(choose(&b, "dupTR").unwrap().quote.unit_price, 7.90);
         b.rule = Rule { pick: "median".into(), ..Rule::default() };
         assert_eq!(choose(&b, "dupTR").unwrap().quote.unit_price, 8.20);
+    }
+
+    #[test]
+    fn a_distributors_invoice_lines_are_quotes_at_their_branch() {
+        let text = "--- page 1 of 2 ---\nInvoice No.   Invoice Date\nACME\n1234-5678901   02/14/26\n100 Main St   ** COPY **\nSpringfield, IL 62701\n\
+                    ORDER QTY   PRODUCT   CODE   DESCRIPTION   CODE   SHIP QTY   PRICE PER   DISC   EXTENSION   C/D   TAX   TY\n\
+                    500   ALLIED   34EMT   3/4 EMT CONDUIT 10FT   500   95.00   C   N   475.00   0.0 %   Y   S\n\
+                    10   BRIDGE   231   3/4 EMT SS CONNECTOR   10   48.00   C   N   4.80   0.0 %   Y   S\n\
+                    4   LEV   TBR20   20A TR DUPLEX   0   8.10   E   N   0.00   0.0 %   Y   B\n\
+                    2   BAD   X1   WRONG EXTENSION   2   10.00   E   N   99.00   0.0 %   Y   S\n";
+        let q = invoice_quotes(text);
+        assert_eq!(q.len(), 3, "{q:#?}");
+        let emt = q.iter().find(|x| x.key == "ALLIED:34EMT").expect("emt");
+        assert_eq!(
+            (emt.unit.as_str(), emt.unit_price, emt.vendor.as_str(), emt.location.as_str(), emt.date.as_str()),
+            ("ft", 0.95, "ACME", "Springfield, IL", "2026-02-14")
+        );
+        assert_eq!(emt.source_type, "INVOICE");
+        assert_eq!(q.iter().find(|x| x.key == "BRIDGE:231").map(|x| (x.unit.as_str(), x.unit_price)), Some(("each", 0.48)));
+        // A back order keeps its price.
+        assert_eq!(q.iter().find(|x| x.key == "LEV:TBR20").map(|x| x.unit_price), Some(8.1));
+        // A lot: its price, its designations and contents.
+        let lots = "--- page 1 of 1 ---\nInvoice No.   Invoice Date\nBIG ELECTRIC\nSUPPLY   9999-0000001   03/01/26\nTown, TX 75001\n\
+                    1   MFR   LOT BILLING   1   3,149.00   E   N   3,149.00   0.0 %   Y   D\nCONSISTS OF\nTYPE/DESIGNATION: 26020 B\n\
+                    1   MFR   PB_INTERIOR   INTERIOR -P1   1   0.00   E   N   0.00   0.0 %   N   D\n";
+        let q = invoice_quotes(lots);
+        let l = q.iter().find(|x| x.unit == "lot").expect("lot");
+        assert_eq!((l.unit_price, l.vendor.as_str(), l.location.as_str()), (3149.0, "BIG ELECTRIC SUPPLY", "Town, TX"));
+        assert!(l.description.contains("26020 B") && l.note.contains("INTERIOR -P1"), "{l:?}");
     }
 
     #[test]
