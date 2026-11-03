@@ -34,7 +34,7 @@
   "plate_kinds": ["RECEPT", "OUTLET", "DUPLEX", "QUAD", "GFCI", "GFI", "SWITCH", "DIMMER", "DATA", "TEL", "VOICE", "TV", "CATV", "USB", "JUNCTION", "OCCUPANCY", "VACANCY", "LOW VOLTAGE"],
   "plate_kinds_why": "the devices that take a cover plate on the wall; a fixture, a luminaire or an alarm device is its own housing",
   "box": {"w_one_gang_in": 2.25, "per_gang_in": 1.81, "why": "a device box's width along the wall, one gang and each added gang"},
-  "gang": {"spacing_in": 2.5, "same_height_in": 1.0, "why": "devices this close side by side at one height share one plate"},
+  "gang": {"gap_in": 0.25, "same_height_in": 1.0, "why": "plates can't overlap: two devices at one height whose own plates (the plate width of their style) would come closer than gap_in are one ganged box under one plate; the spacing is plate width + gap_in"},
   "plate_clearance_in": 0.0,
   "inside_cabinet_band_in": 2,
   "inside_cabinet_why": "a box inside a cabinet is centred in it",

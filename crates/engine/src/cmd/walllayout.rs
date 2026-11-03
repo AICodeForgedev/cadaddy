@@ -543,6 +543,11 @@ struct Tie {
     source: String,
     derived: bool,
     why: String,
+    /// The kind of object the rules data ties the device to when no such object is in the model
+    /// (`refrigerator`, `microwave`…): checked once the object exists, never passed or failed before.
+    pending: String,
+    /// The kind of the object it is tied to (`upper_cabinet`, `refrigerator`…).
+    ref_kind: String,
 }
 
 impl Tie {
@@ -551,6 +556,7 @@ impl Tie {
             "ref": self.reference, "ref_handle": self.ref_handle.hex(), "ref_point": self.ref_point, "axis": self.axis,
             "target_in": r2(self.target_in), "plus_minus_in": r2(self.plus_minus_in), "inside": self.inside, "zone": self.zone,
             "follow": self.follow, "rel_in": r2(self.rel_in), "source": self.source, "derived": self.derived, "why": self.why,
+            "pending_object": self.pending, "ref_kind": self.ref_kind,
         })
     }
     fn from_json(v: &Value) -> Option<Tie> {
@@ -568,8 +574,31 @@ impl Tie {
             source: v["source"].as_str().unwrap_or("").to_string(),
             derived: v["derived"].as_bool().unwrap_or(false),
             why: v["why"].as_str().unwrap_or("").to_string(),
+            pending: v["pending_object"].as_str().unwrap_or("").to_string(),
+            ref_kind: v["ref_kind"].as_str().unwrap_or("").to_string(),
         })
     }
+    /// What a tie whose object isn't in the model reports: `pending object (<kind>)`.
+    fn pending_text(&self) -> String {
+        format!("pending object ({})", if self.pending.is_empty() { "object" } else { self.pending.as_str() })
+    }
+}
+
+/// The kind of a tie's missing object: the rules data's concealed row its words or reason name,
+/// else `object`.
+fn pending_kind(rules: &Value, t: &Tie) -> String {
+    if !t.ref_kind.trim().is_empty() {
+        return t.ref_kind.clone();
+    }
+    let words = tokens(&t.reference);
+    rules["concealed"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["why"].as_str() == Some(t.why.as_str()) || says_any(&words, &row["words"]))
+        .and_then(|row| row["id"].as_str())
+        .unwrap_or("object")
+        .to_string()
 }
 
 fn ties_of(store: &Props) -> Vec<Tie> {
@@ -827,6 +856,8 @@ fn derive_ties(rules: &Value, f: &Face, objs: &[&Obj], plate_rect: &Rect, inch: 
                         follow: in_host,
                         rel_in: pc - hm,
                         source: String::new(),
+                        pending: String::new(),
+                        ref_kind: hx.kind.clone(),
                         derived: true,
                         why: why.clone(),
                     });
@@ -848,6 +879,8 @@ fn derive_ties(rules: &Value, f: &Face, objs: &[&Obj], plate_rect: &Rect, inch: 
                     follow: true,
                     rel_in: pc - mid,
                     source: String::new(),
+                    pending: String::new(),
+                    ref_kind: o.kind.clone(),
                     derived: true,
                     why: why.clone(),
                 });
@@ -869,15 +902,43 @@ fn derive_ties(rules: &Value, f: &Face, objs: &[&Obj], plate_rect: &Rect, inch: 
                     follow: true,
                     rel_in: pc - mid,
                     source: String::new(),
+                    pending: String::new(),
+                    ref_kind: o.kind.clone(),
                     derived: true,
                     why: why.clone(),
                 });
             }
         }
     }
+    // The device's own words name an appliance it serves (a refrigerator receptacle, a
+    // microwave outlet…) but no such object is against its face: the tie waits for the object.
+    for row in &rows {
+        let id = row["id"].as_str().unwrap_or("object");
+        let why = row["why"].as_str().unwrap_or("");
+        if !says_any(words, &row["words"]) || out.iter().any(|t| t.why == why) {
+            continue;
+        }
+        out.push(Tie {
+            reference: format!("{id} (not in the model)"),
+            ref_handle: Handle(0),
+            ref_point: "center".into(),
+            axis: "along".into(),
+            target_in: 0.0,
+            plus_minus_in: row["band_in"].as_f64().unwrap_or(6.0),
+            inside: true,
+            zone: format!("pending object ({id})"),
+            follow: false,
+            rel_in: 0.0,
+            source: String::new(),
+            pending: id.to_string(),
+            ref_kind: String::new(),
+            derived: true,
+            why: why.to_string(),
+        });
+    }
     // A plate inside a cabinet's box with no appliance rule: inside it, centred within the
     // rules data's band.
-    if out.is_empty() {
+    if out.iter().all(|t| !t.pending.is_empty()) {
         let band = rules["inside_cabinet_band_in"].as_f64().unwrap_or(2.0);
         for (o, r) in &against {
             let cabinet = o.words.iter().any(|w| w == "CABINET" || w.starts_with("CAB")) || o.kind.contains("cabinet");
@@ -895,6 +956,8 @@ fn derive_ties(rules: &Value, f: &Face, objs: &[&Obj], plate_rect: &Rect, inch: 
                     follow: true,
                     rel_in: (plate_rect.a0 + plate_rect.a1) / 2.0 - mid,
                     source: String::new(),
+                    pending: String::new(),
+                    ref_kind: o.kind.clone(),
                     derived: true,
                     why: "a box inside a cabinet is centred in it".into(),
                 });
@@ -1061,15 +1124,22 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let mut plate_of: HashMap<usize, (Plate, String, usize)> = HashMap::new();
     let mut ganged = 0usize;
     let mut stacked = 0usize;
+    let mut ganged_list: Vec<Value> = Vec::new();
     for (fk, js) in &on_face {
         // Only devices that take a faceplate (receptacles, switches, outlets…) share one.
         let js: Vec<usize> =
             js.iter().copied().filter(|j| placed.get(*j).and_then(|(i, _)| devs.get(*i)).is_some_and(|dv| has_plate(&dv.words, &rules))).collect();
         let js = &js;
         let pts: Vec<(f64, f64)> = js.iter().filter_map(|j| placed.get(*j)).map(|(_, pl)| (pl.t / inch, pl.zc / inch)).collect();
-        for (g, grp) in
-            solve::gangs(&pts, gang["spacing_in"].as_f64().unwrap_or(2.5), gang["same_height_in"].as_f64().unwrap_or(1.0)).into_iter().enumerate()
-        {
+        // Plates can't overlap: devices at one height closer than a plate's width plus the rules
+        // data's gap are one ganged box. The widest plate on the face sets the spacing.
+        let spacing = js
+            .iter()
+            .filter_map(|j| placed.get(*j))
+            .filter_map(|(i, _)| devs.get(*i))
+            .map(|dv| solve::gang_spacing(&rules, solve::style_said(&dv.words.join(" ")).or(project_style)))
+            .fold(solve::gang_spacing(&rules, project_style), f64::max);
+        for (g, grp) in solve::gangs(&pts, spacing, gang["same_height_in"].as_f64().unwrap_or(1.0)).into_iter().enumerate() {
             let members: Vec<usize> = grp.iter().filter_map(|x| js.get(*x).copied()).collect();
             // The style a member's own words name, else the project's, else the rules data's.
             let said =
@@ -1092,11 +1162,30 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
                 }
             }
             stacked += members.len().saturating_sub(n_gangs as usize);
-            let pl = solve::plate(&rules, style, n_gangs.max(1), from);
+            let name = cx.faces.get(*fk).map_or_else(String::new, |f| format!("{}#{}", f.name, g + 1));
+            let mut pl = solve::plate(&rules, style, n_gangs.max(1), from);
             if n_gangs > 1 {
                 ganged += 1;
+                let along: Vec<f64> = members.iter().filter_map(|j| placed.get(*j)).map(|(_, p)| p.t / inch).collect();
+                let lo = along.iter().copied().fold(f64::INFINITY, f64::min);
+                let hi = along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                pl.from = format!(
+                    "{}; ganged (derived: plates would overlap): {n_gangs} devices within {} in of each other at one height, closer than a plate's width + gap ({} in)",
+                    pl.from,
+                    r2(hi - lo),
+                    r2(spacing)
+                );
+                if ganged_list.len() < MAX_LISTED {
+                    ganged_list.push(json!({
+                        "plate": name,
+                        "gangs": n_gangs,
+                        "devices": members.iter().filter_map(|j| placed.get(*j)).filter_map(|(i, _)| devs.get(*i)).map(|dv| dv.h.hex()).collect::<Vec<_>>(),
+                        "span_in": r2(hi - lo),
+                        "spacing_in": r2(spacing),
+                        "why": "derived: plates would overlap",
+                    }));
+                }
             }
-            let name = cx.faces.get(*fk).map_or_else(String::new, |f| format!("{}#{}", f.name, g + 1));
             for j in &members {
                 plate_of.insert(*j, (pl.clone(), name.clone(), members.len()));
             }
@@ -1212,13 +1301,14 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         let mut ties: Vec<Tie> = ties_of(&store).into_iter().filter(|t| !t.derived).collect();
         let near_objs: Vec<&Obj> = objs.iter().filter(|o| same_level(o.level.as_deref(), dv.level.as_deref())).collect();
         for t in derive_ties(&rules, f, &near_objs, &prect, inch, &dv.words) {
-            *tie_count.entry(t.zone.split(' ').next().unwrap_or("").to_string()).or_default() += 1;
+            let key = if t.pending.is_empty() { t.zone.split(' ').next().unwrap_or("").to_string() } else { t.zone.clone() };
+            *tie_count.entry(key).or_default() += 1;
             ties.push(t);
         }
         set_ties(&mut store, &ties);
         // The band and the solve.
         let kind = band_kind(&dv.words, &rules);
-        let band = ties.iter().filter(|t| t.axis != "vertical").map(|t| t.plus_minus_in).fold(f64::INFINITY, f64::min);
+        let band = ties.iter().filter(|t| t.axis != "vertical" && t.pending.is_empty()).map(|t| t.plus_minus_in).fold(f64::INFINITY, f64::min);
         let band = if band.is_finite() {
             band
         } else {
@@ -1285,7 +1375,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         "heights": heights,
         "constraints": tie_count,
         "objects": objs.len(),
-        "plates": {"by_style": styles, "ganged": ganged, "stacked": stacked, "stacked_why": "devices at the same spot on a face as another (within 1 in): read twice or from two sheets; one gang"},
+        "plates": {"by_style": styles, "ganged": ganged, "ganged_first": ganged_list, "stacked": stacked, "stacked_why": "devices at the same spot on a face as another (within 1 in): read twice or from two sheets; one gang"},
         "solve": solves,
         "fields": LAYOUT_FIELDS,
     }))
@@ -1550,14 +1640,20 @@ pub(crate) fn checks(d: &Drawing, sp: &BuildingSpec, only: Option<&HashSet<Strin
         let t_here = dot(c - a, u) / inch;
         let rect = Rect::centred(t_here, (zc - floor) / inch, pw, ph);
         for tie in ties_of(&dv.store) {
-            let Some(o) = objs.iter().find(|o| o.h == tie.ref_handle) else {
+            let found = if tie.pending.is_empty() { objs.iter().find(|o| o.h == tie.ref_handle) } else { None };
+            let Some(o) = found else {
+                // No object to check against (not placed yet, or deleted): never pass or fail.
+                let mut t = tie.clone();
+                if t.pending.is_empty() {
+                    t.pending = pending_kind(&rules, &t);
+                }
                 list.push(check(
                     "constraint",
                     "unsure",
-                    format!("its reference {} is not in the model", tie.reference),
-                    tie.zone.clone(),
-                    "no object".into(),
-                    tie.to_json(),
+                    format!("{}: {} is not in the model; checked once it is placed", t.pending_text(), t.reference),
+                    format!("{}{}", tie.zone, if tie.derived { " (rules data, derived)" } else { "" }),
+                    t.pending_text(),
+                    t.to_json(),
                 ));
                 continue;
             };
@@ -1751,11 +1847,14 @@ fn run_layout(s: &mut Session, p: &Value) -> Result<Value> {
                 None => what.clone(),
             };
             let ties = ties_of(&dv.store);
-            if let Some(tie) = ties.first() {
+            if let Some(tie) = ties.iter().find(|t| t.pending.is_empty()) {
                 text.push_str(&format!("; ctr {} ±{}", tie.zone, ft_in(tie.plus_minus_in)));
                 if tie.derived {
                     text.push_str(" (rules data)");
                 }
+            }
+            for tie in ties.iter().filter(|t| !t.pending.is_empty()) {
+                text.push_str(&format!("; {}", tie.pending_text()));
             }
             if let (Some(off), Some(from)) = (prop_num(&dv.store, "offset_along"), dv.text("offset_from")) {
                 let documented = dv.store.get("offset_along").is_some_and(|p| p.source.kind == SourceKind::Print);
@@ -1967,6 +2066,8 @@ fn run_constrain(s: &mut Session, p: &Value) -> Result<Value> {
         follow: bool_or(p, "follow", true),
         rel_in: rel,
         source: str_param(p, "source").map(|t| t.chars().take(300).collect()).unwrap_or_default(),
+        pending: String::new(),
+        ref_kind: obj.kind.clone(),
         derived: false,
         why: String::new(),
     };

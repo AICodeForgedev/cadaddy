@@ -57,6 +57,13 @@ pub(crate) fn plate(rules: &Value, style: Option<&str>, gangs: u32, from: &str) 
     Plate { style: st.to_string(), gangs: g, w, h: num(row, "h_in", 4.5), from: from.to_string() }
 }
 
+/// How close two devices at one height may stand before their plates would overlap (inches):
+/// the one-gang plate width of `style` (unknown style: the default) plus the rules data's gap.
+/// Closer than this they are one ganged box under one plate.
+pub(crate) fn gang_spacing(rules: &Value, style: Option<&str>) -> f64 {
+    plate(rules, style, 1, "").w + num(&rules["gang"], "gap_in", 0.25).max(0.0)
+}
+
 /// A rectangle on a face: along from..to, z from..to (inches).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Rect {
@@ -236,6 +243,21 @@ mod tests {
         let g = gangs(&[(10.0, 48.0), (11.81, 48.0), (40.0, 48.0), (10.0, 18.0)], 2.5, 1.0);
         assert_eq!(g.len(), 3, "{g:?}");
         assert!(g.iter().any(|x| x.len() == 2 && x.contains(&0) && x.contains(&1)));
+    }
+
+    #[test]
+    fn the_gang_spacing_is_the_plate_width_plus_the_gap() {
+        let r = rules();
+        let gap = r["gang"]["gap_in"].as_f64().unwrap_or(-1.0);
+        assert!(gap >= 0.0, "the rules data names the gap");
+        let std = gang_spacing(&r, None);
+        let jumbo = gang_spacing(&r, Some("jumbo"));
+        assert!((std - (plate(&r, None, 1, "").w + gap)).abs() < 1e-9, "{std}");
+        assert!(jumbo > std, "a wider plate overlaps from further apart: {jumbo} vs {std}");
+        // Two standard plates 3 in apart would overlap (2.75 in plates + gap): one box; 4 in apart
+        // they are two plates.
+        assert_eq!(gangs(&[(10.0, 18.0), (13.0, 18.0)], std, 1.0).len(), 1);
+        assert_eq!(gangs(&[(10.0, 18.0), (14.0, 18.0)], std, 1.0).len(), 2);
     }
 
     #[test]

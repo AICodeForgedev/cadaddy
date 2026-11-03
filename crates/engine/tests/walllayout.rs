@@ -109,6 +109,14 @@ fn job(extra_objects: bool) -> Session {
         // A dishwasher outlet in the sink base, and one behind the dishwasher.
         device(13.25, 9.4, "D1", "receptacle", "1FA", json!({})),
         device(15.5, 9.4, "D2", "receptacle", "1FB", json!({})),
+        // A receptacle its own words say serves a refrigerator, inside REF-1's footprint.
+        device(26.25 + 4.0 / 12.0, 0.6, "F", "receptacle", "1FD", json!({"device_type": "receptacle F, REFRIGERATOR"})),
+        // 1001 north: two receptacles 2.9" apart at one height (their 2.75" plates + gap would
+        // overlap: one box) and two 3.5" apart (two plates, clear).
+        device(5.0, 9.4, "G1", "receptacle", "1FE", json!({})),
+        device(5.0 + 2.9 / 12.0, 9.4, "G2", "receptacle", "1FF", json!({})),
+        device(7.0, 9.4, "G3", "receptacle", "200", json!({})),
+        device(7.0 + 3.5 / 12.0, 9.4, "G4", "receptacle", "201", json!({})),
     ];
     s.execute("bspec.set", &json!({"replace": true, "spec": spec(tags)})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
@@ -332,6 +340,80 @@ fn appliance_and_cabinet_constraints_by_their_plates_edges() {
     // The layout prints the tie.
     let lay = s.execute("bim.layout", &json!({"room": "1002"})).expect("layout");
     assert!(lay["text"].as_str().is_some_and(|t| t.contains("ctr inside UPPER-3 ±2 in") && t.contains("66 in AFF")), "{}", lay["text"]);
+}
+
+#[test]
+fn a_tie_whose_object_is_missing_is_pending_never_pass_or_fail() {
+    let _g = serial();
+    // No refrigerator in the model: F's tie waits for it.
+    let mut s = job(false);
+    let r = s.execute("bim.layout.rehost", &json!({})).expect("rehost");
+    assert!(r["constraints"]["pending object (refrigerator)"].as_u64().is_some_and(|n| n >= 1), "{r:#}");
+    let f = props(&mut s, "F");
+    assert!(f["constraint_1"]["value"].as_str().is_some_and(|c| c.contains("\"pending_object\":\"refrigerator\"")), "{f:#}");
+    let vf = verdict(&layout_findings(&mut s, "F"), "constraint");
+    assert!(!vf.is_empty() && vf.iter().all(|v| v.starts_with("unsure pending object (refrigerator)")), "{vf:?}");
+    // A pending tie doesn't narrow the band: F keeps the receptacle's.
+    assert!((num(&f, "along_band") - 6.0).abs() < 1e-6, "{f:#}");
+    let lay = s.execute("bim.layout", &json!({"room": "1002"})).expect("layout");
+    assert!(lay["text"].as_str().is_some_and(|t| t.contains("pending object (refrigerator)")), "{}", lay["text"]);
+    // With the refrigerator placed, the same receptacle is tied to it and checked.
+    let mut s = job(true);
+    s.execute("bim.layout.rehost", &json!({})).expect("rehost");
+    let f = props(&mut s, "F");
+    assert!(
+        f["constraint_1"]["value"]
+            .as_str()
+            .is_some_and(|c| c.contains("concealed behind REF-1") && !c.contains("\"pending_object\":\"refrigerator\"")),
+        "{f:#}"
+    );
+    let vf = verdict(&layout_findings(&mut s, "F"), "constraint");
+    assert!(!vf.is_empty() && vf.iter().all(|v| v.starts_with("pass")), "{vf:?}");
+    // A tie whose object is erased afterwards: pending, with the object's kind, never pass or fail.
+    let h = handle_of(&mut s, "M");
+    s.execute(
+        "bim.layout.tie",
+        &json!({"handle": h, "ref": "UPPER-3", "plus_minus_in": 2, "inside": true, "source": "interior elevation (made-up)"}),
+    )
+    .expect("tie");
+    let up = {
+        let d = s.doc().expect("doc");
+        d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == "UPPER-3")).map(|e| e.handle.hex()).expect("cabinet")
+    };
+    s.execute("erase", &json!({"handles": [up]})).expect("erase");
+    let vm = verdict(&layout_findings(&mut s, "M"), "constraint");
+    assert!(vm.iter().any(|v| v.starts_with("unsure pending object (upper_cabinet)")), "{vm:?}");
+    assert!(!vm.iter().any(|v| v.starts_with("pass") || v.starts_with("fail")), "{vm:?}");
+}
+
+#[test]
+fn plates_that_would_overlap_are_one_ganged_box() {
+    let _g = serial();
+    let mut s = job(false);
+    let r = s.execute("bim.layout.rehost", &json!({})).expect("rehost");
+    let (g1, g2, g3, g4) = (props(&mut s, "G1"), props(&mut s, "G2"), props(&mut s, "G3"), props(&mut s, "G4"));
+    // 2.9" apart: closer than a 2.75" plate + the gap, so one 2-gang box, said derived.
+    assert_eq!(g1["plate_group"]["value"], g2["plate_group"]["value"], "{g1:#}\n{g2:#}");
+    assert!(g1["faceplate"]["value"].as_str().is_some_and(|p| p.contains("2-gang")), "{g1:#}");
+    assert!(g1["faceplate"]["note"].as_str().is_some_and(|n| n.contains("derived: plates would overlap")), "{g1:#}");
+    let (h1, h2) = (handle_of(&mut s, "G1"), handle_of(&mut s, "G2"));
+    let listed = r["plates"]["ganged_first"].as_array().expect("ganged list");
+    assert!(
+        listed.iter().any(|g| {
+            let d = g["devices"].to_string();
+            g["why"] == "derived: plates would overlap" && d.contains(&h1) && d.contains(&h2)
+        }),
+        "{listed:#?}"
+    );
+    let spacing = listed.first().and_then(|g| g["spacing_in"].as_f64()).unwrap_or(0.0);
+    assert!(spacing > 2.75 && spacing < 3.5, "plate width + gap: {spacing}");
+    // 3.5" apart: two plates, clear of each other.
+    assert_ne!(g3["plate_group"]["value"], g4["plate_group"]["value"], "{g3:#}\n{g4:#}");
+    assert!(g3["faceplate"]["value"].as_str().is_some_and(|p| p.contains("1-gang")), "{g3:#}");
+    for m in ["G1", "G2", "G3", "G4"] {
+        let plate = verdict(&layout_findings(&mut s, m), "plate");
+        assert!(!plate.is_empty() && plate.iter().all(|v| v.starts_with("pass")), "{m}: {plate:?}");
+    }
 }
 
 #[test]
