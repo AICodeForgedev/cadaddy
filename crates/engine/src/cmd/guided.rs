@@ -2442,8 +2442,10 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 else {
                     continue;
                 };
-                // Read already: a device of this sheet beside the mark.
-                let read = |p: [f64; 2]| cadaddy_geom::Vec2::new(p[0], p[1]).dist(t.at) <= reach;
+                // Read already: a device of this sheet where its symbol is drawn (between the mark and
+                // its circuit label; a receptacle beside it is another device).
+                let spot = cadaddy_geom::Vec2::new((t.at.x + label.at.x) / 2.0, (t.at.y + label.at.y) / 2.0);
+                let read = |p: [f64; 2]| cadaddy_geom::Vec2::new(p[0], p[1]).dist(spot) <= LONE_SYMBOL_H * t.height;
                 if c.placed.iter().filter(|dv| dv.sheet == sheet).any(|dv| read(dv.at)) || lone.iter().any(|dv| read(dv.at)) {
                     continue;
                 }
@@ -3274,6 +3276,9 @@ const DEFAULT_MARK_HEIGHT: f64 = 6.0;
 /// A lone luminaire mark's circuit label is within this of it, in its text heights; a device read
 /// that close is the mark's.
 const LONE_MARK_REACH_H: f64 = 4.0;
+/// A device read within this of where a lone mark's symbol would be drawn (in its text heights)
+/// is that symbol.
+const LONE_SYMBOL_H: f64 = 2.0;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
 
@@ -13550,7 +13555,9 @@ mod tests {
         // (700, 500), `HOR` by the second.
         let texts: Vec<(&str, f64, f64, f64)> =
             vec![("H", 98.0, 507.0, 4.0), ("H", 300.0, 506.0, 4.0), ("G-1,a", 300.0, 494.0, 4.0), ("HOR", 704.0, 506.0, 4.0)];
-        let syms: Vec<(&str, f64, f64)> = vec![("G-1", 100.0, 500.0), ("G-9", 500.0, 500.0), ("G-9", 700.0, 500.0)];
+        // A GFCI receptacle beside the lone downlight (13 off where its symbol would be): another
+        // device, not the downlight's symbol.
+        let syms: Vec<(&str, f64, f64)> = vec![("G-1", 100.0, 500.0), ("G-9", 500.0, 500.0), ("G-9", 700.0, 500.0), ("GFCI", 313.0, 497.0)];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &syms);
         let hi = s.doc().map_or(0, |d| d.handseed);
@@ -13564,7 +13571,8 @@ mod tests {
         job.sheet_regions.push(region("P-1", "P", 3000.0));
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let on = |sheet: &str| -> Vec<(String, String)> {
-            let mut v: Vec<(String, String)> = job.devices.iter().filter(|d| d.sheet == sheet).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+            let mut v: Vec<(String, String)> =
+                job.devices.iter().filter(|d| d.sheet == sheet && d.tag != "GFCI").map(|d| (d.tag.clone(), d.circuit.clone())).collect();
             v.sort();
             v
         };
