@@ -215,3 +215,22 @@ fn report_measures_each_tier() {
     assert!(drawn("building") < drawn("detail"));
     assert!(r["build_ms"].as_f64().unwrap() >= 0.0);
 }
+
+#[test]
+fn model_render_draws_a_tier() {
+    let mut s = built();
+    let tris = |s: &mut Session, f: &str| -> (u64, String) {
+        let r = s.execute("model.render", &json!({"width": 320, "height": 200, "fidelity": f})).unwrap();
+        (r["triangles"].as_u64().unwrap(), r["fidelity"].as_str().unwrap_or("").to_string())
+    };
+    let (b, bt) = tris(&mut s, "building");
+    let (fl, _) = tris(&mut s, "floor");
+    let (d, dt) = tris(&mut s, "detail");
+    assert_eq!((bt.as_str(), dt.as_str()), ("building", "detail"));
+    assert!(b < fl && fl <= d, "{b} {fl} {d}");
+    // Without `fidelity`: everything, as before.
+    let all = s.execute("model.render", &json!({"width": 320, "height": 200})).unwrap();
+    assert!(all.get("fidelity").is_none());
+    assert_eq!(all["triangles"].as_u64().unwrap(), d);
+    assert!(s.execute("model.render", &json!({"width": 32, "height": 32, "fidelity": "street"})).is_err());
+}
