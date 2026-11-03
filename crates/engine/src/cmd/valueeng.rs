@@ -398,13 +398,18 @@ pub(crate) fn study(s: &mut Session, applications: &[Application], construction:
             let n = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
             let feet: f64 = feeders.iter().map(|f| f.feet).sum();
             v["quantity"] = json!({"feeders": feeders.len(), "feet": (feet * 10.0).round() / 10.0, "not_routed": not_routed});
-            v["saves"] = json!({
-                "material": n(&d, "material") - n(&x, "material"),
-                "labor_hours": n(&d, "labor_hours") - n(&x, "labor_hours"),
-                "cost": n(&d, "cost") - n(&x, "cost"),
-            });
             let mut unpriced: Vec<Value> = d["unpriced"].as_array().cloned().unwrap_or_default();
             unpriced.extend(x["unpriced"].as_array().cloned().unwrap_or_default());
+            // Saves only when every line both ways has a price (else each way's priced part).
+            v["saves"] = if unpriced.is_empty() {
+                json!({
+                    "material": n(&d, "material") - n(&x, "material"),
+                    "labor_hours": n(&d, "labor_hours") - n(&x, "labor_hours"),
+                    "cost": n(&d, "cost") - n(&x, "cost"),
+                })
+            } else {
+                Value::Null
+            };
             v["unpriced"] = json!(unpriced);
             v["as_designed"] = d;
             v["alternative"] = x;
@@ -537,6 +542,10 @@ mod tests {
         assert!(designed.contains(&json!({"item": "EMT conduit", "size": "2\"", "ft": 120.0})), "{designed:?}");
         assert!(designed.contains(&json!({"item": "XHHW aluminum", "size": "#2/0", "ft": 360.0})), "{designed:?}");
         assert!(ser["rfi"]["issue"].as_str().unwrap().contains("NEC 338.10(B)(4)(a)"));
+        // The starter book has no aluminum wire or SER: no savings claimed, the gaps named.
+        assert!(ser["saves"].is_null(), "{ser}");
+        assert!(ser["unpriced"].as_array().unwrap().iter().any(|u| u.as_str().is_some_and(|u| u.starts_with("SER cable"))), "{ser}");
+        assert!(!ser["rfi"]["issue"].as_str().unwrap().contains("saves"));
         let nm = out.iter().find(|v| v["id"] == "nm_unit_branch").unwrap();
         assert_eq!(nm["tier"], "allowed_now", "{nm}");
         assert!(nm.get("rfi").is_none());
