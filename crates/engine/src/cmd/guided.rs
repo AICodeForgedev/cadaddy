@@ -9533,7 +9533,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let mut submitted_qty: BTreeMap<String, (u32, String)> = BTreeMap::new();
     for (mark, p) in result["submittal_products"].as_object().into_iter().flatten() {
         let m = mark.trim().to_ascii_uppercase();
-        // A type is a short tag (`A`, `F1`, `XA`); a word the reader took for one (a column's
+        // A type is a short tag (`A`, `Q2`, `QX`); a word the reader took for one (a column's
         // heading, `QTY`) isn't.
         let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic())) || NOT_TYPE_TAGS.contains(&m.as_str());
         if m.is_empty() || m.len() > 6 || m.contains(' ') || word {
@@ -9995,7 +9995,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
 /// Words a submittal's form prints where a type tag goes that are no type.
 const NOT_TYPE_TAGS: [&str; 10] = ["QTY", "TYP", "REF", "NO", "EA", "PCS", "ITEM", "NOTE", "N/A", "TBD"];
 
-/// A luminaire's type from its mark (`luminaire XA` → `XA`), a control's mark as printed.
+/// A luminaire's type from its mark (`luminaire QX` → `QX`), a control's mark as printed.
 fn lt_type(mark: String) -> String {
     super::lightsched::type_of(&mark)
 }
@@ -19953,7 +19953,7 @@ mod tests {
         sp.mep.fixture_schedule = vec![
             row("Q1", "AB12 L48 3500LM MVOLT 35K", "LED 30VA", "RECESSED", "OFFICE TROFFER"),
             row("Q8", "EM2", "LED 1VA", "7'-6\" AFF", "EMERGENCY LIGHT"),
-            row("Q5", "X1", "LED 5VA", "SURFACE", "LOBBY DECORATIVE"),
+            row("Q5", "X1", "LED 5VA", "SURFACE", "DECORATIVE WALL LIGHT"),
         ];
         sp.unit_instances = json!([{"number": "C1", "type": "TYPE 7A"}]);
         s.doc_mut().unwrap().building_spec = Some(sp.to_json());

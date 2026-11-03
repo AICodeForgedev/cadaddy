@@ -43,7 +43,7 @@ const MAX_ELEMENTS: usize = cadaddy_walk3d::rfi::MAX_RFI_ELEMENTS;
 pub(crate) struct Said {
     pub value: String,
     pub kind: SourceKind,
-    /// The document and where in it (`E-9 LIGHT FIXTURE SCHEDULE type Q1`, `Lighting Package p.3`).
+    /// The document and where in it (`E-501 LIGHT FIXTURE SCHEDULE type Q1`, `lighting submittal p.3`).
     pub doc: String,
 }
 
@@ -229,7 +229,7 @@ pub(crate) fn finish_of(text: &str) -> Option<&'static str> {
     FINISHES.iter().find(|(w, _)| up.contains(w)).map(|(_, f)| *f)
 }
 
-/// A value that says the document leaves it to another (`REFER TO SITE LIGHTING PACKAGE`,
+/// A value that says the document leaves it to another (`REFER TO CIVIL PHOTOMETRIC PLAN`,
 /// `BY OTHERS`, `TBD`): no value.
 fn deferred(v: &str) -> bool {
     let up = v.trim().to_ascii_uppercase();
@@ -1364,7 +1364,7 @@ pub(crate) fn sensor_conflicts(
 pub(crate) struct PlanDiff {
     pub room: String,
     pub level: String,
-    /// The typical view (`E-9 UNIT ELECTRICAL PLAN - …`).
+    /// The typical view (`E-501 UNIT ELECTRICAL PLAN - …`).
     pub view: String,
     pub kind: String,
     pub floor_tag: String,
@@ -1512,7 +1512,7 @@ mod tests {
 
     #[test]
     fn a_value_left_to_another_document_is_none() {
-        let r = row("Q9", "REFER TO SITE LIGHTING PACKAGE", "REFER TO SITE LIGHTING PACKAGE", "LED", "SURFACE", "EXTERIOR WALL PACK");
+        let r = row("Q9", "REFER TO CIVIL PHOTOMETRIC PLAN", "REFER TO CIVIL PHOTOMETRIC PLAN", "LED", "SURFACE", "EXTERIOR WALL PACK");
         let s = schedule_says(&r);
         assert!(!s.contains_key("manufacturer") && !s.contains_key("catalog_number"));
         assert!(!interior(&r));
