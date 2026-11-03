@@ -2213,13 +2213,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
             _ => {}
         }
     }
-    // A circuit or a switch's leg the import took for a symbol's tag ("A-2" by a stair's lines, the
-    // "e" by a sensor) is still printed there: back among its sheet's texts, where it was printed.
+    // A circuit, a switch's leg or a receptacle's designation the import took for a symbol's tag
+    // ("A-2" by a stair's lines, the "e" by a sensor, the "GFCI" by a receptacle) is still printed
+    // there: back among its sheet's texts, where it was printed.
     for (g, syms) in symbols.iter().enumerate() {
         for (tag, _, _, tag_at) in syms {
             if let (Some((at, h)), Some(v)) = (tag_at, texts.get_mut(g))
                 && v.len() < MAX_SHEET_TEXTS
-                && (sheet_facts::is_circuit_label(tag) || super::readers::switch_designation(tag).is_some())
+                && (sheet_facts::is_circuit_label(tag)
+                    || super::readers::switch_designation(tag).is_some()
+                    || !receptacle_designations(&[tag.as_str()]).is_empty())
             {
                 v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
             }
@@ -2442,11 +2445,15 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 else {
                     continue;
                 };
-                // Read already: a device of this sheet where its symbol is drawn (between the mark and
-                // its circuit label; a receptacle beside it is another device).
+                // Read already: a luminaire of this sheet by the mark (its symbol, beside or under
+                // it), or any device where the symbol would be drawn (between the mark and its
+                // circuit label). A receptacle beside the mark is another device.
                 let spot = cadaddy_geom::Vec2::new((t.at.x + label.at.x) / 2.0, (t.at.y + label.at.y) / 2.0);
-                let read = |p: [f64; 2]| cadaddy_geom::Vec2::new(p[0], p[1]).dist(spot) <= LONE_SYMBOL_H * t.height;
-                if c.placed.iter().filter(|dv| dv.sheet == sheet).any(|dv| read(dv.at)) || lone.iter().any(|dv| read(dv.at)) {
+                let read = |dv: &super::readers::ReadDevice| {
+                    let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+                    (dv.kind.contains("luminaire") && p.dist(t.at) <= reach) || p.dist(spot) <= LONE_SYMBOL_H * t.height
+                };
+                if c.placed.iter().filter(|dv| dv.sheet == sheet).any(read) || lone.iter().any(read) {
                     continue;
                 }
                 let tag = t.value.trim().to_ascii_uppercase();
