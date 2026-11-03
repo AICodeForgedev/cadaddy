@@ -245,9 +245,9 @@ impl Autosaver {
         self.docs.values().filter_map(|t| t.file.clone()).collect()
     }
 
-    /// Why a drawing currently has no up-to-date recovery copy, for the host to show the user.
-    pub fn failure(&self) -> Option<&str> {
-        self.failed.values().next().map(String::as_str)
+    /// The drawings with no up-to-date recovery copy and why, for the host to show the user.
+    pub fn failures(&self) -> impl Iterator<Item = (u64, &str)> {
+        self.failed.iter().map(|(uid, why)| (*uid, why.as_str()))
     }
 
     /// What to do at `now` (seconds, any fixed origin) with SAVETIME `minutes` and autosave folder
@@ -576,6 +576,12 @@ mod native {
         /// drawing is left out of planning.
         pub fn writing(&self) -> bool {
             self.running.iter().any(|(_, h)| !h.is_finished())
+        }
+
+        /// Whether a write's result hasn't been taken in yet, finished or not: the host needs
+        /// another [`Autosaver::tick`] to learn whether it failed.
+        pub fn results_pending(&self) -> bool {
+            !self.running.is_empty()
         }
 
         /// Take in the writes that have finished ([`Autosaver::tick`] does this first). A drawing
