@@ -1,0 +1,53 @@
+{
+  "_doc": "Value engineering (Q6154): wiring-method alternatives CADaddy weighs. `methods`: the words a specification's wiring-methods table uses for each method. Each alternative swaps the designed method for another where the code allows it: `application` words a spec application must have (and none of `application_not`), the construction types the code allows it in, the code's cites, its conditions and the places it is never used, and how the design intent is still met. Tiers: allowed_now (the spec lists the alternative for that application), needs_rfi (the code allows it, the spec doesn't).",
+  "methods": {
+    "raceway": ["SINGLE CONDUCTORS IN RACEWAY", "CONDUCTORS IN RACEWAY", "IN RACEWAY"],
+    "ac": ["TYPE AC", "ARMORED CABLE"],
+    "mc": ["TYPE MC", "METAL-CLAD CABLE"],
+    "nm": ["TYPE NM", "NONMETALLIC-SHEATHED CABLE", "NON-METALLIC SHEATHED CABLE"],
+    "se": ["TYPE SE", "TYPE SER", "SERVICE-ENTRANCE CABLE", "SERVICE ENTRANCE CABLE"],
+    "uf": ["TYPE UF"]
+  },
+  "alternatives": [
+    {
+      "id": "se_unit_feeders",
+      "name": "Service-entrance cable (SER) for the feeders to the units' panels",
+      "circuit": "feeder",
+      "to": "unit_panel",
+      "application": ["FEEDER", "CONCEALED"],
+      "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
+      "designed": "raceway",
+      "alternative": "se",
+      "construction": ["III", "IV", "V"],
+      "code": [
+        {"cite": "NEC 338.10(B)(4)(a)", "says": "Type SE cable may be used for interior wiring, feeders included, installed under Parts I and II of Article 334 (the NM rules, excluding 334.80); in thermal insulation its ampacity is the 60 °C column"},
+        {"cite": "NEC 334.10", "says": "NM-rule wiring is permitted in dwellings and in other structures permitted to be of Types III, IV and V construction, concealed behind a thermal barrier of at least a 15-minute finish rating"}
+      ],
+      "conditions": [
+        "concealed in walls, floors and ceilings behind a 15-minute thermal barrier (gypsum board)",
+        "the conductors' ampacity checked at the 60 °C column where the cable is in thermal insulation",
+        "the building's construction type is III, IV or V"
+      ],
+      "excluded": ["exposed runs", "below slabs-on-grade, in concrete and underground", "wet and damp locations", "plenums and other air-handling spaces"],
+      "intent": "the feeder still runs from the same breaker to the same panel with the same conductors; only the wiring method changes, within the code's limits for the building's construction type"
+    },
+    {
+      "id": "nm_unit_branch",
+      "name": "Nonmetallic-sheathed cable (NM) for the branch circuits concealed in the units",
+      "circuit": "branch",
+      "to": "unit_panel",
+      "application": ["BRANCH", "CONCEALED"],
+      "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
+      "designed": "raceway",
+      "alternative": "nm",
+      "construction": ["III", "IV", "V"],
+      "code": [
+        {"cite": "NEC 334.10", "says": "NM is permitted in dwellings and in other structures permitted to be of Types III, IV and V construction, concealed behind a thermal barrier of at least a 15-minute finish rating"},
+        {"cite": "NEC 334.12", "says": "NM is not permitted exposed in dropped or suspended ceilings of other than dwellings, in wet or damp locations, or as service-entrance cable"}
+      ],
+      "conditions": ["concealed in walls, floors and ceilings behind a 15-minute thermal barrier (gypsum board)", "the building's construction type is III, IV or V"],
+      "excluded": ["common and public areas' exposed or suspended-ceiling runs", "below slabs-on-grade, in concrete and underground", "wet and damp locations", "plenums and other air-handling spaces"],
+      "intent": "every circuit, device and conductor size stays as designed; only the wiring method changes where the code and the spec permit it"
+    }
+  ]
+}

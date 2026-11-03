@@ -301,6 +301,9 @@ pub(crate) enum Route {
     Stub(String),
     /// From each box to its system's riser box on its level.
     ToRiser,
+    /// Under the slab from what its tag points at (a floor box) to the nearest wall of its room,
+    /// stubbed up there.
+    UnderSlab,
 }
 
 /// What a note asks to be built.
@@ -312,6 +315,33 @@ pub(crate) struct Work {
     pub box_in: Option<[f64; 3]>,
     /// Its conduit: trade size (inches) and how it runs.
     pub conduits: Vec<(f64, Route)>,
+    /// The note puts it in the ground or under the slab (`UNDER SLAB`, `BELOW GRADE`).
+    pub buried: bool,
+    /// The note gives no conduit size: the smallest trade size is assumed.
+    pub size_assumed: bool,
+}
+
+/// The words a note uses for work in the ground or under the slab.
+const BURIED_WORDS: [&str; 11] = [
+    "UNDER SLAB",
+    "UNDERSLAB",
+    "UNDER-SLAB",
+    "BELOW SLAB",
+    "BELOW GRADE",
+    "BELOW GROUND",
+    "UNDERGROUND",
+    "UNDER GROUND",
+    "BURIED",
+    "BURRIED",
+    "IN GRADE",
+];
+/// The trade size assumed for buried conduit a note doesn't size, inches.
+pub(crate) const BURIED_MIN_IN: f64 = 0.75;
+
+/// Whether a text calls for work in the ground or under the slab.
+pub(crate) fn buried(text: &str) -> bool {
+    let up = text.to_ascii_uppercase();
+    BURIED_WORDS.iter().any(|w| up.contains(w))
 }
 
 /// `12"X12"X6"` → [12, 12, 6].
@@ -322,6 +352,88 @@ fn dims(word: &str) -> Option<[f64; 3]> {
         [a, b, c] if word.contains('"') && [*a, *b, *c].iter().all(|v| *v > 0.0 && *v <= 96.0) => Some([*a, *b, *c]),
         _ => None,
     }
+}
+
+/// Lines a note of buried work is joined from, at most.
+const MAX_NOTE_LINES: usize = 12;
+
+/// The notes of a sheet that call for buried work, each whole: its numbered lists' notes (with
+/// their numbers: `21`, `PROVIDE UNDER SLAB CONDUIT…`) and the paragraphs outside the lists, each
+/// joined from the lines left-aligned with the one naming the work, one under the next (a site
+/// plan's callout: `TWO (2) 5" SCH. 40 PVC CONDUIT … MIN. 48" BELOW GRADE …`).
+pub(crate) fn buried_notes(texts: &[TextItem]) -> Vec<(Option<String>, String)> {
+    let ls = lists(texts);
+    let mut out: Vec<(Option<String>, String)> =
+        ls.iter().flat_map(|l| &l.notes).filter(|n| buried(&n.text)).map(|n| (Some(n.number.clone()), n.text.clone())).collect();
+    let in_list = |p: Vec2| ls.iter().any(|l| p.x >= l.area[0] && p.x <= l.area[2] && p.y >= l.area[1] && p.y <= l.area[3]);
+    let mut used = vec![false; texts.len()];
+    for (i, t) in texts.iter().enumerate() {
+        if used.get(i).copied().unwrap_or(true)
+            || !buried(&t.value)
+            || in_list(t.at)
+            || t.rotation.abs() > 0.01
+            || !t.height.is_finite()
+            || t.height <= 0.0
+        {
+            continue;
+        }
+        let h = t.height;
+        // The line next above (`up`) or below a line, left-aligned with it and as tall.
+        let step = |cur: Vec2, up: bool, used: &[bool]| {
+            texts
+                .iter()
+                .enumerate()
+                .filter(|(j, o)| {
+                    let dy = if up { o.at.y - cur.y } else { cur.y - o.at.y };
+                    !used.get(*j).copied().unwrap_or(true)
+                        && (o.at.x - cur.x).abs() < h
+                        && (o.height - h).abs() < 0.25 * h
+                        && dy > 0.5 * h
+                        && dy < 2.2 * h
+                        && o.rotation.abs() <= 0.01
+                })
+                .min_by(|a, b| (a.1.at.y - cur.y).abs().total_cmp(&(b.1.at.y - cur.y).abs()))
+                .map(|(j, _)| j)
+        };
+        if let Some(u) = used.get_mut(i) {
+            *u = true;
+        }
+        let mut lines: Vec<usize> = vec![i];
+        // Up to the paragraph's first line (a numbered line starts one).
+        while lines.len() < MAX_NOTE_LINES {
+            let Some(&top) = lines.first() else { break };
+            let Some(cur) = texts.get(top) else { break };
+            if numbered(&cur.value).is_some() {
+                break;
+            }
+            let Some(j) = step(cur.at, true, &used) else { break };
+            if texts.get(j).is_some_and(|o| o.value.trim_end().ends_with('.') && numbered(&o.value).is_none()) {
+                break;
+            }
+            if let Some(u) = used.get_mut(j) {
+                *u = true;
+            }
+            lines.insert(0, j);
+        }
+        // Down to its last (the next numbered line starts another).
+        while lines.len() < MAX_NOTE_LINES {
+            let Some(&bottom) = lines.last() else { break };
+            let Some(cur) = texts.get(bottom) else { break };
+            let Some(j) = step(cur.at, false, &used) else { break };
+            if texts.get(j).is_some_and(|o| numbered(&o.value).is_some()) {
+                break;
+            }
+            if let Some(u) = used.get_mut(j) {
+                *u = true;
+            }
+            lines.push(j);
+        }
+        let text = lines.iter().filter_map(|j| texts.get(*j)).map(|o| o.value.trim()).collect::<Vec<_>>().join(" ");
+        if !out.iter().any(|(_, o)| *o == text) {
+            out.push((None, text));
+        }
+    }
+    out
 }
 
 /// What a note's words ask to be built (none: a note that builds nothing it can read).
@@ -343,8 +455,19 @@ pub(crate) fn work(text: &str) -> Option<Work> {
             if !x.starts_with("CONDUIT") || i == 0 {
                 continue;
             }
-            let Some(size) = sw.get(i - 1).and_then(|s| super::gearbuild::trade_in(s.trim_end_matches(','))) else { continue };
-            let route = if sentence.contains("BETWEEN") {
+            let in_ground = buried(sentence);
+            let size = match sw.get(i - 1).and_then(|s| super::gearbuild::trade_in(s.trim_end_matches(','))) {
+                Some(v) => v,
+                None if in_ground => {
+                    w.size_assumed = true;
+                    BURIED_MIN_IN
+                }
+                None => continue,
+            };
+            let route = if in_ground {
+                w.buried = true;
+                Route::UnderSlab
+            } else if sentence.contains("BETWEEN") {
                 Route::Riser
             } else if let Some(j) = sw.iter().position(|y| y.starts_with("STUB")) {
                 // `STUBBED INTO CORRIDOR`: the room named after it.
@@ -468,5 +591,35 @@ mod tests {
         let antenna = work(&l.notes[0].text).expect("antenna");
         assert_eq!((antenna.box_in, antenna.conduits.as_slice()), (Some([8.0, 8.0, 6.0]), [(1.0, Route::ToRiser)].as_slice()));
         assert_eq!(work(&l.notes[3].text), None, "a note that builds nothing it can read");
+        assert!(!riser.buried);
+        // Conduit under the slab, its size not given: the smallest trade size, assumed.
+        let floor_box = work("PROVIDE UNDER SLAB CONDUIT FOR FLOOR BOX RECEPTACLE (HUBBLE OR EQUAL). VERIFY PARTS.").expect("floor box");
+        assert_eq!(floor_box.conduits, [(BURIED_MIN_IN, Route::UnderSlab)]);
+        assert!(floor_box.buried && floor_box.size_assumed);
+        let sized = work("PROVIDE 1\" CONDUIT BELOW GRADE TO THE SIGN.").expect("sized");
+        assert_eq!((sized.conduits.as_slice(), sized.size_assumed), ([(1.0, Route::UnderSlab)].as_slice(), false));
+        assert!(buried("MIN. 48\" BELOW GRADE") && !buried("MICROWAVE BELOW"));
+    }
+
+    #[test]
+    fn a_sheets_buried_work_notes_are_read_whole() {
+        // A site plan's callout, its lines one text each, beside another callout; nothing buried in that one.
+        let texts = vec![
+            t(100.0, 500.0, "TWO (2) 5\" SCH. 40 PVC CONDUIT", 6.0),
+            t(100.0, 492.0, "WITH STEEL ELLS AND RISERS,", 6.0),
+            t(100.0, 484.0, "MIN. 48\" BELOW GRADE WITH", 6.0),
+            t(100.0, 476.0, "PULLWIRE FOR PRIMARY", 6.0),
+            t(100.0, 468.0, "CONDUCTORS.", 6.0),
+            t(300.0, 500.0, "UTILITY CO. PAD MOUNTED", 6.0),
+            t(300.0, 492.0, "TRANSFORMER.", 6.0),
+        ];
+        let notes = buried_notes(&texts);
+        assert_eq!(
+            notes,
+            vec![(
+                None,
+                "TWO (2) 5\" SCH. 40 PVC CONDUIT WITH STEEL ELLS AND RISERS, MIN. 48\" BELOW GRADE WITH PULLWIRE FOR PRIMARY CONDUCTORS.".to_string()
+            )]
+        );
     }
 }
