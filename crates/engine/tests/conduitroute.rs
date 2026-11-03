@@ -713,3 +713,102 @@ fn rerouting_again_starts_from_the_circuits_as_read_not_from_the_last_routing() 
     s.execute("conduit.reroute", &json!({})).expect("reroute after the rebuild");
     assert_eq!(key(&mut s), once);
 }
+
+/// A 40' x 24' storey's exterior walls (a pair of rectangles 7.25" apart) at `ox` feet.
+fn storey_walls(d: &mut Drawing, ox: f64) {
+    let t = 7.25 / 12.0;
+    for (x0, y0, x1, y1) in [(ox, 0.0, ox + 40.0, 24.0), (ox + t, t, ox + 40.0 - t, 24.0 - t)] {
+        for (a, b) in [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))] {
+            wall_line(d, a, b);
+        }
+    }
+}
+
+/// Two stacked storeys (10' floor to floor, 9' ceilings; L2 drawn 200' east). L1's circuit LP1-1
+/// runs from the panel at the west wall to receptacles across the building; `joists`: the floor
+/// over L1 framed with I-joists at 24" (a project rule, as a joist layout would give it).
+fn framed_building(joists: bool) -> (Session, Value) {
+    let mut d = Drawing::new_imperial();
+    storey_walls(&mut d, 0.0);
+    storey_walls(&mut d, 200.0);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    if joists {
+        s.execute("project.rules.set", &json!({"domain": "joist_layout", "key": "general", "value": "24", "reason": "sample joist layout"}))
+            .expect("rule");
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12, "stack": true,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "region": [-100, -100, 1000, 1000], "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [1900, -100, 3400, 1000], "base": [2400, 0]}
+        ],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "X1"}],
+        "wall_types": [{"name": "X1", "thickness_in": 7.25, "from": "pairs"}],
+        "tags": [receptacle(1, 12.0, 6.0, "LP1-1"), receptacle(2, 34.0, 6.0, "LP1-1"), receptacle(3, 34.0, 18.0, "LP1-1"), circuit("LP1-1")],
+        "mep": {"systems": [], "runs": [], "equipment": [
+            {"tag": "LP1", "kind": "panel", "level": "L1", "min": [12, 120], "max": [32, 124], "height_ft": 4, "bottom_ft": 2.5,
+             "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    (s, built)
+}
+
+#[test]
+fn the_branches_keep_to_the_joist_bays_and_bore_the_web_only_in_its_hole_zone() {
+    let (mut s, built) = framed_building(true);
+    let rep = s.execute("conduit.route", &json!({"max": 2000})).expect("report");
+    let fr = &rep["framing"];
+    assert!(fr["members"].as_u64().unwrap_or(0) > 10, "the floor over L1 is joisted: {fr}");
+    assert_eq!(fr["levels_framed"], json!(["l1"]), "{fr}");
+    assert!(fr["source"].as_str().unwrap_or("").contains("web"), "{fr}");
+    assert!(fr["members_source"].as_str().unwrap_or("").contains("joist_layout"), "{fr}");
+    let holes = rep["bored_holes"].as_array().cloned().unwrap_or_default();
+    assert!(!holes.is_empty(), "the circuit crosses the joists: {rep}");
+    // The joists: the floor's top at 10', 3/4" subfloor, 11-7/8" deep: 8'-3 3/8" to 9'-11 1/4".
+    // Every hole is in the web's hole zone (1-1/2" flange + 1/8" kept each side), far enough
+    // from the bearing, and taken off.
+    let (z0, z1) = (10.0 - (0.75 + 11.875) / 12.0, 10.0 - 0.75 / 12.0);
+    for h in &holes {
+        let (z, d) = (h["at"][2].as_f64().unwrap(), h["hole_in"].as_f64().unwrap() / 12.0);
+        assert!(z - d / 2.0 >= z0 + 1.625 / 12.0 - 1e-6 && z + d / 2.0 <= z1 - 1.625 / 12.0 + 1e-6, "{h}");
+        assert!(h["end_ft"].as_f64().unwrap() >= 0.5, "{h}");
+        assert_eq!(h["circuit"], json!("LP1-1"));
+        assert!(h["item"].as_str().unwrap().contains("I-joist"), "{h}");
+    }
+    assert_eq!(fr["blocked_pieces"], json!(0), "{fr}");
+    // The routed pieces never run inside a joist: no clash with the framing, every drop in its box.
+    assert!(rep["clashes"].as_array().unwrap().iter().all(|c| c["pair"] != json!("electrical × framing")), "{rep}");
+    assert_eq!(built["conduitRoute"]["unrouted"].as_array().map_or(0, Vec::len), 0, "{built}");
+    let take = s.execute("conduit.takeoff", &json!({"group_by": ["level"]})).expect("takeoff");
+    let bored: f64 = take["lines"].as_array().unwrap().iter().filter(|l| l["kind"] == json!("bored hole")).map(|l| l["qty"].as_f64().unwrap()).sum();
+    assert_eq!(bored as usize, holes.len(), "{take}");
+    assert!(
+        take["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["kind"] == json!("bored hole") && l["level"] == json!("L1") && !l["handles"].as_array().unwrap().is_empty())
+    );
+    // The joists the trades lay out are the ones routed through.
+    let joists = s.execute("bim.count", &json!({"trade": "framing", "kind": "joist"})).expect("count");
+    assert_eq!(joists["count"].as_f64().unwrap_or(0.0) as u64, fr["members"].as_u64().unwrap(), "{joists} {fr}");
+    // Rerouting with the trades' pieces built (studs, sheets, joists) is the same routing: the
+    // pieces are not obstacles.
+    let again = s.execute("conduit.reroute", &json!({})).expect("reroute");
+    assert_eq!(again["clashes"], json!(rep["clashes"].as_array().map_or(0, Vec::len)), "{again}");
+    let rep2 = s.execute("conduit.route", &json!({"max": 2000})).expect("report");
+    assert_eq!(rep2["bored_holes"].as_array().map_or(0, Vec::len), holes.len());
+    assert_eq!(rep2["routed_ft"], rep["routed_ft"]);
+}
+
+#[test]
+fn without_framing_documents_nothing_is_bored_and_the_report_says_why() {
+    let (mut s, _) = framed_building(false);
+    let rep = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(rep["framing"]["members"], json!(0), "{}", rep["framing"]);
+    assert!(rep["framing"]["note"].as_str().unwrap().contains("no floor framing"));
+    assert_eq!(rep["bored_holes"].as_array().map_or(0, Vec::len), 0);
+}

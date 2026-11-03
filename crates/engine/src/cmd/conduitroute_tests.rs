@@ -193,3 +193,102 @@ fn hostile_inputs_do_not_panic() {
     let _ = fill_size(&[(u32::MAX, "999".into(), false)], "NOPE", f64::NAN, rules());
     let _ = spanning_tree(&[Vec2::new(f64::NAN, 0.0), Vec2::new(0.0, 0.0)], 0);
 }
+
+/// I-joists along y (from y = -240 to 240) every 24" from x = 0 to 240, 2.5" wide, their depth
+/// from 112" to 124" (sheet inches); or trusses there from 112" to 136".
+fn joisted(truss: bool) -> Field {
+    let top = if truss { 136.0 } else { 124.0 };
+    let members = (0..=10)
+        .map(|k| {
+            let x = 24.0 * f64::from(k);
+            (
+                Obs {
+                    handle: Handle(0x55),
+                    lo: Vec3::new(x - 1.25, -240.0, 112.0),
+                    hi: Vec3::new(x + 1.25, 240.0, top),
+                    category: FRAMING.into(),
+                    system: "11 7/8\" I-joist".into(),
+                    trade: "framing",
+                },
+                Frame { a: Vec2::new(x, -240.0), b: Vec2::new(x, 240.0), t: 2.5, truss },
+            )
+        })
+        .collect();
+    Field::with_framing(Vec::new(), members, UPF)
+}
+
+#[test]
+fn a_run_across_the_joists_bores_each_web_in_its_hole_zone_and_never_a_flange() {
+    let field = joisted(false);
+    let (a, b) = (Vec2::new(12.0, 0.0), Vec2::new(228.0, 0.0));
+    // 3/4" raceway: a 1-1/8" hole. At 114" its bottom (113.44") would be in the bottom flange
+    // (112" + 1.5" + 1/8").
+    assert!(matches!(field.framing(a, b, 114.0, 0.375, UPF, rules()), Err((_, FLANGE))));
+    let holes = field.framing(a, b, 118.0, 0.375, UPF, rules()).expect("in the web");
+    assert_eq!(holes.len(), 9, "the joists at 24\" … 216\"");
+    assert!(holes.iter().all(|h| (h.dia_in - 1.125).abs() < 1e-9 && h.z == 118.0));
+    assert!(holes.windows(2).all(|w| matches!(w, [p, q] if q.at.x > p.at.x)), "nearest first");
+    // The router seats the run at the first tier the web takes, and counts its holes.
+    let leg = route_leg(a, b, &[114.0, 118.0, 122.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert_eq!(leg.z, vec![118.0]);
+    assert_eq!(leg.holes, 9);
+    // Below the joists nothing is bored.
+    assert_eq!(field.framing(a, b, 110.0, 0.375, UPF, rules()).map(|h| h.len()), Ok(0));
+}
+
+#[test]
+fn a_hole_near_the_bearing_or_too_big_for_the_web_is_not_bored() {
+    let field = joisted(false);
+    // 4" from the joists' end (y = 240): a 1-1/8" hole needs 6" (the rule's 1-1/2" row).
+    let near = field.framing(Vec2::new(12.0, 236.0), Vec2::new(60.0, 236.0), 118.0, 0.375, UPF, rules());
+    assert!(matches!(near, Err((_, NEAR_END))), "{near:?}");
+    let ok = field.framing(Vec2::new(12.0, 200.0), Vec2::new(60.0, 200.0), 118.0, 0.375, UPF, rules());
+    assert_eq!(ok.map(|h| h.len()), Ok(2));
+    // A 7" raceway's hole (7-3/8") is bigger than the rules bore.
+    let big = field.framing(Vec2::new(12.0, 0.0), Vec2::new(60.0, 0.0), 118.0, 3.5, UPF, rules());
+    assert!(matches!(big, Err((_, TOO_BIG))), "{big:?}");
+}
+
+#[test]
+fn a_run_along_the_joists_keeps_to_a_bay_and_a_drop_stands_clear_of_them() {
+    let field = joisted(false);
+    // Straight along the joist at x = 24: inside it.
+    let inside = field.framing(Vec2::new(24.0, -100.0), Vec2::new(24.0, 100.0), 118.0, 0.375, UPF, rules());
+    assert!(matches!(inside, Err((_, IN_JOIST))), "{inside:?}");
+    // The router runs it in the bay beside (x = 12 or 36), boring nothing on the way.
+    let leg = route_leg(Vec2::new(24.0, -100.0), Vec2::new(24.0, 100.0), &[118.0], 0.375, &field, UPF, &[], rules());
+    assert!(leg.blocked.is_empty(), "{leg:?}");
+    assert!(square(&leg));
+    let along: Vec<f64> = leg.pts.windows(2).filter_map(|w| if let [p, q] = w { ((p.x - q.x).abs() < 1e-9).then_some(p.x) } else { None }).collect();
+    assert!(!along.is_empty() && along.iter().all(|x| ((x - 12.0).abs() < 1e-6) || ((x - 36.0).abs() < 1e-6)), "{leg:?}");
+    // A drop under the joist at x = 24 meets its bottom flange; one in the bay is clear.
+    assert!(field.hit_column(Vec2::new(24.0, 0.0), 100.0, 118.0, 0.375, UPF, &[], rules()).is_some());
+    assert!(field.hit_column(Vec2::new(12.0, 0.0), 100.0, 118.0, 0.375, UPF, &[], rules()).is_none());
+    // And a horizontal piece is never an obstacle hit (the framing check decides it).
+    assert!(field.hit(Vec2::new(12.0, 0.0), Vec2::new(228.0, 0.0), 118.0, 0.375, UPF, &[], rules()).is_none());
+}
+
+#[test]
+fn a_truss_is_passed_between_its_chords_never_bored() {
+    let field = joisted(true);
+    let (a, b) = (Vec2::new(12.0, 0.0), Vec2::new(60.0, 0.0));
+    assert!(matches!(field.framing(a, b, 114.0, 0.375, UPF, rules()), Err((_, CHORD))));
+    let pass = field.framing(a, b, 124.0, 0.375, UPF, rules()).expect("through the web");
+    assert_eq!(pass.len(), 2);
+    assert!(pass.iter().all(|h| h.dia_in == 0.0));
+}
+
+#[test]
+fn hostile_framing_never_panics() {
+    let bad = vec![
+        (duct(f64::NAN, 0.0, 1.0, 1.0, 0.0, 1.0), Frame { a: Vec2::new(f64::NAN, 0.0), b: Vec2::new(1.0, 1.0), t: 1.0, truss: false }),
+        (duct(-1e18, -1e18, 1e18, 1e18, 0.0, 1.0), Frame { a: Vec2::new(-1e18, 0.0), b: Vec2::new(1e18, 0.0), t: 1e9, truss: false }),
+        (duct(0.0, 0.0, 0.0, 0.0, 0.0, 1.0), Frame { a: Vec2::new(0.0, 0.0), b: Vec2::new(0.0, 0.0), t: 2.5, truss: true }),
+    ];
+    let field = Field::with_framing(Vec::new(), bad, UPF);
+    let _ = field.framing(Vec2::new(0.0, 0.0), Vec2::new(1e300, 0.0), 0.5, 0.375, UPF, rules());
+    let _ = field.framing(Vec2::new(0.0, 0.0), Vec2::new(10.0, 0.0), f64::NAN, 0.375, UPF, rules());
+    let _ = field.bays_near(Vec2::new(0.0, 0.0), UPF);
+    let _ = route_leg(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), &[0.5], 0.375, &field, UPF, &[], rules());
+}

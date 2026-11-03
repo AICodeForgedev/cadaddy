@@ -96,6 +96,18 @@
     "floor_unrated": "not given (confirm the floor/ceiling assembly; an unrated floor still needs its annular space sealed, IBC 714.6)",
     "source": "IBC 714 / NEC 300.21: penetrations of fire-rated assemblies firestopped with a listed system"
   },
+  "framing": {
+    "flange_in": 1.5,
+    "edge_in": 0.125,
+    "hole_over_in": 0.375,
+    "min_end_ft": [[1.5, 0.5], [2.0, 1.0], [3.0, 2.0], [4.0, 3.0], [5.0, 4.0], [6.5, 5.0]],
+    "apart_x": 2.0,
+    "hole_penalty_ft": 0.5,
+    "truss_chord_in": 3.5,
+    "bored_item": "Bored hole through I-joist web",
+    "truss_item": "Raceway through truss web (no bore)",
+    "source": "company default from the I-joist makers' published web-hole rules (holes in the web only, flanges never cut or drilled, 1/8 in of web kept above and below a hole, the bigger the hole the farther from the bearing, holes apart by twice the larger one); a hole is the trade size plus 3/8 in; the joist submittal's own hole chart overrides (project rule); truss chords are never bored, raceway passes between them"
+  },
   "entry": {
     "spacing_in": 0.5,
     "locknut_od_in": {"0.5": 1.375, "0.75": 1.75, "1.0": 2.0, "1.25": 2.5, "1.5": 2.75, "2.0": 3.375, "2.5": 3.875, "3.0": 4.625, "3.5": 5.25, "4.0": 5.75},

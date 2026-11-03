@@ -2189,10 +2189,42 @@ fn level_anchor(d: &Drawing, level: &Level) -> Option<Vec2> {
 /// level's plan, so plans drawn side by side make one stacked building; the plans stay put.
 /// How many levels were moved.
 fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
+    let offsets = stack_offsets(d, sp);
+    let mut moved = 0;
+    for (name, off) in offsets.iter().skip(1) {
+        let (level, off) = (name.as_str(), *off);
+        if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
+            continue;
+        }
+        let m = cadaddy_geom::Mat3::translate(off);
+        let mine: Vec<Handle> = d
+            .model
+            .iter()
+            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
+            .map(|e| e.handle)
+            .take(MAX_OBJECTS)
+            .collect();
+        for h in &mine {
+            let _ = d.modify_entity(*h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = with_stacked(&e.common.xdata, off).into();
+            });
+        }
+        if !mine.is_empty() {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// The move [`stack_levels`] gives each level's built objects (the lowest's first, zero), from
+/// the drawing as built before it stacks: what the conduit router, routing before the stack,
+/// carries a plan point between levels by.
+pub(crate) fn stack_offsets(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec2)> {
     let mut here: Vec<&Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
     here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-    let Some(lowest) = here.first() else { return 0 };
-    let Some(origin) = level_anchor(d, lowest) else { return 0 };
+    let Some(lowest) = here.first() else { return Vec::new() };
+    let Some(origin) = level_anchor(d, lowest) else { return Vec::new() };
     // Each level's move: its plan's corner onto the lowest's. A roof plan (no walls of its own)
     // is centred over the walls of the storey under it, wherever that went: a roof edge runs a
     // slab's overhang past the walls, so the corners don't match.
@@ -2216,31 +2248,7 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         };
         offsets.push((level.name.as_str(), off));
     }
-    let mut moved = 0;
-    for (name, off) in offsets.iter().skip(1) {
-        let (level, off) = (*name, *off);
-        if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
-            continue;
-        }
-        let m = cadaddy_geom::Mat3::translate(off);
-        let mine: Vec<Handle> = d
-            .model
-            .iter()
-            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
-            .map(|e| e.handle)
-            .take(MAX_OBJECTS)
-            .collect();
-        for h in &mine {
-            let _ = d.modify_entity(*h, |e| {
-                e.kind.transform(&m);
-                e.common.xdata = with_stacked(&e.common.xdata, off).into();
-            });
-        }
-        if !mine.is_empty() {
-            moved += 1;
-        }
-    }
-    moved
+    offsets.into_iter().map(|(n, o)| (n.to_string(), o)).collect()
 }
 
 /// WALLGEN's tag key for how far `model.build` moved a level's object to stack it
