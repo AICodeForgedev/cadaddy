@@ -657,3 +657,59 @@ fn a_device_set_in_its_wall_again_after_a_merge_takes_its_box_and_its_drop_along
     let left = s.doc().expect("doc").model.iter().filter(|e| cadaddy_engine::doc::props::read(&e.common.xdata).get("entry_gap_ft").is_some()).count();
     assert_eq!(left, 0, "every drop reaches its box");
 }
+
+#[test]
+fn rerouting_again_starts_from_the_circuits_as_read_not_from_the_last_routing() {
+    // A typical room's circuit G-1 (read once, its estimated route through both units), two
+    // units each with its own panel of schedule G, and LP1-5 130' from its panel (upsized for
+    // voltage drop). Routed by the build, then rerouted twice: the second reroute routes the
+    // same circuits the same way (the first's parts and upsized conductors are not read back as
+    // circuits of their own).
+    let (mut s, _) = building(|_| {});
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get_mut("spec").cloned().unwrap_or(spec);
+    let tags = spec["tags"].as_array_mut().expect("tags");
+    for (n, x) in [(11, 5.0), (12, 12.0), (13, 45.0), (14, 52.0)] {
+        tags.push(receptacle(n, x, 60.0, "G-1"));
+    }
+    let mut g = circuit("G-1");
+    g["id"] = json!("circuit:L1:room-101:G-1");
+    g["fields"]["panel"] = json!({"value": "G", "source": "plan"});
+    tags.push(g);
+    spec["mep"]["systems"]
+        .as_array_mut()
+        .expect("systems")
+        .push(json!({"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}));
+    spec["mep"]["runs"].as_array_mut().expect("runs").push(json!({"id": "circuit:L1:room-101:G-1#0", "system": "E-CIRCUIT-EST", "level": "L1",
+        "points": [[60, 720], [144, 720], [540, 720], [624, 720]], "size_in": [0.75, 0], "bottoms_ft": [9.25, 9.25, 9.25], "size_source": "tag", "height_source": "estimated route"}));
+    spec["mep"]["equipment"].as_array_mut().expect("equipment").extend([
+        json!({"tag": "G-1A", "kind": "panel", "level": "L1", "min": [0, 800], "max": [14, 804], "height_ft": 2, "bottom_ft": 4.5}),
+        json!({"tag": "G-1B", "kind": "panel", "level": "L1", "min": [480, 800], "max": [494, 804], "height_ft": 2, "bottom_ft": 4.5}),
+    ]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+    let key = |s: &mut Session| {
+        let r = s.execute("conduit.route", &json!({"max": 1000})).expect("report");
+        let sp = s.execute("bspec.get", &json!({})).expect("spec");
+        let circuits =
+            sp["spec"]["tags"].as_array().or_else(|| sp["tags"].as_array()).map_or(0, |t| t.iter().filter(|t| t["kind"] == json!("circuit")).count());
+        json!({
+            "routed_circuits": r["routed_circuits"], "homeruns": r["homeruns"], "routed_ft": r["routed_ft"],
+            "unrouted": r["unrouted"].as_array().map_or(0, Vec::len), "upsized": r["conductors_upsized"].as_array().map_or(0, Vec::len),
+            "circuit_tags": circuits,
+        })
+    };
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let once = key(&mut s);
+    assert_eq!(once["unrouted"], json!(0), "{once}");
+    assert!(once["upsized"].as_u64().is_some_and(|n| n >= 1), "LP1-5 upsized: {once}");
+    s.execute("conduit.reroute", &json!({})).expect("again");
+    let twice = key(&mut s);
+    assert_eq!(twice, once, "the second reroute routes as the first");
+    s.execute("conduit.reroute", &json!({})).expect("a third time");
+    assert_eq!(key(&mut s), once);
+    // A build after a reroute routes from the circuits as read too.
+    s.execute("model.build", &json!({})).expect("rebuild");
+    s.execute("conduit.reroute", &json!({})).expect("reroute after the rebuild");
+    assert_eq!(key(&mut s), once);
+}

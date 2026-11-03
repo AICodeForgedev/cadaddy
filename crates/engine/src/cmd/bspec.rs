@@ -2047,15 +2047,17 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The circuits routed through the model now its devices stand (Q6152): around the ducts,
     // pipes and structure, by the corridors, into each box and the panel's entry window; the
     // drawn conduit as it is. The estimated routes give way to them for the pieces.
+    // From the circuits as read (a reroute may have stored its routing in the spec).
+    let sp_read = super::conduitroute::unrouted(d, &sp);
     let routed = if super::conduitroute::enabled(d) {
-        super::conduitroute::route(d, &sp)
+        super::conduitroute::route(d, &sp_read)
     } else {
         super::conduitroute::Routed {
             report: json!({"routed": false, "note": "routing switched off (model.build {route: false})"}),
             ..Default::default()
         }
     };
-    let mut sp_routed = sp.clone();
+    let mut sp_routed = sp_read;
     super::conduitroute::apply(&mut sp_routed, &routed);
     super::conduitroute::store_report(d, &routed.report);
     mark("conduit routed");

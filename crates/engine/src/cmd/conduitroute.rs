@@ -37,7 +37,7 @@ use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use cadaddy_geom::{Vec2, Vec3};
 use cadaddy_walk3d::tags::ElementTag;
 use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun, MepSystem};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::*;
@@ -2520,20 +2520,37 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
     report["box_fill"] = json!({"checked": checked, "over": over});
 }
 
+/// What a routing took out of the spec it went into: the circuits' tags as read (the routed ones
+/// and their parts replace them) and their estimated runs. The next routing starts from these.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct Replaced {
+    tags: Vec<ElementTag>,
+    runs: Vec<MepRun>,
+}
+
+/// Where the stored spec's [`Replaced`] is kept (among the drawing's embedded files).
+const BASE_FILE: &str = "route/base.json";
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
-/// runs and the routed tags come in (the drawn conduit stays as it is).
-pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) {
+/// runs and the routed tags come in (the drawn conduit stays as it is). What went: the tags and
+/// estimated runs as read (a routing's own earlier output is not among them).
+pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
+    let mut replaced = Replaced::default();
     if routed.runs.is_empty() {
-        return;
+        return replaced;
     }
     let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
     // A split circuit's own tag gives way to its parts'.
     routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
-    sp.mep.runs.retain(|r| {
+    let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
-        !(r.system == BRANCH_SYSTEM || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c))))
-    });
+        r.system == BRANCH_SYSTEM || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c)))
+    };
+    replaced.runs = sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
+    sp.mep.runs.retain(|r| !gone(r));
     sp.mep.runs.extend(routed.runs.iter().cloned());
+    let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of");
+    replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
     sp.tags.retain(|t| !routed_tags.contains(t.id.as_str()) && !t.id.contains(HOME_PART));
     sp.tags.extend(routed.tags.iter().cloned());
     if !sp.mep.systems.iter().any(|s| s.name == BRANCH_SYSTEM) {
@@ -2547,6 +2564,56 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) {
             duct_type: None,
             color_index: 0,
         });
+    }
+    replaced
+}
+
+/// The spec as read, before the routing stored in it (a reroute stores its routed spec): each
+/// routed circuit's tag as read again in its place (its parts and homerun tags gone), the routed
+/// runs gone and the estimated ones back. A spec no routing went into is as it is.
+pub(crate) fn unrouted(d: &Drawing, sp: &BuildingSpec) -> BuildingSpec {
+    let mut out = sp.clone();
+    if !sp.mep.runs.iter().any(|r| r.system == BRANCH_SYSTEM) {
+        return out;
+    }
+    let Some(base) = d.embedded.get(BASE_FILE).and_then(|b| serde_json::from_slice::<Replaced>(b).ok()) else { return out };
+    let by_id: HashMap<&str, &ElementTag> = base.tags.iter().take(MAX_CIRCUITS).map(|t| (t.id.as_str(), t)).collect();
+    let mut placed: BTreeSet<&str> = BTreeSet::new();
+    let mut tags = Vec::with_capacity(out.tags.len());
+    for t in out.tags.drain(..) {
+        if t.id.contains(HOME_PART) {
+            continue;
+        }
+        // A part stands for the circuit it was split from; a routed circuit for itself as read.
+        let of = t.fields.get("split_of").map_or(t.id.as_str(), |f| f.value.as_str());
+        match by_id.get(of) {
+            Some(orig) => {
+                if placed.insert(orig.id.as_str()) {
+                    tags.push((*orig).clone());
+                }
+            }
+            None if t.fields.contains_key("split_of") => {}
+            None => tags.push(t),
+        }
+    }
+    tags.extend(base.tags.iter().take(MAX_CIRCUITS).filter(|t| !placed.contains(t.id.as_str())).cloned());
+    out.tags = tags;
+    out.mep.runs.retain(|r| r.system != BRANCH_SYSTEM);
+    // An estimated run already back in the spec (read again since) is not doubled.
+    let key = |r: &MepRun| serde_json::to_string(r).unwrap_or_default();
+    let mut have: BTreeSet<String> = out.mep.runs.iter().filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM).map(key).collect();
+    for r in base.runs.into_iter().take(MAX_RUNS) {
+        if have.insert(key(&r)) {
+            out.mep.runs.push(r);
+        }
+    }
+    out
+}
+
+/// Keep what the routing stored in the spec replaced, for the next routing.
+fn store_base(d: &mut Drawing, replaced: &Replaced) {
+    if let Ok(b) = serde_json::to_vec(replaced) {
+        d.embedded.insert(BASE_FILE.into(), std::sync::Arc::new(b));
     }
 }
 
@@ -2581,7 +2648,7 @@ pub(crate) fn stored_report(d: &Drawing) -> Option<Value> {
 /// the pieces cut again where the model's are (the stacking move kept on them), the report stored.
 pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     const C: &str = "conduit.reroute";
-    let (mut sp, stored) = super::bspec::current(s, C)?;
+    let (sp, stored) = super::bspec::current(s, C)?;
     if !stored {
         return Err(bad(C, "the drawing has no building spec: model.build first"));
     }
@@ -2589,8 +2656,10 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
     }
     let t0 = web_time::Instant::now();
+    // From the circuits as read, not from the last routing's parts and sizes.
+    let mut sp = unrouted(s.doc()?, &sp);
     let routed = route(s.doc()?, &sp);
-    apply(&mut sp, &routed);
+    let replaced = apply(&mut sp, &routed);
     let d = s.doc_mut()?;
     // Each level's stacking move (a level's built objects all moved by the same).
     let mut offsets: BTreeMap<String, Vec2> = BTreeMap::new();
@@ -2643,6 +2712,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     let mut report = routed.report.clone();
     check_box_fill(d, &mut report);
     store_report(d, &report);
+    store_base(d, &replaced);
     d.building_spec = Some(sp.to_json());
     s.touch();
     Ok(json!({
