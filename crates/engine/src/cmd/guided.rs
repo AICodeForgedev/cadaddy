@@ -8527,12 +8527,8 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     let mut construction: Option<(String, String)> = None;
     'find: for disc in ["G", "A"] {
         for (number, sub) in non_plan_pages(job, disc) {
-            let mut texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-            // Reading order: down the sheet, then across.
-            texts.sort_by(|a, b| {
-                (b.at.y / a.height.max(1e-6)).round().total_cmp(&(a.at.y / a.height.max(1e-6)).round()).then(a.at.x.total_cmp(&b.at.x))
-            });
-            let words: Vec<String> = texts.into_iter().map(|t| t.value).collect();
+            let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+            let words = super::valueeng::reading_order(texts);
             if let Some(c) = super::valueeng::construction_type(&words) {
                 construction = Some((c, number));
                 break 'find;

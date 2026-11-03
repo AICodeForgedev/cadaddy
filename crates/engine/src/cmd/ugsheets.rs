@@ -485,8 +485,13 @@ fn dim_from(lines: &[(String, f64)], v: f64, edge: Option<(&str, f64)>, upf: f64
     }
 }
 
-/// The level's edges (its region, else the extent of its equipment and runs): west and south.
+/// The level's edges (its slab's exterior walls, else its region, else the extent of its
+/// equipment and runs): west and south.
 fn edges(sp: &BuildingSpec, level: &str, pts: &[[f64; 2]]) -> Option<[f64; 2]> {
+    // The slab's own edges: its exterior walls (the field measures from the slab's corners).
+    if let Some(sh) = shell_of(sp, level) {
+        return Some([sh[0], sh[1]]);
+    }
     if let Some(r) = sp.level(level).and_then(|l| l.region).filter(|r| r.iter().all(|v| v.is_finite())) {
         return Some([r[0].min(r[2]), r[1].min(r[3])]);
     }
@@ -500,6 +505,17 @@ fn edges(sp: &BuildingSpec, level: &str, pts: &[[f64; 2]]) -> Option<[f64; 2]> {
         .filter(|p| finite(*p))
         .collect();
     (!all.is_empty()).then(|| [all.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), all.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min)])
+}
+
+/// A level's shell: its exterior walls' extent `[x0, y0, x1, y1]` (sheet units), when the model has it.
+fn shell_of(sp: &BuildingSpec, level: &str) -> Option<[f64; 4]> {
+    let boxes = sp.shells.iter().find(|(l, _)| l.eq_ignore_ascii_case(level)).map(|(_, b)| b)?;
+    let ok: Vec<&[f64; 4]> = boxes.iter().filter(|b| b.iter().all(|v| v.is_finite())).collect();
+    (!ok.is_empty()).then(|| {
+        ok.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |a, b| {
+            [a[0].min(b[0]).min(b[2]), a[1].min(b[1]).min(b[3]), a[2].max(b[0]).max(b[2]), a[3].max(b[1]).max(b[3])]
+        })
+    })
 }
 
 /// The slab level: the lowest one (the first, when none has an elevation).
@@ -615,13 +631,19 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         }
         let id = if r.id.trim().is_empty() { format!("UG-{}", i + 1) } else { r.id.clone() };
         let end = |p: Option<&[f64; 2]>| p.and_then(|p| equipment_at(sp, &r.level, *p)).map(|e| e.tag.clone()).unwrap_or_default();
+        // A feeder's run says its ends (`feeder 604 MDP→DP2`) where no gear is at one (it rises
+        // to another level beside its panel).
+        let said = r.source_sheet.strip_prefix("feeder ").and_then(|v| v.split_once(' ')).and_then(|(_, ends)| ends.split_once('→'));
+        let said_from = said.map(|(a, _)| a.trim().to_string()).unwrap_or_default();
+        let said_to = said.map(|(_, b)| b.split('→').next().unwrap_or(b).trim().to_string()).unwrap_or_default();
+        let or = |v: String, w: &str| if v.is_empty() { w.to_string() } else { v };
         runs.push(Buried {
             kind: "run",
             system: r.system.clone(),
             level: r.level.clone(),
             length_ft: length(&points) / u,
-            from: end(points.first()),
-            to: end(points.last()),
+            from: or(end(points.first()), &said_from),
+            to: or(end(points.last()), &said_to),
             points,
             size_in: size,
             conduits: 1,
@@ -768,8 +790,9 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         };
         for (at, feeds) in ends {
             let edge = edges(sp, &r.level, &r.points);
-            let x = dim_from(&g.x, at[0], edge.map(|e| ("west edge", e[0])), u);
-            let y = dim_from(&g.y, at[1], edge.map(|e| ("south edge", e[1])), u);
+            let slab = shell_of(sp, &r.level).is_some();
+            let x = dim_from(&g.x, at[0], edge.map(|e| (if slab { "west slab edge" } else { "west edge" }, e[0])), u);
+            let y = dim_from(&g.y, at[1], edge.map(|e| (if slab { "south slab edge" } else { "south edge" }, e[1])), u);
             let height_in = sp
                 .mep
                 .equipment
@@ -1306,6 +1329,22 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             .collect();
         let mut pts: Vec<[f64; 2]> = runs.iter().flat_map(|r| r.points.iter().copied()).collect();
         pts.extend(gear.iter().flat_map(|e| [e.min, e.max]));
+        // The slab's walls, and where each stub-up's dimensions start: all on the plan.
+        let walls: Vec<[f64; 4]> = sp
+            .shells
+            .iter()
+            .find(|(l, _)| l.eq_ignore_ascii_case(level))
+            .map(|(_, b)| b.iter().copied().filter(|b| b.iter().all(|v| v.is_finite())).take(MAX_ITEMS).collect())
+            .unwrap_or_default();
+        pts.extend(walls.iter().flat_map(|b| [[b[0], b[1]], [b[2], b[3]]]));
+        for st in &stubs {
+            if let Some((_, from, _)) = &st.x {
+                pts.push([*from, st.at[1]]);
+            }
+            if let Some((_, from, _)) = &st.y {
+                pts.push([st.at[0], *from]);
+            }
+        }
         // The grid lines' places, so every line is inside the plan.
         if let Some((y0, x0)) = span(&pts, 1).zip(span(&pts, 0)) {
             pts.extend(ug.grids.x.iter().map(|(_, x)| [*x, y0.0]));
@@ -1340,6 +1379,13 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
             let py = f.to([f.min[0], *y])[1];
             pen.line([lo[0] - 0.3, py], [hi[0], py])?;
             pen.text([lo[0] - 0.7, py - 0.06], label, 0.14)?;
+        }
+        // The slab's exterior walls, for where things are.
+        if !walls.is_empty() {
+            pen.layer("E-UG-SHELL", 8, None)?;
+            for b in &walls {
+                pen.rect(f.to([b[0], b[1]]), f.to([b[2], b[3]]))?;
+            }
         }
         // Gear fed.
         pen.layer("E-UG-EQPM", 5, None)?;
@@ -1443,7 +1489,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
                 format!("{} {}", mix_text(&st.mix), st.material),
             ]);
         }
-        y = pen.table(SIDE_X, y, "STUB-UP SCHEDULE", &[0.6, 0.9, 1.3, 1.3, 1.1, 0.8, 1.4], &rows)?;
+        y = pen.table(SIDE_X, y, "STUB-UP SCHEDULE", &[0.5, 0.7, 1.7, 1.8, 1.1, 0.7, 2.4], &rows)?;
         let holds: Vec<&super::concrete::Hold> = ug.holds.iter().filter(|h| h.level.is_empty() || h.level.eq_ignore_ascii_case(level)).collect();
         let mut rows = vec![["POUR", "ITEM", "KIND", "SIZE", "QTY / LENGTH", "STATUS"].map(String::from).to_vec()];
         rows.extend(holds.iter().map(|h| {

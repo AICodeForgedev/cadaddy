@@ -188,6 +188,21 @@ pub(crate) fn construction_type(texts: &[String]) -> Option<String> {
     None
 }
 
+/// A sheet's texts in reading order: down the sheet in rows of its usual text height, then
+/// across. Each text gets one key, so the order is total whatever the texts' heights.
+pub(crate) fn reading_order(texts: Vec<cadaddy_mepfix::sheet_facts::TextItem>) -> Vec<String> {
+    let mut hs: Vec<f64> = texts.iter().map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
+    hs.sort_by(f64::total_cmp);
+    let row = hs.get(hs.len() / 2).copied().unwrap_or(1.0).max(1e-6);
+    let mut keyed: Vec<(i64, f64, String)> = texts
+        .into_iter()
+        .filter(|t| t.at.x.is_finite() && t.at.y.is_finite())
+        .map(|t| (-((t.at.y / row).round().clamp(-1e15, 1e15) as i64), t.at.x, t.value))
+        .collect();
+    keyed.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    keyed.into_iter().map(|k| k.2).collect()
+}
+
 /// A construction type's class (`V-A` → `V`).
 fn class_of(t: &str) -> &str {
     t.split('-').next().unwrap_or(t)
@@ -457,6 +472,27 @@ mod tests {
         let f = &apps[4];
         assert_eq!(f.methods, ["ac", "mc", "nm", "raceway"]);
         assert!(wiring_applications("3.2\nSOMETHING ELSE\nA.\nX: Type NM.", "26 05 19").is_empty());
+    }
+
+    #[test]
+    fn texts_of_any_heights_sort_into_reading_order_without_panicking() {
+        // Texts of many heights (a comparator keyed on one text's height isn't a total order and
+        // made the sort panic on a real code sheet).
+        let item = |x: f64, y: f64, h: f64, v: &str| cadaddy_mepfix::sheet_facts::TextItem {
+            value: v.to_string(),
+            at: cadaddy_geom::Vec2::new(x, y),
+            height: h,
+            rotation: 0.0,
+        };
+        let mut texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> =
+            (0..400).map(|i| item(f64::from(i * 37 % 101), f64::from(i * 53 % 97), [0.5, 3.0, 9.0, 1e-9, 40.0][i as usize % 5], "x")).collect();
+        texts.push(item(f64::NAN, 1.0, 1.0, "nan"));
+        texts.push(item(0.0, 500.0, 2.0, "CONSTRUCTION TYPE"));
+        texts.push(item(30.0, 500.2, 2.0, "V-A"));
+        let words = reading_order(texts);
+        assert_eq!(words.len(), 402);
+        assert_eq!(&words[..2], ["CONSTRUCTION TYPE", "V-A"]);
+        assert_eq!(construction_type(&words).as_deref(), Some("V-A"));
     }
 
     #[test]
