@@ -613,6 +613,19 @@ pub fn values(d: &Drawing, e: &Entity, base: &str, kind: &str, upf: f64) -> Vec<
             out.push(("location".into(), Prop::new(format!("{:.2}, {:.2}", c.x / upf, c.y / upf), Source::computed()).with_unit("ft")));
         }
     }
+    // What the model measures of it: a run's length, a ceiling's or floor's area.
+    if (!has(&out, "length") || !has(&out, "area"))
+        && let Some(c) = super::bimlook::classify(d, e)
+    {
+        let q = super::bimlook::quantity(&c, e, upf);
+        for (key, qk, unit) in [("length", "length_ft", "ft"), ("area", "area_sf", "sf")] {
+            if !has(&out, key)
+                && let Some(v) = q.get(qk).and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0)
+            {
+                out.push((key.into(), Prop::new(v, Source::computed()).with_unit(unit)));
+            }
+        }
+    }
     if !has(&out, "source")
         && let Some(h) = super::bimlook::made_source(e)
     {

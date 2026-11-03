@@ -882,7 +882,7 @@ fn span(pts: &[Vec3], flat: bool) -> f64 {
     if d.is_finite() { d } else { 0.0 }
 }
 
-fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
+pub(crate) fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
     let EntityKind::Mesh(m) = &e.kind else { return json!({ "count": 1 }) };
     let pts: Vec<Vec3> = m.vertices.iter().take(200_000).copied().filter(|p| p.is_finite()).collect();
     let (z0, z1) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
