@@ -756,10 +756,27 @@ pub(crate) fn invoice_quotes(text: &str) -> Vec<Quote> {
             let length = cable
                 || up.contains("/FT")
                 || ["CONDUIT", "EMT", "SCH 40", "SCH 80", "/LIFT", "THHN", "XHHW", "WIRE", "CABLE", "STRUT", " MC "].iter().any(|w| up.contains(w));
-            let fitting =
-                ["ELL", "ELBOW", "COUP", "CONN", "ADAPT", "BODY", "STRAP", "BOX", "CLAMP", "BUSHING", "LOCKNUT", "CAP", "TAPE", "PULL LINE"]
-                    .iter()
-                    .any(|w| up.contains(w));
+            let fitting = [
+                "ELL",
+                "ELBOW",
+                "COUP",
+                "CONN",
+                "ADAPT",
+                "BODY",
+                "STRAP",
+                "BOX",
+                "CLAMP",
+                "BUSHING",
+                "LOCKNUT",
+                "CAP",
+                "TAPE",
+                "PULL LINE",
+                "TERMINATOR",
+                "FITTING",
+                "CPLG",
+            ]
+            .iter()
+            .any(|w| up.contains(w));
             let unit = if (div > 1.0 || cable) && length && !fitting { "ft" } else { "each" };
             let q = Quote {
                 key: format!("{maker}:{product}").to_ascii_uppercase(),
@@ -887,7 +904,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
         let held = book.quotes.get(&q.key).and_then(|v| v.iter().find(|o| o.same_source(&q)).cloned());
         match held {
             Some(old) if !old.date.is_empty() && q.date < old.date => kept_newer += 1,
-            Some(old) if (old.unit_price - q.unit_price).abs() < 1e-9 && old.date == q.date && old.origin == "local" => {}
+            Some(old) if (old.unit_price - q.unit_price).abs() < 1e-9 && old.date == q.date && old.unit == q.unit && old.origin == "local" => {}
             Some(old) => {
                 to_history(&dir, &old, &book.today, "replaced by import").map_err(|e| bad(C, format!("history: {e}")))?;
                 history += 1;
