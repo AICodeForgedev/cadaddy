@@ -136,6 +136,9 @@ fn config_in(t: &str) -> Option<String> {
 pub(crate) fn kind_of_product(name: &str) -> Option<&'static str> {
     let u = name.to_ascii_uppercase();
     let has = |w: &str| u.contains(w);
+    // A short word whole (or its plural): `LED` is no part of `COUPLED`, `TUB` of `TUBING`.
+    let words: Vec<&str> = u.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let word = |w: &str| words.iter().any(|x| *x == w || x.strip_suffix('S') == Some(w));
     Some(if has("GFCI") && has("RECEPTACLE") {
         "gfci_receptacle"
     } else if has("RECEPTACLE") {
@@ -158,9 +161,9 @@ pub(crate) fn kind_of_product(name: &str) -> Option<&'static str> {
         "water_closet"
     } else if has("LAVATOR") {
         "lavatory"
-    } else if has("SINK") {
+    } else if word("SINK") {
         "sink"
-    } else if has("SHOWER") || has("BATHTUB") || has("TUB") {
+    } else if has("SHOWER") || has("BATHTUB") || word("TUB") {
         "shower"
     } else if has("SMOKE") {
         "smoke_detector"
@@ -170,7 +173,7 @@ pub(crate) fn kind_of_product(name: &str) -> Option<&'static str> {
         "fire_alarm_notification"
     } else if has("PANELBOARD") {
         "panel"
-    } else if has("LUMINAIRE") || has("LED ") || has("LIGHTING FIXTURE") {
+    } else if has("LUMINAIRE") || word("LED") || has("LIGHTING FIXTURE") {
         "luminaire"
     } else if has("WATER HEATER") {
         "water_heater"
@@ -745,6 +748,14 @@ A. Manufacturers: not a product list.
         assert_eq!(kind_of_product("STRAIGHT-BLADE RECEPTACLES: Duplex GFCI Convenience Receptacles"), Some("gfci_receptacle"));
         assert_eq!(kind_of_product("WATER CLOSETS: Water Closets, Floor Mounted"), Some("water_closet"));
         assert_eq!(kind_of_product("ENCLOSED SWITCHES: Fusible"), None);
+        // Short words are whole words: a close-coupled pump is no LED luminaire, tubing no tub.
+        assert_eq!(kind_of_product("DOMESTIC WATER PUMPS: CLOSE-COUPLED CENTRIFUGAL PUMPS"), None);
+        assert_eq!(kind_of_product("PEX TUBING: Cross-Linked Polyethylene Tubing"), None);
+        assert_eq!(kind_of_product("HEATSINK ASSEMBLIES"), None);
+        assert_eq!(kind_of_product("INTERIOR LIGHTING: LED Downlights"), Some("luminaire"));
+        assert_eq!(kind_of_product("LEDS, recessed"), Some("luminaire"));
+        assert_eq!(kind_of_product("SINKS: Service Sinks"), Some("sink"));
+        assert_eq!(kind_of_product("BATHTUBS AND TUBS"), Some("shower"));
         assert_eq!(
             section_header("SECTION 238113.11 - PACKAGED TERMINAL AIR-CONDITIONERS").as_deref(),
             Some("23 81 13.11 PACKAGED TERMINAL AIR-CONDITIONERS")
