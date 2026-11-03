@@ -231,6 +231,13 @@ pub fn element_of(e: &Entity) -> Element {
                     _ => "IfcBuildingElementProxy",
                 }
             }
+            // A piece of an electrical run (Q6157), as the IFC export writes it.
+            "mep" if mep_part.starts_with("atom:") => match mep_part.strip_prefix("atom:").unwrap_or_default() {
+                "conduit" => "IfcCableCarrierSegment",
+                "box" | "ring" => "IfcJunctionBox",
+                "cable" | "wire" => "IfcCableSegment",
+                _ => "IfcCableCarrierFitting",
+            },
             "mep" if mep_part.starts_with("terminal:sprinkler") => "IfcFireSuppressionTerminal",
             "mep" if mep_part.starts_with("terminal:") => "IfcAirTerminal",
             "mep" if mep_part.starts_with("fitting:") => match kind.as_deref() {
