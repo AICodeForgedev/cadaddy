@@ -375,7 +375,7 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
 /// The specification section files under `paths` (files or folders, searched below) whose name
 /// starts with a section number of the product divisions (`26 27 26 - Wiring Devices.pdf`), or
 /// any PDF/text file given by name.
-fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
+pub(crate) fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
         if depth > 4 || out.len() >= MAX_SPEC_FILES * 4 {
             return;

@@ -920,6 +920,19 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 }
             });
         let known = heights.get(&mark.to_ascii_uppercase()).filter(|h| h.source != SourceKind::Default);
+        // A luminaire's height its fixture schedule row gives (`7'-6" AFF` in its installation).
+        let scheduled = {
+            let ty = super::lightsched::type_of(&mark);
+            sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty).and_then(|r| {
+                Some(Chosen {
+                    inches: mount_height_in(&r.installation)?,
+                    from: "fixture_schedule",
+                    source: SourceKind::Schedule,
+                    doc: format!("{} type {}: {}", r.source, r.tag, r.installation),
+                    datum: Datum::of(&r.installation),
+                })
+            })
+        };
         let plausible = |c: &Chosen| c.inches.is_finite() && (0.0..=240.0).contains(&c.inches);
         // The documents, in order.
         let documented = || -> Option<Chosen> {
@@ -927,6 +940,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 .map(|f| found(f, "own_note", SourceKind::Note))
                 .or_else(|| docs.elevation_of(&ask, true).map(|f| found(f, "elevation", SourceKind::Print)))
                 .or_else(|| enlarged.as_ref().map(|c| Chosen { doc: c.doc.clone(), ..*c }))
+                .or_else(|| scheduled.as_ref().map(|c| Chosen { doc: c.doc.clone(), ..*c }))
                 .or_else(|| docs.legend_of(&ask).map(|f| found(f, "legend", SourceKind::Legend)))
                 .or_else(|| {
                     known.filter(|h| h.source == SourceKind::Legend).map(|h| Chosen {
@@ -1082,7 +1096,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         store.set(
             "mount_height_from",
             Prop::new(height.from, Source::computed()).with_note(
-                "own_note, elevation, enlarged_plan_note, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
+                "own_note, elevation, enlarged_plan_note, fixture_schedule, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
             ),
         );
         store.set(

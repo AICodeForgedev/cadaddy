@@ -130,6 +130,7 @@ pub mod keynotes;
 pub mod labels;
 pub(crate) mod layout;
 pub mod lightbake;
+pub mod lighting;
 pub mod lights;
 pub mod lightsched;
 mod lisp;

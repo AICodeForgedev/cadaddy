@@ -1,5 +1,5 @@
 {
-  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen reads the same file.",
+  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen reads the same file. The lighting step reads E-LIGHT-OCC (the energy code's occupant-sensor spaces and a guest room's master control).",
   "rules": [
     {
       "id": "E-RECEPT-TR",
@@ -157,6 +157,25 @@
           "500": 310,
           "600": 340
         }
+      }
+    },
+    {
+      "id": "E-LIGHT-OCC",
+      "cite": "IECC C405.2.1",
+      "kinds": ["occupancy_sensor"],
+      "sets": "occupant_sensor_required",
+      "rule": "Lights in these spaces are controlled by an occupant sensor that turns them off soon after the space is left: classrooms, lecture and training rooms; conference, meeting and multipurpose rooms; copy and print rooms; lounges and break rooms; enclosed offices and open office areas; restrooms; storage rooms; locker rooms; warehouse storage. The starter list in our own words, section numbers by edition: verify with the authority having jurisdiction.",
+      "editions": {"2015": "IECC 2015 C405.2.1", "2018": "IECC 2018 C405.2.1", "2021": "IECC 2021 C405.2.1"},
+      "spaces": [
+        {"all": ["CLASSROOM"]}, {"all": ["LECTURE"]}, {"all": ["TRAINING"]}, {"all": ["CONFERENCE"]}, {"all": ["MEETING"]},
+        {"all": ["MULTIPURPOSE"]}, {"all": ["COPY"]}, {"all": ["PRINT"]}, {"all": ["LOUNGE"]}, {"all": ["BREAK"]},
+        {"all": ["OFFICE"]}, {"all": ["RESTROOM"]}, {"all": ["RR"]}, {"all": ["TOILET"]}, {"all": ["STOR"]}, {"all": ["LOCKER"]},
+        {"all": ["WAREHOUSE"]}
+      ],
+      "guest_rooms": {
+        "editions": {"2015": "IECC 2015 C405.2.4", "2018": "IECC 2018 C405.2.4", "2021": "IECC 2021 C405.2.5"},
+        "rule": "Each hotel or motel guest room (sleeping unit) has a master control that turns off its luminaires and switched receptacles within 20 minutes of the room being left: a card key or captive key switch, or an occupant sensor. In our own words: verify with the authority having jurisdiction.",
+        "controls": ["CARD", "KEY", "MASTER", "OCCUPANCY", "OCCUPANT", "VACANCY", "SENSOR"]
       }
     }
   ]

@@ -259,20 +259,50 @@ fn items(s: &mut Session) -> Vec<Item> {
                 Some("medium") => 1.0,
                 _ => 2.0,
             };
+            // Documents that disagree: a conflict, each document's word a candidate answer.
+            let sides: Vec<&Value> = r["sides"].as_array().into_iter().flatten().take(8).collect();
+            let conflict = r["kind"] == "conflict";
             let mut cands = Vec::new();
+            if conflict {
+                for side in &sides {
+                    if let Some(t) = side["says"].as_str().filter(|t| !t.is_empty()) {
+                        cands.push(json!({ "answer": cut(t, 200), "from": cut(side["document"].as_str().unwrap_or_default(), 120) }));
+                    }
+                }
+            }
             for k in ["proposed", "assumed"] {
                 if let Some(t) = r[k].as_str().filter(|t| !t.is_empty()) {
                     cands.push(json!({ "answer": t, "from": k }));
                 }
             }
+            let mut documents: Vec<String> = sides.iter().filter_map(|x| x["document"].as_str()).map(|x| cut(x, 120)).collect();
+            for sh in r["sheets"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if !documents.iter().any(|x| x == sh) {
+                    documents.push(sh.to_string());
+                }
+            }
+            documents.truncate(8);
+            let mut detail = json!({"issue": cut(r["issue"].as_str().unwrap_or_default(), 400), "about": cut(about, 120), "assumed": cut(r["assumed"].as_str().unwrap_or_default(), 200), "severity": r["severity"], "at": at});
+            if conflict {
+                detail["topic"] = r["topic"].clone();
+                detail["sides"] = json!(sides);
+                detail["elements"] = json!(r["elements"].as_array().map(|a| a.iter().take(20).cloned().collect::<Vec<_>>()).unwrap_or_default());
+            }
             out.push(Item {
                 id,
-                kind: "rfi",
+                kind: if conflict { "conflict" } else { "rfi" },
                 level,
-                title: cut(r["title"].as_str().unwrap_or(r["issue"].as_str().unwrap_or("gap in the prints")), 120),
-                detail: json!({"issue": cut(r["issue"].as_str().unwrap_or_default(), 400), "about": cut(about, 120), "assumed": cut(r["assumed"].as_str().unwrap_or_default(), 200), "severity": r["severity"], "at": at}),
+                title: cut(
+                    if conflict {
+                        r["issue"].as_str().unwrap_or("documents disagree")
+                    } else {
+                        r["title"].as_str().unwrap_or(r["issue"].as_str().unwrap_or("gap in the prints"))
+                    },
+                    120,
+                ),
+                detail,
                 candidates: cands,
-                documents: r["sheets"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).take(8).collect(),
+                documents,
                 documented: true,
                 rank,
                 key: r["id"].clone(),
@@ -1092,6 +1122,15 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
             super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
         }
         "question" => answer_question(s, item, answer, cite, who),
+        // Documents that disagree (the build's checks): the answer settles the RFI.
+        "conflict" if item.key.is_string() => {
+            let text = answer.as_str().map_or_else(|| answer.to_string(), str::to_string);
+            let full = match cite {
+                Some(c) => format!("{text} [{}; {who}]", c.text()),
+                None => format!("{text} [{who}]"),
+            };
+            s.execute("rfi.set", &json!({"id": item.key, "status": "answered", "answer": full})).map(|_| ())
+        }
         "conflict" => {
             let id = item.key["conflict"].as_str().unwrap_or_default();
             super::forms::resolve_conflict(s, id, answer, &cite.map(Citation::text).unwrap_or_default(), who)

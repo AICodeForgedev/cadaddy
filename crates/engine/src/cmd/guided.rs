@@ -4328,6 +4328,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // What no registration could put onto the plans, kept out of the model: listed with why in
     // the job's summary (Q6158).
     let mut left_out: Vec<Value> = Vec::new();
+    // Where a floor plan shows a typical room's fixtures or switches otherwise than the enlarged
+    // plan of its type (read when the rooms are stamped; the lighting step's conflicts).
+    let mut plan_diffs: Vec<super::lighting::PlanDiff> = Vec::new();
     // Ensure sheet content is in the drawing so bspec.draft can read geometry.
     let t = web_time::Instant::now();
     ensure_sheets_loaded(s, job)?;
@@ -4971,8 +4974,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
                 }
                 let stamp_clock = web_time::Instant::now();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, differs } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // The heights the typical rooms' plans print by their devices.
                 let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
@@ -5351,6 +5355,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Q6029 MUST 3: pass a configurable time budget (default 20 min).
     bim_step(s, job, "devices placed", t);
     let t = web_time::Instant::now();
+    // The light fixture schedule into the spec before the model is built: the luminaires'
+    // mounting heights can come from its rows.
+    let schedule_no_subs = fixture_schedule_step(s, job);
     if let Some(place) = placer.as_deref() {
         let n = anchor_other_trade_rooms(s, job, place)?;
         if n > 0 {
@@ -5480,6 +5487,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
+    match schedule_no_subs {
+        Ok(no_subs) => result["fixture_schedule_no_substitutions"] = json!(no_subs),
+        Err(e) => result["fixture_schedule_error"] = json!(e.to_string()),
+    }
+    result["typical_plan_diffs"] = json!(plan_diffs.iter().take(MAX_PLAN_DIFFS).collect::<Vec<_>>());
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
             "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; outside their level's footprint: {}",
@@ -6245,6 +6257,8 @@ fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     };
     let applied = v.get("applied").and_then(Value::as_object).cloned().unwrap_or_default();
     let elements: u64 = applied.values().filter_map(Value::as_u64).sum();
+    // Every product read, for the lighting step's checks.
+    result["submittal_products"] = v.get("products").cloned().unwrap_or(Value::Null);
     let line = format!(
         "  submittals: {} files read, products onto {elements} elements of {} types ({}); dimming {}",
         v.get("files").and_then(Value::as_array).map_or(0, Vec::len),
@@ -6979,7 +6993,15 @@ fn stamp_typical_rooms(
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
     let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
     if unplaced.is_empty() {
-        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() };
+        return StampedRooms {
+            devices: out,
+            report,
+            authority,
+            panels,
+            rooms: panel_rooms,
+            sleeping: sleeping.into_values().collect(),
+            differs: Vec::new(),
+        };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
     let rooms = job_rooms(job);
@@ -7137,6 +7159,10 @@ fn stamp_typical_rooms(
     // nearest it there (a smoke detector a fire alarm plan marks S is no switch S): that copy
     // goes. A keynote's box read as a receptacle is none.
     let mut gone: BTreeSet<usize> = BTreeSet::new();
+    let mut differs: Vec<super::lighting::PlanDiff> = Vec::new();
+    // A floor plan's fixture this near the enlarged plan's copy of its kind is that copy, tagged
+    // otherwise.
+    let diff_reach = PLAN_DIFF_REACH_FT * 12.0 * k_in;
     let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
     let floor: Vec<&super::readers::ReadDevice> = placed.iter().filter(|dv| !keynote_receptacle(d, dv, &mut shapes)).collect();
     for (ri, (_, level, outline, _)) in rooms.iter().enumerate() {
@@ -7159,6 +7185,26 @@ fn stamp_typical_rooms(
                 if let Some(n) = report.get_mut(key) {
                     *n = n.saturating_sub(1);
                 }
+            } else if super::lighting::lighting_kind(&fk) && differs.len() < MAX_STAMPED {
+                // A fixture or switch the floor plan shows that the enlarged plan of the room's
+                // type doesn't: tagged otherwise there (its nearest copy of the kind), or not there.
+                let other = mine
+                    .iter()
+                    .filter(|(i, _, _)| out.get(*i).is_some_and(|c| super::unitmarks::kind_of(c) == fk))
+                    .min_by(|a, b| gap(a.0).total_cmp(&gap(b.0)))
+                    .filter(|(i, _, _)| gap(*i) <= diff_reach);
+                let view = other.or(mine.first()).map(|(_, _, k)| k.clone()).unwrap_or_default();
+                let room = mine.first().and_then(|(i, _, _)| out.get(*i)).map(|c| c.room.clone()).unwrap_or_default();
+                differs.push(super::lighting::PlanDiff {
+                    room,
+                    level: level.clone(),
+                    view,
+                    kind: fk.clone(),
+                    floor_tag: f.tag.clone(),
+                    floor_sheet: f.sheet.clone(),
+                    enlarged_tag: other.and_then(|(i, _, _)| out.get(*i)).map(|c| c.tag.clone()),
+                    at: f.at,
+                });
             }
         }
     }
@@ -7169,8 +7215,12 @@ fn stamp_typical_rooms(
             !gone.contains(&(i - 1))
         });
     }
-    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
+    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect(), differs }
 }
+
+/// How far a floor plan's fixture or switch may be from the enlarged plan's copy of its kind to be
+/// that copy tagged otherwise, feet.
+const PLAN_DIFF_REACH_FT: f64 = 3.0;
 
 /// What reading the typical-room plans' unread marks gave (Q6159): the devices added, each typical
 /// view by its sheet (their devices go into the rooms of their type, never onto the floor by the
@@ -9239,25 +9289,23 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     equipment_step(s, job, pages, &types, &tags, result)
 }
 
-/// The lighting step ([`super::lightsched`]): the fixture schedule (by its grid) into the spec and
-/// onto each luminaire of its type; RFIs where the plans, the schedule and the submittal disagree.
-fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
-    use super::lightsched;
-    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+/// The light fixture schedules on the electrical pages, read by their grid
+/// ([`super::lightsched`]): each type once, and whether their notes forbid substitutions.
+fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)]) -> (Vec<cadaddy_walk3d::FixtureType>, bool) {
     let mut types: Vec<cadaddy_walk3d::FixtureType> = Vec::new();
     let mut no_subs = false;
     for (number, d) in pages {
         let texts = cadaddy_mepfix::sheet_facts::texts(d);
-        if !texts
-            .iter()
-            .any(|t| t.value.to_ascii_uppercase().contains("FIXTURE SCHEDULE") || t.value.to_ascii_uppercase().contains("LUMINAIRE SCHEDULE"))
-        {
+        if !texts.iter().any(|t| {
+            let u = t.value.to_ascii_uppercase();
+            u.contains("FIXTURE SCHEDULE") || u.contains("LUMINAIRE SCHEDULE")
+        }) {
             continue;
         }
         let segs = super::gridtable::segments(d);
         for title in ["LIGHT FIXTURE SCHEDULE", "LIGHTING FIXTURE SCHEDULE", "LUMINAIRE SCHEDULE"] {
             for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
-                let (rows, ns) = lightsched::fixture_types(&tb);
+                let (rows, ns) = super::lightsched::fixture_types(&tb);
                 no_subs |= ns;
                 for r in rows {
                     if !types.iter().any(|t| t.tag == r.tag) {
@@ -9267,41 +9315,194 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             }
         }
     }
+    (types, no_subs)
+}
+
+/// The fixture schedule into the spec before the model is built, so the luminaires' mounting
+/// heights can come from it (`propfill`'s height chain reads `mep.fixture_schedule`).
+/// Whether its notes forbid substitutions.
+fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool> {
+    let pages = electrical_pages(s.doc()?, job);
+    let (types, no_subs) = fixture_schedule(&pages);
     if types.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
-    // Each luminaire: its type's row; what was submitted for it.
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(no_subs) };
+    sp.mep.fixture_schedule = types;
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(no_subs)
+}
+
+/// Enlarged-plan differences kept for the lighting step, at most.
+const MAX_PLAN_DIFFS: usize = 5_000;
+
+/// A level's key for matching (its digits: `Level 2`, `L2` and `2` are one).
+fn level_key(level: &str) -> String {
+    let d: String = level.chars().filter(char::is_ascii_digit).collect();
+    if d.is_empty() { level.trim().to_ascii_uppercase() } else { d.trim_start_matches('0').to_string() }
+}
+
+/// The lighting step ([`super::lighting`]): each luminaire's product fields from its submittal,
+/// else its fixture schedule row, else the specification's luminaire section, each with its
+/// source; its controls (leg letters, 3-way mates, sensors; emergency and exit unswitched); and
+/// every disagreement between the plans, the schedule, the submittal, the specification and the
+/// energy code a review item of kind `conflict` citing both sides. The report: luminaires and
+/// switches per level and per guest-room type against the plans' symbols, the conflicts by kind.
+fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    use super::lighting::{self as lt, Conflict, Dev};
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let (mut types, mut no_subs) = (sp.mep.fixture_schedule.clone(), result["fixture_schedule_no_substitutions"].as_bool().unwrap_or(false));
+    if types.is_empty() {
+        (types, no_subs) = fixture_schedule(pages);
+    }
+    // The specification's luminaire and lighting control sections (`26 51 xx`, `26 09 xx`).
+    let specs = job_specs(job);
+    let mut spec_light = lt::SpecLighting::default();
+    let mut control_lines: Vec<(String, String)> = Vec::new();
+    for f in super::products::spec_files(&specs, &[]).into_iter().take(400) {
+        let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
+        let digits: String = name.chars().filter(char::is_ascii_digit).take(6).collect();
+        let (lum, ctl) = (digits.starts_with("2651"), digits.starts_with("2609"));
+        if !lum && !ctl {
+            continue;
+        }
+        let Ok(text) = crate::readfile::read(&f).map_err(|e| e.to_string()).and_then(|b| {
+            if f.to_ascii_lowercase().ends_with(".pdf") {
+                super::spec_import::pdf_text(&b, &f).map_err(|e| e.to_string())
+            } else {
+                String::from_utf8(b).map_err(|e| e.to_string())
+            }
+        }) else {
+            continue;
+        };
+        if lum && spec_light.said.is_empty() {
+            spec_light = lt::read_spec_lighting(&text, &name);
+        }
+        if ctl {
+            control_lines.extend(text.lines().map(str::trim).filter(|l| !l.is_empty()).take(20_000).map(|l| (l.to_string(), name.clone())));
+        }
+    }
+    let spec_says = spec_light.says();
+    // The submittal's products by type (every type it has, on a plan or not).
+    let mut submitted: BTreeMap<String, (String, String, String)> = BTreeMap::new();
+    for (mark, p) in result["submittal_products"].as_object().into_iter().flatten() {
+        let m = mark.trim().to_ascii_uppercase();
+        // A type is a short tag (`A`, `F1`, `XA`); a word the reader took for one (a column's
+        // heading, `QTY`) isn't.
+        let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic())) || NOT_TYPE_TAGS.contains(&m.as_str());
+        if m.is_empty() || m.len() > 6 || m.contains(' ') || word {
+            continue;
+        }
+        let g = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        // A luminaire's cut sheet, a scheduled type, or a product of a lighting package.
+        let lighting = p.get("category").and_then(Value::as_str) == Some("luminaire")
+            || types.iter().any(|t| t.tag == m)
+            || g("doc").to_ascii_uppercase().contains("LIGHT");
+        if !lighting {
+            continue;
+        }
+        submitted.insert(m, (g("manufacturer"), g("catalog_number"), g("doc")));
+    }
+    // The submittal the luminaires are in (its name without the page).
+    let submittal_name = submitted
+        .values()
+        .map(|(_, _, doc)| doc.split(" p.").next().unwrap_or(doc).trim().to_string())
+        .find(|d| !d.is_empty())
+        .unwrap_or_else(|| "the submittals".to_string());
+    // Each luminaire: its fields from the documents in order, with their sources.
     let d = s.doc()?;
     let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
-    let mut on_plans: BTreeMap<String, usize> = BTreeMap::new();
-    let mut submitted: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    let mut on_plans: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut field_conflicts: BTreeMap<String, Vec<lt::FieldConflict>> = BTreeMap::new();
+    let mut lums: Vec<Dev> = Vec::new();
+    let mut ctrls: Vec<Dev> = Vec::new();
+    let mut others: Vec<Dev> = Vec::new();
+    let mut handles: BTreeMap<String, cadaddy_doc::Handle> = BTreeMap::new();
+    let mut given_row = 0usize;
     for (e, base) in super::elemprops::elements(d).take(2_000_000) {
         let kind = super::elemprops::reported_kind(e, base.clone());
-        if !matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture") {
+        let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
+        let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
+        if !is_lum && !is_ctl && !matches!(base.as_str(), "device" | "equipment" | "fixture") {
             continue;
         }
         let mut store = props::read(&e.common.xdata);
         let text = |st: &props::Props, k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
         let mark = {
             let m = text(&store, "type_mark");
-            if m.is_empty() { text(&store, "type") } else { m }
+            lt_type(if m.is_empty() { text(&store, "type") } else { m })
         };
-        let ty = lightsched::type_of(&mark);
-        if ty.is_empty() {
+        let circuit = text(&store, "circuit");
+        let number = circuit.rsplit_once(['-', '/', '.']).map_or(String::new(), |(_, n)| n.trim().to_string());
+        let hex = e.handle.hex();
+        let dv = Dev {
+            h: hex.clone(),
+            room: text(&store, "room").to_ascii_uppercase(),
+            leg: text(&store, "switch_leg").to_ascii_lowercase(),
+            mark: mark.clone(),
+            kind: kind.clone(),
+            dimming: text(&store, "dimming"),
+            product: format!(
+                "{} {} {} {} {}",
+                text(&store, "product"),
+                text(&store, "configuration"),
+                text(&store, "required_features"),
+                text(&store, "device_type"),
+                text(&store, "catalog_number")
+            )
+            .to_ascii_uppercase(),
+            circuit: (text(&store, "panel").to_ascii_uppercase(), number),
+            level: level_key(&text(&store, "level")),
+            at: {
+                let v: Vec<f64> = text(&store, "location").split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
+                (v.len() >= 2).then(|| [v[0], v[1]])
+            },
+        };
+        handles.insert(hex.clone(), e.handle);
+        if is_ctl {
+            ctrls.push(dv);
             continue;
         }
-        *on_plans.entry(ty.clone()).or_default() += 1;
-        let (maker, cat) = (text(&store, "manufacturer"), text(&store, "catalog_number"));
-        if !maker.is_empty() || !cat.is_empty() {
-            submitted.entry(ty.clone()).or_default().insert((maker, cat));
+        if !is_lum {
+            if !dv.leg.is_empty() {
+                others.push(dv);
+            }
+            continue;
         }
-        let Some(row) = types.iter().find(|t| t.tag == ty) else { continue };
+        if mark.is_empty() {
+            lums.push(dv);
+            continue;
+        }
+        on_plans.entry(mark.clone()).or_default().push(hex.clone());
+        lums.push(dv);
+        let Some(row) = types.iter().find(|t| t.tag == mark) else { continue };
+        given_row += 1;
         let before = store.clone();
+        // What its submittal says (the values `bim.submittals` put on it, sourced so).
+        let sub_props: Vec<(&'static str, String, String)> = lt::FIELDS
+            .iter()
+            .filter_map(|(k, _)| {
+                let p = store.get(k).filter(|p| p.has_value() && p.source.kind == SourceKind::Submittal)?;
+                Some((*k, p.text().trim().to_string(), p.source.doc.clone().unwrap_or_else(|| submittal_name.clone())))
+            })
+            .collect();
+        let sub = lt::submittal_says(&sub_props);
+        let sched = lt::schedule_says(row);
+        let empty = lt::Sayings::new();
+        let spec = if lt::interior(row) { &spec_says } else { &empty };
+        let (chosen, fcs) = lt::resolve(&[&sub, &sched, spec]);
+        for (k, said) in &chosen {
+            let keep = store.get(k).is_some_and(|old| old.source.kind == SourceKind::User);
+            let same = store.get(k).is_some_and(|old| old.text().trim() == said.value && old.source.kind == said.kind);
+            if !keep && !same {
+                store.set(k, Prop::new(said.value.clone(), Source::from_doc(said.kind, &said.doc)));
+            }
+        }
         let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
         for (k, v) in [
             ("basis_of_design", format!("{} {}", row.manufacturer, row.model).trim().to_string()),
-            ("lamp", row.lamp.clone()),
-            ("voltage", row.voltage.clone()),
             ("installation", row.installation.clone()),
             ("fixture_description", row.description.clone()),
             ("schedule_notes", row.notes.clone()),
@@ -9319,326 +9520,269 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         if store != before {
             changes.push((e.handle, store));
         }
+        if !fcs.is_empty() {
+            field_conflicts.entry(mark).or_insert(fcs);
+        }
     }
     let d = s.doc_mut()?;
-    for (h, store) in changes.iter() {
+    for (h, store) in &changes {
         let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, store).into());
     }
-    // The documents against each other.
-    let mut issues: Vec<(String, String, String)> = Vec::new();
-    for (ty, n) in &on_plans {
-        if !types.iter().any(|t| &t.tag == ty) {
-            issues.push((
-                ty.clone(),
-                format!("{n} luminaires of type {ty} on the plans; the light fixture schedule has no type {ty}"),
-                "Add the type to the schedule (basis of design, lamp, voltage, mounting) or correct the plans' tags".into(),
-            ));
-        }
-    }
-    for t in &types {
-        let Some(subs) = submitted.get(&t.tag) else { continue };
-        for (maker, cat) in subs {
-            let other_maker = !maker.is_empty() && !t.manufacturer.is_empty() && !lightsched::same_maker(&t.manufacturer, maker);
-            let other_product = !cat.is_empty() && !t.model.is_empty() && !lightsched::same_product(&t.model, cat);
-            if other_maker || other_product {
-                let note = if no_subs { "; the schedule's notes allow no substitutions unless approved" } else { "" };
-                issues.push((
-                    t.tag.clone(),
-                    format!(
-                        "type {}: the schedule's basis of design is {} {}; the submittal gives {} {}{note}",
-                        t.tag, t.manufacturer, t.model, maker, cat
-                    ),
-                    "Confirm the substitution is approved (or resubmit the basis of design)".into(),
-                ));
+    // The documents against each other: the types, each type's fields.
+    let mut conflicts: Vec<Conflict> = lt::type_conflicts(&lt::TypeCheck {
+        schedule: &types,
+        submitted: &submitted,
+        on_plans: &on_plans,
+        submitted_qty: &BTreeMap::new(),
+        submittal_name: &submittal_name,
+    });
+    for (ty, fcs) in &field_conflicts {
+        let mut cs = lt::field_conflicts(ty, fcs, on_plans.get(ty).map_or(&[][..], Vec::as_slice));
+        if no_subs {
+            for c in cs.iter_mut().filter(|c| c.topic == "maker" || c.topic == "catalog number") {
+                c.issue.push_str("; the schedule's notes allow no substitutions unless approved");
             }
         }
+        conflicts.extend(cs);
     }
-    let unshown: Vec<String> = types.iter().filter(|t| !on_plans.contains_key(&t.tag)).map(|t| t.tag.clone()).collect();
-    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
-    let mut rfis = Vec::new();
-    for (ty, issue, fix) in &issues {
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in issue.bytes() {
-            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-        }
-        let id = format!("RFI-L{:08x}", h as u32);
-        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
-            let kind = cadaddy_walk3d::RfiKind::Lighting;
-            sp.rfis.push(cadaddy_walk3d::Rfi {
-                id: id.clone(),
-                kind: Some(kind),
-                severity: kind.severity(),
-                about: format!("lighting type {ty}"),
-                issue: issue.clone(),
-                assumed: "The model keeps the plans' type and the submitted product until answered.".into(),
-                proposed: Some(fix.clone()),
-                ..cadaddy_walk3d::Rfi::default()
-            });
-            rfis.push(id);
-        }
-        job.add_finding(StageName::BimBuild, issue, "the lighting documents disagree", 1, vec![fix.clone()], None, false);
-    }
-    sp.mep.fixture_schedule = types.clone();
-    s.doc_mut()?.building_spec = Some(sp.to_json());
-    s.touch();
-    let line = format!(
-        "  lighting: fixture schedule {} types ({}){}; luminaires given their row {}; on the plans {:?}; scheduled but not on the plans {:?}; conflicts {}",
-        types.len(),
-        types.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", "),
-        if no_subs { ", no substitutions" } else { "" },
-        changes.len(),
-        on_plans,
-        unshown,
-        issues.len()
-    );
-    report_progress(s, json!({"step": "lighting"}), &line);
-    s.echo(line);
-    result["lighting"] = json!({"types": types.len(), "luminaires": changes.len(), "conflicts": issues.len(), "rfis": rfis, "unshown": unshown});
-    controls_step(s, job, &types, result)
-}
-
-/// Lighting controls: each luminaire's control by its room and switch leg (the plans' letters on
-/// fixtures and switches), else its circuit's (a contactor or time switch per the panel schedule's
-/// codes), else none; emergency and exit fixtures unswitched by design. Conflicts: a leg no
-/// switch in the room has, a switch leg no fixture has, a 3-way without its pair, a dimmer over
-/// a fixture whose driver doesn't dim (or dims another way), a fixture with no control at all.
-fn controls_step(s: &mut Session, job: &mut GuidedJob, types: &[cadaddy_walk3d::FixtureType], result: &mut Value) -> crate::Result<()> {
-    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
-    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
-    // Each circuit's codes (C, TS, EM...) by panel and number.
+    // The controls.
     let mut codes: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for p in &sp.mep.panel_schedules {
         for c in &p.circuits {
             codes.insert((p.panel.to_ascii_uppercase(), c.number.clone()), c.protection.clone());
         }
     }
-    struct Dev {
-        h: cadaddy_doc::Handle,
-        room: String,
-        leg: String,
-        mark: String,
-        kind: String,
-        dimming: String,
-        product: String,
-        circuit: (String, String),
-        level: String,
-        at: Option<[f64; 2]>,
-    }
-    let d = s.doc()?;
-    let mut lums: Vec<Dev> = Vec::new();
-    let mut ctrls: Vec<Dev> = Vec::new();
-    // Other loads a switch leg may switch (a half-switched receptacle, a fan): those with a leg.
-    let mut others: Vec<Dev> = Vec::new();
-    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
-        let kind = super::elemprops::reported_kind(e, base.clone());
-        let is_lum = matches!(kind.as_str(), "luminaire" | "wall_luminaire" | "light_fixture");
-        let is_ctl = matches!(kind.as_str(), "switch" | "3way_switch" | "dimmer" | "occupancy_sensor");
-        if !is_lum && !is_ctl && !matches!(base.as_str(), "device" | "equipment" | "fixture") {
-            continue;
+    let emergency: BTreeMap<String, lt::Emergency> = types.iter().filter_map(|t| Some((t.tag.clone(), lt::emergency_type(t)?))).collect();
+    let plans = "the electrical plans";
+    let links = lt::link_controls(&lums, &ctrls, &others, &lt::ControlDocs { codes: &codes, emergency: &emergency, plans });
+    conflicts.extend(links.conflicts.iter().cloned());
+    // Sensors the energy code or the specification asks for, and guest rooms' master controls.
+    let rule = lt::sensor_rule();
+    let year = {
+        let d = s.doc()?;
+        let mut texts: Vec<String> =
+            pages.iter().flat_map(|(_, p)| cadaddy_mepfix::sheet_facts::texts(p).into_iter().map(|t| t.value)).take(500_000).collect();
+        let mut y = lt::energy_code_year(texts.iter().map(String::as_str));
+        if y.is_none() {
+            texts = cadaddy_mepfix::sheet_facts::texts(d).into_iter().map(|t| t.value).take(2_000_000).collect();
+            y = lt::energy_code_year(texts.iter().map(String::as_str));
         }
-        let st = props::read(&e.common.xdata);
-        let text = |k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
-        let mark = {
-            let m = text("type_mark");
-            if m.is_empty() { super::lightsched::type_of(&text("type")) } else { m.to_ascii_uppercase() }
-        };
-        let circuit = text("circuit");
-        let number = circuit.rsplit_once(['-', '/', '.']).map_or(String::new(), |(_, n)| n.trim().to_string());
-        let dv = Dev {
-            h: e.handle,
-            room: text("room").to_ascii_uppercase(),
-            leg: text("switch_leg").to_ascii_lowercase(),
-            mark,
-            kind,
-            dimming: text("dimming").to_ascii_uppercase(),
-            product: format!("{} {} {}", text("product"), text("configuration"), text("required_features")).to_ascii_uppercase(),
-            circuit: (text("panel").to_ascii_uppercase(), number),
-            level: text("level").to_ascii_uppercase(),
-            at: {
-                let v: Vec<f64> = text("location").split(',').filter_map(|x| x.trim().parse::<f64>().ok()).collect();
-                (v.len() >= 2).then(|| [v[0], v[1]])
-            },
-        };
-        if is_lum {
-            lums.push(dv);
-        } else if is_ctl {
-            ctrls.push(dv);
-        } else if !dv.leg.is_empty() {
-            others.push(dv);
+        if y.is_none() {
+            for disc in ["G", "A"] {
+                let pg = non_plan_pages(job, disc);
+                y = lt::energy_code_year(
+                    pg.iter()
+                        .flat_map(|(_, p)| cadaddy_mepfix::sheet_facts::texts(p).into_iter().map(|t| t.value))
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(String::as_str),
+                );
+                if y.is_some() {
+                    break;
+                }
+            }
         }
-    }
-    let emergency = |mark: &str| {
-        types.iter().find(|t| t.tag == mark).is_some_and(|t| {
-            let u = format!("{} {}", t.description, t.notes).to_ascii_uppercase();
-            u.contains("EXIT") || u.contains("EMERGENCY")
+        y
+    };
+    let units: BTreeMap<String, String> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|i| {
+            Some((i.get("number")?.as_str()?.trim().to_ascii_uppercase(), i.get("type").and_then(Value::as_str).unwrap_or_default().to_string()))
         })
-    };
-    let is_dimmer = |c: &Dev| c.mark.starts_with("SD") || c.mark.starts_with("D") && c.mark.len() <= 3 || c.product.contains("DIMMER");
-    let dim_kind = |text: &str| -> &'static str {
-        if text.contains("0-10") {
-            "0-10V"
-        } else if ["ELV", "MLV", "PHASE", "FORWARD", "REVERSE", "TRIAC"].iter().any(|w| text.contains(w)) {
-            "phase"
-        } else if text.contains("NON-DIM") || text == "NONE" || text.contains("NO DIM") {
-            "none"
-        } else {
-            ""
-        }
-    };
-    // Within reach on one level (a leg's switch is often across a door, in the next space).
-    let near = |a: &Dev, b: &Dev, reach: f64| {
-        let same_level = a.level.is_empty() || b.level.is_empty() || a.level == b.level;
-        same_level
-            && match (a.at, b.at) {
-                (Some(p), Some(q)) => ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2)).sqrt() <= reach,
-                _ => !a.room.is_empty() && a.room == b.room,
+        .collect();
+    let rooms: Vec<lt::SensorRoom> = job_rooms(job)
+        .into_iter()
+        .filter(|(_, _, _, n)| !n.is_empty())
+        .map(|(name, level, _, number)| {
+            let unit_type = units.get(&number.to_ascii_uppercase()).cloned().filter(|t| !t.is_empty());
+            lt::SensorRoom { number: number.to_ascii_uppercase(), name, level: level_key(&level), unit_type }
+        })
+        .collect();
+    let spec_spaces = lt::spec_sensor_spaces(&rule, &control_lines);
+    conflicts.extend(lt::sensor_conflicts(&rule, year.as_deref(), &spec_spaces, &rooms, &lums, &ctrls, plans));
+    // The enlarged unit plans against the floor plans (read when the typical rooms were stamped).
+    let diffs: Vec<lt::PlanDiff> =
+        result["typical_plan_diffs"].as_array().into_iter().flatten().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    conflicts.extend(lt::plan_diff_conflicts(&diffs));
+    // The links onto the elements: both ways.
+    let d = s.doc()?;
+    let mut writes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let joined = |v: &[String]| v.iter().take(60).cloned().collect::<Vec<_>>().join(", ");
+    let linked: BTreeSet<&String> = links.control.keys().chain(links.controls.keys()).chain(links.three_way_with.keys()).collect();
+    for hex in linked {
+        let Some(h) = handles.get(hex) else { continue };
+        let Some(e) = d.model.get(*h) else { continue };
+        let mut st = props::read(&e.common.xdata);
+        let before = st.clone();
+        let put = |st: &mut props::Props, k: &str, v: String, src: Source| {
+            if !v.is_empty() && !st.get(k).is_some_and(|o| o.source.kind == SourceKind::User) {
+                st.set(k, Prop::new(v, src));
             }
-    };
-    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
-    let mut issues: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
-    let mut tally: BTreeMap<&'static str, usize> = BTreeMap::new();
-    for l in &lums {
-        let in_room: Vec<&Dev> = ctrls.iter().filter(|c| !l.room.is_empty() && c.room == l.room).collect();
-        let by_leg: Vec<&Dev> = ctrls.iter().filter(|c| !l.leg.is_empty() && c.leg == l.leg && near(l, c, CONTROL_REACH_FT)).collect();
-        let circuit_codes = codes.get(&l.circuit).cloned().unwrap_or_default();
-        let (control, src, how): (String, Source, &'static str) = if !by_leg.is_empty() {
-            (
-                format!("switch leg {}: {}", l.leg, by_leg.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
-                Source::from_doc(SourceKind::Print, "switch leg letters on the plan"),
-                "leg",
-            )
-        } else if circuit_codes.iter().any(|c| c == "C" || c == "TS") {
-            (
-                format!(
-                    "{} (panel {} circuit {}: {})",
-                    if circuit_codes.iter().any(|c| c == "TS") { "time switch" } else { "contactor" },
-                    l.circuit.0,
-                    l.circuit.1,
-                    circuit_codes.join("/")
-                ),
-                Source::from_doc(SourceKind::Schedule, "panel schedule codes"),
-                "contactor",
-            )
-        } else if emergency(&l.mark) || circuit_codes.iter().any(|c| c == "EM") {
-            ("unswitched: emergency / exit".to_string(), Source::from_doc(SourceKind::Schedule, "light fixture schedule"), "emergency")
-        } else if !in_room.is_empty() && l.leg.is_empty() {
-            (
-                format!("the room's switches: {}", in_room.iter().map(|c| format!("{} {}", c.mark, c.h.hex())).collect::<Vec<_>>().join(", ")),
-                Source::computed(),
-                "room",
-            )
-        } else {
-            ("none found".to_string(), Source::computed(), "none")
         };
-        *tally.entry(how).or_default() += 1;
-        if how == "none" {
-            let what = if l.leg.is_empty() { "fixture with no control" } else { "switch leg with no switch" };
-            issues.entry(what).or_default().push(format!("{} {} in {}", l.mark, l.h.hex(), if l.room.is_empty() { "no room" } else { &l.room }));
+        if let Some((text, kind, doc, _)) = links.control.get(hex) {
+            put(&mut st, "control", text.clone(), if doc.is_empty() { Source::computed() } else { Source::from_doc(*kind, doc) });
         }
-        // A dimmer over a fixture that doesn't dim, or dims another way.
-        for c in by_leg.iter().filter(|c| is_dimmer(c)) {
-            let (dk, lk) = (dim_kind(&c.product), dim_kind(&l.dimming));
-            if lk == "none" || (!dk.is_empty() && !lk.is_empty() && dk != lk) {
-                issues.entry("dimmer over a fixture that doesn't dim that way").or_default().push(format!(
-                    "{} {} ({}) under {} {} ({}) in {}",
-                    l.mark,
-                    l.h.hex(),
-                    if lk.is_empty() { "?" } else { lk },
-                    c.mark,
-                    c.h.hex(),
-                    if dk.is_empty() { "?" } else { dk },
-                    l.room
-                ));
-            }
+        let by_plan = Source::from_doc(SourceKind::Print, "switch leg letters on the plans");
+        if let Some(v) = links.controlled_by.get(hex) {
+            put(&mut st, "controlled_by", joined(v), by_plan.clone());
         }
-        if let Some(e) = d.model.iter().find(|e| e.handle == l.h) {
-            let mut st = props::read(&e.common.xdata);
-            if !st.get("control").is_some_and(|o| o.source.kind == SourceKind::User) {
-                st.set("control", Prop::new(control, src));
-                changes.push((l.h, st));
-            }
+        if let Some(v) = links.controls.get(hex) {
+            put(&mut st, "controls", joined(v), by_plan.clone());
         }
-    }
-    // Switches: a leg no fixture near it has; a 3-way with no other 3-way of its leg within reach
-    // (its pair is usually at the other door or the other end of a corridor or stair).
-    let three = |c: &Dev| c.mark.starts_with("S3") || c.kind == "3way_switch" || c.product.contains("THREE WAY");
-    for c in &ctrls {
-        if c.kind == "occupancy_sensor" {
-            continue;
+        if let Some(v) = links.three_way_with.get(hex) {
+            put(&mut st, "three_way_with", joined(v), by_plan.clone());
         }
-        // Its leg's loads: lettered fixtures or other loads near it; else unlettered fixtures near
-        // it (a stamped unit's fixtures carry no letters), presumed its.
-        let lettered = lums.iter().chain(others.iter()).any(|l| l.leg == c.leg && near(l, c, CONTROL_REACH_FT));
-        let presumed = lums.iter().any(|l| l.leg.is_empty() && near(l, c, CONTROL_REACH_FT));
-        if !c.leg.is_empty() && !lettered && !presumed {
-            issues.entry("switch leg with no fixture").or_default().push(format!("{} {} leg {} in {}", c.mark, c.h.hex(), c.leg, c.room));
+        if let Some(why) = links.unswitched.get(hex) {
+            put(&mut st, "unswitched", "yes".into(), Source::from_doc(SourceKind::Schedule, why));
         }
-        if three(c) && !ctrls.iter().any(|o| o.h != c.h && three(o) && o.leg == c.leg && near(o, c, THREE_WAY_REACH_FT)) {
-            issues.entry("3-way switch without its pair").or_default().push(format!(
-                "{} {} leg {} in {}",
-                c.mark,
-                c.h.hex(),
-                if c.leg.is_empty() { "-" } else { &c.leg },
-                c.room
-            ));
+        if let Some(why) = links.emergency.get(hex) {
+            put(&mut st, "emergency", "yes".into(), Source::from_doc(SourceKind::Schedule, why));
+        }
+        if st != before {
+            writes.push((*h, st));
         }
     }
     let d = s.doc_mut()?;
-    for (h, st) in &changes {
+    for (h, st) in &writes {
         let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, st).into());
     }
-    let mut rfis = Vec::new();
-    for (what, list) in &issues {
-        let shown: Vec<&String> = list.iter().take(12).collect();
-        let more = if list.len() > shown.len() { format!(" and {} more", list.len() - shown.len()) } else { String::new() };
-        let issue = format!("Lighting controls: {} {what}: {}{more}", list.len(), shown.iter().map(|x| x.as_str()).collect::<Vec<_>>().join("; "));
-        let fix = match *what {
-            "fixture with no control" => "Show its switch leg (or its contactor / sensor), or note it unswitched",
-            "switch leg with no switch" => "Add the switch for that leg, or correct the fixture's leg letter",
-            "switch leg with no fixture" => "Correct the switch's leg letter, or add the fixtures it controls",
-            "3-way switch without its pair" => "Show the second 3-way switch, or make it single pole",
-            _ => "Match the dimmer to the driver (0-10V dimmer for 0-10V drivers, phase dimmer for phase-dimmable), or the fixture to the dimmer",
-        };
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in issue.bytes() {
-            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+    // Every conflict a review item (an RFI of kind `conflict`): this build's replace the last
+    // build's open ones; answered ones stay.
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    sp.rfis.retain(|r| {
+        let ours = r.kind == Some(cadaddy_walk3d::RfiKind::Lighting)
+            || (r.kind == Some(cadaddy_walk3d::RfiKind::Conflict) && r.topic.starts_with("lighting:"));
+        !(ours && r.status == cadaddy_walk3d::RfiStatus::Open)
+    });
+    let per_topic = lt::by_topic(&conflicts);
+    let mut kept: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut rfis = 0usize;
+    for c in &conflicts {
+        let n = kept.entry(c.topic.as_str()).or_default();
+        *n += 1;
+        if *n > lt::MAX_PER_TOPIC || sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
+            continue;
         }
-        let id = format!("RFI-L{:08x}", h as u32);
-        if !sp.rfis.iter().any(|r| r.id == id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
-            let kind = cadaddy_walk3d::RfiKind::Lighting;
-            sp.rfis.push(cadaddy_walk3d::Rfi {
-                id: id.clone(),
-                kind: Some(kind),
-                severity: kind.severity(),
-                about: format!("lighting controls ({what})"),
-                issue: issue.clone(),
-                assumed: "The model links what the plans' letters link; the rest is held.".into(),
-                proposed: Some(fix.into()),
-                ..cadaddy_walk3d::Rfi::default()
-            });
-            rfis.push(id);
+        let mut r = c.to_rfi("lighting");
+        r.at = c.at.map_or([0.0, 0.0], |p| [p[0] * upf, p[1] * upf]);
+        if !sp.rfis.iter().any(|x| x.id == r.id) {
+            sp.rfis.push(r);
+            rfis += 1;
         }
-        job.add_finding(StageName::BimBuild, &issue, "lighting controls on the plans", 1, vec![fix.into()], None, false);
+    }
+    // One job finding per kind of conflict.
+    for (topic, n) in &per_topic {
+        let mine: Vec<&Conflict> = conflicts.iter().filter(|c| &c.topic == topic).collect();
+        let shown: Vec<String> = mine.iter().take(6).map(|c| c.issue.clone()).collect();
+        let more = if mine.len() > shown.len() { format!(" (and {} more)", mine.len() - shown.len()) } else { String::new() };
+        let fix = mine.first().map(|c| c.fix.clone()).unwrap_or_default();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Lighting conflicts, {topic}: {n}: {}{more}", shown.join("; ")),
+            "the lighting documents disagree",
+            1,
+            vec![fix],
+            None,
+            false,
+        );
     }
     s.doc_mut()?.building_spec = Some(sp.to_json());
     s.touch();
+    // The report: luminaires and switches per level and per guest-room type against the plans'
+    // symbols, and the conflicts by kind.
+    let is_lum_kind = |k: &str| k.contains("luminaire") || k.contains("light fixture") || k == "light";
+    let is_ctl_kind = |k: &str| k.contains("switch") || k.contains("dimmer") || k.contains("sensor");
+    let mut symbols: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for dv in &job.devices {
+        let k = device_kind_of(dv).to_ascii_lowercase();
+        let e = symbols.entry(level_key(&dv.level)).or_default();
+        if is_lum_kind(&k) {
+            e.0 += 1;
+        } else if is_ctl_kind(&k) {
+            e.1 += 1;
+        }
+    }
+    let mut built: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for l in &lums {
+        built.entry(l.level.clone()).or_default().0 += 1;
+    }
+    for c in &ctrls {
+        built.entry(c.level.clone()).or_default().1 += 1;
+    }
+    let levels: BTreeSet<&String> = symbols.keys().chain(built.keys()).collect();
+    let by_level: BTreeMap<String, Value> = levels
+        .into_iter()
+        .map(|l| {
+            let (sl, sc) = symbols.get(l).copied().unwrap_or_default();
+            let (bl, bc) = built.get(l).copied().unwrap_or_default();
+            (l.clone(), json!({"luminaires": bl, "luminaire_symbols": sl, "switches": bc, "switch_symbols": sc}))
+        })
+        .collect();
+    // Per guest-room type: each room's luminaires and controls (fewest..most), the rooms.
+    let mut per_room: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for l in &lums {
+        if !l.room.is_empty() {
+            per_room.entry(l.room.clone()).or_default().0 += 1;
+        }
+    }
+    for c in &ctrls {
+        if !c.room.is_empty() {
+            per_room.entry(c.room.clone()).or_default().1 += 1;
+        }
+    }
+    let mut by_type: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
+    for (number, t) in &units {
+        by_type.entry(t.clone()).or_default().push(per_room.get(number).copied().unwrap_or_default());
+    }
+    let by_type: BTreeMap<String, Value> = by_type
+        .into_iter()
+        .map(|(t, v)| {
+            let range = |f: fn(&(usize, usize)) -> usize| json!([v.iter().map(f).min().unwrap_or(0), v.iter().map(f).max().unwrap_or(0)]);
+            (t, json!({"rooms": v.len(), "luminaires": range(|x| x.0), "switches": range(|x| x.1), "rooms_without_luminaires": v.iter().filter(|x| x.0 == 0).count()}))
+        })
+        .collect();
     let line = format!(
-        "  lighting controls: {} luminaires by {:?}; {} controls; conflicts {}",
-        lums.len(),
-        tally,
-        ctrls.len(),
-        issues.iter().map(|(k, v)| format!("{k}: {}", v.len())).collect::<Vec<_>>().join(", ")
+        "  lighting: fixture schedule {} types ({}){}; luminaires given their row {given_row}; on the plans {:?}; controls {:?}; unswitched {}; 3-way pairs {}; energy code {}; conflicts {} ({rfis} review items): {:?}",
+        types.len(),
+        types.iter().map(|t| t.tag.as_str()).collect::<Vec<_>>().join(", "),
+        if no_subs { ", no substitutions" } else { "" },
+        on_plans.iter().map(|(k, v)| (k.clone(), v.len())).collect::<BTreeMap<_, _>>(),
+        links.tally,
+        links.unswitched.len(),
+        links.three_way_with.len() / 2,
+        year.as_deref().unwrap_or("not named"),
+        conflicts.len(),
+        per_topic
     );
-    report_progress(s, json!({"step": "lighting controls"}), &line);
+    report_progress(s, json!({"step": "lighting"}), &line);
     s.echo(line);
-    result["lighting_controls"] =
-        json!({"by": tally, "issues": issues.iter().map(|(k, v)| (k.to_string(), v.len())).collect::<BTreeMap<_, _>>(), "rfis": rfis});
+    result["lighting"] = json!({
+        "types": types.len(),
+        "luminaires": given_row,
+        "on_plans": on_plans.iter().map(|(k, v)| (k.clone(), v.len())).collect::<BTreeMap<_, _>>(),
+        "spec_section": spec_light.section,
+        "energy_code": year,
+        "controls": links.tally,
+        "unswitched": links.unswitched.len(),
+        "three_way": links.three_way_with.len(),
+        "by_level": by_level,
+        "by_unit_type": by_type,
+        "conflicts": per_topic,
+        "review_items": rfis,
+    });
     Ok(())
 }
 
-/// How far a switch leg's switch may be from its fixtures, and a 3-way from its pair, feet.
-const CONTROL_REACH_FT: f64 = 40.0;
-const THREE_WAY_REACH_FT: f64 = 150.0;
+/// Words a submittal's form prints where a type tag goes that are no type.
+const NOT_TYPE_TAGS: [&str; 10] = ["QTY", "TYP", "REF", "NO", "EA", "PCS", "ITEM", "NOTE", "N/A", "TBD"];
+
+/// A luminaire's type from its mark (`luminaire XA` → `XA`), a control's mark as printed.
+fn lt_type(mark: String) -> String {
+    super::lightsched::type_of(&mark)
+}
 
 /// `bim.coderules`' receptacle circuits in GFCI places on breakers that aren't: `A-13 RCPT - ELEVATOR PIT (NEC 620.6 …)`.
 fn gfci_places(v: &Value) -> Vec<String> {
@@ -11059,6 +11203,9 @@ struct StampedRooms {
     rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
     /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
     sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+    /// The fixtures and switches a floor plan shows in a typical room otherwise than its type's
+    /// enlarged plan.
+    differs: Vec<super::lighting::PlanDiff>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -19431,5 +19578,144 @@ mod tests {
         let mut empty = Session::new();
         let e = empty.execute("bim.inventory", &json!({})).err().map(|e| e.to_string()).unwrap_or_default();
         assert!(e.contains("job.start"), "{e}");
+    }
+
+    /// A built luminaire or control as the build leaves it (a device mesh with its props).
+    fn lit_device(
+        s: &mut crate::Session,
+        kind: &str,
+        mark: &str,
+        room: &str,
+        leg: &str,
+        at_ft: [f64; 2],
+        sub: &[(&str, &str)],
+    ) -> cadaddy_doc::Handle {
+        use cadaddy_doc::props::{Prop, Props, Source, SourceKind};
+        let mut m = super::super::wallgen::empty_mesh();
+        let p = cadaddy_geom::Vec2::new(at_ft[0] * 12.0, at_ft[1] * 12.0);
+        super::super::wallgen::add_box(&mut m, p, p + cadaddy_geom::Vec2::new(4.0, 0.0), 2.0, 100.0, 104.0);
+        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 1", cadaddy_doc::Handle(0));
+        let mut st = Props::default();
+        let print = Source::print("E-9", None);
+        st.set("kind", Prop::new(kind, print.clone()));
+        st.set("type_mark", Prop::new(mark, print.clone()));
+        st.set("room", Prop::new(room, Source::computed()));
+        st.set("level", Prop::new("Level 1", Source::computed()));
+        st.set("location", Prop::new(format!("{:.2}, {:.2}, 8.00", at_ft[0], at_ft[1]), Source::computed()));
+        if !leg.is_empty() {
+            st.set("switch_leg", Prop::new(leg, print.clone()));
+        }
+        for (k, v) in sub {
+            st.set(k, Prop::new(*v, Source::from_doc(SourceKind::Submittal, "Package p.4")));
+        }
+        let xdata = cadaddy_doc::props::write(&tags, &st);
+        s.doc_mut()
+            .unwrap()
+            .add(
+                &cadaddy_doc::Space::Model,
+                cadaddy_doc::Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..cadaddy_doc::Common::default() },
+                cadaddy_doc::EntityKind::Mesh(m),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn the_lighting_step_gives_luminaires_their_documents_fields_links_controls_and_queues_each_conflict() {
+        use cadaddy_doc::props::{self, SourceKind};
+        let mut s = crate::Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let row = |tag: &str, model: &str, lamp: &str, install: &str, desc: &str| cadaddy_walk3d::FixtureType {
+            tag: tag.into(),
+            manufacturer: "MAKER ONE".into(),
+            model: model.into(),
+            lamp: lamp.into(),
+            va: super::super::lighting::watts_of(lamp),
+            voltage: "120".into(),
+            installation: install.into(),
+            description: desc.into(),
+            source: "E-9 LIGHT FIXTURE SCHEDULE".into(),
+            ..Default::default()
+        };
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.mep.fixture_schedule = vec![
+            row("Q1", "AB12 L48 3500LM MVOLT 35K", "LED 30VA", "RECESSED", "OFFICE TROFFER"),
+            row("Q8", "EM2", "LED 1VA", "7'-6\" AFF", "EMERGENCY LIGHT"),
+            row("Q5", "X1", "LED 5VA", "SURFACE", "LOBBY DECORATIVE"),
+        ];
+        sp.unit_instances = json!([{"number": "201", "type": "TYPE 7A"}]);
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        let sub = [("manufacturer", "Maker One Lighting"), ("catalog_number", "AB12 L48 4000LM MVOLT 40K")];
+        let l1 = lit_device(&mut s, "luminaire", "Q1", "101", "a", [0.0, 0.0], &sub);
+        let l2 = lit_device(&mut s, "luminaire", "Q1", "101", "a", [10.0, 0.0], &sub);
+        let w1 = lit_device(&mut s, "3way_switch", "S3", "101", "a", [2.0, 0.0], &[]);
+        let w2 = lit_device(&mut s, "3way_switch", "S3", "101", "a", [30.0, 0.0], &[]);
+        let em = lit_device(&mut s, "luminaire", "Q8", "101", "", [8.0, 8.0], &[]);
+        lit_device(&mut s, "luminaire", "Q9", "102", "b", [200.0, 0.0], &[]);
+        lit_device(&mut s, "luminaire", "Q1", "201", "c", [400.0, 0.0], &sub);
+        lit_device(&mut s, "switch", "S", "201", "c", [402.0, 0.0], &[]);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [{"name": "TYPE 7A", "level": "1", "number": "201", "outline": [[0, 0], [10, 0], [10, 10]]}]}));
+        }
+        let mut result = json!({
+            "submittal_products": {
+                "Q1": {"manufacturer": "Maker One Lighting", "catalog_number": "AB12 L48 4000LM MVOLT 40K", "category": "luminaire", "doc": "Package p.4"},
+                "Q7": {"manufacturer": "Maker Three", "catalog_number": "ZZ1", "category": "luminaire", "doc": "Package p.12"},
+                "QTY": {"manufacturer": "", "catalog_number": "VX-1", "category": "", "doc": "Other Package p.2"},
+            }
+        });
+        lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
+        let d = s.doc().unwrap();
+        let get = |h: cadaddy_doc::Handle, k: &str| {
+            d.model
+                .get(h)
+                .and_then(|e| props::read(&e.common.xdata).get(k).cloned())
+                .map(|p| (p.text(), p.source.kind, p.source.doc.unwrap_or_default()))
+        };
+        // Each field from the first document that gives it, with its source.
+        assert_eq!(
+            get(l1, "cct").map(|x| (x.0, x.1)),
+            Some(("4000K".to_string(), SourceKind::Submittal)),
+            "decoded from the submitted catalog number"
+        );
+        assert_eq!(get(l1, "lamp").map(|x| x.1), Some(SourceKind::Schedule), "the submittal says nothing of it");
+        assert_eq!(get(l1, "mounting_type").map(|x| x.0), Some("RECESSED".to_string()));
+        assert_eq!(
+            get(em, "manufacturer").map(|x| (x.0, x.1)),
+            Some(("MAKER ONE".to_string(), SourceKind::Schedule)),
+            "no submittal: the schedule's"
+        );
+        // The controls, both ways; the 3-way pair; the emergency light unswitched.
+        assert_eq!(get(l1, "controlled_by").map(|x| x.0), Some(format!("{}, {}", w1.hex(), w2.hex())));
+        assert_eq!(get(w1, "controls").map(|x| x.0), Some(format!("{}, {}", l1.hex(), l2.hex())));
+        assert_eq!(get(w1, "three_way_with").map(|x| x.0), Some(w2.hex()));
+        assert_eq!(get(em, "unswitched").map(|x| x.0), Some("yes".to_string()));
+        assert!(get(em, "emergency").is_some_and(|x| x.2.contains("EMERGENCY LIGHT")));
+        // Every disagreement a review item of kind conflict, both sides cited.
+        let rfis = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
+        let items = rfis["items"].as_array().unwrap();
+        let topics: Vec<&str> = items.iter().filter_map(|r| r["topic"].as_str()).collect();
+        for want in [
+            "lighting: CCT",
+            "lighting: lumens",
+            "lighting: plan type with no schedule row",
+            "lighting: scheduled type on no plan",
+            "lighting: submitted type with no schedule row",
+            "lighting: fixture leg with no switch",
+            "lighting: guest room master control",
+        ] {
+            assert!(topics.contains(&want), "{want} in {topics:?}");
+        }
+        assert!(!items.iter().any(|r| r["issue"].as_str().is_some_and(|i| i.contains("QTY"))), "a header word is no type");
+        assert!(items.iter().all(|r| r["sides"].as_array().is_some_and(|a| a.len() >= 2)), "{items:?}");
+        let review = s.execute("review.list", &json!({"kind": "conflict", "limit": 50})).unwrap();
+        let listed = review["items"].as_array().unwrap();
+        assert_eq!(listed.len(), items.len(), "{review}");
+        assert!(listed.iter().all(|i| i["kind"] == "conflict"));
+        assert_eq!(result["lighting"]["controls"]["leg"], json!(3), "{}", result["lighting"]);
+        // A second build replaces the open items (no doubles).
+        lighting_step(&mut s, &mut job, &[], &mut result).unwrap();
+        let again = s.execute("rfi.list", &json!({"kind": "conflict"})).unwrap();
+        assert_eq!(again["total"], rfis["total"]);
     }
 }
