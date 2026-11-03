@@ -7321,7 +7321,6 @@ fn copy_room_fixtures(
         // The type's fixture set: one of each tag the plans letter in the rooms of this type, the
         // rooms with the most first (a tag lettered across the wall, in the room behind, would
         // put a second where there is none), taken back into the view that goes into its room.
-        let near = 2.0 * upf;
         let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
         let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
         let mut sources = 0usize;
@@ -7352,7 +7351,9 @@ fn copy_room_fixtures(
             let mut added = false;
             for (p, f) in &set {
                 let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
-                if have.iter().any(|h| h.tag == f.tag && (h.at[0] - at[0]).hypot(h.at[1] - at[1]) <= near) {
+                // The set is one of each tag: a room with that tag already (where the plans put it,
+                // however its fit lays the set in) takes none.
+                if have.iter().any(|h| h.tag == f.tag) {
                     continue;
                 }
                 out.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
