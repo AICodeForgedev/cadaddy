@@ -741,10 +741,22 @@ fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn
 }
 
 /// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
+/// Two outlines are one loop: the same corners, whichever each starts at and whichever way it
+/// goes round.
+fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let area = |p: &[Vec2]| cadaddy_geom::shoelace(p).abs();
+    (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
+}
+
 /// A label's width per character, in its text height (a room tag's capitals).
 const LABEL_CHAR_WIDTH: f64 = 0.6;
-/// A tag's number is within this of its name, in the name's text height (one line under it).
-const TAG_NUMBER_REACH: f64 = 3.5;
+/// A tag's number is within this of its name, in the name's text height (under its last line:
+/// a two-line name, `DOUBLE Q ADA` over `(TUB)`, puts it about 5 heights from the first; the
+/// next room's tag is 10 or more away).
+const TAG_NUMBER_REACH: f64 = 5.5;
 /// The least a room its label doesn't fit inside may be, sq ft (a smaller loop under a label is a
 /// piece of furniture's linework).
 const OVERHUNG_ROOM_MIN_SQFT: f64 = 40.0;
@@ -931,7 +943,8 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
         }
         let Some((poly, area)) = holds.or(first) else { continue };
         // One room per outline: a second label in the same room is its number or a note.
-        if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+        // (The same loop traced from another seed may start at another corner.)
+        if out.iter().any(|q| same_loop(&q.outline, &poly)) {
             continue;
         }
         // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
@@ -984,6 +997,17 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_loop_from_another_corner_or_the_other_way_round_is_the_same_room() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let a = [v(0.0, 0.0), v(10.0, 0.0), v(10.0, 5.0), v(0.0, 5.0)];
+        let b = [v(10.0, 5.0), v(0.0, 5.0), v(0.0, 0.0), v(10.0, 0.0)];
+        let c = [v(0.0, 5.0), v(10.0, 5.0), v(10.0, 0.0), v(0.0, 0.0)];
+        assert!(same_loop(&a, &b) && same_loop(&a, &c));
+        assert!(!same_loop(&a, &[v(0.0, 0.0), v(11.0, 0.0), v(11.0, 5.0), v(0.0, 5.0)]));
+        assert!(!same_loop(&a, &a[..3]));
+    }
 
     #[test]
     fn a_short_room_name_is_no_device_mark() {
