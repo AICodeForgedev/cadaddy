@@ -1223,7 +1223,7 @@ pub(crate) fn tally_json(t: &Tally) -> Value {
 
 fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.count";
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let group_by = p.get("group_by").and_then(Value::as_str).map(str::to_ascii_lowercase);
     if let Some(g) = group_by.as_deref()
         && !matches!(g, "kind" | "item" | "size" | "type" | "level" | "room" | "circuit" | "system" | "trade")
@@ -1262,7 +1262,7 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
         );
     }
     if bool_or(p, "verify", false) {
-        let t0 = std::time::Instant::now();
+        let t0 = web_time::Instant::now();
         let full = Index::of(s.doc()?);
         let (t, _) = full.query(&f, None);
         let recount_ms = t0.elapsed().as_secs_f64() * 1000.0;

@@ -1,0 +1,124 @@
+{
+  "trade": "mechanical",
+  "about": "Standard object forms for HVAC kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "ptac",
+      "label": "PTAC / PTHP",
+      "aliases": ["pthp", "through_wall_unit"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "size", "type": "text", "required": true, "aliases": ["capacity", "cooling_btuh"]},
+        {"key": "heating", "type": "text", "required": false, "aliases": ["heating_kw"]},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "mca", "type": "number", "unit": "A", "required": true},
+        {"key": "mocp", "type": "number", "unit": "A", "required": true},
+        {"key": "connection", "type": "text", "required": true, "aliases": ["receptacle", "plug"], "note": "cord and plug (NEMA) or hard wired"},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"]},
+        {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "ahu",
+      "label": "Air handler / fan coil",
+      "aliases": ["air_handler", "fcu", "fan_coil", "rtu", "condensing_unit", "vav"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "cfm", "type": "number", "unit": "cfm", "required": true},
+        {"key": "size", "type": "text", "required": false, "aliases": ["capacity", "tons"]},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "phase", "type": "text", "required": false},
+        {"key": "mca", "type": "number", "unit": "A", "required": true},
+        {"key": "mocp", "type": "number", "unit": "A", "required": true},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"]},
+        {"key": "connections", "type": "text", "required": false, "note": "duct, pipe, condensate, power"},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "fan",
+      "label": "Fan",
+      "aliases": ["exhaust_fan", "ef"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "cfm", "type": "number", "unit": "cfm", "required": true},
+        {"key": "static_pressure", "type": "number", "unit": "in wc", "required": false, "aliases": ["esp"]},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "watts", "type": "number", "unit": "W", "required": false, "aliases": ["hp", "motor"]},
+        {"key": "control", "type": "text", "required": true, "aliases": ["switch_leg"]},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"]},
+        {"key": "connections", "type": "text", "required": false},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "terminal",
+      "label": "Grille / diffuser / register",
+      "aliases": ["air_device"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": false, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "size", "type": "text", "unit": "in", "required": true, "aliases": ["face_size"]},
+        {"key": "neck_size", "type": "text", "unit": "in", "required": false},
+        {"key": "cfm", "type": "number", "unit": "cfm", "required": true},
+        {"key": "system", "type": "text", "required": true, "note": "supply, return, exhaust, transfer"},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"], "note": "ceiling, sidewall"},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "duct",
+      "label": "Duct",
+      "aliases": ["ductwork"],
+      "fields": [
+        {"key": "system", "type": "text", "required": true},
+        {"key": "size", "type": "text", "unit": "in", "required": true},
+        {"key": "shape", "type": "enum", "allowed": ["rectangular", "round", "oval", "flex"], "required": true},
+        {"key": "material", "type": "text", "required": true},
+        {"key": "gauge", "type": "text", "required": false},
+        {"key": "insulation", "type": "text", "required": true},
+        {"key": "elevation", "type": "number", "unit": "ft", "required": true, "aliases": ["bottom_height"], "note": "bottom of duct"},
+        {"key": "connections", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "equipment",
+      "label": "Equipment",
+      "aliases": ["mechanical_equipment"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "tag"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "mca", "type": "number", "unit": "A", "required": false},
+        {"key": "mocp", "type": "number", "unit": "A", "required": false},
+        {"key": "mounting", "type": "text", "required": false, "aliases": ["placement"]},
+        {"key": "connections", "type": "text", "required": false},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

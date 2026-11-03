@@ -3481,6 +3481,14 @@
 	Validation Evidence Packet	Пакет доказів перевірки
 	Validation Prescreen	Попередня перевірка
 	Validation Rules	Правила перевірки
+	Model Fidelity	Деталізація моделі
+	Model Fidelity Rules	Правила деталізації моделі
+	Model Fidelity Report	Звіт про деталізацію моделі
+	Fidelity	Деталізація
+	Auto	Авто
+	Floor	Поверх
+	Detail	Деталі
+	Print Inventory	Опис креслень
 	Piece	Деталь
 	Raceway run	Ділянка кабелепроводу
 	Connects to	З'єднано з
@@ -3497,3 +3505,14 @@
 	Trade Pieces Report	Звіт про деталі видів робіт
 	Trade Piece Rules	Правила деталей видів робіт
 	Read Trade Documents	Прочитати документи видів робіт
+	Object Forms	Форми об'єктів
+	Create Object Forms	Створити форми об'єктів
+	Edit Object Form Field	Змінити поле форми об'єкта
+	Record Object Field Value	Записати значення поля об'єкта
+	Object Form Log	Журнал форм об'єктів
+	Revert Object Form Change	Скасувати зміну форми об'єкта
+	Promote Object Form to Template	Зробити форму об'єкта шаблоном
+	Object Completeness	Повнота об'єктів
+	Object Form	Форма об'єкта
+	Price a Change	Оцінити зміну
+	Value Engineering	Інженерна оптимізація вартості

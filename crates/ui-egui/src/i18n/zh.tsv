@@ -3416,6 +3416,14 @@
 	Report Validation Findings	报告验证结果
 	Validation Run Status	验证运行状态
 	Plant Validation Errors	植入验证错误
+	Model Fidelity	模型精细度
+	Model Fidelity Rules	模型精细度规则
+	Model Fidelity Report	模型精细度报告
+	Fidelity	精细度
+	Auto	自动
+	Floor	楼层
+	Detail	细节
+	Print Inventory	图纸清单
 	Piece	构件
 	Raceway run	线管段
 	Connects to	连接到
@@ -3432,3 +3440,12 @@
 	Trade Pieces Report	各工种构件报告
 	Trade Piece Rules	各工种构件规则
 	Read Trade Documents	读取各工种文件
+	Object Forms	对象表单
+	Create Object Forms	创建对象表单
+	Edit Object Form Field	编辑对象表单字段
+	Record Object Field Value	记录对象字段值
+	Object Form Log	对象表单日志
+	Revert Object Form Change	撤销对象表单更改
+	Promote Object Form to Template	将对象表单提升为模板
+	Object Completeness	对象完整度
+	Object Form	对象表单

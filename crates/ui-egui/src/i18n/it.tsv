@@ -3414,6 +3414,14 @@ menu	Modify	Edita
 	Report Validation Findings	Segnala i risultati della convalida
 	Validation Run Status	Stato dell’esecuzione di convalida
 	Plant Validation Errors	Inserisci errori di convalida
+	Model Fidelity	Fedeltà del modello
+	Model Fidelity Rules	Regole di fedeltà del modello
+	Model Fidelity Report	Rapporto di fedeltà del modello
+	Fidelity	Fedeltà
+	Auto	Automatico
+	Floor	Piano
+	Detail	Dettaglio
+	Print Inventory	Inventario delle tavole
 	Piece	Pezzo
 	Raceway run	Tratta di canalizzazione
 	Connects to	Collegato a
@@ -3430,3 +3438,12 @@ menu	Modify	Edita
 	Trade Pieces Report	Rapporto pezzi per categoria
 	Trade Piece Rules	Regole dei pezzi per categoria
 	Read Trade Documents	Leggi i documenti delle categorie
+	Object Forms	Moduli degli oggetti
+	Create Object Forms	Crea moduli degli oggetti
+	Edit Object Form Field	Modifica campo del modulo oggetto
+	Record Object Field Value	Registra valore del campo oggetto
+	Object Form Log	Registro dei moduli degli oggetti
+	Revert Object Form Change	Annulla modifica del modulo oggetto
+	Promote Object Form to Template	Promuovi modulo oggetto a modello
+	Object Completeness	Completezza degli oggetti
+	Object Form	Modulo oggetto

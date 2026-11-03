@@ -57,6 +57,8 @@ const UNCHECKED: &[&str] = &[
     "cmd/file/etransmit.rs",
     "cmd/file/sheetset.rs",
     "cmd/file/zip.rs",
+    // bim.form.promote: only its own trade template file in the settings folder, updated in place
+    "cmd/forms.rs",
     "cmd/fourd.rs",
     "cmd/guided.rs",
     "cmd/hatch/patfile.rs",

@@ -3336,6 +3336,14 @@ menu	View	عرض
 	Report Validation Findings	الإبلاغ عن نتائج التحقق
 	Validation Run Status	حالة جولة التحقق
 	Plant Validation Errors	زرع أخطاء للتحقق
+	Model Fidelity	دقة النموذج
+	Model Fidelity Rules	قواعد دقة النموذج
+	Model Fidelity Report	تقرير دقة النموذج
+	Fidelity	الدقة
+	Auto	تلقائي
+	Floor	الطابق
+	Detail	التفاصيل
+	Print Inventory	جرد المخططات
 	Piece	القطعة
 	Raceway run	مسار القناة
 	Connects to	يتصل بـ
@@ -3352,3 +3360,12 @@ menu	View	عرض
 	Trade Pieces Report	تقرير قطع الحِرف
 	Trade Piece Rules	قواعد قطع الحِرف
 	Read Trade Documents	قراءة مستندات الحِرف
+	Object Forms	نماذج الكائنات
+	Create Object Forms	إنشاء نماذج الكائنات
+	Edit Object Form Field	تحرير حقل نموذج الكائن
+	Record Object Field Value	تسجيل قيمة حقل الكائن
+	Object Form Log	سجل نماذج الكائنات
+	Revert Object Form Change	التراجع عن تغيير نموذج الكائن
+	Promote Object Form to Template	ترقية نموذج الكائن إلى قالب
+	Object Completeness	اكتمال الكائنات
+	Object Form	نموذج الكائن

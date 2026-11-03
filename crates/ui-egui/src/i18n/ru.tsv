@@ -3130,6 +3130,14 @@
 	Report Validation Findings	Сообщить результаты проверки
 	Validation Run Status	Состояние прогона проверки
 	Plant Validation Errors	Внедрить ошибки для проверки
+	Model Fidelity	Детализация модели
+	Model Fidelity Rules	Правила детализации модели
+	Model Fidelity Report	Отчёт о детализации модели
+	Fidelity	Детализация
+	Auto	Авто
+	Floor	Этаж
+	Detail	Подробно
+	Print Inventory	Опись чертежей
 	Piece	Деталь
 	Raceway run	Участок кабелепровода
 	Connects to	Соединено с
@@ -3146,3 +3154,12 @@
 	Trade Pieces Report	Отчёт по деталям видов работ
 	Trade Piece Rules	Правила деталей видов работ
 	Read Trade Documents	Прочитать документы видов работ
+	Object Forms	Формы объектов
+	Create Object Forms	Создать формы объектов
+	Edit Object Form Field	Изменить поле формы объекта
+	Record Object Field Value	Записать значение поля объекта
+	Object Form Log	Журнал форм объектов
+	Revert Object Form Change	Отменить изменение формы объекта
+	Promote Object Form to Template	Сделать форму объекта шаблоном
+	Object Completeness	Полнота объектов
+	Object Form	Форма объекта

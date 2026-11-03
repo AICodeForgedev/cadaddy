@@ -296,6 +296,8 @@ pub struct DocState {
     pub wheel: cmd::view::navwheel::Wheel,
     /// Model space's visual style (VSCURRENT): how 3D objects show on the Model tab.
     pub visual_style: cadaddy_render::shade::VisualStyle,
+    /// The 3D view's fidelity layers (`view.fidelity`).
+    pub fidelity: cmd::fidelity::View,
     pub uid: u64,
     /// The drawing is saved as binary DXF (it was opened from one, or last saved as one).
     pub binary_dxf: bool,
@@ -410,6 +412,7 @@ impl DocState {
             vpmax: None,
             wheel: Default::default(),
             visual_style: cadaddy_render::shade::VisualStyle::Wireframe2d,
+            fidelity: cmd::fidelity::View::default(),
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             binary_dxf: false,
             read_loss: None,
@@ -3859,7 +3862,11 @@ impl Session {
         }
         let ap = self.pick_aperture();
         match select::pick(self.doc()?, &space, p, ap) {
-            Some(h) => self.idle_pick(h, shift),
+            // A piece the 3D view draws only as part of its run (a coarse fidelity tier): the run.
+            Some(h) => match cmd::fidelity::pick(self, h) {
+                run if run.len() > 1 => self.idle_select_area(run, shift),
+                _ => self.idle_pick(h, shift),
+            },
             None => self.pending_window = Some(PendingWindow { corner: p, during_command: false }),
         }
         Ok(())

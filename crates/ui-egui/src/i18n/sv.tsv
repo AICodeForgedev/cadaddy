@@ -3505,6 +3505,14 @@ menu	Modify	Ändra
 	Report Validation Findings	Rapportera valideringsfynd
 	Validation Run Status	Status för valideringskörning
 	Plant Validation Errors	Plantera valideringsfel
+	Model Fidelity	Modellens detaljnivå
+	Model Fidelity Rules	Regler för modellens detaljnivå
+	Model Fidelity Report	Rapport om modellens detaljnivå
+	Fidelity	Detaljnivå
+	Auto	Auto
+	Floor	Våning
+	Detail	Detalj
+	Print Inventory	Ritningsinventering
 	Piece	Del
 	Raceway run	Rörsträcka
 	Connects to	Ansluter till
@@ -3521,3 +3529,12 @@ menu	Modify	Ändra
 	Trade Pieces Report	Rapport över yrkesdelar
 	Trade Piece Rules	Regler för yrkesdelar
 	Read Trade Documents	Läs yrkesdokument
+	Object Forms	Objektformulär
+	Create Object Forms	Skapa objektformulär
+	Edit Object Form Field	Redigera fält i objektformulär
+	Record Object Field Value	Registrera objektfältvärde
+	Object Form Log	Logg för objektformulär
+	Revert Object Form Change	Återställ ändring i objektformulär
+	Promote Object Form to Template	Gör objektformulär till mall
+	Object Completeness	Objektens fullständighet
+	Object Form	Objektformulär

@@ -1,0 +1,47 @@
+{
+  "trade": "lighting",
+  "about": "Standard object forms for lighting kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "luminaire",
+      "label": "Luminaire",
+      "aliases": ["light_fixture", "light", "lighting_fixture"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "fixture_type"]},
+        {"key": "schedule_row", "type": "text", "required": true, "aliases": ["schedule"], "note": "the lighting fixture schedule row it is"},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "manufacturer", "type": "text", "required": false, "aliases": ["maker"]},
+        {"key": "lumens", "type": "number", "unit": "lm", "required": true},
+        {"key": "cct", "type": "number", "unit": "K", "required": true, "aliases": ["color_temperature"]},
+        {"key": "voltage", "type": "text", "required": true},
+        {"key": "dimming", "type": "text", "required": true, "aliases": ["driver", "protocol"], "note": "driver and dimming protocol (0-10V, ELV, phase)"},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"], "note": "recessed, surface, pendant, wall"},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "control", "type": "text", "required": true, "aliases": ["switch_leg", "control_zone"]},
+        {"key": "panel", "type": "text", "required": true, "aliases": ["fed_from"]},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "emergency", "type": "enum", "allowed": ["yes", "no", "battery", "generator", "inverter"], "required": true},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "exit_sign",
+      "label": "Exit sign",
+      "aliases": [],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "fixture_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "faces", "type": "text", "required": true, "note": "single or double face; arrows"},
+        {"key": "mounting", "type": "text", "required": true, "aliases": ["placement"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": false, "aliases": ["height_aff"]},
+        {"key": "emergency", "type": "enum", "allowed": ["battery", "generator", "inverter", "yes"], "required": true},
+        {"key": "circuit", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

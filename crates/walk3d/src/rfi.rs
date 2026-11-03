@@ -78,10 +78,13 @@ pub enum RfiKind {
     /// Lighting where the documents disagree: a plan's fixture type with no schedule row, a
     /// submitted luminaire that isn't the schedule's basis of design.
     Lighting,
+    /// A wiring method the code allows that the specification doesn't list for the work, proposed
+    /// for its savings in material and labor (value engineering).
+    MethodChoice,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 23] = [
+    pub const ALL: [RfiKind; 24] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -105,6 +108,7 @@ impl RfiKind {
         RfiKind::ServiceEntrance,
         RfiKind::EquipmentElectrical,
         RfiKind::Lighting,
+        RfiKind::MethodChoice,
     ];
 
     /// The snake_case name (as in JSON).
@@ -133,6 +137,7 @@ impl RfiKind {
             RfiKind::ServiceEntrance => "service_entrance",
             RfiKind::EquipmentElectrical => "equipment_electrical",
             RfiKind::Lighting => "lighting",
+            RfiKind::MethodChoice => "method_choice",
         }
     }
 
@@ -166,6 +171,7 @@ impl RfiKind {
             RfiKind::ServiceEntrance => "Service entrance not shown or unclear",
             RfiKind::EquipmentElectrical => "Equipment's submittal differs from the drawings (protection, SCCR, conductors)",
             RfiKind::Lighting => "Lighting documents disagree (plans, fixture schedule, submittal)",
+            RfiKind::MethodChoice => "A wiring method the code allows and the spec doesn't list (value engineering)",
         }
     }
 
@@ -185,7 +191,7 @@ impl RfiKind {
             | RfiKind::EmbedConflict
             | RfiKind::ServiceEntrance
             | RfiKind::EquipmentElectrical => Severity::High,
-            RfiKind::DetailUnused => Severity::Low,
+            RfiKind::DetailUnused | RfiKind::MethodChoice => Severity::Low,
             _ => Severity::Medium,
         }
     }
