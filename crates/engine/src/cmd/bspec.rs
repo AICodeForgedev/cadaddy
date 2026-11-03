@@ -763,12 +763,19 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
         // A room traced from its own tag (`at`) is found by its number only: the plans' unit-type
         // label elsewhere names other rooms.
         let is_number = super::perceive::geometry::room_number(&text);
-        // A spec room with a number and no level is claimed by its number only: its name (a unit
-        // type every floor prints) would take a room of another floor and give it this one's
-        // number.
+        // A spec room numbered for another floor (220 is the second floor's: the number starts
+        // with the floor's digits) isn't this floor's by its name: a unit type every floor prints
+        // would take this floor's room and give it the other floor's number.
+        let floor_digits = here.map(|h| h.name.chars().filter(char::is_ascii_digit).collect::<String>()).unwrap_or_default();
+        let this_floors = |r: &cadaddy_walk3d::SpecRoom| match r.number.as_deref().map(str::trim) {
+            Some(n) if !floor_digits.is_empty() && n.starts_with(|c: char| c.is_ascii_digit()) && n.len() > floor_digits.len() => {
+                n.starts_with(&floor_digits)
+            }
+            _ => true,
+        };
         let room = sp.rooms.iter().position(|r| {
             names_room(r, &text)
-                && (is_number || (r.at.is_none() && (r.number.is_none() || r.level.is_some())))
+                && (is_number || (r.at.is_none() && this_floors(r)))
                 && r.level.as_ref().is_none_or(|l| here.is_some_and(|h| h.name.eq_ignore_ascii_case(l)))
         });
         // Without room tag layers only the spec's rooms are looked for. On them, a room's name
