@@ -6341,7 +6341,7 @@ fn stamp_typical_rooms(
             .count()
     };
     let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
-    let mut footprints: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
+    let mut footprints: Vec<Footprint> = Vec::new();
     let refs = job_sheet_refs(job);
     // The floor plans' door swings and linework round the rooms, to lay each typical view into
     // each room the way it faces.
@@ -6492,7 +6492,7 @@ fn stamp_typical_rooms(
                 let turn = turn_of(view, ri, outline);
                 let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn) else { continue };
                 let room = stamped_room(name, number, ri);
-                if !footprints.iter().any(|(l, r, _)| l == level && *r == room)
+                if !footprints.iter().any(|(l, r, _, _)| l == level && *r == room)
                     && let Some(b) = unit_box(view)
                 {
                     let corners: Vec<cadaddy_geom::Vec2> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
@@ -6501,7 +6501,7 @@ fn stamp_typical_rooms(
                         .map(|q| cadaddy_geom::Vec2::new(q[0], q[1]))
                         .collect();
                     if corners.len() == 4 {
-                        footprints.push((level.clone(), room.clone(), corners));
+                        footprints.push((level.clone(), room.clone(), corners, outline.clone()));
                     }
                 }
                 let mut copy = (*dv).clone();
@@ -7337,15 +7337,25 @@ fn scheduled_connections(
     out
 }
 
+/// A stamped unit's footprint: level, room, the footprint, the room's own (label-traced) outline.
+type Footprint = (String, String, Vec<cadaddy_geom::Vec2>, Vec<cadaddy_geom::Vec2>);
+
 /// Books each device in no room that stands in a unit's footprint to that unit (its level by the
-/// digits of its name: a device read off its sheet may carry the sheet's level code); how many.
-fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[(String, String, Vec<cadaddy_geom::Vec2>)]) -> usize {
+/// digits of its name: a device read off its sheet may carry the sheet's level code); in two
+/// footprints (units back to back, their plans' linework past the wall they share), the one whose
+/// own room is nearer. How many.
+fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Footprint]) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
-        if let Some((_, room, _)) = footprints.iter().find(|(l, _, poly)| here(l) && cadaddy_geom::point_in_polygon(poly, p)) {
+        let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
+        if let Some((_, room, _, _)) = footprints
+            .iter()
+            .filter(|(l, _, poly, _)| here(l) && cadaddy_geom::point_in_polygon(poly, p))
+            .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
+        {
             dv.room = room.clone();
             n += 1;
         }
@@ -9733,8 +9743,8 @@ struct StampedRooms {
     /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
     sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
     /// Each stamped unit's whole footprint (its plan's linework laid into the room: the bath and
-    /// entry its label's room leaves out): level, room, outline.
-    footprints: Vec<(String, String, Vec<cadaddy_geom::Vec2>)>,
+    /// entry its label's room leaves out): level, room, footprint, the room's own outline.
+    footprints: Vec<Footprint>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -14102,16 +14112,28 @@ mod tests {
     #[test]
     fn a_device_in_a_units_bath_is_booked_to_the_unit() {
         let v = |x: f64, y: f64| cadaddy_geom::Vec2::new(x, y);
-        let foot = vec![("2".to_string(), "202".to_string(), vec![v(0.0, 0.0), v(144.0, 0.0), v(144.0, 348.0), v(0.0, 348.0)])];
+        let quad = |x0: f64, y0: f64, x1: f64, y1: f64| vec![v(x0, y0), v(x1, y0), v(x1, y1), v(x0, y1)];
+        // Two units back to back at x = 144: their footprints overlap 12 past the shared wall; their
+        // bedrooms (the label-traced rooms) north of the baths.
+        let foot = vec![
+            ("2".to_string(), "202".to_string(), quad(0.0, 0.0, 156.0, 348.0), quad(0.0, 100.0, 144.0, 348.0)),
+            ("2".to_string(), "204".to_string(), quad(132.0, 0.0, 300.0, 348.0), quad(144.0, 100.0, 300.0, 348.0)),
+        ];
         let wc = |x: f64, y: f64, level: &str| super::super::readers::ReadDevice {
             tag: "P-1".into(),
             at: [x, y],
             level: level.into(),
             ..Default::default()
         };
-        let mut devices = vec![wc(40.0, 30.0, "Level 2"), wc(400.0, 30.0, "Level 2"), wc(40.0, 30.0, "Level 3")];
-        assert_eq!(book_into_units(&mut devices, &foot), 1);
-        assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", ""]);
+        let mut devices = vec![
+            wc(40.0, 30.0, "Level 2"),
+            wc(400.0, 30.0, "Level 2"),
+            wc(40.0, 30.0, "Level 3"),
+            wc(150.0, 60.0, "Level 2"),
+            wc(138.0, 60.0, "Level 2"),
+        ];
+        assert_eq!(book_into_units(&mut devices, &foot), 3);
+        assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
