@@ -75,10 +75,13 @@ pub enum RfiKind {
     /// An equipment connection whose approved submittal's electrical data differs from the
     /// drawings: its protection, its short-circuit rating against the fault current, its conductors.
     EquipmentElectrical,
+    /// Lighting where the documents disagree: a plan's fixture type with no schedule row, a
+    /// submitted luminaire that isn't the schedule's basis of design.
+    Lighting,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 22] = [
+    pub const ALL: [RfiKind; 23] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -101,6 +104,7 @@ impl RfiKind {
         RfiKind::EmbedConflict,
         RfiKind::ServiceEntrance,
         RfiKind::EquipmentElectrical,
+        RfiKind::Lighting,
     ];
 
     /// The snake_case name (as in JSON).
@@ -128,6 +132,7 @@ impl RfiKind {
             RfiKind::EmbedConflict => "embed_conflict",
             RfiKind::ServiceEntrance => "service_entrance",
             RfiKind::EquipmentElectrical => "equipment_electrical",
+            RfiKind::Lighting => "lighting",
         }
     }
 
@@ -160,6 +165,7 @@ impl RfiKind {
             RfiKind::EmbedConflict => "Rebar and embeds clash or lack cover",
             RfiKind::ServiceEntrance => "Service entrance not shown or unclear",
             RfiKind::EquipmentElectrical => "Equipment's submittal differs from the drawings (protection, SCCR, conductors)",
+            RfiKind::Lighting => "Lighting documents disagree (plans, fixture schedule, submittal)",
         }
     }
 
