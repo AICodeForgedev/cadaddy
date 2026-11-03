@@ -60,7 +60,11 @@ fn hex(h: Handle) -> String {
 /// The built elements whose layer starts with `prefix`.
 fn on_layer(s: &Session, prefix: &str) -> Vec<Handle> {
     let d = s.doc().unwrap();
-    d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some() && e.common.layer.to_ascii_uppercase().starts_with(prefix)).map(|e| e.handle).collect()
+    d.model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some() && e.common.layer.to_ascii_uppercase().starts_with(prefix))
+        .map(|e| e.handle)
+        .collect()
 }
 
 fn tiers_of(s: &mut Session, hs: &[Handle]) -> Vec<Value> {
@@ -84,7 +88,8 @@ fn tiers_by_kind_and_size() {
     // A 24x12 duct is a main: building. The 2" line is mid-size: floor. The 3/4" line is small:
     // room, drawn as a line at floor scale. A conduit run: floor. Walls: floor.
     let d = s.doc().unwrap();
-    let layers: std::collections::BTreeSet<String> = d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some()).map(|e| e.common.layer.to_string()).collect();
+    let layers: std::collections::BTreeSet<String> =
+        d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some()).map(|e| e.common.layer.to_string()).collect();
     let duct = layers.iter().find(|l| l.to_ascii_uppercase().contains("DUCT")).cloned().unwrap_or_else(|| panic!("{layers:?}"));
     assert_eq!(tier_of(&mut s, &duct.to_ascii_uppercase()), vec!["building"], "{layers:?}");
     let hs = on_layer(&s, "");
@@ -152,10 +157,7 @@ fn a_coarse_click_picks_the_run() {
     assert_eq!(cadaddy_engine::cmd::fidelity::pick(&s, first), vec![first]);
     // A duct main is drawn at every tier: itself.
     s.execute("view.fidelity", &json!({"level": "building"})).unwrap();
-    let wall = on_layer(&s, "")
-        .into_iter()
-        .find(|h| tiers_of(&mut s, &[*h])[0]["kind"] == "wall")
-        .unwrap();
+    let wall = on_layer(&s, "").into_iter().find(|h| tiers_of(&mut s, &[*h])[0]["kind"] == "wall").unwrap();
     assert_eq!(cadaddy_engine::cmd::fidelity::pick(&s, wall), vec![wall]);
 }
 
@@ -181,7 +183,9 @@ fn project_rules_change_tiers_and_undo() {
     let duct = on_layer(&s, "").into_iter().find(|h| tiers_of(&mut s, &[*h])[0]["kind"] == "duct").unwrap();
     assert_eq!(tiers_of(&mut s, &[duct])[0]["tier"], "building");
     // The project says ducts are floor-tier whatever their size.
-    let r = s.execute("view.fidelity.rules", &json!({"rules": [{"kinds": ["duct"], "tier": "floor", "why": "this job"}], "auto": {"room_ft": 20}})).unwrap();
+    let r = s
+        .execute("view.fidelity.rules", &json!({"rules": [{"kinds": ["duct"], "tier": "floor", "why": "this job"}], "auto": {"room_ft": 20}}))
+        .unwrap();
     assert_eq!(r["source"], "project");
     assert_eq!(r["auto"]["room_ft"], json!(20.0));
     assert_eq!(r["rules"].as_array().unwrap().len(), 1);

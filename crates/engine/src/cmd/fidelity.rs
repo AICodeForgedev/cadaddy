@@ -260,11 +260,20 @@ pub fn facts(d: &Drawing, e: &Entity, upf: f64) -> Option<Facts> {
         Some(k) => k.to_ascii_lowercase(),
         None => super::elemprops::element_kind(e).map(|k| super::elemprops::reported_kind(e, k)).unwrap_or_else(|| part.clone()).to_ascii_lowercase(),
     };
-    let mut text = [Some(kind.clone()), Some(class.category.clone()), Some(class.ty.clone()), super::bimlook::made_name(e).map(str::to_string), made("tag"), made("kind"), prop("type"), prop("kind")]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<String>>()
-        .join(" ");
+    let mut text = [
+        Some(kind.clone()),
+        Some(class.category.clone()),
+        Some(class.ty.clone()),
+        super::bimlook::made_name(e).map(str::to_string),
+        made("tag"),
+        made("kind"),
+        prop("type"),
+        prop("kind"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<String>>()
+    .join(" ");
     text.make_ascii_lowercase();
     let size_in = made("size").and_then(|z| size_inches(&z));
     let extent_ft = match &e.kind {
@@ -282,7 +291,18 @@ pub fn facts(d: &Drawing, e: &Entity, upf: f64) -> Option<Facts> {
     };
     let run = prop("run").or_else(|| made("mepid").and_then(|id| id.rsplit_once('/').map(|(r, _)| r.to_string()))).filter(|r| !r.trim().is_empty());
     let run = run.map(|r| format!("{}|{r}", class.level));
-    Some(Facts { kind, atom: atom_kind.is_some(), trade: class.key.to_string(), category: class.category.to_ascii_lowercase(), part, text, size_in, extent_ft, level: class.level, run })
+    Some(Facts {
+        kind,
+        atom: atom_kind.is_some(),
+        trade: class.key.to_string(),
+        category: class.category.to_ascii_lowercase(),
+        part,
+        text,
+        size_in,
+        extent_ft,
+        level: class.level,
+        run,
+    })
 }
 
 /// A size tag's larger side in inches: `24x12`, `3/4"`, `1 1/2"`, `4" square`, or a bare number
@@ -421,7 +441,8 @@ fn run_view(s: &mut Session, p: &Value) -> Result<Value> {
             s.touch();
         }
         Some(Value::Object(o)) => {
-            let kind = o.get("kind").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(CMD, "`show` needs a `kind`"))?;
+            let kind =
+                o.get("kind").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).ok_or_else(|| bad(CMD, "`show` needs a `kind`"))?;
             let level = o.get("level").and_then(Value::as_str).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string);
             s.state_mut()?.fidelity.force = Some(Force { kind: kind.to_string(), level });
             s.touch();
@@ -494,10 +515,18 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(v) = p.get("auto").filter(|v| !v.is_null()) {
         let o = v.as_object().ok_or_else(|| bad(RULES_CMD, "`auto` must be {building_ft?, floor_ft?, room_ft?, margin?}"))?;
-        let mut a = own.as_ref().and_then(|x| x.get("auto")).and_then(|x| serde_json::from_value::<Auto>(x.clone()).ok()).unwrap_or_else(|| Rules::defaults().auto);
-        for (k, slot) in [("building_ft", &mut a.building_ft), ("floor_ft", &mut a.floor_ft), ("room_ft", &mut a.room_ft), ("margin", &mut a.margin)] {
+        let mut a = own
+            .as_ref()
+            .and_then(|x| x.get("auto"))
+            .and_then(|x| serde_json::from_value::<Auto>(x.clone()).ok())
+            .unwrap_or_else(|| Rules::defaults().auto);
+        for (k, slot) in [("building_ft", &mut a.building_ft), ("floor_ft", &mut a.floor_ft), ("room_ft", &mut a.room_ft), ("margin", &mut a.margin)]
+        {
             if let Some(x) = o.get(k).filter(|x| !x.is_null()) {
-                *slot = x.as_f64().filter(|x| x.is_finite() && *x >= 0.0).ok_or_else(|| bad(RULES_CMD, format!("`auto.{k}` must be a number of 0 or more")))?;
+                *slot = x
+                    .as_f64()
+                    .filter(|x| x.is_finite() && *x >= 0.0)
+                    .ok_or_else(|| bad(RULES_CMD, format!("`auto.{k}` must be a number of 0 or more")))?;
             }
         }
         own.get_or_insert_with(|| json!({}))["auto"] = serde_json::to_value(a).unwrap_or(Value::Null);
@@ -555,8 +584,12 @@ fn drawn(m: &Model3, st: &Stream, vis: &model3::Visible, v: &ShadeView, i: usize
         return false;
     }
     match e.held {
-        Held::Base => vis.chunks.iter().filter_map(|c| m.chunks.get(*c)).any(|c| m.base.owners.get(c.tris.clone()).is_some_and(|o| o.contains(&e.handle))),
-        Held::Instance => vis.instances.iter().any(|(_, _, list)| list.iter().filter_map(|k| m.instances.get(*k as usize)).any(|x| (x.bounds.center() - e.bounds.center()).len() < 1e-6)),
+        Held::Base => {
+            vis.chunks.iter().filter_map(|c| m.chunks.get(*c)).any(|c| m.base.owners.get(c.tris.clone()).is_some_and(|o| o.contains(&e.handle)))
+        }
+        Held::Instance => vis.instances.iter().any(|(_, _, list)| {
+            list.iter().filter_map(|k| m.instances.get(*k as usize)).any(|x| (x.bounds.center() - e.bounds.center()).len() < 1e-6)
+        }),
         Held::Streamed => {
             let cell = f.grids.get(e.tier.index()).map(|g| g.cell_of(e.bounds.center()));
             cell.is_some_and(|c| st.cells.contains_key(&(e.tier.index() as u8, c as u32)))
@@ -657,7 +690,9 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     let mut rooms: BTreeMap<(String, String), (Vec<usize>, model3::Aabb)> = BTreeMap::new();
     for &i in &recs {
         let Some(e) = f.elems.get(i) else { continue };
-        let Some(room) = md.model.get(e.handle).and_then(|x| cadaddy_doc::props::read(&x.common.xdata).get("room").map(|v| v.text())) else { continue };
+        let Some(room) = md.model.get(e.handle).and_then(|x| cadaddy_doc::props::read(&x.common.xdata).get("room").map(|v| v.text())) else {
+            continue;
+        };
         let room = room.trim().to_ascii_lowercase();
         if room.is_empty() {
             continue;
@@ -803,7 +838,13 @@ mod tests {
         assert_eq!(r.class(&atom("box")).0, Tier::Room);
         // A conduit run as one element (not pieces) is a run: floor.
         assert_eq!(r.class(&Facts { kind: "conduit".into(), trade: "conduit".into(), ..Facts::default() }).0, Tier::Floor);
-        let eq = |text: &str, extent: f64| Facts { kind: "equipment".into(), trade: "equipment".into(), text: text.into(), extent_ft: Some(extent), ..Facts::default() };
+        let eq = |text: &str, extent: f64| Facts {
+            kind: "equipment".into(),
+            trade: "equipment".into(),
+            text: text.into(),
+            extent_ft: Some(extent),
+            ..Facts::default()
+        };
         assert_eq!(r.class(&eq("switchboard msb", 3.0)).0, Tier::Building);
         assert_eq!(r.class(&eq("exhaust fan", 1.5)).0, Tier::Building);
         assert_eq!(r.class(&eq("panelboard", 2.0)).0, Tier::Floor);
@@ -812,7 +853,8 @@ mod tests {
         assert_eq!(r.class(&dev("receptacle", "devices")).0, Tier::Room);
         assert_eq!(r.class(&dev("light_fixture", "lights")).0, Tier::Room);
         assert_eq!(r.class(&dev("air_terminal", "terminals")).0, Tier::Floor);
-        let part = |p: &str, text: &str| Facts { kind: p.into(), part: p.into(), trade: "architecture".into(), text: text.into(), ..Facts::default() };
+        let part =
+            |p: &str, text: &str| Facts { kind: p.into(), part: p.into(), trade: "architecture".into(), text: text.into(), ..Facts::default() };
         assert_eq!(r.class(&part("floor", "floor slab")).0, Tier::Building);
         assert_eq!(r.class(&part("roof", "roof")).0, Tier::Building);
         assert_eq!(r.class(&part("wall", "wall exterior 1")).0, Tier::Building);

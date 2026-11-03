@@ -302,7 +302,9 @@ impl Fid {
     /// (the piece itself isn't drawn), else `h` alone.
     pub fn pick(&self, h: Handle, tier: Tier) -> Vec<Handle> {
         match self.elem(h) {
-            Some(e) if e.tier > tier && e.group != NO_GROUP => self.members(e.group).iter().filter_map(|i| self.elems.get(*i as usize)).map(|m| m.handle).collect(),
+            Some(e) if e.tier > tier && e.group != NO_GROUP => {
+                self.members(e.group).iter().filter_map(|i| self.elems.get(*i as usize)).map(|m| m.handle).collect()
+            }
             _ => vec![h],
         }
     }
@@ -344,7 +346,12 @@ impl Fid {
             if out.len() >= MAX_MARKERS {
                 break;
             }
-            if e.tier > tier && e.held != Held::Outside && kinds.contains(&e.kind) && level.as_ref().is_none_or(|l| l.contains(&e.level)) && in_view(&e.bounds, v) {
+            if e.tier > tier
+                && e.held != Held::Outside
+                && kinds.contains(&e.kind)
+                && level.as_ref().is_none_or(|l| l.contains(&e.level))
+                && in_view(&e.bounds, v)
+            {
                 out.push(i as u32);
             }
         }
@@ -373,7 +380,11 @@ impl Fid {
     /// Bytes the index holds.
     pub fn bytes(&self) -> usize {
         self.elems.len() * (std::mem::size_of::<Elem>() + std::mem::size_of::<(Handle, u32)>() + 8)
-            + self.grids.iter().map(|g| g.cells.len() * std::mem::size_of::<GridCell>() + g.cells.iter().map(|c| c.elems.len() * 4).sum::<usize>()).sum::<usize>()
+            + self
+                .grids
+                .iter()
+                .map(|g| g.cells.len() * std::mem::size_of::<GridCell>() + g.cells.iter().map(|c| c.elems.len() * 4).sum::<usize>())
+                .sum::<usize>()
             + self.kinds.iter().chain(&self.levels).chain(&self.groups).map(|s| s.len() + 24).sum::<usize>()
     }
 }
@@ -569,7 +580,8 @@ impl Stream {
 
     /// The cells `v` sees, nearest first by their bounds' depth.
     pub fn visible(&self, v: &ShadeView) -> Vec<(u8, u32)> {
-        let mut out: Vec<(f64, (u8, u32))> = self.cells.iter().filter(|(_, c)| in_view(&c.bounds, v)).map(|(k, c)| (-c.bounds.center().dot(v.dir), *k)).collect();
+        let mut out: Vec<(f64, (u8, u32))> =
+            self.cells.iter().filter(|(_, c)| in_view(&c.bounds, v)).map(|(k, c)| (-c.bounds.center().dot(v.dir), *k)).collect();
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
         out.into_iter().map(|x| x.1).collect()
     }

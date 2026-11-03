@@ -28,7 +28,10 @@ use cadaddy_geom::{Mat4, Vec3};
 use crate::shade::{Line3, Scene, ShadeView, Tri, scene, scene_clipped};
 
 mod fid;
-pub use fid::{AutoTiers, Elem, ElemClass, Fid, Force, Grid, GridCell, Held, MAX_MARKERS, NO_GROUP, STREAM_BUDGET, Show, Stream, StreamCell, StreamStep, Tier, TierCount};
+pub use fid::{
+    AutoTiers, Elem, ElemClass, Fid, Force, Grid, GridCell, Held, MAX_MARKERS, NO_GROUP, STREAM_BUDGET, Show, Stream, StreamCell, StreamStep, Tier,
+    TierCount,
+};
 
 /// A box in space.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -162,13 +165,8 @@ impl Model3 {
     pub fn visible_at(&self, v: &ShadeView, tier: Tier, force: Option<&Force>) -> Visible {
         let px = v.height / f64::from(v.height_px.max(1));
         let depth = |b: &Aabb| -b.center().dot(v.dir);
-        let mut chunks: Vec<(f64, usize)> = self
-            .chunks
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.show.at(tier) && in_view(&c.bounds, v))
-            .map(|(i, c)| (depth(&c.bounds), i))
-            .collect();
+        let mut chunks: Vec<(f64, usize)> =
+            self.chunks.iter().enumerate().filter(|(_, c)| c.show.at(tier) && in_view(&c.bounds, v)).map(|(i, c)| (depth(&c.bounds), i)).collect();
         chunks.sort_by(|a, b| a.0.total_cmp(&b.0));
         let mut tris = chunks.iter().filter_map(|(_, i)| self.chunks.get(*i)).map(|c| c.tris.len()).sum::<usize>();
         let mut groups: std::collections::BTreeMap<(u32, u8), Vec<(f64, u32)>> = std::collections::BTreeMap::new();
@@ -826,7 +824,8 @@ fn build_impl(
     }
     // Every triangle and line at its object's tiers; then each run's pieces, from the tier the
     // classifier says up to the one below their own, as lines along the run.
-    let tri_show: Vec<Show> = if rest_show.is_empty() { Vec::new() } else { base.owners.iter().map(|h| rest_show.get(h).copied().unwrap_or(Show::ALWAYS)).collect() };
+    let tri_show: Vec<Show> =
+        if rest_show.is_empty() { Vec::new() } else { base.owners.iter().map(|h| rest_show.get(h).copied().unwrap_or(Show::ALWAYS)).collect() };
     let mut line_show: Vec<Show> =
         if rest_show.is_empty() { Vec::new() } else { base.line_owners.iter().map(|h| rest_show.get(h).copied().unwrap_or(Show::ALWAYS)).collect() };
     if fid.is_some() {
@@ -1210,7 +1209,8 @@ mod tests {
         let fl = m.visible_at(&far, Tier::Floor, None);
         assert!(drawn(&m, &d, &far, Tier::Floor).get("WALL") == Some(&4));
         assert!(!drawn(&m, &d, &far, Tier::Floor).contains_key("DEV"));
-        let run_lines: usize = fl.chunks.iter().map(|c| &m.chunks[*c]).filter(|c| c.show == Show { from: Tier::Floor, to: Tier::Floor }).map(|c| c.lines.len()).sum();
+        let run_lines: usize =
+            fl.chunks.iter().map(|c| &m.chunks[*c]).filter(|c| c.show == Show { from: Tier::Floor, to: Tier::Floor }).map(|c| c.lines.len()).sum();
         assert_eq!(run_lines, 12, "each stick a line along the run at the floor tier");
         // Near at the room tier: this room's devices, not the far ones; the run lines give way.
         let r = drawn(&m, &d, &near, Tier::Room);
