@@ -29,8 +29,8 @@ struct SceneKey {
     lightmap: u64,
     /// The 4D date shown (the model as it stands then).
     fourd: Option<crate::fourdpalette::Shown>,
-    /// The fidelity level the whole building is built at (room and detail share one: their
-    /// elements are the fine layer's).
+    /// The fidelity level the whole building is built at (room and detail build the floor's:
+    /// their own elements are the fine layer's).
     level: Fidelity,
 }
 
@@ -486,8 +486,8 @@ fn model(app: &mut CadApp, band: i32, level: Option<Fidelity>) -> Option<(SceneK
     // Looks for a lightmap beside the drawing the first time.
     let _ = cadaddy_engine::cmd::lightbake::current(&mut app.session);
     let st = app.session.state().ok()?;
-    // Room and detail build the same whole-building layer (their elements are the fine one's).
-    let coarse = level.map(|l| l.min(Fidelity::Room));
+    // Room and detail build the floor's whole-building layer (their elements are the fine one's).
+    let coarse = level.map(|l| l.min(Fidelity::Floor));
     let key = SceneKey {
         doc: Arc::as_ptr(&st.doc) as usize,
         revision: st.revision,

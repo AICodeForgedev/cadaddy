@@ -206,3 +206,100 @@ fn a_plain_drawing_has_no_levels() {
     assert_eq!(st.instances, 6, "six identical boxes: one prototype, six placements");
     assert_eq!(h.state().session.fidelity_shown, None);
 }
+
+/// What each level costs on a real model (its path in `CADADDY_FIDELITY_BENCH`, a file kept
+/// outside the repo), drawn as the app draws it: time to the first frame after opening, the
+/// model's and the GPU's bytes and the orbit benchmark's frames a second at each level, and how
+/// long a zoom into the room holding the most devices takes to show them. Run with
+/// `--ignored --nocapture`; prints one JSON line.
+#[test]
+#[ignore = "a benchmark of a model from outside the repo"]
+fn bench_a_model_at_each_level() {
+    let Ok(path) = std::env::var("CADADDY_FIDELITY_BENCH") else { return };
+    let gpu = std::env::var("CADADDY_FIDELITY_BENCH_CPU").is_err();
+    let started = std::time::Instant::now();
+    let bytes = std::fs::read(&path).unwrap();
+    let d = cadaddy_io::read(&bytes, &path).unwrap();
+    let read_ms = started.elapsed().as_secs_f64() * 1000.0;
+    // The room holding the most room-level elements, in the view's (stacked) plan.
+    let tiers = cadaddy_engine::cmd::fidelity::Tiered::of(&d).expect("a built model");
+    let room = tiers
+        .display
+        .model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("room")))
+        .map(|e| cadaddy_doc::entity_bounds(&tiers.display, e, 0))
+        .filter(|b| !b.is_empty())
+        .max_by_key(|b| tiers.count_in(b)[Fidelity::Room.index() as usize])
+        .unwrap();
+    let upf = tiers.upf;
+    drop(tiers);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Bench", None);
+    let mut app = CadApp::new(s, Services::default());
+    let rs = gpu.then(|| egui_kittest::wgpu::create_render_state(egui_kittest::wgpu::default_wgpu_setup(), egui_wgpu::RendererOptions::default()));
+    if let Some(rs) = &rs {
+        app.set_wgpu(rs, None);
+    }
+    app.session.execute("vscurrent", &json!({"style": "shadededges"})).unwrap();
+    app.session.execute("view.dir", &json!({"dir": [-1, -1.5, 1], "fit": true})).unwrap();
+    let mut h = harness(app, rs);
+    let opened = std::time::Instant::now();
+    let wait = |h: &mut Harness<'static, CadApp>, done: &dyn Fn(&CadApp) -> bool| {
+        for _ in 0..30_000 {
+            h.run_steps(1);
+            if h.state().canvas.shade.stats.building.is_none() && done(h.state()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    };
+    let fps = |h: &mut Harness<'static, CadApp>| {
+        h.state_mut().run("ui.bench3d", json!({"frames": 10})).unwrap();
+        for _ in 0..20_000 {
+            h.run_steps(1);
+            if h.state().canvas.shade.stats.bench_fps.is_some() {
+                break;
+            }
+        }
+        h.state().canvas.shade.stats.bench_fps
+    };
+    let mut out = serde_json::Map::new();
+    out.insert("read_ms".into(), json!(read_ms.round()));
+    wait(&mut h, &|a| a.canvas.shade.stats.tris_total > 0);
+    out.insert("first_frame_ms".into(), json!(opened.elapsed().as_secs_f64() * 1000.0));
+    out.insert("opened_at".into(), json!(h.state().canvas.shade.stats.fidelity));
+    // The whole building at each level chosen by hand.
+    for level in Fidelity::ALL {
+        h.state_mut().canvas.shade.fidelity.fixed = Some(level);
+        let t0 = std::time::Instant::now();
+        wait(&mut h, &|a| a.canvas.shade.stats.fidelity == level.name() && (level < Fidelity::Room || a.canvas.shade.stats.fine_ms > 0.0));
+        let ready_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        let f = fps(&mut h);
+        let st = h.state().canvas.shade.stats;
+        out.insert(
+            format!("whole_{}", level.name()),
+            json!({"ready_ms": ready_ms, "fps": f, "tris_total": st.tris_total, "tris_drawn": st.tris_drawn, "model_mb": st.model_bytes as f64 / 1e6,
+                   "gpu_mb": st.gpu_bytes as f64 / 1e6, "fine_elements": st.fine_elements, "fine_capped": st.fine_capped, "fine_mb": st.fine_bytes as f64 / 1e6, "fine_ms": st.fine_ms}),
+        );
+    }
+    // Auto: from the whole building into the busiest room (from above).
+    h.state_mut().canvas.shade.fidelity.fixed = None;
+    h.state_mut().session.execute("view.top", &json!({})).unwrap();
+    h.state_mut().session.execute("zoom", &json!({"mode": "extents"})).unwrap();
+    wait(&mut h, &|a| a.canvas.shade.stats.fidelity == "building");
+    let c = room.center();
+    let height = room.height().max(room.width() * 0.6) * 1.3;
+    let t0 = std::time::Instant::now();
+    h.state_mut().session.execute("zoom", &json!({"mode": "center", "center": [c.x, c.y], "height": height})).unwrap();
+    wait(&mut h, &|a| a.canvas.shade.stats.fine_elements > 0 && a.canvas.shade.stats.fidelity == "room");
+    let zoom_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let st = h.state().canvas.shade.stats;
+    out.insert(
+        "zoom_into_room".into(),
+        json!({"room_ft": [room.width() / upf, room.height() / upf], "shown_ms": zoom_ms, "level": st.fidelity, "fine_elements": st.fine_elements, "fine_ms": st.fine_ms,
+               "tris_drawn": st.tris_drawn, "gpu_mb": st.gpu_bytes as f64 / 1e6, "fps": fps(&mut h)}),
+    );
+    out.insert("gpu".into(), json!(gpu));
+    println!("FIDELITY_BENCH {}", serde_json::Value::Object(out));
+}

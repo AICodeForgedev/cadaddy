@@ -356,8 +356,9 @@ impl Tiered {
     }
 
     /// What the view holds for the whole building at `level`: the elements of the building and
-    /// floor levels up to it, the force-shown ones as markers, and the next level's merged runs
-    /// as lines when `level` is coarser than the room.
+    /// floor levels up to it, the force-shown ones as markers, and the merged runs of the level
+    /// after the last of those as lines (room and detail hold the floor's: the same model, its
+    /// lines hidden inside the runs drawn close in and seen beyond them).
     pub fn coarse(&self, level: Fidelity) -> Drawing {
         let top = level.min(Fidelity::Floor);
         let mut out = self.empty();
@@ -368,10 +369,8 @@ impl Tiered {
                 out.model.push_shared(Arc::clone(e));
             }
         }
-        if level < Fidelity::Room {
-            for a in self.aggregates.iter().filter(|a| a.tier.coarser() == Some(level)) {
-                self.push_lines(&mut out, a);
-            }
+        for a in self.aggregates.iter().filter(|a| a.tier.coarser() == Some(top)) {
+            self.push_lines(&mut out, a);
         }
         out
     }
@@ -786,9 +785,13 @@ mod tests {
         assert!(handles(&det).contains(&h["coupling"]));
         assert!(t.fine(Fidelity::Detail, &room_a, 1).unwrap().2);
         assert!(t.fine(Fidelity::Floor, &room_a, MAX_FINE).is_none());
+        // Room and detail hold the floor's whole-building layer (its lines too).
+        assert_eq!(t.coarse(Fidelity::Room).model.len(), floor.model.len());
+        assert_eq!(t.coarse(Fidelity::Detail).model.len(), floor.model.len());
         // Every element is held at the finest level over the whole building, once.
         let whole = Bounds2::new(Vec2::new(-1e6, -1e6), Vec2::new(1e6, 1e6));
-        let mut all = handles(&t.coarse(Fidelity::Detail));
+        let built = handles(&d);
+        let mut all: HashSet<Handle> = handles(&t.coarse(Fidelity::Detail)).intersection(&built).copied().collect();
         let fine_all = handles(&t.fine(Fidelity::Detail, &whole, MAX_FINE).unwrap().0);
         assert!(all.is_disjoint(&fine_all));
         all.extend(fine_all);
