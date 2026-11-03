@@ -309,7 +309,7 @@ fn price(s: &mut Session, lines: &[(String, String, f64)]) -> Value {
 
 /// The spec files' text, each with its section (`26 05 19`): PDFs and text files, or the
 /// Division 26 files in folders.
-fn spec_texts(paths: &[String]) -> Vec<(String, String)> {
+pub(crate) fn spec_texts(paths: &[String]) -> Vec<(String, String)> {
     fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
         if depth > 4 || out.len() >= MAX_SPEC_FILES * 20 {
             return;

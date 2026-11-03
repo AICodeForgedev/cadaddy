@@ -4635,7 +4635,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // Which sheets' runs can't be placed (both ends, or one end off the plan), and how
                 // much of them: where a registration is missing.
                 let upf_runs = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-                let mut unplaced: BTreeMap<String, (usize, f64)> = BTreeMap::new();
+                // By (an estimated route's piece, sheet on level).
+                let mut unplaced: BTreeMap<(bool, String), (usize, f64)> = BTreeMap::new();
                 // A circuit's estimated route drawn in a view of rooms (a typical-room plan) that
                 // can't be placed: each room's own circuits go in instead (with the devices
                 // stamped into the rooms), so it isn't a missing registration.
@@ -4651,7 +4652,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let mut in_views = 0usize;
                 // The runs no registration places, with what the report says of them: a typical
                 // room's plan's go into its rooms below.
-                let mut lost_runs: Vec<(String, f64, cadaddy_walk3d::MepRun)> = Vec::new();
+                let mut lost_runs: Vec<((bool, String), f64, cadaddy_walk3d::MepRun)> = Vec::new();
                 sp.mep.runs.retain_mut(|r| {
                     let start = r.points.first().and_then(|p| sim(*p, &r.level));
                     let end = start.and_then(|_| r.points.last().and_then(|p| sim(*p, &r.level)));
@@ -4670,7 +4671,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         _ => {
                             let why = if start.is_some() { " one end" } else { "" };
                             let ft = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
-                            let key = format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level);
+                            // An estimated route's piece is not drawn conduit: said apart, so a
+                            // count of unplaced runs is never read as drawn work left out.
+                            let key =
+                                (estimated(r), format!("{} on {}{why}", if r.source_sheet.is_empty() { "?" } else { &r.source_sheet }, r.level));
                             if lost_runs.len() < MAX_STAMPED {
                                 lost_runs.push((key, ft, r.clone()));
                             } else {
@@ -4702,19 +4706,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     ));
                     sp.mep.runs.extend(typical.runs);
                 }
-                if !unplaced.is_empty() {
-                    let list: Vec<String> = unplaced.iter().map(|(k, (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
-                    progress_line(&format!("  MEP runs not placeable by sheet: {}", list.join(", ")));
+                let (lines, out) = unplaced_runs_report(&unplaced);
+                for l in lines {
+                    progress_line(&l);
                 }
-                for (k, (n, ft)) in unplaced.iter().take(MAX_LEFT_OUT) {
-                    left_out.push(json!({
-                        "what": "mep_runs",
-                        "where": k,
-                        "count": n,
-                        "feet": (ft * 10.0).round() / 10.0,
-                        "why": "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates",
-                    }));
-                }
+                left_out.extend(out.into_iter().take(MAX_LEFT_OUT));
                 if in_views > 0 {
                     progress_line(&format!("  estimated circuit routes in typical-room views (each room's own circuits instead): {in_views}"));
                 }
@@ -4740,18 +4736,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     None => false,
                 });
-                let dropped = (before.0 - sp.mep.runs.len() - in_views, before.1 - sp.mep.terminals.len(), before.2 - sp.mep.equipment.len());
+                // The drawn runs left out (an estimated route's pieces are counted apart: drawn on no
+                // print), the terminals and equipment.
+                let left = |est: bool| unplaced.iter().filter(|((e, _), _)| *e == est).map(|(_, (n, _))| *n).sum::<usize>();
+                let est_left = left(true);
+                let dropped = (left(false), before.1.saturating_sub(sp.mep.terminals.len()), before.2.saturating_sub(sp.mep.equipment.len()));
                 for (what, n) in [("mep_terminals", dropped.1), ("mep_equipment", dropped.2)] {
                     if n > 0 {
                         left_out.push(json!({"what": what, "count": n, "why": "no registration puts their sheet's view onto its level's architectural plan: kept out of the model"}));
                     }
                 }
                 progress_line(&format!(
-                    "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} runs, {} terminals, {} equipment",
+                    "  MEP onto the plans: {} runs, {} terminals, {} equipment placed; not placeable (no fit to the architecture): {} drawn runs, {} estimated circuit route pieces (drawn on no print), {} terminals, {} equipment",
                     sp.mep.runs.len(),
                     sp.mep.terminals.len(),
                     sp.mep.equipment.len(),
                     dropped.0,
+                    est_left,
                     dropped.1,
                     dropped.2
                 ));
@@ -4912,7 +4913,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     job.add_finding(
                         StageName::BimBuild,
                         "MEP items not placed",
-                        &format!("{} runs, {} terminals and {} pieces of equipment are on sheets that don't line up with an architectural plan; they are not drawn", dropped.0, dropped.1, dropped.2),
+                        &format!(
+                            "{} drawn runs, {} terminals and {} pieces of equipment are on sheets that don't line up with an architectural plan; they are not drawn{}",
+                            dropped.0,
+                            dropped.1,
+                            dropped.2,
+                            if est_left > 0 { format!(" ({est_left} pieces of estimated circuit routes, drawn on no print, are left out too)") } else { String::new() }
+                        ),
                         2,
                         vec!["Register those sheets onto their level's plan".into()],
                         None,
@@ -5653,6 +5660,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
+    // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
+    // the build routes the circuits by (Q6152).
+    route_methods_step(s, job);
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
@@ -5768,6 +5778,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["feeders_error"] = json!(e.to_string());
     }
     bim_step(s, job, "feeder routes", t);
+    // The circuits routed again now their panels and feeders stand (Q6152), and what it found.
+    let t = web_time::Instant::now();
+    match s.execute("conduit.reroute", &json!({})) {
+        Ok(v) => progress_line(&format!("  conduit rerouted with the gear placed: {v}")),
+        Err(e) => result["conduit_reroute_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "conduit routes", t);
     // Buried work the set issues no plan for: its underground sheets generated.
     let t = web_time::Instant::now();
     if let Err(e) = underground_step(s, job, &pages, &mut result) {
@@ -5828,12 +5845,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     identity_step(s, job, &mut result);
     bim_step(s, job, "tag identity", t);
     // The devices whose wall the identity merge removed: set in the wall there now.
+    let mut reseated = 0usize;
     if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
         let n = super::propfill::rehost_devices(s.doc_mut()?, &sp);
         if n > 0 {
             progress_line(&format!("  devices set in their walls again (their walls merged): {n}"));
         }
         result["devices_reseated"] = json!(n);
+        reseated = n;
     }
     if !job.submittals.is_empty() {
         let t = web_time::Instant::now();
@@ -5937,6 +5956,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let t = web_time::Instant::now();
     misplaced_step(s, job, &mut result);
     bim_step(s, job, "elements outside the floors flagged", t);
+    // The devices set in their walls again: the circuits routed again to where they stand now
+    // (their boxes and drops with them, else left where the merged wall was), once the model's
+    // devices are final; then what the routing found (once, after the last reroute).
+    let t = web_time::Instant::now();
+    match super::conduitroute::follow_reseated(s, reseated) {
+        Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
+        Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
+        None => {}
+    }
+    route_report_step(s, job, &mut result);
+    bim_step(s, job, "conduit routes final", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -10423,6 +10453,156 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     Ok(())
 }
 
+/// The specification's wiring-methods tables (26 05 19), its minimum raceway size and the
+/// circuits a homerun may share, stored in the drawing for the router (Q6152).
+fn route_methods_step(s: &mut Session, job: &GuidedJob) {
+    let specs = job_specs(job);
+    let mut m = super::conduitroute::Methods::default();
+    for (section, text) in super::valueeng::spec_texts(&specs) {
+        m.applications.extend(super::valueeng::wiring_applications(&text, &section).into_iter().map(|a| super::conduitroute::MethodApp {
+            section: a.section,
+            item: a.item,
+            application: a.application,
+            methods: a.methods,
+        }));
+        super::conduitroute::spec_limits(&text, &section, &mut m);
+    }
+    progress_line(&format!(
+        "  wiring methods for routing: {} application(s) from {} spec file(s); minimum raceway {}; circuits per homerun {}",
+        m.applications.len(),
+        specs.len(),
+        m.min_size_in.map_or_else(|| "not said".to_string(), |v| format!("{v} in")),
+        m.max_circuits.map_or_else(|| "not said".to_string(), |v| v.to_string())
+    ));
+    if let Ok(d) = s.doc_mut() {
+        m.store(d);
+    }
+}
+
+/// What routing the circuits found (Q6152): its line, the clashes by trade pair and level, the
+/// entry windows the submittals don't give (a question), the windows too small, the boxes
+/// overfilled; the takeoff written beside the job's drawing.
+fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
+    let Some(r) = s.doc().ok().and_then(super::conduitroute::stored_report) else { return };
+    if r["routed"] == json!(false) || r["routed_circuits"].as_u64().unwrap_or(0) == 0 {
+        return;
+    }
+    let n = |k: &str| r[k].as_array().map_or(0, Vec::len);
+    let pairs: Vec<String> = r["clashes_by_pair_level"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(pair, levels)| {
+            let per: Vec<String> = levels.as_object().into_iter().flatten().map(|(l, c)| format!("{l} {c}")).collect();
+            format!("{pair}: {}", per.join(", "))
+        })
+        .collect();
+    let line = format!(
+        "  conduit routed: {} circuits, {} homeruns ({} by corridor, {} circuits sharing), {} ft (the estimate was {} ft) {}; clashes {} [{}]; entry conflicts {}; rated penetrations {}; boxes overfilled {} of {}; conductors upsized {}; unrouted {}",
+        r["routed_circuits"],
+        r["homeruns"],
+        r["homeruns_by_corridor"],
+        r["grouped_circuits"],
+        r["routed_ft"],
+        r["estimated_ft_before"],
+        r["ft_by_method_size"],
+        n("clashes"),
+        pairs.join("; "),
+        n("conflicts"),
+        n("penetrations"),
+        r["box_fill"]["over"].as_array().map_or(0, Vec::len),
+        r["box_fill"]["checked"],
+        n("conductors_upsized"),
+        n("unrouted"),
+    );
+    progress_line(&line);
+    if n("clashes") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} conduit clash(es) the router could not route around: {}", n("clashes"), pairs.join("; ")),
+            "each is a review item of kind clash with both objects, the spot, the clearance needed and a fix (conduit.route {section: \"clashes\"})",
+            2,
+            vec!["Coordinate each clash with the other trade, or accept the suggested offset".into()],
+            None,
+            false,
+        );
+    }
+    if n("conflicts") > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} panel entry conflict(s): the raceways don't fit the allowed entry window", n("conflicts")),
+            "the router never squeezes raceways outside a gear's allowed conduit area (conduit.route {section: \"conflicts\"})",
+            2,
+            vec!["Add a gutter, wireway or pull box, a larger can, or split the entry".into()],
+            None,
+            false,
+        );
+    }
+    let unknown: Vec<String> = r["entry_unknown"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+    if !unknown.is_empty() {
+        let qid = job.next_qid(StageName::BimBuild);
+        let q = Question {
+            id: qid,
+            stage: StageName::BimBuild,
+            question: format!(
+                "Where may the branch raceways enter these panels? Their submittals give no conduit area: {}",
+                unknown.iter().take(12).cloned().collect::<Vec<_>>().join(", ")
+            ),
+            why: "the router lands each homerun in its panel's allowed entry window; without one it centres them on the top (derived)".into(),
+            choices: vec!["Top, centred (as routed)".into(), "Give the conduit areas".into()],
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(json!({"panels": unknown})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("Top, centred (as routed)".into()),
+            answer_schema: None,
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        if let Some(st) = job.stage_mut(StageName::BimBuild) {
+            st.questions.push(q);
+        }
+    }
+    let over = r["box_fill"]["over"].as_array().map_or(0, Vec::len);
+    if over > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{over} device box(es) over their NEC 314.16 fill with the routed conductors"),
+            "each lists the conductors, the volume needed and a bigger box (conduit.route {section: \"box_fill\"})",
+            2,
+            vec!["Use the bigger box or an extension ring, or move a raceway to a junction box".into()],
+            None,
+            false,
+        );
+    }
+    // The takeoff beside the job's own drawing.
+    if job.checkpoint_given
+        && let Some(ck) = job.checkpoint.clone()
+    {
+        let p = std::path::Path::new(&ck);
+        let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
+        let file = p.with_file_name(format!("{stem}-conduit-takeoff.csv")).to_string_lossy().to_string();
+        match s.execute("conduit.takeoff", &json!({"group_by": ["level", "area", "circuit"], "file": file, "force": true})) {
+            Ok(v) => {
+                progress_line(&format!("  conduit takeoff: {} lines, {} firestop; written to {}", v["line_count"], v["firestop"], file));
+                result["conduit_takeoff"] = json!({"file": file, "lines": v["line_count"], "totals": v["totals"]});
+            }
+            Err(e) => result["conduit_takeoff_error"] = json!(e.to_string()),
+        }
+    }
+    result["conduit_route"] = json!({
+        "circuits": r["routed_circuits"], "homeruns": r["homeruns"], "routed_ft": r["routed_ft"],
+        "clashes": n("clashes"), "conflicts": n("conflicts"), "penetrations": n("penetrations"), "unrouted": n("unrouted"),
+    });
+}
+
 /// The sheet number the generated underground sheets start at.
 const UNDERGROUND_SHEET: &str = "E-UG1";
 
@@ -12905,6 +13085,37 @@ fn shell_holds_rooms(rects: &[[cadaddy_geom::Vec2; 2]], rooms: &[[f64; 2]]) -> (
 
 /// How far outside its level's shell (feet) a placed point may still be: what is mounted on the
 /// building's outside walls or stands by them.
+/// The runs no registration placed, by (an estimated route's piece, sheet on level): the job's
+/// progress lines and its `left_out` entries. An estimated circuit route's pieces (chained through
+/// the circuit's tags, drawn on no print) are said apart from the drawn runs, so a count of
+/// unplaced runs is never read as drawn work left out.
+fn unplaced_runs_report(unplaced: &BTreeMap<(bool, String), (usize, f64)>) -> (Vec<String>, Vec<Value>) {
+    let mut lines = Vec::new();
+    for (est, what) in [(false, "MEP runs"), (true, "estimated circuit route pieces (drawn on no print)")] {
+        let list: Vec<String> = unplaced.iter().filter(|((e, _), _)| *e == est).map(|((_, k), (n, ft))| format!("{k}: {n} ({ft:.0} ft)")).collect();
+        if !list.is_empty() {
+            lines.push(format!("  {what} not placeable by sheet: {}", list.join(", ")));
+        }
+    }
+    let out = unplaced
+        .iter()
+        .map(|((est, k), (n, ft))| {
+            json!({
+                "what": if *est { "estimated_circuit_routes" } else { "mep_runs" },
+                "where": k,
+                "count": n,
+                "feet": (ft * 10.0).round() / 10.0,
+                "why": if *est {
+                    "pieces of an estimated circuit route (drawn on no print: chained through the circuit's tags) where no registration of their level places them (another level's view of a several-level sheet, or tags off the building): kept out of the model; the router routes the circuit from its devices, or lists it as unrouted or as a feeder"
+                } else {
+                    "no registration puts this sheet's view onto its level's architectural plan (nor is it a typical room's view): kept out of the model, not drawn at the sheet's coordinates"
+                },
+            })
+        })
+        .collect();
+    (lines, out)
+}
+
 const SHELL_REACH_FT: f64 = 5.0;
 pub(crate) fn add_sheet_links(sp: &mut cadaddy_walk3d::BuildingSpec, regions: &[SheetRegion]) {
     for r in regions.iter().take(MAX_SHEET_LINKS) {
@@ -16311,6 +16522,9 @@ mod tests {
         // D-7: 400 units of chain + 700 of home run; D-9: 200 + 1200 (12 units a foot).
         assert!((c["estimated_ft"].as_f64().unwrap_or(0.0) - 2500.0 / 12.0).abs() < 0.1, "{c:#}");
 
+        // The estimate as Q6007 reads it (routing it through the model is Q6152's, switched off
+        // here; tests/conduitroute.rs routes).
+        super::super::conduitroute::set_enabled(s.doc_mut().unwrap_or_else(|e| panic!("{e}")), false);
         let built = run_bim_build(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(built["circuits"], json!(2), "{built:#}");
         // Q6172: the build took the print inventory of the sheet and kept it.
@@ -17880,6 +18094,33 @@ mod tests {
         assert!(!in_room_view(&run(est, "E-6", [800.0, 300.0]), &regions), "between the views");
         assert!(!in_room_view(&run(est, "E-3", [300.0, 300.0]), &regions), "another sheet");
         assert!(!in_room_view(&run(super::super::printcond::DRAWN_SYSTEM, "E-6", [300.0, 300.0]), &regions), "drawn conduit");
+    }
+
+    #[test]
+    fn unplaced_estimated_route_pieces_are_said_apart_from_drawn_runs() {
+        let mut unplaced: BTreeMap<(bool, String), (usize, f64)> = BTreeMap::new();
+        unplaced.insert((false, "M-201 on Level 1".into()), (2, 30.04));
+        unplaced.insert((true, "E-201 on Level 1".into()), (5, 120.0));
+        unplaced.insert((true, "E-201 on Level 2 one end".into()), (1, 9.0));
+        let (lines, out) = unplaced_runs_report(&unplaced);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[0].starts_with("  MEP runs not placeable by sheet: M-201 on Level 1: 2 (30 ft)"), "{lines:?}");
+        assert!(!lines[0].contains("E-201"), "no estimated piece among the drawn runs: {lines:?}");
+        assert!(
+            lines[1].starts_with("  estimated circuit route pieces (drawn on no print) not placeable by sheet: E-201 on Level 1: 5 (120 ft)"),
+            "{lines:?}"
+        );
+        assert_eq!(out.len(), 3);
+        let what = |w: &str| out.iter().filter(|o| o["where"] == json!(w)).map(|o| o["what"].as_str().unwrap_or("")).collect::<Vec<_>>();
+        assert_eq!(what("M-201 on Level 1"), ["mep_runs"]);
+        assert_eq!(what("E-201 on Level 2 one end"), ["estimated_circuit_routes"]);
+        assert!(out.iter().all(|o| o["why"].as_str().is_some_and(|w| !w.is_empty())));
+        assert_eq!(out.iter().find(|o| o["what"] == json!("mep_runs")).map(|o| o["feet"].clone()), Some(json!(30.0)));
+        // Only estimated pieces left out: no line about drawn runs at all.
+        let only: BTreeMap<(bool, String), (usize, f64)> = [((true, "E-201 on Level 1".to_string()), (1, 1.0))].into_iter().collect();
+        let (lines, _) = unplaced_runs_report(&only);
+        assert!(lines.len() == 1 && lines[0].contains("estimated circuit route pieces"), "{lines:?}");
+        assert!(unplaced_runs_report(&BTreeMap::new()).0.is_empty());
     }
 
     #[test]

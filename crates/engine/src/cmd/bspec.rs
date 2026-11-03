@@ -39,7 +39,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
         CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
-            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, levels, stacked?: levels moved, removed, notes, warnings}",
+            "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
         CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
@@ -456,8 +456,12 @@ fn run_validate(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     // Its switches are true or false and its budget whole seconds: a wrong one is refused, not
     // read as the default.
-    for key in ["replace", "auto", "stack", "clear", "echo"] {
+    for key in ["replace", "auto", "stack", "clear", "echo", "route"] {
         bool_param("model.build", p, key)?;
+    }
+    // Routing the circuits (Q6152) is on unless switched off; the switch stays with the drawing.
+    if let Some(on) = p.get("route").and_then(Value::as_bool) {
+        super::conduitroute::set_enabled(s.doc_mut()?, on);
     }
     let budget = count_param("model.build", p, "budget_s", 1, MAX_BUILD_BUDGET_S)?;
     if bool_or(p, "clear", false) {
@@ -2050,9 +2054,29 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // The devices the readers found, each an element with what was read about it.
     let devices = super::propfill::build_devices(d, &sp);
     mark("device elements");
+    // The circuits routed through the model now its devices stand (Q6152): around the ducts,
+    // pipes and structure, by the corridors, into each box and the panel's entry window; the
+    // drawn conduit as it is. The estimated routes give way to them for the pieces.
+    // From the circuits as read (a reroute may have stored its routing in the spec).
+    let sp_read = super::conduitroute::unrouted(d, &sp);
+    let routed = if super::conduitroute::enabled(d) {
+        super::conduitroute::route(d, &sp_read)
+    } else {
+        super::conduitroute::Routed {
+            report: json!({"routed": false, "note": "routing switched off (model.build {route: false})"}),
+            ..Default::default()
+        }
+    };
+    let mut sp_routed = sp_read;
+    super::conduitroute::apply(&mut sp_routed, &routed);
+    super::conduitroute::store_report(d, &routed.report);
+    mark("conduit routed");
     // The electrical runs as their pieces (sticks, fittings, boxes, cable, wire) and the count
     // index (Q6157).
-    let atoms = super::mepatoms::build::build(d, &sp);
+    let atoms = super::mepatoms::build::build(d, &sp_routed);
+    let mut report = routed.report.clone();
+    super::conduitroute::check_box_fill(d, &mut report);
+    super::conduitroute::store_report(d, &report);
     mark("MEP atoms");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
@@ -2062,7 +2086,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let trade_pieces = super::tradeatoms::build(d, &sp, None);
     mark("trade pieces");
     // Takeoff tables linked to the model count it again.
-    let qty_tables = super::mepqty::refresh(d, &sp);
+    let qty_tables = super::mepqty::refresh(d, &sp_routed);
     mark("takeoff tables");
     // Columns at the grid intersections.
     let grid_columns = super::grids::build(d, &sp);
@@ -2125,6 +2149,12 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["conduitRoute"] = json!({
+        "circuits": routed.report["routed_circuits"], "runs": routed.report["runs"], "homeruns": routed.report["homeruns"],
+        "routed_ft": routed.report["routed_ft"], "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len),
+        "conflicts": routed.report["conflicts"].as_array().map_or(0, Vec::len),
+        "penetrations": routed.report["penetrations"].as_array().map_or(0, Vec::len),
+    });
     r["deviceElements"] = json!(devices.built);
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
@@ -2159,10 +2189,42 @@ fn level_anchor(d: &Drawing, level: &Level) -> Option<Vec2> {
 /// level's plan, so plans drawn side by side make one stacked building; the plans stay put.
 /// How many levels were moved.
 fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
+    let offsets = stack_offsets(d, sp);
+    let mut moved = 0;
+    for (name, off) in offsets.iter().skip(1) {
+        let (level, off) = (name.as_str(), *off);
+        if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
+            continue;
+        }
+        let m = cadaddy_geom::Mat3::translate(off);
+        let mine: Vec<Handle> = d
+            .model
+            .iter()
+            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
+            .map(|e| e.handle)
+            .take(MAX_OBJECTS)
+            .collect();
+        for h in &mine {
+            let _ = d.modify_entity(*h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = with_stacked(&e.common.xdata, off).into();
+            });
+        }
+        if !mine.is_empty() {
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// The move [`stack_levels`] gives each level's built objects (the lowest's first, zero), from
+/// the drawing as built before it stacks: what the conduit router, routing before the stack,
+/// carries a plan point between levels by.
+pub(crate) fn stack_offsets(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, Vec2)> {
     let mut here: Vec<&Level> = sp.levels.iter().filter(|l| l.sheet.is_none()).collect();
     here.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-    let Some(lowest) = here.first() else { return 0 };
-    let Some(origin) = level_anchor(d, lowest) else { return 0 };
+    let Some(lowest) = here.first() else { return Vec::new() };
+    let Some(origin) = level_anchor(d, lowest) else { return Vec::new() };
     // Each level's move: its plan's corner onto the lowest's. A roof plan (no walls of its own)
     // is centred over the walls of the storey under it, wherever that went: a roof edge runs a
     // slab's overhang past the walls, so the corners don't match.
@@ -2186,31 +2248,7 @@ fn stack_levels(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         };
         offsets.push((level.name.as_str(), off));
     }
-    let mut moved = 0;
-    for (name, off) in offsets.iter().skip(1) {
-        let (level, off) = (*name, *off);
-        if !(off.x.is_finite() && off.y.is_finite()) || off.len() < 1e-9 {
-            continue;
-        }
-        let m = cadaddy_geom::Mat3::translate(off);
-        let mine: Vec<Handle> = d
-            .model
-            .iter()
-            .filter(|e| wallgen::made_as(e).is_some() && made_level(e).is_some_and(|l| l.eq_ignore_ascii_case(level)))
-            .map(|e| e.handle)
-            .take(MAX_OBJECTS)
-            .collect();
-        for h in &mine {
-            let _ = d.modify_entity(*h, |e| {
-                e.kind.transform(&m);
-                e.common.xdata = with_stacked(&e.common.xdata, off).into();
-            });
-        }
-        if !mine.is_empty() {
-            moved += 1;
-        }
-    }
-    moved
+    offsets.into_iter().map(|(n, o)| (n.to_string(), o)).collect()
 }
 
 /// WALLGEN's tag key for how far `model.build` moved a level's object to stack it
