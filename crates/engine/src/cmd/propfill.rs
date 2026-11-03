@@ -1480,7 +1480,7 @@ pub fn cfm_in(t: &str) -> Option<f64> {
 }
 
 /// A built element's footprint, height range and centre, in model coordinates.
-fn extent(d: &Drawing, e: &Entity) -> Option<(Bounds2, f64, f64)> {
+pub(crate) fn extent(d: &Drawing, e: &Entity) -> Option<(Bounds2, f64, f64)> {
     let EntityKind::Mesh(m) = &e.kind else {
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         return (!b.is_empty()).then_some((b, 0.0, 0.0));
@@ -1884,7 +1884,10 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     put(&mut store, "room_b", Prop::new(r.label.clone(), Source::computed()), tally);
                 }
             }
-            "duct" | "pipe" | "conduit" | "fixture" | "equipment" if super::wallgen::made_as(e).as_deref() == Some("mep") => {
+            // A piece of a run (Q6157) carries its own properties from the build.
+            "duct" | "pipe" | "conduit" | "fixture" | "equipment"
+                if super::wallgen::made_as(e).as_deref() == Some("mep") && !super::mepatoms::is_atom(e) =>
+            {
                 let part = made(e, "part").unwrap_or_default();
                 let id = made(e, "mepid").unwrap_or_default();
                 let run = id.rsplit_once('/').and_then(|(base, _)| runs.get(base)).copied();
@@ -1965,6 +1968,12 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
         if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
             changed += 1;
         }
+    }
+    // The pieces follow (Q6157): a wall box's ring by its wall, and the count index (a device's
+    // room, a ring's size).
+    if changed > 0 && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        super::mepatoms::build::sync_rings(d);
+        super::mepatoms::reindex(d);
     }
     filled.retain(|_, m| !m.is_empty());
     if changed > 0 {

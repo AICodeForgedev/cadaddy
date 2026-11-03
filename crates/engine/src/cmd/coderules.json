@@ -4,21 +4,160 @@
     {
       "id": "E-RECEPT-TR",
       "cite": "NEC 406.12",
-      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
       "sets": "tamper_resistant",
       "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
       "rooms": {
         "unit_rooms": true,
-        "name_words": ["GUEST", "SUITE", "DWELLING", "APARTMENT", "KING", "QUEEN", "SLEEPING"]
+        "name_words": [
+          "GUEST",
+          "SUITE",
+          "DWELLING",
+          "APARTMENT",
+          "BEDROOM",
+          "SLEEPING",
+          "LODGING"
+        ]
       }
     },
     {
       "id": "E-RECEPT-GFCI",
       "cite": "NEC 210.8",
-      "kinds": ["receptacle", "quad_receptacle", "gfci_receptacle", "ceiling_receptacle"],
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
       "sets": "gfci",
       "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
-      "tags": ["GFCI", "GFI", "GF"]
+      "tags": [
+        "GFCI",
+        "GFI",
+        "GF"
+      ],
+      "sink_reach_ft": 6,
+      "sink_words": [
+        "SINK",
+        "LAV",
+        "LAVATORY",
+        "KITCHENETTE"
+      ],
+      "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)), or in a place below (its circuit's description or its room's name has all of a place's words); it is decided by its circuit like a tagged one.",
+      "receptacle_words": ["RCPT", "RCPTS", "RECEPT", "RECEPTS", "RECEPTACLE", "RECEPTACLES", "OUTLET", "OUTLETS", "GFCI", "GFI"],
+      "places": [
+        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)"},
+        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)"},
+        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)"},
+        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["ROOF"], "cite": "NEC 210.8(B) (rooftop)"},
+        {"all": ["EXTERIOR"], "cite": "NEC 210.8 (outdoors)"},
+        {"all": ["OUTDOOR"], "cite": "NEC 210.8 (outdoors)"},
+        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)"},
+        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)"},
+        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)"},
+        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)"}
+      ]
+    },
+    {
+      "id": "E-WORKSPACE",
+      "cite": "NEC 110.26(A)",
+      "kinds": [
+        "panel",
+        "panelboard",
+        "switchboard",
+        "load_center",
+        "disconnect",
+        "transformer"
+      ],
+      "sets": "working_space",
+      "rule": "In front of electrical equipment likely to be worked on energized: a clear space as deep as the voltage to ground and the condition call for (0-150 V: 3 ft; 151-600 V: 3, 3.5 or 4 ft by condition 1, 2, 3), at least 30 in wide or the equipment's width, and 6.5 ft high. Gear the plans don't locate is laid out along its room's walls with that space clear (condition 1 assumed and said).",
+      "depth_in": [
+        [
+          150,
+          36,
+          36,
+          36
+        ],
+        [
+          600,
+          36,
+          42,
+          48
+        ],
+        [
+          1000,
+          36,
+          48,
+          60
+        ]
+      ],
+      "width_in": 30,
+      "height_in": 78,
+      "mount_top_in": 78,
+      "plate_margin_in": [
+        2.0,
+        1.5
+      ]
+    },
+    {
+      "id": "E-EQUIP-ELEC",
+      "cite": "NEC 110.3(B), 110.10, 240.4, 409.22, 430.22, 440.33, 620.13, 620.16",
+      "kinds": [
+        "equipment_connection"
+      ],
+      "sets": "equipment_electrical",
+      "rule": "An equipment connection follows its approved submittal: its protection no larger than the maker's maximum (fuse class as named), its conductors' ampacity at least 125% of its nameplate / full-load current (its minimum circuit amps when given), its controller's short-circuit current rating at least the available fault current where it is installed. Where the drawings differ, the build reports both values and the fix.",
+      "conductor_factor": 1.25,
+      "ampacity_75c": {
+        "cu": {
+          "14": 20,
+          "12": 25,
+          "10": 35,
+          "8": 50,
+          "6": 65,
+          "4": 85,
+          "3": 100,
+          "2": 115,
+          "1": 130,
+          "1/0": 150,
+          "2/0": 175,
+          "3/0": 200,
+          "4/0": 230,
+          "250": 255,
+          "300": 285,
+          "350": 310,
+          "400": 335,
+          "500": 380,
+          "600": 420
+        },
+        "al": {
+          "12": 20,
+          "10": 30,
+          "8": 40,
+          "6": 50,
+          "4": 65,
+          "3": 75,
+          "2": 90,
+          "1": 100,
+          "1/0": 120,
+          "2/0": 135,
+          "3/0": 155,
+          "4/0": 180,
+          "250": 205,
+          "300": 230,
+          "350": 250,
+          "400": 270,
+          "500": 310,
+          "600": 340
+        }
+      }
     }
   ]
 }

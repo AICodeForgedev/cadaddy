@@ -205,7 +205,8 @@ fn takeoff_has_known_totals_per_level_with_elements_and_diffs() {
     assert_eq!(line(&t, "Level 1", "P-DCW pipe")["qty"], 10.5);
     assert_eq!(line(&t, "Level 1", "P-DCW pipe")["system"], "P-DCW");
     assert_eq!(line(&t, "Level 1", "EMT conduit")["qty"], 21.0);
-    assert_eq!(line(&t, "Level 1", "EMT conduit")["element_count"], 2);
+    // Each 10'-6" run is two sticks (10' and the 6" cut piece, Q6157 mepatoms).
+    assert_eq!(line(&t, "Level 1", "EMT conduit")["element_count"], 4);
     assert_eq!(t["levels"], json!(["Level 1", "Level 2"]));
     let lines = t["lines"].as_array().unwrap();
     assert!(lines.iter().filter(|l| l["element_count"].as_u64().unwrap() > 0).count() >= 4);
@@ -237,8 +238,9 @@ fn takeoff_has_known_totals_per_level_with_elements_and_diffs() {
     let t = s.execute("bim.takeoff", &json!({"group_by": "level"})).unwrap();
     let k = line(&t, "Level 1", "EMT conduit")["key"].clone();
     let shown = s.execute("bim.takeoff.show", &json!({"line": k})).unwrap();
-    assert_eq!(shown["selected"], 2);
-    assert_eq!(s.selection().len(), 2);
+    // The two runs' sticks (Q6157 mepatoms).
+    assert_eq!(shown["selected"], 4);
+    assert_eq!(s.selection().len(), 4);
     assert!(s.state().unwrap().ifc_view.camera.is_some());
     assert!(shown["viewpoint"]["eye"].is_array());
     let idx = t["lines"].as_array().unwrap().iter().position(|l| l["key"] == k).unwrap();
@@ -487,7 +489,9 @@ fn issues_pin_to_elements_show_on_sheets_and_round_trip_through_bcf_2_1_and_3_0(
     let a = &list["issues"][0];
     assert_eq!(a["elements"], json!([conduit]));
     assert_eq!(a["sheet"]["level"], "Level 1");
-    assert_eq!(a["sheet"]["at"], json!([200.0, 87.0]), "the conduit's centre on the plan: {a}");
+    // The conduit's stick that crosses the duct (Q6157 mepatoms: its run's first 10' stick,
+    // 24" to 144"): its centre on the plan.
+    assert_eq!(a["sheet"]["at"], json!([200.0, 84.0]), "the conduit stick's centre on the plan: {a}");
     assert_eq!(a["viewpoint"]["target"], a["at"]);
     assert_eq!(s.execute("bim.issue.list", &json!({"element": conduit})).unwrap()["total"], 1);
     assert_eq!(s.execute("bim.issue.list", &json!({"kind": "rfi"})).unwrap()["issues"][0]["level"], "Level 2");
@@ -537,7 +541,7 @@ fn issues_pin_to_elements_show_on_sheets_and_round_trip_through_bcf_2_1_and_3_0(
         assert_eq!(imp["added"], 2, "{imp}");
         let l = other.execute("bim.issue.list", &json!({"kind": "punch"})).unwrap();
         assert_eq!(l["issues"][0]["elements"], json!([conduit]));
-        assert_eq!(l["issues"][0]["sheet"]["at"], json!([200.0, 87.0]), "pinned by its element");
+        assert_eq!(l["issues"][0]["sheet"]["at"], json!([200.0, 84.0]), "pinned by its element (the stick)");
         assert_eq!(other.execute("bcf.show", &json!({"topic": "1"})).unwrap()["selected"], json!([conduit]));
     }
     // Hostile and wrong params.

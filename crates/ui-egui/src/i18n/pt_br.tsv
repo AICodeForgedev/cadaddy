@@ -3350,3 +3350,31 @@
 	Report Validation Findings	Relatar as constatações da validação
 	Validation Run Status	Status da execução de validação
 	Plant Validation Errors	Inserir erros de validação
+	Model Fidelity	Fidelidade do modelo
+	Model Fidelity Rules	Regras de fidelidade do modelo
+	Model Fidelity Report	Relatório de fidelidade do modelo
+	Fidelity	Fidelidade
+	Auto	Automático
+	Floor	Pavimento
+	Detail	Detalhe
+	Print Inventory	Inventário de pranchas
+	Piece	Peça
+	Raceway run	Trecho de eletroduto
+	Connects to	Conecta a
+	Height AFF	Altura acima do piso acabado
+	Host wall	Parede hospedeira
+	Wall face	Face da parede
+	Outlet box	Caixa de saída
+	Fed by	Alimentado por
+	Count Model Pieces	Contar peças do modelo
+	Edit Model Piece	Editar peça do modelo
+	Walk the Feed	Percorrer a alimentação
+	Object Forms	Formulários de objetos
+	Create Object Forms	Criar formulários de objetos
+	Edit Object Form Field	Editar campo do formulário de objeto
+	Record Object Field Value	Registrar valor de campo do objeto
+	Object Form Log	Registro de formulários de objetos
+	Revert Object Form Change	Reverter alteração do formulário de objeto
+	Promote Object Form to Template	Promover formulário de objeto a modelo
+	Object Completeness	Completude dos objetos
+	Object Form	Formulário de objeto

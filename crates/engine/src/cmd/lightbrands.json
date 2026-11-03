@@ -1,0 +1,62 @@
+{
+  "about": "Lighting brands and the makers that own them, so a submitted brand is recognised as its schedule's maker (public ownership facts; add as needed).",
+  "families": {
+    "ACUITY": [
+      "ACUITY",
+      "ACUITY BRANDS",
+      "LITHONIA",
+      "JUNO",
+      "HOLOPHANE",
+      "PEERLESS",
+      "GOTHAM",
+      "MARK ARCHITECTURAL",
+      "HYDREL",
+      "AMERICAN ELECTRIC LIGHTING",
+      "INDY"
+    ],
+    "COOPER": [
+      "COOPER",
+      "COOPER LIGHTING",
+      "METALUX",
+      "HALO",
+      "CORELITE",
+      "FAIL-SAFE",
+      "SURE-LITES",
+      "LUMARK",
+      "MCGRAW-EDISON",
+      "PORTFOLIO",
+      "IRIS",
+      "NEO-RAY",
+      "STREETWORKS",
+      "INVUE"
+    ],
+    "SIGNIFY": [
+      "SIGNIFY",
+      "PHILIPS",
+      "LIGHTOLIER",
+      "DAY-BRITE",
+      "GARDCO",
+      "STONCO",
+      "LUMEC",
+      "COLOR KINETICS",
+      "ALKCO",
+      "ARDEE",
+      "HADCO"
+    ],
+    "HUBBELL": [
+      "HUBBELL",
+      "PROGRESS LIGHTING",
+      "PRESCOLITE",
+      "KIM LIGHTING",
+      "SPAULDING",
+      "COLUMBIA LIGHTING",
+      "DUAL-LITE",
+      "BEACON",
+      "ARCHITECTURAL AREA LIGHTING"
+    ],
+    "LSI": [
+      "LSI",
+      "LSI INDUSTRIES"
+    ]
+  }
+}

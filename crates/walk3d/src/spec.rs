@@ -1202,6 +1202,13 @@ pub struct Mep {
     /// or not.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub panel_schedules: Vec<PanelSchedule>,
+    /// Equipment connections' electrical data from their submittals, beside what the drawings
+    /// give them (protection, feeder): what the build checks and reports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equipment_electrical: Vec<EquipmentElectrical>,
+    /// The light fixture schedule as printed: each type's basis of design and data.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixture_schedule: Vec<FixtureType>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1754,9 +1761,66 @@ pub struct PanelCircuit {
     /// schedule's legend saying what each is ([`PanelSchedule::legend`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub protection: Vec<String>,
+    /// Its wire size as the schedule prints it (`12`, `4/0`), and its load, VA.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wire: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_va: Option<f64>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+}
+
+/// A light fixture schedule's row: the type and its basis of design.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FixtureType {
+    pub tag: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub lamp: String,
+    pub va: Option<f64>,
+    pub voltage: String,
+    pub installation: String,
+    pub description: String,
+    /// The schedule's note numbers on it (`2,3,5`).
+    pub notes: String,
+    /// The sheet it was read from.
+    pub source: String,
+}
+
+/// An equipment connection's electrical data (its submittal's, else unknown) and the drawings'
+/// provision for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EquipmentElectrical {
+    /// Its tag on the one-line (`ELEV-1`) and what the schedule calls it.
+    pub tag: String,
+    pub description: String,
+    /// The drawings': its source panel, protection (`70A/3P`) and feeder type tag.
+    pub source_panel: String,
+    pub drawing_ocpd: String,
+    pub feeder: String,
+    /// The submittal's: volts and phases, nameplate / full-load / minimum circuit amps, the most
+    /// protection it allows (amps, and the fuse class when it names one), acceleration amps,
+    /// horsepower and kW, the controller's short-circuit current rating (amps).
+    pub volts: Option<f64>,
+    pub phase: Option<u32>,
+    pub nameplate_a: Option<f64>,
+    pub fla: Option<f64>,
+    pub mca: Option<f64>,
+    pub max_ocpd_a: Option<f64>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub fuse_class: String,
+    pub accel_a: Option<f64>,
+    pub hp: Option<f64>,
+    pub kw: Option<f64>,
+    pub sccr_a: Option<f64>,
+    /// Where its data came from (the submittal's file and page, or an agent's reading of it) and
+    /// the submittal's review status.
+    pub source: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status: String,
 }
 
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
@@ -1775,6 +1839,9 @@ pub struct PanelSchedule {
     /// The schedule legend's codes: `GF` → `GROUND FAULT INTERRUPTER`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub legend: BTreeMap<String, String>,
+    /// Its header's facts as printed: `bus amps` → `125A`, `volts/phase`, `mounting`, `location`…
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub header: BTreeMap<String, String>,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.

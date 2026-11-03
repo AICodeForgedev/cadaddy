@@ -151,6 +151,75 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
     out
 }
 
+/// The grid bubbles among some objects: each one's centre, radius and label. A bubble's grid line
+/// (10' or more) ends at it and points through its centre; or it stands in a row of bubbles of
+/// its family, each label once, in sequence (a dashed grid's pieces are too short to be its line). `strict` (an electrical plan, whose circuit and leader lines end
+/// at its devices the same way): both. A device reader must not take a grid's label (`A`, `C`,
+/// `F`) for a device's type mark.
+pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: bool) -> Vec<(Vec2, f64, String)> {
+    let found = bubbles(d, ents, k);
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let lines = grid_lines(ents, k);
+    let pointed = |b: &Bubble| {
+        lines.iter().any(|(a, c)| {
+            let near = a.dist(b.at).min(c.dist(b.at));
+            let len = a.dist(*c);
+            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
+        })
+    };
+    let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
+    // A grid's row: bubbles of its family on one line across or down, each label once (a
+    // corridor's alternating fixture marks, `E G E G`, repeat theirs), three of them in sequence
+    // along it (`A B C`, `1 2 3`; a stacked plan's fixtures lined up floor over floor are not).
+    let in_row = |b: &Bubble| {
+        let row = |same: &dyn Fn(&Bubble) -> bool, along: &dyn Fn(Vec2) -> f64| {
+            let mut labels: Vec<(String, Vec2)> = Vec::new();
+            for o in found.iter().filter(|o| same(o) && family(&o.label) == family(&b.label)) {
+                let l = o.label.to_ascii_uppercase();
+                // The same bubble drawn twice is one.
+                if !labels.iter().any(|(m, p)| *m == l && p.dist(o.at) <= 0.5 * b.r) {
+                    labels.push((l, o.at));
+                }
+            }
+            let distinct: std::collections::BTreeSet<&str> = labels.iter().map(|(l, _)| l.as_str()).collect();
+            if distinct.len() < 3 || distinct.len() != labels.len() {
+                return false;
+            }
+            labels.sort_by(|x, y| along(x.1).total_cmp(&along(y.1)));
+            let ords: Vec<i64> = labels.iter().filter_map(|(l, _)| grid_ordinal(l)).collect();
+            ords.windows(3).any(|w| {
+                let (d1, d2) = (w[1] - w[0], w[2] - w[1]);
+                d1 == d2 && d1.abs() == 1
+            })
+        };
+        row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y)
+            || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
+    };
+    found.iter().filter(|b| if strict { pointed(b) && in_row(b) } else { pointed(b) || in_row(b) }).map(|b| (b.at, b.r, b.label.clone())).collect()
+}
+
+/// A grid label's place in its sequence: a number's value, a letter's place in the alphabet grids
+/// use (no I, no O); none for one between grids (`F.3`) or of more letters.
+fn grid_ordinal(label: &str) -> Option<i64> {
+    let l = label.trim();
+    if !l.is_empty() && l.len() <= 3 && l.chars().all(|c| c.is_ascii_digit()) {
+        return l.parse().ok();
+    }
+    let mut chars = l.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    let c = c.to_ascii_uppercase();
+    if !c.is_ascii_uppercase() || c == 'I' || c == 'O' {
+        return None;
+    }
+    let skipped = i64::from(c > 'I') + i64::from(c > 'O');
+    Some(i64::from(c as u8 - b'A') - skipped)
+}
+
+/// A grid line points through its bubble's centre: off it by at most this share of its radius.
+const GRID_THROUGH: f64 = 0.25;
+
 /// The centre and radius of a path drawn as a circle: every point within 6% of one radius from
 /// the centre and the points going at least 300° round it.
 fn round_path(pts: &[Vec2]) -> Option<(Vec2, f64)> {

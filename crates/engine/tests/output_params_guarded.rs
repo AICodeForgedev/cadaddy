@@ -57,6 +57,8 @@ const UNCHECKED: &[&str] = &[
     "cmd/file/etransmit.rs",
     "cmd/file/sheetset.rs",
     "cmd/file/zip.rs",
+    // bim.form.promote: only its own trade template file in the settings folder, updated in place
+    "cmd/forms.rs",
     "cmd/fourd.rs",
     "cmd/guided.rs",
     "cmd/hatch/patfile.rs",
@@ -76,6 +78,8 @@ const UNCHECKED: &[&str] = &[
     "cmd/project.rs",
     // writes only inside the project folders it manages (registry, shelved archive, template copy)
     "cmd/project_hub.rs",
+    // writes only its own price database (quotes, map, history, settings), updated in place
+    "cmd/pricebook.rs",
     "cmd/props/linfile.rs",
     "cmd/propuse.rs",
     "cmd/rasterout.rs",

@@ -42,7 +42,9 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
     }
     // (The gear, labels, grounding, concrete and underground reviews' kinds come from `gear.review`,
     // `labels.check`, `grounding.check`, `concrete.review` and `ugsheets.review`, not the print gaps: engine
-    // tests/gear.rs, tests/labels.rs, tests/concrete.rs and mepfix tests/ugsheets.rs.)
+    // tests/gear.rs, tests/labels.rs, tests/concrete.rs and mepfix tests/ugsheets.rs; the equipment
+    // and lighting kinds from the guided job's submittal and lighting checks: engine equipsub and
+    // lightsched tests; the method choice from the job's value engineering: engine valueeng.)
     for k in RfiKind::ALL.into_iter().filter(|k| {
         !matches!(
             k,
@@ -54,6 +56,9 @@ fn planted_gaps_and_the_usual_ones_are_all_found_and_nothing_else() {
                 | RfiKind::PourHold
                 | RfiKind::EmbedConflict
                 | RfiKind::ServiceEntrance
+                | RfiKind::EquipmentElectrical
+                | RfiKind::Lighting
+                | RfiKind::MethodChoice
         )
     }) {
         assert!(seen.contains(&k), "{k:?} never found on seeds 1–6");

@@ -1299,7 +1299,10 @@ fn the_export_is_valid_ifc4_with_every_part_as_its_class() {
     assert_eq!(n("IFCDUCTSEGMENT"), 1, "duct segment");
     assert_eq!(n("IFCDUCTFITTING"), 1, "duct fitting (the elbow)");
     assert_eq!(n("IFCPIPESEGMENT"), 1, "pipe segment");
-    assert_eq!(n("IFCCABLECARRIERSEGMENT"), 1, "conduit segment");
+    // The conduit run as its sticks, its fittings and supports as carrier fittings (Q6157).
+    let sticks = s.execute("bim.count", &json!({"kind": "conduit"})).unwrap()["count"].as_u64().unwrap() as usize;
+    assert!(sticks >= 1);
+    assert_eq!(n("IFCCABLECARRIERSEGMENT"), sticks, "conduit segment");
     // Distribution systems group MEP objects by system name.
     assert!(n("IFCDISTRIBUTIONSYSTEM") >= 3, "one IfcDistributionSystem per MEP system: {}", n("IFCDISTRIBUTIONSYSTEM"));
     assert!(n("IFCRELASSIGNSTOGROUP") >= 3, "one IfcRelAssignsToGroup per system: {}", n("IFCRELASSIGNSTOGROUP"));

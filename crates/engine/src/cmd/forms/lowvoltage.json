@@ -1,0 +1,57 @@
+{
+  "trade": "lowvoltage",
+  "about": "Standard object forms for fire alarm, thermostat and other low-voltage kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "fire_alarm_device",
+      "label": "Fire alarm device",
+      "aliases": ["fire_alarm"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "mounting", "type": "enum", "allowed": ["wall", "ceiling", "duct"], "required": true, "aliases": ["placement"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "candela", "type": "number", "unit": "cd", "required": false, "note": "notification appliances"},
+        {"key": "circuit", "type": "text", "required": true, "aliases": ["loop", "slc", "nac"]},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "fire_alarm_notification",
+      "label": "Fire alarm notification appliance",
+      "aliases": [],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "mounting", "type": "enum", "allowed": ["wall", "ceiling"], "required": true, "aliases": ["placement"]},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "candela", "type": "number", "unit": "cd", "required": true},
+        {"key": "circuit", "type": "text", "required": true, "aliases": ["nac"]},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "thermostat",
+      "label": "Thermostat",
+      "aliases": ["tstat", "temperature_sensor"],
+      "fields": [
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "device_type"]},
+        {"key": "product", "type": "text", "required": true, "aliases": ["catalog_number", "model", "submittal"]},
+        {"key": "controls", "type": "text", "required": true, "aliases": ["serves", "equipment"], "note": "the equipment it controls"},
+        {"key": "mount_height", "type": "number", "unit": "in", "required": true, "aliases": ["height_aff"]},
+        {"key": "host_wall", "type": "ref", "required": true, "aliases": ["host"]},
+        {"key": "wiring", "type": "text", "required": false},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true},
+        {"key": "sheet", "type": "text", "required": true, "aliases": ["source_sheet"]},
+        {"key": "location", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

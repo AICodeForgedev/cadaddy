@@ -3415,6 +3415,14 @@
 	Apply Submittals	Застосувати погоджену документацію
 	Apply Product Data	Застосувати дані про вироби
 	Apply Code Rules	Застосувати норми
+	Panel Schedules	Розклади щитів
+	Estimate	Кошторис
+	Price Book	Довідник цін
+	Add Material Quote	Додати пропозицію ціни
+	Remove Material Quote	Вилучити пропозицію ціни
+	Price Book Settings	Параметри довідника цін
+	Map Item to Price	Зіставити позицію з ціною
+	Import Price Book	Імпортувати довідник цін
 	Dimming Check	Перевірка регулювання яскравості
 	Read Partition Type Legend	Прочитати легенду типів перегородок
 	 ({n} shown; Export writes them all)	 (показано {n}; експорт запише всі)
@@ -3473,3 +3481,33 @@
 	Validation Evidence Packet	Пакет доказів перевірки
 	Validation Prescreen	Попередня перевірка
 	Validation Rules	Правила перевірки
+	Model Fidelity	Деталізація моделі
+	Model Fidelity Rules	Правила деталізації моделі
+	Model Fidelity Report	Звіт про деталізацію моделі
+	Fidelity	Деталізація
+	Auto	Авто
+	Floor	Поверх
+	Detail	Деталі
+	Print Inventory	Опис креслень
+	Piece	Деталь
+	Raceway run	Ділянка кабелепроводу
+	Connects to	З'єднано з
+	Height AFF	Висота від чистої підлоги
+	Host wall	Стіна розміщення
+	Wall face	Лицьова поверхня стіни
+	Outlet box	Монтажна коробка
+	Fed by	Живлення від
+	Count Model Pieces	Порахувати деталі моделі
+	Edit Model Piece	Змінити деталь моделі
+	Walk the Feed	Пройти живленням
+	Object Forms	Форми об'єктів
+	Create Object Forms	Створити форми об'єктів
+	Edit Object Form Field	Змінити поле форми об'єкта
+	Record Object Field Value	Записати значення поля об'єкта
+	Object Form Log	Журнал форм об'єктів
+	Revert Object Form Change	Скасувати зміну форми об'єкта
+	Promote Object Form to Template	Зробити форму об'єкта шаблоном
+	Object Completeness	Повнота об'єктів
+	Object Form	Форма об'єкта
+	Price a Change	Оцінити зміну
+	Value Engineering	Інженерна оптимізація вартості

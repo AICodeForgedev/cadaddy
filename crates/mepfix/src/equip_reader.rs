@@ -458,6 +458,21 @@ impl<'a> TextIndex<'a> {
     }
 }
 
+/// The cells of the tables a drawing draws, `[x0, y0, x1, y1]`: closed boxes and the spaces
+/// between grid lines (as [`read_tables`] finds them), on any layer, keyed or not. Empty for a
+/// drawing of no lettering.
+pub fn table_cells(d: &Drawing) -> Vec<[f64; 4]> {
+    let txt = texts(d);
+    let h = txt.iter().map(|t| t.h).fold(f64::INFINITY, f64::min);
+    if !h.is_finite() {
+        return Vec::new();
+    }
+    let mut all = boxes(d);
+    let grid = grid_cells(d, h * 0.3, &all);
+    all.extend(grid);
+    all.into_iter().map(|(lo, hi, _)| [lo.x, lo.y, hi.x, hi.y]).collect()
+}
+
 /// As [`read_tables`], with tables keyed by the columns `is_key` accepts (a fixture schedule's
 /// `TYPE`, say).
 ///

@@ -3322,3 +3322,31 @@ menu	Modify	Modifikace
 	Report Validation Findings	Nahlásit zjištění ověření
 	Validation Run Status	Stav běhu ověření
 	Plant Validation Errors	Vložit chyby pro ověření
+	Model Fidelity	Věrnost modelu
+	Model Fidelity Rules	Pravidla věrnosti modelu
+	Model Fidelity Report	Zpráva o věrnosti modelu
+	Fidelity	Věrnost
+	Auto	Automaticky
+	Floor	Podlaží
+	Detail	Detail
+	Print Inventory	Soupis výkresů
+	Piece	Díl
+	Raceway run	Trasa elektroinstalační trubky
+	Connects to	Připojeno k
+	Height AFF	Výška nad čistou podlahou
+	Host wall	Hostitelská stěna
+	Wall face	Líc stěny
+	Outlet box	Elektroinstalační krabice
+	Fed by	Napájeno z
+	Count Model Pieces	Spočítat díly modelu
+	Edit Model Piece	Upravit díl modelu
+	Walk the Feed	Projít napájení
+	Object Forms	Formuláře objektů
+	Create Object Forms	Vytvořit formuláře objektů
+	Edit Object Form Field	Upravit pole formuláře objektu
+	Record Object Field Value	Zaznamenat hodnotu pole objektu
+	Object Form Log	Protokol formulářů objektů
+	Revert Object Form Change	Vrátit změnu formuláře objektu
+	Promote Object Form to Template	Povýšit formulář objektu na šablonu
+	Object Completeness	Úplnost objektů
+	Object Form	Formulář objektu

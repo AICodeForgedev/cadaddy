@@ -52,7 +52,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("project.note", "Project Note", run_note).params("{text, author?: agent|user (agent)} → {revision, notes}: a handoff note kept in the drawing"),
         CommandSpec::new("review.list", "Review Queue", run_list)
-            .params("{kind?: rfi|mep_guess|clash|concern|validation, status?: open|deferred|resolved|all (open), level?, cursor?, limit?: 1-50 (10)} → {total, byKind, items: [{id, kind, level, title}], next_cursor?}")
+            .params("{kind?: rfi|mep_guess|clash|concern|validation|question, status?: open|deferred|resolved|all (open), level?, cursor?, limit?: 1-50 (10)} → {total, byKind, items: [{id, kind, level, title}], next_cursor?}")
             .noundo(),
         CommandSpec::new("review.next", "Next Review Item", run_next)
             .params("{kind?, level?, id?: an item id (that item, open or not)} → {item: {id, kind, level, title, detail, candidates, documents, how}, remaining}: the most important open item and how to answer it")
@@ -516,6 +516,124 @@ fn judged_items(s: &Session) -> Vec<Item> {
         .collect()
 }
 
+/// Unresolved device marks queued at most (one question per mark and sheet), and the symbols
+/// each lists.
+const MAX_QUEUED_QUESTIONS: usize = 500;
+const QUESTION_SYMBOLS: usize = 8;
+
+/// The device marks nothing resolved (no legend, schedule, panel schedule or known list says what
+/// they are; the BOM lists them as UNRESOLVED): a question per mark and sheet, naming the sheet,
+/// its symbols and the text printed round them. The answer is the kind (`luminaire`,
+/// `equipment connection`) or `not a device`.
+fn question_items(s: &Session) -> Vec<Item> {
+    let Some(sp) = s.doc().ok().and_then(|d| d.building_spec.as_deref()).and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) else {
+        return Vec::new();
+    };
+    let mut groups: BTreeMap<(String, String), Vec<&cadaddy_walk3d::tags::ElementTag>> = BTreeMap::new();
+    for t in sp.tags.iter().filter(|t| t.id.starts_with("device:") && t.fields.contains_key("unresolved")) {
+        let field = |k: &str| t.fields.get(k).map_or_else(String::new, |f| f.value.clone());
+        groups.entry((field("type"), field("sheet"))).or_default().push(t);
+    }
+    groups
+        .into_iter()
+        .take(MAX_QUEUED_QUESTIONS)
+        .map(|((mark, sheet), tags)| {
+            let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map_or_else(String::new, |f| f.value.clone());
+            let levels: std::collections::BTreeSet<&str> = tags.iter().map(|t| t.level.as_str()).collect();
+            let level = if levels.len() == 1 { levels.into_iter().next().unwrap_or_default().to_string() } else { String::new() };
+            let symbols: Vec<String> = tags.iter().map(|t| field(t, "symbol")).filter(|h| !h.is_empty()).take(QUESTION_SYMBOLS).collect();
+            let near: Vec<String> =
+                tags.iter().map(|t| field(t, "unresolved")).collect::<std::collections::BTreeSet<_>>().into_iter().take(3).collect();
+            Item {
+                id: format!("RV-Q{}", hash(&format!("question|{mark}|{sheet}"))),
+                kind: "question",
+                level,
+                title: cut(&format!("What is device mark {mark} on {sheet}? {} placed; no legend, schedule or panel schedule says", tags.len()), 120),
+                detail: json!({
+                    "mark": mark, "sheet": sheet, "count": tags.len(), "symbols": symbols, "near_text": near,
+                    "elements": tags.iter().take(QUESTION_SYMBOLS).map(|t| t.id.as_str()).collect::<Vec<_>>(),
+                }),
+                candidates: vec![
+                    json!({"answer": "luminaire", "from": "a fixture type the lighting schedule lists"}),
+                    json!({"answer": "equipment connection", "from": "a tag of the equipment it powers"}),
+                    json!({"answer": "not a device", "from": "a grid bubble, a plant, a room or keynote tag: it comes out of the model"}),
+                ],
+                documents: vec![sheet.clone(), format!("the legend and schedules that speak for {sheet}"), "the panel schedules' load names".into()],
+                documented: true,
+                rank: 1.8,
+                key: json!({"mark": mark, "sheet": sheet}),
+                system: String::new(),
+            }
+        })
+        .collect()
+}
+
+/// Fields whose documents disagree (`bim.form.record` met a different document's value): a
+/// conflict per element and field, its values with their sources; the answer is the value that
+/// holds, citing the document that settles it.
+fn conflict_items(s: &Session) -> Vec<Item> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    super::forms::open_conflicts(d)
+        .into_iter()
+        .take(MAX_QUEUED_FAILURES)
+        .map(|c| {
+            let level = d.model.get(cadaddy_doc::Handle(u64::from_str_radix(&c.handle, 16).unwrap_or(0))).and_then(|e| super::elemprops::level_of(e)).unwrap_or_default();
+            let said: Vec<String> = c
+                .values
+                .iter()
+                .take(4)
+                .map(|g| format!("{} ({}{})", g.value.as_str().map_or_else(|| g.value.to_string(), str::to_string), g.source.kind.as_str(), g.source.doc.as_deref().map(|x| format!(" {x}")).unwrap_or_default()))
+                .collect();
+            Item {
+                id: format!("RV-F{}", hash(&format!("conflict|{}", c.id))),
+                kind: "conflict",
+                level,
+                title: cut(&format!("{} {} {}: the documents disagree: {}", c.kind, c.handle, c.key, said.join(" vs ")), 120),
+                detail: json!({"conflict": c.id, "handle": c.handle, "kind": c.kind, "key": c.key, "values": c.values}),
+                candidates: c.values.iter().take(4).map(|g| json!({"answer": g.value, "from": format!("{} {}", g.source.kind.as_str(), g.source.doc.clone().unwrap_or_default()).trim().to_string()})).collect(),
+                documents: c.values.iter().filter_map(|g| g.source.doc.clone()).take(8).collect(),
+                documented: true,
+                rank: 1.2,
+                key: json!({"conflict": c.id}),
+                system: String::new(),
+            }
+        })
+        .collect()
+}
+
+/// An answered device-mark question into the model: its devices take the kind (`not a device`
+/// takes them out), the answer and its citation their source.
+fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, who: &str) -> Result<()> {
+    let Some(kind) = answer.as_str().map(str::trim).filter(|a| !a.is_empty() && a.len() <= 60) else {
+        return Err(bad(
+            "review.resolve",
+            "a device mark's answer is its kind (\"luminaire\", \"equipment connection\", \"receptacle\") or \"not a device\"",
+        ));
+    };
+    let (mark, sheet) = (item.key["mark"].as_str().unwrap_or_default(), item.key["sheet"].as_str().unwrap_or_default());
+    let (mut sp, _) = current(s, "review.resolve")?;
+    let ours = |t: &cadaddy_walk3d::tags::ElementTag| {
+        let field = |k: &str| t.fields.get(k).map_or("", |f| f.value.as_str());
+        t.id.starts_with("device:") && t.fields.contains_key("unresolved") && field("type") == mark && field("sheet") == sheet
+    };
+    let source = match cite {
+        Some(c) => format!("answered ({who}): {}", c.text()),
+        None => format!("answered ({who})"),
+    };
+    if kind.eq_ignore_ascii_case("not a device") {
+        sp.tags.retain(|t| !ours(t));
+    } else {
+        for t in sp.tags.iter_mut().filter(|t| ours(t)) {
+            t.kind = kind.to_ascii_lowercase().replace(' ', "_");
+            t.set("device_type", format!("{} {mark}", kind.to_ascii_lowercase()), "user");
+            t.set("kind_source", source.clone(), "user");
+            t.fields.remove("unresolved");
+        }
+    }
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    Ok(())
+}
+
 /// Every decision kept in the drawing: item id → (status, answer).
 pub(crate) fn decisions(d: &Drawing) -> BTreeMap<String, (String, Value)> {
     load(d).decisions.into_iter().map(|(id, x)| (id, (x.status, x.answer))).collect()
@@ -526,6 +644,8 @@ fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     v.extend(concern_items(st));
     v.extend(validation_items(s));
     v.extend(judged_items(s));
+    v.extend(question_items(s));
+    v.extend(conflict_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -547,6 +667,12 @@ fn how(i: &Item) -> Value {
         }
         "clash" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "coordinated: sprinkler main drops below the duct per FP-101"}, "or": "review.defer {id, reason}"})
+        }
+        "conflict" => {
+            json!({"call": "review.resolve", "example": {"id": i.id, "answer": "20A 125V", "citation": {"kind": "submittal", "document": "the approved product data", "ref": "page 2"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
+        }
+        "question" => {
+            json!({"call": "review.resolve", "example": {"id": i.id, "answer": "luminaire", "citation": {"kind": "schedule", "document": "E-001", "ref": "light fixture schedule, type C"}}, "or": "answer \"not a device\" for a grid bubble or another trade's tag"})
         }
         _ => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "covered: GFCI breaker on circuit 12", "citation": {"kind": "schedule", "document": "E-601 panel L1"}}})
@@ -778,8 +904,8 @@ fn run_note(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
     let st = load(s.doc()?);
     let kind = str_param(p, "kind");
-    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern", "validation"].contains(&k)) {
-        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash, concern or validation"));
+    if kind.is_some_and(|k| !["rfi", "mep_guess", "clash", "concern", "validation", "question", "conflict"].contains(&k)) {
+        return Err(bad("review.list", "`kind` is rfi, mep_guess, clash, concern, validation, question or conflict"));
     }
     let status = str_param(p, "status").unwrap_or("open");
     if !["open", "deferred", "resolved", "orphaned", "all"].contains(&status) {
@@ -964,6 +1090,11 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
                 ));
             }
             super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
+        }
+        "question" => answer_question(s, item, answer, cite, who),
+        "conflict" => {
+            let id = item.key["conflict"].as_str().unwrap_or_default();
+            super::forms::resolve_conflict(s, id, answer, &cite.map(Citation::text).unwrap_or_default(), who)
         }
         // Clashes and concerns: the decision is the record.
         _ => Ok(()),

@@ -17,6 +17,9 @@ const MAX_ROWS: usize = 200;
 const HEADER_REACH: f64 = 16.0;
 /// A schedule's title is at least this much taller than its header's text.
 const TITLE_OVER_CELLS: f64 = 1.3;
+/// A legend's lines: how far below and right of its `LEGEND:` label, in its text heights.
+const LEGEND_ROWS: f64 = 12.0;
+const LEGEND_WIDTH: f64 = 120.0;
 /// How far a number can sit from its column's header, in text heights.
 const COLUMN_REACH: f64 = 5.0;
 
@@ -32,6 +35,10 @@ pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
         && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
         && tag.chars().any(|c| c.is_ascii_alphanumeric());
     if !ok || ["SCHEDULE", "SCHEDULES", "SHALL", "AND", "WITH", "TO", "IN", "FOR"].contains(&tag.as_str()) {
+        return None;
+    }
+    // A panel's other tables (its demand calculation, load summary) aren't its schedule.
+    if ["DEMAND", "CALCULATION", "SUMMARY", "RISER"].iter().any(|w| rest.contains(w)) {
         return None;
     }
     let typical = rest.split_once("TYPICAL OF").and_then(|(_, r)| r.split_whitespace().next()).and_then(|n| n.parse::<u32>().ok());
@@ -68,6 +75,9 @@ struct Side {
     num: f64,
     amps: Option<f64>,
     poles: Option<f64>,
+    /// Its wire size and load (VA) columns.
+    wire: Option<f64>,
+    load: Option<f64>,
     /// Its other number columns (wire size, load): a number nearest one of them is none of the above.
     others: Vec<f64>,
     /// The left side (codes left of its numbers, the description right of them).
@@ -80,14 +90,56 @@ struct Cells {
     description: Vec<String>,
     amps: String,
     poles: String,
+    wire: String,
+    load: String,
     codes: Vec<String>,
+}
+
+/// A number as a schedule cell prints it: `20`, `1,204`, `#12`, `4/0`.
+fn numberish(v: &str) -> bool {
+    let d = v.trim().trim_start_matches('#').replace([',', '/'], "");
+    !d.is_empty() && d.len() <= 9 && d.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The header's facts above the circuits: each `LABEL:` and the text right of it on its line.
+fn header_facts(flat: &[&TextItem], y0: f64, y1: f64, x0: f64, x1: f64, row_h: f64) -> BTreeMap<String, String> {
+    let near: Vec<&&TextItem> = flat.iter().filter(|t| t.at.y > y0 && t.at.y < y1 && t.at.x >= x0 && t.at.x <= x1).collect();
+    let mut out = BTreeMap::new();
+    for l in near.iter().filter(|t| t.value.trim().ends_with(':')) {
+        let value = near
+            .iter()
+            .filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * row_h && t.at.x > l.at.x + 0.1 * row_h)
+            .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            .filter(|v| !v.value.trim().ends_with(':'));
+        if let Some(v) = value {
+            out.insert(l.value.trim().trim_end_matches(':').trim().to_ascii_lowercase(), v.value.trim().to_string());
+        }
+    }
+    out
 }
 
 /// The schedules on one sheet's texts (its PDF page re-read, or the drawing's).
 pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
     let flat: Vec<&TextItem> =
         texts.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite()).collect();
-    let legend: BTreeMap<String, String> = flat.iter().filter_map(|t| legend_line(&t.value)).collect();
+    // The legend: the `CODE - MEANING` lines under a `LEGEND:` label (a circuit's own description,
+    // `LTG - THIRD FLOOR`, isn't one); with no label on the sheet, every such line.
+    let labels: Vec<&&TextItem> = flat.iter().filter(|t| t.value.trim().trim_end_matches(':').trim().eq_ignore_ascii_case("LEGEND")).collect();
+    let under = |t: &TextItem| {
+        labels.is_empty()
+            || labels.iter().any(|l| {
+                t.at.y <= l.at.y + 0.6 * l.height
+                    && t.at.y > l.at.y - LEGEND_ROWS * l.height
+                    && t.at.x >= l.at.x - l.height
+                    && t.at.x <= l.at.x + LEGEND_WIDTH * l.height
+            })
+    };
+    let mut legend: BTreeMap<String, String> = BTreeMap::new();
+    for t in flat.iter().filter(|t| under(t)) {
+        if let Some((k, m)) = legend_line(&t.value) {
+            legend.entry(k).or_insert(m);
+        }
+    }
     let mut out = Vec::new();
     for title in &flat {
         if out.len() >= MAX_SCHEDULES {
@@ -112,17 +164,54 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         if h < TITLE_OVER_CELLS * ckts.iter().map(|t| t.height).fold(f64::INFINITY, f64::min) {
             continue;
         }
-        let line: Vec<&&TextItem> = ckts.iter().copied().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).collect();
-        let (Some(l), Some(r)) =
-            (line.iter().min_by(|a, b| a.at.x.total_cmp(&b.at.x)).copied(), line.iter().max_by(|a, b| a.at.x.total_cmp(&b.at.x)).copied())
-        else {
-            continue;
+        let mut line: Vec<&&TextItem> = ckts.iter().copied().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).collect();
+        line.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        // Which way each CKT column faces: its description's header beside it (right of a left
+        // side's numbers, left of a right side's). Tables side by side share the header line; this
+        // title's table starts at its last left-facing CKT before the title, and ends at the next
+        // right-facing one before another table starts.
+        let descs: Vec<f64> = flat
+            .iter()
+            .filter(|t| t.value.to_ascii_uppercase().contains("DESCRIPTION") && t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h)
+            .map(|t| t.at.x)
+            .collect();
+        // Right-facing: the next header right of it is a description, not another CKT (the right
+        // side's own, or the next table's).
+        let ckt_xs: Vec<f64> = line.iter().map(|t| t.at.x).collect();
+        let faces_right = |x: f64| -> Option<bool> {
+            let next_desc = descs.iter().copied().filter(|d| *d > x + 0.1 * row_h).min_by(f64::total_cmp);
+            let next_ckt = ckt_xs.iter().copied().filter(|c| *c > x + 0.1 * row_h).min_by(f64::total_cmp);
+            match (next_desc, next_ckt) {
+                (Some(d), Some(c)) => Some(d < c),
+                (Some(_), None) => Some(true),
+                (None, _) => Some(false),
+            }
+        };
+        let (l, r) = if descs.is_empty() {
+            let (Some(l), Some(r)) = (line.first().copied(), line.last().copied()) else { continue };
+            (l, r)
+        } else {
+            let lefts: Vec<usize> = (0..line.len()).filter(|i| line.get(*i).is_some_and(|t| faces_right(t.at.x) == Some(true))).collect();
+            let start =
+                lefts.iter().copied().rfind(|i| line.get(*i).is_some_and(|t| t.at.x <= title.at.x + 2.0 * h)).or_else(|| lefts.first().copied());
+            let Some(start) = start else { continue };
+            let Some(l) = line.get(start).copied() else { continue };
+            let r = line
+                .iter()
+                .skip(start + 1)
+                .take_while(|t| faces_right(t.at.x) != Some(true))
+                .find(|t| faces_right(t.at.x) == Some(false))
+                .copied()
+                .unwrap_or(l);
+            (l, r)
         };
         let two = r.at.x - l.at.x > 20.0 * row_h;
         // The header's second line (`# | DESCRIPTION | AMPS | P`), else its first.
+        // One-sided, the header runs across the table; two-sided, between its CKT columns.
+        let head_x1 = if two { r.at.x + 3.0 * row_h } else { l.at.x + 120.0 * row_h };
         let head: Vec<&&TextItem> = flat
             .iter()
-            .filter(|t| t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h && t.at.x > l.at.x - row_h && t.at.x < r.at.x + 3.0 * row_h)
+            .filter(|t| t.at.y <= top + 0.6 * row_h && t.at.y > top - 2.6 * row_h && t.at.x > l.at.x - row_h && t.at.x < head_x1)
             .collect();
         let named = |name: &str| -> Vec<f64> { head.iter().filter(|t| t.value.trim().eq_ignore_ascii_case(name)).map(|t| t.at.x).collect() };
         let hash = named("#");
@@ -137,13 +226,20 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let mid = if two { (lnum + rnum) / 2.0 } else { f64::INFINITY };
         let others = [named("SIZE"), named("(VA)"), named("LOAD"), named("*")].concat();
         let half = |left: bool| -> Vec<f64> { others.iter().copied().filter(|x| if left { *x < mid } else { *x > mid }).collect() };
-        let mut sides =
-            vec![Side { num: lnum, amps: first_after(&amps, lnum, mid), poles: first_after(&poles, lnum, mid), others: half(true), left: true }];
+        let sizes = named("SIZE");
+        let loads = [named("(VA)"), named("LOAD")].concat();
+        let (lamps, lpoles) = (first_after(&amps, lnum, mid), first_after(&poles, lnum, mid));
+        let lwire = first_after(&sizes, lpoles.or(lamps).unwrap_or(lnum), mid);
+        let lload = first_after(&loads, lwire.unwrap_or(lnum), mid);
+        let mut sides = vec![Side { num: lnum, amps: lamps, poles: lpoles, wire: lwire, load: lload, others: half(true), left: true }];
         if two {
+            let rwire = last_before(&sizes, rnum, mid);
             sides.push(Side {
                 num: rnum,
                 amps: last_before(&amps, rnum, mid),
                 poles: last_before(&poles, rnum, mid),
+                wire: rwire,
+                load: last_before(&loads, rwire.unwrap_or(rnum), mid),
                 others: half(false),
                 left: false,
             });
@@ -166,7 +262,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                         || u.starts_with("TOTAL")
                         || u.contains("SUB-TOTAL")
                         || u.contains("SUBTOTAL")
-                        || title_panel(&u).is_some()
+                        || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
                         || step.is_some_and(|s| gap > 2.6 * s)
                         || (step.is_none() && gap > 4.0 * row_h)
                         || lines.len() >= MAX_ROWS
@@ -180,6 +276,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             }
         }
         let mut circuits: Vec<PanelCircuit> = Vec::new();
+        let mut side_rows: Vec<Vec<Cells>> = sides.iter().map(|_| Vec::new()).collect();
         for ln in &lines {
             let mut cells: Vec<Cells> = sides.iter().map(|_| Cells::default()).collect();
             for t in ln {
@@ -197,19 +294,36 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                 }
                 // A number belongs to the nearest of the circuit number, amps and poles columns
                 // (a text's height is its capitals': a few of them reach the next column).
-                let numeric = number(v.trim_end_matches('A')).is_some();
+                let numeric = number(v.trim_end_matches('A')).is_some() || numberish(v);
                 if numeric {
-                    let best = [(0u8, Some(side.num)), (1, side.amps), (2, side.poles)]
+                    // Another column is one none of these is (a column's header words, `LOAD` over
+                    // `(VA)`, stand a little apart).
+                    let known = [Some(side.num), side.amps, side.poles, side.wire, side.load];
+                    let other = side.others.iter().copied().filter(|o| !known.iter().flatten().any(|k| (k - o).abs() < 1.5 * row_h));
+                    let best = [(0u8, Some(side.num)), (1, side.amps), (2, side.poles), (3, side.wire), (4, side.load)]
                         .into_iter()
-                        .chain(side.others.iter().map(|o| (9u8, Some(*o))))
+                        .chain(other.map(|o| (9u8, Some(o))))
                         .filter_map(|(k, cx)| cx.map(|cx| ((x - cx).abs(), k)))
                         .filter(|(d, _)| *d <= COLUMN_REACH * row_h)
                         .min_by(|a, b| a.0.total_cmp(&b.0));
                     match best {
                         Some((_, 0)) if c.number.is_empty() && number(v).is_some() => c.number = v.to_string(),
-                        Some((_, 1)) if c.amps.is_empty() => c.amps = v.trim_end_matches('A').to_string(),
-                        Some((_, 2)) if c.poles.is_empty() => c.poles = v.to_string(),
+                        Some((_, 1)) if c.amps.is_empty() && number(v.trim_end_matches('A')).is_some() => {
+                            c.amps = v.trim_end_matches('A').to_string()
+                        }
+                        Some((_, 2)) if c.poles.is_empty() && number(v).is_some() => c.poles = v.to_string(),
+                        Some((_, 3)) if c.wire.is_empty() => c.wire = v.trim_start_matches('#').to_string(),
+                        Some((_, 4)) if c.load.is_empty() => c.load = v.replace(',', ""),
                         _ => {}
+                    }
+                } else if v.eq_ignore_ascii_case("OL") || v.eq_ignore_ascii_case("RD") {
+                    // `OL` / `RD`: see the one-line (riser) diagram — in the breaker's or wire's column.
+                    let near = |cx: Option<f64>| cx.is_some_and(|cx| (x - cx).abs() <= COLUMN_REACH * row_h);
+                    let (da, dw) = (side.amps.map(|a| (x - a).abs()), side.wire.map(|w| (x - w).abs()));
+                    if near(side.amps) && dw.is_none_or(|dw| da.is_some_and(|da| da <= dw)) && c.amps.is_empty() {
+                        c.amps = v.to_ascii_uppercase();
+                    } else if near(side.wire) && c.wire.is_empty() {
+                        c.wire = v.to_ascii_uppercase();
                     }
                 } else if letters(v) {
                     let between = match (side.left, side.amps) {
@@ -223,19 +337,49 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                     }
                 }
             }
-            for c in cells {
-                let Some(n) = number(&c.number) else { continue };
-                if c.description.is_empty() && c.amps.is_empty() {
-                    // The second pole of the breaker above it.
-                    continue;
+            for (rows, c) in side_rows.iter_mut().zip(cells) {
+                rows.push(c);
+            }
+        }
+        // A breaker of several poles spans as many rows, its number on the first or the middle one;
+        // its load is each pole's row's (a row of its own with no description is one of its poles).
+        let load = |c: &Cells| c.load.parse::<f64>().ok().filter(|v| v.is_finite());
+        for rows in &side_rows {
+            let starts = |c: &Cells| number(&c.number).is_some() && !(c.description.is_empty() && c.amps.is_empty());
+            let mut taken = vec![false; rows.len()];
+            for (i, c) in rows.iter().enumerate() {
+                let Some(n) = number(&c.number).filter(|_| starts(c)) else { continue };
+                let poles = c.poles.parse::<u32>().ok().filter(|p| (1..=3).contains(p)).unwrap_or(1);
+                // Its other poles: the pole rows just before it (not another circuit's), then after.
+                let mut mine = vec![i];
+                let mut j = i;
+                while mine.len() < poles as usize && j > 0 {
+                    j -= 1;
+                    if rows.get(j).is_none_or(starts) || taken.get(j).copied().unwrap_or(true) {
+                        break;
+                    }
+                    mine.push(j);
                 }
+                let mut j = i + 1;
+                while mine.len() < poles as usize && rows.get(j).is_some_and(|r| !starts(r)) {
+                    mine.push(j);
+                    j += 1;
+                }
+                for k in &mine {
+                    if let Some(t) = taken.get_mut(*k) {
+                        *t = true;
+                    }
+                }
+                let loads: Vec<f64> = mine.iter().filter_map(|k| rows.get(*k)).filter_map(load).collect();
                 circuits.push(PanelCircuit {
                     number: n.to_string(),
                     description: c.description.join(" "),
                     room: String::new(),
-                    breaker: c.amps,
-                    poles: c.poles.parse::<u32>().ok().filter(|p| (1..=3).contains(p)).unwrap_or(1),
-                    protection: c.codes,
+                    breaker: c.amps.clone(),
+                    poles,
+                    protection: c.codes.clone(),
+                    wire: c.wire.clone(),
+                    load_va: (!loads.is_empty()).then(|| loads.iter().sum()),
                     source: sheet.to_string(),
                 });
             }
@@ -244,9 +388,61 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
             continue;
         }
         circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
-        out.push(PanelSchedule { panel, typical_of, source: sheet.to_string(), circuits, legend: legend.clone() });
+        let header = header_facts(&flat, top + 0.6 * row_h, title.at.y, l.at.x - 2.0 * row_h, head_x1 + 8.0 * row_h, row_h);
+        out.push(PanelSchedule { panel, typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header });
     }
     out
+}
+
+/// A circuit whose breaker or wire the schedule leaves to the one-line or riser (`OL`, `RD`, or
+/// blank) given the one-line's: its breaker (`600A/3P`) and its feeder type (the feeder schedule's
+/// sets, conductors and conduit). A circuit is the one-line's label when its description names it
+/// (`PANELBOARD DP1`, `ELEV-1`) or is one word its tag's letters start (`ELEVATOR` for `ELEV-1`).
+/// The count of circuits given something.
+pub(crate) fn fill_from_oneline(
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    feeds: &[super::equipsub::OnelineLoad],
+    types: &[super::gearbuild::FeederType],
+) -> usize {
+    let deferred = |v: &str| v.is_empty() || v.eq_ignore_ascii_case("OL") || v.eq_ignore_ascii_case("RD");
+    let mut n = 0;
+    for p in &mut sp.mep.panel_schedules {
+        for c in &mut p.circuits {
+            if !deferred(&c.breaker) && !deferred(&c.wire) {
+                continue;
+            }
+            let up = c.description.to_ascii_uppercase();
+            let words: Vec<&str> = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).collect();
+            let named = |f: &&super::equipsub::OnelineLoad| {
+                words.iter().any(|w| w.eq_ignore_ascii_case(&f.tag))
+                    || (words.len() == 1 && super::equipsub::stem(&f.tag).is_some_and(|st| words.first().is_some_and(|w| w.starts_with(&st))))
+            };
+            let Some(f) = feeds.iter().find(named) else { continue };
+            let mut given = false;
+            if let Some((amps, poles)) = super::equipsub::ocpd_of(&f.ocpd).filter(|_| deferred(&c.breaker)) {
+                c.breaker = format!("{amps:.0}");
+                c.poles = poles;
+                given = true;
+            }
+            if deferred(&c.wire) && !f.feeder.is_empty() {
+                c.wire = match types.iter().find(|t| t.tag.eq_ignore_ascii_case(&f.feeder)) {
+                    Some(t) => format!(
+                        "feeder {}: {} set(s) of {} {} {}, ground {}, in {}\" conduit",
+                        t.tag, t.conduits, t.conductors, t.size, t.material, t.ground_size, t.conduit_in
+                    ),
+                    None => format!("feeder {}", f.feeder),
+                };
+                given = true;
+            }
+            if given {
+                if !c.source.contains("one-line") {
+                    c.source = format!("{}; breaker and feeder from the one-line", c.source).trim_start_matches("; ").to_string();
+                }
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// What a circuit's breaker protects against, by its codes and the legend: (ground fault, arc
@@ -272,6 +468,142 @@ pub(crate) fn protection(c: &PanelCircuit, legend: &BTreeMap<String, String>) ->
         }
     }
     (gf, af)
+}
+
+pub fn specs() -> Vec<super::CommandSpec> {
+    vec![super::CommandSpec::new(CMD, "Panel Schedules", run)
+        .params("{panel?: tag (one panel; default every one), csv?: path (write every circuit, one row each), place?: {panel, at: [x,y]} (draw that panel's schedule as a CADaddy table at a point)} → {panels: [{panel, typical_of?, sheet, header: {bus amps, main size / type, volts/phase, mounting, location, nema rating, aic rating, afc value…}, circuits: [{number, description, breaker_amps, poles, wire, load_va, protection: {codes, ground_fault, arc_fault, meaning}, devices: {count, rooms, by_kind}}], totals: {circuits, spaces, spares, connected_va, typed}, legend}], csv?, placed?: handle}: the panel schedules the job read off the prints, as data: each circuit's breaker and its type, wire and load, and the model's devices on it")
+        .menu(&["Tools", "Building", "Panel Schedules"])]
+}
+
+const CMD: &str = "panels.schedule";
+
+/// One circuit's devices in the model: (count, rooms, kind → count).
+type OnCircuit = (usize, std::collections::BTreeSet<String>, BTreeMap<String, usize>);
+
+fn circuit_json(c: &PanelCircuit, legend: &BTreeMap<String, String>, on: Option<&OnCircuit>) -> serde_json::Value {
+    let (gf, af) = protection(c, legend);
+    let meaning: Vec<String> = c.protection.iter().map(|k| legend.get(k).map_or_else(|| k.clone(), |m| format!("{k}: {m}"))).collect();
+    serde_json::json!({
+        "number": c.number, "description": c.description, "breaker_amps": c.breaker.parse::<f64>().ok(), "poles": c.poles,
+        "wire": c.wire, "load_va": c.load_va,
+        "protection": {"codes": c.protection, "ground_fault": gf, "arc_fault": af, "meaning": meaning},
+        "devices": on.map_or(serde_json::json!({"count": 0}), |(n, rooms, kinds)| serde_json::json!({"count": n, "rooms": rooms.len(), "by_kind": kinds})),
+    })
+}
+
+fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_json::Value> {
+    use cadaddy_doc::props;
+    use serde_json::{Value, json};
+    let (sp, stored) = super::bspec::current(s, CMD)?;
+    let want = super::str_param(p, "panel").map(|t| t.trim().to_ascii_uppercase());
+    let schedules: Vec<&PanelSchedule> =
+        sp.mep.panel_schedules.iter().filter(|x| want.as_ref().is_none_or(|w| x.panel.eq_ignore_ascii_case(w))).collect();
+    if !stored || sp.mep.panel_schedules.is_empty() {
+        return Ok(json!({"panels": [], "note": "no panel schedules in this drawing: a job reads them off the electrical sheets (job.start)"}));
+    }
+    if schedules.is_empty() {
+        return Err(super::bad(CMD, format!("no schedule for panel {}", want.unwrap_or_default())));
+    }
+    // The model's devices on each panel's circuits (a typical room panel's, across its rooms).
+    let d = s.doc()?;
+    let mut on: BTreeMap<(String, String), OnCircuit> = BTreeMap::new();
+    for (e, base) in super::elemprops::elements(d).take(2_000_000) {
+        if !matches!(base.as_str(), "device" | "light_fixture" | "fixture" | "equipment") {
+            continue;
+        }
+        let st = props::read(&e.common.xdata);
+        let text = |k: &str| st.get(k).filter(|v| v.has_value()).map(|v| v.text().trim().to_string()).unwrap_or_default();
+        let (panel, circuit) = (text("panel").to_ascii_uppercase(), text("circuit"));
+        if panel.is_empty() || circuit.is_empty() {
+            continue;
+        }
+        let n = circuit.rsplit_once(['-', '/', '.']).map_or(circuit.as_str(), |(_, n)| n).trim().to_string();
+        let kind = super::elemprops::reported_kind(e, base);
+        let slot = on.entry((panel, n)).or_default();
+        slot.0 += 1;
+        slot.1.insert(text("room"));
+        *slot.2.entry(kind).or_default() += 1;
+    }
+    let mut panels = Vec::new();
+    let mut csv =
+        String::from("panel,typical_of,sheet,circuit,description,breaker_amps,poles,wire,load_va,protection,ground_fault,arc_fault,devices\n");
+    let cell = |v: &str| if v.contains([',', '"']) { format!("\"{}\"", v.replace('"', "\"\"")) } else { v.to_string() };
+    for sch in &schedules {
+        let key = sch.panel.to_ascii_uppercase();
+        let circuits: Vec<Value> = sch.circuits.iter().map(|c| circuit_json(c, &sch.legend, on.get(&(key.clone(), c.number.clone())))).collect();
+        let desc = |c: &PanelCircuit, w: &str| c.description.to_ascii_uppercase().contains(w);
+        for c in &sch.circuits {
+            let (gf, af) = protection(c, &sch.legend);
+            let n = on.get(&(key.clone(), c.number.clone())).map_or(0, |x| x.0);
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                cell(&sch.panel),
+                sch.typical_of.map(|t| t.to_string()).unwrap_or_default(),
+                cell(&sch.source),
+                c.number,
+                cell(&c.description),
+                cell(&c.breaker),
+                c.poles,
+                cell(&c.wire),
+                c.load_va.map(|v| v.to_string()).unwrap_or_default(),
+                cell(&c.protection.join("/")),
+                gf,
+                af,
+                n
+            ));
+        }
+        panels.push(json!({
+            "panel": sch.panel, "typical_of": sch.typical_of, "sheet": sch.source, "header": sch.header, "circuits": circuits,
+            "totals": {
+                "circuits": sch.circuits.len(),
+                "spaces": sch.circuits.iter().filter(|c| desc(c, "SPACE")).count(),
+                "spares": sch.circuits.iter().filter(|c| desc(c, "SPARE")).count(),
+                "connected_va": sch.circuits.iter().filter_map(|c| c.load_va).sum::<f64>(),
+                "typed": sch.circuits.iter().filter(|c| !c.protection.is_empty()).count(),
+            },
+            "legend": sch.legend,
+        }));
+    }
+    let mut out = json!({"panels": panels});
+    if let Some(path) = super::str_param(p, "csv").map(str::trim).filter(|x| !x.is_empty()) {
+        super::exchange::guard_output(s, CMD, p, path)?;
+        crate::writefile::write(path, &csv).map_err(|e| super::bad(CMD, format!("{path}: {e}")))?;
+        out["csv"] = json!(path);
+    }
+    if let Some(pl) = p.get("place").filter(|v| !v.is_null()) {
+        let tag = pl.get("panel").and_then(Value::as_str).ok_or_else(|| super::bad(CMD, "`place` needs `panel`"))?;
+        let at = pl.get("at").cloned().ok_or_else(|| super::bad(CMD, "`place` needs `at`: [x, y]"))?;
+        let sch = sp
+            .mep
+            .panel_schedules
+            .iter()
+            .find(|x| x.panel.eq_ignore_ascii_case(tag))
+            .ok_or_else(|| super::bad(CMD, format!("no schedule for panel {tag}")))?;
+        let header = ["CKT", "DESCRIPTION", "AMPS", "P", "WIRE", "LOAD (VA)", "TYPE"];
+        let cells: Vec<Vec<String>> = sch
+            .circuits
+            .iter()
+            .map(|c| {
+                vec![
+                    c.number.clone(),
+                    c.description.clone(),
+                    c.breaker.clone(),
+                    c.poles.to_string(),
+                    c.wire.clone(),
+                    c.load_va.map(|v| format!("{v:.0}")).unwrap_or_default(),
+                    c.protection.join("/"),
+                ]
+            })
+            .collect();
+        let facts: Vec<String> = sch.header.iter().map(|(k, v)| format!("{}: {v}", k.to_ascii_uppercase())).collect();
+        let title =
+            format!("PANEL {} ({}){}", sch.panel, sch.source, if facts.is_empty() { String::new() } else { format!(" - {}", facts.join("; ")) });
+        let r =
+            s.execute("table", &json!({"at": at, "rows": cells.len(), "cols": header.len(), "cells": cells, "title": title, "header": header}))?;
+        out["placed"] = r.get("handle").cloned().unwrap_or(r);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -337,7 +669,8 @@ mod tests {
                 v.push(t(1763.0, y, "1,204", 7.1));
             }
             if !rd.starts_with("SPACE") {
-                v.push(t(1947.0, y, "900", 7.1));
+                // A wider number starts left of its column's `(VA)`, nearer its `LOAD`.
+                v.push(t(if i == 1 { 1944.0 } else { 1947.0 }, y, "900", 7.1));
                 v.push(t(1987.0, y, "12", 7.1));
                 v.push(t(2013.0, y, "1", 7.1));
                 v.push(t(2036.0, y, "20", 7.1));
@@ -354,6 +687,118 @@ mod tests {
         v.push(t(1934.0, 762.0, "GF - GROUND FAULT INTERRUPTER", 7.1));
         v.push(t(1934.0, 752.0, "TS - VIA TIME SWITCH", 7.1));
         v
+    }
+
+    /// A main panel beside the next schedule on one header line: its breakers `OL` (see the
+    /// one-line), three poles a row each with the number on the middle one; a legend under its label.
+    fn main_beside_another() -> Vec<TextItem> {
+        let x = |v: f64| v * 4.0;
+        let mut v = vec![t(x(160.0), 200.0, "PANELBOARD MDP", 10.0)];
+        for (vx, s) in [
+            (50.0, "CKT"),
+            (60.0, "CIRCUIT"),
+            (120.0, "BREAKER"),
+            (145.0, "WIRE"),
+            (160.0, "LOAD"),
+            (200.0, "LOAD"),
+            (215.0, "WIRE"),
+            (225.0, "BREAKER"),
+            (245.0, "CIRCUIT"),
+            (300.0, "CKT"),
+            (330.0, "CKT"),
+            (340.0, "CIRCUIT"),
+        ] {
+            v.push(t(x(vx), 180.0, s, 6.0));
+        }
+        for (vx, s) in [
+            (52.0, "#"),
+            (60.0, "DESCRIPTION"),
+            (121.0, "AMPS"),
+            (135.0, "P"),
+            (145.0, "SIZE"),
+            (161.0, "(VA)"),
+            (201.0, "(VA)"),
+            (215.0, "SIZE"),
+            (225.0, "P"),
+            (236.0, "AMPS"),
+            (245.0, "DESCRIPTION"),
+            (302.0, "#"),
+            (332.0, "#"),
+            (340.0, "DESCRIPTION"),
+        ] {
+            v.push(t(x(vx), 172.0, s, 6.0));
+        }
+        let cells: [(f64, f64, &str); 25] = [
+            (160.0, 162.0, "100"),
+            (200.0, 162.0, "10"),
+            (322.0, 162.0, "GF"),
+            (332.0, 162.0, "1"),
+            (340.0, 162.0, "GUEST WASHER"),
+            (52.0, 154.0, "1"),
+            (60.0, 154.0, "PANELBOARD X"),
+            (121.0, 154.0, "OL"),
+            (135.0, 154.0, "3"),
+            (146.0, 154.0, "OL"),
+            (160.0, 154.0, "200"),
+            (200.0, 154.0, "20"),
+            (215.0, 154.0, "OL"),
+            (225.0, 154.0, "3"),
+            (236.0, 154.0, "OL"),
+            (245.0, 154.0, "ELEVATOR"),
+            (302.0, 154.0, "2"),
+            (322.0, 154.0, "GF"),
+            (332.0, 154.0, "3"),
+            (340.0, 154.0, "LTG - THIRD FLOOR"),
+            (160.0, 146.0, "300"),
+            (200.0, 146.0, "30"),
+            (332.0, 146.0, "5"),
+            (340.0, 146.0, "SPARE"),
+            (60.0, 130.0, "PER PHASE SUB-TOTALS"),
+        ];
+        for (vx, y, s) in cells {
+            v.push(t(x(vx), y, s, 6.0));
+        }
+        v.push(t(x(200.0), 130.0, "LEGEND:", 6.0));
+        v.push(t(x(200.0), 122.0, "GF - GROUND FAULT INTERRUPTER", 6.0));
+        v.push(t(x(260.0), 122.0, "OL - RE: ONE-LINE DIAGRAM", 6.0));
+        v
+    }
+
+    #[test]
+    fn a_main_panel_beside_another_reads_its_own_columns_its_poles_loads_and_its_legend() {
+        let s = read(&main_beside_another(), "E-2");
+        let m = s.iter().find(|p| p.panel == "MDP").expect("MDP");
+        let got: Vec<(&str, &str, &str, u32, Option<f64>)> =
+            m.circuits.iter().map(|c| (c.number.as_str(), c.description.as_str(), c.breaker.as_str(), c.poles, c.load_va)).collect();
+        assert_eq!(got, [("1", "PANELBOARD X", "OL", 3, Some(600.0)), ("2", "ELEVATOR", "OL", 3, Some(60.0))], "{m:#?}");
+        assert_eq!(m.legend.get("OL").map(String::as_str), Some("RE: ONE-LINE DIAGRAM"));
+        assert!(!m.legend.contains_key("LTG"), "a circuit's description is no legend line: {:?}", m.legend);
+    }
+
+    #[test]
+    fn the_one_line_gives_a_circuits_breaker_and_feeder_the_schedule_leaves_to_it() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let m = read(&main_beside_another(), "E-2").into_iter().find(|p| p.panel == "MDP").expect("MDP");
+        sp.mep.panel_schedules.push(m);
+        let feeds = [
+            super::super::equipsub::OnelineLoad { tag: "X".into(), feeder: "604".into(), ocpd: "600A/3P".into() },
+            super::super::equipsub::OnelineLoad { tag: "ELEV-1".into(), feeder: "74".into(), ocpd: "70A/3P".into() },
+        ];
+        let types = [super::super::gearbuild::FeederType {
+            tag: "604".into(),
+            conduits: 2,
+            conduit_in: 3.0,
+            conductors: 4,
+            size: "350 kcmil".into(),
+            material: "cu".into(),
+            ground_size: "1".into(),
+            source: String::new(),
+        }];
+        assert_eq!(fill_from_oneline(&mut sp, &feeds, &types), 2);
+        let c = &sp.mep.panel_schedules[0].circuits;
+        assert_eq!((c[0].breaker.as_str(), c[0].poles), ("600", 3));
+        assert!(c[0].wire.starts_with("feeder 604: 2 set(s) of 4 350 kcmil"), "{}", c[0].wire);
+        assert_eq!((c[1].description.as_str(), c[1].breaker.as_str(), c[1].wire.as_str()), ("ELEVATOR", "70", "feeder 74"));
     }
 
     #[test]
@@ -374,6 +819,12 @@ mod tests {
         assert_eq!(c("2").breaker, "20");
         assert_eq!(c("6").protection, ["AF"]);
         assert_eq!(c("13").poles, 2);
+        assert_eq!(c("1").wire, "12");
+        assert_eq!(c("1").load_va, Some(1204.0));
+        assert_eq!(c("2").wire, "12");
+        assert_eq!(c("2").load_va, Some(900.0));
+        assert_eq!(c("4").load_va, Some(900.0), "a load nearer its column's LOAD than its (VA)");
+        assert_eq!(g.header.get("bus amps").map(String::as_str), Some("125A"), "{:?}", g.header);
         assert!(g.circuits.iter().all(|c| c.number != "15"), "15 is 13's second pole");
         assert_eq!(c("10").description, "SPACE ONLY");
         assert_eq!(g.legend.get("GF").map(String::as_str), Some("GROUND FAULT INTERRUPTER"));
@@ -443,6 +894,30 @@ mod tests {
     }
 
     #[test]
+    fn a_feeder_row_naming_a_panel_is_a_circuit_not_the_tables_end() {
+        // DP1 feeds the room panels: its first row "PANELBOARD G (4 UNITS)" sits a hair above its number.
+        let h = 0.063;
+        let mut v = vec![t(13.6, 24.59, "PANELBOARD DP1", 0.126), t(9.37, 23.84, "CKT", h), t(11.87, 23.84, "BREAKER", h)];
+        for (x, w) in [(9.43, "#"), (9.99, "DESCRIPTION"), (11.88, "AMPS"), (12.31, "P"), (12.58, "SIZE")] {
+            v.push(t(x, 23.70, w, h));
+        }
+        for (i, n) in ["1", "3", "5"].iter().enumerate() {
+            let y = 23.53 - 0.28 * i as f64;
+            v.push(t(9.67, y + 0.004, "PANELBOARD G (4 UNITS)", 0.07));
+            v.push(t(9.43, y, n, h));
+            v.push(t(11.93, y, "125", 0.07));
+            v.push(t(12.32, y, "2", 0.07));
+        }
+        let s = read(&v, "E-2");
+        let dp1 = s.iter().find(|p| p.panel == "DP1").unwrap_or_else(|| panic!("{s:#?}"));
+        assert_eq!(dp1.circuits.len(), 3, "{:#?}", dp1.circuits);
+        assert_eq!(
+            (dp1.circuits[0].description.as_str(), dp1.circuits[0].breaker.as_str(), dp1.circuits[0].poles),
+            ("PANELBOARD G (4 UNITS)", "125", 2)
+        );
+    }
+
+    #[test]
     fn a_cell_naming_a_panel_is_no_schedule_title() {
         let mut v = panel_g();
         // DP2's feeder row "PANELBOARD G (4 UNITS)" in the table's text, a header below it.
@@ -458,6 +933,7 @@ mod tests {
         assert_eq!(title_panel("PANEL 'A'"), Some(("A".into(), None)));
         assert_eq!(title_panel("PANEL SCHEDULE - P1"), Some(("P1".into(), None)));
         assert_eq!(title_panel("PANELBOARD SHALL BE"), None);
+        assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
     }
 }

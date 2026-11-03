@@ -277,10 +277,16 @@ pub(crate) fn register(d: &Drawing, sheets: &[SheetBox], upf: f64) -> Registrati
 
 /// The devices of `devices` that are one thing (same level, type and circuit, or same type at
 /// one spot with no circuit, within 12" plus the registration's error once their sheets are put
-/// onto their level's plan): the indices to leave out (the copies; the best sheet's is kept).
-pub(crate) fn duplicate_devices(d: &Drawing, sheets: &[SheetBox], upf: f64, devices: &[super::readers::ReadDevice]) -> (BTreeSet<usize>, usize) {
+/// onto their level's plan): the indices to leave out (the copies), each with the index of the one
+/// kept (the best sheet's).
+pub(crate) fn duplicate_devices(
+    d: &Drawing,
+    sheets: &[SheetBox],
+    upf: f64,
+    devices: &[super::readers::ReadDevice],
+) -> (BTreeMap<usize, usize>, usize) {
     if sheets.len() < 2 || devices.len() < 2 {
-        return (BTreeSet::new(), 0);
+        return (BTreeMap::new(), 0);
     }
     let reg = register(d, sheets, upf);
     let items: Vec<IdItem> = devices
@@ -302,7 +308,7 @@ pub(crate) fn duplicate_devices(d: &Drawing, sheets: &[SheetBox], upf: f64, devi
         .collect();
     let slack = reg.transforms.iter().filter_map(|t| t.residual).fold(0.0, f64::max).min(upf);
     let (groups, _) = tagid::merge_identities(&items, &|_| upf + slack);
-    let drop: BTreeSet<usize> = groups.iter().flat_map(|g| g.merged.iter().copied()).collect();
+    let drop: BTreeMap<usize, usize> = groups.iter().flat_map(|g| g.merged.iter().map(|&m| (m, g.keep))).collect();
     let registered = reg.transforms.iter().filter(|t| t.registered && t.method != "reference").count();
     (drop, registered)
 }
