@@ -154,7 +154,7 @@
   "specialties": {
     "unit_words": ["GUEST", "UNIT", "DWELLING", "APARTMENT", "SUITE"],
     "public_words": ["PUBLIC", "COMMON"],
-    "public_room_words": ["TOILET", "RESTROOM", "REST ROOM", "WOMEN", "MEN", "BATH", "LOCKER"],
+    "public_room_words": ["TOILET", "RESTROOM", "REST ROOM", "WOMEN", "WOMENS", "MEN", "MENS", "BATH", "LOCKER", "RR", "WC"],
     "scope_source": "the submittal's title names the rooms its accessories go in: guest rooms are the rooms of a unit type, public toilets the rooms named as toilets"
   }
 }

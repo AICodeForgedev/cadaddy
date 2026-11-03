@@ -253,7 +253,7 @@ fn docs_dir() -> std::path::PathBuf {
         ("Sample I-Joist Layout.txt", "J1 - 12 @ 16\"\nJ1 - 8 @ 16\"\n11 7/8\" TJI\n"),
         ("Sample Roof Trusses.txt", "Truss: T1\nQty: 6\nSpacing: 24.0 \"\nTruss: T2\nQty: 4\nSpacing: 24.0 \"\n"),
         ("Sample Doors Frames and Hardware.txt", "Hardware Set#: 1\n1 Single\nSize:\n3-0 X 7-0 X 1 3/4\nWood Door X HM Frame\nTot Qty\n3\n"),
-        ("Sample Guest Toilet Accessories.txt", "Robe Hook\nTA-1:  RH100   QTY-2\n1 EACH - TA-2: GB36\n"),
+        ("Sample Guest Toilet Accessories.txt", "Robe Hook\nAC-1:  RH100   QTY-2\n1 EACH - AC-2: GB36\n"),
         ("Sample Interior Painting.txt", "Interior Primer: latex\nAll areas to receive two (2) coats of latex\n"),
         ("Sample Flooring.txt", "LUXURY VINYL PLANK LVT-1 6\" X 36\"\n"),
         ("Sample Electrical Gear.txt", "PANEL LP1 225A\n"),
@@ -337,12 +337,12 @@ fn the_documents_set_the_pieces_and_their_quantities_are_compared() {
     assert_eq!(set["rows"][0]["item"], json!("door hardware set 1"), "{set}");
     let frame = count(&mut s, json!({"trade": "openings", "kind": "frame", "group_by": "item"}));
     assert_eq!(frame["rows"][0]["item"], json!("hm frame"), "{frame}");
-    // Accessories in the unit rooms (level 2's two): TA-1 one in each, TA-2's one in the
+    // Accessories in the unit rooms (level 2's two): AC-1 one in each, AC-2's one in the
     // accessible unit.
-    let ta1 = count(&mut s, json!({"trade": "specialties", "kind": "accessory", "item": "TA-1", "group_by": "room"}));
+    let ta1 = count(&mut s, json!({"trade": "specialties", "kind": "accessory", "item": "AC-1", "group_by": "room"}));
     assert_eq!(n(&ta1, "count"), 2.0, "{ta1}");
     assert_eq!(ta1["rows"].as_array().unwrap().len(), 2, "one in each unit room: {ta1}");
-    let ta2 = count(&mut s, json!({"trade": "specialties", "kind": "accessory", "item": "TA-2", "group_by": "room"}));
+    let ta2 = count(&mut s, json!({"trade": "specialties", "kind": "accessory", "item": "AC-2", "group_by": "room"}));
     assert_eq!(ta2["rows"].as_array().unwrap().len(), 1);
     assert_eq!(ta2["rows"][0]["room"], json!("KING 202"), "the accessible unit: {ta2}");
     // Paint: a primer and two finish coats; flooring pieces by the 6" x 36" plank.

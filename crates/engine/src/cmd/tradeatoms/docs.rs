@@ -5,12 +5,12 @@
 //! A document's trade is what its name and words are about (concrete mix, post-tensioning,
 //! joists, trusses, insulation, paint, flooring, door hardware, toilet accessories…). What is
 //! read from each:
-//! - concrete: the mix and its strength (`4000 PSI`), post-tensioning, the strand (`1/2"
-//!   diameter, seven wire`), tendon and chair spacing (`CHAIRS @ 4'-0" O.C.`), slab thickness,
-//!   vapor barrier (`15 MIL`), welded wire style, gypsum underlayment thickness;
+//! - concrete: the mix and its strength (`3500 PSI`), post-tensioning, the strand (`1/2"
+//!   dia. seven wire`), tendon and chair spacing (`CHAIRS @ 3'-0" O.C.`), slab thickness, vapor
+//!   barrier (`10 MIL`), welded wire style, gypsum underlayment thickness;
 //! - framing: floor framing (an I-joist or floor truss document) with its spacing, depth and the
-//!   joists its layout lists (`J1 - 14 @ 24"`), roof trusses with their spacing (`Spacing: 24.0`)
-//!   and the quantities their designs list (`Qty: 2`);
+//!   joists its layout lists (`A1 - 12 @ 16"`) or its material list, roof trusses with their
+//!   spacing (`Spacing: 24.0`) and the quantities their designs list (`Qty: 2`);
 //! - finishes: paint coats (`two (2) coats`), flooring products and their piece size;
 //! - insulation: the R-values listed;
 //! - openings: door hardware sets and the openings each lists, their size and frame;
@@ -633,7 +633,7 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
         let mut material: Vec<(String, String, f64, f64, String, String)> = Vec::new();
         for (at, l) in lines {
             let u = l.trim().to_ascii_uppercase().replace(['”', '″'], "\"");
-            // A layout's labels: `J1 - 14 @ 24"`, `J7- 14 @ 24"`: 14 joists of mark J7 at 24"
+            // A layout's labels: `A1 - 12 @ 16"`, `A4- 12 @ 16"`: 12 joists of mark A4 at 16"
             // (a row of the text can hold several).
             let labels = layout_labels(&u);
             for (mark, n, spv) in &labels {
@@ -647,7 +647,7 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
                 continue;
             }
             // A material list's row: mark, product, width, depth, quantity (plies and the pieces
-            // they make), length (`J7   BLI 40   2.5   16   323   14-0-0`).
+            // they make), length (`A4   XJ 40   2.5   14   30   16-0-0`).
             if let Some((mark, product, depth, pieces)) = material_row(l) {
                 material.push((mark, product, depth, pieces, src(*at), l.trim().to_string()));
                 continue;
@@ -660,7 +660,7 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
             }
             for d in [9.5, 11.875, 14.0, 16.0, 18.0, 20.0, 24.0] {
                 let txt = inches_text(d);
-                if u.contains(&txt) && (u.contains("JOIST") || u.contains("TJI") || u.contains("BCI") || u.contains("LPI") || u.trim() == txt) {
+                if u.contains(&txt) && (u.contains("JOIST") || u.trim() == txt) {
                     depths.push((d, format!("{}|{}", src(*at), l.trim())));
                 }
             }
@@ -760,7 +760,7 @@ fn framing_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> St
     }
 }
 
-/// Whether a word is a framing mark (`J7`, `J14`, `T01`): letters then digits, short.
+/// Whether a word is a framing mark (`A4`, `B12`, `T01`): letters then digits, short.
 fn is_mark(w: &str) -> bool {
     let w = w.trim();
     (2..=6).contains(&w.len())
@@ -769,7 +769,7 @@ fn is_mark(w: &str) -> bool {
         && w.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// A layout's labels in a row: `J7- 14 @ 24"`, `J1 - 14 @ 24"`: (mark, count, spacing).
+/// A layout's labels in a row: `A4- 12 @ 16"`, `A1 - 12 @ 16"`: (mark, count, spacing).
 fn layout_labels(u: &str) -> Vec<(String, f64, f64)> {
     let mut out = Vec::new();
     for (i, _) in u.match_indices('@').take(200) {
@@ -795,7 +795,7 @@ fn layout_labels(u: &str) -> Vec<(String, f64, f64)> {
     out
 }
 
-/// A material list's row (`J7   BLI 40   2.5   16   323   14-0-0`): mark, product, depth
+/// A material list's row (`A4   XJ 40   2.5   14   30   16-0-0`): mark, product, depth
 /// (inches) and pieces (the last count before the length: plies' pieces when given).
 fn material_row(line: &str) -> Option<(String, String, f64, f64)> {
     let cells: Vec<&str> = line.split("  ").map(str::trim).filter(|c| !c.is_empty()).collect();
@@ -899,7 +899,7 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
             i += 1;
             continue;
         };
-        // Its size groups (`117 Single   Size: 2-10 X 7-0 …   PC Wood Door X CRS Frame`): the
+        // Its size groups (`40 Single   Size: 3-0 X 7-0 …   Wood Door X HM Frame`): the
         // count on a size's row (or just before a `Size:` line) is that size's openings, the
         // rows above it its doors by hand. A set can list several sizes.
         let mut groups: Vec<(f64, String, String)> = Vec::new();
@@ -993,9 +993,11 @@ fn hardware_facts(lines: &[(usize, &str)], src: &dyn Fn(usize) -> String, out: &
 }
 
 fn accessory_facts(lines: &[(usize, &str)], title: &str, src: &dyn Fn(usize) -> String, out: &mut Vec<Fact>) {
-    let rooms = if ["GUEST", "UNIT", "DWELLING", "APARTMENT", "SUITE"].iter().any(|w| title.contains(w)) {
+    // The rooms its title names, by the rules' words.
+    let r = Rules::default();
+    let rooms = if r.words("specialties.unit_words").iter().any(|w| title.contains(w.as_str())) {
         "unit rooms"
-    } else if ["PUBLIC", "COMMON"].iter().any(|w| title.contains(w)) {
+    } else if r.words("specialties.public_words").iter().any(|w| title.contains(w.as_str())) {
         "public toilets"
     } else {
         "rooms not named"
@@ -1146,7 +1148,7 @@ mod tests {
         let f = facts(mix, "Sample Concrete Mix");
         assert_eq!(num(&f, "concrete.strength_psi"), Some(3500.0));
         assert!(f.iter().any(|x| x.key == "concrete.mix" && x.value.contains("Slab on Grade")));
-        let pt = "POST-TENSIONING STEEL SHALL BE 1 2\" DIAMETER, SEVEN WIRE, GRADE 270KSI STRAND\nTENDON SUPPORT\nCHAIRS @ 3'-6\" O.C.\nTENDONS @ 4'-0\" O.C. EACH WAY\n6\" SLAB WITH 10 MIL VAPOR RETARDER\n6x6-W1.4xW1.4 AT TOPPING";
+        let pt = "POST-TENSION NOTES\nUSE 1 2\" DIA. SEVEN WIRE STRAND, 270 KSI\nTENDON SUPPORT\nCHAIRS @ 3'-6\" O.C.\nTENDONS @ 4'-0\" O.C. EACH WAY\n6\" SLAB WITH 10 MIL VAPOR RETARDER\n6x6-W1.4xW1.4 AT TOPPING";
         let f = facts(pt, "Sample Post-Tension Slab Design");
         assert_eq!(num(&f, "concrete.strand_in"), Some(0.5));
         assert_eq!(num(&f, "concrete.chair_spacing_ft"), Some(3.5));
@@ -1159,7 +1161,7 @@ mod tests {
 
     #[test]
     fn joists_trusses_paint_and_flooring_read() {
-        let j = "Joist spacing\nA1 - 10 @ 19.2\"\nA1 - 12 @ 19.2\"\nB2 - 3 @ 19.2\"\n14\" TJI 230\n16\" o.c.";
+        let j = "Joist spacing\nA1 - 10 @ 19.2\"\nA1 - 12 @ 19.2\"\nB2 - 3 @ 19.2\"\n14\" I-JOIST 230\n16\" o.c.";
         let f = facts(j, "Sample I-Joist");
         assert_eq!(num(&f, "framing.joists_listed"), Some(25.0));
         assert_eq!(num(&f, "framing.joist_spacing_in"), Some(19.2));

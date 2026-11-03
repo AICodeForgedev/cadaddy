@@ -389,7 +389,16 @@ fn accessories(sp: &BuildingSpec, r: &Rules, ctx: &Ctx, batch: &mut Batch, upf: 
     }
     let units = unit_rooms(sp, ctx);
     let public_words = r.words("specialties.public_room_words");
-    let public: Vec<&RoomEl> = ctx.rooms.iter().filter(|rm| public_words.iter().any(|w| rm.name.to_ascii_uppercase().contains(w.as_str()))).collect();
+    // A public toilet by its name's words (whole words: `RR`, not the `RR` in a corridor).
+    let public: Vec<&RoomEl> = ctx
+        .rooms
+        .iter()
+        .filter(|rm| {
+            let name = rm.name.to_ascii_uppercase();
+            let words: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+            public_words.iter().any(|w| if w.contains(' ') { name.contains(w.as_str()) } else { words.contains(&w.as_str()) })
+        })
+        .collect();
     let accessible = |ty: &str| {
         let u = ty.to_ascii_uppercase();
         u.contains("ADA") || u.contains("ACCESSIBLE") || u.contains("HC")
