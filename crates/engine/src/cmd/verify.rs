@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height)} → {path?|png, width, height, triangles, fidelity?}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -932,7 +932,26 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = if size.is_finite() && size > 0.0 { size / 1500.0 } else { 1.0 };
     let bg = cadaddy_color::Rgb(255, 255, 255);
     let (progress, total) = (AtomicUsize::new(0), AtomicUsize::new(0));
-    let m3 = model3::build(&md, &Space::Model, tol, bg, &progress, &total);
+    // Fidelity (as the 3D view draws it): the built model by tier, at the one asked for (auto:
+    // the one the view's height calls for).
+    let fidelity = match p.get("fidelity").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_str().map(str::trim) {
+            Some(t) if t.eq_ignore_ascii_case("auto") => Some(None),
+            Some(t) => {
+                Some(Some(model3::Tier::parse(t).ok_or_else(|| bad("model.render", "`fidelity` must be auto, building, floor, room or detail"))?))
+            }
+            None => return Err(bad("model.render", "`fidelity` must be auto, building, floor, room or detail")),
+        },
+    };
+    let m3 = match fidelity {
+        Some(_) => {
+            let md = std::sync::Arc::new(md.clone());
+            let classify = super::fidelity::classifier(&md);
+            model3::build_fid(std::sync::Arc::clone(&md), &Space::Model, tol, bg, &progress, &total, &[], &classify, model3::FidOptions::default())
+        }
+        None => model3::build(&md, &Space::Model, tol, bg, &progress, &total),
+    };
     // Half-spaces `n · p >= c` the view keeps: a room's box (a foot round its outline), the
     // space in front of a camera, the building's frame.
     let mut keep_in: Vec<(Vec3, f64)> = Vec::new();
@@ -991,11 +1010,29 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or(m3.bounds);
     let initial_view = fit_bounds(&view_bounds, proj, w, h);
     // Cull and pick LODs; flatten only the visible parts into a triangle list.
-    let mut sc = if let Some(iv) = &initial_view {
-        let vis = m3.visible(iv);
-        m3.flatten_visible(&vis)
-    } else {
-        m3.flatten()
+    let mut tier_drawn = None;
+    let mut sc = match (&initial_view, fidelity) {
+        (Some(iv), Some(fixed)) => {
+            let auto = super::fidelity::Rules::of(&md).0.auto.tiers();
+            let tier = fixed.unwrap_or_else(|| auto.tier(iv.height / super::fidelity::units_per_foot(&md), None));
+            tier_drawn = Some(tier);
+            let vis = m3.visible_at(iv, tier, None);
+            let mut sc = m3.flatten_visible(&vis);
+            let mut st = model3::Stream::default();
+            st.update(&m3, iv, tier, f64::INFINITY);
+            for k in st.visible(iv) {
+                if let Some(c) = st.cells.get(&k) {
+                    sc.tris.extend_from_slice(&c.scene.tris);
+                    sc.lines.extend_from_slice(&c.scene.lines);
+                }
+            }
+            sc
+        }
+        (Some(iv), None) => {
+            let vis = m3.visible(iv);
+            m3.flatten_visible(&vis)
+        }
+        (None, _) => m3.flatten(),
     };
     // Clip by the half-spaces (room box, camera front, building frame, plan box).
     if !keep_in.is_empty() {
@@ -1055,6 +1092,9 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         "prototypes": m3.protos.len(),
         "style": if bim { "bim" } else { style.name() },
     });
+    if let Some(t) = tier_drawn {
+        out["fidelity"] = json!(t.name());
+    }
     if outliers > 0 {
         out["outliers"] = json!(outliers);
     }

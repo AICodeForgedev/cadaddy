@@ -3129,6 +3129,13 @@
 	Report Validation Findings	Signaler les constats de validation
 	Validation Run Status	État de l’exécution de validation
 	Plant Validation Errors	Insérer des erreurs de validation
+	Model Fidelity	Fidélité du modèle
+	Model Fidelity Rules	Règles de fidélité du modèle
+	Model Fidelity Report	Rapport de fidélité du modèle
+	Fidelity	Fidélité
+	Auto	Auto
+	Floor	Étage
+	Detail	Détail
 	Print Inventory	Inventaire des plans
 	Piece	Pièce
 	Raceway run	Tronçon de conduit

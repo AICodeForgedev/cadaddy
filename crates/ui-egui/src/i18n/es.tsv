@@ -3348,6 +3348,13 @@
 	Report Validation Findings	Informar de los hallazgos de validación
 	Validation Run Status	Estado de la ejecución de validación
 	Plant Validation Errors	Plantar errores de validación
+	Model Fidelity	Fidelidad del modelo
+	Model Fidelity Rules	Reglas de fidelidad del modelo
+	Model Fidelity Report	Informe de fidelidad del modelo
+	Fidelity	Fidelidad
+	Auto	Automático
+	Floor	Planta
+	Detail	Detalle
 	Print Inventory	Inventario de planos
 	Piece	Pieza
 	Raceway run	Tramo de canalización

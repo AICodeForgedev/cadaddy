@@ -3341,6 +3341,13 @@ menu	Modify	수정
 	Report Validation Findings	검증 결과 보고
 	Validation Run Status	검증 실행 상태
 	Plant Validation Errors	검증용 오류 심기
+	Model Fidelity	모델 충실도
+	Model Fidelity Rules	모델 충실도 규칙
+	Model Fidelity Report	모델 충실도 보고서
+	Fidelity	충실도
+	Auto	자동
+	Floor	층
+	Detail	세부
 	Print Inventory	도면 목록
 	Piece	부재
 	Raceway run	전선관 구간

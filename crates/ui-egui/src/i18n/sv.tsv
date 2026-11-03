@@ -3505,6 +3505,13 @@ menu	Modify	Ändra
 	Report Validation Findings	Rapportera valideringsfynd
 	Validation Run Status	Status för valideringskörning
 	Plant Validation Errors	Plantera valideringsfel
+	Model Fidelity	Modellens detaljnivå
+	Model Fidelity Rules	Regler för modellens detaljnivå
+	Model Fidelity Report	Rapport om modellens detaljnivå
+	Fidelity	Detaljnivå
+	Auto	Auto
+	Floor	Våning
+	Detail	Detalj
 	Print Inventory	Ritningsinventering
 	Piece	Del
 	Raceway run	Rörsträcka

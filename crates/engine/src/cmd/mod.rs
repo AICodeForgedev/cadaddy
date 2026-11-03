@@ -46,6 +46,7 @@ mod exchange;
 mod express;
 mod express4;
 pub mod exterior;
+pub mod fidelity;
 mod field;
 pub mod file;
 pub mod find;
@@ -867,6 +868,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(identity::specs());
         v.extend(inventory::specs());
         v.extend(bimlook::specs());
+        v.extend(fidelity::specs());
         v.extend(projrules::specs());
         v.extend(codebook::specs());
         v.extend(spec_import::specs());
