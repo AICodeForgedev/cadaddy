@@ -275,7 +275,7 @@ pub(crate) struct DimmerProtocol {
     /// says), `mixed` (its leg's fixtures dim two ways: a question), `non-dim` (none of them
     /// dims) or `unknown` (nothing says).
     pub protocol: String,
-    /// Why, in words (`its leg's fixtures: 0-10V H; unknown H1`).
+    /// Why, in words (`its leg's fixtures: 0-10V Q7A; unknown Q9`).
     pub why: String,
 }
 
