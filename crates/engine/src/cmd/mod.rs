@@ -33,6 +33,7 @@ pub mod copricing;
 pub mod cover;
 mod dash_styles;
 pub mod dimcheck;
+pub(crate) mod dimreader;
 mod draw;
 mod draw2;
 mod draworder;
