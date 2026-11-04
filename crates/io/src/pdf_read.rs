@@ -2484,8 +2484,9 @@ struct OutlineRead {
     shapes: usize,
     /// Readings under [`OUTLINE_MIN_CONFIDENCE`], dropped.
     weak: usize,
-    /// Unconfirmed readings of one letter or digit, or of shapes made of straight bars only
-    /// (wall poché, door frames: they read as I, L, J, T), dropped.
+    /// Unconfirmed readings that read as no word (one letter or digit, marks spaced like
+    /// letters, punctuation), or of shapes made of straight bars only (wall poché, door
+    /// frames: they read as I, L, J, T), dropped.
     plain: usize,
     /// More glyph-sized outline pieces than [`MAX_OUTLINE_GLYPHS`]: the rest weren't read.
     capped: bool,
@@ -2553,7 +2554,8 @@ fn outline_glyphs(f: &Fill) -> Vec<(Vec<usize>, [f64; 4])> {
 /// no glyph; a filled outline under visible real text is that text's copy. A reading inside a
 /// hidden string's box takes the string (and its fills go to [`SHX_SOURCE_LAYER`]); one no
 /// hidden string confirms is kept unconfirmed (its shapes stay drawn) when it is sure enough
-/// ([`OUTLINE_MIN_CONFIDENCE`]).
+/// ([`OUTLINE_MIN_CONFIDENCE`]) and reads as a word, for review only on a page whose lettering
+/// has hidden copies.
 fn recover_outlined_lettering(
     strokes: &[Stroke],
     fills: &[Fill],
@@ -2702,17 +2704,20 @@ fn recover_outlined_lettering(
             read.weak += 1;
             continue;
         }
-        // A plan's filled pieces (wall poché, door frames, boxes) read as lone letters and as
-        // words of I, J, L and T: without a hidden string, a reading needs two letters or
-        // digits, and one glyph with a curve or a slant (every digit has one).
-        let alnum = rt.value.chars().filter(char::is_ascii_alphanumeric).count();
+        // A plan's filled pieces (wall poché, door frames, boxes, a row of grilles) read as lone
+        // letters, as words of I, J, L and T, and as marks spaced like letters ("6 6 6"):
+        // without a hidden string, a reading must read as a word with a word of two letters or
+        // digits in it, and one glyph with a curve or a slant (every digit has one).
         let glyphs: HashSet<usize> = rt.stroke_indices.iter().filter_map(|i| outline_of.get(i).map(|o| o.0)).collect();
         let all_bars = own_strokes.is_empty() && !glyphs.is_empty() && glyphs.iter().all(|g| bars.get(*g).copied().unwrap_or(false));
-        if alnum < 2 || all_bars {
+        let has_word = rt.value.split_whitespace().any(|w| w.chars().filter(char::is_ascii_alphanumeric).count() >= 2);
+        if !reads_as_word(&rt.value) || !has_word || all_bars {
             read.plain += 1;
             continue;
         }
-        let review = !hidden.is_empty() && !reads_as_word(&rt.value);
+        // A page that gives its lettering hidden copies gives them all: a reading with none
+        // is kept for review only.
+        let review = !hidden.is_empty();
         read.texts.push(RecoveredText { stroke_indices: HashSet::new(), unconfirmed: true, review, ..rt });
     }
     read

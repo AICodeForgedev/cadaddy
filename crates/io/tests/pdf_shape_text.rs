@@ -281,7 +281,12 @@ fn text_converted_to_outlines_reads_as_tags_in_either_fill_rule_and_turned() {
 #[test]
 fn hidden_text_confirms_outlined_lettering() {
     // the searchable copy (rendering mode 3) where the outlines are drawn
-    let content = [outlined("1010", (100.0, 400.0), 9.0, 0.0, "f"), "BT 3 Tr /F1 12.6 Tf 100 400 Td (1010) Tj ET".into()].concat();
+    let content = [
+        outlined("1010", (100.0, 400.0), 9.0, 0.0, "f"),
+        "BT 3 Tr /F1 12.6 Tf 100 400 Td (1010) Tj ET\n".into(),
+        outlined("2104", (300.0, 400.0), 9.0, 0.0, "f"),
+    ]
+    .concat();
     let r = read(&content);
     let all = texts(&r);
     let shown: Vec<&Read> = all.iter().filter(|t| t.value == "1010" && t.layer != pdf_read::HIDDEN_TEXT_LAYER).collect();
@@ -289,7 +294,16 @@ fn hidden_text_confirms_outlined_lettering() {
     assert_eq!(shown[0].style, "Standard", "confirmed by the PDF's own string");
     // the outlines it was read from are kept on the source layer (off), as stroked lettering's are
     let hatches: Vec<&std::sync::Arc<Entity>> = r.drawing.model.iter().filter(|e| matches!(e.kind, EntityKind::Hatch(_))).collect();
-    assert!(!hatches.is_empty() && hatches.iter().all(|e| e.common.layer == SHX_SOURCE_LAYER));
+    // a hatch's first vertex, sheet points
+    let near = |e: &Entity, x: f64| match &e.kind {
+        EntityKind::Hatch(h) => h.loops.first().and_then(|l| l.vertices.first()).is_some_and(|v| (v.p.x * 72.0 - x).abs() < 30.0),
+        _ => false,
+    };
+    assert!(hatches.iter().filter(|e| near(e, 100.0)).all(|e| e.common.layer == SHX_SOURCE_LAYER), "the confirmed tag's outlines");
+    // the page gives its lettering hidden copies: outlines with none are read for review only
+    // (layer off), and stay drawn
+    assert_eq!(find(&all, "2104").layer, pdf_read::OCR_REVIEW_LAYER);
+    assert!(hatches.iter().filter(|e| near(e, 300.0)).all(|e| e.common.layer != SHX_SOURCE_LAYER));
 }
 
 #[test]
@@ -320,8 +334,12 @@ fn shapes_that_are_not_lettering_stay_shapes() {
             x + 2.0
         ));
     }
-    // a lone glyph no hidden string confirms is a mark as often as a letter
+    // a lone glyph no hidden string confirms is a mark as often as a letter, and so are glyphs
+    // spaced like letters
     content.push_str(&outlined("2", (600.0, 300.0), 9.0, 0.0, "f"));
+    for i in 0..4 {
+        content.push_str(&outlined("0", (600.0 + i as f64 * 20.0, 200.0), 9.0, 0.0, "f"));
+    }
     // outlines under real text are that text drawn twice
     content.push_str(&outlined("4012", (400.0, 400.0), 9.0, 0.0, "f"));
     content.push_str("BT /F1 12.6 Tf 400 400 Td (4012) Tj ET");
