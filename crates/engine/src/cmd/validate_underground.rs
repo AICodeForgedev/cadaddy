@@ -120,6 +120,8 @@ const ELECTRICAL_WORDS: [&str; 10] =
     ["CONDUIT", "CONDUCTOR", "RACEWAY", "FEEDER", "DUCT BANK", "DUCTBANK", "ELECTRICAL", "PULLWIRE", "PULL WIRE", "PULL STRING"];
 const PLUMBING_WORDS: [&str; 10] = ["PIPE", "PIPING", "WATER", "SANITARY", "WASTE", "VENT", "STORM", "SEWER", "GAS ", "CLEANOUT"];
 const WORK_VERBS: [&str; 10] = ["PROVIDE", "INSTALL", "RUN ", "ROUTE", "EXTEND", "STUB", "FURNISH", "PLACE", "BURY", "ROUGH"];
+/// Words of a note about what is already in the ground, not work it calls for.
+const NOT_WORK: [&str; 5] = ["EXISTING UNDERGROUND", "EXISTING UTILIT", "LOCATING ALL", "LOCATE ALL", "LOCATE EXISTING"];
 /// Words after a value that make it a depth (`48" BELOW GRADE`), or before it (`MIN. 48"`).
 const DEPTH_AFTER: [&str; 8] = ["BELOW", "DEEP", "COVER", "BURIAL", "BURY", "UNDER", "BFF", "BELOW-GRADE"];
 const DEPTH_BEFORE: [&str; 7] = ["MIN", "MIN.", "MINIMUM", "DEPTH", "COVER", "AT", "OF"];
@@ -262,7 +264,11 @@ impl Called {
                 _ => None,
             });
         }
-        c.work = WORK_VERBS.iter().any(|v| up.contains(&format!(" {v}"))) || c.size_in.is_some() || c.count.is_some() || c.min_depth_in.is_some();
+        // New work names its run (conduit, pipe) and a verb, size, count or depth; a note about
+        // existing utilities (locate them before digging) calls for none.
+        c.work = !c.trade.is_empty()
+            && !has_any(&up, &NOT_WORK)
+            && (WORK_VERBS.iter().any(|v| up.contains(&format!(" {v}"))) || c.size_in.is_some() || c.count.is_some() || c.min_depth_in.is_some());
         c
     }
 }
@@ -472,6 +478,14 @@ impl Buried {
                 .map(|e| format!("{} {} {}", e.kind, e.title, e.systems.join(" ")))
                 .unwrap_or_default()
         };
+        // In the ground: the slab level's work (and a level below it); a level above's run below
+        // its floor goes down to the level under it.
+        let slab_ft = sp.levels.iter().map(|l| l.elevation_ft).filter(|e| e.is_finite()).fold(f64::INFINITY, f64::min);
+        let in_ground = |level: &str| {
+            level.trim().is_empty()
+                || !slab_ft.is_finite()
+                || sp.level(level).is_none_or(|l| !l.elevation_ft.is_finite() || l.elevation_ft <= slab_ft + 0.5)
+        };
         let mut runs: Vec<Run> = Vec::new();
         let mut risers: Vec<(String, [f64; 2], String, bool)> = Vec::new();
         for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_SCAN) {
@@ -486,7 +500,7 @@ impl Buried {
             };
             let bottom = r.bottoms_ft.iter().copied().filter(|b| b.is_finite()).fold(f64::INFINITY, f64::min);
             let bottom = if bottom.is_finite() { bottom } else { sys.bottom_ft };
-            if !(bottom.is_finite() && bottom < 0.0) {
+            if !(bottom.is_finite() && bottom < 0.0 && in_ground(&r.level)) {
                 continue;
             }
             let points: Vec<[f64; 2]> = r.points.iter().copied().filter(|p| finite(*p)).take(MAX_POINTS).collect();
@@ -1364,9 +1378,43 @@ mod tests {
         // `48 IN` is a value in inches.
         let c = Called::of("PROVIDE TWO (2) 4\" SCH. 40 PVC CONDUITS 48 IN BELOW GRADE FOR THE TELEPHONE SERVICE ENTRANCE.");
         assert_eq!((c.count, c.size_in, c.min_depth_in, c.serves), (Some(2), Some(4.0), Some(48.0), Some("telecom")));
+        // A note about existing utilities, a rule for trenches: no work called.
+        assert!(
+            !Called::of(
+                "THE CONTRACTOR SHALL BE RESPONSIBLE FOR LOCATING ALL UTILITIES PRIOR TO EXCAVATING. EXISTING UNDERGROUND FACILITIES ARE APPROXIMATE."
+            )
+            .work
+        );
+        assert!(!Called::of("TRENCHING INSTALLED PARALLEL TO FOOTINGS SHALL NOT EXTEND INTO THE BEARING PLANE BELOW GRADE.").work);
         // A legend's line type: buried, but no work.
         let c = Called::of("COLD WATER PIPING (BELOW SLAB)");
         assert!(!c.work, "{c:?}");
+    }
+
+    #[test]
+    fn only_the_slab_levels_work_is_in_the_ground() {
+        let sp = BuildingSpec::from_json(
+            &json!({
+                "units_per_foot": 12,
+                "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}, {"name": "L2", "elevation_ft": 10, "height_ft": 10}],
+                "mep": {
+                    "systems": [{"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": 9.0}],
+                    "runs": [
+                        {"system": "E-UG", "level": "L1", "points": [[0, 0], [120, 0]], "size_in": [1, 0], "bottoms_ft": [-1.5], "id": "U1"},
+                        {"system": "E-UG", "level": "L1", "points": [[120, 0]], "size_in": [1, 0], "bottoms_ft": [-1.5], "top_ft": 1.5, "id": "U1:up"},
+                        // From level 1's ceiling up through level 2's floor: no stub-up out of the ground.
+                        {"system": "E-UG", "level": "L2", "points": [[240, 0]], "size_in": [1, 0], "bottoms_ft": [-1.0], "top_ft": 4.0, "id": "R2"},
+                        {"system": "E-UG", "level": "L2", "points": [[0, 60], [240, 60]], "size_in": [1, 0], "bottoms_ft": [-0.5], "id": "R3"}
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let b = Buried::of(&sp);
+        assert_eq!(b.runs.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["U1"]);
+        assert_eq!(b.stubs.len(), 1);
+        assert_eq!(b.stubs[0].runs, ["U1:up"]);
     }
 
     #[test]
