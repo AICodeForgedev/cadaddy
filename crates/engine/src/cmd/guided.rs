@@ -10649,12 +10649,12 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         let norm = cadaddy_mepfix::printlinks::norm_sheet(number);
         let on_slab = slab_sheets.iter().any(|l| cadaddy_mepfix::printlinks::norm_sheet(&l.number) == norm);
         let is_reference = reference.as_deref().is_some_and(|r| cadaddy_mepfix::printlinks::norm_sheet(r) == norm);
-        if (scale.is_none() && on_slab) || (is_reference && !scale_from_reference) {
-            if let Some(sc) = plan_scale(&texts) {
-                scale = Some(sc);
-                scale_from_reference = is_reference;
-                scale_sheet = Some(number.clone());
-            }
+        if ((scale.is_none() && on_slab) || (is_reference && !scale_from_reference))
+            && let Some(sc) = plan_scale(&texts)
+        {
+            scale = Some(sc);
+            scale_from_reference = is_reference;
+            scale_sheet = Some(number.clone());
         }
     }
     // A rerun: what this step built before goes.

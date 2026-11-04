@@ -726,7 +726,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         }
         let id = if r.id.trim().is_empty() { format!("UG-{}", i + 1) } else { r.id.clone() };
         let end = |p: Option<&[f64; 2]>| p.and_then(|p| equipment_at(sp, &r.level, *p)).map(|e| e.tag.clone()).unwrap_or_default();
-        // A feeder's run says its ends (`feeder 604 MDP→DP2`) where no gear is at one (it rises
+        // A feeder's run says its ends (`feeder 7 SB1→P2`) where no gear is at one (it rises
         // to another level beside its panel).
         let said = r.source_sheet.strip_prefix("feeder ").and_then(|v| v.split_once(' ')).and_then(|(_, ends)| ends.split_once('→'));
         let said_from = said.map(|(a, _)| a.trim().to_string()).unwrap_or_default();

@@ -166,7 +166,7 @@ pub(crate) struct Callout {
     pub cover_in: Option<f64>,
     /// Steel elbows and risers.
     pub steel_ells: bool,
-    /// The room it goes to (`… TO MDF ROOM`).
+    /// The room it goes to (`… TO DATA ROOM`).
     pub room: Option<String>,
 }
 
@@ -178,7 +178,7 @@ impl Callout {
             "cover_in": self.cover_in, "steel_ells": self.steel_ells, "room": self.room,
         })
     }
-    /// How it is cited: `E-1 keynote 1`, `P-1 legend CWBF`, `E-2 note`.
+    /// How it is cited: `E-101 keynote 4`, `P-001 legend CWUS`, `E-501 note`.
     pub(crate) fn cite(&self) -> String {
         match (&self.mark, self.from) {
             (Some(m), "legend") => format!("{} legend {m}", self.sheet),
@@ -244,9 +244,11 @@ pub(crate) struct Parsed {
 pub(crate) fn parse(text: &str) -> Parsed {
     let up = text.to_ascii_uppercase().replace(['\u{201d}', '\u{2033}'], "\"");
     let words: Vec<&str> = up.split_whitespace().take(400).collect();
-    let mut p = Parsed::default();
     // `(2)` first (the digits a count in words repeats), else a count word before the size.
-    p.count = words.iter().find(|w| w.starts_with('(') && w.trim_end_matches([',', '.']).ends_with(')')).and_then(|w| count_word(w));
+    let mut p = Parsed {
+        count: words.iter().find(|w| w.starts_with('(') && w.trim_end_matches([',', '.']).ends_with(')')).and_then(|w| count_word(w)),
+        ..Parsed::default()
+    };
     for (i, w) in words.iter().enumerate() {
         let Some(v) = inches(w) else { continue };
         let next: Vec<&str> = words.iter().skip(i + 1).take(4).copied().collect();
@@ -282,7 +284,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
         String::new()
     };
     p.steel_ells = ["STEEL ELL", "STEEL ELBOW", "RGS ELBOW", "RGS ELL", "RIGID ELBOW"].iter().any(|k| up.contains(k));
-    // `… TO MDF ROOM …`: the word(s) between TO and ROOM.
+    // `… TO DATA ROOM …`: the word(s) between TO and ROOM.
     if let Some(i) = words.iter().position(|w| w.trim_end_matches([',', '.']) == "ROOM").filter(|i| *i > 0) {
         let to = words.iter().take(i).rposition(|w| *w == "TO");
         if let Some(j) = to.filter(|j| i - j <= 3) {
@@ -320,11 +322,11 @@ fn leak_what(what: &str) -> &'static str {
     }
 }
 
-/// A sheet number's trade: its discipline letters (`E-1` electrical, `P-2` plumbing).
+/// A sheet number's trade: its discipline letters (`E-101` electrical, `P-201` plumbing).
 pub(crate) fn sheet_trade(sheet: &str) -> Option<&'static str> {
     let t = sheet.trim();
     let disc: String = t.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    // Letters then a number (`E-1`, `P2.01`, `E101`).
+    // Letters then a number (`E-101`, `P2.01`, `E101`).
     if !t.get(disc.len()..).unwrap_or_default().trim_start_matches(['-', '.', ' ']).starts_with(|c: char| c.is_ascii_digit()) {
         return None;
     }
@@ -360,7 +362,7 @@ pub(crate) fn callouts(sheet: &str, texts: &[TextItem]) -> Vec<Callout> {
     let r = rules();
     let mut out: Vec<Callout> = Vec::new();
     // The legend first: a short description saying below the slab, its abbreviation drawn beside
-    // it (`CWBF  COLD WATER PIPING (BELOW SLAB)`).
+    // it (`CWUS  COLD WATER PIPING (UNDER SLAB)`).
     let lg = &r.legend;
     for t in texts.iter().take(200_000) {
         if out.len() >= MAX_CALLOUTS {
@@ -381,7 +383,7 @@ pub(crate) fn callouts(sheet: &str, texts: &[TextItem]) -> Vec<Callout> {
             .map(|o| ((o.at - t.at).len(), (o.at.y - t.at.y).abs(), o.value.trim().to_string()))
             .filter(|(d, _, _)| d.is_finite() && *d <= reach)
             .collect();
-        // An abbreviation starts as its description does (`CWBF`, `COLD WATER …`); the one on
+        // An abbreviation starts as its description does (`CWUS`, `COLD WATER …`); the one on
         // its row first (a legend's rows are its line types); then the nearest.
         let initial = up.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).chars().next();
         let abbr = near
@@ -427,7 +429,7 @@ pub(crate) fn callouts(sheet: &str, texts: &[TextItem]) -> Vec<Callout> {
         let kind = kind_of(&up, r);
         let p = parse(&text);
         // Work out to the site is in the ground only when it names something buried work is, and
-        // asks for it (a schedule row or a legend's name, `EV CHARGER`, asks nothing).
+        // asks for it (a schedule row or a legend's name, `CAR CHARGER`, asks nothing).
         if !said_buried && (kind.is_none() || !(has_any(&up, &r.action_words) || p.size_in.is_some())) {
             continue;
         }
@@ -502,7 +504,7 @@ pub(crate) fn ug_system(name: &str) -> bool {
     name.eq_ignore_ascii_case(E_UG) || name.to_ascii_uppercase().starts_with(&format!("{P_UG}-")) || name.eq_ignore_ascii_case(P_UG)
 }
 
-/// A run a feeder's route made (its source names the feeder, `feeder 604 MDP→DP2`), above or
+/// A run a feeder's route made (its source names the feeder, `feeder 7 SB1→P2`), above or
 /// below the slab.
 pub(crate) fn is_feeder_run(r: &MepRun) -> bool {
     r.system == super::gearbuild::FEEDER_SYSTEM || (r.system == E_UG && r.source_sheet.starts_with("feeder "))
@@ -600,10 +602,10 @@ fn ug_riser(level: &str, src: &str, at: [f64; 2], size: f64, bottom: f64, top: f
     r
 }
 
-/// How a called run's height source starts (`called: E-1 note (service_primary)`): the runs
+/// How a called run's height source starts (`called: E-101 note (service_primary)`): the runs
 /// [`place`] makes, so a rerun replaces them.
 pub(crate) const CALLED_PREFIX: &str = "called: ";
-/// How a proposal's runs' source starts (`ug feeder 604 MDP→DP2`).
+/// How a proposal's runs' source starts (`ug feeder 7 SB1→P2`).
 pub(crate) const PROPOSAL_PREFIX: &str = "ug ";
 
 /// Runs this module made (called, proposed, stack bases): a rerun of the job replaces them.
@@ -890,7 +892,7 @@ pub(crate) struct FramingAbove {
 /// One feed weighed under the slab against overhead.
 #[derive(Clone, Debug)]
 pub(crate) struct Proposal {
-    /// `feeder 604 MDP→DP2`, `circuit MDP-8 ELEVATOR`.
+    /// `feeder 7 SB1→P2`, `feed 84 SB1→LIFT (circuit 4)`.
     pub subject: String,
     pub from: String,
     pub to: String,
@@ -1280,7 +1282,7 @@ mod tests {
             // A row whose own abbreviation is farther than another column's.
             t(900.0, 200.0, "COLD WATER PIPING (BELOW SLAB)", 5.0),
             t(885.0, 200.0, "HW", 4.0),
-            t(864.0, 198.0, "CWBF", 4.0),
+            t(864.0, 198.0, "CWUS", 4.0),
         ];
         let c = callouts("E-101", &texts);
         let prim = c.iter().find(|c| c.what == "service_primary").expect("primary");
@@ -1296,7 +1298,7 @@ mod tests {
         assert_eq!((lg.trade.as_str(), lg.what.as_str(), lg.mark.as_deref()), ("P", "sanitary", Some("SANBF")));
         assert!(!c.iter().any(|c| c.text == "COLD WATER PIPING"));
         let cw = c.iter().find(|c| c.text.contains("COLD WATER PIPING (BELOW")).expect("cw");
-        assert_eq!((cw.mark.as_deref(), cw.what.as_str()), (Some("CWBF"), "water"));
+        assert_eq!((cw.mark.as_deref(), cw.what.as_str()), (Some("CWUS"), "water"));
         assert_eq!(lg.cite(), "E-101 legend SANBF");
     }
 
@@ -1406,9 +1408,9 @@ mod tests {
         assert!(sr.iter().all(|r| r.height_source.contains("steel elbows and risers")));
         // A telecom room upstairs: under the slab to the riser below it, up to it.
         let up =
-            vec![Room { level: "Level 2".into(), name: "MDF 201".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
-        let mut t2 = mk("telecom", "PROVIDE (1) 4\" CONDUIT FROM STREET TELCO TO MDF ROOM");
-        t2.room = Some("MDF".into());
+            vec![Room { level: "Level 2".into(), name: "DATA 201".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
+        let mut t2 = mk("telecom", "PROVIDE (1) 4\" CONDUIT FROM STREET TELCO TO DATA ROOM");
+        t2.room = Some("DATA".into());
         let (tr, tf) = place(&sp, &up, &[t2], &|_| false);
         assert_eq!(tf[0].status, "placed", "{:?}", tf[0]);
         assert!(tf[0].how.contains("rising to it on Level 2"));
@@ -1463,14 +1465,14 @@ mod tests {
     #[test]
     fn a_rows_feed_and_the_slabs_edge_are_read() {
         assert_eq!(row_feed("feeder 74: 1 set(s) of 4 4 cu, ground 8, in 1.25\" conduit"), Some((1, 1.25, "74".into())));
-        assert_eq!(row_feed("feeder 604: 2 set(s) of 4 500 kcmil al, ground 2/0, in 4\" conduit"), Some((2, 4.0, "604".into())));
+        assert_eq!(row_feed("feeder 31: 2 set(s) of 4 350 kcmil cu, ground 1/0, in 3\" conduit"), Some((2, 3.0, "31".into())));
         assert_eq!(row_feed("3#12, 1#12 G"), None);
         let b = [0.0, 0.0, 100.0, 50.0];
         assert_eq!(nearest_edge(b, [95.0, 25.0]), ([100.0, 25.0], [1.0, 0.0]));
         assert_eq!(nearest_edge(b, [50.0, 2.0]), ([50.0, 0.0], [0.0, -1.0]));
         assert_eq!(nearest_edge(b, [-20.0, 25.0]), ([0.0, 25.0], [-1.0, 0.0]));
         assert_eq!(sheet_trade("E-101"), Some("E"));
-        assert_eq!(sheet_trade("P-2"), Some("P"));
-        assert_eq!(sheet_trade("A111"), None);
+        assert_eq!(sheet_trade("P-201"), Some("P"));
+        assert_eq!(sheet_trade("A201"), None);
     }
 }
