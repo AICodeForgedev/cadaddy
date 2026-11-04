@@ -58,6 +58,8 @@ const EXT_MAX_H: f64 = 80.0;
 /// A symbol stands at a witness point when it is at most this big and this near (text heights).
 const SYMBOL_MAX_H: f64 = 6.0;
 const SYMBOL_NEAR_H: f64 = 1.5;
+/// ... and its middle this near the witness line (text heights, plus a share of its size).
+const SYMBOL_ON_LINE_H: f64 = 0.35;
 /// Collinear pieces of a dimension line this far apart are one line (text heights).
 const LINE_GAP_H: f64 = 1.0;
 /// A value fits its stretch when it is within this share (or this many inches) of the stretch's
@@ -266,8 +268,9 @@ pub(crate) struct Items {
     /// Filled arrowheads: their tip and the middle of their back.
     pub arrows: Vec<(Vec2, Vec2)>,
     pub texts: Vec<TextItem>,
-    /// Symbols: closed outlines that are not marks (their middle and half size) and block
-    /// references (their insertion point, size 0) — what a witness on a device stands on.
+    /// Block references (their insertion point, size 0): with the round outlines bigger than a
+    /// mark, what a witness on a device stands on. (Polygons are not: a plan's hatching, frames
+    /// and fixtures are full of them.)
     pub shapes: Vec<(Vec2, f64)>,
 }
 
@@ -333,7 +336,6 @@ impl Items {
                 return;
             }
         }
-        self.shapes.push((c, rmax));
         let mut ring = pts.clone();
         if let Some(f) = pts.first() {
             ring.push(*f);
@@ -930,12 +932,14 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
     out
 }
 
-/// The symbol drawn at `p` (a circle or outline bigger than a mark, a block reference): the
-/// nearest one's middle.
-fn symbol_at(items: &Items, dot_grid: &Grid, shape_grid: &Grid, p: Vec2, h: f64) -> Option<Vec2> {
+/// The symbol a witness at `p` measures to (a circle or round outline bigger than a mark, a
+/// block reference): near `p` and centred on the witness line (through `p`, square to `u`, the
+/// dimension's direction) — a dimension to a device runs to its centre. The nearest one's
+/// middle.
+fn symbol_at(items: &Items, dot_grid: &Grid, shape_grid: &Grid, p: Vec2, u: Vec2, h: f64) -> Option<Vec2> {
     let r = h * SYMBOL_MAX_H;
     let (lo, hi) = (p - Vec2::new(r, r), p + Vec2::new(r, r));
-    let near = |c: Vec2, size: f64| c.dist(p) <= size + h * SYMBOL_NEAR_H;
+    let near = |c: Vec2, size: f64| c.dist(p) <= size + h * SYMBOL_NEAR_H && (c - p).dot(u).abs() <= h * SYMBOL_ON_LINE_H + size * 0.15;
     let dots =
         dot_grid.near(lo, hi).into_iter().filter_map(|i| items.dots.get(i)).filter(|(c, rad)| *rad > h * DOT_MAX_H && *rad <= r && near(*c, *rad));
     let shapes = shape_grid
@@ -975,7 +979,7 @@ fn witness(items: &Items, sg: &Grid, dot_grid: &Grid, shape_grid: &Grid, l: &Dim
         Some((a, b)) => Some((a.min(r.0), b.max(r.1))),
         None => Some(*r),
     });
-    let symbol = |p: Vec2| symbol_at(items, dot_grid, shape_grid, p, h);
+    let symbol = |p: Vec2| symbol_at(items, dot_grid, shape_grid, p, l.u, h);
     let Some((mut lo_s, mut hi_s)) = start else { return Witness { on_line: w, mark, point: w, ext: Vec2::ZERO, symbol: symbol(w) } };
     loop {
         let mut grew = false;

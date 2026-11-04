@@ -108,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CONSTRAIN, "Tie a Device to an Object", run_constrain)
             .params("{handle: device, ref: object handle or tag, ref_point?: center|edge|face (center), axis?: along|vertical|both (along), target_in?: 0, plus_minus_in: number, inside?: bool, follow?: bool (true: it moves with the object), source?: where the documents say it (an elevation, a shop drawing, a submittal's rough-in)} → {handle, constraint}: ties a device's placement to another object with a tolerance band; G-LAYOUT checks it and bim.layout.follow keeps it"),
         CommandSpec::new(DIMS, "Read Drawn Dimensions", run_dims)
-            .params("{sheet?: number, north?, limit?: (20)} → {read, placed, devices_documented, devices_measured_not_fixed: {why: n}, conflicts, conflicts_first: [{handle, face, from, drawn_in, model_in, off_in, band_in, sheet, at}], by_sheet: {<sheet>: {values, read, placed, unplaced: {why: n}, values_unused: {why: n}, stretches_without_value, chains, baseline_groups, not_to_scale, scale_in_per_unit, registration, attached: {both_ends, one_end, none}, ends: {device centre|wall face|opening edge|casework edge: n}, unattached_why: {why: n}}}, dimensions_first: [{sheet, view, level, value, inches, on_sheet, model_ft, marks, to_scale, chain, baseline, ends}]}: the sheets' dimensions drawn as line work and text (a PDF's: dimension line, ticks, dots or arrows, extension lines, the value; chains and baselines) read, each witness point mapped through its sheet's registration onto the model and attached to what it measures: a device's centre, a wall face, an opening's edge, a casework edge. bim.layout.rehost documents a device's along-face offset from them; where the model's position is off the drawn value by more than the kind's band, that is a conflict for review")
+            .params("{sheet?: number, kind?: device|face|opening|casework|none (list only the dimensions with an end on that), north?, limit?: (20)} → {read, placed, devices_documented, devices_measured_not_fixed: {why: n}, conflicts, conflicts_first: [{handle, face, from, drawn_in, model_in, off_in, band_in, sheet, at}], by_sheet: {<sheet>: {values, read, placed, unplaced: {why: n}, values_unused: {why: n}, stretches_without_value, chains, baseline_groups, not_to_scale, scale_in_per_unit, registration, attached: {both_ends, one_end, none}, ends: {device centre|wall face|opening edge|casework edge: n}, unattached_why: {why: n}}}, dimensions_first: [{sheet, view, level, value, inches, on_sheet, model_ft, marks, to_scale, chain, baseline, ends}]}: the sheets' dimensions drawn as line work and text (a PDF's: dimension line, ticks, dots or arrows, extension lines, the value; chains and baselines) read, each witness point mapped through its sheet's registration onto the model and attached to what it measures: a device's centre, a wall face, an opening's edge, a casework edge. bim.layout.rehost documents a device's along-face offset from them; where the model's position is off the drawn value by more than the kind's band, that is a conflict for review")
             .menu(&["Tools", "Building", "Read Drawn Dimensions"])
             .noundo(),
         CommandSpec::new(OBJECT, "Add Casework or Appliance Object", run_object)
@@ -1532,6 +1532,7 @@ fn run_dims(s: &mut Session, p: &Value) -> Result<Value> {
     let north = north_param(DIMS, p)?;
     let limit = p.get("limit").and_then(Value::as_u64).map_or(20, |n| n.min(MAX_LISTED as u64) as usize);
     let sheet = str_param(p, "sheet").map(|t| t.trim().to_ascii_uppercase()).filter(|t| !t.is_empty());
+    let kind = str_param(p, "kind").map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty());
     let cx = context(s, DIMS, north)?;
     let rules = solve::rules();
     let inch = cx.inch();
@@ -1567,7 +1568,7 @@ fn run_dims(s: &mut Session, p: &Value) -> Result<Value> {
             conflicts.push(json!({"handle": dv.h.hex(), "face": f.name, "from": pl.reference.name(), "drawn_in": r2(drawn_in), "model_in": r2(*measured), "off_in": r2(measured - drawn_in), "band_in": r2(band), "sheet": src.doc, "at": src.at}));
         }
     }
-    Ok(drawn::report(&drawn_dims, &attached, &devs, &cx, &conflicts, limit))
+    Ok(drawn::report(&drawn_dims, &attached, &devs, &cx, &conflicts, limit, kind.as_deref()))
 }
 
 // ─── bim.layout.follow ──────────────────────────────────────────────────────

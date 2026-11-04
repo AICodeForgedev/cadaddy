@@ -351,7 +351,9 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
 }
 
 /// The `bim.layout.dims` report: per sheet, what was read, placed, attached and documented.
-pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, conflicts: &[Value], limit: usize) -> Value {
+/// `kind`: list only the dimensions with an end on this kind of object (`device`, `face`,
+/// `opening`, `casework`, `none`).
+pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, conflicts: &[Value], limit: usize, kind: Option<&str>) -> Value {
     let inch = cx.inch();
     let mut sheets: BTreeMap<String, Value> = BTreeMap::new();
     for (num, r) in &drawn.by_sheet {
@@ -391,7 +393,12 @@ pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, confl
                 Err(_) => {}
             }
         }
-        if listed.len() < limit.min(MAX_LISTED) {
+        let wanted = |e: &Result<Hit, String>| match (kind, e) {
+            (None, _) => true,
+            (Some(k), Ok(h)) => h.kind().starts_with(k),
+            (Some(k), Err(_)) => k == "none",
+        };
+        if listed.len() < limit.min(MAX_LISTED) && (wanted(e0) || wanted(e1)) {
             let name = |e: &Result<Hit, String>| -> Value {
                 match e {
                     Ok(Hit::Device(d)) => json!({"device": devs.get(*d).map(|x| x.h.hex())}),
