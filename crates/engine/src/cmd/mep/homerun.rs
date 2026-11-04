@@ -159,7 +159,7 @@ pub(crate) struct Tag {
 /// that tag, longest first.
 pub(crate) fn resolve_pairs(paths: &[Vec<Vec2>], own: &[Option<usize>], tags: &[Tag], upf: f64) -> Vec<Option<(&'static str, bool)>> {
     let mut out: Vec<Option<(&'static str, bool)>> = vec![None; paths.len()];
-    if !tags.iter().any(|t| t.also.is_some()) || !(upf.is_finite() && upf > 0.0) {
+    if !(tags.iter().any(|t| t.also.is_some()) && upf.is_finite() && upf > 0.0) {
         return out;
     }
     // Tagged runs' ends, clustered where they meet.
@@ -386,9 +386,9 @@ mod tests {
         assert_eq!(leader_tip(at, h, 9, &[a, b], &[]), None);
         // A line far from the tag is not its leader; an arrowhead too big is not one.
         assert_eq!(leader_tip(at, h, 9, &[vec![v(300.0, 100.0), v(260.0, 70.0)]], &[[v(258.0, 68.0), v(262.0, 72.0)]]), None);
-        assert_eq!(leader_tip(at, h, 9, &[leader.clone()], &[[v(40.0, 50.0), v(80.0, 90.0)]]), None);
+        assert_eq!(leader_tip(at, h, 9, std::slice::from_ref(&leader), &[[v(40.0, 50.0), v(80.0, 90.0)]]), None);
         // Hostile values.
-        assert_eq!(leader_tip(v(f64::NAN, 0.0), h, 9, &[leader.clone()], &[arrow]), None);
+        assert_eq!(leader_tip(v(f64::NAN, 0.0), h, 9, std::slice::from_ref(&leader), &[arrow]), None);
         assert_eq!(leader_tip(at, 0.0, 9, &[leader], &[arrow]), None);
     }
 

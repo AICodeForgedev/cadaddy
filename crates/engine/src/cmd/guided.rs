@@ -4767,6 +4767,23 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if twice > 0 {
                     progress_line(&format!("  pipe runs drawn twice, one kept: {twice} dropped ({twice_ft:.0} ft)"));
                 }
+                // A level whose plans draw its drainage but no water: its mains are not in the
+                // documents (its rooms' branches, laid in below, connect to none). Asked, not
+                // guessed from another level.
+                for level in levels_without_water(&sp.mep.runs) {
+                    progress_line(&format!("  {level}: drainage drawn, no domestic water drawn"));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        &format!("No water plan for {level}"),
+                        &format!(
+                            "The plumbing plans draw {level}'s sanitary and vent piping but no domestic water piping, and no note makes it typical of another level: its water mains are left out of the model, and its fixtures' water branches connect to no main"
+                        ),
+                        3,
+                        vec!["Ask the engineer which level's water plan applies (RFI)".into(), "Draw the level's water mains".into()],
+                        None,
+                        false,
+                    );
+                }
                 // The guest rooms the plumbing plans don't draw take the pipes of a room of their
                 // type that they do, as its fixtures do.
                 let (room_pipes, room_pipe_report) = copy_room_pipes(s.doc()?, job, &sp.mep.runs, &|r| pipes.contains(&r.system));
@@ -8807,6 +8824,24 @@ const ROOM_HAS_PIPE_FT: f64 = 3.0;
 const ROOM_PIPE_DRAWN_SHARE: f64 = 0.6;
 /// Two rooms are the same size when each side is within this share of the other's.
 const ROOM_SIZE_SHARE: f64 = 0.2;
+
+/// The levels whose plans draw sanitary piping (fixtures drained there) but no domestic water
+/// (cold, hot, hot-water return), in order of first appearance. A roof's vents and storm drains
+/// alone need no water.
+fn levels_without_water(runs: &[cadaddy_walk3d::MepRun]) -> Vec<String> {
+    const WATER: [&str; 3] = ["CW", "HW", "HWR"];
+    let mut order: Vec<&str> = Vec::new();
+    let mut water: BTreeSet<&str> = BTreeSet::new();
+    for r in runs {
+        if r.system == "SAN" && !order.contains(&r.level.as_str()) {
+            order.push(&r.level);
+        }
+        if WATER.contains(&r.system.as_str()) {
+            water.insert(&r.level);
+        }
+    }
+    order.into_iter().filter(|l| !water.contains(l)).map(str::to_string).collect()
+}
 
 /// The pipes of the guest rooms the plumbing plans show (an enlarged plan draws one or two rooms
 /// a floor with their waste, vent and water lines): each room of the same type and size that
@@ -18046,6 +18081,40 @@ mod tests {
     /// line of a system keeps it alone, a pipe going on out of the room goes in up to its wall, a
     /// main passing by isn't the room's, the room the plan draws gets no second copy, and a room of
     /// the name but another size gets none.
+    #[test]
+    fn a_level_with_sanitary_but_no_water_drawn_is_named() {
+        let run = |system: &str, level: &str| cadaddy_walk3d::MepRun {
+            system: system.into(),
+            level: level.into(),
+            points: vec![[0.0, 0.0], [10.0, 0.0]],
+            size_in: [2.0, 0.0],
+            bottoms_ft: vec![0.0],
+            objects: Vec::new(),
+            id: String::new(),
+            encased: false,
+            size_source: "tag".into(),
+            height_source: "default".into(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: "P-9".into(),
+            slope_in_per_ft: 0.0,
+        };
+        let runs = vec![
+            run("SAN", "Level 1"),
+            run("CW", "Level 1"),
+            run("SAN", "Level 2"),
+            run("V", "Level 2"),
+            run("HW", "Level 3"),
+            run("SAN", "Level 3"),
+            run("SAN", "Level 4"),
+            run("V", "Roof"),
+            run("ST", "Roof"),
+        ];
+        assert_eq!(levels_without_water(&runs), vec!["Level 2".to_string(), "Level 4".to_string()]);
+        assert!(levels_without_water(&[]).is_empty());
+    }
+
     #[test]
     fn a_typical_rooms_drawn_pipes_go_into_the_rooms_of_its_type() {
         let mut s = crate::Session::new();
