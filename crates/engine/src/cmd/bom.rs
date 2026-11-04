@@ -251,6 +251,18 @@ fn conductor_parts(makeup: &str) -> Vec<(u32, String, bool)> {
         .collect()
 }
 
+/// A dimmer's item by how it dims (`switch, dimmer, 0-10V`); a leg that doesn't settle it says so.
+fn dimmer_item(item: &str, p: &super::dimcheck::DimmerProtocol) -> String {
+    let said = match p.protocol.as_str() {
+        "mixed" => "protocol a question (its leg's fixtures dim two ways)".to_string(),
+        "non-dim" => "protocol a question (its leg's fixtures don't dim)".to_string(),
+        "unknown" => "protocol unknown".to_string(),
+        known => known.to_string(),
+    };
+    // An item that names its protocol already (a submittal's product) keeps its words.
+    if p.settled() && item.to_ascii_lowercase().contains(&p.protocol.to_ascii_lowercase()) { item.to_string() } else { format!("{item}, {said}") }
+}
+
 /// AWG #4 and larger (`4`, `2`, `1/0`…): conductors that need insulating bushings (NEC 300.4(G)).
 fn large_conductor(size: &str) -> bool {
     size.contains('/') || size.parse::<u32>().is_ok_and(|n| n <= 4)
@@ -275,6 +287,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
     // The plaster ring each built wall box takes (its wall type's finish on the box's face).
     let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
+    // How each built dimmer dims (its leg's fixtures, its own product or a person), by its tag:
+    // dimmers are bought by it.
+    let protocols: BTreeMap<String, super::dimcheck::DimmerProtocol> =
+        s.doc().map(super::dimcheck::dimmer_protocols).unwrap_or_default().into_iter().filter_map(|p| Some((p.devid.clone()?, p))).collect();
     // The model's pieces (Q6157): when it was built with them, its boxes, rings, conduit,
     // fittings, cable and wire are counted from its index, not worked out by rule here.
     let atoms =
@@ -323,6 +339,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
             "homerun" | "conduit" | "circuit" => {}
             kind => {
                 let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
+                let ty = match protocols.get(&t.id) {
+                    Some(p) => dimmer_item(&ty, p),
+                    None => ty,
+                };
                 let plumbing = kind == "plumbing_fixture";
                 add(
                     lines,
