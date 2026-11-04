@@ -432,6 +432,19 @@ pub struct GuidedJob {
     /// Specification section PDFs (or folders of them): what each kind of product must be.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub specs: Vec<String>,
+    /// The specifications the job found itself when given none ([`look_for_specs`]): folders or
+    /// files. `None`: not looked for yet (a checkpoint from before the search).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub specs_found: Option<Vec<String>>,
+    /// Where the job's specifications came from, in words (given, found and how, none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub specs_how: Vec<String>,
+    /// The specification sections the build read (`bim.products`' `sections_read`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub spec_sections_read: Vec<String>,
+    /// The job goes on without a specification, as answered ("none"): it doesn't look again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub specs_declined: bool,
     /// The type marks the submittals give products for: device types as the legends' are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittal_types: Vec<String>,
@@ -774,6 +787,10 @@ impl GuidedJob {
             checkpoint_given: false,
             submittals: Vec::new(),
             specs: Vec::new(),
+            specs_found: None,
+            specs_how: Vec::new(),
+            spec_sections_read: Vec::new(),
+            specs_declined: false,
             submittal_types: Vec::new(),
             luminaire_types: Vec::new(),
             wall_luminaire_types: Vec::new(),
@@ -1168,6 +1185,9 @@ fn run_classify(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(ref sheets) = sheets_vec {
         check_missing_trade_plans(sheets, job);
     }
+
+    // The project manual (Q6168): found, or asked for.
+    look_for_specs(s, job, true);
 
     job.audit("stage_run", "pipeline", None, Some(StageName::Classify), Some(json!({"sheets": sheet_count})));
     Ok(classified)
@@ -6344,30 +6364,113 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
-/// The specifications the job reads: those given, else a project's specifications folder beside
-/// its submittals (`…\\03_Specifications` next to `…\\02_Submittals`).
+/// The specifications the job reads: those given, else those it found ([`look_for_specs`]; a
+/// job from before the search looks now, by name only).
 fn job_specs(job: &GuidedJob) -> Vec<String> {
     if !job.specs.is_empty() {
         return job.specs.clone();
     }
-    let mut out: Vec<String> = Vec::new();
-    for given in &job.submittals {
-        let Some(parent) = std::path::Path::new(given.trim()).parent() else { continue };
-        let Ok(rd) = std::fs::read_dir(parent) else { continue };
-        let mut found: Vec<String> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains("SPEC")))
-            .map(|p| p.to_string_lossy().to_string())
-            .collect();
-        found.sort();
-        for f in found {
-            if !out.contains(&f) {
-                out.push(f);
-            }
-        }
+    match &job.specs_found {
+        Some(found) => found.clone(),
+        None => super::products::find_project_specs(&job.pdfs_path, &job.submittals, false).paths,
     }
-    out
+}
+
+/// The question a job found no specification for asks at classify.
+const NO_SPEC_QUESTION: &str = "No specification found";
+
+/// Whether the job's goal builds the model (the specifications' requirements go onto it).
+fn builds_model(job: &GuidedJob) -> bool {
+    job.stage(StageName::BimBuild).is_some_and(|st| st.status != StageStatus::Skipped)
+}
+
+/// The job's specifications (Q6168), looked for once: those given; else the project manual in
+/// the prints folder, a folder beside it or beside the submittals' (named like a specification,
+/// or a PDF whose pages carry CSI section headers). The job says where, and reads Divisions 22,
+/// 23, 26, 27 and 28 from it after the build. None found: with `ask`, a question at classify
+/// (the project manual's path, or "none" to go on without one); auto mode (or no `ask`: a
+/// resumed job past classify) goes on with a high finding.
+fn look_for_specs(s: &mut Session, job: &mut GuidedJob, ask: bool) {
+    if !builds_model(job) {
+        return;
+    }
+    if !job.specs.is_empty() {
+        job.specs_how = vec![format!("given: {}", job.specs.join("; "))];
+        job.specs_found = Some(Vec::new());
+        return;
+    }
+    if job.specs_declined {
+        job.specs_found = Some(Vec::new());
+        no_spec_finding(job, "started with specs: none");
+        return;
+    }
+    let found = super::products::find_project_specs(&job.pdfs_path, &job.submittals, true);
+    job.specs_found = Some(found.paths.clone());
+    if !found.paths.is_empty() {
+        // An earlier look that found none (a resumed job): its finding is gone with it.
+        let stale: BTreeSet<String> = job.findings.iter().filter(|f| f.description == NO_SPEC_FINDING).map(|f| f.id.clone()).collect();
+        job.findings.retain(|f| !stale.contains(&f.id));
+        job.worklist.retain(|w| !stale.contains(&w.id));
+        job.specs_how = found.how.iter().map(|h| format!("found {h}")).collect();
+        let line = format!("job: specification found: {}", found.how.join("; "));
+        report_progress(s, json!({"step": "specs", "found": found.paths}), &line);
+        s.echo(line);
+        job.audit("specs_found", "pipeline", None, Some(StageName::Classify), Some(json!({"paths": found.paths, "how": found.how})));
+        return;
+    }
+    let line = "job: no specification found in the prints folder, beside it or beside the submittals".to_string();
+    report_progress(s, json!({"step": "specs", "found": []}), &line);
+    s.echo(line);
+    if ask && !job.auto {
+        let q = Question {
+            id: job.next_qid(StageName::Classify),
+            stage: StageName::Classify,
+            question: format!("{NO_SPEC_QUESTION} — give the project manual path, or answer 'none' to continue without it"),
+            why: "Neither the prints folder, the folders beside it nor the submittals' hold a file or folder named like a specification or project manual, or a PDF whose pages carry CSI section headers (SECTION 26 05 19 …): without it no maker, grade or rating requirement reaches the model, Validate or the estimate".into(),
+            choices: vec!["none".into()],
+            evidence: Some(QuestionEvidence {
+                crop_png_path: None,
+                sheet: None,
+                at: None,
+                values: Some(json!({"prints": job.pdfs_path, "submittals": job.submittals})),
+                handles: Vec::new(),
+                tiled_crops: None,
+                leftovers: Vec::new(),
+            }),
+            default: Some("none".into()),
+            answer_schema: Some(json!({"type": "string"})),
+            answer: None,
+            answered_by: None,
+            answered_at: None,
+            kind: QuestionKind::Doubt,
+        };
+        job.add_question_to_worklist(&q);
+        if let Some(st) = job.stage_mut(StageName::Classify) {
+            st.questions.push(q);
+        }
+        return;
+    }
+    no_spec_finding(job, if job.auto { "auto mode goes on without one" } else { "the job was past classify when it looked" });
+}
+
+/// The finding a job without a specification carries.
+const NO_SPEC_FINDING: &str = "No specification: the job runs without the project manual";
+
+/// The job goes on without a specification: a high finding (once), said in the report.
+fn no_spec_finding(job: &mut GuidedJob, why: &str) {
+    job.specs_how = vec![format!("none: {why}")];
+    if job.findings.iter().any(|f| f.description == NO_SPEC_FINDING) {
+        return;
+    }
+    job.add_finding(
+        StageName::Classify,
+        NO_SPEC_FINDING,
+        &format!("No specification was given or found ({why}): no section's makers, grades or ratings reach the model, Validate or the estimate"),
+        4,
+        vec!["Start the job again with specs: the project manual (a PDF, or the folder of section PDFs)".into()],
+        None,
+        false,
+    );
 }
 
 /// The specifications' and submittals' product data onto the built elements (`bim.products`,
@@ -6393,8 +6496,34 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
             return;
         }
     };
+    job.spec_sections_read =
+        v.get("sections_read").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).take(2_000).collect();
+    if !specs.is_empty() && job.spec_sections_read.is_empty() {
+        let unread: Vec<String> = v
+            .get("unread")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(10)
+            .map(|u| format!("{}: {}", u.get("file").and_then(Value::as_str).unwrap_or("?"), u.get("error").and_then(Value::as_str).unwrap_or("")))
+            .collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("The specification ({}) gave no section of Divisions 22, 23, 26, 27 or 28", specs.join("; ")),
+            &if unread.is_empty() {
+                "No file there is a section of the product divisions (named by its section number, or a manual whose pages carry their section headers)".to_string()
+            } else {
+                format!("Files that could not be read: {}", unread.join("; "))
+            },
+            4,
+            vec!["Give the job specs: the project manual or the folder of its section PDFs".into()],
+            None,
+            false,
+        );
+    }
     let line = format!(
-        "  product data: {} spec sections ({} requirements, kinds {}); records on {} elements; by kind {}",
+        "  product data: {} spec sections read, {} with products ({} requirements, kinds {}); records on {} elements; by kind {}",
+        job.spec_sections_read.len(),
         v.get("sections").and_then(Value::as_array).map_or(0, Vec::len),
         v.get("requirements").and_then(Value::as_u64).unwrap_or(0),
         v.get("kinds_specified").map(Value::to_string).unwrap_or_default(),
@@ -13987,6 +14116,17 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
             None => (None, "recorded; name the levels bottom up, like \"1, 2, 3, R\"".into()),
         };
     }
+    // The project manual's path, or "none" (Q6168).
+    if q.stage == StageName::Classify && q.question.starts_with(NO_SPEC_QUESTION) {
+        if text.eq_ignore_ascii_case("none") {
+            job.specs_declined = true;
+            no_spec_finding(job, "answered 'none'");
+            return (None, "the job goes on without a specification".into());
+        }
+        job.specs = vec![text.to_string()];
+        job.specs_how = vec![format!("given in answer: {text}")];
+        return (None, format!("the build reads the specification at {text}"));
+    }
     // A level's elevation or name (or "Correct"), over what the job read.
     if q.stage == StageName::Levels
         && let Some(level) = question_level(q)
@@ -14534,7 +14674,11 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
         _ => Vec::new(),
     };
+    // `specs: false` (or "none"): the job goes on without one, as answering "none" does.
+    job.specs_declined = matches!(p.get("specs"), Some(Value::Bool(false)))
+        || p.get("specs").and_then(Value::as_str).is_some_and(|t| t.trim().eq_ignore_ascii_case("none"));
     job.specs = match p.get("specs") {
+        _ if job.specs_declined => Vec::new(),
         Some(Value::String(one)) if !one.trim().is_empty() => vec![one.trim().to_string()],
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
         _ => Vec::new(),
@@ -14630,6 +14774,21 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             saved.submittals = job.submittals.clone();
         } else if let Some(gone) = saved.submittals.iter().find(|p| !std::path::Path::new(p).exists()) {
             s.echo(format!("job: the checkpoint's submittals ({gone}) aren't on this machine: job.start {{submittals}} gives them"));
+        }
+        // The specifications: given now, else looked for when the checkpoint is from before the
+        // search or what it found isn't on this machine (the build reads them; past classify,
+        // none found is a finding, not a question).
+        if !job.specs.is_empty() {
+            saved.specs = job.specs.clone();
+        }
+        if job.specs_declined {
+            saved.specs = Vec::new();
+            saved.specs_declined = true;
+        }
+        let again = saved.specs_found.as_ref().is_none_or(|f| f.is_empty() || f.iter().any(|p| !std::path::Path::new(p).exists()));
+        let built = saved.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
+        if !built && !saved.specs_declined && (again || !job.specs.is_empty()) {
+            look_for_specs(s, &mut saved, false);
         }
         let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
         let line = format!(
@@ -14840,6 +14999,18 @@ fn check_answer(q: &Question, answer: &Value) -> std::result::Result<(), String>
             }
         }
         _ => {}
+    }
+    if q.stage == StageName::Classify
+        && q.question.starts_with(NO_SPEC_QUESTION)
+        && let Some(path) = answer.as_str().map(str::trim).filter(|t| !t.eq_ignore_ascii_case("none"))
+    {
+        let p = std::path::Path::new(path);
+        let doc = p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
+        if !(p.is_dir() || (p.is_file() && doc)) {
+            return Err(format!(
+                "question {id}: no folder or PDF/text file at {path}: give the project manual (a PDF, or the folder of its section PDFs), or \"none\""
+            ));
+        }
     }
     if q.stage == StageName::Levels && q.question.starts_with("No levels detected") && answer.as_str().and_then(parse_level_list).is_none() {
         return Err(format!("question {id}: name the levels bottom up, like \"1, 2, 3, R\""));
@@ -15307,7 +15478,24 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "not_built": not_built_sheets(&job).join("; "),
         "placement": placement_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
+        "specifications": specs_report(&job),
     }))
+}
+
+/// The report's specifications (Q6168): where they came from, the paths read and every section
+/// the build read.
+fn specs_report(job: &GuidedJob) -> Value {
+    let paths = job_specs(job);
+    let note = if !job.spec_sections_read.is_empty() {
+        format!("{} specification sections read", job.spec_sections_read.len())
+    } else if paths.is_empty() {
+        "no specification read".to_string()
+    } else if job.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done) {
+        "no section of the product divisions read from the specification".to_string()
+    } else {
+        "the build reads the specification".to_string()
+    };
+    json!({"how": job.specs_how, "paths": paths, "sections_read": job.spec_sections_read, "note": note})
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -15695,7 +15883,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] (specification section PDFs, or folders of them; default a *Spec* folder beside the submittals: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (SECTION 26 05 19 …), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),

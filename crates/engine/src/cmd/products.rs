@@ -23,12 +23,25 @@ const MAX_SPEC_FILES: usize = 400;
 const MAX_ELEMENTS: usize = 500_000;
 /// Requirements kept from one section.
 const MAX_REQUIREMENTS: usize = 400;
+/// Pages read of a file holding many sections (a project manual), at most.
+const MAX_BOOK_PAGES: u32 = 3_000;
+/// Pages read of a file to tell whether it is a specification.
+const SNIFF_PAGES: u32 = 12;
+/// Files opened to tell whether they are specifications, at most (a job's search).
+const MAX_SNIFFED: usize = 40;
+/// Bigger files aren't opened to tell what they are (drawings; a manual is named or smaller).
+const MAX_SNIFF_BYTES: u64 = 64 * 1024 * 1024;
+/// Folder entries a job's search looks at, at most.
+const MAX_SEARCHED: usize = 5_000;
+/// A folder holding more entries than this is no project's folder (a downloads or temporary
+/// folder): the search beside a folder in it goes by the names beside it only.
+const MAX_BESIDE: usize = 60;
 /// The CSI divisions whose sections speak for the model's devices, fixtures and equipment.
 const PRODUCT_DIVISIONS: &[&str] = &["22", "23", "26", "27", "28"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Product Data", run)
-        .params("{specs: [path] (specification section PDFs or text, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these)} → {sections: [{section, file, requirements}], requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}]}: each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
+        .params("{specs: [path] (specification section PDFs or text, a project manual, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these)} → {sections: [{section, file, requirements}] (those with products), sections_read: [\"26 27 26 WIRING DEVICES\"…] (every section read; a project manual's product-division sections each), files: n, requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}]}: each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
         .menu(&["Tools", "Building", "Apply Product Data"])]
 }
 
@@ -190,6 +203,219 @@ fn section_header(line: &str) -> Option<String> {
     }
     let tail = digits.get(6..).unwrap_or("");
     Some(format!("{} {} {}{tail} {}", &main[..2], &main[2..4], &main[4..6], title.trim()).trim().to_string())
+}
+
+/// A specification text's sections in order: each one's number and title (as
+/// [`section_header`] gives it) and its lines. A project manual holds hundreds; a section file
+/// one. The text before the first header (a cover, the contents) is no section; a header printed
+/// again (a page header) goes on with its section.
+pub(crate) fn split_sections(text: &str) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    // A page break seen before a header: it goes with the section the header starts.
+    let mut pending = String::new();
+    for line in text.lines() {
+        if line.trim_start().starts_with("--- page ") {
+            pending.push_str(line);
+            pending.push('\n');
+            continue;
+        }
+        if let Some(sec) = section_header(line.trim()) {
+            let num = |s: &str| s.split(' ').take(3).collect::<Vec<_>>().join(" ");
+            if out.last().is_none_or(|(cur, _)| num(cur) != num(&sec)) {
+                out.push((sec, std::mem::take(&mut pending)));
+            }
+        }
+        if let Some((_, body)) = out.last_mut() {
+            body.push_str(&pending);
+            pending.clear();
+            body.push_str(line);
+            body.push('\n');
+        } else {
+            pending.clear();
+        }
+    }
+    out
+}
+
+/// Whether a file or folder name says it is a specification or a project manual: a word that
+/// starts `spec` (`03_Specifications`, `Spec Book`, `ProjectSpecs`; not `Inspection`), or
+/// `project manual`.
+pub(crate) fn names_a_spec(name: &str) -> bool {
+    let chars: Vec<char> = name.chars().collect();
+    let up = name.to_uppercase();
+    if up.contains("PROJECT MANUAL") || up.contains("PROJECT_MANUAL") || up.contains("PROJECTMANUAL") {
+        return true;
+    }
+    (0..chars.len()).any(|i| {
+        let word = chars.get(i..i + 4).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("spec"));
+        let starts = match i.checked_sub(1).and_then(|j| chars.get(j)) {
+            None => true,
+            Some(prev) if !prev.is_alphabetic() => true,
+            // `ProjectSpecs`: a capital after a small letter starts a word.
+            Some(prev) => prev.is_lowercase() && chars.get(i).is_some_and(|c| c.is_uppercase()),
+        };
+        word && starts
+    })
+}
+
+/// A file name's section number when it starts with one (`26 27 26 - Wiring Devices.pdf`,
+/// `262726.pdf` → `26 27 26`).
+fn section_of_name(name: &str) -> Option<String> {
+    let digits: String = name.chars().take(12).filter(char::is_ascii_digit).take(6).collect();
+    (digits.len() == 6 && name.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .then(|| format!("{} {} {}", &digits[..2], &digits[2..4], &digits[4..6]))
+}
+
+/// Whether a text reads as a specification: a CSI section header (`SECTION 26 05 19 - …`) with
+/// its `PART 1`, or two sections' headers.
+fn reads_as_spec(text: &str) -> bool {
+    let mut headers: BTreeSet<String> = BTreeSet::new();
+    let mut part1 = false;
+    for line in text.lines().map(str::trim) {
+        if let Some(h) = section_header(line) {
+            headers.insert(h.split(' ').take(3).collect::<Vec<_>>().join(" "));
+        }
+        part1 |= line.to_ascii_uppercase().starts_with("PART 1");
+    }
+    headers.len() >= 2 || (part1 && !headers.is_empty())
+}
+
+/// Where a job's specifications were found when it was given none: the paths (folders or
+/// files) and how each was told.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct SpecsFound {
+    pub paths: Vec<String>,
+    pub how: Vec<String>,
+}
+
+/// The project's specifications near a job's documents: in the prints folder and the folders
+/// beside it, and beside the submittals' folder. A folder or file named like a specification or
+/// project manual (`03_Specifications`, `Project Manual.pdf`; a folder over files named like
+/// one elsewhere, an RFI's attachment); else, with `sniff`, the PDF and
+/// text files there (not the prints themselves, nor the submittals) whose first pages carry CSI
+/// section headers. Searched three folders down, capped; beside a folder that sits in a crowded
+/// one (more than [`MAX_BESIDE`] entries: downloads, a temporary folder), by name only.
+pub(crate) fn find_project_specs(prints: &str, submittals: &[String], sniff: bool) -> SpecsFound {
+    use std::path::{Path, PathBuf};
+    let is_doc = |p: &Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
+    // A folder that is there (a path from another machine, `C:\\…` here, is none).
+    let dir_of = |p: &Path| if p.is_dir() { Some(p.to_path_buf()) } else { p.parent().filter(|d| d.is_dir()).map(Path::to_path_buf) };
+    let key = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let entries = |d: &Path| -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = std::fs::read_dir(d).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+        v.sort();
+        v
+    };
+    let prints_dir = dir_of(Path::new(prints.trim()));
+    let sub_dirs: Vec<PathBuf> = submittals.iter().filter_map(|s| dir_of(Path::new(s.trim()))).collect();
+    let sub_keys: Vec<PathBuf> = sub_dirs.iter().map(|d| key(d)).collect();
+    let prints_key = prints_dir.as_deref().map(key);
+    // (root, whether its own name counts, whether its files may be opened, how deep to go)
+    let mut roots: Vec<(PathBuf, bool, bool, usize)> = Vec::new();
+    if let Some(d) = &prints_dir {
+        roots.push((d.clone(), false, false, 3));
+    }
+    for d in prints_dir.iter().chain(sub_dirs.iter()) {
+        let Some(parent) = d.parent() else { continue };
+        let me = key(d);
+        let beside = entries(parent);
+        let crowded = beside.len() > MAX_BESIDE;
+        for e in beside.into_iter().take(MAX_SEARCHED) {
+            if key(&e) != me {
+                roots.push((e, true, !crowded, if crowded { 0 } else { 3 }));
+            }
+        }
+    }
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut out = SpecsFound::default();
+    // Named like a specification: folders (a project's specifications folder), and files.
+    let (mut folders, mut files): (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut looked = 0usize;
+    // Folders and files to walk: (path, depth, its name counts, may it be opened, how deep).
+    let mut stack: Vec<(PathBuf, usize, bool, bool, usize)> =
+        roots.into_iter().rev().map(|(p, named, open, deep)| (p, 0, named, open, deep)).collect();
+    while let Some((p, depth, named, open, deep)) = stack.pop() {
+        looked += 1;
+        if looked > MAX_SEARCHED || folders.len() + files.len() >= MAX_SPEC_FILES {
+            break;
+        }
+        let k = key(&p);
+        // The submittals are not the specification; the prints folder is walked once.
+        if sub_keys.iter().any(|s| k.starts_with(s)) || (depth > 0 && prints_key.as_ref() == Some(&k)) || !seen.insert(k) {
+            continue;
+        }
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        if named && names_a_spec(&name) {
+            let has_docs = if p.is_dir() {
+                let mut found = Vec::new();
+                spec_walk(&p, &mut found, 0);
+                found.iter().any(|f| is_doc(f))
+            } else {
+                is_doc(&p)
+            };
+            if has_docs {
+                let to = if p.is_dir() { &mut folders } else { &mut files };
+                to.push(p.to_string_lossy().to_string());
+                continue;
+            }
+        }
+        if p.is_dir() {
+            if depth < deep {
+                for e in entries(&p).into_iter().rev() {
+                    stack.push((e, depth + 1, true, open, deep));
+                }
+            }
+        } else if open && is_doc(&p) && candidates.len() < MAX_SNIFFED * 4 {
+            candidates.push(p);
+        }
+    }
+    // A specifications folder is the project's specification: files named like one elsewhere
+    // (an RFI's attachment, a product's spec sheet) count only without one.
+    let named = if folders.is_empty() { files } else { folders };
+    if !named.is_empty() || !sniff {
+        out.how = named.iter().map(|p| format!("{p}: named like a specification")).collect();
+        out.paths = named;
+        return out;
+    }
+    let mut opened = 0usize;
+    for c in candidates {
+        if opened >= MAX_SNIFFED {
+            break;
+        }
+        if std::fs::metadata(&c).map_or(true, |m| m.len() > MAX_SNIFF_BYTES) {
+            continue;
+        }
+        opened += 1;
+        let Ok(bytes) = crate::readfile::read(&c) else { continue };
+        let text = if c.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
+            super::spec_import::pdf_text_pages(&bytes, &c.to_string_lossy(), SNIFF_PAGES).unwrap_or_default()
+        } else {
+            String::from_utf8_lossy(bytes.get(..bytes.len().min(256 * 1024)).unwrap_or_default()).to_string()
+        };
+        if reads_as_spec(&text) {
+            out.paths.push(c.to_string_lossy().to_string());
+            out.how.push(format!("{}: its pages carry CSI section headers", c.to_string_lossy()));
+        }
+    }
+    out
+}
+
+/// Every file below `dir` (sorted, four folders down, capped).
+fn spec_walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
+    if depth > 4 || out.len() >= MAX_SPEC_FILES * 4 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut entries: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            spec_walk(&p, out, depth + 1);
+        } else {
+            out.push(p);
+        }
+    }
 }
 
 /// What a specification section's PART 2 requires of each product it lists makers for: one
@@ -372,40 +598,30 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
     out
 }
 
-/// The specification section files under `paths` (files or folders, searched below) whose name
-/// starts with a section number of the product divisions (`26 27 26 - Wiring Devices.pdf`), or
-/// any PDF/text file given by name.
+/// The specification files under `paths` (files or folders, searched below): in a folder, the
+/// files whose name starts with a section number of the product divisions (`26 27 26 - Wiring
+/// Devices.pdf`); a folder with no section files gives its own PDF and text files and those below
+/// named like a specification (a project manual, read section by section); any PDF/text file
+/// given by name.
 fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
-        if depth > 4 || out.len() >= MAX_SPEC_FILES * 4 {
-            return;
-        }
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        let mut entries: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).collect();
-        entries.sort();
-        for p in entries {
-            if p.is_dir() {
-                walk(&p, out, depth + 1);
-            } else {
-                out.push(p);
-            }
-        }
-    }
-    let section_of = |name: &str| -> Option<String> {
-        let digits: String = name.chars().take(12).filter(char::is_ascii_digit).take(6).collect();
-        (digits.len() == 6 && name.chars().next().is_some_and(|c| c.is_ascii_digit()))
-            .then(|| format!("{} {} {}", &digits[..2], &digits[2..4], &digits[4..6]))
-    };
     let is_doc = |p: &std::path::Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
     let mut out = Vec::new();
     for given in paths {
         let path = std::path::Path::new(given.trim());
         if path.is_dir() {
             let mut found = Vec::new();
-            walk(path, &mut found, 0);
-            for p in found.into_iter().filter(|p| is_doc(p)) {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                let Some(sec) = section_of(&name) else { continue };
+            spec_walk(path, &mut found, 0);
+            let docs: Vec<std::path::PathBuf> = found.into_iter().filter(|p| is_doc(p)).collect();
+            let name_of = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let numbered: Vec<(&std::path::PathBuf, String)> = docs.iter().filter_map(|p| section_of_name(&name_of(p)).map(|s| (p, s))).collect();
+            if numbered.is_empty() {
+                // A manual: the folder's own files, and the ones below named like one.
+                for p in docs.iter().filter(|p| p.parent() == Some(path) || names_a_spec(&name_of(p))) {
+                    out.push(p.to_string_lossy().to_string());
+                }
+                continue;
+            }
+            for (p, sec) in numbered {
                 let wanted =
                     if only.is_empty() { PRODUCT_DIVISIONS.iter().any(|d| sec.starts_with(d)) } else { only.iter().any(|o| sec == o.trim()) };
                 if wanted {
@@ -506,10 +722,18 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut reqs: Vec<Requirement> = Vec::new();
     let mut sections = Vec::new();
     let mut unread = Vec::new();
+    // Every section read (those with no product list too), in order.
+    let mut read: Vec<String> = Vec::new();
     for f in &files {
         let name = std::path::Path::new(f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
+        // A file not named for one section may hold many (a project manual): all its pages.
+        let book = section_of_name(&name).is_none();
+        let pages = if book { MAX_BOOK_PAGES } else { 200 };
         let text = if f.to_ascii_lowercase().ends_with(".pdf") {
-            match crate::readfile::read(f).map_err(|e| e.to_string()).and_then(|b| super::spec_import::pdf_text(&b, f).map_err(|e| e.to_string())) {
+            match crate::readfile::read(f)
+                .map_err(|e| e.to_string())
+                .and_then(|b| super::spec_import::pdf_text_pages(&b, f, pages).map_err(|e| e.to_string()))
+            {
                 Ok(t) => t,
                 Err(e) => {
                     unread.push(json!({"file": name, "error": e}));
@@ -525,11 +749,30 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         };
-        let got = read_spec_section(&text, &name);
-        if !got.is_empty() {
-            sections.push(json!({"section": got.first().map(|r| r.section.clone()), "file": name, "requirements": got.len()}));
+        let parts = split_sections(&text);
+        if parts.len() <= 1 {
+            let got = read_spec_section(&text, &name);
+            read.push(parts.first().map_or_else(|| name.clone(), |(sec, _)| sec.clone()));
+            if !got.is_empty() {
+                sections.push(json!({"section": got.first().map(|r| r.section.clone()), "file": name, "requirements": got.len()}));
+            }
+            reqs.extend(got);
+            continue;
         }
-        reqs.extend(got);
+        // A manual: its sections of the product divisions (or those asked for), each on its own.
+        for (sec, body) in parts {
+            let num = sec.split(' ').take(3).collect::<Vec<_>>().join(" ");
+            let wanted = if only.is_empty() { PRODUCT_DIVISIONS.iter().any(|d| num.starts_with(d)) } else { only.iter().any(|o| num == o.trim()) };
+            if !wanted || read.len() >= MAX_SPEC_FILES * 4 {
+                continue;
+            }
+            let got = read_spec_section(&body, &name);
+            read.push(sec.clone());
+            if !got.is_empty() {
+                sections.push(json!({"section": sec, "file": name, "requirements": got.len()}));
+            }
+            reqs.extend(got);
+        }
     }
     // Each product element: its record.
     let d = s.doc()?;
@@ -628,6 +871,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let kinds: BTreeSet<&String> = reqs.iter().map(|r| &r.kind).collect();
     Ok(json!({
         "sections": sections,
+        "sections_read": read,
+        "files": files.len(),
         "requirements": reqs.len(),
         "kinds_specified": kinds,
         "elements": changed,
@@ -749,5 +994,150 @@ A. Manufacturers: not a product list.
             section_header("SECTION 238113.11 - PACKAGED TERMINAL AIR-CONDITIONERS").as_deref(),
             Some("23 81 13.11 PACKAGED TERMINAL AIR-CONDITIONERS")
         );
+    }
+
+    /// A made-up project manual: a cover and contents, then three sections, one of them with its
+    /// header printed again at the top of its next page.
+    const MANUAL: &str = "--- page 1 of 6 ---
+PROJECT MANUAL
+SAMPLE OFFICE BUILDING
+--- page 2 of 6 ---
+TABLE OF CONTENTS
+099123 Interior Painting
+262726 Wiring Devices
+--- page 3 of 6 ---
+SECTION 099123 - INTERIOR PAINTING
+PART 1 - GENERAL
+PART 2 - PRODUCTS
+2.1 MANUFACTURERS
+A. Manufacturers: Subject to compliance with requirements, provide products by one of the following:
+1. Paint Maker A.
+INTERIOR PAINTING 099123 - 1
+--- page 4 of 6 ---
+SECTION 262726 - WIRING DEVICES
+PART 1 - GENERAL
+PART 2 - PRODUCTS
+2.2 STRAIGHT-BLADE RECEPTACLES
+A. Duplex Convenience Receptacles: 125 V, 20 A.
+1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:
+a. Maker One.
+WIRING DEVICES 262726 - 1
+--- page 5 of 6 ---
+SECTION 262726 - WIRING DEVICES
+b. Maker Two.
+PART 3 - EXECUTION
+--- page 6 of 6 ---
+SECTION 283111 - DIGITAL, ADDRESSABLE FIRE-ALARM SYSTEM
+PART 1 - GENERAL
+";
+
+    #[test]
+    fn a_project_manual_splits_into_its_sections() {
+        let parts = split_sections(MANUAL);
+        let names: Vec<&str> = parts.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(names, ["09 91 23 INTERIOR PAINTING", "26 27 26 WIRING DEVICES", "28 31 11 DIGITAL, ADDRESSABLE FIRE-ALARM SYSTEM"]);
+        // The cover and contents are no section; a header printed again goes on with its section.
+        assert!(!parts.iter().any(|(_, b)| b.contains("TABLE OF CONTENTS")));
+        let wiring = &parts[1].1;
+        assert!(wiring.starts_with("--- page 4 of 6 ---"), "{wiring}");
+        let reqs = read_spec_section(wiring, "manual");
+        assert_eq!(reqs.len(), 1, "{reqs:?}");
+        assert_eq!(reqs[0].makers, ["Maker One", "Maker Two"], "the list runs on over the page");
+        assert_eq!(reqs[0].section, "26 27 26 WIRING DEVICES");
+        // One section's file is one part.
+        assert_eq!(split_sections(WIRING_DEVICES).len(), 1);
+        assert!(split_sections("no headers here\nat all").is_empty());
+    }
+
+    #[test]
+    fn specification_names_are_told_from_others() {
+        for yes in ["03_Specifications", "Spec Book", "ProjectSpecs", "SPECS", "Project Manual.pdf", "project_manual", "Specifications - Rev 2"] {
+            assert!(names_a_spec(yes), "{yes}");
+        }
+        for no in ["Inspection Reports", "Respect", "Drawings", "02_Submittals", "Prints", "aspect ratio.pdf"] {
+            assert!(!names_a_spec(no), "{no}");
+        }
+        assert!(reads_as_spec(MANUAL));
+        assert!(reads_as_spec("SECTION 26 05 19 - LOW-VOLTAGE CONDUCTORS\nPART 1 - GENERAL\n"));
+        assert!(!reads_as_spec("SUBMITTAL COVER SHEET\nSpec Section 262726\nSECTION 262726 - WIRING DEVICES\n"), "one header and no PART 1");
+        assert!(!reads_as_spec("GENERAL NOTES\n1. PROVIDE BOXES.\n"));
+    }
+
+    fn tree(tag: &str, files: &[&str]) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("cadaddy-findspecs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for f in files {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            let body = if f.contains("book") { MANUAL } else { "made-up text" };
+            std::fs::write(&p, body).unwrap();
+        }
+        root
+    }
+
+    fn found(root: &std::path::Path, prints: &str, subs: &[&str]) -> Vec<String> {
+        let subs: Vec<String> = subs.iter().map(|s| root.join(s).to_string_lossy().to_string()).collect();
+        let f = find_project_specs(&root.join(prints).to_string_lossy(), &subs, true);
+        assert_eq!(f.paths.len(), f.how.len());
+        f.paths.iter().map(|p| p.strip_prefix(&*root.to_string_lossy()).unwrap_or(p).trim_start_matches(['/', '\\']).replace('\\', "/")).collect()
+    }
+
+    #[test]
+    fn a_jobs_specification_is_found_near_its_prints_and_submittals() {
+        // A folder beside the prints, named like one (any number prefix, any depth of sections).
+        let r = tree("beside", &["01 Drawings/E.pdf", "03 Specifications/By Division/26 Electrical/26 27 26 - Wiring Devices.pdf", "RFI/rfi 1.pdf"]);
+        assert_eq!(found(&r, "01 Drawings", &[]), ["03 Specifications"]);
+        // A specifications folder over files named like one elsewhere (an RFI's attachment).
+        let r = tree("rfi", &["01 Drawings/E.pdf", "RFI/Open/Attachment A - Spec 26 27 26.pdf", "RFI/pole_spec.pdf", "Specs/26 27 26.pdf"]);
+        assert_eq!(found(&r, "01 Drawings", &[]), ["Specs"]);
+        let r = tree("rfionly", &["01 Drawings/E.pdf", "RFI/Open/Attachment A - Spec 26 27 26.pdf"]);
+        assert_eq!(found(&r, "01 Drawings", &[]), ["RFI/Open/Attachment A - Spec 26 27 26.pdf"], "without a folder, the file named like one");
+        // A manual in the prints folder itself, named like one.
+        let r = tree("inprints", &["Prints/E.pdf", "Prints/Project Manual.pdf"]);
+        assert_eq!(found(&r, "Prints", &[]), ["Prints/Project Manual.pdf"]);
+        // Submittals given as files: the folders beside theirs (the prints elsewhere).
+        let r = tree(
+            "subs",
+            &["job/drawings/E.pdf", "office/Submittals/lights.pdf", "office/Submittals/gear.pdf", "office/Specs/26 05 19 - Conductors.txt"],
+        );
+        assert_eq!(found(&r, "job/drawings", &["office/Submittals/lights.pdf", "office/Submittals/gear.pdf"]), ["office/Specs"]);
+        // A folder of submittals is no specification, whatever its name.
+        let r = tree("subnamed", &["P/E.pdf", "Spec Submittals/26 27 26 - Wiring Devices.pdf"]);
+        assert!(found(&r, "P", &["Spec Submittals"]).is_empty());
+        // Not named like one: a file beside the prints whose pages carry CSI section headers.
+        let r = tree("sniff", &["Plans/E.txt", "Docs/notes.txt", "Docs/Owner/book.txt", "Inspection/report.txt"]);
+        assert_eq!(found(&r, "Plans", &[]), ["Docs/Owner/book.txt"]);
+        // The prints themselves aren't opened; an empty folder named like one is no specification.
+        let r = tree("none", &["Plans/book.txt", "Plans/E.pdf", "Specs/readme.md"]);
+        assert!(found(&r, "Plans", &[]).is_empty());
+        // Prints in a crowded folder (downloads): the names beside them only, nothing opened
+        // or searched below.
+        let mut crowd: Vec<String> = (0..70).map(|i| format!("other {i:02}/x.txt")).collect();
+        crowd.extend(["Plans/E.pdf".to_string(), "other 05/Specs/26 27 26.txt".into(), "loose book.txt".into()]);
+        let r = tree("crowded", &crowd.iter().map(String::as_str).collect::<Vec<_>>());
+        assert!(found(&r, "Plans", &[]).is_empty());
+        std::fs::create_dir_all(r.join("Job Specs")).unwrap();
+        std::fs::write(r.join("Job Specs").join("26 27 26.txt"), "made-up text").unwrap();
+        assert_eq!(found(&r, "Plans", &[]), ["Job Specs"]);
+        // Submittals from another machine (a resumed job's) hide nothing.
+        let r = tree("elsewhere", &["Plans/E.pdf", "Specs/26 27 26.pdf"]);
+        let f = find_project_specs(&r.join("Plans").to_string_lossy(), &["C:\\Jobs\\Sample\\Submittals".into(), String::new()], true);
+        assert_eq!(f.paths, [r.join("Specs").to_string_lossy().to_string()]);
+        // A single print file's folder is the prints folder.
+        let r = tree("onefile", &["set/E.pdf", "Specifications/26 27 26.pdf"]);
+        assert_eq!(found(&r, "set/E.pdf", &[]), ["Specifications"]);
+    }
+
+    #[test]
+    fn a_folder_of_a_manual_gives_the_manual() {
+        let r = tree("manualdir", &["Specs/Full Specifications.txt", "Specs/Brand/guide.txt", "Specs/Brand/Spec book.txt"]);
+        let files = spec_files(&[r.join("Specs").to_string_lossy().to_string()], &[]);
+        let names: Vec<String> = files.iter().filter_map(|f| std::path::Path::new(f).file_name().map(|n| n.to_string_lossy().to_string())).collect();
+        assert_eq!(names, ["Spec book.txt", "Full Specifications.txt"], "the folder's own files and those named like one, not every file below");
+        // Section files there: only they (of the product divisions).
+        let r = tree("sectiondir", &["Specs/Full Specifications.txt", "Specs/26 27 26 - Wiring Devices.txt", "Specs/09 91 23 - Painting.txt"]);
+        let files = spec_files(&[r.join("Specs").to_string_lossy().to_string()], &[]);
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert!(files[0].ends_with("26 27 26 - Wiring Devices.txt"));
     }
 }

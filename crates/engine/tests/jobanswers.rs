@@ -70,7 +70,8 @@ fn answers_stand_alone_run_their_stage_once_and_the_job_can_go_on_unattended() {
     let dir = job_folder("batch");
     let pdfs = dir.display().to_string();
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false})).expect("job.start");
+    // No specification for the made-up set (`specs: false`): the job doesn't stop to ask for one.
+    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false, "specs": false})).expect("job.start");
     assert_eq!(st["current_stage"], "levels", "{st}");
 
     // MUST 1 + 3: the level questions in one call, with an id that isn't there. Level 2 takes a
@@ -178,7 +179,7 @@ fn a_level_name_answer_renames_the_built_level() {
     let dir = job_folder("rename");
     let pdfs = dir.display().to_string();
     let mut s = Session::new();
-    s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false})).expect("job.start");
+    s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false, "specs": false})).expect("job.start");
     let ids = open_questions(&mut s, "levels");
     let level_two = ids.iter().find(|id| question_text(&mut s, id).contains("\"2\"")).expect("level 2's question").clone();
     // Run to the end on the defaults, then name level 2.
