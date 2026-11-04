@@ -880,7 +880,7 @@ fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
 /// Fill the built model's elements from what the readers found; per kind, how many values went
 /// on each key.
 pub(crate) fn fill(s: &mut Session) -> Result<Value> {
-    let (sp, stored) = super::bspec::current(s, FILL)?;
+    let (mut sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
     let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
@@ -934,6 +934,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let mut untyped_boxes = 0usize;
     // Devices in no room, per level.
     let mut no_room: BTreeMap<String, usize> = BTreeMap::new();
+    // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
+    // tag id: the room their element stands in, for the spec's tags too.
+    let mut tag_rooms: Vec<(String, String)> = Vec::new();
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -973,7 +976,14 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .map(|f| f.value.trim().to_string())
                     .filter(|r| !r.is_empty());
                 match (served, stamped) {
-                    (Some((r, note)), _) => put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally),
+                    (Some((r, note)), stamped) => {
+                        if stamped.is_none()
+                            && let Some(id) = made(e, DEVID)
+                        {
+                            tag_rooms.push((id, r.label.clone()));
+                        }
+                        put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally);
+                    }
                     (None, Some(r)) => {
                         put(&mut store, "room", Prop::new(r, Source::computed()).with_note("the typical room it was stamped into"), tally)
                     }
@@ -1241,7 +1251,22 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
             changes.push((*h, store));
         }
     }
+    // The spec's read devices with no room take their element's (the takeoff counts by room).
+    let mut tags_roomed = 0usize;
+    if stored && !tag_rooms.is_empty() {
+        let at: HashMap<&str, &str> = tag_rooms.iter().map(|(id, r)| (id.as_str(), r.as_str())).collect();
+        for t in sp.tags.iter_mut().take(MAX_ELEMENTS * 4) {
+            let Some(r) = at.get(t.id.as_str()) else { continue };
+            if t.fields.get("room").is_none_or(|f| f.value.trim().is_empty()) {
+                t.set("room", (*r).to_string(), "computed");
+                tags_roomed += 1;
+            }
+        }
+    }
     let d = s.doc_mut()?;
+    if tags_roomed > 0 {
+        d.building_spec = Some(sp.to_json());
+    }
     let mut changed = 0usize;
     for (h, store) in changes {
         if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
@@ -1252,7 +1277,14 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes, "devices_in_no_room": no_room }))
+    Ok(json!({
+        "filled": filled,
+        "elements": changed,
+        "spec": stored,
+        "wall_boxes_untyped": untyped_boxes,
+        "devices_in_no_room": no_room,
+        "device_tags_roomed": tags_roomed,
+    }))
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.

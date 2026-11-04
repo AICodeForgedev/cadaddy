@@ -257,6 +257,18 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert!(sw["panel"].is_null(), "{sw:#}");
     assert_eq!(sw["fed_from"]["value"], "circuit 12");
     assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102");
+    // The spec's read devices carry their rooms too (the takeoff counts by room).
+    assert_eq!(r["device_tags_roomed"], json!(4), "{r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> = sp["spec"]["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["id"].as_str().is_some_and(|i| i.starts_with("device:")))
+        .filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(rooms.len(), 4, "{rooms:?}");
+    assert!(rooms.iter().any(|r| r == "101") && rooms.iter().any(|r| r == "102"), "{rooms:?}");
     // No circuit printed: none presented.
     let j = device_of(&mut s, "J");
     assert!(j["circuit"].is_null() && j["fed_from"].is_null(), "{j:#}");
