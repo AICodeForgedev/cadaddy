@@ -197,6 +197,7 @@ pub(crate) mod validate_present;
 pub mod validate_rules;
 pub mod validate_run;
 pub mod validate_tr;
+pub mod validate_underground;
 pub mod valueeng;
 pub mod verify;
 pub mod walkpub;
