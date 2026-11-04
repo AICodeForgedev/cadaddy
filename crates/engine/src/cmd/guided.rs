@@ -4551,6 +4551,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv).is_none()).collect();
                 let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, duplicates } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
+                // One room's two copies of a tag at one spot are one device (its plan read it twice).
+                let twice = one_per_spot(&mut stamped, upf_dev / 4.0);
+                if twice > 0 {
+                    progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
+                }
                 // The heights the typical rooms' plans print by their devices.
                 let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
                 if notes > 0 {
@@ -7476,6 +7481,25 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
         });
     }
     before - stamped.len() - placed.len()
+}
+
+/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices; how many
+/// went.
+fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
+    let mut kept: BTreeMap<(String, String, String), Vec<[f64; 2]>> = BTreeMap::new();
+    let before = devices.len();
+    devices.retain(|dv| {
+        if dv.room.trim().is_empty() {
+            return true;
+        }
+        let spots = kept.entry((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())).or_default();
+        if spots.iter().any(|p| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps) {
+            return false;
+        }
+        spots.push(dv.at);
+        true
+    });
+    before - devices.len()
 }
 
 /// A floor plan's device this near where a typical plan's copy of the same tag lands is that
@@ -14558,6 +14582,22 @@ mod tests {
         assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 3);
         assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
+    }
+
+    /// A room's two copies of a tag at one spot are one; the same tag a foot away, or another
+    /// room's at that spot, stay.
+    #[test]
+    fn one_device_per_room_tag_and_spot() {
+        let dv = |tag: &str, room: &str, x: f64| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            room: room.into(),
+            at: [x, 0.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut d = vec![dv("S", "219", 10.0), dv("S", "219", 10.5), dv("S", "219", 22.0), dv("S", "221", 10.0), dv("SD", "219", 10.0)];
+        assert_eq!(one_per_spot(&mut d, 3.0), 1);
+        assert_eq!(d.len(), 4);
     }
 
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection
