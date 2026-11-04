@@ -2376,13 +2376,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
             _ => {}
         }
     }
-    // A circuit or a switch's leg the import took for a symbol's tag ("A-2" by a stair's lines, the
-    // "e" by a sensor) is still printed there: back among its sheet's texts, where it was printed.
+    // A circuit, a switch's leg or a receptacle's designation the import took for a symbol's tag
+    // ("A-2" by a stair's lines, the "e" by a sensor, the "GFCI" by a receptacle) is still printed
+    // there: back among its sheet's texts, where it was printed.
     for (g, syms) in symbols.iter().enumerate() {
         for (tag, _, _, tag_at) in syms {
             if let (Some((at, h)), Some(v)) = (tag_at, texts.get_mut(g))
                 && v.len() < MAX_SHEET_TEXTS
-                && (sheet_facts::is_circuit_label(tag) || super::readers::switch_designation(tag).is_some())
+                && (sheet_facts::is_circuit_label(tag)
+                    || super::readers::switch_designation(tag).is_some()
+                    || !receptacle_designations(&[tag.as_str()]).is_empty())
             {
                 v.push(TextItem { value: tag.clone(), at: *at, height: *h, rotation: 0.0 });
                 if let Some(hs) = text_handles.get_mut(g) {
@@ -2728,9 +2731,15 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 else {
                     continue;
                 };
-                // Read already: a device of this sheet beside the mark.
-                let read = |p: [f64; 2]| cadaddy_geom::Vec2::new(p[0], p[1]).dist(t.at) <= reach;
-                if c.placed.iter().filter(|dv| dv.sheet == sheet).any(|dv| read(dv.at)) || lone.iter().any(|dv| read(dv.at)) {
+                // Read already: a luminaire of this sheet by the mark (its symbol, beside or under
+                // it), or any device where the symbol would be drawn (between the mark and its
+                // circuit label). A receptacle beside the mark is another device.
+                let spot = cadaddy_geom::Vec2::new((t.at.x + label.at.x) / 2.0, (t.at.y + label.at.y) / 2.0);
+                let read = |dv: &super::readers::ReadDevice| {
+                    let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+                    (dv.kind.contains("luminaire") && p.dist(t.at) <= reach) || p.dist(spot) <= LONE_SYMBOL_H * t.height
+                };
+                if c.placed.iter().filter(|dv| dv.sheet == sheet).any(read) || lone.iter().any(read) {
                     continue;
                 }
                 let tag = t.value.trim().to_ascii_uppercase();
@@ -3775,6 +3784,9 @@ const DEFAULT_MARK_HEIGHT: f64 = 6.0;
 /// A lone luminaire mark's circuit label is within this of it, in its text heights; a device read
 /// that close is the mark's.
 const LONE_MARK_REACH_H: f64 = 4.0;
+/// A device read within this of where a lone mark's symbol would be drawn (in its text heights)
+/// is that symbol.
+const LONE_SYMBOL_H: f64 = 2.0;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
 
@@ -5083,7 +5095,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
                 }
                 let stamp_clock = web_time::Instant::now();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // The heights the typical rooms' plans print by their devices.
@@ -5097,6 +5109,19 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
                 // the equipment the room's mechanical plan puts there, not a device of its own.
                 let reach = CONNECT_REACH_FT * upf_dev;
+                // Equipment in a unit room no plan connects (its feed only a keynote): its
+                // connection on the circuit the room's panel schedule names it on.
+                // (The panel schedules are read into the spec later in the build: read here too.)
+                let schedules = if sp.mep.panel_schedules.is_empty() {
+                    panel_schedules(&electrical_pages(s.doc()?, job))
+                } else {
+                    sp.mep.panel_schedules.clone()
+                };
+                let scheduled = scheduled_connections(&schedules, &sp.mep.equipment, &stamped);
+                if !scheduled.is_empty() {
+                    progress_line(&format!("  equipment connections from the unit panel's schedule: {}", scheduled.len()));
+                    stamped.extend(scheduled);
+                }
                 let mut connected = connect_to_equipment(&sp.mep.equipment, &mut stamped, reach);
                 // A mechanical plan's mark of a typical room's fan or unit is that equipment (built
                 // from the mechanical plans with the room), no electrical device of its own.
@@ -5120,6 +5145,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // plan's copies of some of them.
                 let before = out.len();
                 let mut out = out;
+                // A device of the plans in no room but in a unit's footprint (its bath, its entry:
+                // the unit's label's room leaves them out) is that unit's.
+                let booked = book_into_units(&mut out, &footprints);
+                if booked > 0 {
+                    progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
+                }
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
                 // A fixture both an enlarged plumbing plan and the floor's plan tag is one fixture.
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
@@ -7152,7 +7183,15 @@ fn stamp_typical_rooms(
     let mut panel_rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)> = BTreeMap::new();
     let mut sleeping: BTreeMap<usize, (String, Vec<cadaddy_geom::Vec2>)> = BTreeMap::new();
     if unplaced.is_empty() {
-        return StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() };
+        return StampedRooms {
+            devices: out,
+            report,
+            authority,
+            panels,
+            rooms: panel_rooms,
+            sleeping: sleeping.into_values().collect(),
+            footprints: Vec::new(),
+        };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
     let rooms = job_rooms(job);
@@ -7171,6 +7210,7 @@ fn stamp_typical_rooms(
     // view's report key): the floor's plans may show some of a room's devices already (and leave
     // the rest to the typical plan), each such device the copy of its tag and kind nearest it.
     let mut copies: Vec<(usize, usize, String)> = Vec::new();
+    let mut footprints: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = Vec::new();
     let refs = job_sheet_refs(job);
     // The floor plans' door swings and linework round the rooms, to lay each typical view into
     // each room the way it faces.
@@ -7193,6 +7233,29 @@ fn stamp_typical_rooms(
         let reach = ROOM_WALL_FT * 12.0 * k_in;
         let sheet_objects = super::bspec::plan_objects(&sub);
         let mut view_lines: BTreeMap<[u64; 4], Vec<cadaddy_geom::Vec2>> = BTreeMap::new();
+        // Each view's unit: its plan's linework, the stray few (a leader, a title's rule) left off.
+        let mut unit_boxes: BTreeMap<[u64; 4], Option<[f64; 4]>> = BTreeMap::new();
+        let mut unit_box = |view: &[f64; 4]| -> Option<[f64; 4]> {
+            *unit_boxes.entry(view.map(f64::to_bits)).or_insert_with(|| {
+                let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
+                    .iter()
+                    .filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3]))
+                    .copied()
+                    .collect();
+                let pts = super::grids::line_samples(&mine, 12.0 * k_in);
+                if pts.len() < 8 {
+                    return None;
+                }
+                let cut = |mut v: Vec<f64>| {
+                    v.sort_by(f64::total_cmp);
+                    let k = v.len() / 40;
+                    (v.get(k).copied().unwrap_or(0.0), v.get(v.len().saturating_sub(1 + k)).copied().unwrap_or(0.0))
+                };
+                let (x0, x1) = cut(pts.iter().map(|p| p.x).collect());
+                let (y0, y1) = cut(pts.iter().map(|p| p.y).collect());
+                (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+            })
+        };
         let mut turn_of = |view: &[f64; 4], ri: usize, outline: &[cadaddy_geom::Vec2]| -> RoomFit {
             *turns.entry((view.map(f64::to_bits), ri)).or_insert_with(|| {
                 let lines = view_lines.entry(view.map(f64::to_bits)).or_insert_with(|| {
@@ -7292,10 +7355,23 @@ fn stamp_typical_rooms(
                 }
                 let turn = turn_of(view, ri, outline);
                 let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn) else { continue };
+                let room = stamped_room(name, number, ri);
+                if !footprints.iter().any(|(l, r, _)| l == level && *r == room)
+                    && let Some(b) = unit_box(view)
+                {
+                    let corners: Vec<cadaddy_geom::Vec2> = [[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]]]
+                        .iter()
+                        .filter_map(|c| place_in_room(*c, *view, bbox(outline), turn))
+                        .map(|q| cadaddy_geom::Vec2::new(q[0], q[1]))
+                        .collect();
+                    if corners.len() == 4 {
+                        footprints.push((level.clone(), room.clone(), corners));
+                    }
+                }
                 let mut copy = (*dv).clone();
                 copy.at = at;
                 copy.level.clone_from(level);
-                copy.room = stamped_room(name, number, ri);
+                copy.room = room;
                 panel_into(copy.room.clone(), true, level, view, outline, turn, &mut panels, &mut panel_rooms);
                 if sleeping_room(words) {
                     sleeping.entry(ri).or_insert_with(|| (level.clone(), outline.clone()));
@@ -7342,7 +7418,7 @@ fn stamp_typical_rooms(
             !gone.contains(&(i - 1))
         });
     }
-    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect() }
+    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect(), footprints }
 }
 
 /// What reading the typical-room plans' unread marks gave (Q6159): the devices added, each typical
@@ -8438,6 +8514,74 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
         moved += 1;
     }
     moved
+}
+
+/// Each unit room's equipment (PTAC, exhaust fan) that no device connects: a connection on the
+/// circuit the typical panel's schedule names it on (`GUESTROOM PTAC-1` on 13, two poles:
+/// `G-13,15`), placed at the equipment by [`connect_to_equipment`].
+fn scheduled_connections(
+    schedules: &[cadaddy_walk3d::PanelSchedule],
+    equipment: &[cadaddy_walk3d::MepEquipment],
+    devices: &[super::readers::ReadDevice],
+) -> Vec<super::readers::ReadDevice> {
+    // The typical panel (one schedule for many rooms) when there is one.
+    let typical: Vec<&cadaddy_walk3d::PanelSchedule> = schedules.iter().filter(|p| p.typical_of.is_some()).collect();
+    let [panel] = typical.as_slice() else { return Vec::new() };
+    let words = |kind: &str| -> &'static [&'static str] {
+        match kind {
+            "ptac" => &["PTAC"],
+            "exhaust_fan" => &["EXHAUST FAN", "BATH FAN"],
+            _ => &[],
+        }
+    };
+    let mut out = Vec::new();
+    for e in equipment.iter().take(MAX_STAMPED) {
+        let Some(room) = e.properties.get("room").filter(|r| !r.is_empty()) else { continue };
+        let tag = match e.kind.as_str() {
+            "ptac" => "PTAC",
+            "exhaust_fan" => "EF",
+            _ => continue,
+        };
+        // Connected already: a connection of its kind in its room.
+        if devices.iter().chain(&out).any(|dv| dv.room == *room && dv.tag.to_ascii_uppercase().starts_with(tag)) {
+            continue;
+        }
+        let Some(c) = panel.circuits.iter().find(|c| {
+            let up = c.description.to_ascii_uppercase();
+            words(&e.kind).iter().any(|w| up.contains(w)) && !c.number.trim().is_empty()
+        }) else {
+            continue;
+        };
+        let Ok(n) = c.number.trim().parse::<u32>() else { continue };
+        let poles: Vec<String> = (0..c.poles.clamp(1, 3)).map(|i| (n + 2 * i).to_string()).collect();
+        out.push(super::readers::ReadDevice {
+            tag: tag.into(),
+            at: [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0],
+            sheet: panel.source.clone(),
+            level: e.level.clone(),
+            circuit: format!("{}-{}", panel.panel, poles.join(",")),
+            room: room.clone(),
+            kind_source: format!("panel {} schedule circuit {}: {}", panel.panel, c.number, c.description),
+            ..super::readers::ReadDevice::default()
+        });
+    }
+    out
+}
+
+/// Books each device in no room that stands in a unit's footprint to that unit (its level by the
+/// digits of its name: a device read off its sheet may carry the sheet's level code); how many.
+fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[(String, String, Vec<cadaddy_geom::Vec2>)]) -> usize {
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let mut n = 0;
+    for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
+        let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+        let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
+        if let Some((_, room, _)) = footprints.iter().find(|(l, _, poly)| here(l) && cadaddy_geom::point_in_polygon(poly, p)) {
+            dv.room = room.clone();
+            n += 1;
+        }
+    }
+    n
 }
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
@@ -11382,6 +11526,9 @@ struct StampedRooms {
     rooms: BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>,
     /// The rooms stamped from a typical plan of a room to sleep in (a guest room): level, outline.
     sleeping: Vec<(String, Vec<cadaddy_geom::Vec2>)>,
+    /// Each stamped unit's whole footprint (its plan's linework laid into the room: the bath and
+    /// entry its label's room leaves out): level, room, outline.
+    footprints: Vec<(String, String, Vec<cadaddy_geom::Vec2>)>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -16028,7 +16175,9 @@ mod tests {
         // (700, 500), `HOR` by the second.
         let texts: Vec<(&str, f64, f64, f64)> =
             vec![("H", 98.0, 507.0, 4.0), ("H", 300.0, 506.0, 4.0), ("G-1,a", 300.0, 494.0, 4.0), ("HOR", 704.0, 506.0, 4.0)];
-        let syms: Vec<(&str, f64, f64)> = vec![("G-1", 100.0, 500.0), ("G-9", 500.0, 500.0), ("G-9", 700.0, 500.0)];
+        // A GFCI receptacle beside the lone downlight (13 off where its symbol would be): another
+        // device, not the downlight's symbol.
+        let syms: Vec<(&str, f64, f64)> = vec![("G-1", 100.0, 500.0), ("G-9", 500.0, 500.0), ("G-9", 700.0, 500.0), ("GFCI", 313.0, 497.0)];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &syms);
         let hi = s.doc().map_or(0, |d| d.handseed);
@@ -16042,7 +16191,8 @@ mod tests {
         job.sheet_regions.push(region("P-1", "P", 3000.0));
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let on = |sheet: &str| -> Vec<(String, String)> {
-            let mut v: Vec<(String, String)> = job.devices.iter().filter(|d| d.sheet == sheet).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+            let mut v: Vec<(String, String)> =
+                job.devices.iter().filter(|d| d.sheet == sheet && d.tag != "GFCI").map(|d| (d.tag.clone(), d.circuit.clone())).collect();
             v.sort();
             v
         };
@@ -16095,6 +16245,57 @@ mod tests {
         assert_eq!(moved, 1);
         let at = |h: &str| census.placed.iter().find(|d| d.handle == h).map(|d| d.at);
         assert_eq!((at("A1"), at("B2")), (Some([10.0, 10.0]), Some([1010.0, 10.0])));
+    }
+
+    /// A unit's PTAC no plan connects (its feed only a keynote) takes its connection on the circuit
+    /// the typical panel's schedule names it on; a fan the plans connect gets no second one.
+    #[test]
+    fn a_unit_ptac_is_connected_on_its_panel_schedules_circuit() {
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        sp.mep.panel_schedules = vec![cadaddy_walk3d::PanelSchedule {
+            panel: "G".into(),
+            typical_of: Some(124),
+            source: "E-2".into(),
+            circuits: vec![
+                cadaddy_walk3d::PanelCircuit { number: "11".into(), description: "RANGE EXHAUST (ADA ONLY)".into(), poles: 1, ..Default::default() },
+                cadaddy_walk3d::PanelCircuit { number: "13".into(), description: "GUESTROOM PTAC-1".into(), poles: 2, ..Default::default() },
+            ],
+            ..Default::default()
+        }];
+        let unit = |kind: &str, at: f64| {
+            let mut e = cadaddy_walk3d::MepEquipment {
+                kind: kind.into(),
+                level: "Level 2".into(),
+                min: [at, 0.0],
+                max: [at + 40.0, 12.0],
+                ..Default::default()
+            };
+            e.properties.insert("room".into(), "202".into());
+            e
+        };
+        sp.mep.equipment = vec![unit("ptac", 100.0), unit("exhaust_fan", 300.0)];
+        let fan = super::super::readers::ReadDevice { tag: "EF".into(), room: "202".into(), ..Default::default() };
+        let got = scheduled_connections(&sp.mep.panel_schedules, &sp.mep.equipment, &[fan]);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!((got[0].tag.as_str(), got[0].circuit.as_str(), got[0].room.as_str(), got[0].at), ("PTAC", "G-13,15", "202", [120.0, 6.0]));
+        assert!(got[0].kind_source.contains("GUESTROOM PTAC-1"));
+    }
+
+    /// A water closet in no room but inside a unit's footprint (its bath: the unit's label's room
+    /// leaves it out) is the unit's; one outside every footprint, or on another floor, stays out.
+    #[test]
+    fn a_device_in_a_units_bath_is_booked_to_the_unit() {
+        let v = |x: f64, y: f64| cadaddy_geom::Vec2::new(x, y);
+        let foot = vec![("2".to_string(), "202".to_string(), vec![v(0.0, 0.0), v(144.0, 0.0), v(144.0, 348.0), v(0.0, 348.0)])];
+        let wc = |x: f64, y: f64, level: &str| super::super::readers::ReadDevice {
+            tag: "P-1".into(),
+            at: [x, y],
+            level: level.into(),
+            ..Default::default()
+        };
+        let mut devices = vec![wc(40.0, 30.0, "Level 2"), wc(400.0, 30.0, "Level 2"), wc(40.0, 30.0, "Level 3")];
+        assert_eq!(book_into_units(&mut devices, &foot), 1);
+        assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", ""]);
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
