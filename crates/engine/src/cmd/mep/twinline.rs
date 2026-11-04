@@ -50,6 +50,15 @@ const MAX_NEAR: usize = 400;
 pub(crate) const JOIN_FT: f64 = 1.5;
 /// A middle line turning back on the path more than this (cosine of 120°) is a pipe beside it.
 const TURN_BACK_COS: f64 = -0.5;
+/// A middle line going on within this of the path's way (cosine of 20°), and at most
+/// [`STRAIGHT_OFF`] of the join reach off its line, goes straight on: through a tee or a crossing
+/// the run goes on, the branch is a path of its own.
+const STRAIGHT_COS: f64 = 0.94;
+const STRAIGHT_OFF: f64 = 0.25;
+/// A branch meets its main at least this far off parallel (sine of 30°).
+const TEE_SIN: f64 = 0.5;
+/// The longest break in a run (a break mark, a label set in the line), in tee reaches.
+const BREAK_REACHES: f64 = 3.0;
 
 /// A length of pipe's middle line: from `a` to `b`, drawn `width` across (drawing units), from
 /// the edges `edges` (indices into the segments given).
@@ -240,8 +249,8 @@ fn is_twin_drawn(segs: &[(Vec2, Vec2)], pairs: &[&Pair], upf: f64) -> bool {
 }
 
 /// The middle lines joined end to end into paths: two ends within [`JOIN_FT`] are one path
-/// through the fitting between them; where three or more meet (a tee) the nearest two join and
-/// the third starts its own path. Each path with the middles it took.
+/// through the fitting between them; where three or more meet (a tee, a crossing) the one going
+/// straight on joins (else the nearest) and the others start their own paths. Each path with the middles it took.
 pub(crate) fn paths(mids: &[Middle], upf: f64) -> Vec<(Vec<Vec2>, Vec<usize>)> {
     let reach = JOIN_FT * upf;
     let cell = reach.max(1e-9);
@@ -253,11 +262,13 @@ pub(crate) fn paths(mids: &[Middle], upf: f64) -> Vec<(Vec<Vec2>, Vec<usize>)> {
     }
     let end_of = |i: usize, at_b: bool| mids.get(i).map(|m| if at_b { m.b } else { m.a });
     let mut used = vec![false; mids.len()];
-    // The unused middle with an end nearest `p` (within reach) that goes on from the path's last
-    // direction `dir` (not back the way it came: a pipe beside it), and whether that end is its `b`.
+    // The unused middle with an end within reach of `p` that goes on from the path's last direction
+    // `dir` (not back the way it came: a pipe beside it), straight on before nearest, and whether
+    // that end is its `b`.
     let nearest = |p: Vec2, dir: Vec2, used: &[bool]| -> Option<(usize, bool)> {
         let (kx, ky) = key(p);
-        let mut best: Option<(f64, usize, bool)> = None;
+        // (turns, distance, middle, at its b): one that goes straight on beats any that turns.
+        let mut best: Option<(bool, f64, usize, bool)> = None;
         for dx in -1..=1 {
             for dy in -1..=1 {
                 for &(i, at_b) in ends.get(&(kx.saturating_add(dx), ky.saturating_add(dy))).into_iter().flatten() {
@@ -265,17 +276,21 @@ pub(crate) fn paths(mids: &[Middle], upf: f64) -> Vec<(Vec<Vec2>, Vec<usize>)> {
                         continue;
                     }
                     let (Some(q), Some(far)) = (end_of(i, at_b), end_of(i, !at_b)) else { continue };
-                    if (far - q).normalized().dot(dir) < TURN_BACK_COS {
+                    let along = (far - q).normalized().dot(dir);
+                    if along < TURN_BACK_COS {
                         continue;
                     }
                     let d = q.dist(p);
-                    if d <= reach && best.is_none_or(|(bd, ..)| d < bd) {
-                        best = Some((d, i, at_b));
+                    // Straight on: the same way, and on the path's line (not a pipe beside it).
+                    let off = q - p;
+                    let turns = !(along >= STRAIGHT_COS && (off.x * dir.y - off.y * dir.x).abs() <= STRAIGHT_OFF * reach);
+                    if d <= reach && best.is_none_or(|(bt, bd, ..)| (turns, d) < (bt, bd)) {
+                        best = Some((turns, d, i, at_b));
                     }
                 }
             }
         }
-        best.map(|(_, i, at_b)| (i, at_b))
+        best.map(|(_, _, i, at_b)| (i, at_b))
     };
     let mut out = Vec::new();
     for start in 0..mids.len() {
@@ -324,13 +339,17 @@ pub(crate) fn paths(mids: &[Middle], upf: f64) -> Vec<(Vec<Vec2>, Vec<usize>)> {
     out
 }
 
-/// A label (a pipe tag's index) for each path that has none, from the labelled paths it joins:
-/// an end of one within `reach` of the other's line (a branch at its tee, a length at its
-/// coupling), breadth first from the labelled ones. A water plan tags a main once and its branches
-/// not at all; each branch is the system of the main it comes off.
+/// A label (a pipe tag's index) for each path that has none, from the labelled paths it joins,
+/// breadth first from the labelled ones. First along each run: a path whose end lines up with
+/// another's, facing it across a break of at most [`BREAK_REACHES`] reaches (the gap a break mark
+/// or a label leaves), is the same pipe. Then at its tees: an end within `reach` of another
+/// path's line, across it, takes the label of the nearest line it reaches (a branch off its main,
+/// a length at its coupling; not a pipe it runs past, nor one its end lies beside). A water plan tags a main once and its branches not
+/// at all; each branch is the system of the main it comes off.
 pub(crate) fn spread(paths: &[Vec<Vec2>], seed: &[Option<usize>], reach: f64) -> Vec<Option<usize>> {
     let mut out: Vec<Option<usize>> = (0..paths.len()).map(|i| seed.get(i).copied().flatten()).collect();
-    let cell = reach.max(1e-9) * 4.0;
+    let far = reach * BREAK_REACHES;
+    let cell = far.max(1e-9);
     let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
     let mut grid: HashMap<(i64, i64), Vec<(usize, Vec2, Vec2)>> = HashMap::new();
     for (i, pts) in paths.iter().enumerate() {
@@ -347,31 +366,88 @@ pub(crate) fn spread(paths: &[Vec<Vec2>], seed: &[Option<usize>], reach: f64) ->
         let t = if l2 > 1e-18 { ((p - a).dot(d) / l2).clamp(0.0, 1.0) } else { 0.0 };
         p.dist(a + d * t)
     };
-    // Who joins whom (both ways).
-    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); paths.len()];
-    for (i, pts) in paths.iter().enumerate() {
-        for end in [pts.first(), pts.last()].into_iter().flatten() {
-            for &(j, a, b) in grid.get(&key(*end)).into_iter().flatten() {
-                if j != i && dist(*end, a, b) <= reach {
-                    if let Some(v) = adj.get_mut(i) {
-                        v.push(j);
+    // Each end of a path, and the way it points out of the path.
+    let ends = |pts: &[Vec2]| -> Vec<(Vec2, Vec2)> {
+        let n = pts.len();
+        let mut v = Vec::new();
+        if let (Some(&e), Some(&f)) = (pts.first(), pts.get(1)) {
+            v.push((e, (e - f).normalized()));
+        }
+        if let (Some(&e), Some(&f)) = (pts.last(), pts.get(n.saturating_sub(2))) {
+            v.push((e, (e - f).normalized()));
+        }
+        v
+    };
+    let path_ends: Vec<Vec<(Vec2, Vec2)>> = paths.iter().map(|p| ends(p)).collect();
+    let mut end_grid: HashMap<(i64, i64), Vec<(usize, Vec2, Vec2)>> = HashMap::new();
+    for (j, theirs) in path_ends.iter().enumerate() {
+        for &(e, d) in theirs {
+            end_grid.entry(key(e)).or_default().push((j, e, d));
+        }
+    }
+    // Who joins whom (both ways): in line across a break, and at tees.
+    let mut in_line: Vec<Vec<usize>> = vec![Vec::new(); paths.len()];
+    let mut tee: Vec<Vec<usize>> = vec![Vec::new(); paths.len()];
+    let link = |m: &mut Vec<Vec<usize>>, i: usize, j: usize| {
+        if let Some(v) = m.get_mut(i) {
+            v.push(j);
+        }
+        if let Some(v) = m.get_mut(j) {
+            v.push(i);
+        }
+    };
+    for (i, my_ends) in path_ends.iter().enumerate() {
+        for &(end, out_dir) in my_ends {
+            let (kx, ky) = key(end);
+            let mut nearest: Option<(f64, usize)> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &(j, a, b) in grid.get(&(kx.saturating_add(dx), ky.saturating_add(dy))).into_iter().flatten() {
+                        let d = dist(end, a, b);
+                        // A run's end beside a line it runs along (a pipe beside it) is no tee,
+                        // unless on it.
+                        let v = b - a;
+                        let lv = v.dot(v).sqrt();
+                        let along = lv > 1e-9 && (out_dir.x * v.y - out_dir.y * v.x).abs() / lv < TEE_SIN;
+                        if j != i && d <= reach && !(along && d > STRAIGHT_OFF * reach) && nearest.is_none_or(|(bd, _)| d < bd) {
+                            nearest = Some((d, j));
+                        }
                     }
-                    if let Some(v) = adj.get_mut(j) {
-                        v.push(i);
+                }
+            }
+            if let Some((_, j)) = nearest {
+                link(&mut tee, i, j);
+            }
+            // An end of another path facing this one, in line, across the break.
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for &(j, e2, d2) in end_grid.get(&(kx.saturating_add(dx), ky.saturating_add(dy))).into_iter().flatten() {
+                        let gap = e2 - end;
+                        if j > i
+                            && gap.dot(out_dir) >= -reach
+                            && gap.dot(gap).sqrt() <= far
+                            && out_dir.dot(d2) <= -STRAIGHT_COS
+                            && (gap.x * out_dir.y - gap.y * out_dir.x).abs() <= STRAIGHT_OFF * reach
+                        {
+                            link(&mut in_line, i, j);
+                        }
                     }
                 }
             }
         }
     }
-    let mut queue: std::collections::VecDeque<usize> = (0..paths.len()).filter(|i| out.get(*i).copied().flatten().is_some()).collect();
-    while let Some(i) = queue.pop_front() {
-        let Some(label) = out.get(i).copied().flatten() else { continue };
-        for &j in adj.get(i).into_iter().flatten() {
-            if let Some(slot) = out.get_mut(j)
-                && slot.is_none()
-            {
-                *slot = Some(label);
-                queue.push_back(j);
+    for links in [&in_line, &tee] {
+        let mut queue: std::collections::VecDeque<usize> = (0..paths.len()).filter(|i| out.get(*i).copied().flatten().is_some()).collect();
+        while let Some(i) = queue.pop_front() {
+            let Some(label) = out.get(i).copied().flatten() else { continue };
+            // Along the run first, wherever the label came in.
+            for &j in in_line.get(i).into_iter().flatten().chain(links.get(i).into_iter().flatten()) {
+                if let Some(slot) = out.get_mut(j)
+                    && slot.is_none()
+                {
+                    *slot = Some(label);
+                    queue.push_back(j);
+                }
             }
         }
     }
@@ -535,6 +611,50 @@ mod tests {
         let apart = vec![v(400.0, 0.0), v(500.0, 0.0)];
         let out = spread(&[main, branch, on, apart], &[Some(7), None, None, None], 12.0);
         assert_eq!(out, [Some(7), Some(7), Some(7), None]);
+    }
+
+    #[test]
+    fn a_run_goes_straight_on_through_a_crossing_not_round_into_the_branch() {
+        let m = |a: Vec2, b: Vec2| Middle { a, b, width: 2.5, edges: [0, 0] };
+        // A main broken at a branch's crossing (15 units of gap), the branch's end nearer (9).
+        let mids = vec![m(v(0.0, 0.0), v(100.0, 0.0)), m(v(115.0, 0.0), v(300.0, 0.0)), m(v(104.0, -8.0), v(104.0, -120.0))];
+        let ps = paths(&mids, UPF);
+        assert_eq!(ps.len(), 2, "{ps:?}");
+        let main = ps.iter().find(|(_, took)| took.contains(&0)).map(|(_, took)| took.clone());
+        assert_eq!(
+            main.map(|mut t| {
+                t.sort_unstable();
+                t
+            }),
+            Some(vec![0, 1])
+        );
+        // With nothing straight ahead the run still turns at its elbow.
+        let elbow = vec![m(v(0.0, 0.0), v(100.0, 0.0)), m(v(104.0, -8.0), v(104.0, -120.0))];
+        assert_eq!(paths(&elbow, UPF).len(), 1);
+        // A pipe beside it, ahead but a lane over, is not straight on.
+        let beside = vec![m(v(0.0, 0.0), v(100.0, 0.0)), m(v(110.0, 12.0), v(300.0, 12.0)), m(v(104.0, -8.0), v(104.0, -120.0))];
+        let ps = paths(&beside, UPF);
+        assert!(ps.iter().any(|(_, took)| took.contains(&0) && took.contains(&2)), "{ps:?}");
+    }
+
+    #[test]
+    fn a_main_broken_for_its_label_keeps_its_tag_and_a_branch_takes_the_main_it_ends_at() {
+        // Two mains 12 apart: the upper tagged 1, the lower tagged 2 on its left length only.
+        let upper = vec![v(-100.0, 12.0), v(400.0, 12.0)];
+        let lower_left = vec![v(0.0, 0.0), v(40.0, 0.0)];
+        // The lower main's next length, 20 units on (a break mark): in line with it.
+        let lower_right = vec![v(60.0, 0.0), v(300.0, 0.0)];
+        // A branch off the upper main (its end 1 from it) down across the lower one into a room.
+        let branch = vec![v(50.0, 11.0), v(50.0, -60.0)];
+        let out = spread(&[upper, lower_left, lower_right, branch], &[Some(1), Some(2), None, None], 12.0);
+        assert_eq!(out, [Some(1), Some(2), Some(2), Some(1)]);
+        // A length whose end lies beside the other main (a lane over, within reach) is not a
+        // branch of it.
+        let beside = spread(&[vec![v(-100.0, 12.0), v(400.0, 12.0)], vec![v(100.0, 0.0), v(300.0, 0.0)]], &[Some(1), None], 12.0);
+        assert_eq!(beside, [Some(1), None]);
+        // Too far on to be the same run: no tag of its own.
+        let far = spread(&[vec![v(0.0, 0.0), v(40.0, 0.0)], vec![v(90.0, 0.0), v(300.0, 0.0)]], &[Some(2), None], 12.0);
+        assert_eq!(far, [Some(2), None]);
     }
 
     #[test]

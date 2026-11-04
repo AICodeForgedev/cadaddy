@@ -357,6 +357,133 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// The distance between two segments (0 where they cross).
+fn seg_seg_dist(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> f64 {
+    let cross = |o: Vec2, p: Vec2, q: Vec2| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+        return 0.0;
+    }
+    seg_dist(a, c, d).min(seg_dist(b, c, d)).min(seg_dist(c, a, b)).min(seg_dist(d, a, b))
+}
+
+/// The line a label is lettered along: a run longer than the label (and two letters' height),
+/// with a stretch parallel to its lettering, at most
+/// [`LABEL_ON_LINE`] of its height off its middle line, and beside it lengthwise (within a
+/// letter's height of its ends: a label in a break of the line). The nearest such run; a label
+/// of one point (a leader's arrow) is on the run its point touches. None: the label is beside
+/// no line of its own.
+fn label_host(line: [Vec2; 2], h: f64, paths: &[&[Vec2]]) -> Option<usize> {
+    if !(h.is_finite() && h > 0.0) {
+        return None;
+    }
+    let [a, b] = line;
+    let len = a.dist(b);
+    // The line runs past its label (not the label's own strokes, a tick, a fitting).
+    let need = len.max(2.0 * h);
+    let mut best: Option<(f64, usize)> = None;
+    for (ci, pts) in paths.iter().enumerate() {
+        if pts.windows(2).filter_map(|w| Some(w.first()?.dist(*w.get(1)?))).sum::<f64>() < need {
+            continue;
+        }
+        for w in pts.windows(2) {
+            let (Some(&p), Some(&q)) = (w.first(), w.get(1)) else { continue };
+            let off = if len <= 1e-9 {
+                let d = seg_dist(a, p, q);
+                (d <= 0.5 * h).then_some(d)
+            } else {
+                let (u, v) = ((b - a) * (1.0 / len), q - p);
+                let lv = v.dot(v).sqrt();
+                if lv <= 1e-9 || (u.x * v.y - u.y * v.x).abs() / lv > LABEL_PARALLEL_SIN {
+                    continue;
+                }
+                // Off the segment's line, from the label's middle; overlap along it.
+                let mid = (a + b) * 0.5;
+                let n = Vec2::new(-v.y / lv, v.x / lv);
+                let off = (mid - p).dot(n).abs();
+                let (s0, s1) = ((a - p).dot(v) / lv, (b - p).dot(v) / lv);
+                let (lo, hi) = (s0.min(s1), s0.max(s1));
+                let gap = (lo - lv).max(-hi).max(0.0);
+                (off <= LABEL_ON_LINE * h && gap <= h).then_some(off)
+            };
+            if let Some(d) = off
+                && best.is_none_or(|(bd, _)| d < bd)
+            {
+                best = Some((d, ci));
+            }
+        }
+    }
+    best.map(|(_, ci)| ci)
+}
+
+/// A pipe label more than this many times the plan's usual label height is outsized.
+const LABEL_OUTSIZED: f64 = 2.0;
+/// How far off a line a label lettered on it may sit, as a share of its height.
+const LABEL_ON_LINE: f64 = 0.75;
+/// Lettering parallel to a line: the sine of the angle between them at most this (10°).
+const LABEL_PARALLEL_SIN: f64 = 0.174;
+
+/// How far a label is from a line: along its lettering from a line parallel to it (a label set
+/// beside or in its pipe), from its middle for a line across it (not a line off its end).
+fn label_dist(line: [Vec2; 2], a: Vec2, b: Vec2) -> f64 {
+    let [p, q] = line;
+    let (u, v) = (q - p, b - a);
+    let (lu, lv) = (u.dot(u).sqrt(), v.dot(v).sqrt());
+    if lu <= 1e-9 || lv <= 1e-9 {
+        return seg_dist((p + q) * 0.5, a, b);
+    }
+    if (u.x * v.y - u.y * v.x).abs() / (lu * lv) <= LABEL_PARALLEL_SIN { seg_seg_dist(p, q, a, b) } else { seg_dist((p + q) * 0.5, a, b) }
+}
+
+/// How wide a character of lettering is, as a share of its height (a typical drafting font's
+/// average advance).
+const LABEL_CHAR_W: f64 = 0.7;
+
+/// Where a label's lettering lies: the middle line of its first row, from its first character to
+/// its last. A label set in a break of the pipe it names lies along that pipe, wherever its
+/// insertion point is. A label of unknown shape (or a point) is its point.
+fn label_line(e: Option<&Entity>, at: Vec2, h: f64, chars: usize) -> [Vec2; 2] {
+    let ok = |v: f64| v.is_finite();
+    let (rot, wf, col, row, span) = match e.map(|e| &e.kind) {
+        Some(EntityKind::Text(t)) => {
+            use cadaddy_doc::{HAlign, VAlign};
+            let span = match (t.halign, t.align_pt) {
+                (HAlign::Aligned | HAlign::Fit, Some(b)) => Some((t.insert.xy(), b.xy())),
+                _ => None,
+            };
+            let col = match t.halign {
+                HAlign::Left | HAlign::Aligned | HAlign::Fit => 0.0,
+                HAlign::Center | HAlign::Middle => 0.5,
+                HAlign::Right => 1.0,
+            };
+            let row = match (t.halign, t.valign) {
+                (HAlign::Middle, _) | (_, VAlign::Middle) => 0.0,
+                (_, VAlign::Top) => -0.5,
+                _ => 0.5,
+            };
+            (t.rotation, t.width_factor, col, row, span)
+        }
+        Some(EntityKind::MText(t)) => {
+            let k = f64::from(t.attach.clamp(1, 9) - 1);
+            (t.rotation, 1.0, (k % 3.0) * 0.5, (k / 3.0).floor() * 0.5 - 0.5, None)
+        }
+        _ => return [at, at],
+    };
+    if !(ok(rot) && ok(h) && h > 0.0 && ok(at.x) && ok(at.y)) {
+        return [at, at];
+    }
+    let dir = Vec2::new(rot.cos(), rot.sin());
+    let up = Vec2::new(-dir.y, dir.x);
+    if let Some((a, b)) = span.filter(|(a, b)| a.is_finite() && b.is_finite() && a.dist(*b) > 0.0) {
+        let mid = up * (0.5 * h);
+        return [a + mid, b + mid];
+    }
+    let wf = if ok(wf) && wf > 0.0 { wf.min(4.0) } else { 1.0 };
+    let w = LABEL_CHAR_W * h * wf * chars.min(200) as f64;
+    let start = at - dir * (col * w) + up * (row * h);
+    [start, start + dir * w]
+}
+
 /// The runs of the plan: systems (the spec's, else drafted from layer names) and their runs.
 pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
     read_with(s, sp, only, None)
@@ -755,6 +882,8 @@ fn read_pipes_from_tags(
     // Step 1: find all pipe-system text tags and their positions.
     struct PipeTag {
         at: Vec2,
+        /// Where its lettering lies (see [`label_line`]); its leader's arrow when it has one.
+        line: [Vec2; 2],
         system: &'static str,
         /// The second system of a tag that names two (`1/2" HW & CW`).
         also: Option<&'static str>,
@@ -764,12 +893,28 @@ fn read_pipes_from_tags(
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
     let mut lettering: Vec<(f64, usize)> = Vec::new();
-    for (_, t, at, h) in notes {
+    let by_handle: std::collections::HashMap<Handle, &Entity> = ents.iter().map(|e| (e.handle, e.as_ref())).collect();
+    for (hd, t, at, h) in notes {
         if let Some((sz, sys, also)) = parse_pipe_tag(t)
             && !sys.is_empty()
         {
-            pipe_tags.push(PipeTag { at: *at, system: sys, also, size_in: sz, text: t.clone() });
+            // A sized label is lettered along its pipe; a bare code may be a word's fragment.
+            let line = if sz.is_some() { label_line(by_handle.get(hd).copied(), *at, *h, t.chars().count()) } else { [*at, *at] };
+            pipe_tags.push(PipeTag { at: *at, line, system: sys, also, size_in: sz, text: t.clone() });
             lettering.push((*h, t.chars().count()));
+        }
+    }
+    // Lettering far taller than the plan's pipe labels (a mis-sized copy the import made): where
+    // it starts, not along a line it can't be said to lie on.
+    let usual_h = {
+        let mut hs: Vec<f64> = lettering.iter().map(|(h, _)| *h).filter(|h| h.is_finite() && *h > 0.0).collect();
+        hs.sort_by(f64::total_cmp);
+        hs.get(hs.len() / 2).copied()
+    };
+    let outsized = |h: f64| usual_h.is_some_and(|u| h > LABEL_OUTSIZED * u);
+    for (t, (h, _)) in pipe_tags.iter_mut().zip(&lettering) {
+        if outsized(*h) {
+            t.line = [t.at, t.at];
         }
     }
     // A tag with a leader of its own is where its arrow points.
@@ -781,6 +926,7 @@ fn read_pipes_from_tags(
         for (tag, tip) in pipe_tags.iter_mut().zip(homerun::sure_tips(&tips, &heights)) {
             if let Some(tip) = tip {
                 tag.at = tip;
+                tag.line = [tip, tip];
             }
         }
     }
@@ -872,44 +1018,56 @@ fn read_pipes_from_tags(
     let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
     let mut runs = Vec::new();
 
+    // A tag lettered along a line (on it, or in a break of it) names that line: no other run takes
+    // it for its own, however near (a stacked pair of mains, each labelled on itself).
+    let hosts: Vec<Option<usize>> = {
+        let paths: Vec<&[Vec2]> = all_chains.iter().map(|(pts, _)| pts.as_slice()).collect();
+        pipe_tags.iter().zip(&lettering).map(|(t, (h, _))| if outsized(*h) { None } else { label_host(t.line, *h, &paths) }).collect()
+    };
+    // The nearest tag within reach of a run, of the tags it may take.
+    // `any`: also the tags lettered on other lines, by where each starts (a run with no tag
+    // nearer, nor one it comes off: as it was read before the lines labels lie on were known).
+    let near = |ci: usize, pts: &[Vec2], any: bool| {
+        pipe_tags
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| any || hosts.get(*k).copied().flatten().is_none_or(|h| h == ci))
+            .map(|(k, t)| {
+                let line = if any { [t.at, t.at] } else { t.line };
+                (k, pts.windows(2).filter_map(|w| Some(label_dist(line, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min))
+            })
+            .filter(|(_, d)| *d < reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(k, _)| k)
+    };
     // On a plan that draws its pipes as two lines, a run with no tag of its own takes the tag of
     // the run it comes off (a branch off a tagged main).
     let spread: Vec<Option<usize>> = if twin {
-        let near = |pts: &[Vec2]| {
-            pipe_tags
-                .iter()
-                .enumerate()
-                .map(|(k, t)| (k, pts.windows(2).filter_map(|w| Some(seg_dist(t.at, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min)))
-                .filter(|(_, d)| *d < reach)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(k, _)| k)
-        };
-        let seed: Vec<Option<usize>> = all_chains.iter().map(|(pts, _)| near(pts)).collect();
+        let seed: Vec<Option<usize>> = all_chains.iter().enumerate().map(|(ci, (pts, _))| near(ci, pts, false)).collect();
         let paths: Vec<Vec<Vec2>> = all_chains.iter().map(|(pts, _)| pts.clone()).collect();
         twinline::spread(&paths, &seed, TEE_REACH_FT * upf)
     } else {
         Vec::new()
     };
     // Each run's own tag: the nearest within reach (of the runs long enough to be pipe).
-    let own_tags: Vec<Option<usize>> = all_chains
+    // Last of all, a run with neither: the nearest tag of any line.
+    let own_tags: Vec<(Option<usize>, Option<usize>)> = all_chains
         .iter()
-        .map(|(pts, _)| {
+        .enumerate()
+        .map(|(ci, (pts, _))| {
             if min_chain_len > 0.0 && pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() < min_chain_len {
-                return None;
+                return (None, None);
             }
-            pipe_tags
-                .iter()
-                .enumerate()
-                .map(|(k, t)| (k, pts.windows(2).filter_map(|w| Some(seg_dist(t.at, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min)))
-                .filter(|(_, d)| *d < reach)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(k, _)| k)
+            match near(ci, pts, false) {
+                Some(k) => (Some(k), None),
+                None => (None, near(ci, pts, true)),
+            }
         })
         .collect();
     // Tubes under a tag naming two systems: each its manifold's, else shared between the two.
     let paired = homerun::resolve_pairs(
         &all_chains.iter().map(|(pts, _)| pts.clone()).collect::<Vec<_>>(),
-        &own_tags,
+        &own_tags.iter().map(|(own, any)| own.or(*any)).collect::<Vec<_>>(),
         &pipe_tags.iter().map(|t| homerun::Tag { at: t.at, system: t.system, also: t.also }).collect::<Vec<_>>(),
         upf,
     );
@@ -947,14 +1105,17 @@ fn read_pipes_from_tags(
             continue;
         }
 
-        // The nearest pipe tag to this chain.
-        let best_tag = own_tags.get(ci).copied().flatten().and_then(|k| pipe_tags.get(k));
+        // The nearest pipe tag to this chain (one lettered on another line only when the chain
+        // takes none from the run it comes off).
+        let (own, any) = own_tags.get(ci).copied().unwrap_or((None, None));
+        let spread_tag = spread.get(ci).copied().flatten();
+        let best_tag = own.or(any.filter(|_| spread_tag.is_none())).and_then(|k| pipe_tags.get(k));
         // Untagged: the tag of the run it comes off, else the plan's own system (a sanitary
         // plan's piping), else not a pipe.
         let pair = paired.get(ci).copied().flatten();
         // A tube from a manifold, tagged by the manifold's tag, is not the manifold's size.
         let own_tag = best_tag.filter(|t| t.also.is_some() || !pair.is_some_and(|(_, from)| from));
-        let best_tag = best_tag.or_else(|| spread.get(ci).copied().flatten().and_then(|k| pipe_tags.get(k)));
+        let best_tag = best_tag.or_else(|| spread_tag.and_then(|k| pipe_tags.get(k)));
         // (Only a plan that draws its pipes to scale says which of its untagged lines are pipes.)
         let Some(sys_code) = pair.map(|(s, _)| s).or(best_tag.map(|t| t.system)).or(untagged.filter(|_| twin)) else { continue };
         systems_seen.insert(sys_code, true);
@@ -2974,6 +3135,164 @@ mod outline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_label_lettered_on_a_pipe_names_that_pipe_not_the_one_beside_it() {
+        use cadaddy_doc::{HAlign, Text, VAlign};
+        let v = Vec2::new;
+        let text = |at: Vec2, value: &str, rotation: f64, halign: HAlign, valign: VAlign| {
+            let left = halign == HAlign::Left && valign == VAlign::Baseline;
+            Entity::new(
+                Handle(0x40),
+                EntityKind::Text(Text {
+                    insert: Vec3::new(at.x, at.y, 0.0),
+                    align_pt: if left { None } else { Some(Vec3::new(at.x, at.y, 0.0)) },
+                    height: 9.0,
+                    value: value.into(),
+                    rotation,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign,
+                    valign,
+                }),
+            )
+        };
+        // Two mains 12 units apart (y 0 and 12); a label set on the upper one, its baseline 4.5
+        // under it: nearer the lower main by its corner, on the upper by its lettering.
+        let lower: Vec<Vec2> = vec![v(0.0, 0.0), v(400.0, 0.0)];
+        let upper: Vec<Vec2> = vec![v(0.0, 12.0), v(400.0, 12.0)];
+        let paths: Vec<&[Vec2]> = vec![lower.as_slice(), upper.as_slice()];
+        let tag = text(v(100.0, 7.5), "2\" CW", 0.0, HAlign::Left, VAlign::Baseline);
+        let line = label_line(Some(&tag), v(100.0, 7.5), 9.0, 5);
+        assert!((line[0].y - 12.0).abs() < 1e-9 && (line[1].y - 12.0).abs() < 1e-9, "{line:?}");
+        assert!(line[1].x > line[0].x + 20.0, "{line:?}");
+        assert_eq!(label_host(line, 9.0, &paths), Some(1));
+        // Centred, turned to a vertical pipe: along x = 50, centred on its point.
+        let tag = text(v(50.0, 100.0), "2\" CW", std::f64::consts::FRAC_PI_2, HAlign::Center, VAlign::Middle);
+        let line = label_line(Some(&tag), v(50.0, 100.0), 9.0, 5);
+        assert!(line.iter().all(|p| (p.x - 50.0).abs() < 1e-9), "{line:?}");
+        assert!((line[0].y + line[1].y - 200.0).abs() < 1e-9, "{line:?}");
+        let riser: Vec<Vec2> = vec![v(50.0, 20.0), v(50.0, 300.0)];
+        assert_eq!(label_host(line, 9.0, &[riser.as_slice(), upper.as_slice()]), Some(0));
+        // Above the upper main (its middle 16.5 over it): on no line of its own.
+        let tag = text(v(100.0, 24.0), "2\" CW", 0.0, HAlign::Left, VAlign::Baseline);
+        let line = label_line(Some(&tag), v(100.0, 24.0), 9.0, 5);
+        assert_eq!(label_host(line, 9.0, &paths), None);
+        // Across a line (a riser through a horizontal label) is not along it; no entity: a point.
+        assert_eq!(label_host([v(40.0, 100.0), v(80.0, 100.0)], 9.0, &[riser.as_slice()]), None);
+        assert_eq!(label_line(None, v(3.0, 4.0), 9.0, 5), [v(3.0, 4.0), v(3.0, 4.0)]);
+        // A label of one point (a leader's arrow) is on the line it touches.
+        assert_eq!(label_host([v(200.0, 11.0), v(200.0, 11.0)], 9.0, &paths), Some(1));
+        assert_eq!(label_host([v(200.0, 6.0), v(200.0, 6.0)], 9.0, &paths), None);
+        // Hostile heights.
+        assert_eq!(label_host(line, f64::NAN, &paths), None);
+        assert_eq!(label_line(Some(&tag), v(100.0, 24.0), f64::INFINITY, 5), [v(100.0, 24.0), v(100.0, 24.0)]);
+    }
+
+    #[test]
+    fn two_mains_side_by_side_each_take_the_label_lettered_on_it() {
+        use cadaddy_doc::{HAlign, Line, Text, VAlign};
+        use cadaddy_walk3d::Level;
+        let mut n = 0x100u64;
+        let mut ents: Vec<Arc<Entity>> = Vec::new();
+        let mut line = |a: (f64, f64), b: (f64, f64), ents: &mut Vec<Arc<Entity>>| {
+            n += 1;
+            ents.push(Arc::new(Entity::new(Handle(n), EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }))));
+        };
+        // Inches. Two 2" pipes drawn as their edges, their middles 12 apart (y 0 and 12), each
+        // broken where its labels are set; the upper one's branch drops across the lower into a
+        // room below, the lower drawn broken under it (the branch's end nearer than its own next
+        // length).
+        let w = 2.375;
+        for (y, gaps) in [(0.0, vec![(300.0, 330.0), (792.0, 806.0), (900.0, 930.0)]), (12.0, vec![(600.0, 630.0), (1300.0, 1330.0)])] {
+            let mut x = 0.0;
+            for (g0, g1) in gaps.iter().copied().chain([(1600.0, 1600.0)]) {
+                for e in [y - w / 2.0, y + w / 2.0] {
+                    line((x, e), (g0, e), &mut ents);
+                }
+                // Each length's ends closed across.
+                for c in [x, g0] {
+                    line((c, y - w / 2.0), (c, y + w / 2.0), &mut ents);
+                }
+                x = g1;
+            }
+        }
+        for e in [800.0 - w / 2.0, 800.0 + w / 2.0] {
+            line((e, 12.0 - w / 2.0), (e, -240.0), &mut ents);
+        }
+        line((800.0 - w / 2.0, -240.0), (800.0 + w / 2.0, -240.0), &mut ents);
+        n += 1;
+        let text = |h: u64, at: (f64, f64), value: &str, height: f64| {
+            Arc::new(Entity::new(
+                Handle(h),
+                EntityKind::Text(Text {
+                    insert: Vec3::new(at.0, at.1, 0.0),
+                    align_pt: None,
+                    height,
+                    value: value.into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Baseline,
+                }),
+            ))
+        };
+        // Each label in a break of its own pipe, its baseline 4" under the pipe's middle: by its
+        // corner the upper pipe's labels are as near the lower pipe as the upper.
+        for (k, (at, v)) in
+            [((301.0, -4.0), "2\" HW"), ((901.0, -4.0), "2\" HW"), ((601.0, 8.0), "2\" CW"), ((1301.0, 8.0), "2\" CW")].into_iter().enumerate()
+        {
+            ents.push(text(n + k as u64, at, v, 8.0));
+        }
+        // A copy of a label the import made huge, over both pipes: no line's own label.
+        ents.push(text(n + 10, (1000.0, -40.0), "2\" HW", 80.0));
+        let refs: Vec<&Arc<Entity>> = ents.iter().collect();
+        let notes = texts(&refs);
+        let sp = BuildingSpec {
+            units_per_foot: 12.0,
+            levels: vec![Level {
+                name: "L1".into(),
+                elevation_ft: 0.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                region: None,
+                base: None,
+                attr: None,
+                sheet: None,
+            }],
+            ..BuildingSpec::default()
+        };
+        let (_, runs) = read_pipes_from_tags(&refs, &notes, &sp, 12.0, None, None);
+        // Every length of each main, and the branch, is its own pipe's system.
+        let along = |y: f64| -> Vec<&str> {
+            runs.iter()
+                .filter(|r| r.points.windows(2).any(|w| (w[0][1] - y).abs() < 1.0 && (w[1][1] - y).abs() < 1.0 && (w[0][0] - w[1][0]).abs() > 24.0))
+                .map(|r| r.system.as_str())
+                .collect()
+        };
+        let (lower, upper) = (along(0.0), along(12.0));
+        assert!(!lower.is_empty() && lower.iter().all(|s| *s == "HW"), "lower {lower:?} in {runs:?}");
+        assert!(!upper.is_empty() && upper.iter().all(|s| *s == "CW"), "upper {upper:?} in {runs:?}");
+        let branch: Vec<&str> = runs.iter().filter(|r| r.points.iter().any(|p| p[1] < -100.0)).map(|r| r.system.as_str()).collect();
+        assert_eq!(branch, ["CW"], "{runs:?}");
+    }
+
+    #[test]
+    fn segments_apart_crossing_and_end_to_end() {
+        let v = Vec2::new;
+        assert_eq!(seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(5.0, -5.0), v(5.0, 5.0)), 0.0);
+        assert!((seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(0.0, 3.0), v(10.0, 3.0)) - 3.0).abs() < 1e-12);
+        assert!((seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(13.0, 4.0), v(20.0, 4.0)) - 5.0).abs() < 1e-12);
+        // A label is measured along its lettering from a line beside it, from its middle from a
+        // line across it (off its end).
+        let label = [v(0.0, 0.0), v(30.0, 0.0)];
+        assert!((label_dist(label, v(-10.0, 4.0), v(50.0, 4.0)) - 4.0).abs() < 1e-12);
+        assert!((label_dist(label, v(40.0, -20.0), v(40.0, 20.0)) - 25.0).abs() < 1e-12);
+        assert!((label_dist([v(3.0, 0.0), v(3.0, 0.0)], v(0.0, 4.0), v(9.0, 4.0)) - 4.0).abs() < 1e-12);
+    }
 
     #[test]
     fn a_pipe_tag_can_name_two_systems_or_write_its_size_against_its_system() {
