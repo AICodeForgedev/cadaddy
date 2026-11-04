@@ -567,11 +567,14 @@ impl Field {
         let (x0, y0, x1, y1) =
             (Self::c(lo.x - pad, self.cell), Self::c(lo.y - pad, self.cell), Self::c(hi.x + pad, self.cell), Self::c(hi.y + pad, self.cell));
         let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-        if !(a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite())
-            || !(0..=4096).contains(&w)
-            || !(0..=4096).contains(&h)
-            || w.saturating_mul(h) > 1_000_000
-        {
+        let sane = a.is_finite()
+            && b.is_finite()
+            && z.is_finite()
+            && zhi.is_finite()
+            && (0..=4096).contains(&w)
+            && (0..=4096).contains(&h)
+            && w.saturating_mul(h) <= 1_000_000;
+        if !sane {
             return None;
         }
         let mut seen: BTreeSet<usize> = BTreeSet::new();
@@ -1595,7 +1598,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "electrical" => matches!(el.category.as_str(), "equipment") || (el.category == "conduit" && el.run.is_empty()),
             _ => !matches!(el.category.as_str(), "room" | "device" | "space" | "zone"),
         };
-        if !keep || !(el.lo.is_finite() && el.hi.is_finite()) {
+        if !(keep && el.lo.is_finite() && el.hi.is_finite()) {
             continue;
         }
         n_obs += 1;
@@ -3293,7 +3296,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     const C: &str = "conduit.reroute";
     let (sp, stored) = super::bspec::current(s, C)?;
     if !stored {
-        return Err(bad(C, "the drawing has no building spec: model.build first"));
+        // A state, not a parameter error (the menu starts it with none).
+        return Ok(json!({"routed": false, "note": "the drawing has no building spec: model.build first"}));
     }
     if !enabled(s.doc()?) {
         return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
@@ -3704,7 +3708,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             csv.push_str(&row.join(","));
             csv.push('\n');
         }
-        std::fs::write(path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
+        crate::writefile::write(path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
         file_out = json!(path);
     }
     let shown: Vec<Value> = lines
