@@ -882,9 +882,7 @@ pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
         {
             continue;
         }
-        for b in &mut run.bottoms_ft {
-            *b = invert;
-        }
+        run.bottoms_ft.fill(invert);
         if run.bottoms_ft.is_empty() {
             run.bottoms_ft.push(invert);
         }
