@@ -179,6 +179,7 @@ pub mod symbol;
 mod takeoff;
 pub mod tours;
 pub mod tradeatoms;
+pub(crate) mod ugplan;
 pub mod ugsheets;
 pub(crate) mod underlay;
 mod unitmarks;

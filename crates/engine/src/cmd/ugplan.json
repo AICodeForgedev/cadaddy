@@ -1,0 +1,69 @@
+{
+  "site_words": ["STREET", "PROPERTY LINE", "PAD MOUNT", "PAD-MOUNT", "UTILITY POLE", "UTILITY CO", "EV CHARG", "ELECTRIC VEHICLE", "PARKING", "SITE LIGHT", "POLE LIGHT", "POLE BASE", "MONUMENT SIGN", "GATE OPERATOR", "SERVICE ENTRANCE"],
+  "action_words": ["PROVIDE", "FURNISH", "INSTALL", "ROUTE", "RUN ", "EXTEND", "STUB", "BURRIED", "BURIED"],
+  "telecom_rooms": ["MDF", "TELECOM", "TELEPHONE", "COMM", "DATA", "IDF"],
+  "site_source": "rule: work between the building and the site (a street, a utility's pad, a parking lot, a pole) runs in the ground even when its note doesn't say so",
+  "trade_words": {
+    "E": ["CONDUIT", "PVC", "RGS", "RACEWAY", "ELECTRICAL", "POWER", "PULLWIRE", "PULL WIRE", "CONDUCTOR"],
+    "P": ["PIPING", "PIPE", "WATER", "SANITARY", "WASTE", "VENT", "STORM", "SUMP", "SEWER", "CLEANOUT", "TRAP"]
+  },
+  "kinds": [
+    {"what": "service_primary", "trade": "E", "words": ["PRIMARY"]},
+    {"what": "service_secondary", "trade": "E", "words": ["SECONDARY", "SERVICE ENTRANCE CONDUCTOR", "SERVICE ENTRACE CONDUCTOR"]},
+    {"what": "telecom", "trade": "E", "words": ["TELCO", "TELEPHONE", "TELECOM", "COMMUNICATIONS SERVICE"]},
+    {"what": "floor_box", "trade": "E", "words": ["FLOOR BOX"]},
+    {"what": "ev_charger", "trade": "E", "words": ["EV CHARG", "ELECTRIC VEHICLE"]},
+    {"what": "site_power", "trade": "E", "words": ["SITE LIGHT", "POLE LIGHT", "MONUMENT SIGN", "GATE OPERATOR"]},
+    {"what": "water", "trade": "P", "words": ["WATER"]},
+    {"what": "sanitary", "trade": "P", "words": ["SANITARY", "WASTE", "SEWER"]},
+    {"what": "vent", "trade": "P", "words": ["VENT"]},
+    {"what": "storm", "trade": "P", "words": ["STORM", "SUMP", "DRAIN"]}
+  ],
+  "legend": {
+    "below_words": ["BELOW SLAB", "BELOW FLOOR", "BELOW GRADE", "UNDER SLAB", "UNDERSLAB", "UNDERGROUND"],
+    "max_chars": 60,
+    "abbr_reach_h": 5.0,
+    "source": "the plumbing legend's line types: a description saying below the slab and the abbreviation drawn with it"
+  },
+  "depths": {
+    "conduit_under_slab_ft": 1.5,
+    "conduit_source": "rule: 18 in below the finished floor to the conduit (NEC Table 300.5: raceway under a building needs no cover; under a 4 in slab, 4 in)",
+    "service_cover_in": 24.0,
+    "service_source": "rule: 24 in cover where the note gives none (NEC Table 300.5 column 3, rigid nonmetallic conduit 18 in; utilities ask 24 in to 48 in) - the note's depth overrides",
+    "drain_invert_ft": 2.0,
+    "drain_source": "rule: a stack's base turns into the building drain 2 ft below the finished floor where the plans give no invert",
+    "water_ft": 1.0,
+    "water_source": "rule: water piping below the slab 12 in below the finished floor where the plans give no depth"
+  },
+  "site": {
+    "stub_ft": 10.0,
+    "source": "rule: the site end is drawn this far outside the slab edge nearest the building end; the site plan locates it (it isn't registered to the building) - verify before trenching"
+  },
+  "stubup": {
+    "conduit_top_ft": 0.5,
+    "telecom_top_ft": 1.0,
+    "source": "rule: conduit stubbed 6 in above the finished floor into the gear (12 in at a telecom backboard), elbows and stub-ups Sch 80 PVC or RGS (NEC 352.10(F) where subject to damage)"
+  },
+  "proposal": {
+    "parallel_min": 2,
+    "big_conduit_in": 2.0,
+    "under_cheaper": 0.95,
+    "branch_min_amps": 50.0,
+    "hoistway_words": ["ELEVATOR", "LIFT"],
+    "code": [
+      "NEC 300.5(A), Table 300.5: raceway under a building needs no cover (under a 4 in slab with no vehicles, 4 in)",
+      "NEC 352.10(F)-(G): Schedule 40 PVC is permitted below the slab; Schedule 80 or RGS where the stub-up is subject to damage",
+      "NEC 300.5(D)(1): stub-ups protected from the trench to the termination"
+    ],
+    "source": "rule: a feed whose two ends are on the slab level is weighed under the slab against overhead by its raceways (parallel sets, size), the framing above, the gear's entries, the specification's below-slab method and length"
+  },
+  "sleeve": {
+    "oversize_in": 1.0,
+    "item": "Sleeve, Sch 40 PVC (through footing or grade beam)",
+    "source": "rule: a buried run through a footing, grade beam or thickened slab edge is sleeved, the sleeve one inch over the raceway or pipe (IPC 307.4 for pipes; structural engineer to confirm the opening)"
+  },
+  "bearing_plane": {
+    "angle_deg": 45.0,
+    "source": "IPC 307.5: a pipe parallel to a footing or bearing wall is not placed within the 45-degree bearing plane below the bottom of the footing"
+  }
+}

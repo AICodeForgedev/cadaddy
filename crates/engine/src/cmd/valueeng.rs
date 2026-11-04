@@ -220,7 +220,7 @@ fn unit_feeders(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<UnitFeeder>, usize) {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let typical: Vec<String> = sp.mep.panel_schedules.iter().filter(|p| p.typical_of.is_some()).map(|p| p.panel.to_ascii_uppercase()).collect();
     let mut length: BTreeMap<&str, f64> = BTreeMap::new();
-    for r in sp.mep.runs.iter().take(MAX_RUNS).filter(|r| r.system == super::gearbuild::FEEDER_SYSTEM) {
+    for r in sp.mep.runs.iter().take(MAX_RUNS).filter(|r| super::ugplan::is_feeder_run(r)) {
         let flat: f64 = r.points.windows(2).map(|w| ((w[1][0] - w[0][0]).powi(2) + (w[1][1] - w[0][1]).powi(2)).sqrt() / upf).sum();
         let up = r.top_ft.map_or(0.0, |t| (t - r.bottoms_ft.first().copied().unwrap_or(t)).abs());
         let v = flat + up;
