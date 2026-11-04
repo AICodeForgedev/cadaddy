@@ -4549,7 +4549,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 progress_line(&format!("  devices not placeable by sheet: {why:?}"));
                 let unplaced: Vec<&super::readers::ReadDevice> = all_devices.iter().filter(|dv| sim(dv).is_none()).collect();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, duplicates } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 // The heights the typical rooms' plans print by their devices.
                 let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
@@ -4578,8 +4578,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
-                let before = out.len();
                 let mut out = out;
+                // The floor plans' copies of devices a typical plan stamped where they are.
+                if !duplicates.is_empty() {
+                    let mut i = 0usize;
+                    out.retain(|_| {
+                        let keep = !duplicates.contains(&i);
+                        i += 1;
+                        keep
+                    });
+                    progress_line(&format!("  floor plans' devices a typical plan stamped at their spot (left out): {}", duplicates.len()));
+                }
+                let before = out.len();
                 // A device of the plans in no room but in a unit's footprint (its bath, its entry:
                 // the unit's label's room leaves them out) is that unit's.
                 // (What a unit's own plans show: its stamped tags; and plumbing, which its plumbing
@@ -6301,6 +6311,7 @@ fn stamp_typical_rooms(
             rooms: panel_rooms,
             sleeping: sleeping.into_values().collect(),
             footprints: Vec::new(),
+            duplicates: BTreeSet::new(),
         };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
@@ -6317,9 +6328,9 @@ fn stamp_typical_rooms(
             >= 2
     };
     // A device of a tag the floor's plans already put where a typical plan's copy lands (within
-    // [`STAND_IN_FT`]) is that device: the floor plan's stands for it (one each). A floor plan may
-    // show a room's receptacles and leave its fixtures to the typical plan; where it shows none at
-    // the spot, the typical plan's is added.
+    // [`STAND_IN_FT`]) is that device: the typical plan's copy is the unit's (its room, its
+    // circuit), and the floor plan's is left out as its duplicate (one each, so two units'
+    // devices back to back on their shared wall keep one each whichever is stamped first).
     let stand_in_reach = STAND_IN_FT * 12.0 * super::perceive::units_per_inch(d);
     // Not one on another panel's circuit (a corridor's receptacle on a house panel by the unit's
     // entry receptacle).
@@ -6487,7 +6498,6 @@ fn stamp_typical_rooms(
                 let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn) else { continue };
                 if let Some(j) = stand_in(level, dv, at, &stood) {
                     stood.insert(j);
-                    continue;
                 }
                 let room = stamped_room(name, number, ri);
                 if !footprints.iter().any(|(l, r, _, _)| l == level && *r == room)
@@ -6515,7 +6525,16 @@ fn stamp_typical_rooms(
             }
         }
     }
-    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect(), footprints }
+    StampedRooms {
+        devices: out,
+        report,
+        authority,
+        panels,
+        rooms: panel_rooms,
+        sleeping: sleeping.into_values().collect(),
+        footprints,
+        duplicates: stood,
+    }
 }
 
 /// The mounting heights the typical rooms' plans print by their devices ("44\" AFF",
@@ -10110,6 +10129,9 @@ struct StampedRooms {
     /// Each stamped unit's whole footprint (its plan's linework laid into the room: the bath and
     /// entry its label's room leaves out): level, room, footprint, the room's own outline.
     footprints: Vec<Footprint>,
+    /// The floor plans' devices (by their index in `placed`) where a typical plan's copy landed:
+    /// the same devices, left out.
+    duplicates: BTreeSet<usize>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -15704,9 +15726,11 @@ mod tests {
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &placed, &unplaced);
         let in_room = |n: &str, tag: &str| stamped.devices.iter().filter(|d| d.room.contains(n) && d.tag == tag).count();
-        assert_eq!((in_room("201", "A"), in_room("202", "A")), (2, 3), "{:?}", stamped.report);
+        assert_eq!((in_room("201", "A"), in_room("202", "A")), (3, 3), "{:?}", stamped.report);
         assert_eq!((in_room("201", "S"), in_room("202", "S")), (1, 1));
-        assert_eq!(stamped.report.get("E-6 ENLARGED DOUBLE QUEEN"), Some(&7), "{:?}", stamped.report);
+        assert_eq!(stamped.report.get("E-6 ENLARGED DOUBLE QUEEN"), Some(&8), "{:?}", stamped.report);
+        // The floor plan's copy where one landed is its duplicate; the corridor's is not.
+        assert_eq!(stamped.duplicates, BTreeSet::from([0]), "{:?}", stamped.duplicates);
         assert!(!stamped.report.keys().any(|k| k.contains("A621") || k.contains("no typical-room view")), "{:?}", stamped.report);
         // Each one inside its room.
         for d in &stamped.devices {
