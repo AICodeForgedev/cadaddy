@@ -11,6 +11,8 @@
 //!   slab edge nearest it (the site plan isn't registered to the building).
 //! - [`stack_bases`]: the drainage stacks of the slab level carried below the floor to the
 //!   building drain.
+//! - [`slab_drains`]: the slab level's horizontal drainage, read off its plans with no height of
+//!   its own, under its floor at the building drain's invert (not in its ceiling).
 //! - [`weigh`]: each feed whose two ends are on the slab level, under the slab against overhead,
 //!   with its reasons from the documents and the rules, and its alternative.
 //!
@@ -63,6 +65,8 @@ pub(crate) struct Depths {
     pub service_source: String,
     pub drain_invert_ft: f64,
     pub drain_source: String,
+    /// Why the slab level's untagged horizontal drains run under its floor ([`slab_drains`]).
+    pub slab_drain_source: String,
     pub water_ft: f64,
     pub water_source: String,
     pub sump_discharge_in: f64,
@@ -845,17 +849,63 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
     (runs, fates)
 }
 
+/// The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to.
+const DRAINS: [&str; 6] = ["SAN", "W", "ST", "SS", "SD", "RD"];
+
+/// How a slab drain's height source starts: a run [`slab_drains`] put under the floor.
+pub(crate) const SLAB_DRAIN_PREFIX: &str = "below the slab: ";
+
+/// The slab level's horizontal drainage (sanitary, waste, storm) that its plans give no height:
+/// on the slab level it runs under the floor to the building drain, not in the ceiling (where a
+/// default height or the plenum seating put it). Each such run goes to the drain's invert
+/// (`depths.drain_invert_ft`), its height source saying so; a run with a height of its own (a
+/// tag, a callout) and the risers keep theirs, and upper levels' drains stay in the ceiling below
+/// them. Returns the runs moved and their length (drawing units). A rerun finds them moved.
+pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
+    let r = rules();
+    let Some(slab) = slab_level(sp) else { return (0, 0.0) };
+    let invert = -r.depths.drain_invert_ft.abs();
+    if !invert.is_finite() {
+        return (0, 0.0);
+    }
+    let mut moved = 0usize;
+    let mut length = 0.0;
+    for run in sp.mep.runs.iter_mut().take(MAX_ITEMS) {
+        let sys = run.system.to_ascii_uppercase();
+        let untagged = matches!(run.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route");
+        if !DRAINS.contains(&sys.as_str())
+            || !run.level.eq_ignore_ascii_case(&slab)
+            || !untagged
+            || run.top_ft.is_some()
+            || run.points.len() < 2
+            || ug_system(&run.system)
+        {
+            continue;
+        }
+        for b in &mut run.bottoms_ft {
+            *b = invert;
+        }
+        if run.bottoms_ft.is_empty() {
+            run.bottoms_ft.push(invert);
+        }
+        run.height_source = format!("{SLAB_DRAIN_PREFIX}{} ({} ft)", r.depths.slab_drain_source, r.depths.drain_invert_ft);
+        run.reviewed = false;
+        length += run.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).filter(|v| v.is_finite()).sum::<f64>();
+        moved += 1;
+    }
+    (moved, length)
+}
+
 /// The drainage stacks of the slab level carried below its floor into the building drain, as
 /// `P-UG-<service>` risers from the drain's invert up to the floor; vents only when a legend
 /// says vent piping runs below the slab.
 pub(crate) fn stack_bases(sp: &BuildingSpec, vent_below: bool) -> Vec<MepRun> {
     let r = rules();
     let Some(slab) = slab_level(sp) else { return Vec::new() };
-    let drains = ["SAN", "W", "ST", "SS", "SD", "RD"];
     let mut out: Vec<MepRun> = Vec::new();
     for run in sp.mep.runs.iter().take(MAX_ITEMS) {
         let sys = run.system.to_ascii_uppercase();
-        let drainage = drains.contains(&sys.as_str()) || (vent_below && sys == "V");
+        let drainage = DRAINS.contains(&sys.as_str()) || (vent_below && sys == "V");
         if !drainage || !run.level.eq_ignore_ascii_case(&slab) || ug_system(&run.system) {
             continue;
         }
@@ -1230,6 +1280,8 @@ mod tests {
             &r.legend.source,
             &r.depths.conduit_source,
             &r.depths.service_source,
+            &r.depths.drain_source,
+            &r.depths.slab_drain_source,
             &r.site.source,
             &r.stubup.source,
             &r.proposal.source,
@@ -1430,6 +1482,52 @@ mod tests {
         assert_eq!(bases.len(), 1);
         assert_eq!((bases[0].system.as_str(), bases[0].top_ft, bases[0].bottoms_ft[0]), ("P-UG-SAN", Some(0.0), -2.0));
         assert!(ug_system(&bases[0].system) && ug_system("E-UG") && !ug_system("E-FEEDER"));
+    }
+
+    #[test]
+    fn the_slab_levels_untagged_drains_go_under_its_floor_and_the_rest_keep_their_height() {
+        let mut sp = spec();
+        let run = |system: &str, level: &str, pts: Vec<[f64; 2]>, bottom: f64, source: &str, top: Option<f64>| -> MepRun {
+            let mut r = super::super::printcond::run(system, level, "P-101", pts, 4.0, bottom);
+            r.height_source = source.into();
+            r.top_ft = top;
+            r
+        };
+        let two = vec![[100.0, 100.0], [100.0, 400.0], [500.0, 400.0]];
+        sp.mep.runs = vec![
+            // Seated in the ceiling by default (no height on the plan): the building drain.
+            run("SAN", "Level 1", two.clone(), 8.75, "default", None),
+            run("ST", "Level 1", two.clone(), 0.0, "", None),
+            // A height the plan gives stays.
+            run("SAN", "Level 1", two.clone(), 1.0, "tag", None),
+            // Upper floors' drains run in the ceiling below them.
+            run("SAN", "Level 2", two.clone(), 8.0, "default", None),
+            // Water and vent piping, and a stack (a riser), aren't the building drain.
+            run("CW", "Level 1", two.clone(), 8.75, "default", None),
+            run("V", "Level 1", two.clone(), 8.75, "default", None),
+            run("SAN", "Level 1", vec![[600.0, 300.0]], 0.0, "default", Some(10.0)),
+        ];
+        let (moved, length) = slab_drains(&mut sp);
+        assert_eq!(moved, 2);
+        assert!((length - 2.0 * 700.0).abs() < 1e-6, "{length}");
+        let invert = -rules().depths.drain_invert_ft;
+        for r in &sp.mep.runs[..2] {
+            assert!(r.bottoms_ft.iter().all(|b| (b - invert).abs() < 1e-9), "{:?}", r.bottoms_ft);
+            assert!(r.height_source.starts_with(SLAB_DRAIN_PREFIX) && r.height_source.contains("invert"), "{}", r.height_source);
+            assert!(below_slab(&sp, r));
+            assert!(!made_here(r), "a rerun keeps the plan's drains");
+        }
+        let kept: Vec<f64> = sp.mep.runs[2..].iter().map(|r| r.bottoms_ft[0]).collect();
+        assert_eq!(kept, vec![1.0, 8.0, 8.75, 8.75, 0.0]);
+        assert!(sp.mep.runs[2..].iter().all(|r| !below_slab(&sp, r)));
+        // The stack still gets its base; a rerun finds the drains moved.
+        assert_eq!(stack_bases(&sp, false).len(), 1);
+        assert_eq!(slab_drains(&mut sp), (0, 0.0));
+        // No slab level, nothing moved.
+        let mut none = BuildingSpec::default();
+        none.levels.clear();
+        none.mep.runs = vec![run("SAN", "Level 1", two, 0.0, "default", None)];
+        assert_eq!(slab_drains(&mut none), (0, 0.0));
     }
 
     #[test]

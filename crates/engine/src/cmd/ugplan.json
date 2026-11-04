@@ -32,6 +32,7 @@
     "service_source": "rule: 24 in cover where the note gives none (NEC Table 300.5 column 3, rigid nonmetallic conduit 18 in; utilities ask 24 in to 48 in) - the note's depth overrides",
     "drain_invert_ft": 2.0,
     "drain_source": "rule: a stack's base turns into the building drain 2 ft below the finished floor where the plans give no invert",
+    "slab_drain_source": "rule: the slab level's horizontal sanitary, waste and storm piping drawn on its plans with no height of its own runs under its floor to the building drain, at the drain's invert (IPC 704.1 slope from there; the plans' inverts override)",
     "water_ft": 1.0,
     "water_source": "rule: water piping below the slab 12 in below the finished floor where the plans give no depth",
     "sump_discharge_in": 2.0,

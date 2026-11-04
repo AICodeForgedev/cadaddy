@@ -5644,6 +5644,20 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
     // the build routes the circuits by (Q6152).
     route_methods_step(s, job);
+    // The slab level's drains its plans give no height (Q6148): under its floor to the building
+    // drain, built there, not in its ceiling.
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+        let (moved, length) = super::ugplan::slab_drains(&mut sp);
+        if moved > 0 {
+            let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+            progress_line(&format!(
+                "  slab-level drains under the floor: {moved} runs, {:.0} ft, at the building drain's invert ({} ft, rule; the plans give none)",
+                length / upf,
+                super::ugplan::rules().depths.drain_invert_ft
+            ));
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+        }
+    }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);

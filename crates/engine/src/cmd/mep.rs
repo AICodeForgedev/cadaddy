@@ -483,6 +483,8 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
     ("HWC", "HWR", "Hot Water Return", 0.5, 10.0),
     ("SAN", "SAN", "Sanitary", 3.0, 0.0),
     ("SS", "SAN", "Sanitary", 3.0, 0.0),
+    // Soil / sanitary: the one-letter code plumbing legends give the sanitary line (`6" S`).
+    ("S", "SAN", "Sanitary", 3.0, 0.0),
     ("W", "SAN", "Sanitary Waste", 3.0, 0.0),
     ("V", "V", "Vent", 2.0, 10.0),
     ("G", "G", "Gas", 1.0, 10.0),
@@ -500,7 +502,7 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
 
 /// Abbreviations that require a size prefix (like `1" G`) because they are too short to be
 /// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
-const SHORT_ABBR: &[&str] = &["G", "W", "F", "V"];
+const SHORT_ABBR: &[&str] = &["G", "W", "F", "V", "S"];
 
 /// Parse a pipe system code from a text tag. Returns (size_in, system_code) if found.
 fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
@@ -2808,5 +2810,20 @@ mod tests {
         assert!(draft_system("E-COND").is_some_and(|s| s.kind == MepKind::Conduit));
         assert!(draft_system("E-CABL-TRAY").is_some_and(|s| s.kind == MepKind::Tray && s.size_in == [12.0, 4.0]));
         assert!(draft_system("A-WALL").is_none());
+    }
+
+    #[test]
+    fn a_one_letter_sanitary_code_reads_after_a_size_only() {
+        // A legend's soil/sanitary letter, the way a sanitary plan tags its lines.
+        assert_eq!(parse_pipe_tag("6\" S"), Some((Some(6.0), "SAN")));
+        assert_eq!(parse_pipe_tag("3\" S."), Some((Some(3.0), "SAN")));
+        assert_eq!(parse_pipe_tag("1 1/2\" S"), Some((Some(1.5), "SAN")));
+        assert_eq!(parse_pipe_tag("4\" SAN"), Some((Some(4.0), "SAN")));
+        // Alone, a letter S is a grid line, a section mark or a compass point: not a pipe.
+        assert_eq!(parse_pipe_tag("S"), None);
+        assert_eq!(parse_pipe_tag("SECTION S"), None);
+        // A size before another word is no pipe either.
+        assert_eq!(parse_pipe_tag("6\" SLEEVE"), None);
+        assert_eq!(parse_pipe_tag("24\" INVERT"), None);
     }
 }
