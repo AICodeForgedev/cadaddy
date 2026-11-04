@@ -1039,7 +1039,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A wall device in its wall: the piece there at its height, its side.
         let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device" | "thermostat" | "plumbing fixture")
             || field(t, "mount").as_deref() == Some("wall");
-        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < WALL_BOX_FT * 12.0 + 12.0;
+        // A wall device up to 8' high; one a document puts higher (a wall pack at 8'-0", a high
+        // sconce) up to its level's next floor.
+        let documented_height = !matches!(height.source, SourceKind::Default | SourceKind::Rule);
+        let storey_in = level.height_ft * 12.0 - BOX_IN[2];
+        let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
+        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
