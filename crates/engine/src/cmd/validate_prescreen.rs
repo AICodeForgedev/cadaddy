@@ -1596,23 +1596,6 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmeasured.remove(vk::RULE);
         }
     }
-    let mut products = super::validate_product::Tally::default();
-    if let Some(found) = product {
-        for (rule, verdicts) in found.checked {
-            let into = checked.entry(rule).or_default();
-            for (v, n) in verdicts {
-                *into.entry(v).or_default() += n;
-            }
-        }
-        for (rule, whys) in found.unmeasured {
-            let into = unmeasured.entry(rule).or_default();
-            for (w, n) in whys {
-                *into.entry(w).or_default() += n;
-            }
-        }
-        findings.extend(found.findings);
-        products = found.tally;
-    }
     // G-UNDERGROUND: the documents' buried work against the model and the underground sheets.
     if let Some(r) = on(super::validate_underground::RULE) {
         use super::validate_underground as vu;
@@ -1636,6 +1619,23 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 *notes.entry(why).or_default() += n;
             }
         }
+    }
+    let mut products = super::validate_product::Tally::default();
+    if let Some(found) = product {
+        for (rule, verdicts) in found.checked {
+            let into = checked.entry(rule).or_default();
+            for (v, n) in verdicts {
+                *into.entry(v).or_default() += n;
+            }
+        }
+        for (rule, whys) in found.unmeasured {
+            let into = unmeasured.entry(rule).or_default();
+            for (w, n) in whys {
+                *into.entry(w).or_default() += n;
+            }
+        }
+        findings.extend(found.findings);
+        products = found.tally;
     }
     if let Some(lit) = lighting {
         for (rule, verdicts) in lit.checked {
