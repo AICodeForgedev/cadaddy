@@ -26,6 +26,8 @@ pub(crate) struct Found {
     pub row: String,
     pub legend_sheet: String,
     pub handles: Vec<Handle>,
+    /// How big it is (drawing units across).
+    pub size: f64,
 }
 
 /// The extent of a stroke.
@@ -163,6 +165,7 @@ pub(crate) fn find(
                 row: row.clone(),
                 legend_sheet: sheet.clone(),
                 handles: members.iter().filter_map(|&i| strokes.get(i).map(|s| s.0)).collect(),
+                size: (b[2] - b[0]).max(b[3] - b[1]),
             });
         }
     }
@@ -381,7 +384,7 @@ pub(crate) fn find_by_parts(d: &Drawing, lo: u64, hi: u64, templates: &[Template
             continue;
         }
         kept.push((at, t.size));
-        out.push(Found { at, row: t.row.clone(), legend_sheet: t.legend_sheet.clone(), handles });
+        out.push(Found { at, row: t.row.clone(), legend_sheet: t.legend_sheet.clone(), handles, size: t.size });
         if out.len() >= MAX_FOUND {
             break;
         }

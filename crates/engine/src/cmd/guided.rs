@@ -11241,7 +11241,7 @@ fn fa_loose_devices(
                 stats.as_drawn.push(number.clone());
                 super::loosesym::find_by_parts(page, 0, u64::MAX, &templates, &symbol_list_rects(&ptexts))
                     .into_iter()
-                    .map(|f| super::loosesym::Found { at: f.at * k + off, handles: Vec::new(), ..f })
+                    .map(|f| super::loosesym::Found { at: f.at * k + off, handles: Vec::new(), size: f.size * k, ..f })
                     .collect()
             }
             None => {
@@ -11256,7 +11256,10 @@ fn fa_loose_devices(
                 stats.off_level += 1;
                 continue;
             };
-            if have.iter().chain(out.iter()).any(|dv| (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= 0.5 * max_size) {
+            // A device read there already (its own mark's): not twice. A symbol beside it (a
+            // horn/strobe by its pull station) is another device.
+            let near = 0.5 * if f.size.is_finite() && f.size > 0.0 { f.size.min(max_size) } else { max_size };
+            if have.iter().chain(out.iter()).any(|dv| (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= near) {
                 stats.read_already += 1;
                 continue;
             }
