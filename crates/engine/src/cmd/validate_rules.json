@@ -100,6 +100,26 @@
       }
     },
     {
+      "id": "G-COVERAGE",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every kind of object the documents define (a legend or schedule row, an abbreviation, a keynote or note naming an object) and the plans mark is in the model, about as many as the plans show; a kind the electrical, fire alarm or low-voltage sheets connect to (power, a circuit, a module, a data drop) is in the model even when its own trade is by others.",
+      "how": [
+        "objects.json `prescreen` G-COVERAGE findings list each kind the documents define with its plan marks by sheet and level and the model's count of it; a kind with marks and no element is ranked first. Start from them.",
+        "On this area's print crops, look for tags or symbols of a kind the model's picture and object list hold none of (a damper tag on a duct, a device symbol the legend names): that is a 'missing' finding naming the kind, citing the print crop (prints/…) and the legend or abbreviation that defines it.",
+        "A kind the electrical or fire alarm sheets power, circuit or give a module to must be in the model whatever trade furnishes it: report it 'missing' citing the electrical sheet's note and the plan that tags it.",
+        "Every answer cites a print page (a prints/ picture with its sheet); a finding that cites none is kept as 'unsure'."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend", "schedule", "general_notes"],
+      "tolerance": {"count_share": 0.1, "count_abs": 1, "dedupe_ft": 3, "repeat_sheets": 2, "repeat_marks": 4},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The mechanical legend defines FSD as a combination fire/smoke damper; the mechanical plans tag eight of them, and the model holds eight fire/smoke dampers.",
+        "fail": "The plans tag eight FSD, the electrical keynote powers them, and the model has no damper at all."
+      }
+    },
+    {
       "id": "G-TYPE",
       "trade": "general",
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},

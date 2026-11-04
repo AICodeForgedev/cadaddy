@@ -1201,6 +1201,8 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or_default();
     let packet: Option<PacketObjects> = objects.as_ref().map(PacketObjects::of);
     let mut problems: Vec<String> = Vec::new();
+    // Answers kept as unsure because they cite no print page (G-COVERAGE).
+    let mut uncited: Vec<String> = Vec::new();
     let mut read: Vec<Read> = Vec::new();
     for (k, f) in list.iter().enumerate() {
         let n = k + 1;
@@ -1219,7 +1221,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                 if area.rules.is_empty() { "none".into() } else { area.rules.join(", ") }
             ));
         }
-        let verdict = o.get("verdict").and_then(Value::as_str).map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
+        let mut verdict = o.get("verdict").and_then(Value::as_str).map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
         if !VERDICTS.contains(&verdict.as_str()) {
             problems.push(format!("finding {n}: `verdict` is {} (got {})", VERDICTS.join(", "), cut(&text_of(o.get("verdict")), 20)));
         }
@@ -1301,7 +1303,11 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             }
         };
         let mut evidence: Vec<Evidence> = Vec::new();
+        // G-COVERAGE: an answer that cites no print page is kept, as `unsure` (Q6183).
+        let cites_or_unsure = rule == super::validate_coverage::RULE;
         match o.get("evidence") {
+            None | Some(Value::Null) if cites_or_unsure => {}
+            Some(Value::Array(ev)) if ev.is_empty() && cites_or_unsure => {}
             Some(Value::Array(ev)) if !ev.is_empty() => {
                 for (j, e) in ev.iter().take(MAX_EVIDENCE).enumerate() {
                     let given = e.get("image").and_then(Value::as_str).unwrap_or_default();
@@ -1316,7 +1322,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                         )),
                     }
                 }
-                if is_problem(&verdict) && !evidence.is_empty() && !evidence.iter().any(|e| e.image.starts_with("prints/")) {
+                if is_problem(&verdict) && !cites_or_unsure && !evidence.is_empty() && !evidence.iter().any(|e| e.image.starts_with("prints/")) {
                     problems.push(format!("finding {n}: a {verdict} finding cites at least one print picture (prints/…): what the documents show"));
                 }
             }
@@ -1324,6 +1330,10 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if problems.len() > before {
             continue;
+        }
+        if cites_or_unsure && verdict != "unsure" && !evidence.iter().any(|e| e.image.starts_with("prints/") && !e.sheet.trim().is_empty()) {
+            uncited.push(format!("finding {n} ({rule}, {verdict}) cites no print page (a prints/ picture with its sheet): kept as unsure"));
+            verdict = "unsure".into();
         }
         let trade = all
             .iter()
@@ -1436,6 +1446,15 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             warnings.push(format!("and {more} more"));
         }
         out["warnings"] = json!(warnings);
+    }
+    if !uncited.is_empty() {
+        let mut w: Vec<Value> = out["warnings"].as_array().cloned().unwrap_or_default();
+        let more = uncited.len().saturating_sub(WARNINGS_SHOWN);
+        w.extend(uncited.into_iter().take(WARNINGS_SHOWN).map(Value::from));
+        if more > 0 {
+            w.push(json!(format!("and {more} more kept as unsure")));
+        }
+        out["warnings"] = json!(w);
     }
     Ok(out)
 }
