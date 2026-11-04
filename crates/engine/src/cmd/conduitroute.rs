@@ -3296,7 +3296,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     const C: &str = "conduit.reroute";
     let (sp, stored) = super::bspec::current(s, C)?;
     if !stored {
-        return Err(bad(C, "the drawing has no building spec: model.build first"));
+        // A state, not a parameter error (the menu starts it with none).
+        return Ok(json!({"routed": false, "note": "the drawing has no building spec: model.build first"}));
     }
     if !enabled(s.doc()?) {
         return Ok(json!({"routed": false, "note": "routing switched off (model.build {route: true} turns it on)"}));
@@ -3707,7 +3708,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             csv.push_str(&row.join(","));
             csv.push('\n');
         }
-        std::fs::write(path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
+        crate::writefile::write(path, csv).map_err(|e| bad(C, format!("could not write {path}: {e}")))?;
         file_out = json!(path);
     }
     let shown: Vec<Value> = lines
