@@ -10702,7 +10702,12 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                     let why = if said.is_empty() {
                         format!("no plan, schedule or note places {}", part.what)
                     } else {
-                        format!("{} name it, but no plan places {} (no symbol, no marker on a level's plan)", said.join(", "), part.what)
+                        format!(
+                            "{} {} it, but no plan places {} (no symbol, no marker on a level's plan)",
+                            said.join(", "),
+                            if said.len() == 1 { "names" } else { "name" },
+                            part.what
+                        )
                     };
                     entry["status"] = json!("undecided");
                     entry["why"] = json!(why.clone());
@@ -15770,6 +15775,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "completeness": completeness_summary(s),
         "not_built": not_built_sheets(&job).join("; "),
         "placement": placement_summary(&job),
+        "keynote_systems": keynote_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
     }))
 }
@@ -15837,6 +15843,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     });
     if job.is_done() {
         v["placement"] = placement_summary(job);
+        v["keynote_systems"] = keynote_summary(job);
     }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
@@ -16746,6 +16753,10 @@ mod tests {
             st.result = Some(result.clone());
         }
         let sum = keynote_summary(&job);
+        for st in job.stages.iter_mut() {
+            st.status = StageStatus::Done;
+        }
+        assert_eq!(job_status_value(&job, None)["keynote_systems"], sum, "the job's status carries it");
         assert_eq!((sum["by_level"]["2"]["riser_boxes"].clone(), sum["rated_penetrations"].clone()), (json!(1), json!(1)), "{sum:#}");
         assert_eq!(sum["fed_from"]["BDA"], json!(["panel P1, circuit 7"]));
         assert_eq!(sum["undecided"].as_array().map(Vec::len), Some(2));
