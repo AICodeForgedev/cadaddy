@@ -10979,10 +10979,30 @@ fn fa_pages_as_drawn(job: &GuidedJob) -> (BTreeMap<String, cadaddy_doc::Drawing>
             Err(e) => notes.push(format!("{number}: {e}")),
         }
     }
+    // Else the set index's current copy (`file#page`, a one-sheet file alone).
+    let index: Vec<Value> = job.index.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    for c in index.iter().take(MAX_SHEETS_SCANNED) {
+        let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        if out.len() >= MAX_LEGEND_SHEETS || !wanted.contains(&number) || out.contains_key(&number) {
+            continue;
+        }
+        let Some(source) = c.get("sources").and_then(Value::as_array).and_then(|s| s.first()).and_then(Value::as_str) else { continue };
+        let (file, page) = match source.rsplit_once('#') {
+            Some((f, p)) => (f, p.trim().parse::<u64>().unwrap_or(1)),
+            None => (source, 1),
+        };
+        match sheet_page_read(job, &json!({"file": file, "page": page}), &mut files, read_pdf, true) {
+            Ok(d) => {
+                notes.retain(|x| !x.starts_with(&format!("{number}:")));
+                out.insert(number, d);
+            }
+            Err(e) => notes.push(format!("{number}: {e}")),
+        }
+    }
     let missing: Vec<String> = wanted
         .iter()
         .filter(|n| !out.contains_key(*n) && !notes.iter().any(|x| x.starts_with(&format!("{n}:"))))
-        .map(|n| format!("{n}: not in the print set's current sheets"))
+        .map(|n| format!("{n}: no file and page in the print set or its index"))
         .collect();
     notes.extend(missing);
     (out, notes)
