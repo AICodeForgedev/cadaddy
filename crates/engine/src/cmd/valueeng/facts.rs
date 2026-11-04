@@ -376,6 +376,7 @@ mod tests {
                 "RESIDENTIAL GROUP R-1 OCCUPANCY (310.2)",
                 "BUSINESS GROU B OCCUPANCY (304)",
                 "GROUP I-1 AND R-1 OCCUPANCIES IN ACCORDANCE WITH TABLE 907.5.2.3.2 SHALL BE PROVIDED WITH ALARM",
+                "GROUP I-1 AND R-1 OCCUPANCIES IN ACCORDANCE WITH TABLE 907.5.2.3.2 SHALL",
             ]),
             &rules,
         );

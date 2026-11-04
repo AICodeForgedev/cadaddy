@@ -297,14 +297,27 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     for t in sp.tags.iter().filter(|t| t.kind == "circuit" && field(t, "route") == super::super::conduitroute::ROUTED).take(MAX_ITEMS) {
         *label_n.entry((t.level.to_ascii_lowercase(), field(t, "circuit").to_string())).or_default() += 1;
     }
+    let routed_tags: Vec<&cadaddy_walk3d::tags::ElementTag> =
+        sp.tags.iter().filter(|t| t.kind == "circuit" && field(t, "route") == super::super::conduitroute::ROUTED).take(MAX_ITEMS).collect();
+    let is_homerun = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.contains_key("circuits") || t.id.contains(":home:");
+    // Each homerun group's circuits (`homerun_group`, the homerun tag's id after `:home:`):
+    // label, conductors, area.
+    let mut group_members: HashMap<(String, String), Vec<(String, String, String)>> = HashMap::new();
+    for t in routed_tags.iter().filter(|t| !is_homerun(t)) {
+        let g = field(t, "homerun_group").replace(['/', '#', '@'], "-");
+        if !g.is_empty() {
+            group_members.entry((t.level.to_ascii_lowercase(), g)).or_default().push((
+                field(t, "circuit").to_string(),
+                field(t, "conductors").to_string(),
+                field(t, "area").to_string(),
+            ));
+        }
+    }
     // The conductors of each circuit label on a level (a homerun's members).
     let mut conductors_of: HashMap<(String, String), String> = HashMap::new();
     for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_ITEMS) {
         conductors_of.entry((t.level.to_ascii_lowercase(), field(t, "circuit").to_string())).or_insert_with(|| field(t, "conductors").to_string());
     }
-    let routed_tags: Vec<&cadaddy_walk3d::tags::ElementTag> =
-        sp.tags.iter().filter(|t| t.kind == "circuit" && field(t, "route") == super::super::conduitroute::ROUTED).take(MAX_ITEMS).collect();
-    let is_homerun = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.contains_key("circuits") || t.id.contains(":home:");
     // Each rated penetration to the routed circuit whose runs pass through it (a typical unit's
     // circuit carries one label in every unit).
     let mut pen_of: HashMap<&str, usize> = HashMap::new();
@@ -312,7 +325,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
         let mut keyed: HashMap<(String, String), Vec<&str>> = HashMap::new();
         for t in &routed_tags {
             let label = if is_homerun(t) {
-                field(t, "circuits").split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(",")
+                field(t, "circuits").split(", ").map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(",")
             } else {
                 field(t, "circuit").to_string()
             };
@@ -419,14 +432,20 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             continue;
         }
         let below = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).any(below_slab);
+        // A homerun's circuits: the ones that name its group (each unit's own, with its own
+        // conductors), else its list (`A-1, A-3,5`: a two-pole label holds a comma).
         let members: Vec<(String, String)> = if homerun {
-            field(t, "circuits")
-                .split(',')
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .take(12)
-                .map(|l| (l.to_string(), conductors_of.get(&(level.to_ascii_lowercase(), l.to_string())).cloned().unwrap_or_default()))
-                .collect()
+            let grp = t.id.split(":home:").nth(1).unwrap_or_default();
+            match group_members.get(&(level.to_ascii_lowercase(), grp.to_string())) {
+                Some(m) if !grp.is_empty() => m.iter().take(12).map(|(l, c, _)| (l.clone(), c.clone())).collect(),
+                _ => field(t, "circuits")
+                    .split(", ")
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .take(12)
+                    .map(|l| (l.to_string(), conductors_of.get(&(level.to_ascii_lowercase(), l.to_string())).cloned().unwrap_or_default()))
+                    .collect(),
+            }
         } else {
             Vec::new()
         };
@@ -437,11 +456,17 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             _ => "common",
         };
         let base = if homerun {
-            let areas: BTreeSet<&str> = members
-                .iter()
-                .filter_map(|(l, _)| sp.tags.iter().find(|x| x.kind == "circuit" && x.level.eq_ignore_ascii_case(&level) && field(x, "circuit") == l))
-                .map(|x| area_word(field(x, "area")))
-                .collect();
+            let grp = t.id.split(":home:").nth(1).unwrap_or_default();
+            let areas: BTreeSet<&str> = match group_members.get(&(level.to_ascii_lowercase(), grp.to_string())) {
+                Some(m) if !grp.is_empty() => m.iter().map(|(_, _, a)| area_word(a)).collect(),
+                _ => members
+                    .iter()
+                    .filter_map(|(l, _)| {
+                        sp.tags.iter().find(|x| x.kind == "circuit" && x.level.eq_ignore_ascii_case(&level) && field(x, "circuit") == l)
+                    })
+                    .map(|x| area_word(field(x, "area")))
+                    .collect(),
+            };
             if areas.len() == 1 {
                 areas.into_iter().next().unwrap_or("common")
             } else if areas.contains("exposed") {
@@ -871,5 +896,39 @@ mod tests {
         };
         assert_eq!(feeder_makeup(&big), "3#500 + 1#250 + 1#1/0G");
         assert_eq!(mepatoms::conductor_parts(&feeder_makeup(&big)).iter().filter(|p| p.2).count(), 1);
+    }
+
+    #[test]
+    fn a_homeruns_circuits_are_the_ones_that_name_its_group_two_pole_labels_whole() {
+        // A homerun to panel P carrying P-1 and the two-pole P-3,5 (its list: `P-1, P-3,5`); a
+        // second unit's P-1 on another homerun has other conductors.
+        let mut a = tag("circuit:L1:E-101:P-1@P1", "L1", "P-1", "unit");
+        a["fields"]["homerun_group"] = serde_json::json!({"value": "P1:0", "source": "computed"});
+        let mut b = tag("circuit:L1:E-101:P-3,5@P1", "L1", "P-3,5", "unit");
+        b["fields"]["homerun_group"] = serde_json::json!({"value": "P1:0", "source": "computed"});
+        b["fields"]["conductors"] = serde_json::json!({"value": "3#10 + 1#10G", "source": "plan"});
+        let mut c = tag("circuit:L1:E-101:P-1@P2", "L1", "P-1", "unit");
+        c["fields"]["homerun_group"] = serde_json::json!({"value": "P2:1", "source": "computed"});
+        c["fields"]["conductors"] = serde_json::json!({"value": "2#8 + 1#8G", "source": "computed"});
+        let mut h = tag("circuit:L1:home:P1:0", "L1", "P-1,3,5", "");
+        h["fields"]["circuits"] = serde_json::json!({"value": "P-1, P-3,5", "source": "computed"});
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+            "tags": [a, b, c, h],
+            "mep": {"runs": [
+                {"system": "E-BRANCH", "level": "L1", "id": "circuit:L1:home:P1:0#home", "points": [[0, 0], [120, 0]], "size_in": [0.75, 0], "bottoms_ft": [9, 9]},
+                {"system": "E-BRANCH", "level": "L1", "id": "circuit:L1:E-101:P-1@P1#0", "points": [[120, 0], [240, 0]], "size_in": [0.75, 0], "bottoms_ft": [9, 9]}
+            ]}
+        }))
+        .unwrap();
+        let items = items(&Drawing::new_imperial(), &sp, &CodeFacts::default(), &super::super::rules());
+        let home = items.iter().find(|i| i.id == "circuit:L1:home:P1:0").unwrap();
+        assert_eq!(home.members, [("P-1".to_string(), "2#12 + 1#12G".to_string()), ("P-3,5".to_string(), "3#10 + 1#10G".to_string())]);
+        assert_eq!(home.area.base, "unit");
+        let refs: Vec<&Item> = vec![home];
+        let atoms = alt_atoms(&sp, &refs, "NM");
+        let types: BTreeSet<String> = atoms.iter().filter(|a| a.0.kind == "cable").map(|a| a.0.ty.clone()).collect();
+        assert_eq!(types, BTreeSet::from(["NM 10/3 w/G".to_string(), "NM 12/2 w/G".to_string()]), "one cable per circuit, each its own conductors");
     }
 }

@@ -490,7 +490,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
     // As designed, by kind and area: every routed circuit and feeder.
     for it in &items {
         let g = groups.entry((it.kind.to_string(), it.area.base.clone())).or_insert_with(|| {
-            json!({"kind": it.kind, "area": it.area.base, "as_designed": {"methods": {}, "items": 0, "feet": 0.0}, "allowed_now": [], "needs_rfi": [], "not_proposed": [], "not_allowed": []})
+            json!({"kind": it.kind, "area": it.area.base, "as_designed": {"methods": {}, "items": 0, "feet": 0.0}, "allowed_now": [], "needs_rfi": [], "not_proposed": [], "not_allowed": [], "no_scope": [], "no_application": []})
         });
         let m = format!("{} ({})", if it.method.is_empty() { "raceway" } else { &it.method }, it.method_source);
         let n = g["as_designed"]["methods"][&m].as_u64().unwrap_or(0) + 1;
@@ -614,7 +614,22 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
                     construction.as_deref().unwrap_or("of a type the code sheet doesn't give")
                 ),
             ),
-            _ if taken_ref.is_empty() => ("no_scope", "no routed circuit or feeder of the model is in its areas".to_string()),
+            _ if taken_ref.is_empty() => (
+                "no_scope",
+                if excluded.values().any(|n| *n > 0) {
+                    format!(
+                        "every circuit or feeder in its areas stays as designed: {}",
+                        excluded
+                            .iter()
+                            .filter(|(k, n)| **n > 0 && alt.areas.iter().all(|a| a != *k))
+                            .map(|(k, n)| format!("{}: {n}", rules.areas.get(k).map_or(k.as_str(), |a| a.name.as_str())))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    "no routed circuit or feeder of the model is in its areas".to_string()
+                },
+            ),
             _ if defeated.is_some() => {
                 ("not_proposed", format!("it can't meet the design's likely intent: {}", defeated.clone().unwrap_or_default()))
             }

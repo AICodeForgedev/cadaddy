@@ -15,7 +15,7 @@
     "sprinklered_no": ["NON-SPRINKLERED", "NONSPRINKLERED", "NOT SPRINKLERED", "UNSPRINKLERED", "SPRINKLERED: NO", "SPRINKLER SYSTEM: NONE"],
     "sprinkler_standards": ["NFPA 13R", "NFPA 13D", "NFPA 13"],
     "occupancy_words": ["OCCUPANCY", "GROUP"],
-    "occupancy_skip": ["TRAVEL", "DISTANCE", "MAXIMUM", "ALARM", "REQUIRED", "EXCEPTION", "SEPARATE", "LOAD", "EGRESS", "PERMIT"],
+    "occupancy_skip": ["TRAVEL", "DISTANCE", "MAXIMUM", "ALARM", "REQUIRED", "EXCEPTION", "SEPARATE", "LOAD", "EGRESS", "PERMIT", "SHALL", "ACCORDANCE"],
     "occupancies": ["A-1", "A-2", "A-3", "A-4", "A-5", "B", "E", "F-1", "F-2", "H-1", "H-2", "H-3", "H-4", "H-5", "I-1", "I-2", "I-3", "I-4", "M", "R-1", "R-2", "R-3", "R-4", "S-1", "S-2", "U"],
     "stories_words": ["STORIES", "STORY", "NUMBER OF FLOORS", "FLOORS ABOVE GRADE"],
     "rated_words": ["HR", "HOUR", "HOURS"],
