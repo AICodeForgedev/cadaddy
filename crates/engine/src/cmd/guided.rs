@@ -9339,7 +9339,9 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     for sc in &scenarios {
         let tier = sc["tier"].as_str().unwrap_or_default();
         let name = sc["name"].as_str().unwrap_or_default();
-        let over = format!("{} feeders, {:.0} ft", sc["quantity"]["feeders"], sc["quantity"]["feet"].as_f64().unwrap_or(0.0));
+        let q = &sc["quantity"];
+        let what = if q["circuits"].is_number() { format!("{} branch circuits", q["circuits"]) } else { format!("{} feeders", q["feeders"]) };
+        let over = format!("{what}, {:.0} ft", q["feet"].as_f64().unwrap_or(0.0));
         let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
         let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["labor_hours"].as_f64()) {
             (Some(c), Some(h)) => format!("; saves ${c:.0} and {h:.0} labor hours over {over}"),
