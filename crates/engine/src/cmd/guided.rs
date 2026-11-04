@@ -12429,9 +12429,9 @@ fn dampers_step(
                     out.push(tag(&l.name, &v, t.at, sheet.clone()));
                 }
             }
-            for (mark, at) in stamped.get(&digits(&l.name)).into_iter().flatten() {
+            for (mark, at, view) in stamped.get(&digits(&l.name)).into_iter().flatten() {
                 if out.len() < 100_000 {
-                    out.push(tag(&l.name, mark, *at, "a typical room plan's tag, stamped into the room".to_string()));
+                    out.push(tag(&l.name, mark, *at, format!("{view} (a typical room plan's tag, stamped into each room of its type)")));
                 }
             }
         }
@@ -15563,9 +15563,14 @@ fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
 
 /// The wall tags of the typical-room plans (unit plans): each legend mark a typical-room view
 /// prints, put at the same place in every room of the type the view's title names (as the
-/// devices are stamped). By level (its digits): (mark, where on the level's plan).
-fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet<String>) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> {
-    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> = BTreeMap::new();
+/// devices are stamped). By level (its digits): (mark, where on the level's plan, the sheet and
+/// view it was read on).
+fn typical_wall_tags(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    marks: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2, String)>> {
+    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2, String)>> = BTreeMap::new();
     let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
         .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
@@ -15605,13 +15610,16 @@ fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet
     for sh in refs.iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("A") && r.kind == "enlarged_plan").take(MAX_STAMP_SHEETS) {
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        let views: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+        let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
             .into_iter()
             .filter_map(|v| {
                 let upper = v.title.to_ascii_uppercase();
                 let plan = !["ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
                 let words = type_words(&v.title, Some(&vocabulary));
-                (plan && types.contains(&words)).then_some((v.region?, words))
+                if !plan || !types.contains(&words) {
+                    return None;
+                }
+                Some((v.region?, words, format!("{} {}", sh.number, v.title.trim())))
             })
             .collect();
         if views.is_empty() {
@@ -15625,12 +15633,12 @@ fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet
             let p = [t.at.x, t.at.y];
             let inside = |r: &[f64; 4]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
             let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-            let Some((view, words)) = views.iter().filter(|(r, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
+            let Some((view, words, title)) = views.iter().filter(|(r, _, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
                 continue;
             };
             for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
                 if let Some(q) = into_room(p, *view, bbox(outline)) {
-                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1])));
+                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1]), title.clone()));
                 }
             }
         }
@@ -16567,7 +16575,7 @@ fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &G
             })
             .collect();
         let own = tags.len();
-        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().cloned());
+        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().map(|(m, p, _)| (m.clone(), *p)));
         if tags.is_empty() {
             continue;
         }

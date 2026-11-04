@@ -685,17 +685,19 @@ pub(crate) fn unprotected<'a>(ducts: &[Duct], walls: &[Wall], placed: &[Placed],
 }
 
 /// The wall crossings met walking along the duct from a damper's place, both ways, carried on
-/// into the duct pieces joined to it (ends or a tee within the rules' join distance past the
-/// pieces' half widths) and on the same level: each crossing of `all` (index) with the distance
+/// into the pieces of the same duct joined to it (same system and size, ends within the rules'
+/// join distance past its half width: a duct drawn in pieces; a tee into another size is another
+/// duct) and on the same level: each crossing of `all` (index) with the distance
 /// along the ducts to it, up to `reach` (plan units), nearest first.
 pub(crate) fn crossings_along(ducts: &[Duct], all: &[Crossing], p: &Placed, reach: f64, upf: f64) -> Vec<(usize, f64)> {
     let r = rules();
-    let Some(level) = ducts.get(p.duct).map(|d| d.level.clone()) else { return Vec::new() };
-    // The level's duct pieces: (duct, segment, ends, half width).
+    let Some(me) = ducts.get(p.duct) else { return Vec::new() };
+    let same_size = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 0.5 && (a[1] - b[1]).abs() < 0.5;
+    // The level's pieces of this duct: (duct, segment, ends, half width).
     let pieces: Vec<(usize, usize, Vec2, Vec2, f64)> = ducts
         .iter()
         .enumerate()
-        .filter(|(_, d)| same_level(&d.level, &level))
+        .filter(|(_, d)| same_level(&d.level, &me.level) && d.system.eq_ignore_ascii_case(&me.system) && same_size(d.size_in, me.size_in))
         .flat_map(|(di, d)| d.points.windows(2).enumerate().map(move |(si, w)| (di, si, w[0], w[1], d.size_in[0].max(0.0) / 24.0 * upf)))
         .take(MAX_CROSSINGS)
         .collect();
@@ -1498,27 +1500,27 @@ mod tests {
             circuit("fire_smoke", "P1", "27", ""),
         ];
         let panels =
-            vec![panel_at("P1", "Level 1", "MECHANICAL 120"), panel_at("P3", "Level 1", "LAUNDRY 130"), panel_at("P2", "Level 2", "STORAGE 205")];
+            vec![panel_at("P1", "Level 1", "MECHANICAL E12"), panel_at("P3", "Level 1", "JANITOR E14"), panel_at("P2", "Level 2", "STORAGE F05")];
         let one = |kind: &str, level: &str, rooms: &[&str], panels: &[PanelPlace]| {
             let rooms: Vec<String> = rooms.iter().map(|r| r.to_string()).collect();
             pick_circuit(kind, level, &rooms, &circuits, panels)
         };
         // The damper's level has one of the panels (the first match, P1, is on another level).
-        let got = one("motorized", "Level 2", &["210"], &panels);
+        let got = one("motorized", "Level 2", &["F10"], &panels);
         assert!(matches!(&got, CircuitPick::One { circuit: 2, why } if why.contains("panel P2 is on Level 2")), "{got:?}");
         // Two panels on the damper's level: the one in the damper's room (either side of its wall).
-        let got = one("motorized", "Level 1", &["131", "130"], &panels);
-        assert!(matches!(&got, CircuitPick::One { circuit: 1, why } if why.contains("130")), "{got:?}");
+        let got = one("motorized", "Level 1", &["E16", "E14"], &panels);
+        assert!(matches!(&got, CircuitPick::One { circuit: 1, why } if why.contains("E14")), "{got:?}");
         // Neither panel serves the damper's room: tied, both candidates, not the first match.
-        let got = one("motorized", "Level 1", &["150"], &panels);
+        let got = one("motorized", "Level 1", &["E20"], &panels);
         assert!(matches!(&got, CircuitPick::Tied { candidates, .. } if candidates == &vec![0, 1]), "{got:?}");
         // The schedule row says what it serves.
         let mut rows = circuits.clone();
         if let Some(c) = rows.get_mut(0) {
-            c.room = "ROOM 150".into();
+            c.room = "ROOM E20".into();
         }
-        let got = pick_circuit("motorized", "Level 1", &["150".to_string()], &rows, &panels);
-        assert!(matches!(&got, CircuitPick::One { circuit: 0, why } if why.contains("schedule row serves 150")), "{got:?}");
+        let got = pick_circuit("motorized", "Level 1", &["E20".to_string()], &rows, &panels);
+        assert!(matches!(&got, CircuitPick::One { circuit: 0, why } if why.contains("schedule row serves E20")), "{got:?}");
         // A served-area note naming the level.
         let notes = vec![
             PanelPlace {
@@ -1535,12 +1537,12 @@ mod tests {
         let got = one("motorized", "Level 3", &[], &notes);
         assert!(matches!(&got, CircuitPick::One { circuit: 0, .. }), "{got:?}");
         // No document places the panels: tied.
-        assert!(matches!(one("motorized", "Level 1", &["150"], &[]), CircuitPick::Tied { .. }));
+        assert!(matches!(one("motorized", "Level 1", &["E20"], &[]), CircuitPick::Tied { .. }));
         // The only circuit of its kind (a smoke damper takes the fire/smoke dampers' circuit).
         assert!(matches!(one("smoke", "Level 4", &[], &panels), CircuitPick::One { circuit: 3, .. }));
         assert_eq!(one("backdraft", "Level 1", &[], &panels), CircuitPick::NoneNamed);
-        assert!(names_room("GUEST LAUNDRY 149", "149") && !names_room("ROOM 1490", "149") && names_room("MECH ROOM", "MECH ROOM"));
-        assert!(!names_room("ROOM", "MECH ROOM") && !names_room("", "149"));
+        assert!(names_room("JANITOR CLOSET E14", "E14") && !names_room("ROOM E140", "E14") && names_room("MECH ROOM", "MECH ROOM"));
+        assert!(!names_room("ROOM", "MECH ROOM") && !names_room("", "E14"));
     }
 
     fn placed_one(kind: &str, code: &str, at: Vec2, ducts: &[Duct], walls: &[Wall]) -> Placed {
@@ -1577,6 +1579,14 @@ mod tests {
         let mut list = vec![placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &split, &walls)];
         walls_along_ducts(&mut list, &split, &walls, &all2, &[], 12.0);
         assert!(list.first().is_some_and(|m| m.duct == 2 && m.wall == Some(0)), "{list:?}");
+        // The other piece another size (a branch off a main): another duct, not followed.
+        if let Some(d) = split.get_mut(2) {
+            d.size_in = [8.0, 8.0];
+        }
+        let all2 = crossings(&split, &walls);
+        let mut list = vec![placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &split, &walls)];
+        walls_along_ducts(&mut list, &split, &walls, &all2, &[], 12.0);
+        assert!(list.first().is_some_and(|m| m.duct == 0 && m.wall.is_none() && m.moved_along.is_none()), "{list:?}");
         // A motorized damper isn't rated: left where it is.
         let mut md = vec![placed_one("motorized", "MD", Vec2::new(330.0, 104.0), &ducts, &walls)];
         walls_along_ducts(&mut md, &ducts, &walls, &all, &[], 12.0);
