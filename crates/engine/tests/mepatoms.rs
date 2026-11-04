@@ -56,7 +56,8 @@ fn building(wiring: Option<&str>) -> Session {
         }
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
-    let built = s.execute("model.build", &json!({})).expect("build");
+    // The estimated route as the readers gave it (routing it is Q6152's, tests/conduitroute.rs).
+    let built = s.execute("model.build", &json!({"route": false})).expect("build");
     assert!(built["atoms"].as_u64().unwrap_or(0) > 0, "{built}");
     s
 }

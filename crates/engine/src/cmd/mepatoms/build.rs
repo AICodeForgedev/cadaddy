@@ -72,11 +72,30 @@ struct Method {
     conductors: String,
     conductors_source: Source,
     estimated: bool,
+    /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
+    routed: bool,
+}
+
+/// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
+/// (`LP1-1,3,5` holds `LP1-3`).
+fn on_circuit(boxc: &str, circuit: &str) -> bool {
+    if boxc == circuit {
+        return true;
+    }
+    let split = |c: &str| -> Option<(String, Vec<String>)> {
+        let (p, n) = c.trim().split_once('-')?;
+        let nums: Vec<String> = n.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).take(64).collect();
+        (!p.trim().is_empty() && !nums.is_empty()).then(|| (p.trim().to_ascii_uppercase(), nums))
+    };
+    match (split(boxc), split(circuit)) {
+        (Some((pb, nb)), Some((pc, nc))) => pb == pc && nb.iter().all(|n| nc.contains(n)),
+        _ => false,
+    }
 }
 
 /// The 3D path of a run: its plan points at their segments' heights (a change of height is a
 /// vertical leg at the corner); a riser straight up from its bottom to its top.
-fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
+pub(crate) fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
     let z = |i: usize| base_z + r.bottoms_ft.get(i).or(r.bottoms_ft.last()).copied().unwrap_or(0.0) * upf;
     if let Some(top) = r.top_ft {
         let Some(p) = r.points.first() else { return Vec::new() };
@@ -268,7 +287,7 @@ fn block(m: &mut Mesh, c: Vec3, along: Vec2, w: f64, t: f64, h: f64) {
 }
 
 /// A piece's body (sheet units).
-fn body(a: &Atom, upf: f64) -> Mesh {
+pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
     let mut m = super::super::wallgen::empty_mesh();
     let r = (a.body_in.max(0.1) / 24.0) * upf;
     let dir3 = a.b - a.a;
@@ -386,6 +405,24 @@ fn wiring_method(d: &Drawing) -> Option<(String, Source)> {
     (!v.is_empty()).then(|| (v.clone(), Source::from_doc(SourceKind::Rule, &format!("project rule wiring_method/general: {v}"))))
 }
 
+/// The tags that make an atom a built MEP element (its level, source, system, kind and part).
+pub(crate) fn mep_tags(level: &str, source: Handle, system: &str, kind: &str, size: &str, item: &str, mepid: &str) -> Vec<RawTag> {
+    let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
+    let mk = if kind == "cable" { "cable" } else { "conduit" };
+    vec![
+        t(1001, super::super::wallgen::APP.into()),
+        t(1000, "mep".into()),
+        t(1000, level.to_string()),
+        t(1000, source.hex()),
+        t(1000, format!("system:{system}")),
+        t(1000, format!("kind:{mk}")),
+        t(1000, format!("part:atom:{kind}")),
+        t(1000, format!("size:{size}")),
+        t(1000, format!("type:{item}")),
+        t(1000, format!("mepid:{mepid}")),
+    ]
+}
+
 /// The atoms of the spec's electrical runs and its devices' boxes, into the model; the counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let started = web_time::Instant::now();
@@ -409,6 +446,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
 
     // -- What each run is: raceway or cable, its material, circuit and conductors. --
+    let ve_feeders = super::super::valueeng::approved_feeders(d);
     let mut paths: BTreeMap<GroupKey, (Method, Vec<Path3>)> = BTreeMap::new();
     let mut cable_circuits: BTreeSet<String> = BTreeSet::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
@@ -424,6 +462,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let ctag = super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string();
         let tag = circuits.get(ctag.as_str()).copied();
         let estimated = r.height_source == super::super::printcond::ESTIMATED || r.system == super::super::printcond::CIRCUIT_SYSTEM;
+        // A routed run (Q6152) ends at its box's top: moved onto the box's entry like an estimate.
+        let routed = r.height_source == super::super::conduitroute::ROUTED;
         let (circuit, panel) = tag.map_or_else(Default::default, |t| {
             (field(t, "circuit").map(|v| v.0).unwrap_or_default(), field(t, "panel").map(|v| v.0).unwrap_or_default())
         });
@@ -442,8 +482,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // The raceway the documents name (the circuit's, the system's), else the project's wiring
         // method, else the default; a cable system or a cable wiring method is cable.
         let named = tag.and_then(|t| field(t, "conduit")).filter(|(_, s)| s != "default");
-        let from_named =
-            named.as_ref().and_then(|(v, s)| rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), src_of(s, &format!("circuit {circuit}: {v}")))));
+        let from_named = named.as_ref().and_then(|(v, s)| {
+            let src = || src_of(s, &format!("circuit {circuit}: {v}"));
+            rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), src())).or_else(|| rl.cable_named(v).map(|(k, _)| (true, k.to_string(), src())))
+        });
         let from_system = || {
             let words = format!("{} {}", sy.name, sy.layer);
             match sy.kind {
@@ -472,8 +514,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if cable && !circuit.is_empty() {
             cable_circuits.insert(circuit.clone());
         }
+        // A feeder an approved value engineering alternative changed: its cable, its own chain.
+        let ve = (r.system == super::super::gearbuild::FEEDER_SYSTEM).then(|| ve_feeders.get(&r.source_sheet)).flatten().and_then(|(cable, why)| {
+            let f = sp.mep.feeders.iter().find(|f| r.source_sheet.starts_with(&format!("feeder {} {}→", f.tag, f.from)))?;
+            rl.cables.contains_key(cable).then(|| (cable.clone(), why.clone(), super::super::valueeng::feeder_makeup(f)))
+        });
+        let (cable, name, source, conductors, csrc, ctag) = match ve {
+            Some((c, why, makeup)) => {
+                let src = Source::from_doc(SourceKind::Rule, &why);
+                (true, c, src.clone(), makeup, src, r.source_sheet.clone())
+            }
+            None => (cable, name, source, conductors, csrc, ctag),
+        };
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated };
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -535,9 +589,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     } else {
         Vec::new()
     };
+    // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
+    let scope = super::super::scope::decisions(d);
+    let sr = super::super::scope::rules();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
+        let theirs = sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).map(|x| {
+            let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
+            let ours = x.ours_for(&kind, &fa);
+            (ours.iter().any(|i| i.item == "box"), ours.iter().any(|i| i.item == "ring"))
+        });
+        if theirs.is_some_and(|(b, _)| !b) {
+            continue;
+        }
         // A device placed outside its level's footprint is flagged for review: no box with it.
         if ps.get("misplaced").is_some() {
             continue;
@@ -548,6 +613,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let circuit = ps.get("circuit").map(Prop::text).unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
         let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
+        let ring = ring && theirs.is_none_or(|(_, r)| r);
         let c = plan.center();
         let out = ["face_normal", "host_face"].iter().find_map(|k| {
             let t = ps.get(k).map(Prop::text)?;
@@ -650,8 +716,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         boxes
             .iter()
             .enumerate()
-            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (b.circuit == circuit || !own_only && !taken.contains(bi)))
-            .map(|(bi, b)| (bi, b.circuit == circuit, Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
+            .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
             .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
             .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(bi, _, _, _)| bi)
@@ -727,7 +793,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     if gap > 3.0 * upf {
                         // Not moved: the route gives no drop to it; the gap is said for review.
                         gaps.push((ci, end, gap / upf));
-                    } else if m.estimated {
+                    } else if m.estimated || m.routed {
                         let before = super::path_ft(&c.pts, upf);
                         land_on(&mut c.pts, end, entry, upf);
                         landing_ft += super::path_ft(&c.pts, upf) - before;
@@ -925,20 +991,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
-        let mk = if a.kind == "cable" { "cable" } else { "conduit" };
-        let xdata = vec![
-            t(1001, super::super::wallgen::APP.into()),
-            t(1000, "mep".into()),
-            t(1000, ctx.level.clone()),
-            t(1000, ctx.source.hex()),
-            t(1000, format!("system:{system}")),
-            t(1000, format!("kind:{mk}")),
-            t(1000, format!("part:atom:{}", a.kind)),
-            t(1000, format!("size:{}", a.size)),
-            t(1000, format!("type:{}", a.item)),
-            t(1000, format!("mepid:{}/{}{}", ctx.run, a.kind, handles.len())),
-        ];
+        let xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
             Ok(h) => {
                 *by_kind.entry(a.kind).or_default() += 1;

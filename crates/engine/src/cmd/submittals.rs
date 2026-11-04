@@ -4,6 +4,10 @@
 //! each object is. Every element of a type mark gets its submittal product as properties: maker,
 //! catalog number, how it dims, and which submittal says so. The source is the submittal and
 //! page. The products also go into the drawing's type catalog. A person's values stay.
+//!
+//! A dimmer then takes the way the fixtures on its leg dim (`dimming`: 0-10V, phase, DALI, or
+//! `mixed` where its leg's fixtures dim two ways, a question; `bim.dimming`), worked out from
+//! their submittals, unless its own product or a person says.
 
 use std::collections::BTreeMap;
 
@@ -29,7 +33,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "fixture", "equipmen
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, submittal), with the submittal and page as the source; the products go into the type catalog; a person's values stay")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -149,6 +153,20 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             set.push(("dimming", if note.is_empty() { prop } else { prop.with_note(&note) }));
             dimming.insert(mark.clone(), control);
         }
+        // What its cut sheet says of it besides (a luminaire's voltage, finish, mounting, CCT,
+        // lumens, wattage).
+        for (key, prop_key) in [
+            (keys::VOLTS, "voltage"),
+            (keys::FINISH, "finish"),
+            (keys::MOUNTING, "mounting_type"),
+            (keys::CCT, "cct"),
+            (keys::LUMENS, "lumens"),
+            (keys::WATTAGE, "wattage"),
+        ] {
+            if let Some(v) = product.value(key) {
+                set.push((prop_key, Prop::new(v, src.clone())));
+            }
+        }
         set.push(("submittal", Prop::new(product.doc.clone(), src.clone())));
         for h in handles {
             let Some(e) = d.model.get(*h) else { continue };
@@ -173,6 +191,35 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             changed += 1;
         }
     }
+
+    // Each dimmer: the way the fixtures on its leg dim now, unless its own product or a person
+    // says. One worked out before and no longer settled goes.
+    let d = s.doc()?;
+    let mut dimmers: BTreeMap<String, usize> = BTreeMap::new();
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    for x in super::dimcheck::dimmer_protocols(d) {
+        *dimmers.entry(x.protocol.clone()).or_default() += 1;
+        let Some(e) = d.model.get(x.handle) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        if store.get("dimming").is_some_and(|p| matches!(p.source.kind, SourceKind::User | SourceKind::Submittal)) {
+            continue;
+        }
+        let before = store.clone();
+        if x.settled() || x.protocol == "mixed" {
+            store.set("dimming", Prop::new(x.protocol.clone(), Source::computed()).with_note(&x.why));
+        } else {
+            store.remove("dimming");
+        }
+        if store != before {
+            changes.push((x.handle, store));
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, store) in changes {
+        if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
+            changed += 1;
+        }
+    }
     if changed > 0 {
         s.touch();
     }
@@ -181,12 +228,32 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         by_mark.iter().filter(|(m, _)| !products.contains_key(*m)).map(|(m, h)| (m, h.len())).take(MAX_LISTED).collect();
     let not_in_model: Vec<&String> = products.keys().filter(|m| !by_mark.contains_key(*m)).take(MAX_LISTED).collect();
     let questions: Vec<Value> = questions.into_iter().take(MAX_LISTED).map(|(mark, text)| json!({"mark": mark, "text": text})).collect();
+    // Every product read, in the model or not (the lighting step checks the submittal's types
+    // against the schedule's).
+    let listed: serde_json::Map<String, Value> = products
+        .iter()
+        .take(MAX_LISTED)
+        .map(|(m, p)| {
+            (
+                m.clone(),
+                json!({
+                    "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
+                    "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
+                    "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
+                    "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
+                    "doc": p.doc,
+                }),
+            )
+        })
+        .collect();
     Ok(json!({
+        "products": listed,
         "files": read,
         "applied": applied,
         "elements": changed,
         "catalog": catalog,
         "dimming": dimming,
+        "dimmers": dimmers,
         "no_submittal": no_submittal,
         "not_in_model": not_in_model,
         "questions": questions,
@@ -432,6 +499,56 @@ Model Number : WRAP 48 840
         assert_eq!(prop(&s, b, "catalog_number").unwrap().text(), "MINE-1", "a person's value stays");
         assert!(prop(&s, other, "manufacturer").is_none());
         assert!(s.doc().unwrap().bim_types.get("Q7").is_some(), "the product is in the type catalog");
+    }
+
+    /// A luminaire or a switch element of type `mark` on leg `leg` of room 101.
+    fn on_leg(s: &mut Session, mark: &str, item: &str, leg: &str, at: f64) -> Handle {
+        let h = device(s, mark, at);
+        let d = s.doc_mut().unwrap();
+        let mut store = props::read(&d.model.get(h).unwrap().common.xdata);
+        store.set("room", Prop::new("101", Source::computed()));
+        store.set("switch_leg", Prop::new(leg, Source::print("E-1", None)));
+        if !item.is_empty() {
+            store.set("type", Prop::new(item, Source::print("E-1", None)));
+        }
+        d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).unwrap();
+        h
+    }
+
+    #[test]
+    fn each_dimmer_takes_the_dimming_of_the_fixtures_on_its_leg() {
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        on_leg(&mut s, "Q7", "", "a", 0.0);
+        let a = on_leg(&mut s, "SD", "switch, dimmer", "a", 10.0);
+        on_leg(&mut s, "Q7A", "", "b", 20.0);
+        let b = on_leg(&mut s, "SD", "switch, dimmer", "b", 30.0);
+        on_leg(&mut s, "Q7", "", "c", 40.0);
+        on_leg(&mut s, "Q7A", "", "c", 50.0);
+        let c = on_leg(&mut s, "SD", "switch, dimmer", "c", 60.0);
+        // A person's word on one stays; a plain switch takes none.
+        let mine = on_leg(&mut s, "SD", "switch, dimmer", "a", 70.0);
+        {
+            let d = s.doc_mut().unwrap();
+            let mut store = props::read(&d.model.get(mine).unwrap().common.xdata);
+            store.set("dimming", Prop::new("ELV", Source::user()));
+            d.modify_entity(mine, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).unwrap();
+        }
+        let plain = on_leg(&mut s, "S3", "switch, 3-way", "b", 80.0);
+        let file = std::env::temp_dir().join(format!("cadaddy-submittal-dimmers-{}.txt", std::process::id()));
+        let text = "--- page 1 of 2 ---\nType : Q7\nManufacturer : ACME LIGHTING\nModel Number : QX100E1\nQX100E1   4in downlight, 120V, LE/TE 5% Dim\n--- page 2 of 2 ---\nType : Q7A\nManufacturer : ACME LIGHTING\nModel Number : HX6D010\nHX6D010   4in downlight, 120-277V 0-10V 5% Dim\n";
+        std::fs::write(&file, text).unwrap();
+        let r = s.execute(CMD, &json!({"paths": [file.to_string_lossy()]})).unwrap();
+        std::fs::remove_file(&file).ok();
+        assert_eq!((r["dimming"]["Q7"].clone(), r["dimming"]["Q7A"].clone()), (json!("phase"), json!("0-10V")), "{r}");
+        assert_eq!(r["dimmers"], json!({"0-10V": 1, "ELV": 1, "mixed": 1, "phase": 1}), "{r}");
+        let pa = prop(&s, a, "dimming").unwrap();
+        assert_eq!((pa.text(), pa.source.kind), ("phase".to_string(), SourceKind::Computed));
+        assert_eq!(pa.note.as_deref(), Some("its leg's fixtures: phase Q7"));
+        assert_eq!(prop(&s, b, "dimming").unwrap().text(), "0-10V");
+        assert_eq!(prop(&s, c, "dimming").unwrap().text(), "mixed", "a question, said on the dimmer");
+        assert_eq!(prop(&s, mine, "dimming").unwrap().text(), "ELV", "a person's value stays");
+        assert!(prop(&s, plain, "dimming").is_none(), "a 3-way switch doesn't dim");
     }
 
     #[test]

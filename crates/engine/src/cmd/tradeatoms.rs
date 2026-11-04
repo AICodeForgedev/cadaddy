@@ -690,6 +690,65 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec, only: Option<&BTreeSet<S
     })
 }
 
+/// A framing member the floors' and roof's layout makes (a joist or a truss), for the conduit
+/// router (Q6152): the raceways keep to its bays and bore its web only where the hole rules allow.
+#[derive(Clone, Debug)]
+pub(crate) struct Member {
+    /// `joist` or `truss`.
+    pub kind: &'static str,
+    pub item: String,
+    /// The level whose floor it frames (a truss: the top storey's), and that floor's element.
+    pub level: String,
+    pub host: Handle,
+    /// Its centreline in plan (sheet units, as built: stacked), its width across it, its depth's
+    /// bottom and top.
+    pub a: Vec2,
+    pub b: Vec2,
+    pub t: f64,
+    pub z0: f64,
+    pub z1: f64,
+    /// Where it came from (the joist or truss submittal, a project rule, the trade rules).
+    pub source: String,
+}
+
+/// Most framing members handed to the router.
+const MAX_MEMBERS: usize = 400_000;
+
+/// The floors' joists and the roof's trusses as [`build`] lays them out (the same documents and
+/// rules), without adding them to the drawing: the conduit router routes before the trades'
+/// pieces are made.
+pub(crate) fn framing_members(d: &Drawing, sp: &BuildingSpec) -> Vec<Member> {
+    let rules = Rules::of(d, sp);
+    let ctx = Ctx { upf: upf_of(sp), rooms: Vec::new(), devices: Vec::new() };
+    let mut batch = Batch::default();
+    floors::lay_out(d, sp, &rules, &ctx, &mut batch, &|t: &str| t == "framing");
+    let mut out = Vec::new();
+    for p in batch.pieces.iter().filter(|p| matches!(p.kind, "joist" | "truss")) {
+        let source = match (&p.source.doc, p.source.kind) {
+            (Some(doc), k) => format!("{}: {doc}", k.as_str()),
+            (None, k) => k.as_str().to_string(),
+        };
+        for b in p.blocks.iter().filter(|b| b.ok()) {
+            if out.len() >= MAX_MEMBERS {
+                return out;
+            }
+            out.push(Member {
+                kind: p.kind,
+                item: p.item.clone(),
+                level: p.level.clone(),
+                host: p.host.unwrap_or_default(),
+                a: b.a,
+                b: b.b,
+                t: b.t,
+                z0: b.z0,
+                z1: b.z1,
+                source: source.clone(),
+            });
+        }
+    }
+    out
+}
+
 /// What every layout looks up: the built walls, rooms, doors and windows by level, the levels'
 /// floors and the electrical and MEP pieces (for crossings).
 pub(crate) struct Ctx {

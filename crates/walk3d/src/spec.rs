@@ -1483,8 +1483,13 @@ impl Mep {
             && self.equipment.is_empty()
             && self.revisions.is_empty()
             && self.feeders.is_empty()
+            && self.panel_schedules.is_empty()
+            && self.equipment_electrical.is_empty()
+            && self.fixture_schedule.is_empty()
+            && self.gear_rules.is_none()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
+            && self.labels_printed.is_empty()
             && self.grounding.is_none()
             && self.services.is_empty()
             && self.required_services.is_empty()
@@ -1792,6 +1797,9 @@ pub struct FixtureType {
     pub notes: String,
     /// The sheet it was read from.
     pub source: String,
+    /// The quantity the schedule gives, when it has a quantity column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<u32>,
 }
 
 /// An equipment connection's electrical data (its submittal's, else unknown) and the drawings'
@@ -3527,6 +3535,39 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A spec whose MEP holds only panel schedules (read before anything is built) keeps them
+    /// when it is saved and read back.
+    #[test]
+    fn mep_with_only_panel_schedules_survives_a_save() {
+        let sp = BuildingSpec {
+            mep: Mep {
+                panel_schedules: vec![PanelSchedule {
+                    panel: "P1".into(),
+                    circuits: vec![PanelCircuit { number: "7".into(), description: "RADIO AMPLIFIER".into(), ..Default::default() }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!sp.mep.is_empty());
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.panel_schedules, sp.mep.panel_schedules);
+        let labels = Mep { labels_printed: [("P1".to_string(), "PANEL P1".to_string())].into_iter().collect(), ..Default::default() };
+        assert!(!labels.is_empty() && Mep::default().is_empty());
+    }
+
+    #[test]
+    fn a_spec_holding_only_schedules_keeps_them_when_saved() {
+        let mut sp = BuildingSpec::default();
+        sp.mep.fixture_schedule.push(FixtureType { tag: "Q1".into(), quantity: Some(4), ..FixtureType::default() });
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "P1".into(), ..PanelSchedule::default() });
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.fixture_schedule.len(), 1, "the fixture schedule is MEP data too");
+        assert_eq!(back.mep.fixture_schedule[0].quantity, Some(4));
+        assert_eq!(back.mep.panel_schedules.len(), 1);
+    }
 
     #[test]
     fn a_corridors_edges_run_round_its_floor_not_between_its_rectangles() {

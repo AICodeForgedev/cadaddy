@@ -1,0 +1,25 @@
+{
+  "_about": "Systems the plans' keynotes build (keynotes.rs, the guided job's keynote step): a system's names as notes and schedules write them, and the parts of it the job must find in the documents before it builds or prices them. A part no document places stays `undecided`, with why; it is never guessed.",
+  "systems": [
+    {
+      "name": "BDA",
+      "also": ["ERRCS", "EMERGENCY RESPONDER RADIO", "BI-DIRECTIONAL AMPLIFIER", "BIDIRECTIONAL AMPLIFIER"],
+      "title": "emergency responder radio coverage (BDA)",
+      "source": "IFC 510 and NFPA 1221 (emergency responder radio coverage): a head-end (bi-directional amplifier, on a dedicated circuit with standby power), a donor antenna outside (usually the roof) and the coverage antennas inside",
+      "parts": [
+        {
+          "part": "head_end",
+          "what": "the head-end (bi-directional amplifier) and its power",
+          "words": ["HEAD-END", "HEAD END", "HEADEND", "AMPLIFIER", "BDA PANEL", "BDA EQUIPMENT", "BDA CABINET", "POWER FOR"],
+          "powered": true
+        },
+        {
+          "part": "donor_antenna",
+          "what": "the donor antenna and its cable to the head-end",
+          "words": ["DONOR", "ROOF", "WEATHER HEAD", "WEATHERHEAD"],
+          "powered": false
+        }
+      ]
+    }
+  ]
+}

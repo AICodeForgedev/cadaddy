@@ -819,3 +819,37 @@ fn a_packet_shows_each_elements_expected_height_and_its_source() {
     assert!(g["expected_source"].is_object(), "{g}");
     let _ = std::fs::remove_dir_all(&out);
 }
+
+/// Gives the element `handle` a height record of `inches` from a document.
+fn height_record(s: &mut Session, handle: &str, inches: f64, kind: cadaddy_engine::doc::props::SourceKind, doc: &str) {
+    use cadaddy_engine::doc::props::{self, Prop, Source};
+    let h = cadaddy_engine::doc::Handle::parse_hex(handle).unwrap();
+    assert!(s.doc_mut().unwrap().model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        store.set("mount_height", Prop::new(inches, Source::from_doc(kind, doc)).with_unit("in"));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+}
+
+#[test]
+fn a_part_its_schedule_mounts_a_foot_under_the_ceiling_is_measured_though_its_top_is_at_the_ceiling() {
+    use cadaddy_engine::doc::props::SourceKind;
+    let j = job();
+    // Level L1's ceiling is 9 ft (108 in). Three made-up built parts no plan element stands for,
+    // each 4 in tall from 92 in: their tops (96 in) are within a foot of the ceiling.
+    let (s, sconce) = built_device(j.s, "FFFF0", [40.0, 11.5], false, 92.0);
+    let (s, high) = built_device(s, "FFFF1", [50.0, 11.5], false, 92.0);
+    let (mut s, bare) = built_device(s, "FFFF2", [60.0, 11.5], false, 92.0);
+    // The schedule mounts the first at 7'-10" (its middle 14 in under the ceiling), the second at
+    // 8'-6" (in the ceiling's band); the third has no document height.
+    height_record(&mut s, &sconce, 94.0, SourceKind::Schedule, "LIGHT FIXTURE SCHEDULE type Q8: 7'-10\" AFF");
+    height_record(&mut s, &high, 102.0, SourceKind::Schedule, "LIGHT FIXTURE SCHEDULE type Q9: 8'-6\" AFF");
+    let (r, fs) = heights(&mut s);
+    let f = of(&fs, "G-HEIGHT", &sconce).unwrap_or_else(|| panic!("the schedule's wall height is measured: {r}"));
+    assert_eq!(f["verdict"], "pass", "{f}");
+    assert!((f["measured"]["aff_in"].as_f64().unwrap() - 94.0).abs() < 0.05, "its middle: {f}");
+    assert!((f["measured"]["expected_in"].as_f64().unwrap() - 94.0).abs() < 1e-6, "{f}");
+    assert_eq!(f["measured"]["expected_source"]["from"], "schedule", "{f}");
+    assert!(of(&fs, "G-HEIGHT", &high).is_none(), "a height in the ceiling's band is a ceiling item's: {r}");
+    assert!(of(&fs, "G-HEIGHT", &bare).is_none(), "no document puts it on a wall: {r}");
+}
