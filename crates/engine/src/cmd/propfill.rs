@@ -937,6 +937,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
     // tag id: the room their element stands in, for the spec's tags too.
     let mut tag_rooms: Vec<(String, String)> = Vec::new();
+    // Each read device's place on its plan (drawing units), by tag id.
+    let plan_at: HashMap<&str, Vec2> =
+        sp.tags.iter().filter(|t| t.id.starts_with("device:")).map(|t| (t.id.as_str(), Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf))).collect();
     // Not into a typical room's unit: its devices are its plans' (stamped and booked by the build),
     // not another trade's or a floor above's that stands over it.
     let unit_rooms: BTreeSet<String> = sp
@@ -1001,7 +1004,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     (None, None) => {
                         // Not in a room: the corridor, stair or hoistway it stands in (or is on the
                         // wall of, within a foot), from the plans' circulation spaces.
-                        let q = c - shift;
+                        // Where the plans put it (its read tag's place; the built model stacks the
+                        // levels), else its built place less the stacking.
+                        let q = made(e, DEVID).and_then(|id| plan_at.get(id.as_str()).copied()).unwrap_or(c - shift);
                         let reach = ROOM_NEAR_FT * upf;
                         let probes = [[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]];
                         let space = sp.circulation.iter().find(|cs| {
