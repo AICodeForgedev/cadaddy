@@ -84,6 +84,9 @@ const UNCHECKED: &[&str] = &[
     "cmd/propuse.rs",
     "cmd/rasterout.rs",
     "cmd/sequence.rs",
+    // ve.study RFI sketches: <id>.svg into the sketches folder the call names (made if missing);
+    // the caller in valueeng/scenario.rs keeps an existing file unless force: true
+    "cmd/valueeng/sketch.rs",
     "cmd/wholejob.rs",
 ];
 
