@@ -5055,7 +5055,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
         if n > 0 || !missed.is_empty() {
-            progress_line(&format!("  rooms numbered from other trades' plans: {n}; not numbered: {missed:?}"));
+            progress_line(&format!("  rooms numbered from other trades' plans and the plans' stray numbers: {n}; not numbered: {missed:?}"));
         }
     }
     let scraps = drop_numbered_scraps(s)?;
@@ -5885,15 +5885,20 @@ fn number_rooms_from_other_trades(
         })
         .collect();
     let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok((0, missed)) };
-    if extras.is_empty() {
-        return Ok((0, missed));
-    }
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // Each level's plan corner; the stack moved each level's model by the lowest's minus its own.
     let corner = |l: &cadaddy_walk3d::Level| l.region.map(|r| cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])));
     let lowest = sp.levels.iter().filter(|l| corner(l).is_some()).min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).and_then(corner);
     let mut rooms = super::bspec::room_elements(s.doc()?);
+    // And the architectural plans' own numbers no room took: a number printed by a label the trace
+    // couldn't start from (an elevator's, under its ELEV. on the shaft's wall). Not a callout's
+    // sheet number, nor one a room of the level has.
+    let mut extras = extras;
+    extras.extend(stray_plan_numbers(s.doc()?, job, &rooms));
+    if extras.is_empty() {
+        return Ok((0, missed));
+    }
     let mut numbered = 0;
     for (number, at, level) in extras {
         let Some(m) = place(at, &level) else {
@@ -5984,6 +5989,40 @@ fn number_rooms_from_other_trades(
 /// Whether a room of the level (digits of its name) already has the number: one number per level
 /// (the other piece of a corridor walls cut in two doesn't take it again). A "Room NNN" traced
 /// from the same label doesn't count: it is the room the number goes to, again.
+/// The room numbers printed on each level's architectural plan that no room of the level has:
+/// (number, where, level), each once.
+fn stray_plan_numbers(d: &cadaddy_doc::Drawing, job: &GuidedJob, rooms: &[super::bspec::RoomElement]) -> Vec<(String, [f64; 2], String)> {
+    let sheets: BTreeSet<String> = job.sheet_regions.iter().map(|r| sheet_key(&r.number)).collect();
+    let plans: Vec<([f64; 4], String)> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("A") && r.kind == "plan" && r.not_built.is_empty() && !r.level.is_empty())
+        .map(|r| (r.plan_rect(), r.level.clone()))
+        .collect();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out = Vec::new();
+    if plans.is_empty() {
+        return out;
+    }
+    for e in d.model.iter().take(4_000_000) {
+        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
+        let v = t.value.trim();
+        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) {
+            continue;
+        }
+        let p = t.insert.xy();
+        let Some((_, level)) = plans.iter().find(|(r, _)| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3]) else { continue };
+        if number_taken(rooms, level, v) || !seen.insert((level.clone(), v.to_ascii_uppercase())) {
+            continue;
+        }
+        out.push((v.to_string(), [p.x, p.y], level.clone()));
+        if out.len() >= MAX_STAMPED {
+            break;
+        }
+    }
+    out
+}
+
 fn number_taken(rooms: &[super::bspec::RoomElement], level: &str, number: &str) -> bool {
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let number = number.trim();
