@@ -70,7 +70,8 @@
     "fall_source": "IPC 704.1 (Table 704.1): horizontal drainage piping 2-1/2 in and smaller at least 1/4 in per foot, 3 in to 6 in at least 1/8 in per foot, 8 in and larger at least 1/16 in per foot",
     "piece_ft": 10.0,
     "reach_ft": 6.0,
-    "join_ft": 1.0,
+    "join_ft": 2.0,
+    "join_source": "rule: a drain's end within 2 ft of another drain joins it (plans stop a branch short of the main at its fitting; a dashed line's gaps are shorter)",
     "min_depth_ft": 1.0,
     "min_depth_source": "rule: a drain under the slab stays at least 12 in below the finished floor (the slab, its base course and the fitting)",
     "source": "the plans' inverts by the slab level's drains (depths below the finished floor, the invert taken as the pipe's bottom): the deepest of a connected drain network is its outlet, the run between it and each other invert sloped evenly, a branch past the inverts rising from its junction at the code's least fall"

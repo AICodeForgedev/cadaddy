@@ -132,6 +132,7 @@ pub(crate) struct SlopeRules {
     pub reach_ft: f64,
     /// How near two runs' ends (or an end and a run) are to join (feet).
     pub join_ft: f64,
+    pub join_source: String,
     pub min_depth_ft: f64,
     pub min_depth_source: String,
     pub source: String,
@@ -1770,6 +1771,7 @@ mod tests {
             &r.slope.source,
             &r.slope.fall_source,
             &r.slope.min_depth_source,
+            &r.slope.join_source,
         ] {
             assert!(!s.trim().is_empty());
         }

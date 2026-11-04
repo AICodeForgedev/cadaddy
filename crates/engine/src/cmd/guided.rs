@@ -4727,6 +4727,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     None => false,
                 });
+                // The plans' invert notes go with their drains (Q6148).
+                sp.mep.inverts.retain_mut(|v| match sim(v.at, &v.level) {
+                    Some(m) => {
+                        v.at = m.apply(v.at);
+                        true
+                    }
+                    None => false,
+                });
                 sp.mep.equipment.retain_mut(|e| match sim(e.min, &e.level) {
                     Some(m) => {
                         let (a, b) = (m.apply(e.min), m.apply(e.max));
