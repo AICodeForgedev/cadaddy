@@ -54,7 +54,20 @@ pub const DOCUMENTS: [&str; 12] = [
     "riser_diagram",
 ];
 /// The tolerances a rule may have (inches unless the name says feet).
-pub const TOLERANCES: [&str; 7] = ["plan_in", "height_in", "route_ft", "size_in", "depth_in", "clear_width_in", "clear_depth_in"];
+pub const TOLERANCES: [&str; 12] = [
+    "plan_in",
+    "height_in",
+    "route_ft",
+    "size_in",
+    "depth_in",
+    "clear_width_in",
+    "clear_depth_in",
+    "count_share",
+    "count_abs",
+    "dedupe_ft",
+    "repeat_sheets",
+    "repeat_marks",
+];
 pub const SEVERITIES: [&str; 3] = ["high", "medium", "low"];
 /// Largest tolerance a project may set.
 const MAX_TOLERANCE: f64 = 1_000.0;
@@ -497,7 +510,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new(CMD_SET, "Change a Validation Rule", run_set).params(
-            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
+            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in, count_share, count_abs, dedupe_ft, repeat_sheets, repeat_marks), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
         ),
     ]
 }
