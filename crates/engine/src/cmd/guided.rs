@@ -2413,7 +2413,13 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
             } else if refused.contains(tag.as_str()) {
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
             } else {
-                match device_types::tag_verdict(tag, &c.legend_types, learned, &sheet_numbers) {
+                // A mark with its subscript is the device its base mark says.
+                let verdict = if compound.contains_key(h) {
+                    TagVerdict::Device(tag.clone())
+                } else {
+                    device_types::tag_verdict(tag, &c.legend_types, learned, &sheet_numbers)
+                };
+                match verdict {
                     // A sheet of no level (uncertain, not answered) or on the site datum is a
                     // reference sheet: nothing on it is a model element.
                     TagVerdict::Device(_) if job.level_at([at.x, at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) => {

@@ -216,6 +216,21 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A typical room's unit keeps its devices to what the build stamped and booked into it: a read
+/// device standing in it is in it as a model element, but its spec tag isn't given the unit.
+#[test]
+fn a_units_room_is_not_written_onto_unbooked_devices_tags() {
+    let mut s = plan();
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "102", "type": "Q", "hand": "normal"}]}})).expect("units");
+    let r = fill(&mut s);
+    assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102", "the element stands in it");
+    assert_eq!(r["device_tags_roomed"], json!(2), "the two outside the unit: {r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> =
+        sp["spec"]["tags"].as_array().into_iter().flatten().filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string)).collect();
+    assert!(!rooms.iter().any(|r| r == "102"), "{rooms:?}");
+}
+
 #[test]
 fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location() {
     let mut s = plan();
