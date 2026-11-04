@@ -1816,7 +1816,7 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
         // wall) when its mounting says so, else on the face; turned with the wall.
         let face = if panel(&e.kind) && !e.round {
-            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf)
+            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some((z0 + z1) * 0.5))
         } else {
             None
         };

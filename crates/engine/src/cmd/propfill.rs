@@ -374,7 +374,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         // where it was read, for review.
         let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device" | "thermostat") || on_a_wall;
         let on_wall = wall_kind && !ceiling_mount && height.inches > FLOOR_BOX_IN && height.inches < WALL_BOX_FT * 12.0 + 12.0;
-        let face = on_wall.then(|| wall_face(&walls, &level.name, Vec2::new(x, y), HOST_SNAP_FT * upf)).flatten();
+        let face = on_wall.then(|| wall_face(&walls, &level.name, Vec2::new(x, y), HOST_SNAP_FT * upf, Some(z))).flatten();
         let (centre, along) = match &face {
             Some(f) => (f.at + f.out * (w / 2.0), f.along),
             None => (Vec2::new(x, y), Vec2::new(1.0, 0.0)),
@@ -471,18 +471,23 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
 }
 
 /// The built walls' plan footprints (their meshes' outlines), with their levels and handles.
-pub(crate) fn wall_footprints(d: &Drawing) -> Vec<(Option<String>, Handle, Vec<Vec2>)> {
+pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
         .filter_map(|e| {
             let EntityKind::Mesh(m) = &e.kind else { return None };
             let h = super::mep::hull(&m.vertices.iter().map(|v| v.xy()).collect::<Vec<_>>());
-            (h.len() >= 3).then(|| (super::bspec::made_level(e), e.handle, h))
+            let z = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
+            (h.len() >= 3).then(|| (super::bspec::made_level(e), e.handle, h, z))
         })
         .take(MAX_ELEMENTS)
         .collect()
 }
+
+/// A built wall's piece: its level, handle, plan outline and the heights it spans (drawing units;
+/// a door's head is a piece from the head up).
+pub(crate) type WallPiece = (Option<String>, Handle, Vec<Vec2>, [f64; 2]);
 
 /// A wall face a device goes on: the wall, the point on its face, the face's direction and its
 /// outward normal (toward the room), and how far the device moved to it.
@@ -496,10 +501,12 @@ pub(crate) struct WallFace {
 
 /// The face of `level`'s nearest wall within `reach` of `p`: one of each footprint's long sides
 /// (not a wall's end), the point on it nearest `p`. A point inside a wall goes to the face it is
-/// nearer.
-pub(crate) fn wall_face(walls: &[(Option<String>, Handle, Vec<Vec2>)], level: &str, p: Vec2, reach: f64) -> Option<WallFace> {
+/// nearer. At height `z` (drawing units), only a wall there (not a door's head over the opening
+/// it stands in: the wall beside the door).
+pub(crate) fn wall_face(walls: &[WallPiece], level: &str, p: Vec2, reach: f64, z: Option<f64>) -> Option<WallFace> {
     let mut best: Option<(f64, WallFace)> = None;
-    for (_, h, poly) in walls.iter().filter(|(l, _, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
+    let at_height = |zr: &[f64; 2]| z.is_none_or(|z| !zr[0].is_finite() || (zr[0] <= z && z <= zr[1]));
+    for (_, h, poly, _) in walls.iter().filter(|(l, _, _, zr)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && at_height(zr)) {
         let n = poly.len();
         let edges: Vec<(Vec2, Vec2)> = (0..n).filter_map(|i| Some((*poly.get(i)?, *poly.get((i + 1) % n)?))).collect();
         let longest = edges.iter().map(|(a, b)| a.dist(*b)).fold(0.0, f64::max);
@@ -1408,4 +1415,25 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let n = r["elements"].as_u64().unwrap_or(0);
     s.echo(format!("Filled the properties of {n} element(s)."));
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A switch read in a door's opening goes on the wall beside the door, not on the head over
+    /// the opening (a wall piece from 7' up).
+    #[test]
+    fn a_device_in_a_door_opening_goes_on_the_wall_beside_it() {
+        let rect = |x0: f64, x1: f64| vec![Vec2::new(x0, 0.0), Vec2::new(x1, 0.0), Vec2::new(x1, 6.0), Vec2::new(x0, 6.0)];
+        let walls: Vec<WallPiece> =
+            vec![(Some("L1".into()), Handle(1), rect(0.0, 36.0), [84.0, 108.0]), (Some("L1".into()), Handle(2), rect(36.0, 120.0), [0.0, 108.0])];
+        let at = Vec2::new(24.0, 8.0);
+        let head = wall_face(&walls, "L1", at, 36.0, None).map(|f| f.wall);
+        assert_eq!(head, Some(Handle(1)), "with no height: the nearest piece");
+        let beside = wall_face(&walls, "L1", at, 36.0, Some(48.0)).expect("the wall beside the door");
+        assert_eq!(beside.wall, Handle(2));
+        assert!((beside.at.x - 36.0).abs() < 1e-9 && (beside.at.y - 6.0).abs() < 1e-9, "at the jamb: {:?}", beside.at);
+        assert!(wall_face(&walls, "L1", at, 6.0, Some(48.0)).is_none(), "out of reach: stays for review");
+    }
 }
