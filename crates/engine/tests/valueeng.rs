@@ -45,20 +45,20 @@ fn code_texts(construction: &str) -> Value {
 }
 
 /// A made-up one-storey building: two units (rooms 101 and 102) with a panel each of the
-/// typical schedule G, fed from DP1 by feeder 1 (aluminum 2/0, 2" EMT); circuit G-1 in each
+/// typical schedule U, fed from DPA by feeder 1 (aluminum 2/0, 2" EMT); circuit U-1 in each
 /// unit; a common-area circuit LP1-1 and a service-room circuit LP1-3 on panel LP1.
 fn building(dir: &std::path::Path) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     let tags = vec![
-        receptacle(1, 5.0, 5.0, "G-1"),
-        receptacle(2, 12.0, 5.0, "G-1"),
-        receptacle(3, 45.0, 5.0, "G-1"),
-        receptacle(4, 52.0, 5.0, "G-1"),
+        receptacle(1, 5.0, 5.0, "U-1"),
+        receptacle(2, 12.0, 5.0, "U-1"),
+        receptacle(3, 45.0, 5.0, "U-1"),
+        receptacle(4, 52.0, 5.0, "U-1"),
         receptacle(5, 20.0, -20.0, "LP1-1"),
         receptacle(6, 30.0, -20.0, "LP1-1"),
         receptacle(7, 30.0, -40.0, "LP1-3"),
-        circuit("circuit:L1:room-101:G-1", "G-1", "G"),
+        circuit("circuit:L1:room-101:U-1", "U-1", "U"),
         circuit("circuit:L1:E-101:LP1-1", "LP1-1", "LP1"),
         circuit("circuit:L1:E-101:LP1-3", "LP1-3", "LP1"),
     ];
@@ -71,22 +71,22 @@ fn building(dir: &std::path::Path) -> Session {
         "mep": {
             "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2, 2], "bottom_ft": 10, "show": true}],
             "panel_schedules": [
-                {"panel": "G", "typical_of": 2, "circuits": [{"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}]},
-                {"panel": "DP1", "circuits": [{"number": "1", "description": "PANEL G (2 UNITS)", "breaker": "125", "poles": 2}]},
+                {"panel": "U", "typical_of": 2, "circuits": [{"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}]},
+                {"panel": "DPA", "circuits": [{"number": "1", "description": "PANEL U (2 UNITS)", "breaker": "125", "poles": 2}]},
                 {"panel": "LP1", "circuits": [{"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1}, {"number": "3", "description": "RECEPTACLES", "breaker": "20", "poles": 1}]}
             ],
             "feeders": [
-                {"tag": "1", "from": "DP1", "to": "G", "phases": 2, "neutrals": 1, "grounds": 1, "size": "2/0", "ground_size": "4", "material": "al", "conduits": 1, "conduit_in": 2, "sets": 1, "source": "FEEDER SCHEDULE E-601"}
+                {"tag": "1", "from": "DPA", "to": "U", "phases": 2, "neutrals": 1, "grounds": 1, "size": "2/0", "ground_size": "4", "material": "al", "conduits": 1, "conduit_in": 2, "sets": 1, "source": "FEEDER SCHEDULE E-601"}
             ],
             "runs": [
-                {"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder 1 DP1→G-1A", "points": [[-14, -600], [84, -600], [84, 1200]], "size_in": [2, 2], "bottoms_ft": [10, 10]},
-                {"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder 1 DP1→G-1B", "points": [[-14, -600], [580, -600], [580, 1200]], "size_in": [2, 2], "bottoms_ft": [10, 10]}
+                {"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder 1 DPA→U-1A", "points": [[-14, -600], [84, -600], [84, 1200]], "size_in": [2, 2], "bottoms_ft": [10, 10]},
+                {"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder 1 DPA→U-1B", "points": [[-14, -600], [580, -600], [580, 1200]], "size_in": [2, 2], "bottoms_ft": [10, 10]}
             ],
             "equipment": [
                 {"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5},
-                {"tag": "DP1", "kind": "panel", "level": "L1", "min": [-24, -606], "max": [-4, -594], "height_ft": 4, "bottom_ft": 2.5},
-                {"tag": "G-1A", "kind": "panel", "level": "L1", "min": [0, 1200], "max": [14, 1204], "height_ft": 2, "bottom_ft": 4.5},
-                {"tag": "G-1B", "kind": "panel", "level": "L1", "min": [480, 1200], "max": [494, 1204], "height_ft": 2, "bottom_ft": 4.5}
+                {"tag": "DPA", "kind": "panel", "level": "L1", "min": [-24, -606], "max": [-4, -594], "height_ft": 4, "bottom_ft": 2.5},
+                {"tag": "U-1A", "kind": "panel", "level": "L1", "min": [0, 1200], "max": [14, 1204], "height_ft": 2, "bottom_ft": 4.5},
+                {"tag": "U-1B", "kind": "panel", "level": "L1", "min": [480, 1200], "max": [494, 1204], "height_ft": 2, "bottom_ft": 4.5}
             ]
         }
     });
@@ -126,7 +126,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 fn study(s: &mut Session, dir: &std::path::Path, extra: Value) -> Value {
-    let mut p = json!({"specs": [dir.join("260519 - Conductors.txt").to_string_lossy()], "code_texts": code_texts("V-A"), "code_sheet": "G-001"});
+    let mut p = json!({"specs": [dir.join("260519 - Conductors.txt").to_string_lossy()], "code_texts": code_texts("V-A"), "code_sheet": "C-001"});
     if let (Some(m), Some(x)) = (p.as_object_mut(), extra.as_object()) {
         for (k, v) in x {
             m.insert(k.clone(), v.clone());
@@ -335,10 +335,10 @@ fn a_scenario_toggles_in_the_model_and_the_takeoff_and_its_approved_rfi_makes_it
     let has = |t: &Value, kind: &str, circuit: &str| {
         t["lines"].as_array().is_some_and(|a| a.iter().any(|l| l["kind"] == json!(kind) && l["circuit"] == json!(circuit)))
     };
-    assert!(has(&design, "conduit", "G-1") && !has(&design, "cable", "G-1"), "{design}");
+    assert!(has(&design, "conduit", "U-1") && !has(&design, "cable", "U-1"), "{design}");
     // The takeoff of the scenario: NM cable for the units' circuit, the rest as designed.
     let alt = s.execute("conduit.takeoff", &json!({"group_by": ["circuit"], "price": false, "scenario": "nm_unit_branch"})).expect("takeoff");
-    assert!(has(&alt, "cable", "G-1") && !has(&alt, "conduit", "G-1"), "{alt}");
+    assert!(has(&alt, "cable", "U-1") && !has(&alt, "conduit", "U-1"), "{alt}");
     assert!(has(&alt, "conduit", "LP1-1"), "the common area stays as designed: {alt}");
     // Shown in the model: its layer on, the design's pieces it replaces hidden; hidden again.
     let shown = s.execute("ve.scenario", &json!({"id": "nm_unit_branch", "show": true})).expect("show");
@@ -365,7 +365,7 @@ fn a_scenario_toggles_in_the_model_and_the_takeoff_and_its_approved_rfi_makes_it
     assert!(c["adopted"]["pieces"].as_u64().unwrap_or(0) > 0, "{c}");
     s.execute("conduit.reroute", &json!({})).expect("reroute");
     let t = s.execute("conduit.takeoff", &json!({"group_by": ["circuit"], "price": false})).expect("takeoff");
-    assert!(has(&t, "cable", "G-1") && !has(&t, "conduit", "G-1"), "{t}");
+    assert!(has(&t, "cable", "U-1") && !has(&t, "conduit", "U-1"), "{t}");
     assert!(has(&t, "conduit", "LP1-1"), "{t}");
     let _ = std::fs::remove_dir_all(&dir);
 }
