@@ -3536,6 +3536,28 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 mod tests {
     use super::*;
 
+    /// A spec whose MEP holds only panel schedules (read before anything is built) keeps them
+    /// when it is saved and read back.
+    #[test]
+    fn mep_with_only_panel_schedules_survives_a_save() {
+        let sp = BuildingSpec {
+            mep: Mep {
+                panel_schedules: vec![PanelSchedule {
+                    panel: "P1".into(),
+                    circuits: vec![PanelCircuit { number: "7".into(), description: "RADIO AMPLIFIER".into(), ..Default::default() }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!sp.mep.is_empty());
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.panel_schedules, sp.mep.panel_schedules);
+        let labels = Mep { labels_printed: [("P1".to_string(), "PANEL P1".to_string())].into_iter().collect(), ..Default::default() };
+        assert!(!labels.is_empty() && Mep::default().is_empty());
+    }
+
     #[test]
     fn a_spec_holding_only_schedules_keeps_them_when_saved() {
         let mut sp = BuildingSpec::default();

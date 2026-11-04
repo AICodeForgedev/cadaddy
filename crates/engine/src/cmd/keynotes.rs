@@ -5,8 +5,91 @@
 //! conduit of a size between each of its boxes (a riser), stubbed into a space, or run to its
 //! system's riser.
 
+use std::sync::OnceLock;
+
 use cadaddy_geom::Vec2;
 use cadaddy_mepfix::sheet_facts::TextItem;
+use cadaddy_walk3d::{PanelCircuit, PanelSchedule};
+use serde::Deserialize;
+
+/// The systems keynotes build and the parts of each the documents must place
+/// ([`SystemRules`]).
+const RULES: &str = include_str!("keynotes.json");
+
+/// A system keynotes build (`BDA`): its names, and the parts of it the job looks for in the
+/// documents (a head-end and its power, a donor antenna) and leaves `undecided` when no
+/// document places them.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SystemRules {
+    pub name: String,
+    pub also: Vec<String>,
+    pub title: String,
+    pub source: String,
+    pub parts: Vec<PartRule>,
+}
+
+/// One part of a system: what it is, the words a note or schedule names it by, and whether it
+/// takes power (a branch circuit of its own).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct PartRule {
+    pub part: String,
+    pub what: String,
+    pub words: Vec<String>,
+    pub powered: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Rules {
+    systems: Vec<SystemRules>,
+}
+
+/// The rules data's systems.
+pub(crate) fn systems() -> &'static [SystemRules] {
+    static R: OnceLock<Rules> = OnceLock::new();
+    &R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default()).systems
+}
+
+/// The rules for a system a note names (`BDA`); a system the data doesn't know has no parts.
+pub(crate) fn system_rules(name: &str) -> SystemRules {
+    systems()
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(name) || s.also.iter().any(|a| a.eq_ignore_ascii_case(name)))
+        .cloned()
+        .unwrap_or_else(|| SystemRules { name: name.to_ascii_uppercase(), ..SystemRules::default() })
+}
+
+/// Whether `text` holds `phrase` as whole words (`BDA` in `BDA SYSTEM`, not in `ABDAL`).
+fn has_phrase(text: &str, phrase: &str) -> bool {
+    let norm = |s: &str| {
+        let s: String = s.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+        format!(" {} ", s.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    let p = norm(phrase);
+    !p.trim().is_empty() && norm(text).contains(&p)
+}
+
+impl SystemRules {
+    /// Whether a text names the system.
+    pub fn named_in(&self, text: &str) -> bool {
+        !self.name.is_empty() && (has_phrase(text, &self.name) || self.also.iter().any(|a| has_phrase(text, a)))
+    }
+}
+
+impl PartRule {
+    /// Whether a text names the part.
+    pub fn named_in(&self, text: &str) -> bool {
+        self.words.iter().any(|w| has_phrase(text, w))
+    }
+}
+
+/// The panel schedules' circuits that feed a system: those whose description names it
+/// (`BDA SYSTEM`), with their panel.
+pub(crate) fn system_circuits<'a>(sys: &SystemRules, schedules: &'a [PanelSchedule]) -> Vec<(&'a PanelSchedule, &'a PanelCircuit)> {
+    schedules.iter().flat_map(|p| p.circuits.iter().map(move |c| (p, c))).filter(|(_, c)| sys.named_in(&c.description)).take(MAX_TAGS).collect()
+}
 
 /// Most notes a list holds, lists a sheet holds, tags a sheet holds (hostile files).
 const MAX_NOTES: usize = 60;
@@ -322,6 +405,73 @@ pub(crate) struct Work {
     pub buried: bool,
     /// The note gives no conduit size: the smallest trade size is assumed.
     pub size_assumed: bool,
+    /// Its box is an antenna's (`… ANTENNA LOCATION`) or the system's riser box (`RISER
+    /// JUNCTION BOX`, or a box its conduit rises between).
+    pub antenna: bool,
+    pub riser: bool,
+    /// The conduits (of [`Work::conduits`]) the note gives a pull tape (`WITH PULL TAPE`).
+    pub pull_tape: Vec<(f64, Route)>,
+    /// The space its conduit to the riser runs in or above (`ABOVE HARD LID PORTION OF
+    /// CORRIDOR` → `CORRIDOR`), and whether over a hard (gypsum) ceiling there.
+    pub via: Option<String>,
+    pub hard_lid: bool,
+    /// The fire rating the note keeps where its work passes (`MAINTAIN 2-HOUR FIRE RATING OF
+    /// FLOORS AND WALLS`).
+    pub rating: Option<Rating>,
+}
+
+/// A fire rating a note says to keep: its hours, and whether of floors, of walls (neither said:
+/// both).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Rating {
+    pub hours: f64,
+    pub floors: bool,
+    pub walls: bool,
+}
+
+impl Rating {
+    /// `2-hour`.
+    pub fn words(&self) -> String {
+        format!("{}-hour", self.hours)
+    }
+}
+
+impl Work {
+    /// The kind its box is built as: `<system>_antenna_box`, `<system>_riser_box`, else a plain
+    /// `junction_box` (a note that names no system, or no role for its box).
+    pub fn box_kind(&self) -> String {
+        let sys = self.system.to_ascii_lowercase();
+        let role = if self.antenna {
+            "antenna"
+        } else if self.riser {
+            "riser"
+        } else {
+            ""
+        };
+        if sys.is_empty() || role.is_empty() { "junction_box".to_string() } else { format!("{sys}_{role}_box") }
+    }
+}
+
+/// The words a note gives a conduit's pull line with.
+const PULL_WORDS: [&str; 6] = ["PULL TAPE", "PULL STRING", "PULL LINE", "PULL ROPE", "PULLWIRE", "PULL WIRE"];
+/// The words that put a run over a hard (gypsum board) ceiling.
+const HARD_LID_WORDS: [&str; 4] = ["HARD LID", "HARD-LID", "HARDLID", "GYP"];
+/// The words before the space a run follows (`… PORTION OF CORRIDOR`, `ALONG THE CORRIDOR`).
+const VIA_WORDS: [&str; 5] = ["OF", "IN", "ALONG", "THROUGH", "VIA"];
+
+/// `2-HOUR`, `2 HOUR`, `TWO-HOUR`, `2 HR` → 2.
+fn hours(sentence: &str) -> Option<f64> {
+    let w: Vec<&str> = sentence.split(|c: char| c.is_whitespace() || c == '-').filter(|x| !x.is_empty()).collect();
+    let i = w.iter().position(|x| matches!(x.trim_end_matches(['.', ',']), "HOUR" | "HOURS" | "HR" | "HRS"))?;
+    let n = w.get(i.checked_sub(1)?)?;
+    let v = match *n {
+        "ONE" => 1.0,
+        "TWO" => 2.0,
+        "THREE" => 3.0,
+        "FOUR" => 4.0,
+        _ => n.trim_start_matches('(').trim_end_matches(')').parse::<f64>().ok()?,
+    };
+    (v > 0.0 && v <= 4.0).then_some(v)
 }
 
 /// The words a note uses for work in the ground or under the slab.
@@ -483,11 +633,43 @@ pub(crate) fn work(text: &str) -> Option<Work> {
             } else {
                 Route::ToRiser
             };
+            if PULL_WORDS.iter().any(|p| sentence.contains(p)) && !w.pull_tape.contains(&(size, route.clone())) {
+                w.pull_tape.push((size, route.clone()));
+            }
+            if route == Route::ToRiser {
+                w.hard_lid |= HARD_LID_WORDS.iter().any(|p| sentence.contains(p));
+                // The space named last after `OF` / `IN` / `ALONG`: `… PORTION OF CORRIDOR`.
+                let named = sw
+                    .iter()
+                    .enumerate()
+                    .skip(i + 1)
+                    .filter(|(_, y)| VIA_WORDS.contains(&y.trim_end_matches([',', '.'])))
+                    .filter_map(|(j, _)| sw.iter().skip(j + 1).find(|y| !matches!(**y, "THE" | "A" | "AN" | "EACH")))
+                    .map(|y| y.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string())
+                    .rfind(|y| !y.is_empty() && !y.chars().any(|c| c.is_ascii_digit()));
+                if named.is_some() {
+                    w.via = named;
+                }
+            }
+            if route == Route::Riser {
+                w.riser = true;
+            }
             if !w.conduits.contains(&(size, route.clone())) {
                 w.conduits.push((size, route));
             }
         }
     }
+    // Its box's role: the first sentence's words (`… CEILING MOUNTED ANTENNA LOCATION`, `… RISER
+    // JUNCTION BOX`).
+    let first = up.split(". ").next().unwrap_or_default();
+    w.antenna = first.contains("ANTENNA");
+    w.riser |= !w.antenna && first.contains("RISER");
+    // The rating it keeps: `MAINTAIN 2-HOUR FIRE RATING OF FLOORS AND WALLS`.
+    w.rating = up.split(". ").filter(|s| s.contains("RATING") || s.contains("RATED")).find_map(|s| {
+        let hours = hours(s)?;
+        let (floors, walls) = (s.contains("FLOOR"), s.contains("WALL"));
+        Some(Rating { hours, floors: floors || !walls, walls: walls || !floors })
+    });
     (w.box_in.is_some() || !w.conduits.is_empty()).then_some(w)
 }
 
@@ -602,6 +784,55 @@ mod tests {
         let sized = work("PROVIDE 1\" CONDUIT BELOW GRADE TO THE SIGN.").expect("sized");
         assert_eq!((sized.conduits.as_slice(), sized.size_assumed), ([(1.0, Route::UnderSlab)].as_slice(), false));
         assert!(buried("MIN. 48\" BELOW GRADE") && !buried("MICROWAVE BELOW"));
+    }
+
+    #[test]
+    fn a_notes_words_say_its_box_kind_pull_tape_route_and_rating() {
+        // The list's own wording: pull tape above the corridor's hard lid, the wall's rating kept.
+        let (texts, _) = sheet();
+        let l = lists(&texts).remove(0);
+        let antenna = work(&l.notes[0].text).expect("antenna");
+        assert!(antenna.antenna && !antenna.riser && antenna.hard_lid, "{antenna:?}");
+        assert_eq!((antenna.box_kind().as_str(), antenna.via.as_deref()), ("bda_antenna_box", Some("CORRIDOR")));
+        assert_eq!(antenna.pull_tape, [(1.0, Route::ToRiser)]);
+        let riser = work(&l.notes[2].text).expect("riser");
+        assert_eq!((riser.box_kind().as_str(), riser.pull_tape.len(), riser.rating.clone()), ("bda_riser_box", 0, None));
+        // Other wordings: a pull string along a gypsum-lidded corridor, a 1-hour wall rating
+        // in words; a riser box of another system, its floors 2 HR; a plain box, no system.
+        let a = work("BDA SYSTEM CEILING ANTENNA. PROVIDE 6\"X6\"X4\" JUNCTION BOX WHERE THE SYSTEM VENDOR DIRECTS. RUN 3/4\" CONDUIT WITH PULL STRING ABOVE THE GYPSUM CEILING ALONG THE CORRIDOR. KEEP THE ONE-HOUR RATING OF WALLS.").expect("a");
+        assert_eq!(
+            (a.box_in, a.pull_tape.as_slice(), a.via.as_deref(), a.hard_lid),
+            (Some([6.0, 6.0, 4.0]), [(0.75, Route::ToRiser)].as_slice(), Some("CORRIDOR"), true)
+        );
+        assert_eq!(a.rating, Some(Rating { hours: 1.0, floors: false, walls: true }));
+        let r =
+            work("DAS SYSTEM RISER JUNCTION BOX 10\"X10\"X4\". PROVIDE 1-1/4\" CONDUIT BETWEEN EACH RISER BOX. MAINTAIN 2 HR FIRE RATING OF FLOORS.")
+                .expect("r");
+        assert_eq!((r.system.as_str(), r.box_kind().as_str(), r.conduits.as_slice()), ("DAS", "das_riser_box", [(1.25, Route::Riser)].as_slice()));
+        assert_eq!(r.rating, Some(Rating { hours: 2.0, floors: true, walls: false }));
+        let plain = work("PROVIDE 4\"X4\"X2\" JUNCTION BOX FOR THE DOOR OPERATOR. KEEP THE (2) HOUR RATED ASSEMBLY.").expect("plain");
+        assert_eq!((plain.box_kind().as_str(), plain.rating.clone()), ("junction_box", Some(Rating { hours: 2.0, floors: true, walls: true })));
+        assert_eq!(Rating { hours: 2.0, floors: true, walls: true }.words(), "2-hour");
+    }
+
+    #[test]
+    fn a_systems_power_and_parts_are_named_by_whole_words() {
+        let bda = system_rules("bda");
+        let parts: Vec<&str> = bda.parts.iter().map(|p| p.part.as_str()).collect();
+        assert_eq!(parts, ["head_end", "donor_antenna"]);
+        assert!(!bda.source.is_empty(), "rules data cite their source");
+        assert!(bda.named_in("BDA SYSTEM") && bda.named_in("ERRCS PANEL") && !bda.named_in("ABDAL PUMP"));
+        assert!(bda.parts[1].named_in("RUN IT TO THE ROOF.") && !bda.parts[1].named_in("ROOFTOP UNIT"));
+        let c = |n: &str, d: &str| PanelCircuit { number: n.into(), description: d.into(), ..Default::default() };
+        let schedules = vec![
+            PanelSchedule { panel: "L1".into(), circuits: vec![c("1", "ABDAL PUMP"), c("3", "RCPT - LOBBY")], ..Default::default() },
+            PanelSchedule { panel: "H2".into(), circuits: vec![c("12", "ERRCS / BDA HEAD-END")], ..Default::default() },
+        ];
+        let fed: Vec<(&str, &str)> = system_circuits(&bda, &schedules).into_iter().map(|(p, c)| (p.panel.as_str(), c.number.as_str())).collect();
+        assert_eq!(fed, [("H2", "12")]);
+        // A system the rules data doesn't know: its name, no parts to look for.
+        let other = system_rules("Paging");
+        assert_eq!((other.name.as_str(), other.parts.len()), ("PAGING", 0));
     }
 
     #[test]
