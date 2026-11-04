@@ -95,7 +95,7 @@ fn on_circuit(boxc: &str, circuit: &str) -> bool {
 
 /// The 3D path of a run: its plan points at their segments' heights (a change of height is a
 /// vertical leg at the corner); a riser straight up from its bottom to its top.
-fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
+pub(crate) fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
     let z = |i: usize| base_z + r.bottoms_ft.get(i).or(r.bottoms_ft.last()).copied().unwrap_or(0.0) * upf;
     if let Some(top) = r.top_ft {
         let Some(p) = r.points.first() else { return Vec::new() };
@@ -287,7 +287,7 @@ fn block(m: &mut Mesh, c: Vec3, along: Vec2, w: f64, t: f64, h: f64) {
 }
 
 /// A piece's body (sheet units).
-fn body(a: &Atom, upf: f64) -> Mesh {
+pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
     let mut m = super::super::wallgen::empty_mesh();
     let r = (a.body_in.max(0.1) / 24.0) * upf;
     let dir3 = a.b - a.a;
@@ -405,6 +405,24 @@ fn wiring_method(d: &Drawing) -> Option<(String, Source)> {
     (!v.is_empty()).then(|| (v.clone(), Source::from_doc(SourceKind::Rule, &format!("project rule wiring_method/general: {v}"))))
 }
 
+/// The tags that make an atom a built MEP element (its level, source, system, kind and part).
+pub(crate) fn mep_tags(level: &str, source: Handle, system: &str, kind: &str, size: &str, item: &str, mepid: &str) -> Vec<RawTag> {
+    let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
+    let mk = if kind == "cable" { "cable" } else { "conduit" };
+    vec![
+        t(1001, super::super::wallgen::APP.into()),
+        t(1000, "mep".into()),
+        t(1000, level.to_string()),
+        t(1000, source.hex()),
+        t(1000, format!("system:{system}")),
+        t(1000, format!("kind:{mk}")),
+        t(1000, format!("part:atom:{kind}")),
+        t(1000, format!("size:{size}")),
+        t(1000, format!("type:{item}")),
+        t(1000, format!("mepid:{mepid}")),
+    ]
+}
+
 /// The atoms of the spec's electrical runs and its devices' boxes, into the model; the counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let started = web_time::Instant::now();
@@ -428,6 +446,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
 
     // -- What each run is: raceway or cable, its material, circuit and conductors. --
+    let ve_feeders = super::super::valueeng::approved_feeders(d);
     let mut paths: BTreeMap<GroupKey, (Method, Vec<Path3>)> = BTreeMap::new();
     let mut cable_circuits: BTreeSet<String> = BTreeSet::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
@@ -495,6 +514,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if cable && !circuit.is_empty() {
             cable_circuits.insert(circuit.clone());
         }
+        // A feeder an approved value engineering alternative changed: its cable, its own chain.
+        let ve = (r.system == super::super::gearbuild::FEEDER_SYSTEM).then(|| ve_feeders.get(&r.source_sheet)).flatten().and_then(|(cable, why)| {
+            let f = sp.mep.feeders.iter().find(|f| r.source_sheet.starts_with(&format!("feeder {} {}→", f.tag, f.from)))?;
+            rl.cables.contains_key(cable).then(|| (cable.clone(), why.clone(), super::super::valueeng::feeder_makeup(f)))
+        });
+        let (cable, name, source, conductors, csrc, ctag) = match ve {
+            Some((c, why, makeup)) => {
+                let src = Source::from_doc(SourceKind::Rule, &why);
+                (true, c, src.clone(), makeup, src, r.source_sheet.clone())
+            }
+            None => (cable, name, source, conductors, csrc, ctag),
+        };
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
         let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
@@ -948,20 +979,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let t = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
-        let mk = if a.kind == "cable" { "cable" } else { "conduit" };
-        let xdata = vec![
-            t(1001, super::super::wallgen::APP.into()),
-            t(1000, "mep".into()),
-            t(1000, ctx.level.clone()),
-            t(1000, ctx.source.hex()),
-            t(1000, format!("system:{system}")),
-            t(1000, format!("kind:{mk}")),
-            t(1000, format!("part:atom:{}", a.kind)),
-            t(1000, format!("size:{}", a.size)),
-            t(1000, format!("type:{}", a.item)),
-            t(1000, format!("mepid:{}/{}{}", ctx.run, a.kind, handles.len())),
-        ];
+        let xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
             Ok(h) => {
                 *by_kind.entry(a.kind).or_default() += 1;

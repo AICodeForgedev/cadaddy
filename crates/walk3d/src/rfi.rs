@@ -233,6 +233,11 @@ pub enum RfiStatus {
     Answered,
     /// Answered and built in, or not needed.
     Closed,
+    /// The design team approved what it proposed (a value engineering alternative becomes the
+    /// design).
+    Approved,
+    /// The design team turned down what it proposed.
+    Rejected,
 }
 
 impl RfiStatus {
@@ -242,11 +247,15 @@ impl RfiStatus {
             RfiStatus::Sent => "sent",
             RfiStatus::Answered => "answered",
             RfiStatus::Closed => "closed",
+            RfiStatus::Approved => "approved",
+            RfiStatus::Rejected => "rejected",
         }
     }
 
     pub fn parse(s: &str) -> Option<RfiStatus> {
-        [RfiStatus::Open, RfiStatus::Sent, RfiStatus::Answered, RfiStatus::Closed].into_iter().find(|k| k.name().eq_ignore_ascii_case(s.trim()))
+        [RfiStatus::Open, RfiStatus::Sent, RfiStatus::Answered, RfiStatus::Closed, RfiStatus::Approved, RfiStatus::Rejected]
+            .into_iter()
+            .find(|k| k.name().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -287,6 +296,9 @@ pub struct Rfi {
     /// The design team's answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// A sketch sent with it (a file beside the drawing: a marked-up plan crop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch: Option<String>,
 }
 
 impl Rfi {

@@ -27,12 +27,12 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("rfi.list", "RFI List", run_list)
             .params(
-                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit, severity?: high|medium|low, status?: open|sent|answered|closed} → {items: [{id, kind, title, severity, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?}], total, bySeverity, byKind, csv}: where the prints are silent or disagree and what was assumed meanwhile — the readers' items in the spec (with their sheets) and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
+                "{level?: name, kind?: untagged_wall|unknown_tag|sheet_conflict|height_vs_ceiling|rated_to_ceiling|double_ceiling_short_wall|head_unspecified|ceiling_unspecified|soffit_no_detail|detail_missing|detail_unused|sleeve_no_route|sleeve_no_fit, severity?: high|medium|low, status?: open|sent|answered|closed|approved|rejected} → {items: [{id, kind, title, severity, level, at, extent?, sheets, about, issue, assumed, proposed?, status, answer?}], total, bySeverity, byKind, csv}: where the prints are silent or disagree and what was assumed meanwhile — the readers' items in the spec (with their sheets) and the spec's own gaps (guessed wall and ceiling types, rated walls stopping at a ceiling, heads of wall not given…)",
             )
             .noundo(),
         CommandSpec::new("rfi.zoom", "Zoom to RFI", run_zoom).params("{id} → {id, level, window}: the plan view on the item (its extent, or 20' round it)").noundo(),
         CommandSpec::new("rfi.set", "Update RFI", run_set)
-            .params("{id, status?: open|sent|answered|closed, answer?: text, severity?: high|medium|low} → {item}: tracks an item in the spec (items from the spec's own gaps are copied into it)"),
+            .params("{id, status?: open|sent|answered|closed|approved|rejected, answer?: text, severity?: high|medium|low} → {item, value_engineering?}: tracks an item in the spec (items from the spec's own gaps are copied into it); a value engineering RFI (method_choice) approved makes its alternative the design (ve.decide)"),
         CommandSpec::new("rfi.export", "Export RFI List", run_export)
             .params(
                 "{force?: bool (replace an existing file; otherwise it is refused), path: .csv|.xlsx|.pdf, format?: csv|xlsx|pdf (default from the extension), pictures?: bool (default true; XLSX/PDF: a picture of the built model at each item, saved beside the file in <name>-pictures/), level?, kind?, severity?, status?} → {path, format, items, pictures}",
@@ -53,7 +53,7 @@ fn items(s: &Session, cmd: &str, p: &Value) -> Result<(BuildingSpec, Vec<Rfi>)> 
         None => None,
     };
     let status = match str_param(p, "status") {
-        Some(k) => Some(RfiStatus::parse(k).ok_or_else(|| bad(cmd, "`status` is open, sent, answered or closed"))?),
+        Some(k) => Some(RfiStatus::parse(k).ok_or_else(|| bad(cmd, "`status` is open, sent, answered, closed, approved or rejected"))?),
         None => None,
     };
     let level = str_param(p, "level");
@@ -124,7 +124,15 @@ fn run_zoom(s: &mut Session, p: &Value) -> Result<Value> {
 fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (mut sp, mut r) = find(s, "rfi.set", p)?;
     if let Some(st) = str_param(p, "status") {
-        r.status = RfiStatus::parse(st).ok_or_else(|| bad("rfi.set", "`status` is open, sent, answered or closed"))?;
+        r.status = RfiStatus::parse(st).ok_or_else(|| bad("rfi.set", "`status` is open, sent, answered, closed, approved or rejected"))?;
+    }
+    // A value engineering RFI's answer decides its scenario (approved: the design).
+    if r.kind == Some(RfiKind::MethodChoice) && matches!(r.status, RfiStatus::Approved | RfiStatus::Rejected) {
+        let answer = p.get("answer").and_then(Value::as_str).unwrap_or_default().chars().take(MAX_ANSWER).collect::<String>();
+        let v = super::valueeng::decide(s, &r.id, r.status.name(), "", &answer, "rfi.set")?;
+        let (sp, _) = current(s, "rfi.set")?;
+        let item = cadaddy_walk3d::rfi::list(&sp).into_iter().find(|x| x.id == r.id).unwrap_or(r);
+        return Ok(json!({ "item": item_json(&item), "value_engineering": v }));
     }
     if let Some(sv) = str_param(p, "severity") {
         r.severity = Severity::parse(sv).ok_or_else(|| bad("rfi.set", "`severity` is high, medium or low"))?;
