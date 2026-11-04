@@ -5182,6 +5182,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
+                // One room's two copies of a tag at one spot are one device (its plan read it twice).
+                let twice = one_per_spot(&mut stamped, upf_dev / 4.0);
+                if twice > 0 {
+                    progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
+                }
                 // The heights the typical rooms' plans print by their devices.
                 let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
                 if notes > 0 {
@@ -5265,7 +5270,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 connected += connect_to_equipment(&sp.mep.equipment, &mut out, reach);
                 // One connection per piece of equipment: the electrical plan's and the mechanical
                 // plan's tags of one fan, both put at it, are one.
-                let doubled = one_connection_each(&mut stamped, &mut out);
+                let doubled = one_connection_each(&mut stamped, &mut out, upf_dev);
                 if doubled > 0 {
                     progress_line(&format!("  equipment connections two plans tag, one kept: {doubled}"));
                 }
@@ -9345,17 +9350,51 @@ fn units_trade(sheet: &str) -> String {
 
 /// Leaves one equipment connection (EF, PTAC) per room and tag, the first (stamped before placed),
 /// where two plans tag one piece of equipment; how many went.
-fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>) -> usize {
+fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
     let connection = |dv: &super::readers::ReadDevice| {
         let t = dv.tag.trim().to_ascii_uppercase();
-        !dv.room.trim().is_empty() && (t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-"))
+        t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-")
     };
     let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
+    // Where each kept one is: another plan's tag put at the same equipment (in no room) is it.
+    let mut at: Vec<(String, String, [f64; 2])> = Vec::new();
     let before = stamped.len() + placed.len();
     for list in [&mut *stamped, &mut *placed] {
-        list.retain(|dv| !connection(dv) || seen.insert((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())));
+        list.retain(|dv| {
+            if !connection(dv) {
+                return true;
+            }
+            let tag = dv.tag.trim().to_ascii_uppercase();
+            let here = at.iter().any(|(l, t, p)| *l == dv.level && *t == tag && (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps);
+            let keep = if dv.room.trim().is_empty() { !here } else { seen.insert((dv.level.clone(), dv.room.clone(), tag.clone())) };
+            if keep {
+                at.push((dv.level.clone(), tag, dv.at));
+            }
+            keep
+        });
     }
     before - stamped.len() - placed.len()
+}
+
+/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices, unless
+/// their circuits differ (two counter receptacles side by side on G-5 and G-6 are two); how many
+/// went.
+fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
+    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], String)>> = BTreeMap::new();
+    let before = devices.len();
+    devices.retain(|dv| {
+        if dv.room.trim().is_empty() {
+            return true;
+        }
+        let circuit = dv.circuit.trim().to_ascii_uppercase();
+        let spots = kept.entry((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())).or_default();
+        if spots.iter().any(|(p, c)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps && (c.is_empty() || circuit.is_empty() || *c == circuit)) {
+            return false;
+        }
+        spots.push((dv.at, circuit));
+        true
+    });
+    before - devices.len()
 }
 
 /// A floor plan's device this near where a typical plan's copy of the same tag lands is that
@@ -15034,7 +15073,8 @@ type JobRoom = (String, String, Vec<cadaddy_geom::Vec2>, String);
 
 /// The rooms stage's rooms with outlines (not the ones traced from other trades' tags).
 fn job_rooms(job: &GuidedJob) -> Vec<JobRoom> {
-    job.stage(StageName::Rooms)
+    let mut rooms: Vec<JobRoom> = job
+        .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
         .and_then(|r| r.get("rooms"))
         .and_then(Value::as_array)
@@ -15053,7 +15093,101 @@ fn job_rooms(job: &GuidedJob) -> Vec<JobRoom> {
             let number = r.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
             (outline.len() >= 3 && !name.is_empty()).then_some((name, level, outline, number))
         })
-        .collect()
+        .collect();
+    // A trace that leaked through a wall into its neighbour, cut back.
+    trim_swallowed(&mut rooms);
+    rooms
+}
+
+/// How far (sheet units in feet times this) a room's box may stick out of one it is inside.
+const SWALLOW_TOL_FT: f64 = 1.0;
+
+/// A room whose traced outline leaked through a wall into its neighbour (unit 328's trace took
+/// 326 in as well): where a smaller room of its level lies inside its box, spanning the box's
+/// whole depth at one end, that end is cut off (its outline clipped to what is left).
+fn trim_swallowed(rooms: &mut [JobRoom]) {
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    // Sheet units per foot: the rooms' outlines are in the plan's units (inches on these sets).
+    let tol = SWALLOW_TOL_FT * 12.0;
+    let area = |b: &[f64; 4]| (b[2] - b[0]) * (b[3] - b[1]);
+    for i in 0..rooms.len().min(MAX_STAMPED) {
+        let Some(mut a) = boxes.get(i).copied() else { continue };
+        let level = rooms.get(i).map(|r| r.1.clone()).unwrap_or_default();
+        let mut cut = false;
+        for (j, b) in boxes.iter().enumerate() {
+            if j == i || rooms.get(j).is_none_or(|r| r.1 != level) || area(b) >= area(&a) * 0.9 {
+                continue;
+            }
+            let inside = b[0] >= a[0] - tol && b[2] <= a[2] + tol && b[1] >= a[1] - tol && b[3] <= a[3] + tol;
+            if !inside {
+                continue;
+            }
+            let full_y = b[1] <= a[1] + tol && b[3] >= a[3] - tol;
+            let full_x = b[0] <= a[0] + tol && b[2] >= a[2] - tol;
+            if full_y && b[0] <= a[0] + tol && b[2] < a[2] - tol {
+                a[0] = b[2];
+                cut = true;
+            } else if full_y && b[2] >= a[2] - tol && b[0] > a[0] + tol {
+                a[2] = b[0];
+                cut = true;
+            } else if full_x && b[1] <= a[1] + tol && b[3] < a[3] - tol {
+                a[1] = b[3];
+                cut = true;
+            } else if full_x && b[3] >= a[3] - tol && b[1] > a[1] + tol {
+                a[3] = b[1];
+                cut = true;
+            }
+        }
+        if cut && let Some(r) = rooms.get_mut(i) {
+            let clipped = clip_to_box(&r.2, a);
+            if clipped.len() >= 3 {
+                r.2 = clipped;
+            }
+        }
+    }
+}
+
+/// `poly` clipped to the box `b` (`[x0, y0, x1, y1]`).
+fn clip_to_box(poly: &[cadaddy_geom::Vec2], b: [f64; 4]) -> Vec<cadaddy_geom::Vec2> {
+    let mut out: Vec<cadaddy_geom::Vec2> = poly.to_vec();
+    // Each side: inside test and the crossing on the side's line.
+    for side in 0..4 {
+        let inside = |p: &cadaddy_geom::Vec2| match side {
+            0 => p.x >= b[0],
+            1 => p.x <= b[2],
+            2 => p.y >= b[1],
+            _ => p.y <= b[3],
+        };
+        let cross = |p: cadaddy_geom::Vec2, q: cadaddy_geom::Vec2| {
+            let t = match side {
+                0 => (b[0] - p.x) / (q.x - p.x),
+                1 => (b[2] - p.x) / (q.x - p.x),
+                2 => (b[1] - p.y) / (q.y - p.y),
+                _ => (b[3] - p.y) / (q.y - p.y),
+            };
+            p + (q - p) * if t.is_finite() { t } else { 0.0 }
+        };
+        let input = std::mem::take(&mut out);
+        let n = input.len();
+        for k in 0..n {
+            let (Some(&p), Some(&q)) = (input.get(k), input.get((k + 1) % n)) else { continue };
+            match (inside(&p), inside(&q)) {
+                (true, true) => out.push(q),
+                (true, false) => out.push(cross(p, q)),
+                (false, true) => {
+                    out.push(cross(p, q));
+                    out.push(q);
+                }
+                (false, false) => {}
+            }
+        }
+    }
+    out
 }
 
 /// The room types (the words of a name several rooms carry) and every word they use.
@@ -20405,6 +20539,30 @@ mod tests {
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
+    /// A room's two copies of a tag at one spot are one; the same tag a foot away, another room's
+    /// at that spot, or one on another circuit, stay.
+    #[test]
+    fn one_device_per_room_tag_and_spot() {
+        let dv = |tag: &str, room: &str, x: f64| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            room: room.into(),
+            at: [x, 0.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut d = vec![dv("S", "219", 10.0), dv("S", "219", 10.5), dv("S", "219", 22.0), dv("S", "221", 10.0), dv("SD", "219", 10.0)];
+        assert_eq!(one_per_spot(&mut d, 3.0), 1);
+        assert_eq!(d.len(), 4);
+        // Two receptacles side by side on two circuits are two.
+        let on = |mut d: super::super::readers::ReadDevice, c: &str| {
+            d.circuit = c.into();
+            d
+        };
+        let mut r = vec![on(dv("REC", "219", 10.0), "G-5"), on(dv("REC", "219", 10.2), "G-6"), on(dv("REC", "219", 10.1), "G-5")];
+        assert_eq!(one_per_spot(&mut r, 3.0), 1);
+        assert_eq!(r.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-5", "G-6"]);
+    }
+
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection
     /// per room; two rooms' fans are two.
     #[test]
@@ -20417,8 +20575,18 @@ mod tests {
         };
         let mut stamped = vec![dv("EF", "103"), dv("EF", "105"), dv("REC", "103"), dv("REC", "103")];
         let mut placed = vec![dv("EF", "103"), dv("PTAC", "103")];
-        assert_eq!(one_connection_each(&mut stamped, &mut placed), 1);
+        assert_eq!(one_connection_each(&mut stamped, &mut placed, 12.0), 1);
         assert_eq!((stamped.len(), placed.len()), (4, 1));
+        // The floor plans' tags of a unit's fan, put at it (in no room), are its one; a corridor's
+        // fan elsewhere stays.
+        let at = |mut d: super::super::readers::ReadDevice, x: f64| {
+            d.at = [x, 0.0];
+            d
+        };
+        let mut stamped = vec![at(dv("EF", "103"), 100.0)];
+        let mut placed = vec![at(dv("EF", ""), 100.0), at(dv("EF", ""), 104.0), at(dv("EF", ""), 400.0)];
+        assert_eq!(one_connection_each(&mut stamped, &mut placed, 12.0), 2);
+        assert_eq!(placed.iter().map(|d| d.at[0]).collect::<Vec<_>>(), vec![400.0]);
     }
 
     /// The note as a sheet prints it: its heading, then each item's name and height in two
@@ -20521,6 +20689,26 @@ mod tests {
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
+    }
+
+    /// A unit's trace that leaked through the wall into its neighbour (two units wide) is cut back
+    /// to its own half; the neighbour, and a room no smaller one is inside, stay.
+    #[test]
+    fn a_room_trace_that_took_in_its_neighbour_is_cut_back() {
+        let v = |x: f64, y: f64| cadaddy_geom::Vec2::new(x, y);
+        let rect = |x0: f64, x1: f64| vec![v(x0, 0.0), v(x1, 0.0), v(x1, 360.0), v(x0, 360.0)];
+        let mut rooms: Vec<JobRoom> = vec![
+            ("DOUBLE Q".into(), "3".into(), rect(0.0, 144.0), "326".into()),
+            ("DOUBLE Q".into(), "3".into(), rect(6.0, 294.0), "328".into()),
+            ("DOUBLE Q".into(), "3".into(), rect(300.0, 444.0), "330".into()),
+            ("LOBBY".into(), "1".into(), rect(0.0, 900.0), "141".into()),
+        ];
+        trim_swallowed(&mut rooms);
+        let xs = |i: usize| rooms.get(i).map(|r| r.2.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, p| (a.0.min(p.x), a.1.max(p.x))));
+        assert_eq!(xs(1), Some((144.0, 294.0)), "328 cut back to its own half");
+        assert_eq!(xs(0), Some((0.0, 144.0)));
+        assert_eq!(xs(2), Some((300.0, 444.0)));
+        assert_eq!(xs(3), Some((0.0, 900.0)), "another level's room");
     }
 
     /// A general note's typical mounting heights, item by item, to each one's centre.

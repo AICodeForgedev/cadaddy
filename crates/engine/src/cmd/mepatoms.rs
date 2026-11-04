@@ -1514,7 +1514,7 @@ fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let level = super::bspec::made_level(e).unwrap_or_default();
     let walls = super::propfill::wall_footprints(d);
     let centre = b.center();
-    let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf)?;
+    let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf, None)?;
     // Its depth across the face, and its front: the side its room sees.
     let depth = (b.max - b.min).dot(cadaddy_geom::Vec2::new(out.x.abs(), out.y.abs()));
     let front = centre + out * (depth / 2.0);
