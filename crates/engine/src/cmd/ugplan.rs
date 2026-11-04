@@ -1184,56 +1184,62 @@ pub(crate) fn slope_drains(sp: &mut BuildingSpec) -> Sloped {
             }
         }
     }
-    // A run's end near another run (within `join`) but not on its points (by a piece's end, where
-    // no point was added for it): joined to the nearer end of that piece.
+    // The runs' pieces as drawn (a node may sit up to `join` from a point it stands for), each
+    // with its two nodes and its run.
+    let mut drawn: Vec<([f64; 2], [f64; 2], usize, usize, usize)> = Vec::new();
+    for (k, (i, mine)) in idx.iter().zip(&node_of).enumerate() {
+        let Some(run) = sp.mep.runs.get(*i) else { continue };
+        if mine.len() != run.points.len() {
+            continue;
+        }
+        for (w, n) in run.points.windows(2).zip(mine.windows(2)) {
+            if let ([a, b], [na, nb]) = (w, n) {
+                drawn.push((*a, *b, *na, *nb, k));
+            }
+        }
+    }
     let coarse_c = piece + join;
     let mut coarse: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for (n, p) in nodes.iter().enumerate() {
-        coarse.entry(cell(*p, coarse_c)).or_default().push(n);
+    for (n, (a, b, ..)) in drawn.iter().enumerate() {
+        coarse.entry(cell([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0], coarse_c)).or_default().push(n);
     }
-    let ends: Vec<usize> = node_of.iter().flat_map(|m| m.first().copied().into_iter().chain(m.last().copied())).collect();
-    for e in ends {
-        let Some(p) = nodes.get(e).copied() else { continue };
-        // Even an end joined to another run's end (a junction of three) may sit by a third run.
+    // The drawn piece of another run nearest `p` within `within` (not one already at the node
+    // `at`): its node nearer `p`.
+    let nearest_piece = |p: [f64; 2], skip: Option<(usize, usize)>, within: f64| -> Option<(f64, usize, [f64; 2])> {
         let (cx, cy) = cell(p, coarse_c);
-        let mut best: Option<(f64, usize)> = None;
-        for k in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy))) {
-            for &a in coarse.get(&k).into_iter().flatten() {
-                for &(b, _) in adj.get(a).into_iter().flatten() {
-                    if a == e || b == e || adj.get(e).is_some_and(|l| l.iter().any(|(n, _)| *n == a || *n == b)) {
-                        continue;
-                    }
-                    let (Some(pa), Some(pb)) = (nodes.get(a).copied(), nodes.get(b).copied()) else { continue };
-                    let d = seg_dist(p, pa, pb);
-                    let near = if dist2(p, pa) <= dist2(p, pb) { a } else { b };
-                    if d <= join && best.is_none_or(|x| d < x.0) {
-                        best = Some((d, near));
-                    }
+        let span = (within / coarse_c).ceil().max(1.0) as i64;
+        let mut best: Option<(f64, usize, [f64; 2])> = None;
+        for key in (-span..=span).flat_map(|dx| (-span..=span).map(move |dy| (cx + dx, cy + dy))) {
+            for &n in coarse.get(&key).into_iter().flatten() {
+                let Some((a, b, na, nb, k)) = drawn.get(n).copied() else { continue };
+                if skip.is_some_and(|(run, at)| run == k || na == at || nb == at) {
+                    continue;
+                }
+                let d = seg_dist(p, a, b);
+                if d <= within && best.is_none_or(|x| d < x.0) {
+                    best = Some(if dist2(p, a) <= dist2(p, b) { (d, na, a) } else { (d, nb, b) });
                 }
             }
         }
-        if let Some((_, n)) = best
-            && let Some(q) = nodes.get(n).copied()
-        {
-            link(&mut adj, e, n, dist2(p, q));
+        best
+    };
+    // A run's end by another run (within `join`), where no point of that run took it: joined to
+    // the nearer end of the piece it is by (an end already joined to another's end, a junction
+    // of three, too).
+    for (k, (i, mine)) in idx.iter().zip(&node_of).enumerate() {
+        let Some(run) = sp.mep.runs.get(*i) else { continue };
+        for (e, p) in [(mine.first(), run.points.first()), (mine.last(), run.points.last())] {
+            let (Some(&e), Some(&p)) = (e, p) else { continue };
+            if let Some((_, n, q)) = nearest_piece(p, Some((k, e)), join) {
+                link(&mut adj, e, n, dist2(p, q));
+            }
         }
     }
     // Each note pinned to the nearer end of the nearest piece within reach.
     let mut pinned: BTreeMap<usize, (f64, String)> = BTreeMap::new();
     for v in &notes {
-        let mut best: Option<(f64, usize)> = None;
-        for (a, l) in adj.iter().enumerate() {
-            let Some(pa) = nodes.get(a).copied() else { continue };
-            for &(b, _) in l {
-                let Some(pb) = nodes.get(b).copied() else { continue };
-                let d = seg_dist(v.at, pa, pb);
-                if d <= reach && best.is_none_or(|x| d < x.0) {
-                    best = Some((d, if dist2(v.at, pa) <= dist2(v.at, pb) { a } else { b }));
-                }
-            }
-        }
-        match best {
-            Some((_, n)) => {
+        match nearest_piece(v.at, None, reach) {
+            Some((_, n, _)) => {
                 out.attached += 1;
                 pinned.entry(n).or_insert((v.depth_ft, v.text.clone()));
             }
