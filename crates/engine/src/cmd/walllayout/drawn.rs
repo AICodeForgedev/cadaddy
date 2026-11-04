@@ -258,7 +258,7 @@ fn symbol_moves(devs: &[Dev], drawn: &Drawn, inch: f64) -> HashMap<(String, Stri
                 let k = ((d.x / bin).round() as i64, (d.y / bin).round() as i64);
                 let v = votes.entry(k).or_insert((0, Vec2::ZERO));
                 v.0 += 1;
-                v.1 = v.1 + d;
+                v.1 += d;
                 pairs += 1;
             }
             if pairs > 200_000 {
