@@ -6485,11 +6485,13 @@ fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     match s.execute("bim.dimming", &json!({})) {
         Ok(dv) => {
             let line = format!(
-                "  dimming: {} switch legs, {} with phase and 0-10V fixtures together; 0-10V pairs on {} legs to {} fixtures",
+                "  dimming: {} switch legs, {} with phase and 0-10V fixtures together; 0-10V pairs on {} legs to {} fixtures, {} ft; dimmers {}",
                 dv.get("legs").and_then(Value::as_array).map_or(0, Vec::len),
                 dv.get("mixed").and_then(Value::as_u64).unwrap_or(0),
                 dv.pointer("/pairs/legs").and_then(Value::as_u64).unwrap_or(0),
-                dv.pointer("/pairs/fixtures").and_then(Value::as_u64).unwrap_or(0)
+                dv.pointer("/pairs/fixtures").and_then(Value::as_u64).unwrap_or(0),
+                dv.pointer("/pairs/feet").and_then(Value::as_f64).unwrap_or(0.0),
+                dv.get("dimmers").map(Value::to_string).unwrap_or_default()
             );
             report_progress(s, json!({"step": "dimming", "mixed": dv.get("mixed")}), &line);
             s.echo(line);
@@ -6510,6 +6512,12 @@ fn submittals_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
                     )
                 } else if f.contains("no dimmer") {
                     ("A 0-10V fixture on a plain switch never dims", 1, "Confirm the fixtures are meant not to dim")
+                } else if f.contains("which dimmer") || f.contains("is it a dimmer") {
+                    (
+                        "A dimmer dims the way the fixtures on its leg do; their submittals don't settle one way",
+                        2,
+                        "Ask which dimmer it is (the lighting controls schedule), or settle the fixtures' dimming",
+                    )
                 } else {
                     (
                         "A 0-10V fixture dims over its own 2-wire control pair from the dimmer or sensor",
