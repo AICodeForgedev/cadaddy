@@ -1012,7 +1012,9 @@ impl RouteCtx<'_> {
         (self.plan(a) - self.plan(b)).len() / self.upf + (self.elevation(&a.level) - self.elevation(&b.level)).abs()
     }
     fn run(&self, level: &str, src: &str, pts: Vec<[f64; 2]>, size: f64, bottom: f64, top: Option<f64>) -> cadaddy_walk3d::MepRun {
-        let mut r = super::printcond::run(FEEDER_SYSTEM, level, src, pts, size, bottom);
+        // Under the slab level's floor it is in the ground: the underground system (Q6148).
+        let buried = bottom < 0.0 && super::ugplan::slab_level(self.sp).is_some_and(|l| l.eq_ignore_ascii_case(level));
+        let mut r = super::printcond::run(if buried { super::ugplan::E_UG } else { FEEDER_SYSTEM }, level, src, pts, size, bottom);
         r.top_ft = top;
         r.size_source = "feeder schedule".into();
         r.height_source = "proposed".into();
