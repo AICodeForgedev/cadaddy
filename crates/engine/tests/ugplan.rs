@@ -36,7 +36,9 @@ fn spec() -> Value {
             ],
             "equipment": [
                 {"tag": "SB1", "kind": "switchboard", "level": "Level 1", "min": [ft(90.0), ft(30.0)], "max": [ft(93.0), ft(33.0)], "bottom_ft": 0, "height_ft": 7},
-                {"tag": "P2", "kind": "panel", "level": "Level 1", "min": [ft(10.0), ft(30.0)], "max": [ft(11.5), ft(30.5)], "bottom_ft": 4, "height_ft": 4}
+                {"tag": "P2", "kind": "panel", "level": "Level 1", "min": [ft(10.0), ft(30.0)], "max": [ft(11.5), ft(30.5)], "bottom_ft": 4, "height_ft": 4},
+                // An exhaust fan a foot from the stack: not what the stack's base feeds.
+                {"tag": "EF", "kind": "exhaust_fan", "level": "Level 1", "min": [ft(31.0), ft(10.0)], "max": [ft(32.0), ft(11.0)], "bottom_ft": 9, "height_ft": 1}
             ],
             "feeders": [{"tag": "F1", "from": "SB1", "to": "P2", "conduit_in": 3, "conduits": 2, "sets": 2, "size": "350", "material": "cu", "entry": "bottom"}],
             "runs": [
@@ -188,9 +190,39 @@ fn bad_parameters_are_refused_and_the_plan_report_needs_a_job() {
     let mut s = session();
     assert!(s.execute("ugsheets.build", &json!({"trade": "X"})).is_err());
     assert!(s.execute("ugsheets.plan", &json!({})).is_err());
-    // A scale that doesn't fit falls back to one that does; a made-up one is ignored.
-    for scale in ["1/4\" = 1'-0\"", "7/9\" = 1'-0\"", ""] {
+    // The level's plan's scale: the sheet grows to hold it (36 × 24 can't hold 100' at 1/4").
+    let b = s.execute("ugsheets.build", &json!({"scale": "1/4\" = 1'-0\"", "level": "Level 1"})).unwrap();
+    assert_eq!(b["sheets"][0]["scale"], "1/4\" = 1'-0\"", "{b}");
+    // Too large for any sheet, made up, or none: the largest that fits.
+    for scale in ["1\" = 1'-0\"", "7/9\" = 1'-0\"", ""] {
         let b = s.execute("ugsheets.build", &json!({"scale": scale, "level": "Level 1"})).unwrap();
-        assert_ne!(b["sheets"][0]["scale"], "1/4\" = 1'-0\"", "{b}");
+        assert_eq!(b["sheets"][0]["scale"], "1/8\" = 1'-0\"", "{b}");
     }
+}
+
+#[test]
+fn a_service_the_job_built_from_its_callout_is_not_missing() {
+    let mut sp = spec();
+    let before = {
+        let mut s = Session::new();
+        s.execute("bspec.set", &json!({"replace": true, "spec": sp.clone()})).unwrap();
+        s.execute("ugsheets.check", &json!({})).unwrap()
+    };
+    let missing = |r: &Value| {
+        r["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["check"] == "service_missing")
+            .map(|f| f["about"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(missing(&before), vec!["power service".to_string(), "telephone service".to_string()]);
+    // The primaries a site plan's note calls for, placed by the job.
+    sp["mep"]["runs"].as_array_mut().unwrap().push(json!({"system": "E-UG", "level": "Level 1", "source_sheet": "E-1", "height_source": "called: E-1 note (service_primary, steel elbows and risers)",
+        "points": [[ft(110.0), ft(31.5)], [ft(100.0), ft(31.5)]], "size_in": [5, 5], "bottoms_ft": [-4.4]}));
+    let mut s = Session::new();
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    let r = s.execute("ugsheets.check", &json!({})).unwrap();
+    assert_eq!(missing(&r), vec!["telephone service".to_string()], "{r}");
 }

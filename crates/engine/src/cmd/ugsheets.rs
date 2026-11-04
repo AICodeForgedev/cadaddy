@@ -38,10 +38,11 @@ const UNDER_SLAB_DEPTH_FT: f64 = 2.0;
 const STUB_RISE_FT: f64 = 1.0;
 /// Under the slab is suggested when it costs less than this share of overhead.
 const CHEAPER: f64 = 0.95;
-/// The sheet (inches on paper): size, the plan's box, the schedules' column.
-const SHEET: [f64; 2] = [36.0, 24.0];
-const PLAN: [f64; 4] = [1.0, 2.5, 24.5, 22.5];
-const SIDE_X: f64 = 25.5;
+/// The sheet sizes (inches on paper, ARCH D, E1, E), smallest first: the smallest whose plan box
+/// holds the plan at the scale asked for (the level's plan's), else the first.
+const SHEETS: [[f64; 2]; 3] = [[36.0, 24.0], [42.0, 30.0], [48.0, 36.0]];
+/// The schedules' and notes' column at a sheet's right, inches.
+const SIDE_W: f64 = 10.5;
 /// Characters in a line of the notes (0.08" text across the side column).
 const NOTE_CHARS: usize = 110;
 /// A buried electrical run this close to another trade's line (plan, feet) is a crossing to
@@ -55,7 +56,31 @@ const MAX_BENDS_DEG: f64 = 360.0;
 const MAX_PAIR_TESTS: usize = 2_000_000;
 /// The trench sections' box at the foot of the side column (paper inches): x, y, width, height
 /// of each of the two.
-const SECTION_BOX: [f64; 4] = [SIDE_X, 2.3, 4.9, 4.2];
+const SECTION_W: [f64; 3] = [2.3, 4.9, 4.2];
+
+/// A sheet's size and where its parts go (paper inches).
+#[derive(Clone, Copy, Debug)]
+struct Paper {
+    size: [f64; 2],
+    /// The plan's box `[x0, y0, x1, y1]`.
+    plan: [f64; 4],
+    side_x: f64,
+    /// The trench sections' box: x, y, width, height of each.
+    section: [f64; 4],
+}
+
+impl Paper {
+    fn of(size: [f64; 2]) -> Paper {
+        let side_x = size[0] - SIDE_W;
+        Paper { size, plan: [1.0, 2.5, side_x - 1.0, size[1] - 1.5], side_x, section: [side_x, SECTION_W[0], SECTION_W[1], SECTION_W[2]] }
+    }
+    /// The smallest sheet whose plan box holds a plan `w` × `h` feet at `per_ft` (paper inches a
+    /// foot), else the first.
+    fn holding(w: f64, h: f64, per_ft: Option<f64>) -> Paper {
+        let fits = |p: &Paper, k: f64| w * k <= p.plan[2] - p.plan[0] && h * k <= p.plan[3] - p.plan[1];
+        per_ft.and_then(|k| SHEETS.iter().map(|s| Paper::of(*s)).find(|p| fits(p, k))).unwrap_or_else(|| Paper::of(SHEETS[0]))
+    }
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -633,7 +658,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     let slab = slab_level(sp).unwrap_or_default().to_string();
     let mut pipes: Vec<Buried> = Vec::new();
     // (trade, level, at, size, top above the floor, what it feeds, run id, bottom)
-    let mut risers: Vec<(&'static str, String, [f64; 2], f64, f64, String, String)> = Vec::new();
+    let mut risers: Vec<(&'static str, String, [f64; 2], f64, f64, String, String, bool)> = Vec::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_ITEMS) {
         let Some(sys) = sp.mep.systems.iter().find(|s| s.name.eq_ignore_ascii_case(&r.system)) else { continue };
         if !matches!(sys.kind, MepKind::Conduit | MepKind::Pipe) {
@@ -652,11 +677,19 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         // A riser out of the ground: where it comes up is a stub-up.
         if let (Some(top), [at]) = (r.top_ft, r.points.as_slice()) {
             if top.is_finite() && top >= -1e-6 && finite(*at) && risers.len() < MAX_ITEMS {
-                let feeds = equipment_at(sp, &r.level, *at).map(|e| e.tag.clone()).unwrap_or_else(|| {
-                    if trade == "P" { format!("{} stack", r.system.rsplit('-').next().unwrap_or(&r.system)) } else { r.source_sheet.clone() }
-                });
+                // A stack's base is its stack (gear standing near it isn't what it feeds); a riser
+                // at no gear is named short by its source.
+                let short = |v: &str| {
+                    let v = v.strip_prefix(super::ugplan::PROPOSAL_PREFIX).unwrap_or(v);
+                    v.split(" (").next().unwrap_or(v).chars().take(24).collect::<String>()
+                };
+                let feeds = if trade == "P" {
+                    format!("{} stack", r.system.rsplit('-').next().unwrap_or(&r.system))
+                } else {
+                    equipment_at(sp, &r.level, *at).map_or_else(|| short(&r.source_sheet), |e| e.tag.clone())
+                };
                 let id = if r.id.trim().is_empty() { format!("UP-{}", i + 1) } else { r.id.clone() };
-                risers.push((trade, r.level.clone(), *at, size, top, feeds, id));
+                risers.push((trade, r.level.clone(), *at, size, top, feeds, id, r.height_source.contains("steel elbows")));
             }
             continue;
         }
@@ -794,8 +827,24 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             });
         }
     }
+    // Services the job built from the documents' callouts (Q6148): shown, not missing.
+    let called = |kind: &str| {
+        let whats: &[&str] = match kind.to_ascii_lowercase().as_str() {
+            "power" | "electric" | "electrical" => &["(service_primary", "(service_secondary"],
+            "telephone" | "telecom" | "tel" | "phone" => &["(telecom"],
+            _ => &[],
+        };
+        sp.mep
+            .runs
+            .iter()
+            .take(MAX_ITEMS)
+            .any(|r| r.height_source.starts_with(super::ugplan::CALLED_PREFIX) && whats.iter().any(|w| r.height_source.contains(w)))
+    };
     for kind in &required {
         let found: Vec<&Service> = sp.mep.services.iter().filter(|s| is_kind(s, kind)).collect();
+        if found.is_empty() && called(kind) {
+            continue;
+        }
         let at = found.iter().find_map(|s| s.at).unwrap_or([0.0, 0.0]);
         let level = found.first().map(|s| s.level.clone()).or_else(|| slab_level(sp).map(str::to_string)).unwrap_or_default();
         if found.is_empty() {
@@ -899,7 +948,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     // A riser where no run's end already comes up.
     let ends_near = 0.5 * u;
     let from_runs = stubs.len();
-    for (trade, level, at, size, top, feeds, id) in risers {
+    for (trade, level, at, size, top, feeds, id, steel) in risers {
         let taken =
             stubs.iter().take(from_runs).any(|st| st.level.eq_ignore_ascii_case(&level) && (st.at[0] - at[0]).hypot(st.at[1] - at[1]) <= ends_near);
         if taken {
@@ -915,7 +964,13 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             run: id,
             size_in: size,
             conduits: 1,
-            material: if trade == "P" { "PIPE".into() } else { "PVC Sch 80".into() },
+            material: if trade == "P" {
+                "PIPE".into()
+            } else if steel {
+                "RGS (steel elbow and riser, per note)".into()
+            } else {
+                "PVC Sch 80".into()
+            },
             height_in: (top * 12.0).max(0.0),
             mix: vec![(1, size)],
             x,
@@ -1326,7 +1381,7 @@ impl Frame {
     }
 }
 
-fn frame(pts: &[[f64; 2]], upf: f64, want: Option<f64>) -> Frame {
+fn frame(pts: &[[f64; 2]], upf: f64, want: Option<f64>, paper: &Paper) -> Frame {
     let pts: Vec<[f64; 2]> = pts.iter().copied().filter(|p| finite(*p)).collect();
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in &pts {
@@ -1338,7 +1393,8 @@ fn frame(pts: &[[f64; 2]], upf: f64, want: Option<f64>) -> Frame {
         hi = [upf, upf];
     }
     let (w, h) = (((hi[0] - lo[0]) / upf).max(1.0), ((hi[1] - lo[1]) / upf).max(1.0));
-    let (pw, ph) = (PLAN[2] - PLAN[0], PLAN[3] - PLAN[1]);
+    let plan = paper.plan;
+    let (pw, ph) = (plan[2] - plan[0], plan[3] - plan[1]);
     // The scale asked for (the level's plan's) when the plan fits at it, else the largest that fits.
     let fits = |k: &f64| w * k <= pw && h * k <= ph;
     let (per_ft, scale) = SCALES
@@ -1348,7 +1404,7 @@ fn frame(pts: &[[f64; 2]], upf: f64, want: Option<f64>) -> Frame {
         .unwrap_or((pw.min(ph) / w.max(h), "not to scale"));
     let k = per_ft / upf;
     // Centred in the plan's box.
-    let origin = [PLAN[0] + (pw - w * per_ft) / 2.0, PLAN[1] + (ph - h * per_ft) / 2.0];
+    let origin = [plan[0] + (pw - w * per_ft) / 2.0, plan[1] + (ph - h * per_ft) / 2.0];
     Frame { min: lo, k, origin, scale }
 }
 
@@ -1412,8 +1468,8 @@ impl Pen<'_> {
     /// A typical trench section at `x0` in the section box, for the runs `of`: the datum (grade
     /// or the slab's bottom), the trench, the conduits side by side at the least cover, the
     /// encasement when there is one, the warning tape, the cover dimensioned, and its notes.
-    fn section(&mut self, x0: f64, of: &[&Buried], title: &str, datum: &str) -> Result<()> {
-        let [_, y0, w, h] = SECTION_BOX;
+    fn section(&mut self, x0: f64, of: &[&Buried], title: &str, datum: &str, sbox: [f64; 4]) -> Result<()> {
+        let [_, y0, w, h] = sbox;
         let cover = of.iter().map(|r| r.depth_in).filter(|d| d.is_finite() && *d > 0.0).fold(f64::INFINITY, f64::min);
         let n = of.iter().map(|r| r.conduits).max().unwrap_or(1).clamp(1, 12);
         let size = of.iter().map(|r| r.size_in).filter(|v| v.is_finite() && *v > 0.0).fold(0.0, f64::max);
@@ -1645,11 +1701,6 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
         };
         s.execute("layout.set", &json!({ "name": layout }))?;
-        // A 36" × 24" sheet, plotted 1:1 (the plan is drawn to scale on it).
-        s.execute(
-            "pagesetup",
-            &json!({ "layout": layout, "width": SHEET[0] * 25.4, "height": SHEET[1] * 25.4, "margins": [0, 0, 0, 0], "scale": 1, "center": false }),
-        )?;
         let runs: Vec<&Buried> = mine.iter().copied().filter(|r| r.level.eq_ignore_ascii_case(level)).collect();
         let stubs: Vec<&Stub> = ug.stubs.iter().filter(|st| st.trade == trade && st.level.eq_ignore_ascii_case(level)).collect();
         let sleeves: Vec<&SleeveAt> = ug.sleeves.iter().filter(|x| x.trade == trade && x.level.eq_ignore_ascii_case(level)).collect();
@@ -1701,7 +1752,15 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect(),
             None => Vec::new(),
         };
-        let f = frame(&pts, u, want_scale);
+        // The plan's extent in feet, for the sheet that holds it at the scale asked for.
+        let ext = span(&pts, 0).zip(span(&pts, 1)).map_or((1.0, 1.0), |((x0, x1), (y0, y1))| (((x1 - x0) / u).max(1.0), ((y1 - y0) / u).max(1.0)));
+        let paper = Paper::holding(ext.0, ext.1, want_scale);
+        let f = frame(&pts, u, want_scale, &paper);
+        // The sheet, plotted 1:1 (the plan is drawn to scale on it).
+        s.execute(
+            "pagesetup",
+            &json!({ "layout": layout, "width": paper.size[0] * 25.4, "height": paper.size[1] * 25.4, "margins": [0, 0, 0, 0], "scale": 1, "center": false }),
+        )?;
         let mut pen = Pen { s, dims: 0 };
         // The sheet: the title block, else a border and a title strip.
         pen.layer(&lay("ANNO"), 7, None)?;
@@ -1710,15 +1769,15 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 pen.s.execute("insert", &json!({ "name": b, "at": [0, 0] }))?;
             }
             None => {
-                pen.rect([0.5, 0.5], [SHEET[0] - 0.5, SHEET[1] - 0.5])?;
-                pen.line([0.5, 2.0], [SHEET[0] - 0.5, 2.0])?;
+                pen.rect([0.5, 0.5], [paper.size[0] - 0.5, paper.size[1] - 0.5])?;
+                pen.line([0.5, 2.0], [paper.size[0] - 0.5, 2.0])?;
             }
         }
         pen.text([1.0, 1.2], &title, 0.3)?;
         pen.text([1.0, 1.65], "GENERATED BY CADADDY FROM THE CONTRACT DOCUMENTS - REQUIRES ENGINEER OF RECORD REVIEW", 0.14)?;
         pen.text([14.5, 1.25], GENERATED_MARK, 0.2)?;
         pen.text([1.0, 0.75], &format!("SCALE: {}", f.scale), 0.14)?;
-        pen.text([SHEET[0] - 4.0, 1.0], &number, 0.45)?;
+        pen.text([paper.size[0] - 4.0, 1.0], &number, 0.45)?;
         // The background: interior walls light, grids across the plan.
         if !inner.is_empty() {
             pen.layer(&lay("BKGD"), 9, None)?;
@@ -1727,7 +1786,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         pen.layer(&lay("GRID"), 8, Some("CENTER"))?;
-        let (lo, hi) = (f.to(f.min), [PLAN[2], PLAN[3]]);
+        let (lo, hi) = (f.to(f.min), [paper.plan[2], paper.plan[3]]);
         for (label, x) in &ug.grids.x {
             let px = f.to([*x, f.min[1]])[0];
             pen.line([px, lo[1] - 0.3], [px, hi[1]])?;
@@ -1852,9 +1911,9 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let stub_dims = pen.dims;
         // The legend: the sheet's line types and symbols drawn, then the documents' own.
-        let mut y = SHEET[1] - 1.0;
+        let mut y = paper.size[1] - 1.0;
         pen.layer(&lay("ANNO"), 7, None)?;
-        pen.text([SIDE_X, y], "LEGEND", 0.16)?;
+        pen.text([paper.side_x, y], "LEGEND", 0.16)?;
         y -= 0.32;
         let rows: [(&str, &str); 6] = [
             ("COND", "CALLED BY THE DOCUMENTS (SOURCE IN THE NOTES)"),
@@ -1880,17 +1939,17 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             };
             pen.layer(&lay(what), color, lt)?;
             match what {
-                "STUB" => pen.circle([SIDE_X + 0.4, y + 0.05], 0.08)?,
-                "SLV" => pen.rect([SIDE_X + 0.34, y - 0.01], [SIDE_X + 0.46, y + 0.11])?,
-                _ => pen.line([SIDE_X, y + 0.05], [SIDE_X + 0.8, y + 0.05])?,
+                "STUB" => pen.circle([paper.side_x + 0.4, y + 0.05], 0.08)?,
+                "SLV" => pen.rect([paper.side_x + 0.34, y - 0.01], [paper.side_x + 0.46, y + 0.11])?,
+                _ => pen.line([paper.side_x, y + 0.05], [paper.side_x + 0.8, y + 0.05])?,
             }
             pen.layer(&lay("ANNO"), 7, None)?;
-            pen.text([SIDE_X + 1.0, y], text, 0.09)?;
+            pen.text([paper.side_x + 1.0, y], text, 0.09)?;
             y -= 0.2;
         }
         for lt in legend_types.iter().take(10) {
             pen.text(
-                [SIDE_X, y],
+                [paper.side_x, y],
                 &format!("{} (DOCUMENTS' LINE TYPE, {}): CALLED WHERE THE PLANS DRAW IT", lt.text.to_ascii_uppercase(), lt.sheet),
                 0.09,
             )?;
@@ -1917,7 +1976,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             .collect();
         let mut rows = vec![["RUN", "FROM", "TO", "QTY-SIZE", "MATERIAL", "DEPTH", "LENGTH", "BENDS", "ENCASED", "BASIS"].map(String::from).to_vec()];
         rows.extend(run_rows);
-        y = pen.table(SIDE_X, y, "UNDERGROUND RUN SCHEDULE", &[0.9, 0.8, 0.8, 0.8, 1.1, 0.6, 0.7, 0.6, 0.8, 1.1], &rows)?;
+        y = pen.table(paper.side_x, y, "UNDERGROUND RUN SCHEDULE", &[0.9, 0.8, 0.8, 0.8, 1.1, 0.6, 0.7, 0.6, 0.8, 1.1], &rows)?;
         let mut rows = vec![["STUB", "FEEDS", "FROM GRID X", "FROM GRID Y", "COORD (FT)", "HEIGHT", "TYPE"].map(String::from).to_vec()];
         let ox = ug.grids.x.first().map_or(0.0, |g| g.1);
         let oy = ug.grids.y.first().map_or(0.0, |g| g.1);
@@ -1932,11 +1991,11 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 format!("{} {}", mix_text(&st.mix), st.material),
             ]);
         }
-        y = pen.table(SIDE_X, y, "STUB-UP SCHEDULE", &[0.5, 0.7, 1.7, 1.8, 1.1, 0.7, 2.4], &rows)?;
+        y = pen.table(paper.side_x, y, "STUB-UP SCHEDULE", &[0.5, 0.7, 1.7, 1.8, 1.1, 0.7, 2.4], &rows)?;
         if !sleeves.is_empty() {
             let mut rows = vec![["SLEEVE", "RUN", "THROUGH", "SIZE"].map(String::from).to_vec()];
             rows.extend(sleeves.iter().map(|x| vec![x.tag.clone(), x.run.clone(), x.through.to_ascii_uppercase(), trade_size(x.size_in)]));
-            y = pen.table(SIDE_X, y, "SLEEVES - STRUCTURAL ENGINEER TO CONFIRM", &[0.8, 2.0, 3.0, 0.8], &rows)?;
+            y = pen.table(paper.side_x, y, "SLEEVES - STRUCTURAL ENGINEER TO CONFIRM", &[0.8, 2.0, 3.0, 0.8], &rows)?;
         }
         let holds: Vec<&super::concrete::Hold> =
             if trade == "E" { ug.holds.iter().filter(|h| h.level.is_empty() || h.level.eq_ignore_ascii_case(level)).collect() } else { Vec::new() };
@@ -1946,7 +2005,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 let qty = if h.length_ft > 0.0 { format!("{} ft", r2(h.length_ft).round()) } else { h.count.to_string() };
                 vec![h.pour.clone(), h.element.clone(), h.kind.clone(), h.size.clone(), qty, h.status.to_uppercase()]
             }));
-            y = pen.table(SIDE_X, y, "POUR HOLD POINTS - CONFIRM BEFORE CONCRETE", &[0.9, 1.6, 1.1, 0.9, 1.1, 1.2], &rows)?;
+            y = pen.table(paper.side_x, y, "POUR HOLD POINTS - CONFIRM BEFORE CONCRETE", &[0.9, 1.6, 1.1, 0.9, 1.1, 1.2], &rows)?;
         }
         if !xings.is_empty() {
             let mut rows = vec![["MARK", "ELECTRICAL", "OTHER TRADE", "WHERE", "VERTICAL CLEAR"].map(String::from).to_vec()];
@@ -1959,7 +2018,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                     x.separation_in.map_or("VERIFY".into(), |v| format!("{}\"", r2(v))),
                 ]
             }));
-            y = pen.table(SIDE_X, y, "CROSSINGS - POTHOLE AND VERIFY BEFORE TRENCHING", &[0.6, 1.2, 3.6, 1.2, 1.2], &rows)?;
+            y = pen.table(paper.side_x, y, "CROSSINGS - POTHOLE AND VERIFY BEFORE TRENCHING", &[0.6, 1.2, 3.6, 1.2, 1.2], &rows)?;
         }
         let mut notes: Vec<String> = vec![GENERATED_NOTE.into()];
         if runs.iter().any(|r| r.proposed) || (trade == "E" && !alternatives.is_empty()) {
@@ -1996,17 +2055,17 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         notes.push("VERIFY ALL STUB-UP LOCATIONS AGAINST EQUIPMENT SUBMITTALS BEFORE THE POUR.".into());
-        pen.text([SIDE_X, y], "NOTES", 0.16)?;
+        pen.text([paper.side_x, y], "NOTES", 0.16)?;
         let mut ny = y - 0.3;
         // The notes stop above the trench sections.
-        let floor = SECTION_BOX[1] + SECTION_BOX[3] + 0.3;
+        let floor = paper.section[1] + paper.section[3] + 0.3;
         'notes: for (n, note) in notes.iter().enumerate().take(40) {
             for (j, line) in wrap(&format!("{}. {note}", n + 1), NOTE_CHARS).iter().enumerate() {
                 if ny < floor {
-                    pen.text([SIDE_X, ny], "... more in ugsheets.check", 0.08)?;
+                    pen.text([paper.side_x, ny], "... more in ugsheets.check", 0.08)?;
                     break 'notes;
                 }
-                pen.text([SIDE_X + if j == 0 { 0.0 } else { 0.2 }, ny], line, 0.08)?;
+                pen.text([paper.side_x + if j == 0 { 0.0 } else { 0.2 }, ny], line, 0.08)?;
                 ny -= 0.16;
             }
             ny -= 0.06;
@@ -2021,8 +2080,8 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             if of.is_empty() {
                 continue;
             }
-            let x0 = SECTION_BOX[0] + sections as f64 * (SECTION_BOX[2] + 0.2);
-            pen.section(x0, &of, title, datum)?;
+            let x0 = paper.section[0] + sections as f64 * (paper.section[2] + 0.2);
+            pen.section(x0, &of, title, datum, paper.section)?;
             sections += 1;
         }
         // Registered to its level like the set's sheets: a sheet point is `(q - origin) / k + min`

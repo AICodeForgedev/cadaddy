@@ -22,7 +22,7 @@
   "legend": {
     "below_words": ["BELOW SLAB", "BELOW FLOOR", "BELOW GRADE", "UNDER SLAB", "UNDERSLAB", "UNDERGROUND"],
     "max_chars": 60,
-    "abbr_reach_h": 5.0,
+    "abbr_reach_h": 8.0,
     "source": "the plumbing legend's line types: a description saying below the slab and the abbreviation drawn with it"
   },
   "depths": {
@@ -33,7 +33,9 @@
     "drain_invert_ft": 2.0,
     "drain_source": "rule: a stack's base turns into the building drain 2 ft below the finished floor where the plans give no invert",
     "water_ft": 1.0,
-    "water_source": "rule: water piping below the slab 12 in below the finished floor where the plans give no depth"
+    "water_source": "rule: water piping below the slab 12 in below the finished floor where the plans give no depth",
+    "sump_discharge_in": 2.0,
+    "sump_source": "a sump pump's discharge 2 in where the note gives no size (the pump's submittal overrides)"
   },
   "site": {
     "stub_ft": 10.0,

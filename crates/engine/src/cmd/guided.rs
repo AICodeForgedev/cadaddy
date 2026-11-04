@@ -10561,13 +10561,26 @@ const MAX_UG_RFIS: usize = 60;
 
 /// A plan's scale as its view title prints it (`SCALE: 1/16" = 1'-0"`), normalized.
 fn plan_scale(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Option<String> {
+    let clean = |v: &str| v.to_ascii_uppercase().replace(['\u{201d}', '\u{2033}'], "\"").replace(['\u{2019}', '\u{2032}'], "'");
+    // The last word of a text that is a fraction or a whole number of inches (`1/16"`, `SCALE: 3/32"`).
+    let last = |v: &str| {
+        v.rsplit(|c: char| c.is_whitespace() || c == ':' || c == '=').find(|w| !w.is_empty()).unwrap_or_default().trim_end_matches('"').to_string()
+    };
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     for t in texts.iter().take(200_000) {
-        let v = t.value.to_ascii_uppercase().replace(['\u{201d}', '\u{2033}'], "\"").replace('\u{2019}', "'");
-        let Some(i) = v.find("= 1'-0\"").or_else(|| v.find("=1'-0\"")) else { continue };
-        let head = v.get(..i).unwrap_or_default().trim_end();
-        let frac: String = head.rsplit(|c: char| c.is_whitespace() || c == ':').next().unwrap_or_default().trim_end_matches('"').to_string();
-        if !frac.is_empty() && frac.chars().all(|c| c.is_ascii_digit() || c == '/') {
+        let v = clean(&t.value);
+        let Some(i) = v.find("1'-0\"") else { continue };
+        let head = v.get(..i).unwrap_or_default().replace('=', " ");
+        let mut frac = last(head.trim());
+        // Printed in pieces (`1/16"` `=` `1'-0"`): the texts just left of it on its line.
+        if frac.is_empty() && t.height.is_finite() && t.height > 0.0 {
+            let h = t.height;
+            let mut left: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+                texts.iter().filter(|o| (o.at.y - t.at.y).abs() < 0.5 * h && o.at.x < t.at.x && t.at.x - o.at.x < 12.0 * h).collect();
+            left.sort_by(|a, b| b.at.x.total_cmp(&a.at.x));
+            frac = left.iter().map(|o| last(clean(&o.value).trim())).find(|w| !w.is_empty()).unwrap_or_default();
+        }
+        if !frac.is_empty() && frac.chars().all(|c| c.is_ascii_digit() || c == '/') && frac.chars().any(|c| c.is_ascii_digit()) {
             *counts.entry(format!("{frac}\" = 1'-0\"")).or_default() += 1;
         }
     }
@@ -10586,15 +10599,27 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let Some(slab) = ugplan::slab_level(&sp) else { return Ok(()) };
     // (a) What the documents call for, and whether the set issues each trade's plan.
-    let reference = sp
-        .sheets
+    // The slab level's reference plan: its registration's, else its architectural sheet (the
+    // registrations are made later in the build).
+    let slab_sheets: Vec<&cadaddy_walk3d::levels::SheetLink> =
+        sp.sheets.iter().filter(|l| l.level.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(&slab))).collect();
+    let reference = slab_sheets
         .iter()
-        .filter(|l| l.level.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(&slab)))
-        .find_map(|l| l.registration.as_ref().map(|r| r.reference.clone()));
+        .find_map(|l| l.registration.as_ref().map(|r| r.reference.clone()))
+        .or_else(|| slab_sheets.iter().find(|l| l.discipline.as_deref().is_some_and(|d| d.eq_ignore_ascii_case("A"))).map(|l| l.number.clone()));
     let mut issued: BTreeMap<&str, String> = BTreeMap::new();
     let mut callouts: Vec<Callout> = Vec::new();
-    let mut scale: Option<String> = None;
-    let mut scale_from_reference = false;
+    // The level's plan's scale: its reference plan's view title (an architectural sheet).
+    let mut scale: Option<String> = reference.as_deref().and_then(|rf| {
+        let d = s.doc().ok()?;
+        let want = cadaddy_mepfix::printlinks::norm_sheet(rf);
+        let sh = job_sheet_refs(job)
+            .into_iter()
+            .find(|r| cadaddy_mepfix::printlinks::norm_sheet(r.number.split('/').next().unwrap_or_default()) == want)?;
+        plan_scale(&cadaddy_mepfix::sheet_facts::texts(&super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh })))
+    });
+    let mut scale_from_reference = scale.is_some();
+    let mut scale_sheet: Option<String> = if scale.is_some() { reference.clone() } else { None };
     let plumbing = s.doc().map(|d| discipline_pages(d, job, "P")).unwrap_or_default();
     for (number, sub) in pages.iter().chain(&plumbing) {
         let texts = cadaddy_mepfix::sheet_facts::texts(sub);
@@ -10622,16 +10647,13 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         }
         // The level's plan's scale: a sheet registered to the slab level (its reference first).
         let norm = cadaddy_mepfix::printlinks::norm_sheet(number);
-        let on_slab = sp.sheets.iter().any(|l| {
-            l.registration.is_some()
-                && l.level.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(&slab))
-                && cadaddy_mepfix::printlinks::norm_sheet(&l.number) == norm
-        });
+        let on_slab = slab_sheets.iter().any(|l| cadaddy_mepfix::printlinks::norm_sheet(&l.number) == norm);
         let is_reference = reference.as_deref().is_some_and(|r| cadaddy_mepfix::printlinks::norm_sheet(r) == norm);
         if (scale.is_none() && on_slab) || (is_reference && !scale_from_reference) {
             if let Some(sc) = plan_scale(&texts) {
                 scale = Some(sc);
                 scale_from_reference = is_reference;
+                scale_sheet = Some(number.clone());
             }
         }
     }
@@ -10655,7 +10677,7 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
             .collect();
         super::bspec::room_elements(d)
             .into_iter()
-            .filter(|r| r.level.eq_ignore_ascii_case(&slab))
+            .take(20_000)
             .map(|r| {
                 let off = offsets.get(&r.handle).copied().unwrap_or(cadaddy_geom::Vec2::ZERO);
                 let name = match &r.number {
@@ -10854,6 +10876,7 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         "framing_above": framing.as_ref().map(|f| json!({"kind": f.kind, "item": f.item, "members": f.members, "source": f.source})),
         "below_slab_method": method,
         "scale": scale,
+        "scale_sheet": scale_sheet,
         "rfis": rfis,
         "sleeves": check["sleeves"].as_array().map_or(0, Vec::len),
         "findings": check["findings"].as_array().map(|a| a.iter().filter(|f| f["check"] == "bearing_plane" || f["check"] == "stub_undimensioned").cloned().collect::<Vec<_>>()),
@@ -18458,6 +18481,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_plans_scale_is_read_whole_or_split_in_two_texts() {
+        let t = |x: f64, y: f64, v: &str| cadaddy_mepfix::sheet_facts::TextItem {
+            value: v.into(),
+            at: cadaddy_geom::Vec2::new(x, y),
+            height: 6.0,
+            rotation: 0.0,
+        };
+        // Whole, twice; a detail's once: the plans' scale.
+        let whole = vec![t(0.0, 0.0, "SCALE: 1/16\" = 1'-0\""), t(0.0, 100.0, "SCALE: 1/16\"=1'-0\""), t(0.0, 200.0, "SCALE: 1/4\" = 1'-0\"")];
+        assert_eq!(plan_scale(&whole).as_deref(), Some("1/16\" = 1'-0\""));
+        // Split: the fraction the text just left of it on its line.
+        let split = vec![t(0.0, 0.0, "SCALE: 3/32\""), t(40.0, 1.0, "= 1'-0\""), t(500.0, 0.0, "1/2\"")];
+        assert_eq!(plan_scale(&split).as_deref(), Some("3/32\" = 1'-0\""));
+        // In three pieces.
+        let three = vec![t(0.0, 0.0, "1/8\""), t(20.0, 0.0, "="), t(30.0, 0.0, "1'-0\"")];
+        assert_eq!(plan_scale(&three).as_deref(), Some("1/8\" = 1'-0\""));
+        // Nothing to read; a stray text.
+        assert_eq!(plan_scale(&[t(0.0, 0.0, "= 1'-0\""), t(0.0, 50.0, "NOT TO SCALE")]), None);
+    }
 
     #[test]
     fn guided_job_new_sets_stages() {

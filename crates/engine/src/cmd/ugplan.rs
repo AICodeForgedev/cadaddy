@@ -65,6 +65,8 @@ pub(crate) struct Depths {
     pub drain_source: String,
     pub water_ft: f64,
     pub water_source: String,
+    pub sump_discharge_in: f64,
+    pub sump_source: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -373,13 +375,22 @@ pub(crate) fn callouts(sheet: &str, texts: &[TextItem]) -> Vec<Callout> {
             continue;
         }
         let reach = lg.abbr_reach_h * t.height;
-        let abbr = texts
+        let near: Vec<(f64, f64, String)> = texts
             .iter()
             .filter(|o| abbreviation(&o.value) && o.rotation.abs() <= 0.01)
-            .map(|o| ((o.at - t.at).len(), o.value.trim().to_string()))
-            .filter(|(d, _)| d.is_finite() && *d <= reach)
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, v)| v);
+            .map(|o| ((o.at - t.at).len(), (o.at.y - t.at.y).abs(), o.value.trim().to_string()))
+            .filter(|(d, _, _)| d.is_finite() && *d <= reach)
+            .collect();
+        // An abbreviation starts as its description does (`CWBF`, `COLD WATER …`); the one on
+        // its row first (a legend's rows are its line types); then the nearest.
+        let initial = up.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).chars().next();
+        let abbr = near
+            .iter()
+            .min_by(|a, b| {
+                let key = |x: &(f64, f64, String)| (x.2.chars().next() != initial, x.1 > 0.8 * t.height);
+                key(a).cmp(&key(b)).then(a.0.total_cmp(&b.0))
+            })
+            .map(|(_, _, v)| v.clone());
         // A line type is drawn with its abbreviation.
         if abbr.is_none() {
             continue;
@@ -634,6 +645,56 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
     for (i, c) in called.iter().enumerate() {
         let fate = |status, n, how: String| Fate { callout: i, status, runs: n, how };
         if c.trade != "E" {
+            // A sump's discharge routed under the slab to the outside: the sump where the panel
+            // schedule's circuit for it says (an elevator's: in its hoistway).
+            let up = c.text.to_ascii_uppercase();
+            if c.what == "storm" && up.contains("SUMP") && c.from != "legend" {
+                let pr = &r.proposal;
+                let pit = sp
+                    .mep
+                    .panel_schedules
+                    .iter()
+                    .flat_map(|p| &p.circuits)
+                    .map(|ci| ci.description.to_ascii_uppercase())
+                    .find(|d| d.contains("SUMP") && has_any(d, &pr.hoistway_words))
+                    .and_then(|_| {
+                        sp.circulation
+                            .iter()
+                            .find(|x| x.level.eq_ignore_ascii_case(&slab) && matches!(x.kind, cadaddy_walk3d::CirculationKind::Hoistway))
+                            .map(|x| x.at)
+                    });
+                match (pit.filter(|p| p.iter().all(|v| v.is_finite())), slab_b) {
+                    (Some(at), Some(b)) => {
+                        let (edge, n) = nearest_edge(b, at);
+                        let out = [edge[0] + n[0] * u, edge[1] + n[1] * u];
+                        let mut pts = vec![at, [edge[0], at[1]], edge, out];
+                        if (edge[0] - at[0]).abs() < 1e-6 || (edge[1] - at[1]).abs() > (edge[0] - at[0]).abs() {
+                            pts = vec![at, [at[0], edge[1]], edge, out];
+                        }
+                        pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
+                        let size = c.size_in.unwrap_or(r.depths.sump_discharge_in);
+                        let size_from = if c.size_in.is_some() { "note".to_string() } else { format!("rule: {}", r.depths.sump_source) };
+                        let why = format!("{CALLED_PREFIX}{} ({})", c.cite(), c.what);
+                        let sys = format!("{P_UG}-ST");
+                        let mut run = super::printcond::run(&sys, &slab, &c.sheet, pts, size, -r.depths.drain_invert_ft);
+                        run.height_source = why.clone();
+                        run.size_source = size_from.clone();
+                        let mut day = super::printcond::run(&sys, &slab, &c.sheet, vec![out], size, -r.depths.drain_invert_ft);
+                        day.top_ft = Some(0.5);
+                        day.height_source = why;
+                        day.size_source = size_from;
+                        runs.push(run);
+                        runs.push(day);
+                        fates.push(fate("placed", 2, "from the sump in the elevator's hoistway (its circuit on the panel schedule) under the slab to the nearest exterior wall, up to daylight".into()));
+                    }
+                    _ => fates.push(fate(
+                        "not_placed",
+                        0,
+                        "no sump the panel schedules place (an elevator's, in its hoistway) on the slab level".into(),
+                    )),
+                }
+                continue;
+            }
             // Plumbing below the slab is what the plans draw: the pipes read below it and the
             // stacks' bases. A legend line type or a note alone locates nothing.
             let how = match (c.from, c.what.as_str()) {
@@ -650,7 +711,7 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
             fates.push(fate("placed_elsewhere", 0, "built by the keynotes step from its tag".into()));
             continue;
         }
-        let why = format!("{CALLED_PREFIX}{} ({})", c.cite(), c.what);
+        let why = format!("{CALLED_PREFIX}{} ({}{})", c.cite(), c.what, if c.steel_ells { ", steel elbows and risers" } else { "" });
         let (size, size_from) = match c.size_in {
             Some(v) => (v, "note".to_string()),
             None => (super::keynotes::BURIED_MIN_IN, "rule: smallest trade size (the note gives none)".to_string()),
@@ -706,19 +767,29 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
             }
             "telecom" => {
                 let room_word = c.room.clone().unwrap_or_default();
-                let on_slab = || rooms.iter().filter(|rm| rm.level.eq_ignore_ascii_case(&slab));
+                // The slab level's rooms first, then the levels up (a room upstairs: its riser).
+                let elevation = |l: &str| sp.level(l).map_or(f64::INFINITY, |v| v.elevation_ft);
+                let mut ordered: Vec<&Room> = rooms.iter().collect();
+                ordered.sort_by(|a, b| elevation(&a.level).total_cmp(&elevation(&b.level)));
+                let named = |w: &str| ordered.iter().copied().find(|rm| has_word(&rm.name, w));
                 // The room the note names, else a telecom room by the rules' names.
-                let target = on_slab()
+                let target = ordered
+                    .iter()
+                    .copied()
                     .find(|rm| !room_word.is_empty() && room_word.split_whitespace().all(|w| has_word(&rm.name, w)))
-                    .or_else(|| {
-                        if room_word.is_empty() { r.telecom_rooms.iter().find_map(|w| on_slab().find(|rm| has_word(&rm.name, w))) } else { None }
-                    })
-                    .and_then(|rm| room_centre(rm).map(|p| (rm.name.clone(), p)));
+                    .or_else(|| if room_word.is_empty() { r.telecom_rooms.iter().find_map(|w| named(w)) } else { None })
+                    .and_then(|rm| room_centre(rm).map(|p| (rm.name.clone(), rm.level.clone(), p)));
                 let room_word = if room_word.is_empty() { r.telecom_rooms.join("/") } else { room_word };
-                let Some((name, at)) = target else {
-                    fates.push(fate("not_placed", 0, format!("no room named {room_word} on {slab}")));
+                let Some((name, room_level, at)) = target else {
+                    fates.push(fate("not_placed", 0, format!("no room named {room_word} in the model")));
                     continue;
                 };
+                // Onto the slab level's plan (each level's plan has its own place in the drawing).
+                let corner = |l: &str| sp.level(l).and_then(|v| v.region).map_or([0.0, 0.0], |g| [g[0], g[1]]);
+                let (h, m) = (corner(&room_level), corner(&slab));
+                let at = [at[0] - h[0] + m[0], at[1] - h[1] + m[1]];
+                let rise = elevation(&room_level) - elevation(&slab);
+                let rise = if rise.is_finite() { rise.max(0.0) } else { 0.0 };
                 let Some((edge, out)) = site_point(at) else {
                     fates.push(fate("not_placed", 0, "the slab level has no outline".into()));
                     continue;
@@ -726,11 +797,12 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                 let bottom = -(cover_ft + size / 12.0);
                 let mut pts = vec![out, edge, [at[0], edge[1]], at];
                 pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6);
-                add(pts, bottom, &[(at, r.stubup.telecom_top_ft)]);
+                add(pts, bottom, &[(at, rise + r.stubup.telecom_top_ft)]);
+                let up = if rise > 0.0 { format!(", rising to it on {room_level}") } else { String::new() };
                 fates.push(fate(
                     "placed",
                     runs.len() - n_before,
-                    format!("from the street side to room {name}; site end by rule outside the nearest slab edge"),
+                    format!("from the street side under the slab to room {name}{up}; site end by rule outside the nearest slab edge"),
                 ));
             }
             "ev_charger" | "site_power" => {
@@ -1205,6 +1277,10 @@ mod tests {
             // A legend row that isn't buried, and a long note naming a slab that isn't a line type.
             t(900.0, 280.0, "COLD WATER PIPING", 5.0),
             t(880.0, 280.0, "CW", 4.0),
+            // A row whose own abbreviation is farther than another column's.
+            t(900.0, 200.0, "COLD WATER PIPING (BELOW SLAB)", 5.0),
+            t(885.0, 200.0, "HW", 4.0),
+            t(864.0, 198.0, "CWBF", 4.0),
         ];
         let c = callouts("E-101", &texts);
         let prim = c.iter().find(|c| c.what == "service_primary").expect("primary");
@@ -1219,6 +1295,8 @@ mod tests {
         let lg = c.iter().find(|c| c.from == "legend").expect("legend");
         assert_eq!((lg.trade.as_str(), lg.what.as_str(), lg.mark.as_deref()), ("P", "sanitary", Some("SANBF")));
         assert!(!c.iter().any(|c| c.text == "COLD WATER PIPING"));
+        let cw = c.iter().find(|c| c.text.contains("COLD WATER PIPING (BELOW")).expect("cw");
+        assert_eq!((cw.mark.as_deref(), cw.what.as_str()), (Some("CWBF"), "water"));
         assert_eq!(lg.cite(), "E-101 legend SANBF");
     }
 
@@ -1241,7 +1319,7 @@ mod tests {
                     ],
                     "panel_schedules": [
                         {"panel": "SB1", "circuits": [{"number": "4", "description": "LIFT", "breaker": "80", "poles": 3, "wire": "feeder 84: 1 set(s) of 4 3 cu, ground 8, in 1.5\" conduit"}]},
-                        {"panel": "P2", "circuits": [{"number": "7", "description": "ELECTRIC VEHICLE CHARGER", "breaker": "50", "poles": 2, "wire": "2#6, 1#10 G"}]}
+                        {"panel": "P2", "circuits": [{"number": "7", "description": "ELECTRIC VEHICLE CHARGER", "breaker": "50", "poles": 2, "wire": "2#6, 1#10 G"}, {"number": "9", "description": "LIFT PIT SUMP PUMP", "breaker": "20", "poles": 1, "wire": "2#12"}]}
                     ],
                     "runs": [
                         {"system": "SAN", "level": "Level 1", "points": [[600, 300]], "size_in": [4, 0], "bottoms_ft": [0], "top_ft": 10, "source_sheet": "P-201"},
@@ -1285,7 +1363,21 @@ mod tests {
         let mut lost = lost;
         lost.room = Some("VAULT".into());
         let fb = mk("floor_box", "UNDER SLAB CONDUIT FOR FLOOR BOX");
-        let (runs, fates) = place(&sp, &rooms, &[prim, tel, ev, lost, fb], &|c| c.what == "floor_box");
+        let mut sump = mk("storm", "ROUTE SUMP PUMP DISCHARGE UNDERSLAB TO EXTERIOR WALL AND DAYLIGHT");
+        sump.trade = "P".into();
+        let mut legend = mk("water", "COLD WATER PIPING (BELOW SLAB)");
+        legend.trade = "P".into();
+        legend.from = "legend";
+        let (runs, fates) = place(&sp, &rooms, &[prim, tel, ev, lost, fb, sump, legend], &|c| c.what == "floor_box");
+        // The sump's discharge: from the hoistway (its circuit names the lift) to the nearest wall
+        // (south, 100 from it) and a foot out, up to daylight.
+        let st: Vec<&MepRun> = runs.iter().filter(|r| r.system == "P-UG-ST").collect();
+        assert_eq!(st.len(), 2);
+        assert_eq!(st[0].points.first(), Some(&[300.0, 100.0]));
+        assert_eq!(st[0].points.last(), Some(&[300.0, -12.0]));
+        assert_eq!((st[0].size_in[0], st[1].top_ft), (2.0, Some(0.5)));
+        assert!(st[0].size_source.starts_with("rule:"));
+        let runs: Vec<MepRun> = runs.into_iter().filter(|r| r.system != "P-UG-ST").collect();
         assert!(runs.iter().all(|r| r.system == E_UG && r.level == "Level 1"));
         // The primary: two conduits out past the pad, at 48" cover below the floor to the top
         // (plus the conduit), coming up at the pad outside the east wall (nearest the switchboard).
@@ -1304,8 +1396,23 @@ mod tests {
         assert_eq!(ev_run.points.first(), Some(&[210.0, 502.0]));
         assert!(ev_run.size_source.contains("smallest"));
         let status: Vec<&str> = fates.iter().map(|f| f.status).collect();
-        assert_eq!(status, vec!["placed", "placed", "placed", "not_placed", "placed_elsewhere"]);
+        assert_eq!(status, vec!["placed", "placed", "placed", "not_placed", "placed_elsewhere", "placed", "not_placed"]);
+        assert!(fates[6].how.contains("line pattern"));
         assert!(fates[3].how.contains("VAULT"));
+        // The note's steel elbows and risers go with its runs.
+        let mut steel = mk("service_primary", "PRIMARY");
+        steel.steel_ells = true;
+        let (sr, _) = place(&sp, &rooms, &[steel], &|_| false);
+        assert!(sr.iter().all(|r| r.height_source.contains("steel elbows and risers")));
+        // A telecom room upstairs: under the slab to the riser below it, up to it.
+        let up =
+            vec![Room { level: "Level 2".into(), name: "MDF 201".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
+        let mut t2 = mk("telecom", "PROVIDE (1) 4\" CONDUIT FROM STREET TELCO TO MDF ROOM");
+        t2.room = Some("MDF".into());
+        let (tr, tf) = place(&sp, &up, &[t2], &|_| false);
+        assert_eq!(tf[0].status, "placed", "{:?}", tf[0]);
+        assert!(tf[0].how.contains("rising to it on Level 2"));
+        assert_eq!(tr.iter().find(|r| r.points.len() == 1).and_then(|r| r.top_ft), Some(11.0));
     }
 
     #[test]
