@@ -4618,22 +4618,51 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
                 // (And one tag in one unit from two sheets, the enlarged plan's and the floor's,
                 // is one fixture however far apart their registrations put it.)
-                let mut kept: Vec<(String, String, [f64; 2], String, String)> = Vec::new();
+                // Two plans' tags of one fixture (the sanitary plan's and the water plan's) on two
+                // sheets register a little apart: within [`CROSS_SHEET_FIXTURE_FT`] they are one.
+                // Of the two, the one in a unit that has no other of its tag stays (the neighbour's
+                // water closet across the wall they share is not this unit's second).
+                let across = CROSS_SHEET_FIXTURE_FT * upf_dev;
                 let before_dupes = out.len();
                 let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
-                out.retain(|dv| {
+                let mut kept: Vec<usize> = Vec::new();
+                let mut gone: BTreeSet<usize> = BTreeSet::new();
+                for i in 0..out.len() {
+                    let Some(dv) = out.get(i) else { break };
                     if dv.kind != "plumbing fixture" && dv.kind != "plumbing stack" {
-                        return true;
+                        continue;
                     }
-                    let key = (dv.tag.clone(), digits(&dv.level));
-                    let same_unit = |room: &str, sheet: &str| !dv.room.is_empty() && room == dv.room && sheet != dv.sheet;
-                    if kept.iter().any(|(t, l, at, room, sheet)| {
-                        *t == key.0 && *l == key.1 && ((at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near || same_unit(room, sheet))
-                    }) {
-                        return false;
+                    let same = |o: &super::readers::ReadDevice| {
+                        let d = (o.at[0] - dv.at[0]).hypot(o.at[1] - dv.at[1]);
+                        o.tag == dv.tag
+                            && digits(&o.level) == digits(&dv.level)
+                            && (d <= near
+                                || (d <= across && o.sheet != dv.sheet)
+                                || (!dv.room.is_empty() && o.room == dv.room && o.sheet != dv.sheet))
+                    };
+                    let Some(pos) = kept.iter().position(|&k| out.get(k).is_some_and(same)) else {
+                        kept.push(i);
+                        continue;
+                    };
+                    let k = kept.get(pos).copied().unwrap_or(i);
+                    let others = |room: &str, but: usize| {
+                        kept.iter().filter(|&&j| j != but && out.get(j).is_some_and(|o| o.room == room && o.tag == dv.tag)).count()
+                    };
+                    let theirs = out.get(k).map_or_else(String::new, |o| o.room.clone());
+                    if !dv.room.is_empty() && dv.room != theirs && others(&theirs, k) >= 1 && others(&dv.room, k) == 0 {
+                        gone.insert(k);
+                        if let Some(slot) = kept.get_mut(pos) {
+                            *slot = i;
+                        }
+                    } else {
+                        gone.insert(i);
                     }
-                    kept.push((key.0, key.1, dv.at, dv.room.clone(), dv.sheet.clone()));
-                    true
+                }
+                let mut i = 0usize;
+                out.retain(|_| {
+                    let keep = !gone.contains(&i);
+                    i += 1;
+                    keep
                 });
                 if out.len() < before_dupes {
                     progress_line(&format!("  plumbing fixtures tagged on two plans, one kept: {}", before_dupes - out.len()));
@@ -7372,6 +7401,12 @@ fn book_into_units(
 ) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
+    // The tags each unit was booked so far, and those it holds already.
+    let mut held: BTreeSet<(String, String)> = devices
+        .iter()
+        .filter(|dv| !dv.room.trim().is_empty())
+        .map(|dv| (dv.room.clone(), format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet))))
+        .collect();
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
         let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
@@ -7394,8 +7429,14 @@ fn book_into_units(
             .filter(|(l, room, poly, _)| {
                 here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&mine))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
             })
-            .max_by(|a, b| edge_distance(&a.2, p).total_cmp(&edge_distance(&b.2, p)))
+            .max_by(|a, b| {
+                // A plumbing fixture: a unit that has none of its tag yet first (two units' water
+                // closets back to back are one each).
+                let lacks = |room: &str| plumbing && !held.contains(&(room.to_string(), mine.clone()));
+                lacks(&a.1).cmp(&lacks(&b.1)).then(edge_distance(&a.2, p).total_cmp(&edge_distance(&b.2, p)))
+            })
         {
+            held.insert((room.clone(), mine.clone()));
             dv.room = room.clone();
             n += 1;
         }
@@ -7758,6 +7799,9 @@ fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[Typic
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
 const DUPLICATE_FIXTURE_FT: f64 = 2.0;
+/// Two sheets' tags of one plumbing fixture (the sanitary and the water plans'), at most this far
+/// apart (feet): less than two water closets back to back across a wall.
+const CROSS_SHEET_FIXTURE_FT: f64 = 2.75;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
