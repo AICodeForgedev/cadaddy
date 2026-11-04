@@ -409,3 +409,49 @@ fn the_job_says_where_each_devices_height_came_from_and_what_it_kept_out() {
     assert_eq!(report["placement"], *p, "the report says the same");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_luminaires_height_comes_from_its_fixture_schedule_row() {
+    let _g = serial();
+    let mut s = Session::empty();
+    s.open_drawing(two_rooms(), "Schedule heights", None);
+    let tags = vec![device(5.0, 0.8, "Q8", "luminaire", "1F1", json!({})), device(11.0, 0.8, "Q1", "luminaire", "1F2", json!({}))];
+    let extra = json!({"mep": {"fixture_schedule": [
+        {"tag": "Q8", "installation": "7'-6\" AFF", "description": "EMERGENCY LIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "Q1", "installation": "RECESSED", "description": "DOWNLIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"}
+    ]}});
+    build(&mut s, spec(tags, extra));
+    let p = props(&mut s, "Q8");
+    assert_eq!(p["mount_height"]["value"], json!(90.0), "{p:#}");
+    assert_eq!(p["mount_height"]["source"]["kind"], "schedule", "{p:#}");
+    assert_eq!(p["mount_height_from"]["value"], "fixture_schedule");
+    assert!(p["mount_height"]["source"]["doc"].as_str().is_some_and(|d| d.contains("type Q8")), "{p:#}");
+    // A row that gives no height isn't the height's document.
+    assert_ne!(props(&mut s, "Q1")["mount_height_from"]["value"], "fixture_schedule");
+}
+
+#[test]
+fn a_wall_light_its_schedule_mounts_at_eight_feet_is_set_in_its_wall() {
+    let _g = serial();
+    let mut s = Session::empty();
+    s.open_drawing(two_rooms(), "Wall pack", None);
+    // Made-up wall lights drawn a foot outside the south wall (its outer face at 0'): the
+    // schedule mounts one at 8'-0", the other at 9'-10" (above its 10' storey's top box).
+    let tags = vec![device(10.0, -1.0, "Q7", "luminaire", "1F7", json!({})), device(30.0, -1.0, "Q6", "luminaire", "1F8", json!({}))];
+    let extra = json!({"mep": {"fixture_schedule": [
+        {"tag": "Q7", "installation": "8'-0\" AFF", "description": "EXTERIOR WALL LIGHT", "source": "E-501 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "Q6", "installation": "9'-10\" AFF", "description": "EXTERIOR WALL LIGHT", "source": "E-501 LIGHT FIXTURE SCHEDULE"}
+    ]}});
+    build(&mut s, spec(tags, extra));
+    let p = props(&mut s, "Q7");
+    assert_eq!(p["mount_height"]["value"], json!(96.0), "{p:#}");
+    assert!(p["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "set in its wall: {p:#}");
+    assert!(p["placement"]["value"].as_str().is_some_and(|t| t.starts_with("in its wall")), "{p:#}");
+    // Its box in the wall's outer face (0'), not a foot out where it was drawn.
+    let (b, z0, z1) = extent(&mut s, "Q7");
+    assert!(b[1].abs() <= 0.25 && b[3] <= 6.0 + 1e-6, "in the outer face: {b:?}");
+    assert!(((z0 + z1) / 2.0 - 96.0).abs() < 0.5, "{z0} {z1}");
+    // 9'-10" is past the storey's top for a box: it stays where it was drawn.
+    let q = props(&mut s, "Q6");
+    assert!(q["host_wall"]["value"].is_null(), "{q:#}");
+}

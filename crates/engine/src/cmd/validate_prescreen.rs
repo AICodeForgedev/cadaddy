@@ -103,6 +103,8 @@ pub const RULES: [&str; 12] = [
 ];
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
+/// A built part whose top is this close under its level's ceiling, inches, is at the ceiling.
+const CEILING_BAND_IN: f64 = 12.0;
 /// Items of one expected set, and the largest count, at most.
 const MAX_EXPECT_ITEMS: usize = 50;
 const MAX_COUNT: u32 = 1_000;
@@ -529,6 +531,10 @@ struct Item {
     /// Its own height record (`mount_height`: read off a print, a note, a legend or a schedule,
     /// or a default the job assumed).
     record: Option<vh::Record>,
+    /// A built part its shape puts at the ceiling (its top within a foot of it) whose own
+    /// document height puts its middle a foot or more under it (a sconce or exit sign the
+    /// schedule mounts at `7'-6" AFF` under an 8' ceiling): G-HEIGHT measures it as a wall item.
+    aff_documented: bool,
     /// Its symbol's point on its sheet (model coordinates): plan elements only.
     sheet_at: Option<cadaddy_geom::Vec2>,
     /// The sheet it was read from, when its record says.
@@ -581,6 +587,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 built: false,
                 host: ent.and_then(stored_host),
                 record: ent.and_then(vh::record_of),
+                aff_documented: false,
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
                 source: e.source.clone().filter(|s| !s.trim().is_empty()),
             }
@@ -619,7 +626,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 let (lo, hi) = ((z0 / upf - floor) * 12.0, (z1 / upf - floor) * 12.0);
                 if !lo.is_finite() || !hi.is_finite() {
                     (None, None, Mounting::Other)
-                } else if hi >= ceiling * 12.0 - 12.0 {
+                } else if hi >= ceiling * 12.0 - CEILING_BAND_IN {
                     (Some(lo), Some((lo, hi)), Mounting::Ceiling)
                 } else if lo <= 6.0 {
                     (Some(lo), Some((lo, hi)), Mounting::Floor)
@@ -629,6 +636,10 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             }
             _ => (None, None, Mounting::Other),
         };
+        // A built part's height record is its own, else the plan element's it was built from.
+        let record = vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x)));
+        let aff_documented =
+            mounting == Mounting::Ceiling && record.as_ref().is_some_and(|r| !r.assumed && r.inches <= ceiling * 12.0 - CEILING_BAND_IN);
         let c = super::bimlook::classify(d, e);
         let mark = super::validate_kind::mark_of(e);
         let r = kinds.resolve(&kind, mark.as_deref(), Some(e));
@@ -651,8 +662,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             mounting,
             built: true,
             host: stored_host(e),
-            // A built part's height record is its own, else the plan element's it was built from.
-            record: vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x))),
+            record,
+            aff_documented,
             sheet_at: None,
             source: None,
         });
@@ -1021,8 +1032,10 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         };
         let mut why_kind: BTreeMap<String, u64> = BTreeMap::new();
         let mut skip = |why: String| *why_kind.entry(why).or_default() += 1;
-        for (it, a) in mine.iter().filter(|(it, _)| it.mounting == Mounting::Wall && applies(r, it)) {
-            let Some(z) = it.z_in else {
+        for (it, a) in mine.iter().filter(|(it, _)| (it.mounting == Mounting::Wall || it.aff_documented) && applies(r, it)) {
+            // A wall item's middle; a ceiling-band part its documents mount on a wall, its middle too.
+            let z = if it.aff_documented { it.z_span_in.map(|(lo, hi)| (lo + hi) / 2.0) } else { it.z_in };
+            let Some(z) = z else {
                 skip("no height in the model".to_string());
                 continue;
             };
@@ -2096,6 +2109,7 @@ mod tests {
             built: false,
             host: None,
             record: None,
+            aff_documented: false,
             sheet_at: None,
             source: None,
         };
