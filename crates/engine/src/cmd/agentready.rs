@@ -259,20 +259,50 @@ fn items(s: &mut Session) -> Vec<Item> {
                 Some("medium") => 1.0,
                 _ => 2.0,
             };
+            // Documents that disagree: a conflict, each document's word a candidate answer.
+            let sides: Vec<&Value> = r["sides"].as_array().into_iter().flatten().take(8).collect();
+            let conflict = r["kind"] == "conflict";
             let mut cands = Vec::new();
+            if conflict {
+                for side in &sides {
+                    if let Some(t) = side["says"].as_str().filter(|t| !t.is_empty()) {
+                        cands.push(json!({ "answer": cut(t, 200), "from": cut(side["document"].as_str().unwrap_or_default(), 120) }));
+                    }
+                }
+            }
             for k in ["proposed", "assumed"] {
                 if let Some(t) = r[k].as_str().filter(|t| !t.is_empty()) {
                     cands.push(json!({ "answer": t, "from": k }));
                 }
             }
+            let mut documents: Vec<String> = sides.iter().filter_map(|x| x["document"].as_str()).map(|x| cut(x, 120)).collect();
+            for sh in r["sheets"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if !documents.iter().any(|x| x == sh) {
+                    documents.push(sh.to_string());
+                }
+            }
+            documents.truncate(8);
+            let mut detail = json!({"issue": cut(r["issue"].as_str().unwrap_or_default(), 400), "about": cut(about, 120), "assumed": cut(r["assumed"].as_str().unwrap_or_default(), 200), "severity": r["severity"], "at": at});
+            if conflict {
+                detail["topic"] = r["topic"].clone();
+                detail["sides"] = json!(sides);
+                detail["elements"] = json!(r["elements"].as_array().map(|a| a.iter().take(20).cloned().collect::<Vec<_>>()).unwrap_or_default());
+            }
             out.push(Item {
                 id,
-                kind: "rfi",
+                kind: if conflict { "conflict" } else { "rfi" },
                 level,
-                title: cut(r["title"].as_str().unwrap_or(r["issue"].as_str().unwrap_or("gap in the prints")), 120),
-                detail: json!({"issue": cut(r["issue"].as_str().unwrap_or_default(), 400), "about": cut(about, 120), "assumed": cut(r["assumed"].as_str().unwrap_or_default(), 200), "severity": r["severity"], "at": at}),
+                title: cut(
+                    if conflict {
+                        r["issue"].as_str().unwrap_or("documents disagree")
+                    } else {
+                        r["title"].as_str().unwrap_or(r["issue"].as_str().unwrap_or("gap in the prints"))
+                    },
+                    120,
+                ),
+                detail,
                 candidates: cands,
-                documents: r["sheets"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).take(8).collect(),
+                documents,
                 documented: true,
                 rank,
                 key: r["id"].clone(),
@@ -605,6 +635,51 @@ fn question_items(s: &Session) -> Vec<Item> {
         .collect()
 }
 
+/// Whose work a class of element is, where no document says (Q6167): a question per class and
+/// aspect (its party, what of its rough-in is ours), the default that holds until answered.
+fn scope_items(s: &Session) -> Vec<Item> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    let Some(sp) = d.building_spec.as_deref().and_then(|t| cadaddy_walk3d::BuildingSpec::from_json(t).ok()) else { return Vec::new() };
+    let r = super::scope::rules();
+    super::scope::questions(d, &sp)
+        .into_iter()
+        .map(|(class, aspect, n, default)| {
+            let label = r.classes.iter().find(|c| c.class == class).map_or_else(|| class.clone(), |c| c.label.clone());
+            let (title, candidates) = if aspect == "party" {
+                (
+                    format!("Who furnishes and installs the {label}? {n} in the model; no document says ({default})"),
+                    vec![
+                        json!({"answer": r.classes.iter().find(|c| c.class == class).map_or("", |c| c.party.as_str()), "from": "the default: the trade it belongs to"}),
+                        json!({"answer": "ours", "from": "the electrical contract furnishes and installs them"}),
+                        json!({"answer": {"furnish": "owner", "install": "electrical"}, "from": "furnished by another, installed by us"}),
+                    ],
+                )
+            } else {
+                (
+                    format!("What of the {label}' rough-in is ours? {n} in the model; no document says ({default})"),
+                    vec![
+                        json!({"answer": {"ours": ["box", "ring", "conduit", "pull string"]}, "from": "a box, ring and empty conduit with a pull string"}),
+                        json!({"answer": {"ours": "none"}, "from": "nothing: the other trade does its own rough-in"}),
+                    ],
+                )
+            };
+            Item {
+                id: format!("RV-S{}", hash(&format!("scope|{class}|{aspect}"))),
+                kind: "question",
+                level: String::new(),
+                title: cut(&title, 160),
+                detail: json!({"class": class, "aspect": aspect, "elements": n, "default": default}),
+                candidates,
+                documents: vec!["the specification's division of work and the sections of the trade".into(), "the general notes and the legends".into(), "the trade's submittals".into()],
+                documented: false,
+                rank: 1.7,
+                key: json!({"scope": class, "aspect": aspect}),
+                system: String::new(),
+            }
+        })
+        .collect()
+}
+
 /// Fields whose documents disagree (`bim.form.record` met a different document's value): a
 /// conflict per element and field, its values with their sources; the answer is the value that
 /// holds, citing the document that settles it.
@@ -641,6 +716,15 @@ fn conflict_items(s: &Session) -> Vec<Item> {
 /// An answered device-mark question into the model: its devices take the kind (`not a device`
 /// takes them out), the answer and its citation their source.
 fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, who: &str) -> Result<()> {
+    // Whose work a class is (Q6167): the answer is kept as the project's rule for it.
+    if let Some(class) = item.key["scope"].as_str() {
+        let source = match cite {
+            Some(c) => format!("answered ({who}): {}", c.text()),
+            None => format!("answered ({who})"),
+        };
+        let a = if item.key["aspect"] == "ours" && !answer.is_object() { json!({"ours": answer}) } else { answer.clone() };
+        return super::scope::answer(s.doc_mut()?, class, &a, &source).map_err(|e| bad("review.resolve", e));
+    }
     let Some(kind) = answer.as_str().map(str::trim).filter(|a| !a.is_empty() && a.len() <= 60) else {
         return Err(bad(
             "review.resolve",
@@ -682,6 +766,7 @@ fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     v.extend(validation_items(s));
     v.extend(judged_items(s));
     v.extend(question_items(s));
+    v.extend(scope_items(s));
     v.extend(conflict_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
@@ -707,6 +792,9 @@ fn how(i: &Item) -> Value {
         }
         "conflict" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "20A 125V", "citation": {"kind": "submittal", "document": "the approved product data", "ref": "page 2"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
+        }
+        "question" if i.key.get("scope").is_some() => {
+            json!({"call": "review.resolve", "example": {"id": i.id, "answer": if i.key["aspect"] == "ours" { json!({"ours": ["box", "conduit"]}) } else { json!("fire alarm") }, "citation": {"kind": "spec", "document": "the division of work", "ref": "the section that says"}}, "or": "review.rfi_draft {id, question} when no document settles it"})
         }
         "question" => {
             json!({"call": "review.resolve", "example": {"id": i.id, "answer": "luminaire", "citation": {"kind": "schedule", "document": "E-001", "ref": "light fixture schedule, type C"}}, "or": "answer \"not a device\" for a grid bubble or another trade's tag"})
@@ -1129,6 +1217,15 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
             super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
         }
         "question" => answer_question(s, item, answer, cite, who),
+        // Documents that disagree (the build's checks): the answer settles the RFI.
+        "conflict" if item.key.is_string() => {
+            let text = answer.as_str().map_or_else(|| answer.to_string(), str::to_string);
+            let full = match cite {
+                Some(c) => format!("{text} [{}; {who}]", c.text()),
+                None => format!("{text} [{who}]"),
+            };
+            s.execute("rfi.set", &json!({"id": item.key, "status": "answered", "answer": full})).map(|_| ())
+        }
         "conflict" => {
             let id = item.key["conflict"].as_str().unwrap_or_default();
             super::forms::resolve_conflict(s, id, answer, &cite.map(Citation::text).unwrap_or_default(), who)
