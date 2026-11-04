@@ -1,5 +1,5 @@
 {
-  "_doc": "Value engineering (Q6154): wiring-method alternatives CADaddy weighs. `methods`: the words a specification's wiring-methods table uses for each method. Each alternative swaps the designed method for another where the code allows it: `application` words a spec application must have (and none of `application_not`), the construction types the code allows it in, the code's cites, its conditions and the places it is never used, and how the design intent is still met. Tiers: allowed_now (the spec lists the alternative for that application), needs_rfi (the code allows it, the spec doesn't).",
+  "_doc": "Value engineering (Q6154): the wiring-method alternatives CADaddy weighs, as data. `methods`: the words a specification's wiring-methods table uses for each method. `code_sheet`: the words a code-analysis sheet labels its facts with. `areas`: how the model's rooms are classified (each alternative names the classes it is never used in). Each alternative swaps the designed method for another where the code allows it: the circuits it applies to (`circuit`, `areas`, `to`), the spec application words it must match (`application`, none of `application_not`), the construction types the code allows it in, the code's cites, its conditions, the places it is never used (`excluded_areas`, with why), the ampacity column its conductors are checked at, and the design intents it is weighed against. Tiers: allowed_now (the spec lists the alternative for the application and the code allows it), needs_rfi (the code allows it, the spec doesn't), not_proposed (it can't meet the design's likely intent), not_allowed (the code doesn't allow it here). The cites are NEC numbering (2017 through 2023 keep these numbers).",
   "methods": {
     "raceway": ["SINGLE CONDUCTORS IN RACEWAY", "CONDUCTORS IN RACEWAY", "IN RACEWAY"],
     "ac": ["TYPE AC", "ARMORED CABLE"],
@@ -8,46 +8,241 @@
     "se": ["TYPE SE", "TYPE SER", "SERVICE-ENTRANCE CABLE", "SERVICE ENTRANCE CABLE"],
     "uf": ["TYPE UF"]
   },
+  "method_names": {"raceway": "conductors in raceway", "ac": "armored cable (AC)", "mc": "metal-clad cable (MC)", "nm": "nonmetallic-sheathed cable (NM)", "se": "service-entrance cable (SER)", "uf": "underground feeder cable (UF)"},
+  "code_sheet": {
+    "construction": ["CONSTRUCTION TYPE", "TYPE OF CONSTRUCTION"],
+    "sprinklered_yes": ["FULLY SPRINKLERED", "SPRINKLER SYSTEM PROVIDED", "SPRINKLER SYSTEM: PROVIDED", "SPRINKLERED: YES", "SPRINKLERED THROUGHOUT", "NFPA 13 SYSTEM", "(NFPA 13)"],
+    "sprinklered_no": ["NON-SPRINKLERED", "NONSPRINKLERED", "NOT SPRINKLERED", "UNSPRINKLERED", "SPRINKLERED: NO", "SPRINKLER SYSTEM: NONE"],
+    "sprinkler_standards": ["NFPA 13R", "NFPA 13D", "NFPA 13"],
+    "occupancy_words": ["OCCUPANCY", "GROUP"],
+    "occupancy_skip": ["TRAVEL", "DISTANCE", "MAXIMUM", "ALARM", "REQUIRED", "EXCEPTION", "SEPARATE", "LOAD", "EGRESS", "PERMIT", "SHALL", "ACCORDANCE"],
+    "occupancies": ["A-1", "A-2", "A-3", "A-4", "A-5", "B", "E", "F-1", "F-2", "H-1", "H-2", "H-3", "H-4", "H-5", "I-1", "I-2", "I-3", "I-4", "M", "R-1", "R-2", "R-3", "R-4", "S-1", "S-2", "U"],
+    "stories_words": ["STORIES", "STORY", "NUMBER OF FLOORS", "FLOORS ABOVE GRADE"],
+    "rated_words": ["HR", "HOUR", "HOURS"],
+    "rated_skip": ["ALLOWABLE", "TRAVEL", "EGRESS", "LOAD"],
+    "nec_words": ["NATIONAL ELECTRICAL CODE", "NATIONAL ELECTRIC CODE", "NFPA 70", "NEC"],
+    "source": "the code-analysis sheet's own labels (IBC chapters 3, 5, 6, 9; the codes in force)"
+  },
+  "areas": {
+    "unit": {"name": "dwelling and guest units", "source": "the router's area: a typical unit's circuits, or rooms named as units (conduitroute.json methods.unit_words)"},
+    "common": {"name": "common areas, concealed", "source": "the router's area: concealed in walls and ceilings outside the units"},
+    "exposed": {"name": "exposed (mechanical, electrical and service rooms)", "source": "the router's area: rooms named in conduitroute.json methods.exposed_rooms"},
+    "suspended": {"name": "above suspended (lay-in) ceilings", "source": "the RCP: the room's ceiling type is a suspended grid"},
+    "plenum": {"name": "air-handling (plenum) ceilings", "words": ["PLENUM"], "source": "a room or ceiling type named a plenum (NEC 300.22(C))"},
+    "rated_corridor": {"name": "fire-rated corridors", "words": ["CORRIDOR", "CORR.", "HALL"], "source": "a corridor (the spec's circulation or a room so named) where the code sheet or the wall types give rated assemblies"},
+    "below_slab": {"name": "below slabs-on-grade, in concrete and underground", "source": "a run below the floor of the lowest level"},
+    "ceiling_unknown": {"name": "ceilings the documents don't type", "source": "no RCP ceiling and no room finish over the run: whether it is a suspended ceiling's cavity is not documented", "confirm": "the documents don't say whether the ceilings over these runs are gypsum or suspended: confirm none is a suspended ceiling's cavity (NEC 334.12(A)(2)) before choosing it"}
+  },
+  "crew": {"size": 4, "hours_per_day": 8.0, "source": "company default: a crew of 4 electricians at 8 h a day (the job's own crew overrides: `crew_size`, `hours_per_day`)"},
+  "ampacity": {
+    "source": "NEC Table 310.16 (75 °C and 90 °C insulation; 60 °C column), copper and aluminum",
+    "cu": {"60": {"14": 15, "12": 20, "10": 30, "8": 40, "6": 55, "4": 70, "3": 85, "2": 95, "1": 110, "1/0": 125, "2/0": 145, "3/0": 165, "4/0": 195, "250": 215, "300": 240, "350": 260, "400": 280, "500": 320},
+           "75": {"14": 20, "12": 25, "10": 35, "8": 50, "6": 65, "4": 85, "3": 100, "2": 115, "1": 130, "1/0": 150, "2/0": 175, "3/0": 200, "4/0": 230, "250": 255, "300": 285, "350": 310, "400": 335, "500": 380},
+           "90": {"14": 25, "12": 30, "10": 40, "8": 55, "6": 75, "4": 95, "3": 115, "2": 130, "1": 145, "1/0": 170, "2/0": 195, "3/0": 225, "4/0": 260, "250": 290, "300": 320, "350": 350, "400": 380, "500": 430}},
+    "al": {"60": {"12": 15, "10": 25, "8": 35, "6": 40, "4": 55, "3": 65, "2": 75, "1": 85, "1/0": 100, "2/0": 115, "3/0": 130, "4/0": 150, "250": 170, "300": 195, "350": 210, "400": 225, "500": 260},
+           "75": {"12": 20, "10": 30, "8": 40, "6": 50, "4": 65, "3": 75, "2": 90, "1": 100, "1/0": 120, "2/0": 135, "3/0": 155, "4/0": 180, "250": 205, "300": 230, "350": 250, "400": 270, "500": 310},
+           "90": {"12": 25, "10": 35, "8": 45, "6": 55, "4": 75, "3": 85, "2": 100, "1": 115, "1/0": 135, "2/0": 150, "3/0": 175, "4/0": 205, "250": 230, "300": 260, "350": 280, "400": 305, "500": 350}},
+    "sizes": ["14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0", "3/0", "4/0", "250", "300", "350", "400", "500"],
+    "small_conductor_max_a": {"cu": {"14": 15, "12": 20, "10": 30}, "al": {"12": 15, "10": 25}},
+    "small_conductor_source": "NEC 240.4(D)",
+    "standard_ocpd_a": [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 600, 700, 800],
+    "next_size_up_source": "NEC 240.4(B): the next standard size up (240.6(A)) protects a conductor whose ampacity doesn't match one, up to 800 A",
+    "bundling": {"cables_per_opening": 2, "factors": [[4, 6, 0.80], [7, 9, 0.70], [10, 20, 0.50], [21, 30, 0.45], [31, 40, 0.40], [41, 1000, 0.35]], "source": "NEC 334.80: more than two cables of two or more current-carrying conductors through one bored hole sealed with firestop or caulk, or in contact with thermal insulation, are adjusted by 310.15(C)(1) (the 90 °C rating may be derated, the result not above the 60 °C column)"}
+  },
+  "firestop": {
+    "raceway_item": "Firestop system, through-penetration (UL listed)",
+    "cable_item": "Firestop system, cable through-penetration (UL listed)",
+    "source": "IBC 714 / NEC 300.21: each penetration of a fire-rated assembly sealed with a system listed for what passes through it (a raceway's system is not a cable's)"
+  },
+  "intents": [
+    {
+      "id": "specifier_default",
+      "reason": "specifier default: the specification's wiring-methods article lists conductors in raceway for this application as a master specification does, not for a reason the job states",
+      "detect": "spec_raceway_only",
+      "meets": "the alternative is a method the code permits for the building's construction type; the conductors, protection and routing stay as designed",
+      "risk": ""
+    },
+    {
+      "id": "fire_rating",
+      "reason": "fire rating: the runs pass through fire-rated walls or floors",
+      "detect": "rated_penetrations",
+      "meets": "each rated penetration gets a firestop system listed for cable (priced with the alternative)",
+      "risk": "a cable firestop system must be listed for the assembly and the cable; the inspector checks each one"
+    },
+    {
+      "id": "future_capacity",
+      "reason": "future capacity: the designed raceway is larger than its conductors need, so conductors can be added or replaced later",
+      "detect": "oversized_raceway",
+      "meets": "",
+      "risk": "a cable can't take more conductors: a later upgrade means new cable, not a pull; if spare capacity is the intent, keep the raceway",
+      "defeats_when_stated": ["FUTURE", "SPARE CAPACITY", "SPARE CONDUCTORS", "UPSIZE"]
+    },
+    {
+      "id": "physical_protection",
+      "reason": "physical protection: the runs are exposed where they can be damaged",
+      "detect": "exposed",
+      "meets": "",
+      "risk": "a cable exposed to damage is not permitted (NEC 330.12(1), 334.15(B)); only raceway protects it",
+      "defeats": true
+    }
+  ],
   "alternatives": [
     {
       "id": "se_unit_feeders",
       "name": "Service-entrance cable (SER) for the feeders to the units' panels",
       "circuit": "feeder",
       "to": "unit_panel",
+      "areas": ["common", "unit"],
       "application": ["FEEDER", "CONCEALED"],
       "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
       "designed": "raceway",
       "alternative": "se",
+      "cable": "SER",
       "construction": ["III", "IV", "V"],
+      "ampacity_column": "60",
+      "ampacity_why": "NEC 338.10(B)(4)(a): SE cable used as an interior feeder under Part II of Article 334, in thermal insulation, is sized by the 60 °C column",
       "code": [
         {"cite": "NEC 338.10(B)(4)(a)", "says": "Type SE cable may be used for interior wiring, feeders included, installed under Parts I and II of Article 334 (the NM rules, excluding 334.80); in thermal insulation its ampacity is the 60 °C column"},
-        {"cite": "NEC 334.10", "says": "NM-rule wiring is permitted in dwellings and in other structures permitted to be of Types III, IV and V construction, concealed behind a thermal barrier of at least a 15-minute finish rating"}
+        {"cite": "NEC 334.10(3)", "says": "NM-rule wiring is permitted in other structures permitted to be of Types III, IV and V construction, concealed behind a thermal barrier of at least a 15-minute finish rating"},
+        {"cite": "NEC 300.21", "says": "penetrations of fire-rated assemblies are firestopped to keep the rating"}
       ],
       "conditions": [
+        "the building's construction type is III, IV or V (the code sheet's)",
         "concealed in walls, floors and ceilings behind a 15-minute thermal barrier (gypsum board)",
         "the conductors' ampacity checked at the 60 °C column where the cable is in thermal insulation",
-        "the building's construction type is III, IV or V"
+        "each rated penetration sealed with a firestop system listed for cable",
+        "the authority having jurisdiction confirms (local amendments may restrict cable wiring)"
       ],
-      "excluded": ["exposed runs", "below slabs-on-grade, in concrete and underground", "wet and damp locations", "plenums and other air-handling spaces"],
-      "intent": "the feeder still runs from the same breaker to the same panel with the same conductors; only the wiring method changes, within the code's limits for the building's construction type"
+      "excluded_areas": {
+        "exposed": "NEC 334.15(B): exposed where subject to damage",
+        "plenum": "NEC 300.22(C): not in other spaces used for environmental air",
+        "below_slab": "NEC 334.12(B)(4) and 300.5: wet locations, in concrete and underground",
+        "suspended": "NEC 334.12(A)(2): not exposed within a dropped or suspended ceiling cavity of other than dwellings"
+      },
+      "intents": ["specifier_default", "fire_rating", "future_capacity", "physical_protection"]
     },
     {
       "id": "nm_unit_branch",
       "name": "Nonmetallic-sheathed cable (NM) for the branch circuits concealed in the units",
       "circuit": "branch",
-      "to": "unit_panel",
+      "areas": ["unit"],
       "application": ["BRANCH", "CONCEALED"],
       "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
       "designed": "raceway",
       "alternative": "nm",
+      "cable": "NM",
       "construction": ["III", "IV", "V"],
+      "ampacity_column": "60",
+      "ampacity_why": "NEC 334.80: NM's ampacity is the 60 °C conductor rating's",
+      "bundling": true,
       "code": [
-        {"cite": "NEC 334.10", "says": "NM is permitted in dwellings and in other structures permitted to be of Types III, IV and V construction, concealed behind a thermal barrier of at least a 15-minute finish rating"},
-        {"cite": "NEC 334.12", "says": "NM is not permitted exposed in dropped or suspended ceilings of other than dwellings, in wet or damp locations, or as service-entrance cable"}
+        {"cite": "NEC 334.10(3)", "says": "NM is permitted in other structures permitted to be of Types III, IV and V construction, concealed within walls, floors or ceilings that give a thermal barrier of at least a 15-minute finish rating"},
+        {"cite": "NEC 334.12(A)(2)", "says": "NM is not permitted exposed within a dropped or suspended ceiling cavity in other than dwellings"},
+        {"cite": "NEC 334.80", "says": "60 °C ampacity; more than two cables bundled or through one sealed bored hole are adjusted under 310.15(C)(1)"}
       ],
-      "conditions": ["concealed in walls, floors and ceilings behind a 15-minute thermal barrier (gypsum board)", "the building's construction type is III, IV or V"],
-      "excluded": ["common and public areas' exposed or suspended-ceiling runs", "below slabs-on-grade, in concrete and underground", "wet and damp locations", "plenums and other air-handling spaces"],
-      "intent": "every circuit, device and conductor size stays as designed; only the wiring method changes where the code and the spec permit it"
+      "conditions": [
+        "the building's construction type is III, IV or V (the code sheet's)",
+        "concealed in walls, floors and ceilings behind a 15-minute thermal barrier (gypsum board)",
+        "each circuit's conductors checked at the 60 °C column and, where its homerun shares a bored hole, adjusted for bundling (334.80)",
+        "each rated penetration sealed with a firestop system listed for cable",
+        "the authority having jurisdiction confirms (the specification asks for it where it lists NM)"
+      ],
+      "excluded_areas": {
+        "common": "outside the units (a separate alternative weighs the common areas)",
+        "exposed": "NEC 334.10(3): concealed only (334.15(B): exposed where subject to damage)",
+        "suspended": "NEC 334.12(A)(2): not exposed within a dropped or suspended ceiling cavity of other than dwellings",
+        "plenum": "NEC 300.22(C): not in other spaces used for environmental air",
+        "below_slab": "NEC 334.12(B)(4) and 300.5: wet locations, in concrete and underground"
+      },
+      "intents": ["specifier_default", "fire_rating", "physical_protection"]
+    },
+    {
+      "id": "nm_common_branch",
+      "name": "Nonmetallic-sheathed cable (NM) for the branch circuits concealed in common areas under gypsum ceilings",
+      "circuit": "branch",
+      "areas": ["common"],
+      "application": ["BRANCH", "CONCEALED"],
+      "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
+      "designed": "raceway",
+      "alternative": "nm",
+      "cable": "NM",
+      "construction": ["III", "IV", "V"],
+      "ampacity_column": "60",
+      "ampacity_why": "NEC 334.80: NM's ampacity is the 60 °C conductor rating's",
+      "bundling": true,
+      "code": [
+        {"cite": "NEC 334.10(3)", "says": "NM is permitted in other structures permitted to be of Types III, IV and V construction, concealed within walls, floors or ceilings that give a thermal barrier of at least a 15-minute finish rating"},
+        {"cite": "NEC 334.12(A)(2)", "says": "NM is not permitted exposed within a dropped or suspended ceiling cavity in other than dwellings"},
+        {"cite": "NEC 334.80", "says": "60 °C ampacity; more than two cables bundled or through one sealed bored hole are adjusted under 310.15(C)(1)"}
+      ],
+      "conditions": [
+        "the building's construction type is III, IV or V (the code sheet's)",
+        "only where every room the circuit serves has a gypsum (not suspended) ceiling and no plenum",
+        "each circuit's conductors checked at the 60 °C column and adjusted for bundling (334.80)",
+        "the authority having jurisdiction confirms (the specification asks for it where it lists NM)"
+      ],
+      "excluded_areas": {
+        "unit": "inside the units (a separate alternative weighs them)",
+        "exposed": "NEC 334.10(3): concealed only (334.15(B): exposed where subject to damage)",
+        "suspended": "NEC 334.12(A)(2): not exposed within a dropped or suspended ceiling cavity of other than dwellings",
+        "plenum": "NEC 300.22(C): not in other spaces used for environmental air",
+        "rated_corridor": "company default: a rated corridor's walls and ceiling membrane stay cable-free (each membrane penetration would need its own listed cable firestop; the AHJ may allow it)",
+        "ceiling_unknown": "this alternative is for documented gypsum ceilings only: the documents don't type these ceilings",
+        "below_slab": "NEC 334.12(B)(4) and 300.5: wet locations, in concrete and underground"
+      },
+      "intents": ["specifier_default", "fire_rating", "physical_protection"]
+    },
+    {
+      "id": "mc_concealed_branch",
+      "name": "Metal-clad cable (MC) for the branch circuits concealed in walls and ceilings",
+      "circuit": "branch",
+      "areas": ["unit", "common"],
+      "application": ["BRANCH", "CONCEALED"],
+      "application_not": ["CONCRETE", "SLAB", "UNDERGROUND", "EXPOSED"],
+      "designed": "raceway",
+      "alternative": "mc",
+      "cable": "MC",
+      "construction": ["I", "II", "III", "IV", "V"],
+      "ampacity_column": "75",
+      "ampacity_why": "NEC 330.80 and 110.14(C): the conductors' 90 °C rating derated, never above the terminations' 75 °C column",
+      "code": [
+        {"cite": "NEC 330.10(A)", "says": "Type MC cable is permitted for branch circuits and feeders, concealed or exposed, in any construction type, including above suspended ceilings and in spaces used for environmental air (300.22(C)(1))"},
+        {"cite": "NEC 330.30", "says": "supported within 12 in of each box and at most every 6 ft"},
+        {"cite": "NEC 300.21", "says": "penetrations of fire-rated assemblies are firestopped to keep the rating"}
+      ],
+      "conditions": [
+        "concealed, or exposed where not subject to physical damage (330.12(1))",
+        "each rated penetration sealed with a firestop system listed for the cable",
+        "the authority having jurisdiction confirms"
+      ],
+      "excluded_areas": {
+        "exposed": "NEC 330.12(1): not where subject to physical damage",
+        "below_slab": "NEC 330.12(2) and 330.10(A)(11): not in concrete or underground unless identified for it"
+      },
+      "intents": ["specifier_default", "fire_rating", "physical_protection"]
+    },
+    {
+      "id": "mc_exposed_branch",
+      "name": "Metal-clad cable (MC) for the exposed branch circuits",
+      "circuit": "branch",
+      "areas": ["exposed"],
+      "application": ["BRANCH", "EXPOSED"],
+      "application_not": ["CONCRETE", "SLAB", "UNDERGROUND"],
+      "designed": "raceway",
+      "alternative": "mc",
+      "cable": "MC",
+      "construction": ["I", "II", "III", "IV", "V"],
+      "ampacity_column": "75",
+      "ampacity_why": "NEC 330.80 and 110.14(C): the conductors' 90 °C rating derated, never above the terminations' 75 °C column",
+      "code": [
+        {"cite": "NEC 330.10(A)", "says": "Type MC cable is permitted exposed for branch circuits and feeders"},
+        {"cite": "NEC 330.12(1)", "says": "Type MC cable is not permitted where subject to physical damage"}
+      ],
+      "conditions": ["exposed only where not subject to physical damage (330.12(1))", "the authority having jurisdiction confirms"],
+      "excluded_areas": {
+        "below_slab": "NEC 330.12(2): not in concrete or underground unless identified for it"
+      },
+      "intents": ["specifier_default", "physical_protection"]
     }
   ]
 }

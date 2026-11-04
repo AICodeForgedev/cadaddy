@@ -923,6 +923,19 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 }
             });
         let known = heights.get(&mark.to_ascii_uppercase()).filter(|h| h.source != SourceKind::Default);
+        // A luminaire's height its fixture schedule row gives (`7'-6" AFF` in its installation).
+        let scheduled = {
+            let ty = super::lightsched::type_of(&mark);
+            sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty).and_then(|r| {
+                Some(Chosen {
+                    inches: mount_height_in(&r.installation)?,
+                    from: "fixture_schedule",
+                    source: SourceKind::Schedule,
+                    doc: format!("{} type {}: {}", r.source, r.tag, r.installation),
+                    datum: Datum::of(&r.installation),
+                })
+            })
+        };
         let plausible = |c: &Chosen| c.inches.is_finite() && (0.0..=240.0).contains(&c.inches);
         // The documents, in order.
         let documented = || -> Option<Chosen> {
@@ -930,6 +943,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 .map(|f| found(f, "own_note", SourceKind::Note))
                 .or_else(|| docs.elevation_of(&ask, true).map(|f| found(f, "elevation", SourceKind::Print)))
                 .or_else(|| enlarged.as_ref().map(|c| Chosen { doc: c.doc.clone(), ..*c }))
+                .or_else(|| scheduled.as_ref().map(|c| Chosen { doc: c.doc.clone(), ..*c }))
                 .or_else(|| docs.legend_of(&ask).map(|f| found(f, "legend", SourceKind::Legend)))
                 .or_else(|| {
                     known.filter(|h| h.source == SourceKind::Legend).map(|h| Chosen {
@@ -1025,7 +1039,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         // A wall device in its wall: the piece there at its height, its side.
         let wall_kind = matches!(kind, "device" | "switch" | "low voltage outlet" | "fire alarm device" | "thermostat" | "plumbing fixture")
             || field(t, "mount").as_deref() == Some("wall");
-        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < WALL_BOX_FT * 12.0 + 12.0;
+        // A wall device up to 8' high; one a document puts higher (a wall pack at 8'-0", a high
+        // sconce) up to its level's next floor.
+        let documented_height = !matches!(height.source, SourceKind::Default | SourceKind::Rule);
+        let storey_in = level.height_ft * 12.0 - BOX_IN[2];
+        let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
+        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
@@ -1085,7 +1104,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         store.set(
             "mount_height_from",
             Prop::new(height.from, Source::computed()).with_note(
-                "own_note, elevation, enlarged_plan_note, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
+                "own_note, elevation, enlarged_plan_note, fixture_schedule, legend, general_notes, project_rule (the documents, in order), ceiling, floor, equipment, wall_luminaire_rule or default",
             ),
         );
         store.set(

@@ -3515,6 +3515,8 @@
 	Object Form	Форма об'єкта
 	Price a Change	Оцінити зміну
 	Value Engineering	Інженерна оптимізація вартості
+	Value Engineering Scenario	Сценарій оптимізації вартості
+	Value Engineering Decision	Рішення щодо оптимізації вартості
 	Wall Faces	Грані стін
 	Place Devices on Wall Faces	Розмістити пристрої на гранях стін
 	Devices Follow Their Walls	Пристрої слідують за стінами
@@ -3524,3 +3526,4 @@
 	Conduit Routing Report	Звіт про трасування кабельних труб
 	Reroute Conduit	Перетрасувати кабельні труби
 	Conduit Takeoff	Відомість кабельних труб
+	Scope by Trade	Обсяг робіт за фахом

@@ -81,10 +81,13 @@ pub enum RfiKind {
     /// A wiring method the code allows that the specification doesn't list for the work, proposed
     /// for its savings in material and labor (value engineering).
     MethodChoice,
+    /// Two documents (or a document and the code) disagree: each side is cited in the item's
+    /// `sides`, and none is picked silently. Its `topic` says which check found it.
+    Conflict,
 }
 
 impl RfiKind {
-    pub const ALL: [RfiKind; 24] = [
+    pub const ALL: [RfiKind; 25] = [
         RfiKind::UntaggedWall,
         RfiKind::UnknownTag,
         RfiKind::SheetConflict,
@@ -109,6 +112,7 @@ impl RfiKind {
         RfiKind::EquipmentElectrical,
         RfiKind::Lighting,
         RfiKind::MethodChoice,
+        RfiKind::Conflict,
     ];
 
     /// The snake_case name (as in JSON).
@@ -138,6 +142,7 @@ impl RfiKind {
             RfiKind::EquipmentElectrical => "equipment_electrical",
             RfiKind::Lighting => "lighting",
             RfiKind::MethodChoice => "method_choice",
+            RfiKind::Conflict => "conflict",
         }
     }
 
@@ -172,6 +177,7 @@ impl RfiKind {
             RfiKind::EquipmentElectrical => "Equipment's submittal differs from the drawings (protection, SCCR, conductors)",
             RfiKind::Lighting => "Lighting documents disagree (plans, fixture schedule, submittal)",
             RfiKind::MethodChoice => "A wiring method the code allows and the spec doesn't list (value engineering)",
+            RfiKind::Conflict => "Documents disagree (each side cited)",
         }
     }
 
@@ -233,6 +239,11 @@ pub enum RfiStatus {
     Answered,
     /// Answered and built in, or not needed.
     Closed,
+    /// The design team approved what it proposed (a value engineering alternative becomes the
+    /// design).
+    Approved,
+    /// The design team turned down what it proposed.
+    Rejected,
 }
 
 impl RfiStatus {
@@ -242,11 +253,15 @@ impl RfiStatus {
             RfiStatus::Sent => "sent",
             RfiStatus::Answered => "answered",
             RfiStatus::Closed => "closed",
+            RfiStatus::Approved => "approved",
+            RfiStatus::Rejected => "rejected",
         }
     }
 
     pub fn parse(s: &str) -> Option<RfiStatus> {
-        [RfiStatus::Open, RfiStatus::Sent, RfiStatus::Answered, RfiStatus::Closed].into_iter().find(|k| k.name().eq_ignore_ascii_case(s.trim()))
+        [RfiStatus::Open, RfiStatus::Sent, RfiStatus::Answered, RfiStatus::Closed, RfiStatus::Approved, RfiStatus::Rejected]
+            .into_iter()
+            .find(|k| k.name().eq_ignore_ascii_case(s.trim()))
     }
 }
 
@@ -287,6 +302,30 @@ pub struct Rfi {
     /// The design team's answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
+    /// Which check found it (`lighting: catalog`, `lighting: switch leg with no fixture`): a
+    /// conflict's kind within its trade, for grouping.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub topic: String,
+    /// What each document says, cited (a conflict has two or more).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sides: Vec<RfiSide>,
+    /// The model elements it is about (handles), at most [`MAX_RFI_ELEMENTS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<String>,
+    /// A sketch sent with it (a file beside the drawing: a marked-up plan crop).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sketch: Option<String>,
+}
+
+/// Elements an item lists at most.
+pub const MAX_RFI_ELEMENTS: usize = 200;
+
+/// One document's word in a conflict: which document (sheet and schedule, submittal and page,
+/// specification section, code section) and what it says.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RfiSide {
+    pub document: String,
+    pub says: String,
 }
 
 impl Rfi {

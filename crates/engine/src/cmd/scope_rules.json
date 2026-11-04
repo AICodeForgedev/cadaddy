@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "about": "Whose work each kind of element is (Q6167 scopesplit): the words the documents name each party, element class and rough-in item by, and what holds when no document says. The documents' own statements always win: these are only how they are read, and the defaults a review question names.",
+  "ours": "electrical",
+  "parties": {
+    "electrical": {"label": "electrical contractor", "words": ["ELECTRICAL CONTRACTOR", "ELECTRICAL SUBCONTRACTOR", "ELECTRICAL TRADE", "ELECTRICIAN", "E.C.", "EC", "DIVISION 26", "DIV 26", "DIV. 26"]},
+    "mechanical": {"label": "mechanical contractor", "words": ["MECHANICAL CONTRACTOR", "MECHANICAL SUBCONTRACTOR", "HVAC CONTRACTOR", "HVAC SUBCONTRACTOR", "TEMPERATURE CONTROLS CONTRACTOR", "TEMPERATURE CONTROL CONTRACTOR", "CONTROLS CONTRACTOR", "BAS CONTRACTOR", "UNIT MANUFACTURER", "EQUIPMENT MANUFACTURER", "M.C.", "MC", "TCC", "DIVISION 23", "DIV 23", "DIV. 23"]},
+    "plumbing": {"label": "plumbing contractor", "words": ["PLUMBING CONTRACTOR", "PLUMBING SUBCONTRACTOR", "P.C.", "PC", "DIVISION 22", "DIV 22", "DIV. 22"]},
+    "fire alarm": {"label": "fire alarm contractor", "words": ["FIRE ALARM CONTRACTOR", "FIRE ALARM SUBCONTRACTOR", "FIRE ALARM VENDOR", "FIRE ALARM INSTALLER", "FIRE ALARM SYSTEM SUPPLIER", "FIRE ALARM SUPPLIER", "FA CONTRACTOR", "FA VENDOR", "F.A.C.", "FAC", "FIRE PROTECTION ENGINEER", "FIRE PROTECTION ENGINEER OF RECORD"]},
+    "fire protection": {"label": "fire protection contractor", "words": ["FIRE PROTECTION CONTRACTOR", "FIRE SPRINKLER CONTRACTOR", "SPRINKLER CONTRACTOR", "DIVISION 21", "DIV 21", "DIV. 21"]},
+    "low voltage": {"label": "low voltage contractor", "words": ["LOW VOLTAGE CONTRACTOR", "LOW-VOLTAGE CONTRACTOR", "LOW VOLTAGE VENDOR", "LOW-VOLTAGE VENDOR", "LOW VOLTAGE SUBCONTRACTOR", "LOW VOLTAGE INSTALLER", "LV CONTRACTOR", "LV VENDOR", "LVC", "TELECOM CONTRACTOR", "TELECOMMUNICATIONS CONTRACTOR", "COMMUNICATIONS CONTRACTOR", "DATA CONTRACTOR", "CABLING CONTRACTOR", "SECURITY CONTRACTOR", "AV CONTRACTOR", "AUDIO VISUAL CONTRACTOR", "DIVISION 27", "DIV 27", "DIV. 27"]},
+    "general": {"label": "general contractor", "words": ["GENERAL CONTRACTOR", "G.C.", "GC"]},
+    "owner": {"label": "owner", "words": ["OWNER'S VENDOR", "OWNER'S CONTRACTOR", "OWNER", "OFCI", "OFOI"]},
+    "others": {"label": "others (not named)", "words": ["OTHERS", "OTHER TRADES"]}
+  },
+  "divisions": [
+    {"prefix": "21", "party": "fire protection"},
+    {"prefix": "22", "party": "plumbing"},
+    {"prefix": "23", "party": "mechanical"},
+    {"prefix": "25", "party": "mechanical"},
+    {"prefix": "26", "party": "electrical"},
+    {"prefix": "27", "party": "low voltage"},
+    {"prefix": "2831", "party": "fire alarm"},
+    {"prefix": "2846", "party": "fire alarm"},
+    {"prefix": "28", "party": "low voltage"}
+  ],
+  "disciplines": {"M": "mechanical", "H": "mechanical", "P": "plumbing", "FP": "fire protection", "E": "electrical", "FA": "fire alarm", "T": "low voltage", "TC": "low voltage", "TY": "low voltage", "LV": "low voltage", "SY": "low voltage"},
+  "classes": [
+    {
+      "class": "thermostat",
+      "label": "thermostats",
+      "party": "mechanical",
+      "kinds": ["thermostat", "temperature sensor", "humidistat"],
+      "words": ["THERMOSTAT", "THERMOSTATS", "T-STAT", "T-STATS", "TSTAT", "TSTATS", "TEMPERATURE SENSOR", "TEMPERATURE SENSORS", "HUMIDISTAT", "HUMIDISTATS"],
+      "default_ours": ["box", "ring", "conduit"],
+      "default_reason": "a thermostat is the mechanical trade's control: it is furnished with its unit and wired by the controls installer; the electrical trade usually sets its box and an empty conduit to the ceiling"
+    },
+    {
+      "class": "fire alarm",
+      "label": "fire alarm devices",
+      "party": "fire alarm",
+      "kinds": ["fire alarm device", "fire alarm", "smoke detector", "heat detector", "duct detector", "pull station", "horn strobe", "horn", "strobe", "speaker strobe", "door holder", "fire alarm module", "fire alarm panel", "annunciator", "fire alarm power supply"],
+      "words": ["FIRE ALARM", "F.A.", "FIRE-ALARM", "SMOKE DETECTOR", "SMOKE DETECTORS", "HEAT DETECTOR", "HEAT DETECTORS", "DUCT DETECTOR", "DUCT DETECTORS", "PULL STATION", "PULL STATIONS", "HORN/STROBE", "HORN STROBE", "HORN/STROBES", "STROBE", "STROBES", "NOTIFICATION APPLIANCE", "NOTIFICATION APPLIANCES", "INITIATING DEVICE", "INITIATING DEVICES", "FACP", "FACU", "ANNUNCIATOR"],
+      "system_words": ["FIRE ALARM SYSTEM", "FIRE-ALARM SYSTEM", "FIRE ALARM"],
+      "default_ours": [],
+      "default_reason": "a fire alarm system is a design-build or deferred-submittal scope: its contractor furnishes and installs the devices, panels and cabling unless the specification puts them on the electrical contractor",
+      "power_kinds": ["control panel", "power supply", "fire alarm panel", "fire alarm power supply"]
+    },
+    {
+      "class": "low voltage",
+      "label": "low voltage devices",
+      "party": "low voltage",
+      "kinds": ["low voltage outlet", "low voltage device", "data outlet", "telephone outlet", "tv outlet", "television outlet", "catv outlet", "card reader", "camera", "wireless access point", "intercom", "speaker"],
+      "words": ["LOW VOLTAGE DEVICE", "LOW VOLTAGE DEVICES", "LOW-VOLTAGE DEVICE", "LOW-VOLTAGE DEVICES", "LOW VOLTAGE OUTLET", "LOW VOLTAGE OUTLETS", "LOW VOLTAGE CONDUIT", "LOW-VOLTAGE CONDUIT", "LOW VOLTAGE LAYOUT", "LOW VOLTAGE SYSTEMS", "LOW VOLTAGE CABLING", "DATA OUTLET", "DATA OUTLETS", "TELEPHONE OUTLET", "TELEPHONE OUTLETS", "TELEVISION OUTLET", "TELEVISION OUTLETS", "TV OUTLET", "TV OUTLETS", "TV", "CATV", "CARD READER", "CARD READERS", "WIRELESS ACCESS POINT", "WIRELESS ACCESS POINTS", "DATA/TELEPHONE", "TELECOMMUNICATIONS OUTLET", "TELECOMMUNICATIONS OUTLETS"],
+      "default_ours": ["box", "ring", "conduit", "pull string"],
+      "default_reason": "low voltage devices and cabling are the low voltage contractor's: the electrical trade usually roughs in a box, a ring and an empty conduit with a pull string"
+    }
+  ],
+  "items": {
+    "box": ["BACK BOX", "BACK BOXES", "BACKBOX", "BACKBOXES", "BACK-BOX", "BACK-BOXES", "JUNCTION BOX", "JUNCTION BOXES", "OUTLET BOX", "OUTLET BOXES", "DEVICE BOX", "DEVICE BOXES", "BOX", "BOXES", "J-BOX", "J-BOXES"],
+    "ring": ["PLASTER RING", "PLASTER RINGS", "MUD RING", "MUD RINGS", "DEVICE RING", "DEVICE RINGS", "LOW VOLTAGE RING", "LOW VOLTAGE BRACKET", "LV BRACKET", "RING", "RINGS"],
+    "conduit": ["CONDUIT", "CONDUITS", "RACEWAY", "RACEWAYS", "STUB", "STUBS", "STUB-UP", "STUB-UPS", "STUBBED"],
+    "pull string": ["PULL STRING", "PULL STRINGS", "PULLSTRING", "PULL TAPE", "PULL LINE", "PULL CORD", "PULL WIRE"],
+    "sleeve": ["SLEEVE", "SLEEVES"],
+    "power": ["120V", "120 V", "120VAC", "120 VAC", "120-VOLT", "120 VOLT", "BRANCH CIRCUIT", "BRANCH CIRCUITS", "POWER CIRCUIT", "POWER CIRCUITS", "DEDICATED CIRCUIT", "DEDICATED CIRCUITS"]
+  },
+  "item_names": {
+    "box": "Box, 4\" square",
+    "ring": "Plaster ring",
+    "conduit": "Conduit stub to the ceiling space",
+    "pull string": "Pull string",
+    "sleeve": "Sleeve",
+    "power": "Dedicated 120 V branch circuit"
+  },
+  "whole_system": ["ALL ELEMENTS", "COMPLETE SYSTEM", "ENTIRE SYSTEM", "THE SYSTEM", "SYSTEM", "ALL DEVICES", "ALL EQUIPMENT", "DEVICES", "EQUIPMENT", "DEVICE LAYOUT"],
+  "design_build": ["DEFERRED SUBMITTAL", "DIFFERED SUBMITTAL", "DEFERRED SUBMITTALS", "DELEGATED DESIGN", "DELEGATED-DESIGN", "DESIGN-BUILD", "DESIGN BUILD", "DESIGN/BUILD", "PERFORMANCE SPECIFIED"],
+  "rough_in_only": ["ROUGH-IN ONLY", "ROUGH IN ONLY", "ROUGHIN ONLY", "BOX AND CONDUIT ONLY", "BOX AND RACEWAY ONLY", "EMPTY CONDUIT ONLY", "PATHWAY ONLY", "PATHWAYS ONLY"],
+  "fa_kinds": [
+    {"kind": "duct detector", "all": [["DUCT"], ["DETECTOR", "SMOKE", "DETECTION"]]},
+    {"kind": "smoke/CO detector", "all": [["SMOKE"], ["CO", "CARBON MONOXIDE", "CARBON"]]},
+    {"kind": "CO detector", "all": [["CO DETECTOR", "CARBON MONOXIDE", "CO DETECTION"]]},
+    {"kind": "smoke detector", "all": [["SMOKE"]]},
+    {"kind": "heat detector", "all": [["HEAT"]]},
+    {"kind": "pull station", "all": [["PULL", "MANUAL STATION"]]},
+    {"kind": "horn/strobe", "all": [["HORN", "SPEAKER", "AUDIBLE", "AUDIO/VISUAL", "AUDIO VISUAL", "SOUNDER"], ["STROBE", "VISUAL", "VISIBLE"]]},
+    {"kind": "strobe", "all": [["STROBE", "VISUAL", "VISIBLE"]]},
+    {"kind": "horn", "all": [["HORN", "SPEAKER", "AUDIBLE", "BELL", "CHIME"]]},
+    {"kind": "door holder", "all": [["DOOR HOLD", "DOOR HOLDER", "DOOR HOLDERS", "HOLD OPEN", "HOLD-OPEN", "MAGNETIC DOOR"]]},
+    {"kind": "control panel", "all": [["FACP", "FACU", "CONTROL PANEL", "CONTROL UNIT"]]},
+    {"kind": "annunciator", "all": [["ANNUNCIATOR", "FAAP"]]},
+    {"kind": "power supply", "all": [["POWER SUPPLY", "NAC PANEL", "NAC EXTENDER", "BOOSTER"]]},
+    {"kind": "relay/module", "all": [["RELAY", "MODULE", "MONITOR", "INTERFACE"]]},
+    {"kind": "sprinkler switch", "all": [["TAMPER", "FLOW SWITCH", "WATERFLOW", "WATER FLOW", "VALVE SUPERVISORY"]]}
+  ],
+  "panels": [
+    {"kind": "control panel", "tag": "FACP", "words": ["FIRE ALARM CONTROL PANEL", "FIRE-ALARM CONTROL PANEL", "FIRE ALARM CONTROL UNIT", "FIRE-ALARM CONTROL UNIT", "FACP", "FACU"], "size_in": [24.0, 6.0, 30.0], "top_in": 72.0},
+    {"kind": "annunciator", "tag": "FAAP", "words": ["REMOTE ANNUNCIATOR", "ANNUNCIATOR PANEL", "ANNUNCIATOR", "FAAP"], "size_in": [14.0, 4.0, 10.0], "top_in": 72.0}
+  ],
+  "panel_source": "trade default box sizes (the shop drawings give the model and its backbox; the panel's top at most 72\" above the floor so its display reads, NFPA 72 and the usual FACP mounting note)"
+}

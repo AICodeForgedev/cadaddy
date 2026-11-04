@@ -1293,15 +1293,55 @@ struct GearEl {
     hi: Vec3,
 }
 
-/// A rated wall a route may cross.
+/// A rated wall a route may cross: its outline on its level's own plan, its top (drawing z),
+/// its type and that type's rating.
 #[derive(Clone, Debug)]
-struct Rated {
-    handle: Handle,
-    level: String,
-    hull: Vec<Vec2>,
-    top: f64,
-    wall_type: String,
-    rating: String,
+pub(crate) struct Rated {
+    pub handle: Handle,
+    pub level: String,
+    pub hull: Vec<Vec2>,
+    pub top: f64,
+    pub wall_type: String,
+    pub rating: String,
+}
+
+/// The built walls whose type has a fire rating in the documents (the wall types' assemblies),
+/// at most `cap`.
+pub(crate) fn rated_walls(d: &Drawing, sp: &BuildingSpec, cap: usize) -> Vec<Rated> {
+    let rating_of = |name: &str| {
+        sp.wall_types
+            .iter()
+            .find(|w| w.name.eq_ignore_ascii_case(name))
+            .and_then(|w| w.assembly.as_ref())
+            .and_then(|a| a.fire_rating.clone())
+            .filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))
+    };
+    let mut rated = Vec::new();
+    for e in d.model.iter() {
+        if rated.len() >= cap {
+            break;
+        }
+        if super::wallgen::made_as(e).as_deref() != Some("wall") {
+            continue;
+        }
+        let Some(t) = super::bimlook::made_tag(e, "type") else { continue };
+        let Some(r) = rating_of(t) else { continue };
+        let Some((_, hi)) = mesh_box(e) else { continue };
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let off = super::bspec::stacked_by(e);
+        let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
+        if hull.len() >= 3 {
+            rated.push(Rated {
+                handle: e.handle,
+                level: super::bspec::made_level(e).unwrap_or_default(),
+                hull,
+                top: hi.z,
+                wall_type: t.to_string(),
+                rating: r,
+            });
+        }
+    }
+    rated
 }
 
 fn mesh_box(e: &Entity) -> Option<(Vec3, Vec3)> {
@@ -1344,7 +1384,7 @@ fn inside(p: Vec2, poly: &[Vec2]) -> bool {
 }
 
 /// Whether segment `a`–`b` crosses polygon `poly` (goes through it, ends outside it).
-fn crosses(a: Vec2, b: Vec2, poly: &[Vec2]) -> bool {
+pub(crate) fn crosses(a: Vec2, b: Vec2, poly: &[Vec2]) -> bool {
     if inside(a, poly) || inside(b, poly) {
         return false;
     }
@@ -1516,58 +1556,29 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // -- The devices, the gear, the obstacles, the rated walls. --
     let mut devs: Vec<Dev> = Vec::new();
     let mut gear: Vec<GearEl> = Vec::new();
-    let mut rated: Vec<Rated> = Vec::new();
-    let rating_of = |name: &str| {
-        sp.wall_types
-            .iter()
-            .find(|w| w.name.eq_ignore_ascii_case(name))
-            .and_then(|w| w.assembly.as_ref())
-            .and_then(|a| a.fire_rating.clone())
-            .filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))
-    };
+    let rated = rated_walls(d, sp, MAX_DEVICES);
     for e in d.model.iter() {
-        match super::wallgen::made_as(e).as_deref() {
-            Some("device") if devs.len() < MAX_DEVICES => {
-                let ps = props::read(&e.common.xdata);
-                if ps.get("misplaced").is_some() {
-                    continue;
-                }
-                let Some((lo, hi)) = mesh_box(e) else { continue };
-                let off = super::bspec::stacked_by(e);
-                let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
-                let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
-                let yoke = matches!(kind.replace('_', " ").as_str(), "receptacle" | "switch" | "dimmer" | "occupancy sensor");
-                devs.push(Dev {
-                    handle: e.handle,
-                    level: super::bspec::made_level(e).unwrap_or_default(),
-                    circuit: ps.get("circuit").map(Prop::text).unwrap_or_default().trim().to_string(),
-                    kind,
-                    room: ps.get("room").map(Prop::text).unwrap_or_default(),
-                    at: Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0),
-                    top: hi.z,
-                    face: face_of(&ps),
-                    yoke,
-                });
+        if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
+            let ps = props::read(&e.common.xdata);
+            if ps.get("misplaced").is_some() {
+                continue;
             }
-            Some("wall") if rated.len() < MAX_DEVICES => {
-                let Some(t) = super::bimlook::made_tag(e, "type") else { continue };
-                let Some(r) = rating_of(t) else { continue };
-                let Some((_, hi)) = mesh_box(e) else { continue };
-                let EntityKind::Mesh(m) = &e.kind else { continue };
-                let off = super::bspec::stacked_by(e);
-                let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
-                if hull.len() >= 3 {
-                    rated.push(Rated {
-                        handle: e.handle,
-                        level: super::bspec::made_level(e).unwrap_or_default(),
-                        hull,
-                        top: hi.z,
-                        wall_type: t.to_string(),
-                        rating: r,
-                    });
-                }
-            }
-            _ => {}
+            let Some((lo, hi)) = mesh_box(e) else { continue };
+            let off = super::bspec::stacked_by(e);
+            let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
+            let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
+            let yoke = matches!(kind.replace('_', " ").as_str(), "receptacle" | "switch" | "dimmer" | "occupancy sensor");
+            devs.push(Dev {
+                handle: e.handle,
+                level: super::bspec::made_level(e).unwrap_or_default(),
+                circuit: ps.get("circuit").map(Prop::text).unwrap_or_default().trim().to_string(),
+                kind,
+                room: ps.get("room").map(Prop::text).unwrap_or_default(),
+                at: Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0),
+                top: hi.z,
+                face: face_of(&ps),
+                yoke,
+            });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
             && gear.len() < MAX_DEVICES
@@ -1893,6 +1904,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     };
 
     // -- The methods: the documents' table by area, the project rule, the default. --
+    let approved_ve = super::valueeng::approved_circuits(d);
     let rule_method = d
         .project_rules
         .get(cadaddy_doc::projrules::RuleDomain::WiringMethod, "general")
@@ -2069,6 +2081,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "concealed"
         };
         let (method, msrc, cable, allowed) = method_for(area);
+        // An approved (or chosen) value engineering alternative keeps its cable on every route.
+        let (method, msrc, cable) = match approved_ve.get(tag.id.as_str()) {
+            Some((m, why)) => (m.clone(), format!("{why}: {m}"), super::mepatoms::rules().cable_named(m).is_some()),
+            None => (method, msrc, cable),
+        };
         let e = methods_used.entry(format!("{area}: {method}")).or_insert((0, msrc.clone()));
         e.0 += 1;
         // The panel: this level's gear of the circuit's panel nearest the devices.
@@ -2199,7 +2216,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             method.clone(),
             if msrc.starts_with("spec") {
                 "spec"
-            } else if msrc.starts_with("project") {
+            } else if msrc.starts_with("project") || approved_ve.contains_key(tag.id.as_str()) {
                 "rule"
             } else {
                 "default"
@@ -2981,7 +2998,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
 
 /// An MEP run's piece (a stick, fitting, box, cable, wire): not a building trade's (studs,
 /// sheets, joists are atoms too, and a reroute keeps them).
-fn mep_piece(e: &Entity) -> bool {
+pub(crate) fn mep_piece(e: &Entity) -> bool {
     super::mepatoms::is_atom(e) && !super::tradeatoms::is_trade_piece(e)
 }
 
@@ -3398,7 +3415,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {routed, removed, atoms, seconds, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
-            .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the estimate's rate), price?: bool (default true)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
+            .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
             .noundo(),
     ]
 }
@@ -3437,50 +3454,6 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
-/// One cost DB row: material and labor per unit, labor in dollars.
-struct CostRow {
-    item: String,
-    size: String,
-    unit: String,
-    material: f64,
-    labor_dollars: f64,
-}
-
-fn read_cost_db(path: &str) -> Result<Vec<CostRow>> {
-    let text = std::fs::read_to_string(path).map_err(|e| bad("conduit.takeoff", format!("`cost_db` {path}: {e}")))?;
-    let mut lines = text.lines().take(200_000);
-    let head: Vec<String> = lines.next().unwrap_or_default().split(',').map(|h| h.trim().trim_matches('"').to_ascii_lowercase()).collect();
-    let col = |names: &[&str]| head.iter().position(|h| names.contains(&h.as_str()));
-    let (Some(ci), Some(cm), Some(cl)) = (col(&["item", "description", "name"]), col(&["material_unit", "material"]), col(&["labor_unit", "labor"]))
-    else {
-        return Err(bad("conduit.takeoff", "`cost_db` needs columns item, material_unit and labor_unit (labor in dollars per unit)"));
-    };
-    let (cs, cu) = (col(&["size"]), col(&["unit", "uom"]));
-    let num =
-        |s: &str| s.trim().trim_matches('"').trim_start_matches('$').replace(',', "").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0);
-    let mut out = Vec::new();
-    for l in lines {
-        let f: Vec<&str> = l.split(',').collect();
-        let get = |i: Option<usize>| i.and_then(|i| f.get(i)).map(|v| v.trim().trim_matches('"').to_string()).unwrap_or_default();
-        let item = get(Some(ci));
-        if item.is_empty() {
-            continue;
-        }
-        out.push(CostRow {
-            item,
-            size: get(cs),
-            unit: get(cu),
-            material: num(&get(Some(cm))).unwrap_or(0.0),
-            labor_dollars: num(&get(Some(cl))).unwrap_or(0.0),
-        });
-    }
-    Ok(out)
-}
-
-fn norm(s: &str) -> String {
-    s.to_ascii_lowercase().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '/' || *c == '-').collect()
-}
-
 fn csv_cell(v: &str) -> String {
     let t = v.replace('"', "\"\"");
     let risky = t.starts_with(['=', '+', '-', '@']);
@@ -3505,18 +3478,25 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         super::exchange::guard_output(s, C, p, path)?;
     }
     let cost_db = match str_param(p, "cost_db") {
-        Some(path) => Some(read_cost_db(path)?),
+        Some(path) => Some(super::valueeng::read_cost_db(path, C)?),
         None => None,
+    };
+    // A value engineering scenario: its pieces in place of the design's it replaces.
+    let (replaced, scenario_pieces) = match str_param(p, "scenario").filter(|x| !x.trim().is_empty()) {
+        Some(id) => super::valueeng::takeoff_view(s.doc()?, id)
+            .ok_or_else(|| bad(C, format!("there is no value engineering scenario {id} (ve.scenario lists them)")))?,
+        None => Default::default(),
     };
     // Every piece of the model, grouped.
     type Key = (String, String, String, String, String, String, String);
     let mut rows: BTreeMap<Key, (f64, Vec<Handle>)> = BTreeMap::new();
     {
         let d = s.doc()?;
-        for e in d.model.iter().filter(|e| mep_piece(e)) {
+        for e in d.model.iter().filter(|e| (mep_piece(e) && !replaced.contains(&e.handle)) || scenario_pieces.contains(&e.handle)) {
             let ps = props::read(&e.common.xdata);
             let g = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
-            let kind = g(super::mepatoms::ATOM_KEY);
+            let ve = scenario_pieces.contains(&e.handle);
+            let kind = if ve { g(super::valueeng::VE_ATOM) } else { g(super::mepatoms::ATOM_KEY) };
             // Field bends are labor, not material: listed (a count where the route turns) all the same.
             if kind.is_empty() {
                 continue;
@@ -3524,7 +3504,11 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
             let length = g("length_ft").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0);
             let by_ft = matches!(kind.as_str(), "conduit" | "cable" | "wire");
             let qty = if by_ft { length.unwrap_or(0.0) } else { 1.0 };
-            let level = if groups.iter().any(|x| x == "level") { super::bspec::made_level(e).unwrap_or_default() } else { String::new() };
+            let level = match (groups.iter().any(|x| x == "level"), ve) {
+                (false, _) => String::new(),
+                (true, true) => g("level"),
+                (true, false) => super::bspec::made_level(e).unwrap_or_default(),
+            };
             let area = if groups.iter().any(|x| x == "area") { g("room") } else { String::new() };
             let circuit = if groups.iter().any(|x| x == "circuit") { g("circuit") } else { String::new() };
             let ty = if kind == "wire" { format!("{} {}", g("type"), g("color")).trim().to_string() } else { g("type") };
@@ -3596,12 +3580,13 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     if price {
         match &cost_db {
             Some(db) => {
-                let rate =
-                    rate.or_else(|| s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| *v > 0.0));
+                let rate = rate
+                    .or(db.manpower_rate)
+                    .or_else(|| s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| *v > 0.0));
                 for l in &mut lines {
                     let (item, size) = (l["item"].as_str().unwrap_or_default().to_string(), l["size"].as_str().unwrap_or_default().to_string());
                     let qty = l["qty"].as_f64().unwrap_or(0.0);
-                    let hit = db.iter().find(|r| norm(&r.item) == norm(&item) && (r.size.is_empty() || norm(&r.size) == norm(&size)));
+                    let hit = db.find(&item, &size);
                     match hit {
                         Some(r) => {
                             let (m, ld) = (r.material * qty, r.labor_dollars * qty);

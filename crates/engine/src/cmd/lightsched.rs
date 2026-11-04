@@ -19,6 +19,7 @@ pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
     let install = t.column(&["INSTALL"]).or_else(|| t.column(&["MOUNTING"]));
     let desc = t.column(&["DESCRIPTION"]);
     let notes = t.column(&["NOTES"]);
+    let qty = t.column(&["QTY"]).or_else(|| t.column(&["QUANTITY"]));
     let mut out = Vec::new();
     let mut no_subs = false;
     for r in &t.rows {
@@ -50,6 +51,7 @@ pub(crate) fn fixture_types(t: &GridTable) -> (Vec<FixtureType>, bool) {
             description: t.cell(r, desc).to_string(),
             notes: t.cell(r, notes).to_string(),
             source: format!("{} LIGHT FIXTURE SCHEDULE", t.sheet),
+            quantity: qty.and_then(|_| t.cell(r, qty).trim().parse::<u32>().ok()).filter(|q| *q > 0 && *q < 100_000),
         });
     }
     (out, no_subs)

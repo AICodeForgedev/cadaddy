@@ -43,7 +43,7 @@ pub use levels::{Datum, DatumKind, LevelNote, ShaftMark, ShaftRun, SheetLink};
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
-pub use rfi::{Rfi, RfiKind, RfiStatus, Severity};
+pub use rfi::{Rfi, RfiKind, RfiSide, RfiStatus, Severity};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use concrete::{Concrete, ConcreteElement, Depression, Embed, MAX_CONCRETE, PadDecision, Pour, Rebar, Signoff};
