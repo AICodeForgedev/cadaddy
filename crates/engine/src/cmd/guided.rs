@@ -11422,16 +11422,19 @@ fn fa_loose_devices(
                 stats.unplaceable += 1;
                 continue;
             };
-            // A device read there already (its own mark's): not twice. A symbol beside it (a
-            // horn/strobe by its pull station) is another device.
+            let Some(kind) = r.fa_kind_of(&f.row) else { continue };
+            let tag = kind.to_ascii_uppercase();
+            // This symbol read there already (found before, or read with no mark): not twice. A
+            // device another mark names beside it (a horn/strobe by its pull station's `P`) is
+            // another device.
             let near = 0.5 * if f.size.is_finite() && f.size > 0.0 { f.size.min(max_size) } else { max_size };
-            if have.iter().chain(out.iter()).any(|dv| (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= near) {
+            let same = |dv: &super::readers::ReadDevice| dv.tag.trim().is_empty() || dv.tag.eq_ignore_ascii_case(&tag);
+            if have.iter().chain(out.iter()).any(|dv| same(dv) && (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= near) {
                 stats.read_already += 1;
                 continue;
             }
-            let Some(kind) = r.fa_kind_of(&f.row) else { continue };
             out.push(super::readers::ReadDevice {
-                tag: kind.to_ascii_uppercase(),
+                tag,
                 at,
                 sheet: span.sheet.clone(),
                 level: region.level.clone(),
@@ -17852,9 +17855,12 @@ mod tests {
                 .all(|d| d.tag == "STROBE" && d.kind == "fire alarm device" && d.kind_source == "E-313 legend: WALL STROBE" && d.level == "6"),
             "{found:?}"
         );
-        // One already read there is not read twice; a sheet that isn't a fire alarm plan has none.
-        let have = vec![super::super::readers::ReadDevice { tag: "X".into(), at: [100.0, 100.0], ..Default::default() }];
+        // One read there with no mark is not read twice; a device another mark names there is
+        // another device; a sheet that isn't a fire alarm plan has none.
+        let have = vec![super::super::readers::ReadDevice { at: [100.0, 100.0], ..Default::default() }];
         assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new(), &|p, _| Some(p)).0.len(), 1);
+        let have = vec![super::super::readers::ReadDevice { tag: "P".into(), at: [100.0, 100.0], ..Default::default() }];
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new(), &|p, _| Some(p)).0.len(), 2);
         assert!(
             fa_loose_devices(s.doc().unwrap(), &job, &av, &[], &BTreeMap::new(), &|p, _| Some(p)).0.is_empty(),
             "an electrical legend's audio/visual outlet"
