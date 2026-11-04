@@ -1042,7 +1042,15 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
     let names = labels_to_trace(names, |n| n.2, score, regions);
     phase("labels");
-    let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
+    // A detail or section callout's sheet (`A131`, `A411`) reads like a lettered room number: one
+    // of the set's sheet numbers is no room's.
+    let mut sheet_numbers: std::collections::BTreeSet<String> =
+        spec.as_ref().map(|sp| sp.sheets.iter().map(|x| x.number.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
+    if let Ok(Some(job)) = crate::cmd::guided::load_job(s) {
+        sheet_numbers.extend(job.sheet_regions.iter().map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase()));
+    }
+    let mut numbers: Vec<Label> =
+        all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
     numbers.extend(tag_numbers);
     // Read sheet by sheet: trace on the plans' own objects only (a whole print set side by side
     // is so large its trace tolerance - a fraction of the extents - opens every room).
