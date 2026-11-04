@@ -699,9 +699,9 @@ struct Placed {
     documented: Option<String>,
     depth_front: f64,
     /// A drawn dimension's offset: the model's own offset from the same reference (inches) and
-    /// the dimension's source; `across`: the dimension runs across the device's wall, not along.
+    /// the dimension's source; or why the dimension that measures it gives no along offset.
     drawn: Option<(f64, Source)>,
-    drawn_across: bool,
+    drawn_why: Option<&'static str>,
 }
 
 /// The face a device is on: its stored host wall's face toward its room first (the side its
@@ -813,28 +813,70 @@ fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)], doc: Opt
     // A dimension the sheets draw as line work (a chain to a face, an opening or casework edge):
     // the document's offset when it runs along the device's face.
     let mut drawn = None;
-    let mut drawn_across = false;
+    let mut drawn_why = None;
     if let Some(doc) = doc {
-        if dot(doc.dir, f.u).abs() >= 0.9 {
-            let r = match &doc.reference {
-                Ref::End { name, point, .. } => {
-                    Ref::End { name: name.clone(), point: *point, sign: if f.along(c) >= f.along(*point) { 1.0 } else { -1.0 } }
-                }
-                other => other.clone(),
-            };
-            let measured = match &r {
-                Ref::Face { name, inward, .. } => cx.face(f.level.as_deref(), name).map_or_else(|| dot(c - f.a, *inward), |g| g.depth(c)),
-                Ref::End { point, sign, .. } => (f.along(c) - f.along(*point)) * sign,
-            };
-            reference = r;
-            offset = doc.value_in * inch;
-            documented = Some(doc.why.clone());
-            drawn = Some((measured / inch, doc.source.clone()));
-        } else {
-            drawn_across = true;
+        match drawn_reference(cx, f, c, doc) {
+            Ok((r, measured, said)) => {
+                reference = r;
+                offset = said;
+                documented = Some(doc.why.clone());
+                drawn = Some((measured / inch, doc.source.clone()));
+            }
+            Err(why) => drawn_why = Some(why),
         }
     }
-    Some(Placed { face: face_k, t, zc, across, along_len, reference, offset, documented, depth_front, drawn, drawn_across })
+    Some(Placed { face: face_k, t, zc, across, along_len, reference, offset, documented, depth_front, drawn, drawn_why })
+}
+
+/// How far a drawn dimension's reference may be off the device's face's ends (inches), and off
+/// its wall's line for an opening's edge or a casework edge.
+const DRAWN_REF_REACH_IN: f64 = 24.0;
+const DRAWN_EDGE_OFF_IN: f64 = 12.0;
+const DRAWN_CASEWORK_OFF_IN: f64 = 48.0;
+
+/// A drawn dimension's reference as an along-face offset of the device on face `f`: the
+/// reference (the face of the wall that faces the device: a demising wall's other room's face
+/// gives way to its twin, the drawn value less the wall between them), the model's own offset
+/// from it and the drawn one (drawing units); or why it isn't one.
+fn drawn_reference(cx: &Ctx, f: &Face, c: Vec2, doc: &drawn::DocOffset) -> std::result::Result<(Ref, f64, f64), &'static str> {
+    let inch = cx.inch();
+    if dot(doc.dir, f.u).abs() < 0.9 {
+        return Err("dimensioned across its wall, not along it");
+    }
+    let reach = DRAWN_REF_REACH_IN * inch;
+    let on_span = |t: f64| t >= -reach && t <= f.len + reach;
+    match &doc.reference {
+        Ref::Face { name, .. } => {
+            let g = cx.face(f.level.as_deref(), name).ok_or("its reference face is gone")?;
+            let said = doc.value_in * inch;
+            let (g, said) = if g.depth(c) >= -inch {
+                (g, said)
+            } else {
+                let twin = cx
+                    .faces
+                    .iter()
+                    .filter(|h| {
+                        same_level(h.level.as_deref(), f.level.as_deref()) && dot(h.u, g.u) < -0.95 && h.walls.iter().any(|w| g.walls.contains(w))
+                    })
+                    .filter(|h| h.depth(c) >= -inch)
+                    .min_by(|a, b| a.depth(c).total_cmp(&b.depth(c)))
+                    .ok_or("its reference face faces away from it")?;
+                (twin, said - dot(twin.a - g.a, g.inward).abs())
+            };
+            if !on_span(f.along(g.a)) {
+                return Err("its reference is not at its wall");
+            }
+            Ok((Ref::Face { name: g.name.clone(), wall: g.wall, inward: g.inward }, g.depth(c), said))
+        }
+        Ref::End { name, point, .. } => {
+            let off = if doc.casework { DRAWN_CASEWORK_OFF_IN } else { DRAWN_EDGE_OFF_IN } * inch;
+            if f.depth(*point).abs() > off || !on_span(f.along(*point)) {
+                return Err("its reference is not at its wall");
+            }
+            let sign = if f.along(c) >= f.along(*point) { 1.0 } else { -1.0 };
+            Ok((Ref::End { name: name.clone(), point: *point, sign }, (f.along(c) - f.along(*point)) * sign, doc.value_in * inch))
+        }
+    }
 }
 
 /// The ties the rules data gives a device from the objects against its face.
@@ -1241,7 +1283,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let mut raised: Vec<(Handle, String, Vec<super::forms::Given>)> = Vec::new();
     let mut agree: Vec<Handle> = Vec::new();
     let mut conflicts_first: Vec<Value> = Vec::new();
-    let mut drawn_across = 0usize;
+    let mut drawn_not_used: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (j, (i, pl)) in placed.iter().enumerate() {
         let (Some(dv), Some(f)) = (devs.get(*i), cx.faces.get(pl.face)) else { continue };
         let floor = level_floor(&cx.sp, dv.level.as_deref(), cx.upf);
@@ -1368,8 +1410,8 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         );
         // A drawn dimension the model's position disagrees with by more than the kind's band:
         // a conflict for review (both values, their sources).
-        if pl.drawn_across {
-            drawn_across += 1;
+        if let Some(why) = pl.drawn_why {
+            *drawn_not_used.entry(why).or_default() += 1;
         }
         if let Some((measured_in, src)) = &pl.drawn {
             let kind_band = rules["along_band_in"][kind.as_str()].as_f64().or_else(|| rules["along_band_in"]["default"].as_f64()).unwrap_or(6.0);
@@ -1475,7 +1517,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             "placed": drawn_dims.placed.len(),
             "placed_by_sheet": drawn_sheets,
             "devices_documented": placed.iter().filter(|(_, pl)| pl.drawn.is_some()).count(),
-            "dimensioned_across_their_wall": drawn_across,
+            "measured_not_used": drawn_not_used,
             "conflicts": raised.len(),
             "conflict_ids": conflict_ids.iter().take(MAX_LISTED).collect::<Vec<_>>(),
             "conflicts_first": conflicts_first,

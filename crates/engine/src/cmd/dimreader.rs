@@ -55,6 +55,9 @@ const SAME_MARK_H: f64 = 0.4;
 /// far at most (text heights).
 const EXT_GAP_H: f64 = 2.0;
 const EXT_MAX_H: f64 = 80.0;
+/// A symbol stands at a witness point when it is at most this big and this near (text heights).
+const SYMBOL_MAX_H: f64 = 6.0;
+const SYMBOL_NEAR_H: f64 = 1.5;
 /// Collinear pieces of a dimension line this far apart are one line (text heights).
 const LINE_GAP_H: f64 = 1.0;
 /// A value fits its stretch when it is within this share (or this many inches) of the stretch's
@@ -263,11 +266,14 @@ pub(crate) struct Items {
     /// Filled arrowheads: their tip and the middle of their back.
     pub arrows: Vec<(Vec2, Vec2)>,
     pub texts: Vec<TextItem>,
+    /// Symbols: closed outlines that are not marks (their middle and half size) and block
+    /// references (their insertion point, size 0) — what a witness on a device stands on.
+    pub shapes: Vec<(Vec2, f64)>,
 }
 
 impl Items {
     fn full(&self) -> bool {
-        self.segs.len() + self.dots.len() + self.arrows.len() + self.texts.len() >= MAX_ITEMS
+        self.segs.len() + self.dots.len() + self.arrows.len() + self.texts.len() + self.shapes.len() >= MAX_ITEMS
     }
 
     /// Open polyline points: runs of collinear pieces are one segment (an extension line drawn
@@ -327,6 +333,7 @@ impl Items {
                 return;
             }
         }
+        self.shapes.push((c, rmax));
         let mut ring = pts.clone();
         if let Some(f) = pts.first() {
             ring.push(*f);
@@ -390,6 +397,7 @@ pub(crate) fn items_by_rect(d: &Drawing, rects: &[[f64; 4]]) -> Vec<Items> {
                 Some(v) => v.p,
                 None => continue,
             },
+            EntityKind::Insert(i) => i.insert.xy(),
             _ => continue,
         };
         let Some(k) = rects.iter().position(|r| inside(r, first)) else { continue };
@@ -430,6 +438,7 @@ pub(crate) fn items_by_rect(d: &Drawing, rects: &[[f64; 4]]) -> Vec<Items> {
                     it.add_closed(&pts, true);
                 }
             }
+            EntityKind::Insert(i) if i.insert.xy().is_finite() => it.shapes.push((i.insert.xy(), 0.0)),
             _ => {}
         }
     }
@@ -468,6 +477,8 @@ pub(crate) struct Witness {
     pub point: Vec2,
     /// The way its extension line runs from the dimension line to the object (unit; zero: none).
     pub ext: Vec2,
+    /// A symbol is drawn at its point (a device's, not a wall's).
+    pub symbol: bool,
 }
 
 /// A dimension read off a sheet (sheet coordinates).
@@ -700,6 +711,7 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
     // Marks.
     let dot_grid = Grid::points(items.dots.iter().map(|d| d.0), h_med * 8.0);
     let arrow_grid = Grid::points(items.arrows.iter().map(|a| a.0), h_med * 8.0);
+    let shape_grid = Grid::points(items.shapes.iter().map(|a| a.0), h_med * 8.0);
     // Each line's witness positions.
     let mut witnesses: Vec<Vec<(f64, Mark)>> = Vec::new();
     for l in &lines {
@@ -871,7 +883,7 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
             if strings.len() >= MAX_STRINGS {
                 break;
             }
-            let w = |t: f64, m: Mark| witness(items, &sg, l, t, m);
+            let w = |t: f64, m: Mark| witness(items, &sg, &dot_grid, &shape_grid, l, t, m);
             strings.push(DimString {
                 ends: (w(wa.0, wa.1), w(wb.0, wb.1)),
                 dir: l.u,
@@ -918,8 +930,21 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
     out
 }
 
+/// Is a symbol drawn at `p` (a circle or outline bigger than a mark, a block reference)?
+fn symbol_at(items: &Items, dot_grid: &Grid, shape_grid: &Grid, p: Vec2, h: f64) -> bool {
+    let r = h * SYMBOL_MAX_H;
+    let (lo, hi) = (p - Vec2::new(r, r), p + Vec2::new(r, r));
+    let near = |c: Vec2, size: f64| c.dist(p) <= size + h * SYMBOL_NEAR_H;
+    dot_grid.near(lo, hi).into_iter().filter_map(|i| items.dots.get(i)).any(|(c, rad)| *rad > h * DOT_MAX_H && *rad <= r && near(*c, *rad))
+        || shape_grid
+            .near(lo, hi)
+            .into_iter()
+            .filter_map(|i| items.shapes.get(i))
+            .any(|(c, size)| *size <= r && (*size == 0.0 || *size >= h * 0.3) && near(*c, *size))
+}
+
 /// The witness at `t` on `l`: its extension line run out (through dashes) to its far end.
-fn witness(items: &Items, sg: &Grid, l: &DimLine, t: f64, mark: Mark) -> Witness {
+fn witness(items: &Items, sg: &Grid, dot_grid: &Grid, shape_grid: &Grid, l: &DimLine, t: f64, mark: Mark) -> Witness {
     let w = l.at(t);
     let h = l.h;
     let n = l.u.perp();
@@ -947,7 +972,8 @@ fn witness(items: &Items, sg: &Grid, l: &DimLine, t: f64, mark: Mark) -> Witness
         Some((a, b)) => Some((a.min(r.0), b.max(r.1))),
         None => Some(*r),
     });
-    let Some((mut lo_s, mut hi_s)) = start else { return Witness { on_line: w, mark, point: w, ext: Vec2::ZERO } };
+    let symbol = |p: Vec2| symbol_at(items, dot_grid, shape_grid, p, h);
+    let Some((mut lo_s, mut hi_s)) = start else { return Witness { on_line: w, mark, point: w, ext: Vec2::ZERO, symbol: symbol(w) } };
     loop {
         let mut grew = false;
         for r in &runs {
@@ -967,9 +993,10 @@ fn witness(items: &Items, sg: &Grid, l: &DimLine, t: f64, mark: Mark) -> Witness
     // The object's side: where it runs farther.
     let (far, dir) = if -lo_s >= hi_s { (lo_s, n * -1.0) } else { (hi_s, n) };
     if far.abs() <= h * 1.5 {
-        return Witness { on_line: w, mark, point: w, ext: Vec2::ZERO };
+        return Witness { on_line: w, mark, point: w, ext: Vec2::ZERO, symbol: symbol(w) };
     }
-    Witness { on_line: w, mark, point: w + n * far, ext: dir }
+    let point = w + n * far;
+    Witness { on_line: w, mark, point, ext: dir, symbol: symbol(point) }
 }
 
 // ─── Mapping onto the model ────────────────────────────────────────────────

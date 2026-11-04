@@ -152,6 +152,11 @@ impl Sheet {
         let c = self.p(at);
         self.ents.push(EntityKind::Circle(Circle { center: c, radius: 0.7 }));
     }
+    /// A device's symbol (a 6" circle) where the sheet shows it.
+    fn symbol(&mut self, at: (f64, f64)) {
+        let c = self.p(at);
+        self.ents.push(EntityKind::Circle(Circle { center: c, radius: 6.0 }));
+    }
     /// An extension line from the dimension line (`y_line`) to `to` (model y), dashed.
     fn ext(&mut self, x: f64, y_line: f64, to: f64) {
         let s = if to > y_line { 1.0 } else { -1.0 };
@@ -202,6 +207,10 @@ fn draw_sheet(shift: (f64, f64)) -> Vec<EntityKind> {
     ] {
         sh.line(a, b);
     }
+    // The devices' symbols, where this sheet shows them (X 10" off the model's; Z not shown).
+    for at in [(222.0, 7.2), (186.0, 7.2), (162.0, 7.2), (414.0, 112.8), (267.0, 7.2), (255.0, 7.2), (48.0, 112.8)] {
+        sh.symbol(at);
+    }
     for k in 0..24 {
         let y = 40.0 + f64::from(k) * 2.5;
         sh.line((20.0 + f64::from(k), y), (60.0 + f64::from(k) * 3.0, y));
@@ -237,6 +246,36 @@ fn draw_sheet(shift: (f64, f64)) -> Vec<EntityKind> {
     sh.dot((267.0, y));
     sh.ext(267.0, y, 9.0);
     sh.value("2'-0\"", 248.0, y);
+    // 4. 1001's width, face to face: 19'-3"; and from its west face to where device Z is in the
+    // model, which this sheet doesn't draw (a room's dimension, not Z's): 7'-10". One baseline.
+    let y = 60.0;
+    sh.line((2.0, y), (241.0, y));
+    sh.tick((6.0, y));
+    sh.tick((237.0, y));
+    sh.value("19'-3\"", 110.0, y);
+    let y = 70.0;
+    sh.line((2.0, y), (104.0, y));
+    sh.tick((6.0, y));
+    sh.tick((100.0, y));
+    sh.ext(100.0, y, 9.0);
+    sh.value("7'-10\"", 40.0, y);
+    // 5. Across the demising wall: from 1001's east face (x = 237") to device Y in 1002 (255"):
+    // 1'-6", which is 1'-0" from 1002's own west face.
+    let y = 50.0;
+    sh.line((233.0, y), (259.0, y));
+    sh.tick((237.0, y));
+    sh.dot((255.0, y));
+    sh.ext(255.0, y, 9.0);
+    sh.value("1'-6\"", 240.0, y);
+    // 6. 1001's north wall: from the west edge of the upper cabinet there (30"–60", its front
+    // at y = 102") to device W (48"): 1'-6".
+    let y = 90.0;
+    sh.line((26.0, y), (52.0, y));
+    sh.tick((30.0, y));
+    sh.ext(30.0, y, 101.0);
+    sh.dot((48.0, y));
+    sh.ext(48.0, y, 111.0);
+    sh.value("1'-6\"", 33.0, y);
     sh.ents
 }
 
@@ -263,11 +302,17 @@ fn job(second_sheet: bool) -> Session {
         device(34.5, 9.4, "D", "receptacle", "1F3"),
         // Drawn at 22.25' (2'-0" from the west face); the model has it at 23.083'.
         device(20.25 + 34.0 / 12.0, 0.6, "X", "receptacle", "1F4"),
+        device(255.0 / 12.0, 0.6, "Y", "receptacle", "1F5"),
+        device(100.0 / 12.0, 0.6, "Z", "receptacle", "1F6"),
+        device(4.0, 9.4, "W", "receptacle", "1F7"),
     ];
     s.execute("bspec.set", &json!({"replace": true, "spec": spec(tags, second_sheet)})).expect("spec");
     s.execute("model.build", &json!({})).expect("build");
     s.execute("rooms.build", &json!({})).expect("rooms");
     s.execute("bim.props.fill", &json!({})).expect("fill");
+    // An upper cabinet on 1001's north wall, 30"–60" (made-up casework).
+    s.execute("bim.layout.object", &json!({"kind": "upper_cabinet", "tag": "CAB-1", "level": "L1", "box": [30.0, 102.0, 54.0, 60.0, 114.0, 84.0], "source": "made-up elevation"}))
+        .expect("cabinet");
     s
 }
 
@@ -289,15 +334,21 @@ fn a_chain_on_a_turned_enlarged_sheet_documents_each_devices_offset() {
     let mut s = job(false);
     let r = s.execute("bim.layout.dims", &json!({"limit": 20})).expect("dims");
     let e950 = &r["by_sheet"]["E-950"];
-    // Read: the chain's three, the door's one, the conflict's one; all placed through the
-    // sheet's registration (turned 90°, half size, moved).
-    assert_eq!((e950["read"].as_u64(), e950["placed"].as_u64()), (Some(5), Some(5)), "{r:#}");
+    // Read: the chain's three, the door's, the conflict's, the room's two, the demising wall's; all placed through the sheet's registration (turned 90°, half size,
+    // moved).
+    assert_eq!((e950["read"].as_u64(), e950["placed"].as_u64()), (Some(9), Some(9)), "{r:#}");
     assert_eq!(e950["registration"], json!("tags onto A-900"), "{e950}");
-    assert_eq!(e950["chains"], json!(1), "{e950}");
-    assert_eq!(e950["attached"]["both_ends"], json!(5), "{e950}");
-    // Devices in the chain are the end of the stretch on each side: C, B twice, A twice, D, X.
-    assert_eq!(e950["ends"]["device centre"], json!(7), "{e950}");
-    assert_eq!(e950["ends"]["wall face"], json!(2), "{e950}");
+    // Baselines: dimensions sharing a witness line on another dimension line — the room's and Z's
+    // from the west face; the chain's, the room's and the demising wall's at the east face.
+    assert_eq!((e950["chains"].as_u64(), e950["baseline_groups"].as_u64()), (Some(1), Some(2)), "{e950}");
+    // Z's: its far end is on nothing (no symbol there, so not on Z).
+    assert_eq!((e950["attached"]["both_ends"].as_u64(), e950["attached"]["one_end"].as_u64()), (Some(8), Some(1)), "{e950}");
+    // Devices in the chain end the stretch on each side: C, B twice, A twice; then D, X, Y, W.
+    assert_eq!(e950["ends"]["device centre"], json!(9), "{e950}");
+    assert_eq!(e950["ends"]["casework edge"], json!(1), "{e950}");
+    // The chain's east face, the conflict's west face, the room's two, Z's west face, the
+    // demising wall's.
+    assert_eq!(e950["ends"]["wall face"], json!(6), "{e950}");
     assert_eq!(e950["ends"]["opening edge"], json!(1), "{e950}");
     // The witness points land on the model where the devices are.
     let dims = r["dimensions_first"].as_array().expect("listed");
@@ -306,7 +357,7 @@ fn a_chain_on_a_turned_enlarged_sheet_documents_each_devices_offset() {
     assert!(xs.iter().any(|x| (x - 18.5).abs() < 0.01) && xs.iter().any(|x| (x - 19.75).abs() < 0.01), "{chain_a}");
     // Rehost documents the offsets: each from the chain's fixed end, the east face.
     let rh = s.execute("bim.layout.rehost", &json!({})).expect("rehost");
-    assert_eq!(rh["drawn_dimensions"]["devices_documented"], json!(5), "{:#}", rh["drawn_dimensions"]);
+    assert_eq!(rh["drawn_dimensions"]["devices_documented"], json!(7), "{:#}", rh["drawn_dimensions"]);
     for (mark, inches) in [("A", 15.0), ("B", 51.0), ("C", 75.0)] {
         let p = props(&mut s, mark);
         assert_eq!(p["offset_from"]["value"], json!("1001/E"), "{mark}: {p:#}");
@@ -317,6 +368,19 @@ fn a_chain_on_a_turned_enlarged_sheet_documents_each_devices_offset() {
         assert!(p["offset_along"]["note"].as_str().is_some_and(|n| n.contains("documented") && n.contains("E-950")), "{mark}: {p:#}");
         assert!(p.get("offset_conflict").is_none_or(Value::is_null), "{mark} agrees with the model");
     }
+    // Y: dimensioned from the demising wall's far face; documented from its own room's face, the
+    // wall's thickness off the drawn value.
+    let y = props(&mut s, "Y");
+    assert_eq!((y["offset_from"]["value"].as_str(), y["offset_along"]["value"].as_f64()), (Some("1002/W"), Some(12.0)), "{y:#}");
+    assert_eq!(y["offset_along"]["source"]["doc"], json!("E-950"));
+    // W: from the cabinet's edge.
+    let w = props(&mut s, "W");
+    assert!(w["offset_from"]["value"].as_str().is_some_and(|t| t.contains("CAB-1")), "{w:#}");
+    assert_eq!(w["offset_along"]["value"].as_f64(), Some(18.0), "{w:#}");
+    // Z: the sheet draws no device there: its offset stays measured from the plan.
+    let z = props(&mut s, "Z");
+    assert_eq!(z["offset_along"]["source"]["kind"], json!("computed"), "{z:#}");
+    assert!(z["offset_along"]["note"].as_str().is_some_and(|n| n.contains("derived: measured from the plan")), "{z:#}");
 }
 
 #[test]
@@ -372,8 +436,8 @@ fn a_sheet_with_no_registration_borrows_the_one_of_the_sheet_drawing_its_plan() 
     let r = s.execute("bim.layout.dims", &json!({})).expect("dims");
     let e951 = &r["by_sheet"]["E-951"];
     assert!(e951["registration"].as_str().is_some_and(|t| t.starts_with("lines") && t.contains("E-950")), "{e951:#}");
-    assert_eq!((e951["read"].as_u64(), e951["placed"].as_u64()), (Some(5), Some(5)), "{e951:#}");
-    assert_eq!(e951["attached"]["both_ends"], json!(5), "{e951:#}");
+    assert_eq!((e951["read"].as_u64(), e951["placed"].as_u64()), (Some(9), Some(9)), "{e951:#}");
+    assert_eq!(e951["attached"]["both_ends"], json!(8), "{e951:#}");
 }
 
 #[test]
@@ -392,8 +456,8 @@ fn an_unregistered_sheet_reports_why_and_hostile_params_are_refused() {
     s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
     let r = s.execute("bim.layout.dims", &json!({})).expect("dims");
     let e950 = &r["by_sheet"]["E-950"];
-    assert_eq!((e950["read"].as_u64(), e950["placed"].as_u64()), (Some(5), Some(0)), "{e950:#}");
-    assert_eq!(e950["unplaced"]["its sheet is not registered on a level's plan"], json!(5), "{e950:#}");
+    assert_eq!((e950["read"].as_u64(), e950["placed"].as_u64()), (Some(9), Some(0)), "{e950:#}");
+    assert_eq!(e950["unplaced"]["its sheet is not registered on a level's plan"], json!(9), "{e950:#}");
     for p in [json!({"limit": -3}), json!({"sheet": 7}), json!({"north": "x"}), json!({"limit": 1e300, "sheet": "NOPE"})] {
         let _ = s.execute("bim.layout.dims", &p);
     }

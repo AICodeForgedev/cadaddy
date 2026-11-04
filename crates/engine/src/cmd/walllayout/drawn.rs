@@ -79,6 +79,8 @@ pub(super) struct DocOffset {
     pub dir: Vec2,
     pub source: Source,
     pub why: String,
+    /// The reference is a casework edge (in front of the wall, not on its line).
+    pub casework: bool,
 }
 
 /// What attaching found.
@@ -98,11 +100,13 @@ struct Cand {
     hit: Hit,
 }
 
-fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec2, reach: f64) -> Vec<Cand> {
+/// The objects a witness point may be on. A device only where the sheet draws a symbol at the
+/// witness (a wall's witness has none): `symbol`.
+fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec2, reach: f64, symbol: bool) -> Vec<Cand> {
     let n = u.perp();
     let lv = Some(level);
     let mut out = Vec::new();
-    for (i, dv) in devs.iter().enumerate().filter(|(_, d)| same_level(d.level.as_deref(), lv)) {
+    for (i, dv) in devs.iter().enumerate().filter(|(_, d)| symbol && same_level(d.level.as_deref(), lv)) {
         // A device in a wall that runs along the witness line is that wall's, not the
         // dimension's: the dimension measures along the device's own wall.
         if dv.normal().is_some_and(|nm| dot(nm.normalized(), u).abs() > 0.7) {
@@ -164,8 +168,10 @@ struct Chain<'a> {
     dims: Vec<usize>,
     points: Vec<Vec2>,
     sheet_points: Vec<Vec2>,
+    symbols: Vec<bool>,
     values: Vec<f64>,
     texts: Vec<String>,
+    to_scale: Vec<bool>,
     p: &'a Placed,
 }
 
@@ -189,8 +195,10 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
                     dims: Vec::new(),
                     points: vec![p.a],
                     sheet_points: vec![p.s.ends.0.on_line],
+                    symbols: vec![p.s.ends.0.symbol],
                     values: Vec::new(),
                     texts: Vec::new(),
+                    to_scale: Vec::new(),
                     p,
                 });
             }
@@ -198,6 +206,8 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
                 c.dims.push(i);
                 c.points.push(p.b);
                 c.sheet_points.push(p.s.ends.1.on_line);
+                c.symbols.push(p.s.ends.1.symbol);
+                c.to_scale.push(p.s.to_scale);
                 c.values.push(p.s.inches);
                 c.texts.push(p.s.text.clone());
             }
@@ -217,7 +227,8 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
         let p = ch.p;
         let u = p.dir;
         let reach = REACH_IN * inch + p.residual;
-        let cands: Vec<Vec<Cand>> = ch.points.iter().map(|w| candidates(cx, devs, objs, &p.level, *w, u, reach)).collect();
+        let cands: Vec<Vec<Cand>> =
+            ch.points.iter().zip(&ch.symbols).map(|(w, sym)| candidates(cx, devs, objs, &p.level, *w, u, reach, *sym)).collect();
         // Slide the chain to where most witnesses fall on an object.
         let slide_max = (SLIDE_MIN_IN * inch).max(2.0 * p.residual);
         let tight = TIGHT_IN * inch;
@@ -271,6 +282,12 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
                 continue;
             };
             let (lo, hi) = (r.min(k), r.max(k));
+            // A value that doesn't fit its drawn length (not to scale, or not a dimension's at
+            // all) documents nothing.
+            if ch.to_scale.get(lo..hi).is_none_or(|v| v.iter().any(|ok| !ok)) {
+                out.undocumented.push((dv.h, "a value on its way to the fixed end does not fit its drawn length (not to scale)".into()));
+                continue;
+            }
             let value: f64 = ch.values.get(lo..hi).map_or(0.0, |v| v.iter().sum());
             let text = ch.texts.get(lo..hi).map(|t| t.join(" + ")).unwrap_or_default();
             let c = dv.c();
@@ -306,7 +323,15 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
             let at_sheet = ch.sheet_points.get(k).copied().unwrap_or(Vec2::ZERO);
             let view = p.view.as_deref().map(|v| format!(" ({v})")).unwrap_or_default();
             let why = format!("a dimension on {}{view}: {} from {} to the device, read off the sheet's line work", p.sheet, text, reference.name());
-            let doc = DocOffset { reference, value_in: value, dir: u, source: Source::print(&p.sheet, Some([r2(at_sheet.x), r2(at_sheet.y)])), why };
+            let casework = matches!(hits.get(r), Some(Ok(Hit::Casework { .. })));
+            let doc = DocOffset {
+                reference,
+                value_in: value,
+                dir: u,
+                source: Source::print(&p.sheet, Some([r2(at_sheet.x), r2(at_sheet.y)])),
+                why,
+                casework,
+            };
             // Two chains measuring one device: the shorter offset (the nearer reference).
             match out.docs.get(&dv.h) {
                 Some(old) if old.value_in <= doc.value_in => {}
