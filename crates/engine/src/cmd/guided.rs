@@ -11061,7 +11061,7 @@ fn fa_templates(
     fa_row: &dyn Fn(&str, &str) -> bool,
 ) -> Vec<super::loosesym::Template> {
     let mut out = Vec::new();
-    for tb in legend_tables(texts) {
+    for tb in symbol_lists(texts) {
         for (row, cell) in tb.loose_cells(page, 3) {
             if !fa_row(&row.value, number) {
                 continue;
@@ -11077,6 +11077,50 @@ fn fa_templates(
         }
     }
     out
+}
+
+/// The SYMBOL | DESCRIPTION tables of a sheet's lettering ([`legend_tables`]), and those whose
+/// DESCRIPTION header is centred over a column of rows set flush left: the column the rows under
+/// the header line up on, between the SYMBOL header and the DESCRIPTION header's end.
+fn symbol_lists(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<LegendTable<'_>> {
+    let mut out = legend_tables(texts);
+    for tb in &mut out {
+        if !tb.rows.is_empty() {
+            continue;
+        }
+        let h = tb.h();
+        let right = tb.desc_x + tb.title.chars().count() as f64 * h;
+        let under: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+            .iter()
+            .filter(|t| {
+                t.at.y < tb.head.at.y - 0.5 * h
+                    && t.at.y > tb.below
+                    && t.at.x > tb.head.at.x + 2.0 * h
+                    && t.at.x <= right
+                    && t.value.chars().count() > 3
+            })
+            .collect();
+        // The left edge most of them share.
+        let Some(x) = under.iter().map(|t| t.at.x).max_by_key(|x| under.iter().filter(|o| (o.at.x - x).abs() <= 0.5 * h).count()) else {
+            continue;
+        };
+        tb.desc_x = x;
+        tb.rows = texts.iter().filter(|t| (t.at.x - x).abs() <= 1.5 * h && t.at.y < tb.head.at.y - 0.5 * h && t.at.y > tb.below).collect();
+    }
+    out
+}
+
+/// The extents of the symbol lists on a sheet ([`symbol_lists`]): the header down to its last
+/// row, and well right of it.
+fn symbol_list_rects(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<[f64; 4]> {
+    symbol_lists(texts)
+        .iter()
+        .map(|tb| {
+            let h = tb.h();
+            let bottom = tb.rows.iter().map(|r| r.at.y).fold(tb.head.at.y, f64::min);
+            [tb.head.at.x - 4.0 * h, bottom - 2.0 * h, tb.desc_x.max(tb.head.at.x) + 120.0 * h, tb.head.at.y + 2.0 * h]
+        })
+        .collect()
 }
 
 /// Words paired to place a page read again, at most; index entries looked through, at most.
@@ -11195,7 +11239,7 @@ fn fa_loose_devices(
                 let templates = fa_templates(page, &ptexts, &number, &fa_row);
                 stats.rows = stats.rows.max(templates.len());
                 stats.as_drawn.push(number.clone());
-                super::loosesym::find_by_parts(page, 0, u64::MAX, &templates, &symbol_table_rects(&ptexts))
+                super::loosesym::find_by_parts(page, 0, u64::MAX, &templates, &symbol_list_rects(&ptexts))
                     .into_iter()
                     .map(|f| super::loosesym::Found { at: f.at * k + off, handles: Vec::new(), ..f })
                     .collect()
@@ -17453,7 +17497,8 @@ mod tests {
         // plan's two horn/strobes (one turned, its ring bigger) and lettering.
         let mut page = cadaddy_doc::Drawing::new_imperial();
         text(&mut page, [500.0, 530.0], "SYMBOL");
-        text(&mut page, [530.0, 530.0], "DESCRIPTION");
+        // (The DESCRIPTION header centred over its column, the rows flush left.)
+        text(&mut page, [545.0, 530.0], "DESCRIPTION");
         text(&mut page, [530.0, 524.0], "FIRE ALARM PULL STATION");
         poly(&mut page, &[Vec2::new(502.0, 523.0), Vec2::new(506.0, 523.0), Vec2::new(506.0, 527.0), Vec2::new(502.0, 527.0)], true);
         text(&mut page, [503.0, 524.0], "P");
