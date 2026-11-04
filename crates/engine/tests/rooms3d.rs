@@ -351,3 +351,22 @@ fn a_callouts_sheet_number_is_no_rooms_number() {
     assert_eq!(room(rooms, "OFFICE")["number"], "101", "{rooms:?}");
     assert!(room(rooms, "STORAGE")["number"].is_null(), "{rooms:?}");
 }
+
+/// An equipment room tagged by the unit it houses (`AHU` over its number) is a room; an equipment
+/// tag with its own number (`AHU-1`) names none.
+#[test]
+fn an_equipment_rooms_tag_names_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 120.0], "AHU");
+    text(&mut s, [100.0, 105.0], "152");
+    text(&mut s, [340.0, 120.0], "AHU-1");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert!(!rooms.iter().any(|x| x["name"] == "AHU-1"), "{rooms:?}");
+}
