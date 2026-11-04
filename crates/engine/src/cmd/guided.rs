@@ -7377,7 +7377,8 @@ fn typical_item(item: &str, sheet: &str) -> Option<TypicalHeight> {
 
 /// The typical mounting heights a set's general note gives (`ELECTRICAL DEVICE MOUNTED HEIGHTS
 /// (UNO): • PANELBOARDS 6'-6" AFF TO TOP • TOGGLE SWITCH 4'-0" AFF TO TOP • RECEPTACLES 1'-6"
-/// CENTERLINE…`): the note's lines from its heading down to the next numbered note, item by item.
+/// CENTERLINE…`): the note's rows from its heading down to the next numbered note, each read left
+/// to right (an item's name and its height are often two columns), item by item.
 fn typical_mounting_heights(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<TypicalHeight> {
     let mut out: Vec<TypicalHeight> = Vec::new();
     for (sheet, sub) in pages {
@@ -7395,19 +7396,27 @@ fn typical_mounting_heights(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<Typ
                 })
                 .collect();
             lines.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-            let mut said = String::new();
-            for (i, l) in lines.iter().enumerate() {
-                let v = l.value.trim();
+            // Its rows, each read left to right (an item's name and its height are two columns).
+            let mut rows: Vec<(f64, Vec<&cadaddy_mepfix::sheet_facts::TextItem>)> = Vec::new();
+            for l in lines {
+                match rows.last_mut() {
+                    Some((y, row)) if (*y - l.at.y).abs() <= 0.5 * h => row.push(l),
+                    _ => rows.push((l.at.y, vec![l])),
+                }
+            }
+            let mut items: Vec<String> = Vec::new();
+            for (i, (_, row)) in rows.iter_mut().enumerate() {
+                row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                let text = row.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ");
                 // The next numbered note ends this one.
-                let numbered = v.split_once('.').is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()));
-                if i > 0 && numbered && !std::ptr::eq(*l, head) {
+                let numbered = text.split_once('.').is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()));
+                if i > 0 && numbered {
                     break;
                 }
-                said.push_str(v);
-                said.push('\n');
+                let text = if i == 0 { text.split_once(':').map_or(String::new(), |(_, rest)| rest.to_string()) } else { text };
+                items.extend(text.split(['\u{2022}', ';']).map(str::trim).filter(|i| !i.is_empty()).map(str::to_string));
             }
-            let text = said.split_once(':').map_or(said.as_str(), |(_, rest)| rest);
-            for item in text.split(['\u{2022}', '\n', ';']).map(str::trim).filter(|i| !i.is_empty()) {
+            for item in &items {
                 if let Some(t) = typical_item(item, sheet)
                     && !out.iter().any(|o| o.kind == t.kind)
                 {
@@ -14082,6 +14091,42 @@ mod tests {
         let mut placed = vec![dv("EF", "103"), dv("PTAC", "103")];
         assert_eq!(one_connection_each(&mut stamped, &mut placed), 1);
         assert_eq!((stamped.len(), placed.len()), (4, 1));
+    }
+
+    /// The note as a sheet prints it: its heading, then each item's name and height in two
+    /// columns, down to the next numbered note.
+    #[test]
+    fn a_two_column_mounting_height_note_is_read_row_by_row() {
+        let mut d = cadaddy_doc::Drawing::default();
+        let rows: [(&str, f64, f64); 9] = [
+            ("17.ELECTRICAL DEVICE MOUNTED HEIGHTS (UNO):", 34.6, 17.5),
+            ("PANELBOARDS", 35.1, 17.4),
+            ("6'-6\" AFF TO TOP", 36.8, 17.4),
+            ("TOGGLE SWITCH", 35.1, 17.2),
+            ("4'-0\" AFF TO TOP", 36.8, 17.2),
+            ("RECEPTACLES", 35.1, 17.1),
+            ("1'-6\" CENTERLINE", 36.8, 17.1),
+            ("18.THERMOSTATS SHALL BE 5'-0\" AFF", 34.6, 16.9),
+            ("TV OUTLETS 6'-0\" AFF", 35.1, 16.7),
+        ];
+        for (v, x, y) in rows {
+            let t = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: 0.1,
+                value: v.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t)).ok();
+        }
+        let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
+        // The next note's thermostat and what follows it are not this note's.
+        assert_eq!(got, vec![("switch", 45.75), ("receptacle", 18.0)]);
     }
 
     /// A general note's typical mounting heights, item by item, to each one's centre.
