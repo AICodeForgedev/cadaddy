@@ -1318,7 +1318,8 @@ pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<u
         .collect();
     let d = s.doc()?;
     let mut changes: Vec<(Handle, Props)> = Vec::new();
-    for e in d.model.iter().take(MAX_ELEMENTS) {
+    // The whole model, as `fill` looks at it (a print set's imported sheets come first).
+    for e in d.model.iter().take(MAX_ELEMENTS * 4) {
         if super::elemprops::element_kind(e).as_deref() != Some("equipment") {
             continue;
         }
