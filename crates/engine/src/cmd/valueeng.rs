@@ -542,10 +542,12 @@ mod tests {
         assert!(designed.contains(&json!({"item": "EMT conduit", "size": "2\"", "ft": 120.0})), "{designed:?}");
         assert!(designed.contains(&json!({"item": "XHHW aluminum", "size": "#2/0", "ft": 360.0})), "{designed:?}");
         assert!(ser["rfi"]["issue"].as_str().unwrap().contains("NEC 338.10(B)(4)(a)"));
-        // The starter book has no aluminum wire or SER: no savings claimed, the gaps named.
-        assert!(ser["saves"].is_null(), "{ser}");
-        assert!(ser["unpriced"].as_array().unwrap().iter().any(|u| u.as_str().is_some_and(|u| u.starts_with("SER cable"))), "{ser}");
-        assert!(!ser["rfi"]["issue"].as_str().unwrap().contains("saves"));
+        // Both ways priced from the starter book: SER saves the conduit and most of the pulling.
+        assert_eq!(ser["unpriced"], json!([]), "{ser}");
+        let saves = |k: &str| ser["saves"][k].as_f64().unwrap_or(f64::NAN);
+        assert!((saves("material") - 144.24).abs() < 0.01, "{ser}");
+        assert!((saves("labor_hours") - 18.0).abs() < 0.01, "{ser}");
+        assert!(ser["rfi"]["issue"].as_str().unwrap().contains("saves"), "{ser}");
         let nm = out.iter().find(|v| v["id"] == "nm_unit_branch").unwrap();
         assert_eq!(nm["tier"], "allowed_now", "{nm}");
         assert!(nm.get("rfi").is_none());
