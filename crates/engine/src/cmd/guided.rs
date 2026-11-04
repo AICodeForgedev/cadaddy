@@ -5312,15 +5312,29 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // its legend row's by its drawn sample's shape (Q6167).
         if !legend.is_empty() {
             let (pages, notes) = fa_pages_as_drawn(job);
-            let (loose, mut st) = fa_loose_devices(s.doc()?, job, &legend, &devices, &pages);
+            // Placed as the devices read were (their sheet's registration onto its level's plan
+            // when the set has one); none more than its storey's margin outside its walls.
+            let place = |at: [f64; 2], level: &str| match placer.as_deref() {
+                Some(sim) => sim(at, level).map(|m| m.apply(at)),
+                None => Some(at),
+            };
+            let (mut loose, mut st) = fa_loose_devices(s.doc()?, job, &legend, &devices, &pages, &place);
             st.unplaced.extend(notes);
+            if let Some(sh) = shells.as_deref()
+                && let Ok((sp, _)) = super::bspec::current(s, "bim_build")
+            {
+                let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let n = loose.len();
+                loose.retain(|dv| !outside_shell(sh, &dv.level, dv.at, upf));
+                st.unplaceable += n - loose.len();
+            }
             if !st.sheets.is_empty() {
                 let mut by: BTreeMap<&str, usize> = BTreeMap::new();
                 for dv in &loose {
                     *by.entry(dv.tag.as_str()).or_default() += 1;
                 }
                 progress_line(&format!(
-                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, read as drawn {:?}, not {:?}, fire alarm legend rows {}, copies found {}, off every level {}, a device read there {})",
+                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, read as drawn {:?}, not {:?}, fire alarm legend rows {}, copies found {}, off every level {}, not placeable {}, a device read there {})",
                     loose.len(),
                     st.sheets,
                     st.as_drawn,
@@ -5328,6 +5342,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     st.rows,
                     st.found,
                     st.off_level,
+                    st.unplaceable,
                     st.read_already
                 ));
                 devices.extend(loose);
@@ -11313,6 +11328,7 @@ struct LooseStats {
     rows: usize,
     found: usize,
     off_level: usize,
+    unplaceable: usize,
     read_already: usize,
 }
 
@@ -11325,6 +11341,7 @@ fn fa_loose_devices(
     legend: &BTreeMap<Shape, (String, String)>,
     have: &[super::readers::ReadDevice],
     pages: &BTreeMap<String, cadaddy_doc::Drawing>,
+    place: &dyn Fn([f64; 2], &str) -> Option<[f64; 2]>,
 ) -> (Vec<super::readers::ReadDevice>, LooseStats) {
     let r = super::scope::rules();
     let mut stats = LooseStats::default();
@@ -11395,9 +11412,14 @@ fn fa_loose_devices(
         };
         stats.found += found.len();
         for f in found {
-            let at = [f.at.x, f.at.y];
-            let Some(region) = job.level_at(at).filter(|g| super::printmep::building_level(&g.level)) else {
+            let on_sheet = [f.at.x, f.at.y];
+            let Some(region) = job.level_at(on_sheet).filter(|g| super::printmep::building_level(&g.level)) else {
                 stats.off_level += 1;
+                continue;
+            };
+            // Onto its level's plan, as the devices read there were.
+            let Some(at) = place(on_sheet, &region.level) else {
+                stats.unplaceable += 1;
                 continue;
             };
             // A device read there already (its own mark's): not twice. A symbol beside it (a
@@ -17745,11 +17767,16 @@ mod tests {
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
         let mut pages = BTreeMap::new();
         pages.insert("E-313".to_string(), page);
-        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages);
+        // The sheet's registration onto its level's plan: 1000 back to the left.
+        let onto_plan = |p: [f64; 2], level: &str| (level == "6").then_some([p[0] - 1000.0, p[1]]);
+        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &onto_plan);
         let mut at: Vec<(i64, i64)> = found.iter().map(|d| (d.at[0].round() as i64, d.at[1].round() as i64)).collect();
         at.sort_unstable();
         assert_eq!(at.len(), 2, "{found:?} {st:?}");
-        assert!((at[0].0 - 1101).abs() <= 2 && (at[1].0 - 1200).abs() <= 2, "{at:?}");
+        assert!((at[0].0 - 101).abs() <= 2 && (at[1].0 - 200).abs() <= 2, "on the plan: {at:?}");
+        // A sheet no registration places: none.
+        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &|_, _| None);
+        assert!(none.is_empty() && st.unplaceable == 2, "{st:?}");
         assert!(
             found.iter().all(|d| d.tag == "HORN/STROBE" && d.kind_source == "E-313 legend: COMBINATION F.A. HORN & STROBE" && d.level == "6"),
             "{found:?}"
@@ -17757,7 +17784,7 @@ mod tests {
         assert_eq!((st.as_drawn.len(), st.rows), (1, 1), "the horn/strobe row only (the pull station's is lettered): {st:?}");
         // Lettering that can't place the page: nothing read off it.
         job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo: marks, hi }];
-        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages);
+        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &|p, _| Some(p));
         assert!(none.is_empty() && st.unplaced == ["E-313: 0 words written once on both (3 needed)"], "{st:?}");
     }
 
@@ -17814,7 +17841,7 @@ mod tests {
         }];
         job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo, hi }];
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
-        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new());
+        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new(), &|p, _| Some(p));
         assert_eq!((st.sheets.len(), st.rows, st.found), (1, 1, 2), "{st:?}");
         let mut at: Vec<f64> = found.iter().map(|d| d.at[0].round()).collect();
         at.sort_by(f64::total_cmp);
@@ -17827,10 +17854,13 @@ mod tests {
         );
         // One already read there is not read twice; a sheet that isn't a fire alarm plan has none.
         let have = vec![super::super::readers::ReadDevice { tag: "X".into(), at: [100.0, 100.0], ..Default::default() }];
-        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new()).0.len(), 1);
-        assert!(fa_loose_devices(s.doc().unwrap(), &job, &av, &[], &BTreeMap::new()).0.is_empty(), "an electrical legend's audio/visual outlet");
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new(), &|p, _| Some(p)).0.len(), 1);
+        assert!(
+            fa_loose_devices(s.doc().unwrap(), &job, &av, &[], &BTreeMap::new(), &|p, _| Some(p)).0.is_empty(),
+            "an electrical legend's audio/visual outlet"
+        );
         job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "POWER PLAN"}]}));
-        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new()).0.is_empty());
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new(), &|p, _| Some(p)).0.is_empty());
     }
 
     #[test]
