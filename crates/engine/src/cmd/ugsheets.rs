@@ -89,13 +89,13 @@ impl Paper {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("ugsheets.check", "Check Underground", run_check)
-            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
+            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, reviews (a proposed route too close to another trade's line: for review, not an error), warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
             .noundo(),
         CommandSpec::new("ugsheets.plan", "Underground Plan Report", run_plan)
             .params("{} → the job's underground plan (Q6148), as its last run left it: {slab_level, trades: {E|P: {callouts: [{trade, sheet, from: note|keynote|legend, mark, text, what, said_buried, count, size_in, material, cover_in, steel_ells, room}], plan_issued, sheet, placed: [{callout, status, runs, how}], takeoff}}, sheets, called_runs, stack_bases, proposed_runs, proposals: [{subject, from, to, copies, conduits, size_in, under_slab_ft, overhead_ft, decision, reasons, alternative, routed_under, routed_over, adds_route}], framing_above, below_slab_method, scale, rfis, sleeves, findings}")
             .noundo(),
         CommandSpec::new("ugsheets.review", "Review Underground", run_review)
-            .params("{} → {errors, rfis: [id], findings}: an RFI (service_entrance) for each required service not shown or unclear"),
+            .params("{} → {errors, rfis: [id], findings}: an RFI (service_entrance) for each required service not shown or unclear, and one (pour_hold) for each proposed route that crosses another trade's buried line too close (a review item, not an error)"),
         CommandSpec::new("ugsheets.build", "Underground Sheets", run_build)
             .params("{trade?: E (default, conduit) | P (pipes below the slab), level?: name (default: every level with buried work: the slab level), number?: first sheet number (default \"E-001\"), title?: the sheet's title, scale?: the plan's scale when it fits (\"1/16\\\" = 1'-0\\\"\"), called?: [{sheet, level?, text}] (buried work the documents' notes call for that no plan locates: listed in the notes), sources?: [{sheet: how it is cited, level?, text}] (every callout of the documents for this sheet, listed in its notes), line_types?: [{sheet, text}] (the documents' legend line types for buried work, in the legend), alternatives?: [{subject, points: [[x, y]], size_in, conduits}] (underground alternatives to routes the model runs overhead, dashed), title_block?: block name (default: a block named like a title block), today?, clearance_in?, pdf?: path, dwg?: path} → {sheets: [{layout, number, title, trade, level, runs, stubups, dimensions, crossings, sleeves, alternatives, sources, sections, replaced, scale, registered}], files: [path]}: building again replaces the sheet's layout; each sheet is registered to its level in the set's sheet list"),
     ]
@@ -174,6 +174,9 @@ struct Crossing {
     distance_ft: f64,
     /// Clear vertical distance between them (inches), when both depths are known.
     separation_in: Option<f64>,
+    /// The electrical run is CADaddy's proposal (dashed, with its RFI), not called work: a crossing
+    /// too close is a review item for the engineer, not an error in the documents' work.
+    proposed: bool,
 }
 
 /// Where a buried run comes up.
@@ -439,6 +442,7 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
                     how,
                     distance_ft,
                     separation_in: sep,
+                    proposed: r.proposed,
                 });
             }
         }
@@ -449,12 +453,21 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
             x.separation_in.map_or("vertical separation unknown (a depth isn't given)".to_string(), |s| format!("{}\" clear vertically", r2(s)));
         findings.push(Finding {
             check: "crossing",
-            severity: if low { "error" } else { "warning" },
+            // A proposed route too close: for review with its routing RFI, not an error.
+            severity: match (low, x.proposed) {
+                (true, false) => "error",
+                (true, true) => "review",
+                _ => "warning",
+            },
             about: x.id.clone(),
             level: x.level.clone(),
             at: x.at,
-            message: format!("{} {} {} ({}): {sep_text}", x.electrical, x.how, x.other, x.other_label),
-            fix: if low {
+            message: format!("{}{} {} {} ({}): {sep_text}", if x.proposed { "proposed " } else { "" }, x.electrical, x.how, x.other, x.other_label),
+            fix: if low && x.proposed {
+                format!(
+                    "a proposed route: if the engineer accepts it under the slab, run it at least {MIN_SEPARATION_IN}\" clear of the pipe (lower it, or shift the route) or sleeve the crossing"
+                )
+            } else if low {
                 format!("keep at least {MIN_SEPARATION_IN}\" between them: lower one, or sleeve or encase the crossing")
             } else {
                 "pothole and confirm both depths before trenching; mark the crossing in the field".into()
@@ -1243,6 +1256,7 @@ fn ft_in(ft: f64) -> String {
 
 fn ug_json(ug: &Ug) -> Value {
     let errors = ug.findings.iter().filter(|f| f.severity == "error").count();
+    let reviews = ug.findings.iter().filter(|f| f.severity == "review").count();
     let dim = |d: &Option<(String, f64, f64)>| d.as_ref().map(|(from, _, ft)| json!({ "from": from, "ft": r2(*ft) }));
     // Coordinates for layout tools: from the first grid lines (else the sheet's origin), feet.
     let ox = ug.grids.x.first().map_or(0.0, |g| g.1);
@@ -1250,7 +1264,8 @@ fn ug_json(ug: &Ug) -> Value {
     json!({
         "ok": errors == 0,
         "errors": errors,
-        "warnings": ug.findings.len() - errors,
+        "reviews": reviews,
+        "warnings": ug.findings.len() - errors - reviews,
         "runs": ug.runs.iter().map(|r| json!({
             "id": r.id, "kind": r.kind, "system": r.system, "level": r.level, "from": r.from, "to": r.to, "size_in": r.size_in,
             "conduits": r.conduits, "material": r.material, "depth_in": r2(r.depth_in), "length_ft": r2(r.length_ft),
@@ -1336,12 +1351,20 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut sp = spec_of("ugsheets.review", s)?;
     let ug = study(&sp, &s.doc()?.bim_types, None, CLEARANCE_FT);
     let mut added = Vec::new();
-    for f in ug.findings.iter().filter(|f| f.severity == "error" && f.check.starts_with("service_")) {
-        let id = format!("RFI-U{}", hash(&format!("{}|{}", f.about, f.check)));
+    for f in
+        ug.findings.iter().filter(|f| (f.severity == "error" && f.check.starts_with("service_")) || (f.severity == "review" && f.check == "crossing"))
+    {
+        // A crossing's id is its pair, not its number (numbers shift as runs change).
+        let key = if f.check == "crossing" { f.data["items"].to_string() } else { f.about.clone() };
+        let id = format!("RFI-U{}", hash(&format!("{key}|{}", f.check)));
         if sp.rfis.iter().any(|r| r.id == id) || sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
             continue;
         }
-        let kind = cadaddy_walk3d::RfiKind::ServiceEntrance;
+        let (kind, assumed) = if f.check == "crossing" {
+            (cadaddy_walk3d::RfiKind::PourHold, "The proposed route is shown as drawn until its routing RFI is answered.")
+        } else {
+            (cadaddy_walk3d::RfiKind::ServiceEntrance, "Held: the slab isn't poured over this service's route until it is answered.")
+        };
         sp.rfis.push(cadaddy_walk3d::Rfi {
             id: id.clone(),
             kind: Some(kind),
@@ -1350,7 +1373,7 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
             at: f.at,
             about: format!("{} ({})", f.about, f.check),
             issue: f.message.clone(),
-            assumed: "Held: the slab isn't poured over this service's route until it is answered.".into(),
+            assumed: assumed.into(),
             proposed: (!f.fix.is_empty()).then(|| f.fix.clone()),
             ..cadaddy_walk3d::Rfi::default()
         });
@@ -1377,6 +1400,132 @@ const SCALES: [(f64, &str); 6] = [
 ];
 
 /// Where the plan goes on paper: model point → paper point.
+/// A plan label's width per character, as a share of its height (the sheets' single-stroke text).
+const LABEL_CHAR_W: f64 = 0.8;
+/// Label boxes a sheet keeps for the overlap test, at most.
+const MAX_LABELS: usize = 2_000;
+
+/// The labels placed on a sheet's plan so far (paper boxes `[x0, y0, x1, y1]`): a label that
+/// would overlap one of them is skipped.
+#[derive(Default)]
+struct LabelBoxes {
+    boxes: Vec<[f64; 4]>,
+    skipped: usize,
+}
+
+impl LabelBoxes {
+    /// The box of `text` at height `h` with its insertion point (lower left) at `at`.
+    fn box_of(at: [f64; 2], text: &str, h: f64) -> [f64; 4] {
+        [at[0], at[1], at[0] + text.chars().count() as f64 * h * LABEL_CHAR_W, at[1] + h]
+    }
+    /// Keeps the box an earlier label or tag takes (always drawn).
+    fn take(&mut self, at: [f64; 2], text: &str, h: f64) {
+        if self.boxes.len() < MAX_LABELS {
+            self.boxes.push(Self::box_of(at, text, h));
+        }
+    }
+    /// Whether `text` fits at `at` clear of every earlier label; when it does, its box is kept.
+    fn fits(&mut self, at: [f64; 2], text: &str, h: f64) -> bool {
+        let b = Self::box_of(at, text, h);
+        if !b.iter().all(|v| v.is_finite())
+            || self.boxes.len() >= MAX_LABELS
+            || self.boxes.iter().any(|o| b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3])
+        {
+            self.skipped += 1;
+            return false;
+        }
+        self.boxes.push(b);
+        true
+    }
+}
+
+/// The runs' chains: runs of one kind (system, size, conduits, material, called or proposed)
+/// whose ends meet (within `tol`, plan units) are one chain, labelled once. Each chain is its
+/// runs' indices, the longest first.
+fn run_chains(runs: &[&Buried], tol: f64) -> Vec<Vec<usize>> {
+    let n = runs.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        let mut hops = 0;
+        while let Some(&p) = parent.get(i) {
+            if p == i || hops > 10_000 {
+                break;
+            }
+            let gp = parent.get(p).copied().unwrap_or(p);
+            if let Some(x) = parent.get_mut(i) {
+                *x = gp;
+            }
+            i = p;
+            hops += 1;
+        }
+        i
+    }
+    let key = |r: &Buried| format!("{}|{}|{}|{}|{}|{}", r.kind, r.system, r2(r.size_in), r.conduits, r.material, r.proposed);
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-6 };
+    let cell = |p: [f64; 2]| ((p[0] / tol).floor().clamp(-1e15, 1e15) as i64, (p[1] / tol).floor().clamp(-1e15, 1e15) as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, [f64; 2])>> = std::collections::HashMap::new();
+    for (i, r) in runs.iter().enumerate() {
+        for p in [r.points.first(), r.points.last()].into_iter().flatten().filter(|p| p.iter().all(|v| v.is_finite())) {
+            let (cx, cy) = cell(*p);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let near: Vec<usize> = grid
+                        .get(&(cx + dx, cy + dy))
+                        .map(|v| v.iter().filter(|(_, q)| dist(*p, *q) <= tol).map(|(j, _)| *j).collect())
+                        .unwrap_or_default();
+                    for j in near {
+                        if runs.get(j).is_some_and(|o| key(o) == key(r)) {
+                            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                            if let Some(x) = parent.get_mut(a) {
+                                *x = b;
+                            }
+                        }
+                    }
+                }
+            }
+            grid.entry((cx, cy)).or_default().push((i, *p));
+        }
+    }
+    let mut chains: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        chains.entry(r).or_default().push(i);
+    }
+    let len = |i: &usize| runs.get(*i).map_or(0.0, |r| r.length_ft);
+    let mut out: Vec<Vec<usize>> = chains.into_values().collect();
+    for c in &mut out {
+        c.sort_by(|a, b| len(b).total_cmp(&len(a)).then(a.cmp(b)));
+    }
+    // The longest chains are labelled first (they get the free spots).
+    out.sort_by(|a, b| {
+        let t = |c: &Vec<usize>| c.iter().map(len).sum::<f64>();
+        t(b).total_cmp(&t(a)).then(a.first().cmp(&b.first()))
+    });
+    out
+}
+
+/// A chain's label: its longest run's, the chain's depth range when it slopes, and how many more
+/// runs it stands for (the run schedule lists each).
+fn chain_label(runs: &[&Buried], chain: &[usize]) -> Option<String> {
+    let first = runs.get(*chain.first()?)?;
+    let depths: Vec<f64> = chain.iter().filter_map(|i| runs.get(*i)).map(|r| r.depth_in).filter(|d| d.is_finite()).collect();
+    let lo = depths.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = depths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let depth = if lo.is_finite() && hi - lo >= 0.5 { format!("{}-{}", r2(lo).round(), r2(hi).round()) } else { format!("{}", r2(first.depth_in)) };
+    let mut what = if first.kind == "pipe" {
+        format!("{} {}\" {} @ {depth}\" BFF", first.id, r2(first.size_in), first.system)
+    } else {
+        format!("{} {}-{} {} @ {depth}\" BFF", first.id, first.conduits, trade_size(first.size_in), first.material)
+    };
+    if chain.len() > 1 {
+        what.push_str(&format!(" (+{} RUNS)", chain.len() - 1));
+    }
+    if first.proposed {
+        what.push_str(" (PROPOSED)");
+    }
+    Some(what)
+}
+
 struct Frame {
     min: [f64; 2],
     k: f64,
@@ -1815,12 +1964,15 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
         }
         // Gear fed.
         pen.layer(&lay("EQPM"), 5, None)?;
+        let mut labels = LabelBoxes::default();
         for e in &gear {
             pen.rect(f.to(e.min), f.to(e.max))?;
-            pen.text([f.to(e.max)[0] + 0.05, f.to(e.max)[1] + 0.05], &e.tag, 0.1)?;
+            let at = [f.to(e.max)[0] + 0.05, f.to(e.max)[1] + 0.05];
+            pen.text(at, &e.tag, 0.1)?;
+            labels.take(at, &e.tag, 0.1);
         }
-        // The buried runs, each tagged: what the documents call for solid, what CADaddy proposes
-        // dashed on a layer of its own.
+        // The buried runs: what the documents call for solid, what CADaddy proposes dashed on a
+        // layer of its own.
         for r in &runs {
             if r.proposed {
                 pen.layer(&lay("PROP"), 30, Some("DASHED"))?;
@@ -1829,16 +1981,30 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
             let pp: Vec<[f64; 2]> = r.points.iter().map(|q| f.to(*q)).collect();
             pen.pline(&pp, false)?;
-            if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
-                let mut what = if r.kind == "pipe" {
-                    format!("{} {}\" {} @ {}\" BFF", r.id, r2(r.size_in), r.system, r2(r.depth_in))
-                } else {
-                    format!("{} {}-{} {} @ {}\" BFF", r.id, r.conduits, trade_size(r.size_in), r.material, r2(r.depth_in))
-                };
-                if r.proposed {
-                    what.push_str(" (PROPOSED)");
+        }
+        // Tagged once per chain (runs of one kind end to end), at its longest run, and only where
+        // the tag doesn't overlap an earlier one: the run schedule lists every run.
+        let mut run_labels = 0usize;
+        for chain in run_chains(&runs, 0.5 * u) {
+            let (Some(what), Some(r)) = (chain_label(&runs, &chain), chain.first().and_then(|i| runs.get(*i))) else { continue };
+            if r.proposed {
+                pen.layer(&lay("PROP"), 30, Some("DASHED"))?;
+            } else {
+                pen.layer(&lay("COND"), 1, None)?;
+            }
+            let pp: Vec<[f64; 2]> = r.points.iter().map(|q| f.to(*q)).collect();
+            // At the middle of its longest segment, else the middle point.
+            let mid = pp
+                .windows(2)
+                .max_by(|a, b| dist(a[0], a[1]).total_cmp(&dist(b[0], b[1])))
+                .map(|w| [(w[0][0] + w[1][0]) / 2.0, (w[0][1] + w[1][1]) / 2.0])
+                .or_else(|| pp.get(pp.len() / 2).copied());
+            if let Some(mid) = mid {
+                let at = [mid[0] + 0.05, mid[1] + 0.08];
+                if labels.fits(at, &what, 0.08) {
+                    pen.text(at, &what, 0.08)?;
+                    run_labels += 1;
                 }
-                pen.text([mid[0] + 0.05, mid[1] + 0.08], &what, 0.08)?;
             }
         }
         // Underground alternatives to routes the model runs overhead: dashed, never mixed with
@@ -1849,7 +2015,11 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 let pp: Vec<[f64; 2]> = apts.iter().map(|q| f.to(*q)).collect();
                 pen.pline(&pp, false)?;
                 if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
-                    pen.text([mid[0] + 0.05, mid[1] - 0.14], &format!("{subject} {n}-{} (PROPOSED ALTERNATIVE - RFI)", trade_size(*size)), 0.08)?;
+                    let at = [mid[0] + 0.05, mid[1] - 0.14];
+                    let what = format!("{subject} {n}-{} (PROPOSED ALTERNATIVE - RFI)", trade_size(*size));
+                    if labels.fits(at, &what, 0.08) {
+                        pen.text(at, &what, 0.08)?;
+                    }
                 }
             }
         }
@@ -1873,7 +2043,10 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 let pp: Vec<[f64; 2]> = opts.iter().map(|q| f.to(*q)).collect();
                 pen.pline(&pp, false)?;
                 if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
-                    pen.text([mid[0] + 0.05, mid[1] + 0.08], label, 0.08)?;
+                    let at = [mid[0] + 0.05, mid[1] + 0.08];
+                    if labels.fits(at, label, 0.08) {
+                        pen.text(at, label, 0.08)?;
+                    }
                 }
             }
         }
@@ -2062,6 +2235,9 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             for fd in ug.findings.iter().filter(|fd| fd.severity == "error") {
                 notes.push(format!("{}: {} - RFI BEFORE THE SLAB.", fd.about.to_uppercase(), fd.message.to_uppercase()));
             }
+            for fd in ug.findings.iter().filter(|fd| fd.severity == "review") {
+                notes.push(format!("{}: {} - REVIEW WITH THE ROUTING RFI.", fd.about.to_uppercase(), fd.message.to_uppercase()));
+            }
         }
         notes.push("VERIFY ALL STUB-UP LOCATIONS AGAINST EQUIPMENT SUBMITTALS BEFORE THE POUR.".into());
         pen.text([paper.side_x, y], "NOTES", 0.16)?;
@@ -2124,7 +2300,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             });
         }
         sheets.push(json!({
-            "layout": layout, "number": number, "title": title, "trade": trade, "level": level, "runs": runs.len(), "stubups": stubs.len(), "dimensions": stub_dims,
+            "layout": layout, "number": number, "title": title, "trade": trade, "level": level, "runs": runs.len(), "run_labels": run_labels, "labels_skipped": labels.skipped, "stubups": stubs.len(), "dimensions": stub_dims,
             "section_dimensions": pen.dims - stub_dims, "crossings": xings.len(), "sleeves": sleeves.len(), "alternatives": if trade == "E" { alternatives.len() } else { 0 },
             "sources": sources.len(), "sections": sections, "replaced": existing.is_some(), "scale": f.scale, "registered": !links.is_empty(),
         }));
@@ -2238,5 +2414,95 @@ mod tests {
         assert_eq!(seg_gap([0.0, 0.0], [10.0, 0.0], [12.0, -5.0], [12.0, 5.0]), (2.0, [10.0, 0.0]));
         // Above, below, overlapping.
         assert_eq!((separation(22.5, 1.5, 48.0, 6.0), separation(48.0, 6.0, 22.5, 1.5), separation(22.5, 4.0, 24.0, 2.0)), (24.0, 24.0, 0.0));
+    }
+
+    fn buried(id: &str, points: Vec<[f64; 2]>, depth_in: f64, proposed: bool) -> Buried {
+        let length_ft = points.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>() / 12.0;
+        Buried {
+            id: id.into(),
+            kind: "run",
+            trade: "E",
+            system: "E-UG".into(),
+            level: "Level 1".into(),
+            points,
+            size_in: 2.0,
+            conduits: 1,
+            material: "PVC Sch 40".into(),
+            depth_in,
+            length_ft,
+            from: String::new(),
+            to: String::new(),
+            bends_deg: 0.0,
+            encased: false,
+            proposed,
+            basis: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_proposed_route_too_close_to_a_drain_is_for_review_and_called_work_is_an_error() {
+        // A 4" drain 24" below the floor, crossed by a called conduit and by a proposed one, both
+        // just above it (3" clear), and a proposed one well clear (pothole warning).
+        let drain = Other {
+            id: "P1".into(),
+            label: "4\" SAN @ 24\" BFF".into(),
+            level: "Level 1".into(),
+            points: vec![[0.0, 120.0], [600.0, 120.0]],
+            size_in: 4.0,
+            depth_in: Some(24.0),
+        };
+        let runs = vec![
+            buried("R1", vec![[100.0, 0.0], [100.0, 240.0]], 19.0, false),
+            buried("R2", vec![[300.0, 0.0], [300.0, 240.0]], 19.0, true),
+            buried("R3", vec![[500.0, 0.0], [500.0, 240.0]], 48.0, true),
+        ];
+        let mut findings = Vec::new();
+        let xs = crossings(&runs, &[drain], 12.0, 12.0, &mut findings);
+        assert_eq!(xs.len(), 3);
+        let sev: Vec<(&str, &str)> = findings.iter().map(|f| (f.check, f.severity)).collect();
+        assert_eq!(sev, vec![("crossing", "error"), ("crossing", "review"), ("crossing", "warning")]);
+        assert!(findings[1].message.starts_with("proposed R2 crosses P1"), "{}", findings[1].message);
+        assert!(findings[1].fix.contains("if the engineer accepts it"), "{}", findings[1].fix);
+        assert!(!findings[0].message.starts_with("proposed"));
+    }
+
+    #[test]
+    fn runs_are_labelled_once_per_chain_and_a_label_that_would_overlap_is_skipped() {
+        // Three pieces end to end (one sloping 24" to 30"), a branch of another size off their
+        // middle, a proposed run sharing an end (another kind), and a far run on its own.
+        let mut b = buried("B", vec![[100.0, 0.0], [100.0, 100.0]], 24.0, false);
+        b.size_in = 1.0;
+        let runs = [
+            buried("A1", vec![[0.0, 0.0], [100.0, 0.0]], 24.0, false),
+            buried("A2", vec![[100.0, 0.0], [300.0, 0.0]], 27.0, false),
+            buried("A3", vec![[300.0, 0.0], [350.0, 0.0]], 30.0, false),
+            b,
+            buried("P", vec![[350.0, 0.0], [350.0, 80.0]], 24.0, true),
+            buried("F", vec![[0.0, 900.0], [60.0, 900.0]], 24.0, false),
+        ];
+        let refs: Vec<&Buried> = runs.iter().collect();
+        let chains = run_chains(&refs, 6.0);
+        let ids: Vec<Vec<&str>> = chains.iter().map(|c| c.iter().map(|i| refs[*i].id.as_str()).collect()).collect();
+        // The longest chain first, its longest run first.
+        assert_eq!(ids, vec![vec!["A2", "A1", "A3"], vec!["B"], vec!["P"], vec!["F"]]);
+        let label = chain_label(&refs, &chains[0]).unwrap_or_default();
+        assert_eq!(label, "A2 1-2\" PVC Sch 40 @ 24-30\" BFF (+2 RUNS)");
+        assert_eq!(chain_label(&refs, &chains[2]).unwrap_or_default(), "P 1-2\" PVC Sch 40 @ 24\" BFF (PROPOSED)");
+        // Ends a little off still join; far ones don't; NaN joins nothing and doesn't panic.
+        let near = [buried("X", vec![[0.0, 0.0], [10.0, 0.0]], 24.0, false), buried("Y", vec![[13.0, 0.0], [30.0, 0.0]], 24.0, false)];
+        let nr: Vec<&Buried> = near.iter().collect();
+        assert_eq!(run_chains(&nr, 6.0).len(), 1);
+        assert_eq!(run_chains(&nr, 1.0).len(), 2);
+        let nan = [buried("N", vec![[f64::NAN, 0.0], [10.0, 0.0]], 24.0, false)];
+        assert_eq!(run_chains(&nan.iter().collect::<Vec<_>>(), 6.0).len(), 1);
+        // Overlap: a second label on the first's spot is skipped, one beside it fits.
+        let mut boxes = LabelBoxes::default();
+        boxes.take([0.0, 0.0], "DP", 0.1);
+        assert!(!boxes.fits([0.05, 0.02], "R1 1-2\" PVC", 0.08));
+        assert!(boxes.fits([0.5, 0.0], "R1 1-2\" PVC", 0.08));
+        assert!(!boxes.fits([0.6, 0.05], "R2", 0.08));
+        assert!(boxes.fits([0.6, 0.2], "R2", 0.08));
+        assert!(!boxes.fits([f64::NAN, 0.0], "R3", 0.08));
+        assert_eq!(boxes.skipped, 3);
     }
 }

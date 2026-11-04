@@ -508,8 +508,10 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     }
     // -- Feeders: each one's routed runs (by their source), its pieces by where they lie (a piece
     // under the slab only to a feeder's run under the slab). --
-    let feeder_runs: Vec<(usize, &MepRun)> = sp.mep.runs.iter().enumerate().take(MAX_RUNS).filter(|(_, r)| super::super::ugplan::is_feeder_run(r)).collect();
-    let feeder_pieces: Vec<usize> = all.iter().enumerate().filter(|(_, p)| p.system == FEEDER_SYSTEM || p.system == super::super::ugplan::E_UG).map(|(i, _)| i).collect();
+    let feeder_runs: Vec<(usize, &MepRun)> =
+        sp.mep.runs.iter().enumerate().take(MAX_RUNS).filter(|(_, r)| super::super::ugplan::is_feeder_run(r)).collect();
+    let feeder_pieces: Vec<usize> =
+        all.iter().enumerate().filter(|(_, p)| p.system == FEEDER_SYSTEM || p.system == super::super::ugplan::E_UG).map(|(i, _)| i).collect();
     let mut owner: HashMap<usize, usize> = HashMap::new();
     for &pi in &feeder_pieces {
         let Some(p) = all.get(pi) else { continue };

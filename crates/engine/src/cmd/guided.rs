@@ -12122,6 +12122,20 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         }
         rfis.push(id);
     }
+    // (c) Called work the model has nowhere to put (the room its note names isn't in the model):
+    // asked, never guessed.
+    let room_left = cadaddy_walk3d::rfi::MAX_RFIS.saturating_sub(sp.rfis.len());
+    let mut unplaced: Vec<(String, String)> = Vec::new();
+    for rfi in ugplan::unplaced_rfis(&sp, &callouts, &fates, MAX_UG_RFIS.min(room_left)) {
+        unplaced.push((rfi.id.clone(), rfi.issue.clone()));
+        match sp.rfis.iter_mut().find(|r| r.id == rfi.id) {
+            Some(old) => {
+                old.issue = rfi.issue;
+                old.assumed = rfi.assumed;
+            }
+            None => sp.rfis.push(rfi),
+        }
+    }
     // (e) Into the model, below the slab at their depths, their systems' own.
     for r in called_runs.iter().chain(&bases).chain(&proposed_runs) {
         if !sp.mep.systems.iter().any(|y| y.name.eq_ignore_ascii_case(&r.system)) {
@@ -12145,6 +12159,10 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
     build_new_mep(s, sp, new_runs, &BTreeSet::new())?;
     // (b) Each trade with buried work and no plan of its own gets its generated sheet.
     let check = s.execute("ugsheets.check", &json!({}))?;
+    // The required services the drawings don't show, and the proposed routes too close to another
+    // trade's buried line, become RFIs (review items), not silent errors.
+    let reviewed = s.execute("ugsheets.review", &json!({})).unwrap_or(Value::Null);
+    let review_rfis: Vec<Value> = reviewed["rfis"].as_array().cloned().unwrap_or_default();
     let mut trades = serde_json::Map::new();
     let mut lines: Vec<String> = Vec::new();
     let mut built_sheets: Vec<String> = Vec::new();
@@ -12227,6 +12245,15 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         return Ok(());
     }
     let under: Vec<&ugplan::Proposal> = proposals.iter().filter(|p| p.decision == "under_slab").collect();
+    let n_cross =
+        |sev: &str| check["findings"].as_array().map_or(0, |a| a.iter().filter(|f| f["check"] == "crossing" && f["severity"] == sev).count());
+    lines.push(format!(
+        "crossings with other trades' buried lines: {} too close (errors), {} proposed routes too close (for review), {} to pothole (warnings); {} new RFIs",
+        n_cross("error"),
+        n_cross("review"),
+        n_cross("warning"),
+        review_rfis.len()
+    ));
     lines.push(format!(
         "proposed under the slab: {} of {} feeds weighed ({}); {} RFIs",
         under.len(),
@@ -12238,6 +12265,26 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         let l = format!("  underground: {line}");
         report_progress(s, json!({"step": "underground"}), &l);
         s.echo(l);
+    }
+    for (id, ask) in &unplaced {
+        let l = format!("  underground: not placed, asked ({id}): {ask}");
+        report_progress(s, json!({"step": "underground"}), &l);
+        s.echo(l);
+    }
+    if !unplaced.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!(
+                "underground: {} called item(s) not placed, the model has nowhere to put them: {}",
+                unplaced.len(),
+                unplaced.iter().map(|(_, a)| a.as_str()).take(6).collect::<Vec<_>>().join(" | ")
+            ),
+            "the documents call for the work but the room or gear it goes to isn't in the model; CADaddy doesn't guess a place",
+            2,
+            unplaced.iter().map(|(id, _)| format!("Send {id} to the engineer, or add the missing room/gear to the model and rerun")).collect(),
+            None,
+            false,
+        );
     }
     if !built_sheets.is_empty() {
         job.add_finding(
@@ -12263,6 +12310,8 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
         "scale": scale,
         "scale_sheet": scale_sheet,
         "rfis": rfis,
+        "review_rfis": review_rfis,
+        "unplaced_rfis": unplaced.iter().map(|(id, ask)| json!({"id": id, "issue": ask})).collect::<Vec<_>>(),
         "sleeves": check["sleeves"].as_array().map_or(0, Vec::len),
         "findings": check["findings"].as_array().map(|a| a.iter().filter(|f| f["check"] == "bearing_plane" || f["check"] == "stub_undimensioned").cloned().collect::<Vec<_>>()),
     });

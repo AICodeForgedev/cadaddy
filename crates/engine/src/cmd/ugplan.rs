@@ -659,6 +659,9 @@ pub(crate) struct Fate {
     pub status: &'static str,
     pub runs: usize,
     pub how: String,
+    /// Called work the model has nowhere to put (the room or gear its note names isn't in the
+    /// model): the question for the engineer. CADaddy never guesses the place.
+    pub ask: Option<String>,
 }
 
 /// The called electrical work CADaddy can locate: each a solid `E-UG` run (and its stub-ups), its
@@ -680,7 +683,8 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
         })
     };
     for (i, c) in called.iter().enumerate() {
-        let fate = |status, n, how: String| Fate { callout: i, status, runs: n, how };
+        let fate = |status, n, how: String| Fate { callout: i, status, runs: n, how, ask: None };
+        let unplaced = |how: String, ask: String| Fate { callout: i, status: "not_placed", runs: 0, how, ask: Some(ask) };
         if c.trade != "E" {
             // A sump's discharge routed under the slab to the outside: the sump where the panel
             // schedule's circuit for it says (an elevator's: in its hoistway).
@@ -769,7 +773,14 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
         match c.what.as_str() {
             "service_primary" | "service_secondary" => {
                 let Some(g) = gear else {
-                    fates.push(fate("not_placed", 0, "no service gear on the slab level".into()));
+                    fates.push(unplaced(
+                        "no service gear on the slab level in the model".into(),
+                        format!(
+                            "{} calls for {}; the model has no service gear on {slab} to run it to. Where does it enter the building?",
+                            c.cite(),
+                            c.text.trim()
+                        ),
+                    ));
                     continue;
                 };
                 let Some((edge, pad)) = site_point(centre(g)) else {
@@ -818,7 +829,14 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     .and_then(|rm| room_centre(rm).map(|p| (rm.name.clone(), rm.level.clone(), p)));
                 let room_word = if room_word.is_empty() { r.telecom_rooms.join("/") } else { room_word };
                 let Some((name, room_level, at)) = target else {
-                    fates.push(fate("not_placed", 0, format!("no room named {room_word} in the model")));
+                    fates.push(unplaced(
+                        format!("no {room_word} (telecom) room in the model"),
+                        format!(
+                            "{} calls for {}; the model has no room named {room_word} on any level. Which room and level do the service conduits end in?",
+                            c.cite(),
+                            c.text.trim()
+                        ),
+                    ));
                     continue;
                 };
                 // Onto the slab level's plan (each level's plan has its own place in the drawing).
@@ -852,7 +870,10 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     .find(|p| p.circuits.iter().any(|ci| words.iter().any(|w| ci.description.to_ascii_uppercase().contains(w.as_str()))))
                     .and_then(|p| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&p.panel) && e.level.eq_ignore_ascii_case(&slab)));
                 let Some(pn) = panel else {
-                    fates.push(fate("not_placed", 0, format!("no panel on {slab} has a circuit for it")));
+                    fates.push(unplaced(
+                        format!("no panel on {slab} has a circuit for it"),
+                        format!("{} calls for {}; no panel schedule on {slab} has its circuit. Which panel feeds it?", c.cite(), c.text.trim()),
+                    ));
                     continue;
                 };
                 let pc = centre(pn);
@@ -873,11 +894,55 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                     format!("out of panel {} to the site; the site end by rule outside the nearest slab edge (locate from the site plan)", pn.tag),
                 ));
             }
-            "floor_box" => fates.push(fate("not_placed", 0, "no keynote tag locates the floor box".into())),
+            "floor_box" => fates.push(unplaced(
+                "no keynote tag locates the floor box".into(),
+                format!("{} calls for {}; no plan tag locates the box. Where is it?", c.cite(), c.text.trim()),
+            )),
             _ => fates.push(fate("not_placed", 0, "no rule places this kind of work".into())),
         }
     }
     (runs, fates)
+}
+
+/// The RFIs for the called work [`place`] had nowhere to put (each fate with an `ask`), one per
+/// callout, `at` the slab level's service gear when the model has it. Kind: a service entrance
+/// for a utility's conduits, else work to settle before the pour. Ids hash the callout, so a
+/// rerun updates its own.
+pub(crate) fn unplaced_rfis(sp: &BuildingSpec, called: &[Callout], fates: &[Fate], max: usize) -> Vec<cadaddy_walk3d::Rfi> {
+    use cadaddy_walk3d::RfiKind;
+    let Some(slab) = slab_level(sp) else { return Vec::new() };
+    let at = service_gear(sp, &slab).map_or([0.0, 0.0], centre);
+    let mut out: Vec<cadaddy_walk3d::Rfi> = Vec::new();
+    for f in fates.iter().filter(|f| f.status == "not_placed") {
+        let (Some(ask), Some(c)) = (&f.ask, called.get(f.callout)) else { continue };
+        if out.len() >= max {
+            break;
+        }
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in c.cite().bytes().chain(c.text.bytes()) {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+        }
+        let id = format!("RFI-UGN{:08x}", h as u32);
+        if out.iter().any(|r| r.id == id) {
+            continue;
+        }
+        let kind =
+            if matches!(c.what.as_str(), "service_primary" | "service_secondary" | "telecom") { RfiKind::ServiceEntrance } else { RfiKind::PourHold };
+        out.push(cadaddy_walk3d::Rfi {
+            id,
+            kind: Some(kind),
+            severity: kind.severity(),
+            level: slab.clone(),
+            at,
+            sheets: vec![c.sheet.clone()],
+            about: format!("underground work not placed: {}", c.cite()),
+            issue: ask.clone(),
+            assumed: format!("{}; nothing drawn for it on the underground sheet until answered.", f.how),
+            topic: format!("underground: {}", c.what),
+            ..cadaddy_walk3d::Rfi::default()
+        });
+    }
+    out
 }
 
 /// The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to.
@@ -1996,6 +2061,57 @@ mod tests {
         assert_eq!(tf[0].status, "placed", "{:?}", tf[0]);
         assert!(tf[0].how.contains("rising to it on Level 2"));
         assert_eq!(tr.iter().find(|r| r.points.len() == 1).and_then(|r| r.top_ft), Some(11.0));
+    }
+
+    #[test]
+    fn called_work_the_model_has_no_place_for_is_asked_by_rfi_never_guessed() {
+        let sp = spec();
+        // The model's only room is an office: the note's telecom room isn't in it.
+        let rooms =
+            vec![Room { level: "Level 1".into(), name: "OFFICE 101".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
+        let mk = |what: &str, text: &str, room: Option<&str>| Callout {
+            trade: "E".into(),
+            sheet: "E-100".into(),
+            from: "note",
+            what: what.into(),
+            text: text.into(),
+            room: room.map(Into::into),
+            ..Callout::default()
+        };
+        let tel = mk("telecom", "TWO (2) 4\" CONDUITS FOR TELCO SERVICE ENTRANCE TO SERVER ROOM", Some("SERVER"));
+        let mut legend = mk("water", "COLD WATER PIPING (BELOW SLAB)", None);
+        legend.trade = "P".into();
+        legend.from = "legend";
+        let fb = mk("floor_box", "UNDER SLAB CONDUIT FOR FLOOR BOX", None);
+        let called = [tel, legend, fb];
+        let (runs, fates) = place(&sp, &rooms, &called, &|_| false);
+        // Nothing drawn for the telecom conduits: no fallback to the gear's or any other room.
+        assert!(runs.iter().all(|r| !r.height_source.contains("telecom")), "{runs:?}");
+        assert_eq!(fates[0].status, "not_placed");
+        assert!(fates[0].how.contains("no SERVER (telecom) room in the model"), "{}", fates[0].how);
+        let ask = fates[0].ask.as_deref().unwrap_or_default();
+        assert!(ask.contains("E-100 note") && ask.contains("SERVER") && ask.contains("Which room"), "{ask}");
+        // A legend line type is not a question: it places where the plans draw it.
+        assert!(fates[1].ask.is_none());
+        assert!(fates[2].ask.is_some());
+        let rfis = unplaced_rfis(&sp, &called, &fates, 10);
+        assert_eq!(rfis.len(), 2);
+        assert_eq!(rfis[0].kind, Some(cadaddy_walk3d::RfiKind::ServiceEntrance));
+        assert_eq!(rfis[1].kind, Some(cadaddy_walk3d::RfiKind::PourHold));
+        assert_eq!((rfis[0].level.as_str(), rfis[0].sheets.clone()), ("Level 1", vec!["E-100".to_string()]));
+        assert!(rfis[0].assumed.contains("nothing drawn"));
+        assert!(rfis[0].id.starts_with("RFI-UGN"));
+        // At the slab level's service gear; the same ids on a rerun; capped.
+        let gear = service_gear(&sp, "Level 1").map(centre);
+        assert_eq!(Some(rfis[0].at), gear);
+        let again = unplaced_rfis(&sp, &called, &fates, 10);
+        assert_eq!(rfis.iter().map(|r| &r.id).collect::<Vec<_>>(), again.iter().map(|r| &r.id).collect::<Vec<_>>());
+        assert_eq!(unplaced_rfis(&sp, &called, &fates, 1).len(), 1);
+        // With the room in the model it is placed and nothing is asked.
+        let server = vec![Room { name: "SERVER 102".into(), ..rooms[0].clone() }];
+        let (_, placed) = place(&sp, &server, &called[..1], &|_| false);
+        assert_eq!((placed[0].status, placed[0].ask.is_none()), ("placed", true));
+        assert!(unplaced_rfis(&sp, &called[..1], &placed, 10).is_empty());
     }
 
     #[test]
