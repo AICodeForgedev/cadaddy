@@ -253,6 +253,79 @@ fn unit_feeders(sp: &cadaddy_walk3d::BuildingSpec) -> (Vec<UnitFeeder>, usize) {
     (out, not_routed)
 }
 
+/// The units' branch circuits as the model routes them (each circuit tag in a unit room, its
+/// estimated runs: the home run, the legs between devices and the drops), and what each is wired
+/// with: (circuits, feet, conductors per size `#12` → 3, the conduit's trade size).
+fn unit_branches(sp: &cadaddy_walk3d::BuildingSpec) -> (usize, f64, BTreeMap<String, u32>, String) {
+    let units: std::collections::BTreeSet<String> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u.get("number").and_then(Value::as_str))
+        .map(|n| n.trim().to_ascii_uppercase())
+        .collect();
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.trim().to_string()).unwrap_or_default();
+    let circuits: Vec<&cadaddy_walk3d::tags::ElementTag> =
+        sp.tags.iter().filter(|t| t.kind == "circuit" && units.contains(&field(t, "room").to_ascii_uppercase())).take(MAX_RUNS).collect();
+    let ids: std::collections::BTreeSet<&str> = circuits.iter().map(|t| t.id.as_str()).collect();
+    let mut feet = 0.0;
+    for r in sp.mep.runs.iter().take(MAX_RUNS).filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM) {
+        let Some((cid, _)) = r.id.rsplit_once('#') else { continue };
+        if !ids.contains(cid) {
+            continue;
+        }
+        let along: f64 = r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
+        let drop = match (r.top_ft, r.bottoms_ft.first()) {
+            (Some(top), Some(b)) if top.is_finite() && b.is_finite() => (top - b).abs(),
+            _ => 0.0,
+        };
+        if along.is_finite() {
+            feet += along + drop;
+        }
+    }
+    // The conductors and conduit the circuits are wired with (the most common).
+    let mut wired: BTreeMap<String, usize> = BTreeMap::new();
+    let mut conduit: BTreeMap<String, usize> = BTreeMap::new();
+    for t in &circuits {
+        *wired.entry(field(t, "conductors")).or_default() += 1;
+        *conduit.entry(field(t, "conduit")).or_default() += 1;
+    }
+    let most = |m: &BTreeMap<String, usize>| m.iter().max_by_key(|(_, n)| **n).map(|(k, _)| k.clone()).unwrap_or_default();
+    let mut sizes: BTreeMap<String, u32> = BTreeMap::new();
+    for part in most(&wired).split('+') {
+        let part = part.trim().trim_end_matches(['G', 'g']);
+        if let Some((n, size)) = part.split_once('#')
+            && let Ok(n) = n.trim().parse::<u32>()
+        {
+            *sizes.entry(format!("#{}", size.trim())).or_default() += n;
+        }
+    }
+    let trade = most(&conduit).split_whitespace().next().unwrap_or("3/4\"").to_string();
+    (circuits.len(), feet, sizes, trade)
+}
+
+/// The branch circuits' lines each way: as designed (the conduit and its conductors) and NM
+/// cable of the conductors' size (`12-2 WG`: the circuit's conductors less its ground, with
+/// ground).
+fn branch_lines(feet: f64, sizes: &BTreeMap<String, u32>, trade: &str) -> (Vec<(String, String, f64)>, Vec<(String, String, f64)>) {
+    let r = |q: f64| (q * 10.0).round() / 10.0;
+    let mut designed = vec![("EMT conduit".to_string(), trade.to_string(), r(feet))];
+    for (size, n) in sizes {
+        designed.push(("THHN wire".to_string(), size.clone(), r(feet * f64::from(*n))));
+    }
+    // The circuit's conductors' size (the first listed), its count less the ground.
+    let alt = sizes
+        .iter()
+        .next()
+        .map(|(size, n)| {
+            vec![("NM cable copper".to_string(), format!("{}-{} WG", size.trim_start_matches('#'), n.saturating_sub(1).max(2)), r(feet))]
+        })
+        .unwrap_or_default();
+    (designed, alt)
+}
+
 /// The lines (item, size, feet) each way: as designed (conduit and its conductors) and the
 /// alternative (the cable).
 fn feeder_lines(feeders: &[UnitFeeder], cable: &str) -> (Vec<(String, String, f64)>, Vec<(String, String, f64)>) {
@@ -368,6 +441,7 @@ pub(crate) fn study(s: &mut Session, applications: &[Application], construction:
     let rules = rules();
     let (sp, _) = super::bspec::current(s, CMD)?;
     let (feeders, not_routed) = unit_feeders(&sp);
+    let branches = unit_branches(&sp);
     let mut out = Vec::new();
     for a in &rules.alternatives {
         let app = applications.iter().find(|ap| {
@@ -413,8 +487,29 @@ pub(crate) fn study(s: &mut Session, applications: &[Application], construction:
             v["unpriced"] = json!(unpriced);
             v["as_designed"] = d;
             v["alternative"] = x;
+        } else if a.circuit == "branch" && a.to == "unit_panel" && branches.1 > 0.0 && a.alternative == "nm" {
+            let (n, feet, sizes, trade) = &branches;
+            let (designed, alt) = branch_lines(*feet, sizes, trade);
+            let d = price(s, &designed);
+            let x = price(s, &alt);
+            let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
+            v["quantity"] = json!({"circuits": n, "feet": (feet * 10.0).round() / 10.0, "routes": "estimated (the typical plans' devices, home run to the unit's panel)"});
+            let mut unpriced: Vec<Value> = d["unpriced"].as_array().cloned().unwrap_or_default();
+            unpriced.extend(x["unpriced"].as_array().cloned().unwrap_or_default());
+            v["saves"] = if unpriced.is_empty() {
+                json!({
+                    "material": num(&d, "material") - num(&x, "material"),
+                    "labor_hours": num(&d, "labor_hours") - num(&x, "labor_hours"),
+                    "cost": num(&d, "cost") - num(&x, "cost"),
+                })
+            } else {
+                Value::Null
+            };
+            v["unpriced"] = json!(unpriced);
+            v["as_designed"] = d;
+            v["alternative"] = x;
         } else {
-            v["quantity"] = json!({"measured": false, "why": if a.circuit == "branch" { "the model's branch wiring lengths aren't measured yet" } else { "no routed feeders to the units' panels" }});
+            v["quantity"] = json!({"measured": false, "why": if a.circuit == "branch" { "no branch circuits routed in the units" } else { "no routed feeders to the units' panels" }});
         }
         if tier == "needs_rfi" {
             let ap = app.map(|ap| format!("{} §{} ({})", ap.section, ap.item, ap.application)).unwrap_or_default();
@@ -515,6 +610,10 @@ mod tests {
         let spec = json!({
             "version": 1, "units_per_foot": 12,
             "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9}],
+            "unit_instances": [{"number": "101", "type": "Q", "level": "Level 1"}],
+            "tags": [{"id": "circuit:G-101-9", "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {
+                "room": {"value": "101", "source": "computed"}, "conductors": {"value": "2#12 + 1#12G", "source": "default"},
+                "conduit": {"value": "3/4\" EMT", "source": "default"}}}],
             "mep": {
                 "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2, 2], "bottom_ft": 10}],
                 "panel_schedules": [{"panel": "G", "typical_of": 2}],
@@ -524,7 +623,9 @@ mod tests {
                 ],
                 "runs": [
                     {"system": "E-FEEDER", "level": "Level 1", "source_sheet": "feeder 123 DP1→G-101→G-201", "points": [[0, 0], [1200, 0]], "size_in": [2, 2], "bottoms_ft": [10]},
-                    {"system": "E-FEEDER", "level": "Level 1", "source_sheet": "feeder 123 DP1→G-101→G-201", "points": [[1200, 0]], "size_in": [2, 2], "bottoms_ft": [0], "top_ft": 20}
+                    {"system": "E-FEEDER", "level": "Level 1", "source_sheet": "feeder 123 DP1→G-101→G-201", "points": [[1200, 0]], "size_in": [2, 2], "bottoms_ft": [0], "top_ft": 20},
+                    {"system": "E-CIRCUIT-EST", "level": "Level 1", "id": "circuit:G-101-9#home", "points": [[0, 0], [240, 0]], "size_in": [0.75, 0.75], "bottoms_ft": [9]},
+                    {"system": "E-CIRCUIT-EST", "level": "Level 1", "id": "circuit:G-101-9#d0", "points": [[240, 0]], "size_in": [0.75, 0.75], "bottoms_ft": [1.5], "top_ft": 9}
                 ]
             }
         });
@@ -551,6 +652,15 @@ mod tests {
         let nm = out.iter().find(|v| v["id"] == "nm_unit_branch").unwrap();
         assert_eq!(nm["tier"], "allowed_now", "{nm}");
         assert!(nm.get("rfi").is_none());
+        // The unit's branch circuit as routed: a 20' home run and a 7'-6" drop to its receptacle,
+        // in 3/4" EMT with 2#12 + 1#12G, against 12-2 NM with ground.
+        assert_eq!(nm["quantity"]["circuits"], 1, "{nm}");
+        assert_eq!(nm["quantity"]["feet"], 27.5, "{nm}");
+        assert_eq!(nm["alternative"]["lines"], json!([{"item": "NM cable copper", "size": "12-2 WG", "ft": 27.5}]), "{nm}");
+        let designed = nm["as_designed"]["lines"].as_array().unwrap();
+        assert!(designed.contains(&json!({"item": "EMT conduit", "size": "3/4\"", "ft": 27.5})), "{designed:?}");
+        assert!(designed.contains(&json!({"item": "THHN wire", "size": "#12", "ft": 82.5})), "{designed:?}");
+        assert!(nm["saves"]["labor_hours"].as_f64().is_some_and(|h| h > 0.0), "{nm}");
         // Type I construction: the code allows neither.
         let out = study(&mut s, &apps, Some("I-A")).unwrap();
         assert!(out.iter().all(|v| v["tier"] == "not_allowed"), "{out:?}");
