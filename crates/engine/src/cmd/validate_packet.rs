@@ -1824,6 +1824,8 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         "- Say UNSURE rather than guess: when the image is unreadable, the document is not in the packet, or the print and the notes disagree.\n",
     );
     s.push_str("- Check every rule above for every element it applies to; a pass is a finding too.\n");
+    s.push_str("- Elements with the same verdict on the same evidence may share one finding: `\"handles\": [\"<handle>\", …]` (it counts once per handle). Send each rule and element once: a repeat is merged into the first.\n");
+    s.push_str("- More than 1000 findings: report them in parts (`\"part\": 1`, `\"part\": 2`, …; the last one with `\"final\": true`); the area is done on the final part.\n");
     s
 }
 
