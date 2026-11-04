@@ -125,7 +125,7 @@ fn prints() -> Value {
         "version": 1,
         "submittals": [
             {"mark": "DUPLEX", "section": "26 27 26", "fields": {"manufacturer": "Acme", "catalogNumber": "XR-100"}},
-            {"mark": "A", "section": "26 51 19", "fields": {"manufacturer": "Acme Lighting", "catalogNumber": "LX-100"}}
+            {"mark": "F9", "section": "26 51 19", "fields": {"manufacturer": "Acme Lighting", "catalogNumber": "LX-100"}}
         ]
     })
 }
@@ -149,12 +149,12 @@ fn spec() -> Value {
             {"name": "Partition", "thickness_in": 4.875, "from": "centerline"}
         ],
         "rooms": [{"name": "Guest Room", "number": "101"}, {"name": "Guest Room", "number": "102"}, {"name": "Corridor", "number": "103"}, {"name": "Patio", "number": "104"}],
-        "devices": {"by_type": {"DUPLEX": dev, "QUAD": dev, "GFI": dev, "A": lum, "LAV": fix, "G": panel}},
+        "devices": {"by_type": {"DUPLEX": dev, "QUAD": dev, "GFI": dev, "F9": lum, "LAV": fix, "LP1": panel}},
         "sheets": [
             {"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "discipline": "A", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH],
              "registration": {"reference": "A-101", "method": "reference", "a": 1.0, "b": 0.0, "tx": 0.0, "ty": 0.0, "matched": 4}}
         ],
-        "mep": {"panel_schedules": [{"panel": "G", "source": "E-601", "legend": {"GF": "GROUND FAULT CIRCUIT INTERRUPTER"}, "circuits": [
+        "mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT CIRCUIT INTERRUPTER"}, "circuits": [
             {"number": "1", "description": "RCPT", "protection": ["GF"]},
             {"number": "2", "description": "RCPT", "protection": ["GF"]},
             {"number": "3", "description": "RCPT"},
@@ -207,9 +207,9 @@ fn job() -> Job {
             ([5.0, 0.5], "QUAD"),     // 1 maker
             ([8.0, 0.5], "DUPLEX"),   // 2 no TR
             ([11.0, 0.5], "DUPLEX"),  // 3 bare
-            ([7.0, 6.0], "A"),        // 4 luminaire
+            ([7.0, 6.0], "F9"),       // 4 luminaire
             ([22.0, 10.5], "LAV"),    // 5 lavatory
-            ([16.0, 6.0], "G"),       // 6 panel
+            ([16.0, 6.0], "LP1"),     // 6 panel
             ([21.0, 11.5], "GFI"),    // 7 double
             ([28.0, 0.5], "DUPLEX"),  // 8 on a GFCI breaker
             ([23.5, 11.5], "DUPLEX"), // 9 at the sink
@@ -233,7 +233,7 @@ fn job() -> Job {
     let record = |resolved: Value| {
         json!(json!({"required": required(), "approved": {"none": "no submittal for this kind"}, "resolved": resolved}).to_string())
     };
-    let circ = |n: &str| json!(format!("G-{n}"));
+    let circ = |n: &str| json!(format!("LP1-{n}"));
     let s = set_props(
         s,
         &[
@@ -257,17 +257,17 @@ fn job() -> Job {
             ),
             (&h[4], "catalog_number", json!("LX-200")),
             // 102: the circuits.
-            (&h[7], "panel", json!("G")),
+            (&h[7], "panel", json!("LP1")),
             (&h[7], "circuit", circ("1")),
-            (&h[8], "panel", json!("G")),
+            (&h[8], "panel", json!("LP1")),
             (&h[8], "circuit", circ("2")),
-            (&h[9], "panel", json!("G")),
+            (&h[9], "panel", json!("LP1")),
             (&h[9], "circuit", circ("3")),
-            (&h[10], "panel", json!("G")),
+            (&h[10], "panel", json!("LP1")),
             (&h[10], "circuit", circ("4")),
-            (&h[11], "panel", json!("G")),
+            (&h[11], "panel", json!("LP1")),
             (&h[11], "circuit", circ("4")),
-            (&h[12], "panel", json!("G")),
+            (&h[12], "panel", json!("LP1")),
             (&h[12], "circuit", circ("9")),
             // 104.
             (&h[13], "features", json!("TR, duplex")),
@@ -423,7 +423,7 @@ fn gfci_is_judged_on_the_whole_circuit() {
     let d = of(&fs, &j.double, "G-PRODUCT-CODE", "gfci");
     assert_eq!(d["verdict"], "fail", "{d}");
     assert!(d["issue"].as_str().unwrap().contains("double protection"), "{d}");
-    assert!(d["measured"]["breaker_row"].as_str().unwrap().contains("panel G schedule on E-601, circuit 1"), "the breaker's row cited: {d}");
+    assert!(d["measured"]["breaker_row"].as_str().unwrap().contains("panel LP1 schedule on E-601, circuit 1"), "the breaker's row cited: {d}");
     // GFCI breaker + standard receptacle: pass.
     let g = of(&fs, &j.on_gf, "G-PRODUCT-CODE", "gfci");
     assert_eq!(g["verdict"], "pass", "{g}");
@@ -452,7 +452,7 @@ fn stamped_gfci_verdicts_are_not_trusted() {
         &[
             (&j.at_sink, "gfci_breaker", json!("yes")),
             (&j.at_sink, "gfci", json!("breaker")),
-            (&j.at_sink, "protected_by", json!("breaker, circuit G-3")),
+            (&j.at_sink, "protected_by", json!("breaker, circuit LP1-3")),
         ],
     );
     let mut s = s;
