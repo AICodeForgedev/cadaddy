@@ -120,6 +120,8 @@ pub(crate) struct Rules {
     pub wall_tag_reach_ft: f64,
     /// Duct pieces whose ends are this close (feet, past their half widths) are one path.
     pub duct_join_ft: f64,
+    /// Where the reaches above come from.
+    pub reach_source: String,
     pub body_in: f64,
     pub default_size_in: [f64; 2],
     pub power: PowerRules,
@@ -888,10 +890,11 @@ pub(crate) fn walls_along_ducts(
             p.bottom_ft = d.bottom(c.segment);
             p.moved_along = Some(along);
             p.why = format!(
-                "no wall within {} ft of the tag; the wall its duct crosses {:.1} ft along the duct (within {} ft)",
+                "no wall within {} ft of the tag; the wall its duct crosses {:.1} ft along the duct (within {} ft, {})",
                 r.wall_reach_ft,
                 along / upf,
-                r.along_duct_reach_ft
+                r.along_duct_reach_ft,
+                r.reach_source
             );
         }
         if let Some(f) = finding {
