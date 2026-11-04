@@ -772,11 +772,14 @@ fn read_pipes_from_tags(
             lettering.push((*h, t.chars().count()));
         }
     }
-    // A tag with a leader is where its arrow points.
+    // A tag with a leader of its own is where its arrow points.
     if !pipe_tags.is_empty() {
         let (strokes, arrows) = leaders_and_arrows(ents);
-        for (tag, (h, chars)) in pipe_tags.iter_mut().zip(lettering) {
-            if let Some(tip) = homerun::leader_tip(tag.at, h, chars, &strokes, &arrows) {
+        let tips: Vec<Vec<Vec2>> =
+            pipe_tags.iter().zip(&lettering).map(|(tag, (h, chars))| homerun::leader_tips(tag.at, *h, *chars, &strokes, &arrows)).collect();
+        let heights: Vec<f64> = lettering.iter().map(|(h, _)| *h).collect();
+        for (tag, tip) in pipe_tags.iter_mut().zip(homerun::sure_tips(&tips, &heights)) {
+            if let Some(tip) = tip {
                 tag.at = tip;
             }
         }

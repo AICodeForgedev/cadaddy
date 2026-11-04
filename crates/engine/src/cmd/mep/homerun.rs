@@ -4,7 +4,8 @@
 //! (`1/2" HW & CW TO LAVATORY`). Read line by line, a tube is its pattern's strokes, far longer
 //! than the tube, and every tube under such a tag takes its first system. Here:
 //! - a run drawn in a pattern is measured along its middle ([`centreline`]);
-//! - a tag's leader takes the tag to what its arrow points at ([`leader_tip`]);
+//! - a tag's leader takes the tag to what its arrow points at, when the leader is surely its
+//!   ([`leader_tips`], [`sure_tips`]);
 //! - a tube under a two-system tag takes the system of the manifold it comes from, the one a
 //!   single-system tag points at ([`resolve_pairs`]); one that reaches no known manifold is
 //!   shared out between the tag's two systems, as the tag says each fixture gets one of each.
@@ -28,6 +29,8 @@ const ARROW_MAX_H: f64 = 3.0;
 /// A leader is this long at least and at most, in text heights.
 const LEADER_MIN_H: f64 = 1.5;
 const LEADER_MAX_H: f64 = 80.0;
+/// Two leaders' tips this many text heights apart point at one place.
+const SAME_TIP_H: f64 = 1.0;
 /// Most lines and polylines followed along one leader.
 const LEADER_HOPS: usize = 3;
 /// Ends of tubes this close (feet) are at one manifold's ports.
@@ -82,12 +85,13 @@ pub(crate) fn centreline(pts: &[Vec2], upf: f64) -> Option<Vec<Vec2>> {
 /// A line or polyline that may be a leader: its points.
 pub(crate) type Stroke = Vec<Vec2>;
 
-/// Where the leader of a tag at `at` (`h` high, `chars` long) points: the far end of a line or
-/// polyline that starts beside the tag's first line (either end of it) and ends in an arrowhead
-/// (one of `arrows`, as `[min, max]` boxes). `None` when the tag has no such leader.
-pub(crate) fn leader_tip(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], arrows: &[[Vec2; 2]]) -> Option<Vec2> {
+/// Where the leaders of a tag at `at` (`h` high, `chars` long) may point: the far ends of the
+/// lines or polylines that start beside the tag's first line (either end of it) and end in an
+/// arrowhead (one of `arrows`, as `[min, max]` boxes), one per place, nearest-starting first.
+/// Empty when the tag has no such leader.
+pub(crate) fn leader_tips(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], arrows: &[[Vec2; 2]]) -> Vec<Vec2> {
     if !(h.is_finite() && h > 0.0 && at.is_finite()) {
-        return None;
+        return Vec::new();
     }
     // The tag's first line, left, centred or right of `at` (its justification is not known here).
     let w = 0.9 * h * chars as f64;
@@ -102,7 +106,7 @@ pub(crate) fn leader_tip(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], arr
                 && p.y <= hi.y + 0.5 * h
         })
     };
-    let mut best: Option<(f64, Vec2)> = None;
+    let mut found: Vec<(f64, Vec2)> = Vec::new();
     for s in strokes {
         let (Some(&a), Some(&b)) = (s.first(), s.last()) else { continue };
         for (start, far) in [(a, b), (b, a)] {
@@ -131,14 +135,37 @@ pub(crate) fn leader_tip(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], arr
                 total += l;
             }
             if total >= LEADER_MIN_H * h && total <= LEADER_MAX_H * h && arrow_at(tip) {
-                let d = start.dist(at);
-                if best.is_none_or(|(bd, _)| d < bd) {
-                    best = Some((d, tip));
-                }
+                found.push((start.dist(at), tip));
             }
         }
     }
-    best.map(|(_, p)| p)
+    found.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut tips: Vec<Vec2> = Vec::new();
+    for (_, p) in found {
+        if !tips.iter().any(|t| t.dist(p) <= SAME_TIP_H * h) {
+            tips.push(p);
+        }
+    }
+    tips
+}
+
+/// Where each tag points, of tags whose leaders are known (`tips` from [`leader_tips`], `h`
+/// their text heights): a tag with one leader points where it does, unless another tag's leaders
+/// reach that place too. A stacked label (lines one above another with their leaders fanned out
+/// from one point) or a tag with several leaders can't say which arrow is which line's, so such
+/// a tag stays where its text is.
+pub(crate) fn sure_tips(tips: &[Vec<Vec2>], h: &[f64]) -> Vec<Option<Vec2>> {
+    tips.iter()
+        .enumerate()
+        .map(|(i, own)| {
+            let ([tip], Some(&hi)) = (own.as_slice(), h.get(i)) else { return None };
+            if !(hi.is_finite() && hi > 0.0) {
+                return None;
+            }
+            let shared = tips.iter().enumerate().any(|(j, other)| j != i && other.iter().any(|o| o.dist(*tip) <= SAME_TIP_H * hi));
+            (!shared).then_some(*tip)
+        })
+        .collect()
 }
 
 /// A tag as [`resolve_pairs`] reads it: where it is (or points), its system and its second
@@ -376,20 +403,43 @@ mod tests {
         // Shoulder left of the tag, then down to an arrowhead.
         let leader = vec![v(95.0, 102.0), v(85.0, 102.0), v(60.0, 70.0)];
         let arrow = [v(58.0, 68.0), v(62.0, 73.0)];
-        assert_eq!(leader_tip(at, h, 9, std::slice::from_ref(&leader), &[arrow]), Some(v(60.0, 70.0)));
+        assert_eq!(leader_tips(at, h, 9, std::slice::from_ref(&leader), &[arrow]), vec![v(60.0, 70.0)]);
         // From the tag's right end (9 characters), in two lines joined end to end.
         let a = vec![v(100.0 + 0.9 * h * 9.0 + 3.0, 102.0), v(160.0, 102.0)];
         let b = vec![v(160.0, 102.0), v(170.0, 130.0)];
         let arrow2 = [v(168.0, 128.0), v(172.0, 132.0)];
-        assert_eq!(leader_tip(at, h, 9, &[a.clone(), b.clone()], &[arrow2]), Some(v(170.0, 130.0)));
+        assert_eq!(leader_tips(at, h, 9, &[a.clone(), b.clone()], &[arrow2]), vec![v(170.0, 130.0)]);
+        // Both: two places, the nearer-starting first.
+        assert_eq!(leader_tips(at, h, 9, &[a.clone(), b.clone(), leader.clone()], &[arrow, arrow2]), vec![v(60.0, 70.0), v(170.0, 130.0)]);
         // No arrowhead: no leader (a pipe passing the tag is not one).
-        assert_eq!(leader_tip(at, h, 9, &[a, b], &[]), None);
+        assert!(leader_tips(at, h, 9, &[a, b], &[]).is_empty());
         // A line far from the tag is not its leader; an arrowhead too big is not one.
-        assert_eq!(leader_tip(at, h, 9, &[vec![v(300.0, 100.0), v(260.0, 70.0)]], &[[v(258.0, 68.0), v(262.0, 72.0)]]), None);
-        assert_eq!(leader_tip(at, h, 9, std::slice::from_ref(&leader), &[[v(40.0, 50.0), v(80.0, 90.0)]]), None);
+        assert!(leader_tips(at, h, 9, &[vec![v(300.0, 100.0), v(260.0, 70.0)]], &[[v(258.0, 68.0), v(262.0, 72.0)]]).is_empty());
+        assert!(leader_tips(at, h, 9, std::slice::from_ref(&leader), &[[v(40.0, 50.0), v(80.0, 90.0)]]).is_empty());
         // Hostile values.
-        assert_eq!(leader_tip(v(f64::NAN, 0.0), h, 9, std::slice::from_ref(&leader), &[arrow]), None);
-        assert_eq!(leader_tip(at, 0.0, 9, &[leader], &[arrow]), None);
+        assert!(leader_tips(v(f64::NAN, 0.0), h, 9, std::slice::from_ref(&leader), &[arrow]).is_empty());
+        assert!(leader_tips(at, 0.0, 9, &[leader], &[arrow]).is_empty());
+    }
+
+    #[test]
+    fn a_tag_moves_to_its_leader_only_when_the_leader_is_its_alone() {
+        let h = [4.5; 5];
+        let tips = vec![
+            // One leader, its own: moves.
+            vec![v(10.0, 10.0)],
+            // Two leaders: which is it? Stays.
+            vec![v(50.0, 50.0), v(80.0, 50.0)],
+            // A stacked label's lines, their fanned leaders reaching the same arrows: both stay.
+            vec![v(200.0, 10.0)],
+            vec![v(202.0, 11.0), v(240.0, 10.0)],
+            // No leader.
+            Vec::new(),
+        ];
+        assert_eq!(sure_tips(&tips, &h), vec![Some(v(10.0, 10.0)), None, None, None, None]);
+        // Hostile: heights missing or not a number.
+        assert_eq!(sure_tips(&tips, &[]), vec![None; 5]);
+        assert_eq!(sure_tips(&[vec![v(1.0, 1.0)], vec![v(1.0, 1.0)]], &[f64::NAN, f64::NAN]), vec![None, None]);
+        assert!(sure_tips(&[], &h).is_empty());
     }
 
     /// Tubes from a manifold at `port` (`n` ports 2" apart, 18 units a foot), each to `to`.
