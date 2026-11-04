@@ -7483,20 +7483,22 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
     before - stamped.len() - placed.len()
 }
 
-/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices; how many
+/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices, unless
+/// their circuits differ (two counter receptacles side by side on G-5 and G-6 are two); how many
 /// went.
 fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
-    let mut kept: BTreeMap<(String, String, String), Vec<[f64; 2]>> = BTreeMap::new();
+    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], String)>> = BTreeMap::new();
     let before = devices.len();
     devices.retain(|dv| {
         if dv.room.trim().is_empty() {
             return true;
         }
+        let circuit = dv.circuit.trim().to_ascii_uppercase();
         let spots = kept.entry((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())).or_default();
-        if spots.iter().any(|p| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps) {
+        if spots.iter().any(|(p, c)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps && (c.is_empty() || circuit.is_empty() || *c == circuit)) {
             return false;
         }
-        spots.push(dv.at);
+        spots.push((dv.at, circuit));
         true
     });
     before - devices.len()
@@ -14584,8 +14586,8 @@ mod tests {
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
-    /// A room's two copies of a tag at one spot are one; the same tag a foot away, or another
-    /// room's at that spot, stay.
+    /// A room's two copies of a tag at one spot are one; the same tag a foot away, another room's
+    /// at that spot, or one on another circuit, stay.
     #[test]
     fn one_device_per_room_tag_and_spot() {
         let dv = |tag: &str, room: &str, x: f64| super::super::readers::ReadDevice {
@@ -14598,6 +14600,14 @@ mod tests {
         let mut d = vec![dv("S", "219", 10.0), dv("S", "219", 10.5), dv("S", "219", 22.0), dv("S", "221", 10.0), dv("SD", "219", 10.0)];
         assert_eq!(one_per_spot(&mut d, 3.0), 1);
         assert_eq!(d.len(), 4);
+        // Two receptacles side by side on two circuits are two.
+        let on = |mut d: super::super::readers::ReadDevice, c: &str| {
+            d.circuit = c.into();
+            d
+        };
+        let mut r = vec![on(dv("REC", "219", 10.0), "G-5"), on(dv("REC", "219", 10.2), "G-6"), on(dv("REC", "219", 10.1), "G-5")];
+        assert_eq!(one_per_spot(&mut r, 3.0), 1);
+        assert_eq!(r.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-5", "G-6"]);
     }
 
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection
