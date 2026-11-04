@@ -297,6 +297,64 @@
       }
     },
     {
+      "id": "E-GEAR-SPACE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "In front of every piece of electrical gear the working space NEC 110.26 calls for is clear of walls, other equipment and door swings (as deep as its voltage to ground and condition call for, as wide as the gear or 30 in, 6.5 ft or the gear's height high), with that headroom to the ceiling, and its dedicated space (its footprint up to 6 ft over it) free of ducts and pipes.",
+      "how": [
+        "objects.json `gear` lists each piece of gear here with its box, its working space as the build laid it out (`properties` WORKING SPACE, PLACEMENT; `sources.status` proposed when CADaddy placed it because the plans don't locate it) and the prescreen's measured clear depth, front face, doors and ceiling (E-GEAR-SPACE in `prescreen`). Start from those findings.",
+        "On the enlarged electrical room plan, measure from the gear's front to the nearest wall, equipment or door leaf across the space's width; the depth is 3 ft up to 150 V to ground, and 3, 3.5 or 4 ft from 151 to 600 V for conditions 1, 2 and 3 (what faces the gear: nothing live or grounded, a grounded wall, live parts). A depth that holds only for condition 1 is 'unsure' unless the plan shows what faces the gear.",
+        "A door whose leaf sweeps the space when it swings into the room is a 'fail'; one whose swing the plan doesn't show is 'unsure'.",
+        "Over the gear's footprint up to 6 ft above it, no duct or pipe of another system may pass (dedicated space); the ceiling must be at least 6.5 ft or the gear's top."
+      ],
+      "documents": ["enlarged_plan", "plan", "rcp", "schedule", "submittal"],
+      "tolerance": {"depth_in": 1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The 208Y/120 V panel has 6 ft clear in front of it, 30 in wide, under a 9 ft ceiling; no duct passes over it.",
+        "fail": "The room's door swings in across the panel's working space; a sanitary line crosses 4 ft over the switchboard."
+      }
+    },
+    {
+      "id": "E-GEAR-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Each enclosure takes what lands on it, recomputed from the feeder schedule, the one-line and the gear submittal: the raceways through each side fit that side's conduit (knockout) area; the conductors in the wiring gutter fill at most 40 percent of it (NEC 312.8); each lug has the bending space NEC 312.6 gives for its conductors; each feeder's parallel sets, size and metal fit the lugs it lands on.",
+      "how": [
+        "objects.json `gear` gives each piece of gear's feeders (sets, conductors, conduits and trade sizes, entry side, the schedule row and one-line tag each came from), its lugs and the submittal's box and conduit areas. E-GEAR-FILL in `prescreen` packed the raceways on each side and counted the gutter, bending space and lugs; start from those findings.",
+        "Check the counts on the feeder schedule and the one-line pictures: every feeder the panel schedule names (a row feeding another panel) must have its conduits and conductors; a missing one makes the count 'unsure'.",
+        "Check the conduit area and lugs on the gear submittal pages: a side whose raceways need more area than it has is a 'fail'; a parallel set with more sets than the lugs take, or a size outside the lugs' range, is a 'fail'.",
+        "The gutter's width and depth and the bending space at the lugs are rarely in a panelboard submittal: when the submittal doesn't give them they are missing and the finding is 'unsure', never a pass."
+      ],
+      "documents": ["schedule", "riser_diagram", "submittal", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "Four 2 in conduits come in through the top of a 20 in wide panel whose submittal draws a 16 x 4 in conduit area; its main lugs take two 3/0-500 kcmil per phase and the feeder is two sets of 350 kcmil.",
+        "fail": "Fourteen raceways come in through the top: about 150 sq in needed, 60 sq in of conduit area. The feeder is four sets of 500 kcmil on lugs that take two per phase."
+      }
+    },
+    {
+      "id": "E-GEAR-SIZE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Each piece of gear's enclosure in the model (height, width, depth) is the gear submittal's.",
+      "how": [
+        "objects.json `gear` gives each piece's box as built (`model_in`) and as the submittal gives it (`submittal`, re-read from the job's gear submittals; `properties.BOX` as the build recorded it). E-GEAR-SIZE in `prescreen` compared them.",
+        "Read the box on the gear submittal pages (the dimension line or the elevation drawing): a side off by more than the tolerance is a 'fail'; no size in any submittal is 'unsure'."
+      ],
+      "documents": ["submittal", "schedule"],
+      "tolerance": {"size_in": 0.5},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {
+        "pass": "The submittal gives 50 x 20 x 5.75 in; the model's panel is 50 in high, 20 in wide and 5.75 in deep.",
+        "fail": "The submittal gives a 90 in high switchboard 36 in deep; the model's box is 90 x 40 x 20 in."
+      }
+    },
+    {
       "id": "E-LUM",
       "trade": "electrical",
       "applies_to": {"kinds": ["light_fixture", "luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
