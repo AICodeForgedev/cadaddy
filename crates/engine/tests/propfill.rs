@@ -216,6 +216,24 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A device in no room stands in a corridor the plans trace: that is its room (the takeoff
+/// counts the corridor's receptacles by it).
+#[test]
+fn a_device_in_a_corridor_is_in_the_corridor() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = sp["tags"].as_array_mut() {
+        t.push(device(80.0, 5.0, "C", "", "1F9"));
+    }
+    sp["circulation"] = json!([{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [960, 60], "rects": [[[900, 0], [1100, 120]]]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = fill(&mut s);
+    let c = device_of(&mut s, "C");
+    assert_eq!(c["room"]["value"], "CORRIDOR", "{c:#}");
+    assert_eq!(r["devices_in_no_room"], json!({}), "{r:#}");
+}
+
 /// A general note's panelboard height to top puts each scheduled panel on a wall at its centre
 /// (the top less half its box), from the note; a person's height stays.
 #[test]

@@ -998,7 +998,31 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     (None, Some(r)) => {
                         put(&mut store, "room", Prop::new(r, Source::computed()).with_note("the typical room it was stamped into"), tally)
                     }
-                    (None, None) => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                    (None, None) => {
+                        // Not in a room: the corridor, stair or hoistway it stands in (or is on the
+                        // wall of, within a foot), from the plans' circulation spaces.
+                        let q = c - shift;
+                        let reach = ROOM_NEAR_FT * upf;
+                        let probes = [[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]];
+                        let space = sp.circulation.iter().find(|cs| {
+                            lvl.is_some_and(|l| cs.level.eq_ignore_ascii_case(l)) && !cs.name.trim().is_empty() && probes.iter().any(|p| cs.holds(*p))
+                        });
+                        match space {
+                            Some(cs) => {
+                                let name = cs.name.trim().to_string();
+                                if let Some(id) = made(e, DEVID) {
+                                    tag_rooms.push((id, name.clone()));
+                                }
+                                let what = match cs.kind {
+                                    cadaddy_walk3d::CirculationKind::Corridor => "corridor",
+                                    cadaddy_walk3d::CirculationKind::Stair => "stair",
+                                    cadaddy_walk3d::CirculationKind::Hoistway => "hoistway",
+                                };
+                                put(&mut store, "room", Prop::new(name, Source::computed()).with_note(&format!("the {what} it stands in")), tally);
+                            }
+                            None => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                        }
+                    }
                 }
                 if let Some((wh, _)) = host {
                     put(&mut store, "host_wall", Prop::new(wh.hex(), Source::computed()).with_note("the nearest wall of its level"), tally);
