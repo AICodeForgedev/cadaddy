@@ -6316,20 +6316,30 @@ fn stamp_typical_rooms(
         placed.iter().filter(|dv| dv.level == level && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))).take(2).count()
             >= 2
     };
-    // How many devices of a tag the floor's plans already put in a room: the typical plan's of
-    // that tag there are those first (one each), the rest it adds (a floor plan may show a room's
-    // receptacles and leave its fixtures to the typical plan).
-    let shown = |level: &str, o: &[cadaddy_geom::Vec2], tag: &str| {
+    // A device of a tag the floor's plans already put where a typical plan's copy lands (within
+    // [`STAND_IN_FT`]) is that device: the floor plan's stands for it (one each). A floor plan may
+    // show a room's receptacles and leave its fixtures to the typical plan; where it shows none at
+    // the spot, the typical plan's is added.
+    let stand_in_reach = STAND_IN_FT * 12.0 * super::perceive::units_per_inch(d);
+    // Not one on another panel's circuit (a corridor's receptacle on a house panel by the unit's
+    // entry receptacle).
+    let panel = |c: &str| super::propfill::panel_of(c).map(|p| p.to_ascii_uppercase());
+    let stand_in = |level: &str, typ: &super::readers::ReadDevice, at: [f64; 2], taken: &BTreeSet<usize>| {
+        let theirs = panel(&typ.circuit);
         placed
             .iter()
-            .filter(|dv| {
-                dv.level == level
-                    && dv.tag.eq_ignore_ascii_case(tag)
-                    && cadaddy_geom::point_in_polygon(o, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))
+            .enumerate()
+            .filter(|(j, dv)| !taken.contains(j) && dv.level == level && dv.tag.eq_ignore_ascii_case(&typ.tag))
+            .filter(|(_, dv)| match (panel(&dv.circuit), &theirs) {
+                (Some(a), Some(b)) => a == *b,
+                _ => true,
             })
-            .count()
+            .map(|(j, dv)| (j, (dv.at[0] - at[0]).hypot(dv.at[1] - at[1])))
+            .filter(|(_, dd)| *dd <= stand_in_reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(j, _)| j)
     };
-    let mut matched: BTreeMap<(usize, String), usize> = BTreeMap::new();
+    let mut stood: BTreeSet<usize> = BTreeSet::new();
     let mut footprints: Vec<Footprint> = Vec::new();
     let refs = job_sheet_refs(job);
     // The floor plans' door swings and linework round the rooms, to lay each typical view into
@@ -6473,13 +6483,12 @@ fn stamp_typical_rooms(
                 if out.len() >= MAX_STAMPED {
                     continue;
                 }
-                let used = matched.entry((ri, dv.tag.to_ascii_uppercase())).or_insert(0);
-                if *used < shown(level, outline, &dv.tag) {
-                    *used += 1;
-                    continue;
-                }
                 let turn = turn_of(view, ri, outline);
                 let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn) else { continue };
+                if let Some(j) = stand_in(level, dv, at, &stood) {
+                    stood.insert(j);
+                    continue;
+                }
                 let room = stamped_room(name, number, ri);
                 if !footprints.iter().any(|(l, r, _, _)| l == level && *r == room)
                     && let Some(b) = unit_box(view)
@@ -7386,6 +7395,10 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
     }
     before - stamped.len() - placed.len()
 }
+
+/// A floor plan's device this near where a typical plan's copy of the same tag lands is that
+/// device (feet).
+const STAND_IN_FT: f64 = 3.0;
 
 /// A subscript letter's text at its base mark's lower right: this far right and below the base
 /// mark's text, in its text heights.
@@ -15675,12 +15688,18 @@ mod tests {
             level: level.into(),
             ..Default::default()
         };
-        let placed = vec![device("A", [10_072.0, 100.0], "E-2", "Level 2")];
+        // The floor plan's own copy of one receptacle in room 201, where the enlarged plan's lands
+        // (on the room's panel): it stands for it. A corridor's on a house panel by another: not.
+        let on = |mut d: super::super::readers::ReadDevice, circuit: &str| {
+            d.circuit = circuit.into();
+            d
+        };
+        let placed = vec![on(device("A", [10_020.0, 20.0], "E-2", "Level 2"), "G-5"), on(device("A", [10_120.0, 20.0], "E-2", "Level 2"), "H-3")];
         // The enlarged plan's three receptacles and a switch, in its view.
         let read: Vec<_> =
             [("A", [4534.0 + 20.0, 220.0]), ("A", [4534.0 + 120.0, 220.0]), ("A", [4534.0 + 20.0, 460.0]), ("S", [4534.0 + 130.0, 300.0])]
                 .iter()
-                .map(|(t, at)| device(t, *at, "E-6", "T"))
+                .map(|(t, at)| on(device(t, *at, "E-6", "T"), if *t == "A" { "G-5" } else { "" }))
                 .collect();
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &placed, &unplaced);
