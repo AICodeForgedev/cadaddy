@@ -119,6 +119,32 @@ pub(crate) struct BearingPlane {
     pub source: String,
 }
 
+/// How the slab level's buried drains are sloped between the plans' inverts ([`slope_drains`]).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SlopeRules {
+    /// `[largest size (in), least fall (in per ft)]`, smallest size first.
+    pub min_fall: Vec<[f64; 2]>,
+    pub fall_source: String,
+    /// Longest piece a sloped run is cut into (feet): its segments step down at this spacing.
+    pub piece_ft: f64,
+    /// How far from a drain an invert note may sit (feet).
+    pub reach_ft: f64,
+    /// How near two runs' ends (or an end and a run) are to join (feet).
+    pub join_ft: f64,
+    pub min_depth_ft: f64,
+    pub min_depth_source: String,
+    pub source: String,
+}
+
+impl SlopeRules {
+    /// The code's least fall for a pipe of `size_in`, feet per foot.
+    pub(crate) fn least_fall(&self, size_in: f64) -> f64 {
+        let size = if size_in.is_finite() && size_in > 0.0 { size_in } else { 4.0 };
+        self.min_fall.iter().find(|r| size <= r[0] + 1e-9).or(self.min_fall.last()).map_or(0.0, |r| r[1].max(0.0) / 12.0)
+    }
+}
+
 /// `ugplan.json`.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
@@ -138,6 +164,7 @@ pub(crate) struct Rules {
     pub proposal: ProposalRules,
     pub sleeve: Sleeve,
     pub bearing_plane: BearingPlane,
+    pub slope: SlopeRules,
 }
 
 pub(crate) fn rules() -> &'static Rules {
@@ -855,6 +882,11 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
 /// The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to.
 const DRAINS: [&str; 6] = ["SAN", "W", "ST", "SS", "SD", "RD"];
 
+/// Whether a run's system is a drainage service (sanitary, waste, storm).
+pub(crate) fn is_drainage(system: &str) -> bool {
+    DRAINS.iter().any(|d| d.eq_ignore_ascii_case(system.trim()))
+}
+
 /// How a slab drain's height source starts: a run [`slab_drains`] put under the floor.
 pub(crate) const SLAB_DRAIN_PREFIX: &str = "below the slab: ";
 
@@ -900,6 +932,435 @@ pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
     (moved, length)
 }
 
+/// How a sloped slab drain's height source goes on after [`SLAB_DRAIN_PREFIX`].
+pub(crate) const SLOPED_MARK: &str = "sloped between the plans' inverts";
+
+/// Most invert notes, nodes of the drain network and pieces of one run [`slope_drains`] takes.
+const MAX_INVERTS: usize = 500;
+const MAX_NODES: usize = 100_000;
+const MAX_PIECES: usize = 2_000;
+
+/// What [`slope_drains`] did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Sloped {
+    /// Invert notes on the slab level.
+    pub inverts: usize,
+    /// Notes pinned to a drain under the floor.
+    pub attached: usize,
+    /// Notes with no such drain within reach (their text).
+    pub unattached: Vec<String>,
+    /// Connected drain networks with an invert (each sloped from its deepest).
+    pub networks: usize,
+    pub runs: usize,
+    /// Spans between two inverts falling less than the code's least fall for their size (or
+    /// against the flow): the plans' values are kept, each is for review.
+    pub flatter_than_code: usize,
+    /// Depths reached, feet below the floor (shallowest, deepest).
+    pub range_ft: Option<(f64, f64)>,
+}
+
+impl Sloped {
+    pub(crate) fn json(&self) -> Value {
+        json!({
+            "inverts": self.inverts,
+            "attached": self.attached,
+            "unattached": self.unattached,
+            "networks": self.networks,
+            "runs": self.runs,
+            "flatter_than_code": self.flatter_than_code,
+            "depth_ft": self.range_ft.map(|(a, b)| json!([a, b])),
+            "source": rules().slope.source,
+            "fall_source": rules().slope.fall_source,
+        })
+    }
+}
+
+/// Cut a run's segments into pieces no longer than `piece` (drawing units), each piece keeping
+/// its segment's bottom: a sloped run steps down piece by piece.
+fn cut_pieces(run: &mut MepRun, piece: f64) {
+    if !(piece.is_finite() && piece > 0.0) || run.points.len() < 2 || run.bottoms_ft.len() + 1 != run.points.len() {
+        return;
+    }
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(run.points.len());
+    let mut bottoms: Vec<f64> = Vec::with_capacity(run.bottoms_ft.len());
+    for (w, b) in run.points.windows(2).zip(run.bottoms_ft.iter()) {
+        let [a, c] = w else { continue };
+        let len = (c[0] - a[0]).hypot(c[1] - a[1]);
+        let left = MAX_PIECES.saturating_sub(bottoms.len()).max(1);
+        let n = if len.is_finite() { ((len / piece).ceil() as usize).clamp(1, left) } else { 1 };
+        if pts.is_empty() {
+            pts.push(*a);
+        }
+        for k in 1..=n {
+            let t = k as f64 / n as f64;
+            pts.push([a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t]);
+            bottoms.push(*b);
+        }
+    }
+    if pts.len() == bottoms.len() + 1 {
+        run.points = pts;
+        run.bottoms_ft = bottoms;
+    }
+}
+
+fn dist2(a: [f64; 2], b: [f64; 2]) -> f64 {
+    (b[0] - a[0]).hypot(b[1] - a[1])
+}
+
+fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 1e-18 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - dx * t).hypot(p[1] - a[1] - dy * t)
+}
+
+/// A run's end on another run's middle (a branch into a main, within `join`): the main gets a
+/// point there, so the branch joins it where it meets it (the main's pieces at most `piece`
+/// long).
+fn split_at_branches(sp: &mut BuildingSpec, idx: &[usize], piece: f64, join: f64) {
+    use std::collections::HashMap;
+    let c = piece + join;
+    let cell = |p: [f64; 2]| ((p[0] / c).floor() as i64, (p[1] / c).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<(usize, usize)>> = HashMap::new();
+    for (k, &i) in idx.iter().enumerate() {
+        let Some(run) = sp.mep.runs.get(i) else { continue };
+        for (j, w) in run.points.windows(2).enumerate() {
+            if let [a, b] = w {
+                grid.entry(cell([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0])).or_default().push((k, j));
+            }
+        }
+    }
+    // (run, segment, along, point) for each branch end.
+    let mut cuts: Vec<(usize, usize, f64, [f64; 2])> = Vec::new();
+    for (k, &i) in idx.iter().enumerate() {
+        let Some(run) = sp.mep.runs.get(i) else { continue };
+        for p in run.points.first().into_iter().chain(run.points.last()) {
+            let (cx, cy) = cell(*p);
+            let mut best: Option<(f64, usize, usize, f64, [f64; 2])> = None;
+            for key in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy))) {
+                for &(k2, j2) in grid.get(&key).into_iter().flatten() {
+                    if k2 == k {
+                        continue;
+                    }
+                    let Some(other) = idx.get(k2).and_then(|i2| sp.mep.runs.get(*i2)) else { continue };
+                    let (Some(a), Some(b)) = (other.points.get(j2), other.points.get(j2 + 1)) else { continue };
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let l2 = dx * dx + dy * dy;
+                    if l2 <= 1e-18 {
+                        continue;
+                    }
+                    let t = (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0);
+                    let q = [a[0] + dx * t, a[1] + dy * t];
+                    let d = dist2(*p, q);
+                    // Onto a piece's end already: the network joins it there.
+                    if d <= join && dist2(q, *a) > join && dist2(q, *b) > join && best.is_none_or(|x| d < x.0) {
+                        best = Some((d, k2, j2, t, q));
+                    }
+                }
+            }
+            if let Some((_, k2, j2, t, q)) = best {
+                cuts.push((k2, j2, t, q));
+            }
+        }
+    }
+    // Last first, so the earlier places stand.
+    cuts.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(b.2.total_cmp(&a.2)));
+    for (k, j, _, q) in cuts {
+        let Some(run) = idx.get(k).and_then(|i| sp.mep.runs.get_mut(*i)) else { continue };
+        if run.points.len() > MAX_PIECES || run.bottoms_ft.len() + 1 != run.points.len() {
+            continue;
+        }
+        let Some(b) = run.bottoms_ft.get(j).copied() else { continue };
+        run.points.insert(j + 1, q);
+        run.bottoms_ft.insert(j, b);
+    }
+}
+
+/// The slab level's buried drains (the runs [`slab_drains`] put under its floor) sloped between
+/// the inverts its plans print (`mep.inverts`, depths below the finished floor): the drains
+/// joined end to end, or end to run, are one network; its deepest invert is its outlet; each
+/// other invert's path to the outlet falls evenly from the invert to the next one downstream;
+/// a branch past every invert rises from where it joins at the code's least fall for its size
+/// (`slope.min_fall`), never above `slope.min_depth_ft`. A network with no invert keeps the
+/// rule's depth. A rerun gives the same result.
+pub(crate) fn slope_drains(sp: &mut BuildingSpec) -> Sloped {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+    let r = rules();
+    let sl = &r.slope;
+    let mut out = Sloped::default();
+    let Some(slab) = slab_level(sp) else { return out };
+    let u = upf(sp);
+    let notes: Vec<cadaddy_walk3d::MepInvert> = sp
+        .mep
+        .inverts
+        .iter()
+        .filter(|v| v.level.eq_ignore_ascii_case(&slab) && v.depth_ft.is_finite() && v.depth_ft > 0.0 && v.at.iter().all(|c| c.is_finite()))
+        .take(MAX_INVERTS)
+        .cloned()
+        .collect();
+    out.inverts = notes.len();
+    let (piece, join, reach) = (sl.piece_ft * u, sl.join_ft * u, sl.reach_ft * u);
+    if notes.is_empty() || !(piece > 0.0 && join > 0.0 && reach > 0.0) {
+        return out;
+    }
+    let idx: Vec<usize> = sp
+        .mep
+        .runs
+        .iter()
+        .enumerate()
+        .take(MAX_SCAN)
+        .filter(|(_, run)| {
+            is_drainage(&run.system)
+                && run.level.eq_ignore_ascii_case(&slab)
+                && run.height_source.starts_with(SLAB_DRAIN_PREFIX)
+                && run.top_ft.is_none()
+                && run.points.len() >= 2
+                && run.points.iter().flatten().all(|c| c.is_finite())
+        })
+        .map(|(i, _)| i)
+        .take(MAX_ITEMS)
+        .collect();
+    for &i in &idx {
+        if let Some(run) = sp.mep.runs.get_mut(i) {
+            cut_pieces(run, piece);
+        }
+    }
+    split_at_branches(sp, &idx, piece, join);
+    // The network: the runs' points (one node within `join`), their pieces the edges.
+    let mut nodes: Vec<[f64; 2]> = Vec::new();
+    let mut size: Vec<f64> = Vec::new();
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let cell = |p: [f64; 2], c: f64| ((p[0] / c).floor() as i64, (p[1] / c).floor() as i64);
+    let mut node_of: Vec<Vec<usize>> = Vec::with_capacity(idx.len());
+    for &i in &idx {
+        let Some(run) = sp.mep.runs.get(i) else { continue };
+        let mut mine = Vec::with_capacity(run.points.len());
+        for p in &run.points {
+            let (cx, cy) = cell(*p, join);
+            let found = (-1..=1)
+                .flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy)))
+                .filter_map(|k| grid.get(&k))
+                .flatten()
+                .copied()
+                .filter(|&n| nodes.get(n).is_some_and(|q| dist2(*q, *p) <= join))
+                .min_by(|a, b| nodes.get(*a).map_or(f64::MAX, |q| dist2(*q, *p)).total_cmp(&nodes.get(*b).map_or(f64::MAX, |q| dist2(*q, *p))));
+            let n = match found {
+                Some(n) => n,
+                None if nodes.len() < MAX_NODES => {
+                    nodes.push(*p);
+                    size.push(0.0);
+                    grid.entry((cx, cy)).or_default().push(nodes.len() - 1);
+                    nodes.len() - 1
+                }
+                None => break,
+            };
+            if let Some(sz) = size.get_mut(n) {
+                *sz = sz.max(run.size_in[0]);
+            }
+            mine.push(n);
+        }
+        node_of.push(mine);
+    }
+    let mut adj: Vec<Vec<(usize, f64)>> = vec![Vec::new(); nodes.len()];
+    let link = |adj: &mut Vec<Vec<(usize, f64)>>, a: usize, b: usize, w: f64| {
+        if a == b || !w.is_finite() || adj.get(a).is_some_and(|l| l.iter().any(|(n, _)| *n == b)) {
+            return;
+        }
+        if let Some(l) = adj.get_mut(a) {
+            l.push((b, w));
+        }
+        if let Some(l) = adj.get_mut(b) {
+            l.push((a, w));
+        }
+    };
+    for mine in &node_of {
+        for w in mine.windows(2) {
+            if let [a, b] = w
+                && let (Some(p), Some(q)) = (nodes.get(*a), nodes.get(*b))
+            {
+                link(&mut adj, *a, *b, dist2(*p, *q));
+            }
+        }
+    }
+    // Each note pinned to the nearer end of the nearest piece within reach.
+    let mut pinned: BTreeMap<usize, (f64, String)> = BTreeMap::new();
+    for v in &notes {
+        let mut best: Option<(f64, usize)> = None;
+        for (a, l) in adj.iter().enumerate() {
+            let Some(pa) = nodes.get(a).copied() else { continue };
+            for &(b, _) in l {
+                let Some(pb) = nodes.get(b).copied() else { continue };
+                let d = seg_dist(v.at, pa, pb);
+                if d <= reach && best.is_none_or(|x| d < x.0) {
+                    best = Some((d, if dist2(v.at, pa) <= dist2(v.at, pb) { a } else { b }));
+                }
+            }
+        }
+        match best {
+            Some((_, n)) => {
+                out.attached += 1;
+                pinned.entry(n).or_insert((v.depth_ft, v.text.clone()));
+            }
+            None => out.unattached.push(v.text.clone()),
+        }
+    }
+    // Each network from its deepest invert (its outlet) out.
+    let mut depth: Vec<Option<f64>> = vec![None; nodes.len()];
+    let mut net_of: Vec<Option<usize>> = vec![None; nodes.len()];
+    let mut net_notes: Vec<Vec<String>> = Vec::new();
+    while let Some((&o, (d_o, _))) =
+        pinned.iter().filter(|(n, _)| net_of.get(**n).is_some_and(Option::is_none)).max_by(|a, b| a.1.0.total_cmp(&b.1.0).then(b.0.cmp(a.0)))
+    {
+        let d_o = *d_o;
+        let net = net_notes.len();
+        // Path lengths from the outlet; each node's next node toward it.
+        let mut dist: HashMap<usize, f64> = HashMap::new();
+        let mut parent: HashMap<usize, usize> = HashMap::new();
+        let mut order: Vec<usize> = Vec::new();
+        let mut heap = BinaryHeap::new();
+        dist.insert(o, 0.0);
+        heap.push(Reverse((0u64, o)));
+        while let Some(Reverse((bits, n))) = heap.pop() {
+            let d = f64::from_bits(bits);
+            // Settled already (here or in another network), or a longer way to it.
+            if net_of.get(n).is_some_and(Option::is_some) || dist.get(&n).is_some_and(|x| *x < d) {
+                continue;
+            }
+            if let Some(slot) = net_of.get_mut(n) {
+                *slot = Some(net);
+            }
+            order.push(n);
+            for &(m, w) in adj.get(n).into_iter().flatten() {
+                let nd = d + w;
+                if net_of.get(m).is_some_and(Option::is_none) && dist.get(&m).is_none_or(|x| nd < *x) {
+                    dist.insert(m, nd);
+                    parent.insert(m, n);
+                    heap.push(Reverse((nd.to_bits(), m)));
+                }
+            }
+        }
+        let at = |n: usize| dist.get(&n).copied().unwrap_or(0.0);
+        // Each invert's stretch down to the next invert toward the outlet.
+        let mut ups: HashMap<usize, Vec<usize>> = HashMap::new();
+        let mut texts: Vec<String> = Vec::new();
+        for (&a, (_, text)) in pinned.iter().filter(|(n, _)| net_of.get(**n).copied().flatten() == Some(net)) {
+            if !texts.contains(text) {
+                texts.push(text.clone());
+            }
+            if a == o {
+                continue;
+            }
+            let mut n = a;
+            let mut steps = 0usize;
+            while let Some(&p) = parent.get(&n) {
+                steps += 1;
+                if pinned.contains_key(&p) || steps > MAX_NODES {
+                    break;
+                }
+                ups.entry(p).or_default().push(a);
+                n = p;
+            }
+        }
+        // Outlet first, every node after the one it drains to.
+        let mut below: HashMap<usize, usize> = HashMap::new();
+        for &n in &order {
+            if let Some((d, _)) = pinned.get(&n) {
+                let d = if n == o { d_o } else { *d };
+                if let Some(slot) = depth.get_mut(n) {
+                    *slot = Some(d);
+                }
+                below.insert(n, n);
+                // The span from the invert below: falling at the code's least fall at least.
+                if n != o
+                    && let Some(&p) = parent.get(&n)
+                    && let Some(&anc) = below.get(&p)
+                {
+                    let d_anc = depth.get(anc).copied().flatten().unwrap_or(d_o);
+                    let len_ft = (at(n) - at(anc)) / u;
+                    let fall = sl.least_fall(size.get(n).copied().unwrap_or(0.0));
+                    if len_ft > 0.0 && (d_anc - d) / len_ft + 1e-9 < fall {
+                        out.flatter_than_code += 1;
+                    }
+                }
+                continue;
+            }
+            let Some(&p) = parent.get(&n) else { continue };
+            let anc = below.get(&p).copied().unwrap_or(o);
+            below.insert(n, anc);
+            let d_anc = depth.get(anc).copied().flatten().unwrap_or(d_o);
+            let d = match ups.get(&n) {
+                // On the way to inverts upstream: evenly from the one below to each, the deepest.
+                Some(list) => list
+                    .iter()
+                    .filter_map(|&a| {
+                        let d_a = pinned.get(&a)?.0;
+                        let span = at(a) - at(anc);
+                        Some(if span > 0.0 { d_anc + (d_a - d_anc) * (at(n) - at(anc)) / span } else { d_a })
+                    })
+                    .fold(f64::NEG_INFINITY, f64::max),
+                // Past every invert: rising from the node it drains to at the least fall.
+                None => {
+                    let d_p = depth.get(p).copied().flatten().unwrap_or(d_anc);
+                    let len_ft = (at(n) - at(p)) / u;
+                    d_p - sl.least_fall(size.get(n).copied().unwrap_or(0.0)) * len_ft
+                }
+            };
+            if let Some(slot) = depth.get_mut(n) {
+                *slot = d.is_finite().then_some(d.max(sl.min_depth_ft));
+            }
+        }
+        net_notes.push(texts);
+    }
+    out.networks = net_notes.len();
+    // Each piece at the depth of its middle.
+    let round = |v: f64| (v * 9600.0).round() / 9600.0;
+    for (k, &i) in idx.iter().enumerate() {
+        let (Some(mine), Some(run)) = (node_of.get(k), sp.mep.runs.get_mut(i)) else { continue };
+        if mine.len() != run.points.len() || run.bottoms_ft.len() + 1 != mine.len() {
+            continue;
+        }
+        let mut net = None;
+        let mut changed = false;
+        for (j, w) in mine.windows(2).enumerate() {
+            let [a, b] = w else { continue };
+            let (Some(da), Some(db)) = (depth.get(*a).copied().flatten(), depth.get(*b).copied().flatten()) else { continue };
+            if let Some(slot) = run.bottoms_ft.get_mut(j) {
+                *slot = round(-(da + db) / 2.0);
+                changed = true;
+            }
+            net = net.or(net_of.get(*a).copied().flatten());
+            out.range_ft = Some(out.range_ft.map_or((da.min(db), da.max(db)), |(lo, hi)| (lo.min(da).min(db), hi.max(da).max(db))));
+        }
+        if changed {
+            let said: Vec<String> = net.and_then(|n| net_notes.get(n)).map(|t| t.iter().take(4).cloned().collect()).unwrap_or_default();
+            run.height_source = format!("{SLAB_DRAIN_PREFIX}{SLOPED_MARK} ({}); {}", said.join(", "), sl.fall_source);
+            run.reviewed = false;
+            out.runs += 1;
+        }
+    }
+    out
+}
+
+/// The depth (feet below the floor) of the slab level's sloped drain at `at` (within `reach`
+/// drawing units), the nearest piece's.
+pub(crate) fn sloped_depth_at(sp: &BuildingSpec, slab: &str, at: [f64; 2], reach: f64) -> Option<f64> {
+    let mut best: Option<(f64, f64)> = None;
+    for run in sp.mep.runs.iter().take(MAX_SCAN) {
+        if !run.level.eq_ignore_ascii_case(slab) || !run.height_source.starts_with(SLAB_DRAIN_PREFIX) || !run.height_source.contains(SLOPED_MARK) {
+            continue;
+        }
+        for (w, b) in run.points.windows(2).zip(run.bottoms_ft.iter()) {
+            let [p, q] = w else { continue };
+            let d = seg_dist(at, *p, *q);
+            if d <= reach && b.is_finite() && best.is_none_or(|x| d < x.0) {
+                best = Some((d, -b));
+            }
+        }
+    }
+    best.map(|(_, depth)| depth)
+}
+
 /// The drainage stacks of the slab level carried below its floor into the building drain, as
 /// `P-UG-<service>` risers from the drain's invert up to the floor; vents only when a legend
 /// says vent piping runs below the slab.
@@ -925,10 +1386,22 @@ pub(crate) fn stack_bases(sp: &BuildingSpec, vent_below: bool) -> Vec<MepRun> {
         if out.iter().any(|o| o.points.first().is_some_and(|p| (p[0] - at[0]).hypot(p[1] - at[1]) < 0.5 * upf(sp))) {
             continue;
         }
-        let mut b = super::printcond::run(&format!("{P_UG}-{sys}"), &slab, &run.source_sheet, vec![*at], run.size_in[0], -r.depths.drain_invert_ft);
+        // Down to the sloped building drain at its spot, else to the rule's invert.
+        let sloped = sloped_depth_at(sp, &slab, *at, r.slope.reach_ft * upf(sp));
+        let mut b = super::printcond::run(
+            &format!("{P_UG}-{sys}"),
+            &slab,
+            &run.source_sheet,
+            vec![*at],
+            run.size_in[0],
+            -sloped.unwrap_or(r.depths.drain_invert_ft),
+        );
         b.top_ft = Some(0.0);
         b.size_source = if run.size_source.is_empty() { "the stack's".into() } else { format!("the stack's ({})", run.size_source) };
-        b.height_source = format!("rule: stack base to the building drain ({}); the plans give no invert", r.depths.drain_invert_ft);
+        b.height_source = match sloped {
+            Some(d) => format!("stack base to the building drain, {d:.2} ft below the floor there ({SLOPED_MARK})"),
+            None => format!("rule: stack base to the building drain ({}); the plans give no invert", r.depths.drain_invert_ft),
+        };
         out.push(b);
     }
     out
@@ -1294,10 +1767,17 @@ mod tests {
             &r.proposal.source,
             &r.sleeve.source,
             &r.bearing_plane.source,
+            &r.slope.source,
+            &r.slope.fall_source,
+            &r.slope.min_depth_source,
         ] {
             assert!(!s.trim().is_empty());
         }
         assert!(r.depths.service_cover_in > 0.0 && r.site.stub_ft > 0.0 && r.bearing_plane.angle_deg > 0.0);
+        // IPC 704.1's least falls: 1/4 in per foot to 2-1/2 in, 1/8 to 6 in, 1/16 above.
+        let sl = &r.slope;
+        assert!((sl.least_fall(2.0) - 0.25 / 12.0).abs() < 1e-12 && (sl.least_fall(4.0) - 0.125 / 12.0).abs() < 1e-12);
+        assert!((sl.least_fall(8.0) - 0.0625 / 12.0).abs() < 1e-12 && sl.piece_ft > 0.0 && sl.reach_ft > 0.0 && sl.join_ft > 0.0);
     }
 
     #[test]
@@ -1544,6 +2024,85 @@ mod tests {
         none.levels.clear();
         none.mep.runs = vec![run("SAN", "Level 1", two, 0.0, "default", None)];
         assert_eq!(slab_drains(&mut none), (0, 0.0));
+    }
+
+    #[test]
+    fn the_slab_drains_slope_between_the_plans_inverts_and_branches_rise_at_the_codes_fall() {
+        let inv = |level: &str, at: [f64; 2], depth_ft: f64, text: &str| cadaddy_walk3d::MepInvert {
+            level: level.into(),
+            at,
+            depth_ft,
+            text: text.into(),
+            source_sheet: "P-101".into(),
+        };
+        let drain = |size: f64, pts: Vec<[f64; 2]>| -> MepRun {
+            let mut r = super::super::printcond::run("SAN", "Level 1", "P-101", pts, size, 8.75);
+            r.height_source = "default".into();
+            r
+        };
+        let build = |west: f64, east: f64| {
+            let mut sp = spec();
+            sp.mep.runs.extend([
+                // The building drain, west to east (83 ft), out at the east end.
+                drain(6.0, vec![[100.0, 300.0], [1100.0, 300.0]]),
+                // A branch into its middle, no invert of its own.
+                drain(3.0, vec![[500.0, 300.0], [500.0, 500.0]]),
+                // A drain of its own, no invert by it.
+                drain(4.0, vec![[100.0, 560.0], [300.0, 560.0]]),
+            ]);
+            sp.mep.inverts = vec![
+                inv("Level 1", [95.0, 304.0], west, "24\" INVERT"),
+                inv("Level 1", [1104.0, 296.0], east, "48\" INVERT"),
+                inv("Level 1", [700.0, 100.0], 3.0, "36\" INVERT"),
+                inv("Level 2", [100.0, 300.0], 1.0, "12\" INVERT"),
+            ];
+            assert_eq!(slab_drains(&mut sp).0, 3);
+            sp
+        };
+        let mut sp = build(2.0, 4.0);
+        let got = slope_drains(&mut sp);
+        assert_eq!((got.inverts, got.attached, got.networks, got.runs, got.flatter_than_code), (3, 2, 1, 2, 0), "{got:?}");
+        assert_eq!(got.unattached, vec!["36\" INVERT".to_string()]);
+        let n = sp.mep.runs.len();
+        let (main, branch, alone) = (&sp.mep.runs[n - 3], &sp.mep.runs[n - 2], &sp.mep.runs[n - 1]);
+        // The main: cut into pieces of 10 ft at most, falling evenly from 2 ft to 4 ft.
+        assert!(main.points.len() >= 10 && main.bottoms_ft.len() + 1 == main.points.len());
+        assert!(main.points.windows(2).all(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) <= 120.0 + 1e-9));
+        assert!(main.bottoms_ft.windows(2).all(|w| w[1] < w[0]), "{:?}", main.bottoms_ft);
+        let want = |x: f64| -(2.0 + 2.0 * (x - 100.0) / 1000.0);
+        for (w, b) in main.points.windows(2).zip(&main.bottoms_ft) {
+            assert!((b - want((w[0][0] + w[1][0]) / 2.0)).abs() < 1e-3, "{b} at {:?}", w);
+        }
+        assert!(main.height_source.starts_with(SLAB_DRAIN_PREFIX) && main.height_source.contains(SLOPED_MARK));
+        assert!(main.height_source.contains("24\" INVERT") && main.height_source.contains("48\" INVERT") && main.height_source.contains("IPC 704.1"));
+        // The branch rises from the main at 1/8 in per foot (3 in pipe), north.
+        let at_junction = -want(500.0);
+        assert!(branch.bottoms_ft.windows(2).all(|w| w[1] > w[0]), "{:?}", branch.bottoms_ft);
+        assert!(branch.bottoms_ft.iter().all(|b| -b < at_junction && -b >= rules().slope.min_depth_ft));
+        let rise = at_junction - (-branch.bottoms_ft[branch.bottoms_ft.len() - 1]);
+        assert!(rise > 0.1 && rise < 0.2, "{rise}");
+        // The lone drain keeps the rule's invert.
+        assert!(alone.bottoms_ft.iter().all(|b| (b + rules().depths.drain_invert_ft).abs() < 1e-9));
+        assert!(!alone.height_source.contains(SLOPED_MARK));
+        // The stack on the main goes down to the drain's depth there (3 ft), not the rule's 2 ft.
+        let bases = stack_bases(&sp, false);
+        assert_eq!(bases.len(), 1);
+        assert!((bases[0].bottoms_ft[0] + 3.0).abs() < 0.15, "{:?}", bases[0].bottoms_ft);
+        assert!(bases[0].height_source.contains(SLOPED_MARK));
+        // A rerun gives the same.
+        let before: Vec<Vec<f64>> = sp.mep.runs.iter().map(|r| r.bottoms_ft.clone()).collect();
+        assert_eq!(slope_drains(&mut sp).runs, 2);
+        assert_eq!(sp.mep.runs.iter().map(|r| r.bottoms_ft.clone()).collect::<Vec<_>>(), before);
+        // Inverts falling less than the code's least fall (6 in over 83 ft): kept, for review.
+        let mut flat = build(2.0, 2.5);
+        let got = slope_drains(&mut flat);
+        assert_eq!(got.flatter_than_code, 1);
+        let m = &flat.mep.runs[flat.mep.runs.len() - 3];
+        assert!((m.bottoms_ft[0] + 2.0).abs() < 0.05 && (m.bottoms_ft[m.bottoms_ft.len() - 1] + 2.5).abs() < 0.05, "{:?}", m.bottoms_ft);
+        // No inverts: nothing sloped.
+        let mut none = build(2.0, 4.0);
+        none.mep.inverts.clear();
+        assert_eq!(slope_drains(&mut none), Sloped::default());
     }
 
     #[test]

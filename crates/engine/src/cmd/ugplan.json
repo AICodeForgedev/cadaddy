@@ -65,6 +65,16 @@
     "item": "Sleeve, Sch 40 PVC (through footing or grade beam)",
     "source": "rule: a buried run through a footing, grade beam or thickened slab edge is sleeved, the sleeve one inch over the raceway or pipe (IPC 307.4 for pipes; structural engineer to confirm the opening)"
   },
+  "slope": {
+    "min_fall": [[2.5, 0.25], [6.0, 0.125], [1000.0, 0.0625]],
+    "fall_source": "IPC 704.1 (Table 704.1): horizontal drainage piping 2-1/2 in and smaller at least 1/4 in per foot, 3 in to 6 in at least 1/8 in per foot, 8 in and larger at least 1/16 in per foot",
+    "piece_ft": 10.0,
+    "reach_ft": 6.0,
+    "join_ft": 1.0,
+    "min_depth_ft": 1.0,
+    "min_depth_source": "rule: a drain under the slab stays at least 12 in below the finished floor (the slab, its base course and the fitting)",
+    "source": "the plans' inverts by the slab level's drains (depths below the finished floor, the invert taken as the pipe's bottom): the deepest of a connected drain network is its outlet, the run between it and each other invert sloped evenly, a branch past the inverts rising from its junction at the code's least fall"
+  },
   "bearing_plane": {
     "angle_deg": 45.0,
     "source": "IPC 307.5: a pipe parallel to a footing or bearing wall is not placed within the 45-degree bearing plane below the bottom of the footing"

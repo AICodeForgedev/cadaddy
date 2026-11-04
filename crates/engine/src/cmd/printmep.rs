@@ -17,6 +17,19 @@ use crate::Session;
 const MAX_SET_RUNS: usize = 50_000;
 /// How many sheets one read takes.
 const MAX_SHEETS: usize = 500;
+/// Invert notes kept per sheet and per set.
+const MAX_SHEET_INVERTS: usize = 200;
+const MAX_SET_INVERTS: usize = 2_000;
+/// How near a drain an invert note is printed (feet): farther, it is another drawing's.
+const INVERT_REACH_FT: f64 = 6.0;
+
+/// The distance from `p` to the segment `a`–`b`.
+fn seg_dist(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 1e-18 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - dx * t).hypot(p[1] - a[1] - dy * t)
+}
 
 /// Feet to one decimal (never `-0.0`).
 pub(crate) fn r1(v: f64) -> f64 {
@@ -335,6 +348,13 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
             super::readers::duct_mep(&net, &level, &sh.number, &spec)
         }
         _ => {
+            // The inverts the sheet prints (`24" INVERT`): where its drains' depths come from.
+            let invert_notes: Vec<(f64, f64, f64, String)> = cadaddy_mepfix::sheet_facts::texts(&sub)
+                .into_iter()
+                .take(200_000)
+                .filter_map(|t| super::mep::invert_tag(&t.value).map(|d| (t.at.x, t.at.y, d, t.value.trim().to_string())))
+                .take(MAX_SHEET_INVERTS)
+                .collect();
             let mut t = Session::empty();
             t.open_drawing(sub, &sh.number, None);
             match super::mep::read(&t, &spec, None) {
@@ -350,6 +370,26 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
                         r.objects.clear();
                     }
                     m.runs = super::runtidy::tidy_runs(std::mem::take(&mut m.runs), sheet_upf);
+                    // An invert is a drain's: one by a drainage run (within reach) is kept.
+                    let reach = INVERT_REACH_FT * sheet_upf;
+                    let drains: Vec<&MepRun> = m.runs.iter().filter(|r| super::ugplan::is_drainage(&r.system)).collect();
+                    for (x, y, depth_ft, text) in invert_notes {
+                        let near = drains.iter().any(|r| {
+                            r.points.windows(2).any(|w| match w {
+                                [a, b] => seg_dist([x, y], *a, *b) <= reach,
+                                _ => false,
+                            })
+                        });
+                        if near {
+                            m.inverts.push(cadaddy_walk3d::MepInvert {
+                                level: level.clone(),
+                                at: [x, y],
+                                depth_ft,
+                                text,
+                                source_sheet: sh.number.clone(),
+                            });
+                        }
+                    }
                     m
                 }
                 Err(e) => {
@@ -372,6 +412,9 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
     }
     for t in &mut mep.terminals {
         t.at = at.apply(t.at);
+    }
+    for v in &mut mep.inverts {
+        v.at = at.apply(v.at);
     }
     for e in &mut mep.equipment {
         e.min = at.apply(e.min);
@@ -462,6 +505,9 @@ fn clone_mep_for_level(src: &Mep, target: &str) -> Mep {
     for e in &mut out.equipment {
         e.level = target.to_string();
     }
+    for v in &mut out.inverts {
+        v.level = target.to_string();
+    }
     out
 }
 
@@ -475,6 +521,7 @@ fn add(to: &mut Mep, from: Mep, room: usize) {
     to.runs.extend(from.runs.into_iter().take(room));
     to.terminals.extend(from.terminals);
     to.equipment.extend(from.equipment);
+    to.inverts.extend(from.inverts.into_iter().take(MAX_SET_INVERTS.saturating_sub(to.inverts.len())));
 }
 
 /// Put a print set's MEP parts into the spec: what `sheets` read before goes (a re-read
@@ -487,6 +534,7 @@ pub(crate) fn merge_mep(sp: &mut BuildingSpec, mep: Mep, sheets: &[String]) {
         sp.mep.equipment.retain(|e| !e.sources.get("sheet").is_some_and(|s| from(s)));
         let levels: Vec<&str> = mep.terminals.iter().map(|t| t.level.as_str()).collect();
         sp.mep.terminals.retain(|t| !levels.iter().any(|l| l.eq_ignore_ascii_case(&t.level)));
+        sp.mep.inverts.retain(|v| !from(&v.source_sheet));
     }
     let mut next_id = sp.mep.runs.len();
     for sy in mep.systems {
@@ -503,10 +551,19 @@ pub(crate) fn merge_mep(sp: &mut BuildingSpec, mep: Mep, sheets: &[String]) {
     }
     sp.mep.terminals.extend(mep.terminals);
     sp.mep.equipment.extend(mep.equipment);
+    for v in mep.inverts {
+        if sp.mep.inverts.len() >= MAX_SET_INVERTS {
+            break;
+        }
+        if !sp.mep.inverts.contains(&v) {
+            sp.mep.inverts.push(v);
+        }
+    }
     // Nothing is built on the site datum (a site plan's utilities are no building's MEP).
     sp.mep.runs.retain(|r| r.level.trim().is_empty() || building_level(&r.level));
     sp.mep.terminals.retain(|t| t.level.trim().is_empty() || building_level(&t.level));
     sp.mep.equipment.retain(|e| e.level.trim().is_empty() || building_level(&e.level));
+    sp.mep.inverts.retain(|v| v.level.trim().is_empty() || building_level(&v.level));
     ensure_levels(sp);
 }
 
@@ -926,6 +983,36 @@ mod tests {
         assert!(plain.runs > 0, "the same sheet without the note reads its duct: {plain:?}");
         assert!(mep.runs.is_empty(), "{notes:?}");
         assert!(notes.warnings.iter().any(|w| w.contains("notes sheet")), "{notes:?}");
+    }
+
+    #[test]
+    fn a_plumbing_plans_invert_notes_by_its_drains_are_read_and_merged_once() {
+        let mut s = Session::new();
+        // A sanitary line tagged with the legend's letter, an invert by its end, one far off a
+        // drain, and the legend's row naming the abbreviation.
+        s.execute("line", &json!({"points": [[0, 0], [600, 0]]})).expect("line");
+        s.execute("text", &json!({"at": [300, 6], "text": "6\" S", "height": 4})).expect("tag");
+        s.execute("text", &json!({"at": [12, 20], "text": "24\" INVERT", "height": 4})).expect("invert");
+        s.execute("text", &json!({"at": [300, 400], "text": "48\" INVERT", "height": 4})).expect("far");
+        s.execute("text", &json!({"at": [500, 300], "text": "IE INVERT ELEVATION", "height": 4})).expect("legend");
+        let d = s.doc().expect("doc").clone();
+        let sh = SheetRef { rect: [-10.0, -10.0, 700.0, 500.0], ..sheet("P-101", "P", "1", 0.0) };
+        let (mep, read) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        assert!(mep.runs.iter().any(|r| r.system == "SAN"), "{read:?}");
+        assert_eq!(mep.inverts.len(), 1, "{:?}", mep.inverts);
+        let v = &mep.inverts[0];
+        assert_eq!(
+            (v.depth_ft, v.text.as_str(), v.source_sheet.as_str(), v.level.as_str()),
+            (2.0, "24\" INVERT", "P-101", mep.runs[0].level.as_str())
+        );
+        // Into the spec once; a re-read of the sheet replaces its inverts.
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
+        merge_mep(&mut sp, mep.clone(), &["P-101".to_string()]);
+        merge_mep(&mut sp, mep.clone(), &["P-101".to_string()]);
+        assert_eq!(sp.mep.inverts.len(), 1);
+        // A duct read takes none.
+        let (ducts, _) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        assert!(ducts.inverts.is_empty());
     }
 
     /// A duct's two sides with its size tag, and a title block titled `title`.

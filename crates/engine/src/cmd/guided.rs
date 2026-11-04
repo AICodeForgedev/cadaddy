@@ -5664,21 +5664,44 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     route_methods_step(s, job);
     // The slab level's drains its plans give no height (Q6148): under its floor to the building
     // drain, built there, not in its ceiling.
+    let mut drain_slope = Value::Null;
     if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
         let (moved, length) = super::ugplan::slab_drains(&mut sp);
         if moved > 0 {
             let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
             progress_line(&format!(
-                "  slab-level drains under the floor: {moved} runs, {:.0} ft, at the building drain's invert ({} ft, rule; the plans give none)",
+                "  slab-level drains under the floor: {moved} runs, {:.0} ft, at the building drain's invert ({} ft, rule) where the plans give no invert",
                 length / upf,
                 super::ugplan::rules().depths.drain_invert_ft
             ));
+        }
+        // Then sloped between the inverts the plans print by them.
+        let sloped = super::ugplan::slope_drains(&mut sp);
+        if sloped.inverts > 0 {
+            progress_line(&format!(
+                "  slab-level drains sloped between the plans' inverts: {} of {} invert notes on a drain ({} networks, {} runs, {}), {} span(s) flatter than the code's least fall{}",
+                sloped.attached,
+                sloped.inverts,
+                sloped.networks,
+                sloped.runs,
+                sloped.range_ft.map_or_else(|| "no depth".to_string(), |(a, b)| format!("{a:.2}-{b:.2} ft below the floor")),
+                sloped.flatter_than_code,
+                if sloped.unattached.is_empty() { String::new() } else { format!("; no drain by {:?}", sloped.unattached) }
+            ));
+        }
+        if sloped.inverts > 0 {
+            drain_slope = sloped.json();
+        }
+        if moved > 0 || sloped.runs > 0 {
             s.doc_mut()?.building_spec = Some(sp.to_json());
         }
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
+    if !drain_slope.is_null() {
+        result["drain_slope"] = drain_slope;
+    }
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
             "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; outside their level's footprint: {}",
