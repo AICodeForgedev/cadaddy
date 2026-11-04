@@ -1544,8 +1544,8 @@ mod tests {
         // The only circuit of its kind (a smoke damper takes the fire/smoke dampers' circuit).
         assert!(matches!(one("smoke", "Level 4", &[], &panels), CircuitPick::One { circuit: 3, .. }));
         assert_eq!(one("backdraft", "Level 1", &[], &panels), CircuitPick::NoneNamed);
-        assert!(names_room("JANITOR CLOSET E14", "E14") && !names_room("ROOM E140", "E14") && names_room("MECH ROOM", "MECH ROOM"));
-        assert!(!names_room("ROOM", "MECH ROOM") && !names_room("", "E14"));
+        assert!(names_room("JANITOR CLOSET E14", "E14") && !names_room("ROOM E140", "E14") && names_room("PUMP ROOM", "PUMP ROOM"));
+        assert!(!names_room("ROOM", "PUMP ROOM") && !names_room("", "E14"));
     }
 
     fn placed_one(kind: &str, code: &str, at: Vec2, ducts: &[Duct], walls: &[Wall]) -> Placed {

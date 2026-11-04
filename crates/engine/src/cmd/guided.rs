@@ -13065,7 +13065,7 @@ fn dampers_step(
             .collect();
         job.add_finding(
             StageName::BimBuild,
-            &format!("{} rated damper(s) at a rated wall the model has without its rating or not at all", wall_model.len()),
+            &format!("{} rated damper(s) where the architectural plans' rated wall and the wall model differ", wall_model.len()),
             &format!("the architectural plans tag a rated wall where the damper's duct goes, the wall model differs: {}", what.join("; ")),
             2,
             vec!["Check the wall on the architectural plan: type the model's wall with the tagged rating, or add the wall the model lacks".into()],
