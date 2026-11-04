@@ -377,6 +377,43 @@ fn items(s: &mut Session) -> Vec<Item> {
             });
         }
     }
+    // The conduit router's own (Q6152): what it could not route around, and the entry windows
+    // its raceways don't fit, each with both objects, the spot, the clearance and a fix.
+    if let Some(r) = s.doc().ok().and_then(super::conduitroute::stored_report) {
+        for (list, kind) in [("clashes", "clash"), ("conflicts", "conflict")] {
+            for c in r[list].as_array().into_iter().flatten().take(MAX_QUEUED_CLASHES) {
+                let id = format!("RV-R{}", hash(&format!("{list}|{c}")));
+                let title = match kind {
+                    "clash" => format!(
+                        "{} on {} runs into {} {} ({}): {}",
+                        c["a"]["what"].as_str().unwrap_or("conduit"),
+                        c["a"]["circuit"].as_str().unwrap_or_default(),
+                        c["b"]["category"].as_str().unwrap_or_default(),
+                        c["b"]["system"].as_str().unwrap_or_default(),
+                        c["pair"].as_str().unwrap_or_default(),
+                        c["fix"].as_str().unwrap_or_default()
+                    ),
+                    _ => format!("panel {} entry window: {}", c["gear"].as_str().unwrap_or_default(), c["fix"].as_str().unwrap_or_default()),
+                };
+                out.push(Item {
+                    id,
+                    kind,
+                    level: c["level"].as_str().unwrap_or_default().to_string(),
+                    title: cut(&title, 120),
+                    detail: c.clone(),
+                    candidates: vec![
+                        json!({"answer": "reroute", "from": c["fix"]}),
+                        json!({"answer": "coordinated", "from": "accepted as routed (say why)"}),
+                    ],
+                    documents: vec!["the plans of both trades at this spot".into(), "the gear's submittal (its conduit areas)".into()],
+                    documented: false,
+                    rank: 2.5,
+                    key: c.clone(),
+                    system: super::conduitroute::BRANCH_SYSTEM.into(),
+                });
+            }
+        }
+    }
     out.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     out
 }

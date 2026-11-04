@@ -1998,8 +1998,15 @@ fn run_fill(s: &mut Session, _p: &Value) -> Result<Value> {
         Ok((sp, _)) => rehost_devices(s.doc_mut()?, &sp),
         Err(_) => 0,
     };
+    // Their boxes and the raceways' drops go with them.
+    let rerouted = super::conduitroute::follow_reseated(s, reseated);
     let mut r = fill(s)?;
     r["reseated"] = json!(reseated);
+    match rerouted {
+        Some(Ok(v)) => r["rerouted"] = v,
+        Some(Err(e)) => r["reroute_error"] = json!(e.to_string()),
+        None => {}
+    }
     let devices = s.doc().map_or(0, |d| d.model.iter().filter(|e| made(e, DEVID).is_some()).count());
     r["devices"] = json!(devices);
     let n = r["elements"].as_u64().unwrap_or(0);

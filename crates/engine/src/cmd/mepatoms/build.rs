@@ -72,6 +72,25 @@ struct Method {
     conductors: String,
     conductors_source: Source,
     estimated: bool,
+    /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
+    routed: bool,
+}
+
+/// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
+/// (`LP1-1,3,5` holds `LP1-3`).
+fn on_circuit(boxc: &str, circuit: &str) -> bool {
+    if boxc == circuit {
+        return true;
+    }
+    let split = |c: &str| -> Option<(String, Vec<String>)> {
+        let (p, n) = c.trim().split_once('-')?;
+        let nums: Vec<String> = n.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).take(64).collect();
+        (!p.trim().is_empty() && !nums.is_empty()).then(|| (p.trim().to_ascii_uppercase(), nums))
+    };
+    match (split(boxc), split(circuit)) {
+        (Some((pb, nb)), Some((pc, nc))) => pb == pc && nb.iter().all(|n| nc.contains(n)),
+        _ => false,
+    }
 }
 
 /// The 3D path of a run: its plan points at their segments' heights (a change of height is a
@@ -424,6 +443,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let ctag = super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string();
         let tag = circuits.get(ctag.as_str()).copied();
         let estimated = r.height_source == super::super::printcond::ESTIMATED || r.system == super::super::printcond::CIRCUIT_SYSTEM;
+        // A routed run (Q6152) ends at its box's top: moved onto the box's entry like an estimate.
+        let routed = r.height_source == super::super::conduitroute::ROUTED;
         let (circuit, panel) = tag.map_or_else(Default::default, |t| {
             (field(t, "circuit").map(|v| v.0).unwrap_or_default(), field(t, "panel").map(|v| v.0).unwrap_or_default())
         });
@@ -442,8 +463,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // The raceway the documents name (the circuit's, the system's), else the project's wiring
         // method, else the default; a cable system or a cable wiring method is cable.
         let named = tag.and_then(|t| field(t, "conduit")).filter(|(_, s)| s != "default");
-        let from_named =
-            named.as_ref().and_then(|(v, s)| rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), src_of(s, &format!("circuit {circuit}: {v}")))));
+        let from_named = named.as_ref().and_then(|(v, s)| {
+            let src = || src_of(s, &format!("circuit {circuit}: {v}"));
+            rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), src())).or_else(|| rl.cable_named(v).map(|(k, _)| (true, k.to_string(), src())))
+        });
         let from_system = || {
             let words = format!("{} {}", sy.name, sy.layer);
             match sy.kind {
@@ -473,7 +496,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             cable_circuits.insert(circuit.clone());
         }
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated };
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -650,8 +673,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         boxes
             .iter()
             .enumerate()
-            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (b.circuit == circuit || !own_only && !taken.contains(bi)))
-            .map(|(bi, b)| (bi, b.circuit == circuit, Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
+            .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
             .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
             .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(bi, _, _, _)| bi)
@@ -727,7 +750,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     if gap > 3.0 * upf {
                         // Not moved: the route gives no drop to it; the gap is said for review.
                         gaps.push((ci, end, gap / upf));
-                    } else if m.estimated {
+                    } else if m.estimated || m.routed {
                         let before = super::path_ft(&c.pts, upf);
                         land_on(&mut c.pts, end, entry, upf);
                         landing_ft += super::path_ft(&c.pts, upf) - before;
