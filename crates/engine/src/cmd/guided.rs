@@ -5280,18 +5280,20 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A fire alarm plan's symbols with no mark (strobes, horn/strobes): loose strokes, each
         // its legend row's by its drawn sample's shape (Q6167).
         if !legend.is_empty() {
-            let pages = fa_pages_as_drawn(job);
-            let (loose, st) = fa_loose_devices(s.doc()?, job, &legend, &devices, &pages);
+            let (pages, notes) = fa_pages_as_drawn(job);
+            let (loose, mut st) = fa_loose_devices(s.doc()?, job, &legend, &devices, &pages);
+            st.unplaced.extend(notes);
             if !st.sheets.is_empty() {
                 let mut by: BTreeMap<&str, usize> = BTreeMap::new();
                 for dv in &loose {
                     *by.entry(dv.tag.as_str()).or_default() += 1;
                 }
                 progress_line(&format!(
-                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, read as drawn {:?}, fire alarm legend rows {}, copies found {}, off every level {}, a device read there {})",
+                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, read as drawn {:?}, not {:?}, fire alarm legend rows {}, copies found {}, off every level {}, a device read there {})",
                     loose.len(),
                     st.sheets,
                     st.as_drawn,
+                    st.unplaced,
                     st.rows,
                     st.found,
                     st.off_level,
@@ -10953,13 +10955,16 @@ fn fire_alarm_sheets(job: &GuidedJob) -> BTreeSet<String> {
 /// The fire alarm plans' pages read again from the PDFs with every stroke as drawn: no
 /// lettering read off strokes, no repeated clusters made blocks (an import may read a symbol's
 /// circle as a letter, or keep one copy of a symbol with its neighbours for all of them).
-fn fa_pages_as_drawn(job: &GuidedJob) -> BTreeMap<String, cadaddy_doc::Drawing> {
-    let mut out = BTreeMap::new();
+fn fa_pages_as_drawn(job: &GuidedJob) -> (BTreeMap<String, cadaddy_doc::Drawing>, Vec<String>) {
+    let (mut out, mut notes) = (BTreeMap::new(), Vec::new());
     let wanted = fire_alarm_sheets(job);
     if wanted.is_empty() {
-        return out;
+        return (out, notes);
     }
-    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else { return out };
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
+        notes.push("no PDF reader in this build".into());
+        return (out, notes);
+    };
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for c in classified.iter().take(MAX_SHEETS_SCANNED) {
@@ -10967,16 +10972,28 @@ fn fa_pages_as_drawn(job: &GuidedJob) -> BTreeMap<String, cadaddy_doc::Drawing> 
         if out.len() >= MAX_LEGEND_SHEETS || !wanted.contains(&number) || out.contains_key(&number) {
             continue;
         }
-        if let Ok(d) = sheet_page_read(job, c, &mut files, read_pdf, true) {
-            out.insert(number, d);
+        match sheet_page_read(job, c, &mut files, read_pdf, true) {
+            Ok(d) => {
+                out.insert(number, d);
+            }
+            Err(e) => notes.push(format!("{number}: {e}")),
         }
     }
-    out
+    let missing: Vec<String> = wanted
+        .iter()
+        .filter(|n| !out.contains_key(*n) && !notes.iter().any(|x| x.starts_with(&format!("{n}:"))))
+        .map(|n| format!("{n}: not in the print set's current sheets"))
+        .collect();
+    notes.extend(missing);
+    (out, notes)
 }
 
 /// Where a page read again sits in the model: the scale and shift that put its lettering on the
 /// model's copy of the sheet, from the words written once on each (three at least, agreeing).
-fn text_fit(page: &[cadaddy_mepfix::sheet_facts::TextItem], model: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Option<(f64, cadaddy_geom::Vec2)> {
+fn text_fit(
+    page: &[cadaddy_mepfix::sheet_facts::TextItem],
+    model: &[cadaddy_mepfix::sheet_facts::TextItem],
+) -> std::result::Result<(f64, cadaddy_geom::Vec2), String> {
     let once = |texts: &[cadaddy_mepfix::sheet_facts::TextItem]| {
         let mut by: BTreeMap<String, (usize, cadaddy_geom::Vec2)> = BTreeMap::new();
         for t in texts.iter().filter(|t| t.value.trim().chars().count() >= 6 && t.at.x.is_finite() && t.at.y.is_finite()) {
@@ -10989,7 +11006,7 @@ fn text_fit(page: &[cadaddy_mepfix::sheet_facts::TextItem], model: &[cadaddy_mep
     let pairs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2)> =
         once(page).into_iter().filter_map(|(k, p)| m.get(&k).map(|q| (p, *q))).take(MAX_FIT_PAIRS).collect();
     if pairs.len() < 3 {
-        return None;
+        return Err(format!("{} words written once on both (3 needed)", pairs.len()));
     }
     let median = |mut v: Vec<f64>| {
         v.sort_by(f64::total_cmp);
@@ -11004,14 +11021,15 @@ fn text_fit(page: &[cadaddy_mepfix::sheet_facts::TextItem], model: &[cadaddy_mep
             }
         }
     }
-    let k = median(ratios).filter(|k| k.is_finite() && *k > 0.0)?;
-    let off = cadaddy_geom::Vec2::new(
-        median(pairs.iter().map(|(p, q)| q.x - k * p.x).collect())?,
-        median(pairs.iter().map(|(p, q)| q.y - k * p.y).collect())?,
-    );
+    let k = median(ratios).filter(|k| k.is_finite() && *k > 0.0).ok_or("no scale between the words")?;
+    let (Some(x), Some(y)) = (median(pairs.iter().map(|(p, q)| q.x - k * p.x).collect()), median(pairs.iter().map(|(p, q)| q.y - k * p.y).collect()))
+    else {
+        return Err("no shift between the words".into());
+    };
+    let off = cadaddy_geom::Vec2::new(x, y);
     let span = pairs.iter().map(|(_, q)| q.x.abs().max(q.y.abs())).fold(1.0, f64::max);
     let agree = pairs.iter().filter(|(p, q)| (*p * k + off - *q).len() <= 1e-3 * span).count();
-    (agree >= 3 && 2 * agree >= pairs.len()).then_some((k, off))
+    if agree >= 3 && 2 * agree >= pairs.len() { Ok((k, off)) } else { Err(format!("{agree} of {} words in common agree on one place", pairs.len())) }
 }
 
 /// The fire alarm rows of a page's symbol lists as samples to find piece by piece: rows drawn
@@ -11081,8 +11099,9 @@ fn symbol_table_rects(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<[f
 #[derive(Debug, Default)]
 struct LooseStats {
     sheets: Vec<String>,
-    /// The plans read again as drawn and placed by their lettering.
+    /// The plans read again as drawn and placed by their lettering; why others weren't.
     as_drawn: Vec<String>,
+    unplaced: Vec<String>,
     rows: usize,
     found: usize,
     off_level: usize,
@@ -11142,7 +11161,13 @@ fn fa_loose_devices(
         let number = span.sheet.split('/').next().unwrap_or(&span.sheet).trim().to_ascii_uppercase();
         let raw = pages.get(&number).and_then(|page| {
             let ptexts = cadaddy_mepfix::sheet_facts::texts(page);
-            text_fit(&ptexts, &texts).map(|fit| (page, ptexts, fit))
+            match text_fit(&ptexts, &texts) {
+                Ok(fit) => Some((page, ptexts, fit)),
+                Err(why) => {
+                    stats.unplaced.push(format!("{number}: {why}"));
+                    None
+                }
+            }
         });
         let found = match raw {
             Some(_) if !done.insert(number.clone()) => Vec::new(),
@@ -17429,6 +17454,7 @@ mod tests {
         {
             s.execute("text", &json!({"at": at, "text": v, "height": 2.0})).unwrap();
         }
+        let marks = s.doc().unwrap().handseed;
         for x in [1150.0, 1160.0, 1170.0] {
             s.execute("text", &json!({"at": [x, 400.0], "text": "S", "height": 2.0})).unwrap();
         }
@@ -17461,8 +17487,9 @@ mod tests {
         );
         assert_eq!((st.as_drawn.len(), st.rows), (1, 1), "the horn/strobe row only (the pull station's is lettered): {st:?}");
         // Lettering that can't place the page: nothing read off it.
-        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo: hi, hi }];
-        assert!(fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages).0.is_empty());
+        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo: marks, hi }];
+        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages);
+        assert!(none.is_empty() && st.unplaced == ["E-313: 0 words written once on both (3 needed)"], "{st:?}");
     }
 
     #[test]
