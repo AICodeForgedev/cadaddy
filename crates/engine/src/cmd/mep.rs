@@ -289,6 +289,41 @@ pub(crate) fn height_tag(t: &str, section_ft: f64) -> Option<f64> {
     }
 }
 
+/// The deepest invert note read (feet): deeper is a datum's elevation, not a depth.
+const MAX_INVERT_FT: f64 = 20.0;
+
+/// The depth of an invert note by a drain (`24" INVERT`, `INV. 2'-0"`, `IE -4'-0"`), feet below
+/// the finished floor. None for an elevation on a site datum (`IE 645.20`: no foot or inch mark;
+/// `INV 98'-6"`: deeper than any slab's drain), for a positive elevation (`INV EL 4'-0"` is above
+/// the floor or on a datum) and for a legend's row (`IE  INVERT ELEVATION`: no value).
+pub(crate) fn invert_tag(t: &str) -> Option<f64> {
+    let up = t.trim().to_ascii_uppercase();
+    if up.len() > 60 {
+        return None;
+    }
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric() && c != '.').filter(|w| !w.is_empty()).collect();
+    let is_key = |w: &str| matches!(w.trim_end_matches('.'), "INVERT" | "INV" | "IE" | "I.E");
+    let key = words.iter().copied().find(|w| is_key(w))?;
+    // The keyword as a word (`IE` in `SUPPLIES IE 2'` is the second one).
+    let at = up.match_indices(key).map(|(i, _)| i).find(|&i| {
+        let prev = up.get(..i).and_then(|b| b.chars().next_back());
+        let next = up.get(i + key.len()..).and_then(|a| a.chars().next());
+        !prev.is_some_and(|c| c.is_ascii_alphanumeric()) && !next.is_some_and(|c| c.is_ascii_alphanumeric())
+    })?;
+    let (before, after) = (up.get(..at)?, up.get(at + key.len()..)?);
+    let elevation = words.iter().any(|w| matches!(w.trim_end_matches('.'), "EL" | "ELEV" | "ELEVATION"));
+    // The value after the keyword (`INV 24"`), else before it (`24" INVERT`).
+    let (inches, negative) = match feet_inches(after) {
+        Some(v) => (v, after.trim_start_matches(|c: char| c == ' ' || c == '.' || c == ':' || c == '=' || c.is_ascii_alphabetic()).starts_with('-')),
+        None => (feet_inches(before)?, before.trim_start().starts_with('-')),
+    };
+    if elevation && !negative {
+        return None;
+    }
+    let ft = inches / 12.0;
+    (ft.is_finite() && ft > 0.0 && ft <= MAX_INVERT_FT).then_some(ft)
+}
+
 /// Chains of segments joined end to end (polylines stay whole), with their source objects.
 fn chains(ents: &[&Arc<Entity>]) -> Vec<(Vec<Vec2>, Vec<Handle>)> {
     let mut pieces: Vec<(Vec<Vec2>, Vec<Handle>)> = Vec::new();
@@ -620,6 +655,8 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
     ("HWC", "HWR", "Hot Water Return", 0.5, 10.0),
     ("SAN", "SAN", "Sanitary", 3.0, 0.0),
     ("SS", "SAN", "Sanitary", 3.0, 0.0),
+    // Soil / sanitary: the one-letter code plumbing legends give the sanitary line (`6" S`).
+    ("S", "SAN", "Sanitary", 3.0, 0.0),
     ("W", "SAN", "Sanitary Waste", 3.0, 0.0),
     ("V", "V", "Vent", 2.0, 10.0),
     ("G", "G", "Gas", 1.0, 10.0),
@@ -637,7 +674,7 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
 
 /// Abbreviations that require a size prefix (like `1" G`) because they are too short to be
 /// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
-const SHORT_ABBR: &[&str] = &["G", "W", "F", "V"];
+const SHORT_ABBR: &[&str] = &["G", "W", "F", "V", "S"];
 
 /// Parse a pipe system code from a text tag. Returns (size_in, system_code, second system) if
 /// found: a tag can name two systems run side by side (`1/2" HW & CW TO LAVATORY`, `HW/CW`), and
@@ -3410,5 +3447,39 @@ mod tests {
         assert!(draft_system("E-COND").is_some_and(|s| s.kind == MepKind::Conduit));
         assert!(draft_system("E-CABL-TRAY").is_some_and(|s| s.kind == MepKind::Tray && s.size_in == [12.0, 4.0]));
         assert!(draft_system("A-WALL").is_none());
+    }
+
+    #[test]
+    fn a_one_letter_sanitary_code_reads_after_a_size_only() {
+        // A legend's soil/sanitary letter, the way a sanitary plan tags its lines.
+        assert_eq!(parse_pipe_tag("6\" S"), Some((Some(6.0), "SAN", None)));
+        assert_eq!(parse_pipe_tag("3\" S."), Some((Some(3.0), "SAN", None)));
+        assert_eq!(parse_pipe_tag("1 1/2\" S"), Some((Some(1.5), "SAN", None)));
+        assert_eq!(parse_pipe_tag("4\" SAN"), Some((Some(4.0), "SAN", None)));
+        // Alone, a letter S is a grid line, a section mark or a compass point: not a pipe.
+        assert_eq!(parse_pipe_tag("S"), None);
+        assert_eq!(parse_pipe_tag("SECTION S"), None);
+        // A size before another word is no pipe either.
+        assert_eq!(parse_pipe_tag("6\" SLEEVE"), None);
+        assert_eq!(parse_pipe_tag("24\" INVERT"), None);
+    }
+
+    #[test]
+    fn an_invert_note_is_a_depth_below_the_floor_never_a_datum_elevation() {
+        assert_eq!(invert_tag("24\" INVERT"), Some(2.0));
+        assert_eq!(invert_tag("48\" INVERT"), Some(4.0));
+        assert_eq!(invert_tag("INV. 2'-6\""), Some(2.5));
+        assert_eq!(invert_tag("IE -3'-0\""), Some(3.0));
+        assert_eq!(invert_tag("INV EL -1'-6\""), Some(1.5));
+        // A site datum's elevation, a positive elevation, a legend's row, other words: none.
+        assert_eq!(invert_tag("IE 645.20"), None);
+        assert_eq!(invert_tag("INV 98'-6\""), None);
+        assert_eq!(invert_tag("INV EL 4'-0\""), None);
+        assert_eq!(invert_tag("IE INVERT ELEVATION"), None);
+        assert_eq!(invert_tag("6\" S"), None);
+        assert_eq!(invert_tag("INVESTIGATE 24\""), None);
+        assert_eq!(invert_tag("SUPPLIES IE -2'-0\""), Some(2.0));
+        // An invert note is no height tag, no pipe tag.
+        assert_eq!(height_tag("24\" INVERT", 0.5), None);
     }
 }

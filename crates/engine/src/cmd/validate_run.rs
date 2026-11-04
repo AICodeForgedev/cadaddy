@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new(CMD_STATUS, "Validation Run Status", run_status)
             .params(
-                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged}, findings: {total, by_verdict, by_trade, by_rule}, accuracy: {overall, by_trade, by_rule} (pass / (pass+fail+missing+extra)), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, next}: how far the run is and how the model scores",
+                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged}, findings: {total, by_verdict, by_trade, by_rule}, accuracy: {overall, by_trade, by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra)), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, next}: how far the run is and how the model scores",
             )
             .noundo(),
         CommandSpec::new(CMD_PLANT, "Plant Validation Errors", run_plant)
@@ -1442,6 +1442,17 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
         "runs": st.runs.iter().map(|r| json!({"run": r.id, "scope": r.scope["scope"], "areas": r.areas.len(), "done": r.areas.iter().filter(|a| a.status == "done").count()})).collect::<Vec<_>>(),
         "next": if left > 0 { CMD_NEXT } else { "review.list {kind: \"validation\"}" },
     });
+    // The products' accuracy per kind and per field, as the run's prescreen measured them.
+    if let Some(pk) = run.prescreen.get("measured").and_then(|m| m.get("products")).filter(|p| p.is_object()) {
+        let scores = |key: &str| -> serde_json::Map<String, Value> {
+            pk.get(key)
+                .and_then(Value::as_object)
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.get("accuracy").cloned().unwrap_or(Value::Null))).collect())
+                .unwrap_or_default()
+        };
+        out["accuracy"]["products"] = json!({"by_kind": scores("by_kind"), "by_field": scores("by_field")});
+        out["products"] = json!({"by_kind": pk.get("by_kind"), "by_field": pk.get("by_field")});
+    }
     if let Some(plant) = plant_of(d) {
         out["planted"] = planted_report(&plant, run, &all, reveal);
     }
@@ -1458,6 +1469,9 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if out.to_string().len() > super::agentready::ANSWER_MAX {
         out["findings"]["by_rule"] = json!("over the answer's size: see accuracy.by_rule");
+        if out.get("products").is_some() {
+            out["products"] = json!("over the answer's size: see accuracy.products");
+        }
         if let Some(pl) = out.get_mut("planted").and_then(Value::as_object_mut) {
             pl.insert("errors".into(), json!("too many to list here"));
         }

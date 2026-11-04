@@ -216,6 +216,70 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A device in no room stands in a corridor the plans trace: that is its room (the takeoff
+/// counts the corridor's receptacles by it).
+#[test]
+fn a_device_in_a_corridor_is_in_the_corridor() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = sp["tags"].as_array_mut() {
+        t.push(device(80.0, 5.0, "C", "", "1F9"));
+    }
+    sp["circulation"] = json!([{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [960, 60], "rects": [[[900, 0], [1100, 120]]]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = fill(&mut s);
+    let c = device_of(&mut s, "C");
+    assert_eq!(c["room"]["value"], "CORRIDOR", "{c:#}");
+    assert_eq!(r["devices_in_no_room"], json!({}), "{r:#}");
+}
+
+/// A general note's panelboard height to top puts each scheduled panel on a wall at its centre
+/// (the top less half its box), from the note; a person's height stays.
+#[test]
+fn a_notes_panelboard_height_to_top_is_each_wall_panels() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["bottom_ft"] = json!(3.0);
+    sp["mep"]["equipment"][1]["height_ft"] = json!(3.5);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s
+        .execute("bim.props.fill", &json!({"panel_top_in": 78.0, "panel_top_doc": "E-1 general note: PANELBOARDS 6'-6\" AFF TO TOP"}))
+        .expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
+    let lp = find(&mut s, "equipment", json!({"type_mark": "LP1"}));
+    let el = get(&mut s, &lp[0]);
+    let h = &el["mount_height"];
+    // A 42" box whose top is at 78": its centre at 57".
+    assert_eq!(h["value"], json!(57.0), "{el:#}");
+    assert_eq!(h["source"]["kind"], "note");
+    // One of a typical panel's (the guest rooms' `LP1-201` of the schedule's `LP1`) too.
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["tag"] = json!("LP1-201");
+    sp["mep"]["equipment"][1]["circuits"] = json!([]);
+    sp["mep"]["panel_schedules"] = json!([{"panel": "LP1", "circuits": []}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("bim.props.fill", &json!({"panel_top_in": 78.0})).expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
+}
+
+/// A typical room's unit keeps its devices to what the build stamped and booked into it: a read
+/// device standing in it is in it as a model element, but its spec tag isn't given the unit.
+#[test]
+fn a_units_room_is_not_written_onto_unbooked_devices_tags() {
+    let mut s = plan();
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "102", "type": "Q", "hand": "normal"}]}})).expect("units");
+    let r = fill(&mut s);
+    assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102", "the element stands in it");
+    assert_eq!(r["device_tags_roomed"], json!(2), "the two outside the unit: {r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> =
+        sp["spec"]["tags"].as_array().into_iter().flatten().filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string)).collect();
+    assert!(!rooms.iter().any(|r| r == "102"), "{rooms:?}");
+}
+
 #[test]
 fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location() {
     let mut s = plan();
@@ -257,6 +321,18 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert!(sw["panel"].is_null(), "{sw:#}");
     assert_eq!(sw["fed_from"]["value"], "circuit 12");
     assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102");
+    // The spec's read devices carry their rooms too (the takeoff counts by room).
+    assert_eq!(r["device_tags_roomed"], json!(4), "{r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> = sp["spec"]["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["id"].as_str().is_some_and(|i| i.starts_with("device:")))
+        .filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(rooms.len(), 4, "{rooms:?}");
+    assert!(rooms.iter().any(|r| r == "101") && rooms.iter().any(|r| r == "102"), "{rooms:?}");
     // No circuit printed: none presented.
     let j = device_of(&mut s, "J");
     assert!(j["circuit"].is_null() && j["fed_from"].is_null(), "{j:#}");

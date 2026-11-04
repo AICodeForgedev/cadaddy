@@ -100,7 +100,7 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
         if mine_runs.contains(&i) || !on_level(&r.level) || r.points.len() < 2 || !r.points.iter().any(inside) {
             continue;
         }
-        if r.system != super::super::conduitroute::BRANCH_SYSTEM && r.system != super::super::gearbuild::FEEDER_SYSTEM {
+        if r.system != super::super::conduitroute::BRANCH_SYSTEM && !super::super::ugplan::is_feeder_run(r) {
             continue;
         }
         let _ = writeln!(s, r##"<polyline points="{}" fill="none" stroke="#b0b0b0" stroke-width="1"/>"##, path_of(r));

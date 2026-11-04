@@ -1,5 +1,5 @@
 {
-  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen reads the same file. The lighting step reads E-LIGHT-OCC (the energy code's occupant-sensor spaces and a guest room's master control).",
+  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen and its G-PRODUCT-CODE rule (TR, GFCI by circuit, WR outdoors) read the same file. The lighting step reads E-LIGHT-OCC (the energy code's occupant-sensor spaces and a guest room's master control).",
   "rules": [
     {
       "id": "E-RECEPT-TR",
@@ -12,6 +12,8 @@
       ],
       "sets": "tamper_resistant",
       "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
+      "max_amps": 20,
+      "max_volts": 250,
       "rooms": {
         "unit_rooms": true,
         "name_words": [
@@ -63,6 +65,30 @@
         {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)"},
         {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)"},
         {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)"}
+      ]
+    },
+    {
+      "id": "E-RECEPT-WR",
+      "cite": "NEC 406.9(A), (B)",
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "weatherproof_receptacle"
+      ],
+      "sets": "weather_resistant",
+      "rule": "A 15 or 20 A, 125 or 250 V nonlocking receptacle in a damp or wet location (outdoors: an exterior wall, a roof, a balcony, a patio or deck) is a listed weather-resistant type. In our own words: verify with the authority having jurisdiction.",
+      "places": [
+        {"all": ["EXTERIOR"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["OUTDOOR"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["OUTSIDE"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["ROOF"], "cite": "NEC 406.9 (roof)"},
+        {"all": ["ROOFTOP"], "cite": "NEC 406.9 (roof)"},
+        {"all": ["BALCONY"], "cite": "NEC 406.9 (balcony)"},
+        {"all": ["PATIO"], "cite": "NEC 406.9 (patio)"},
+        {"all": ["DECK"], "cite": "NEC 406.9 (deck)"},
+        {"all": ["TERRACE"], "cite": "NEC 406.9 (terrace)"},
+        {"all": ["POOL"], "cite": "NEC 406.9 (pool area)"}
       ]
     },
     {

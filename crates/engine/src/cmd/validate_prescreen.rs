@@ -42,6 +42,11 @@
 //!     box or conduit of another size, conduit off its route), `missing`, or `unsure` (a size or
 //!     route nothing measures); the rated walls and floors keynote conduit passes are listed with
 //!     the rating its firestopping keeps.
+//!   - **G-PRODUCT, G-PRODUCT-CODE**: every product's record field by field against its
+//!     submittal and specification section, and every receptacle's code-required features where
+//!     it is (tamper-resistant, GFCI judged on its whole circuit, weather-resistant), from the
+//!     code rules data the build applies too ([`super::validate_product`]). `products` counts
+//!     them per kind and per field; a field the model doesn't know is `unsure`.
 //!
 //! Project-rule sets are never built in: domain `custom`, key
 //! `prescreen.expect.<room type>`, value a list such as
@@ -87,7 +92,7 @@ pub const CMD: &str = "validate.prescreen";
 /// The project-rule key prefix of a room type's expected set.
 pub const EXPECT_PREFIX: &str = "prescreen.expect.";
 /// The rules the prescreen measures.
-pub const RULES: [&str; 12] = [
+pub const RULES: [&str; 14] = [
     "G-HOST",
     "G-HEIGHT",
     super::walllayout::RULE,
@@ -100,6 +105,8 @@ pub const RULES: [&str; 12] = [
     super::validate_lighting::THREE_WAY,
     super::validate_lighting::COUNT,
     super::validate_keynote::RULE,
+    super::validate_product::RULE,
+    super::validate_product::CODE,
 ];
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
@@ -122,7 +129,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known)")
             .noundo()
             .files(),
     ]
@@ -701,6 +708,8 @@ pub(crate) struct Screened {
     /// The elements in no area of their level (outside every room, more than a foot off any
     /// room's wall line): each with the nearest area and how far off it is (Q6160).
     pub no_room: Vec<Value>,
+    /// G-PRODUCT's and G-PRODUCT-CODE's counts per kind and per field.
+    pub products: super::validate_product::Tally,
 }
 
 /// G-PRESENT's counts: rooms checked and verdicts, per room type and per level, and the rooms
@@ -804,6 +813,7 @@ impl Screened {
             "rooms_without_set": self.without_set.len(),
             "present": self.present.to_json(),
             "conflicts": {"total": conflicts.len(), "from_build": conflicts.iter().filter(|f| f["source"] == "build").count(), "items": listed},
+            "products": if self.products.is_empty() { Value::Null } else { self.products.to_json() },
         })
     }
 }
@@ -1130,11 +1140,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmeasured.remove(&r.rule.id);
         }
     }
-    let units = if on("G-PRESENT").is_some() || on(super::validate_tr::RULE).is_some() { Units::of(sc.d) } else { Units(HashMap::new()) };
+    let product_on = super::validate_product::RULES.iter().any(|id| on(id).is_some());
+    let units = if on("G-PRESENT").is_some() || on(super::validate_tr::RULE).is_some() || on(super::validate_product::CODE).is_some() {
+        Units::of(sc.d)
+    } else {
+        Units(HashMap::new())
+    };
     // An element on its room's wall line (just outside the outline) is that room's, as in the
     // packets: the nearest room of its level within a foot, when that room is in scope.
     let lighting_on = super::validate_lighting::RULES.iter().any(|id| on(id).is_some());
-    let level_rooms: Vec<Area> = if (on(super::validate_tr::RULE).is_some() || lighting_on) && mine.iter().any(|(_, a)| a.is_none()) {
+    let level_rooms: Vec<Area> = if (on(super::validate_tr::RULE).is_some() || lighting_on || product_on) && mine.iter().any(|(_, a)| a.is_none()) {
         super::validate_packet::model_areas(sc.d, sc.frame)
     } else {
         Vec::new()
@@ -1223,7 +1238,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     }
     // The lighting rules (E-LUM-*, E-SWITCH-*).
     let mut lighting: Option<super::validate_lighting::Found> = None;
-    if lighting_on {
+    let mut product: Option<super::validate_product::Found> = None;
+    if lighting_on || product_on {
         use super::validate_lighting as vl;
         let by_id: HashMap<String, &v::Element> = sc.model.elements.iter().take(MAX_ELEMENTS).map(|e| (e.id.to_ascii_uppercase(), e)).collect();
         let lits: Vec<vl::Lit> = mine
@@ -1243,9 +1259,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 room: a.or_else(|| on_wall_line(it)),
             })
             .collect();
-        let inp =
-            vl::Input { d: sc.d, sp: sc.sp, frame: sc.frame, prints: sc.prints, kinds: &kinds, rules: sc.rules, areas: sc.areas, only: sc.only };
-        lighting = Some(vl::screen(&inp, &lits));
+        if lighting_on {
+            let inp =
+                vl::Input { d: sc.d, sp: sc.sp, frame: sc.frame, prints: sc.prints, kinds: &kinds, rules: sc.rules, areas: sc.areas, only: sc.only };
+            lighting = Some(vl::screen(&inp, &lits));
+        }
+        // The products (G-PRODUCT, G-PRODUCT-CODE).
+        if product_on {
+            let inp = super::validate_product::Input { d: sc.d, sp: sc.sp, prints: sc.prints, rules: sc.rules, only: sc.only, units: &units };
+            product = Some(super::validate_product::screen(&inp, &lits));
+        }
     }
     // G-LAYOUT: each wall device placed relative to its named face (Q6174): its face, its
     // height (hard), its along-face offset (soft: solved in the framing), its ties to casework and
@@ -1564,6 +1587,23 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmeasured.remove(vk::RULE);
         }
     }
+    let mut products = super::validate_product::Tally::default();
+    if let Some(found) = product {
+        for (rule, verdicts) in found.checked {
+            let into = checked.entry(rule).or_default();
+            for (v, n) in verdicts {
+                *into.entry(v).or_default() += n;
+            }
+        }
+        for (rule, whys) in found.unmeasured {
+            let into = unmeasured.entry(rule).or_default();
+            for (w, n) in whys {
+                *into.entry(w).or_default() += n;
+            }
+        }
+        findings.extend(found.findings);
+        products = found.tally;
+    }
     if let Some(lit) = lighting {
         for (rule, verdicts) in lit.checked {
             let into = checked.entry(rule).or_default();
@@ -1602,6 +1642,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         unmatched,
         unmeasured,
         present,
+        products,
     }
 }
 
@@ -1753,6 +1794,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "rooms_without_set": out.without_set.iter().take(20).collect::<Vec<_>>(),
         "no_room": {"elements": out.no_room.len(), "first": out.no_room.iter().take(10).collect::<Vec<_>>()},
         "present": out.present.to_json(),
+        "products": if out.products.is_empty() { Value::Null } else { out.products.to_json() },
         "disabled": out.disabled,
         "ms": start.elapsed().as_millis() as u64,
     });

@@ -1562,6 +1562,65 @@ pub fn open_conflicts(d: &Drawing) -> Vec<Conflict> {
     stored(d).conflicts.into_iter().filter(|c| c.open).collect()
 }
 
+/// Conflicts another step finds between a document and the model (a drawn dimension and the
+/// model's position, Q6178): each `(element, kind, values)` in `raised` is opened on field `key`
+/// (or kept open with these values; one already settled with the same values stays settled),
+/// and an open one on an element in `agree` closes (the two agree now). The ids raised.
+pub(crate) fn raise_conflicts(
+    s: &mut Session,
+    key: &str,
+    raised: &[(cadaddy_doc::Handle, String, Vec<Given>)],
+    agree: &[cadaddy_doc::Handle],
+) -> Result<Vec<String>> {
+    if raised.is_empty() && agree.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut st = stored(s.doc()?);
+    let mut ids = Vec::new();
+    let mut changed = false;
+    for (h, kind, values) in raised {
+        let hex = h.hex();
+        let id = conflict_id(&hex, key);
+        let values: Vec<Given> = values.iter().take(16).cloned().collect();
+        let full = st.conflicts.len() >= MAX_CONFLICTS;
+        match st.conflicts.iter_mut().find(|c| c.id == id) {
+            Some(c) if c.values == values => {}
+            Some(c) => {
+                c.values = values;
+                c.open = true;
+                c.answer = None;
+                changed = true;
+            }
+            None if !full => {
+                st.conflicts.push(Conflict {
+                    id: id.clone(),
+                    handle: hex,
+                    kind: kind.clone(),
+                    key: key.to_string(),
+                    values,
+                    open: true,
+                    answer: None,
+                });
+                changed = true;
+            }
+            None => continue,
+        }
+        ids.push(id);
+    }
+    for h in agree {
+        let id = conflict_id(&h.hex(), key);
+        if let Some(c) = st.conflicts.iter_mut().find(|c| c.id == id && c.open) {
+            c.open = false;
+            c.answer = Some(json!("the model agrees with the document now"));
+            changed = true;
+        }
+    }
+    if changed {
+        save(s, &st)?;
+    }
+    Ok(ids)
+}
+
 /// Settle conflict `id`: the field takes `answer` (a person's or agent's decision, citing the
 /// document that settles it), and the conflict closes.
 pub fn resolve_conflict(s: &mut Session, id: &str, answer: &Value, cite: &str, who: &str) -> Result<()> {

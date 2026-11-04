@@ -462,6 +462,114 @@ fn a_sewer_across_a_feeder_is_one_crossing_marked_on_the_sheet() {
 }
 
 #[test]
+fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_or_a_pothole_warning_not_an_error() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // A feeder's leg into its panel (along y, 10 ft or longer) with nothing else near it.
+    let buried = buried_segments(&sp);
+    let (feeder, at) = buried
+        .iter()
+        .find_map(|(id, ss)| {
+            let (a, b) = *ss.last()?;
+            if (a[0] - b[0]).abs() > 1e-6 || (a[1] - b[1]).abs() < 10.0 {
+                return None;
+            }
+            let at = [a[0] + 0.5, (a[1] + b[1]) / 2.0];
+            let pipe: Seg = ([at[0], at[1] - 1.0], [at[0], at[1] + 1.0]);
+            buried.iter().filter(|(o, _)| o != id).all(|(_, oss)| oss.iter().all(|o| seg_dist(*o, pipe) > 1.25)).then(|| (id.clone(), at))
+        })
+        .expect("a feeder leg with nothing else near it");
+    // CADaddy proposes that feeder under the slab (not called), and a pipe below the floor runs
+    // 6" beside it, 8" below it: too close.
+    for r in sp["mep"]["runs"].as_array_mut().unwrap().iter_mut().filter(|r| r["id"] == feeder.as_str()) {
+        r["height_source"] = json!("proposed");
+        r["source_sheet"] = json!("feeder 604 MSB→P1");
+    }
+    sp["mep"]["systems"].as_array_mut().unwrap().push(json!({"name": "P-SAN", "layer": "P-SAN", "kind": "pipe", "size_in": [4, 4], "bottom_ft": -3}));
+    sp["mep"]["runs"].as_array_mut().unwrap().push(json!({"id": "SAN-1", "system": "P-SAN", "level": "1",
+        "points": [[at[0] * 12.0, (at[1] - 1.0) * 12.0], [at[0] * 12.0, (at[1] + 1.0) * 12.0]], "size_in": [4, 4], "bottoms_ft": [-3]}));
+    let mut s = session_with(sp.clone());
+    let r = s.execute("ugsheets.check", &json!({"clearance_in": 12})).unwrap();
+    let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
+    assert_eq!(xs.len(), 1, "{r}");
+    assert_eq!((xs[0]["vertical_separation_in"].clone(), xs[0]["severity"].clone()), (json!(8.0), json!("review")), "{}", xs[0]);
+    assert!(xs[0]["message"].as_str().unwrap().starts_with("proposed "), "{}", xs[0]);
+    let errors_before = r["errors"].as_u64().unwrap();
+    assert_eq!(r["reviews"], json!(1), "{r}");
+    assert!(!r["findings"].as_array().unwrap().iter().any(|f| f["check"] == "crossing" && f["severity"] == "error"));
+    // Each review is an RFI (a review item), once: a second review adds none.
+    let v = s.execute("ugsheets.review", &json!({})).unwrap();
+    assert_eq!(v["errors"].as_u64(), Some(errors_before));
+    let list = s.execute("rfi.list", &json!({})).unwrap();
+    let items: Vec<&Value> = list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").collect();
+    assert_eq!(items.len(), 1, "{list}");
+    assert!(items[0]["issue"].as_str().unwrap().contains("SAN-1"), "{}", items[0]);
+    assert_eq!(items[0]["status"], json!("open"));
+    let again = s.execute("ugsheets.review", &json!({})).unwrap();
+    assert!(!again["rfis"].as_array().unwrap().iter().any(|id| v["rfis"].as_array().unwrap().contains(id)), "{again}");
+    let list = s.execute("rfi.list", &json!({})).unwrap();
+    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 1);
+    // On the sheet's notes for review, not as an RFI-before-the-slab error.
+    let b = s.execute("ugsheets.build", &json!({})).unwrap();
+    let layout = b["sheets"][0]["layout"].as_str().unwrap().to_string();
+    let all = texts_of(&s, &layout).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
+    assert!(all.contains("REVIEW WITH THE ROUTING RFI"), "{all}");
+
+    // The same pipe at the rule's depth (a slab drain no printed invert reaches): pothole and
+    // confirm, a warning, and no RFI.
+    for r in sp["mep"]["runs"].as_array_mut().unwrap().iter_mut().filter(|r| r["id"] == "SAN-1") {
+        r["height_source"] = json!("below the slab: rule (2 ft)");
+    }
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"clearance_in": 12})).unwrap();
+    let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
+    assert_eq!((xs.len(), xs[0]["severity"].clone(), r["reviews"].clone()), (1, json!("warning"), json!(0)), "{r}");
+    assert!(xs[0]["fix"].as_str().unwrap().starts_with("drain depth by rule, no invert shown: pothole and confirm"), "{}", xs[0]);
+    let v = s.execute("ugsheets.review", &json!({})).unwrap();
+    let list = s.execute("rfi.list", &json!({})).unwrap();
+    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 0, "{v}");
+}
+
+#[test]
+fn a_crowded_plans_runs_are_tagged_once_per_chain_and_never_on_top_of_each_other() {
+    let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
+    let mut sp = spec(&t);
+    // Forty short pieces of one 4" drain end to end, and ten branches stacked 2" apart: one
+    // tag for the drain, and no tag drawn over another.
+    sp["mep"]["systems"].as_array_mut().unwrap().push(json!({"name": "P-SAN", "layer": "P-SAN", "kind": "pipe", "size_in": [4, 4], "bottom_ft": -2}));
+    let runs = sp["mep"]["runs"].as_array_mut().unwrap();
+    let (x0, y0) = (20.0 * 12.0, 30.0 * 12.0);
+    for i in 0..40 {
+        let a = x0 + f64::from(i) * 24.0;
+        runs.push(json!({"id": format!("D{i}"), "system": "P-SAN", "level": "1", "points": [[a, y0], [a + 24.0, y0]], "size_in": [4, 4], "bottoms_ft": [-2]}));
+    }
+    for i in 0..10 {
+        let y = y0 + 24.0 + f64::from(i) * 2.0;
+        runs.push(json!({"id": format!("B{i}"), "system": "P-SAN", "level": "1", "points": [[x0, y], [x0 + 60.0, y]], "size_in": [2, 2], "bottoms_ft": [-2]}));
+    }
+    let mut s = session_with(sp);
+    let b = s.execute("ugsheets.build", &json!({"trade": "P", "number": "P-090"})).unwrap();
+    let sh = &b["sheets"][0];
+    let layout = sh["layout"].as_str().unwrap().to_string();
+    let texts = texts_of(&s, &layout);
+    // The drain's pieces: one tag for the chain (with how many more runs), and every piece in
+    // the run schedule.
+    let tags: Vec<&(String, [f64; 2])> = texts.iter().filter(|(x, _)| x.contains("\" P-SAN @") && x.starts_with('D')).collect();
+    assert_eq!(tags.len(), 1, "{tags:?}");
+    assert!(tags[0].0.contains("(+39 RUNS)"), "{}", tags[0].0);
+    for i in 0..40 {
+        let id = format!("D{i}");
+        assert!(texts.iter().any(|(x, _)| *x == id), "{id} in the run schedule");
+    }
+    // The branches 2" apart (their 0.08" tags overlap at any of the plan's scales): some
+    // skipped, said so.
+    let branch_tags = texts.iter().filter(|(x, _)| x.starts_with('B') && x.contains("@")).count();
+    assert!((1..10).contains(&branch_tags), "{branch_tags}");
+    assert!(sh["labels_skipped"].as_u64().unwrap() >= 1, "{sh}");
+    assert_eq!(sh["run_labels"].as_u64().unwrap() as usize, texts.iter().filter(|(x, _)| x.contains("\" BFF")).count(), "{sh}");
+}
+
+#[test]
 fn bends_and_encasement_are_reported() {
     let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
     let mut sp = spec(&t);

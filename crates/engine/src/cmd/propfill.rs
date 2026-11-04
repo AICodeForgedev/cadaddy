@@ -22,7 +22,7 @@
 //! Nothing that was not read is presented as read: assumptions are `default` or `rule`, what the
 //! model gives is `computed`, and a person's value (`user`) is never replaced.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, RawTag, Space};
@@ -72,7 +72,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -1597,7 +1597,7 @@ fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
 /// Fill the built model's elements from what the readers found; per kind, how many values went
 /// on each key.
 pub(crate) fn fill(s: &mut Session) -> Result<Value> {
-    let (sp, stored) = super::bspec::current(s, FILL)?;
+    let (mut sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
     let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
@@ -1651,6 +1651,19 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     let mut untyped_boxes = 0usize;
     // Devices in no room, per level.
     let mut no_room: BTreeMap<String, usize> = BTreeMap::new();
+    // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
+    // tag id: the room their element stands in, for the spec's tags too.
+    let mut tag_rooms: Vec<(String, String)> = Vec::new();
+    // Not into a typical room's unit: its devices are its plans' (stamped and booked by the build),
+    // not another trade's or a floor above's that stands over it.
+    let unit_rooms: BTreeSet<String> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u.get("number").and_then(serde_json::Value::as_str))
+        .map(|n| n.trim().to_ascii_uppercase())
+        .collect();
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -1708,11 +1721,43 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .map(|f| f.value.trim().to_string())
                     .filter(|r| !r.is_empty());
                 match (served, stamped) {
-                    (Some((r, note)), _) => put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally),
+                    (Some((r, note)), stamped) => {
+                        if stamped.is_none()
+                            && !unit_rooms.contains(&r.label.trim().to_ascii_uppercase())
+                            && let Some(id) = made(e, DEVID)
+                        {
+                            tag_rooms.push((id, r.label.clone()));
+                        }
+                        put(&mut store, "room", Prop::new(r.label.clone(), Source::computed()).with_note(note), tally);
+                    }
                     (None, Some(r)) => {
                         put(&mut store, "room", Prop::new(r, Source::computed()).with_note("the typical room it was stamped into"), tally)
                     }
-                    (None, None) => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                    (None, None) => {
+                        // Not in a room: the corridor, stair or hoistway it stands in (or is on the
+                        // wall of, within a foot), from the plans' circulation spaces.
+                        let q = c - shift;
+                        let reach = ROOM_NEAR_FT * upf;
+                        let probes = [[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]];
+                        let space = sp.circulation.iter().find(|cs| {
+                            lvl.is_some_and(|l| cs.level.eq_ignore_ascii_case(l)) && !cs.name.trim().is_empty() && probes.iter().any(|p| cs.holds(*p))
+                        });
+                        match space {
+                            Some(cs) => {
+                                let name = cs.name.trim().to_string();
+                                if let Some(id) = made(e, DEVID) {
+                                    tag_rooms.push((id, name.clone()));
+                                }
+                                let what = match cs.kind {
+                                    cadaddy_walk3d::CirculationKind::Corridor => "corridor",
+                                    cadaddy_walk3d::CirculationKind::Stair => "stair",
+                                    cadaddy_walk3d::CirculationKind::Hoistway => "hoistway",
+                                };
+                                put(&mut store, "room", Prop::new(name, Source::computed()).with_note(&format!("the {what} it stands in")), tally);
+                            }
+                            None => *no_room.entry(lvl.unwrap_or("").to_string()).or_default() += 1,
+                        }
+                    }
                 }
                 if let Some((wh, _)) = host {
                     if built_host.is_none() {
@@ -1981,7 +2026,22 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
             changes.push((*h, store));
         }
     }
+    // The spec's read devices with no room take their element's (the takeoff counts by room).
+    let mut tags_roomed = 0usize;
+    if stored && !tag_rooms.is_empty() {
+        let at: HashMap<&str, &str> = tag_rooms.iter().map(|(id, r)| (id.as_str(), r.as_str())).collect();
+        for t in sp.tags.iter_mut().take(MAX_ELEMENTS * 4) {
+            let Some(r) = at.get(t.id.as_str()) else { continue };
+            if t.fields.get("room").is_none_or(|f| f.value.trim().is_empty()) {
+                t.set("room", (*r).to_string(), "computed");
+                tags_roomed += 1;
+            }
+        }
+    }
     let d = s.doc_mut()?;
+    if tags_roomed > 0 {
+        d.building_spec = Some(sp.to_json());
+    }
     let mut changed = 0usize;
     for (h, store) in changes {
         if d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).is_ok() {
@@ -1998,7 +2058,73 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
-    Ok(json!({ "filled": filled, "elements": changed, "spec": stored, "wall_boxes_untyped": untyped_boxes, "devices_in_no_room": no_room }))
+    Ok(json!({
+        "filled": filled,
+        "elements": changed,
+        "spec": stored,
+        "wall_boxes_untyped": untyped_boxes,
+        "devices_in_no_room": no_room,
+        "device_tags_roomed": tags_roomed,
+    }))
+}
+
+/// Gear standing within this of its floor stands on it (a switchboard), inches: no wall height.
+const FLOOR_GEAR_IN: f64 = 6.0;
+
+/// Each scheduled panel on a wall (its box clear of the floor), and each of a typical panel's
+/// (`G-101` of the schedule's `G`), takes its height from a note's
+/// height to its top: its centre is that less half its box, from the note, unless a person or a
+/// print gave it one. How many.
+pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<usize> {
+    let (sp, _) = super::bspec::current(s, FILL)?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let scheduled: BTreeSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| !e.circuits.is_empty())
+        .map(|e| e.tag.trim().to_ascii_uppercase())
+        .chain(sp.mep.panel_schedules.iter().map(|p| p.panel.trim().to_ascii_uppercase()))
+        .collect();
+    let d = s.doc()?;
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    // The whole model, as `fill` looks at it (a print set's imported sheets come first).
+    for e in d.model.iter().take(MAX_ELEMENTS * 4) {
+        if super::elemprops::element_kind(e).as_deref() != Some("equipment") {
+            continue;
+        }
+        let Some(tag) = made(e, "tag").map(|t| t.trim().to_ascii_uppercase()) else { continue };
+        // A scheduled panel, or one of a typical panel's (`G-101` of the guest rooms' `G`).
+        let typical = tag.rsplit_once('-').is_some_and(|(base, _)| scheduled.contains(base.trim()));
+        if !scheduled.contains(&tag) && !typical {
+            continue;
+        }
+        let Some((_, z0, z1)) = extent(d, e) else { continue };
+        let floor = super::bspec::made_level(e).and_then(|l| sp.level(&l).map(|l| l.elevation_ft * upf)).unwrap_or(0.0);
+        let (lo, hi) = ((z0 - floor) / upf * 12.0, (z1 - floor) / upf * 12.0);
+        if !lo.is_finite() || !hi.is_finite() || hi <= lo || lo <= FLOOR_GEAR_IN {
+            continue;
+        }
+        let mut store = props::read(&e.common.xdata);
+        if store.get("mount_height").is_some_and(|p| !matches!(p.source.kind, SourceKind::Default | SourceKind::Rule)) {
+            continue;
+        }
+        let centre = round2(top_in - (hi - lo) / 2.0);
+        store.set(
+            "mount_height",
+            Prop::new(centre, Source::from_doc(SourceKind::Note, doc)).with_unit("in").with_note("the note's height to its top, less half its box"),
+        );
+        changes.push((e.handle, store));
+    }
+    let n = changes.len();
+    let d = s.doc_mut()?;
+    for (h, store) in changes {
+        d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).ok();
+    }
+    if n > 0 {
+        s.touch();
+    }
+    Ok(n)
 }
 
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.
@@ -2011,7 +2137,7 @@ fn sheet_at(sp: &BuildingSpec, p: Vec2, level: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn run_fill(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     // A device whose wall is gone (merged into another) goes in the wall there now first.
     let reseated = match super::bspec::current(s, FILL) {
         Ok((sp, _)) => rehost_devices(s.doc_mut()?, &sp),
@@ -2025,6 +2151,11 @@ fn run_fill(s: &mut Session, _p: &Value) -> Result<Value> {
         Some(Ok(v)) => r["rerouted"] = v,
         Some(Err(e)) => r["reroute_error"] = json!(e.to_string()),
         None => {}
+    }
+    // A general note's panelboard height (`PANELBOARDS 6'-6" AFF TO TOP`): each wall panel's.
+    if let Some(top) = p.get("panel_top_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0 && *v < 240.0) {
+        let doc = super::str_param(p, "panel_top_doc").unwrap_or("general note");
+        r["panels_heighted"] = json!(panel_heights(s, top, doc)?);
     }
     let devices = s.doc().map_or(0, |d| d.model.iter().filter(|e| made(e, DEVID).is_some()).count());
     r["devices"] = json!(devices);

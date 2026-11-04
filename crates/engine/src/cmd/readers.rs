@@ -1538,7 +1538,9 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
             _ => format!("{read} {tag}"),
         };
         e.set("device_type", item, "plan");
-        let detector = read == "fire alarm device" && matches!(tag.to_ascii_uppercase().as_str(), "S" | "SD" | "H" | "HD" | "D" | "DD");
+        // A smoke, heat or duct detector: `S`, `SD`, or its mark with a subscript (`SR`).
+        let up = tag.to_ascii_uppercase();
+        let detector = read == "fire alarm device" && up.chars().count() <= 2 && up.starts_with(['S', 'H', 'D']);
         if read == "wall luminaire" {
             e.set("mount", "wall", "submittal");
         } else if luminaire || detector {

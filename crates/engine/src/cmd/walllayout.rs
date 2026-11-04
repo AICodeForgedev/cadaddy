@@ -30,6 +30,7 @@
 //! General: nothing here knows a job; sizes and bands are rules data, everything else is read
 //! from the model and the documents.
 
+mod drawn;
 mod faces;
 mod solve;
 
@@ -55,6 +56,7 @@ pub const FOLLOW: &str = "bim.layout.follow";
 pub const LAYOUT: &str = "bim.layout";
 pub const CONSTRAIN: &str = "bim.layout.tie";
 pub const OBJECT: &str = "bim.layout.object";
+pub const DIMS: &str = "bim.layout.dims";
 /// The prescreen rule.
 pub const RULE: &str = "G-LAYOUT";
 
@@ -105,6 +107,10 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{room: number or name, level?, draw?: bool (a layout sheet with each face unfolded and dimension strings from its reference faces), north?} → {room, level, faces: [{name, wall_type, length, openings, devices: [{handle, text, ...}]}], text, sheet?}: the room's faces with their devices in field terms (\"1201/S: REC 18 in AFF ctr (hard); 15 in from 1201/E target, band ±6 in, pending framing; plate standard 1-gang 2.75 x 4.5 in\")"),
         CommandSpec::new(CONSTRAIN, "Tie a Device to an Object", run_constrain)
             .params("{handle: device, ref: object handle or tag, ref_point?: center|edge|face (center), axis?: along|vertical|both (along), target_in?: 0, plus_minus_in: number, inside?: bool, follow?: bool (true: it moves with the object), source?: where the documents say it (an elevation, a shop drawing, a submittal's rough-in)} → {handle, constraint}: ties a device's placement to another object with a tolerance band; G-LAYOUT checks it and bim.layout.follow keeps it"),
+        CommandSpec::new(DIMS, "Read Drawn Dimensions", run_dims)
+            .params("{sheet?: number, kind?: device|face|opening|casework|none (list only the dimensions with an end on that), north?, limit?: (20)} → {read, placed, devices_documented, devices_measured_not_fixed: {why: n}, conflicts, conflicts_first: [{handle, face, from, drawn_in, model_in, off_in, band_in, sheet, at}], by_sheet: {<sheet>: {values, read, placed, unplaced: {why: n}, values_unused: {why: n}, stretches_without_value, chains, baseline_groups, not_to_scale, scale_in_per_unit, registration, attached: {both_ends, one_end, none}, ends: {device centre|wall face|opening edge|casework edge: n}, unattached_why: {why: n}}}, dimensions_first: [{sheet, view, level, value, inches, on_sheet, model_ft, marks, to_scale, chain, baseline, ends}]}: the sheets' dimensions drawn as line work and text (a PDF's: dimension line, ticks, dots or arrows, extension lines, the value; chains and baselines) read, each witness point mapped through its sheet's registration onto the model and attached to what it measures: a device's centre, a wall face, an opening's edge, a casework edge. bim.layout.rehost documents a device's along-face offset from them; where the model's position is off the drawn value by more than the kind's band, that is a conflict for review")
+            .menu(&["Tools", "Building", "Read Drawn Dimensions"])
+            .noundo(),
         CommandSpec::new(OBJECT, "Add Casework or Appliance Object", run_object)
             .params("{kind: string (base_cabinet, upper_cabinet, sink_base, vanity, refrigerator, range, dishwasher, microwave, washer, dryer, tv or another casework or appliance kind), tag?, level?, box: [x0, y0, z0, x1, y1, z1] (drawing units, model), source?: where it was read (a submittal, an elevation)} → {handle}: an object other placements can be tied to (a box with its kind, tag and source)"),
     ]
@@ -692,6 +698,10 @@ struct Placed {
     offset: f64,
     documented: Option<String>,
     depth_front: f64,
+    /// A drawn dimension's offset: the model's own offset from the same reference (inches) and
+    /// the dimension's source; or why the dimension that measures it gives no along offset.
+    drawn: Option<(f64, Source)>,
+    drawn_why: Option<&'static str>,
 }
 
 /// The face a device is on: its stored host wall's face toward its room first (the side its
@@ -743,7 +753,7 @@ fn face_for(cx: &Ctx, by_wall: &HashMap<Handle, Vec<usize>>, by_level: &HashMap<
     )
 }
 
-fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)]) -> Option<Placed> {
+fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)], doc: Option<&drawn::DocOffset>) -> Option<Placed> {
     let inch = cx.inch();
     let f = cx.faces.get(face_k)?;
     let c = dv.c();
@@ -800,7 +810,73 @@ fn place(cx: &Ctx, face_k: usize, dv: &Dev, dims: &[(Vec2, Vec2, f64)]) -> Optio
             break;
         }
     }
-    Some(Placed { face: face_k, t, zc, across, along_len, reference, offset, documented, depth_front })
+    // A dimension the sheets draw as line work (a chain to a face, an opening or casework edge):
+    // the document's offset when it runs along the device's face.
+    let mut drawn = None;
+    let mut drawn_why = None;
+    if let Some(doc) = doc {
+        match drawn_reference(cx, f, c, doc) {
+            Ok((r, measured, said)) => {
+                reference = r;
+                offset = said;
+                documented = Some(doc.why.clone());
+                drawn = Some((measured / inch, doc.source.clone()));
+            }
+            Err(why) => drawn_why = Some(why),
+        }
+    }
+    Some(Placed { face: face_k, t, zc, across, along_len, reference, offset, documented, depth_front, drawn, drawn_why })
+}
+
+/// How far a drawn dimension's reference may be off the device's face's ends (inches), and off
+/// its wall's line for an opening's edge or a casework edge.
+const DRAWN_REF_REACH_IN: f64 = 24.0;
+const DRAWN_EDGE_OFF_IN: f64 = 12.0;
+const DRAWN_CASEWORK_OFF_IN: f64 = 48.0;
+
+/// A drawn dimension's reference as an along-face offset of the device on face `f`: the
+/// reference (the face of the wall that faces the device: a demising wall's other room's face
+/// gives way to its twin, the drawn value less the wall between them), the model's own offset
+/// from it and the drawn one (drawing units); or why it isn't one.
+fn drawn_reference(cx: &Ctx, f: &Face, c: Vec2, doc: &drawn::DocOffset) -> std::result::Result<(Ref, f64, f64), &'static str> {
+    let inch = cx.inch();
+    if dot(doc.dir, f.u).abs() < 0.9 {
+        return Err("dimensioned across its wall, not along it");
+    }
+    let reach = DRAWN_REF_REACH_IN * inch;
+    let on_span = |t: f64| t >= -reach && t <= f.len + reach;
+    match &doc.reference {
+        Ref::Face { name, .. } => {
+            let g = cx.face(f.level.as_deref(), name).ok_or("its reference face is gone")?;
+            let said = doc.value_in * inch;
+            let (g, said) = if g.depth(c) >= -inch {
+                (g, said)
+            } else {
+                let twin = cx
+                    .faces
+                    .iter()
+                    .filter(|h| {
+                        same_level(h.level.as_deref(), f.level.as_deref()) && dot(h.u, g.u) < -0.95 && h.walls.iter().any(|w| g.walls.contains(w))
+                    })
+                    .filter(|h| h.depth(c) >= -inch)
+                    .min_by(|a, b| a.depth(c).total_cmp(&b.depth(c)))
+                    .ok_or("its reference face faces away from it")?;
+                (twin, said - dot(twin.a - g.a, g.inward).abs())
+            };
+            if !on_span(f.along(g.a)) {
+                return Err("its reference is not at its wall");
+            }
+            Ok((Ref::Face { name: g.name.clone(), wall: g.wall, inward: g.inward }, g.depth(c), said))
+        }
+        Ref::End { name, point, .. } => {
+            let off = if doc.casework { DRAWN_CASEWORK_OFF_IN } else { DRAWN_EDGE_OFF_IN } * inch;
+            if f.depth(*point).abs() > off || !on_span(f.along(*point)) {
+                return Err("its reference is not at its wall");
+            }
+            let sign = if f.along(c) >= f.along(*point) { 1.0 } else { -1.0 };
+            Ok((Ref::End { name: name.clone(), point: *point, sign }, (f.along(c) - f.along(*point)) * sign, doc.value_in * inch))
+        }
+    }
 }
 
 /// The ties the rules data gives a device from the objects against its face.
@@ -1075,6 +1151,10 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let devs: Vec<Dev> = devices(d).into_iter().filter(Dev::wall_mounted).collect();
     let objs = objects(d, &cx.sp, cx.upf, &rules);
     let dims = dimensions(d);
+    // The sheets' dimensions drawn as line work, placed on the model and attached.
+    let all_devs = devices(d);
+    let drawn_dims = super::dimreader::read_drawing(d, &cx.sp);
+    let attached = drawn::attach(&cx, &all_devs, &objs, &drawn_dims);
     let tol_h = rules["height_tolerance_in"].as_f64().unwrap_or(0.25);
     // Each device on its face.
     let mut placed: Vec<(usize, Placed)> = Vec::new();
@@ -1083,7 +1163,7 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let mut unplaced: Vec<(Handle, Props)> = Vec::new();
     let mut no_face_by: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (i, dv) in devs.iter().enumerate() {
-        match face_for(&cx, &by_wall, &by_level, dv).and_then(|k| place(&cx, k, dv, &dims)) {
+        match face_for(&cx, &by_wall, &by_level, dv).and_then(|k| place(&cx, k, dv, &dims, attached.docs.get(&dv.h))) {
             Some(pl) => placed.push((i, pl)),
             None => {
                 no_face_n += 1;
@@ -1200,6 +1280,10 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
     let in_wall = in_wall_items(d);
     let mut framing_cache: HashMap<usize, (Vec<f64>, Vec<Obstacle>)> = HashMap::new();
     let mut changes: Vec<(Handle, Props)> = unplaced;
+    let mut raised: Vec<(Handle, String, Vec<super::forms::Given>)> = Vec::new();
+    let mut agree: Vec<Handle> = Vec::new();
+    let mut conflicts_first: Vec<Value> = Vec::new();
+    let mut drawn_not_used: BTreeMap<&'static str, usize> = BTreeMap::new();
     for (j, (i, pl)) in placed.iter().enumerate() {
         let (Some(dv), Some(f)) = (devs.get(*i), cx.faces.get(pl.face)) else { continue };
         let floor = level_floor(&cx.sp, dv.level.as_deref(), cx.upf);
@@ -1251,7 +1335,8 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         let (off_src, off_note) = match &pl.documented {
             Some(why) => {
                 *offsets.entry("documented").or_default() += 1;
-                (Source::of(SourceKind::Print), format!("documented: {why}"))
+                let src = pl.drawn.as_ref().map_or_else(|| Source::of(SourceKind::Print), |(_, src)| src.clone());
+                (src, format!("documented: {why}"))
             }
             None => {
                 *offsets.entry("measured").or_default() += 1;
@@ -1323,6 +1408,49 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             "along_band",
             Prop::new(r2(band), band_src).with_unit("in").with_note("± how far along the wall the box may drift from its target (along is soft)"),
         );
+        // A drawn dimension the model's position disagrees with by more than the kind's band:
+        // a conflict for review (both values, their sources).
+        if let Some(why) = pl.drawn_why {
+            *drawn_not_used.entry(why).or_default() += 1;
+        }
+        if let Some((measured_in, src)) = &pl.drawn {
+            let kind_band = rules["along_band_in"][kind.as_str()].as_f64().or_else(|| rules["along_band_in"]["default"].as_f64()).unwrap_or(6.0);
+            let documented_in = pl.offset / inch;
+            let off = measured_in - documented_in;
+            if off.abs() > kind_band + 1e-6 {
+                let note = format!(
+                    "the drawn dimension says {} from {}; the model has it {} from it ({} off, band ±{})",
+                    ft_in(documented_in),
+                    pl.reference.name(),
+                    ft_in(*measured_in),
+                    ft_in(off.abs()),
+                    ft_in(kind_band)
+                );
+                store.set(
+                    "offset_conflict",
+                    Prop::new(note.clone(), src.clone()).with_note("a conflict for review: the documents and the model disagree"),
+                );
+                let what = store.get("kind").map(Prop::text).unwrap_or_else(|| "device".into());
+                let mut model_note = Prop::new(r2(*measured_in), Source::computed());
+                model_note.note = Some(format!("the model's position: {} from {}", ft_in(*measured_in), pl.reference.name()));
+                raised.push((
+                    dv.h,
+                    what,
+                    vec![
+                        super::forms::Given { value: json!(r2(documented_in)), source: src.clone(), author: String::new() },
+                        super::forms::Given { value: json!(r2(*measured_in)), source: Source::computed(), author: String::new() },
+                    ],
+                ));
+                if conflicts_first.len() < MAX_LISTED {
+                    conflicts_first.push(json!({"handle": dv.h.hex(), "face": f.name, "from": pl.reference.name(), "drawn_in": r2(documented_in), "model_in": r2(*measured_in), "off_in": r2(off), "band_in": r2(kind_band), "sheet": src.doc, "at": src.at}));
+                }
+            } else {
+                store.remove("offset_conflict");
+                agree.push(dv.h);
+            }
+        } else {
+            store.remove("offset_conflict");
+        }
         let (studs, obstacles) = framing_cache.entry(pl.face).or_insert_with(|| framing(&in_wall, f, inch)).clone();
         let box_w = rules["box"]["w_one_gang_in"].as_f64().unwrap_or(2.25)
             + rules["box"]["per_gang_in"].as_f64().unwrap_or(1.81) * (plate_of.get(&j).map_or(1, |p| p.2) as f64 - 1.0).max(0.0);
@@ -1364,7 +1492,13 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
             let _ = dm.modify_entity(h, |x| x.common.xdata = xdata.into());
         }
     }
+    let conflict_ids = super::forms::raise_conflicts(s, "offset_along", &raised, &agree)?;
     let placed_n = placed.len();
+    let drawn_read: usize = drawn_dims.by_sheet.values().map(|r| r.read).sum();
+    let mut drawn_sheets: BTreeMap<&str, usize> = BTreeMap::new();
+    for p in &drawn_dims.placed {
+        *drawn_sheets.entry(p.sheet.as_str()).or_default() += 1;
+    }
     Ok(json!({
         "faces": cx.faces.len(),
         "by_level": faces_by_level,
@@ -1378,7 +1512,63 @@ pub(crate) fn rehost(s: &mut Session, north: f64, project_style: Option<&str>) -
         "plates": {"by_style": styles, "ganged": ganged, "ganged_first": ganged_list, "stacked": stacked, "stacked_why": "devices at the same spot on a face as another (within 1 in): read twice or from two sheets; one gang"},
         "solve": solves,
         "fields": LAYOUT_FIELDS,
+        "drawn_dimensions": {
+            "read": drawn_read,
+            "placed": drawn_dims.placed.len(),
+            "placed_by_sheet": drawn_sheets,
+            "devices_documented": placed.iter().filter(|(_, pl)| pl.drawn.is_some()).count(),
+            "measured_not_used": drawn_not_used,
+            "conflicts": raised.len(),
+            "conflict_ids": conflict_ids.iter().take(MAX_LISTED).collect::<Vec<_>>(),
+            "conflicts_first": conflicts_first,
+            "report": format!("{DIMS} {{}}"),
+        },
     }))
+}
+
+// ─── bim.layout.dims ────────────────────────────────────────────────────────
+
+fn run_dims(s: &mut Session, p: &Value) -> Result<Value> {
+    let north = north_param(DIMS, p)?;
+    let limit = p.get("limit").and_then(Value::as_u64).map_or(20, |n| n.min(MAX_LISTED as u64) as usize);
+    let sheet = str_param(p, "sheet").map(|t| t.trim().to_ascii_uppercase()).filter(|t| !t.is_empty());
+    let kind = str_param(p, "kind").map(|t| t.trim().to_ascii_lowercase()).filter(|t| !t.is_empty());
+    let cx = context(s, DIMS, north)?;
+    let rules = solve::rules();
+    let inch = cx.inch();
+    let d = s.doc()?;
+    let devs = devices(d);
+    let objs = objects(d, &cx.sp, cx.upf, &rules);
+    let mut drawn_dims = super::dimreader::read_drawing(d, &cx.sp);
+    if let Some(want) = &sheet {
+        drawn_dims.placed.retain(|x| x.sheet.eq_ignore_ascii_case(want));
+        drawn_dims.by_sheet.retain(|k, _| k.eq_ignore_ascii_case(want));
+    }
+    let attached = drawn::attach(&cx, &devs, &objs, &drawn_dims);
+    let mut by_wall: HashMap<Handle, Vec<usize>> = HashMap::new();
+    let mut by_level: HashMap<String, Vec<usize>> = HashMap::new();
+    for (k, f) in cx.faces.iter().enumerate() {
+        for w in &f.walls {
+            by_wall.entry(*w).or_default().push(k);
+        }
+        by_level.entry(f.level.clone().unwrap_or_default().to_ascii_lowercase()).or_default().push(k);
+    }
+    // The conflicts rehost would raise: each documented wall device on its face.
+    let mut conflicts: Vec<Value> = Vec::new();
+    for dv in devs.iter().filter(|dv| dv.wall_mounted()) {
+        let Some(doc) = attached.docs.get(&dv.h) else { continue };
+        let Some(pl) = face_for(&cx, &by_wall, &by_level, dv).and_then(|k| place(&cx, k, dv, &[], Some(doc))) else { continue };
+        let (Some((measured, src)), Some(f)) = (&pl.drawn, cx.faces.get(pl.face)) else { continue };
+        let band = rules["along_band_in"][band_kind(&dv.words, &rules).as_str()]
+            .as_f64()
+            .or_else(|| rules["along_band_in"]["default"].as_f64())
+            .unwrap_or(6.0);
+        let drawn_in = pl.offset / inch;
+        if (measured - drawn_in).abs() > band + 1e-6 {
+            conflicts.push(json!({"handle": dv.h.hex(), "face": f.name, "from": pl.reference.name(), "drawn_in": r2(drawn_in), "model_in": r2(*measured), "off_in": r2(measured - drawn_in), "band_in": r2(band), "sheet": src.doc, "at": src.at}));
+        }
+    }
+    Ok(drawn::report(&drawn_dims, &attached, &devs, &cx, &conflicts, limit, kind.as_deref()))
 }
 
 // ─── bim.layout.follow ──────────────────────────────────────────────────────

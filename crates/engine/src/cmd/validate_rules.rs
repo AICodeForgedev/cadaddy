@@ -767,7 +767,18 @@ mod tests {
     #[test]
     fn the_jobs_kinds_get_rules_by_family() {
         let rules = builtin().unwrap();
-        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.names_kinds() && r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        // G-PRODUCT (Q6137) checks every product kind's record: asserted on its own below, left
+        // out of each trade's set here.
+        let got = |k: &str| -> BTreeSet<&str> {
+            rules.iter().filter(|r| r.names_kinds() && r.id != "G-PRODUCT" && r.applies_to_kind(k)).map(|r| r.id.as_str()).collect()
+        };
+        let product = |k: &str| rules.iter().any(|r| r.id == "G-PRODUCT" && r.applies_to_kind(k));
+        for k in ["plumbing_fixture", "light_fixture", "gfci_receptacle", "ptac", "exhaust_fan", "occupancy_sensor", "smoke_detector"] {
+            assert!(product(k), "{k} has a product record to check");
+        }
+        for k in ["return_grille", "wall", "duct", "equipment_connection"] {
+            assert!(!product(k), "{k} is no product G-PRODUCT checks");
+        }
         let set = |ids: &[&'static str]| -> BTreeSet<&'static str> { ids.iter().copied().collect() };
         assert_eq!(got("plumbing_fixture"), set(&["P-FIXTURE"]));
         assert!(!got("light_fixture").contains("P-FIXTURE"), "a light fixture is no plumbing fixture");
