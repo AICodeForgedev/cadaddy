@@ -31,6 +31,7 @@ pub mod constraints;
 pub mod coordination;
 pub mod copricing;
 pub mod cover;
+mod dampers;
 mod dash_styles;
 pub mod dimcheck;
 mod draw;

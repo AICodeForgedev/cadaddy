@@ -1626,6 +1626,47 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             rough_in_lines(lines, dec, &ours, false, &st(&e, "tag"), &st(&e, "level"), "");
             continue;
         }
+        // Dampers (Q6182): by kind and duct size, whose work their scope says; their power boxes
+        // and fire alarm modules are electrical lines of their own, on their circuit.
+        let kind = st(&e, "kind").to_ascii_lowercase();
+        let prop = |k: &str| e["properties"][k].as_str().unwrap_or_default().to_string();
+        if kind.ends_with("_damper") || matches!(kind.as_str(), "damper_power_box" | "fa_control_module" | "fa_monitor_module") {
+            let damper = kind.ends_with("_damper");
+            let ours = prop("SCOPE").starts_with("ours");
+            add(
+                lines,
+                Line {
+                    trade: if damper && !ours { "mechanical" } else { "electrical" },
+                    category: if damper {
+                        "dampers"
+                    } else if kind == "damper_power_box" {
+                        "damper power"
+                    } else {
+                        "fire alarm"
+                    }
+                    .into(),
+                    item: if damper {
+                        let name = prop("NAME");
+                        if name.is_empty() { kind.replace('_', " ") } else { name }
+                    } else {
+                        st(&e, "title")
+                    },
+                    size: if damper { prop("DUCT_SIZE") } else { prop("SIZE") },
+                    unit: "each",
+                    net: 1.0,
+                    status: if damper { "firm" } else { "rule" },
+                    rule: (!damper).then(|| prop("RULE")).filter(|r| !r.is_empty()),
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
+                    circuit: match (prop("PANEL"), prop("CIRCUIT")) {
+                        (p, c) if !p.is_empty() && !c.is_empty() => format!("{p}-{c}"),
+                        _ => String::new(),
+                    },
+                    ..Line::default()
+                },
+            );
+            continue;
+        }
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"

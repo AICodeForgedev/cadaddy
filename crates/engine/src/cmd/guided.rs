@@ -5942,6 +5942,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["keynotes_error"] = json!(e.to_string());
     }
     bim_step(s, job, "keynotes", t);
+    // The dampers the mechanical plans tag, in their ducts, with their power and fire alarm
+    // modules (Q6182).
+    let t = web_time::Instant::now();
+    if let Err(e) = dampers_step(s, job, &pages, placer.as_deref(), &mut result) {
+        result["dampers_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "dampers", t);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -11928,6 +11935,818 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     Ok(())
 }
 
+/// Dampers (Q6182, [`super::dampers`]): the damper tags of the mechanical plans and enlarged
+/// plans as dampers in their ducts at the walls they cross (sized to the duct, at its height),
+/// their power (a box at each powered damper on the circuit the electrical notes name, its
+/// branch conduit) and fire alarm modules (per the sequence of operations), and the code check of
+/// the ducts through rated walls with no damper. Review findings and RFIs for what the documents
+/// leave open. After the build: `place` puts a sheet point onto its level's plan.
+fn dampers_step(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    place: Option<&dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>,
+    result: &mut Value,
+) -> crate::Result<()> {
+    use super::dampers::{self, Duct, Found, Wall};
+    use cadaddy_geom::Vec2;
+    use cadaddy_mepfix::sheet_facts::TextItem;
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let r = dampers::rules();
+    // A build run again: this step's own elements of the last run go first.
+    let mine = |k: &str| k.ends_with("_damper") || k == r.power.device || k == r.fire_alarm.control || k == r.fire_alarm.monitor;
+    sp.mep.equipment.retain(|e| {
+        !(mine(&e.kind) && (e.properties.contains_key("TAG_SHEET") || e.properties.contains_key("FEEDS") || e.properties.contains_key("FOR")))
+    });
+    sp.mep.runs.retain(|r| !r.id.starts_with("damper:"));
+    sp.mep.devices.retain(|d| d.kind != "damper_power");
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let started = web_time::Instant::now();
+    let is_plan = |k: &str| matches!(k, "plan" | "enlarged_plan");
+    let refs: Vec<super::printmep::SheetRef> = job_sheet_refs(job)
+        .into_iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("M") && is_plan(&r.kind) && super::printmep::building_level(&r.level))
+        .collect();
+    // Each mechanical plan's texts, straight pieces and circles (sheet units).
+    struct Sheet {
+        r: super::printmep::SheetRef,
+        texts: Vec<TextItem>,
+        segs: Vec<(Vec2, Vec2)>,
+        rounds: Vec<(Vec2, f64)>,
+    }
+    let sheets: Vec<Sheet> = {
+        let d = s.doc()?;
+        // The attributes of the symbols the job's device reading made (inserted after the
+        // import, so outside each sheet's own objects): a tag read as a symbol's attribute.
+        let attribs = attribute_texts(d);
+        refs.into_iter()
+            .take(MAX_LEGEND_SHEETS)
+            .map(|r| {
+                let sub = super::printmep::sheet_drawing(d, &r);
+                let mut texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+                // A tag the import made a symbol (a repeated drawing of the page) is a block's text.
+                texts.extend(block_texts(&sub));
+                let [x0, y0, x1, y1] = r.view.unwrap_or(r.rect);
+                let inside = |p: Vec2| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1);
+                for a in attribs.iter().filter(|a| inside(a.at)) {
+                    if !texts.iter().any(|t| t.value == a.value && (t.at - a.at).len() < 0.1 * a.height) {
+                        texts.push(a.clone());
+                    }
+                }
+                let segs = super::keynotes::sheet_segments(&sub, r.view.unwrap_or(r.rect));
+                let rounds = sub
+                    .model
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        cadaddy_doc::EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
+                        _ => None,
+                    })
+                    .take(200_000)
+                    .collect();
+                Sheet { r, texts, segs, rounds }
+            })
+            .collect()
+    };
+    // The legends: each plan's own (taken first by [`dampers::meaning`]), then the mechanical
+    // legend sheets', the other mechanical plans', then the electrical sheets' (a set printing the
+    // mechanical abbreviations on an electrical sheet).
+    let mut rows: Vec<dampers::LegendEntry> = Vec::new();
+    let m_legends = non_plan_pages(job, "M");
+    for (number, sub) in &m_legends {
+        rows.extend(dampers::legend(&cadaddy_mepfix::sheet_facts::texts(sub), number));
+    }
+    for sh in &sheets {
+        rows.extend(dampers::legend(&sh.texts, &sh.r.number));
+    }
+    for (number, sub) in pages {
+        rows.extend(dampers::legend(&cadaddy_mepfix::sheet_facts::texts(sub), number));
+    }
+    rows.truncate(20_000);
+    let legend_read: Vec<Value> = rows
+        .iter()
+        .filter(|e| dampers::kind_of_words(&e.meaning).is_some() || dampers::rules().codes.iter().any(|c| c.code.eq_ignore_ascii_case(&e.code)))
+        .take(100)
+        .map(|e| json!({"sheet": e.sheet, "code": e.code, "meaning": e.meaning}))
+        .collect();
+    let sheets_read: Vec<Value> =
+        sheets.iter().map(|sh| json!({"sheet": sh.r.number, "kind": sh.r.kind, "level": sh.r.level, "texts": sh.texts.len()})).collect();
+    let legend_sheets: Vec<&String> = m_legends.iter().map(|(n, _)| n).collect();
+    let mut not_dampers: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    // The tags, onto their levels' plans.
+    let mut found: Vec<Found> = Vec::new();
+    let mut unregistered: BTreeMap<String, usize> = BTreeMap::new();
+    let mut keynote_dampers: Vec<Value> = Vec::new();
+    let mut read_on: BTreeMap<String, usize> = BTreeMap::new();
+    let mut codes_by_sheet: Vec<Value> = Vec::new();
+    for sh in &sheets {
+        let known = |c: &str| dampers::meaning(c, &sh.r.number, &rows).is_some();
+        let tags = dampers::tags(&sh.texts, &sh.segs, &sh.rounds, &rows, &known);
+        let mut codes: BTreeMap<String, usize> = BTreeMap::new();
+        for tg in &tags {
+            *codes.entry(tg.code.clone()).or_default() += 1;
+        }
+        codes_by_sheet.push(json!({"sheet": sh.r.number, "level": sh.r.level, "view": sh.r.view, "codes": codes}));
+        if tags.is_empty() {
+            continue;
+        }
+        // The sheet's keynotes, and where their numbers are tagged.
+        let lists = super::keynotes::lists(&sh.texts);
+        let mut ktags: Vec<(String, String, Vec2)> = Vec::new();
+        for list in &lists {
+            let me = super::keynotes::subject(list);
+            let others: Vec<String> = lists.iter().map(super::keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
+            let rounds: Vec<(Vec2, f64)> = sh.rounds.clone();
+            for (num, at) in super::keynotes::tags(&sh.texts, &sh.segs, &[], &rounds, &others, list) {
+                let text = list.notes.iter().find(|n| n.number == num).map(|n| n.text.clone()).unwrap_or_default();
+                ktags.push((num, text, Vec2::new(at[0], at[1])));
+            }
+            for n in list.notes.iter().filter(|n| dampers::kind_of_words(&n.text).is_some()) {
+                keynote_dampers
+                    .push(json!({"sheet": sh.r.number, "number": n.number, "text": n.text.chars().take(KEYNOTE_TEXT_CHARS).collect::<String>(),
+                    "kind": dampers::kind_of_words(&n.text).map(|k| k.kind.clone())}));
+            }
+        }
+        let mut levels = vec![sh.r.level.clone()];
+        for l in &sh.r.levels {
+            if !levels.iter().any(|x| x.eq_ignore_ascii_case(l)) {
+                levels.push(l.clone());
+            }
+        }
+        for tag in tags {
+            let Some(m) = dampers::meaning(&tag.code, &sh.r.number, &rows) else { continue };
+            let Some(kind) = m.kind else {
+                let e = not_dampers.entry(tag.code.clone()).or_insert((0, m.source.clone()));
+                e.0 += 1;
+                continue;
+            };
+            *read_on.entry(sh.r.number.clone()).or_default() += 1;
+            let keynote = ktags
+                .iter()
+                .filter(|(_, _, at)| (*at - tag.at).len() < 6.0 * tag.height)
+                .min_by(|a, b| (a.2 - tag.at).len().total_cmp(&(b.2 - tag.at).len()))
+                .map(|(n, t, _)| (n.clone(), t.clone()));
+            for code in &levels {
+                let level = super::printmep::level_name(code);
+                let sim = place.and_then(|p| p([tag.at.x, tag.at.y], &level));
+                let Some(sim) = sim else {
+                    *unregistered.entry(format!("{} on {level}", sh.r.number)).or_default() += 1;
+                    continue;
+                };
+                let map = |p: Vec2| {
+                    let q = sim.apply([p.x, p.y]);
+                    Vec2::new(q[0], q[1])
+                };
+                // The level whose plan it lands on (an enlarged sheet's views may be of several
+                // levels), else the sheet's.
+                let on = map(tag.at);
+                let by_region = sp.levels.iter().find(|l| {
+                    l.region.is_some_and(|g| on.x >= g[0].min(g[2]) && on.x <= g[0].max(g[2]) && on.y >= g[1].min(g[3]) && on.y <= g[1].max(g[3]))
+                });
+                found.push(Found {
+                    sheet: sh.r.number.clone(),
+                    enlarged: sh.r.kind == "enlarged_plan" || sim.scale() < 0.8,
+                    level: by_region
+                        .or_else(|| sp.levels.iter().find(|l| same_level_name(&l.name, &level)))
+                        .map_or(level.clone(), |l| l.name.clone()),
+                    code: tag.code.clone(),
+                    number: tag.number.clone(),
+                    kind: kind.kind.clone(),
+                    kind_source: m.source.clone(),
+                    at: map(tag.points_to.unwrap_or(tag.at)),
+                    tag_at: map(tag.at),
+                    enclosed: tag.enclosed,
+                    keynote: keynote.clone(),
+                });
+            }
+        }
+    }
+    let duct_systems: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+    let ducts: Vec<Duct> = sp
+        .mep
+        .runs
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none())
+        .map(|(i, r)| Duct {
+            run: i,
+            level: r.level.clone(),
+            points: r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect(),
+            size_in: r.size_in,
+            bottoms_ft: r.bottoms_ft.clone(),
+            system: r.system.clone(),
+            sheet: r.source_sheet.clone(),
+        })
+        .collect();
+    // The built walls on their levels' plans, with their types' ratings.
+    let walls: Vec<Wall> = {
+        let d = s.doc()?;
+        let rating_of = |name: &str| {
+            sp.wall_types.iter().find(|w| w.name.eq_ignore_ascii_case(name)).and_then(|w| w.assembly.as_ref()).and_then(|a| {
+                let r =
+                    a.fire_rating.clone().filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))?;
+                Some((r, if a.source.is_empty() { format!("wall type {name}'s assembly") } else { a.source.clone() }))
+            })
+        };
+        d.model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
+            .filter_map(|e| {
+                let cadaddy_doc::EntityKind::Mesh(m) = &e.kind else { return None };
+                let level = super::bspec::made_level(e)?;
+                let off = super::bspec::stacked_by(e);
+                let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
+                let elev = sp.level(&level).map_or(0.0, |l| l.elevation_ft);
+                let top = m.vertices.iter().take(10_000).map(|v| v.z).fold(f64::NEG_INFINITY, f64::max) / upf - elev;
+                let wall_type = super::bimlook::made_tag(e, "type").unwrap_or_default().to_string();
+                let (rating, rating_source) = match rating_of(&wall_type) {
+                    Some((r, src)) => (Some(r), src),
+                    None => (None, String::new()),
+                };
+                (hull.len() >= 3).then_some(Wall { level, hull, top_ft: top.is_finite().then_some(top), wall_type, rating, rating_source })
+            })
+            .take(100_000)
+            .collect()
+    };
+    let tags_read = found.len();
+    let (placed, unplaced) = dampers::place(found, &ducts, &walls, upf);
+    let all_crossings = dampers::crossings(&ducts, &walls);
+    let open = dampers::unprotected(&ducts, &walls, &placed, upf, &all_crossings);
+    // The rooms the dampers are in (on their levels' plans).
+    let rooms: Vec<(String, String, Vec<Vec2>)> = {
+        let d = s.doc()?;
+        super::bspec::room_elements(d)
+            .into_iter()
+            .map(|rm| {
+                let off = d.model.get(rm.handle).map_or(Vec2::ZERO, |e| super::bspec::stacked_by(e));
+                let name = match &rm.number {
+                    Some(n) if !rm.name.contains(n.as_str()) => format!("{} {n}", rm.name),
+                    _ => rm.name.clone(),
+                };
+                (rm.level, name, rm.outline.iter().map(|p| *p - off).collect())
+            })
+            .collect()
+    };
+    let room_at = |level: &str, p: Vec2| {
+        rooms
+            .iter()
+            .filter(|(l, _, o)| same_level_name(l, level) && o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p))
+            .min_by(|a, b| cadaddy_geom::shoelace(&a.2).abs().total_cmp(&cadaddy_geom::shoelace(&b.2).abs()))
+            .map(|(_, n, _)| n.clone())
+            .unwrap_or_default()
+    };
+    // Power: the electrical notes naming the dampers' circuit (a plan of the damper's level
+    // first), else the panel schedules' circuits that name dampers.
+    let panels: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
+    let level_of_sheet = |number: &str| {
+        job.sheet_regions
+            .iter()
+            .find(|g| g.number.eq_ignore_ascii_case(number) && is_plan(&g.kind) && g.not_built.is_empty())
+            .map(|g| super::printmep::level_name(&g.level))
+            .unwrap_or_default()
+    };
+    let mut notes: Vec<(String, String, String)> = Vec::new();
+    for (number, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        let level = level_of_sheet(number);
+        for list in
+            super::keynotes::lists(&texts).into_iter().chain(super::keynotes::lists_under(&texts, |u| u.contains("NOTES") && !u.contains("KEYNOTES")))
+        {
+            for n in list.notes {
+                notes.push((number.clone(), level.clone(), n.text));
+            }
+        }
+    }
+    let circuit_notes = dampers::circuit_notes(&notes, &panels);
+    let schedule_circuits: Vec<(String, String, String, String)> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .flat_map(|p| p.circuits.iter().map(move |c| (p, c)))
+        .filter_map(|(p, c)| {
+            let k = dampers::kind_of_words(&c.description)?;
+            let src = if c.source.is_empty() { p.source.clone() } else { c.source.clone() };
+            Some((
+                k.kind.clone(),
+                p.panel.clone(),
+                c.number.clone(),
+                format!("{src} panel {} schedule, circuit {}: {}", p.panel, c.number, c.description),
+            ))
+        })
+        .collect();
+    // Fire alarm: the sequence of operations on the fire alarm and electrical sheets.
+    let mut fa_pages: Vec<(String, Vec<TextItem>)> = Vec::new();
+    {
+        let d = s.doc()?;
+        for r in job_sheet_refs(job).into_iter().filter(|r| r.discipline.eq_ignore_ascii_case("FA")).take(MAX_LEGEND_SHEETS) {
+            fa_pages.push((r.number.clone(), cadaddy_mepfix::sheet_facts::texts(&super::printmep::sheet_drawing(d, &r))));
+        }
+    }
+    for (number, sub) in non_plan_pages(job, "FA").iter().chain(pages.iter()) {
+        fa_pages.push((number.clone(), cadaddy_mepfix::sheet_facts::texts(sub)));
+    }
+    let fa = dampers::fa_actions(&fa_pages);
+    drop(fa_pages);
+    // Whose work the dampers are: the mechanical trade's unless the scope split says ours.
+    let ours = result["scope"]["decisions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|dcs| dcs["class"].as_str().is_some_and(|c| c.to_ascii_lowercase().contains("damper")) && dcs["by_others"].as_bool() == Some(false));
+    let scope = if ours { "ours (the scope split)" } else { "by others: mechanical (no scope split says ours)" };
+    // The elements.
+    let used: BTreeSet<String> = sp.mep.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let mut new_equipment: BTreeSet<String> = BTreeSet::new();
+    let mut runs: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+    let mut seq: BTreeMap<String, usize> = BTreeMap::new();
+    let mut listed: Vec<Value> = Vec::new();
+    let mut unpowered: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // (panel, circuit, level) → the boxes on it.
+    let mut on_circuit: BTreeMap<(String, String, String), Vec<(String, Vec2, f64)>> = BTreeMap::new();
+    let (mut boxes, mut control_modules, mut monitor_modules) = (0usize, 0u32, 0u32);
+    let ft_in = |v: f64| {
+        let t = format!("{v:.1}");
+        t.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let size_label = |s: [f64; 2]| if s[1] > 0.0 { format!("{}x{}", ft_in(s[0]), ft_in(s[1])) } else { format!("{}\u{d8}", ft_in(s[0])) };
+    let bounds = |pts: &[Vec2]| {
+        pts.iter()
+            .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p.x), lo[1].min(p.y)], [hi[0].max(p.x), hi[1].max(p.y)]))
+    };
+    for p in &placed {
+        let Some(kind) = dampers::kind_rule(&p.found.kind) else { continue };
+        let tag = loop {
+            let n = seq.entry(p.found.code.clone()).or_insert(0);
+            *n += 1;
+            let t = format!("{}-{}", p.found.code, n);
+            if !used.contains(&t.to_ascii_uppercase()) && !new_equipment.contains(&t.to_ascii_uppercase()) {
+                break t;
+            }
+            if *n > 100_000 {
+                break format!("{}-X{}", p.found.code, listed.len() + 1);
+            }
+        };
+        let across = Vec2::new(-p.along.y, p.along.x);
+        let (half_len, half_w) = (r.body_in / 24.0 * upf, p.size_in[0] / 24.0 * upf);
+        let height_ft = if p.size_in[1] > 0.0 { p.size_in[1] } else { p.size_in[0] } / 12.0;
+        let corners = [
+            p.at + p.along * half_len + across * half_w,
+            p.at + p.along * half_len - across * half_w,
+            p.at - p.along * half_len + across * half_w,
+            p.at - p.along * half_len - across * half_w,
+        ];
+        let (lo, hi) = bounds(&corners);
+        let duct = ducts.get(p.duct);
+        let wall = p.wall.and_then(|i| walls.get(i));
+        // Its room; one set in a wall is between the rooms on the duct's two sides.
+        let room = match room_at(&p.found.level, p.at) {
+            r if !r.is_empty() => r,
+            _ => {
+                let (a, b) = (room_at(&p.found.level, p.at + p.along * (2.0 * upf)), room_at(&p.found.level, p.at - p.along * (2.0 * upf)));
+                match (a.is_empty(), b.is_empty()) {
+                    (false, false) if a != b => format!("{a} / {b}"),
+                    (false, _) => a,
+                    _ => b,
+                }
+            }
+        };
+        let mut props: BTreeMap<String, String> = BTreeMap::new();
+        props.insert("CODE".into(), p.found.code.clone());
+        props.insert("NAME".into(), kind.name.clone());
+        props.insert("DUCT_SIZE".into(), size_label(p.size_in));
+        props.insert("SIZE".into(), size_label(p.size_in));
+        props.insert("SCOPE".into(), scope.into());
+        if let Some(d) = duct {
+            props.insert("DUCT_SYSTEM".into(), d.system.clone());
+        }
+        if let Some(w) = wall {
+            props.insert("WALL_TYPE".into(), w.wall_type.clone());
+            props.insert("WALL_RATING".into(), w.rating.clone().unwrap_or_else(|| "not rated in the documents".into()));
+            if !w.rating_source.is_empty() {
+                props.insert("WALL_RATING_SOURCE".into(), w.rating_source.clone());
+            }
+        }
+        if !room.is_empty() {
+            props.insert("ROOM".into(), room.clone());
+        }
+        let tag_text = if p.found.number.is_empty() { p.found.code.clone() } else { format!("{}-{}", p.found.code, p.found.number) };
+        props.insert("TAG_SHEET".into(), p.found.sheet.clone());
+        props.insert("TAG_TEXT".into(), tag_text.clone());
+        if !p.also.is_empty() {
+            props.insert("ALSO_ON".into(), p.also.join(", "));
+        }
+        if let Some((n, t)) = &p.found.keynote {
+            props.insert("KEYNOTE".into(), format!("{} keynote {n}: {t}", p.found.sheet));
+        }
+        let mut sources = BTreeMap::new();
+        sources.insert("kind".to_string(), p.found.kind_source.clone());
+        sources.insert(
+            "position".to_string(),
+            match wall {
+                Some(w) => {
+                    format!("{} tag {tag_text}, in its duct where it crosses wall {} (within {} ft)", p.found.sheet, w.wall_type, r.wall_reach_ft)
+                }
+                None => format!("{} tag {tag_text}: {}", p.found.sheet, p.why),
+            },
+        );
+        sources.insert("size".to_string(), format!("its duct ({})", duct.map(|d| d.sheet.clone()).unwrap_or_default()));
+        sources.insert("elevation".to_string(), "its duct's bottom".to_string());
+        // Power: the box at the actuator, on its circuit.
+        let mut power: Value = Value::Null;
+        if kind.powered {
+            let note = circuit_notes
+                .iter()
+                .filter(|n| dampers::same_duty(&n.kind, &kind.kind))
+                .min_by_key(|n| if same_level_name(&n.level, &p.found.level) { 0 } else { 1 })
+                .map(|n| (n.panel.clone(), n.circuit.clone(), n.source.clone()))
+                .or_else(|| schedule_circuits.iter().find(|c| dampers::same_duty(&c.0, &kind.kind)).map(|c| (c.1.clone(), c.2.clone(), c.3.clone())));
+            let bx = r.power.box_in;
+            let at = p.at + across * (half_w + 0.5 * upf);
+            let hw = bx[0] / 24.0 * upf;
+            let btag = format!("{tag}-PWR");
+            let mut bprops: BTreeMap<String, String> = BTreeMap::new();
+            bprops.insert("FEEDS".into(), tag.clone());
+            bprops.insert("SIZE".into(), format!("{}\"x{}\"x{}\"", bx[0], bx[1], bx[2]));
+            bprops.insert("WHIP".into(), format!("{} ({} ft)", r.power.whip, r.power.whip_ft));
+            bprops.insert("RULE".into(), r.power.source.clone());
+            let mut bsrc = BTreeMap::new();
+            bsrc.insert("position".to_string(), format!("at damper {tag}'s actuator (rules data)"));
+            match &note {
+                Some((panel, circuit, src)) => {
+                    bprops.insert("PANEL".into(), panel.clone());
+                    bprops.insert("CIRCUIT".into(), circuit.clone());
+                    bsrc.insert("circuit".to_string(), src.clone());
+                    let in_schedule = sp.mep.panel_schedules.iter().any(|ps| {
+                        ps.panel.eq_ignore_ascii_case(panel)
+                            && ps.circuits.iter().any(|c| circuit.split(',').next().is_some_and(|n| c.number.trim() == n.trim()))
+                    });
+                    bprops.insert("IN_PANEL_SCHEDULE".into(), if in_schedule { "yes" } else { "no" }.into());
+                    props.insert("POWER".into(), format!("panel {panel}, circuit {circuit}"));
+                    on_circuit.entry((panel.clone(), circuit.clone(), p.found.level.clone())).or_default().push((
+                        btag.clone(),
+                        at,
+                        p.bottom_ft + height_ft,
+                    ));
+                    sp.mep.devices.push(cadaddy_walk3d::ElecDevice {
+                        tag: btag.clone(),
+                        kind: "damper_power".into(),
+                        level: p.found.level.clone(),
+                        room: room.clone(),
+                        panel: panel.clone(),
+                        circuit: circuit.clone(),
+                        source: src.chars().take(200).collect(),
+                        ..Default::default()
+                    });
+                    power = json!({"panel": panel, "circuit": circuit, "source": src, "in_panel_schedule": in_schedule});
+                }
+                None => {
+                    bprops.insert("CIRCUIT".into(), "none named: RFI".into());
+                    unpowered.entry(kind.name.clone()).or_default().push(format!("{tag} ({} {})", p.found.level, p.found.sheet));
+                    power = json!({"circuit": null, "why": "no electrical note or panel schedule names the circuit"});
+                }
+            }
+            sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+                tag: btag.clone(),
+                kind: r.power.device.clone(),
+                level: p.found.level.clone(),
+                min: [at.x - hw, at.y - hw],
+                max: [at.x + hw, at.y + hw],
+                bottom_ft: p.bottom_ft,
+                height_ft: (bx[2] / 12.0).max(0.05),
+                systems: vec!["E-DAMPER".into()],
+                title: r.power.name.clone(),
+                properties: bprops,
+                sources: bsrc,
+                confidence: 0.6,
+                ..Default::default()
+            });
+            new_equipment.insert(btag.to_ascii_uppercase());
+            boxes += 1;
+        }
+        // Fire alarm modules.
+        let (control, monitor, why) = dampers::fa_modules(&kind.kind, &fa);
+        for (i, (n, kind_m, name)) in
+            [(control, &r.fire_alarm.control, &r.fire_alarm.control_name), (monitor, &r.fire_alarm.monitor, &r.fire_alarm.monitor_name)]
+                .into_iter()
+                .enumerate()
+        {
+            if n == 0 {
+                continue;
+            }
+            let bx = r.fire_alarm.box_in;
+            let hw = bx[0] / 24.0 * upf;
+            let at = p.at - across * (half_w + (0.5 + 0.5 * i as f64) * upf);
+            let mtag = format!("{tag}-{}", if i == 0 { "CM" } else { "MM" });
+            let mut mp = BTreeMap::new();
+            mp.insert("FOR".to_string(), tag.clone());
+            mp.insert("SEQUENCE".to_string(), why.join("; ").chars().take(240).collect());
+            mp.insert("RULE".to_string(), r.fire_alarm.source.clone());
+            mp.insert("MODULE_KIND".to_string(), kind_m.clone());
+            let mut ms = BTreeMap::new();
+            ms.insert("count".to_string(), format!("{} (rules data, one per damper)", why.join("; ").chars().take(200).collect::<String>()));
+            sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+                tag: mtag.clone(),
+                kind: kind_m.clone(),
+                level: p.found.level.clone(),
+                min: [at.x - hw, at.y - hw],
+                max: [at.x + hw, at.y + hw],
+                bottom_ft: p.bottom_ft,
+                height_ft: (bx[2] / 12.0).max(0.05),
+                systems: vec!["FA".into()],
+                title: name.clone(),
+                properties: mp,
+                sources: ms,
+                confidence: 0.6,
+                ..Default::default()
+            });
+            new_equipment.insert(mtag.to_ascii_uppercase());
+        }
+        control_modules += control;
+        monitor_modules += monitor;
+        if control + monitor > 0 {
+            props.insert("FA_MODULES".into(), format!("{control} control, {monitor} monitor ({})", why.join("; ")));
+        }
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: tag.clone(),
+            kind: format!("{}_damper", kind.kind),
+            level: p.found.level.clone(),
+            min: lo,
+            max: hi,
+            bottom_ft: p.bottom_ft,
+            height_ft: height_ft.max(0.1),
+            systems: duct.map(|d| vec![d.system.clone()]).unwrap_or_default(),
+            title: format!("{} ({})", kind.name, p.found.code),
+            properties: props,
+            sources,
+            confidence: if p.wall.is_some() { 0.8 } else { 0.6 },
+            ..Default::default()
+        });
+        new_equipment.insert(tag.to_ascii_uppercase());
+        listed.push(json!({
+            "tag": tag, "read": tag_text, "kind": kind.kind, "level": p.found.level, "sheet": p.found.sheet, "also_on": p.also,
+            "room": room, "wall": wall.map(|w| json!({"type": w.wall_type, "rating": w.rating, "source": w.rating_source})),
+            "duct": duct.map(|d| json!({"system": d.system, "size": size_label(p.size_in), "sheet": d.sheet, "run": d.run, "segment": p.segment})), "tag_enclosed": p.found.enclosed, "bottom_ft": (p.bottom_ft * 100.0).round() / 100.0,
+            "at_ft": [(p.at.x / upf * 10.0).round() / 10.0, (p.at.y / upf * 10.0).round() / 10.0], "kind_source": p.found.kind_source,
+            "keynote": p.found.keynote.as_ref().map(|(n, t)| json!({"number": n, "text": t})), "power": power,
+            "fa_modules": {"control": control, "monitor": monitor}, "why": p.why,
+        }));
+    }
+    // The branch circuit conduit: box to box along each circuit on each level (nearest first),
+    // from the panel when it stands on that level; above the dampers' ducts.
+    let mut conduit_ft = 0.0f64;
+    let mut home_runs: Vec<String> = Vec::new();
+    for ((panel, circuit, level), mut list) in on_circuit {
+        let gear = sp
+            .mep
+            .equipment
+            .iter()
+            .find(|e| e.tag.eq_ignore_ascii_case(&panel) && same_level_name(&e.level, &level))
+            .map(|e| Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0));
+        let mut from = gear.or_else(|| list.first().map(|b| b.1));
+        if gear.is_none() {
+            home_runs.push(format!("panel {panel} circuit {circuit}: the panel is not on {level}'s plan, its home run not drawn"));
+        }
+        let mut k = 0usize;
+        while !list.is_empty() {
+            let Some(f) = from else { break };
+            let Some((i, _)) = list.iter().enumerate().min_by(|a, b| (a.1.1 - f).len().total_cmp(&(b.1.1 - f).len())) else { break };
+            let b = list.remove(i);
+            if (b.1 - f).len() > 1e-6 {
+                let pts = vec![[f.x, f.y], [b.1.x, f.y], [b.1.x, b.1.y]];
+                let mut run = super::printcond::run("E-DAMPER", &level, "", pts, r.power.conduit_in, b.2 + 0.5);
+                run.id = format!("damper:{panel}-{circuit}:{level}:{k}");
+                run.size_source = format!("rules data: {}", r.power.source);
+                run.height_source = "rule: above the dampers' ducts".into();
+                conduit_ft += ((b.1.x - f.x).abs() + (b.1.y - f.y).abs()) / upf;
+                runs.push(run);
+                k += 1;
+            }
+            from = Some(b.1);
+        }
+    }
+    // The ducts through rated walls with no damper: the code book's check.
+    let checks: Vec<cadaddy_walk3d::codebook::MechCheck> = open
+        .iter()
+        .filter_map(|c| {
+            let d = ducts.get(c.duct)?;
+            let w = walls.get(c.wall)?;
+            Some(cadaddy_walk3d::codebook::MechCheck {
+                id: format!("{} {} duct at ({:.1}, {:.1}) ft", d.system, size_label(d.size_in), c.at.x / upf, c.at.y / upf),
+                level: Some(d.level.clone()),
+                location: Some(format!("{} wall {} ({})", w.rating.clone().unwrap_or_default(), w.wall_type, w.rating_source)),
+                has_damper: false,
+                clearance_in: None,
+            })
+        })
+        .collect();
+    let book = cadaddy_walk3d::codebook::starter_book();
+    let code_findings: Vec<Value> = checks
+        .iter()
+        .flat_map(|c| book.check_mechanical(std::slice::from_ref(c)).into_iter().filter(|f| f.rule_id.contains("fire_damper")).map(move |f| (c, f)))
+        .map(|(c, f)| json!({"duct": c.id, "level": c.level, "wall": c.location, "rule": f.rule_id, "cite": f.cite}))
+        .collect();
+    // The model's new elements.
+    let n_runs = runs.len();
+    let made = build_new_mep(s, sp.clone(), runs, &new_equipment)?;
+    let _ = made;
+    // Findings, RFIs.
+    if !unplaced.is_empty() {
+        let what: Vec<String> = unplaced.iter().take(12).map(|(f, why)| format!("{} {} on {} ({why})", f.sheet, f.code, f.level)).collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} damper tag(s) not put in a duct", unplaced.len()),
+            &format!("each stays listed, not dropped: {}", what.join("; ")),
+            2,
+            vec!["Check the tag's duct on the mechanical plan; a duct the reader missed leaves its damper out".into()],
+            None,
+            false,
+        );
+    }
+    if !code_findings.is_empty() {
+        let mut groups: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for f in &code_findings {
+            *groups.entry((f["level"].as_str().unwrap_or_default().to_string(), f["wall"].as_str().unwrap_or_default().to_string())).or_default() +=
+                1;
+        }
+        let what: Vec<String> = groups.iter().take(24).map(|((l, w), n)| format!("{l}, {w}: {n}")).collect();
+        let typical: Vec<String> = keynote_dampers
+            .iter()
+            .filter(|k| k["kind"].as_str().and_then(dampers::kind_rule).is_some_and(|x| x.rated))
+            .map(|k| format!("{} keynote {}", k["sheet"].as_str().unwrap_or_default(), k["number"].as_str().unwrap_or_default()))
+            .collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} duct crossing(s) of rated walls with no damper tagged (IMC 607.5)", code_findings.len()),
+            &format!(
+                "fire/smoke damper required at rated assembly unless an exception applies (IMC 607.5.x, e.g. a fire partition in a sprinklered building){}: {}",
+                if typical.is_empty() { String::new() } else { format!("; keynotes calling for rated dampers that may cover some (typical room plans, not placed per room): {}", typical.join(", ")) },
+                what.join("; ")
+            ),
+            3,
+            vec!["Check each crossing on the mechanical plans: a damper there, a rated wall that isn't, or a question for the engineer".into()],
+            None,
+            false,
+        );
+    }
+    let mut rfis_added: Vec<String> = Vec::new();
+    if !unpowered.is_empty() {
+        let Ok((mut sp2, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+        for (name, tags) in &unpowered {
+            let issue = format!(
+                "{} {name}(s) need power for their actuators ({}), but no electrical note or panel schedule names their circuit: {}.",
+                tags.len(),
+                dampers::rules().power.source,
+                tags.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
+            );
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in issue.bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            let id = format!("RFI-D{:08x}", h as u32);
+            if !sp2.rfis.iter().any(|x| x.id == id) && sp2.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+                let kind = cadaddy_walk3d::RfiKind::EquipmentElectrical;
+                sp2.rfis.push(cadaddy_walk3d::Rfi {
+                    id: id.clone(),
+                    kind: Some(kind),
+                    severity: kind.severity(),
+                    about: format!("{name} power"),
+                    issue: issue.clone(),
+                    assumed: "Each damper has its power box at the actuator, on no circuit, until answered.".into(),
+                    proposed: Some("Name the panel and circuit for the dampers' actuators".into()),
+                    ..cadaddy_walk3d::Rfi::default()
+                });
+                rfis_added.push(id);
+            }
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("{name}s with no circuit named"),
+                &issue,
+                3,
+                vec!["Answer the RFI with the dampers' panel and circuit".into()],
+                None,
+                false,
+            );
+        }
+        s.doc_mut()?.building_spec = Some(sp2.to_json());
+    }
+    s.touch();
+    // The takeoff: the dampers by kind and size (whose work), our electrical lines apart.
+    let mut by_kind_size: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for v in &listed {
+        let k = v["kind"].as_str().unwrap_or_default().to_string();
+        let size = v["duct"]["size"].as_str().unwrap_or_default().to_string();
+        *by_kind_size.entry((k, size)).or_default() += 1;
+    }
+    let mechanical: Vec<Value> = by_kind_size
+        .iter()
+        .map(|((k, size), n)| json!({"item": dampers::kind_rule(k).map_or(k.clone(), |x| x.name.clone()), "size": size, "count": n, "scope": scope}))
+        .collect();
+    let whips = boxes as f64 * r.power.whip_ft;
+    let wire_ft = (conduit_ft + whips) * f64::from(r.power.conductors);
+    let counts = dampers::by_level_kind(&placed);
+    let line = format!(
+        "  dampers: {} tags read ({} on registered sheets), {} dampers in their ducts ({} at a wall, {} rated), {} not in a duct; by level {:?}; {} power boxes ({} with no circuit named), {:.0} ft branch conduit; fire alarm modules {} control, {} monitor; {} ducts through rated walls with no damper ({:.1} s)",
+        read_on.values().sum::<usize>(),
+        tags_read,
+        placed.len(),
+        placed.iter().filter(|p| p.wall.is_some()).count(),
+        placed.iter().filter(|p| p.wall.and_then(|i| walls.get(i)).is_some_and(|w| w.rating.is_some())).count(),
+        unplaced.len(),
+        counts,
+        boxes,
+        unpowered.values().map(Vec::len).sum::<usize>(),
+        conduit_ft,
+        control_modules,
+        monitor_modules,
+        code_findings.len(),
+        started.elapsed().as_secs_f64()
+    );
+    progress_line(&line);
+    result["dampers"] = json!({
+        "sheets_read": sheets_read, "codes_by_sheet": codes_by_sheet, "legend_sheets": legend_sheets, "legend": legend_read,
+        "read_on": read_on, "tags_placed_on_plans": tags_read, "count": placed.len(), "by_level_kind": counts, "dampers": listed,
+        "not_in_a_duct": unplaced.iter().take(200).map(|(f, why)| json!({"sheet": f.sheet, "code": f.code, "level": f.level, "kind": f.kind, "at_ft": [(f.tag_at.x / upf * 10.0).round() / 10.0, (f.tag_at.y / upf * 10.0).round() / 10.0], "why": why})).collect::<Vec<_>>(),
+        "not_registered": unregistered, "not_dampers": not_dampers.iter().map(|(c, (n, src))| json!({"code": c, "tags": n, "source": src})).collect::<Vec<_>>(),
+        "keynotes_naming_dampers": keynote_dampers.into_iter().take(100).collect::<Vec<_>>(),
+        "circuit_notes": circuit_notes.iter().map(|n| json!({"kind": n.kind, "panel": n.panel, "circuit": n.circuit, "sheet": n.sheet, "level": n.level, "text": n.text})).collect::<Vec<_>>(),
+        "schedule_circuits": schedule_circuits.iter().map(|c| json!({"kind": c.0, "panel": c.1, "circuit": c.2, "source": c.3})).collect::<Vec<_>>(),
+        "fire_alarm": {"sequence": fa.iter().map(|a| json!({"sheet": a.sheet, "text": a.text, "release": a.release, "monitor": a.monitor, "kind": a.kind})).collect::<Vec<_>>(),
+            "control_modules": control_modules, "monitor_modules": monitor_modules, "count_from": "rules data (one per damper); the shop drawings' own module count not read"},
+        "code_check": code_findings.iter().take(500).cloned().collect::<Vec<_>>(), "code_check_count": code_findings.len(),
+        "rfis": rfis_added, "home_runs": home_runs, "conduit_runs": n_runs,
+        "takeoff": {
+            "mechanical": mechanical,
+            "electrical": {"power_boxes": boxes, "whips": boxes, "whip_ft": whips, "branch_conduit_ft": (conduit_ft * 10.0).round() / 10.0, "conduit_size_in": r.power.conduit_in,
+                "wire": r.power.wire, "wire_ft": (wire_ft * 10.0).round() / 10.0, "source": r.power.source},
+            "fire_alarm": {"control_modules": control_modules, "monitor_modules": monitor_modules, "source": r.fire_alarm.source},
+        },
+    });
+    Ok(())
+}
+
+/// The visible attributes of the blocks inserted on a drawing, as texts where they are printed.
+fn attribute_texts(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::sheet_facts::TextItem> {
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if out.len() >= 400_000 {
+            break;
+        }
+        let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { continue };
+        for a in ins.attribs.iter().take(64).filter(|a| !a.invisible) {
+            let (value, at, h, rot) = (a.text.value.trim().to_string(), a.text.insert.xy(), a.text.height, a.text.rotation);
+            if value.is_empty() || !at.is_finite() || !(h.is_finite() && h > 0.0) {
+                continue;
+            }
+            out.push(cadaddy_mepfix::sheet_facts::TextItem { value, at, height: h, rotation: if rot.is_finite() { rot } else { 0.0 } });
+        }
+    }
+    out
+}
+
+/// The texts in the blocks inserted on a drawing (a PDF import makes each drawing repeated on a
+/// page a block: a damper tag drawn three times is one), where each insert puts them.
+fn block_texts(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::sheet_facts::TextItem> {
+    use cadaddy_geom::Vec2;
+    let mut out = Vec::new();
+    for e in d.model.iter() {
+        if out.len() >= 200_000 {
+            break;
+        }
+        let cadaddy_doc::EntityKind::Insert(ins) = &e.kind else { continue };
+        let Some(b) = d.block(&ins.block) else { continue };
+        if b.entities.len() > 400 {
+            continue;
+        }
+        let m = ins.transform(b.base.xy());
+        for be in b.entities.iter() {
+            let (value, at, height, rotation) = match &be.kind {
+                cadaddy_doc::EntityKind::Text(t) => (t.value.trim().to_string(), t.insert.xy(), t.height, t.rotation),
+                cadaddy_doc::EntityKind::MText(t) => (t.contents.trim().to_string(), t.insert.xy(), t.height, t.rotation),
+                _ => continue,
+            };
+            if value.is_empty() || !at.is_finite() || !(height.is_finite() && height > 0.0) {
+                continue;
+            }
+            let rot = if rotation.is_finite() { rotation } else { 0.0 };
+            let p = m.apply(at);
+            let up = m.apply(at + Vec2::new(-rot.sin(), rot.cos()) * height) - p;
+            let along = m.apply(at + Vec2::new(rot.cos(), rot.sin())) - p;
+            let h = up.len();
+            if !(p.is_finite() && h.is_finite() && h > 0.0) {
+                continue;
+            }
+            out.push(cadaddy_mepfix::sheet_facts::TextItem { value, at: p, height: h, rotation: along.y.atan2(along.x) });
+        }
+    }
+    out
+}
+
+/// Whether two level names are one level (`Level 2`, `2`, `LEVEL 02`): their digits, else the names.
+fn same_level_name(a: &str, b: &str) -> bool {
+    let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>().trim_start_matches('0').to_string();
+    let (ka, kb) = (key(a), key(b));
+    if ka.is_empty() || kb.is_empty() { a.trim().eq_ignore_ascii_case(b.trim()) } else { ka == kb }
+}
+
 /// Value engineering (Q6154, [`super::valueeng`]): the building's code-analysis sheet (the
 /// general sheets', else the architectural ones': the first that gives a construction type), the
 /// specs' wiring-methods tables, each alternative tiered, priced with its manpower and modelled;
@@ -17255,6 +18074,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "not_built": not_built_sheets(&job).join("; "),
         "placement": placement_summary(&job),
         "keynote_systems": keynote_summary(&job),
+        "dampers": dampers_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
     }))
@@ -17340,6 +18160,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
     if job.is_done() {
         v["placement"] = placement_summary(job);
         v["keynote_systems"] = keynote_summary(job);
+        v["dampers"] = dampers_summary(job);
     }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
@@ -17441,6 +18262,19 @@ fn job_summary(s: &Session, job: &GuidedJob, stats: Option<&ModelStats>) -> Valu
 
 /// What the keynotes built (Q6146), per level: boxes by kind, conduit by size, rated
 /// penetrations; each system's power and what the documents leave undecided.
+/// What the build's damper step did (Q6182): its counts, dampers, power, fire alarm modules,
+/// code check and takeoff, as the bim_build stage's result has them; null before.
+fn dampers_summary(job: &GuidedJob) -> Value {
+    let Some(d) = job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r.get("dampers")) else {
+        return Value::Null;
+    };
+    let mut v = d.clone();
+    if let Some(c) = v.get_mut("code_check").and_then(Value::as_array_mut) {
+        c.truncate(50);
+    }
+    v
+}
+
 fn keynote_summary(job: &GuidedJob) -> Value {
     let Some(k) = job.stages.iter().find(|st| st.name == StageName::BimBuild).and_then(|st| st.result.as_ref()).and_then(|r| r.get("keynotes"))
     else {
