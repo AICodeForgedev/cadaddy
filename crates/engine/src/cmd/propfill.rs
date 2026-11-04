@@ -1301,7 +1301,8 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
 /// Gear standing within this of its floor stands on it (a switchboard), inches: no wall height.
 const FLOOR_GEAR_IN: f64 = 6.0;
 
-/// Each scheduled panel on a wall (its box clear of the floor) takes its height from a note's
+/// Each scheduled panel on a wall (its box clear of the floor), and each of a typical panel's
+/// (`G-101` of the schedule's `G`), takes its height from a note's
 /// height to its top: its centre is that less half its box, from the note, unless a person or a
 /// print gave it one. How many.
 pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<usize> {
@@ -1322,7 +1323,9 @@ pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<u
             continue;
         }
         let Some(tag) = made(e, "tag").map(|t| t.trim().to_ascii_uppercase()) else { continue };
-        if !scheduled.contains(&tag) {
+        // A scheduled panel, or one of a typical panel's (`G-101` of the guest rooms' `G`).
+        let typical = tag.rsplit_once('-').is_some_and(|(base, _)| scheduled.contains(base.trim()));
+        if !scheduled.contains(&tag) && !typical {
             continue;
         }
         let Some((_, z0, z1)) = extent(d, e) else { continue };

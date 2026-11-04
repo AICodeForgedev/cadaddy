@@ -236,6 +236,15 @@ fn a_notes_panelboard_height_to_top_is_each_wall_panels() {
     // A 42" box whose top is at 78": its centre at 57".
     assert_eq!(h["value"], json!(57.0), "{el:#}");
     assert_eq!(h["source"]["kind"], "note");
+    // One of a typical panel's (the guest rooms' `LP1-201` of the schedule's `LP1`) too.
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["tag"] = json!("LP1-201");
+    sp["mep"]["equipment"][1]["circuits"] = json!([]);
+    sp["mep"]["panel_schedules"] = json!([{"panel": "LP1", "circuits": []}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("bim.props.fill", &json!({"panel_top_in": 78.0})).expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
 }
 
 /// A typical room's unit keeps its devices to what the build stamped and booked into it: a read
