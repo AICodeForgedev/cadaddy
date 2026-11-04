@@ -29,10 +29,15 @@ const SLIDE_MIN_IN: f64 = 2.0;
 /// there and this near it (inches), once the sheet's symbols are laid onto the model's devices.
 const SYMBOL_DEVICE_IN: f64 = 12.0;
 /// The sheet's symbols are laid onto the devices by a move of at most this (inches) plus three
-/// times the registration's error, found to this bin (inches), kept when this many agree.
+/// times the registration's error: the one that lands the most within this of a device
+/// (inches), kept when this many land; a chain's own move from the symbols this near it
+/// (inches): a registration's error drifts across a sheet. Symbols and moves tried, at most.
 const SYMBOL_MOVE_IN: f64 = 12.0;
-const SYMBOL_BIN_IN: f64 = 2.0;
+const SYMBOL_FIT_IN: f64 = 6.0;
 const SYMBOL_MOVE_MIN: usize = 2;
+const SYMBOL_LOCAL_IN: f64 = 240.0;
+const MAX_SYMBOLS: usize = 4_000;
+const MAX_MOVES: usize = 3_000;
 /// A witness is on an object within this (inches) when the chain is slid, and takes the
 /// nearest object within this much at most.
 const TIGHT_IN: f64 = 2.0;
@@ -232,42 +237,62 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
     out
 }
 
-/// Each sheet's (and level's) move laying its witness symbols onto the model's devices: the
-/// move most symbol–device pairs agree on (to a bin), within the registration's error; none
-/// when fewer than [`SYMBOL_MOVE_MIN`] agree.
-fn symbol_moves(devs: &[Dev], drawn: &Drawn, inch: f64) -> HashMap<(String, String), Vec2> {
+/// The move laying `syms` onto the devices `near` (model): of the moves from a symbol to a
+/// device within `reach`, the one that puts the most symbols within [`SYMBOL_FIT_IN`] of a
+/// device (a tie: the shorter), and how many land; none when fewer than [`SYMBOL_MOVE_MIN`] do.
+fn lay_symbols(syms: &[Vec2], near: &[Vec2], reach: f64, inch: f64) -> Option<(Vec2, usize)> {
+    let fit = SYMBOL_FIT_IN * inch;
+    let key = |p: Vec2| ((p.x / fit).floor() as i64, (p.y / fit).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<Vec2>> = HashMap::new();
+    for c in near {
+        grid.entry(key(*c)).or_default().push(*c);
+    }
+    let lands = |q: Vec2| -> bool {
+        let (kx, ky) = key(q);
+        (-1..=1).any(|dx| (-1..=1).any(|dy| grid.get(&(kx + dx, ky + dy)).is_some_and(|v| v.iter().any(|c| c.dist(q) <= fit))))
+    };
+    let mut moves: Vec<Vec2> = vec![Vec2::ZERO];
+    for q in syms {
+        for c in near.iter().filter(|c| c.dist(*q) <= reach) {
+            if moves.len() < MAX_MOVES {
+                moves.push(*c - *q);
+            }
+        }
+    }
+    moves
+        .iter()
+        .map(|m| (syms.iter().filter(|q| lands(**q + *m)).count(), *m))
+        .max_by(|a, b| a.0.cmp(&b.0).then(b.1.len().total_cmp(&a.1.len())))
+        .filter(|b| b.0 >= SYMBOL_MOVE_MIN)
+        .map(|(n, m)| (m, n))
+}
+
+/// The witness symbols of each sheet and level (model points), and the registration's error.
+fn sheet_symbols(drawn: &Drawn, inch: f64) -> BTreeMap<(String, String), (Vec<Vec2>, f64)> {
     let mut by: BTreeMap<(String, String), (Vec<Vec2>, f64)> = BTreeMap::new();
     for p in &drawn.placed {
         let e = by.entry((p.sheet.clone(), p.level.to_ascii_lowercase())).or_insert_with(|| (Vec::new(), p.residual));
         for q in [p.symbols.0, p.symbols.1].into_iter().flatten() {
-            if !e.0.iter().any(|x| x.dist(q) <= inch) && e.0.len() < 4_000 {
+            if !e.0.iter().any(|x| x.dist(q) <= inch) && e.0.len() < MAX_SYMBOLS {
                 e.0.push(q);
             }
         }
     }
+    by
+}
+
+fn level_devices(devs: &[Dev], level: &str) -> Vec<Vec2> {
+    devs.iter().filter(|d| same_level(d.level.as_deref(), Some(level))).map(Dev::c).collect()
+}
+
+/// Each sheet's (and level's) move laying its witness symbols onto the model's devices
+/// ([`lay_symbols`] within three times the registration's error), how many land, of how many.
+pub(super) fn symbol_moves(devs: &[Dev], drawn: &Drawn, inch: f64) -> HashMap<(String, String), (Vec2, usize, usize)> {
     let mut out = HashMap::new();
-    let bin = SYMBOL_BIN_IN * inch;
-    for ((sheet, level), (syms, residual)) in by {
+    for ((sheet, level), (syms, residual)) in sheet_symbols(drawn, inch) {
         let reach = (SYMBOL_MOVE_IN * inch + 3.0 * residual).min(72.0 * inch);
-        let near: Vec<Vec2> = devs.iter().filter(|d| same_level(d.level.as_deref(), Some(level.as_str()))).map(Dev::c).collect();
-        let mut votes: HashMap<(i64, i64), (usize, Vec2)> = HashMap::new();
-        let mut pairs = 0usize;
-        for q in &syms {
-            for c in near.iter().filter(|c| c.dist(*q) <= reach) {
-                let d = *c - *q;
-                let k = ((d.x / bin).round() as i64, (d.y / bin).round() as i64);
-                let v = votes.entry(k).or_insert((0, Vec2::ZERO));
-                v.0 += 1;
-                v.1 += d;
-                pairs += 1;
-            }
-            if pairs > 200_000 {
-                break;
-            }
-        }
-        let best = votes.into_iter().max_by(|a, b| a.1.0.cmp(&b.1.0).then(b.0.cmp(&a.0)));
-        if let Some((_, (n, sum))) = best.filter(|b| b.1.0 >= SYMBOL_MOVE_MIN) {
-            out.insert((sheet, level), sum / n as f64);
+        if let Some((m, n)) = lay_symbols(&syms, &level_devices(devs, &level), reach, inch) {
+            out.insert((sheet, level), (m, n, syms.len()));
         }
     }
     out
@@ -277,13 +302,27 @@ fn symbol_moves(devs: &[Dev], drawn: &Drawn, inch: f64) -> HashMap<(String, Stri
 pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Attached {
     let inch = cx.inch();
     let moves = symbol_moves(devs, drawn, inch);
+    let symbols = sheet_symbols(drawn, inch);
+    let mut level_devs: HashMap<String, Vec<Vec2>> = HashMap::new();
     let mut out = Attached { ends: drawn.placed.iter().map(|_| (Err(String::new()), Err(String::new()))).collect(), ..Attached::default() };
     for ch in chains(drawn) {
         let p = ch.p;
         let u = p.dir;
         let reach = REACH_IN * inch + p.residual;
         let sym_tol = SYMBOL_DEVICE_IN * inch;
-        let mv = moves.get(&(p.sheet.clone(), p.level.to_ascii_lowercase())).copied().unwrap_or(Vec2::ZERO);
+        // The move laying this chain's neighbourhood's symbols onto the devices, else the sheet's.
+        let key = (p.sheet.clone(), p.level.to_ascii_lowercase());
+        let sheet_move = moves.get(&key).map_or(Vec2::ZERO, |m| m.0);
+        let mv = if ch.symbols.iter().any(Option::is_some) {
+            let mid = ch.points.iter().fold(Vec2::ZERO, |a, q| a + *q) / ch.points.len().max(1) as f64;
+            let local: Vec<Vec2> =
+                symbols.get(&key).map(|(v, _)| v.iter().copied().filter(|q| q.dist(mid) <= SYMBOL_LOCAL_IN * inch).collect()).unwrap_or_default();
+            let near = level_devs.entry(key.1.clone()).or_insert_with(|| level_devices(devs, &key.1));
+            let reach = (SYMBOL_MOVE_IN * inch + 3.0 * p.residual).min(72.0 * inch);
+            lay_symbols(&local, near, reach, inch).map_or(sheet_move, |(m, _)| m)
+        } else {
+            sheet_move
+        };
         let cands: Vec<Vec<Cand>> = ch
             .points
             .iter()
@@ -414,6 +453,7 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
 /// `opening`, `casework`, `none`).
 pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, conflicts: &[Value], limit: usize, kind: Option<&str>) -> Value {
     let inch = cx.inch();
+    let moves = symbol_moves(devs, drawn, inch);
     let mut sheets: BTreeMap<String, Value> = BTreeMap::new();
     for (num, r) in &drawn.by_sheet {
         if r.values == 0 {
@@ -426,6 +466,7 @@ pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, confl
                 "stretches_without_value": r.no_value, "chains": r.chains, "baseline_groups": r.baselines, "not_to_scale": r.not_to_scale,
                 "scale_in_per_unit": r.scale_in_per_unit, "registration": r.registration,
                 "attached": {"both_ends": 0, "one_end": 0, "none": 0}, "ends": {}, "unattached_why": {},
+                "symbols_onto_devices": moves.iter().filter(|((sh, _), _)| sh == num).map(|((_, lv), (m, n, of))| json!({"level": lv, "move_in": [r2(m.x / inch), r2(m.y / inch)], "landed": n, "of": of})).collect::<Vec<_>>(),
             }),
         );
     }

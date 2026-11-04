@@ -900,6 +900,19 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
             });
         }
     }
+    // The same dimension read twice (a text drawn twice over itself, a line found twice): once.
+    let mut kept: Vec<DimString> = Vec::new();
+    for d in strings {
+        let same = |k: &DimString| {
+            (k.inches - d.inches).abs() < 1e-6
+                && k.ends.0.on_line.dist(d.ends.0.on_line) <= d.h * 0.2
+                && k.ends.1.on_line.dist(d.ends.1.on_line) <= d.h * 0.2
+        };
+        if !kept.iter().any(same) {
+            kept.push(d);
+        }
+    }
+    let mut strings = kept;
     // Baselines: dimensions on different lines sharing a first witness line.
     let mut group = 0usize;
     for i in 0..strings.len() {
