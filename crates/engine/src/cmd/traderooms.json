@@ -1,0 +1,98 @@
+{
+  "functions": [
+    {
+      "function": "mdf",
+      "label": "MDF",
+      "names": [
+        "MDF",
+        "MAIN DISTRIBUTION FRAME",
+        "MAIN TELECOM",
+        "MAIN TELECOMMUNICATIONS",
+        "MAIN TELECOMMUNICATIONS ROOM",
+        "MAIN TELECOM ROOM",
+        "ENTRANCE FACILITY",
+        "TELECOM ENTRANCE FACILITY",
+        "MPOE"
+      ]
+    },
+    {
+      "function": "idf",
+      "label": "IDF",
+      "names": [
+        "IDF",
+        "INTERMEDIATE DISTRIBUTION FRAME",
+        "TELECOM CLOSET",
+        "TELECOMMUNICATIONS CLOSET"
+      ]
+    },
+    {
+      "function": "telecom",
+      "label": "TELECOM",
+      "names": [
+        "TELECOM",
+        "TELECOMMUNICATIONS",
+        "TELECOMMUNICATION",
+        "COMMUNICATIONS"
+      ],
+      "with_room_word": [
+        "TEL",
+        "TELEPHONE",
+        "TELE/DATA",
+        "TEL/DATA",
+        "DATA",
+        "COMM",
+        "COMMS",
+        "SERVER",
+        "TECHNOLOGY",
+        "TECH",
+        "LOW VOLTAGE",
+        "LV"
+      ],
+      "with_room_word_note": "a word that names a system or a device as well (DATA outlet, TEL board) names a room only with a room word: DATA ROOM, TEL CLOSET"
+    }
+  ],
+  "room_words": [
+    "ROOM",
+    "ROOMS",
+    "RM",
+    "RM.",
+    "CLOSET",
+    "CLO",
+    "CLO."
+  ],
+  "trade_disciplines": [
+    "T",
+    "TN",
+    "TY",
+    "LV",
+    "E",
+    "EL",
+    "FA",
+    "Y",
+    "TC"
+  ],
+  "trade_view_words": [
+    "LOW VOLTAGE",
+    "LOW-VOLTAGE",
+    "TELECOM",
+    "TELECOMMUNICATIONS",
+    "TECHNOLOGY",
+    "STRUCTURED CABLING",
+    "COMMUNICATIONS",
+    "DATA AND VOICE",
+    "VOICE/DATA",
+    "FIRE ALARM",
+    "SECURITY"
+  ],
+  "heading_words": [
+    "NOTES",
+    "NOTE",
+    "REQUIREMENTS",
+    "REQUIREMENT",
+    "LEGEND"
+  ],
+  "max_label_chars": 40,
+  "min_room_sqft": 16.0,
+  "max_room_sqft": 2500.0,
+  "source": "rule: telecommunications spaces named as ANSI/TIA-569 and BICSI name them (the entrance facility and main distribution frame, MDF, where the service enters; intermediate distribution frames, IDF, telecommunications rooms and closets on the floors); a telecom/low-voltage or fire alarm plan names the rooms its systems need, and its enlarged room plans are titled with the room they show"
+}

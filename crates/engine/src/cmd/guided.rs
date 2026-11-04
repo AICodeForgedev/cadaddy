@@ -5939,6 +5939,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if n > 0 || !missed.is_empty() {
             progress_line(&format!("  rooms numbered from other trades' plans: {n}; not numbered: {missed:?}"));
         }
+        let trade_rooms = name_rooms_from_other_trades(s, job, place)?;
+        result["trade_rooms"] = trade_rooms;
     }
     let scraps = drop_numbered_scraps(s)?;
     if scraps > 0 {
@@ -7376,6 +7378,82 @@ fn number_rooms_from_other_trades(
         numbered += 1;
     }
     Ok((numbered, missed))
+}
+
+/// The rooms the other trades' sheets name (Q6180, [`super::traderooms::name_rooms`]): the trades'
+/// floor plans of each level and every sheet's enlarged trade room views, put on the model's
+/// rooms. A progress line, and a finding each for the rooms the trade names otherwise than the
+/// architectural plans (both names kept) and for the names no room takes. The step's result.
+fn name_rooms_from_other_trades(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    place: &dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>,
+) -> Result<Value> {
+    let sheets: Vec<super::traderooms::TradeSheet> = job
+        .sheet_regions
+        .iter()
+        .map(|r| super::traderooms::TradeSheet {
+            number: r.number.clone(),
+            discipline: r.discipline.clone(),
+            // A floor plan of a level (a site sheet or one of no level gives its rooms no level).
+            level: if matches!(r.kind.as_str(), "plan" | "enlarged_plan") && r.not_built.is_empty() { r.level.clone() } else { String::new() },
+            rect: r.rect,
+            plan: r.plan_rect(),
+        })
+        .collect();
+    let out = super::traderooms::name_rooms(s, &sheets, place)?;
+    let n = |k: &str| out.get(k).and_then(Value::as_u64).unwrap_or(0);
+    progress_line(&format!(
+        "  rooms named from other trades' sheets: {} named, {} added, {} agree, {} named otherwise (both kept), {} unplaced; other room labels: {} in rooms the architectural plans named (their name kept), {} in no room; functions {}",
+        n("named"),
+        n("added"),
+        n("agrees"),
+        n("conflicts"),
+        n("unplaced"),
+        n("kept_architectural"),
+        n("unmatched"),
+        out.get("functions").cloned().unwrap_or(json!({}))
+    ));
+    let listed: Vec<&Value> = out.get("rooms").and_then(Value::as_array).into_iter().flatten().collect();
+    let line = |v: &Value| {
+        let f = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let room = match (f("room"), v.get("number").and_then(Value::as_str)) {
+            (r, _) if !r.is_empty() => format!("{} room {r}", f("level")),
+            (_, Some(num)) => format!("room {num}"),
+            _ => f("level"),
+        };
+        let why = f("why");
+        format!("{room}: {} names it {}{}", f("source"), f("name"), if why.is_empty() { String::new() } else { format!(" ({why})") })
+    };
+    let conflicts: Vec<String> = listed.iter().filter(|v| v.get("how").and_then(Value::as_str) == Some("conflict")).map(|v| line(v)).collect();
+    if !conflicts.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Rooms another trade names otherwise than the architectural plans",
+            &format!(
+                "{} room(s) keep the architectural name with the other trade's beside it (never overwritten): {}",
+                conflicts.len(),
+                conflicts.iter().take(12).cloned().collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Confirm each room's name (and its use) with the architect; the trade's name is the room's other_name".into()],
+            None,
+            false,
+        );
+    }
+    let unplaced: Vec<String> = listed.iter().filter(|v| v.get("how").and_then(Value::as_str) == Some("unplaced")).map(|v| line(v)).collect();
+    if !unplaced.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Room names on other trades' sheets no room takes",
+            &format!("{} name(s) were not placed in any room: {}", unplaced.len(), unplaced.iter().take(12).cloned().collect::<Vec<_>>().join("; ")),
+            2,
+            vec!["Check where the trade's sheet puts each room on the architectural plan".into()],
+            None,
+            false,
+        );
+    }
+    Ok(out)
 }
 
 /// Whether a room of the level (digits of its name) already has the number: one number per level
@@ -12456,7 +12534,16 @@ fn underground_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cada
                     Some(n) => format!("{} {n}", r.name.to_ascii_uppercase()),
                     None => r.name.to_ascii_uppercase(),
                 };
-                ugplan::Room { level: r.level.clone(), name, outline: r.outline.iter().map(|p| [p.x - off.x, p.y - off.y]).collect() }
+                // The names other trades give it, and its function's (Q6180).
+                let tag = |k: &str| d.model.get(r.handle).and_then(|e| super::bspec::room_tag(e, k)).filter(|v| !v.is_empty()).map(str::to_string);
+                let function = tag("function:");
+                let aka = [tag("other_name:"), function.as_deref().and_then(super::traderooms::function_rule).map(|f| f.label.clone())]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("; ")
+                    .to_ascii_uppercase();
+                ugplan::Room { level: r.level.clone(), name, outline: r.outline.iter().map(|p| [p.x - off.x, p.y - off.y]).collect(), aka, function }
             })
             .collect()
     };
