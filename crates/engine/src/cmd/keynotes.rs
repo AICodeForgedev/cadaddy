@@ -51,13 +51,16 @@ fn numbered(v: &str) -> Option<(String, String)> {
 
 /// The keynote lists on a sheet's texts.
 pub(crate) fn lists(texts: &[TextItem]) -> Vec<List> {
+    lists_under(texts, |u| u.contains("KEYNOTES") || u.contains("KEYED NOTES"))
+}
+
+/// The numbered lists under the headings `heading` takes (its upper-case text): a sheet's
+/// general notes as well as its keynotes.
+pub(crate) fn lists_under(texts: &[TextItem], heading: impl Fn(&str) -> bool) -> Vec<List> {
     let flat: Vec<&TextItem> =
         texts.iter().filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite()).collect();
     let mut out = Vec::new();
-    for head in flat.iter().filter(|t| {
-        let u = t.value.to_ascii_uppercase();
-        u.contains("KEYNOTES") || u.contains("KEYED NOTES")
-    }) {
+    for head in flat.iter().filter(|t| t.value.len() <= 80 && heading(&t.value.to_ascii_uppercase())) {
         if out.len() >= MAX_LISTS {
             break;
         }

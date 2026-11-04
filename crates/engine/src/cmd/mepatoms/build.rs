@@ -558,9 +558,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     } else {
         Vec::new()
     };
+    // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
+    let scope = super::super::scope::decisions(d);
+    let sr = super::super::scope::rules();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
+        let theirs = sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).map(|x| {
+            let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
+            let ours = x.ours_for(&kind, &fa);
+            (ours.iter().any(|i| i.item == "box"), ours.iter().any(|i| i.item == "ring"))
+        });
+        if theirs.is_some_and(|(b, _)| !b) {
+            continue;
+        }
         // A device placed outside its level's footprint is flagged for review: no box with it.
         if ps.get("misplaced").is_some() {
             continue;
@@ -571,6 +582,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let circuit = ps.get("circuit").map(Prop::text).unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
         let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
+        let ring = ring && theirs.is_none_or(|(_, r)| r);
         let c = plan.center();
         let out = ["face_normal", "host_face"].iter().find_map(|k| {
             let t = ps.get(k).map(Prop::text)?;

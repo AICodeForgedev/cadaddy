@@ -5381,6 +5381,46 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 progress_line(&format!("  devices of no kind (their mark is in no legend row or known list): {unknown:?}"));
             }
         }
+        // A fire alarm plan's symbols with no mark (strobes, horn/strobes): loose strokes, each
+        // its legend row's by its drawn sample's shape (Q6167).
+        if !legend.is_empty() {
+            let (pages, notes) = fa_pages_as_drawn(job);
+            // Placed as the devices read were (their sheet's registration onto its level's plan
+            // when the set has one); none more than its storey's margin outside its walls.
+            let place = |at: [f64; 2], level: &str| match placer.as_deref() {
+                Some(sim) => sim(at, level).map(|m| m.apply(at)),
+                None => Some(at),
+            };
+            let (mut loose, mut st) = fa_loose_devices(s.doc()?, job, &legend, &devices, &pages, &place);
+            st.unplaced.extend(notes);
+            if let Some(sh) = shells.as_deref()
+                && let Ok((sp, _)) = super::bspec::current(s, "bim_build")
+            {
+                let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let n = loose.len();
+                loose.retain(|dv| !outside_shell(sh, &dv.level, dv.at, upf));
+                st.unplaceable += n - loose.len();
+            }
+            if !st.sheets.is_empty() {
+                let mut by: BTreeMap<&str, usize> = BTreeMap::new();
+                for dv in &loose {
+                    *by.entry(dv.tag.as_str()).or_default() += 1;
+                }
+                progress_line(&format!(
+                    "  fire alarm symbols with no mark, by their legend rows' shapes: {} {by:?} (plans {:?}, read as drawn {:?}, not {:?}, fire alarm legend rows {}, copies found {}, off every level {}, not placeable {}, a device read there {})",
+                    loose.len(),
+                    st.sheets,
+                    st.as_drawn,
+                    st.unplaced,
+                    st.rows,
+                    st.found,
+                    st.off_level,
+                    st.unplaceable,
+                    st.read_already
+                ));
+                devices.extend(loose);
+            }
+        }
         // Still of no kind: the electrical and mechanical sheets that aren't plans (the legend
         // sheet, the fixture and equipment schedules, the panel schedules' load names).
         if devices.iter().any(unresolved_mark) {
@@ -5704,6 +5744,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         progress_line(&format!("  trade documents: {line} ({:.1} s)", t_docs.elapsed().as_secs_f64()));
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
+    // Whose work each element is (Q6167): the notes, specifications and submittals read for who
+    // furnishes and installs what another trade may own, the fire alarm devices given their kinds
+    // by the legends. Before the build: its pieces leave out a box that isn't ours.
+    let t_scope = web_time::Instant::now();
+    let (scope_summary, scope_docs) = scope_step(s, job);
+    progress_line(&format!("  whose work: read in {:.1} s", t_scope.elapsed().as_secs_f64()));
     let budget_s = super::bspec::BUILD_BUDGET_S;
     // The job merges walls read off several sheets after the build: its own line says the counts
     // the model ends with (= bim.tree), the build's would be a second, earlier set.
@@ -5711,6 +5757,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // the build routes the circuits by (Q6152).
     route_methods_step(s, job);
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
+    result["scope"] = scope_summary;
     bim_step(s, job, "model built", t);
     result["left_out"] = json!(left_out);
     if let Some(db) = result.get("deviceBuild") {
@@ -5813,6 +5860,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["gear_error"] = json!(e.to_string());
     }
     bim_step(s, job, "electrical gear", t);
+    // The fire alarm panels where the documents put them (proposed, in their rooms).
+    let t = web_time::Instant::now();
+    fa_panels_step(s, job, &scope_docs, &mut result);
+    bim_step(s, job, "fire alarm panels", t);
     // What the electrical keynotes ask built (a BDA system's boxes and conduit).
     let t = web_time::Instant::now();
     if let Err(e) = keynote_step(s, job, &pages, &mut result) {
@@ -6228,6 +6279,18 @@ fn sheet_page(
     files: &mut BTreeMap<String, Vec<u8>>,
     read_pdf: ReadPdf,
 ) -> std::result::Result<cadaddy_doc::Drawing, String> {
+    sheet_page_read(job, c, files, read_pdf, false)
+}
+
+/// [`sheet_page`], `as_drawn`: every stroke kept as the PDF draws it (no lettering read off
+/// strokes, no repeated clusters made blocks).
+fn sheet_page_read(
+    job: &GuidedJob,
+    c: &Value,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    read_pdf: ReadPdf,
+    as_drawn: bool,
+) -> std::result::Result<cadaddy_doc::Drawing, String> {
     let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else {
         return Err("the sheet index gives it no file and page".into());
     };
@@ -6236,7 +6299,11 @@ fn sheet_page(
         files.insert(file.to_string(), bytes);
     }
     let bytes = files.get(file).ok_or_else(|| format!("{file}: not read"))?;
-    read_pdf(bytes, &json!({"page": page, "text": true, "images": false})).map(|(d, _)| d).map_err(|e| format!("{file} page {page}: {e}"))
+    let mut opts = json!({"page": page, "text": true, "images": false});
+    if as_drawn {
+        opts["recoverText"] = json!(false);
+    }
+    read_pdf(bytes, &opts).map(|(d, _)| d).map_err(|e| format!("{file} page {page}: {e}"))
 }
 
 /// Take the print inventory, keep it in the drawing, and give its coverage in the stage result.
@@ -6364,6 +6431,134 @@ const MAX_SHEET_LINKS: usize = 2_000;
 /// and its level (a sheet listed already keeps its entry and gains its place).
 /// The build's identity pass (`bim.identity` then `rooms.graph`): merged copies leave the counts,
 /// findings go on the build stage, and the answer's summary goes in the result as `identity`.
+/// The documents read for whose work each element is: the sheets of the trades another trade's
+/// work is on (and the general sheets), those the drawing holds and the others' pages, the
+/// specifications and the submittals of those trades.
+fn scope_docs(s: &Session, job: &GuidedJob) -> Vec<super::scope::Doc> {
+    let r = super::scope::rules();
+    let wanted = |disc: &str| disc.eq_ignore_ascii_case("G") || r.disciplines.contains_key(&disc.trim().to_ascii_uppercase());
+    let mut docs = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    if let Ok(d) = s.doc() {
+        for sh in job_sheet_refs(job).iter().filter(|r| wanted(&r.discipline)).take(MAX_LEGEND_SHEETS * 4) {
+            let number = sh.number.split('/').next().unwrap_or("").to_string();
+            if !seen.insert(number.clone()) {
+                continue;
+            }
+            let sub = super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() });
+            docs.push(super::scope::sheet_doc(&number, &cadaddy_mepfix::sheet_facts::texts(&sub)));
+        }
+    }
+    let mut discs: Vec<String> = r.disciplines.keys().cloned().collect();
+    discs.push("G".into());
+    for disc in discs {
+        for (number, page) in non_plan_pages(job, &disc) {
+            if seen.insert(number.clone()) {
+                docs.push(super::scope::sheet_doc(&number, &cadaddy_mepfix::sheet_facts::texts(&page)));
+            }
+        }
+    }
+    let mut unread = Vec::new();
+    docs.extend(super::scope::file_docs(&job_specs(job), &job.submittals, &mut unread));
+    if !unread.is_empty() {
+        progress_line(&format!("  whose work: {} files not read", unread.len()));
+    }
+    docs
+}
+
+/// Whose work each class of element is (Q6167), read and kept; the fire alarm devices' kinds.
+/// A class no document speaks for keeps its default and is a finding (`review.list` asks).
+fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope::Doc>) {
+    let docs = scope_docs(s, job);
+    let (stmts, read) = super::scope::read_docs(&docs);
+    if let Ok(d) = s.doc_mut() {
+        super::scope::record(d, &read, "guided job");
+    }
+    let mut fa = Value::Null;
+    if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+        && let Ok(d) = s.doc()
+    {
+        let (n, open) = super::scope::fa_kinds(d, &mut sp);
+        let mut by: BTreeMap<String, usize> = BTreeMap::new();
+        for t in &sp.tags {
+            if let Some(k) = t.fields.get("fa_kind") {
+                *by.entry(k.value.clone()).or_default() += 1;
+            }
+        }
+        progress_line(&format!("  fire alarm devices by their legends: {n} given their kind {by:?}; marks left open {open:?}"));
+        fa = json!({"resolved": n, "by_kind": by, "unresolved": open});
+        if let Ok(d) = s.doc_mut() {
+            d.building_spec = Some(sp.to_json());
+        }
+    }
+    let kept = s.doc().map(super::scope::decisions).unwrap_or_default();
+    let sp = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp).unwrap_or_default();
+    let summary = super::scope::summary(&kept, &sp);
+    let line: Vec<String> = summary
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|x| x["elements"].as_u64().unwrap_or(0) > 0)
+        .map(|x| {
+            format!(
+                "{} {}: {} ({}), ours [{}] ({})",
+                x["elements"],
+                x["class"].as_str().unwrap_or(""),
+                x["party"].as_str().unwrap_or(""),
+                x["party_from"].as_str().unwrap_or(""),
+                x["ours"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
+                x["ours_from"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    progress_line(&format!("  whose work: {} documents, {} statements; {}", docs.len(), stmts.len(), line.join("; ")));
+    for (class, aspect, n, default) in s.doc().ok().map(|d| super::scope::questions(d, &sp)).unwrap_or_default() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!(
+                "{n} {class} elements: no document says {} ({default})",
+                if aspect == "party" { "who furnishes and installs them" } else { "what of their rough-in is ours" }
+            ),
+            "the notes, the specification's sections and the submittals were read for it; the BOM lists them by the default until answered",
+            2,
+            vec!["Answer the review question (review.list kind question), citing the document that settles it".into()],
+            None,
+            false,
+        );
+    }
+    (json!({"decisions": summary, "statements": stmts.len(), "documents": docs.len(), "fire_alarm": fa}), docs)
+}
+
+/// The fire alarm panels the documents locate (`… LOCATED IN ELECTRICAL ROOM 610`), along a wall
+/// of their rooms and built; one not placed is a finding.
+fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Doc], result: &mut Value) {
+    let places = super::scope::panel_places(docs);
+    if places.is_empty() {
+        return;
+    }
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return };
+    let rooms = s.doc().map(super::scope::room_boxes).unwrap_or_default();
+    let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
+    let Ok(d) = s.doc_mut() else { return };
+    d.building_spec = Some(sp.to_json());
+    let built = super::scope::build_panels(d, &sp, &placed, &rooms);
+    s.touch();
+    progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
+    for (tag, why) in &not {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Fire alarm panel {tag} not placed: {why}"),
+            "the documents name its room",
+            2,
+            Vec::new(),
+            None,
+            false,
+        );
+    }
+    result["fire_alarm_panels"] =
+        json!({"placed": placed, "built": built, "not_placed": not.iter().map(|(t, w)| json!({"tag": t, "why": w})).collect::<Vec<_>>()});
+}
+
 /// The specifications the job reads: those given, else those it found ([`look_for_specs`]; a
 /// job from before the search looks now, by name only).
 fn job_specs(job: &GuidedJob) -> Vec<String> {
@@ -9500,7 +9695,7 @@ pub(crate) fn symbol_shape(d: &cadaddy_doc::Drawing, block: &str) -> Option<Vec<
 }
 
 /// [`symbol_shape`] of some drawn objects (a symbol drawn once, as linework, in a legend row).
-fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
+pub(crate) fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> Option<Vec<(u8, i32, i32, i32)>> {
     let mut parts: Vec<(u8, [f64; 2], f64)> = Vec::new();
     for kind in objects.take(64) {
         match kind {
@@ -9529,7 +9724,7 @@ fn shape_of<'a>(objects: impl Iterator<Item = &'a cadaddy_doc::EntityKind>) -> O
 }
 
 /// A symbol's shape ([`symbol_shape`]).
-type Shape = Vec<(u8, i32, i32, i32)>;
+pub(crate) type Shape = Vec<(u8, i32, i32, i32)>;
 
 /// Whether a shape is a keynote's box: straight pieces only, drawn into all four corners of its
 /// extent (square or eased), with its number's strokes inside. A receptacle's symbol is round (a
@@ -11295,6 +11490,357 @@ fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk
         }
     }
     out
+}
+
+/// The fire alarm plans of the set: the sheets whose title says fire alarm.
+fn fire_alarm_sheets(job: &GuidedJob) -> BTreeSet<String> {
+    job.index
+        .as_ref()
+        .or(job.sheets.as_ref())
+        .and_then(|i| i.get("sheets"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|sh| sh.get("title").and_then(Value::as_str).is_some_and(|t| t.to_ascii_uppercase().contains("FIRE ALARM")))
+        .filter_map(|sh| sh.get("number").and_then(Value::as_str).map(|n| n.trim().to_ascii_uppercase()))
+        .collect()
+}
+
+/// The fire alarm plans' pages read again from the PDFs with every stroke as drawn: no
+/// lettering read off strokes, no repeated clusters made blocks (an import may read a symbol's
+/// circle as a letter, or keep one copy of a symbol with its neighbours for all of them).
+fn fa_pages_as_drawn(job: &GuidedJob) -> (BTreeMap<String, cadaddy_doc::Drawing>, Vec<String>) {
+    let (mut out, mut notes) = (BTreeMap::new(), Vec::new());
+    let wanted = fire_alarm_sheets(job);
+    if wanted.is_empty() {
+        return (out, notes);
+    }
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
+        notes.push("no PDF reader in this build".into());
+        return (out, notes);
+    };
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for c in classified.iter().take(MAX_SHEETS_SCANNED) {
+        let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        if out.len() >= MAX_LEGEND_SHEETS || !wanted.contains(&number) || out.contains_key(&number) {
+            continue;
+        }
+        match sheet_page_read(job, c, &mut files, read_pdf, true) {
+            Ok(d) => {
+                out.insert(number, d);
+            }
+            Err(e) => notes.push(format!("{number}: {e}")),
+        }
+    }
+    // Else the set index's current copy (`file#page`, a one-sheet file alone).
+    let index: Vec<Value> = job.index.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    for c in index.iter().take(MAX_SHEETS_SCANNED) {
+        let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+        if out.len() >= MAX_LEGEND_SHEETS || !wanted.contains(&number) || out.contains_key(&number) {
+            continue;
+        }
+        let Some(source) = c.get("sources").and_then(Value::as_array).and_then(|s| s.first()).and_then(Value::as_str) else { continue };
+        let (file, page) = match source.rsplit_once('#') {
+            Some((f, p)) => (f, p.trim().parse::<u64>().unwrap_or(1)),
+            None => (source, 1),
+        };
+        match sheet_page_read(job, &json!({"file": file, "page": page}), &mut files, read_pdf, true) {
+            Ok(d) => {
+                notes.retain(|x| !x.starts_with(&format!("{number}:")));
+                out.insert(number, d);
+            }
+            Err(e) => notes.push(format!("{number}: {e}")),
+        }
+    }
+    let missing: Vec<String> = wanted
+        .iter()
+        .filter(|n| !out.contains_key(*n) && !notes.iter().any(|x| x.starts_with(&format!("{n}:"))))
+        .map(|n| format!("{n}: no file and page in the print set or its index"))
+        .collect();
+    notes.extend(missing);
+    (out, notes)
+}
+
+/// Where a page read again sits in the model: the scale and shift that put its lettering on the
+/// model's copy of the sheet, from the words written once on each (three at least, agreeing).
+fn text_fit(
+    page: &[cadaddy_mepfix::sheet_facts::TextItem],
+    model: &[cadaddy_mepfix::sheet_facts::TextItem],
+) -> std::result::Result<(f64, cadaddy_geom::Vec2), String> {
+    let once = |texts: &[cadaddy_mepfix::sheet_facts::TextItem]| {
+        let mut by: BTreeMap<String, (usize, cadaddy_geom::Vec2)> = BTreeMap::new();
+        for t in texts.iter().filter(|t| t.value.trim().chars().count() >= 6 && t.at.x.is_finite() && t.at.y.is_finite()) {
+            let e = by.entry(t.value.trim().to_ascii_uppercase()).or_insert((0, t.at));
+            e.0 += 1;
+        }
+        by.into_iter().filter(|(_, (n, _))| *n == 1).map(|(k, (_, p))| (k, p)).collect::<BTreeMap<_, _>>()
+    };
+    let m = once(model);
+    let pairs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2)> =
+        once(page).into_iter().filter_map(|(k, p)| m.get(&k).map(|q| (p, *q))).take(MAX_FIT_PAIRS).collect();
+    if pairs.len() < 3 {
+        return Err(format!("{} words written once on both (3 needed)", pairs.len()));
+    }
+    let median = |mut v: Vec<f64>| {
+        v.sort_by(f64::total_cmp);
+        v.get(v.len() / 2).copied()
+    };
+    let mut ratios = Vec::new();
+    for (i, (p, q)) in pairs.iter().enumerate() {
+        for (p2, q2) in pairs.iter().skip(i + 1).take(8) {
+            let dp = (*p2 - *p).len();
+            if dp > 1e-6 {
+                ratios.push((*q2 - *q).len() / dp);
+            }
+        }
+    }
+    let k = median(ratios).filter(|k| k.is_finite() && *k > 0.0).ok_or("no scale between the words")?;
+    let (Some(x), Some(y)) = (median(pairs.iter().map(|(p, q)| q.x - k * p.x).collect()), median(pairs.iter().map(|(p, q)| q.y - k * p.y).collect()))
+    else {
+        return Err("no shift between the words".into());
+    };
+    let off = cadaddy_geom::Vec2::new(x, y);
+    let span = pairs.iter().map(|(_, q)| q.x.abs().max(q.y.abs())).fold(1.0, f64::max);
+    let agree = pairs.iter().filter(|(p, q)| (*p * k + off - *q).len() <= 1e-3 * span).count();
+    if agree >= 3 && 2 * agree >= pairs.len() { Ok((k, off)) } else { Err(format!("{agree} of {} words in common agree on one place", pairs.len())) }
+}
+
+/// The fire alarm rows of a page's symbol lists as samples to find piece by piece: rows drawn
+/// with no letter (a lettered one, `P` in a box, is read by its letter).
+fn fa_templates(
+    page: &cadaddy_doc::Drawing,
+    texts: &[cadaddy_mepfix::sheet_facts::TextItem],
+    number: &str,
+    fa_row: &dyn Fn(&str, &str) -> bool,
+) -> Vec<super::loosesym::Template> {
+    let mut out = Vec::new();
+    for tb in symbol_lists(texts) {
+        for (row, cell) in tb.loose_cells(page, 3) {
+            if !fa_row(&row.value, number) {
+                continue;
+            }
+            let Some(b) = super::loosesym::bounds_of(&cell) else { continue };
+            let pad = 0.1 * (b[2] - b[0]).max(b[3] - b[1]);
+            let lettered = texts.iter().any(|t| {
+                t.value.trim().chars().count() <= 3 && t.at.x >= b[0] - pad && t.at.x <= b[2] + pad && t.at.y >= b[1] - pad && t.at.y <= b[3] + pad
+            });
+            if !lettered && let Some(tm) = super::loosesym::Template::new(&cell, row.value.trim(), number) {
+                out.push(tm);
+            }
+        }
+    }
+    out
+}
+
+/// The SYMBOL | DESCRIPTION tables of a sheet's lettering ([`legend_tables`]), and those whose
+/// DESCRIPTION header is centred over a column of rows set flush left: the column the rows under
+/// the header line up on, between the SYMBOL header and the DESCRIPTION header's end.
+fn symbol_lists(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<LegendTable<'_>> {
+    let mut out = legend_tables(texts);
+    for tb in &mut out {
+        if !tb.rows.is_empty() {
+            continue;
+        }
+        let h = tb.h();
+        let right = tb.desc_x + tb.title.chars().count() as f64 * h;
+        let under: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+            .iter()
+            .filter(|t| {
+                t.at.y < tb.head.at.y - 0.5 * h
+                    && t.at.y > tb.below
+                    && t.at.x > tb.head.at.x + 2.0 * h
+                    && t.at.x <= right
+                    && t.value.chars().count() > 3
+            })
+            .collect();
+        // The left edge most of them share.
+        let Some(x) = under.iter().map(|t| t.at.x).max_by_key(|x| under.iter().filter(|o| (o.at.x - x).abs() <= 0.5 * h).count()) else {
+            continue;
+        };
+        tb.desc_x = x;
+        tb.rows = texts.iter().filter(|t| (t.at.x - x).abs() <= 1.5 * h && t.at.y < tb.head.at.y - 0.5 * h && t.at.y > tb.below).collect();
+    }
+    out
+}
+
+/// The extents of the symbol lists on a sheet ([`symbol_lists`]): the header down to its last
+/// row, and well right of it.
+fn symbol_list_rects(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<[f64; 4]> {
+    symbol_lists(texts)
+        .iter()
+        .map(|tb| {
+            let h = tb.h();
+            let bottom = tb.rows.iter().map(|r| r.at.y).fold(tb.head.at.y, f64::min);
+            [tb.head.at.x - 4.0 * h, bottom - 2.0 * h, tb.desc_x.max(tb.head.at.x) + 120.0 * h, tb.head.at.y + 2.0 * h]
+        })
+        .collect()
+}
+
+/// Words paired to place a page read again, at most; index entries looked through, at most.
+const MAX_FIT_PAIRS: usize = 400;
+const MAX_SHEETS_SCANNED: usize = 2_000;
+
+/// The SYMBOL | DESCRIPTION tables' extents on a sheet's lettering: the header down its
+/// description column while the rows run on, and well right of it.
+fn symbol_table_rects(texts: &[cadaddy_mepfix::sheet_facts::TextItem]) -> Vec<[f64; 4]> {
+    texts
+        .iter()
+        .filter(|t| t.value.eq_ignore_ascii_case("SYMBOL"))
+        .take(20)
+        .map(|head| {
+            let th = head.height;
+            // Its rows: down its DESCRIPTION column (else its own) while they run on.
+            let desc_x = texts
+                .iter()
+                .filter(|t| t.value.to_ascii_uppercase().starts_with("DESCRIPTION") && (t.at.y - head.at.y).abs() <= th && t.at.x > head.at.x)
+                .map(|t| t.at.x)
+                .min_by(f64::total_cmp)
+                .unwrap_or(head.at.x);
+            let col: Vec<f64> = texts.iter().filter(|t| t.at.y < head.at.y && (t.at.x - desc_x).abs() <= 3.0 * th).map(|t| t.at.y).collect();
+            let mut ys = col;
+            ys.sort_by(|a, b| b.total_cmp(a));
+            let mut bottom = head.at.y;
+            for y in ys {
+                if bottom - y > 6.0 * th {
+                    break;
+                }
+                bottom = y;
+            }
+            [head.at.x - 4.0 * th, bottom - 2.0 * th, desc_x.max(head.at.x) + 120.0 * th, head.at.y + 2.0 * th]
+        })
+        .collect()
+}
+
+/// What [`fa_loose_devices`] looked at: the fire alarm plans, their legends' fire alarm rows,
+/// the copies of a row's sample found, and those left out (off every level, or a device read there).
+#[derive(Debug, Default)]
+struct LooseStats {
+    sheets: Vec<String>,
+    /// The plans read again as drawn and placed by their lettering; why others weren't.
+    as_drawn: Vec<String>,
+    unplaced: Vec<String>,
+    rows: usize,
+    found: usize,
+    off_level: usize,
+    unplaceable: usize,
+    read_already: usize,
+}
+
+/// The symbols with no mark on the fire alarm plans (Q6167): the loose strokes of each copy of
+/// a fire alarm legend row's drawn sample, outside the legend tables and away from the devices
+/// already read, each a fire alarm device of its row (`STROBE`, `HORN/STROBE`), the row its source.
+fn fa_loose_devices(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    legend: &BTreeMap<Shape, (String, String)>,
+    have: &[super::readers::ReadDevice],
+    pages: &BTreeMap<String, cadaddy_doc::Drawing>,
+    place: &dyn Fn([f64; 2], &str) -> Option<[f64; 2]>,
+) -> (Vec<super::readers::ReadDevice>, LooseStats) {
+    let r = super::scope::rules();
+    let mut stats = LooseStats::default();
+    let fire_alarm = fire_alarm_sheets(job);
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<super::readers::ReadDevice> = Vec::new();
+    for span in job.sheet_spans.iter().filter(|sp| fire_alarm.contains(&sp.sheet.split('/').next().unwrap_or(&sp.sheet).trim().to_ascii_uppercase()))
+    {
+        stats.sheets.push(span.sheet.clone());
+        // The sheet's text: its letters' height sizes a symbol; its legend tables are left out.
+        let texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> = d
+            .model
+            .iter()
+            .filter(|e| e.handle.0 >= span.lo && e.handle.0 < span.hi)
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Text(t) if t.height.is_finite() && t.height > 0.0 => Some(cadaddy_mepfix::sheet_facts::TextItem {
+                    value: t.value.trim().to_string(),
+                    at: t.insert.xy(),
+                    height: t.height,
+                    rotation: t.rotation,
+                }),
+                _ => None,
+            })
+            .take(MAX_SHEET_TEXTS)
+            .collect();
+        let mut heights: Vec<f64> = texts.iter().filter(|t| t.value.chars().count() <= 3).map(|t| t.height).collect();
+        heights.sort_by(f64::total_cmp);
+        let Some(&h) = heights.get(heights.len() / 2) else { continue };
+        let tables = symbol_table_rects(&texts);
+        let max_size = 6.0 * h;
+        // A fire alarm row: its words say so, or a fire alarm plan's legend holds it (an
+        // electrical legend's `SPEAKER` or `AUDIO/VISUAL OUTLET` is a low voltage device).
+        let fa_row = |w: &str, sheet: &str| {
+            let u = w.to_ascii_uppercase();
+            r.fa_kind_of(w).is_some()
+                && (u.contains("FIRE ALARM")
+                    || u.contains("F.A.")
+                    || fire_alarm.contains(&sheet.split('/').next().unwrap_or(sheet).trim().to_ascii_uppercase()))
+        };
+        // The sheet as drawn (its page read again with every stroke kept), where it is in the
+        // model by the lettering both carry: its legend rows' samples found piece by piece.
+        let number = span.sheet.split('/').next().unwrap_or(&span.sheet).trim().to_ascii_uppercase();
+        let raw = pages.get(&number).and_then(|page| {
+            let ptexts = cadaddy_mepfix::sheet_facts::texts(page);
+            match text_fit(&ptexts, &texts) {
+                Ok(fit) => Some((page, ptexts, fit)),
+                Err(why) => {
+                    stats.unplaced.push(format!("{number}: {why}"));
+                    None
+                }
+            }
+        });
+        let found = match raw {
+            Some(_) if !done.insert(number.clone()) => Vec::new(),
+            Some((page, ptexts, (k, off))) => {
+                let templates = fa_templates(page, &ptexts, &number, &fa_row);
+                stats.rows = stats.rows.max(templates.len());
+                stats.as_drawn.push(number.clone());
+                super::loosesym::find_by_parts(page, 0, u64::MAX, &templates, &symbol_list_rects(&ptexts))
+                    .into_iter()
+                    .map(|f| super::loosesym::Found { at: f.at * k + off, handles: Vec::new(), size: f.size * k, ..f })
+                    .collect()
+            }
+            None => {
+                stats.rows = stats.rows.max(legend.values().filter(|(w, sheet)| fa_row(w, sheet)).count());
+                super::loosesym::find(d, span.lo, span.hi, legend, &fa_row, max_size, &tables)
+            }
+        };
+        stats.found += found.len();
+        for f in found {
+            let on_sheet = [f.at.x, f.at.y];
+            let Some(region) = job.level_at(on_sheet).filter(|g| super::printmep::building_level(&g.level)) else {
+                stats.off_level += 1;
+                continue;
+            };
+            // Onto its level's plan, as the devices read there were.
+            let Some(at) = place(on_sheet, &region.level) else {
+                stats.unplaceable += 1;
+                continue;
+            };
+            let Some(kind) = r.fa_kind_of(&f.row) else { continue };
+            let tag = kind.to_ascii_uppercase();
+            // This symbol read there already (found before, or read with no mark): not twice. A
+            // device another mark names beside it (a horn/strobe by its pull station's `P`) is
+            // another device.
+            let near = 0.5 * if f.size.is_finite() && f.size > 0.0 { f.size.min(max_size) } else { max_size };
+            let same = |dv: &super::readers::ReadDevice| dv.tag.trim().is_empty() || dv.tag.eq_ignore_ascii_case(&tag);
+            if have.iter().chain(out.iter()).any(|dv| same(dv) && (dv.at[0] - at[0]).hypot(dv.at[1] - at[1]) <= near) {
+                stats.read_already += 1;
+                continue;
+            }
+            out.push(super::readers::ReadDevice {
+                tag,
+                at,
+                sheet: span.sheet.clone(),
+                level: region.level.clone(),
+                handle: f.handles.first().map(|x| x.hex()).unwrap_or_default(),
+                kind: "fire alarm device".into(),
+                kind_source: format!("{} legend: {}", f.legend_sheet, f.row),
+                ..super::readers::ReadDevice::default()
+            });
+        }
+    }
+    (out, stats)
 }
 
 /// One sheet's legend rows into `out` ([`legend_symbols`]).
@@ -17662,6 +18208,202 @@ mod tests {
         ] {
             assert_eq!(legend_kind(row), want, "{row}");
         }
+    }
+
+    #[test]
+    fn a_fire_alarm_plan_read_as_drawn_finds_its_unmarked_symbols_by_their_parts() {
+        use cadaddy_doc::{Entity, EntityKind, Line, LwPolyline, Text};
+        use cadaddy_geom::{PolyVertex, Vec2, Vec3};
+        fn push(d: &mut cadaddy_doc::Drawing, k: EntityKind) {
+            let h = cadaddy_doc::Handle(d.handseed.max(0x100));
+            d.handseed = h.0 + 1;
+            d.model.push(Entity::new(h, k));
+        }
+        fn text(d: &mut cadaddy_doc::Drawing, at: [f64; 2], v: &str) {
+            push(
+                d,
+                EntityKind::Text(Text {
+                    insert: Vec3::new(at[0], at[1], 0.0),
+                    align_pt: None,
+                    height: 2.0,
+                    value: v.into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: Default::default(),
+                    valign: Default::default(),
+                }),
+            );
+        }
+        fn poly(d: &mut cadaddy_doc::Drawing, pts: &[Vec2], closed: bool) {
+            let vertices = pts.iter().map(|p| PolyVertex { p: *p, bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+            push(d, EntityKind::LwPolyline(LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false }));
+        }
+        // A made-up horn/strobe: a box with an X and a ring in it, a flag at its side; `q` quarter turns.
+        fn horn_strobe(d: &mut cadaddy_doc::Drawing, c: Vec2, s: f64, r: f64, q: u8) {
+            let p = |x: f64, y: f64| {
+                let mut v = Vec2::new(x, y);
+                for _ in 0..q {
+                    v = Vec2::new(-v.y, v.x);
+                }
+                v + c
+            };
+            let h = s / 2.0;
+            poly(d, &[p(-h, -h), p(h, -h), p(h, h), p(-h, h)], true);
+            for (a, b) in [((-h, -h), (-0.25, -0.25)), ((h, h), (0.25, 0.25)), ((-h, h), (-0.25, 0.25)), ((h, -h), (0.25, -0.25))] {
+                let (a, b) = (p(a.0, a.1), p(b.0 * s, b.1 * s));
+                push(d, EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) }));
+            }
+            let ring: Vec<Vec2> = (0..10).map(|i| p(r * (f64::from(i) * 0.628).cos(), r * (f64::from(i) * 0.628).sin())).collect();
+            poly(d, &ring, true);
+            poly(d, &[p(h, 0.0), p(h + 0.87 * s, h), p(h + 0.87 * s, -h)], true);
+        }
+        // The page as drawn: a symbol list (a lettered pull station row, a horn/strobe row), the
+        // plan's two horn/strobes (one turned, its ring bigger) and lettering.
+        let mut page = cadaddy_doc::Drawing::new_imperial();
+        text(&mut page, [500.0, 530.0], "SYMBOL");
+        // (The DESCRIPTION header centred over its column, the rows flush left.)
+        text(&mut page, [545.0, 530.0], "DESCRIPTION");
+        text(&mut page, [530.0, 524.0], "FIRE ALARM PULL STATION");
+        poly(&mut page, &[Vec2::new(502.0, 523.0), Vec2::new(506.0, 523.0), Vec2::new(506.0, 527.0), Vec2::new(502.0, 527.0)], true);
+        text(&mut page, [503.0, 524.0], "P");
+        text(&mut page, [530.0, 519.0], "COMBINATION F.A. HORN & STROBE");
+        horn_strobe(&mut page, Vec2::new(504.0, 520.0), 4.0, 1.0, 0);
+        horn_strobe(&mut page, Vec2::new(100.0, 100.0), 4.0, 1.0, 0);
+        horn_strobe(&mut page, Vec2::new(200.0, 150.0), 4.0, 1.3, 1);
+        for (at, v) in
+            [([100.0, 50.0], "FIRE ALARM - FIRST FLOOR"), ([400.0, 300.0], "FIRE ALARM GENERAL NOTES"), ([800.0, 40.0], "SHEET TITLE BLOCK")]
+        {
+            text(&mut page, at, v);
+        }
+        // The model's copy of the sheet: its lettering 1000 to the right, its symbols lost.
+        let mut s = crate::Session::new();
+        let lo = s.doc().unwrap().handseed;
+        for (at, v) in
+            [([1100.0, 50.0], "FIRE ALARM - FIRST FLOOR"), ([1400.0, 300.0], "FIRE ALARM GENERAL NOTES"), ([1800.0, 40.0], "SHEET TITLE BLOCK")]
+        {
+            s.execute("text", &json!({"at": at, "text": v, "height": 2.0})).unwrap();
+        }
+        let marks = s.doc().unwrap().handseed;
+        for x in [1150.0, 1160.0, 1170.0] {
+            s.execute("text", &json!({"at": [x, 400.0], "text": "S", "height": 2.0})).unwrap();
+        }
+        let hi = s.doc().unwrap().handseed;
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-313".into(),
+            level: "6".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [1000.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo, hi }];
+        job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
+        let mut pages = BTreeMap::new();
+        pages.insert("E-313".to_string(), page);
+        // The sheet's registration onto its level's plan: 1000 back to the left.
+        let onto_plan = |p: [f64; 2], level: &str| (level == "6").then_some([p[0] - 1000.0, p[1]]);
+        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &onto_plan);
+        let mut at: Vec<(i64, i64)> = found.iter().map(|d| (d.at[0].round() as i64, d.at[1].round() as i64)).collect();
+        at.sort_unstable();
+        assert_eq!(at.len(), 2, "{found:?} {st:?}");
+        assert!((at[0].0 - 101).abs() <= 2 && (at[1].0 - 200).abs() <= 2, "on the plan: {at:?}");
+        // A sheet no registration places: none.
+        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &|_, _| None);
+        assert!(none.is_empty() && st.unplaceable == 2, "{st:?}");
+        assert!(
+            found.iter().all(|d| d.tag == "HORN/STROBE" && d.kind_source == "E-313 legend: COMBINATION F.A. HORN & STROBE" && d.level == "6"),
+            "{found:?}"
+        );
+        assert_eq!((st.as_drawn.len(), st.rows), (1, 1), "the horn/strobe row only (the pull station's is lettered): {st:?}");
+        // Lettering that can't place the page: nothing read off it.
+        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo: marks, hi }];
+        let (none, st) = fa_loose_devices(s.doc().unwrap(), &job, &BTreeMap::new(), &[], &pages, &|p, _| Some(p));
+        assert!(none.is_empty() && st.unplaced == ["E-313: 0 words written once on both (3 needed)"], "{st:?}");
+    }
+
+    #[test]
+    fn a_fire_alarm_plans_symbols_with_no_mark_are_their_legend_rows() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // A made-up strobe: a circle with an X and a stem, at `c` (6 units across).
+        let strobe = |s: &mut crate::Session, c: [f64; 2]| {
+            s.execute("circle", &json!({"center": c, "radius": 1.8})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 1.2, c[1] - 1.2], [c[0] + 1.2, c[1] + 1.2]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 1.2, c[1] + 1.2], [c[0] + 1.2, c[1] - 1.2]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 3.0, c[1] - 1.5], [c[0] - 3.0, c[1] + 1.5]]})).unwrap();
+            s.execute("line", &json!({"points": [[c[0] - 3.0, c[1]], [c[0] - 1.8, c[1]]]})).unwrap();
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 2.0})).unwrap();
+        };
+        // The symbol list: its strobe row's sample, and the plan's two copies and a pull station's mark.
+        text(&mut s, [500.0, 530.0], "SYMBOL");
+        text(&mut s, [530.0, 530.0], "DESCRIPTION");
+        strobe(&mut s, [503.0, 520.0]);
+        text(&mut s, [530.0, 519.0], "WALL STROBE");
+        strobe(&mut s, [100.0, 100.0]);
+        strobe(&mut s, [200.0, 100.0]);
+        text(&mut s, [300.0, 100.0], "P");
+        let hi = s.doc().unwrap().handseed;
+        let sample: Vec<cadaddy_doc::EntityKind> = s
+            .doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| e.handle.0 >= lo && e.handle.0 < hi && !matches!(e.kind, cadaddy_doc::EntityKind::Text(_)))
+            .take(5)
+            .map(|e| e.kind.clone())
+            .collect();
+        let mut legend = BTreeMap::new();
+        legend.insert(shape_of(sample.iter()).unwrap(), ("WALL STROBE".to_string(), "E-313".to_string()));
+        // The same shape in another legend, a low voltage row: not a fire alarm device.
+        let mut av = BTreeMap::new();
+        av.insert(shape_of(sample.iter()).unwrap(), ("AUDIO/VISUAL OUTLET".to_string(), "E-314".to_string()));
+        job.sheet_regions = vec![SheetRegion {
+            number: "E-313".into(),
+            level: "6".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 1000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-313".into(), lo, hi }];
+        job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "FIRE ALARM PLAN"}]}));
+        let (found, st) = fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new(), &|p, _| Some(p));
+        assert_eq!((st.sheets.len(), st.rows, st.found), (1, 1, 2), "{st:?}");
+        let mut at: Vec<f64> = found.iter().map(|d| d.at[0].round()).collect();
+        at.sort_by(f64::total_cmp);
+        assert_eq!(at, [99.0, 199.0], "the plan's two copies, not the legend's sample: {found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|d| d.tag == "STROBE" && d.kind == "fire alarm device" && d.kind_source == "E-313 legend: WALL STROBE" && d.level == "6"),
+            "{found:?}"
+        );
+        // One read there with no mark is not read twice; a device another mark names there is
+        // another device; a sheet that isn't a fire alarm plan has none.
+        let have = vec![super::super::readers::ReadDevice { at: [100.0, 100.0], ..Default::default() }];
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new(), &|p, _| Some(p)).0.len(), 1);
+        let have = vec![super::super::readers::ReadDevice { tag: "P".into(), at: [100.0, 100.0], ..Default::default() }];
+        assert_eq!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &have, &BTreeMap::new(), &|p, _| Some(p)).0.len(), 2);
+        assert!(
+            fa_loose_devices(s.doc().unwrap(), &job, &av, &[], &BTreeMap::new(), &|p, _| Some(p)).0.is_empty(),
+            "an electrical legend's audio/visual outlet"
+        );
+        job.sheets = Some(json!({"sheets": [{"number": "E-313", "title": "POWER PLAN"}]}));
+        assert!(fa_loose_devices(s.doc().unwrap(), &job, &legend, &[], &BTreeMap::new(), &|p, _| Some(p)).0.is_empty());
     }
 
     #[test]

@@ -604,6 +604,16 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
 /// named like a specification (a project manual, read section by section); any PDF/text file
 /// given by name.
 fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
+    spec_files_by(paths, only, PRODUCT_DIVISIONS)
+}
+
+/// The specification section files of `divisions` (`23`, `28`…) among paths and folders.
+pub(crate) fn spec_files_in(paths: &[String], divisions: &[String]) -> Vec<String> {
+    let d: Vec<&str> = divisions.iter().map(String::as_str).collect();
+    spec_files_by(paths, &[], &d)
+}
+
+fn spec_files_by(paths: &[String], only: &[String], divisions: &[&str]) -> Vec<String> {
     let is_doc = |p: &std::path::Path| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf") || x.eq_ignore_ascii_case("txt"));
     let mut out = Vec::new();
     for given in paths {
@@ -623,7 +633,7 @@ fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
             }
             for (p, sec) in numbered {
                 let wanted =
-                    if only.is_empty() { PRODUCT_DIVISIONS.iter().any(|d| sec.starts_with(d)) } else { only.iter().any(|o| sec == o.trim()) };
+                    if only.is_empty() { divisions.iter().any(|d| sec.starts_with(d)) } else { only.iter().any(|o| sec == o.trim()) };
                 if wanted {
                     out.push(p.to_string_lossy().to_string());
                 }
