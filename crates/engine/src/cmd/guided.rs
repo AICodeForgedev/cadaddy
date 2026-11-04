@@ -4585,10 +4585,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // (What a unit's own plans show: its stamped tags; and plumbing, which its plumbing
                 // plans give. A corridor's sconce by the unit's door is the corridor's.)
                 let mut own: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                // The panels the unit's own devices are on (its load center).
+                let mut fed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                 for dv in &stamped {
                     own.entry(dv.room.clone()).or_default().insert(dv.tag.trim().to_ascii_uppercase());
+                    if let Some(p) = super::propfill::panel_of(&dv.circuit) {
+                        fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
+                    }
                 }
-                let booked = book_into_units(&mut out, &footprints, &own);
+                let booked = book_into_units(&mut out, &footprints, &own, &fed);
                 if booked > 0 {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
@@ -7331,20 +7336,32 @@ type Footprint = (String, String, Vec<cadaddy_geom::Vec2>, Vec<cadaddy_geom::Vec
 /// code); in two
 /// footprints (units back to back, their plans' linework past the wall they share), the one whose
 /// own room is nearer. How many.
-fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Footprint], own: &BTreeMap<String, BTreeSet<String>>) -> usize {
+fn book_into_units(
+    devices: &mut [super::readers::ReadDevice],
+    footprints: &[Footprint],
+    own: &BTreeMap<String, BTreeSet<String>>,
+    panels: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
         let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
         let tag = dv.tag.trim().to_ascii_uppercase();
+        // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
+        // panel, across the unit's entry wall): not the unit's.
+        let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
+        let fed_here = |room: &str| match (&panel, panels.get(room)) {
+            (Some(p), Some(ps)) if !ps.is_empty() => ps.contains(p),
+            _ => true,
+        };
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
         let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
         if let Some((_, room, _, _)) = footprints
             .iter()
             .filter(|(l, room, poly, _)| {
-                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && cadaddy_geom::point_in_polygon(poly, p)
+                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
             })
             .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
         {
@@ -14306,7 +14323,8 @@ mod tests {
         ];
         let own: BTreeMap<String, BTreeSet<String>> =
             [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
-        assert_eq!(book_into_units(&mut devices, &foot, &own), 3);
+        let none = BTreeMap::new();
+        assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
         // no tag the unit's plans show, stays out.
         let mut fa = vec![super::super::readers::ReadDevice {
@@ -14316,9 +14334,23 @@ mod tests {
             level: "Level 2".into(),
             ..Default::default()
         }];
-        assert_eq!(book_into_units(&mut fa, &foot, &own), 1);
+        assert_eq!(book_into_units(&mut fa, &foot, &own, &none), 1);
         let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
-        assert_eq!(book_into_units(&mut g, &foot, &own), 0);
+        assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
+        // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
+        // corridor's, across the entry wall) is not.
+        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC".to_string()].into())].into();
+        let fed: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["G".to_string()].into())].into();
+        let rec = |circuit: &str| super::super::readers::ReadDevice {
+            tag: "REC".into(),
+            circuit: circuit.into(),
+            at: [40.0, 30.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut recs = vec![rec("G-9"), rec("A-3"), rec("")];
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 2);
+        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
