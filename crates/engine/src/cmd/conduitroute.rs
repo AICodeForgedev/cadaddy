@@ -567,11 +567,8 @@ impl Field {
         let (x0, y0, x1, y1) =
             (Self::c(lo.x - pad, self.cell), Self::c(lo.y - pad, self.cell), Self::c(hi.x + pad, self.cell), Self::c(hi.y + pad, self.cell));
         let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-        if !(a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite())
-            || !(0..=4096).contains(&w)
-            || !(0..=4096).contains(&h)
-            || w.saturating_mul(h) > 1_000_000
-        {
+        let sane = a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite();
+        if !(sane && (0..=4096).contains(&w) && (0..=4096).contains(&h) && w.saturating_mul(h) <= 1_000_000) {
             return None;
         }
         let mut seen: BTreeSet<usize> = BTreeSet::new();
@@ -1290,15 +1287,55 @@ struct GearEl {
     hi: Vec3,
 }
 
-/// A rated wall a route may cross.
+/// A rated wall a route may cross: its outline on its level's own plan, its top (drawing z),
+/// its type and that type's rating.
 #[derive(Clone, Debug)]
-struct Rated {
-    handle: Handle,
-    level: String,
-    hull: Vec<Vec2>,
-    top: f64,
-    wall_type: String,
-    rating: String,
+pub(crate) struct Rated {
+    pub handle: Handle,
+    pub level: String,
+    pub hull: Vec<Vec2>,
+    pub top: f64,
+    pub wall_type: String,
+    pub rating: String,
+}
+
+/// The built walls whose type has a fire rating in the documents (the wall types' assemblies),
+/// at most `cap`.
+pub(crate) fn rated_walls(d: &Drawing, sp: &BuildingSpec, cap: usize) -> Vec<Rated> {
+    let rating_of = |name: &str| {
+        sp.wall_types
+            .iter()
+            .find(|w| w.name.eq_ignore_ascii_case(name))
+            .and_then(|w| w.assembly.as_ref())
+            .and_then(|a| a.fire_rating.clone())
+            .filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))
+    };
+    let mut rated = Vec::new();
+    for e in d.model.iter() {
+        if rated.len() >= cap {
+            break;
+        }
+        if super::wallgen::made_as(e).as_deref() != Some("wall") {
+            continue;
+        }
+        let Some(t) = super::bimlook::made_tag(e, "type") else { continue };
+        let Some(r) = rating_of(t) else { continue };
+        let Some((_, hi)) = mesh_box(e) else { continue };
+        let EntityKind::Mesh(m) = &e.kind else { continue };
+        let off = super::bspec::stacked_by(e);
+        let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
+        if hull.len() >= 3 {
+            rated.push(Rated {
+                handle: e.handle,
+                level: super::bspec::made_level(e).unwrap_or_default(),
+                hull,
+                top: hi.z,
+                wall_type: t.to_string(),
+                rating: r,
+            });
+        }
+    }
+    rated
 }
 
 fn mesh_box(e: &Entity) -> Option<(Vec3, Vec3)> {
@@ -1341,7 +1378,7 @@ fn inside(p: Vec2, poly: &[Vec2]) -> bool {
 }
 
 /// Whether segment `a`–`b` crosses polygon `poly` (goes through it, ends outside it).
-fn crosses(a: Vec2, b: Vec2, poly: &[Vec2]) -> bool {
+pub(crate) fn crosses(a: Vec2, b: Vec2, poly: &[Vec2]) -> bool {
     if inside(a, poly) || inside(b, poly) {
         return false;
     }
@@ -1513,58 +1550,29 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // -- The devices, the gear, the obstacles, the rated walls. --
     let mut devs: Vec<Dev> = Vec::new();
     let mut gear: Vec<GearEl> = Vec::new();
-    let mut rated: Vec<Rated> = Vec::new();
-    let rating_of = |name: &str| {
-        sp.wall_types
-            .iter()
-            .find(|w| w.name.eq_ignore_ascii_case(name))
-            .and_then(|w| w.assembly.as_ref())
-            .and_then(|a| a.fire_rating.clone())
-            .filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))
-    };
+    let rated = rated_walls(d, sp, MAX_DEVICES);
     for e in d.model.iter() {
-        match super::wallgen::made_as(e).as_deref() {
-            Some("device") if devs.len() < MAX_DEVICES => {
-                let ps = props::read(&e.common.xdata);
-                if ps.get("misplaced").is_some() {
-                    continue;
-                }
-                let Some((lo, hi)) = mesh_box(e) else { continue };
-                let off = super::bspec::stacked_by(e);
-                let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
-                let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
-                let yoke = matches!(kind.replace('_', " ").as_str(), "receptacle" | "switch" | "dimmer" | "occupancy sensor");
-                devs.push(Dev {
-                    handle: e.handle,
-                    level: super::bspec::made_level(e).unwrap_or_default(),
-                    circuit: ps.get("circuit").map(Prop::text).unwrap_or_default().trim().to_string(),
-                    kind,
-                    room: ps.get("room").map(Prop::text).unwrap_or_default(),
-                    at: Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0),
-                    top: hi.z,
-                    face: face_of(&ps),
-                    yoke,
-                });
+        if super::wallgen::made_as(e).as_deref() == Some("device") && devs.len() < MAX_DEVICES {
+            let ps = props::read(&e.common.xdata);
+            if ps.get("misplaced").is_some() {
+                continue;
             }
-            Some("wall") if rated.len() < MAX_DEVICES => {
-                let Some(t) = super::bimlook::made_tag(e, "type") else { continue };
-                let Some(r) = rating_of(t) else { continue };
-                let Some((_, hi)) = mesh_box(e) else { continue };
-                let EntityKind::Mesh(m) = &e.kind else { continue };
-                let off = super::bspec::stacked_by(e);
-                let hull = super::mep::hull(&m.vertices.iter().take(10_000).map(|v| v.xy() - off).collect::<Vec<_>>());
-                if hull.len() >= 3 {
-                    rated.push(Rated {
-                        handle: e.handle,
-                        level: super::bspec::made_level(e).unwrap_or_default(),
-                        hull,
-                        top: hi.z,
-                        wall_type: t.to_string(),
-                        rating: r,
-                    });
-                }
-            }
-            _ => {}
+            let Some((lo, hi)) = mesh_box(e) else { continue };
+            let off = super::bspec::stacked_by(e);
+            let (lo, hi) = (lo - Vec3::new(off.x, off.y, 0.0), hi - Vec3::new(off.x, off.y, 0.0));
+            let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
+            let yoke = matches!(kind.replace('_', " ").as_str(), "receptacle" | "switch" | "dimmer" | "occupancy sensor");
+            devs.push(Dev {
+                handle: e.handle,
+                level: super::bspec::made_level(e).unwrap_or_default(),
+                circuit: ps.get("circuit").map(Prop::text).unwrap_or_default().trim().to_string(),
+                kind,
+                room: ps.get("room").map(Prop::text).unwrap_or_default(),
+                at: Vec2::new((lo.x + hi.x) / 2.0, (lo.y + hi.y) / 2.0),
+                top: hi.z,
+                face: face_of(&ps),
+                yoke,
+            });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
             && gear.len() < MAX_DEVICES
@@ -1595,7 +1603,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "electrical" => matches!(el.category.as_str(), "equipment") || (el.category == "conduit" && el.run.is_empty()),
             _ => !matches!(el.category.as_str(), "room" | "device" | "space" | "zone"),
         };
-        if !keep || !(el.lo.is_finite() && el.hi.is_finite()) {
+        if !(keep && el.lo.is_finite() && el.hi.is_finite()) {
             continue;
         }
         n_obs += 1;

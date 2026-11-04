@@ -1483,8 +1483,13 @@ impl Mep {
             && self.equipment.is_empty()
             && self.revisions.is_empty()
             && self.feeders.is_empty()
+            && self.panel_schedules.is_empty()
+            && self.equipment_electrical.is_empty()
+            && self.fixture_schedule.is_empty()
+            && self.gear_rules.is_none()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
+            && self.labels_printed.is_empty()
             && self.grounding.is_none()
             && self.services.is_empty()
             && self.required_services.is_empty()
@@ -3527,6 +3532,28 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A spec whose MEP holds only panel schedules (read before anything is built) keeps them
+    /// when it is saved and read back.
+    #[test]
+    fn mep_with_only_panel_schedules_survives_a_save() {
+        let sp = BuildingSpec {
+            mep: Mep {
+                panel_schedules: vec![PanelSchedule {
+                    panel: "P1".into(),
+                    circuits: vec![PanelCircuit { number: "7".into(), description: "RADIO AMPLIFIER".into(), ..Default::default() }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!sp.mep.is_empty());
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.panel_schedules, sp.mep.panel_schedules);
+        let labels = Mep { labels_printed: [("P1".to_string(), "PANEL P1".to_string())].into_iter().collect(), ..Default::default() };
+        assert!(!labels.is_empty() && Mep::default().is_empty());
+    }
 
     #[test]
     fn a_corridors_edges_run_round_its_floor_not_between_its_rectangles() {
