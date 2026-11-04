@@ -4761,7 +4761,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 // The set's typical mounting heights (a general note: "DEVICE MOUNTED HEIGHTS (UNO):
                 // TOGGLE SWITCH 4'-0\" AFF TO TOP…") onto each device of those kinds with none of its own.
-                let typical = typical_mounting_heights(&electrical_pages(s.doc()?, job));
+                let pages = electrical_pages(s.doc()?, job);
+                // The fire alarm symbol list (SYMBOL, DESCRIPTION, MOUNTING) onto the fire alarm
+                // devices: what each mark is, and its ceiling or its height.
+                let rows = symbol_list_rows(&pages);
+                if !rows.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = apply_symbol_list(&mut sp, &rows);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                    }
+                    progress_line(&format!(
+                        "  fire alarm symbol list: {} marks ({}); {n} devices named",
+                        rows.len(),
+                        rows.iter().map(|r| r.mark.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                let typical = typical_mounting_heights(&pages);
                 if !typical.is_empty()
                     && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
                 {
@@ -7383,6 +7400,153 @@ fn fire_alarm_subscripts(
         }
     }
     (subs, compound)
+}
+
+/// A row of a symbol list (`FIRE ALARM SYMBOL LIST`: SYMBOL, DESCRIPTION, MOUNTING): the mark in
+/// its symbol (with its subscript: `SR`), what it is, and where it mounts.
+#[derive(Clone, Debug, PartialEq)]
+struct SymbolRow {
+    mark: String,
+    description: String,
+    /// On the ceiling (`CEIL./WALL`), else at this centre height (inches) when the row gives one.
+    ceiling: bool,
+    inches: Option<f64>,
+    /// The row's mounting words and its sheet, for the device's notes.
+    doc: String,
+}
+
+/// A symbol list's rows at most (per table).
+const MAX_SYMBOL_ROWS: usize = 60;
+
+/// The symbol lists on the sheets: a table headed SYMBOL, DESCRIPTION and MOUNTING, each row's
+/// letters in the symbol column joined left to right (an `S` with its subscript `R` is `SR`). A
+/// mark two rows give (`H` a heat detector and a horn) is left out: which one is not known.
+fn symbol_list_rows(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<SymbolRow> {
+    let mut out: Vec<SymbolRow> = Vec::new();
+    let mut twice: BTreeSet<String> = BTreeSet::new();
+    for (sheet, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        let upper = |t: &cadaddy_mepfix::sheet_facts::TextItem| t.value.trim().to_ascii_uppercase();
+        // Heights to the bottom of the item unless noted, when the sheet says so.
+        let to_bottom = texts.iter().any(|t| {
+            let u = upper(t);
+            u.contains("MOUNTING HEIGHTS TO BOTTOM")
+        });
+        for head in texts.iter().filter(|t| upper(t) == "MOUNTING") {
+            let h = head.height.max(1e-6);
+            let on_row = |t: &&cadaddy_mepfix::sheet_facts::TextItem, y: f64| (t.at.y - y).abs() <= 0.5 * h;
+            let Some(desc_head) = texts
+                .iter()
+                .filter(|t| on_row(t, head.at.y) && upper(t) == "DESCRIPTION" && t.at.x < head.at.x)
+                .max_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            else {
+                continue;
+            };
+            let Some(sym_head) = texts
+                .iter()
+                .filter(|t| on_row(t, head.at.y) && upper(t) == "SYMBOL" && t.at.x < desc_head.at.x)
+                .max_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            else {
+                continue;
+            };
+            // The descriptions: words between the symbol column and halfway to the mounting
+            // column's heading, below the heading, row after row (a gap of more than 4 rows ends
+            // the table).
+            let mut descs: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+                .iter()
+                .filter(|t| {
+                    t.at.y < head.at.y - 0.5 * h
+                        && t.at.x > sym_head.at.x + h
+                        && t.at.x < (desc_head.at.x + head.at.x) / 2.0
+                        && t.value.trim().chars().count() > 3
+                })
+                .collect();
+            descs.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
+            let mut last_y = head.at.y;
+            for d in descs.into_iter().take(MAX_SYMBOL_ROWS) {
+                if last_y - d.at.y > 4.0 * h * 1.5 {
+                    break;
+                }
+                last_y = d.at.y;
+                let dh = d.height.max(1e-6);
+                let mut letters: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+                    .iter()
+                    .filter(|t| {
+                        let v = t.value.trim();
+                        v.chars().count() <= 2
+                            && v.chars().all(|c| c.is_ascii_uppercase())
+                            && (t.at.y - d.at.y).abs() <= 0.6 * dh
+                            && t.at.x < d.at.x
+                            && t.at.x > sym_head.at.x - 3.0 * h
+                            && (0.6..=1.5).contains(&(t.height / dh))
+                    })
+                    .collect();
+                if letters.is_empty() {
+                    continue;
+                }
+                letters.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                let mark: String = letters.iter().map(|t| t.value.trim()).collect();
+                let mounting = texts
+                    .iter()
+                    .filter(|t| on_row(t, d.at.y) && t.at.x >= head.at.x - 3.0 * h)
+                    .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+                    .map(|t| t.value.trim().to_string())
+                    .unwrap_or_default();
+                let mu = mounting.to_ascii_uppercase();
+                let ceiling = mu.contains("CEIL");
+                let inches = (!ceiling)
+                    .then(|| super::propfill::mount_height_in(&format!("{mounting} AFF")))
+                    .flatten()
+                    .map(|i| {
+                        if mu.contains("TO TOP") {
+                            i - HALF_BOX_IN
+                        } else if mu.contains("TO BOTTOM") || to_bottom {
+                            i + HALF_BOX_IN
+                        } else {
+                            i
+                        }
+                    })
+                    .filter(|i| *i > 0.0 && *i < 240.0);
+                if out.iter().any(|r| r.mark == mark) || twice.contains(&mark) {
+                    out.retain(|r| r.mark != mark);
+                    twice.insert(mark);
+                    continue;
+                }
+                out.push(SymbolRow {
+                    mark,
+                    description: d.value.trim().to_string(),
+                    ceiling,
+                    inches,
+                    doc: format!("{sheet} symbol list: {}", if mounting.is_empty() { d.value.trim() } else { mounting.as_str() }),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Each fire alarm device whose mark a symbol list row gives: its description (`device_type`),
+/// and its ceiling or its height when it has none. How many.
+fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) -> usize {
+    let mut n = 0;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "fire_alarm_device").take(MAX_STAMPED * 4) {
+        let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
+        let Some(row) = rows.iter().find(|r| r.mark == mark) else { continue };
+        t.set("device_type", format!("{} {mark}", row.description.to_ascii_lowercase()), "legend");
+        t.set("legend", row.description.clone(), "legend");
+        let has = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).is_some_and(|f| !f.value.trim().is_empty());
+        if row.ceiling && !has(t, "mount") {
+            t.set("mount", "ceiling", "legend");
+        } else if let Some(i) = row.inches
+            && !has(t, "mount_height_in")
+            && !has(t, "mount")
+        {
+            t.set("mount_height_in", format!("{}", (i * 100.0).round() / 100.0), "legend");
+            t.set("mount_height_note", row.doc.clone(), "legend");
+        }
+        n += 1;
+    }
+    n
 }
 
 /// A kind of device's typical mounting height a general note gives.
@@ -14185,6 +14349,72 @@ mod tests {
         let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
         // The next note's thermostat and what follows it are not this note's.
         assert_eq!(got, vec![("switch", 45.75), ("receptacle", 18.0)]);
+    }
+
+    /// A fire alarm symbol list as E-7 prints it: each row's letters (an `S` with its subscript
+    /// `R`), description and mounting; a mark two rows give is left out.
+    #[test]
+    fn a_fire_alarm_symbol_list_names_marks_and_mounts() {
+        let mut d = cadaddy_doc::Drawing::default();
+        let h = 18.3;
+        let rows: Vec<(&str, f64, f64, f64)> = vec![
+            ("MOUNTING HEIGHTS TO BOTTOM OF ITEM UNLESS NOTED OTHERWISE.", 30000.0, 3500.0, h),
+            ("SYMBOL", 34300.8, 2958.7, h),
+            ("DESCRIPTION", 34677.8, 2958.7, h),
+            ("MOUNTING", 35303.0, 2958.7, h),
+            ("P", 34343.4, 2889.6, h),
+            ("FIRE ALARM MANUAL PULL STATION", 34454.7, 2890.2, h),
+            ("4'-0\" TO TOP", 35281.0, 2890.2, h),
+            ("COMBINATION F.A. HORN & STROBE SIGNAL", 34454.7, 2836.5, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2836.5, h),
+            ("S", 34343.4, 2727.4, h),
+            ("AREA SMOKE DETECTOR", 34454.7, 2728.3, h),
+            ("CEIL./WALL", 35281.0, 2728.3, h),
+            ("S", 34340.5, 2619.5, h),
+            ("R", 34372.8, 2613.1, h),
+            ("RESIDENT ROOM SMOKE DETECTOR AND SOUNDER BASE", 34454.7, 2620.5, h),
+            ("CEIL./WALL", 35281.0, 2620.5, h),
+            ("H", 34338.6, 2566.4, h),
+            ("AREA HEAT DETECTOR", 34454.7, 2566.4, h),
+            ("CEIL./WALL", 35281.0, 2566.4, h),
+            ("H", 34342.4, 2511.4, h),
+            ("HEARING IMPAIRED HORN & STROBE SIGNAL", 34454.7, 2512.3, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2512.3, h),
+            ("WS", 34343.4, 2457.0, h),
+            ("WEATHERPROOF STROBE", 34454.7, 2458.0, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2458.0, h),
+        ];
+        for (v, x, y, ht) in rows {
+            let t = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: ht,
+                value: v.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t)).ok();
+        }
+        let rows = symbol_list_rows(&[("E-7".into(), d)]);
+        let got: Vec<(&str, bool, Option<f64>)> = rows.iter().map(|r| (r.mark.as_str(), r.ceiling, r.inches)).collect();
+        assert_eq!(got, vec![("P", false, Some(45.75)), ("S", true, None), ("SR", true, None), ("WS", false, Some(82.25))], "{rows:#?}");
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let tag = |id: &str, mark: &str| {
+            let mut t = cadaddy_walk3d::tags::ElementTag { id: id.into(), kind: "fire_alarm_device".into(), ..Default::default() };
+            t.set("type", mark, "plan");
+            t
+        };
+        sp.tags = vec![tag("device:p", "P"), tag("device:r", "SR"), tag("device:h", "H")];
+        assert_eq!(apply_symbol_list(&mut sp, &rows), 2, "H is either of two rows");
+        let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("45.75"));
+        assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
+        assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
+        assert!(f("device:h", "device_type").is_none());
     }
 
     /// A general note's typical mounting heights, item by item, to each one's centre.
