@@ -445,6 +445,9 @@ pub struct GuidedJob {
     /// The job goes on without a specification, as answered ("none"): it doesn't look again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub specs_declined: bool,
+    /// The company's cost DB (a private export: labor in dollars), for value engineering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_db: Option<String>,
     /// The type marks the submittals give products for: device types as the legends' are.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub submittal_types: Vec<String>,
@@ -791,6 +794,7 @@ impl GuidedJob {
             specs_how: Vec::new(),
             spec_sections_read: Vec::new(),
             specs_declined: false,
+            cost_db: None,
             submittal_types: Vec::new(),
             luminaire_types: Vec::new(),
             wall_luminaire_types: Vec::new(),
@@ -5901,12 +5905,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["underground_error"] = json!(e.to_string());
     }
     bim_step(s, job, "underground", t);
-    // The wiring-method alternatives the code and the spec allow, priced from the model.
-    let t = web_time::Instant::now();
-    if let Err(e) = value_step(s, job, &mut result) {
-        result["value_engineering_error"] = json!(e.to_string());
-    }
-    bim_step(s, job, "value engineering", t);
     let t = web_time::Instant::now();
     match s.execute("bim.props.fill", &json!({})) {
         Ok(v) => {
@@ -6077,6 +6075,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     route_report_step(s, job, &mut result);
     bim_step(s, job, "conduit routes final", t);
+    // The wiring-method alternatives the code and the spec allow, priced from the final routes
+    // (after the last reroute: the scenarios replace the pieces as they stand).
+    let t = web_time::Instant::now();
+    if let Err(e) = value_step(s, job, &mut result) {
+        result["value_engineering_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "value engineering", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -11493,95 +11498,114 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     Ok(())
 }
 
-/// Value engineering (Q6154, [`super::valueeng`]): the building's construction type from its
-/// code sheet (the general sheets', else the architectural ones'), the specs' wiring-methods
-/// tables, each alternative tiered and priced from the model; one needing an RFI gets its draft.
+/// Value engineering (Q6154, [`super::valueeng`]): the building's code-analysis sheet (the
+/// general sheets', else the architectural ones': the first that gives a construction type), the
+/// specs' wiring-methods tables, each alternative tiered, priced with its manpower and modelled;
+/// one needing an RFI gets its draft (and its sketch beside the job's drawing).
 fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
     if !matches!(super::bspec::current(s, "bim_build"), Ok((_, true))) {
         return Ok(());
     }
     let specs = job_specs(job);
-    let mut construction: Option<(String, String)> = None;
+    let mut code: Option<(String, Vec<String>)> = None;
     'find: for disc in ["G", "A"] {
         for (number, sub) in non_plan_pages(job, disc) {
             let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
             let words = super::valueeng::reading_order(texts);
-            if let Some(c) = super::valueeng::construction_type(&words) {
-                construction = Some((c, number));
+            if super::valueeng::construction_type(&words).is_some() {
+                code = Some((number, words));
                 break 'find;
             }
         }
     }
-    let v = s.execute("ve.study", &json!({"specs": specs, "construction_type": construction.as_ref().map(|c| c.0.clone())}))?;
-    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    // Its files beside the job's own drawing.
+    let beside = job.checkpoint.clone().filter(|_| job.checkpoint_given).map(|ck| {
+        let p = std::path::Path::new(&ck);
+        let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
+        (
+            p.with_file_name(format!("{stem}-ve")).to_string_lossy().to_string(),
+            p.with_file_name(format!("{stem}-ve-prices.csv")).to_string_lossy().to_string(),
+        )
+    });
+    let mut params = json!({"specs": specs, "force": true});
+    if let Some((number, words)) = &code {
+        params["code_texts"] = json!(words);
+        params["code_sheet"] = json!(number);
+    }
+    if let Some(db) = job.cost_db.as_ref().filter(|p| !p.trim().is_empty()) {
+        params["cost_db"] = json!(db);
+        if let Some((_, book)) = &beside {
+            params["price_book"] = json!(book);
+        }
+    }
+    if let Some((dir, _)) = &beside {
+        params["sketches"] = json!(dir);
+    }
+    let v = s.execute("ve.study", &params)?;
     let scenarios = v["scenarios"].as_array().cloned().unwrap_or_default();
     let mut lines = Vec::new();
     let mut rfis = Vec::new();
     for sc in &scenarios {
         let tier = sc["tier"].as_str().unwrap_or_default();
         let name = sc["name"].as_str().unwrap_or_default();
-        let over = format!("{} feeders, {:.0} ft", sc["quantity"]["feeders"], sc["quantity"]["feet"].as_f64().unwrap_or(0.0));
-        let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
-        let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["labor_hours"].as_f64()) {
-            (Some(c), Some(h)) => format!("; saves ${c:.0} and {h:.0} labor hours over {over}"),
+        let q = &sc["quantity"];
+        let over = if sc["kind"] == "feeder" {
+            format!("{} feeders, {:.0} ft", q["feeders"], q["feet"].as_f64().unwrap_or(0.0))
+        } else {
+            format!("{} circuits and {} homeruns, {:.0} ft", q["circuits"], q["homeruns"], q["feet"].as_f64().unwrap_or(0.0))
+        };
+        let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).take(6).collect()).unwrap_or_default();
+        let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["man_hours"].as_f64()) {
+            (Some(c), Some(h)) => {
+                format!("; saves ${c:.0} and {h:.0} man-hours ({:.1} crew-days) over {over}", sc["saves"]["crew_days"].as_f64().unwrap_or(0.0))
+            }
             _ if sc["as_designed"].is_object() => format!(
-                "; over {over}: savings not priced (no price for {}); of what is priced, as designed ${:.0} and {:.0} h, the alternative ${:.0} and {:.0} h",
+                "; over {over}: savings not priced (no price for {}); of what is priced, as designed ${:.0} and {:.0} man-hours, the alternative ${:.0} and {:.0} man-hours",
                 unpriced.join(", "),
                 sc["as_designed"]["cost"].as_f64().unwrap_or(0.0),
-                sc["as_designed"]["labor_hours"].as_f64().unwrap_or(0.0),
+                sc["as_designed"]["man_hours"].as_f64().unwrap_or(0.0),
                 sc["alternative"]["cost"].as_f64().unwrap_or(0.0),
-                sc["alternative"]["labor_hours"].as_f64().unwrap_or(0.0),
+                sc["alternative"]["man_hours"].as_f64().unwrap_or(0.0),
             ),
             _ => String::new(),
         };
-        lines.push(format!("{name}: {tier}{money}"));
+        let why = sc["why"].as_str().map(|w| format!(" ({w})")).unwrap_or_default();
+        lines.push(format!("{name}: {tier}{why}{money}"));
+        if let Some(id) = sc["rfi"]["id"].as_str() {
+            rfis.push(id.to_string());
+        }
         if !matches!(tier, "allowed_now" | "needs_rfi") {
             continue;
-        }
-        if let (true, Some(issue)) = (tier == "needs_rfi", sc["rfi"]["issue"].as_str()) {
-            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-            for b in sc["id"].as_str().unwrap_or_default().bytes() {
-                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
-            }
-            let id = format!("RFI-V{:08x}", h as u32);
-            sp.rfis.retain(|r| r.id != id);
-            if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
-                let kind = cadaddy_walk3d::RfiKind::MethodChoice;
-                sp.rfis.push(cadaddy_walk3d::Rfi {
-                    id: id.clone(),
-                    kind: Some(kind),
-                    severity: kind.severity(),
-                    about: name.to_string(),
-                    issue: issue.to_string(),
-                    assumed: "The model stays as designed; the alternative is a priced scenario until the RFI is approved.".into(),
-                    proposed: sc["rfi"]["proposed"].as_str().map(str::to_string),
-                    ..cadaddy_walk3d::Rfi::default()
-                });
-                rfis.push(id);
-            }
         }
         job.add_finding(
             StageName::BimBuild,
             &format!("Value engineering ({}): {name}{money}", tier.replace('_', " ")),
-            "a wiring method the code allows saves material and labor; the model stays as designed until approved",
+            "a wiring method the code allows saves material and labor; the model stays as designed until approved (ve.scenario shows it)",
             3,
             vec![if tier == "needs_rfi" { "Send the drafted RFI".into() } else { "Price it into the bid as allowed".into() }],
             None,
             false,
         );
     }
-    if !rfis.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
-    }
+    let f = &v["facts"];
     let line = format!(
-        "  value engineering: construction type {}; {} wiring-method applications read; {}",
-        construction.as_ref().map(|(c, n)| format!("{c} ({n})")).unwrap_or_else(|| "not found".into()),
+        "  value engineering: construction type {}; sprinklered {}; occupancies {}; {} wiring-method applications read; {}",
+        code.as_ref()
+            .and(f["construction_type"]["value"].as_str())
+            .map(|c| format!("{c} ({})", code.as_ref().map(|c| c.0.as_str()).unwrap_or_default()))
+            .unwrap_or_else(|| "not found".into()),
+        f["sprinklered"]["value"].as_bool().map_or("not said", |b| if b { "yes" } else { "no" }),
+        f["occupancies"]
+            .as_array()
+            .map(|o| o.iter().filter_map(|x| x["value"].as_str()).collect::<Vec<_>>().join(", "))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "not said".into()),
         v["applications"].as_array().map_or(0, Vec::len),
         lines.join("; ")
     );
     report_progress(s, json!({"step": "value engineering"}), &line);
     s.echo(line);
-    result["value_engineering"] = json!({"construction_type": construction.map(|c| c.0), "scenarios": scenarios, "rfis": rfis});
+    result["value_engineering"] = json!({"facts": v["facts"], "groups": v["groups"], "scenarios": scenarios, "rfis": rfis, "pricing": v["pricing"], "price_book": v["price_book"]});
     Ok(())
 }
 
@@ -16005,6 +16029,7 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).take(64).collect(),
         _ => Vec::new(),
     };
+    job.cost_db = p.get("cost_db").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
     // The checkpoint: a path, false (none), else the default in the temporary folder.
     job.checkpoint = match p.get("checkpoint") {
         Some(Value::Bool(false)) => None,
@@ -17235,7 +17260,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (SECTION 26 05 19 …), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (SECTION 26 05 19 …), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
