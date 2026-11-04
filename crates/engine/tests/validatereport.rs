@@ -294,7 +294,14 @@ fn a_large_area_reports_in_parts() {
     let st = j.s.execute("validate.status", &json!({"run": run})).unwrap();
     assert_eq!((st["areas"]["done"].as_u64(), st["areas"]["in_parts"].as_u64()), (Some(0), Some(1)), "{st}");
     assert_eq!(st["findings"]["total"], 700, "{st}");
-    let r2 = report(&mut j.s, &run, LOUNGE, json!({"part": 2, "final": true}), b.to_vec()).unwrap();
+    // The rest in parts of 700 (the packet's rules may give more pairs than one more part
+    // carries), the last one final.
+    let rest: Vec<&[Value]> = b.chunks(700).collect();
+    let mut r2 = Value::Null;
+    for (i, c) in rest.iter().enumerate() {
+        let opts = if i + 1 == rest.len() { json!({"part": i + 2, "final": true}) } else { json!({"part": i + 2}) };
+        r2 = report(&mut j.s, &run, LOUNGE, opts, c.to_vec()).unwrap();
+    }
     assert_eq!(r2["final"], true, "{r2}");
     assert_eq!(r2["area_findings"].as_u64().unwrap() as usize, pairs.len(), "{r2}");
     assert_eq!(r2["pairs"]["judged"].as_u64().unwrap() as usize, pairs.len(), "{r2}");

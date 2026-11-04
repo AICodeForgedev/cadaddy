@@ -243,13 +243,14 @@ fn stub_ups_need_two_dimensions_from_the_slab_or_the_grid() {
     assert_eq!(at_lp["verdict"], "pass", "{at_lp}");
     assert_eq!(at_lp["measured"]["sheet"], "E-UG1", "{at_lp}");
     assert!(at_lp["measured"]["x"]["from"].as_str().unwrap().starts_with("slab"), "{at_lp}");
-    // The floor box's riser isn't on the generated stub-up schedule: nothing dimensions it.
+    // The floor box's riser: the generated sheet's stub-up schedule lists every stub-up
+    // (ugsheets.build), so it is dimensioned both ways too.
     let fb = stubs
         .iter()
         .find(|f| f["handle"] == "K2:up0" || f["measured"]["runs"].as_array().is_some_and(|a| a.iter().any(|x| x == "K2:up0")))
         .unwrap_or_else(|| panic!("{r}"));
-    assert_eq!(fb["verdict"], "fail", "{fb}");
-    assert!(fb["issue"].as_str().unwrap().contains("isn't on E-UG1's stub-up schedule"), "{fb}");
+    assert_eq!(fb["verdict"], "pass", "{fb}");
+    assert!(fb["issue"].as_str().unwrap().contains("dimensioned both ways"), "{fb}");
 
     // No shell to measure from, a grid of numbered lines only: the stub-ups have one dimension each.
     let cols = json!([
