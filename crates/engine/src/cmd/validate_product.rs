@@ -438,10 +438,10 @@ impl<'a> Own<'a> {
                 _ => {}
             }
         }
-        if let Some(s) = self.prop(&["tamperresistant"]) {
-            if let Some(b) = flag(&s.value).or_else(|| super::validate_tr::says_tr(&s.value, true)) {
-                return (Some(b), s.from);
-            }
+        if let Some(s) = self.prop(&["tamperresistant"])
+            && let Some(b) = flag(&s.value).or_else(|| super::validate_tr::says_tr(&s.value, true))
+        {
+            return (Some(b), s.from);
         }
         if let Some(list) = list_of(self.resolved().and_then(|r| r.get("features"))) {
             let said: Vec<Option<bool>> = list.iter().map(|f| super::validate_tr::says_tr(f, true)).collect();
