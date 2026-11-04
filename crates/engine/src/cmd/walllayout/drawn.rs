@@ -25,9 +25,14 @@ const REACH_IN: f64 = 12.0;
 /// Witness points slide together at most this far: twice the registration's error, at least
 /// this (inches).
 const SLIDE_MIN_IN: f64 = 2.0;
-/// A device is the one the sheet draws at a witness when its centre is this near the symbol
-/// there (inches), plus twice the registration's error.
-const SYMBOL_DEVICE_IN: f64 = 9.0;
+/// A device is the one the sheet draws at a witness when it is the device nearest the symbol
+/// there and this near it (inches), once the sheet's symbols are laid onto the model's devices.
+const SYMBOL_DEVICE_IN: f64 = 12.0;
+/// The sheet's symbols are laid onto the devices by a move of at most this (inches) plus three
+/// times the registration's error, found to this bin (inches), kept when this many agree.
+const SYMBOL_MOVE_IN: f64 = 12.0;
+const SYMBOL_BIN_IN: f64 = 2.0;
+const SYMBOL_MOVE_MIN: usize = 2;
 /// A witness is on an object within this (inches) when the chain is slid, and takes the
 /// nearest object within this much at most.
 const TIGHT_IN: f64 = 2.0;
@@ -97,10 +102,12 @@ pub(super) struct Attached {
     pub undocumented: Vec<(Handle, String)>,
 }
 
-/// One candidate on a witness line: where it is along the dimension, and what it is.
+/// One candidate on a witness line: where it is along the dimension, what it is, and (a device)
+/// how far from the symbol drawn there.
 struct Cand {
     at: f64,
     hit: Hit,
+    sym: f64,
 }
 
 /// The objects a witness point may be on. A device only where the sheet draws a symbol at the
@@ -112,6 +119,7 @@ fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec
     let mut out = Vec::new();
     let at_symbol = |d: &Dev| symbol.is_some_and(|(q, tol)| d.c().dist(q) <= tol);
     for (i, dv) in devs.iter().enumerate().filter(|(_, d)| same_level(d.level.as_deref(), lv) && at_symbol(d)) {
+        let sym = symbol.map_or(f64::INFINITY, |(q, _)| dv.c().dist(q));
         // A device in a wall that runs along the witness line is that wall's, not the
         // dimension's: the dimension measures along the device's own wall.
         if dv.normal().is_some_and(|nm| dot(nm.normalized(), u).abs() > 0.7) {
@@ -119,7 +127,7 @@ fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec
         }
         let c = dv.c();
         if dot(c - w, n).abs() <= reach && dot(c - w, u).abs() <= reach {
-            out.push(Cand { at: dot(c, u), hit: Hit::Device(i) });
+            out.push(Cand { at: dot(c, u), hit: Hit::Device(i), sym });
         }
     }
     for (k, f) in cx.faces.iter().enumerate().filter(|(_, f)| same_level(f.level.as_deref(), lv)) {
@@ -128,7 +136,7 @@ fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec
             // The face runs along the witness line: is the witness point beside its span?
             let t = f.along(w);
             if t >= -reach && t <= f.len + reach && f.depth(w).abs() <= reach {
-                out.push(Cand { at: dot(f.a, u), hit: Hit::Face(k) });
+                out.push(Cand { at: dot(f.a, u), hit: Hit::Face(k), sym: f64::INFINITY });
             }
         } else if cu >= ALONG_COS && f.depth(w).abs() <= reach {
             let mut edges: Vec<(f64, &'static str)> = f.openings.iter().flat_map(|o| [(o.from, o.kind), (o.to, o.kind)]).collect();
@@ -144,7 +152,7 @@ fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec
             for (edge, kind) in edges {
                 let p = f.at(edge);
                 if dot(p - w, u).abs() <= reach {
-                    out.push(Cand { at: dot(p, u), hit: Hit::Opening { face: k, edge, kind } });
+                    out.push(Cand { at: dot(p, u), hit: Hit::Opening { face: k, edge, kind }, sym: f64::INFINITY });
                 }
             }
         }
@@ -161,7 +169,7 @@ fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec
         for (at, side) in [(u0, "start"), (u1, "end")] {
             if (at - dot(w, u)).abs() <= reach {
                 let p = w + u * (at - dot(w, u));
-                out.push(Cand { at, hit: Hit::Casework { obj: j, point: p, side } });
+                out.push(Cand { at, hit: Hit::Casework { obj: j, point: p, side }, sym: f64::INFINITY });
             }
         }
     }
@@ -224,17 +232,64 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
     out
 }
 
+/// Each sheet's (and level's) move laying its witness symbols onto the model's devices: the
+/// move most symbol–device pairs agree on (to a bin), within the registration's error; none
+/// when fewer than [`SYMBOL_MOVE_MIN`] agree.
+fn symbol_moves(devs: &[Dev], drawn: &Drawn, inch: f64) -> HashMap<(String, String), Vec2> {
+    let mut by: BTreeMap<(String, String), (Vec<Vec2>, f64)> = BTreeMap::new();
+    for p in &drawn.placed {
+        let e = by.entry((p.sheet.clone(), p.level.to_ascii_lowercase())).or_insert_with(|| (Vec::new(), p.residual));
+        for q in [p.symbols.0, p.symbols.1].into_iter().flatten() {
+            if !e.0.iter().any(|x| x.dist(q) <= inch) && e.0.len() < 4_000 {
+                e.0.push(q);
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    let bin = SYMBOL_BIN_IN * inch;
+    for ((sheet, level), (syms, residual)) in by {
+        let reach = (SYMBOL_MOVE_IN * inch + 3.0 * residual).min(72.0 * inch);
+        let near: Vec<Vec2> = devs.iter().filter(|d| same_level(d.level.as_deref(), Some(level.as_str()))).map(Dev::c).collect();
+        let mut votes: HashMap<(i64, i64), (usize, Vec2)> = HashMap::new();
+        let mut pairs = 0usize;
+        for q in &syms {
+            for c in near.iter().filter(|c| c.dist(*q) <= reach) {
+                let d = *c - *q;
+                let k = ((d.x / bin).round() as i64, (d.y / bin).round() as i64);
+                let v = votes.entry(k).or_insert((0, Vec2::ZERO));
+                v.0 += 1;
+                v.1 = v.1 + d;
+                pairs += 1;
+            }
+            if pairs > 200_000 {
+                break;
+            }
+        }
+        let best = votes.into_iter().max_by(|a, b| a.1.0.cmp(&b.1.0).then(b.0.cmp(&a.0)));
+        if let Some((_, (n, sum))) = best.filter(|b| b.1.0 >= SYMBOL_MOVE_MIN) {
+            out.insert((sheet, level), sum / n as f64);
+        }
+    }
+    out
+}
+
 /// Attach every placed dimension (see the module docs).
 pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Attached {
     let inch = cx.inch();
+    let moves = symbol_moves(devs, drawn, inch);
     let mut out = Attached { ends: drawn.placed.iter().map(|_| (Err(String::new()), Err(String::new()))).collect(), ..Attached::default() };
     for ch in chains(drawn) {
         let p = ch.p;
         let u = p.dir;
         let reach = REACH_IN * inch + p.residual;
-        let sym_tol = SYMBOL_DEVICE_IN * inch + 2.0 * p.residual;
-        let cands: Vec<Vec<Cand>> =
-            ch.points.iter().zip(&ch.symbols).map(|(w, sym)| candidates(cx, devs, objs, &p.level, *w, u, reach, sym.map(|q| (q, sym_tol)))).collect();
+        let sym_tol = SYMBOL_DEVICE_IN * inch;
+        let mv = moves.get(&(p.sheet.clone(), p.level.to_ascii_lowercase())).copied().unwrap_or(Vec2::ZERO);
+        let cands: Vec<Vec<Cand>> = ch
+            .points
+            .iter()
+            .zip(&ch.symbols)
+            .map(|(w, sym)| candidates(cx, devs, objs, &p.level, *w, u, reach, sym.map(|q| (q + mv, sym_tol))))
+            .collect();
         // Slide the chain to where most witnesses fall on an object.
         let slide_max = (SLIDE_MIN_IN * inch).max(2.0 * p.residual);
         let tight = TIGHT_IN * inch;
@@ -261,15 +316,19 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
                 let mut ranked: Vec<(f64, &Cand)> = cs.iter().map(|c| ((c.at - at).abs(), c)).filter(|(d, _)| *d <= LOOSE_IN * inch).collect();
                 ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
                 let near = ranked.first().map_or(0.0, |x| x.0);
-                ranked.iter().filter(|(d, _)| *d <= near + 0.5 * inch).min_by_key(|(_, c)| c.hit.rank()).map(|(_, c)| c.hit.clone()).ok_or_else(
-                    || {
+                // A symbol's witness is on the device nearest the symbol; else the nearest
+                // object (a tie: the device, an opening, casework, a face).
+                let device = ranked.iter().filter(|(_, c)| matches!(c.hit, Hit::Device(_))).min_by(|a, b| a.1.sym.total_cmp(&b.1.sym));
+                device
+                    .or_else(|| ranked.iter().filter(|(d, _)| *d <= near + 0.5 * inch).min_by_key(|(_, c)| c.hit.rank()))
+                    .map(|(_, c)| c.hit.clone())
+                    .ok_or_else(|| {
                         if cs.is_empty() {
                             format!("nothing on its level within {} of its witness point", ft_in(reach / inch))
                         } else {
                             format!("no object within {} of its witness line", ft_in(LOOSE_IN))
                         }
-                    },
-                )
+                    })
             })
             .collect();
         for (k, di) in ch.dims.iter().enumerate() {
