@@ -20,6 +20,8 @@ use cadaddy_doc::props::{self, Prop};
 const MAX_ITEMS: usize = 20_000;
 const MAX_PIECES: usize = 2_000_000;
 const MAX_RUNS: usize = 200_000;
+/// Why an item isn't weighed: its conductors don't read as conductors.
+pub(crate) const NOT_READ: &str = "conductors_not_read";
 /// A feeder piece belongs to the feeder run it lies on, within this many feet.
 const FEEDER_REACH_FT: f64 = 1.5;
 
@@ -656,10 +658,29 @@ pub(crate) fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
     parts.join(" + ")
 }
 
+/// Whether a conductors text reads as conductors (`2#12 + 1#12G`, `3#10, 1#10G in 3/4" EMT`):
+/// every part a count, `#` and a size (a schedule's description read as one, `DRYER #1`, isn't).
+pub(crate) fn conductors_read(text: &str) -> bool {
+    let head = text.split(" in ").next().unwrap_or_default();
+    let parts: Vec<&str> = head.split(['+', ',']).map(str::trim).filter(|p| !p.is_empty()).collect();
+    !parts.is_empty()
+        && parts.iter().all(|p| {
+            p.split_once('#').is_some_and(|(n, size)| {
+                let n = n.trim();
+                !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && size.trim_start().starts_with(|c: char| c.is_ascii_digit())
+            })
+        })
+}
+
 /// Whether an alternative takes an item, or why not (the excluded area's name and cite).
 pub(crate) fn takes(alt: &Alternative, it: &Item) -> std::result::Result<(), String> {
     if it.kind != alt.circuit {
         return Err("another kind".into());
+    }
+    // Conductors the documents don't give as conductors: nothing to size a cable from.
+    let members_read = it.members.iter().all(|(_, c)| c.is_empty() || conductors_read(c));
+    if !conductors_read(&it.conductors) || !members_read {
+        return Err(NOT_READ.into());
     }
     if !alt.areas.iter().any(|a| a == &it.area.base) {
         return Err(it.area.base.clone());
@@ -896,6 +917,18 @@ mod tests {
         };
         assert_eq!(feeder_makeup(&big), "3#500 + 1#250 + 1#1/0G");
         assert_eq!(mepatoms::conductor_parts(&feeder_makeup(&big)).iter().filter(|p| p.2).count(), 1);
+        // Conductors as a schedule's description (a misread cell) are not weighed.
+        for ok in ["2#12 + 1#12G", "3#10, 1#10G", "2#12 + 1#12G in 3/4\" EMT", "3#500 + 1#250 + 1#1/0G"] {
+            assert!(conductors_read(ok), "{ok}");
+        }
+        for bad in ["DRYER #1", "", "#12", "2 #", "TWO#12", "2#G"] {
+            assert!(!conductors_read(bad), "{bad}");
+        }
+        let mut odd = low.clone();
+        odd.conductors = "DRYER #1".into();
+        odd.area.flags.clear();
+        let mc = rules.alternatives.iter().find(|a| a.id == "mc_concealed_branch").unwrap();
+        assert_eq!(takes(mc, &odd), Err(NOT_READ.to_string()));
     }
 
     #[test]

@@ -505,10 +505,18 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
         // The circuits it would change, and the ones its exclusions keep as designed.
         let mut taken: Vec<&scope::Item> = Vec::new();
         let mut excluded: BTreeMap<String, usize> = BTreeMap::new();
+        let mut not_read: Vec<Value> = Vec::new();
+        let mut not_read_n = 0usize;
         for it in items.iter().filter(|it| it.kind == alt.circuit) {
             match scope::takes(alt, it) {
                 Ok(()) => taken.push(it),
                 Err(why) if alt.excluded_areas.contains_key(&why) => *excluded.entry(why).or_default() += 1,
+                Err(why) if why == scope::NOT_READ && alt.areas.contains(&it.area.base) => {
+                    not_read_n += 1;
+                    if not_read.len() < MAX_NAMED {
+                        not_read.push(json!({"id": it.id, "label": it.label, "level": it.level, "conductors": it.conductors}));
+                    }
+                }
                 Err(_) => {}
             }
         }
@@ -672,6 +680,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             })).collect::<Vec<_>>(),
             "intent": intent, "checks": checks,
             "to_confirm": to_confirm,
+            "not_weighed": {"count": not_read_n, "why": "their conductors don't read as conductors (a count, # and a size): kept as designed, asked about upstream", "items": not_read},
             "quantity": {
                 "items": taken_ref.len(),
                 "circuits": taken_ref.iter().filter(|i| i.kind == "branch" && i.members.is_empty()).count(),
