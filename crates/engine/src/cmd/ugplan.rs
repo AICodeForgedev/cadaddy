@@ -1184,6 +1184,42 @@ pub(crate) fn slope_drains(sp: &mut BuildingSpec) -> Sloped {
             }
         }
     }
+    // A run's end near another run (within `join`) but not on its points (by a piece's end, where
+    // no point was added for it): joined to the nearer end of that piece.
+    let coarse_c = piece + join;
+    let mut coarse: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (n, p) in nodes.iter().enumerate() {
+        coarse.entry(cell(*p, coarse_c)).or_default().push(n);
+    }
+    let ends: Vec<usize> = node_of.iter().flat_map(|m| m.first().copied().into_iter().chain(m.last().copied())).collect();
+    for e in ends {
+        let Some(p) = nodes.get(e).copied() else { continue };
+        if adj.get(e).is_some_and(|l| l.len() > 1) {
+            continue;
+        }
+        let (cx, cy) = cell(p, coarse_c);
+        let mut best: Option<(f64, usize)> = None;
+        for k in (-1..=1).flat_map(|dx| (-1..=1).map(move |dy| (cx + dx, cy + dy))) {
+            for &a in coarse.get(&k).into_iter().flatten() {
+                for &(b, _) in adj.get(a).into_iter().flatten() {
+                    if a == e || b == e || adj.get(e).is_some_and(|l| l.iter().any(|(n, _)| *n == a || *n == b)) {
+                        continue;
+                    }
+                    let (Some(pa), Some(pb)) = (nodes.get(a).copied(), nodes.get(b).copied()) else { continue };
+                    let d = seg_dist(p, pa, pb);
+                    let near = if dist2(p, pa) <= dist2(p, pb) { a } else { b };
+                    if d <= join && best.is_none_or(|x| d < x.0) {
+                        best = Some((d, near));
+                    }
+                }
+            }
+        }
+        if let Some((_, n)) = best
+            && let Some(q) = nodes.get(n).copied()
+        {
+            link(&mut adj, e, n, dist2(p, q));
+        }
+    }
     // Each note pinned to the nearer end of the nearest piece within reach.
     let mut pinned: BTreeMap<usize, (f64, String)> = BTreeMap::new();
     for v in &notes {
@@ -2051,6 +2087,8 @@ mod tests {
                 drain(3.0, vec![[500.0, 300.0], [500.0, 500.0]]),
                 // A drain of its own, no invert by it.
                 drain(4.0, vec![[100.0, 560.0], [300.0, 560.0]]),
+                // A branch stopped short of the main (20 in off it) by one of its pieces' ends.
+                drain(4.0, vec![[230.0, 320.0], [230.0, 450.0]]),
             ]);
             sp.mep.inverts = vec![
                 inv("Level 1", [95.0, 304.0], west, "24\" INVERT"),
@@ -2058,15 +2096,15 @@ mod tests {
                 inv("Level 1", [700.0, 100.0], 3.0, "36\" INVERT"),
                 inv("Level 2", [100.0, 300.0], 1.0, "12\" INVERT"),
             ];
-            assert_eq!(slab_drains(&mut sp).0, 3);
+            assert_eq!(slab_drains(&mut sp).0, 4);
             sp
         };
         let mut sp = build(2.0, 4.0);
         let got = slope_drains(&mut sp);
-        assert_eq!((got.inverts, got.attached, got.networks, got.runs, got.flatter_than_code), (3, 2, 1, 2, 0), "{got:?}");
+        assert_eq!((got.inverts, got.attached, got.networks, got.runs, got.flatter_than_code), (3, 2, 1, 3, 0), "{got:?}");
         assert_eq!(got.unattached, vec!["36\" INVERT".to_string()]);
         let n = sp.mep.runs.len();
-        let (main, branch, alone) = (&sp.mep.runs[n - 3], &sp.mep.runs[n - 2], &sp.mep.runs[n - 1]);
+        let (main, branch, alone, short) = (&sp.mep.runs[n - 4], &sp.mep.runs[n - 3], &sp.mep.runs[n - 2], &sp.mep.runs[n - 1]);
         // The main: cut into pieces of 10 ft at most, falling evenly from 2 ft to 4 ft.
         assert!(main.points.len() >= 10 && main.bottoms_ft.len() + 1 == main.points.len());
         assert!(main.points.windows(2).all(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]) <= 120.0 + 1e-9));
@@ -2086,6 +2124,9 @@ mod tests {
         // The lone drain keeps the rule's invert.
         assert!(alone.bottoms_ft.iter().all(|b| (b + rules().depths.drain_invert_ft).abs() < 1e-9));
         assert!(!alone.height_source.contains(SLOPED_MARK));
+        // The branch stopped short joins the network: it rises from the main too.
+        assert!(short.height_source.contains(SLOPED_MARK), "{}", short.height_source);
+        assert!(short.bottoms_ft.windows(2).all(|w| w[1] > w[0]) && -short.bottoms_ft[0] < -want(230.0) + 0.05, "{:?}", short.bottoms_ft);
         // The stack on the main goes down to the drain's depth there (3 ft), not the rule's 2 ft.
         let bases = stack_bases(&sp, false);
         assert_eq!(bases.len(), 1);
@@ -2093,13 +2134,13 @@ mod tests {
         assert!(bases[0].height_source.contains(SLOPED_MARK));
         // A rerun gives the same.
         let before: Vec<Vec<f64>> = sp.mep.runs.iter().map(|r| r.bottoms_ft.clone()).collect();
-        assert_eq!(slope_drains(&mut sp).runs, 2);
+        assert_eq!(slope_drains(&mut sp).runs, 3);
         assert_eq!(sp.mep.runs.iter().map(|r| r.bottoms_ft.clone()).collect::<Vec<_>>(), before);
         // Inverts falling less than the code's least fall (6 in over 83 ft): kept, for review.
         let mut flat = build(2.0, 2.5);
         let got = slope_drains(&mut flat);
         assert_eq!(got.flatter_than_code, 1);
-        let m = &flat.mep.runs[flat.mep.runs.len() - 3];
+        let m = &flat.mep.runs[flat.mep.runs.len() - 4];
         assert!((m.bottoms_ft[0] + 2.0).abs() < 0.05 && (m.bottoms_ft[m.bottoms_ft.len() - 1] + 2.5).abs() < 0.05, "{:?}", m.bottoms_ft);
         // No inverts: nothing sloped.
         let mut none = build(2.0, 4.0);
