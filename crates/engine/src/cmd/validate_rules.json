@@ -80,6 +80,26 @@
       }
     },
     {
+      "id": "G-UNDERGROUND",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every below-grade or under-slab callout of the documents (a note, a keynote, a site plan's callout) has its run in the model and on an underground sheet, of the size, count, material and least depth it gives; every stub-up has two dimensions to a slab corner or edge or a grid line; a run CADaddy proposes is reported as proposed with its review item, never as called; a buried run no callout, drawing or proposal accounts for is extra.",
+      "how": [
+        "objects.json `underground` lists the callouts read off the sheets (what each calls for: trade, count, size, material, least depth, what it serves), the underground sheets (the set's own, and the ones CADaddy generated: `underground_sheet` prints) and the buried runs and stub-ups; the prescreen (G-UNDERGROUND) matched each callout to a run. Start from its findings.",
+        "Read each callout on its sheet's crop and the run that answers it on the underground sheet's run schedule: the count, the trade size, the material (PVC Schedule 40 or 80, rigid steel) and the depth to the top of the run; a run shallower than the callout's least depth, or of another size or material, is a 'fail' citing the note.",
+        "A callout with no run in the model, or a run no underground sheet shows, is 'missing'. A dashed run marked PROPOSED is CADaddy's, not the documents': it never answers a callout; report it 'unsure' citing its RFI.",
+        "On the stub-up schedule and the plan, each stub-up has two perpendicular dimensions from a slab edge or corner or a grid line; one or none is a 'fail'."
+      ],
+      "documents": ["plan", "general_notes", "legend", "spec"],
+      "tolerance": {"depth_in": 1, "size_in": 0.1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The site plan's note calls for two 5\" Schedule 40 PVC conduits at least 48\" below grade; the model has both at 48\" and the underground sheet's run schedule lists them.",
+        "fail": "The note calls for 48\" below grade; the run is 24\" deep. The stub-up at the floor box has a dimension from the slab's west edge only."
+      }
+    },
+    {
       "id": "G-TYPE",
       "trade": "general",
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
