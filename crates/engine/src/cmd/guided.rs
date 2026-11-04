@@ -5908,6 +5908,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 v["offsets"]["documented"].as_u64().unwrap_or(0),
                 v["offsets"]["measured"].as_u64().unwrap_or(0)
             ));
+            let dd = &v["drawn_dimensions"];
+            progress_line(&format!(
+                "  drawn dimensions: {} read, {} placed on the model; {} devices' offsets documented by them, {} conflicts for review",
+                dd["read"].as_u64().unwrap_or(0),
+                dd["placed"].as_u64().unwrap_or(0),
+                dd["devices_documented"].as_u64().unwrap_or(0),
+                dd["conflicts"].as_u64().unwrap_or(0)
+            ));
             result["layout"] = v;
         }
         Err(e) => result["layout_error"] = json!(e.to_string()),

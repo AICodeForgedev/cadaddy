@@ -669,7 +669,8 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
             continue;
         }
         // Run it out along collinear pieces.
-        let mut l = DimLine { o: a, u, t0: (a - a).dot(u).min((b - a).dot(u)), t1: (a - a).dot(u).max((b - a).dot(u)), h: tk.h };
+        let tb = (b - a).dot(u);
+        let mut l = DimLine { o: a, u, t0: tb.min(0.0), t1: tb.max(0.0), h: tk.h };
         for _ in 0..16 {
             let (lo, hi) = (l.at(l.t0) - Vec2::new(tk.h, tk.h) * LINE_GAP_H, l.at(l.t1) + Vec2::new(tk.h, tk.h) * LINE_GAP_H);
             let (lo, hi) = (lo.min(hi), lo.max(hi));
@@ -1101,11 +1102,11 @@ fn plan_move(own: &Items, other: &Items, width: f64) -> Option<(Vec2, f64, usize
 fn stacking(d: &Drawing) -> HashMap<String, Vec2> {
     let mut out: HashMap<String, Vec2> = HashMap::new();
     for e in d.model.iter().take(MAX_MODEL) {
-        if super::wallgen::made_as(&e).is_none() {
+        if super::wallgen::made_as(e).is_none() {
             continue;
         }
-        let Some(level) = super::bspec::made_level(&e) else { continue };
-        out.entry(level.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(&e));
+        let Some(level) = super::bspec::made_level(e) else { continue };
+        out.entry(level.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
     }
     out
 }
