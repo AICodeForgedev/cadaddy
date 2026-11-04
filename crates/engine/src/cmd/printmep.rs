@@ -10,6 +10,7 @@
 use cadaddy_doc::{Drawing, EntityStore, Space};
 use cadaddy_walk3d::{BuildingSpec, Level, Mep, MepKind, MepRun};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use crate::Session;
 
@@ -190,15 +191,61 @@ pub(crate) struct SheetRead {
     pub terminals: usize,
     pub equipment: usize,
     pub warnings: Vec<String>,
+    /// Pipe sheets: feet by system, then by size (`4"`).
+    pub by_system: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Pipe sheets: runs followed on past their tags' reach (Q6181) and their length.
+    pub followed_runs: usize,
+    pub followed_ft: f64,
 }
 
 impl SheetRead {
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut out = json!({
             "sheet": self.sheet, "level": self.level, "trade": self.trade, "runs": self.runs,
             "length_ft": r1(self.length_ft), "terminals": self.terminals,
             "equipment": self.equipment, "warnings": self.warnings,
-        })
+        });
+        if self.trade == "pipe" {
+            out["by_system"] = json!(
+                self.by_system
+                    .iter()
+                    .map(|(sy, sizes)| (
+                        sy.clone(),
+                        sizes.iter().map(|(z, ft)| (z.clone(), json!(r1(*ft)))).collect::<serde_json::Map<_, _>>().into()
+                    ))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            out["followed_runs"] = json!(self.followed_runs);
+            out["followed_ft"] = json!(r1(self.followed_ft));
+        }
+        out
+    }
+}
+
+/// A pipe's size as a plan prints it (`4"`, `1-1/2"`, `0.75"`).
+fn size_label(inches: f64) -> String {
+    let whole = inches.trunc();
+    let frac = inches - whole;
+    let eighths = (frac * 8.0).round();
+    if (frac * 8.0 - eighths).abs() > 1e-6 {
+        return format!("{}\"", r1(inches));
+    }
+    let f = match eighths as u8 {
+        0 => String::new(),
+        8 => return format!("{}\"", whole + 1.0),
+        n => {
+            let (mut a, mut b) = (u32::from(n), 8u32);
+            while a % 2 == 0 && b > 1 {
+                a /= 2;
+                b /= 2;
+            }
+            format!("{a}/{b}")
+        }
+    };
+    match (whole > 0.0, f.is_empty()) {
+        (_, true) => format!("{whole}\""),
+        (true, false) => format!("{whole}-{f}\""),
+        (false, false) => format!("{f}\""),
     }
 }
 
@@ -511,6 +558,16 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
     read.length_ft = mep.runs.iter().map(|r| path_ft(&r.points, upf)).sum();
     read.terminals = mep.terminals.len();
     read.equipment = mep.equipment.len();
+    if trade != MepKind::Duct {
+        for r in &mep.runs {
+            let ft = path_ft(&r.points, upf);
+            *read.by_system.entry(r.system.clone()).or_default().entry(size_label(r.size_in[0])).or_insert(0.0) += ft;
+            if r.size_source.starts_with("followed from") {
+                read.followed_runs += 1;
+                read.followed_ft += ft;
+            }
+        }
+    }
     if read.runs == 0 {
         read.warnings.push(format!(
             "{} ({}): no {} runs read on this {} plan",
@@ -548,6 +605,9 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
                 terminals: cloned.terminals.len(),
                 equipment: cloned.equipment.len(),
                 warnings: Vec::new(),
+                by_system: read.by_system.clone(),
+                followed_runs: read.followed_runs,
+                followed_ft: read.followed_ft,
             });
             let room = MAX_SET_RUNS.saturating_sub(out.mep.runs.len());
             if room == 0 {
@@ -882,6 +942,15 @@ pub(crate) fn load_project_plans(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pipe_sizes_are_labelled_as_plans_print_them() {
+        assert_eq!(super::size_label(4.0), "4\"");
+        assert_eq!(super::size_label(1.5), "1-1/2\"");
+        assert_eq!(super::size_label(0.75), "3/4\"");
+        assert_eq!(super::size_label(2.5), "2-1/2\"");
+        assert_eq!(super::size_label(0.3), "0.3\"");
+    }
+
     use super::*;
     use cadaddy_walk3d::MepSystem;
 
