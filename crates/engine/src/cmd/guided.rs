@@ -4598,7 +4598,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // The panels the unit's own devices are on (its load center).
                 let mut fed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                 for dv in &stamped {
-                    own.entry(dv.room.clone()).or_default().insert(dv.tag.trim().to_ascii_uppercase());
+                    own.entry(dv.room.clone()).or_default().insert(format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet)));
                     if let Some(p) = super::propfill::panel_of(&dv.circuit) {
                         fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
                     }
@@ -7375,7 +7375,9 @@ fn book_into_units(
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
         let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
-        let tag = dv.tag.trim().to_ascii_uppercase();
+        // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
+        // not the electrical plan's wall light).
+        let mine = format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet));
         // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
         // panel, across the unit's entry wall): not the unit's.
         let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
@@ -7385,19 +7387,26 @@ fn book_into_units(
         };
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
-        let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
+        // Two units' footprints overlap past the wall they share: the one it stands deepest in
+        // (the bath on its side of the wall).
         if let Some((_, room, _, _)) = footprints
             .iter()
             .filter(|(l, room, poly, _)| {
-                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
+                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&mine))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
             })
-            .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
+            .max_by(|a, b| edge_distance(&a.2, p).total_cmp(&edge_distance(&b.2, p)))
         {
             dv.room = room.clone();
             n += 1;
         }
     }
     n
+}
+
+/// The trade of the sheet a device was read from (its number's discipline letter: `E-6` E), for
+/// what a unit's plans show; unknown: empty.
+fn units_trade(sheet: &str) -> String {
+    cadaddy_mepfix::sheet_facts::discipline_of(sheet.split('/').next().unwrap_or(sheet)).to_ascii_uppercase()
 }
 
 /// Leaves one equipment connection (EF, PTAC) per room and tag, the first (stamped before placed),
@@ -14345,6 +14354,7 @@ mod tests {
         ];
         let wc = |x: f64, y: f64, level: &str| super::super::readers::ReadDevice {
             tag: "P-1".into(),
+            sheet: "P-2".into(),
             at: [x, y],
             level: level.into(),
             ..Default::default()
@@ -14357,7 +14367,7 @@ mod tests {
             wc(138.0, 60.0, "Level 2"),
         ];
         let own: BTreeMap<String, BTreeSet<String>> =
-            [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
+            [("202".to_string(), ["P-1@P".to_string()].into()), ("204".to_string(), ["P-1@P".to_string()].into())].into();
         let none = BTreeMap::new();
         assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
@@ -14374,18 +14384,27 @@ mod tests {
         assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
         // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
         // corridor's, across the entry wall) is not.
-        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC".to_string()].into())].into();
+        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC@E".to_string(), "F@E".to_string()].into())].into();
         let fed: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["G".to_string()].into())].into();
         let rec = |circuit: &str| super::super::readers::ReadDevice {
             tag: "REC".into(),
             circuit: circuit.into(),
+            sheet: "E-3".into(),
             at: [40.0, 30.0],
             level: "Level 2".into(),
             ..Default::default()
         };
-        let mut recs = vec![rec("G-9"), rec("A-3"), rec("")];
-        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 2);
-        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202"]);
+        // An `F` off a mechanical plan isn't the unit's electrical wall light.
+        let f_on = |sheet: &str| super::super::readers::ReadDevice {
+            tag: "F".into(),
+            sheet: sheet.into(),
+            at: [40.0, 30.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut recs = vec![rec("G-9"), rec("A-3"), rec(""), f_on("M-2"), f_on("E-3")];
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 3);
+        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
