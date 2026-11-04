@@ -5170,7 +5170,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     fate(job, &dv.handle, MarkFate::left_out(device_kind_of(dv), super::inventory::NOT_PLACEABLE, &why));
                 }
                 let stamp_clock = web_time::Instant::now();
-                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, differs } =
+                let StampedRooms { devices: mut stamped, report, authority, panels, rooms, sleeping: guest, footprints, differs, duplicates } =
                     stamp_typical_rooms(s.doc()?, job, &out, &unplaced);
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
@@ -5219,8 +5219,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 sleeping = guest;
                 // A room an enlarged plan of its own shows: that plan's devices, not the overall
                 // plan's copies of some of them.
-                let before = out.len();
                 let mut out = out;
+                // The floor plans' copies of devices a typical plan stamped where they are.
+                if !duplicates.is_empty() {
+                    for (i, (of, room)) in &duplicates {
+                        if let Some(dv) = out.get(*i) {
+                            let why = format!("the typical plan's copy of its {} tag stamped into {room} at its spot is that device", dv.tag.trim());
+                            fate(job, &dv.handle, MarkFate::duplicate(device_kind_of(dv), of, &why));
+                        }
+                    }
+                    let mut i = 0usize;
+                    out.retain(|_| {
+                        let keep = !duplicates.contains_key(&i);
+                        i += 1;
+                        keep
+                    });
+                    progress_line(&format!("  floor plans' devices a typical plan stamped at their spot (left out): {}", duplicates.len()));
+                }
+                let before = out.len();
                 // A device of the plans in no room but in a unit's footprint (its bath, its entry:
                 // the unit's label's room leaves them out) is that unit's.
                 // (What a unit's own plans show: its stamped tags; and plumbing, which its plumbing
@@ -5229,7 +5245,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // The panels the unit's own devices are on (its load center).
                 let mut fed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                 for dv in &stamped {
-                    own.entry(dv.room.clone()).or_default().insert(dv.tag.trim().to_ascii_uppercase());
+                    own.entry(dv.room.clone()).or_default().insert(format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet)));
                     if let Some(p) = super::propfill::panel_of(&dv.circuit) {
                         fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
                     }
@@ -5249,25 +5265,59 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let near = DUPLICATE_FIXTURE_FT * upf_dev;
                 // (And one tag in one unit from two sheets, the enlarged plan's and the floor's,
                 // is one fixture however far apart their registrations put it.)
-                let mut kept: Vec<(String, String, [f64; 2], String, String, String)> = Vec::new();
+                // Two plans' tags of one fixture (the sanitary plan's and the water plan's) on two
+                // sheets register a little apart: within [`CROSS_SHEET_FIXTURE_FT`] they are one.
+                // Of the two, the one in a unit that has no other of its tag stays (the neighbour's
+                // water closet across the wall they share is not this unit's second).
+                let across = CROSS_SHEET_FIXTURE_FT * upf_dev;
                 let before_dupes = out.len();
                 let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
-                let mut twice: Vec<(String, MarkFate)> = Vec::new();
-                out.retain(|dv| {
+                let mut kept: Vec<usize> = Vec::new();
+                // Each fixture left out, by the one kept for it.
+                let mut gone: BTreeMap<usize, usize> = BTreeMap::new();
+                for i in 0..out.len() {
+                    let Some(dv) = out.get(i) else { break };
                     if dv.kind != "plumbing fixture" && dv.kind != "plumbing stack" {
-                        return true;
+                        continue;
                     }
-                    let key = (dv.tag.clone(), digits(&dv.level));
-                    let same_unit = |room: &str, sheet: &str| !dv.room.is_empty() && room == dv.room && sheet != dv.sheet;
-                    if let Some(k) = kept.iter().find(|(t, l, at, _, sheet, room)| {
-                        *t == key.0 && *l == key.1 && ((at[0] - dv.at[0]).hypot(at[1] - dv.at[1]) <= near || same_unit(room, sheet))
-                    }) {
-                        let why = format!("one fixture with the {} tag on {}: tagged on two plans", k.0, k.4);
-                        twice.push((dv.handle.clone(), MarkFate::duplicate(device_kind_of(dv), &k.3, &why)));
-                        return false;
+                    let same = |o: &super::readers::ReadDevice| {
+                        let d = (o.at[0] - dv.at[0]).hypot(o.at[1] - dv.at[1]);
+                        o.tag == dv.tag
+                            && digits(&o.level) == digits(&dv.level)
+                            && (d <= near
+                                || (d <= across && o.sheet != dv.sheet)
+                                || (!dv.room.is_empty() && o.room == dv.room && o.sheet != dv.sheet))
+                    };
+                    let Some(pos) = kept.iter().position(|&k| out.get(k).is_some_and(same)) else {
+                        kept.push(i);
+                        continue;
+                    };
+                    let k = kept.get(pos).copied().unwrap_or(i);
+                    let others = |room: &str, but: usize| {
+                        kept.iter().filter(|&&j| j != but && out.get(j).is_some_and(|o| o.room == room && o.tag == dv.tag)).count()
+                    };
+                    let theirs = out.get(k).map_or_else(String::new, |o| o.room.clone());
+                    if !dv.room.is_empty() && dv.room != theirs && others(&theirs, k) >= 1 && others(&dv.room, k) == 0 {
+                        gone.insert(k, i);
+                        if let Some(slot) = kept.get_mut(pos) {
+                            *slot = i;
+                        }
+                    } else {
+                        gone.insert(i, k);
                     }
-                    kept.push((key.0, key.1, dv.at, dv.handle.clone(), dv.sheet.clone(), dv.room.clone()));
-                    true
+                }
+                let mut twice: Vec<(String, MarkFate)> = Vec::new();
+                for (g, k) in &gone {
+                    if let (Some(dv), Some(o)) = (out.get(*g), out.get(*k)) {
+                        let why = format!("one fixture with the {} tag on {}: tagged on two plans", o.tag, o.sheet);
+                        twice.push((dv.handle.clone(), MarkFate::duplicate(device_kind_of(dv), &o.handle, &why)));
+                    }
+                }
+                let mut i = 0usize;
+                out.retain(|_| {
+                    let keep = !gone.contains_key(&i);
+                    i += 1;
+                    keep
                 });
                 for (h, f) in twice {
                     fate(job, &h, f);
@@ -7652,6 +7702,7 @@ fn stamp_typical_rooms(
             sleeping: sleeping.into_values().collect(),
             footprints: Vec::new(),
             differs: Vec::new(),
+            duplicates: BTreeMap::new(),
         };
     }
     // The rooms stage's rooms with outlines; a name several rooms carry is a unit type.
@@ -7672,9 +7723,9 @@ fn stamp_typical_rooms(
     // the rest to the typical plan), each such device the copy of its tag and kind nearest it.
     let mut copies: Vec<(usize, usize, String)> = Vec::new();
     // A device of a tag the floor's plans already put where a typical plan's copy lands (within
-    // [`STAND_IN_FT`]) is that device: the floor plan's stands for it (one each). A floor plan may
-    // show a room's receptacles and leave its fixtures to the typical plan; where it shows none at
-    // the spot, the typical plan's is added.
+    // [`STAND_IN_FT`]) is that device: the typical plan's copy is the unit's (its room, its
+    // circuit), and the floor plan's is left out as its duplicate (one each, so two units'
+    // devices back to back on their shared wall keep one each whichever is stamped first).
     let stand_in_reach = STAND_IN_FT * 12.0 * super::perceive::units_per_inch(d);
     // Not one on another panel's circuit (a corridor's receptacle on a house panel by the unit's
     // entry receptacle).
@@ -7852,15 +7903,19 @@ fn stamp_typical_rooms(
         }
     }
     // A device the floor's plans show in a room is the typical plan's copy of its tag and kind
-    // nearest it there (a smoke detector a fire alarm plan marks S is no switch S): that copy
-    // goes. A keynote's box read as a receptacle is none.
-    let mut gone: BTreeSet<usize> = BTreeSet::new();
+    // nearest it there (a smoke detector a fire alarm plan marks S is no switch S): the copy is
+    // the unit's (its room, its circuit) and stays; the floor plan's device is its duplicate, left
+    // out. A keynote's box read as a receptacle is none.
+    // The copies a floor plan's device was found to be (each one device at most).
+    let mut taken: BTreeSet<usize> = BTreeSet::new();
+    let mut duplicates: BTreeMap<usize, (String, String)> = BTreeMap::new();
     let mut differs: Vec<super::lighting::PlanDiff> = Vec::new();
     // A floor plan's fixture this near the enlarged plan's copy of its kind is that copy, tagged
     // otherwise.
     let diff_reach = PLAN_DIFF_REACH_FT * 12.0 * k_in;
     let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
-    let floor: Vec<&super::readers::ReadDevice> = placed.iter().filter(|dv| !keynote_receptacle(d, dv, &mut shapes)).collect();
+    let floor: Vec<(usize, &super::readers::ReadDevice)> =
+        placed.iter().enumerate().filter(|(_, dv)| !keynote_receptacle(d, dv, &mut shapes)).collect();
     // Each floor plan's device stands for one copy at most (a device by a wall between two rooms).
     let mut stood: BTreeSet<usize> = BTreeSet::new();
     for (ri, (_, level, outline, _)) in rooms.iter().enumerate() {
@@ -7868,7 +7923,7 @@ fn stamp_typical_rooms(
         if mine.is_empty() {
             continue;
         }
-        for (fi, f) in floor.iter().enumerate() {
+        for &(fi, f) in &floor {
             if stood.contains(&fi) || f.level != *level {
                 continue;
             }
@@ -7880,7 +7935,7 @@ fn stamp_typical_rooms(
             let fk = super::unitmarks::kind_of(f);
             let theirs = panel(&f.circuit);
             let same = |i: &usize| {
-                !gone.contains(i) && out.get(*i).is_some_and(|c| c.tag.eq_ignore_ascii_case(&f.tag) && super::unitmarks::kind_of(c) == fk)
+                !taken.contains(i) && out.get(*i).is_some_and(|c| c.tag.eq_ignore_ascii_case(&f.tag) && super::unitmarks::kind_of(c) == fk)
             };
             let nearest = mine
                 .iter()
@@ -7890,11 +7945,11 @@ fn stamp_typical_rooms(
                     _ => true,
                 })
                 .min_by(|a, b| gap(a.0).total_cmp(&gap(b.0)));
-            if let Some((i, _, key)) = nearest {
-                gone.insert(*i);
+            if let Some((i, _, _)) = nearest {
+                taken.insert(*i);
                 stood.insert(fi);
-                if let Some(n) = report.get_mut(key) {
-                    *n = n.saturating_sub(1);
+                if let Some(c) = out.get(*i) {
+                    duplicates.insert(fi, (c.handle.clone(), c.room.clone()));
                 }
             } else if in_room && !mine.iter().any(|(i, _, _)| same(i)) && super::lighting::lighting_kind(&fk) && differs.len() < MAX_STAMPED {
                 // A fixture or switch the floor plan shows that the enlarged plan of the room's
@@ -7919,14 +7974,17 @@ fn stamp_typical_rooms(
             }
         }
     }
-    if !gone.is_empty() {
-        let mut i = 0usize;
-        out.retain(|_| {
-            i += 1;
-            !gone.contains(&(i - 1))
-        });
+    StampedRooms {
+        devices: out,
+        report,
+        authority,
+        panels,
+        rooms: panel_rooms,
+        sleeping: sleeping.into_values().collect(),
+        footprints,
+        differs,
+        duplicates,
     }
-    StampedRooms { devices: out, report, authority, panels, rooms: panel_rooms, sleeping: sleeping.into_values().collect(), footprints, differs }
 }
 
 /// How far a floor plan's fixture or switch may be from the enlarged plan's copy of its kind to be
@@ -9098,10 +9156,18 @@ fn book_into_units(
 ) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
+    // The tags each unit was booked so far, and those it holds already.
+    let mut held: BTreeSet<(String, String)> = devices
+        .iter()
+        .filter(|dv| !dv.room.trim().is_empty())
+        .map(|dv| (dv.room.clone(), format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet))))
+        .collect();
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
         let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
-        let tag = dv.tag.trim().to_ascii_uppercase();
+        // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
+        // not the electrical plan's wall light).
+        let mine = format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet));
         // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
         // panel, across the unit's entry wall): not the unit's.
         let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
@@ -9111,19 +9177,32 @@ fn book_into_units(
         };
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
-        let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
+        // Two units' footprints overlap past the wall they share: the one it stands deepest in
+        // (the bath on its side of the wall).
         if let Some((_, room, _, _)) = footprints
             .iter()
             .filter(|(l, room, poly, _)| {
-                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
+                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&mine))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
             })
-            .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
+            .max_by(|a, b| {
+                // A plumbing fixture: a unit that has none of its tag yet first (two units' water
+                // closets back to back are one each).
+                let lacks = |room: &str| plumbing && !held.contains(&(room.to_string(), mine.clone()));
+                lacks(&a.1).cmp(&lacks(&b.1)).then(edge_distance(&a.2, p).total_cmp(&edge_distance(&b.2, p)))
+            })
         {
+            held.insert((room.clone(), mine.clone()));
             dv.room = room.clone();
             n += 1;
         }
     }
     n
+}
+
+/// The trade of the sheet a device was read from (its number's discipline letter: `E-6` E), for
+/// what a unit's plans show; unknown: empty.
+fn units_trade(sheet: &str) -> String {
+    cadaddy_mepfix::sheet_facts::discipline_of(sheet.split('/').next().unwrap_or(sheet)).to_ascii_uppercase()
 }
 
 /// Leaves one equipment connection (EF, PTAC) per room and tag, the first (stamped before placed),
@@ -9475,6 +9554,9 @@ fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[Typic
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
 const DUPLICATE_FIXTURE_FT: f64 = 2.0;
+/// Two sheets' tags of one plumbing fixture (the sanitary and the water plans'), at most this far
+/// apart (feet): less than two water closets back to back across a wall.
+const CROSS_SHEET_FIXTURE_FT: f64 = 2.75;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
@@ -13520,6 +13602,9 @@ struct StampedRooms {
     /// The fixtures and switches a floor plan shows in a typical room otherwise than its type's
     /// enlarged plan.
     differs: Vec<super::lighting::PlanDiff>,
+    /// The floor plans' devices (by their index in `placed`) where a typical plan's copy landed:
+    /// the same devices, left out; each by the copy's mark (its handle) and room.
+    duplicates: BTreeMap<usize, (String, String)>,
 }
 
 /// The electrical legends' designations (`3=3-WAY`, `OS2=WALL MOUNTED OCCUPANCY SENSOR …`) on the
@@ -18700,6 +18785,7 @@ mod tests {
         ];
         let wc = |x: f64, y: f64, level: &str| super::super::readers::ReadDevice {
             tag: "P-1".into(),
+            sheet: "P-2".into(),
             at: [x, y],
             level: level.into(),
             ..Default::default()
@@ -18712,7 +18798,7 @@ mod tests {
             wc(138.0, 60.0, "Level 2"),
         ];
         let own: BTreeMap<String, BTreeSet<String>> =
-            [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
+            [("202".to_string(), ["P-1@P".to_string()].into()), ("204".to_string(), ["P-1@P".to_string()].into())].into();
         let none = BTreeMap::new();
         assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
@@ -18729,18 +18815,27 @@ mod tests {
         assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
         // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
         // corridor's, across the entry wall) is not.
-        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC".to_string()].into())].into();
+        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC@E".to_string(), "F@E".to_string()].into())].into();
         let fed: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["G".to_string()].into())].into();
         let rec = |circuit: &str| super::super::readers::ReadDevice {
             tag: "REC".into(),
             circuit: circuit.into(),
+            sheet: "E-3".into(),
             at: [40.0, 30.0],
             level: "Level 2".into(),
             ..Default::default()
         };
-        let mut recs = vec![rec("G-9"), rec("A-3"), rec("")];
-        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 2);
-        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202"]);
+        // An `F` off a mechanical plan isn't the unit's electrical wall light.
+        let f_on = |sheet: &str| super::super::readers::ReadDevice {
+            tag: "F".into(),
+            sheet: sheet.into(),
+            at: [40.0, 30.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut recs = vec![rec("G-9"), rec("A-3"), rec(""), f_on("M-2"), f_on("E-3")];
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 3);
+        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
@@ -20320,9 +20415,11 @@ mod tests {
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &placed, &unplaced);
         let in_room = |n: &str, tag: &str| stamped.devices.iter().filter(|d| d.room.contains(n) && d.tag == tag).count();
-        assert_eq!((in_room("201", "A"), in_room("202", "A")), (2, 3), "{:?}", stamped.report);
+        assert_eq!((in_room("201", "A"), in_room("202", "A")), (3, 3), "{:?}", stamped.report);
         assert_eq!((in_room("201", "S"), in_room("202", "S")), (1, 1));
-        assert_eq!(stamped.report.get("E-6 ENLARGED DOUBLE QUEEN"), Some(&7), "{:?}", stamped.report);
+        assert_eq!(stamped.report.get("E-6 ENLARGED DOUBLE QUEEN"), Some(&8), "{:?}", stamped.report);
+        // The floor plan's copy where one landed is its duplicate; the corridor's is not.
+        assert_eq!(stamped.duplicates.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([0]), "{:?}", stamped.duplicates);
         assert!(!stamped.report.keys().any(|k| k.contains("A621") || k.contains("no typical-room view")), "{:?}", stamped.report);
         // Each one inside its room.
         for d in &stamped.devices {
@@ -20575,10 +20672,10 @@ mod tests {
         assert_eq!(left, ["T M-9", "EF E-9", "REC E-9"]);
     }
 
-    /// Q6159: a device the floor's plans show in a typical room stands for the typical plan's copy
-    /// of the same mark AND kind nearest it (that copy goes, not the first of the mark); a floor
-    /// plan's device of another kind under the same mark (a fire alarm plan's smoke detector `S`)
-    /// takes no switch `S` out of the room.
+    /// Q6159: a device the floor's plans show in a typical room is the typical plan's copy of the
+    /// same mark AND kind nearest it (the copy stays, the floor plan's device is its duplicate); a
+    /// floor plan's device of another kind under the same mark (a fire alarm plan's smoke detector
+    /// `S`) is no switch `S`'s duplicate.
     #[test]
     fn a_floor_plans_device_stands_for_the_nearest_typical_copy_of_its_kind() {
         let mut s = crate::Session::new();
@@ -20646,9 +20743,10 @@ mod tests {
         assert_eq!(of("301", "S").len(), 1, "the smoke detector takes no switch: {:?}", stamped.devices);
         assert_eq!(of("301", "R1").len(), 2);
         assert_eq!(of("302", "S").len(), 1);
-        // 302 keeps the receptacle the floor's plans don't show.
-        assert_eq!(of("302", "R1"), vec![*near], "the copy the floor's receptacle stands for went");
-        assert_eq!(stamped.report.get("E-9 ENLARGED STUDIO KING"), Some(&5), "{:?}", stamped.report);
+        // 302 keeps both copies; the floor's receptacle by the far one is that copy's duplicate.
+        assert_eq!(of("302", "R1"), vec![*far, *near], "every typical copy stays");
+        assert_eq!(stamped.duplicates.keys().copied().collect::<BTreeSet<_>>(), BTreeSet::from([1]), "{:?}", stamped.duplicates);
+        assert_eq!(stamped.report.get("E-9 ENLARGED STUDIO KING"), Some(&6), "{:?}", stamped.report);
     }
 
     /// A typical room's plan's pipe no registration placed goes into each room of its type, at
