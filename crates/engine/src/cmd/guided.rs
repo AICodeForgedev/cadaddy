@@ -2456,7 +2456,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 .min_by(|a, b| a.0.at.dist(at).total_cmp(&b.0.at.dist(at)))
                 .map(|(_, m)| m)
         };
+        // A fire alarm symbol's subscript (a small `R` at an `S`'s lower right: a resident room's
+        // smoke detector with sounder base) is part of its mark, not a device of its own: the
+        // import may hang the letter on another symbol nearby.
+        let (subscript_of, compound) = if fire_alarm_sheet { fire_alarm_subscripts(syms) } else { Default::default() };
         for (tag, at, h, tag_at) in syms {
+            if subscript_of.contains(h) {
+                *c.not_device.entry("a fire alarm symbol's subscript (part of its mark)").or_default() += 1;
+                continue;
+            }
+            let tag = compound.get(h).unwrap_or(tag);
             // (On an electrical plan only: another trade's tags read like circuits, `P-3`. And a
             // luminaire's mark only, one the lighting submittals list: a note by a receptacle,
             // `HOR`, is no type.)
@@ -7442,6 +7451,49 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
         list.retain(|dv| !connection(dv) || seen.insert((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())));
     }
     before - stamped.len() - placed.len()
+}
+
+/// A subscript letter's text at its base mark's lower right: this far right and below the base
+/// mark's text, in its text heights.
+const SUBSCRIPT_REACH_H: (f64, f64) = (0.3, 2.0);
+
+/// The fire alarm symbols whose mark is another's subscript (a single letter whose text is at
+/// that mark's text's lower right, about its size: the `R` of a resident room's smoke detector
+/// `S` with sounder base), and each base's mark with it (`SR`), by symbol.
+#[allow(clippy::type_complexity)]
+fn fire_alarm_subscripts(
+    syms: &[(String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>)],
+) -> (BTreeSet<cadaddy_doc::Handle>, BTreeMap<cadaddy_doc::Handle, String>) {
+    let mut subs: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
+    let mut compound: BTreeMap<cadaddy_doc::Handle, String> = BTreeMap::new();
+    let letters = |t: &str, n: usize| (1..=n).contains(&t.chars().count()) && t.chars().all(|c| c.is_ascii_uppercase());
+    for (t, _, h, at) in syms.iter().take(MAX_STAMPED) {
+        let Some((p, ht)) = at.filter(|(_, ht)| ht.is_finite() && *ht > 0.0) else { continue };
+        if !letters(t, 1) {
+            continue;
+        }
+        let base = syms
+            .iter()
+            .filter(|(bt, _, bh, _)| bh != h && letters(bt, 2) && !subs.contains(bh) && !compound.contains_key(bh))
+            .filter_map(|(bt, _, bh, bat)| {
+                let (q, bht) = (*bat)?;
+                let (dx, dy) = ((p.x - q.x) / bht, (q.y - p.y) / bht);
+                let size = ht / bht;
+                ((SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dx)
+                    && (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dy)
+                    && (0.6..=1.5).contains(&size))
+                .then_some((bt, *bh, dx.hypot(dy)))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((bt, bh, _)) = base
+            && !subs.contains(h)
+            && !compound.contains_key(h)
+        {
+            subs.insert(*h);
+            compound.insert(bh, format!("{bt}{t}"));
+        }
+    }
+    (subs, compound)
 }
 
 /// A kind of device's typical mounting height a general note gives.
@@ -15838,6 +15890,37 @@ mod tests {
         run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(job.devices.len(), 3, "{:?}", job.devices);
         assert!(job.devices.iter().all(|d| d.tag == "S" && d.kind == "fire alarm device" && d.leg.is_empty()), "{:?}", job.devices);
+    }
+
+    /// A fire alarm plan's resident room detector (`S` with a subscript `R` at its lower right) is
+    /// one device marked `SR`; the corridor's plain `S` stays an `S`.
+    #[test]
+    fn a_fire_alarm_marks_subscript_is_part_of_its_mark() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-7", "sheet_type": "plan", "level": "1", "title": "FIRE ALARM - 1ST FLOOR"}]}));
+        job.sheets_loaded = true;
+        let syms: Vec<(&str, f64, f64)> = vec![("S", 100.0, 300.0), ("R", 102.4, 297.6), ("S", 200.0, 300.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &[], &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-7".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "Q-7".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut tags: Vec<&str> = job.devices.iter().map(|d| d.tag.as_str()).collect();
+        tags.sort_unstable();
+        assert_eq!(tags, vec!["S", "SR"], "{:?}", job.devices);
     }
 
     #[test]
