@@ -3964,6 +3964,9 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
 }
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
+    // A general note's panelboard height to top (`PANELBOARDS 6'-6" AFF TO TOP`), for the panels
+    // once their properties are filled.
+    let mut panel_top: Option<(f64, String)> = None;
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
     let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
@@ -4779,6 +4782,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     ));
                 }
                 let typical = typical_mounting_heights(&pages);
+                panel_top = typical.iter().find(|t| t.kind == "panel" && t.to == "top").map(|t| (t.given_in, t.doc.clone()));
                 if !typical.is_empty()
                     && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
                 {
@@ -5119,8 +5123,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "value engineering", t);
     let t = web_time::Instant::now();
-    match s.execute("bim.props.fill", &json!({})) {
+    let fill = match &panel_top {
+        Some((top, doc)) => json!({"panel_top_in": top, "panel_top_doc": doc}),
+        None => json!({}),
+    };
+    match s.execute("bim.props.fill", &fill) {
         Ok(v) => {
+            if let Some(n) = v.get("panels_heighted").and_then(Value::as_u64) {
+                progress_line(&format!("  panels at the general note's height to top: {n}"));
+            }
             // Devices in no room (outside every room, not on a room's wall): per level.
             if let Some(m) = v.get("devices_in_no_room").and_then(Value::as_object).filter(|m| !m.is_empty()) {
                 let per: Vec<String> = m.iter().map(|(l, n)| format!("{}: {n}", if l.is_empty() { "no level" } else { l })).collect();
@@ -7553,8 +7564,12 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
 #[derive(Clone, Debug, PartialEq)]
 struct TypicalHeight {
     /// The device kind it is for (`switch`, `receptacle`, `low_voltage_outlet`, `thermostat`,
-    /// `emergency light`: luminaires the fixture schedule calls emergency lights).
+    /// `emergency light`: luminaires the fixture schedule calls emergency lights; `panel`).
     kind: &'static str,
+    /// The height as the note gives it, inches, and to what: `top`, `bottom` or `centre` (a
+    /// panel's centre depends on its box).
+    given_in: f64,
+    to: &'static str,
     /// Its centre over the floor, inches.
     inches: f64,
     /// The note's words for it, with its sheet.
@@ -7567,7 +7582,9 @@ const HALF_BOX_IN: f64 = 2.25;
 /// The kind a typical-height item names (`TOGGLE SWITCH`, `RECEPTACLES`, `VOICE/DATA OUTLETS`).
 fn typical_kind(words: &str) -> Option<&'static str> {
     let up = words.to_ascii_uppercase();
-    if up.contains("EMERGENCY") {
+    if up.contains("PANEL") {
+        Some("panel")
+    } else if up.contains("EMERGENCY") {
         Some("emergency light")
     } else if up.contains("SWITCH") {
         Some("switch")
@@ -7587,14 +7604,20 @@ fn typical_item(item: &str, sheet: &str) -> Option<TypicalHeight> {
     let kind = typical_kind(item.split(|c: char| c.is_ascii_digit()).next().unwrap_or(item))?;
     let inches = super::propfill::mount_height_in(&format!("{item} AFF"))?;
     let up = item.to_ascii_uppercase();
-    let centre = if up.contains("TO TOP") {
-        inches - HALF_BOX_IN
+    let (centre, to) = if up.contains("TO TOP") {
+        (inches - HALF_BOX_IN, "top")
     } else if up.contains("TO BOTTOM") {
-        inches + HALF_BOX_IN
+        (inches + HALF_BOX_IN, "bottom")
     } else {
-        inches
+        (inches, "centre")
     };
-    (centre > 0.0 && centre < 240.0).then(|| TypicalHeight { kind, inches: centre, doc: format!("{sheet} general note: {}", item.trim()) })
+    (centre > 0.0 && centre < 240.0).then(|| TypicalHeight {
+        kind,
+        inches: centre,
+        given_in: inches,
+        to,
+        doc: format!("{sheet} general note: {}", item.trim()),
+    })
 }
 
 /// The typical mounting heights a set's general note gives (`ELECTRICAL DEVICE MOUNTED HEIGHTS
@@ -14348,7 +14371,7 @@ mod tests {
         }
         let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
         // The next note's thermostat and what follows it are not this note's.
-        assert_eq!(got, vec![("switch", 45.75), ("receptacle", 18.0)]);
+        assert_eq!(got, vec![("panel", 75.75), ("switch", 45.75), ("receptacle", 18.0)]);
     }
 
     /// A fire alarm symbol list as E-7 prints it: each row's letters (an `S` with its subscript
@@ -14424,7 +14447,7 @@ mod tests {
         assert_eq!(typical_item("RECEPTACLES 1'-6\" CENTERLINE", "E-1").map(|t| (t.kind, t.inches)), Some(("receptacle", 18.0)));
         assert_eq!(typical_item("VOICE/DATA OUTLETS 1'-6\" CENTERLINE", "E-1").map(|t| t.kind), Some("low_voltage_outlet"));
         assert_eq!(typical_item("EMERGENCY LIGHTS 7'-6\" AFF TO BOTTOM", "E-1").map(|t| (t.kind, t.inches)), Some(("emergency light", 92.25)));
-        assert_eq!(typical_item("PANELBOARDS 6'-6\" AFF TO TOP", "E-1"), None, "a panel isn't a device");
+        assert_eq!(typical_item("PANELBOARDS 6'-6\" AFF TO TOP", "E-1").map(|t| (t.kind, t.given_in, t.to)), Some(("panel", 78.0, "top")));
         let mut sp = cadaddy_walk3d::BuildingSpec::default();
         let tag = |id: &str, kind: &str, mark: &str| {
             let mut t = cadaddy_walk3d::tags::ElementTag { id: id.into(), kind: kind.into(), ..Default::default() };

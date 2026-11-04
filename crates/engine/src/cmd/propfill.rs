@@ -72,7 +72,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{} → {filled: {kind: {key: n}}, elements, devices, mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so} → {filled: {kind: {key: n}}, elements, devices, mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -1298,6 +1298,61 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     }))
 }
 
+/// Gear standing within this of its floor stands on it (a switchboard), inches: no wall height.
+const FLOOR_GEAR_IN: f64 = 6.0;
+
+/// Each scheduled panel on a wall (its box clear of the floor) takes its height from a note's
+/// height to its top: its centre is that less half its box, from the note, unless a person or a
+/// print gave it one. How many.
+pub(crate) fn panel_heights(s: &mut Session, top_in: f64, doc: &str) -> Result<usize> {
+    let (sp, _) = super::bspec::current(s, FILL)?;
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let scheduled: BTreeSet<String> = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| !e.circuits.is_empty())
+        .map(|e| e.tag.trim().to_ascii_uppercase())
+        .chain(sp.mep.panel_schedules.iter().map(|p| p.panel.trim().to_ascii_uppercase()))
+        .collect();
+    let d = s.doc()?;
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    for e in d.model.iter().take(MAX_ELEMENTS) {
+        if super::elemprops::element_kind(e).as_deref() != Some("equipment") {
+            continue;
+        }
+        let Some(tag) = made(e, "tag").map(|t| t.trim().to_ascii_uppercase()) else { continue };
+        if !scheduled.contains(&tag) {
+            continue;
+        }
+        let Some((_, z0, z1)) = extent(d, e) else { continue };
+        let floor = super::bspec::made_level(e).and_then(|l| sp.level(&l).map(|l| l.elevation_ft * upf)).unwrap_or(0.0);
+        let (lo, hi) = ((z0 - floor) / upf * 12.0, (z1 - floor) / upf * 12.0);
+        if !lo.is_finite() || !hi.is_finite() || hi <= lo || lo <= FLOOR_GEAR_IN {
+            continue;
+        }
+        let mut store = props::read(&e.common.xdata);
+        if store.get("mount_height").is_some_and(|p| !matches!(p.source.kind, SourceKind::Default | SourceKind::Rule)) {
+            continue;
+        }
+        let centre = round2(top_in - (hi - lo) / 2.0);
+        store.set(
+            "mount_height",
+            Prop::new(centre, Source::from_doc(SourceKind::Note, doc)).with_unit("in").with_note("the note's height to its top, less half its box"),
+        );
+        changes.push((e.handle, store));
+    }
+    let n = changes.len();
+    let d = s.doc_mut()?;
+    for (h, store) in changes {
+        d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &store).into()).ok();
+    }
+    if n > 0 {
+        s.touch();
+    }
+    Ok(n)
+}
+
 /// The sheet a plan point lies on (the set's sheet rectangles), else the level's name.
 fn sheet_at(sp: &BuildingSpec, p: Vec2, level: Option<&str>) -> String {
     sp.sheets
@@ -1308,8 +1363,13 @@ fn sheet_at(sp: &BuildingSpec, p: Vec2, level: Option<&str>) -> String {
         .unwrap_or_default()
 }
 
-fn run_fill(s: &mut Session, _p: &Value) -> Result<Value> {
+fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let mut r = fill(s)?;
+    // A general note's panelboard height (`PANELBOARDS 6'-6" AFF TO TOP`): each wall panel's.
+    if let Some(top) = p.get("panel_top_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0 && *v < 240.0) {
+        let doc = super::str_param(p, "panel_top_doc").unwrap_or("general note");
+        r["panels_heighted"] = json!(panel_heights(s, top, doc)?);
+    }
     let devices = s.doc().map_or(0, |d| d.model.iter().filter(|e| made(e, DEVID).is_some()).count());
     r["devices"] = json!(devices);
     let n = r["elements"].as_u64().unwrap_or(0);

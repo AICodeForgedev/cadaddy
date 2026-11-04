@@ -216,6 +216,28 @@ fn a_switch_takes_its_wiring_device_sections_product_record() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A general note's panelboard height to top puts each scheduled panel on a wall at its centre
+/// (the top less half its box), from the note; a person's height stays.
+#[test]
+fn a_notes_panelboard_height_to_top_is_each_wall_panels() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["bottom_ft"] = json!(3.0);
+    sp["mep"]["equipment"][1]["height_ft"] = json!(3.5);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s
+        .execute("bim.props.fill", &json!({"panel_top_in": 78.0, "panel_top_doc": "E-1 general note: PANELBOARDS 6'-6\" AFF TO TOP"}))
+        .expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
+    let lp = find(&mut s, "equipment", json!({"type_mark": "LP1"}));
+    let el = get(&mut s, &lp[0]);
+    let h = &el["mount_height"];
+    // A 42" box whose top is at 78": its centre at 57".
+    assert_eq!(h["value"], json!(57.0), "{el:#}");
+    assert_eq!(h["source"]["kind"], "note");
+}
+
 /// A typical room's unit keeps its devices to what the build stamped and booked into it: a read
 /// device standing in it is in it as a model element, but its spec tag isn't given the unit.
 #[test]
