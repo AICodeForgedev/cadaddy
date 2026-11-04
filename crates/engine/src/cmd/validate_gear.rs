@@ -663,6 +663,21 @@ fn box_prop(v: &str) -> Option<[f64; 3]> {
     out.iter().all(|x| *x > 0.0).then_some(out)
 }
 
+/// The box the build recorded from the submittal (`BOX`; a `SIZE` record counts only when its
+/// source is a submittal), and any other size record with its source (shown, never compared).
+fn recorded_box(e: &MepEquipment) -> (Option<[f64; 3]>, Option<Value>) {
+    if let Some(b) = e.properties.get("BOX").and_then(|b| box_prop(b)) {
+        return (Some(b), None);
+    }
+    let Some(v) = e.properties.get("SIZE") else { return (None, None) };
+    let from = e.sources.get("size").cloned().unwrap_or_default();
+    let low = from.to_ascii_lowercase();
+    match box_prop(v) {
+        Some(b) if low.contains("submittal") || low.contains(".pdf") => (Some(b), None),
+        parsed => (None, Some(json!({"size": v, "in": parsed, "from": if from.is_empty() { Value::Null } else { json!(from) }}))),
+    }
+}
+
 // ---------------------------------------------------------------- the check
 
 pub(crate) struct Ctx<'a> {
@@ -1067,7 +1082,7 @@ pub(crate) fn check(cx: &Ctx, space: Option<&Effective>, fill: Option<&Effective
             let t = tol(r, "size_in", DEFAULT_SIZE_IN);
             let model = [r2(g.z_in[1] - g.z_in[0]), r2(g.obb.hw * 24.0), r2(g.obb.hd * 24.0)];
             let reread = cx.docs.and_then(|d| d.of(tag)).filter(|s| s.size_in.iter().all(|v| *v > 0.0));
-            let recorded = g.e.properties.get("BOX").and_then(|b| box_prop(b));
+            let (recorded, other_size) = recorded_box(g.e);
             let recorded_from = g.e.sources.get("size").cloned();
             let (want, from): (Option<[f64; 3]>, String) = match (reread, recorded) {
                 (Some(s), _) => (Some(s.size_in), format!("the submittal, re-read: {}", s.source)),
@@ -1107,7 +1122,7 @@ pub(crate) fn check(cx: &Ctx, space: Option<&Effective>, fill: Option<&Effective
                 words(model),
                 json!({
                     "model_in": {"height": model[0], "width": model[1], "depth": model[2]}, "submittal_in": want, "submittal_from": from,
-                    "recorded_box": g.e.properties.get("BOX"), "recorded_disagrees_with_submittal": differs, "tolerance_in": t,
+                    "recorded_box": g.e.properties.get("BOX"), "other_size_record": other_size, "recorded_disagrees_with_submittal": differs, "tolerance_in": t,
                 }),
             );
         }
@@ -1238,7 +1253,7 @@ fn fill_checks(
         e.1.push(json!({"feeder": f.tag, "from": f.from, "to": f.to, "conduits": n, "trade_in": f.conduit_in, "side": side, "side_assumed": assumed, "source": f.source}));
         e.2 |= assumed;
     }
-    let box_in = doc.map(|d| d.size_in).filter(|s| s.iter().all(|v| *v > 0.0)).or_else(|| g.e.properties.get("BOX").and_then(|b| box_prop(b)));
+    let box_in = doc.map(|d| d.size_in).filter(|s| s.iter().all(|v| *v > 0.0)).or_else(|| recorded_box(g.e).0);
     let margin = code.plate_margin_in.unwrap_or([2.0, 1.5]);
     for (side, (pitches, feeders, assumed)) in &sides {
         let drawn = doc
@@ -1763,6 +1778,18 @@ mod tests {
         let (fits, need, have) = pack(&p, [16.0, 4.0]);
         assert!(!fits && need > 58.0 && (have - 64.0).abs() < 1e-9);
         assert!(!pack(&[5.0], [4.0, 10.0]).0);
+    }
+
+    #[test]
+    fn a_size_record_counts_only_when_a_submittal_gave_it() {
+        let mut e = MepEquipment::default();
+        e.properties.insert("SIZE".into(), "14\" W x 4\" D x 24\" H".into());
+        let (b, other) = recorded_box(&e);
+        assert!(b.is_none() && other.is_some_and(|o| o["in"] == json!([24.0, 14.0, 4.0])));
+        e.sources.insert("size".into(), "Panelboard submittal p.3".into());
+        assert_eq!(recorded_box(&e).0, Some([24.0, 14.0, 4.0]));
+        e.properties.insert("BOX".into(), "50 H x 20 W x 5.75 D in".into());
+        assert_eq!(recorded_box(&e).0, Some([50.0, 20.0, 5.75]));
     }
 
     #[test]
