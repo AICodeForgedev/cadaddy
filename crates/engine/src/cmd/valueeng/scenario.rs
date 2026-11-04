@@ -415,6 +415,9 @@ pub(crate) fn draft_rfis(
             )),
             status: prev.as_ref().map_or(RfiStatus::Open, |p| p.status),
             answer: prev.as_ref().and_then(|p| p.answer.clone()),
+            topic: String::new(),
+            sides: Vec::new(),
+            elements: Vec::new(),
             sketch: sketch_path.clone(),
         };
         sp.rfis.retain(|x| x.id != id);
