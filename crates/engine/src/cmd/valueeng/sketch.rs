@@ -36,7 +36,7 @@ pub(crate) fn write(
     if let Some(dir) = std::path::Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, svg)
+    crate::writefile::write(path, svg)
 }
 
 /// The sketch as SVG text.

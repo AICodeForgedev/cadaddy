@@ -817,7 +817,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut v = study(s, &inp)?;
     if let (Some(path), Some(db)) = (str_param(p, "price_book").filter(|x| !x.trim().is_empty()), inp.cost_db.as_ref()) {
         let (csv, rows) = price::book_csv(db, &all_lines(&v));
-        std::fs::write(path, csv).map_err(|e| bad(CMD, format!("could not write {path}: {e}")))?;
+        crate::writefile::write(path, csv).map_err(|e| bad(CMD, format!("could not write {path}: {e}")))?;
         v["price_book"] =
             json!({"file": path, "rows": rows, "private": "the cost DB's own prices: keep it beside the drawing, never in a public place"});
     }
