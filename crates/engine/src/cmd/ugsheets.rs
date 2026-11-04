@@ -27,6 +27,10 @@ use crate::{Result, Session};
 
 /// Runs, stub-ups and findings looked at, at most (hostile specs).
 const MAX_ITEMS: usize = 5_000;
+/// A spec's runs scanned for the underground ones, at most: a large job holds thousands of runs
+/// above the slab, and the job adds its underground runs last, so the cap on what is worked on
+/// ([`MAX_ITEMS`]) counts the buried runs, not the runs' places in the list.
+const MAX_SCAN: usize = 200_000;
 /// Points of one run used, at most.
 const MAX_POINTS: usize = 1_000;
 /// A run's end within this of a piece of equipment feeds it (feet).
@@ -38,10 +42,11 @@ const UNDER_SLAB_DEPTH_FT: f64 = 2.0;
 const STUB_RISE_FT: f64 = 1.0;
 /// Under the slab is suggested when it costs less than this share of overhead.
 const CHEAPER: f64 = 0.95;
-/// The sheet (inches on paper): size, the plan's box, the schedules' column.
-const SHEET: [f64; 2] = [36.0, 24.0];
-const PLAN: [f64; 4] = [1.0, 2.5, 24.5, 22.5];
-const SIDE_X: f64 = 25.5;
+/// The sheet sizes (inches on paper, ARCH D, E1, E), smallest first: the smallest whose plan box
+/// holds the plan at the scale asked for (the level's plan's), else the first.
+const SHEETS: [[f64; 2]; 3] = [[36.0, 24.0], [42.0, 30.0], [48.0, 36.0]];
+/// The schedules' and notes' column at a sheet's right, inches.
+const SIDE_W: f64 = 10.5;
 /// Characters in a line of the notes (0.08" text across the side column).
 const NOTE_CHARS: usize = 110;
 /// A buried electrical run this close to another trade's line (plan, feet) is a crossing to
@@ -55,17 +60,44 @@ const MAX_BENDS_DEG: f64 = 360.0;
 const MAX_PAIR_TESTS: usize = 2_000_000;
 /// The trench sections' box at the foot of the side column (paper inches): x, y, width, height
 /// of each of the two.
-const SECTION_BOX: [f64; 4] = [SIDE_X, 2.3, 4.9, 4.2];
+const SECTION_W: [f64; 3] = [2.3, 4.9, 4.2];
+
+/// A sheet's size and where its parts go (paper inches).
+#[derive(Clone, Copy, Debug)]
+struct Paper {
+    size: [f64; 2],
+    /// The plan's box `[x0, y0, x1, y1]`.
+    plan: [f64; 4],
+    side_x: f64,
+    /// The trench sections' box: x, y, width, height of each.
+    section: [f64; 4],
+}
+
+impl Paper {
+    fn of(size: [f64; 2]) -> Paper {
+        let side_x = size[0] - SIDE_W;
+        Paper { size, plan: [1.0, 2.5, side_x - 1.0, size[1] - 1.5], side_x, section: [side_x, SECTION_W[0], SECTION_W[1], SECTION_W[2]] }
+    }
+    /// The smallest sheet whose plan box holds a plan `w` × `h` feet at `per_ft` (paper inches a
+    /// foot), else the first.
+    fn holding(w: f64, h: f64, per_ft: Option<f64>) -> Paper {
+        let fits = |p: &Paper, k: f64| w * k <= p.plan[2] - p.plan[0] && h * k <= p.plan[3] - p.plan[1];
+        per_ft.and_then(|k| SHEETS.iter().map(|s| Paper::of(*s)).find(|p| fits(p, k))).unwrap_or_else(|| Paper::of(SHEETS[0]))
+    }
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("ugsheets.check", "Check Underground", run_check)
-            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
+            .params("{today?: YYYY-MM-DD, clearance_in?: plan distance to another trade's buried line checked as a crossing (default 12)} → {ok, errors, reviews (a proposed route too close to another trade's line: for review, not an error), warnings, runs: [{id, kind, system, level, from, to, size_in, conduits, material, depth_in, length_ft, bends_deg, encased}], stubups: [{tag, level, at, feeds, run, size_in, conduits, material, height_in, x: {from, ft}, y: {from, ft}, coords_ft}], services: [{kind, tag, status, to, at, encased}], other_trade: [{id, label, level, depth_in}], crossings: [{id, level, at, electrical, other, how, distance_ft, vertical_separation_in}], routes: [{feeder, from, to, level, under_slab: {length_ft, cost?}, overhead: {length_ft, cost?}, basis, suggest}], holds: [{pour, item, kind, size, status}], findings: [{check, severity, about, level, message, fix}]}")
+            .noundo(),
+        CommandSpec::new("ugsheets.plan", "Underground Plan Report", run_plan)
+            .params("{} → the job's underground plan (Q6148), as its last run left it: {slab_level, trades: {E|P: {callouts: [{trade, sheet, from: note|keynote|legend, mark, text, what, said_buried, count, size_in, material, cover_in, steel_ells, room}], plan_issued, sheet, placed: [{callout, status, runs, how}], takeoff}}, sheets, called_runs, stack_bases, proposed_runs, proposals: [{subject, from, to, copies, conduits, size_in, under_slab_ft, overhead_ft, decision, reasons, alternative, routed_under, routed_over, adds_route}], framing_above, below_slab_method, scale, rfis, sleeves, findings}")
             .noundo(),
         CommandSpec::new("ugsheets.review", "Review Underground", run_review)
-            .params("{} → {errors, rfis: [id], findings}: an RFI (service_entrance) for each required service not shown or unclear"),
+            .params("{} → {errors, rfis: [id], findings}: an RFI (service_entrance) for each required service not shown or unclear, and one (pour_hold) for each proposed route that crosses another trade's buried line too close (a review item, not an error)"),
         CommandSpec::new("ugsheets.build", "Underground Sheets", run_build)
-            .params("{level?: name (default: every level with buried work), number?: first sheet number (default \"E-001\"), called?: [{sheet, level?, text}] (buried work the documents' notes call for that no plan locates: listed in the notes), title_block?: block name (default: a block named like a title block), today?, clearance_in?, pdf?: path, dwg?: path} → {sheets: [{layout, number, title, level, runs, stubups, dimensions, crossings, sections, replaced}], files: [path]}: building again replaces the sheet's layout"),
+            .params("{trade?: E (default, conduit) | P (pipes below the slab), level?: name (default: every level with buried work: the slab level), number?: first sheet number (default \"E-001\"), title?: the sheet's title, scale?: the plan's scale when it fits (\"1/16\\\" = 1'-0\\\"\"), called?: [{sheet, level?, text}] (buried work the documents' notes call for that no plan locates: listed in the notes), sources?: [{sheet: how it is cited, level?, text}] (every callout of the documents for this sheet, listed in its notes), line_types?: [{sheet, text}] (the documents' legend line types for buried work, in the legend), alternatives?: [{subject, points: [[x, y]], size_in, conduits}] (underground alternatives to routes the model runs overhead, dashed), title_block?: block name (default: a block named like a title block), today?, clearance_in?, pdf?: path, dwg?: path} → {sheets: [{layout, number, title, trade, level, runs, stubups, dimensions, crossings, sleeves, alternatives, sources, sections, replaced, scale, registered}], files: [path]}: building again replaces the sheet's layout; each sheet is registered to its level in the set's sheet list"),
     ]
 }
 
@@ -75,8 +107,11 @@ pub fn specs() -> Vec<CommandSpec> {
 #[derive(Clone, Debug)]
 struct Buried {
     id: String,
-    /// `run` (a conduit run below the floor) or `service` (a utility entrance).
+    /// `run` (a conduit run below the floor), `service` (a utility entrance) or `pipe` (a pipe
+    /// below the slab, the plumbing sheet's).
     kind: &'static str,
+    /// `E` (conduit) or `P` (pipe).
+    trade: &'static str,
     system: String,
     level: String,
     points: Vec<[f64; 2]>,
@@ -106,6 +141,8 @@ struct Called {
 
 /// Notes of called work a sheet lists, at most.
 const MAX_CALLED: usize = 60;
+/// The mark every generated sheet carries in its title strip.
+const GENERATED_MARK: &str = "GENERATED BY CADADDY - NOT FOR CONSTRUCTION WITHOUT ENGINEER REVIEW";
 /// The first note of every generated sheet.
 const GENERATED_NOTE: &str = "THIS SHEET IS GENERATED BY CADADDY FROM THE CONTRACT DOCUMENTS (NO UNDERGROUND PLAN IS ISSUED). IT IS NOT AN ENGINEER'S DRAWING: THE ENGINEER OF RECORD REVIEWS IT BEFORE USE. SOLID RUNS ARE CALLED BY THE DOCUMENTS.";
 
@@ -120,6 +157,9 @@ struct Other {
     size_in: f64,
     /// Below the floor or grade to its top (inches), when the drawings say.
     depth_in: Option<f64>,
+    /// Its depth is a rule's, not the documents' (a slab drain no printed invert reaches, called
+    /// buried plumbing the plans give no invert for).
+    depth_by_rule: bool,
 }
 
 /// Where a buried electrical run crosses (or comes within the clearance of) another trade's line.
@@ -137,12 +177,20 @@ struct Crossing {
     distance_ft: f64,
     /// Clear vertical distance between them (inches), when both depths are known.
     separation_in: Option<f64>,
+    /// The electrical run is CADaddy's proposal (dashed, with its RFI), not called work: a crossing
+    /// too close is a review item for the engineer, not an error in the documents' work.
+    proposed: bool,
+    /// The other line's depth is a rule's, no invert shown: a proposed route too close to it is
+    /// to pothole and confirm (a warning), not a review item.
+    other_by_rule: bool,
 }
 
 /// Where a buried run comes up.
 #[derive(Clone, Debug)]
 struct Stub {
     tag: String,
+    /// `E` or `P`.
+    trade: &'static str,
     level: String,
     at: [f64; 2],
     feeds: String,
@@ -207,8 +255,23 @@ pub(super) struct Grids {
     pub(super) y: Vec<(String, f64)>,
 }
 
+/// Where a buried run passes a footing, a grade beam or the slab's thickened edge: sleeved.
+#[derive(Clone, Debug)]
+struct SleeveAt {
+    tag: String,
+    trade: &'static str,
+    level: String,
+    at: [f64; 2],
+    run: String,
+    through: String,
+    size_in: f64,
+}
+
 struct Ug {
     runs: Vec<Buried>,
+    /// Pipes below the slab (the plumbing sheet's runs).
+    pipes: Vec<Buried>,
+    sleeves: Vec<SleeveAt>,
     stubs: Vec<Stub>,
     services: Vec<Value>,
     /// Pipe services (water, sewer, storm, gas) and pipe runs below the floor, shown for
@@ -385,6 +448,8 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
                     how,
                     distance_ft,
                     separation_in: sep,
+                    proposed: r.proposed,
+                    other_by_rule: o.depth_by_rule,
                 });
             }
         }
@@ -395,12 +460,34 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
             x.separation_in.map_or("vertical separation unknown (a depth isn't given)".to_string(), |s| format!("{}\" clear vertically", r2(s)));
         findings.push(Finding {
             check: "crossing",
-            severity: if low { "error" } else { "warning" },
+            // A proposed route too close: for review with its routing RFI, or to pothole when the
+            // other line's depth is only a rule's. Called work too close stays an error.
+            severity: match (low, x.proposed, x.other_by_rule) {
+                (true, false, _) => "error",
+                (true, true, false) => "review",
+                _ => "warning",
+            },
             about: x.id.clone(),
             level: x.level.clone(),
             at: x.at,
-            message: format!("{} {} {} ({}): {sep_text}", x.electrical, x.how, x.other, x.other_label),
-            fix: if low {
+            message: format!(
+                "{}{} {} {} ({}): {sep_text}{}",
+                if x.proposed { "proposed " } else { "" },
+                x.electrical,
+                x.how,
+                x.other,
+                x.other_label,
+                if x.other_by_rule { " (its depth by rule, no invert shown)" } else { "" }
+            ),
+            fix: if low && x.proposed && x.other_by_rule {
+                format!(
+                    "drain depth by rule, no invert shown: pothole and confirm; keep at least {MIN_SEPARATION_IN}\" between them if the proposed route is accepted"
+                )
+            } else if low && x.proposed {
+                format!(
+                    "a proposed route: if the engineer accepts it under the slab, run it at least {MIN_SEPARATION_IN}\" clear of the pipe (lower it, or shift the route) or sleeve the crossing"
+                )
+            } else if low {
                 format!("keep at least {MIN_SEPARATION_IN}\" between them: lower one, or sleeve or encase the crossing")
             } else {
                 "pothole and confirm both depths before trenching; mark the crossing in the field".into()
@@ -602,32 +689,97 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     let mut runs: Vec<Buried> = Vec::new();
     let mut findings: Vec<Finding> = Vec::new();
     let mut other_trade: Vec<Other> = Vec::new();
-    // Conduit runs below the floor (and pipe runs below it, another trade's, for crossings).
-    for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_ITEMS) {
+    // Conduit and pipe runs below the slab (a run under an upper floor is in the ceiling below,
+    // not in the ground); pipes are also another trade's lines for the crossings. Risers coming
+    // up out of the ground are stub-ups.
+    let slab = slab_level(sp).unwrap_or_default().to_string();
+    let mut pipes: Vec<Buried> = Vec::new();
+    // (trade, level, at, size, top above the floor, what it feeds, run id, bottom)
+    let mut risers: Vec<(&'static str, String, [f64; 2], f64, f64, String, String, bool)> = Vec::new();
+    let mut seen = 0usize;
+    for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_SCAN) {
         let Some(sys) = sp.mep.systems.iter().find(|s| s.name.eq_ignore_ascii_case(&r.system)) else { continue };
         if !matches!(sys.kind, MepKind::Conduit | MepKind::Pipe) {
             continue;
         }
         let bottom = r.bottoms_ft.iter().copied().filter(|b| b.is_finite()).fold(f64::INFINITY, f64::min);
         let bottom = if bottom.is_finite() { bottom } else { sys.bottom_ft };
-        if !(bottom.is_finite() && bottom < 0.0) {
+        let on_slab = r.level.eq_ignore_ascii_case(&slab) || slab.is_empty();
+        let buried =
+            if r.bottoms_ft.iter().any(|b| b.is_finite()) { super::ugplan::below_slab(sp, r) } else { bottom.is_finite() && bottom < 0.0 && on_slab };
+        if !buried {
+            continue;
+        }
+        seen += 1;
+        if seen > MAX_ITEMS {
+            break;
+        }
+        let trade = if sys.kind == MepKind::Pipe { "P" } else { "E" };
+        let size = [r.size_in[0], sys.size_in[0]].into_iter().find(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        // A riser out of the ground: where it comes up is a stub-up.
+        if let (Some(top), [at]) = (r.top_ft, r.points.as_slice()) {
+            if top.is_finite() && top >= -1e-6 && finite(*at) && risers.len() < MAX_ITEMS {
+                // A stack's base is its stack (gear standing near it isn't what it feeds); a riser
+                // at no gear is named short by its source.
+                let short = |v: &str| {
+                    let v = v.strip_prefix(super::ugplan::PROPOSAL_PREFIX).unwrap_or(v);
+                    v.split(" (").next().unwrap_or(v).chars().take(24).collect::<String>()
+                };
+                let feeds = if trade == "P" {
+                    format!("{} stack", r.system.rsplit('-').next().unwrap_or(&r.system))
+                } else {
+                    equipment_at(sp, &r.level, *at).map_or_else(|| short(&r.source_sheet), |e| e.tag.clone())
+                };
+                let id = if r.id.trim().is_empty() { format!("UP-{}", i + 1) } else { r.id.clone() };
+                risers.push((trade, r.level.clone(), *at, size, top, feeds, id, r.height_source.contains("steel elbows")));
+            }
             continue;
         }
         let points: Vec<[f64; 2]> = r.points.iter().copied().filter(|p| finite(*p)).take(MAX_POINTS).collect();
         if points.len() < 2 {
             continue;
         }
-        let size = [r.size_in[0], sys.size_in[0]].into_iter().find(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
+        let basis = [r.source_sheet.as_str(), r.height_source.as_str()].into_iter().filter(|v| !v.trim().is_empty()).collect::<Vec<_>>().join("; ");
         if sys.kind == MepKind::Pipe {
             let id = if r.id.trim().is_empty() { format!("P-{}", i + 1) } else { r.id.clone() };
             let depth = (-bottom * 12.0 - size).max(0.0);
             let label = format!("{}\" {} @ {}\" BFF", r2(size), sys.name.to_ascii_uppercase(), r2(depth));
-            other_trade.push(Other { id, label, level: r.level.clone(), points, size_in: size, depth_in: Some(depth) });
+            let hs = r.height_source.as_str();
+            let depth_by_rule = (hs.starts_with(super::ugplan::SLAB_DRAIN_PREFIX) && !hs.contains(super::ugplan::SLOPED_MARK))
+                || (r.system.to_ascii_uppercase().starts_with(&format!("{}-", super::ugplan::P_UG)) && hs.starts_with(super::ugplan::CALLED_PREFIX));
+            other_trade.push(Other {
+                id: id.clone(),
+                label,
+                level: r.level.clone(),
+                points: points.clone(),
+                size_in: size,
+                depth_in: Some(depth),
+                depth_by_rule,
+            });
+            pipes.push(Buried {
+                kind: "pipe",
+                trade: "P",
+                system: r.system.clone(),
+                level: r.level.clone(),
+                length_ft: length(&points) / u,
+                from: String::new(),
+                to: String::new(),
+                points,
+                size_in: size,
+                conduits: 1,
+                material: String::new(),
+                depth_in: depth,
+                id,
+                bends_deg: 0.0,
+                encased: false,
+                proposed: r.height_source.eq_ignore_ascii_case("proposed"),
+                basis,
+            });
             continue;
         }
         let id = if r.id.trim().is_empty() { format!("UG-{}", i + 1) } else { r.id.clone() };
         let end = |p: Option<&[f64; 2]>| p.and_then(|p| equipment_at(sp, &r.level, *p)).map(|e| e.tag.clone()).unwrap_or_default();
-        // A feeder's run says its ends (`feeder 604 MDP→DP2`) where no gear is at one (it rises
+        // A feeder's run says its ends (`feeder 7 SB1→P2`) where no gear is at one (it rises
         // to another level beside its panel).
         let said = r.source_sheet.strip_prefix("feeder ").and_then(|v| v.split_once(' ')).and_then(|(_, ends)| ends.split_once('→'));
         let said_from = said.map(|(a, _)| a.trim().to_string()).unwrap_or_default();
@@ -635,6 +787,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         let or = |v: String, w: &str| if v.is_empty() { w.to_string() } else { v };
         runs.push(Buried {
             kind: "run",
+            trade: "E",
             system: r.system.clone(),
             level: r.level.clone(),
             length_ft: length(&points) / u,
@@ -650,7 +803,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             bends_deg: 0.0,
             encased: r.encased,
             proposed: r.height_source.eq_ignore_ascii_case("proposed"),
-            basis: [r.source_sheet.as_str(), r.height_source.as_str()].into_iter().filter(|v| !v.trim().is_empty()).collect::<Vec<_>>().join("; "),
+            basis,
         });
     }
     // Service entrances.
@@ -692,11 +845,12 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             let depth_in =
                 svc.depth_ft.map(|d| d * 12.0).or_else(|| (svc.cover_in > 0.0).then_some(svc.cover_in)).filter(|d| d.is_finite() && *d >= 0.0);
             let size_in = svc.size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
-            other_trade.push(Other { id, label, level: svc.level.clone(), points, size_in, depth_in });
+            other_trade.push(Other { id, label, level: svc.level.clone(), points, size_in, depth_in, depth_by_rule: false });
             continue;
         }
         runs.push(Buried {
             kind: "service",
+            trade: "E",
             system: svc.kind.clone(),
             level: svc.level.clone(),
             length_ft: length(&points) / u,
@@ -726,8 +880,24 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             });
         }
     }
+    // Services the job built from the documents' callouts (Q6148): shown, not missing.
+    let called = |kind: &str| {
+        let whats: &[&str] = match kind.to_ascii_lowercase().as_str() {
+            "power" | "electric" | "electrical" => &["(service_primary", "(service_secondary"],
+            "telephone" | "telecom" | "tel" | "phone" => &["(telecom"],
+            _ => &[],
+        };
+        sp.mep
+            .runs
+            .iter()
+            .take(MAX_SCAN)
+            .any(|r| r.height_source.starts_with(super::ugplan::CALLED_PREFIX) && whats.iter().any(|w| r.height_source.contains(w)))
+    };
     for kind in &required {
         let found: Vec<&Service> = sp.mep.services.iter().filter(|s| is_kind(s, kind)).collect();
+        if found.is_empty() && called(kind) {
+            continue;
+        }
         let at = found.iter().find_map(|s| s.at).unwrap_or([0.0, 0.0]);
         let level = found.first().map(|s| s.level.clone()).or_else(|| slab_level(sp).map(str::to_string)).unwrap_or_default();
         if found.is_empty() {
@@ -754,6 +924,9 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             });
         }
     }
+    for p in pipes.iter_mut() {
+        p.bends_deg = turns(&p.points).round();
+    }
     // Bends: the route's turns and a 90 at each end that comes up (a service comes up inside).
     for r in runs.iter_mut() {
         let ends = if r.kind == "service" { 1.0 } else { [&r.from, &r.to].into_iter().filter(|t| !t.is_empty()).count() as f64 };
@@ -771,8 +944,23 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             });
         }
     }
-    // Stub-ups: a buried run's ends at equipment, and where a service comes up.
+    // Stub-ups: a buried run's ends at equipment, where a service comes up, and each riser out of
+    // the ground (a stack's base, a floor box's, the far end of a run at no gear).
     let g = grids(sp);
+    let dims_at = |level: &str, at: [f64; 2], pts: &[[f64; 2]]| {
+        // From the nearer of the slab's edges (its exterior walls), else the level's west and south.
+        let (ex, ey) = match shell_of(sp, level) {
+            Some(sh) => (
+                Some(if (at[0] - sh[0]).abs() <= (sh[2] - at[0]).abs() { ("slab W", sh[0]) } else { ("slab E", sh[2]) }),
+                Some(if (at[1] - sh[1]).abs() <= (sh[3] - at[1]).abs() { ("slab S", sh[1]) } else { ("slab N", sh[3]) }),
+            ),
+            None => {
+                let edge = edges(sp, level, pts);
+                (edge.map(|e| ("west edge", e[0])), edge.map(|e| ("south edge", e[1])))
+            }
+        };
+        (dim_from(&g.x, at[0], ex, u), dim_from(&g.y, at[1], ey, u))
+    };
     let mut stubs: Vec<Stub> = Vec::new();
     for r in runs.iter().take(MAX_ITEMS) {
         let ends: Vec<([f64; 2], String)> = if r.kind == "service" {
@@ -785,19 +973,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
                 .collect()
         };
         for (at, feeds) in ends {
-            // From the nearer of the slab's edges (its exterior walls), else the level's west and south.
-            let (ex, ey) = match shell_of(sp, &r.level) {
-                Some(sh) => (
-                    Some(if (at[0] - sh[0]).abs() <= (sh[2] - at[0]).abs() { ("slab W", sh[0]) } else { ("slab E", sh[2]) }),
-                    Some(if (at[1] - sh[1]).abs() <= (sh[3] - at[1]).abs() { ("slab S", sh[1]) } else { ("slab N", sh[3]) }),
-                ),
-                None => {
-                    let edge = edges(sp, &r.level, &r.points);
-                    (edge.map(|e| ("west edge", e[0])), edge.map(|e| ("south edge", e[1])))
-                }
-            };
-            let x = dim_from(&g.x, at[0], ex, u);
-            let y = dim_from(&g.y, at[1], ey, u);
+            let (x, y) = dims_at(&r.level, at, &r.points);
             let height_in = sp
                 .mep
                 .equipment
@@ -806,6 +982,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
                 .map_or(6.0, |e| if e.bottom_ft.is_finite() && e.bottom_ft > 0.0 { e.bottom_ft * 12.0 + 2.0 } else { 6.0 });
             stubs.push(Stub {
                 tag: format!("SU-{}", stubs.len() + 1),
+                trade: r.trade,
                 level: r.level.clone(),
                 at,
                 feeds,
@@ -821,6 +998,38 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             });
         }
     }
+    // A riser where no run's end already comes up.
+    let ends_near = 0.5 * u;
+    let from_runs = stubs.len();
+    for (trade, level, at, size, top, feeds, id, steel) in risers {
+        let taken =
+            stubs.iter().take(from_runs).any(|st| st.level.eq_ignore_ascii_case(&level) && (st.at[0] - at[0]).hypot(st.at[1] - at[1]) <= ends_near);
+        if taken {
+            continue;
+        }
+        let (x, y) = dims_at(&level, at, &[at]);
+        stubs.push(Stub {
+            tag: String::new(),
+            trade,
+            level,
+            at,
+            feeds,
+            run: id,
+            size_in: size,
+            conduits: 1,
+            material: if trade == "P" {
+                "PIPE".into()
+            } else if steel {
+                "RGS (steel elbow and riser, per note)".into()
+            } else {
+                "PVC Sch 80".into()
+            },
+            height_in: (top * 12.0).max(0.0),
+            mix: vec![(1, size)],
+            x,
+            y,
+        });
+    }
     // Runs coming up at the same place into the same equipment are one stub-up group (their
     // conduits side by side), listed once.
     let near = 0.5 * u;
@@ -828,6 +1037,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     for st in stubs {
         match merged.iter_mut().find(|m| {
             m.level.eq_ignore_ascii_case(&st.level)
+                && m.trade == st.trade
                 && m.feeds.eq_ignore_ascii_case(&st.feeds)
                 && (m.at[0] - st.at[0]).hypot(m.at[1] - st.at[1]) <= near
         }) {
@@ -905,9 +1115,155 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     // The slab's hold points.
     let els = super::concrete::elements(sp, types);
     let holds = super::concrete::holds(sp, &els, today, &super::concrete::Rules::of(sp));
+    let (sleeves, plane) = sleeves_and_bearing(sp, &els, &runs, &pipes, u);
+    findings.extend(plane);
     let crossings = crossings(&runs, &other_trade, clearance_ft * u, u, &mut findings);
     findings.truncate(MAX_ITEMS);
-    Ug { runs, stubs, services, other_trade, crossings, routes, holds, findings, grids: g }
+    Ug { runs, pipes, sleeves, stubs, services, other_trade, crossings, routes, holds, findings, grids: g }
+}
+
+/// The footings and grade beams of the slab level as lines in plan (a beam's centreline, a
+/// footing's outline), with what each is and its bottom below the floor (feet), and the slab's
+/// own edge (its thickened edge or the footing under it).
+fn foundations(sp: &BuildingSpec, els: &[super::concrete::Element], level: &str) -> Vec<(String, Vec<[[f64; 2]; 2]>, f64, f64)> {
+    let mut out = Vec::new();
+    for x in els.iter().take(MAX_ITEMS).filter(|x| matches!(x.e.kind.as_str(), "footing" | "grade_beam") && x.e.level.eq_ignore_ascii_case(level)) {
+        let e = &x.e;
+        let bottom = (-e.top_ft + e.depth_in / 12.0).max(0.0);
+        let half = e.width_in / 24.0 * upf(sp);
+        let segs: Vec<[[f64; 2]; 2]> = if e.path.len() >= 2 {
+            e.path.windows(2).map(|w| [w[0], w[1]]).collect()
+        } else {
+            let (a, b) = (e.min, e.max);
+            vec![[a, [b[0], a[1]]], [[b[0], a[1]], b], [b, [a[0], b[1]]], [[a[0], b[1]], a]]
+        };
+        let label = format!("{} {}", e.kind.replace('_', " "), e.id).trim().to_string();
+        out.push((label, segs, bottom, if e.path.len() >= 2 { half } else { 0.0 }));
+    }
+    if let Some(b) = shell_of(sp, level) {
+        let segs = vec![[[b[0], b[1]], [b[2], b[1]]], [[b[2], b[1]], [b[2], b[3]]], [[b[2], b[3]], [b[0], b[3]]], [[b[0], b[3]], [b[0], b[1]]]];
+        out.push(("slab edge".into(), segs, 0.0, 0.0));
+    }
+    out
+}
+
+/// Sleeves where buried runs pass footings, grade beams or the slab's edge, and the pipes laid
+/// in a footing's bearing plane (IPC 307.5).
+fn sleeves_and_bearing(
+    sp: &BuildingSpec,
+    els: &[super::concrete::Element],
+    runs: &[Buried],
+    pipes: &[Buried],
+    u: f64,
+) -> (Vec<SleeveAt>, Vec<Finding>) {
+    let ur = super::ugplan::rules();
+    let mut sleeves: Vec<SleeveAt> = Vec::new();
+    let mut findings = Vec::new();
+    let Some(slab) = slab_level(sp).map(str::to_string) else { return (sleeves, findings) };
+    let found = foundations(sp, els, &slab);
+    let mut tests = 0usize;
+    for r in runs.iter().chain(pipes).filter(|r| r.level.eq_ignore_ascii_case(&slab)).take(MAX_ITEMS) {
+        for (label, segs, _, _) in &found {
+            let hit = r.points.windows(2).find_map(|w| {
+                segs.iter().find_map(|s| {
+                    tests += 1;
+                    if tests > MAX_PAIR_TESTS { None } else { seg_hit(w[0], w[1], s[0], s[1]) }
+                })
+            });
+            if let Some(at) = hit {
+                if sleeves.iter().any(|x| x.run == r.id && x.through == *label) {
+                    continue;
+                }
+                sleeves.push(SleeveAt {
+                    tag: format!("SL-{}", sleeves.len() + 1),
+                    trade: r.trade,
+                    level: r.level.clone(),
+                    at,
+                    run: r.id.clone(),
+                    through: label.clone(),
+                    size_in: r.size_in + ur.sleeve.oversize_in,
+                });
+            }
+        }
+    }
+    // A pipe below a footing's bottom, closer to it than the bearing plane allows.
+    let slope = ur.bearing_plane.angle_deg.to_radians().tan();
+    for p in pipes.iter().filter(|p| p.level.eq_ignore_ascii_case(&slab)).take(MAX_ITEMS) {
+        let invert_ft = (p.depth_in + p.size_in) / 12.0;
+        for (label, segs, bottom, half) in found.iter().filter(|f| f.2 > 0.0) {
+            let deeper = invert_ft - bottom;
+            if !(deeper > 0.0 && slope.is_finite() && slope > 0.0) {
+                continue;
+            }
+            let reach_ft = deeper / slope;
+            // Along the pipe, not only at its bends: each of its segments against the footing's.
+            let near = p
+                .points
+                .windows(2)
+                .flat_map(|w| segs.iter().map(move |s| seg_gap(w[0], w[1], s[0], s[1])))
+                .map(|(d, at)| ((d - half) / u, at))
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((d, at)) = near.filter(|(d, _)| d.is_finite() && *d < reach_ft) {
+                findings.push(Finding {
+                    check: "bearing_plane",
+                    severity: "warning",
+                    about: p.id.clone(),
+                    level: p.level.clone(),
+                    at,
+                    message: format!(
+                        "{} is {:.1} ft from {label} and {:.1} ft below its bottom: inside its {}° bearing plane ({})",
+                        p.id,
+                        d.max(0.0),
+                        deeper,
+                        ur.bearing_plane.angle_deg,
+                        ur.bearing_plane.source
+                    ),
+                    fix: "move the pipe out of the bearing plane, lower the footing, or have the structural engineer accept it".into(),
+                    data: json!({ "distance_ft": r2(d.max(0.0)), "below_footing_ft": r2(deeper) }),
+                });
+            }
+        }
+    }
+    (sleeves, findings)
+}
+
+/// The buried work's quantities by trade, apart from the rest of the takeoff: raceway and pipe
+/// by material and size (called and proposed apart), elbows, stub-ups, trench length, sleeves.
+fn takeoff_json(ug: &Ug) -> Value {
+    let mut out = serde_json::Map::new();
+    for trade in ["E", "P"] {
+        let runs: Vec<&Buried> = ug.runs.iter().chain(&ug.pipes).filter(|r| r.trade == trade).collect();
+        let mut lines: BTreeMap<(String, String, bool), (f64, u64)> = BTreeMap::new();
+        let mut trench: Vec<(String, f64)> = Vec::new();
+        for r in &runs {
+            let size = if r.size_in > 0.0 { trade_size(r.size_in) } else { "?".into() };
+            let material = if r.material.is_empty() { r.system.clone() } else { r.material.clone() };
+            let e = lines.entry((material, size, r.proposed)).or_default();
+            e.0 += r.length_ft * f64::from(r.conduits.max(1));
+            // Elbows: each 90 of the route's bends, each raceway.
+            e.1 += ((r.bends_deg / 90.0).round().max(0.0) as u64).saturating_mul(u64::from(r.conduits.max(1)));
+            // One trench for runs on the same path (a feeder's parallel conduits).
+            let key = r.points.iter().map(|p| format!("{:.0},{:.0}", p[0], p[1])).collect::<Vec<_>>().join(" ");
+            if !trench.iter().any(|(k, _)| *k == key) {
+                trench.push((key, r.length_ft));
+            }
+        }
+        let stubs: u64 = ug.stubs.iter().filter(|s| s.trade == trade).map(|s| u64::from(s.conduits)).sum();
+        let sleeves: Vec<&SleeveAt> = ug.sleeves.iter().filter(|s| s.trade == trade).collect();
+        out.insert(
+            trade.into(),
+            json!({
+                "lines": lines.iter().map(|((m, size, prop), (ft, ells))| json!({ "material": m, "size": size, "status": if *prop { "proposed" } else { "called" }, "ft": r2(*ft), "elbows_90": ells })).collect::<Vec<_>>(),
+                "ft_called": r2(runs.iter().filter(|r| !r.proposed).map(|r| r.length_ft * f64::from(r.conduits.max(1))).sum()),
+                "ft_proposed": r2(runs.iter().filter(|r| r.proposed).map(|r| r.length_ft * f64::from(r.conduits.max(1))).sum()),
+                "stub_ups": stubs,
+                "trench_ft": r2(trench.iter().map(|(_, l)| *l).sum()),
+                "sleeves": sleeves.len(),
+                "sleeve_item": super::ugplan::rules().sleeve.item,
+            }),
+        );
+    }
+    Value::Object(out)
 }
 
 fn id_of(s: &Service) -> String {
@@ -915,7 +1271,8 @@ fn id_of(s: &Service) -> String {
 }
 
 fn r2(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    // `+ 0.0`: an empty sum is -0.0.
+    (v * 100.0).round() / 100.0 + 0.0
 }
 
 /// Feet and inches (`12'-6"`), signs kept.
@@ -930,6 +1287,7 @@ fn ft_in(ft: f64) -> String {
 
 fn ug_json(ug: &Ug) -> Value {
     let errors = ug.findings.iter().filter(|f| f.severity == "error").count();
+    let reviews = ug.findings.iter().filter(|f| f.severity == "review").count();
     let dim = |d: &Option<(String, f64, f64)>| d.as_ref().map(|(from, _, ft)| json!({ "from": from, "ft": r2(*ft) }));
     // Coordinates for layout tools: from the first grid lines (else the sheet's origin), feet.
     let ox = ug.grids.x.first().map_or(0.0, |g| g.1);
@@ -937,16 +1295,22 @@ fn ug_json(ug: &Ug) -> Value {
     json!({
         "ok": errors == 0,
         "errors": errors,
-        "warnings": ug.findings.len() - errors,
+        "reviews": reviews,
+        "warnings": ug.findings.len() - errors - reviews,
         "runs": ug.runs.iter().map(|r| json!({
             "id": r.id, "kind": r.kind, "system": r.system, "level": r.level, "from": r.from, "to": r.to, "size_in": r.size_in,
             "conduits": r.conduits, "material": r.material, "depth_in": r2(r.depth_in), "length_ft": r2(r.length_ft),
             "bends_deg": r.bends_deg, "encased": r.encased, "proposed": r.proposed, "basis": r.basis,
         })).collect::<Vec<_>>(),
         "stubups": ug.stubs.iter().map(|s| json!({
-            "tag": s.tag, "level": s.level, "at": s.at, "feeds": s.feeds, "run": s.run, "size_in": s.size_in, "conduits": s.conduits,
+            "tag": s.tag, "trade": s.trade, "level": s.level, "at": s.at, "feeds": s.feeds, "run": s.run, "size_in": s.size_in, "conduits": s.conduits,
             "mix": s.mix.iter().map(|(n, size)| json!({ "count": n, "size_in": size })).collect::<Vec<_>>(), "material": s.material, "height_in": r2(s.height_in), "x": dim(&s.x), "y": dim(&s.y), "coords_ft": [r2(s.at[0] - ox), r2(s.at[1] - oy)],
         })).collect::<Vec<_>>(),
+        "pipes": ug.pipes.iter().map(|r| json!({
+            "id": r.id, "system": r.system, "level": r.level, "size_in": r.size_in, "depth_in": r2(r.depth_in), "length_ft": r2(r.length_ft), "proposed": r.proposed, "basis": r.basis,
+        })).collect::<Vec<_>>(),
+        "sleeves": ug.sleeves.iter().map(|x| json!({ "tag": x.tag, "trade": x.trade, "level": x.level, "at": x.at, "run": x.run, "through": x.through, "size_in": x.size_in })).collect::<Vec<_>>(),
+        "takeoff": takeoff_json(ug),
         "services": ug.services,
         "other_trade": ug.other_trade.iter().map(|o| json!({ "id": o.id, "label": o.label, "level": o.level, "depth_in": o.depth_in.map(r2) })).collect::<Vec<_>>(),
         "crossings": ug.crossings.iter().map(|x| json!({
@@ -988,6 +1352,17 @@ fn clearance_of(cmd: &str, p: &Value) -> Result<f64> {
     }
 }
 
+/// The embedded file the job keeps its underground plan in.
+pub(crate) const PLAN_FILE: &str = "underground.json";
+
+fn run_plan(s: &mut Session, _p: &Value) -> Result<Value> {
+    let d = s.doc()?;
+    d.embedded
+        .get(PLAN_FILE)
+        .and_then(|b| serde_json::from_slice::<Value>(b).ok())
+        .ok_or_else(|| bad("ugsheets.plan", "no underground plan in this drawing yet: the job's BIM build makes it"))
+}
+
 fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
     let sp = spec_of("ugsheets.check", s)?;
     let t = today_of("ugsheets.check", p)?;
@@ -1007,12 +1382,20 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
     let mut sp = spec_of("ugsheets.review", s)?;
     let ug = study(&sp, &s.doc()?.bim_types, None, CLEARANCE_FT);
     let mut added = Vec::new();
-    for f in ug.findings.iter().filter(|f| f.severity == "error" && f.check.starts_with("service_")) {
-        let id = format!("RFI-U{}", hash(&format!("{}|{}", f.about, f.check)));
+    for f in
+        ug.findings.iter().filter(|f| (f.severity == "error" && f.check.starts_with("service_")) || (f.severity == "review" && f.check == "crossing"))
+    {
+        // A crossing's id is its pair, not its number (numbers shift as runs change).
+        let key = if f.check == "crossing" { f.data["items"].to_string() } else { f.about.clone() };
+        let id = format!("RFI-U{}", hash(&format!("{key}|{}", f.check)));
         if sp.rfis.iter().any(|r| r.id == id) || sp.rfis.len() >= cadaddy_walk3d::rfi::MAX_RFIS {
             continue;
         }
-        let kind = cadaddy_walk3d::RfiKind::ServiceEntrance;
+        let (kind, assumed) = if f.check == "crossing" {
+            (cadaddy_walk3d::RfiKind::PourHold, "The proposed route is shown as drawn until its routing RFI is answered.")
+        } else {
+            (cadaddy_walk3d::RfiKind::ServiceEntrance, "Held: the slab isn't poured over this service's route until it is answered.")
+        };
         sp.rfis.push(cadaddy_walk3d::Rfi {
             id: id.clone(),
             kind: Some(kind),
@@ -1021,7 +1404,7 @@ fn run_review(s: &mut Session, _p: &Value) -> Result<Value> {
             at: f.at,
             about: format!("{} ({})", f.about, f.check),
             issue: f.message.clone(),
-            assumed: "Held: the slab isn't poured over this service's route until it is answered.".into(),
+            assumed: assumed.into(),
             proposed: (!f.fix.is_empty()).then(|| f.fix.clone()),
             ..cadaddy_walk3d::Rfi::default()
         });
@@ -1048,6 +1431,132 @@ const SCALES: [(f64, &str); 6] = [
 ];
 
 /// Where the plan goes on paper: model point → paper point.
+/// A plan label's width per character, as a share of its height (the sheets' single-stroke text).
+const LABEL_CHAR_W: f64 = 0.8;
+/// Label boxes a sheet keeps for the overlap test, at most.
+const MAX_LABELS: usize = 2_000;
+
+/// The labels placed on a sheet's plan so far (paper boxes `[x0, y0, x1, y1]`): a label that
+/// would overlap one of them is skipped.
+#[derive(Default)]
+struct LabelBoxes {
+    boxes: Vec<[f64; 4]>,
+    skipped: usize,
+}
+
+impl LabelBoxes {
+    /// The box of `text` at height `h` with its insertion point (lower left) at `at`.
+    fn box_of(at: [f64; 2], text: &str, h: f64) -> [f64; 4] {
+        [at[0], at[1], at[0] + text.chars().count() as f64 * h * LABEL_CHAR_W, at[1] + h]
+    }
+    /// Keeps the box an earlier label or tag takes (always drawn).
+    fn take(&mut self, at: [f64; 2], text: &str, h: f64) {
+        if self.boxes.len() < MAX_LABELS {
+            self.boxes.push(Self::box_of(at, text, h));
+        }
+    }
+    /// Whether `text` fits at `at` clear of every earlier label; when it does, its box is kept.
+    fn fits(&mut self, at: [f64; 2], text: &str, h: f64) -> bool {
+        let b = Self::box_of(at, text, h);
+        if !b.iter().all(|v| v.is_finite())
+            || self.boxes.len() >= MAX_LABELS
+            || self.boxes.iter().any(|o| b[0] < o[2] && o[0] < b[2] && b[1] < o[3] && o[1] < b[3])
+        {
+            self.skipped += 1;
+            return false;
+        }
+        self.boxes.push(b);
+        true
+    }
+}
+
+/// The runs' chains: runs of one kind (system, size, conduits, material, called or proposed)
+/// whose ends meet (within `tol`, plan units) are one chain, labelled once. Each chain is its
+/// runs' indices, the longest first.
+fn run_chains(runs: &[&Buried], tol: f64) -> Vec<Vec<usize>> {
+    let n = runs.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        let mut hops = 0;
+        while let Some(&p) = parent.get(i) {
+            if p == i || hops > 10_000 {
+                break;
+            }
+            let gp = parent.get(p).copied().unwrap_or(p);
+            if let Some(x) = parent.get_mut(i) {
+                *x = gp;
+            }
+            i = p;
+            hops += 1;
+        }
+        i
+    }
+    let key = |r: &Buried| format!("{}|{}|{}|{}|{}|{}", r.kind, r.system, r2(r.size_in), r.conduits, r.material, r.proposed);
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-6 };
+    let cell = |p: [f64; 2]| ((p[0] / tol).floor().clamp(-1e15, 1e15) as i64, (p[1] / tol).floor().clamp(-1e15, 1e15) as i64);
+    let mut grid: std::collections::HashMap<(i64, i64), Vec<(usize, [f64; 2])>> = std::collections::HashMap::new();
+    for (i, r) in runs.iter().enumerate() {
+        for p in [r.points.first(), r.points.last()].into_iter().flatten().filter(|p| p.iter().all(|v| v.is_finite())) {
+            let (cx, cy) = cell(*p);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    let near: Vec<usize> = grid
+                        .get(&(cx + dx, cy + dy))
+                        .map(|v| v.iter().filter(|(_, q)| dist(*p, *q) <= tol).map(|(j, _)| *j).collect())
+                        .unwrap_or_default();
+                    for j in near {
+                        if runs.get(j).is_some_and(|o| key(o) == key(r)) {
+                            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                            if let Some(x) = parent.get_mut(a) {
+                                *x = b;
+                            }
+                        }
+                    }
+                }
+            }
+            grid.entry((cx, cy)).or_default().push((i, *p));
+        }
+    }
+    let mut chains: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..n {
+        let r = root(&mut parent, i);
+        chains.entry(r).or_default().push(i);
+    }
+    let len = |i: &usize| runs.get(*i).map_or(0.0, |r| r.length_ft);
+    let mut out: Vec<Vec<usize>> = chains.into_values().collect();
+    for c in &mut out {
+        c.sort_by(|a, b| len(b).total_cmp(&len(a)).then(a.cmp(b)));
+    }
+    // The longest chains are labelled first (they get the free spots).
+    out.sort_by(|a, b| {
+        let t = |c: &Vec<usize>| c.iter().map(len).sum::<f64>();
+        t(b).total_cmp(&t(a)).then(a.first().cmp(&b.first()))
+    });
+    out
+}
+
+/// A chain's label: its longest run's, the chain's depth range when it slopes, and how many more
+/// runs it stands for (the run schedule lists each).
+fn chain_label(runs: &[&Buried], chain: &[usize]) -> Option<String> {
+    let first = runs.get(*chain.first()?)?;
+    let depths: Vec<f64> = chain.iter().filter_map(|i| runs.get(*i)).map(|r| r.depth_in).filter(|d| d.is_finite()).collect();
+    let lo = depths.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = depths.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let depth = if lo.is_finite() && hi - lo >= 0.5 { format!("{}-{}", r2(lo).round(), r2(hi).round()) } else { format!("{}", r2(first.depth_in)) };
+    let mut what = if first.kind == "pipe" {
+        format!("{} {}\" {} @ {depth}\" BFF", first.id, r2(first.size_in), first.system)
+    } else {
+        format!("{} {}-{} {} @ {depth}\" BFF", first.id, first.conduits, trade_size(first.size_in), first.material)
+    };
+    if chain.len() > 1 {
+        what.push_str(&format!(" (+{} RUNS)", chain.len() - 1));
+    }
+    if first.proposed {
+        what.push_str(" (PROPOSED)");
+    }
+    Some(what)
+}
+
 struct Frame {
     min: [f64; 2],
     k: f64,
@@ -1061,7 +1570,7 @@ impl Frame {
     }
 }
 
-fn frame(pts: &[[f64; 2]], upf: f64) -> Frame {
+fn frame(pts: &[[f64; 2]], upf: f64, want: Option<f64>, paper: &Paper) -> Frame {
     let pts: Vec<[f64; 2]> = pts.iter().copied().filter(|p| finite(*p)).collect();
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in &pts {
@@ -1073,11 +1582,18 @@ fn frame(pts: &[[f64; 2]], upf: f64) -> Frame {
         hi = [upf, upf];
     }
     let (w, h) = (((hi[0] - lo[0]) / upf).max(1.0), ((hi[1] - lo[1]) / upf).max(1.0));
-    let (pw, ph) = (PLAN[2] - PLAN[0], PLAN[3] - PLAN[1]);
-    let (per_ft, scale) = SCALES.into_iter().find(|(k, _)| w * k <= pw && h * k <= ph).unwrap_or((pw.min(ph) / w.max(h), "not to scale"));
+    let plan = paper.plan;
+    let (pw, ph) = (plan[2] - plan[0], plan[3] - plan[1]);
+    // The scale asked for (the level's plan's) when the plan fits at it, else the largest that fits.
+    let fits = |k: &f64| w * k <= pw && h * k <= ph;
+    let (per_ft, scale) = SCALES
+        .into_iter()
+        .find(|(k, _)| want.is_some_and(|v| (v - k).abs() < 1e-9) && fits(k))
+        .or_else(|| SCALES.into_iter().find(|(k, _)| fits(k)))
+        .unwrap_or((pw.min(ph) / w.max(h), "not to scale"));
     let k = per_ft / upf;
     // Centred in the plan's box.
-    let origin = [PLAN[0] + (pw - w * per_ft) / 2.0, PLAN[1] + (ph - h * per_ft) / 2.0];
+    let origin = [plan[0] + (pw - w * per_ft) / 2.0, plan[1] + (ph - h * per_ft) / 2.0];
     Frame { min: lo, k, origin, scale }
 }
 
@@ -1141,8 +1657,8 @@ impl Pen<'_> {
     /// A typical trench section at `x0` in the section box, for the runs `of`: the datum (grade
     /// or the slab's bottom), the trench, the conduits side by side at the least cover, the
     /// encasement when there is one, the warning tape, the cover dimensioned, and its notes.
-    fn section(&mut self, x0: f64, of: &[&Buried], title: &str, datum: &str) -> Result<()> {
-        let [_, y0, w, h] = SECTION_BOX;
+    fn section(&mut self, x0: f64, of: &[&Buried], title: &str, datum: &str, sbox: [f64; 4]) -> Result<()> {
+        let [_, y0, w, h] = sbox;
         let cover = of.iter().map(|r| r.depth_in).filter(|d| d.is_finite() && *d > 0.0).fold(f64::INFINITY, f64::min);
         let n = of.iter().map(|r| r.conduits).max().unwrap_or(1).clamp(1, 12);
         let size = of.iter().map(|r| r.size_in).filter(|v| v.is_finite() && *v > 0.0).fold(0.0, f64::max);
@@ -1257,14 +1773,23 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "ugsheets.build";
-    let sp = spec_of(cmd, s)?;
+    let mut sp = spec_of(cmd, s)?;
     let t = today_of(cmd, p)?;
     let c = clearance_of(cmd, p)?;
     let ug = study(&sp, &s.doc()?.bim_types, t, c);
     let u = upf(&sp);
+    let trade: &'static str = match str_param(p, "trade").map(|v| v.trim().to_ascii_uppercase()) {
+        None => "E",
+        Some(v) if v.is_empty() || v == "E" => "E",
+        Some(v) if v == "P" => "P",
+        Some(_) => return Err(bad(cmd, "trade: E (electrical) or P (plumbing)")),
+    };
+    let pre = format!("{trade}-UG");
+    let lay = |what: &str| format!("{pre}-{what}");
     let only = str_param(p, "level").map(str::trim).filter(|l| !l.is_empty());
+    let mine: Vec<&Buried> = if trade == "E" { ug.runs.iter().collect() } else { ug.pipes.iter().collect() };
     let mut levels: Vec<String> = Vec::new();
-    for l in ug.runs.iter().map(|r| r.level.clone()).chain(ug.stubs.iter().map(|s| s.level.clone())) {
+    for l in mine.iter().map(|r| r.level.clone()).chain(ug.stubs.iter().filter(|st| st.trade == trade).map(|s| s.level.clone())) {
         if only.is_none_or(|o| o.eq_ignore_ascii_case(&l)) && !levels.iter().any(|x| x.eq_ignore_ascii_case(&l)) {
             levels.push(l);
         }
@@ -1276,29 +1801,74 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             levels.push(l.to_string());
         }
     }
-    let called: Vec<Called> = p
-        .get("called")
+    let texts_of = |key: &str| -> Vec<Called> {
+        p.get(key)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .take(MAX_CALLED)
+                    .filter_map(|c| {
+                        let text = c.get("text")?.as_str()?.trim();
+                        (!text.is_empty()).then(|| Called {
+                            sheet: c.get("sheet").and_then(Value::as_str).unwrap_or_default().to_string(),
+                            level: c.get("level").and_then(Value::as_str).unwrap_or_default().to_string(),
+                            text: text.chars().take(400).collect(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let called = texts_of("called");
+    // Every callout of the documents for this sheet (`sheet` is how it is cited), with what was
+    // done with it: listed in the notes; legend line types in the legend.
+    let sources = texts_of("sources");
+    let legend_types = texts_of("line_types");
+    // Proposals CADaddy draws as alternatives only (a route in the model already runs
+    // overhead): `{subject, points, size_in, conduits}`.
+    let alternatives: Vec<(String, Vec<[f64; 2]>, f64, u32)> = p
+        .get("alternatives")
         .and_then(Value::as_array)
         .map(|a| {
             a.iter()
-                .take(MAX_CALLED)
-                .filter_map(|c| {
-                    let text = c.get("text")?.as_str()?.trim();
-                    (!text.is_empty()).then(|| Called {
-                        sheet: c.get("sheet").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        level: c.get("level").and_then(Value::as_str).unwrap_or_default().to_string(),
-                        text: text.chars().take(400).collect(),
+                .take(MAX_ITEMS)
+                .filter_map(|x| {
+                    let pts: Vec<[f64; 2]> = x
+                        .get("points")?
+                        .as_array()?
+                        .iter()
+                        .take(MAX_POINTS)
+                        .filter_map(|q| Some([q.get(0)?.as_f64()?, q.get(1)?.as_f64()?]))
+                        .filter(|q| finite(*q))
+                        .collect();
+                    (pts.len() >= 2).then(|| {
+                        (
+                            x.get("subject").and_then(Value::as_str).unwrap_or_default().chars().take(120).collect(),
+                            pts,
+                            x.get("size_in").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0),
+                            x.get("conduits").and_then(Value::as_u64).map_or(1, |n| n.clamp(1, 99) as u32),
+                        )
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
+    let want_scale = str_param(p, "scale").and_then(|v| {
+        let v = v.replace(' ', "");
+        SCALES.iter().find(|(_, name)| name.replace(' ', "") == v).map(|(k, _)| *k)
+    });
+    let title_param = str_param(p, "title").map(str::trim).filter(|v| !v.is_empty()).map(|v| v.chars().take(80).collect::<String>());
     let first = str_param(p, "number").map(str::trim).filter(|n| !n.is_empty()).unwrap_or("E-001").to_string();
     let tb = str_param(p, "title_block").map(str::to_string).or_else(|| title_block(s));
     let mut sheets = Vec::new();
+    let mut links: Vec<cadaddy_walk3d::levels::SheetLink> = Vec::new();
     for (i, level) in levels.iter().enumerate().take(50) {
         let number = sheet_number(&first, i);
-        let title = format!("UNDERGROUND / UNDER-SLAB ELECTRICAL - {}", level_name(&sp, level));
+        let title = match &title_param {
+            Some(t) => t.clone(),
+            None if trade == "P" => format!("UNDER-SLAB PLUMBING - {}", level_name(&sp, level)),
+            None => format!("UNDERGROUND / UNDER-SLAB ELECTRICAL - {}", level_name(&sp, level)),
+        };
         // Characters a layout name can't have (a level named `1/2`) become dashes.
         let name: String = format!("{number} Underground {}", level_name(&sp, level))
             .chars()
@@ -1320,13 +1890,9 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
         };
         s.execute("layout.set", &json!({ "name": layout }))?;
-        // A 36" × 24" sheet, plotted 1:1 (the plan is drawn to scale on it).
-        s.execute(
-            "pagesetup",
-            &json!({ "layout": layout, "width": SHEET[0] * 25.4, "height": SHEET[1] * 25.4, "margins": [0, 0, 0, 0], "scale": 1, "center": false }),
-        )?;
-        let runs: Vec<&Buried> = ug.runs.iter().filter(|r| r.level.eq_ignore_ascii_case(level)).collect();
-        let stubs: Vec<&Stub> = ug.stubs.iter().filter(|st| st.level.eq_ignore_ascii_case(level)).collect();
+        let runs: Vec<&Buried> = mine.iter().copied().filter(|r| r.level.eq_ignore_ascii_case(level)).collect();
+        let stubs: Vec<&Stub> = ug.stubs.iter().filter(|st| st.trade == trade && st.level.eq_ignore_ascii_case(level)).collect();
+        let sleeves: Vec<&SleeveAt> = ug.sleeves.iter().filter(|x| x.trade == trade && x.level.eq_ignore_ascii_case(level)).collect();
         let gear: Vec<&MepEquipment> = sp
             .mep
             .equipment
@@ -1335,11 +1901,13 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 e.level.eq_ignore_ascii_case(level)
                     && (runs.iter().any(|r| r.from == e.tag || r.to == e.tag)
                         || stubs.iter().any(|st| st.feeds == e.tag)
-                        || ug.routes.iter().any(|r| r.from == e.tag || r.to == e.tag))
+                        || (trade == "E" && ug.routes.iter().any(|r| r.from == e.tag || r.to == e.tag)))
             })
             .collect();
         let mut pts: Vec<[f64; 2]> = runs.iter().flat_map(|r| r.points.iter().copied()).collect();
         pts.extend(gear.iter().flat_map(|e| [e.min, e.max]));
+        pts.extend(alternatives.iter().flat_map(|a| a.1.iter().copied()));
+        pts.extend(stubs.iter().map(|st| st.at));
         // The slab's walls, and where each stub-up's dimensions start: all on the plan.
         let walls: Vec<[f64; 4]> = sp
             .shells
@@ -1361,26 +1929,53 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             pts.extend(ug.grids.x.iter().map(|(_, x)| [*x, y0.0]));
             pts.extend(ug.grids.y.iter().map(|(_, y)| [x0.0, *y]));
         }
-        let f = frame(&pts, u);
+        // The level's interior walls, light, for where things are (inside the plan's frame).
+        let inner: Vec<[[f64; 2]; 2]> = match span(&pts, 0).zip(span(&pts, 1)) {
+            Some(((x0, x1), (y0, y1))) => sp
+                .walls
+                .iter()
+                .filter(|w| w.level.eq_ignore_ascii_case(level))
+                .map(|w| [w.a, w.b])
+                .filter(|w| w.iter().all(|q| finite(*q) && q[0] >= x0 && q[0] <= x1 && q[1] >= y0 && q[1] <= y1))
+                .take(MAX_ITEMS)
+                .collect(),
+            None => Vec::new(),
+        };
+        // The plan's extent in feet, for the sheet that holds it at the scale asked for.
+        let ext = span(&pts, 0).zip(span(&pts, 1)).map_or((1.0, 1.0), |((x0, x1), (y0, y1))| (((x1 - x0) / u).max(1.0), ((y1 - y0) / u).max(1.0)));
+        let paper = Paper::holding(ext.0, ext.1, want_scale);
+        let f = frame(&pts, u, want_scale, &paper);
+        // The sheet, plotted 1:1 (the plan is drawn to scale on it).
+        s.execute(
+            "pagesetup",
+            &json!({ "layout": layout, "width": paper.size[0] * 25.4, "height": paper.size[1] * 25.4, "margins": [0, 0, 0, 0], "scale": 1, "center": false }),
+        )?;
         let mut pen = Pen { s, dims: 0 };
         // The sheet: the title block, else a border and a title strip.
-        pen.layer("E-UG-ANNO", 7, None)?;
+        pen.layer(&lay("ANNO"), 7, None)?;
         match &tb {
             Some(b) => {
                 pen.s.execute("insert", &json!({ "name": b, "at": [0, 0] }))?;
             }
             None => {
-                pen.rect([0.5, 0.5], [SHEET[0] - 0.5, SHEET[1] - 0.5])?;
-                pen.line([0.5, 2.0], [SHEET[0] - 0.5, 2.0])?;
+                pen.rect([0.5, 0.5], [paper.size[0] - 0.5, paper.size[1] - 0.5])?;
+                pen.line([0.5, 2.0], [paper.size[0] - 0.5, 2.0])?;
             }
         }
         pen.text([1.0, 1.2], &title, 0.3)?;
         pen.text([1.0, 1.65], "GENERATED BY CADADDY FROM THE CONTRACT DOCUMENTS - REQUIRES ENGINEER OF RECORD REVIEW", 0.14)?;
+        pen.text([14.5, 1.25], GENERATED_MARK, 0.2)?;
         pen.text([1.0, 0.75], &format!("SCALE: {}", f.scale), 0.14)?;
-        pen.text([SHEET[0] - 4.0, 1.0], &number, 0.45)?;
-        // Grids across the plan.
-        pen.layer("E-UG-GRID", 8, Some("CENTER"))?;
-        let (lo, hi) = (f.to(f.min), [PLAN[2], PLAN[3]]);
+        pen.text([paper.size[0] - 4.0, 1.0], &number, 0.45)?;
+        // The background: interior walls light, grids across the plan.
+        if !inner.is_empty() {
+            pen.layer(&lay("BKGD"), 9, None)?;
+            for w in &inner {
+                pen.line(f.to(w[0]), f.to(w[1]))?;
+            }
+        }
+        pen.layer(&lay("GRID"), 8, Some("CENTER"))?;
+        let (lo, hi) = (f.to(f.min), [paper.plan[2], paper.plan[3]]);
         for (label, x) in &ug.grids.x {
             let px = f.to([*x, f.min[1]])[0];
             pen.line([px, lo[1] - 0.3], [px, hi[1]])?;
@@ -1391,56 +1986,108 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             pen.line([lo[0] - 0.3, py], [hi[0], py])?;
             pen.text([lo[0] - 0.7, py - 0.06], label, 0.14)?;
         }
-        // The slab's exterior walls, for where things are.
+        // The slab's exterior walls (its edge), for where things are.
         if !walls.is_empty() {
-            pen.layer("E-UG-SHELL", 8, None)?;
+            pen.layer(&lay("SHELL"), 8, None)?;
             for b in &walls {
                 pen.rect(f.to([b[0], b[1]]), f.to([b[2], b[3]]))?;
             }
         }
         // Gear fed.
-        pen.layer("E-UG-EQPM", 5, None)?;
+        pen.layer(&lay("EQPM"), 5, None)?;
+        let mut labels = LabelBoxes::default();
         for e in &gear {
             pen.rect(f.to(e.min), f.to(e.max))?;
-            pen.text([f.to(e.max)[0] + 0.05, f.to(e.max)[1] + 0.05], &e.tag, 0.1)?;
+            let at = [f.to(e.max)[0] + 0.05, f.to(e.max)[1] + 0.05];
+            pen.text(at, &e.tag, 0.1)?;
+            labels.take(at, &e.tag, 0.1);
         }
-        // The buried runs, each tagged: what the documents call for solid, what CADaddy proposes
-        // dashed on a layer of its own.
+        // The buried runs: what the documents call for solid, what CADaddy proposes dashed on a
+        // layer of its own.
         for r in &runs {
             if r.proposed {
-                pen.layer("E-UG-PROP", 30, Some("DASHED"))?;
+                pen.layer(&lay("PROP"), 30, Some("DASHED"))?;
             } else {
-                pen.layer("E-UG-COND", 1, None)?;
+                pen.layer(&lay("COND"), 1, None)?;
             }
             let pp: Vec<[f64; 2]> = r.points.iter().map(|q| f.to(*q)).collect();
             pen.pline(&pp, false)?;
-            if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
-                let mut what = format!("{} {}-{} {} @ {}\" BFF", r.id, r.conduits, trade_size(r.size_in), r.material, r2(r.depth_in));
-                if r.proposed {
-                    what.push_str(" (PROPOSED)");
+        }
+        // Tagged once per chain (runs of one kind end to end), at its longest run, and only where
+        // the tag doesn't overlap an earlier one: the run schedule lists every run.
+        let mut run_labels = 0usize;
+        for chain in run_chains(&runs, 0.5 * u) {
+            let (Some(what), Some(r)) = (chain_label(&runs, &chain), chain.first().and_then(|i| runs.get(*i))) else { continue };
+            if r.proposed {
+                pen.layer(&lay("PROP"), 30, Some("DASHED"))?;
+            } else {
+                pen.layer(&lay("COND"), 1, None)?;
+            }
+            let pp: Vec<[f64; 2]> = r.points.iter().map(|q| f.to(*q)).collect();
+            // At the middle of its longest segment, else the middle point.
+            let mid = pp
+                .windows(2)
+                .max_by(|a, b| dist(a[0], a[1]).total_cmp(&dist(b[0], b[1])))
+                .map(|w| [(w[0][0] + w[1][0]) / 2.0, (w[0][1] + w[1][1]) / 2.0])
+                .or_else(|| pp.get(pp.len() / 2).copied());
+            if let Some(mid) = mid {
+                let at = [mid[0] + 0.05, mid[1] + 0.08];
+                if labels.fits(at, &what, 0.08) {
+                    pen.text(at, &what, 0.08)?;
+                    run_labels += 1;
                 }
-                pen.text([mid[0] + 0.05, mid[1] + 0.08], &what, 0.08)?;
             }
         }
-        // Other-trade utilities (pipe services, pipes below the floor) for coordination only.
-        let others: Vec<&Other> = ug.other_trade.iter().filter(|o| o.level.is_empty() || o.level.eq_ignore_ascii_case(level)).collect();
-        if !others.is_empty() {
-            pen.layer("E-UG-OTHR", 8, Some("DASHDOT"))?;
-            for o in &others {
-                let pp: Vec<[f64; 2]> = o.points.iter().map(|q| f.to(*q)).collect();
+        // Underground alternatives to routes the model runs overhead: dashed, never mixed with
+        // called work.
+        if trade == "E" && !alternatives.is_empty() {
+            pen.layer(&lay("PROP"), 30, Some("DASHED"))?;
+            for (subject, apts, size, n) in &alternatives {
+                let pp: Vec<[f64; 2]> = apts.iter().map(|q| f.to(*q)).collect();
                 pen.pline(&pp, false)?;
                 if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
-                    pen.text([mid[0] + 0.05, mid[1] + 0.08], &o.label, 0.08)?;
+                    let at = [mid[0] + 0.05, mid[1] - 0.14];
+                    let what = format!("{subject} {n}-{} (PROPOSED ALTERNATIVE - RFI)", trade_size(*size));
+                    if labels.fits(at, &what, 0.08) {
+                        pen.text(at, &what, 0.08)?;
+                    }
                 }
             }
         }
-        // Stub-ups, dimensioned from the grid lines (or the level's edges).
+        // The other trade's buried lines for coordination only.
+        let others: Vec<(String, Vec<[f64; 2]>)> = if trade == "E" {
+            ug.other_trade
+                .iter()
+                .filter(|o| o.level.is_empty() || o.level.eq_ignore_ascii_case(level))
+                .map(|o| (o.label.clone(), o.points.clone()))
+                .collect()
+        } else {
+            ug.runs
+                .iter()
+                .filter(|r| r.level.eq_ignore_ascii_case(level))
+                .map(|r| (format!("{} {}-{} {}", r.id, r.conduits, trade_size(r.size_in), r.material), r.points.clone()))
+                .collect()
+        };
+        if !others.is_empty() {
+            pen.layer(&lay("OTHR"), 8, Some("DASHDOT"))?;
+            for (label, opts) in &others {
+                let pp: Vec<[f64; 2]> = opts.iter().map(|q| f.to(*q)).collect();
+                pen.pline(&pp, false)?;
+                if let Some(mid) = pp.get(pp.len() / 2).or(pp.first()) {
+                    let at = [mid[0] + 0.05, mid[1] + 0.08];
+                    if labels.fits(at, label, 0.08) {
+                        pen.text(at, label, 0.08)?;
+                    }
+                }
+            }
+        }
+        // Stub-ups, dimensioned from the grid lines (or the slab's edges).
         for st in &stubs {
-            pen.layer("E-UG-STUB", 2, None)?;
+            pen.layer(&lay("STUB"), 2, None)?;
             let c = f.to(st.at);
             pen.circle(c, 0.08)?;
             pen.text([c[0] + 0.12, c[1] + 0.12], &st.tag, 0.1)?;
-            pen.layer("E-UG-DIMS", 3, None)?;
+            pen.layer(&lay("DIMS"), 3, None)?;
             if let Some((_, from, ft)) = &st.x {
                 let a = f.to([*from, st.at[1]]);
                 pen.dim(a, c, [c[0], c[1] - 0.35], &ft_in(ft.abs()))?;
@@ -1450,10 +2097,23 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 pen.dim(a, c, [c[0] + 0.35, c[1]], &ft_in(ft.abs()))?;
             }
         }
+        // Sleeves through footings, grade beams and the slab's edge.
+        if !sleeves.is_empty() {
+            pen.layer(&lay("SLV"), 4, None)?;
+            for x in &sleeves {
+                let c = f.to(x.at);
+                pen.rect([c[0] - 0.06, c[1] - 0.06], [c[0] + 0.06, c[1] + 0.06])?;
+                pen.text([c[0] + 0.1, c[1] - 0.16], &x.tag, 0.08)?;
+            }
+        }
         // Crossings with other trades, marked where they are.
-        let xings: Vec<&Crossing> = ug.crossings.iter().filter(|x| x.level.is_empty() || x.level.eq_ignore_ascii_case(level)).collect();
+        let xings: Vec<&Crossing> = if trade == "E" {
+            ug.crossings.iter().filter(|x| x.level.is_empty() || x.level.eq_ignore_ascii_case(level)).collect()
+        } else {
+            Vec::new()
+        };
         if !xings.is_empty() {
-            pen.layer("E-UG-XING", 6, None)?;
+            pen.layer(&lay("XING"), 6, None)?;
             for x in &xings {
                 let c = f.to(x.at);
                 pen.circle(c, 0.15)?;
@@ -1463,9 +2123,53 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         let stub_dims = pen.dims;
+        // The legend: the sheet's line types and symbols drawn, then the documents' own.
+        let mut y = paper.size[1] - 1.0;
+        pen.layer(&lay("ANNO"), 7, None)?;
+        pen.text([paper.side_x, y], "LEGEND", 0.16)?;
+        y -= 0.32;
+        let rows: [(&str, &str); 6] = [
+            ("COND", "CALLED BY THE DOCUMENTS (SOURCE IN THE NOTES)"),
+            ("PROP", "PROPOSED BY CADADDY - NOT CALLED; CONFIRM BY RFI"),
+            ("OTHR", "OTHER TRADE, FOR COORDINATION"),
+            ("STUB", "STUB-UP, DIMENSIONED FROM THE SLAB EDGE OR GRID"),
+            ("SLV", "SLEEVE THROUGH FOOTING, GRADE BEAM OR SLAB EDGE"),
+            ("BKGD", "WALLS (BACKGROUND)"),
+        ];
+        for (what, text) in rows {
+            let lt = match what {
+                "PROP" => Some("DASHED"),
+                "OTHR" => Some("DASHDOT"),
+                _ => None,
+            };
+            let color = match what {
+                "COND" => 1,
+                "PROP" => 30,
+                "STUB" => 2,
+                "SLV" => 4,
+                "BKGD" => 9,
+                _ => 8,
+            };
+            pen.layer(&lay(what), color, lt)?;
+            match what {
+                "STUB" => pen.circle([paper.side_x + 0.4, y + 0.05], 0.08)?,
+                "SLV" => pen.rect([paper.side_x + 0.34, y - 0.01], [paper.side_x + 0.46, y + 0.11])?,
+                _ => pen.line([paper.side_x, y + 0.05], [paper.side_x + 0.8, y + 0.05])?,
+            }
+            pen.layer(&lay("ANNO"), 7, None)?;
+            pen.text([paper.side_x + 1.0, y], text, 0.09)?;
+            y -= 0.2;
+        }
+        for lt in legend_types.iter().take(10) {
+            pen.text(
+                [paper.side_x, y],
+                &format!("{} (DOCUMENTS' LINE TYPE, {}): CALLED WHERE THE PLANS DRAW IT", lt.text.to_ascii_uppercase(), lt.sheet),
+                0.09,
+            )?;
+            y -= 0.2;
+        }
+        y -= 0.25;
         // The schedules and notes down the side.
-        pen.layer("E-UG-ANNO", 7, None)?;
-        let mut y = SHEET[1] - 1.0;
         let run_rows: Vec<Vec<String>> = runs
             .iter()
             .map(|r| {
@@ -1474,7 +2178,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                     r.from.clone(),
                     r.to.clone(),
                     format!("{}-{}", r.conduits, trade_size(r.size_in)),
-                    r.material.clone(),
+                    if r.material.is_empty() { r.system.clone() } else { r.material.clone() },
                     format!("{}\"", r2(r.depth_in)),
                     format!("{} ft", r2(r.length_ft).round()),
                     format!("{}°", r.bends_deg),
@@ -1485,7 +2189,7 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             .collect();
         let mut rows = vec![["RUN", "FROM", "TO", "QTY-SIZE", "MATERIAL", "DEPTH", "LENGTH", "BENDS", "ENCASED", "BASIS"].map(String::from).to_vec()];
         rows.extend(run_rows);
-        y = pen.table(SIDE_X, y, "UNDERGROUND RUN SCHEDULE", &[0.9, 0.8, 0.8, 0.8, 1.1, 0.6, 0.7, 0.6, 0.8, 1.1], &rows)?;
+        y = pen.table(paper.side_x, y, "UNDERGROUND RUN SCHEDULE", &[0.9, 0.8, 0.8, 0.8, 1.1, 0.6, 0.7, 0.6, 0.8, 1.1], &rows)?;
         let mut rows = vec![["STUB", "FEEDS", "FROM GRID X", "FROM GRID Y", "COORD (FT)", "HEIGHT", "TYPE"].map(String::from).to_vec()];
         let ox = ug.grids.x.first().map_or(0.0, |g| g.1);
         let oy = ug.grids.y.first().map_or(0.0, |g| g.1);
@@ -1500,14 +2204,22 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 format!("{} {}", mix_text(&st.mix), st.material),
             ]);
         }
-        y = pen.table(SIDE_X, y, "STUB-UP SCHEDULE", &[0.5, 0.7, 1.7, 1.8, 1.1, 0.7, 2.4], &rows)?;
-        let holds: Vec<&super::concrete::Hold> = ug.holds.iter().filter(|h| h.level.is_empty() || h.level.eq_ignore_ascii_case(level)).collect();
-        let mut rows = vec![["POUR", "ITEM", "KIND", "SIZE", "QTY / LENGTH", "STATUS"].map(String::from).to_vec()];
-        rows.extend(holds.iter().map(|h| {
-            let qty = if h.length_ft > 0.0 { format!("{} ft", r2(h.length_ft).round()) } else { h.count.to_string() };
-            vec![h.pour.clone(), h.element.clone(), h.kind.clone(), h.size.clone(), qty, h.status.to_uppercase()]
-        }));
-        y = pen.table(SIDE_X, y, "POUR HOLD POINTS - CONFIRM BEFORE CONCRETE", &[0.9, 1.6, 1.1, 0.9, 1.1, 1.2], &rows)?;
+        y = pen.table(paper.side_x, y, "STUB-UP SCHEDULE", &[0.5, 0.7, 1.7, 1.8, 1.1, 0.7, 2.4], &rows)?;
+        if !sleeves.is_empty() {
+            let mut rows = vec![["SLEEVE", "RUN", "THROUGH", "SIZE"].map(String::from).to_vec()];
+            rows.extend(sleeves.iter().map(|x| vec![x.tag.clone(), x.run.clone(), x.through.to_ascii_uppercase(), trade_size(x.size_in)]));
+            y = pen.table(paper.side_x, y, "SLEEVES - STRUCTURAL ENGINEER TO CONFIRM", &[0.8, 2.0, 3.0, 0.8], &rows)?;
+        }
+        let holds: Vec<&super::concrete::Hold> =
+            if trade == "E" { ug.holds.iter().filter(|h| h.level.is_empty() || h.level.eq_ignore_ascii_case(level)).collect() } else { Vec::new() };
+        if trade == "E" {
+            let mut rows = vec![["POUR", "ITEM", "KIND", "SIZE", "QTY / LENGTH", "STATUS"].map(String::from).to_vec()];
+            rows.extend(holds.iter().map(|h| {
+                let qty = if h.length_ft > 0.0 { format!("{} ft", r2(h.length_ft).round()) } else { h.count.to_string() };
+                vec![h.pour.clone(), h.element.clone(), h.kind.clone(), h.size.clone(), qty, h.status.to_uppercase()]
+            }));
+            y = pen.table(paper.side_x, y, "POUR HOLD POINTS - CONFIRM BEFORE CONCRETE", &[0.9, 1.6, 1.1, 0.9, 1.1, 1.2], &rows)?;
+        }
         if !xings.is_empty() {
             let mut rows = vec![["MARK", "ELECTRICAL", "OTHER TRADE", "WHERE", "VERTICAL CLEAR"].map(String::from).to_vec()];
             rows.extend(xings.iter().map(|x| {
@@ -1519,54 +2231,63 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
                     x.separation_in.map_or("VERIFY".into(), |v| format!("{}\"", r2(v))),
                 ]
             }));
-            y = pen.table(SIDE_X, y, "CROSSINGS - POTHOLE AND VERIFY BEFORE TRENCHING", &[0.6, 1.2, 3.6, 1.2, 1.2], &rows)?;
+            y = pen.table(paper.side_x, y, "CROSSINGS - POTHOLE AND VERIFY BEFORE TRENCHING", &[0.6, 1.2, 3.6, 1.2, 1.2], &rows)?;
         }
         let mut notes: Vec<String> = vec![GENERATED_NOTE.into()];
-        if runs.iter().any(|r| r.proposed) {
+        if runs.iter().any(|r| r.proposed) || (trade == "E" && !alternatives.is_empty()) {
             notes.push(
                 "DASHED RUNS ARE NOT CALLED BY THE DOCUMENTS: CADADDY PROPOSES THEM UNDER THE SLAB (SEE THE RUN SCHEDULE'S BASIS). CONFIRM BY RFI BEFORE THE POUR."
                     .into(),
             );
         }
+        // Every callout of the documents for this sheet, and what was done with it.
+        for c in sources.iter().filter(|c| c.level.is_empty() || c.level.eq_ignore_ascii_case(level)).take(20) {
+            notes.push(format!("CALLED ({}): {}", c.sheet, c.text.to_ascii_uppercase()));
+        }
         // Buried work the documents call for in notes whose place no plan shows.
         for c in called.iter().filter(|c| c.level.is_empty() || c.level.eq_ignore_ascii_case(level)).take(12) {
             notes.push(format!("CALLED, NOT LOCATED ON ANY PLAN ({}): {}", c.sheet, c.text.to_ascii_uppercase()));
         }
-        for r in ug.routes.iter().filter(|r| r.level.eq_ignore_ascii_case(level) && r.suggest == "under_slab") {
-            let saves = match (r.under.cost, r.over.cost) {
-                (Some(a), Some(b)) => format!(", saves about ${:.0}", b - a),
-                _ => String::new(),
-            };
-            notes.push(format!(
-                "ROUTE {} ({} TO {}) UNDER SLAB: {} FT VS {} FT OVERHEAD{saves}. ROUTING ONLY - SIZES PER FEEDER SCHEDULE.",
-                r.feeder,
-                r.from,
-                r.to,
-                r2(r.under.length_ft).round(),
-                r2(r.over.length_ft).round()
-            ));
-        }
-        for fd in ug.findings.iter().filter(|fd| fd.severity == "error") {
-            notes.push(format!("{}: {} - RFI BEFORE THE SLAB.", fd.about.to_uppercase(), fd.message.to_uppercase()));
+        if trade == "E" {
+            for r in ug.routes.iter().filter(|r| r.level.eq_ignore_ascii_case(level) && r.suggest == "under_slab") {
+                let saves = match (r.under.cost, r.over.cost) {
+                    (Some(a), Some(b)) => format!(", saves about ${:.0}", b - a),
+                    _ => String::new(),
+                };
+                notes.push(format!(
+                    "ROUTE {} ({} TO {}) UNDER SLAB: {} FT VS {} FT OVERHEAD{saves}. ROUTING ONLY - SIZES PER FEEDER SCHEDULE.",
+                    r.feeder,
+                    r.from,
+                    r.to,
+                    r2(r.under.length_ft).round(),
+                    r2(r.over.length_ft).round()
+                ));
+            }
+            for fd in ug.findings.iter().filter(|fd| fd.severity == "error") {
+                notes.push(format!("{}: {} - RFI BEFORE THE SLAB.", fd.about.to_uppercase(), fd.message.to_uppercase()));
+            }
+            for fd in ug.findings.iter().filter(|fd| fd.severity == "review") {
+                notes.push(format!("{}: {} - REVIEW WITH THE ROUTING RFI.", fd.about.to_uppercase(), fd.message.to_uppercase()));
+            }
         }
         notes.push("VERIFY ALL STUB-UP LOCATIONS AGAINST EQUIPMENT SUBMITTALS BEFORE THE POUR.".into());
-        pen.text([SIDE_X, y], "NOTES", 0.16)?;
+        pen.text([paper.side_x, y], "NOTES", 0.16)?;
         let mut ny = y - 0.3;
         // The notes stop above the trench sections.
-        let floor = SECTION_BOX[1] + SECTION_BOX[3] + 0.3;
-        'notes: for (n, note) in notes.iter().enumerate().take(30) {
+        let floor = paper.section[1] + paper.section[3] + 0.3;
+        'notes: for (n, note) in notes.iter().enumerate().take(40) {
             for (j, line) in wrap(&format!("{}. {note}", n + 1), NOTE_CHARS).iter().enumerate() {
                 if ny < floor {
-                    pen.text([SIDE_X, ny], "... more in ugsheets.check", 0.08)?;
+                    pen.text([paper.side_x, ny], "... more in ugsheets.check", 0.08)?;
                     break 'notes;
                 }
-                pen.text([SIDE_X + if j == 0 { 0.0 } else { 0.2 }, ny], line, 0.08)?;
+                pen.text([paper.side_x + if j == 0 { 0.0 } else { 0.2 }, ny], line, 0.08)?;
                 ny -= 0.16;
             }
             ny -= 0.06;
         }
         // Typical trench sections: the services' and the under-slab runs'.
-        pen.layer("E-UG-SECT", 7, None)?;
+        pen.layer(&lay("SECT"), 7, None)?;
         let mut sections = 0usize;
         for (kind, title, datum) in
             [("service", "TYPICAL TRENCH SECTION - SERVICE", "GRADE"), ("run", "TYPICAL TRENCH SECTION - UNDER SLAB", "FINISHED FLOOR")]
@@ -1575,14 +2296,51 @@ fn run_build_inner(s: &mut Session, p: &Value) -> Result<Value> {
             if of.is_empty() {
                 continue;
             }
-            let x0 = SECTION_BOX[0] + sections as f64 * (SECTION_BOX[2] + 0.2);
-            pen.section(x0, &of, title, datum)?;
+            let x0 = paper.section[0] + sections as f64 * (paper.section[2] + 0.2);
+            pen.section(x0, &of, title, datum, paper.section)?;
             sections += 1;
         }
+        // Registered to its level like the set's sheets: a sheet point is `(q - origin) / k + min`
+        // on the level's plan.
+        if f.k.is_finite() && f.k > 0.0 {
+            let reference = sp
+                .sheets
+                .iter()
+                .filter(|l| l.level.as_deref().is_some_and(|v| v.eq_ignore_ascii_case(level)))
+                .find_map(|l| l.registration.as_ref().map(|r| r.reference.clone()))
+                .unwrap_or_else(|| number.clone());
+            links.push(cadaddy_walk3d::levels::SheetLink {
+                number: number.clone(),
+                title: title.clone(),
+                discipline: Some(trade.to_string()),
+                level: Some(level.clone()),
+                source: format!("generated: layout:{layout}"),
+                rect: None,
+                levels: Vec::new(),
+                registration: Some(cadaddy_walk3d::levels::SheetRegistration {
+                    reference,
+                    method: "generated".into(),
+                    a: 1.0 / f.k,
+                    b: 0.0,
+                    tx: f.min[0] - f.origin[0] / f.k,
+                    ty: f.min[1] - f.origin[1] / f.k,
+                    matched: 0,
+                    residual: None,
+                }),
+                view: None,
+            });
+        }
         sheets.push(json!({
-            "layout": layout, "number": number, "title": title, "level": level, "runs": runs.len(), "stubups": stubs.len(), "dimensions": stub_dims,
-            "section_dimensions": pen.dims - stub_dims, "crossings": xings.len(), "sections": sections, "replaced": existing.is_some(), "scale": f.scale,
+            "layout": layout, "number": number, "title": title, "trade": trade, "level": level, "runs": runs.len(), "run_labels": run_labels, "labels_skipped": labels.skipped, "stubups": stubs.len(), "dimensions": stub_dims,
+            "section_dimensions": pen.dims - stub_dims, "crossings": xings.len(), "sleeves": sleeves.len(), "alternatives": if trade == "E" { alternatives.len() } else { 0 },
+            "sources": sources.len(), "sections": sections, "replaced": existing.is_some(), "scale": f.scale, "registered": !links.is_empty(),
         }));
+    }
+    // The sheets in the set's list, each registered to its level (built again: replaced).
+    if !links.is_empty() {
+        sp.sheets.retain(|l| !(l.source.starts_with("generated:") && links.iter().any(|n| n.number.eq_ignore_ascii_case(&l.number))));
+        sp.sheets.extend(links);
+        s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     let mut files = Vec::new();
     if let Some(path) = str_param(p, "pdf").map(str::trim).filter(|x| !x.is_empty()) {
@@ -1687,5 +2445,106 @@ mod tests {
         assert_eq!(seg_gap([0.0, 0.0], [10.0, 0.0], [12.0, -5.0], [12.0, 5.0]), (2.0, [10.0, 0.0]));
         // Above, below, overlapping.
         assert_eq!((separation(22.5, 1.5, 48.0, 6.0), separation(48.0, 6.0, 22.5, 1.5), separation(22.5, 4.0, 24.0, 2.0)), (24.0, 24.0, 0.0));
+    }
+
+    fn buried(id: &str, points: Vec<[f64; 2]>, depth_in: f64, proposed: bool) -> Buried {
+        let length_ft = points.windows(2).map(|w| dist(w[0], w[1])).sum::<f64>() / 12.0;
+        Buried {
+            id: id.into(),
+            kind: "run",
+            trade: "E",
+            system: "E-UG".into(),
+            level: "Level 1".into(),
+            points,
+            size_in: 2.0,
+            conduits: 1,
+            material: "PVC Sch 40".into(),
+            depth_in,
+            length_ft,
+            from: String::new(),
+            to: String::new(),
+            bends_deg: 0.0,
+            encased: false,
+            proposed,
+            basis: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_proposed_route_too_close_to_a_drain_is_for_review_or_pothole_and_called_work_is_an_error() {
+        // A 4" drain 24" below the floor, crossed by a called conduit and by a proposed one, both
+        // just above it (3" clear), and a proposed one well clear (pothole warning).
+        let drain = Other {
+            id: "P1".into(),
+            label: "4\" SAN @ 24\" BFF".into(),
+            level: "Level 1".into(),
+            points: vec![[0.0, 120.0], [600.0, 120.0]],
+            size_in: 4.0,
+            depth_in: Some(24.0),
+            depth_by_rule: false,
+        };
+        let runs = vec![
+            buried("R1", vec![[100.0, 0.0], [100.0, 240.0]], 19.0, false),
+            buried("R2", vec![[300.0, 0.0], [300.0, 240.0]], 19.0, true),
+            buried("R3", vec![[500.0, 0.0], [500.0, 240.0]], 48.0, true),
+        ];
+        let mut findings = Vec::new();
+        let xs = crossings(&runs, std::slice::from_ref(&drain), 12.0, 12.0, &mut findings);
+        assert_eq!(xs.len(), 3);
+        let sev: Vec<(&str, &str)> = findings.iter().map(|f| (f.check, f.severity)).collect();
+        assert_eq!(sev, vec![("crossing", "error"), ("crossing", "review"), ("crossing", "warning")]);
+        assert!(findings[1].message.starts_with("proposed R2 crosses P1"), "{}", findings[1].message);
+        assert!(findings[1].fix.contains("if the engineer accepts it"), "{}", findings[1].fix);
+        assert!(!findings[0].message.starts_with("proposed"));
+        // The same drain at a rule's depth (no invert shown): the proposed route too close is to
+        // pothole and confirm, a warning; the called conduit too close is still an error.
+        let ruled = Other { depth_by_rule: true, ..drain };
+        let mut findings = Vec::new();
+        crossings(&runs, &[ruled], 12.0, 12.0, &mut findings);
+        let sev: Vec<&str> = findings.iter().map(|f| f.severity).collect();
+        assert_eq!(sev, vec!["error", "warning", "warning"]);
+        assert!(findings[1].fix.starts_with("drain depth by rule, no invert shown: pothole and confirm"), "{}", findings[1].fix);
+        assert!(findings[1].message.ends_with("(its depth by rule, no invert shown)"), "{}", findings[1].message);
+        assert!(findings[0].fix.starts_with("keep at least"), "{}", findings[0].fix);
+    }
+
+    #[test]
+    fn runs_are_labelled_once_per_chain_and_a_label_that_would_overlap_is_skipped() {
+        // Three pieces end to end (one sloping 24" to 30"), a branch of another size off their
+        // middle, a proposed run sharing an end (another kind), and a far run on its own.
+        let mut b = buried("B", vec![[100.0, 0.0], [100.0, 100.0]], 24.0, false);
+        b.size_in = 1.0;
+        let runs = [
+            buried("A1", vec![[0.0, 0.0], [100.0, 0.0]], 24.0, false),
+            buried("A2", vec![[100.0, 0.0], [300.0, 0.0]], 27.0, false),
+            buried("A3", vec![[300.0, 0.0], [350.0, 0.0]], 30.0, false),
+            b,
+            buried("P", vec![[350.0, 0.0], [350.0, 80.0]], 24.0, true),
+            buried("F", vec![[0.0, 900.0], [60.0, 900.0]], 24.0, false),
+        ];
+        let refs: Vec<&Buried> = runs.iter().collect();
+        let chains = run_chains(&refs, 6.0);
+        let ids: Vec<Vec<&str>> = chains.iter().map(|c| c.iter().map(|i| refs[*i].id.as_str()).collect()).collect();
+        // The longest chain first, its longest run first.
+        assert_eq!(ids, vec![vec!["A2", "A1", "A3"], vec!["B"], vec!["P"], vec!["F"]]);
+        let label = chain_label(&refs, &chains[0]).unwrap_or_default();
+        assert_eq!(label, "A2 1-2\" PVC Sch 40 @ 24-30\" BFF (+2 RUNS)");
+        assert_eq!(chain_label(&refs, &chains[2]).unwrap_or_default(), "P 1-2\" PVC Sch 40 @ 24\" BFF (PROPOSED)");
+        // Ends a little off still join; far ones don't; NaN joins nothing and doesn't panic.
+        let near = [buried("X", vec![[0.0, 0.0], [10.0, 0.0]], 24.0, false), buried("Y", vec![[13.0, 0.0], [30.0, 0.0]], 24.0, false)];
+        let nr: Vec<&Buried> = near.iter().collect();
+        assert_eq!(run_chains(&nr, 6.0).len(), 1);
+        assert_eq!(run_chains(&nr, 1.0).len(), 2);
+        let nan = [buried("N", vec![[f64::NAN, 0.0], [10.0, 0.0]], 24.0, false)];
+        assert_eq!(run_chains(&nan.iter().collect::<Vec<_>>(), 6.0).len(), 1);
+        // Overlap: a second label on the first's spot is skipped, one beside it fits.
+        let mut boxes = LabelBoxes::default();
+        boxes.take([0.0, 0.0], "DP", 0.1);
+        assert!(!boxes.fits([0.05, 0.02], "R1 1-2\" PVC", 0.08));
+        assert!(boxes.fits([0.5, 0.0], "R1 1-2\" PVC", 0.08));
+        assert!(!boxes.fits([0.6, 0.05], "R2", 0.08));
+        assert!(boxes.fits([0.6, 0.2], "R2", 0.08));
+        assert!(!boxes.fits([f64::NAN, 0.0], "R3", 0.08));
+        assert_eq!(boxes.skipped, 3);
     }
 }

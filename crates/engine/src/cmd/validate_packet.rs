@@ -143,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -1753,7 +1753,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room; G-PRODUCT: each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section, `unsure` when the model has no product data; G-PRODUCT-CODE: each receptacle's code-required features where it is: tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n- `objects.json` elements: a product's `product_record` (what the specification requires, what the submittal approved, what it resolves to) and its `product_checks` (G-PRODUCT, G-PRODUCT-CODE); the specification pages the records cite are among the pictures (`manifest.json` `specs`).\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
     if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
@@ -3021,6 +3021,82 @@ fn applied_submittals(d: &Drawing, kinds: &Kinds) -> BTreeMap<String, Applied> {
     out
 }
 
+/// Specification pages a packet carries, at most.
+const MAX_SPEC_PAGES: usize = 8;
+
+/// A specification page a packet shows: the section's file and page, and the product it is for.
+struct SpecPage {
+    file: String,
+    section: String,
+    page: u32,
+    path: std::path::PathBuf,
+    product: String,
+    kinds: Vec<String>,
+}
+
+/// The digits of a section number or a file name's start (`26 27 26` → `262726`).
+fn section_digits(s: &str) -> String {
+    s.chars().take_while(|c| c.is_ascii_digit() || c.is_whitespace() || matches!(c, '.' | '-' | '_')).filter(char::is_ascii_digit).take(12).collect()
+}
+
+/// The file among `files` named for section `section` (its name starts with the section's
+/// number, spaced or not).
+fn spec_file<'f>(files: &'f [String], section: &str) -> Option<&'f String> {
+    let want = section_digits(section);
+    if want.len() < 5 {
+        return None;
+    }
+    files.iter().take(MAX_FOLDER_FILES).find(|f| {
+        let stem = std::path::Path::new(f.as_str()).file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+        let have = section_digits(stem.trim_start_matches(|c: char| !c.is_ascii_digit()));
+        have.len() >= want.len() && have.starts_with(&want)
+    })
+}
+
+/// A page number from a page as a record gives it: a footer (`262726 - 2` → 2) or a number.
+fn footer_page(page: &str) -> Option<u32> {
+    let t = page.trim();
+    let last = t.rsplit(['-', ' ', '.']).find(|x| !x.trim().is_empty()).unwrap_or(t).trim();
+    last.parse::<u32>().ok().filter(|n| *n >= 1 && *n <= 5_000)
+}
+
+/// A specification page as a picture: cut to its product's paragraph (the band from a line
+/// naming the product down a third of the page) when a text on it names the product, else whole.
+fn spec_png(path: &std::path::Path, page: u32, product: &str) -> std::result::Result<(Vec<u8>, bool), String> {
+    let hook = super::file::io().and_then(|h| h.read_pdf).ok_or_else(|| "PDF pages can't be read in this build".to_string())?;
+    let bytes = crate::readfile::read(path).map_err(|e| e.to_string())?;
+    if bytes.len() > 200 * 1024 * 1024 {
+        return Err("the file is over 200 MB".into());
+    }
+    let (pd, _) = hook(&bytes, &json!({"page": page}))?;
+    let ext = pd.extents(&Space::Model);
+    if ext.is_empty() {
+        return Err("the page is empty".into());
+    }
+    let (w, h) = (ext.width().max(1e-9), ext.height().max(1e-9));
+    // The product's heading words (`TOGGLE SWITCHES` of `TOGGLE SWITCHES: Switches, 20 A`).
+    let head = product.split([':', ',']).next().unwrap_or_default().trim().to_ascii_uppercase();
+    let at = (head.len() >= 4)
+        .then(|| {
+            pd.model.iter().take(MAX_ENTITIES).find_map(|e| match &e.kind {
+                EntityKind::Text(t) if t.value.to_ascii_uppercase().contains(&head) => Some(t.insert.y),
+                EntityKind::MText(t) if t.contents.to_ascii_uppercase().contains(&head) => Some(t.insert.y),
+                _ => None,
+            })
+        })
+        .flatten()
+        .filter(|y| y.is_finite());
+    let rect = match at {
+        Some(y) => [ext.min.x, (y - h / 3.0).max(ext.min.y), ext.max.x, (y + h / 30.0).min(ext.max.y)],
+        None => [ext.min.x, ext.min.y, ext.max.x, ext.max.y],
+    };
+    let (rw, rh) = ((rect[2] - rect[0]).max(1e-9), (rect[3] - rect[1]).max(1e-9));
+    let scale = f64::from(SUBMITTAL_PX) / w.max(h);
+    let px = [((rw * scale).ceil() as u32).clamp(16, SUBMITTAL_PX), ((rh * scale).ceil() as u32).clamp(16, SUBMITTAL_PX)];
+    let png = render_drawing(&pd, rect, px).ok_or_else(|| "the page couldn't be drawn".to_string())?;
+    Ok((png, at.is_some()))
+}
+
 // ---------------------------------------------------------------- the packet
 
 fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
@@ -3076,6 +3152,22 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => None,
         Some(Value::String(x)) if !x.trim().is_empty() && x.len() <= 4096 => Some(x.trim().to_string()),
         Some(_) => return Err(bad(CMD, "`prints` is the folder (or PDF) the job's prints are in")),
+    };
+    let given_specs: Vec<String> = match p.get("specs") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::String(x)) if !x.trim().is_empty() && x.len() <= 4096 => vec![x.trim().to_string()],
+        Some(Value::Array(a)) => a
+            .iter()
+            .take(50)
+            .map(|x| {
+                x.as_str()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty() && t.len() <= 4096)
+                    .map(str::to_string)
+                    .ok_or_else(|| bad(CMD, "`specs` is a list of specification files or folders"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => return Err(bad(CMD, "`specs` is a list of specification files or folders")),
     };
     let (all_rules, rejected) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let only_rules: Option<BTreeSet<String>> = match p.get("rules") {
@@ -3140,8 +3232,14 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // Each product's record and its G-PRODUCT / G-PRODUCT-CODE verdicts; the spec pages the
+    // records cite (for the pictures).
+    let spec_pages = match here.objects.get_mut("elements") {
+        Some(Value::Array(els)) => super::validate_product::annotate(d, els, &pre.findings),
+        _ => Vec::new(),
+    };
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes). A `conflict` verdict: the documents disagree (both are cited in `documents`)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -3450,6 +3548,40 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             .push(json!({"submittal": name, "pages": pages, "for": why.iter().take(20).collect::<Vec<_>>(), "applied_to": on.0, "marks": marks}));
     }
 
+    // The specification pages the area's product records cite: a section's own file (named for
+    // its number), at the page its footer gives.
+    let mut spec_paths: Vec<String> = given_specs.clone();
+    spec_paths.extend(job.as_ref().map(|j| j.specs.iter().chain(j.specs_found.iter().flatten()).cloned().collect::<Vec<_>>()).unwrap_or_default());
+    let spec_files = if spec_pages.is_empty() || spec_paths.is_empty() { Vec::new() } else { super::products::spec_files(&spec_paths, &[]) };
+    let mut specs: Vec<SpecPage> = Vec::new();
+    for (section, page, product, kinds) in spec_pages.iter().take(MAX_SPEC_PAGES) {
+        let what = format!("spec {section} p.{page}");
+        let file = spec_file(&spec_files, section);
+        let n = footer_page(page);
+        match (file, n) {
+            (Some(path), Some(n)) => specs.push(SpecPage {
+                file: format!("prints/p{:02}_spec_{}_p{n}.png", specs.len() + 1, safe(section)),
+                section: section.clone(),
+                page: n,
+                path: std::path::PathBuf::from(path),
+                product: product.clone(),
+                kinds: kinds.iter().cloned().collect(),
+            }),
+            (None, _) => left_out.push((
+                what,
+                if spec_paths.is_empty() {
+                    "the job keeps no specification files".to_string()
+                } else {
+                    format!("no file of section {section} among the job's specifications (a project manual's pages aren't located)")
+                },
+            )),
+            (Some(_), None) => left_out.push((what, "its page isn't a page number".to_string())),
+        }
+    }
+    for x in spec_pages.iter().skip(MAX_SPEC_PAGES) {
+        left_out.push((format!("spec {} p.{}", x.0, x.1), format!("over the packet's {MAX_SPEC_PAGES} specification pages")));
+    }
+
     // The cap: print crops first (each followed by its overlay), then submittals, then the rest.
     let mut order: Vec<(u8, usize)> = Vec::new();
     // A level's sheet not placed on its plan, shown whole, that no element here was read from:
@@ -3470,6 +3602,9 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     for k in 0..subs.len() {
         order.push((2, k));
     }
+    for k in 0..specs.len() {
+        order.push((3, k));
+    }
     for (j, m) in model_imgs.iter().enumerate().filter(|(_, m)| m.over.is_none() && m.kind != "plan") {
         let _ = m;
         order.push((1, j));
@@ -3482,6 +3617,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         let f = match t {
             0 => crops.get(*i).map(|c| c.file.clone()),
             1 => model_imgs.get(*i).map(|m| m.file.clone()),
+            3 => specs.get(*i).map(|x| x.file.clone()),
             _ => subs.get(*i).map(|x| x.0.clone()),
         };
         if let Some(f) = f {
@@ -3492,6 +3628,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let model_imgs_kept: Vec<&ModelImage> = model_imgs.iter().enumerate().filter(|(j, _)| kept.contains(&(1, *j))).map(|(_, m)| m).collect();
     let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> =
         subs.iter().enumerate().filter(|(k, _)| kept.contains(&(2, *k))).map(|(_, x)| x).collect();
+    let specs: Vec<&SpecPage> = specs.iter().enumerate().filter(|(k, _)| kept.contains(&(3, *k))).map(|(_, x)| x).collect();
 
     // Every file is checked before any is written.
     let dir = std::path::Path::new(&out_dir);
@@ -3500,6 +3637,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     files.extend(crops.iter().map(|(_, c)| full(&c.file)));
     files.extend(model_imgs_kept.iter().map(|m| full(&m.file)));
     files.extend(subs.iter().map(|x| full(&x.0)));
+    files.extend(specs.iter().map(|x| full(&x.file)));
     for f in &files {
         super::exchange::guard_output(s, CMD, p, f)?;
     }
@@ -3655,6 +3793,20 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             Err(e) => left_out.push((file.clone(), format!("submittal {sb}: {e}"))),
         }
     }
+    let mut specs_out: Vec<Value> = Vec::new();
+    for sp_page in &specs {
+        match spec_png(&sp_page.path, sp_page.page, &sp_page.product) {
+            Ok((b, cropped)) => {
+                if write_png(&sp_page.file, Some(b), &mut left_out)? {
+                    specs_out.push(json!({
+                        "file": sp_page.file, "section": sp_page.section, "page": sp_page.page, "product": sp_page.product,
+                        "for": sp_page.kinds, "cropped_to_product": cropped,
+                    }));
+                }
+            }
+            Err(e) => left_out.push((sp_page.file.clone(), format!("spec {} p.{}: {e}", sp_page.section, sp_page.page))),
+        }
+    }
 
     // The texts.
     let kept_crops: Vec<Crop> = crops.iter().map(|(_, c)| (*c).clone()).filter(|c| prints_out.iter().any(|j| j["file"] == json!(c.file))).collect();
@@ -3684,6 +3836,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "model": model_out,
         "submittals": subs_out,
         "submittals_unlisted": unlisted_json,
+        "specs": specs_out,
         "similarity": similarity_json,
         "objects": "objects.json",
         "rules": "rules.json",
@@ -3694,7 +3847,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             "walls": here.counts.get("walls"),
             "openings": here.counts.get("openings"),
             "rules": rules_on.len(),
-            "pictures": prints_out.len() + model_out.len() + subs_out.len(),
+            "pictures": prints_out.len() + model_out.len() + subs_out.len() + specs_out.len(),
         },
         "left_out": left_out.iter().map(|(w, y)| json!({"what": w, "why": y})).collect::<Vec<_>>(),
     });

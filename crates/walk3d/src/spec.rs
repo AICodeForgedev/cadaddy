@@ -1246,6 +1246,25 @@ pub struct Mep {
     /// height above the floor, in feet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevation_bands: Vec<ElevationBand>,
+    /// The inverts the plumbing plans print by their drains (`24" INVERT`): depths below the
+    /// finished floor the slab level's buried drains are sloped between.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inverts: Vec<MepInvert>,
+}
+
+/// An invert a plan prints by a drain: where (drawing units, as the runs), its level, and the
+/// depth of the pipe's invert below that level's finished floor.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepInvert {
+    pub level: String,
+    pub at: [f64; 2],
+    /// Feet below the finished floor (positive).
+    pub depth_ft: f64,
+    /// The note as printed.
+    pub text: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source_sheet: String,
 }
 
 /// The grounding electrode system, the bonds and the telecom grounding.
