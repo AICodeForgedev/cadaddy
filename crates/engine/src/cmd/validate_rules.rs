@@ -804,6 +804,41 @@ mod tests {
         }
     }
 
+    /// Kinds Validate round 2 found without a proper rule (Q6140): a wall luminaire gets the
+    /// luminaire and circuit rules, a thermostat its own rule beside host, height and present, a
+    /// fan coil unit the mechanical equipment rule and not the exhaust fan's.
+    #[test]
+    fn leftover_kinds_get_proper_rules() {
+        let rules = builtin().unwrap();
+        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        let lum = got("wall_luminaire");
+        for id in ["E-LUM", "E-CIRCUIT", "E-LUM-TYPE", "E-LUM-CONTROL", "E-LUM-COUNT", "G-HEIGHT", "G-PRESENT"] {
+            assert!(lum.contains(id), "wall_luminaire: {id} in {lum:?}");
+        }
+        assert!(!lum.iter().any(|r| r.starts_with("M-") || r.starts_with("P-")), "{lum:?}");
+        let ts = got("thermostat");
+        for id in ["M-TSTAT", "G-HOST", "G-HEIGHT", "G-PRESENT"] {
+            assert!(ts.contains(id), "thermostat: {id} in {ts:?}");
+        }
+        assert!(!ts.iter().any(|r| r.starts_with("E-")), "a thermostat is no electrical device: {ts:?}");
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(rule("M-TSTAT").trade, "mechanical");
+        for w in ["in the model", "wall", "height"] {
+            assert!(rule("M-TSTAT").check.contains(w), "{w}");
+        }
+        for k in ["fan_coil_unit", "Fan Coil Unit", "fcu"] {
+            let fcu = got(k);
+            assert!(fcu.contains("M-EQUIP") && !fcu.contains("M-EF"), "{k}: {fcu:?}");
+        }
+        // By its category too: a fan coil unit is written as unitary equipment, which M-EF doesn't name.
+        let cat = super::super::validate_kind::category_of_kind("fan_coil_unit");
+        assert_eq!(cat.as_deref(), Some("IfcUnitaryEquipment"));
+        assert!(!rule("M-EF").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        assert!(rule("M-EQUIP").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        // An exhaust fan is still M-EF's.
+        assert!(got("exhaust_fan").contains("M-EF") && !got("exhaust_fan").contains("M-EQUIP"));
+    }
+
     #[test]
     fn an_element_gets_a_rule_by_kind_category_or_mark() {
         let rules = builtin().unwrap();

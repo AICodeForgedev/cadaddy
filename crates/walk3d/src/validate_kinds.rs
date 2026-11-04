@@ -155,7 +155,14 @@ pub const KIND_FAMILIES: &[(&str, &[&str])] = &[
     ("ptac", &["pthp", "through_wall_unit", "ptac_unit", "ptac_sleeve"]),
     ("luminaire", &["light_fixture", "wall_luminaire", "downlight", "sconce"]),
     ("panel", &["panelboard", "load_center"]),
+    // A fan coil unit is mechanical equipment (Q6140), not a fan: its words hold `fan`, so it
+    // is named here to be read as itself.
+    ("fan_coil_unit", &["fan_coil", "fcu", "cassette_fan_coil", "vertical_fan_coil", "horizontal_fan_coil"]),
 ];
+
+/// The BIM category (IFC class) of a kind the job builds that no producer above tags, when its
+/// own words would read as another kind's (`fan_coil_unit` holds `fan`, but it is no IfcFan).
+pub const KIND_CATEGORIES: &[(&str, &str)] = &[("fan_coil_unit", "IfcUnitaryEquipment")];
 
 /// Kinds the PDF→BIM job builds that no producer above makes and no family holds (a rule may
 /// name them).
@@ -267,7 +274,11 @@ fn made(kind: &str, by: Producer) -> Option<Entity> {
 
 /// The IFC class an element of `kind` is written as, when its producer tags it.
 pub fn category_of(kind: &str) -> Option<String> {
-    let (k, by) = MODEL_KINDS.iter().find(|(k, _)| k.eq_ignore_ascii_case(kind.trim()))?;
+    let Some((k, by)) = MODEL_KINDS.iter().find(|(k, _)| k.eq_ignore_ascii_case(kind.trim())) else {
+        // A kind of the family table with a category of its own, or a member of one.
+        let n = norm(kind);
+        return KIND_CATEGORIES.iter().find(|(f, _)| in_family_at(&n, f, 0)).map(|(_, c)| c.to_string());
+    };
     made(k, *by).map(|e| crate::fourd::element_of(&e).class)
 }
 
@@ -332,6 +343,20 @@ mod tests {
         assert_eq!(category_of("exhaust_fan").as_deref(), Some("IfcFan"));
         assert_eq!(category_of("panel").as_deref(), Some("IfcElectricDistributionBoard"));
         assert_eq!(category_of("smoke_detector"), None);
+    }
+
+    #[test]
+    fn a_fan_coil_unit_is_mechanical_equipment_not_a_fan() {
+        assert_eq!(known_kind("fan_coil_unit").as_deref(), Some("fan_coil_unit"));
+        assert_eq!(known_kind("Fan Coil Unit").as_deref(), Some("fan_coil_unit"));
+        assert!(!kind_matches("fan", "fan_coil_unit") && !kind_matches("exhaust_fan", "fan_coil_unit"));
+        assert!(kind_matches("fan_coil_unit", "fcu") && kind_matches("fan_coil_unit", "vertical_fan_coil"));
+        assert_eq!(category_of("fan_coil_unit").as_deref(), Some("IfcUnitaryEquipment"));
+        assert_eq!(category_of("fcu").as_deref(), Some("IfcUnitaryEquipment"));
+        assert!(model_categories().contains("IfcUnitaryEquipment"));
+        // A fan is still a fan.
+        assert!(kind_matches("fan", "inline_fan"));
+        assert_eq!(category_of("fan").as_deref(), Some("IfcFan"));
     }
 
     #[test]
