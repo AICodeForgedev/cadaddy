@@ -2726,10 +2726,25 @@ fn plan_crops(
     // 1d. The print round each keynote marker in or by the area, and the keynote lists of the
     //     sheets that mark it.
     for k in keynotes {
+        // A gear sheet the spec has no link for (a schedule or diagram the job imported): its
+        // rectangle, as a link of its own.
+        let own = (!k.kind.starts_with("keynote")).then(|| SheetLink {
+            number: k.sheet.clone(),
+            title: k.shows.clone(),
+            discipline: None,
+            level: None,
+            source: "job".into(),
+            rect: Some(k.rect),
+            levels: Vec::new(),
+            registration: None,
+            view: None,
+        });
         let Some(l) = links
             .iter()
+            .copied()
             .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
-            .or_else(|| links.iter().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+            .or_else(|| links.iter().copied().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+            .or(own.as_ref())
         else {
             continue;
         };
@@ -3187,7 +3202,18 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     // its kinds bring in the gear rules.
     let mut gear_crops: Vec<super::validate_keynote::CropAsk> = Vec::new();
     let mut gear_pages: Vec<(String, String)> = Vec::new();
-    if let Some((gear_json, asks, pages, kinds)) = super::validate_gear::for_packet(d, &sp, &frame, &area, gear_docs.as_ref()) {
+    // The job's imported sheets that are no plan link (schedules, diagrams): number, kind, rectangle.
+    let regions: Vec<(String, String, [f64; 4])> = {
+        let mut seen: BTreeSet<String> = sp.sheets.iter().map(|l| l.number.to_ascii_uppercase()).collect();
+        job.as_ref()
+            .map(|j| j.sheet_regions.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| seen.insert(r.number.to_ascii_uppercase()))
+            .map(|r| (r.number.clone(), r.kind.clone(), r.rect))
+            .collect()
+    };
+    if let Some((gear_json, asks, pages, kinds)) = super::validate_gear::for_packet(d, &sp, &frame, &area, gear_docs.as_ref(), &regions) {
         let n = gear_json["gear"].as_array().map_or(0, Vec::len);
         here.objects["gear"] = gear_json;
         here.objects["counts"]["gear"] = json!(n);

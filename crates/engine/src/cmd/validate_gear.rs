@@ -416,24 +416,40 @@ pub(crate) fn working_space(
     room: Option<&str>,
 ) -> Space {
     let width_ft = (width_in / 12.0).max(2.0 * g.hw);
-    // Which face is the front: the one away from a wall behind the gear.
-    let near_wall = |sign: f64| -> f64 {
-        let face = g.at(0.0, sign * g.hd);
-        obstacles
-            .iter()
-            .filter(|o| o.z_in.is_none())
-            .map(|o| super::validate_packet::seg_dist(face, o.a, o.b).0 - o.half_ft)
-            .fold(f64::INFINITY, f64::min)
+    // The wall it stands on or is set in: the full-height wall along its width nearest its
+    // centre, within its depth and BACK_WALL_FT. Its front is the face farther from that wall's
+    // centreline; that wall line (every piece of it) is behind or round the gear, never in front.
+    let along = |o: &Obstacle| {
+        let d = sub(o.b, o.a);
+        let len = d[0].hypot(d[1]);
+        len > 1e-9 && (d[0] * g.u[1] - d[1] * g.u[0]).abs() / len < 0.1
     };
-    let (back_pos, back_neg) = (near_wall(1.0), near_wall(-1.0));
-    // The wall behind: the nearer face's, when it is near one (a face as near as the other is no
-    // back: the gear stands free, or in a niche).
-    let sides: Vec<(f64, &'static str)> = if back_pos <= BACK_WALL_FT && back_pos + 1e-3 < back_neg {
-        vec![(-1.0, "the face away from the wall behind it")]
-    } else if back_neg <= BACK_WALL_FT && back_neg + 1e-3 < back_pos {
-        vec![(1.0, "the face away from the wall behind it")]
-    } else {
-        vec![(1.0, "the clearer long face (no single wall behind it)"), (-1.0, "the clearer long face (no single wall behind it)")]
+    let host = obstacles
+        .iter()
+        .filter(|o| o.z_in.is_none() && along(o))
+        .map(|o| (o, super::validate_packet::seg_dist(g.c, o.a, o.b).0 - o.half_ft))
+        .filter(|(_, d)| *d <= g.hd + BACK_WALL_FT)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(o, _)| o);
+    // The distance of a point to the host wall's line (feet).
+    let off_line = |h: &Obstacle, p: [f64; 2]| {
+        let d = sub(h.b, h.a);
+        let len = d[0].hypot(d[1]).max(1e-12);
+        ((p[0] - h.a[0]) * d[1] - (p[1] - h.a[1]) * d[0]).abs() / len
+    };
+    let on_host_line = |o: &Obstacle| host.is_some_and(|h| along(o) && off_line(h, o.a) <= 1.0 / 12.0 && off_line(h, o.b) <= 1.0 / 12.0);
+    let sides: Vec<(f64, &'static str)> = match host {
+        Some(h) => {
+            let (pos, neg) = (off_line(h, g.at(0.0, g.hd)), off_line(h, g.at(0.0, -g.hd)));
+            if pos > neg + 1e-3 {
+                vec![(1.0, "the face away from the wall it is on")]
+            } else if neg > pos + 1e-3 {
+                vec![(-1.0, "the face away from the wall it is on")]
+            } else {
+                vec![(1.0, "the clearer long face (it sits centred in its wall)"), (-1.0, "the clearer long face (it sits centred in its wall)")]
+            }
+        }
+        None => vec![(1.0, "the clearer long face (no wall behind it)"), (-1.0, "the clearer long face (no wall behind it)")],
     };
     // The clear depth in front of one face over a band of its width.
     let clear = |sign: f64, s0: f64, s1: f64| -> (f64, Option<String>) {
@@ -449,7 +465,7 @@ pub(crate) fn working_space(
             [dot(d, u), dot(d, t_dir)]
         };
         for o in obstacles {
-            if o.z_in.is_some_and(|z| z[0] >= height_in || z[1] <= 0.0) {
+            if o.z_in.is_some_and(|z| z[0] >= height_in || z[1] <= 0.0) || on_host_line(o) {
                 continue;
             }
             let (a, b) = (local(o.a), local(o.b));
@@ -520,10 +536,14 @@ pub(crate) fn working_space(
         }));
     }
     let (depth_verdict, why) = match need_in {
-        None => (
-            if clear_in + 1e-6 < 36.0 { "fail" } else { "unsure" },
-            "the gear's voltage to ground isn't in its schedule or record: the depth it needs isn't known".to_string(),
+        None if clear_in + 1e-6 < 36.0 => (
+            "fail",
+            format!(
+                "{} in clear in front: short of the least depth any voltage needs (36 in); its voltage to ground isn't in its schedule or record",
+                r2(clear_in)
+            ),
         ),
+        None => ("unsure", "the gear's voltage to ground isn't in its schedule or record: the depth it needs isn't known".to_string()),
         Some([c1, _]) if clear_in + 1e-6 < c1 => ("fail", format!("{} in clear in front, {c1} in needed (condition 1)", r2(clear_in))),
         Some([c1, c3]) if clear_in + 1e-6 < c3 => (
             "unsure",
@@ -615,7 +635,16 @@ fn volts_to_ground(v: &str) -> Option<f64> {
 /// A piece of gear's voltage to ground and where it says so: its panel schedule's header, else
 /// its own record.
 fn gear_volts(sp: &BuildingSpec, e: &MepEquipment) -> Option<(f64, String)> {
-    if let Some(p) = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(e.tag.trim())) {
+    // Its own schedule, else the typical schedule its record names (`PANEL`: one schedule for
+    // every unit's panel).
+    let typical = e.properties.iter().find(|(k, _)| k.eq_ignore_ascii_case("PANEL")).map(|(_, v)| v.trim());
+    let schedule = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .find(|p| p.panel.trim().eq_ignore_ascii_case(e.tag.trim()))
+        .or_else(|| typical.and_then(|t| sp.mep.panel_schedules.iter().find(|p| !t.is_empty() && p.panel.trim().eq_ignore_ascii_case(t))));
+    if let Some(p) = schedule {
         for (k, v) in p.header.iter().take(100) {
             if k.to_ascii_lowercase().contains("volt")
                 && let Some(g) = volts_to_ground(v)
@@ -1270,7 +1299,7 @@ fn fill_checks(
             (None, Some(p), _) => (Some(p), "drawn in the submittal, as the build recorded it".into()),
             (None, None, Some(b)) => (
                 Some([(b[1] - 2.0 * margin[0]).max(0.0), (b[2] - margin[1]).max(0.0)]),
-                format!("derived: the box's {} W x {} D in less {} x {} in margins ({})", b[1], b[2], margin[0], margin[1], code.cite),
+                format!("derived: the box's {} W x {} D in less {} x {} in margins (coderules {})", b[1], b[2], margin[0], margin[1], code.id),
             ),
             (None, None, None) => (None, String::new()),
         };
@@ -1525,8 +1554,11 @@ fn carried(cx: &Ctx, space: Option<&Effective>, fill: Option<&Effective>, size: 
         let text = format!("{} {} {}", item.about, item.issue, item.assumed);
         let up = text.to_ascii_uppercase();
         let words: BTreeSet<&str> = up.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').filter(|w| !w.is_empty()).collect();
-        let named_tag = tags.iter().any(|t| words.contains(t.as_str()));
-        let gear_word = ["SWITCHBOARD", "SWITCHGEAR", "PANELBOARD", "FEEDER", "LUGS", "LUG", "GEAR"].iter().any(|w| words.contains(w));
+        // A tag counts alone when it can't be a word or a type letter (three characters or more).
+        let named_tag = tags.iter().filter(|t| t.chars().count() >= 3).any(|t| words.contains(t.as_str()));
+        let gear_word = ["SWITCHBOARD", "SWITCHGEAR", "PANELBOARD", "PANEL", "FEEDER", "FEEDERS", "LUGS", "LUG", "GEAR", "TRANSFORMER"]
+            .iter()
+            .any(|w| words.contains(w));
         if !(named_tag || gear_word) {
             continue;
         }
@@ -1596,6 +1628,7 @@ pub(crate) fn for_packet(
     frame: &Frame,
     area: &Area,
     docs: Option<&GearDocs>,
+    regions: &[(String, String, [f64; 4])],
 ) -> Option<(Value, Vec<super::validate_keynote::CropAsk>, Vec<(String, String)>, BTreeSet<String>)> {
     let (gear, _) = placed(d, sp, frame);
     let here: Vec<&Placed> = in_area(&gear, area).collect();
@@ -1605,7 +1638,10 @@ pub(crate) fn for_packet(
     let mut kinds: BTreeSet<String> = BTreeSet::new();
     let mut sheets: Vec<(String, &'static str, String)> = Vec::new();
     let mut pages: Vec<(String, String)> = Vec::new();
-    let numbers: Vec<&str> = sp.sheets.iter().map(|l| l.number.as_str()).filter(|n| !n.trim().is_empty()).collect();
+    // The sheets a packet can show: the spec's sheet links, and the job's other imported sheets
+    // (schedules and diagrams are no plan: the job keeps only their rectangles).
+    let numbers: Vec<&str> =
+        sp.sheets.iter().map(|l| l.number.as_str()).chain(regions.iter().map(|r| r.0.as_str())).filter(|n| !n.trim().is_empty()).collect();
     let mut want_sheet = |text: &str, kind: &'static str, why: String| {
         let words: BTreeSet<String> =
             text.to_ascii_uppercase().split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')')).map(str::to_string).collect();
@@ -1660,22 +1696,32 @@ pub(crate) fn for_packet(
             "feeders": feeders,
         }));
     }
-    // The riser or one-line diagrams.
-    for l in sp.sheets.iter().filter(|l| l.view.is_none() && riser_title(&l.title)).take(2) {
-        if !sheets.iter().any(|(s, _, _)| s.eq_ignore_ascii_case(&l.number)) && sheets.len() < MAX_GEAR_SHEETS {
-            sheets.insert(0, (l.number.clone(), "gear_riser", format!("{} {}", l.number, l.title)));
+    // The riser or one-line diagrams: a sheet titled so, or a job sheet of that kind.
+    let risers: Vec<(String, String)> = sp
+        .sheets
+        .iter()
+        .filter(|l| l.view.is_none() && riser_title(&l.title))
+        .map(|l| (l.number.clone(), format!("{} {}", l.number, l.title)))
+        .chain(regions.iter().filter(|r| riser_title(&r.1.replace('_', " "))).map(|r| (r.0.clone(), format!("{} ({})", r.0, r.1))))
+        .take(2)
+        .collect();
+    for (n, why) in risers {
+        if !sheets.iter().any(|(s, _, _)| s.eq_ignore_ascii_case(&n)) && sheets.len() < MAX_GEAR_SHEETS {
+            sheets.insert(0, (n, "gear_riser", why));
         }
     }
     let asks: Vec<super::validate_keynote::CropAsk> = sheets
         .iter()
         .filter_map(|(n, kind, why)| {
-            let l = sp
+            let link = sp
                 .sheets
                 .iter()
                 .find(|l| l.number.eq_ignore_ascii_case(n) && l.view.is_none())
-                .or_else(|| sp.sheets.iter().find(|l| l.number.eq_ignore_ascii_case(n)))?;
-            let r = l.rect.filter(|r| r.iter().all(|v| v.is_finite()))?;
-            Some(super::validate_keynote::CropAsk { sheet: l.number.clone(), kind, rect: super::validate_packet::norm_rect(r), shows: why.clone() })
+                .or_else(|| sp.sheets.iter().find(|l| l.number.eq_ignore_ascii_case(n)))
+                .and_then(|l| l.rect.map(|r| (l.number.clone(), r)));
+            let (number, r) = link.or_else(|| regions.iter().find(|r| r.0.eq_ignore_ascii_case(n)).map(|r| (r.0.clone(), r.2)))?;
+            let r = Some(r).filter(|r| r.iter().all(|v| v.is_finite()))?;
+            Some(super::validate_keynote::CropAsk { sheet: number, kind, rect: super::validate_packet::norm_rect(r), shows: why.clone() })
         })
         .collect();
     let v = json!({
@@ -1738,6 +1784,19 @@ mod tests {
         // The voltage not known: never a pass.
         let ws = working_space(&panel(), None, 30.0, 78.0, &room(8.0), &[], None);
         assert_eq!(ws.verdict, "unsure", "{ws:?}");
+    }
+
+    #[test]
+    fn a_recessed_panel_is_measured_from_its_face_not_against_its_own_wall() {
+        // Set in the south wall (y -0.5..0), its front flush with the face, 4 in deep.
+        let recessed = Obb { c: [5.0, -1.0 / 6.0], u: [1.0, 0.0], hw: 7.0 / 12.0, hd: 1.0 / 6.0 };
+        let mut obs = room(8.0);
+        // The wall in pieces either side of it, on the same line.
+        obs.push(wall("S2", [-1.0, -0.25], [4.0, -0.25], 6.0));
+        let ws = working_space(&recessed, Some([36.0, 36.0]), 30.0, 78.0, &obs, &[], None);
+        assert_eq!(ws.verdict, "pass", "{ws:?}");
+        assert!((ws.clear_in - 96.0).abs() < 0.6, "{ws:?}");
+        assert_eq!(ws.front, "the face away from the wall it is on", "{ws:?}");
     }
 
     #[test]
