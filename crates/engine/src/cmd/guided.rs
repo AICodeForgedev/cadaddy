@@ -2593,7 +2593,16 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 .min_by(|a, b| a.0.at.dist(at).total_cmp(&b.0.at.dist(at)))
                 .map(|(_, m)| m)
         };
+        // A fire alarm symbol's subscript (a small `R` at an `S`'s lower right: a resident room's
+        // smoke detector with sounder base) is part of its mark, not a device of its own: the
+        // import may hang the letter on another symbol nearby.
+        let (subscript_of, compound) = if fire_alarm_sheet { fire_alarm_subscripts(syms) } else { Default::default() };
         for (tag, at, h, tag_at) in syms {
+            if subscript_of.contains(h) {
+                *c.not_device.entry("a fire alarm symbol's subscript (part of its mark)").or_default() += 1;
+                continue;
+            }
+            let tag = compound.get(h).unwrap_or(tag);
             // (On an electrical plan only: another trade's tags read like circuits, `P-3`. And a
             // luminaire's mark only, one the lighting submittals list: a note by a receptacle,
             // `HOR`, is no type.)
@@ -2677,19 +2686,24 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 *c.not_device.entry("not a device (answered)").or_default() += 1;
                 c.fates.push((h.0, MarkFate::not_object("answered: not a device")));
             } else {
-                let verdict = match device_types::tag_verdict_listed(tag, &listed, !c.legend_types.is_empty(), learned, &sheet_numbers) {
-                    // A fire alarm plan's marks are its devices, listed or not: the sheet says
-                    // what they are.
-                    TagVerdict::Unlisted(t) if fire_alarm_sheet => TagVerdict::Device(t),
-                    // On an electrical plan a mechanical equipment's tag by its number (`HP` over
-                    // `3`, not a room's name by its room number) is that equipment's connection.
-                    TagVerdict::Unlisted(t)
-                        if electrical(&sheet)
-                            && equipment_of(&t, texts.get(g).map_or(&[][..], Vec::as_slice), *tag_at).is_some_and(|e| e.contains('-')) =>
-                    {
-                        TagVerdict::Device(t)
+                // A mark with its subscript is the device its base mark says.
+                let verdict = if compound.contains_key(h) {
+                    TagVerdict::Device(tag.clone())
+                } else {
+                    match device_types::tag_verdict_listed(tag, &listed, !c.legend_types.is_empty(), learned, &sheet_numbers) {
+                        // A fire alarm plan's marks are its devices, listed or not: the sheet says
+                        // what they are.
+                        TagVerdict::Unlisted(t) if fire_alarm_sheet => TagVerdict::Device(t),
+                        // On an electrical plan a mechanical equipment's tag by its number (`HP` over
+                        // `3`, not a room's name by its room number) is that equipment's connection.
+                        TagVerdict::Unlisted(t)
+                            if electrical(&sheet)
+                                && equipment_of(&t, texts.get(g).map_or(&[][..], Vec::as_slice), *tag_at).is_some_and(|e| e.contains('-')) =>
+                        {
+                            TagVerdict::Device(t)
+                        }
+                        v => v,
                     }
-                    v => v,
                 };
                 match verdict {
                     // A sheet of no level (uncertain, not answered) or on the site datum is a
@@ -4478,6 +4492,9 @@ fn bim_step(s: &mut Session, job: &GuidedJob, step: &str, started: web_time::Ins
 
 fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     job.mark_fates.clear();
+    // A general note's panelboard height to top (`PANELBOARDS 6'-6" AFF TO TOP`), for the panels
+    // once their properties are filled.
+    let mut panel_top: Option<(f64, String)> = None;
     // Where a sheet point goes on its level's plan: made once (its view fits are the slow part)
     // for the MEP and the devices both.
     let mut placer: Option<Box<dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>> = None;
@@ -5209,10 +5226,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // (What a unit's own plans show: its stamped tags; and plumbing, which its plumbing
                 // plans give. A corridor's sconce by the unit's door is the corridor's.)
                 let mut own: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                // The panels the unit's own devices are on (its load center).
+                let mut fed: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
                 for dv in &stamped {
                     own.entry(dv.room.clone()).or_default().insert(dv.tag.trim().to_ascii_uppercase());
+                    if let Some(p) = super::propfill::panel_of(&dv.circuit) {
+                        fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
+                    }
                 }
-                let booked = book_into_units(&mut out, &footprints, &own);
+                let booked = book_into_units(&mut out, &footprints, &own, &fed);
                 if booked > 0 {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
@@ -5505,7 +5527,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 // The set's typical mounting heights (a general note: "DEVICE MOUNTED HEIGHTS (UNO):
                 // TOGGLE SWITCH 4'-0\" AFF TO TOP…") onto each device of those kinds with none of its own.
-                let typical = typical_mounting_heights(&electrical_pages(s.doc()?, job));
+                let pages = electrical_pages(s.doc()?, job);
+                // The fire alarm symbol list (SYMBOL, DESCRIPTION, MOUNTING) onto the fire alarm
+                // devices: what each mark is, and its ceiling or its height.
+                let rows = symbol_list_rows(&pages);
+                if !rows.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = apply_symbol_list(&mut sp, &rows);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                    }
+                    progress_line(&format!(
+                        "  fire alarm symbol list: {} marks ({}); {n} devices named",
+                        rows.len(),
+                        rows.iter().map(|r| r.mark.as_str()).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                let typical = typical_mounting_heights(&pages);
+                panel_top = typical.iter().find(|t| t.kind == "panel" && t.to == "top").map(|t| (t.given_in, t.doc.clone()));
                 if !typical.is_empty()
                     && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
                 {
@@ -5922,8 +5962,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "underground", t);
     let t = web_time::Instant::now();
-    match s.execute("bim.props.fill", &json!({})) {
+    let fill = match &panel_top {
+        Some((top, doc)) => json!({"panel_top_in": top, "panel_top_doc": doc}),
+        None => json!({}),
+    };
+    match s.execute("bim.props.fill", &fill) {
         Ok(v) => {
+            if let Some(n) = v.get("panels_heighted").and_then(Value::as_u64) {
+                progress_line(&format!("  panels at the general note's height to top: {n}"));
+            }
             // Devices in no room (outside every room, not on a room's wall): per level.
             if let Some(m) = v.get("devices_in_no_room").and_then(Value::as_object).filter(|m| !m.is_empty()) {
                 let per: Vec<String> = m.iter().map(|(l, n)| format!("{}: {n}", if l.is_empty() { "no level" } else { l })).collect();
@@ -7624,6 +7671,14 @@ fn stamp_typical_rooms(
     // view's report key): the floor's plans may show some of a room's devices already (and leave
     // the rest to the typical plan), each such device the copy of its tag and kind nearest it.
     let mut copies: Vec<(usize, usize, String)> = Vec::new();
+    // A device of a tag the floor's plans already put where a typical plan's copy lands (within
+    // [`STAND_IN_FT`]) is that device: the floor plan's stands for it (one each). A floor plan may
+    // show a room's receptacles and leave its fixtures to the typical plan; where it shows none at
+    // the spot, the typical plan's is added.
+    let stand_in_reach = STAND_IN_FT * 12.0 * super::perceive::units_per_inch(d);
+    // Not one on another panel's circuit (a corridor's receptacle on a house panel by the unit's
+    // entry receptacle).
+    let panel = |c: &str| super::propfill::panel_of(c).map(|p| p.to_ascii_uppercase());
     let mut footprints: Vec<Footprint> = Vec::new();
     let refs = job_sheet_refs(job);
     // The floor plans' door swings and linework round the rooms, to lay each typical view into
@@ -7806,27 +7861,42 @@ fn stamp_typical_rooms(
     let diff_reach = PLAN_DIFF_REACH_FT * 12.0 * k_in;
     let mut shapes: BTreeMap<String, bool> = BTreeMap::new();
     let floor: Vec<&super::readers::ReadDevice> = placed.iter().filter(|dv| !keynote_receptacle(d, dv, &mut shapes)).collect();
+    // Each floor plan's device stands for one copy at most (a device by a wall between two rooms).
+    let mut stood: BTreeSet<usize> = BTreeSet::new();
     for (ri, (_, level, outline, _)) in rooms.iter().enumerate() {
         let mine: Vec<&(usize, usize, String)> = copies.iter().filter(|c| c.1 == ri).collect();
         if mine.is_empty() {
             continue;
         }
-        for f in floor.iter().filter(|dv| dv.level == *level && cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])))
-        {
-            let fk = super::unitmarks::kind_of(f);
+        for (fi, f) in floor.iter().enumerate() {
+            if stood.contains(&fi) || f.level != *level {
+                continue;
+            }
             let gap = |i: usize| out.get(i).map_or(f64::INFINITY, |c| (c.at[0] - f.at[0]).hypot(c.at[1] - f.at[1]));
+            let in_room = cadaddy_geom::point_in_polygon(outline, cadaddy_geom::Vec2::new(f.at[0], f.at[1]));
+            if !in_room && !mine.iter().any(|(i, _, _)| gap(*i) <= stand_in_reach) {
+                continue;
+            }
+            let fk = super::unitmarks::kind_of(f);
+            let theirs = panel(&f.circuit);
+            let same = |i: &usize| {
+                !gone.contains(i) && out.get(*i).is_some_and(|c| c.tag.eq_ignore_ascii_case(&f.tag) && super::unitmarks::kind_of(c) == fk)
+            };
             let nearest = mine
                 .iter()
-                .filter(|(i, _, _)| {
-                    !gone.contains(i) && out.get(*i).is_some_and(|c| c.tag.eq_ignore_ascii_case(&f.tag) && super::unitmarks::kind_of(c) == fk)
+                .filter(|(i, _, _)| same(i) && gap(*i) <= stand_in_reach)
+                .filter(|(i, _, _)| match (out.get(*i).and_then(|c| panel(&c.circuit)), &theirs) {
+                    (Some(a), Some(b)) => a == *b,
+                    _ => true,
                 })
                 .min_by(|a, b| gap(a.0).total_cmp(&gap(b.0)));
             if let Some((i, _, key)) = nearest {
                 gone.insert(*i);
+                stood.insert(fi);
                 if let Some(n) = report.get_mut(key) {
                     *n = n.saturating_sub(1);
                 }
-            } else if super::lighting::lighting_kind(&fk) && differs.len() < MAX_STAMPED {
+            } else if in_room && !mine.iter().any(|(i, _, _)| same(i)) && super::lighting::lighting_kind(&fk) && differs.len() < MAX_STAMPED {
                 // A fixture or switch the floor plan shows that the enlarged plan of the room's
                 // type doesn't: tagged otherwise there (its nearest copy of the kind), or not there.
                 let other = mine
@@ -9020,20 +9090,32 @@ type Footprint = (String, String, Vec<cadaddy_geom::Vec2>, Vec<cadaddy_geom::Vec
 /// code); in two
 /// footprints (units back to back, their plans' linework past the wall they share), the one whose
 /// own room is nearer. How many.
-fn book_into_units(devices: &mut [super::readers::ReadDevice], footprints: &[Footprint], own: &BTreeMap<String, BTreeSet<String>>) -> usize {
+fn book_into_units(
+    devices: &mut [super::readers::ReadDevice],
+    footprints: &[Footprint],
+    own: &BTreeMap<String, BTreeSet<String>>,
+    panels: &BTreeMap<String, BTreeSet<String>>,
+) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
     for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
         // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
         let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
         let tag = dv.tag.trim().to_ascii_uppercase();
+        // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
+        // panel, across the unit's entry wall): not the unit's.
+        let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
+        let fed_here = |room: &str| match (&panel, panels.get(room)) {
+            (Some(p), Some(ps)) if !ps.is_empty() => ps.contains(p),
+            _ => true,
+        };
         let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
         let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
         let near = |o: &[cadaddy_geom::Vec2]| if o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p) { 0.0 } else { edge_distance(o, p) };
         if let Some((_, room, _, _)) = footprints
             .iter()
             .filter(|(l, room, poly, _)| {
-                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && cadaddy_geom::point_in_polygon(poly, p)
+                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&tag))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
             })
             .min_by(|a, b| near(&a.3).total_cmp(&near(&b.3)))
         {
@@ -9059,12 +9141,210 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
     before - stamped.len() - placed.len()
 }
 
+/// A floor plan's device this near where a typical plan's copy of the same tag lands is that
+/// device (feet).
+const STAND_IN_FT: f64 = 3.0;
+
+/// A subscript letter's text at its base mark's lower right: this far right and below the base
+/// mark's text, in its text heights.
+const SUBSCRIPT_REACH_H: (f64, f64) = (0.3, 2.0);
+
+/// The fire alarm symbols whose mark is another's subscript (a single letter whose text is at
+/// that mark's text's lower right, about its size: the `R` of a resident room's smoke detector
+/// `S` with sounder base), and each base's mark with it (`SR`), by symbol.
+#[allow(clippy::type_complexity)]
+fn fire_alarm_subscripts(
+    syms: &[(String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>)],
+) -> (BTreeSet<cadaddy_doc::Handle>, BTreeMap<cadaddy_doc::Handle, String>) {
+    let mut subs: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
+    let mut compound: BTreeMap<cadaddy_doc::Handle, String> = BTreeMap::new();
+    let letters = |t: &str, n: usize| (1..=n).contains(&t.chars().count()) && t.chars().all(|c| c.is_ascii_uppercase());
+    for (t, _, h, at) in syms.iter().take(MAX_STAMPED) {
+        let Some((p, ht)) = at.filter(|(_, ht)| ht.is_finite() && *ht > 0.0) else { continue };
+        if !letters(t, 1) {
+            continue;
+        }
+        let base = syms
+            .iter()
+            .filter(|(bt, _, bh, _)| bh != h && letters(bt, 2) && !subs.contains(bh) && !compound.contains_key(bh))
+            .filter_map(|(bt, _, bh, bat)| {
+                let (q, bht) = (*bat)?;
+                let (dx, dy) = ((p.x - q.x) / bht, (q.y - p.y) / bht);
+                let size = ht / bht;
+                ((SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dx)
+                    && (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dy)
+                    && (0.6..=1.5).contains(&size))
+                .then_some((bt, *bh, dx.hypot(dy)))
+            })
+            .min_by(|a, b| a.2.total_cmp(&b.2));
+        if let Some((bt, bh, _)) = base
+            && !subs.contains(h)
+            && !compound.contains_key(h)
+        {
+            subs.insert(*h);
+            compound.insert(bh, format!("{bt}{t}"));
+        }
+    }
+    (subs, compound)
+}
+
+/// A row of a symbol list (`FIRE ALARM SYMBOL LIST`: SYMBOL, DESCRIPTION, MOUNTING): the mark in
+/// its symbol (with its subscript: `SR`), what it is, and where it mounts.
+#[derive(Clone, Debug, PartialEq)]
+struct SymbolRow {
+    mark: String,
+    description: String,
+    /// On the ceiling (`CEIL./WALL`), else at this centre height (inches) when the row gives one.
+    ceiling: bool,
+    inches: Option<f64>,
+    /// The row's mounting words and its sheet, for the device's notes.
+    doc: String,
+}
+
+/// A symbol list's rows at most (per table).
+const MAX_SYMBOL_ROWS: usize = 60;
+
+/// The symbol lists on the sheets: a table headed SYMBOL, DESCRIPTION and MOUNTING, each row's
+/// letters in the symbol column joined left to right (an `S` with its subscript `R` is `SR`). A
+/// mark two rows give (`H` a heat detector and a horn) is left out: which one is not known.
+fn symbol_list_rows(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<SymbolRow> {
+    let mut out: Vec<SymbolRow> = Vec::new();
+    let mut twice: BTreeSet<String> = BTreeSet::new();
+    for (sheet, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        let upper = |t: &cadaddy_mepfix::sheet_facts::TextItem| t.value.trim().to_ascii_uppercase();
+        // Heights to the bottom of the item unless noted, when the sheet says so.
+        let to_bottom = texts.iter().any(|t| {
+            let u = upper(t);
+            u.contains("MOUNTING HEIGHTS TO BOTTOM")
+        });
+        for head in texts.iter().filter(|t| upper(t) == "MOUNTING") {
+            let h = head.height.max(1e-6);
+            let on_row = |t: &&cadaddy_mepfix::sheet_facts::TextItem, y: f64| (t.at.y - y).abs() <= 0.5 * h;
+            let Some(desc_head) = texts
+                .iter()
+                .filter(|t| on_row(t, head.at.y) && upper(t) == "DESCRIPTION" && t.at.x < head.at.x)
+                .max_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            else {
+                continue;
+            };
+            let Some(sym_head) = texts
+                .iter()
+                .filter(|t| on_row(t, head.at.y) && upper(t) == "SYMBOL" && t.at.x < desc_head.at.x)
+                .max_by(|a, b| a.at.x.total_cmp(&b.at.x))
+            else {
+                continue;
+            };
+            // The descriptions: words between the symbol column and halfway to the mounting
+            // column's heading, below the heading, row after row (a gap of more than 4 rows ends
+            // the table).
+            let mut descs: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+                .iter()
+                .filter(|t| {
+                    t.at.y < head.at.y - 0.5 * h
+                        && t.at.x > sym_head.at.x + h
+                        && t.at.x < (desc_head.at.x + head.at.x) / 2.0
+                        && t.value.trim().chars().count() > 3
+                })
+                .collect();
+            descs.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
+            let mut last_y = head.at.y;
+            for d in descs.into_iter().take(MAX_SYMBOL_ROWS) {
+                if last_y - d.at.y > 4.0 * h * 1.5 {
+                    break;
+                }
+                last_y = d.at.y;
+                let dh = d.height.max(1e-6);
+                let mut letters: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+                    .iter()
+                    .filter(|t| {
+                        let v = t.value.trim();
+                        v.chars().count() <= 2
+                            && v.chars().all(|c| c.is_ascii_uppercase())
+                            && (t.at.y - d.at.y).abs() <= 0.6 * dh
+                            && t.at.x < d.at.x
+                            && t.at.x > sym_head.at.x - 3.0 * h
+                            && (0.6..=1.5).contains(&(t.height / dh))
+                    })
+                    .collect();
+                if letters.is_empty() {
+                    continue;
+                }
+                letters.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                let mark: String = letters.iter().map(|t| t.value.trim()).collect();
+                let mounting = texts
+                    .iter()
+                    .filter(|t| on_row(t, d.at.y) && t.at.x >= head.at.x - 3.0 * h)
+                    .min_by(|a, b| a.at.x.total_cmp(&b.at.x))
+                    .map(|t| t.value.trim().to_string())
+                    .unwrap_or_default();
+                let mu = mounting.to_ascii_uppercase();
+                let ceiling = mu.contains("CEIL");
+                let inches = (!ceiling)
+                    .then(|| super::propfill::mount_height_in(&format!("{mounting} AFF")))
+                    .flatten()
+                    .map(|i| {
+                        if mu.contains("TO TOP") {
+                            i - HALF_BOX_IN
+                        } else if mu.contains("TO BOTTOM") || to_bottom {
+                            i + HALF_BOX_IN
+                        } else {
+                            i
+                        }
+                    })
+                    .filter(|i| *i > 0.0 && *i < 240.0);
+                if out.iter().any(|r| r.mark == mark) || twice.contains(&mark) {
+                    out.retain(|r| r.mark != mark);
+                    twice.insert(mark);
+                    continue;
+                }
+                out.push(SymbolRow {
+                    mark,
+                    description: d.value.trim().to_string(),
+                    ceiling,
+                    inches,
+                    doc: format!("{sheet} symbol list: {}", if mounting.is_empty() { d.value.trim() } else { mounting.as_str() }),
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Each fire alarm device whose mark a symbol list row gives: its description (`device_type`),
+/// and its ceiling or its height when it has none. How many.
+fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) -> usize {
+    let mut n = 0;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:") && t.kind == "fire_alarm_device").take(MAX_STAMPED * 4) {
+        let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
+        let Some(row) = rows.iter().find(|r| r.mark == mark) else { continue };
+        t.set("device_type", format!("{} {mark}", row.description.to_ascii_lowercase()), "legend");
+        t.set("legend", row.description.clone(), "legend");
+        let has = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).is_some_and(|f| !f.value.trim().is_empty());
+        if row.ceiling && !has(t, "mount") {
+            t.set("mount", "ceiling", "legend");
+        } else if let Some(i) = row.inches
+            && !has(t, "mount_height_in")
+            && !has(t, "mount")
+        {
+            t.set("mount_height_in", format!("{}", (i * 100.0).round() / 100.0), "legend");
+            t.set("mount_height_note", row.doc.clone(), "legend");
+        }
+        n += 1;
+    }
+    n
+}
+
 /// A kind of device's typical mounting height a general note gives.
 #[derive(Clone, Debug, PartialEq)]
 struct TypicalHeight {
     /// The device kind it is for (`switch`, `receptacle`, `low_voltage_outlet`, `thermostat`,
-    /// `emergency light`: luminaires the fixture schedule calls emergency lights).
+    /// `emergency light`: luminaires the fixture schedule calls emergency lights; `panel`).
     kind: &'static str,
+    /// The height as the note gives it, inches, and to what: `top`, `bottom` or `centre` (a
+    /// panel's centre depends on its box).
+    given_in: f64,
+    to: &'static str,
     /// Its centre over the floor, inches.
     inches: f64,
     /// The note's words for it, with its sheet.
@@ -9077,7 +9357,9 @@ const HALF_BOX_IN: f64 = 2.25;
 /// The kind a typical-height item names (`TOGGLE SWITCH`, `RECEPTACLES`, `VOICE/DATA OUTLETS`).
 fn typical_kind(words: &str) -> Option<&'static str> {
     let up = words.to_ascii_uppercase();
-    if up.contains("EMERGENCY") {
+    if up.contains("PANEL") {
+        Some("panel")
+    } else if up.contains("EMERGENCY") {
         Some("emergency light")
     } else if up.contains("SWITCH") {
         Some("switch")
@@ -9097,19 +9379,26 @@ fn typical_item(item: &str, sheet: &str) -> Option<TypicalHeight> {
     let kind = typical_kind(item.split(|c: char| c.is_ascii_digit()).next().unwrap_or(item))?;
     let inches = super::propfill::mount_height_in(&format!("{item} AFF"))?;
     let up = item.to_ascii_uppercase();
-    let centre = if up.contains("TO TOP") {
-        inches - HALF_BOX_IN
+    let (centre, to) = if up.contains("TO TOP") {
+        (inches - HALF_BOX_IN, "top")
     } else if up.contains("TO BOTTOM") {
-        inches + HALF_BOX_IN
+        (inches + HALF_BOX_IN, "bottom")
     } else {
-        inches
+        (inches, "centre")
     };
-    (centre > 0.0 && centre < 240.0).then(|| TypicalHeight { kind, inches: centre, doc: format!("{sheet} general note: {}", item.trim()) })
+    (centre > 0.0 && centre < 240.0).then(|| TypicalHeight {
+        kind,
+        inches: centre,
+        given_in: inches,
+        to,
+        doc: format!("{sheet} general note: {}", item.trim()),
+    })
 }
 
 /// The typical mounting heights a set's general note gives (`ELECTRICAL DEVICE MOUNTED HEIGHTS
 /// (UNO): • PANELBOARDS 6'-6" AFF TO TOP • TOGGLE SWITCH 4'-0" AFF TO TOP • RECEPTACLES 1'-6"
-/// CENTERLINE…`): the note's lines from its heading down to the next numbered note, item by item.
+/// CENTERLINE…`): the note's rows from its heading down to the next numbered note, each read left
+/// to right (an item's name and its height are often two columns), item by item.
 fn typical_mounting_heights(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<TypicalHeight> {
     let mut out: Vec<TypicalHeight> = Vec::new();
     for (sheet, sub) in pages {
@@ -9127,19 +9416,27 @@ fn typical_mounting_heights(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<Typ
                 })
                 .collect();
             lines.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-            let mut said = String::new();
-            for (i, l) in lines.iter().enumerate() {
-                let v = l.value.trim();
+            // Its rows, each read left to right (an item's name and its height are two columns).
+            let mut rows: Vec<(f64, Vec<&cadaddy_mepfix::sheet_facts::TextItem>)> = Vec::new();
+            for l in lines {
+                match rows.last_mut() {
+                    Some((y, row)) if (*y - l.at.y).abs() <= 0.5 * h => row.push(l),
+                    _ => rows.push((l.at.y, vec![l])),
+                }
+            }
+            let mut items: Vec<String> = Vec::new();
+            for (i, (_, row)) in rows.iter_mut().enumerate() {
+                row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+                let text = row.iter().map(|t| t.value.trim()).collect::<Vec<_>>().join(" ");
                 // The next numbered note ends this one.
-                let numbered = v.split_once('.').is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()));
-                if i > 0 && numbered && !std::ptr::eq(*l, head) {
+                let numbered = text.split_once('.').is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()));
+                if i > 0 && numbered {
                     break;
                 }
-                said.push_str(v);
-                said.push('\n');
+                let text = if i == 0 { text.split_once(':').map_or(String::new(), |(_, rest)| rest.to_string()) } else { text };
+                items.extend(text.split(['\u{2022}', ';']).map(str::trim).filter(|i| !i.is_empty()).map(str::to_string));
             }
-            let text = said.split_once(':').map_or(said.as_str(), |(_, rest)| rest);
-            for item in text.split(['\u{2022}', '\n', ';']).map(str::trim).filter(|i| !i.is_empty()) {
+            for item in &items {
                 if let Some(t) = typical_item(item, sheet)
                     && !out.iter().any(|o| o.kind == t.kind)
                 {
@@ -18416,7 +18713,8 @@ mod tests {
         ];
         let own: BTreeMap<String, BTreeSet<String>> =
             [("202".to_string(), ["P-1".to_string()].into()), ("204".to_string(), ["P-1".to_string()].into())].into();
-        assert_eq!(book_into_units(&mut devices, &foot, &own), 3);
+        let none = BTreeMap::new();
+        assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
         // no tag the unit's plans show, stays out.
         let mut fa = vec![super::super::readers::ReadDevice {
@@ -18426,9 +18724,23 @@ mod tests {
             level: "Level 2".into(),
             ..Default::default()
         }];
-        assert_eq!(book_into_units(&mut fa, &foot, &own), 1);
+        assert_eq!(book_into_units(&mut fa, &foot, &own, &none), 1);
         let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
-        assert_eq!(book_into_units(&mut g, &foot, &own), 0);
+        assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
+        // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
+        // corridor's, across the entry wall) is not.
+        let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC".to_string()].into())].into();
+        let fed: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["G".to_string()].into())].into();
+        let rec = |circuit: &str| super::super::readers::ReadDevice {
+            tag: "REC".into(),
+            circuit: circuit.into(),
+            at: [40.0, 30.0],
+            level: "Level 2".into(),
+            ..Default::default()
+        };
+        let mut recs = vec![rec("G-9"), rec("A-3"), rec("")];
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 2);
+        assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
 
@@ -18448,6 +18760,108 @@ mod tests {
         assert_eq!((stamped.len(), placed.len()), (4, 1));
     }
 
+    /// The note as a sheet prints it: its heading, then each item's name and height in two
+    /// columns, down to the next numbered note.
+    #[test]
+    fn a_two_column_mounting_height_note_is_read_row_by_row() {
+        let mut d = cadaddy_doc::Drawing::default();
+        let rows: [(&str, f64, f64); 9] = [
+            ("17.ELECTRICAL DEVICE MOUNTED HEIGHTS (UNO):", 34.6, 17.5),
+            ("PANELBOARDS", 35.1, 17.4),
+            ("6'-6\" AFF TO TOP", 36.8, 17.4),
+            ("TOGGLE SWITCH", 35.1, 17.2),
+            ("4'-0\" AFF TO TOP", 36.8, 17.2),
+            ("RECEPTACLES", 35.1, 17.1),
+            ("1'-6\" CENTERLINE", 36.8, 17.1),
+            ("18.THERMOSTATS SHALL BE 5'-0\" AFF", 34.6, 16.9),
+            ("TV OUTLETS 6'-0\" AFF", 35.1, 16.7),
+        ];
+        for (v, x, y) in rows {
+            let t = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: 0.1,
+                value: v.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t)).ok();
+        }
+        let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
+        // The next note's thermostat and what follows it are not this note's.
+        assert_eq!(got, vec![("panel", 75.75), ("switch", 45.75), ("receptacle", 18.0)]);
+    }
+
+    /// A fire alarm symbol list as E-7 prints it: each row's letters (an `S` with its subscript
+    /// `R`), description and mounting; a mark two rows give is left out.
+    #[test]
+    fn a_fire_alarm_symbol_list_names_marks_and_mounts() {
+        let mut d = cadaddy_doc::Drawing::default();
+        let h = 18.3;
+        let rows: Vec<(&str, f64, f64, f64)> = vec![
+            ("MOUNTING HEIGHTS TO BOTTOM OF ITEM UNLESS NOTED OTHERWISE.", 30000.0, 3500.0, h),
+            ("SYMBOL", 34300.8, 2958.7, h),
+            ("DESCRIPTION", 34677.8, 2958.7, h),
+            ("MOUNTING", 35303.0, 2958.7, h),
+            ("P", 34343.4, 2889.6, h),
+            ("FIRE ALARM MANUAL PULL STATION", 34454.7, 2890.2, h),
+            ("4'-0\" TO TOP", 35281.0, 2890.2, h),
+            ("COMBINATION F.A. HORN & STROBE SIGNAL", 34454.7, 2836.5, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2836.5, h),
+            ("S", 34343.4, 2727.4, h),
+            ("AREA SMOKE DETECTOR", 34454.7, 2728.3, h),
+            ("CEIL./WALL", 35281.0, 2728.3, h),
+            ("S", 34340.5, 2619.5, h),
+            ("R", 34372.8, 2613.1, h),
+            ("RESIDENT ROOM SMOKE DETECTOR AND SOUNDER BASE", 34454.7, 2620.5, h),
+            ("CEIL./WALL", 35281.0, 2620.5, h),
+            ("H", 34338.6, 2566.4, h),
+            ("AREA HEAT DETECTOR", 34454.7, 2566.4, h),
+            ("CEIL./WALL", 35281.0, 2566.4, h),
+            ("H", 34342.4, 2511.4, h),
+            ("HEARING IMPAIRED HORN & STROBE SIGNAL", 34454.7, 2512.3, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2512.3, h),
+            ("WS", 34343.4, 2457.0, h),
+            ("WEATHERPROOF STROBE", 34454.7, 2458.0, h),
+            ("WALL 80\" A.F.F.", 35281.0, 2458.0, h),
+        ];
+        for (v, x, y, ht) in rows {
+            let t = cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(x, y, 0.0),
+                align_pt: None,
+                height: ht,
+                value: v.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::default(),
+                valign: cadaddy_doc::VAlign::default(),
+            };
+            d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::Text(t)).ok();
+        }
+        let rows = symbol_list_rows(&[("E-7".into(), d)]);
+        let got: Vec<(&str, bool, Option<f64>)> = rows.iter().map(|r| (r.mark.as_str(), r.ceiling, r.inches)).collect();
+        assert_eq!(got, vec![("P", false, Some(45.75)), ("S", true, None), ("SR", true, None), ("WS", false, Some(82.25))], "{rows:#?}");
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let tag = |id: &str, mark: &str| {
+            let mut t = cadaddy_walk3d::tags::ElementTag { id: id.into(), kind: "fire_alarm_device".into(), ..Default::default() };
+            t.set("type", mark, "plan");
+            t
+        };
+        sp.tags = vec![tag("device:p", "P"), tag("device:r", "SR"), tag("device:h", "H")];
+        assert_eq!(apply_symbol_list(&mut sp, &rows), 2, "H is either of two rows");
+        let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
+        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("45.75"));
+        assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
+        assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
+        assert!(f("device:h", "device_type").is_none());
+    }
+
     /// A general note's typical mounting heights, item by item, to each one's centre.
     #[test]
     fn a_general_notes_typical_heights_are_read_item_by_item() {
@@ -18455,7 +18869,7 @@ mod tests {
         assert_eq!(typical_item("RECEPTACLES 1'-6\" CENTERLINE", "E-1").map(|t| (t.kind, t.inches)), Some(("receptacle", 18.0)));
         assert_eq!(typical_item("VOICE/DATA OUTLETS 1'-6\" CENTERLINE", "E-1").map(|t| t.kind), Some("low_voltage_outlet"));
         assert_eq!(typical_item("EMERGENCY LIGHTS 7'-6\" AFF TO BOTTOM", "E-1").map(|t| (t.kind, t.inches)), Some(("emergency light", 92.25)));
-        assert_eq!(typical_item("PANELBOARDS 6'-6\" AFF TO TOP", "E-1"), None, "a panel isn't a device");
+        assert_eq!(typical_item("PANELBOARDS 6'-6\" AFF TO TOP", "E-1").map(|t| (t.kind, t.given_in, t.to)), Some(("panel", 78.0, "top")));
         let mut sp = cadaddy_walk3d::BuildingSpec::default();
         let tag = |id: &str, kind: &str, mark: &str| {
             let mut t = cadaddy_walk3d::tags::ElementTag { id: id.into(), kind: kind.into(), ..Default::default() };
@@ -19890,12 +20304,18 @@ mod tests {
             level: level.into(),
             ..Default::default()
         };
-        let placed = vec![device("A", [10_072.0, 100.0], "E-2", "Level 2")];
+        // The floor plan's own copy of one receptacle in room 201, where the enlarged plan's lands
+        // (on the room's panel): it stands for it. A corridor's on a house panel by another: not.
+        let on = |mut d: super::super::readers::ReadDevice, circuit: &str| {
+            d.circuit = circuit.into();
+            d
+        };
+        let placed = vec![on(device("A", [10_020.0, 20.0], "E-2", "Level 2"), "G-5"), on(device("A", [10_120.0, 20.0], "E-2", "Level 2"), "H-3")];
         // The enlarged plan's three receptacles and a switch, in its view.
         let read: Vec<_> =
             [("A", [4534.0 + 20.0, 220.0]), ("A", [4534.0 + 120.0, 220.0]), ("A", [4534.0 + 20.0, 460.0]), ("S", [4534.0 + 130.0, 300.0])]
                 .iter()
-                .map(|(t, at)| device(t, *at, "E-6", "T"))
+                .map(|(t, at)| on(device(t, *at, "E-6", "T"), if *t == "A" { "G-5" } else { "" }))
                 .collect();
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &placed, &unplaced);
@@ -20456,6 +20876,37 @@ mod tests {
         run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(job.devices.len(), 3, "{:?}", job.devices);
         assert!(job.devices.iter().all(|d| d.tag == "S" && d.kind == "fire alarm device" && d.leg.is_empty()), "{:?}", job.devices);
+    }
+
+    /// A fire alarm plan's resident room detector (`S` with a subscript `R` at its lower right) is
+    /// one device marked `SR`; the corridor's plain `S` stays an `S`.
+    #[test]
+    fn a_fire_alarm_marks_subscript_is_part_of_its_mark() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "Q-7", "sheet_type": "plan", "level": "1", "title": "FIRE ALARM - 1ST FLOOR"}]}));
+        job.sheets_loaded = true;
+        let syms: Vec<(&str, f64, f64)> = vec![("S", 100.0, 300.0), ("R", 102.4, 297.6), ("S", 200.0, 300.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &[], &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "Q-7".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "Q-7".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut tags: Vec<&str> = job.devices.iter().map(|d| d.tag.as_str()).collect();
+        tags.sort_unstable();
+        assert_eq!(tags, vec!["S", "SR"], "{:?}", job.devices);
     }
 
     #[test]
