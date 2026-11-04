@@ -635,8 +635,7 @@ fn spec_files_by(paths: &[String], only: &[String], divisions: &[&str]) -> Vec<S
                 continue;
             }
             for (p, sec) in numbered {
-                let wanted =
-                    if only.is_empty() { divisions.iter().any(|d| sec.starts_with(d)) } else { only.iter().any(|o| sec == o.trim()) };
+                let wanted = if only.is_empty() { divisions.iter().any(|d| sec.starts_with(d)) } else { only.iter().any(|o| sec == o.trim()) };
                 if wanted {
                     out.push(p.to_string_lossy().to_string());
                 }
