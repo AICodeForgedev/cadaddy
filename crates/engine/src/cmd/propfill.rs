@@ -22,7 +22,7 @@
 //! Nothing that was not read is presented as read: assumptions are `default` or `rule`, what the
 //! model gives is `computed`, and a person's value (`user`) is never replaced.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Common, Drawing, Entity, EntityKind, Handle, RawTag, Space};
@@ -937,6 +937,16 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
     // tag id: the room their element stands in, for the spec's tags too.
     let mut tag_rooms: Vec<(String, String)> = Vec::new();
+    // Not into a typical room's unit: its devices are its plans' (stamped and booked by the build),
+    // not another trade's or a floor above's that stands over it.
+    let unit_rooms: BTreeSet<String> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|u| u.get("number").and_then(serde_json::Value::as_str))
+        .map(|n| n.trim().to_ascii_uppercase())
+        .collect();
     for (h, kind) in &work {
         let Some(e) = d.model.get(*h) else { continue };
         let mut store = props::read(&e.common.xdata);
@@ -978,6 +988,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 match (served, stamped) {
                     (Some((r, note)), stamped) => {
                         if stamped.is_none()
+                            && !unit_rooms.contains(&r.label.trim().to_ascii_uppercase())
                             && let Some(id) = made(e, DEVID)
                         {
                             tag_rooms.push((id, r.label.clone()));
