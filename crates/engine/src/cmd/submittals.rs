@@ -29,7 +29,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "fixture", "equipmen
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, submittal), with the submittal and page as the source; the products go into the type catalog; a person's values stay")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; a person's values stay")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -149,6 +149,20 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             set.push(("dimming", if note.is_empty() { prop } else { prop.with_note(&note) }));
             dimming.insert(mark.clone(), control);
         }
+        // What its cut sheet says of it besides (a luminaire's voltage, finish, mounting, CCT,
+        // lumens, wattage).
+        for (key, prop_key) in [
+            (keys::VOLTS, "voltage"),
+            (keys::FINISH, "finish"),
+            (keys::MOUNTING, "mounting_type"),
+            (keys::CCT, "cct"),
+            (keys::LUMENS, "lumens"),
+            (keys::WATTAGE, "wattage"),
+        ] {
+            if let Some(v) = product.value(key) {
+                set.push((prop_key, Prop::new(v, src.clone())));
+            }
+        }
         set.push(("submittal", Prop::new(product.doc.clone(), src.clone())));
         for h in handles {
             let Some(e) = d.model.get(*h) else { continue };
@@ -181,7 +195,26 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         by_mark.iter().filter(|(m, _)| !products.contains_key(*m)).map(|(m, h)| (m, h.len())).take(MAX_LISTED).collect();
     let not_in_model: Vec<&String> = products.keys().filter(|m| !by_mark.contains_key(*m)).take(MAX_LISTED).collect();
     let questions: Vec<Value> = questions.into_iter().take(MAX_LISTED).map(|(mark, text)| json!({"mark": mark, "text": text})).collect();
+    // Every product read, in the model or not (the lighting step checks the submittal's types
+    // against the schedule's).
+    let listed: serde_json::Map<String, Value> = products
+        .iter()
+        .take(MAX_LISTED)
+        .map(|(m, p)| {
+            (
+                m.clone(),
+                json!({
+                    "manufacturer": p.value(keys::MANUFACTURER).unwrap_or_default(),
+                    "catalog_number": p.value(keys::CATALOG_NUMBER).unwrap_or_default(),
+                    "category": p.proposal.get("category").and_then(Value::as_str).unwrap_or_default(),
+                    "quantity": p.value(super::spec_import::QUANTITY).and_then(|q| q.parse::<u32>().ok()),
+                    "doc": p.doc,
+                }),
+            )
+        })
+        .collect();
     Ok(json!({
+        "products": listed,
         "files": read,
         "applied": applied,
         "elements": changed,

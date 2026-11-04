@@ -10,7 +10,7 @@ use cadaddy_doc::bimspec::{
     self, BimType, Confidence, LocationRule, MAX_RFI_ITEMS, RfiItem, SpecField, SpecImportResult, SpecProposal, SubmittalRecord,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::{Result, Session};
@@ -1384,9 +1384,90 @@ const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FO
 /// A luminaire whose cut sheet says it goes on a wall (not the wall-wash trims of a downlight).
 const WALL_MOUNT_WORDS: &[&str] = &["WALL MOUNT", "WALL-MOUNT", "WALL BRACKET", "SCONCE", "WALL PACK", "WALLPACK", "EXIT SIGN", "EXIT LIGHT"];
 
+/// A custom fixture's shop drawing names no maker or catalog number in a field of its own: its
+/// title block does. The maker is the letterhead its web address spells (`www.examplelighting.com`
+/// under `EXAMPLE LIGHTING`), the catalog number the drawing's number (`DRAWING NUMBER` and one
+/// part number on the sheet, `D-12345-01`), the voltage the title block's (`VOLTAGE` and `120V`).
+/// Only for a product the cut sheet's own fields left without them.
+fn read_title_block(p: &mut SpecProposal, lines: &[String]) {
+    let segs: Vec<&str> = lines.iter().flat_map(|l| l.split(COLUMN_BREAK)).map(str::trim).filter(|x| !x.is_empty()).take(MAX_BLOCK_LINES).collect();
+    let up = |x: &str| x.to_ascii_uppercase();
+    // Its labels as read (a scan's words may run together: `DRAWINGNUMBER:`).
+    let squeezed = |x: &str| x.chars().filter(|c| !c.is_whitespace() && *c != '.').collect::<String>().to_ascii_uppercase();
+    let drawing = segs.iter().any(|x| {
+        let u = squeezed(x);
+        u.contains("DRAWINGNUMBER") || u.contains("DRAWINGNO") || u.contains("DWGNO")
+    });
+    if !drawing {
+        return;
+    }
+    let page = p.file_source.clone();
+    if p.bim_type.get_field(bimspec::keys::MANUFACTURER).is_none() {
+        // The web address's name, and the letterhead whose letters are it.
+        let site = segs.iter().find_map(|x| {
+            let l = x.to_ascii_lowercase();
+            let host = l.split_whitespace().find(|w| w.starts_with("www.") || w.contains("://www."))?;
+            let host = host.split("www.").nth(1)?;
+            let name: String = host.split('.').next()?.chars().filter(char::is_ascii_alphanumeric).collect();
+            (name.len() >= 4).then_some(name)
+        });
+        let maker = site.and_then(|name| {
+            segs.iter()
+                .find(|x| {
+                    let letters: String = x.chars().filter(char::is_ascii_alphanumeric).collect::<String>().to_ascii_lowercase();
+                    // (A web address cut short at the page's edge still spells its start.)
+                    x.chars().any(|c| c.is_ascii_uppercase())
+                        && !x.chars().any(|c| c.is_ascii_lowercase())
+                        && letters.len() >= 4
+                        && (letters == name || (name.len() >= 8 && letters.starts_with(&name)))
+                })
+                .map(|x| x.trim().to_string())
+        });
+        if let Some(m) = maker {
+            p.bim_type.set_field(bimspec::keys::MANUFACTURER, SpecField::new(&m).with_source(format!("{page} (title block)")));
+        }
+    }
+    if p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).is_none() {
+        // A drawing number: a few letters, a dash, four digits or more, a dash and more (a quote's
+        // or job's number, `Q-20481`, has no third part).
+        let part = |x: &str| {
+            let t = x.trim().trim_end_matches('.');
+            let parts: Vec<&str> = t.split('-').collect();
+            parts.len() >= 3
+                && parts.first().is_some_and(|a| (1..=4).contains(&a.len()) && a.chars().all(|c| c.is_ascii_uppercase()))
+                && parts.get(1).is_some_and(|b| b.len() >= 4 && b.chars().all(|c| c.is_ascii_digit()))
+                && parts.iter().skip(2).all(|c| !c.is_empty() && c.chars().all(|c| c.is_ascii_alphanumeric()))
+        };
+        let found: BTreeSet<String> = segs.iter().filter(|x| part(x)).map(|x| x.trim().trim_end_matches('.').to_string()).collect();
+        if found.len() == 1
+            && let Some(c) = found.into_iter().next()
+        {
+            p.bim_type.set_field(bimspec::keys::CATALOG_NUMBER, SpecField::new(&c).with_source(format!("{page} (title block drawing number)")));
+        }
+    }
+    if p.bim_type.get_field(bimspec::keys::VOLTS).is_none() && segs.iter().any(|x| squeezed(x).contains("VOLTAGE")) {
+        let volts: BTreeSet<String> = segs
+            .iter()
+            .filter_map(|x| {
+                let t = up(x).trim().trim_end_matches('.').to_string();
+                let n = t.strip_suffix('V')?;
+                (n.len() == 3 && n.chars().all(|c| c.is_ascii_digit())).then(|| format!("{n}V"))
+            })
+            .collect();
+        if volts.len() == 1
+            && let Some(v) = volts.into_iter().next()
+        {
+            p.bim_type.set_field(bimspec::keys::VOLTS, SpecField::new(&v).with_source(format!("{page} (title block)")));
+        }
+    }
+}
+
 fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &mut SpecImportResult, counter: &mut u32) {
     for (i, p) in types.iter_mut().enumerate() {
         let lines = blocks.get(i).map(Vec::as_slice).unwrap_or(&[]);
+        if p.bim_type.get_field(bimspec::keys::MANUFACTURER).is_none() || p.bim_type.get_field(bimspec::keys::CATALOG_NUMBER).is_none() {
+            read_title_block(p, lines);
+        }
         if p.bim_type.category.is_empty() {
             let words = LIGHTING_WORDS.iter().filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w))).count();
             if words >= 2 {
@@ -1429,6 +1510,9 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
         }
     }
 }
+
+/// A submitted product's field: how many were ordered.
+pub(crate) const QUANTITY: &str = "quantity";
 
 fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, stamps: &mut Vec<String>, page: &str) {
     let lower = line.to_ascii_lowercase();
@@ -1514,6 +1598,19 @@ fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec
             }
         }
         return;
+    }
+
+    // The quantity ordered (a shop drawing's title block `QUANTITY: 12`); a blank one is none.
+    for prefix in &["quantity:", "qty:", "qty."] {
+        if lower.starts_with(prefix) {
+            let val = line[prefix.len()..].trim();
+            if let Some(n) = val.split_whitespace().next().and_then(|w| w.parse::<u32>().ok()).filter(|n| *n > 0 && *n < 100_000)
+                && let Some(ty) = types.last_mut()
+            {
+                ty.bim_type.set_field(QUANTITY, SpecField::new(n.to_string()).with_source(page));
+            }
+            return;
+        }
     }
 
     // Ratings.
@@ -2503,6 +2600,56 @@ Mounting: Surface
     }
 
     // ── MUST 1: per-block submittal application ───────────────────────────
+
+    #[test]
+    fn a_shop_drawings_title_block_names_its_maker_catalog_and_voltage() {
+        let mut s = session();
+        let submittal = "\
+--- page 1 of 2 ---
+Type : Q4
+EXAMPLEFIXTUREWORKS
+www.examplefixtur
+WALL SCONCE Q-20481
+DIMENSIONS: QUANTITY: DRAWINGNUMBER: VOLTAGE: WEIGHT:
+AS INDICATED
+X-20481-07
+120V.
+--- page 2 of 2 ---
+Type : Q5
+Manufacturer: Other Lighting
+Catalog No: AB-1234-5
+Ordering example AB-1234-6 and AB-1234-7
+";
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let f = |m: &str, k: &str| proposals.iter().find(|p| p["mark"] == m).map(|p| p["fields"][k]["value"].clone()).unwrap_or_default();
+        assert_eq!(f("Q4", "manufacturer"), json!("EXAMPLEFIXTUREWORKS"), "{r:#}");
+        assert_eq!(f("Q4", "catalogNumber"), json!("X-20481-07"));
+        assert_eq!(f("Q4", "volts"), json!("120V"));
+        // A cut sheet with its own fields keeps them (no title block read over them).
+        assert_eq!(f("Q5", "catalogNumber"), json!("AB-1234-5"));
+    }
+
+    #[test]
+    fn a_cut_sheets_quantity_is_its_types_and_a_blank_one_is_none() {
+        let mut s = session();
+        let submittal = "\
+Type Q1: Recessed LED downlight
+Manufacturer: Apex Lighting
+Catalog No: A-1
+QUANTITY: 12
+
+Type Q2: Wall sconce
+Manufacturer: Apex Lighting
+Catalog No: B-2
+QUANTITY:
+";
+        let r = s.execute("bim.spec_import", &json!({"text": submittal, "format": "submittal"})).unwrap_or_default();
+        let proposals = arr(&r["proposals"]);
+        let q = |m: &str| proposals.iter().find(|p| p["mark"] == m).map(|p| p["fields"]["quantity"]["value"].clone()).unwrap_or_default();
+        assert_eq!(q("Q1"), json!("12"));
+        assert_eq!(q("Q2"), Value::Null, "a blank quantity is none");
+    }
 
     #[test]
     fn submittal_per_block_no_cross_contamination() {
