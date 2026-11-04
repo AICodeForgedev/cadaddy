@@ -70,3 +70,21 @@ fn hostile_twists_are_read_and_written_within_one_turn() {
     let r = read_dxf(text.as_bytes()).unwrap();
     assert!((active_twist(&r).unwrap() - 45.0).abs() < 1e-9);
 }
+
+/// The untiled `*Active` view of a turned model view fits the extents as the turned view sees
+/// them: a 100 × 10 drawing turned a quarter turn is 100 high on screen.
+#[test]
+fn a_turned_untiled_view_fits_the_turned_extents() {
+    let mut d = Drawing::new_imperial();
+    d.add(
+        &cadaddy_doc::Space::Model,
+        cadaddy_doc::Common::default(),
+        cadaddy_doc::EntityKind::Line(cadaddy_doc::Line { a: cadaddy_doc::geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_doc::geom::Vec3::new(100.0, 10.0, 0.0) }),
+    )
+    .unwrap();
+    d.vports = vec![VportConfig { name: VportConfig::ACTIVE.into(), tiles: vec![tile((0.0, 0.0), (1.0, 1.0), 90.0)] }];
+    let r = read_dxf(write_dxf(&d).as_bytes()).unwrap();
+    let t = r.vports.iter().find(|c| c.is_active()).and_then(|c| c.tiles.first()).copied().unwrap();
+    assert!((t.height - 110.0).abs() < 1e-6, "{t:?}");
+    assert!((t.center - Vec2::new(50.0, 5.0)).len() < 1e-6, "{t:?}");
+}
