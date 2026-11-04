@@ -621,7 +621,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
                         "every circuit or feeder in its areas stays as designed: {}",
                         excluded
                             .iter()
-                            .filter(|(k, n)| **n > 0 && alt.areas.iter().all(|a| a != *k))
+                            .filter(|(k, n)| **n > 0 && !matches!(k.as_str(), "unit" | "common" | "exposed"))
                             .map(|(k, n)| format!("{}: {n}", rules.areas.get(k).map_or(k.as_str(), |a| a.name.as_str())))
                             .collect::<Vec<_>>()
                             .join(", ")

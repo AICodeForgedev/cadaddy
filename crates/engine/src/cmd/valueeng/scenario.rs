@@ -249,16 +249,17 @@ pub(crate) fn draft_rfis(
         let v = &b.value;
         let id = rfi_id(&b.alt.id);
         // Where: the level with the most of its runs, their extent there.
-        let mut by_level: BTreeMap<String, usize> = BTreeMap::new();
-        for it in &b.items {
-            *by_level.entry(it.level.clone()).or_default() += 1;
+        // The level most of its routes' feet are on (each level's plan is its own frame).
+        let mut by_level: BTreeMap<String, f64> = BTreeMap::new();
+        for r in b.items.iter().flat_map(|i| i.runs.iter()).filter_map(|r| sp.mep.runs.get(*r)) {
+            let ft: f64 = r.points.windows(2).map(|w| if let [a, c] = w { (c[0] - a[0]).hypot(c[1] - a[1]) } else { 0.0 }).sum();
+            *by_level.entry(r.level.clone()).or_default() += if ft.is_finite() { ft } else { 0.0 };
         }
-        let level = by_level.iter().max_by_key(|(_, n)| **n).map(|(l, _)| l.clone()).unwrap_or_default();
+        let level = by_level.iter().max_by(|a, b| a.1.total_cmp(b.1)).map(|(l, _)| l.clone()).unwrap_or_default();
         let pts: Vec<[f64; 2]> = b
             .items
             .iter()
-            .filter(|i| i.level == level)
-            .flat_map(|i| i.runs.iter().filter_map(|r| sp.mep.runs.get(*r)).flat_map(|r| r.points.iter().copied()))
+            .flat_map(|i| i.runs.iter().filter_map(|r| sp.mep.runs.get(*r)).filter(|r| r.level == level).flat_map(|r| r.points.iter().copied()))
             .filter(|p| p.iter().all(|x| x.is_finite()))
             .take(200_000)
             .collect();

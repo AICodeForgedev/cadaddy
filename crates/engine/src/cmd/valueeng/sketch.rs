@@ -42,8 +42,11 @@ pub(crate) fn write(
 /// The sketch as SVG text.
 pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str, title: &str, question: &str, upf: f64) -> String {
     let on_level = |l: &str| l.eq_ignore_ascii_case(level);
-    let mine: Vec<&Item> = items.iter().filter(|i| on_level(&i.level)).collect();
-    let mine_runs: std::collections::HashSet<usize> = mine.iter().flat_map(|i| i.runs.iter().copied()).collect();
+    // The changed runs on this level (a feeder's route goes up through the others: each level's
+    // plan is its own frame).
+    let on_this = |i: &usize| sp.mep.runs.get(*i).is_some_and(|r| on_level(&r.level));
+    let mine: Vec<&Item> = items.iter().filter(|i| i.runs.iter().any(on_this)).collect();
+    let mine_runs: std::collections::HashSet<usize> = mine.iter().flat_map(|i| i.runs.iter().copied()).filter(on_this).collect();
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for r in mine_runs.iter().filter_map(|i| sp.mep.runs.get(*i)) {
         for p in r.points.iter().filter(|p| p.iter().all(|v| v.is_finite())) {
@@ -104,7 +107,7 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
     }
     let mut labels = 0usize;
     for it in &mine {
-        for r in it.runs.iter().filter_map(|i| sp.mep.runs.get(*i)) {
+        for r in it.runs.iter().filter(|i| on_this(i)).filter_map(|i| sp.mep.runs.get(*i)) {
             if r.points.len() >= 2 {
                 let _ = writeln!(s, r##"<polyline points="{}" fill="none" stroke="#d01010" stroke-width="3"/>"##, path_of(r));
             } else if let Some(p) = r.points.first() {
@@ -112,11 +115,12 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
             }
         }
         if labels < MAX_LABELS
-            && let Some(p) = it.runs.iter().filter_map(|i| sp.mep.runs.get(*i)).find_map(|r| r.points.first())
+            && let Some(p) = it.runs.iter().filter(|i| on_this(i)).filter_map(|i| sp.mep.runs.get(*i)).find_map(|r| r.points.first())
         {
             labels += 1;
+            let label = if it.to.is_empty() { it.label.clone() } else { format!("{} → {}", it.label, it.to) };
             let _ =
-                writeln!(s, r##"<text x="{:.1}" y="{:.1}" font-size="11" fill="#d01010">{}</text>"##, px(p[0]) + 4.0, py(p[1]) - 4.0, esc(&it.label));
+                writeln!(s, r##"<text x="{:.1}" y="{:.1}" font-size="11" fill="#d01010">{}</text>"##, px(p[0]) + 4.0, py(p[1]) - 4.0, esc(&label));
         }
     }
     // The title, the question, the legend and a scale.
@@ -139,4 +143,44 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
     );
     s.push_str("</svg>\n");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sketch_crops_to_the_levels_own_runs_and_marks_them_up() {
+        // A feeder's route on two levels, each level's plan in its own frame far apart on the
+        // sheet: the level 1 sketch is the level 1 runs only.
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}, {"name": "L2", "elevation_ft": 10, "height_ft": 10}],
+            "mep": {"runs": [
+                {"system": "E-FEEDER", "level": "L1", "source_sheet": "feeder 1 P→Q", "points": [[0, 0], [600, 0], [600, 240]], "size_in": [2, 2], "bottoms_ft": [9, 9, 9]},
+                {"system": "E-FEEDER", "level": "L2", "source_sheet": "feeder 1 P→Q", "points": [[90000, 0], [90600, 0]], "size_in": [2, 2], "bottoms_ft": [9, 9]},
+                {"system": "E-BRANCH", "level": "L1", "id": "circuit:L1:x:P-1#0", "points": [[100, 100], [300, 100]], "size_in": [0.75, 0], "bottoms_ft": [9, 9]}
+            ]}
+        }))
+        .unwrap();
+        let item = Item {
+            kind: "feeder",
+            id: "feeder 1 P→Q".into(),
+            label: "1".into(),
+            to: "Q".into(),
+            level: "L1".into(),
+            runs: vec![0, 1],
+            ..Item::default()
+        };
+        let svg = render(&Drawing::new_imperial(), &sp, &[item], "L1", "RFI-X: SER", "May SER be used?", 12.0);
+        assert!(svg.starts_with("<svg") && svg.contains("RFI-X: SER") && svg.contains("May SER be used?") && svg.contains(">1 → Q</text>"));
+        // One changed run marked up in red (the level 2 one is not on this sketch), the branch
+        // run in grey; the width is the level 1 runs' 50 ft and the margins, not the sheet's.
+        assert_eq!(svg.matches(r##"stroke="#d01010" stroke-width="3""##).count(), 1, "{svg}");
+        assert_eq!(svg.matches(r##"stroke="#b0b0b0""##).count(), 1);
+        assert!(svg.contains(">10 ft</text>"), "a scale for a 80 ft crop: {svg}");
+        // Hostile input: nothing on the level, non-finite points.
+        let none = render(&Drawing::new_imperial(), &sp, &[], "L9", "<&>", "\"", f64::NAN);
+        assert!(none.contains("&lt;&amp;&gt;") && none.ends_with("</svg>\n"));
+    }
 }
