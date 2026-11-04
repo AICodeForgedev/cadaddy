@@ -26,6 +26,7 @@ use super::perceive::{feet_inches, texts};
 use super::*;
 use crate::{Result, Session};
 
+mod homerun;
 mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
@@ -511,15 +512,35 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
 /// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
 const SHORT_ABBR: &[&str] = &["G", "W", "F", "V"];
 
-/// Parse a pipe system code from a text tag. Returns (size_in, system_code) if found.
-fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
+/// Parse a pipe system code from a text tag. Returns (size_in, system_code, second system) if
+/// found: a tag can name two systems run side by side (`1/2" HW & CW TO LAVATORY`, `HW/CW`), and
+/// a size can be written against its system (`1/2"CW`).
+fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str, Option<&'static str>)> {
     let up = t.to_ascii_uppercase().replace('\u{2033}', "\"");
     let words: Vec<&str> = up.split_whitespace().collect();
     // Skip texts that are too long to be pipe tags (schedules, notes, titles).
     if words.len() > 8 {
         return None;
     }
-    // Pattern 1: `N" SYS` (e.g. "2\" CW", "4\" SAN", "3/4\" HW")
+    let code = |w: &str| {
+        let s = w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+        PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)).map(|(_, code, ..)| *code)
+    };
+    // A system, or two joined (`HW/CW`, `HW&CW`), then perhaps `& CW` / `AND CW` after it.
+    let systems = |w: &str, rest: &[&str]| -> Option<(&'static str, Option<&'static str>)> {
+        if let Some((a, b)) = w.split_once(['/', '&', '+'])
+            && let (Some(a), Some(b)) = (code(a), code(b))
+        {
+            return Some((a, (a != b).then_some(b)));
+        }
+        let a = code(w)?;
+        let b = match rest {
+            [j, w2, ..] if matches!(*j, "&" | "AND" | "/" | "+") => code(w2).filter(|b| *b != a),
+            _ => None,
+        };
+        Some((a, b))
+    };
+    // Pattern 1: `N" SYS` (e.g. "2\" CW", "4\" SAN", "3/4\" HW", "1/2\"CW", "1/2\" HW & CW")
     for (i, w) in words.iter().enumerate() {
         if !w.contains('"') || w.contains('\'') {
             continue;
@@ -532,12 +553,15 @@ fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
             (_, v) => v,
         };
         if let Some(v) = value.filter(|v| *v > 0.0 && *v <= 24.0) {
-            // System code after the size: any abbreviation is valid here (even single-letter).
-            if let Some(sys) = words.get(i + 1) {
-                let s = sys.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
-                if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
-                    return Some((Some(v), code));
-                }
+            // System code after the size (or written against it): any abbreviation is valid
+            // here (even single-letter).
+            let glued = w.split_once('"').map(|(_, r)| r).filter(|r| !r.is_empty());
+            let (sys, rest) = match glued {
+                Some(g) => (Some(g), words.get(i + 1..).unwrap_or_default()),
+                None => (words.get(i + 1).copied(), words.get(i + 2..).unwrap_or_default()),
+            };
+            if let Some((a, b)) = sys.and_then(|sys| systems(sys, rest)) {
+                return Some((Some(v), a, b));
             }
             // Size without a system: skip (could be any dimension on the drawing).
             return None;
@@ -545,14 +569,14 @@ fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
     }
     // Pattern 2: bare system label (e.g. "CW", "SAN", "HW UP"). Only accept multi-char
     // abbreviations to avoid matching grid labels, room numbers, etc.
-    for w in &words {
+    for (i, w) in words.iter().enumerate() {
         let s = w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
         if SHORT_ABBR.iter().any(|a| a.eq_ignore_ascii_case(s)) {
             // Single-letter abbreviations need a size to be valid.
             continue;
         }
-        if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
-            return Some((None, code));
+        if let Some((a, b)) = systems(s, words.get(i + 1..).unwrap_or_default()) {
+            return Some((None, a, b));
         }
     }
     None
@@ -692,6 +716,32 @@ fn twin_chains(linework: &[&Arc<Entity>], upf: f64) -> Option<(Vec<(Vec<Vec2>, V
     Some((chains, widths))
 }
 
+/// The lines and short polylines that may be leaders, and the boxes of the shapes that may be
+/// their arrowheads (filled triangles: hatches, solids, small closed polylines).
+fn leaders_and_arrows(ents: &[&Arc<Entity>]) -> (Vec<homerun::Stroke>, Vec<[Vec2; 2]>) {
+    let mut strokes = Vec::new();
+    let mut arrows = Vec::new();
+    let bbox = |pts: &mut dyn Iterator<Item = Vec2>| {
+        pts.filter(|p| p.is_finite()).fold(None, |b: Option<[Vec2; 2]>, p| {
+            Some(b.map_or([p, p], |[lo, hi]| [Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))]))
+        })
+    };
+    for e in ents {
+        match &e.kind {
+            EntityKind::Line(l) => strokes.push(vec![l.a.xy(), l.b.xy()]),
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() <= 5 => arrows.extend(bbox(&mut p.vertices.iter().map(|v| v.p))),
+            EntityKind::LwPolyline(p) if !p.closed && (2..=4).contains(&p.vertices.len()) => strokes.push(p.vertices.iter().map(|v| v.p).collect()),
+            EntityKind::Hatch(h) => arrows.extend(bbox(&mut h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)))),
+            EntityKind::Solid(s) => arrows.extend(bbox(&mut s.corners.iter().map(|c| c.xy()))),
+            _ => {}
+        }
+        if strokes.len() >= MAX_SEGS {
+            break;
+        }
+    }
+    (strokes, arrows)
+}
+
 /// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
 /// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
 fn read_pipes_from_tags(
@@ -706,16 +756,29 @@ fn read_pipes_from_tags(
     struct PipeTag {
         at: Vec2,
         system: &'static str,
+        /// The second system of a tag that names two (`1/2" HW & CW`).
+        also: Option<&'static str>,
         size_in: Option<f64>,
         #[allow(dead_code)]
         text: String,
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
-    for (_, t, at, _) in notes {
-        if let Some((sz, sys)) = parse_pipe_tag(t)
+    let mut lettering: Vec<(f64, usize)> = Vec::new();
+    for (_, t, at, h) in notes {
+        if let Some((sz, sys, also)) = parse_pipe_tag(t)
             && !sys.is_empty()
         {
-            pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
+            pipe_tags.push(PipeTag { at: *at, system: sys, also, size_in: sz, text: t.clone() });
+            lettering.push((*h, t.chars().count()));
+        }
+    }
+    // A tag with a leader is where its arrow points.
+    if !pipe_tags.is_empty() {
+        let (strokes, arrows) = leaders_and_arrows(ents);
+        for (tag, (h, chars)) in pipe_tags.iter_mut().zip(lettering) {
+            if let Some(tip) = homerun::leader_tip(tag.at, h, chars, &strokes, &arrows) {
+                tag.at = tip;
+            }
         }
     }
     if pipe_tags.is_empty() && untagged.is_none() {
@@ -756,6 +819,8 @@ fn read_pipes_from_tags(
             })
             .count();
         let c = if !pipe_tags.is_empty() && 2 * near >= pipe_tags.len() && pen.len() < linework.len() { pen_chains } else { chains(&linework) };
+        // A run drawn in a pattern (a tube's zigzag) is its middle line.
+        let c: Vec<(Vec<Vec2>, Vec<Handle>)> = c.into_iter().map(|(pts, hs)| (homerun::centreline(&pts, upf).unwrap_or(pts), hs)).collect();
         let n = c.len();
         (c, vec![None; n])
     });
@@ -822,6 +887,29 @@ fn read_pipes_from_tags(
     } else {
         Vec::new()
     };
+    // Each run's own tag: the nearest within reach (of the runs long enough to be pipe).
+    let own_tags: Vec<Option<usize>> = all_chains
+        .iter()
+        .map(|(pts, _)| {
+            if min_chain_len > 0.0 && pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() < min_chain_len {
+                return None;
+            }
+            pipe_tags
+                .iter()
+                .enumerate()
+                .map(|(k, t)| (k, pts.windows(2).filter_map(|w| Some(seg_dist(t.at, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min)))
+                .filter(|(_, d)| *d < reach)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(k, _)| k)
+        })
+        .collect();
+    // Tubes under a tag naming two systems: each its manifold's, else shared between the two.
+    let paired = homerun::resolve_pairs(
+        &all_chains.iter().map(|(pts, _)| pts.clone()).collect::<Vec<_>>(),
+        &own_tags,
+        &pipe_tags.iter().map(|t| homerun::Tag { at: t.at, system: t.system, also: t.also }).collect::<Vec<_>>(),
+        upf,
+    );
     for (ci, ((pts, handles), width)) in all_chains.iter().zip(&widths).enumerate() {
         if pts.len() < 2 {
             continue;
@@ -856,22 +944,16 @@ fn read_pipes_from_tags(
             continue;
         }
 
-        // Find the nearest pipe tag to this chain.
-        let mut best_tag: Option<&PipeTag> = None;
-        let mut best_dist = f64::INFINITY;
-        for tag in &pipe_tags {
-            let d = segs.iter().map(|(a, b)| seg_dist(tag.at, *a, *b)).fold(f64::INFINITY, f64::min);
-            if d < reach && d < best_dist {
-                best_dist = d;
-                best_tag = Some(tag);
-            }
-        }
+        // The nearest pipe tag to this chain.
+        let best_tag = own_tags.get(ci).copied().flatten().and_then(|k| pipe_tags.get(k));
         // Untagged: the tag of the run it comes off, else the plan's own system (a sanitary
         // plan's piping), else not a pipe.
-        let own_tag = best_tag;
+        let pair = paired.get(ci).copied().flatten();
+        // A tube from a manifold, tagged by the manifold's tag, is not the manifold's size.
+        let own_tag = best_tag.filter(|t| t.also.is_some() || !pair.is_some_and(|(_, from)| from));
         let best_tag = best_tag.or_else(|| spread.get(ci).copied().flatten().and_then(|k| pipe_tags.get(k)));
         // (Only a plan that draws its pipes to scale says which of its untagged lines are pipes.)
-        let Some(sys_code) = best_tag.map(|t| t.system).or(untagged.filter(|_| twin)) else { continue };
+        let Some(sys_code) = pair.map(|(s, _)| s).or(best_tag.map(|t| t.system)).or(untagged.filter(|_| twin)) else { continue };
         systems_seen.insert(sys_code, true);
 
         let (_, _, _, default_size, default_bottom) =
@@ -2889,6 +2971,23 @@ mod outline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pipe_tag_can_name_two_systems_or_write_its_size_against_its_system() {
+        assert_eq!(parse_pipe_tag("1/2\" HW & CW TO"), Some((Some(0.5), "HW", Some("CW"))));
+        assert_eq!(parse_pipe_tag("3/4\" CW AND HW"), Some((Some(0.75), "CW", Some("HW"))));
+        assert_eq!(parse_pipe_tag("1\" HW/CW"), Some((Some(1.0), "HW", Some("CW"))));
+        assert_eq!(parse_pipe_tag("1/2\"CW TO WATER"), Some((Some(0.5), "CW", None)));
+        assert_eq!(parse_pipe_tag("1 1/2\" HW"), Some((Some(1.5), "HW", None)));
+        assert_eq!(parse_pipe_tag("HW & CW UP"), Some((None, "HW", Some("CW"))));
+        // One system named twice is one; a size and no system is no tag.
+        assert_eq!(parse_pipe_tag("2\" CW & CW"), Some((Some(2.0), "CW", None)));
+        assert_eq!(parse_pipe_tag("12\" O.C."), None);
+        assert_eq!(parse_pipe_tag("1/2\"X TO"), None);
+        // A single letter alone is still no tag.
+        assert_eq!(parse_pipe_tag("V"), None);
+        assert_eq!(parse_pipe_tag("W/D"), None);
+    }
 
     #[test]
     fn runs_with_no_height_of_their_own_sit_in_their_levels_plenum() {

@@ -379,7 +379,7 @@ pub(crate) fn spread(paths: &[Vec<Vec2>], seed: &[Option<usize>], reach: f64) ->
 }
 
 /// A path without its in-line points (each within `tol` of the line through its neighbours).
-fn simplify(pts: Vec<Vec2>, tol: f64) -> Vec<Vec2> {
+pub(crate) fn simplify(pts: Vec<Vec2>, tol: f64) -> Vec<Vec2> {
     let mut out: Vec<Vec2> = Vec::with_capacity(pts.len());
     for p in pts {
         while out.len() >= 2 {
