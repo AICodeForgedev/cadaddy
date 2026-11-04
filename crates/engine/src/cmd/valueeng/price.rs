@@ -46,7 +46,8 @@ fn num(s: &str) -> Option<f64> {
     s.trim().trim_matches('"').trim_start_matches('$').replace(',', "").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0)
 }
 
-/// One CSV line's cells (quoted cells may hold commas).
+/// One CSV line's cells: a cell that starts with a quote may hold commas (`""` a quote in it);
+/// a quote elsewhere is an inch mark (`3/4"`).
 fn cells(line: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -58,7 +59,11 @@ fn cells(line: &str) -> Vec<String> {
                 cur.push('"');
                 chars.next();
             }
-            '"' => quoted = !quoted,
+            '"' if quoted => quoted = false,
+            '"' if cur.trim().is_empty() => {
+                cur.clear();
+                quoted = true;
+            }
             ',' if !quoted => out.push(std::mem::take(&mut cur).trim().to_string()),
             _ => cur.push(c),
         }
@@ -117,7 +122,8 @@ pub(crate) fn parse_cost_db(text: &str, json_form: bool, cmd: &str) -> Result<Co
                 continue;
             };
             let col = |names: &[&str]| h.iter().position(|x| names.contains(&x.as_str()));
-            let (Some(ci), Some(cm), Some(cl)) = (col(&["item", "description", "name"]), col(&["material_unit", "material"]), col(&["labor_unit", "labor"]))
+            let (Some(ci), Some(cm), Some(cl)) =
+                (col(&["item", "description", "name"]), col(&["material_unit", "material"]), col(&["labor_unit", "labor"]))
             else {
                 return Err(bad(cmd, "`cost_db` needs columns item, material_unit and labor_unit (labor in dollars per unit)"));
             };
@@ -160,7 +166,10 @@ impl CostDb {
     /// any).
     pub(crate) fn find(&self, item: &str, size: &str) -> Option<&CostRow> {
         let (i, s) = (norm(item), norm(size));
-        self.rows.iter().find(|r| norm(&r.item) == i && !r.size.is_empty() && norm(&r.size) == s).or_else(|| self.rows.iter().find(|r| norm(&r.item) == i && r.size.is_empty()))
+        self.rows
+            .iter()
+            .find(|r| norm(&r.item) == i && !r.size.is_empty() && norm(&r.size) == s)
+            .or_else(|| self.rows.iter().find(|r| norm(&r.item) == i && r.size.is_empty()))
     }
 }
 
@@ -220,7 +229,15 @@ pub(crate) fn price(s: &mut Session, lines: &[Line], db: Option<&CostDb>, mp: &M
                     v["material"] = json!(r2(m));
                     v["labor_dollars"] = json!(r2(ld));
                     v["man_hours"] = mh.map_or(Value::Null, |h| json!((h * 1000.0).round() / 1000.0));
-                    v["via"] = json!(format!("cost DB: {} {} ${}/{} material, ${}/{} labor (dollars)", r.item, r.size, r.material, unit_of(r), r.labor_dollars, unit_of(r)));
+                    v["via"] = json!(format!(
+                        "cost DB: {} {} ${}/{} material, ${}/{} labor (dollars)",
+                        r.item,
+                        r.size,
+                        r.material,
+                        unit_of(r),
+                        r.labor_dollars,
+                        unit_of(r)
+                    ));
                     tm += m;
                     tl += ld;
                     th += mh.unwrap_or(0.0);
@@ -250,7 +267,8 @@ pub(crate) fn price(s: &mut Session, lines: &[Line], db: Option<&CostDb>, mp: &M
             let (Some(v), Some(l)) = (out.get_mut(*i), lines.get(*i)) else { continue };
             let x = got.get(k).cloned().unwrap_or(Value::Null);
             if x["priced"].as_bool() == Some(true) {
-                let (m, h, ld) = (x["material"].as_f64().unwrap_or(0.0), x["labor_hours"].as_f64().unwrap_or(0.0), x["labor_cost"].as_f64().unwrap_or(0.0));
+                let (m, h, ld) =
+                    (x["material"].as_f64().unwrap_or(0.0), x["labor_hours"].as_f64().unwrap_or(0.0), x["labor_cost"].as_f64().unwrap_or(0.0));
                 v["material"] = json!(r2(m));
                 v["labor_dollars"] = json!(r2(ld));
                 v["man_hours"] = json!((h * 1000.0).round() / 1000.0);
@@ -344,12 +362,13 @@ mod tests {
 
     #[test]
     fn a_cost_db_reads_its_rows_and_what_it_reports_of_itself() {
-        let csv = "# price_date: 2026-09-30\n# escalation: 3% a year to the bid date\n# manpower_rate: 70\n# manpower_rate_source: the job's workbook\nitem,size,unit,material_unit,labor_unit\n\"EMT conduit\",\"3/4\"\"\",ft,0.80,2.10\nNM-B cable,12/2 w/G,ft,0.55,0.95\nCable staple,,ea,0.05,0.40\n";
+        let csv = "# price_date: 2026-09-30\n# escalation: 3% a year to the bid date\n# manpower_rate: 70\n# manpower_rate_source: the job's workbook\nitem,size,unit,material_unit,labor_unit\n\"EMT conduit\",\"3/4\"\"\",ft,0.80,2.10\nNM-B cable,12/2 w/G,ft,0.55,0.95\nCable staple,,ea,0.05,0.40\nEMT coupling,1/2\",ea,0.30,1.10\n";
         let db = parse_cost_db(csv, false, "t").unwrap();
         assert_eq!((db.price_date.as_str(), db.manpower_rate), ("2026-09-30", Some(70.0)));
         assert_eq!(db.escalation, "3% a year to the bid date");
-        assert_eq!(db.rows.len(), 3);
+        assert_eq!(db.rows.len(), 4);
         assert_eq!(db.rows[0].size, "3/4\"");
+        assert_eq!(db.rows[3].size, "1/2\"", "an inch mark in an unquoted cell");
         assert!(db.find("emt conduit", "3/4\"").is_some());
         assert!(db.find("Cable staple", "anything").is_some(), "a row with no size takes any");
         assert!(db.find("EMT conduit", "1\"").is_none());
@@ -385,7 +404,9 @@ mod tests {
 
     #[test]
     fn hostile_cost_dbs_never_panic() {
-        for t in ["", "#", "# manpower_rate: NaN\nitem,material,labor\n,,\nx,-1,inf\n", "\"unterminated,a\nitem,material,labor\n\"\"\"\n", "{}", "[1,2]"] {
+        for t in
+            ["", "#", "# manpower_rate: NaN\nitem,material,labor\n,,\nx,-1,inf\n", "\"unterminated,a\nitem,material,labor\n\"\"\"\n", "{}", "[1,2]"]
+        {
             let _ = parse_cost_db(t, false, "t");
             let _ = parse_cost_db(t, true, "t");
         }

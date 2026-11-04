@@ -11,10 +11,10 @@ use cadaddy_walk3d::{BuildingSpec, MepRun};
 use super::super::conduitroute::{BRANCH_SYSTEM, mep_piece};
 use super::super::gearbuild::FEEDER_SYSTEM;
 use super::super::mepatoms::{self, Atom};
-use cadaddy_doc::props::{self, Prop};
 use super::facts::CodeFacts;
 use super::price::Line;
 use super::{Alternative, Rules};
+use cadaddy_doc::props::{self, Prop};
 
 /// Circuits, pieces and runs looked at, at most (hostile models).
 const MAX_ITEMS: usize = 20_000;
@@ -115,18 +115,22 @@ fn feeder_trip(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder) -> Option<(f64, St
     let tag = f.tag.trim().to_ascii_uppercase();
     if let Some(s) = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(f.from.trim())) {
         for c in s.circuits.iter().take(2_000) {
-            let words: Vec<String> = c.description.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '/')).map(str::to_ascii_uppercase).collect();
+            let words: Vec<String> =
+                c.description.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '/')).map(str::to_ascii_uppercase).collect();
             let wire = c.wire.trim().to_ascii_uppercase();
             let by_wire = !tag.is_empty() && wire.strip_prefix("FEEDER ").is_some_and(|w| w.split([':', ' ', ',']).next() == Some(tag.as_str()));
-            if (!to.is_empty() && words.contains(&to)) || by_wire {
-                if let Some(a) = trip(&c.breaker) {
-                    return Some((a, format!("panel {} circuit {}: {}", s.panel, c.number, c.breaker)));
-                }
+            if ((!to.is_empty() && words.contains(&to)) || by_wire)
+                && let Some(a) = trip(&c.breaker)
+            {
+                return Some((a, format!("panel {} circuit {}: {}", s.panel, c.number, c.breaker)));
             }
         }
     }
     let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(f.to.trim()))?;
-    s.header.iter().filter(|(k, _)| k.to_ascii_uppercase().contains("MAIN")).find_map(|(k, v)| trip(v).map(|a| (a, format!("panel {} {k}: {v}", s.panel))))
+    s.header
+        .iter()
+        .filter(|(k, _)| k.to_ascii_uppercase().contains("MAIN"))
+        .find_map(|(k, v)| trip(v).map(|a| (a, format!("panel {} {k}: {v}", s.panel))))
 }
 
 /// The rooms of the model by the label its pieces carry (`room`): name, outline, level.
@@ -196,12 +200,24 @@ fn pieces(d: &Drawing) -> Vec<Piece> {
         let at = super::super::mepatoms::build::stick_ends(&ps).map_or_else(
             || {
                 let b = cadaddy_doc::entity_bounds(d, e, 0);
-                if b.is_empty() { Vec3::new(f64::NAN, f64::NAN, f64::NAN) } else { Vec3::new((b.min.x + b.max.x) * 0.5, (b.min.y + b.max.y) * 0.5, 0.0) }
+                if b.is_empty() {
+                    Vec3::new(f64::NAN, f64::NAN, f64::NAN)
+                } else {
+                    Vec3::new((b.min.x + b.max.x) * 0.5, (b.min.y + b.max.y) * 0.5, 0.0)
+                }
             },
             |(a, b)| (a + b) * 0.5,
         );
         let tag = g("run").split('#').next().unwrap_or_default().to_string();
-        out.push(Piece { handle: e.handle, level: super::super::bspec::made_level(e).unwrap_or_default(), room: g("room"), system, circuit: g("circuit"), tag, at });
+        out.push(Piece {
+            handle: e.handle,
+            level: super::super::bspec::made_level(e).unwrap_or_default(),
+            room: g("room"),
+            system,
+            circuit: g("circuit"),
+            tag,
+            at,
+        });
     }
     out
 }
@@ -243,14 +259,24 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     let rated_corr = corridors_rated(sp, facts);
     let corridor_words = rules.areas.get("rated_corridor").map(|a| a.words.clone()).unwrap_or_default();
     let plenum_words = rules.areas.get("plenum").map(|a| a.words.clone()).unwrap_or_default();
-    // Penetrations of rated walls, by level and circuit label.
-    let mut pen: HashMap<(String, String), usize> = HashMap::new();
+    // Penetrations of rated walls: level, circuit (a homerun's circuits joined), where.
+    let mut pens: Vec<(String, String, Vec2)> = Vec::new();
     for p in report["penetrations"].as_array().into_iter().flatten().take(MAX_PIECES) {
-        let rated = p["rating"].as_str().is_some_and(|r| !r.trim().is_empty() && r.trim() != "0");
+        let rated = p["rating"].as_str().is_some_and(|r| !r.trim().is_empty() && !r.trim().starts_with('0'));
+        let at = Vec2::new(p["at"][0].as_f64().unwrap_or(f64::NAN), p["at"][1].as_f64().unwrap_or(f64::NAN));
         if rated {
-            *pen.entry((p["level"].as_str().unwrap_or_default().to_ascii_lowercase(), p["circuit"].as_str().unwrap_or_default().to_string())).or_default() += 1;
+            pens.push((p["level"].as_str().unwrap_or_default().to_ascii_lowercase(), p["circuit"].as_str().unwrap_or_default().to_string(), at));
         }
     }
+    // Below the slab on grade: under the floor of the lowest level (a riser through an upper
+    // floor is not).
+    let lowest = sp
+        .levels
+        .iter()
+        .filter(|l| l.elevation_ft.is_finite())
+        .min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft))
+        .map(|l| l.name.to_ascii_lowercase());
+    let below_slab = |r: &MepRun| lowest.as_deref() == Some(r.level.to_ascii_lowercase().as_str()) && r.bottoms_ft.iter().any(|b| *b < -0.1);
     // The runs of each circuit tag.
     let mut runs_of: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS).filter(|(_, r)| r.system == BRANCH_SYSTEM) {
@@ -276,14 +302,66 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
     for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_ITEMS) {
         conductors_of.entry((t.level.to_ascii_lowercase(), field(t, "circuit").to_string())).or_insert_with(|| field(t, "conductors").to_string());
     }
-    let classify = |level: &str, base: &str, idx: &[usize], below: bool| -> Area {
+    let routed_tags: Vec<&cadaddy_walk3d::tags::ElementTag> =
+        sp.tags.iter().filter(|t| t.kind == "circuit" && field(t, "route") == super::super::conduitroute::ROUTED).take(MAX_ITEMS).collect();
+    let is_homerun = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.contains_key("circuits") || t.id.contains(":home:");
+    // Each rated penetration to the routed circuit whose runs pass through it (a typical unit's
+    // circuit carries one label in every unit).
+    let mut pen_of: HashMap<&str, usize> = HashMap::new();
+    {
+        let mut keyed: HashMap<(String, String), Vec<&str>> = HashMap::new();
+        for t in &routed_tags {
+            let label = if is_homerun(t) {
+                field(t, "circuits").split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(",")
+            } else {
+                field(t, "circuit").to_string()
+            };
+            keyed.entry((t.level.to_ascii_lowercase(), label)).or_default().push(t.id.as_str());
+        }
+        for (level, circuit, at) in &pens {
+            let Some(cands) = keyed.get(&(level.clone(), circuit.clone())) else { continue };
+            let best = if cands.len() == 1 {
+                cands.first().copied()
+            } else {
+                cands
+                    .iter()
+                    .map(|id| {
+                        let d = runs_of
+                            .get(id)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|i| sp.mep.runs.get(*i))
+                            .map(|r| dist_to_run(r, *at))
+                            .fold(f64::INFINITY, f64::min);
+                        (*id, d)
+                    })
+                    .filter(|(_, d)| d.is_finite())
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(id, _)| id)
+            };
+            if let Some(id) = best {
+                *pen_of.entry(id).or_default() += 1;
+            }
+        }
+    }
+    let classify = |level: &str, base: &str, idx: &[usize], below: bool, rated_here: bool| -> Area {
         let mut a = Area { base: base.to_string(), ..Area::default() };
         if below {
             a.flags.insert("below_slab".into());
         }
+        let mut ceiling_known = false;
         for &i in idx.iter().take(10_000) {
             let Some(p) = all.get(i) else { continue };
             let at = Vec2::new(p.at.x, p.at.y);
+            if let Some((grid, words)) = ceiling_at(sp, level, at) {
+                ceiling_known = true;
+                if grid {
+                    a.flags.insert("suspended".into());
+                }
+                if has(&words, &plenum_words) {
+                    a.flags.insert("plenum".into());
+                }
+            }
             let mut corridor = sp
                 .circulation
                 .iter()
@@ -299,6 +377,7 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
                         a.flags.insert("plenum".into());
                     }
                     if let Some((grid, words)) = ceiling_at(sp, level, info.centre) {
+                        ceiling_known = true;
                         if grid {
                             a.flags.insert("suspended".into());
                         }
@@ -308,19 +387,26 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
                     }
                 }
             }
-            if corridor && rated_corr && base != "unit" {
+            // A corridor is rated where the code sheet or its walls' types say so, or where the
+            // run passes through a rated wall from it.
+            if corridor && (rated_corr || rated_here) && base != "unit" {
                 a.flags.insert("rated_corridor".into());
             }
+        }
+        // No RCP ceiling and no room finish over the run: whether it is a suspended ceiling's
+        // cavity is not documented.
+        if !ceiling_known && !idx.is_empty() {
+            a.flags.insert("ceiling_unknown".into());
         }
         a
     };
     let mut out: Vec<Item> = Vec::new();
     // -- Branch circuits (and homeruns) as routed. --
-    for t in sp.tags.iter().filter(|t| t.kind == "circuit" && field(t, "route") == super::super::conduitroute::ROUTED).take(MAX_ITEMS) {
+    for t in routed_tags.iter().copied() {
         let label = field(t, "circuit").to_string();
         let level = t.level.clone();
         // A homerun's own tag (its circuits listed), not a circuit's (which says where its homerun goes).
-        let homerun = t.fields.contains_key("circuits") || t.id.contains(":home:");
+        let homerun = is_homerun(t);
         let key = (level.to_ascii_lowercase(), label.clone());
         let idx = match by_tag.get(t.id.as_str()) {
             Some(v) => v.clone(),
@@ -328,7 +414,11 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             None => Vec::new(),
         };
         let runs = runs_of.get(t.id.as_str()).cloned().unwrap_or_default();
-        let below = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).any(|r| r.bottoms_ft.iter().any(|b| *b < -0.1));
+        // A tag no run or piece is routed for changes nothing.
+        if runs.is_empty() && idx.is_empty() {
+            continue;
+        }
+        let below = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).any(below_slab);
         let members: Vec<(String, String)> = if homerun {
             field(t, "circuits")
                 .split(',')
@@ -352,21 +442,22 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
                 .filter_map(|(l, _)| sp.tags.iter().find(|x| x.kind == "circuit" && x.level.eq_ignore_ascii_case(&level) && field(x, "circuit") == l))
                 .map(|x| area_word(field(x, "area")))
                 .collect();
-            if areas.len() == 1 { areas.into_iter().next().unwrap_or("common") } else if areas.contains("exposed") { "exposed" } else { "common" }
+            if areas.len() == 1 {
+                areas.into_iter().next().unwrap_or("common")
+            } else if areas.contains("exposed") {
+                "exposed"
+            } else {
+                "common"
+            }
         } else {
             area_word(field(t, "area"))
         };
         let feet: f64 = runs.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| run_feet(r, upf)).sum();
-        let mut area = classify(&level, base, &idx, below);
-        if has(&field(t, "wiring_method").to_string(), &rl.methods.exposed_words) && area.base == "common" {
+        let pens = pen_of.get(t.id.as_str()).copied().unwrap_or(0);
+        let mut area = classify(&level, base, &idx, below, pens > 0);
+        if has(field(t, "wiring_method"), &rl.methods.exposed_words) && area.base == "common" {
             area.base = "exposed".into();
         }
-        let pens = if homerun {
-            let labels: Vec<&str> = members.iter().map(|(l, _)| l.as_str()).collect();
-            pen.get(&(key.0.clone(), labels.join(","))).copied().unwrap_or(0)
-        } else {
-            pen.get(&key).copied().unwrap_or(0)
-        };
         out.push(Item {
             kind: "branch",
             id: t.id.clone(),
@@ -427,7 +518,11 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             continue;
         }
         // A typical panel's feeders: each copy's route is one feeder (`sources` of one tag).
-        let copies = if typical.contains(&to_up) { mine.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| r.source_sheet.clone()).collect::<BTreeSet<_>>() } else { BTreeSet::new() };
+        let copies = if typical.contains(&to_up) {
+            mine.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| r.source_sheet.clone()).collect::<BTreeSet<_>>()
+        } else {
+            BTreeSet::new()
+        };
         let groups: Vec<Vec<usize>> = if copies.len() > 1 {
             copies.iter().map(|src| mine.iter().copied().filter(|i| sp.mep.runs.get(*i).is_some_and(|r| &r.source_sheet == src)).collect()).collect()
         } else {
@@ -437,12 +532,34 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             used.extend(g.iter().copied());
             let level = g.first().and_then(|i| sp.mep.runs.get(*i)).map(|r| r.level.clone()).unwrap_or_default();
             let idx: Vec<usize> = owner.iter().filter(|(_, ri)| g.contains(ri)).map(|(pi, _)| *pi).collect();
-            let below = g.iter().filter_map(|i| sp.mep.runs.get(*i)).any(|r| r.bottoms_ft.iter().any(|b| *b < -0.1));
+            let below = g.iter().filter_map(|i| sp.mep.runs.get(*i)).any(below_slab);
             let feet: f64 = g.iter().filter_map(|i| sp.mep.runs.get(*i)).map(|r| run_feet(r, upf)).sum::<f64>() / f64::from(f.conduits.max(1));
-            let dest = g.first().and_then(|i| sp.mep.runs.get(*i)).map(|r| r.source_sheet.rsplit('→').next().unwrap_or_default().trim().to_string()).unwrap_or_default();
-            let base = if typical.contains(&to_up) { "common" } else if has(&f.to, &rl.methods.exposed_rooms) { "exposed" } else { "common" };
-            let mut area = classify(&level, base, &idx, below);
+            let dest = g
+                .first()
+                .and_then(|i| sp.mep.runs.get(*i))
+                .map(|r| r.source_sheet.rsplit('→').next().unwrap_or_default().trim().to_string())
+                .unwrap_or_default();
+            let base = if typical.contains(&to_up) {
+                "common"
+            } else if has(&f.to, &rl.methods.exposed_rooms) {
+                "exposed"
+            } else {
+                "common"
+            };
+            let mut area = classify(&level, base, &idx, below, false);
             area.base = base.to_string();
+            // No pieces in the model to read its ceilings from: not documented either.
+            if idx.is_empty() && !g.is_empty() && !area.flags.contains("suspended") {
+                let known = g
+                    .iter()
+                    .filter_map(|i| sp.mep.runs.get(*i))
+                    .flat_map(|r| r.points.iter())
+                    .take(2_000)
+                    .any(|q| ceiling_at(sp, &level, Vec2::new(q[0], q[1])).is_some());
+                if !known {
+                    area.flags.insert("ceiling_unknown".into());
+                }
+            }
             // Fill: the raceway against what its conductors need.
             let sizes = |n: u32, s: &str| (n, super::super::ugsheets::wire_size(s));
             let mut conds = vec![sizes(f.phases, &f.size), sizes(f.neutrals, if f.neutral_size.is_empty() { &f.size } else { &f.neutral_size })];
@@ -452,7 +569,8 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             let need = needed_raceway("EMT", &conds);
             let oversized = need.filter(|n| f.conduit_in.is_finite() && f.conduit_in > *n + 1e-9).map(|n| (f.conduit_in, n));
             let (breaker, _) = feeder_trip(sp, f).map_or((None, String::new()), |(a, s)| (Some(a), s));
-            let stub_pieces: Vec<Handle> = all.iter().filter(|p| p.system.eq_ignore_ascii_case(&f.tag) && !f.tag.is_empty()).map(|p| p.handle).collect();
+            let stub_pieces: Vec<Handle> =
+                all.iter().filter(|p| p.system.eq_ignore_ascii_case(&f.tag) && !f.tag.is_empty()).map(|p| p.handle).collect();
             let mut design: Vec<Handle> = idx.iter().filter_map(|i| all.get(*i)).map(|p| p.handle).collect();
             // A typical panel's stubs belong to its feeders together: each copy its share.
             if copies.len() <= 1 {
@@ -489,7 +607,16 @@ pub(crate) fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
     let w = |n: u32, s: &str, g: bool| {
         let size = super::super::ugsheets::wire_size(s);
         let size = size.trim_start_matches('#').split_whitespace().next().unwrap_or_default().to_string();
-        format!("{n}#{size}{}", if g { "G" } else if al { " AL" } else { "" })
+        format!(
+            "{n}#{size}{}",
+            if g {
+                "G"
+            } else if al {
+                " AL"
+            } else {
+                ""
+            }
+        )
     };
     let mut parts = Vec::new();
     if f.neutral_size.is_empty() || f.neutral_size == f.size || f.neutrals == 0 {
@@ -559,16 +686,35 @@ pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_i
             let sets = f64::from(f.sets.max(1));
             let mut add = |n: u32, s: &str| {
                 if n > 0 {
-                    *by.entry(("wire".into(), wire.into(), super::super::ugsheets::wire_size(s), "ft".into())).or_default() += it.feet * sets * f64::from(n);
+                    *by.entry(("wire".into(), wire.into(), super::super::ugsheets::wire_size(s), "ft".into())).or_default() +=
+                        it.feet * sets * f64::from(n);
                 }
             };
             add(f.phases, &f.size);
             add(f.neutrals, if f.neutral_size.is_empty() { &f.size } else { &f.neutral_size });
             add(f.grounds, if f.ground_size.is_empty() { &f.size } else { &f.ground_size });
-            // No pieces in the model (not built): its raceways from the schedule over the route.
+            // No pieces in the model (its feeders not built): its raceways cut from its routes as
+            // the atom builder cuts them (sticks, couplings, connectors, straps, elbows).
             if !conduit {
+                let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+                let ar = mepatoms::rules();
                 let size = if f.conduit_in.is_finite() && f.conduit_in > 0.0 { f.conduit_in } else { 1.0 };
-                *by.entry(("conduit".into(), format!("{} conduit", it.method), mepatoms::trade_size(size), "ft".into())).or_default() += it.feet * f64::from(f.conduits.max(1));
+                let name = if ar.raceways.contains_key(&it.method) { it.method.clone() } else { ar.default_raceway.clone() };
+                if let Some(rw) = ar.raceways.get(&name) {
+                    let large = mepatoms::large_conductors(&feeder_makeup(f), ar.bushing_min_awg);
+                    for r in it.runs.iter().filter_map(|i| sp.mep.runs.get(*i)) {
+                        let Some(level) = sp.level(&r.level) else { continue };
+                        let path = mepatoms::build::run_path(r, level.elevation_ft * upf, upf);
+                        for a in mepatoms::raceway_pieces(&path, upf, size, &name, rw, large, ar).atoms {
+                            let by_ft = matches!(a.kind, "conduit" | "cable" | "wire");
+                            let qty = if by_ft { a.length_ft } else { 1.0 };
+                            if qty.is_finite() && qty > 0.0 && a.kind != "wire" {
+                                *by.entry((a.kind.to_string(), a.item.clone(), a.size.clone(), if by_ft { "ft".into() } else { "ea".into() }))
+                                    .or_default() += qty;
+                            }
+                        }
+                    }
+                }
             }
         }
         if it.rated_penetrations > 0 {
@@ -576,7 +722,10 @@ pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_i
             *by.entry(("firestop".into(), fs_item.into(), size, "ea".into())).or_default() += it.rated_penetrations as f64;
         }
     }
-    by.into_iter().filter(|(_, q)| *q > 0.0).map(|((kind, item, size, unit), qty)| Line { kind, item, size, unit, qty: (qty * 100.0).round() / 100.0 }).collect()
+    by.into_iter()
+        .filter(|(_, q)| *q > 0.0)
+        .map(|((kind, item, size, unit), qty)| Line { kind, item, size, unit, qty: (qty * 100.0).round() / 100.0 })
+        .collect()
 }
 
 /// The alternative's pieces along the same routes: one cable per circuit (a homerun's circuits
@@ -590,8 +739,12 @@ pub(crate) fn alt_atoms(sp: &BuildingSpec, items: &[&Item], cable: &str) -> Vec<
     for it in items {
         let sets: Vec<(String, String)> = match (it.kind, it.feeder.and_then(|i| sp.mep.feeders.get(i))) {
             // A feeder's sets: one cable each, its raceways' routes sharing them.
-            ("feeder", Some(f)) => std::iter::repeat_n((it.label.clone(), feeder_makeup(f)), (f.sets.max(1) / f.conduits.max(1)).clamp(1, 12) as usize).collect(),
-            _ if !it.members.is_empty() => it.members.iter().map(|(l, c)| (l.clone(), if c.is_empty() { it.conductors.clone() } else { c.clone() })).collect(),
+            ("feeder", Some(f)) => {
+                std::iter::repeat_n((it.label.clone(), feeder_makeup(f)), (f.sets.max(1) / f.conduits.max(1)).clamp(1, 12) as usize).collect()
+            }
+            _ if !it.members.is_empty() => {
+                it.members.iter().map(|(l, c)| (l.clone(), if c.is_empty() { it.conductors.clone() } else { c.clone() })).collect()
+            }
             _ => vec![(it.label.clone(), it.conductors.clone())],
         };
         for ri in it.runs.iter().take(MAX_RUNS) {
@@ -625,7 +778,10 @@ pub(crate) fn alt_lines(sp: &BuildingSpec, items: &[&Item], atoms: &[(Atom, Stri
                     let al = f.material.trim().eq_ignore_ascii_case("al");
                     let bare = |s: &str| super::super::ugsheets::wire_size(s).trim_start_matches('#').to_string();
                     let mut sizes: Vec<String> = std::iter::repeat_n(bare(&f.size), f.phases.clamp(1, 3) as usize).collect();
-                    sizes.extend(std::iter::repeat_n(bare(if f.neutral_size.is_empty() { &f.size } else { &f.neutral_size }), f.neutrals.min(2) as usize));
+                    sizes.extend(std::iter::repeat_n(
+                        bare(if f.neutral_size.is_empty() { &f.size } else { &f.neutral_size }),
+                        f.neutrals.min(2) as usize,
+                    ));
                     if f.grounds > 0 {
                         sizes.push(bare(if f.ground_size.is_empty() { &f.size } else { &f.ground_size }));
                     }
@@ -646,4 +802,74 @@ pub(crate) fn alt_lines(sp: &BuildingSpec, items: &[&Item], atoms: &[(Atom, Stri
         *by.entry(("firestop".into(), fs_item.into(), String::new(), "ea".into())).or_default() += pens as f64;
     }
     by.into_iter().map(|((kind, item, size, unit), qty)| Line { kind, item, size, unit, qty: (qty * 100.0).round() / 100.0 }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tag(id: &str, level: &str, label: &str, area: &str) -> serde_json::Value {
+        serde_json::json!({"id": id, "kind": "circuit", "level": level, "at_ft": [0, 0], "fields": {
+            "circuit": {"value": label, "source": "plan"}, "panel": {"value": "P", "source": "plan"},
+            "conductors": {"value": "2#12 + 1#12G", "source": "default"}, "conduit": {"value": "EMT", "source": "spec"},
+            "route": {"value": "routed", "source": "computed"}, "area": {"value": area, "source": "computed"}
+        }})
+    }
+
+    #[test]
+    fn only_runs_under_the_lowest_floor_are_below_the_slab_and_untyped_ceilings_are_said() {
+        // Two storeys: L2's circuit drops through its floor to a box below (a riser from -1 ft);
+        // L1's circuit runs under the slab on grade (-1.5 ft).
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}, {"name": "L2", "elevation_ft": 10, "height_ft": 10}],
+            "tags": [tag("circuit:L2:E-201:P-1", "L2", "P-1", "unit"), tag("circuit:L1:E-101:P-3", "L1", "P-3", "concealed")],
+            "mep": {"runs": [
+                {"system": "E-BRANCH", "level": "L2", "id": "circuit:L2:E-201:P-1#0", "points": [[0, 0], [120, 0]], "size_in": [0.75, 0], "bottoms_ft": [9, 9]},
+                {"system": "E-BRANCH", "level": "L2", "id": "circuit:L2:E-201:P-1#1", "points": [[120, 0]], "size_in": [0.75, 0], "bottoms_ft": [-1.0], "top_ft": 9},
+                {"system": "E-BRANCH", "level": "L1", "id": "circuit:L1:E-101:P-3#0", "points": [[0, 0], [240, 0]], "size_in": [0.75, 0], "bottoms_ft": [-1.5, -1.5]}
+            ]}
+        }))
+        .unwrap();
+        let d = Drawing::new_imperial();
+        let rules = super::super::rules();
+        let items = items(&d, &sp, &CodeFacts::default(), &rules);
+        assert_eq!(items.len(), 2, "{items:?}");
+        let up = items.iter().find(|i| i.label == "P-1").unwrap();
+        assert!(!up.area.flags.contains("below_slab"), "a riser through an upper floor: {:?}", up.area);
+        assert_eq!(up.area.base, "unit");
+        assert!((up.feet - 20.0).abs() < 1e-6, "10 ft across and 10 ft up: {}", up.feet);
+        let low = items.iter().find(|i| i.label == "P-3").unwrap();
+        assert!(low.area.flags.contains("below_slab"), "{:?}", low.area);
+        assert_eq!(low.area.base, "common");
+        // NM never goes below the slab; MC neither.
+        for id in ["nm_common_branch", "mc_concealed_branch"] {
+            let alt = rules.alternatives.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(takes(alt, low), Err("below_slab".to_string()), "{id}");
+        }
+        let nm = rules.alternatives.iter().find(|a| a.id == "nm_unit_branch").unwrap();
+        assert_eq!(takes(nm, up), Ok(()));
+        // A feeder's conductors as one makeup (`3#2/0 AL + 1#4G`), kcmil sizes by their number.
+        let f = cadaddy_walk3d::Feeder {
+            phases: 2,
+            neutrals: 1,
+            grounds: 1,
+            size: "2/0".into(),
+            ground_size: "4".into(),
+            material: "al".into(),
+            ..Default::default()
+        };
+        assert_eq!(feeder_makeup(&f), "3#2/0 AL + 1#4G");
+        let big = cadaddy_walk3d::Feeder {
+            phases: 3,
+            neutrals: 1,
+            grounds: 1,
+            size: "500 kcmil".into(),
+            neutral_size: "250".into(),
+            ground_size: "1/0".into(),
+            ..Default::default()
+        };
+        assert_eq!(feeder_makeup(&big), "3#500 + 1#250 + 1#1/0G");
+        assert_eq!(mepatoms::conductor_parts(&feeder_makeup(&big)).iter().filter(|p| p.2).count(), 1);
+    }
 }

@@ -22,7 +22,16 @@ fn esc(t: &str) -> String {
 }
 
 /// The sketch of `items` on `level` into `path`.
-pub(crate) fn write(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str, title: &str, question: &str, path: &str, upf: f64) -> std::io::Result<()> {
+pub(crate) fn write(
+    d: &Drawing,
+    sp: &BuildingSpec,
+    items: &[Item],
+    level: &str,
+    title: &str,
+    question: &str,
+    path: &str,
+    upf: f64,
+) -> std::io::Result<()> {
     let svg = render(d, sp, items, level, title, question, upf);
     if let Some(dir) = std::path::Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
@@ -57,7 +66,10 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
     let py = |y: f64| head + (y1 - y) * k;
     let inside = |p: &[f64; 2]| p[0] >= x0 && p[0] <= x1 && p[1] >= y0 && p[1] <= y1;
     let mut s = String::new();
-    let _ = writeln!(s, r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH:.0}" height="{height:.0}" viewBox="0 0 {WIDTH:.0} {height:.0}" font-family="sans-serif">"#);
+    let _ = writeln!(
+        s,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{WIDTH:.0}" height="{height:.0}" viewBox="0 0 {WIDTH:.0} {height:.0}" font-family="sans-serif">"#
+    );
     let _ = writeln!(s, r##"<rect x="0" y="0" width="{WIDTH:.0}" height="{height:.0}" fill="#ffffff"/>"##);
     // The rooms.
     for r in super::super::bspec::room_elements(d).into_iter().filter(|r| on_level(&r.level) && r.outline.len() >= 3).take(MAX_ROOMS) {
@@ -69,10 +81,18 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
         let n = r.outline.len() as f64;
         let c = r.outline.iter().fold((0.0, 0.0), |a, p| (a.0 + p.x, a.1 + p.y));
         let label = r.number.clone().filter(|x| !x.trim().is_empty()).unwrap_or_else(|| r.name.clone());
-        let _ = writeln!(s, r##"<text x="{:.1}" y="{:.1}" font-size="10" fill="#777" text-anchor="middle">{}</text>"##, px(c.0 / n), py(c.1 / n), esc(&label));
+        let _ = writeln!(
+            s,
+            r##"<text x="{:.1}" y="{:.1}" font-size="10" fill="#777" text-anchor="middle">{}</text>"##,
+            px(c.0 / n),
+            py(c.1 / n),
+            esc(&label)
+        );
     }
     // The other routed runs, thin; the changed ones marked up.
-    let path_of = |r: &cadaddy_walk3d::MepRun| -> String { r.points.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| format!("{:.1},{:.1}", px(p[0]), py(p[1]))).collect::<Vec<_>>().join(" ") };
+    let path_of = |r: &cadaddy_walk3d::MepRun| -> String {
+        r.points.iter().filter(|p| p.iter().all(|v| v.is_finite())).map(|p| format!("{:.1},{:.1}", px(p[0]), py(p[1]))).collect::<Vec<_>>().join(" ")
+    };
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
         if mine_runs.contains(&i) || !on_level(&r.level) || r.points.len() < 2 || !r.points.iter().any(inside) {
             continue;
@@ -95,17 +115,28 @@ pub(crate) fn render(d: &Drawing, sp: &BuildingSpec, items: &[Item], level: &str
             && let Some(p) = it.runs.iter().filter_map(|i| sp.mep.runs.get(*i)).find_map(|r| r.points.first())
         {
             labels += 1;
-            let _ = writeln!(s, r##"<text x="{:.1}" y="{:.1}" font-size="11" fill="#d01010">{}</text>"##, px(p[0]) + 4.0, py(p[1]) - 4.0, esc(&it.label));
+            let _ =
+                writeln!(s, r##"<text x="{:.1}" y="{:.1}" font-size="11" fill="#d01010">{}</text>"##, px(p[0]) + 4.0, py(p[1]) - 4.0, esc(&it.label));
         }
     }
     // The title, the question, the legend and a scale.
     let _ = writeln!(s, r##"<rect x="0" y="0" width="{WIDTH:.0}" height="{head:.0}" fill="#ffffff" stroke="#333" stroke-width="1"/>"##);
     let _ = writeln!(s, r##"<text x="12" y="26" font-size="18" font-weight="bold" fill="#111">{}</text>"##, esc(title));
     let _ = writeln!(s, r##"<text x="12" y="52" font-size="13" fill="#111">{}</text>"##, esc(question));
-    let _ = writeln!(s, r##"<text x="12" y="76" font-size="12" fill="#333">{} — red: the runs the alternative changes ({} on this level); grey: other routed runs, kept as designed</text>"##, esc(level), mine.len());
+    let _ = writeln!(
+        s,
+        r##"<text x="12" y="76" font-size="12" fill="#333">{} — red: the runs the alternative changes ({} on this level); grey: other routed runs, kept as designed</text>"##,
+        esc(level),
+        mine.len()
+    );
     let bar_ft = [10.0, 20.0, 50.0, 100.0].into_iter().find(|f| f * upf * k >= 80.0).unwrap_or(100.0);
     let bar = bar_ft * upf * k;
-    let _ = writeln!(s, r##"<line x1="12" y1="96" x2="{:.1}" y2="96" stroke="#111" stroke-width="2"/><text x="{:.1}" y="100" font-size="11" fill="#111">{bar_ft:.0} ft</text>"##, 12.0 + bar, 18.0 + bar);
+    let _ = writeln!(
+        s,
+        r##"<line x1="12" y1="96" x2="{:.1}" y2="96" stroke="#111" stroke-width="2"/><text x="{:.1}" y="100" font-size="11" fill="#111">{bar_ft:.0} ft</text>"##,
+        12.0 + bar,
+        18.0 + bar
+    );
     s.push_str("</svg>\n");
     s
 }

@@ -567,11 +567,8 @@ impl Field {
         let (x0, y0, x1, y1) =
             (Self::c(lo.x - pad, self.cell), Self::c(lo.y - pad, self.cell), Self::c(hi.x + pad, self.cell), Self::c(hi.y + pad, self.cell));
         let (w, h) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-        if !(a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite())
-            || !(0..=4096).contains(&w)
-            || !(0..=4096).contains(&h)
-            || w.saturating_mul(h) > 1_000_000
-        {
+        let sane = a.is_finite() && b.is_finite() && z.is_finite() && zhi.is_finite();
+        if !(sane && (0..=4096).contains(&w) && (0..=4096).contains(&h) && w.saturating_mul(h) <= 1_000_000) {
             return None;
         }
         let mut seen: BTreeSet<usize> = BTreeSet::new();
@@ -1595,7 +1592,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "electrical" => matches!(el.category.as_str(), "equipment") || (el.category == "conduit" && el.run.is_empty()),
             _ => !matches!(el.category.as_str(), "room" | "device" | "space" | "zone"),
         };
-        if !keep || !(el.lo.is_finite() && el.hi.is_finite()) {
+        if !(keep && el.lo.is_finite() && el.hi.is_finite()) {
             continue;
         }
         n_obs += 1;
@@ -3468,7 +3465,8 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // A value engineering scenario: its pieces in place of the design's it replaces.
     let (replaced, scenario_pieces) = match str_param(p, "scenario").filter(|x| !x.trim().is_empty()) {
-        Some(id) => super::valueeng::takeoff_view(s.doc()?, id).ok_or_else(|| bad(C, format!("there is no value engineering scenario {id} (ve.scenario lists them)")))?,
+        Some(id) => super::valueeng::takeoff_view(s.doc()?, id)
+            .ok_or_else(|| bad(C, format!("there is no value engineering scenario {id} (ve.scenario lists them)")))?,
         None => Default::default(),
     };
     // Every piece of the model, grouped.

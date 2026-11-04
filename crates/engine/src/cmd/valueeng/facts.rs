@@ -48,7 +48,11 @@ pub(crate) struct CodeFacts {
 
 impl CodeFacts {
     pub(crate) fn is_empty(&self) -> bool {
-        self.construction_type.is_none() && self.sprinklered.is_none() && self.occupancies.is_empty() && self.stories.is_none() && self.rated.is_empty()
+        self.construction_type.is_none()
+            && self.sprinklered.is_none()
+            && self.occupancies.is_empty()
+            && self.stories.is_none()
+            && self.rated.is_empty()
     }
 }
 
@@ -130,18 +134,32 @@ fn sprinklers(texts: &[String], rules: &Rules) -> (Option<Fact<bool>>, Option<St
     (found, standard)
 }
 
-/// The occupancies (`R-1`, `B`) named beside an occupancy or group word.
+/// The occupancies (`R-1`, `B`) named beside an occupancy or group word: the classification's
+/// own lines (a group, or the code's chapter 3 section: `GROUP R-1 OCCUPANCY (310.2)`) when the
+/// sheet has them, else any, never a table's or a note's (travel distances, alarms).
 fn occupancies(texts: &[String], rules: &Rules) -> Vec<Fact<String>> {
     let cs = &rules.code_sheet;
+    let classifying = |up: &str| {
+        up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "GROUP" || w == "GROU")
+            || up.match_indices('(').any(|(i, _)| up.get(i + 1..i + 3).is_some_and(|d| d.starts_with('3') && d.chars().all(|c| c.is_ascii_digit())))
+    };
+    let skip = |up: &str| cs.occupancy_skip.iter().any(|w| up.contains(w.as_str()));
+    let own = texts.iter().any(|t| {
+        let up = t.to_ascii_uppercase();
+        classifying(&up) && cs.occupancy_words.iter().any(|w| up.contains(w.as_str())) && !skip(&up)
+    });
     let mut out: Vec<Fact<String>> = Vec::new();
     for t in texts {
         let up = t.to_ascii_uppercase();
-        if !cs.occupancy_words.iter().any(|w| up.contains(w.as_str())) {
+        if !cs.occupancy_words.iter().any(|w| up.contains(w.as_str())) || skip(&up) || (own && !classifying(&up)) {
             continue;
         }
         // `R-1 OCCUPANCY`, `GROUP R-1`, `(R-1)`, `B OCCUPANCY`: a word that is one of the groups.
-        let words: Vec<String> =
-            up.split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')' | ':' | '/' | ';')).filter(|w| !w.is_empty()).map(str::to_string).collect();
+        let words: Vec<String> = up
+            .split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')' | ':' | '/' | ';'))
+            .filter(|w| !w.is_empty())
+            .map(str::to_string)
+            .collect();
         for (k, w) in words.iter().enumerate() {
             let w = w.trim_matches('.');
             if !cs.occupancies.iter().any(|o| o == w) {
@@ -149,7 +167,8 @@ fn occupancies(texts: &[String], rules: &Rules) -> Vec<Fact<String>> {
             }
             // A one-letter group needs its own word beside it (`B OCCUPANCY`, `GROUP B`).
             if w.len() == 1 {
-                let near = |j: Option<usize>| j.and_then(|j| words.get(j)).is_some_and(|x| cs.occupancy_words.iter().any(|o| x.starts_with(o.as_str())));
+                let near =
+                    |j: Option<usize>| j.and_then(|j| words.get(j)).is_some_and(|x| cs.occupancy_words.iter().any(|o| x.starts_with(o.as_str())));
                 if !near(k.checked_sub(1)) && !near(Some(k + 1)) {
                     continue;
                 }
@@ -167,9 +186,17 @@ fn stories(texts: &[String], rules: &Rules) -> Option<Fact<u32>> {
     let cs = &rules.code_sheet;
     let num_before = |up: &str, word: &str| -> Option<u32> {
         let at = up.find(word)?;
-        up.get(..at)?.split(|c: char| c.is_whitespace() || c == '/').rev().find(|w| !w.is_empty())?.parse::<u32>().ok().filter(|n| (1..=200).contains(n))
+        up.get(..at)?
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .rev()
+            .find(|w| !w.is_empty())?
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (1..=200).contains(n))
     };
-    let num_in = |up: &str| -> Option<u32> { up.split_whitespace().find_map(|w| w.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().ok()).filter(|n| (1..=200).contains(n)) };
+    let num_in = |up: &str| -> Option<u32> {
+        up.split_whitespace().find_map(|w| w.trim_matches(|c: char| !c.is_ascii_digit()).parse::<u32>().ok()).filter(|n| (1..=200).contains(n))
+    };
     let mut allowable: Option<Fact<u32>> = None;
     for (i, t) in texts.iter().enumerate() {
         let up = t.to_ascii_uppercase();
@@ -253,7 +280,8 @@ fn rated(texts: &[String], rules: &Rules) -> Vec<Rated> {
 
 /// The electrical code in force: `2017 NATIONAL ELECTRIC CODE`, `NFPA 70 (2020)`, `NEC 2023`.
 fn electrical_code(texts: &[String], rules: &Rules) -> Option<Fact<String>> {
-    let year = |s: &str| -> Option<u32> { s.split(|c: char| !c.is_ascii_digit()).filter_map(|w| w.parse::<u32>().ok()).find(|y| (1990..=2100).contains(y)) };
+    let year =
+        |s: &str| -> Option<u32> { s.split(|c: char| !c.is_ascii_digit()).filter_map(|w| w.parse::<u32>().ok()).find(|y| (1990..=2100).contains(y)) };
     for t in texts {
         let up = t.to_ascii_uppercase();
         let Some(w) = rules.code_sheet.nec_words.iter().find(|w| up.contains(w.as_str())) else { continue };
@@ -331,15 +359,7 @@ mod tests {
 
         // Labels first, values after (a form), a different wording, no sprinklers.
         let b = read(
-            &t(&[
-                "TYPE OF CONSTRUCTION:",
-                "TYPE IIB",
-                "NUMBER OF FLOORS:",
-                "2",
-                "SPRINKLERED: NO",
-                "OCCUPANCY: B",
-                "CODES: NFPA 70 (2023)",
-            ]),
+            &t(&["TYPE OF CONSTRUCTION:", "TYPE IIB", "NUMBER OF FLOORS:", "2", "SPRINKLERED: NO", "OCCUPANCY: B", "CODES: NFPA 70 (2023)"]),
             &rules,
         );
         assert_eq!(b.construction_type.as_ref().map(|f| f.value.as_str()), Some("II-B"));
@@ -347,6 +367,19 @@ mod tests {
         assert_eq!(b.stories.as_ref().map(|f| f.value), Some(2));
         assert_eq!(b.occupancies.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(), ["B"]);
         assert_eq!(b.electrical_code.as_ref().map(|f| f.value.as_str()), Some("NEC 2023"));
+
+        // The classification's own lines win over a travel-distance table's and a note's.
+        let h = read(
+            &t(&[
+                "B, R-2, S OCCUPANCY (SPRINKLER SYSTEM)   50FT MAXIMUM",
+                "R, S-1 OCCUPANCY (SPRINKLER SYSTEM)",
+                "RESIDENTIAL GROUP R-1 OCCUPANCY (310.2)",
+                "BUSINESS GROU B OCCUPANCY (304)",
+                "GROUP I-1 AND R-1 OCCUPANCIES IN ACCORDANCE WITH TABLE 907.5.2.3.2 SHALL BE PROVIDED WITH ALARM",
+            ]),
+            &rules,
+        );
+        assert_eq!(h.occupancies.iter().map(|o| o.value.as_str()).collect::<Vec<_>>(), ["R-1", "B"]);
 
         // Nothing to read: nothing claimed.
         let c = read(&t(&["GENERAL NOTES", "1. VERIFY ALL DIMENSIONS", "CONNECT TO EXISTING 2019 SERVICE"]), &rules);

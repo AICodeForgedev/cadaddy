@@ -30,7 +30,12 @@ fn a_specs_wiring_methods_table_says_each_applications_methods() {
 fn texts_of_any_heights_sort_into_reading_order_without_panicking() {
     // Texts of many heights (a comparator keyed on one text's height isn't a total order and made
     // the sort panic on a real code sheet).
-    let item = |x: f64, y: f64, h: f64, v: &str| cadaddy_mepfix::sheet_facts::TextItem { value: v.to_string(), at: cadaddy_geom::Vec2::new(x, y), height: h, rotation: 0.0 };
+    let item = |x: f64, y: f64, h: f64, v: &str| cadaddy_mepfix::sheet_facts::TextItem {
+        value: v.to_string(),
+        at: cadaddy_geom::Vec2::new(x, y),
+        height: h,
+        rotation: 0.0,
+    };
     let mut texts: Vec<cadaddy_mepfix::sheet_facts::TextItem> =
         (0..400).map(|i| item(f64::from(i * 37 % 101), f64::from(i * 53 % 97), [0.5, 3.0, 9.0, 1e-9, 40.0][i as usize % 5], "x")).collect();
     texts.push(item(f64::NAN, 1.0, 1.0, "nan"));

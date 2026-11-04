@@ -31,9 +31,17 @@ const SPEC: &str = "PART 3 - EXECUTION\n3.2\nWIRING METHODS\nA.\nExposed Feeders
 
 /// The code-analysis sheet's texts (made up).
 fn code_texts(construction: &str) -> Value {
-    json!(["USE AND OCCUPANCY CLASSIFICATION", "RESIDENTIAL GROUP R-1 OCCUPANCY", "ACTUAL:", "38 FEET / 3 STORIES",
-           format!("CONSTRUCTION TYPE   {construction}"), "FULLY SPRINKLERED (NFPA 13)", "FLOOR/CEILING CONSTRUCTION", "1 HR",
-           "2020 NATIONAL ELECTRICAL CODE"])
+    json!([
+        "USE AND OCCUPANCY CLASSIFICATION",
+        "RESIDENTIAL GROUP R-1 OCCUPANCY",
+        "ACTUAL:",
+        "38 FEET / 3 STORIES",
+        format!("CONSTRUCTION TYPE   {construction}"),
+        "FULLY SPRINKLERED (NFPA 13)",
+        "FLOOR/CEILING CONSTRUCTION",
+        "1 HR",
+        "2020 NATIONAL ELECTRICAL CODE"
+    ])
 }
 
 /// A made-up one-storey building: two units (rooms 101 and 102) with a panel each of the
@@ -58,6 +66,8 @@ fn building(dir: &std::path::Path) -> Session {
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "tags": tags,
+        // A lay-in ceiling over the common area's receptacles (the RCP's grid).
+        "rcp": {"ceilings": [{"level": "L1", "outline": [[100, -300], [400, -300], [400, -180], [100, -180]], "height_ft": 9, "grid": {"spacing_in": [24, 24], "origin": [0, 0]}}]},
         "mep": {
             "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2, 2], "bottom_ft": 10, "show": true}],
             "panel_schedules": [
@@ -164,13 +174,37 @@ fn the_alternatives_are_tiered_from_the_code_sheet_the_spec_and_the_rooms() {
     assert!(unit["needs_rfi"].as_array().is_some_and(|a| !a.contains(&json!("nm_unit_branch"))));
     let exposed = groups.iter().find(|g| g["kind"] == json!("branch") && g["area"] == json!("exposed")).expect("exposed group");
     assert!(exposed["not_proposed"].as_array().is_some_and(|a| a.contains(&json!("mc_exposed_branch"))), "{exposed}");
+    // The common area's circuit under the lay-in ceiling stays as designed for NM (334.12(A)(2)),
+    // not for MC; the units' ceilings the documents don't type are said, to confirm.
+    let named = |sc: &Value| {
+        sc["quantity"]["named"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|n| n["label"].as_str().map(str::to_string)).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let nmc = scenario(&v, "nm_common_branch");
+    assert!(!named(nmc).contains(&"LP1-1".to_string()), "{nmc}");
+    assert!(
+        nmc["excluded"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|x| x["area"] == json!("suspended") && x["kept_as_designed"].as_u64().unwrap_or(0) >= 1)),
+        "{nmc}"
+    );
+    assert!(named(mc).contains(&"LP1-1".to_string()), "{mc}");
+    assert!(
+        nm["to_confirm"].as_array().is_some_and(|c| c.iter().any(|x| x["area"] == json!("ceiling_unknown") && x["items"].as_u64().unwrap_or(0) >= 1)),
+        "{nm}"
+    );
     // Each option says where it is never used and why.
     let excl = nm["excluded"].as_array().cloned().unwrap_or_default();
     assert!(excl.iter().any(|e| e["area"] == json!("suspended") && e["why"].as_str().is_some_and(|w| w.contains("334.12(A)(2)"))), "{excl:?}");
     assert!(excl.iter().any(|e| e["area"] == json!("plenum")));
     // Type I-A: NM and SER aren't allowed by the code; MC still is.
     let v = s
-        .execute("ve.study", &json!({"specs": [dir.join("260519 - Conductors.txt").to_string_lossy()], "code_texts": code_texts("I-A"), "model": false}))
+        .execute(
+            "ve.study",
+            &json!({"specs": [dir.join("260519 - Conductors.txt").to_string_lossy()], "code_texts": code_texts("I-A"), "model": false}),
+        )
         .expect("study");
     assert_eq!(scenario(&v, "se_unit_feeders")["tier"], json!("not_allowed"));
     assert_eq!(scenario(&v, "nm_unit_branch")["tier"], json!("not_allowed"));
@@ -192,7 +226,9 @@ fn both_ways_are_priced_from_the_takeoff_with_labor_dollars_turned_into_man_hour
     assert!(alt.iter().any(|l| l["item"] == json!("SER cable aluminum") && l["size"] == json!("2/0-2/0-2/0-4")), "{alt:?}");
     assert!(alt.iter().any(|l| l["kind"] == json!("strap")), "the cable's supports: {alt:?}");
     // A cost DB that prices every line both ways (labor in dollars, $50/h).
-    let mut csv = String::from("# price_date: 2026-09-30\n# escalation: 4% a year\n# manpower_rate: 50\n# manpower_rate_source: the job's labor workbook\nitem,size,unit,material_unit,labor_unit\n");
+    let mut csv = String::from(
+        "# price_date: 2026-09-30\n# escalation: 4% a year\n# manpower_rate: 50\n# manpower_rate_source: the job's labor workbook\nitem,size,unit,material_unit,labor_unit\n",
+    );
     for sc in v["scenarios"].as_array().into_iter().flatten() {
         for side in ["as_designed", "alternative"] {
             for l in sc[side]["lines"].as_array().into_iter().flatten() {
@@ -233,7 +269,11 @@ fn both_ways_are_priced_from_the_takeoff_with_labor_dollars_turned_into_man_hour
     let v = study(&mut s, &dir, json!({"model": false, "cost_db": db.to_string_lossy()}));
     let ser = scenario(&v, "se_unit_feeders");
     assert!(ser["saves"].is_null(), "{ser}");
-    assert!(ser["unpriced"].as_array().is_some_and(|u| u.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("SER cable")))), "{}", ser["unpriced"]);
+    assert!(
+        ser["unpriced"].as_array().is_some_and(|u| u.iter().any(|x| x.as_str().is_some_and(|x| x.starts_with("SER cable")))),
+        "{}",
+        ser["unpriced"]
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -252,7 +292,10 @@ fn a_needs_rfi_option_drafts_its_rfi_with_citations_intent_savings_and_a_sketch(
     assert!(rfi["building"].as_array().is_some_and(|b| b.iter().any(|x| x.as_str().is_some_and(|x| x.contains("Type V-A")))), "{rfi}");
     // The design's likely reason: the 2" raceway is larger than its conductors need (future
     // capacity): said with its risk.
-    assert!(rfi["intent"].as_array().is_some_and(|i| i.iter().any(|x| x.as_str().is_some_and(|x| x.contains("future capacity") && x.contains("risk")))), "{rfi}");
+    assert!(
+        rfi["intent"].as_array().is_some_and(|i| i.iter().any(|x| x.as_str().is_some_and(|x| x.contains("future capacity") && x.contains("risk")))),
+        "{rfi}"
+    );
     assert!(rfi["savings"].as_str().is_some_and(|t| t.contains("savings not priced") || t.contains("saves")), "{rfi}");
     let svg = std::fs::read_to_string(rfi["sketch"].as_str().expect("sketch path")).expect("sketch written");
     assert!(svg.starts_with("<svg") && svg.contains("#d01010") && svg.contains(&id), "a marked-up crop");
@@ -263,7 +306,10 @@ fn a_needs_rfi_option_drafts_its_rfi_with_citations_intent_savings_and_a_sketch(
     assert!(item["issue"].as_str().is_some_and(|t| t.contains("Conflict:") && t.contains("Intent:") && t.contains("Savings:")), "{item}");
     assert!(item["extent"].is_array(), "its place for the export's picture: {item}");
     let review = s.execute("review.list", &json!({"kind": "rfi", "limit": 50})).expect("review");
-    assert!(review["items"].as_array().is_some_and(|a| a.iter().any(|x| x["title"].as_str().is_some_and(|t| t.contains("wiring method")))), "{review}");
+    assert!(
+        review["items"].as_array().is_some_and(|a| a.iter().any(|x| x["title"].as_str().is_some_and(|t| t.contains("wiring method")))),
+        "{review}"
+    );
     // Studying again keeps one RFI with its status.
     let _ = study(&mut s, &dir, json!({}));
     let list = s.execute("rfi.list", &json!({"kind": "method_choice"})).expect("rfi.list");
@@ -286,7 +332,9 @@ fn a_scenario_toggles_in_the_model_and_the_takeoff_and_its_approved_rfi_makes_it
     // Hidden at first; the model's counts and its takeoff are the design's.
     assert_eq!(count(&mut s, json!({"kind": "conduit"}))["length_ft"].as_f64().unwrap_or(0.0), before_conduit);
     let design = s.execute("conduit.takeoff", &json!({"group_by": ["circuit"], "price": false})).expect("takeoff");
-    let has = |t: &Value, kind: &str, circuit: &str| t["lines"].as_array().is_some_and(|a| a.iter().any(|l| l["kind"] == json!(kind) && l["circuit"] == json!(circuit)));
+    let has = |t: &Value, kind: &str, circuit: &str| {
+        t["lines"].as_array().is_some_and(|a| a.iter().any(|l| l["kind"] == json!(kind) && l["circuit"] == json!(circuit)))
+    };
     assert!(has(&design, "conduit", "G-1") && !has(&design, "cable", "G-1"), "{design}");
     // The takeoff of the scenario: NM cable for the units' circuit, the rest as designed.
     let alt = s.execute("conduit.takeoff", &json!({"group_by": ["circuit"], "price": false, "scenario": "nm_unit_branch"})).expect("takeoff");

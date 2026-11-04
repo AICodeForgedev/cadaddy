@@ -10339,7 +10339,10 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     let beside = job.checkpoint.clone().filter(|_| job.checkpoint_given).map(|ck| {
         let p = std::path::Path::new(&ck);
         let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
-        (p.with_file_name(format!("{stem}-ve")).to_string_lossy().to_string(), p.with_file_name(format!("{stem}-ve-prices.csv")).to_string_lossy().to_string())
+        (
+            p.with_file_name(format!("{stem}-ve")).to_string_lossy().to_string(),
+            p.with_file_name(format!("{stem}-ve-prices.csv")).to_string_lossy().to_string(),
+        )
     });
     let mut params = json!({"specs": specs, "force": true});
     if let Some((number, words)) = &code {
@@ -10363,10 +10366,13 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
         let tier = sc["tier"].as_str().unwrap_or_default();
         let name = sc["name"].as_str().unwrap_or_default();
         let q = &sc["quantity"];
-        let over = format!("{} {}, {:.0} ft", q["items"], if sc["kind"] == "feeder" { "feeders" } else { "circuits" }, q["feet"].as_f64().unwrap_or(0.0));
+        let over =
+            format!("{} {}, {:.0} ft", q["items"], if sc["kind"] == "feeder" { "feeders" } else { "circuits" }, q["feet"].as_f64().unwrap_or(0.0));
         let unpriced: Vec<&str> = sc["unpriced"].as_array().map(|u| u.iter().filter_map(Value::as_str).take(6).collect()).unwrap_or_default();
         let money = match (sc["saves"]["cost"].as_f64(), sc["saves"]["man_hours"].as_f64()) {
-            (Some(c), Some(h)) => format!("; saves ${c:.0} and {h:.0} man-hours ({:.1} crew-days) over {over}", sc["saves"]["crew_days"].as_f64().unwrap_or(0.0)),
+            (Some(c), Some(h)) => {
+                format!("; saves ${c:.0} and {h:.0} man-hours ({:.1} crew-days) over {over}", sc["saves"]["crew_days"].as_f64().unwrap_or(0.0))
+            }
             _ if sc["as_designed"].is_object() => format!(
                 "; over {over}: savings not priced (no price for {}); of what is priced, as designed ${:.0} and {:.0} man-hours, the alternative ${:.0} and {:.0} man-hours",
                 unpriced.join(", "),
@@ -10398,9 +10404,16 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
     let f = &v["facts"];
     let line = format!(
         "  value engineering: construction type {}; sprinklered {}; occupancies {}; {} wiring-method applications read; {}",
-        code.as_ref().and(f["construction_type"]["value"].as_str()).map(|c| format!("{c} ({})", code.as_ref().map(|c| c.0.as_str()).unwrap_or_default())).unwrap_or_else(|| "not found".into()),
+        code.as_ref()
+            .and(f["construction_type"]["value"].as_str())
+            .map(|c| format!("{c} ({})", code.as_ref().map(|c| c.0.as_str()).unwrap_or_default()))
+            .unwrap_or_else(|| "not found".into()),
         f["sprinklered"]["value"].as_bool().map_or("not said", |b| if b { "yes" } else { "no" }),
-        f["occupancies"].as_array().map(|o| o.iter().filter_map(|x| x["value"].as_str()).collect::<Vec<_>>().join(", ")).filter(|t| !t.is_empty()).unwrap_or_else(|| "not said".into()),
+        f["occupancies"]
+            .as_array()
+            .map(|o| o.iter().filter_map(|x| x["value"].as_str()).collect::<Vec<_>>().join(", "))
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| "not said".into()),
         v["applications"].as_array().map_or(0, Vec::len),
         lines.join("; ")
     );

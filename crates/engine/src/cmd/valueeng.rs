@@ -31,8 +31,8 @@ mod scenario;
 mod scope;
 mod sketch;
 
-pub(crate) use scenario::{VE_ATOM, approved_circuits, approved_feeders, decide, takeoff_view};
 pub(crate) use price::read_cost_db;
+pub(crate) use scenario::{VE_ATOM, approved_circuits, approved_feeders, decide, takeoff_view};
 pub(crate) use scope::feeder_makeup;
 
 const CMD: &str = "ve.study";
@@ -88,6 +88,7 @@ pub(crate) struct CodeSheetWords {
     sprinklered_no: Vec<String>,
     sprinkler_standards: Vec<String>,
     occupancy_words: Vec<String>,
+    occupancy_skip: Vec<String>,
     occupancies: Vec<String>,
     stories_words: Vec<String>,
     rated_words: Vec<String>,
@@ -102,6 +103,9 @@ pub(crate) struct AreaRule {
     name: String,
     words: Vec<String>,
     source: String,
+    /// What to confirm when an alternative doesn't exclude the area but its exclusions depend on
+    /// what the documents don't say.
+    confirm: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -435,7 +439,10 @@ fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
         (Some(r), _) => (Some(r), "given".to_string()),
         (None, Some(r)) => (
             Some(r),
-            inp.cost_db.as_ref().map(|d| if d.manpower_rate_source.is_empty() { format!("cost DB {}", d.path) } else { d.manpower_rate_source.clone() }).unwrap_or_default(),
+            inp.cost_db
+                .as_ref()
+                .map(|d| if d.manpower_rate_source.is_empty() { format!("cost DB {}", d.path) } else { d.manpower_rate_source.clone() })
+                .unwrap_or_default(),
         ),
         _ => match s.execute("estimate.settings", &json!({})).ok().and_then(|v| v["labor_rate"].as_f64()).filter(|v| v.is_finite() && *v > 0.0) {
             Some(r) => (Some(r), "the estimate's labor rate (no cost DB manpower rate)".to_string()),
@@ -447,7 +454,11 @@ fn manpower(s: &mut Session, rules: &Rules, inp: &Inputs) -> price::Manpower {
         rate,
         rate_source,
         crew_size: inp.crew_size.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rules.crew.size.max(1.0)),
-        hours_per_day: inp.hours_per_day.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(if rules.crew.hours_per_day > 0.0 { rules.crew.hours_per_day } else { 8.0 }),
+        hours_per_day: inp.hours_per_day.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(if rules.crew.hours_per_day > 0.0 {
+            rules.crew.hours_per_day
+        } else {
+            8.0
+        }),
         crew_source: if given_crew { "given".into() } else { rules.crew.source.clone() },
     }
 }
@@ -536,6 +547,14 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
         }
         let taken_ref: Vec<&scope::Item> = sized.iter().collect();
         let feet: f64 = taken_ref.iter().map(|i| i.feet).sum();
+        // What the documents don't say that its exclusions depend on: to confirm, with how many.
+        let mut to_confirm: Vec<Value> = Vec::new();
+        for (k, a) in rules.areas.iter().filter(|(_, a)| !a.confirm.is_empty()) {
+            let n = taken_ref.iter().filter(|i| i.area.flags.contains(k)).count();
+            if n > 0 && alt.excluded_areas.contains_key("suspended") {
+                to_confirm.push(json!({"area": k, "name": a.name, "items": n, "confirm": a.confirm}));
+            }
+        }
         let pens: usize = taken_ref.iter().map(|i| i.rated_penetrations).sum();
         // The design's likely intent, from the documents and the model.
         let mut intent: Vec<Value> = Vec::new();
@@ -549,12 +568,24 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
                 },
                 "rated_penetrations" => (pens > 0, format!("{pens} rated wall penetration(s) on these runs (conduit.route penetrations)")),
                 "oversized_raceway" => {
-                    let over: Vec<String> = taken_ref.iter().filter_map(|i| i.oversized.map(|(a, b)| format!("{} {}\" where {}\" fits", i.label, a, b))).take(5).collect();
+                    let over: Vec<String> = taken_ref
+                        .iter()
+                        .filter_map(|i| i.oversized.map(|(a, b)| format!("{} {}\" where {}\" fits", i.label, a, b)))
+                        .take(5)
+                        .collect();
                     let n = taken_ref.iter().filter(|i| i.oversized.is_some()).count();
-                    (n > 0, if n > 0 { format!("{n} raceway(s) larger than their conductors need (NEC Chapter 9 fill): {}", over.join("; ")) } else { "every raceway sized to its conductors".into() })
+                    (
+                        n > 0,
+                        if n > 0 {
+                            format!("{n} raceway(s) larger than their conductors need (NEC Chapter 9 fill): {}", over.join("; "))
+                        } else {
+                            "every raceway sized to its conductors".into()
+                        },
+                    )
                 }
                 "exposed" => {
-                    let n = items.iter().filter(|it| it.kind == alt.circuit && alt.areas.contains(&it.area.base) && it.area.base == "exposed").count();
+                    let n =
+                        items.iter().filter(|it| it.kind == alt.circuit && alt.areas.contains(&it.area.base) && it.area.base == "exposed").count();
                     (n > 0, format!("{n} exposed run(s) in the alternative's areas"))
                 }
                 _ => (false, String::new()),
@@ -577,10 +608,16 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             (None, _) => ("no_application", "the specification's wiring-methods table has no application this alternative answers to".to_string()),
             (Some(_), false) => (
                 "not_allowed",
-                format!("the code allows it in construction types {} only; the building is {}", alt.construction.join(", "), construction.as_deref().unwrap_or("of a type the code sheet doesn't give")),
+                format!(
+                    "the code allows it in construction types {} only; the building is {}",
+                    alt.construction.join(", "),
+                    construction.as_deref().unwrap_or("of a type the code sheet doesn't give")
+                ),
             ),
             _ if taken_ref.is_empty() => ("no_scope", "no routed circuit or feeder of the model is in its areas".to_string()),
-            _ if defeated.is_some() => ("not_proposed", format!("it can't meet the design's likely intent: {}", defeated.clone().unwrap_or_default())),
+            _ if defeated.is_some() => {
+                ("not_proposed", format!("it can't meet the design's likely intent: {}", defeated.clone().unwrap_or_default()))
+            }
             _ if lists_alt => ("allowed_now", String::new()),
             _ => ("needs_rfi", String::new()),
         };
@@ -619,7 +656,14 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
                 "area": k, "name": rules.areas.get(k).map(|a| a.name.clone()).unwrap_or_default(), "why": w, "kept_as_designed": excluded.get(k).copied().unwrap_or(0),
             })).collect::<Vec<_>>(),
             "intent": intent, "checks": checks,
-            "quantity": {"items": taken_ref.len(), "feet": r1(feet), "rated_penetrations": pens, "named": named},
+            "to_confirm": to_confirm,
+            "quantity": {
+                "items": taken_ref.len(),
+                "circuits": taken_ref.iter().filter(|i| i.kind == "branch" && i.members.is_empty()).count(),
+                "homeruns": taken_ref.iter().filter(|i| !i.members.is_empty()).count(),
+                "feeders": taken_ref.iter().filter(|i| i.kind == "feeder").count(),
+                "feet": r1(feet), "rated_penetrations": pens, "named": named,
+            },
             "as_designed": dv, "alternative": xv, "saves": saves, "unpriced": unpriced,
         });
         if !why.is_empty() {
@@ -706,7 +750,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // None given: what the job read for the router.
     if paths.is_empty() {
         let m = super::conduitroute::Methods::stored(s.doc()?);
-        applications.extend(m.applications.into_iter().map(|a| Application { section: a.section, item: a.item, application: a.application, methods: a.methods, text: String::new() }));
+        applications.extend(m.applications.into_iter().map(|a| Application {
+            section: a.section,
+            item: a.item,
+            application: a.application,
+            methods: a.methods,
+            text: String::new(),
+        }));
     }
     let code_texts: Vec<String> = p
         .get("code_texts")
@@ -744,7 +794,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if let (Some(path), Some(db)) = (str_param(p, "price_book").filter(|x| !x.trim().is_empty()), inp.cost_db.as_ref()) {
         let (csv, rows) = price::book_csv(db, &all_lines(&v));
         std::fs::write(path, csv).map_err(|e| bad(CMD, format!("could not write {path}: {e}")))?;
-        v["price_book"] = json!({"file": path, "rows": rows, "private": "the cost DB's own prices: keep it beside the drawing, never in a public place"});
+        v["price_book"] =
+            json!({"file": path, "rows": rows, "private": "the cost DB's own prices: keep it beside the drawing, never in a public place"});
     }
     Ok(v)
 }

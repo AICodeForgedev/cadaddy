@@ -169,7 +169,9 @@ pub(crate) fn store(s: &mut Session, built: &[Built]) -> Result<Value> {
                 ps.set(k, Prop::new(v.clone(), Source::computed()));
             }
             let xdata = props::write(&[], &ps);
-            if let Ok(h) = d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
+            if let Ok(h) =
+                d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh))
+            {
                 pieces.push(h.hex());
             }
         }
@@ -231,7 +233,14 @@ pub(crate) fn store(s: &mut Session, built: &[Built]) -> Result<Value> {
 
 /// Drafts each NEEDS RFI alternative's RFI onto the spec's list (kept with its status and
 /// answer from one study to the next), its sketch written when a folder is given.
-pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp: &Inputs, built: &mut [Built], mp: &price::Manpower) -> Result<BTreeMap<String, Value>> {
+pub(crate) fn draft_rfis(
+    s: &mut Session,
+    sp: &BuildingSpec,
+    rules: &Rules,
+    inp: &Inputs,
+    built: &mut [Built],
+    mp: &price::Manpower,
+) -> Result<BTreeMap<String, Value>> {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut sp = sp.clone();
     let mut out = BTreeMap::new();
@@ -289,13 +298,22 @@ pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp:
             building.push(format!("{} in force", e.value));
         }
         let cites: Vec<String> = b.alt.code.iter().map(|c| format!("{}: {}", c.cite, c.says)).collect();
+        let mut conditions = b.alt.conditions.clone();
+        for c in v["to_confirm"].as_array().into_iter().flatten() {
+            conditions.push(format!("{} ({} of these)", c["confirm"].as_str().unwrap_or_default(), c["items"].as_u64().unwrap_or(0)));
+        }
         let excluded: Vec<String> = v["excluded"]
             .as_array()
             .into_iter()
             .flatten()
             .map(|e| {
                 let n = e["kept_as_designed"].as_u64().unwrap_or(0);
-                format!("{} ({}){}", e["name"].as_str().unwrap_or_default(), e["why"].as_str().unwrap_or_default(), if n > 0 { format!(": {n} kept as designed") } else { String::new() })
+                format!(
+                    "{} ({}){}",
+                    e["name"].as_str().unwrap_or_default(),
+                    e["why"].as_str().unwrap_or_default(),
+                    if n > 0 { format!(": {n} kept as designed") } else { String::new() }
+                )
             })
             .collect();
         let intent: Vec<String> = v["intent"]
@@ -304,7 +322,8 @@ pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp:
             .flatten()
             .filter(|i| i["likely"].as_bool() == Some(true))
             .map(|i| {
-                let how = i["met"].as_str().map(|m| format!("met: {m}")).or_else(|| i["risk"].as_str().map(|r| format!("risk: {r}"))).unwrap_or_default();
+                let how =
+                    i["met"].as_str().map(|m| format!("met: {m}")).or_else(|| i["risk"].as_str().map(|r| format!("risk: {r}"))).unwrap_or_default();
                 format!("{} ({}); {how}", i["reason"].as_str().unwrap_or_default(), i["evidence"].as_str().unwrap_or_default())
             })
             .collect();
@@ -320,7 +339,15 @@ pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp:
                 mp.crew_size,
                 mp.hours_per_day,
                 v["as_designed"]["basis"].as_str().unwrap_or_default(),
-                inp.cost_db.as_ref().filter(|d| !d.price_date.is_empty()).map(|d| format!("; prices of {}{}", d.price_date, if d.escalation.is_empty() { String::new() } else { format!(", escalation {}", d.escalation) })).unwrap_or_default()
+                inp.cost_db
+                    .as_ref()
+                    .filter(|d| !d.price_date.is_empty())
+                    .map(|d| format!(
+                        "; prices of {}{}",
+                        d.price_date,
+                        if d.escalation.is_empty() { String::new() } else { format!(", escalation {}", d.escalation) }
+                    ))
+                    .unwrap_or_default()
             )
         } else {
             format!(
@@ -360,7 +387,7 @@ pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp:
             "{question}\nConflict: {conflict}\nCode: {} — the building: {}.\nConditions: {}.\nNot in: {}.\nIntent: {}.\nSavings: {savings}.{}",
             cites.join("; "),
             if building.is_empty() { "(the code sheet not read)".to_string() } else { building.join(", ") },
-            b.alt.conditions.join("; "),
+            conditions.join("; "),
             if excluded.is_empty() { "—".to_string() } else { excluded.join("; ") },
             if intent.is_empty() { "no reason for the specified method found in the documents".to_string() } else { intent.join(" | ") },
             sketch_path.as_ref().map(|p| format!("\nSketch: {p}")).unwrap_or_default()
@@ -381,7 +408,10 @@ pub(crate) fn draft_rfis(s: &mut Session, sp: &BuildingSpec, rules: &Rules, inp:
             about: b.alt.name.clone(),
             issue: issue.chars().take(6_000).collect(),
             assumed: format!("The model stays as designed; the alternative is model scenario {} (ve.scenario) until this RFI is approved.", b.alt.id),
-            proposed: Some(format!("Approve {} where the conditions above hold (ve.decide {{id: \"{id}\", decision: \"approved\"}} once answered)", b.alt.name.to_lowercase())),
+            proposed: Some(format!(
+                "Approve {} where the conditions above hold (ve.decide {{id: \"{id}\", decision: \"approved\"}} once answered)",
+                b.alt.name.to_lowercase()
+            )),
             status: prev.as_ref().map_or(RfiStatus::Open, |p| p.status),
             answer: prev.as_ref().and_then(|p| p.answer.clone()),
             sketch: sketch_path.clone(),
@@ -468,20 +498,30 @@ fn adopt(d: &mut Drawing, x: &mut Sc) -> usize {
             }
         }
         out.set(super::super::mepatoms::ATOM_KEY, Prop::new(kind.clone(), Source::computed()));
-        out.set("adopted_from", Prop::new(format!("value engineering {} ({})", x.id, if x.rfi.is_empty() { x.decision.clone() } else { format!("{} {}", x.rfi, x.decision) }), Source::computed()));
-        let mut xd = super::super::mepatoms::build::mep_tags(&level, Handle(0), &system, &kind, &g("size"), &g("item"), &format!("ve:{}/{kind}{k}", x.id));
+        out.set(
+            "adopted_from",
+            Prop::new(
+                format!("value engineering {} ({})", x.id, if x.rfi.is_empty() { x.decision.clone() } else { format!("{} {}", x.rfi, x.decision) }),
+                Source::computed(),
+            ),
+        );
+        let mut xd =
+            super::super::mepatoms::build::mep_tags(&level, Handle(0), &system, &kind, &g("size"), &g("item"), &format!("ve:{}/{kind}{k}", x.id));
         xd = props::write(&xd, &out);
         let layer = super::super::mep::mep_layer_name(&system, &level);
         if d.layer(&layer).is_none() {
-            d.layers.push(cadaddy_doc::Layer { name: layer.as_str().into(), color: cadaddy_doc::color::Color::Index(6), ..cadaddy_doc::Layer::default() });
+            d.layers.push(cadaddy_doc::Layer {
+                name: layer.as_str().into(),
+                color: cadaddy_doc::color::Color::Index(6),
+                ..cadaddy_doc::Layer::default()
+            });
         }
-        if d
-            .modify_entity(h, |e| {
-                e.common.xdata = xd.into();
-                e.common.layer = layer.as_str().into();
-                e.common.visible = true;
-            })
-            .is_ok()
+        if d.modify_entity(h, |e| {
+            e.common.xdata = xd.into();
+            e.common.layer = layer.as_str().into();
+            e.common.visible = true;
+        })
+        .is_ok()
         {
             n += 1;
         }
@@ -494,7 +534,8 @@ fn adopt(d: &mut Drawing, x: &mut Sc) -> usize {
 pub(crate) fn run_decide(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "ve.decide";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "`id` is required (a scenario's or its RFI's)"))?.to_string();
-    let decision = str_param(p, "decision").map(|t| t.trim().to_ascii_lowercase()).ok_or_else(|| bad(C, "`decision` is approved, rejected or chosen"))?;
+    let decision =
+        str_param(p, "decision").map(|t| t.trim().to_ascii_lowercase()).ok_or_else(|| bad(C, "`decision` is approved, rejected or chosen"))?;
     if !matches!(decision.as_str(), "approved" | "rejected" | "chosen") {
         return Err(bad(C, "`decision` is approved, rejected or chosen"));
     }
@@ -514,7 +555,9 @@ pub(crate) fn decide(s: &mut Session, id: &str, decision: &str, by: &str, note: 
         return Err(bad(cmd, format!("{} is the design already", x.id)));
     }
     match (x.tier.as_str(), decision) {
-        ("needs_rfi", "chosen") => return Err(bad(cmd, format!("{} needs its RFI ({}) approved: only the engineer's approval makes it the design", x.id, x.rfi))),
+        ("needs_rfi", "chosen") => {
+            return Err(bad(cmd, format!("{} needs its RFI ({}) approved: only the engineer's approval makes it the design", x.id, x.rfi)));
+        }
         ("allowed_now", "approved" | "rejected") if x.rfi.is_empty() => {
             return Err(bad(cmd, format!("{} is allowed now (no RFI): `chosen` makes it the design", x.id)));
         }
@@ -568,7 +611,8 @@ pub(crate) fn decide(s: &mut Session, id: &str, decision: &str, by: &str, note: 
 pub(crate) fn approved_circuits(d: &Drawing) -> HashMap<String, (String, String)> {
     let mut out = HashMap::new();
     for x in state(d).scenarios.iter().filter(|x| x.adopted && x.kind == "branch") {
-        let why = if x.rfi.is_empty() { format!("value engineering {}: chosen (allowed now)", x.id) } else { format!("{} approved ({})", x.rfi, x.id) };
+        let why =
+            if x.rfi.is_empty() { format!("value engineering {}: chosen (allowed now)", x.id) } else { format!("{} approved ({})", x.rfi, x.id) };
         for c in &x.circuits {
             out.insert(c.clone(), (x.cable.clone(), why.clone()));
         }
@@ -580,7 +624,8 @@ pub(crate) fn approved_circuits(d: &Drawing) -> HashMap<String, (String, String)
 pub(crate) fn approved_feeders(d: &Drawing) -> HashMap<String, (String, String)> {
     let mut out = HashMap::new();
     for x in state(d).scenarios.iter().filter(|x| x.adopted && x.kind == "feeder") {
-        let why = if x.rfi.is_empty() { format!("value engineering {}: chosen (allowed now)", x.id) } else { format!("{} approved ({})", x.rfi, x.id) };
+        let why =
+            if x.rfi.is_empty() { format!("value engineering {}: chosen (allowed now)", x.id) } else { format!("{} approved ({})", x.rfi, x.id) };
         for f in &x.feeders {
             out.insert(f.clone(), (x.cable.clone(), why.clone()));
         }
