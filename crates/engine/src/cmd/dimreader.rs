@@ -477,8 +477,8 @@ pub(crate) struct Witness {
     pub point: Vec2,
     /// The way its extension line runs from the dimension line to the object (unit; zero: none).
     pub ext: Vec2,
-    /// A symbol is drawn at its point (a device's, not a wall's).
-    pub symbol: bool,
+    /// The symbol drawn at its point, if any (a device's; a wall's witness has none).
+    pub symbol: Option<Vec2>,
 }
 
 /// A dimension read off a sheet (sheet coordinates).
@@ -930,17 +930,20 @@ pub(crate) fn read(items: &Items, scale_hint: Option<f64>) -> SheetRead {
     out
 }
 
-/// Is a symbol drawn at `p` (a circle or outline bigger than a mark, a block reference)?
-fn symbol_at(items: &Items, dot_grid: &Grid, shape_grid: &Grid, p: Vec2, h: f64) -> bool {
+/// The symbol drawn at `p` (a circle or outline bigger than a mark, a block reference): the
+/// nearest one's middle.
+fn symbol_at(items: &Items, dot_grid: &Grid, shape_grid: &Grid, p: Vec2, h: f64) -> Option<Vec2> {
     let r = h * SYMBOL_MAX_H;
     let (lo, hi) = (p - Vec2::new(r, r), p + Vec2::new(r, r));
     let near = |c: Vec2, size: f64| c.dist(p) <= size + h * SYMBOL_NEAR_H;
-    dot_grid.near(lo, hi).into_iter().filter_map(|i| items.dots.get(i)).any(|(c, rad)| *rad > h * DOT_MAX_H && *rad <= r && near(*c, *rad))
-        || shape_grid
-            .near(lo, hi)
-            .into_iter()
-            .filter_map(|i| items.shapes.get(i))
-            .any(|(c, size)| *size <= r && (*size == 0.0 || *size >= h * 0.3) && near(*c, *size))
+    let dots =
+        dot_grid.near(lo, hi).into_iter().filter_map(|i| items.dots.get(i)).filter(|(c, rad)| *rad > h * DOT_MAX_H && *rad <= r && near(*c, *rad));
+    let shapes = shape_grid
+        .near(lo, hi)
+        .into_iter()
+        .filter_map(|i| items.shapes.get(i))
+        .filter(|(c, size)| *size <= r && (*size == 0.0 || *size >= h * 0.3) && near(*c, *size));
+    dots.chain(shapes).map(|(c, _)| *c).min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
 }
 
 /// The witness at `t` on `l`: its extension line run out (through dashes) to its far end.
@@ -1013,6 +1016,8 @@ pub(crate) struct Placed {
     pub a: Vec2,
     pub b: Vec2,
     pub dir: Vec2,
+    /// The symbols drawn at the witness points, if any (model).
+    pub symbols: (Option<Vec2>, Option<Vec2>),
     /// Model units per sheet unit, and the registration's error (model units, when known).
     pub scale: f64,
     pub residual: f64,
@@ -1300,6 +1305,7 @@ pub(crate) fn read_drawing(d: &Drawing, sp: &BuildingSpec) -> Drawn {
                 dir: along.normalized(),
                 a,
                 b,
+                symbols: (s.ends.0.symbol.map(to_model), s.ends.1.symbol.map(to_model)),
                 scale: r.scale(),
                 residual: r.residual.filter(|v| v.is_finite()).unwrap_or(0.0),
                 method,

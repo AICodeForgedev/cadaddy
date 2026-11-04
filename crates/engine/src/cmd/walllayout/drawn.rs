@@ -25,6 +25,9 @@ const REACH_IN: f64 = 12.0;
 /// Witness points slide together at most this far: twice the registration's error, at least
 /// this (inches).
 const SLIDE_MIN_IN: f64 = 2.0;
+/// A device is the one the sheet draws at a witness when its centre is this near the symbol
+/// there (inches), plus twice the registration's error.
+const SYMBOL_DEVICE_IN: f64 = 9.0;
 /// A witness is on an object within this (inches) when the chain is slid, and takes the
 /// nearest object within this much at most.
 const TIGHT_IN: f64 = 2.0;
@@ -101,12 +104,14 @@ struct Cand {
 }
 
 /// The objects a witness point may be on. A device only where the sheet draws a symbol at the
-/// witness (a wall's witness has none): `symbol`.
-fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec2, reach: f64, symbol: bool) -> Vec<Cand> {
+/// witness (a wall's witness has none), and only the one at that symbol (`symbol`: its model
+/// point and how near the device must be).
+fn candidates(cx: &Ctx, devs: &[Dev], objs: &[Obj], level: &str, w: Vec2, u: Vec2, reach: f64, symbol: Option<(Vec2, f64)>) -> Vec<Cand> {
     let n = u.perp();
     let lv = Some(level);
     let mut out = Vec::new();
-    for (i, dv) in devs.iter().enumerate().filter(|(_, d)| symbol && same_level(d.level.as_deref(), lv)) {
+    let at_symbol = |d: &Dev| symbol.is_some_and(|(q, tol)| d.c().dist(q) <= tol);
+    for (i, dv) in devs.iter().enumerate().filter(|(_, d)| same_level(d.level.as_deref(), lv) && at_symbol(d)) {
         // A device in a wall that runs along the witness line is that wall's, not the
         // dimension's: the dimension measures along the device's own wall.
         if dv.normal().is_some_and(|nm| dot(nm.normalized(), u).abs() > 0.7) {
@@ -168,7 +173,7 @@ struct Chain<'a> {
     dims: Vec<usize>,
     points: Vec<Vec2>,
     sheet_points: Vec<Vec2>,
-    symbols: Vec<bool>,
+    symbols: Vec<Option<Vec2>>,
     values: Vec<f64>,
     texts: Vec<String>,
     to_scale: Vec<bool>,
@@ -195,7 +200,7 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
                     dims: Vec::new(),
                     points: vec![p.a],
                     sheet_points: vec![p.s.ends.0.on_line],
-                    symbols: vec![p.s.ends.0.symbol],
+                    symbols: vec![p.symbols.0],
                     values: Vec::new(),
                     texts: Vec::new(),
                     to_scale: Vec::new(),
@@ -206,7 +211,7 @@ fn chains(drawn: &Drawn) -> Vec<Chain<'_>> {
                 c.dims.push(i);
                 c.points.push(p.b);
                 c.sheet_points.push(p.s.ends.1.on_line);
-                c.symbols.push(p.s.ends.1.symbol);
+                c.symbols.push(p.symbols.1);
                 c.to_scale.push(p.s.to_scale);
                 c.values.push(p.s.inches);
                 c.texts.push(p.s.text.clone());
@@ -227,8 +232,9 @@ pub(super) fn attach(cx: &Ctx, devs: &[Dev], objs: &[Obj], drawn: &Drawn) -> Att
         let p = ch.p;
         let u = p.dir;
         let reach = REACH_IN * inch + p.residual;
+        let sym_tol = SYMBOL_DEVICE_IN * inch + 2.0 * p.residual;
         let cands: Vec<Vec<Cand>> =
-            ch.points.iter().zip(&ch.symbols).map(|(w, sym)| candidates(cx, devs, objs, &p.level, *w, u, reach, *sym)).collect();
+            ch.points.iter().zip(&ch.symbols).map(|(w, sym)| candidates(cx, devs, objs, &p.level, *w, u, reach, sym.map(|q| (q, sym_tol)))).collect();
         // Slide the chain to where most witnesses fall on an object.
         let slide_max = (SLIDE_MIN_IN * inch).max(2.0 * p.residual);
         let tight = TIGHT_IN * inch;
@@ -403,7 +409,8 @@ pub(super) fn report(drawn: &Drawn, at: &Attached, devs: &[Dev], cx: &Ctx, confl
                 "model_ft": [[r2(p.a.x / inch / 12.0), r2(p.a.y / inch / 12.0)], [r2(p.b.x / inch / 12.0), r2(p.b.y / inch / 12.0)]],
                 "value_at": [r2(p.s.text_at.x), r2(p.s.text_at.y)], "registration": p.method, "model_units_per_sheet_unit": (p.scale * 1e4).round() / 1e4,
                 "marks": [p.s.ends.0.mark.name(), p.s.ends.1.mark.name()],
-                "extension_lines": [p.s.ends.0.ext.len() > 0.5, p.s.ends.1.ext.len() > 0.5], "to_scale": p.s.to_scale, "chain": p.s.chain, "baseline": p.s.baseline,
+                "extension_lines": [p.s.ends.0.ext.len() > 0.5, p.s.ends.1.ext.len() > 0.5],
+                "symbols_on_sheet": [p.s.ends.0.symbol.map(|q| [r2(q.x), r2(q.y)]), p.s.ends.1.symbol.map(|q| [r2(q.x), r2(q.y)])], "to_scale": p.s.to_scale, "chain": p.s.chain, "baseline": p.s.baseline,
                 "ends": [name(e0), name(e1)],
             }));
         }
