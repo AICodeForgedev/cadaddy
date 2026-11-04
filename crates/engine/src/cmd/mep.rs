@@ -629,8 +629,26 @@ const OUTLINE_ACROSS_FT: f64 = 3.0;
 /// The points of a chain looked at for a loop, at most (the check is quadratic).
 const MAX_OUTLINE_POINTS: usize = 2_000;
 
+/// A followed chain's points, carried on from `from` (the end it was followed from) at its
+/// nearer end: the run is unbroken across the dash's gap or the fitting it was followed over.
+/// An end farther than `reach` from it (the chain was followed by a stretch in its middle) is
+/// left as drawn.
+fn bridged(pts: &[Vec2], from: Option<Vec2>, reach: f64) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = pts.iter().map(|p| [p.x, p.y]).collect();
+    let (Some(first), Some(last), Some(from)) = (pts.first(), pts.last(), from) else { return out };
+    let (d0, d1) = (first.dist(from), last.dist(from));
+    if d0 <= d1 {
+        if d0 > 1e-9 && d0 <= reach {
+            out.insert(0, [from.x, from.y]);
+        }
+    } else if d1 > 1e-9 && d1 <= reach {
+        out.push([from.x, from.y]);
+    }
+    out
+}
+
 /// The chains that continue the tag-read runs (Q6181, [`super::pipefollow`]): (chain, the
-/// run it continues). A run is followed from when its chain is the one nearest its tag (the
+/// run it continues, the point it carries on from). A run is followed from when its chain is the one nearest its tag (the
 /// tag's own line, not something else in its reach); a chain any tag reaches is never taken.
 #[allow(clippy::too_many_arguments)]
 fn follow_tagged(
@@ -643,7 +661,7 @@ fn follow_tagged(
     runs: &[MepRun],
     reach: f64,
     upf: f64,
-) -> Vec<(usize, usize)> {
+) -> Vec<(usize, usize, Option<Vec2>)> {
     use super::pipefollow::{Line, Pen, Seed, follow};
     let by: BTreeMap<Handle, &Arc<Entity>> = ents.iter().map(|e| (e.handle, *e)).collect();
     let near_tags = |pts: &[Vec2]| -> Vec<String> {
@@ -687,8 +705,8 @@ fn follow_tagged(
         .collect();
     follow(ents, &lines, &seeds, notes, upf)
         .into_iter()
-        .filter_map(|(ci, s)| seeds.get(s).and_then(|sd| run_of.get(sd.chain).copied().flatten()).map(|ri| (ci, ri)))
-        .filter(|(_, ri)| runs.get(*ri).is_some())
+        .filter_map(|f| seeds.get(f.seed).and_then(|sd| run_of.get(sd.chain).copied().flatten()).map(|ri| (f.line, ri, f.from)))
+        .filter(|(_, ri, _)| runs.get(*ri).is_some())
         .collect()
 }
 
@@ -906,7 +924,9 @@ fn read_pipes_from_tags(
         reach,
         upf,
     );
-    for (ci, ri) in followed {
+    let fr = super::pipefollow::rules();
+    let bridge = (fr.gap_ft + fr.join_in / 12.0) * upf;
+    for (ci, ri, from) in followed {
         let (Some((pts, handles)), Some(seed), Some(tag)) = (all_chains.get(ci), runs.get(ri), tag_of_run.get(ri).and_then(|t| pipe_tags.get(*t)))
         else {
             continue;
@@ -916,12 +936,14 @@ fn read_pipes_from_tags(
         }
         let source = format!("followed from {}", tag.text.trim());
         let bottom = seed.bottoms_ft.first().copied().unwrap_or(0.0);
+        let points = bridged(pts, from, bridge);
+        let bottoms_ft = vec![bottom; points.len().saturating_sub(1).max(1)];
         runs.push(MepRun {
             system: seed.system.clone(),
             level: seed.level.clone(),
-            points: pts.iter().map(|p| [p.x, p.y]).collect(),
+            points,
             size_in: seed.size_in,
-            bottoms_ft: vec![bottom; pts.len().saturating_sub(1).max(1)],
+            bottoms_ft,
             objects: handles.iter().map(|h| h.hex()).collect(),
             id: String::new(),
             encased: false,

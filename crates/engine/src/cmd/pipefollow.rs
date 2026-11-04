@@ -455,11 +455,23 @@ impl Sheet<'_> {
     }
 }
 
-/// The lines followed from the seeds: (line, the seed it continues).
+/// A line followed from a seed.
+pub(crate) struct Followed {
+    pub line: usize,
+    /// The seed whose run it continues.
+    pub seed: usize,
+    /// The point it was followed from (the end of the line before it), when it carries straight
+    /// on from there (in line, from its own end, or joined end to end): the run is unbroken
+    /// across the dash's gap or the fitting. None: followed some other way (by a stretch in
+    /// its middle), left as drawn.
+    pub from: Option<Vec2>,
+}
+
+/// The lines followed from the seeds.
 ///
 /// `ents` the sheet's objects (fixtures: circles and symbols), `lines` its chains, `notes` its
 /// texts, `upf` drawing units per foot.
-pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], notes: &[(Handle, String, Vec2, f64)], upf: f64) -> Vec<(usize, usize)> {
+pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], notes: &[(Handle, String, Vec2, f64)], upf: f64) -> Vec<Followed> {
     let rules = rules();
     if seeds.is_empty() || lines.is_empty() || !(upf.is_finite() && upf > 0.0) {
         return Vec::new();
@@ -572,7 +584,7 @@ pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], note
             if sheet.at_fixture(end) {
                 continue;
             }
-            let mut found: Vec<(usize, bool)> = Vec::new();
+            let mut found: Vec<(usize, bool, Option<Vec2>)> = Vec::new();
             // In line: a straight stretch of the candidate ahead of the end, on its line,
             // heading the same way, starting within the gap.
             for k in sheet.seg_grid.near(end, gap) {
@@ -584,7 +596,9 @@ pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], note
                 let near = if c.dist(end) <= d.dist(end) { *c } else { *d };
                 let w = near - end;
                 if near.dist(end) <= gap && w.dot(u) >= -join && w.cross(u).abs() <= lateral {
-                    found.push((*cl, true));
+                    // Its own end carries straight on from this one: a gap the pipe crosses.
+                    let own_end = lines.get(*cl).is_some_and(|c| ends(c.pts).iter().any(|(q, _)| q.dist(near) <= 1e-6));
+                    found.push((*cl, true, (own_end && chain_end).then_some(end)));
                 }
             }
             // Joined end to end at an angle (a bend): only from the line's own ends.
@@ -592,13 +606,13 @@ pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], note
                 for k in end_grid.near(end, join) {
                     if k != line && lines.get(k).is_some_and(|c| length(c.pts) >= min_joined && ends(c.pts).iter().any(|(q, _)| q.dist(end) <= join))
                     {
-                        found.push((k, false));
+                        found.push((k, false, Some(end)));
                     }
                 }
             }
-            found.sort_unstable_by_key(|(k, in_line)| (*k, !*in_line));
-            found.dedup_by_key(|(k, _)| *k);
-            for (k, in_line) in found {
+            found.sort_unstable_by_key(|(k, in_line, from)| (*k, !*in_line, from.is_none()));
+            found.dedup_by_key(|(k, _, _)| *k);
+            for (k, in_line, from) in found {
                 if owner.get(k).is_none_or(|o| o.is_some()) {
                     continue;
                 }
@@ -635,7 +649,7 @@ pub(crate) fn follow(ents: &[&Arc<Entity>], lines: &[Line], seeds: &[Seed], note
                 if sheet.twin_of_owned(k, width, &owner) {
                     continue;
                 }
-                out.push((k, s));
+                out.push(Followed { line: k, seed: s, from });
                 if out.len() >= rules.max_followed {
                     return out;
                 }
@@ -829,6 +843,10 @@ mod tests {
         let f = followed(&runs);
         assert_eq!(f.len(), 9, "every dash: {runs:?}");
         assert!(f.iter().all(|r| r.system == "SAN" && r.size_in[0] == 6.0));
+        // Unbroken across the gaps: the dashes' runs carry on from the line before them, so the
+        // drain is one length from the tag's line to the last dash (120" to 930").
+        let ft: f64 = f.iter().map(|r| r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>()).sum();
+        assert!((ft - 810.0).abs() < 1.0, "{ft}");
         // Past a gap over the rules' limit, it stops.
         let mut q = Plan::new();
         q.line([0.0, 0.0], [120.0, 0.0], 18, "").text([40.0, 6.0], "6\" S", 6.0).line(
