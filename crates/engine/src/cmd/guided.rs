@@ -4861,6 +4861,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
                     }
                 }
+                // The set's typical mounting heights (a general note: "DEVICE MOUNTED HEIGHTS (UNO):
+                // TOGGLE SWITCH 4'-0\" AFF TO TOP…") onto each device of those kinds with none of its own.
+                let typical = typical_mounting_heights(&electrical_pages(s.doc()?, job));
+                if !typical.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = apply_typical_heights(&mut sp, &typical);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                    }
+                    progress_line(&format!(
+                        "  typical mounting heights (general note): {} kinds ({}); {n} devices took theirs",
+                        typical.len(),
+                        typical.iter().map(|t| format!("{} {:.1}\"", t.kind, t.inches)).collect::<Vec<_>>().join(", ")
+                    ));
+                }
                 // The typical rooms as unit types: their views and each room's hand and fit, for the
                 // packets and the unit takeoff (written unless the spec has its own).
                 if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
@@ -7426,6 +7442,123 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
         list.retain(|dv| !connection(dv) || seen.insert((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())));
     }
     before - stamped.len() - placed.len()
+}
+
+/// A kind of device's typical mounting height a general note gives.
+#[derive(Clone, Debug, PartialEq)]
+struct TypicalHeight {
+    /// The device kind it is for (`switch`, `receptacle`, `low_voltage_outlet`, `thermostat`,
+    /// `emergency light`: luminaires the fixture schedule calls emergency lights).
+    kind: &'static str,
+    /// Its centre over the floor, inches.
+    inches: f64,
+    /// The note's words for it, with its sheet.
+    doc: String,
+}
+
+/// Half a device box's height, inches: a height "to top" or "to bottom" is this from its centre.
+const HALF_BOX_IN: f64 = 2.25;
+
+/// The kind a typical-height item names (`TOGGLE SWITCH`, `RECEPTACLES`, `VOICE/DATA OUTLETS`).
+fn typical_kind(words: &str) -> Option<&'static str> {
+    let up = words.to_ascii_uppercase();
+    if up.contains("EMERGENCY") {
+        Some("emergency light")
+    } else if up.contains("SWITCH") {
+        Some("switch")
+    } else if up.contains("RECEPT") {
+        Some("receptacle")
+    } else if ["VOICE", "DATA", "TELEPHONE", "TEL/", "TV", "CATV"].iter().any(|w| up.contains(w)) {
+        Some("low_voltage_outlet")
+    } else if up.contains("THERMOSTAT") {
+        Some("thermostat")
+    } else {
+        None
+    }
+}
+
+/// One typical-height item (`TOGGLE SWITCH 4'-0" AFF TO TOP`): its kind and centre height.
+fn typical_item(item: &str, sheet: &str) -> Option<TypicalHeight> {
+    let kind = typical_kind(item.split(|c: char| c.is_ascii_digit()).next().unwrap_or(item))?;
+    let inches = super::propfill::mount_height_in(&format!("{item} AFF"))?;
+    let up = item.to_ascii_uppercase();
+    let centre = if up.contains("TO TOP") {
+        inches - HALF_BOX_IN
+    } else if up.contains("TO BOTTOM") {
+        inches + HALF_BOX_IN
+    } else {
+        inches
+    };
+    (centre > 0.0 && centre < 240.0).then(|| TypicalHeight { kind, inches: centre, doc: format!("{sheet} general note: {}", item.trim()) })
+}
+
+/// The typical mounting heights a set's general note gives (`ELECTRICAL DEVICE MOUNTED HEIGHTS
+/// (UNO): • PANELBOARDS 6'-6" AFF TO TOP • TOGGLE SWITCH 4'-0" AFF TO TOP • RECEPTACLES 1'-6"
+/// CENTERLINE…`): the note's lines from its heading down to the next numbered note, item by item.
+fn typical_mounting_heights(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<TypicalHeight> {
+    let mut out: Vec<TypicalHeight> = Vec::new();
+    for (sheet, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        for head in texts.iter().filter(|t| {
+            let up = t.value.to_ascii_uppercase();
+            (up.contains("MOUNTED HEIGHT") || up.contains("MOUNTING HEIGHT"))
+                && (up.contains("UNO") || up.contains("UNLESS") || up.contains("TYPICAL"))
+        }) {
+            let h = head.height.max(1e-6);
+            let mut lines: Vec<&cadaddy_mepfix::sheet_facts::TextItem> = texts
+                .iter()
+                .filter(|t| {
+                    t.at.y <= head.at.y + 0.5 * h && head.at.y - t.at.y <= 12.0 * h && t.at.x >= head.at.x - 3.0 * h && t.at.x - head.at.x <= 80.0 * h
+                })
+                .collect();
+            lines.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
+            let mut said = String::new();
+            for (i, l) in lines.iter().enumerate() {
+                let v = l.value.trim();
+                // The next numbered note ends this one.
+                let numbered = v.split_once('.').is_some_and(|(n, _)| !n.is_empty() && n.len() <= 2 && n.chars().all(|c| c.is_ascii_digit()));
+                if i > 0 && numbered && !std::ptr::eq(*l, head) {
+                    break;
+                }
+                said.push_str(v);
+                said.push('\n');
+            }
+            let text = said.split_once(':').map_or(said.as_str(), |(_, rest)| rest);
+            for item in text.split(['\u{2022}', '\n', ';']).map(str::trim).filter(|i| !i.is_empty()) {
+                if let Some(t) = typical_item(item, sheet)
+                    && !out.iter().any(|o| o.kind == t.kind)
+                {
+                    out.push(t);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Each device of a kind the typical heights give with no height of its own (no AFF note by it)
+/// takes the note's: its `mount_height_in`, with the note. How many.
+fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[TypicalHeight]) -> usize {
+    let emergency: BTreeSet<String> = sp
+        .mep
+        .fixture_schedule
+        .iter()
+        .filter(|f| f.description.to_ascii_uppercase().contains("EMERGENCY LIGHT"))
+        .map(|f| f.tag.to_ascii_uppercase())
+        .collect();
+    let mut n = 0;
+    for t in sp.tags.iter_mut().filter(|t| t.id.starts_with("device:")).take(MAX_STAMPED * 4) {
+        if t.fields.get("mount_height_in").is_some_and(|f| !f.value.trim().is_empty()) {
+            continue;
+        }
+        let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
+        let kind = if emergency.contains(&mark) { "emergency light" } else { t.kind.as_str() };
+        let Some(h) = typical.iter().find(|h| h.kind == kind) else { continue };
+        t.set("mount_height_in", format!("{}", (h.inches * 100.0).round() / 100.0), "note");
+        t.set("mount_height_note", h.doc.clone(), "note");
+        n += 1;
+    }
+    n
 }
 
 /// Two tags of one plumbing fixture (on the enlarged plan and the floor's), at most this far apart (feet).
@@ -14236,6 +14369,37 @@ mod tests {
         let mut placed = vec![dv("EF", "103"), dv("PTAC", "103")];
         assert_eq!(one_connection_each(&mut stamped, &mut placed), 1);
         assert_eq!((stamped.len(), placed.len()), (4, 1));
+    }
+
+    /// A general note's typical mounting heights, item by item, to each one's centre.
+    #[test]
+    fn a_general_notes_typical_heights_are_read_item_by_item() {
+        assert_eq!(typical_item("TOGGLE SWITCH 4'-0\" AFF TO TOP", "E-1").map(|t| (t.kind, t.inches)), Some(("switch", 45.75)));
+        assert_eq!(typical_item("RECEPTACLES 1'-6\" CENTERLINE", "E-1").map(|t| (t.kind, t.inches)), Some(("receptacle", 18.0)));
+        assert_eq!(typical_item("VOICE/DATA OUTLETS 1'-6\" CENTERLINE", "E-1").map(|t| t.kind), Some("low_voltage_outlet"));
+        assert_eq!(typical_item("EMERGENCY LIGHTS 7'-6\" AFF TO BOTTOM", "E-1").map(|t| (t.kind, t.inches)), Some(("emergency light", 92.25)));
+        assert_eq!(typical_item("PANELBOARDS 6'-6\" AFF TO TOP", "E-1"), None, "a panel isn't a device");
+        let mut sp = cadaddy_walk3d::BuildingSpec::default();
+        let tag = |id: &str, kind: &str, mark: &str| {
+            let mut t = cadaddy_walk3d::tags::ElementTag { id: id.into(), kind: kind.into(), ..Default::default() };
+            t.set("type", mark, "plan");
+            t
+        };
+        let mut noted = tag("device:b", "receptacle", "REC");
+        noted.set("mount_height_in", "44", "note");
+        sp.tags = vec![tag("device:a", "receptacle", "REC"), noted, tag("device:c", "switch", "S"), tag("device:d", "device", "E")];
+        sp.mep.fixture_schedule = vec![cadaddy_walk3d::FixtureType { tag: "E".into(), description: "EMERGENCY LIGHT".into(), ..Default::default() }];
+        let typical: Vec<TypicalHeight> =
+            ["RECEPTACLES 1'-6\" CENTERLINE", "TOGGLE SWITCH 4'-0\" AFF TO TOP", "EMERGENCY LIGHTS 7'-6\" AFF TO BOTTOM"]
+                .iter()
+                .filter_map(|i| typical_item(i, "E-1"))
+                .collect();
+        assert_eq!(apply_typical_heights(&mut sp, &typical), 3);
+        let h = |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("mount_height_in")).map(|f| f.value.clone());
+        assert_eq!(
+            (h("device:a"), h("device:b"), h("device:c"), h("device:d")),
+            (Some("18".into()), Some("44".into()), Some("45.75".into()), Some("92.25".into()))
+        );
     }
 
     /// A made-up two-sheet job: sheet Q-1 has a fixture schedule (types A, B) beside its plan;
