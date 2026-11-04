@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1235,
-    "count": 1235,
+    "callableAsJson": 1238,
+    "count": 1238,
     "ids": [
       "-attedit",
       "-block",
@@ -166,6 +166,7 @@
       "bim.props.summary",
       "bim.remove_type",
       "bim.schedule",
+      "bim.scope",
       "bim.set_spec",
       "bim.set_type",
       "bim.source",
@@ -1154,6 +1155,8 @@
       "validate.rules",
       "validate.rules.set",
       "validate.status",
+      "ve.decide",
+      "ve.scenario",
       "ve.study",
       "view",
       "view.back",
@@ -1239,7 +1242,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 537,
+    "inMenus": 539,
     "typed": 564
   },
   "features": {
