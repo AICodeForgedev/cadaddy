@@ -1839,7 +1839,7 @@ mod tests {
     #[test]
     fn working_space_is_measured_from_the_face_away_from_its_wall() {
         // 8 ft to the north wall: clear for 120 V (36") and for 277 V condition 3 (48").
-        let ws = working_space(&panel(), Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[], Some("101"));
+        let ws = working_space(&panel(), Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[], Some("11"));
         assert_eq!(ws.verdict, "pass", "{ws:?}");
         assert!((ws.clear_in - 90.0).abs() < 0.6, "{ws:?}");
         // A 30" deep room: short.
@@ -1888,11 +1888,11 @@ mod tests {
         let wide = Obb { c: [8.0, 0.25], u: [1.0, 0.0], hw: 1.5, hd: 0.25 };
         let door =
             |into: Option<&str>| Door { id: "D1".into(), min: [10.0, 1.0], max: [10.5, 4.0], swings_into: into.map(str::to_string), source: None };
-        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("101"))], Some("101"));
+        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("11"))], Some("11"));
         assert_eq!(ws.verdict, "fail", "{ws:?}");
-        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(None)], Some("101"));
+        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(None)], Some("11"));
         assert_eq!(ws.verdict, "unsure", "{ws:?}");
-        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("102"))], Some("101"));
+        let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("12"))], Some("11"));
         assert_eq!(ws.verdict, "pass", "{ws:?}");
     }
 
