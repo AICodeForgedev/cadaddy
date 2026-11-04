@@ -1814,6 +1814,76 @@ fn add_room_elements(
     by_level
 }
 
+/// One room element of `level` added after the build (a room another trade's plan names that
+/// the architectural plans gave none, Q6180): `outline` where its level's plan is, moved by
+/// `stacked` as `model.build` moved its level (recorded, as every stacked object records it),
+/// tagged as [`add_room_elements`] tags a traced room, plus `extra` tags (`key:value`). Its
+/// handle, or None when its level isn't in the spec or the outline is no room.
+pub(crate) fn add_room_element(
+    d: &mut Drawing,
+    sp: &BuildingSpec,
+    level: &str,
+    outline: &[Vec2],
+    name: &str,
+    stacked: Vec2,
+    extra: &[String],
+) -> Option<Handle> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let level = sp.level(level)?.name.clone();
+    if outline.len() < 3 || !outline.iter().all(|p| p.is_finite()) || !stacked.is_finite() {
+        return None;
+    }
+    let moved: Vec<Vec2> = outline.iter().map(|p| *p + stacked).collect();
+    let bounds = cadaddy_geom::Bounds2::from_points(moved.iter().copied());
+    let t = Traced {
+        room: None,
+        level,
+        cached_area: cadaddy_geom::shoelace(&moved).abs(),
+        at: bounds.center(),
+        outline: moved,
+        tag: Handle(0),
+        name: Some(name.to_string()),
+        number: None,
+        cached_bounds: bounds,
+        circulation: false,
+        on_floor: false,
+        floor_room: None,
+    };
+    let before: std::collections::HashSet<Handle> = d.model.iter().map(|e| e.handle).collect();
+    let added = add_room_elements(d, sp, &[&t], upf, &std::collections::BTreeMap::new());
+    if added.values().sum::<usize>() == 0 {
+        return None;
+    }
+    let h = d.model.iter().map(|e| e.handle).find(|h| !before.contains(h))?;
+    let extra: Vec<RawTag> = extra.iter().map(|v| RawTag { code: 1000, value: v.chars().take(240).collect() }).collect();
+    d.modify_entity(h, |e| {
+        let mut x = with_stacked(&e.common.xdata, stacked);
+        let at = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)).unwrap_or(0);
+        let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);
+        for (i, t) in extra.iter().enumerate() {
+            x.insert(end + i, t.clone());
+        }
+        e.common.xdata = x.into();
+    })
+    .ok()?;
+    Some(h)
+}
+
+/// Set WALLGEN tag `key` (`name:`) of a built object to `value`: the first such tag replaced,
+/// else added at the end of WALLGEN's tags. False when the object carries no WALLGEN tags.
+pub(crate) fn set_made_tag(x: &mut Vec<RawTag>, key: &str, value: &str) -> bool {
+    let Some(at) = x.iter().position(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(wallgen::APP)) else { return false };
+    let end = x.iter().skip(at + 1).position(|t| t.code == 1001).map_or(x.len(), |i| at + 1 + i);
+    let tag = RawTag { code: 1000, value: format!("{key}{}", value.chars().take(240).collect::<String>()) };
+    // The fixed tags (part, level, source handle) come first: a key is looked for after them.
+    let old = x.get(at + 1..end).and_then(|g| g.iter().skip(3).position(|t| t.code == 1000 && t.value.starts_with(key))).map(|i| at + 4 + i);
+    match old.and_then(|i| x.get_mut(i)) {
+        Some(t) => *t = tag,
+        None => x.insert(end, tag),
+    }
+    true
+}
+
 /// A build summary's walls, doors and windows counted from what the model holds now (as
 /// bim.tree counts them): steps after a build, and a rebuild after them, change it.
 pub(crate) fn recount_built(d: &Drawing, r: &mut Value) {

@@ -767,7 +767,18 @@ mod tests {
     #[test]
     fn the_jobs_kinds_get_rules_by_family() {
         let rules = builtin().unwrap();
-        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.names_kinds() && r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        // G-PRODUCT (Q6137) checks every product kind's record: asserted on its own below, left
+        // out of each trade's set here.
+        let got = |k: &str| -> BTreeSet<&str> {
+            rules.iter().filter(|r| r.names_kinds() && r.id != "G-PRODUCT" && r.applies_to_kind(k)).map(|r| r.id.as_str()).collect()
+        };
+        let product = |k: &str| rules.iter().any(|r| r.id == "G-PRODUCT" && r.applies_to_kind(k));
+        for k in ["plumbing_fixture", "light_fixture", "gfci_receptacle", "ptac", "exhaust_fan", "occupancy_sensor", "smoke_detector"] {
+            assert!(product(k), "{k} has a product record to check");
+        }
+        for k in ["return_grille", "wall", "duct", "equipment_connection"] {
+            assert!(!product(k), "{k} is no product G-PRODUCT checks");
+        }
         let set = |ids: &[&'static str]| -> BTreeSet<&'static str> { ids.iter().copied().collect() };
         assert_eq!(got("plumbing_fixture"), set(&["P-FIXTURE"]));
         assert!(!got("light_fixture").contains("P-FIXTURE"), "a light fixture is no plumbing fixture");
@@ -802,6 +813,41 @@ mod tests {
                 assert!(rule(id).check.contains(w) || rule(id).how.iter().any(|h| h.contains(w)), "{id}: {w}");
             }
         }
+    }
+
+    /// Kinds Validate round 2 found without a proper rule (Q6140): a wall luminaire gets the
+    /// luminaire and circuit rules, a thermostat its own rule beside host, height and present, a
+    /// fan coil unit the mechanical equipment rule and not the exhaust fan's.
+    #[test]
+    fn leftover_kinds_get_proper_rules() {
+        let rules = builtin().unwrap();
+        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        let lum = got("wall_luminaire");
+        for id in ["E-LUM", "E-CIRCUIT", "E-LUM-TYPE", "E-LUM-CONTROL", "E-LUM-COUNT", "G-HEIGHT", "G-PRESENT"] {
+            assert!(lum.contains(id), "wall_luminaire: {id} in {lum:?}");
+        }
+        assert!(!lum.iter().any(|r| r.starts_with("M-") || r.starts_with("P-")), "{lum:?}");
+        let ts = got("thermostat");
+        for id in ["M-TSTAT", "G-HOST", "G-HEIGHT", "G-PRESENT"] {
+            assert!(ts.contains(id), "thermostat: {id} in {ts:?}");
+        }
+        assert!(!ts.iter().any(|r| r.starts_with("E-")), "a thermostat is no electrical device: {ts:?}");
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(rule("M-TSTAT").trade, "mechanical");
+        for w in ["in the model", "wall", "height"] {
+            assert!(rule("M-TSTAT").check.contains(w), "{w}");
+        }
+        for k in ["fan_coil_unit", "Fan Coil Unit", "fcu"] {
+            let fcu = got(k);
+            assert!(fcu.contains("M-EQUIP") && !fcu.contains("M-EF"), "{k}: {fcu:?}");
+        }
+        // By its category too: a fan coil unit is written as unitary equipment, which M-EF doesn't name.
+        let cat = super::super::validate_kind::category_of_kind("fan_coil_unit");
+        assert_eq!(cat.as_deref(), Some("IfcUnitaryEquipment"));
+        assert!(!rule("M-EF").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        assert!(rule("M-EQUIP").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        // An exhaust fan is still M-EF's.
+        assert!(got("exhaust_fan").contains("M-EF") && !got("exhaust_fan").contains("M-EQUIP"));
     }
 
     #[test]

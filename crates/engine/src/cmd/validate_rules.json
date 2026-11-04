@@ -80,6 +80,26 @@
       }
     },
     {
+      "id": "G-UNDERGROUND",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every below-grade or under-slab callout of the documents (a note, a keynote, a site plan's callout) has its run in the model and on an underground sheet, of the size, count, material and least depth it gives; every stub-up has two dimensions to a slab corner or edge or a grid line; a run CADaddy proposes is reported as proposed with its review item, never as called; a buried run no callout, drawing or proposal accounts for is extra.",
+      "how": [
+        "objects.json `underground` lists the callouts read off the sheets (what each calls for: trade, count, size, material, least depth, what it serves), the underground sheets (the set's own, and the ones CADaddy generated: `underground_sheet` prints) and the buried runs and stub-ups; the prescreen (G-UNDERGROUND) matched each callout to a run. Start from its findings.",
+        "Read each callout on its sheet's crop and the run that answers it on the underground sheet's run schedule: the count, the trade size, the material (PVC Schedule 40 or 80, rigid steel) and the depth to the top of the run; a run shallower than the callout's least depth, or of another size or material, is a 'fail' citing the note.",
+        "A callout with no run in the model, or a run no underground sheet shows, is 'missing'. A dashed run marked PROPOSED is CADaddy's, not the documents': it never answers a callout; report it 'unsure' citing its RFI.",
+        "On the stub-up schedule and the plan, each stub-up has two perpendicular dimensions from a slab edge or corner or a grid line; one or none is a 'fail'."
+      ],
+      "documents": ["plan", "general_notes", "legend", "spec"],
+      "tolerance": {"depth_in": 1, "size_in": 0.1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The site plan's note calls for two 5\" Schedule 40 PVC conduits at least 48\" below grade; the model has both at 48\" and the underground sheet's run schedule lists them.",
+        "fail": "The note calls for 48\" below grade; the run is 24\" deep. The stub-up at the floor box has a dimension from the slab's west edge only."
+      }
+    },
+    {
       "id": "G-TYPE",
       "trade": "general",
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
@@ -240,6 +260,44 @@
       }
     },
     {
+      "id": "G-PRODUCT",
+      "trade": "general",
+      "applies_to": {"kinds": ["receptacle", "outlet", "data_outlet", "floor_box", "switch", "occupancy_sensor", "luminaire", "exit_sign", "fixture", "fan", "ptac", "panel", "disconnect", "transformer", "water_heater", "pump", "ahu", "rtu", "condensing_unit", "thermostat", "fire_alarm_device"], "categories": [], "marks": []},
+      "check": "Each product's record matches the documents field by field: its maker is in the approved list (its type's submittal first, else the specification's makers), its catalog number is the one submitted for its type, and its colour or finish, configuration, rating and required features are what its specification section requires.",
+      "how": [
+        "The prescreen gives each element's product fields as the model has them (its properties, its product record, its type) next to what the submittal and the specification require, with the section, page and submittal cited: pass, fail, or unsure ('no product data' when the model doesn't know the field).",
+        "Where it says 'unsure', read the specification and submittal pages in the packet: the wiring device, lighting or plumbing fixture section's product paragraph and the submitted cut sheet for the element's type.",
+        "A maker not in the approved list, a catalog number other than the submitted one, a colour, configuration or rating other than the specification's, or a missing required feature is a 'fail' citing the page; never pass a field the model doesn't record."
+      ],
+      "documents": ["spec", "submittal", "schedule", "legend"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The duplex receptacle's maker and catalog number are the submitted ones, and it is white, 20 A 125 V and tamper-resistant as the wiring device section requires.",
+        "fail": "The specification says wiring devices are white; the model's receptacle is red."
+      }
+    },
+    {
+      "id": "G-PRODUCT-CODE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["receptacle"], "categories": [], "marks": []},
+      "check": "Each receptacle has the features the code requires where it is, from the code rules data the build applies too: tamper-resistant in guest rooms and dwelling units, GFCI protection judged on its whole circuit (a GFCI breaker means a standard device; near a sink or in a listed place on a standard breaker, a GFCI device or one on the load side of a GFCI device of the same circuit), weather-resistant outdoors.",
+      "how": [
+        "The prescreen reads each receptacle's room, its circuit and that breaker's type from the panel schedule, the sinks near it and the places the code lists, and says pass, fail or unsure with the code text and the schedule row cited.",
+        "Where it says 'unsure' ('breaker type unknown' or 'no product data'), read the panel schedule row of its circuit and the device's legend row or tag on the plan.",
+        "A GFCI receptacle on a GFCI breaker is a 'fail' (double protection); a standard receptacle where GFCI is needed with no GFCI breaker and no GFCI receptacle upstream on its circuit is a 'fail'."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule", "legend", "general_notes", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": "spec",
+      "examples": {
+        "pass": "The bath receptacle is a standard device on a GFCI breaker, as the panel schedule row shows.",
+        "fail": "The kitchenette receptacle beside the sink is a standard device on a standard breaker with no GFCI receptacle ahead of it on the circuit."
+      }
+    },
+    {
       "id": "E-SWITCH",
       "trade": "electrical",
       "applies_to": {"kinds": ["switch"], "categories": ["IfcSwitchingDevice"], "marks": []},
@@ -357,7 +415,7 @@
     {
       "id": "E-LUM",
       "trade": "electrical",
-      "applies_to": {"kinds": ["light_fixture", "luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "applies_to": {"kinds": ["light_fixture", "luminaire", "wall_luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
       "check": "Luminaires are at their RCP positions, in the ceiling at that area's ceiling height (wall-mounted ones at the elevation or legend height), of the fixture schedule's type and mounted as the submittal says.",
       "how": [
         "Compare each fixture on the RCP crop with the model picture: same place, same count.",
@@ -504,7 +562,7 @@
     {
       "id": "E-CIRCUIT",
       "trade": "electrical",
-      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "disconnect", "junction_box", "equipment_connection", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "wall_luminaire", "disconnect", "junction_box", "equipment_connection", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
       "check": "The element's circuit and switch-leg tags are the print's.",
       "how": [
         "Read the circuit number (panel and circuit) and switch leg letter beside each device or on its homerun on the plan crop.",
@@ -618,12 +676,13 @@
     {
       "id": "M-EQUIP",
       "trade": "mechanical",
-      "applies_to": {"kinds": ["ahu", "rtu", "vav", "condensing_unit", "pump", "water_heater"], "categories": ["IfcUnitaryEquipment", "IfcAirTerminalBox", "IfcCondenser", "IfcPump", "IfcBoiler"], "marks": []},
+      "applies_to": {"kinds": ["ahu", "rtu", "vav", "condensing_unit", "pump", "water_heater", "fan_coil_unit"], "categories": ["IfcUnitaryEquipment", "IfcAirTerminalBox", "IfcCondenser", "IfcPump", "IfcBoiler"], "marks": []},
       "check": "Equipment is at the drawn location, of the schedule or submittal size, with its service clearance kept clear.",
       "how": [
         "Find the equipment symbol and tag on the plan crop; compare its place with the model.",
         "Read the size from the schedule or submittal page and compare the model's size.",
-        "Check that nothing in the model stands in the service clearance the submittal shows."
+        "Check that nothing in the model stands in the service clearance the submittal shows.",
+        "A fan coil unit is equipment (this rule), not an exhaust fan: check it where the mechanical plan draws it (ceiling, closet or soffit), with its schedule tag and size, and its access panel clear."
       ],
       "documents": ["plan", "enlarged_plan", "schedule", "submittal"],
       "tolerance": {"plan_in": 12, "size_in": 2},
@@ -689,6 +748,26 @@
       "examples": {
         "pass": "The guest room's unit sits in the exterior wall under the window where the enlarged plan draws it, tagged as the schedule row.",
         "fail": "The unit is modelled on the corridor wall; the plan draws it in the exterior wall."
+      }
+    },
+    {
+      "id": "M-TSTAT",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["thermostat"], "categories": [], "marks": []},
+      "check": "Every thermostat the plans show in the area is in the model, on the wall the plan draws it on (at its wall face), at the height the legend, elevation or notes give, for the unit the plans pair it with.",
+      "how": [
+        "Find each thermostat symbol (T, TSTAT) on the mechanical, enlarged or electrical plan inside the area; one with no model element is a 'missing' finding citing the crop, and a model thermostat no symbol stands for is 'extra'.",
+        "The object list gives its host wall and its distance to the wall face (G-HOST in `prescreen`): it must be on the wall the plan draws it on, not in the room's middle or on the far side of the wall.",
+        "Compare its height above the floor with the legend, elevation or general notes (G-HEIGHT in `prescreen` names the document); a default height no document gives is 'unsure', never a pass.",
+        "Check it controls the unit the plans pair it with (its tag, or the unit in the same room)."
+      ],
+      "documents": ["plan", "enlarged_plan", "interior_elevation", "legend", "general_notes", "schedule"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The thermostat is on the wall by the entry where the enlarged plan draws it, at its wall face, at the legend's 48 in. to its centre.",
+        "fail": "The thermostat stands in the middle of the room, 4 ft from any wall, or sits at the 18 in. receptacle height."
       }
     },
     {

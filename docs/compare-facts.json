@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1238,
-    "count": 1238,
+    "callableAsJson": 1240,
+    "count": 1240,
     "ids": [
       "-attedit",
       "-block",
@@ -151,6 +151,7 @@
       "bim.issue.set",
       "bim.issue.show",
       "bim.layout",
+      "bim.layout.dims",
       "bim.layout.follow",
       "bim.layout.object",
       "bim.layout.rehost",
@@ -1127,6 +1128,7 @@
       "ucsman",
       "ugsheets.build",
       "ugsheets.check",
+      "ugsheets.plan",
       "ugsheets.review",
       "undo",
       "undohistory",
@@ -1242,7 +1244,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 539,
+    "inMenus": 540,
     "typed": 564
   },
   "features": {

@@ -506,16 +506,19 @@ pub(crate) fn items(d: &Drawing, sp: &BuildingSpec, facts: &CodeFacts, rules: &R
             oversized: None,
         });
     }
-    // -- Feeders: each one's routed runs (by their source), its pieces by where they lie. --
-    let feeder_runs: Vec<(usize, &MepRun)> = sp.mep.runs.iter().enumerate().take(MAX_RUNS).filter(|(_, r)| r.system == FEEDER_SYSTEM).collect();
-    let feeder_pieces: Vec<usize> = all.iter().enumerate().filter(|(_, p)| p.system == FEEDER_SYSTEM).map(|(i, _)| i).collect();
+    // -- Feeders: each one's routed runs (by their source), its pieces by where they lie (a piece
+    // under the slab only to a feeder's run under the slab). --
+    let feeder_runs: Vec<(usize, &MepRun)> =
+        sp.mep.runs.iter().enumerate().take(MAX_RUNS).filter(|(_, r)| super::super::ugplan::is_feeder_run(r)).collect();
+    let feeder_pieces: Vec<usize> =
+        all.iter().enumerate().filter(|(_, p)| p.system == FEEDER_SYSTEM || p.system == super::super::ugplan::E_UG).map(|(i, _)| i).collect();
     let mut owner: HashMap<usize, usize> = HashMap::new();
     for &pi in &feeder_pieces {
         let Some(p) = all.get(pi) else { continue };
         let at = Vec2::new(p.at.x, p.at.y);
         let best = feeder_runs
             .iter()
-            .filter(|(_, r)| r.level.eq_ignore_ascii_case(&p.level))
+            .filter(|(_, r)| r.level.eq_ignore_ascii_case(&p.level) && r.system == p.system)
             .map(|(i, r)| (*i, dist_to_run(r, at)))
             .filter(|(_, dd)| dd.is_finite() && *dd <= FEEDER_REACH_FT * upf)
             .min_by(|a, b| a.1.total_cmp(&b.1));

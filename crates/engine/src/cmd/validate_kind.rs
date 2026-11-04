@@ -186,6 +186,12 @@ fn category(e: Option<&Entity>, kind: &str) -> Option<String> {
         .or_else(|| model_kind_in(kind).and_then(validate_kinds::category_of))
 }
 
+/// The IFC class an element of `kind` is written as when nothing else tags it.
+#[cfg(test)]
+pub(crate) fn category_of_kind(kind: &str) -> Option<String> {
+    category(None, kind)
+}
+
 /// What one of the job's tables says of a mark, in its own words (a legend row, a schedule row,
 /// a spec device tag): for the facts a kind doesn't hold (tamper-resistance, Q6142).
 #[derive(Clone, Debug, PartialEq)]

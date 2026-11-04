@@ -515,14 +515,21 @@ const MAX_NOTE_LINES: usize = 12;
 /// joined from the lines left-aligned with the one naming the work, one under the next (a site
 /// plan's callout: `TWO (2) 5" SCH. 40 PVC CONDUIT … MIN. 48" BELOW GRADE …`).
 pub(crate) fn buried_notes(texts: &[TextItem]) -> Vec<(Option<String>, String)> {
+    notes_matching(texts, buried)
+}
+
+/// The notes of a sheet with a line `hit` says yes to, each whole (as [`buried_notes`] joins
+/// them): its numbered lists' notes whose text is a hit, and the paragraphs outside the lists
+/// joined round each line that is.
+pub(crate) fn notes_matching(texts: &[TextItem], hit: impl Fn(&str) -> bool) -> Vec<(Option<String>, String)> {
     let ls = lists(texts);
     let mut out: Vec<(Option<String>, String)> =
-        ls.iter().flat_map(|l| &l.notes).filter(|n| buried(&n.text)).map(|n| (Some(n.number.clone()), n.text.clone())).collect();
+        ls.iter().flat_map(|l| &l.notes).filter(|n| hit(&n.text)).map(|n| (Some(n.number.clone()), n.text.clone())).collect();
     let in_list = |p: Vec2| ls.iter().any(|l| p.x >= l.area[0] && p.x <= l.area[2] && p.y >= l.area[1] && p.y <= l.area[3]);
     let mut used = vec![false; texts.len()];
     for (i, t) in texts.iter().enumerate() {
         if used.get(i).copied().unwrap_or(true)
-            || !buried(&t.value)
+            || !hit(&t.value)
             || in_list(t.at)
             || t.rotation.abs() > 0.01
             || !t.height.is_finite()
