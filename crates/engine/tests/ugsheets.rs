@@ -462,7 +462,7 @@ fn a_sewer_across_a_feeder_is_one_crossing_marked_on_the_sheet() {
 }
 
 #[test]
-fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_not_an_error() {
+fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_or_a_pothole_warning_not_an_error() {
     let t = cadaddy_mepfix::hotel_truth_for(5, HotelSize::Small);
     let mut sp = spec(&t);
     // A feeder's leg into its panel (along y, 10 ft or longer) with nothing else near it.
@@ -488,7 +488,7 @@ fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_not_an_error() {
     sp["mep"]["systems"].as_array_mut().unwrap().push(json!({"name": "P-SAN", "layer": "P-SAN", "kind": "pipe", "size_in": [4, 4], "bottom_ft": -3}));
     sp["mep"]["runs"].as_array_mut().unwrap().push(json!({"id": "SAN-1", "system": "P-SAN", "level": "1",
         "points": [[at[0] * 12.0, (at[1] - 1.0) * 12.0], [at[0] * 12.0, (at[1] + 1.0) * 12.0]], "size_in": [4, 4], "bottoms_ft": [-3]}));
-    let mut s = session_with(sp);
+    let mut s = session_with(sp.clone());
     let r = s.execute("ugsheets.check", &json!({"clearance_in": 12})).unwrap();
     let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
     assert_eq!(xs.len(), 1, "{r}");
@@ -514,6 +514,20 @@ fn a_proposed_feeder_too_close_to_a_pipe_is_a_review_item_not_an_error() {
     let layout = b["sheets"][0]["layout"].as_str().unwrap().to_string();
     let all = texts_of(&s, &layout).into_iter().map(|(x, _)| x).collect::<Vec<_>>().join(" ");
     assert!(all.contains("REVIEW WITH THE ROUTING RFI"), "{all}");
+
+    // The same pipe at the rule's depth (a slab drain no printed invert reaches): pothole and
+    // confirm, a warning, and no RFI.
+    for r in sp["mep"]["runs"].as_array_mut().unwrap().iter_mut().filter(|r| r["id"] == "SAN-1") {
+        r["height_source"] = json!("below the slab: rule (2 ft)");
+    }
+    let mut s = session_with(sp);
+    let r = s.execute("ugsheets.check", &json!({"clearance_in": 12})).unwrap();
+    let xs: Vec<&Value> = r["findings"].as_array().unwrap().iter().filter(|f| f["check"] == "crossing").collect();
+    assert_eq!((xs.len(), xs[0]["severity"].clone(), r["reviews"].clone()), (1, json!("warning"), json!(0)), "{r}");
+    assert!(xs[0]["fix"].as_str().unwrap().starts_with("drain depth by rule, no invert shown: pothole and confirm"), "{}", xs[0]);
+    let v = s.execute("ugsheets.review", &json!({})).unwrap();
+    let list = s.execute("rfi.list", &json!({})).unwrap();
+    assert_eq!(list["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "pour_hold").count(), 0, "{v}");
 }
 
 #[test]

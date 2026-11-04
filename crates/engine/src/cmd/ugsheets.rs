@@ -157,6 +157,9 @@ struct Other {
     size_in: f64,
     /// Below the floor or grade to its top (inches), when the drawings say.
     depth_in: Option<f64>,
+    /// Its depth is a rule's, not the documents' (a slab drain no printed invert reaches, called
+    /// buried plumbing the plans give no invert for).
+    depth_by_rule: bool,
 }
 
 /// Where a buried electrical run crosses (or comes within the clearance of) another trade's line.
@@ -177,6 +180,9 @@ struct Crossing {
     /// The electrical run is CADaddy's proposal (dashed, with its RFI), not called work: a crossing
     /// too close is a review item for the engineer, not an error in the documents' work.
     proposed: bool,
+    /// The other line's depth is a rule's, no invert shown: a proposed route too close to it is
+    /// to pothole and confirm (a warning), not a review item.
+    other_by_rule: bool,
 }
 
 /// Where a buried run comes up.
@@ -443,6 +449,7 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
                     distance_ft,
                     separation_in: sep,
                     proposed: r.proposed,
+                    other_by_rule: o.depth_by_rule,
                 });
             }
         }
@@ -453,17 +460,30 @@ fn crossings(runs: &[Buried], others: &[Other], clearance: f64, u: f64, findings
             x.separation_in.map_or("vertical separation unknown (a depth isn't given)".to_string(), |s| format!("{}\" clear vertically", r2(s)));
         findings.push(Finding {
             check: "crossing",
-            // A proposed route too close: for review with its routing RFI, not an error.
-            severity: match (low, x.proposed) {
-                (true, false) => "error",
-                (true, true) => "review",
+            // A proposed route too close: for review with its routing RFI, or to pothole when the
+            // other line's depth is only a rule's. Called work too close stays an error.
+            severity: match (low, x.proposed, x.other_by_rule) {
+                (true, false, _) => "error",
+                (true, true, false) => "review",
                 _ => "warning",
             },
             about: x.id.clone(),
             level: x.level.clone(),
             at: x.at,
-            message: format!("{}{} {} {} ({}): {sep_text}", if x.proposed { "proposed " } else { "" }, x.electrical, x.how, x.other, x.other_label),
-            fix: if low && x.proposed {
+            message: format!(
+                "{}{} {} {} ({}): {sep_text}{}",
+                if x.proposed { "proposed " } else { "" },
+                x.electrical,
+                x.how,
+                x.other,
+                x.other_label,
+                if x.other_by_rule { " (its depth by rule, no invert shown)" } else { "" }
+            ),
+            fix: if low && x.proposed && x.other_by_rule {
+                format!(
+                    "drain depth by rule, no invert shown: pothole and confirm; keep at least {MIN_SEPARATION_IN}\" between them if the proposed route is accepted"
+                )
+            } else if low && x.proposed {
                 format!(
                     "a proposed route: if the engineer accepts it under the slab, run it at least {MIN_SEPARATION_IN}\" clear of the pipe (lower it, or shift the route) or sleeve the crossing"
                 )
@@ -724,7 +744,18 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             let id = if r.id.trim().is_empty() { format!("P-{}", i + 1) } else { r.id.clone() };
             let depth = (-bottom * 12.0 - size).max(0.0);
             let label = format!("{}\" {} @ {}\" BFF", r2(size), sys.name.to_ascii_uppercase(), r2(depth));
-            other_trade.push(Other { id: id.clone(), label, level: r.level.clone(), points: points.clone(), size_in: size, depth_in: Some(depth) });
+            let hs = r.height_source.as_str();
+            let depth_by_rule = (hs.starts_with(super::ugplan::SLAB_DRAIN_PREFIX) && !hs.contains(super::ugplan::SLOPED_MARK))
+                || (r.system.to_ascii_uppercase().starts_with(&format!("{}-", super::ugplan::P_UG)) && hs.starts_with(super::ugplan::CALLED_PREFIX));
+            other_trade.push(Other {
+                id: id.clone(),
+                label,
+                level: r.level.clone(),
+                points: points.clone(),
+                size_in: size,
+                depth_in: Some(depth),
+                depth_by_rule,
+            });
             pipes.push(Buried {
                 kind: "pipe",
                 trade: "P",
@@ -814,7 +845,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             let depth_in =
                 svc.depth_ft.map(|d| d * 12.0).or_else(|| (svc.cover_in > 0.0).then_some(svc.cover_in)).filter(|d| d.is_finite() && *d >= 0.0);
             let size_in = svc.size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
-            other_trade.push(Other { id, label, level: svc.level.clone(), points, size_in, depth_in });
+            other_trade.push(Other { id, label, level: svc.level.clone(), points, size_in, depth_in, depth_by_rule: false });
             continue;
         }
         runs.push(Buried {
@@ -2440,7 +2471,7 @@ mod tests {
     }
 
     #[test]
-    fn a_proposed_route_too_close_to_a_drain_is_for_review_and_called_work_is_an_error() {
+    fn a_proposed_route_too_close_to_a_drain_is_for_review_or_pothole_and_called_work_is_an_error() {
         // A 4" drain 24" below the floor, crossed by a called conduit and by a proposed one, both
         // just above it (3" clear), and a proposed one well clear (pothole warning).
         let drain = Other {
@@ -2450,6 +2481,7 @@ mod tests {
             points: vec![[0.0, 120.0], [600.0, 120.0]],
             size_in: 4.0,
             depth_in: Some(24.0),
+            depth_by_rule: false,
         };
         let runs = vec![
             buried("R1", vec![[100.0, 0.0], [100.0, 240.0]], 19.0, false),
@@ -2457,13 +2489,23 @@ mod tests {
             buried("R3", vec![[500.0, 0.0], [500.0, 240.0]], 48.0, true),
         ];
         let mut findings = Vec::new();
-        let xs = crossings(&runs, &[drain], 12.0, 12.0, &mut findings);
+        let xs = crossings(&runs, std::slice::from_ref(&drain), 12.0, 12.0, &mut findings);
         assert_eq!(xs.len(), 3);
         let sev: Vec<(&str, &str)> = findings.iter().map(|f| (f.check, f.severity)).collect();
         assert_eq!(sev, vec![("crossing", "error"), ("crossing", "review"), ("crossing", "warning")]);
         assert!(findings[1].message.starts_with("proposed R2 crosses P1"), "{}", findings[1].message);
         assert!(findings[1].fix.contains("if the engineer accepts it"), "{}", findings[1].fix);
         assert!(!findings[0].message.starts_with("proposed"));
+        // The same drain at a rule's depth (no invert shown): the proposed route too close is to
+        // pothole and confirm, a warning; the called conduit too close is still an error.
+        let ruled = Other { depth_by_rule: true, ..drain };
+        let mut findings = Vec::new();
+        crossings(&runs, &[ruled], 12.0, 12.0, &mut findings);
+        let sev: Vec<&str> = findings.iter().map(|f| f.severity).collect();
+        assert_eq!(sev, vec!["error", "warning", "warning"]);
+        assert!(findings[1].fix.starts_with("drain depth by rule, no invert shown: pothole and confirm"), "{}", findings[1].fix);
+        assert!(findings[1].message.ends_with("(its depth by rule, no invert shown)"), "{}", findings[1].message);
+        assert!(findings[0].fix.starts_with("keep at least"), "{}", findings[0].fix);
     }
 
     #[test]
