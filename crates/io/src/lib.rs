@@ -37,6 +37,7 @@ mod dxf_write;
 mod dxf_xref;
 pub mod eps;
 pub mod pdf;
+pub(crate) mod pdf_glyphs;
 pub(crate) mod pdf_image;
 pub mod pdf_markups;
 pub mod pdf_merge;

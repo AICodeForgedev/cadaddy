@@ -384,6 +384,8 @@ struct Fill {
     pen: Pen,
     layer: Option<String>,
     order: usize,
+    /// Filled by the even-odd rule (`f*`), else non-zero winding.
+    even_odd: bool,
 }
 
 /// A raster image painted on the page: its pixels and where the unit square of image space
@@ -430,6 +432,8 @@ struct Out {
     seq: usize,
     ops: usize,
     clipped_ops: usize,
+    /// Painting-order numbers of what Type3 glyph procedures drew (lettering, not linework).
+    glyph_orders: HashSet<usize>,
 }
 
 fn to_rgb(c: &[f64]) -> [f64; 3] {
@@ -490,6 +494,121 @@ struct Font {
     default_width: f64,
     /// The CAD text style for the font: (style name, TrueType font file); `None` keeps Standard.
     style: Option<(String, String)>,
+    /// Character code → text, from the glyph names of the font's `/Differences` (a simple font
+    /// without a ToUnicode entry for the code).
+    names: HashMap<u32, String>,
+    /// A Type3 font's own glyphs.
+    type3: Option<Type3>,
+}
+
+/// What a Type3 font draws its glyphs with: content streams in glyph space.
+struct Type3 {
+    /// FontMatrix: glyph space → text space.
+    matrix: M,
+    /// The glyph procedure of each code the font's encoding names.
+    procs: HashMap<u32, std::sync::Arc<Vec<u8>>>,
+    /// The top of each glyph's box (`d1`'s upper y) in text space: its height above the baseline.
+    tops: HashMap<u32, f64>,
+    /// The resources the glyph procedures use (the page's when the font has none).
+    resources: Option<std::sync::Arc<Dictionary>>,
+}
+
+/// Bytes of glyph procedures one Type3 font may hold.
+const MAX_TYPE3_BYTES: usize = 16 << 20;
+
+/// The glyph names of a simple font's encoding by code (`/Encoding << /Differences [code /name
+/// /name … code /name …] >>`).
+fn differences(doc: &Document, fd: &Dictionary) -> HashMap<u32, Vec<u8>> {
+    let mut out = HashMap::new();
+    let Some(Object::Dictionary(enc)) = dict_get(doc, fd, b"Encoding") else { return out };
+    let Some(Object::Array(diffs)) = dict_get(doc, enc, b"Differences") else { return out };
+    let mut code = 0u32;
+    for o in diffs.iter().take(4096) {
+        match deref(doc, o) {
+            Object::Name(n) => {
+                if code <= 0xFFFF {
+                    out.insert(code, n.clone());
+                }
+                code = code.saturating_add(1);
+            }
+            o => {
+                if let Some(c) = num(o).filter(|c| (0.0..=65_535.0).contains(c)) {
+                    code = c as u32;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A glyph procedure's `d0` / `d1` (its first operator, set apart: the content parser reads
+/// operator names of letters only, so `d1` would come apart into `d` and a stray `1` that
+/// spoils the path after it) and the rest of the procedure. The box is `d1`'s six numbers.
+fn glyph_proc(data: &[u8]) -> (Option<[f64; 6]>, Vec<u8>) {
+    let mut pos = 0usize;
+    let mut operands: Vec<f64> = Vec::new();
+    while operands.len() <= 6 {
+        while data.get(pos).is_some_and(|b| b.is_ascii_whitespace()) {
+            pos += 1;
+        }
+        let start = pos;
+        while data.get(pos).is_some_and(|b| !b.is_ascii_whitespace()) {
+            pos += 1;
+        }
+        let Some(token) = data.get(start..pos).filter(|t| !t.is_empty()) else { break };
+        match token {
+            b"d0" => return (None, data.get(pos..).unwrap_or_default().to_vec()),
+            b"d1" => return (<[f64; 6]>::try_from(operands).ok(), data.get(pos..).unwrap_or_default().to_vec()),
+            t => match std::str::from_utf8(t).ok().and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite()) {
+                Some(v) => operands.push(v),
+                None => break,
+            },
+        }
+    }
+    (None, data.to_vec())
+}
+
+/// A Type3 font's matrix, glyph procedures (by code, through its encoding's glyph names) and
+/// glyph tops.
+fn load_type3(doc: &Document, fd: &Dictionary, names: &HashMap<u32, Vec<u8>>) -> Type3 {
+    let matrix = dict_get(doc, fd, b"FontMatrix")
+        .and_then(|o| o.as_array().ok())
+        .map(|a| nums(a))
+        .and_then(|v| <[f64; 6]>::try_from(v).ok())
+        .map(M)
+        .filter(|m| m.finite() && m.scale() > 1e-9)
+        .unwrap_or(M([0.001, 0.0, 0.0, 0.001, 0.0, 0.0]));
+    let mut t3 = Type3 { matrix, procs: HashMap::new(), tops: HashMap::new(), resources: None };
+    t3.resources = dict_get(doc, fd, b"Resources").and_then(|o| o.as_dict().ok()).cloned().map(std::sync::Arc::new);
+    let Some(Object::Dictionary(char_procs)) = dict_get(doc, fd, b"CharProcs") else { return t3 };
+    let mut bytes = 0usize;
+    let mut by_name: HashMap<&[u8], (std::sync::Arc<Vec<u8>>, Option<[f64; 6]>)> = HashMap::new();
+    for (&code, name) in names {
+        let proc = match by_name.get(name.as_slice()) {
+            Some(p) => p.clone(),
+            None => {
+                let Some(data) = char_procs.get(name).ok().and_then(|o| stream_bytes(doc, o)) else { continue };
+                bytes += data.len();
+                if bytes > MAX_TYPE3_BYTES {
+                    break;
+                }
+                let (glyph_box, body) = glyph_proc(&data);
+                let p = (std::sync::Arc::new(body), glyph_box);
+                by_name.insert(name.as_slice(), p.clone());
+                p
+            }
+        };
+        // `wx wy llx lly urx ury d1`: the glyph's box (a coloured glyph's `d0` has none)
+        if let Some([_, _, _, lly, _, ury]) = proc.1 {
+            let (_, top) = matrix.apply(0.0, ury.max(lly));
+            let (_, base) = matrix.apply(0.0, 0.0);
+            if (top - base).is_finite() {
+                t3.tops.insert(code, (top - base).abs());
+            }
+        }
+        t3.procs.insert(code, proc.0);
+    }
+    t3
 }
 
 /// The CAD text style for a PDF font (its BaseFont, subset prefix and all): a style named after
@@ -697,6 +816,14 @@ fn load_font(doc: &Document, fd: &Dictionary) -> Font {
         font.style = ttf_style(&String::from_utf8_lossy(base));
     }
     let subtype = dict_get(doc, fd, b"Subtype").and_then(|o| o.as_name().ok()).unwrap_or(b"");
+    if subtype != b"Type0" {
+        let names = differences(doc, fd);
+        font.names = names.iter().filter_map(|(&c, n)| crate::pdf_glyphs::glyph_name_text(&String::from_utf8_lossy(n)).map(|t| (c, t))).collect();
+        if subtype == b"Type3" {
+            font.type3 = Some(load_type3(doc, fd, &names));
+            font.style = None;
+        }
+    }
     if subtype == b"Type0" {
         font.two_byte = true;
         font.default_width = 1000.0;
@@ -732,10 +859,12 @@ fn load_font(doc: &Document, fd: &Dictionary) -> Font {
             }
         }
     } else {
-        let first = dict_get(doc, fd, b"FirstChar").and_then(num).unwrap_or(0.0) as u32;
+        let first = dict_get(doc, fd, b"FirstChar").and_then(num).filter(|c| (0.0..=65_535.0).contains(c)).unwrap_or(0.0) as u32;
+        // a Type3 font's widths are in its glyph space (FontMatrix maps them to text space)
+        let per_mille = font.type3.as_ref().map_or(1.0, |t| t.matrix.0[0].hypot(t.matrix.0[1]) * 1000.0);
         if let Some(Object::Array(ws)) = dict_get(doc, fd, b"Widths") {
-            for (n, x) in ws.iter().map(|o| deref(doc, o)).filter_map(num).enumerate() {
-                font.widths.insert(first + n as u32, x);
+            for (n, x) in ws.iter().take(65_536).map(|o| deref(doc, o)).filter_map(num).enumerate() {
+                font.widths.insert(first + n as u32, x * per_mille);
             }
         }
         if let Some(Object::Dictionary(desc)) = dict_get(doc, fd, b"FontDescriptor")
@@ -776,11 +905,18 @@ fn win_ansi(c: u32) -> char {
 }
 
 fn decode(font: &Font, code: u32) -> String {
-    match font.map.get(&code) {
+    match font.map.get(&code).or_else(|| font.names.get(&code)) {
         Some(s) => s.clone(),
         None if font.two_byte => String::new(),
+        // a Type3 glyph nothing names is only its drawing (see `Interp::show_text`)
+        None if font.type3.is_some() => String::new(),
         None => win_ansi(code).to_string(),
     }
+}
+
+/// Whether a code of `font` decodes to text (its ToUnicode map or a glyph name says what it is).
+fn decodes(font: &Font, code: u32) -> bool {
+    font.map.contains_key(&code) || font.names.contains_key(&code) || (font.type3.is_none() && !font.two_byte)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1000,7 +1136,7 @@ impl<'a> Interp<'a> {
                     if o != "n" {
                         let fill = matches!(o, "f" | "F" | "f*" | "B" | "B*" | "b" | "b*");
                         let stroke = matches!(o, "S" | "s" | "B" | "B*" | "b" | "b*");
-                        self.paint(&path, &gs, fill, stroke, layer);
+                        self.paint(&path, &gs, fill, stroke, layer, matches!(o, "f*" | "B*" | "b*"));
                     }
                     path.clear();
                     clip_pending = false;
@@ -1108,7 +1244,7 @@ impl<'a> Interp<'a> {
                     } else {
                         self.force_layer.clone().or_else(|| ocg.iter().rev().find_map(|l| l.clone()))
                     };
-                    self.show_text(&mut ts, &gs, &parts, layer);
+                    self.show_text(&mut ts, &gs, &parts, layer, resources, depth);
                 }
                 // form XObjects
                 "Do" => {
@@ -1272,51 +1408,99 @@ impl<'a> Interp<'a> {
         drawn
     }
 
-    fn show_text(&mut self, ts: &mut TextState, gs: &Gs, parts: &[(Vec<u8>, f64)], layer: Option<String>) {
+    fn show_text(
+        &mut self,
+        ts: &mut TextState,
+        gs: &Gs,
+        parts: &[(Vec<u8>, f64)],
+        layer: Option<String>,
+        resources: Option<&Dictionary>,
+        depth: usize,
+    ) {
         let Some(fid) = ts.font else { return };
         let (size, cs, ws, hs, rise) = (ts.size, ts.char_space, ts.word_space, ts.hscale, ts.rise);
         let font = self.font(fid);
         let style = font.style.clone();
-        let mut glyphs: Vec<(String, f64, f64)> = Vec::new(); // (text, adjustment before, advance)
+        let type3 = font.type3.as_ref().map(|t| (t.matrix, t.resources.clone()));
+        // (text, adjustment before, advance, top of a Type3 glyph, its procedure to draw)
+        let mut glyphs: Vec<(String, f64, f64, Option<f64>, Option<std::sync::Arc<Vec<u8>>>)> = Vec::new();
         for (bytes, adj) in parts {
             let mut first = true;
             for code in codes(font, bytes) {
                 let w = font.widths.get(&code).copied().unwrap_or(font.default_width) / 1000.0;
                 let s = decode(font, code);
                 let space = if !font.two_byte && code == 32 { ws } else { 0.0 };
-                glyphs.push((s, if first { *adj } else { 0.0 }, (w * size + cs + space) * hs));
+                let t3 = font.type3.as_ref();
+                let top = t3.and_then(|t| t.tops.get(&code).copied());
+                // A Type3 glyph no map or name decodes is drawn as the page shows it; the
+                // lettering OCR reads it.
+                let proc = t3.filter(|_| !decodes(font, code)).and_then(|t| t.procs.get(&code).cloned());
+                glyphs.push((s, if first { *adj } else { 0.0 }, (w * size + cs + space) * hs, top, proc));
                 first = false;
             }
         }
         // Some writers pack separate labels into one TJ with large jumps between them: a jump of
         // more than a character width starts a new text where it lands; a smaller gap is a space.
-        let mut runs: Vec<(M, String, M)> = Vec::new();
+        let mut runs: Vec<(M, String, M, Option<f64>)> = Vec::new();
+        let mut draws: Vec<(M, std::sync::Arc<Vec<u8>>)> = Vec::new();
         let mut value = String::new();
         let mut start: Option<M> = None;
-        for (s, adj, advance) in glyphs {
+        let mut run_top: Option<f64> = None;
+        for (s, adj, advance, top, proc) in glyphs {
             if adj != 0.0 {
                 if adj.abs() > 1000.0 && start.is_some() {
                     if let Some(m) = start.take() {
-                        runs.push((m, std::mem::take(&mut value), ts.tm));
+                        runs.push((m, std::mem::take(&mut value), ts.tm, run_top.take()));
                     }
                 } else if adj < -200.0 && !value.is_empty() && !value.ends_with(' ') {
                     value.push(' ');
                 }
                 ts.tm = M([1.0, 0.0, 0.0, 1.0, -adj / 1000.0 * size * hs, 0.0]).then(ts.tm);
             }
-            if start.is_none() {
-                start = Some(ts.tm);
+            if let Some(p) = proc {
+                draws.push((ts.tm, p));
+            }
+            // (a Type3 text starts at its first glyph that decodes: the ones before are drawn)
+            if !s.is_empty() || type3.is_none() {
+                if start.is_none() {
+                    start = Some(ts.tm);
+                }
+                if let Some(t) = top {
+                    run_top = Some(run_top.map_or(t, |r: f64| r.max(t)));
+                }
             }
             value.push_str(&s);
             ts.tm = M([1.0, 0.0, 0.0, 1.0, advance, 0.0]).then(ts.tm);
         }
         if let Some(m) = start {
-            runs.push((m, value, ts.tm));
+            runs.push((m, value, ts.tm, run_top));
+        }
+        // the undecoded Type3 glyphs, drawn through FontMatrix where each one stands (not when
+        // the text is invisible: that is the searchable copy of lettering drawn elsewhere)
+        if let Some((fm, glyph_res)) = type3
+            && layer.as_deref() != Some(HIDDEN_TEXT_LAYER)
+        {
+            let res = glyph_res.as_deref().or(resources);
+            let saved = self.force_layer.clone();
+            if saved.is_none() {
+                self.force_layer = layer.clone();
+            }
+            for (tm, proc) in draws {
+                let mut g = gs.clone();
+                g.ctm = fm.then(M([size * hs, 0.0, 0.0, size, 0.0, rise])).then(tm).then(gs.ctm);
+                if !g.ctm.finite() {
+                    continue;
+                }
+                let before = self.out.seq;
+                self.run(&proc, res, g, depth + 1);
+                self.out.glyph_orders.extend(before..self.out.seq);
+            }
+            self.force_layer = saved;
         }
         if !self.want_text {
             return;
         }
-        for (tm, value, end_tm) in runs {
+        for (tm, value, end_tm, top) in runs {
             let value = value.replace('\u{0}', "");
             if value.trim().is_empty() {
                 continue;
@@ -1339,8 +1523,9 @@ impl<'a> Interp<'a> {
             self.out.texts.push(TextOut {
                 at: (e + ux * shift, f + uy * shift),
                 end: (em.0[4], em.0[5]),
-                // cap height of the common sans fonts, as CAD text heights are
-                height: ylen * 0.716,
+                // cap height of the common sans fonts, as CAD text heights are; a Type3 font's
+                // glyphs say how tall they are
+                height: ylen * top.filter(|t| *t > 1e-6 && t.is_finite()).unwrap_or(0.716),
                 rotation: b.atan2(a).to_degrees(),
                 width_factor: if hs > 0.0 { (xlen / ylen).clamp(0.05, 20.0) } else { 1.0 },
                 value: value.trim().to_string(),
@@ -1353,7 +1538,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn paint(&mut self, path: &[Seg], gs: &Gs, fill: bool, stroke: bool, layer: Option<String>) {
+    fn paint(&mut self, path: &[Seg], gs: &Gs, fill: bool, stroke: bool, layer: Option<String>, even_odd: bool) {
         let subs = flatten(path, &gs.ctm);
         if subs.is_empty() {
             return;
@@ -1390,7 +1575,7 @@ impl<'a> Interp<'a> {
                 }
             }
             if !loops.is_empty() {
-                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order });
+                self.out.fills.push(Fill { loops, pen, layer: layer.clone(), order, even_odd });
             }
         }
         if stroke {
@@ -2182,50 +2367,360 @@ fn round_loop(s: &Stroke) -> bool {
     closes && hi > 0.0 && lo / hi >= 0.88
 }
 
+/// The boxes of a page's visible real text items, a quarter letter round, for finding what lies
+/// on them.
+struct TextCover {
+    boxes: Vec<[f64; 4]>,
+    grid: HashMap<(i64, i64), Vec<usize>>,
+}
+
+impl TextCover {
+    const CELL: f64 = 36.0;
+
+    fn new(texts: &[TextOut]) -> TextCover {
+        let mut boxes: Vec<[f64; 4]> = Vec::new();
+        let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
+            let h = t.height.max(0.5);
+            let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
+            let len = dx.hypot(dy);
+            // the text's up direction (perpendicular to its baseline)
+            let (ux, uy) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, 1.0) };
+            let corners = [t.at, t.end, (t.at.0 + ux * h, t.at.1 + uy * h), (t.end.0 + ux * h, t.end.1 + uy * h)];
+            let pad = h * 0.25;
+            let b =
+                corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
+            let b = [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad];
+            let (gx0, gy0, gx1, gy1) = (
+                (b[0] / Self::CELL).floor() as i64,
+                (b[1] / Self::CELL).floor() as i64,
+                (b[2] / Self::CELL).floor() as i64,
+                (b[3] / Self::CELL).floor() as i64,
+            );
+            // a long note spans many cells; a hostile one is capped
+            if (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1) > 2_000 {
+                continue;
+            }
+            let bi = boxes.len();
+            boxes.push(b);
+            for gx in gx0..=gx1 {
+                for gy in gy0..=gy1 {
+                    grid.entry((gx, gy)).or_default().push(bi);
+                }
+            }
+        }
+        TextCover { boxes, grid }
+    }
+
+    /// Whether a point lies on one of the texts.
+    fn covers(&self, x: f64, y: f64) -> bool {
+        let Some(cands) = self.grid.get(&((x / Self::CELL).floor() as i64, (y / Self::CELL).floor() as i64)) else { return false };
+        cands.iter().filter_map(|&bi| self.boxes.get(bi)).any(|t| x >= t[0] && x <= t[2] && y >= t[1] && y <= t[3])
+    }
+}
+
 /// The strokes that lie on a visible real text item: a plotted copy of the text, which the
 /// text already is.  The OCR leaves them alone.  (Strokes under hidden text are the lettering
 /// the hidden text stands for; what its own recovery didn't claim, the OCR may read.)
 fn strokes_under_text(strokes: &[Stroke], texts: &[TextOut]) -> HashSet<usize> {
-    const CELL: f64 = 36.0;
-    let mut boxes: Vec<[f64; 4]> = Vec::new();
-    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for t in texts.iter().filter(|t| !t.value.trim().is_empty() && t.layer.as_deref() != Some(HIDDEN_TEXT_LAYER)) {
-        let h = t.height.max(0.5);
-        let (dx, dy) = (t.end.0 - t.at.0, t.end.1 - t.at.1);
-        let len = dx.hypot(dy);
-        // the text's up direction (perpendicular to its baseline)
-        let (ux, uy) = if len > 1e-9 { (-dy / len, dx / len) } else { (0.0, 1.0) };
-        let corners = [t.at, t.end, (t.at.0 + ux * h, t.at.1 + uy * h), (t.end.0 + ux * h, t.end.1 + uy * h)];
-        let pad = h * 0.25;
-        let b = corners.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p.0), b[1].min(p.1), b[2].max(p.0), b[3].max(p.1)]);
-        let b = [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad];
-        let (gx0, gy0, gx1, gy1) =
-            ((b[0] / CELL).floor() as i64, (b[1] / CELL).floor() as i64, (b[2] / CELL).floor() as i64, (b[3] / CELL).floor() as i64);
-        // a long note spans many cells; a hostile one is capped
-        if (gx1 - gx0 + 1).saturating_mul(gy1 - gy0 + 1) > 2_000 {
-            continue;
-        }
-        let bi = boxes.len();
-        boxes.push(b);
-        for gx in gx0..=gx1 {
-            for gy in gy0..=gy1 {
-                grid.entry((gx, gy)).or_default().push(bi);
-            }
-        }
-    }
+    let cover = TextCover::new(texts);
     let mut under = HashSet::new();
-    if boxes.is_empty() {
+    if cover.boxes.is_empty() {
         return under;
     }
     for (i, s) in strokes.iter().enumerate() {
         let Some(b) = bbox(std::slice::from_ref(&s.pts)) else { continue };
-        let (cx, cy) = ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0);
-        let Some(cands) = grid.get(&((cx / CELL).floor() as i64, (cy / CELL).floor() as i64)) else { continue };
-        if cands.iter().filter_map(|&bi| boxes.get(bi)).any(|t| cx >= t[0] && cx <= t[2] && cy >= t[1] && cy <= t[3]) {
+        if cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) {
             under.insert(i);
         }
     }
     under
+}
+
+/// Glyph-sized pieces of filled outlines one page's lettering reader looks at, at most.
+const MAX_OUTLINE_GLYPHS: usize = 50_000;
+
+/// The confidence (its weakest glyph's) under which a reading of outlined lettering that no
+/// hidden string confirms is dropped. Measured on filled outlines of sans faces (regular,
+/// condensed, bold, mono): their words read at 0.61 and up; filled pictograms beside plan
+/// tags (an accessible-room wheelchair, a hearing-assistance ear) at about 0.5, a serif face's
+/// misreadings at 0.46–0.60.
+const OUTLINE_MIN_CONFIDENCE: f64 = 0.6;
+
+/// Whether a glyph's centre lines are bars across and up the sheet only, a few of them (a
+/// piece of wall poché, a corner, a box: or an E, F, H, I, L, T): lettering that has no curve
+/// or slant can't be told from them.
+fn bar_shape(lines: &[(Vec<(f64, f64)>, bool)]) -> bool {
+    let mut segments = 0usize;
+    for (pts, closed) in lines {
+        let ring = if *closed { pts.first().copied() } else { None };
+        for w in pts.windows(2).map(|w| (w[0], w[1])).chain(ring.and_then(|f| Some((*pts.last()?, f)))) {
+            let ((x0, y0), (x1, y1)) = w;
+            let (dx, dy) = ((x1 - x0).abs(), (y1 - y0).abs());
+            let len = dx.hypot(dy);
+            if len < 1e-9 {
+                continue;
+            }
+            if dx > len * 0.15 && dy > len * 0.15 {
+                return false;
+            }
+            segments += 1;
+        }
+    }
+    segments <= 6
+}
+
+/// Loops one fill may have for its glyphs to be read (a word converted to outlines has two or
+/// three per letter; a merged dot pattern has thousands).
+const MAX_OUTLINE_LOOPS: usize = 2_000;
+
+/// What the outlined-lettering reader found on a page.
+#[derive(Default)]
+struct OutlineRead {
+    texts: Vec<RecoveredText>,
+    /// Fills whose lettering a hidden string confirmed (they move to [`SHX_SOURCE_LAYER`]).
+    fills: HashSet<usize>,
+    /// Glyph shapes it read: filled glyphs thinned to their centre lines, and glyph strokes.
+    shapes: usize,
+    /// Readings under [`OUTLINE_MIN_CONFIDENCE`], dropped.
+    weak: usize,
+    /// Unconfirmed readings that read as no word (one letter or digit, marks spaced like
+    /// letters, punctuation), or of shapes made of straight bars only (wall poché, door
+    /// frames: they read as I, L, J, T), dropped.
+    plain: usize,
+    /// More glyph-sized outline pieces than [`MAX_OUTLINE_GLYPHS`]: the rest weren't read.
+    capped: bool,
+}
+
+/// The glyphs of a filled outline: its loops grouped by overlapping boxes (a letter's outline
+/// with the holes inside it, a dot beside its stem as its own), each with its box.
+fn outline_glyphs(f: &Fill) -> Vec<(Vec<usize>, [f64; 4])> {
+    let boxes: Vec<(usize, [f64; 4])> =
+        f.loops.iter().enumerate().filter(|(_, l)| l.len() >= 3).filter_map(|(i, l)| Some((i, bbox(std::slice::from_ref(l))?))).collect();
+    let mut order: Vec<usize> = (0..boxes.len()).collect();
+    order.sort_by(|&a, &b| {
+        let (x, y) = (boxes.get(a).map_or(0.0, |b| b.1[0]), boxes.get(b).map_or(0.0, |b| b.1[0]));
+        x.total_cmp(&y)
+    });
+    // union-find over the loops whose boxes overlap (swept left to right)
+    let mut parent: Vec<usize> = (0..boxes.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        for _ in 0..64 {
+            let p = parent.get(i).copied().unwrap_or(i);
+            if p == i {
+                break;
+            }
+            let gp = parent.get(p).copied().unwrap_or(p);
+            if let Some(slot) = parent.get_mut(i) {
+                *slot = gp;
+            }
+            i = gp;
+        }
+        i
+    }
+    for (k, &a) in order.iter().enumerate() {
+        let Some(&(_, ba)) = boxes.get(a) else { continue };
+        for &b in order.iter().skip(k + 1) {
+            let Some(&(_, bb)) = boxes.get(b) else { continue };
+            if bb[0] > ba[2] {
+                break;
+            }
+            if bb[1] <= ba[3] && bb[3] >= ba[1] {
+                let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                if ra != rb
+                    && let Some(slot) = parent.get_mut(ra.max(rb))
+                {
+                    *slot = ra.min(rb);
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, (Vec<usize>, [f64; 4])> = BTreeMap::new();
+    for (k, &(li, b)) in boxes.iter().enumerate() {
+        let r = root(&mut parent, k);
+        let e = groups.entry(r).or_insert_with(|| (Vec::new(), b));
+        e.0.push(li);
+        e.1 = [e.1[0].min(b[0]), e.1[1].min(b[1]), e.1[2].max(b[2]), e.1[3].max(b[3])];
+    }
+    groups.into_values().collect()
+}
+
+/// Read lettering the page draws as shapes: filled glyph outlines (text converted to outlines,
+/// a Type3 glyph that fills its shape) and the strokes Type3 glyph procedures drew
+/// (`glyph_orders`). Each filled glyph is thinned to its centre lines
+/// ([`crate::pdf_glyphs::skeleton`]), and those and the glyph strokes go through the stroke
+/// lettering OCR ([`recover_shx_ocr`]), which joins them into glyphs, words and lines in every
+/// direction a plan uses. A solid blob (a square, a dot, an arrowhead fills most of its box) is
+/// no glyph; a filled outline under visible real text is that text's copy. A reading inside a
+/// hidden string's box takes the string (and its fills go to [`SHX_SOURCE_LAYER`]); one no
+/// hidden string confirms is kept unconfirmed (its shapes stay drawn) when it is sure enough
+/// ([`OUTLINE_MIN_CONFIDENCE`]) and reads as a word, for review only on a page whose lettering
+/// has hidden copies.
+fn recover_outlined_lettering(
+    strokes: &[Stroke],
+    fills: &[Fill],
+    texts: &[TextOut],
+    sheet: (f64, f64),
+    glyph_orders: &HashSet<usize>,
+    taken_strokes: &HashSet<usize>,
+    taken_fills: &HashSet<usize>,
+    recovered: &[RecoveredText],
+) -> OutlineRead {
+    let mut read = OutlineRead::default();
+    let max_seg = ocr_max_seg(sheet);
+    let cover = TextCover::new(texts);
+    // the shapes to read, and where each came from
+    enum From {
+        Fill(usize),
+        Stroke(usize),
+    }
+    let mut shapes: Vec<Stroke> = Vec::new();
+    let mut from: Vec<From> = Vec::new();
+    // each centre line's glyph (numbered as read) and its holes; whether each glyph is bars only
+    let mut outline_of: HashMap<usize, (usize, usize)> = HashMap::new();
+    let mut bars: Vec<bool> = Vec::new();
+    let mut glyphs = 0usize;
+    'fills: for (fi, f) in fills.iter().enumerate() {
+        if taken_fills.contains(&fi) || f.loops.len() > MAX_OUTLINE_LOOPS {
+            continue;
+        }
+        let drawn_as_glyph = glyph_orders.contains(&f.order);
+        for (loops, b) in outline_glyphs(f) {
+            let (w, h) = (b[2] - b[0], b[3] - b[1]);
+            if w.max(h) < 1.5 || w > max_seg * 2.0 || h > max_seg * 2.0 {
+                continue;
+            }
+            if !drawn_as_glyph && cover.covers((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0) {
+                continue;
+            }
+            glyphs += 1;
+            if glyphs > MAX_OUTLINE_GLYPHS {
+                read.capped = true;
+                break 'fills;
+            }
+            let rings: Vec<&[(f64, f64)]> = loops.iter().filter_map(|&li| f.loops.get(li).map(Vec::as_slice)).collect();
+            let Some(sk) = crate::pdf_glyphs::skeleton(&rings, f.even_odd) else { continue };
+            // lettering is drawn in strokes thin beside the glyph; a square, a dot, an
+            // arrowhead is about as thick as it is big
+            let aspect = w / h.max(1e-9);
+            if sk.ink < 0.04 || sk.width > 0.3 || (sk.ink > 0.8 && (0.4..=2.5).contains(&aspect)) {
+                continue;
+            }
+            // The centre lines stand half a stroke inside the outline on every side; stretched
+            // to its box they space and size like the lettering the page shows (the matching
+            // normalises each glyph to its box anyway).
+            let Some(sb) = bbox(&sk.lines.iter().map(|l| l.0.clone()).collect::<Vec<_>>()) else { continue };
+            bars.push(bar_shape(&sk.lines));
+            let stretch =
+                |v: f64, s0: f64, s1: f64, o0: f64, o1: f64| if s1 - s0 > 1e-9 { o0 + (v - s0) / (s1 - s0) * (o1 - o0) } else { (o0 + o1) / 2.0 };
+            for (mut pts, closed) in sk.lines {
+                if closed && pts.len() > 1 {
+                    pts.pop();
+                }
+                for p in &mut pts {
+                    *p = (stretch(p.0, sb[0], sb[2], b[0], b[2]), stretch(p.1, sb[1], sb[3], b[1], b[3]));
+                }
+                outline_of.insert(shapes.len(), (read.shapes, sk.holes));
+                shapes.push(Stroke { pts, closed, pen: f.pen, layer: f.layer.clone(), curve_loop: false, curved_loop: false, order: f.order });
+                from.push(From::Fill(fi));
+            }
+            read.shapes += 1;
+        }
+    }
+    for (si, s) in strokes.iter().enumerate() {
+        if glyph_orders.contains(&s.order) && !taken_strokes.contains(&si) {
+            shapes.push(Stroke {
+                pts: s.pts.clone(),
+                closed: s.closed,
+                pen: s.pen,
+                layer: s.layer.clone(),
+                curve_loop: s.curve_loop,
+                curved_loop: s.curved_loop,
+                order: s.order,
+            });
+            from.push(From::Stroke(si));
+            read.shapes += 1;
+        }
+    }
+    if shapes.is_empty() {
+        return read;
+    }
+    let (readings, _) = recover_shx_ocr(&shapes, sheet, &HashSet::new(), &outline_of);
+    // each hidden string's box, a third of a letter round (as `settle_ocr`)
+    let hidden: Vec<(&TextOut, [f64; 4])> = texts
+        .iter()
+        .filter(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER) && !t.value.trim().is_empty())
+        .map(|t| {
+            let b = text_box(t);
+            let m = t.height.max(0.5) / 3.0;
+            (t, [b[0] - m, b[1] - m, b[2] + m, b[3] + m])
+        })
+        .collect();
+    let mut taken: Vec<Option<usize>> = vec![None; hidden.len()];
+    for rt in readings {
+        let (mut own_fills, mut own_strokes) = (HashSet::new(), HashSet::new());
+        for i in &rt.stroke_indices {
+            match from.get(*i) {
+                Some(From::Fill(fi)) => {
+                    own_fills.insert(*fi);
+                }
+                Some(From::Stroke(si)) => {
+                    own_strokes.insert(*si);
+                }
+                None => {}
+            }
+        }
+        let on = hidden.iter().position(|(_, b)| rt.at.0 >= b[0] && rt.at.0 <= b[2] && rt.at.1 >= b[1] && rt.at.1 <= b[3]);
+        if let Some((i, h)) = on.and_then(|i| Some((i, hidden.get(i)?.0))) {
+            // read already (from the strokes under the same string)
+            let near = h.height.max(0.5);
+            if recovered.iter().any(|r| r.value.trim() == h.value.trim() && (r.at.0 - h.at.0).hypot(r.at.1 - h.at.1) <= near) {
+                continue;
+            }
+            read.fills.extend(own_fills);
+            match taken.get(i).copied().flatten().and_then(|k| read.texts.get_mut(k)) {
+                Some(t) => t.stroke_indices.extend(own_strokes),
+                None => {
+                    if let Some(slot) = taken.get_mut(i) {
+                        *slot = Some(read.texts.len());
+                    }
+                    read.texts.push(RecoveredText {
+                        at: h.at,
+                        height: h.height,
+                        value: h.value.trim().to_string(),
+                        stroke_indices: own_strokes,
+                        pen: rt.pen,
+                        layer: rt.layer,
+                        unconfirmed: false,
+                        confidence: None,
+                        review: false,
+                        rotation: h.rotation,
+                    });
+                }
+            }
+            continue;
+        }
+        if rt.confidence.is_none_or(|c| c < OUTLINE_MIN_CONFIDENCE) {
+            read.weak += 1;
+            continue;
+        }
+        // A plan's filled pieces (wall poché, door frames, boxes, a row of grilles) read as lone
+        // letters, as words of I, J, L and T, and as marks spaced like letters ("6 6 6"):
+        // without a hidden string, a reading must read as a word with a word of two letters or
+        // digits in it, and one glyph with a curve or a slant (every digit has one).
+        let glyphs: HashSet<usize> = rt.stroke_indices.iter().filter_map(|i| outline_of.get(i).map(|o| o.0)).collect();
+        let all_bars = own_strokes.is_empty() && !glyphs.is_empty() && glyphs.iter().all(|g| bars.get(*g).copied().unwrap_or(false));
+        let has_word = rt.value.split_whitespace().any(|w| w.chars().filter(char::is_ascii_alphanumeric).count() >= 2);
+        if !reads_as_word(&rt.value) || !has_word || all_bars {
+            read.plain += 1;
+            continue;
+        }
+        // A page that gives its lettering hidden copies gives them all: a reading with none
+        // is kept for review only.
+        let review = !hidden.is_empty();
+        read.texts.push(RecoveredText { stroke_indices: HashSet::new(), unconfirmed: true, review, ..rt });
+    }
+    read
 }
 
 /// A text entity recovered from SHX stroke clusters.
@@ -2659,20 +3154,32 @@ fn look_alike(a: char, b: char) -> bool {
 }
 
 /// Match a candidate glyph against all templates.
-fn match_glyph(candidate: &[(f64, f64)], candidate_aspect: f64, candidate_n_strokes: usize, templates: &[ShxTemplate]) -> Option<GlyphRead> {
+/// `holes`: the glyph's holes when its shape is known (a filled outline): only the characters
+/// with as many take part ([`crate::pdf_glyphs::holes_fit`]), whatever their stroke count.
+fn match_glyph(
+    candidate: &[(f64, f64)],
+    candidate_aspect: f64,
+    candidate_n_strokes: usize,
+    templates: &[ShxTemplate],
+    holes: Option<usize>,
+) -> Option<GlyphRead> {
     if candidate.is_empty() {
         return None;
     }
     let mut fits: Vec<(char, f64)> = Vec::new();
     for tpl in templates {
+        if holes.is_some_and(|h| !crate::pdf_glyphs::holes_fit(tpl.ch, h)) {
+            continue;
+        }
         // loose aspect ratio filter (width factors from about 0.4 to 2.5 pass)
         let ar = candidate_aspect / tpl.aspect;
         if !(0.25..=4.0).contains(&ar) {
             continue;
         }
-        // loose stroke count filter: PDF output joins and splits strokes
+        // loose stroke count filter: PDF output joins and splits strokes (a filled glyph's
+        // centre lines split at every junction instead: its holes tell more)
         let (lo, hi) = (tpl.n_strokes / 2, tpl.n_strokes * 2 + 2);
-        if candidate_n_strokes < lo || candidate_n_strokes > hi {
+        if holes.is_none() && (candidate_n_strokes < lo || candidate_n_strokes > hi) {
             continue;
         }
         // only fits that could still be the best or its look-alike runner-up matter
@@ -2728,16 +3235,16 @@ fn glyph_slant(strokes: &[&[(f64, f64)]]) -> Option<f64> {
 /// lettering) the straightened reading wins unless the upright one fits clearly better (by a
 /// fifth); on one that barely leans it is the other way round, so an upright 7 or / stays
 /// itself.
-fn read_glyph(strokes: &[&[(f64, f64)]], slant: f64, templates: &[ShxTemplate]) -> Option<GlyphRead> {
+fn read_glyph(strokes: &[&[(f64, f64)]], slant: f64, templates: &[ShxTemplate], holes: Option<usize>) -> Option<GlyphRead> {
     let n = strokes.len();
-    let upright = glyph_samples(strokes, 0.0).and_then(|(s, a)| match_glyph(&s, a, n, templates));
+    let upright = glyph_samples(strokes, 0.0).and_then(|(s, a)| match_glyph(&s, a, n, templates, holes));
     if slant.abs() < 0.05 {
         return upright;
     }
     let straightened = [slant - 0.1, slant, slant + 0.1]
         .into_iter()
         .filter(|s| s.abs() >= 0.05 && s.abs() <= MAX_SLANT)
-        .filter_map(|s| glyph_samples(strokes, s).and_then(|(smp, a)| match_glyph(&smp, a, n, templates)))
+        .filter_map(|s| glyph_samples(strokes, s).and_then(|(smp, a)| match_glyph(&smp, a, n, templates, holes)))
         .min_by(|a, b| a.dist.total_cmp(&b.dist));
     match (upright, straightened) {
         (Some(u), Some(s)) if slant.abs() >= OBLIQUE_ROW => Some(if u.dist < s.dist * 0.8 { u } else { s }),
@@ -2903,8 +3410,16 @@ fn settle_look_alikes(word: &mut [(&MatchedGlyph, char)]) {
 /// turned reading (of two or more letters or digits: a lone turned glyph is as often a tick)
 /// replaces the stray glyphs it shares strokes with.  Where the two turns read the same
 /// strokes (a word read upside down too), the reading with more letters wins, then the surer.
-fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
-    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded);
+///
+/// `shapes`: for strokes that are a filled glyph's centre lines, (which glyph, its holes) — the
+/// holes narrow the characters it can be.
+fn recover_shx_ocr(
+    strokes: &[Stroke],
+    sheet: (f64, f64),
+    excluded: &HashSet<usize>,
+    shapes: &HashMap<usize, (usize, usize)>,
+) -> (Vec<RecoveredText>, OcrReport) {
+    let (upright, mut report) = recover_shx_ocr_upright(strokes, sheet, excluded, shapes);
     let alnum = |rt: &RecoveredText| rt.value.chars().filter(char::is_ascii_alphanumeric).count();
     let (mut result, stray): (Vec<RecoveredText>, Vec<RecoveredText>) = upright.into_iter().partition(|rt| alnum(rt) >= 2);
     let mut taken: HashSet<usize> = excluded.clone();
@@ -2928,7 +3443,7 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
                 order: s.order,
             })
             .collect();
-        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken);
+        let (texts, _) = recover_shx_ocr_upright(&turned, (sheet.1, sheet.0), &taken, shapes);
         for mut rt in texts.into_iter().filter(|rt| alnum(rt) >= 2) {
             rt.at = back(rt.at);
             rt.rotation = rotation;
@@ -2950,7 +3465,12 @@ fn recover_shx_ocr(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usi
 }
 
 /// Read the lettering that runs across the sheet (left to right, upright or slanted).
-fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &HashSet<usize>) -> (Vec<RecoveredText>, OcrReport) {
+fn recover_shx_ocr_upright(
+    strokes: &[Stroke],
+    sheet: (f64, f64),
+    excluded: &HashSet<usize>,
+    shapes: &HashMap<usize, (usize, usize)>,
+) -> (Vec<RecoveredText>, OcrReport) {
     let mut report = OcrReport::default();
     let templates = shx_templates();
     if templates.is_empty() {
@@ -3021,7 +3541,9 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
                             continue;
                         }
                         let (Some(a), Some(b)) = (strokes.get(cc.idx), strokes.get(n.idx)) else { continue };
-                        if polyline_gap(&a.pts, &b.pts) <= tol {
+                        // the pieces of one filled glyph (a 0 with a dot in it) are one glyph
+                        let one_outline = shapes.get(&cc.idx).zip(shapes.get(&n.idx)).is_some_and(|(x, y)| x.0 == y.0);
+                        if one_outline || polyline_gap(&a.pts, &b.pts) <= tol {
                             if let Some(v) = visited.get_mut(ni) {
                                 *v = true;
                             }
@@ -3125,7 +3647,15 @@ fn recover_shx_ocr_upright(strokes: &[Stroke], sheet: (f64, f64), excluded: &Has
     let mut matched: Vec<MatchedGlyph> = Vec::new();
     for (gi, ((members, bb, pen), pts)) in glyphs.iter().zip(&glyph_pts).enumerate() {
         let slant = row_slant(gi);
-        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates) {
+        // a filled glyph's holes: the sum over the outlines its strokes came from
+        let mut outlines: HashMap<usize, usize> = HashMap::new();
+        for m in members {
+            if let Some(&(shape, h)) = shapes.get(m) {
+                outlines.insert(shape, h);
+            }
+        }
+        let holes = (!outlines.is_empty()).then(|| outlines.values().sum());
+        if let Some(GlyphRead { mut ch, dist, mut alt }) = read_glyph(pts, slant, &templates, holes) {
             let straight = pts.len() == 1 && pts.first().is_some_and(|p| p.len() <= 2);
             let ring = (members.len() == 1 && members.first().and_then(|&i| strokes.get(i)).is_some_and(|s| s.closed))
                 || members.iter().any(|&i| strokes.get(i).is_some_and(|s| s.curved_loop));
@@ -3647,7 +4177,13 @@ fn reduce_masks(masks: Vec<Fill>, strokes: &[Stroke], fills: &[Fill], texts: &[T
 
         // emit one merged mask for the group
         let loop_pts = vec![(merged_bb[0], merged_bb[1]), (merged_bb[2], merged_bb[1]), (merged_bb[2], merged_bb[3]), (merged_bb[0], merged_bb[3])];
-        result.push(Fill { loops: vec![loop_pts], pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 }, order: max_order, layer: None });
+        result.push(Fill {
+            loops: vec![loop_pts],
+            pen: Pen { rgb: [255, 255, 255], lw: 0, transp: 0 },
+            order: max_order,
+            layer: None,
+            even_odd: false,
+        });
     }
     result
 }
@@ -4250,6 +4786,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // All three are text/symbol-oriented post-processing; skip when recover_text is off
     // (downstream geometry analysis that needs every stroke intact).
     let mut ocr_report = OcrReport::default();
+    // fills whose outlined lettering hidden text confirmed: kept on the SHX source layer (off)
+    let mut outline_fills: HashSet<usize> = HashSet::new();
     let (
         recovered_texts,
         shx_stroke_indices,
@@ -4308,6 +4846,9 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         // letters.
         let mut excluded = taken.clone();
         excluded.extend(strokes_under_text(&strokes, &texts));
+        // a Type3 font's drawn glyphs are lettering whatever the page: the outlined-lettering
+        // reader below takes them
+        excluded.extend(strokes.iter().enumerate().filter(|(_, s)| out.glyph_orders.contains(&s.order)).map(|(i, _)| i));
         let has_hidden_text = texts.iter().any(|t| t.layer.as_deref() == Some(HIDDEN_TEXT_LAYER));
         let has_shx_evidence = has_hidden_text || !recovered_texts.is_empty();
         let real_chars: usize = texts.iter().map(|t| t.value.trim().chars().count()).sum();
@@ -4315,7 +4856,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
         let loose = strokes.iter().enumerate().filter(|(i, s)| !excluded.contains(i) && ocr_candidate(s, max_seg).is_some()).count();
         let lettering_is_strokes = texts.len() < OCR_REAL_TEXT_LIMIT || loose >= real_chars.saturating_mul(OCR_STROKES_PER_CHAR);
         if has_shx_evidence || lettering_is_strokes {
-            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded);
+            let (ocr_texts, report) = recover_shx_ocr(&strokes, sheet, &excluded, &HashMap::new());
             // What the PDF's hidden text says is written where the OCR read takes that string;
             // a circle and a reading under the confidence floor aren't inserted (their strokes
             // stay linework).
@@ -4393,6 +4934,32 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 recovered_texts.extend(ocr_texts);
             }
             ocr_report = report;
+        }
+        // Lettering drawn as shapes: filled glyph outlines and Type3 glyph procedures.
+        let taken_fills: HashSet<usize> = instances.iter().flat_map(|inst| inst.fill_indices.iter().copied()).collect();
+        let outlined = recover_outlined_lettering(&strokes, &fills, &texts, sheet, &out.glyph_orders, &taken, &taken_fills, &recovered_texts);
+        if outlined.shapes > 0 {
+            stats.insert("outlined lettering glyph shapes".into(), outlined.shapes);
+        }
+        if outlined.weak > 0 {
+            stats.insert("outlined lettering readings under the confidence floor dropped".into(), outlined.weak);
+        }
+        if outlined.plain > 0 {
+            stats.insert("outlined lettering lone glyphs and bar shapes dropped".into(), outlined.plain);
+        }
+        if outlined.capped {
+            notes.push(format!("outlined lettering: more than {MAX_OUTLINE_GLYPHS} glyph-sized outline pieces; the rest were not read"));
+        }
+        if !outlined.texts.is_empty() {
+            let confirmed = outlined.texts.iter().filter(|t| !t.unconfirmed).count();
+            stats.insert("outlined lettering texts recovered".into(), outlined.texts.len());
+            notes.push(format!(
+                "outlined lettering: {} text(s) read from {} glyph shape(s) drawn as outlines or Type3 glyphs ({confirmed} confirmed by hidden text; the rest use style {OCR_TEXT_STYLE} and their shapes stay drawn)",
+                outlined.texts.len(),
+                outlined.shapes
+            ));
+            outline_fills.extend(outlined.fills);
+            recovered_texts.extend(outlined.texts);
         }
         for rt in &recovered_texts {
             shx_stroke_indices.extend(&rt.stroke_indices);
@@ -4815,7 +5382,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 if symbol_fill_indices.contains(&i) {
                     continue;
                 }
-                let (layer, color, lw) = place("fill", f.pen, &f.layer);
+                let (layer, color, lw) = place(if outline_fills.contains(&i) { "shx_source" } else { "fill" }, f.pen, &f.layer);
                 let loops: Vec<HatchLoop> = f
                     .loops
                     .iter()
@@ -4831,7 +5398,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 if loops.is_empty() {
                     continue;
                 }
-                if opts.merge_small_fills && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
+                if opts.merge_small_fills && !outline_fills.contains(&i) && f.loops.iter().filter(|l| l.len() >= 3).all(|l| is_small(l)) {
                     let e = small_fills
                         .entry((f.layer.clone().unwrap_or_default(), f.pen.rgb, f.pen.transp))
                         .or_insert_with(|| (layer, color, lw, Vec::new()));
