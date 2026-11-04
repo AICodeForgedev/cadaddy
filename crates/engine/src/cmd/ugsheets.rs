@@ -27,6 +27,10 @@ use crate::{Result, Session};
 
 /// Runs, stub-ups and findings looked at, at most (hostile specs).
 const MAX_ITEMS: usize = 5_000;
+/// A spec's runs scanned for the underground ones, at most: a large job holds thousands of runs
+/// above the slab, and the job adds its underground runs last, so the cap on what is worked on
+/// ([`MAX_ITEMS`]) counts the buried runs, not the runs' places in the list.
+const MAX_SCAN: usize = 200_000;
 /// Points of one run used, at most.
 const MAX_POINTS: usize = 1_000;
 /// A run's end within this of a piece of equipment feeds it (feet).
@@ -659,7 +663,8 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
     let mut pipes: Vec<Buried> = Vec::new();
     // (trade, level, at, size, top above the floor, what it feeds, run id, bottom)
     let mut risers: Vec<(&'static str, String, [f64; 2], f64, f64, String, String, bool)> = Vec::new();
-    for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_ITEMS) {
+    let mut seen = 0usize;
+    for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_SCAN) {
         let Some(sys) = sp.mep.systems.iter().find(|s| s.name.eq_ignore_ascii_case(&r.system)) else { continue };
         if !matches!(sys.kind, MepKind::Conduit | MepKind::Pipe) {
             continue;
@@ -671,6 +676,10 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
             if r.bottoms_ft.iter().any(|b| b.is_finite()) { super::ugplan::below_slab(sp, r) } else { bottom.is_finite() && bottom < 0.0 && on_slab };
         if !buried {
             continue;
+        }
+        seen += 1;
+        if seen > MAX_ITEMS {
+            break;
         }
         let trade = if sys.kind == MepKind::Pipe { "P" } else { "E" };
         let size = [r.size_in[0], sys.size_in[0]].into_iter().find(|v| v.is_finite() && *v > 0.0).unwrap_or(0.0);
@@ -837,7 +846,7 @@ fn study(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, today: Optio
         sp.mep
             .runs
             .iter()
-            .take(MAX_ITEMS)
+            .take(MAX_SCAN)
             .any(|r| r.height_source.starts_with(super::ugplan::CALLED_PREFIX) && whats.iter().any(|w| r.height_source.contains(w)))
     };
     for kind in &required {

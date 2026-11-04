@@ -226,3 +226,26 @@ fn a_service_the_job_built_from_its_callout_is_not_missing() {
     let r = s.execute("ugsheets.check", &json!({})).unwrap();
     assert_eq!(missing(&r), vec!["telephone service".to_string()], "{r}");
 }
+
+#[test]
+fn buried_runs_after_thousands_of_others_are_still_seen() {
+    // A large job: thousands of runs above the slab come first, its underground runs last.
+    let mut sp = spec();
+    let mine = sp["mep"]["runs"].as_array().cloned().unwrap();
+    let mut runs: Vec<Value> = (0..6_000)
+        .map(|i| {
+            let y = ft(1.0 + f64::from(i % 50));
+            json!({"system": "E-BRANCH", "level": "Level 1", "points": [[ft(60.0), y], [ft(70.0), y]], "size_in": [0.75, 0.75], "bottoms_ft": [9.0]})
+        })
+        .collect();
+    runs.extend(mine);
+    sp["mep"]["runs"] = json!(runs);
+    let mut s = Session::new();
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).unwrap();
+    let r = s.execute("ugsheets.check", &json!({})).unwrap();
+    // The same buried work as the small spec: the feeder, the drain, the stack's stub-up.
+    assert_eq!(r["runs"].as_array().map(Vec::len), Some(1), "{}", r["runs"]);
+    assert_eq!(r["pipes"].as_array().map(Vec::len), Some(1), "{}", r["pipes"]);
+    let stubs = r["stubups"].as_array().cloned().unwrap_or_default();
+    assert!(stubs.iter().any(|x| x["trade"] == "P" && x["feeds"] == "SAN stack"), "{stubs:?}");
+}

@@ -36,6 +36,9 @@ const RULES: &str = include_str!("ugplan.json");
 const MAX_CALLOUTS: usize = 200;
 /// Runs, feeders and circuits looked at, at most.
 const MAX_ITEMS: usize = 5_000;
+/// A spec's runs scanned, at most: the cap on what is worked on ([`MAX_ITEMS`]) counts the
+/// runs that qualify (a large job's drains and stacks come after thousands of other runs).
+const MAX_SCAN: usize = 200_000;
 /// Characters of a callout kept.
 const MAX_TEXT: usize = 600;
 
@@ -870,7 +873,10 @@ pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
     }
     let mut moved = 0usize;
     let mut length = 0.0;
-    for run in sp.mep.runs.iter_mut().take(MAX_ITEMS) {
+    for run in sp.mep.runs.iter_mut().take(MAX_SCAN) {
+        if moved >= MAX_ITEMS {
+            break;
+        }
         let sys = run.system.to_ascii_uppercase();
         let untagged = matches!(run.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route");
         if !DRAINS.contains(&sys.as_str())
@@ -901,7 +907,10 @@ pub(crate) fn stack_bases(sp: &BuildingSpec, vent_below: bool) -> Vec<MepRun> {
     let r = rules();
     let Some(slab) = slab_level(sp) else { return Vec::new() };
     let mut out: Vec<MepRun> = Vec::new();
-    for run in sp.mep.runs.iter().take(MAX_ITEMS) {
+    for run in sp.mep.runs.iter().take(MAX_SCAN) {
+        if out.len() >= MAX_ITEMS {
+            break;
+        }
         let sys = run.system.to_ascii_uppercase();
         let drainage = DRAINS.contains(&sys.as_str()) || (vent_below && sys == "V");
         if !drainage || !run.level.eq_ignore_ascii_case(&slab) || ug_system(&run.system) {
@@ -1521,6 +1530,15 @@ mod tests {
         // The stack still gets its base; a rerun finds the drains moved.
         assert_eq!(stack_bases(&sp, false).len(), 1);
         assert_eq!(slab_drains(&mut sp), (0, 0.0));
+        // A large job's drains and stacks after thousands of other runs: still found.
+        let mut big = spec();
+        let filler = run("E-BRANCH", "Level 1", vec![[0.0, 0.0], [10.0, 0.0]], 9.0, "default", None);
+        let mut runs = vec![filler; MAX_ITEMS + 1_000];
+        runs.push(run("SAN", "Level 1", vec![[100.0, 100.0], [300.0, 100.0]], 8.75, "default", None));
+        runs.push(run("SAN", "Level 1", vec![[600.0, 300.0]], 0.0, "default", Some(10.0)));
+        big.mep.runs = runs;
+        assert_eq!(slab_drains(&mut big).0, 1);
+        assert_eq!(stack_bases(&big, false).len(), 1);
         // No slab level, nothing moved.
         let mut none = BuildingSpec::default();
         none.levels.clear();
