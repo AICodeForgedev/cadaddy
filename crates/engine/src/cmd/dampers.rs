@@ -38,6 +38,10 @@ const MAX_TEXTS: usize = 200_000;
 const MAX_LEADER_HOPS: usize = 4;
 /// Wall crossings looked at on one level, at most.
 const MAX_CROSSINGS: usize = 50_000;
+/// Tags merged into one damper that are listed with it, at most.
+const MAX_MERGED: usize = 20;
+/// Duct pieces a walk along a duct goes through, at most.
+const MAX_WALK: usize = 2_000;
 
 /// A code the rules data knows, and the kind of damper it is.
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -107,6 +111,15 @@ pub(crate) struct Rules {
     pub leader_reach_ft: f64,
     pub wall_reach_ft: f64,
     pub dedupe_ft: f64,
+    /// Two tags of one sheet this close (feet on the plan) are one tag read twice.
+    pub same_tag_ft: f64,
+    /// How far along its duct (feet) a rated damper's wall is looked for when no wall is within
+    /// the wall reach, and how far a wall type tag may sit from that path.
+    pub along_duct_reach_ft: f64,
+    /// How far a wall type tag sits from the wall it types, at most (feet).
+    pub wall_tag_reach_ft: f64,
+    /// Duct pieces whose ends are this close (feet, past their half widths) are one path.
+    pub duct_join_ft: f64,
     pub body_in: f64,
     pub default_size_in: [f64; 2],
     pub power: PowerRules,
@@ -283,6 +296,8 @@ pub(crate) struct Tag {
     pub points_to: Option<Vec2>,
     /// In a circle or a closed outline (a hexagon) round it.
     pub enclosed: bool,
+    /// The text it was read from (its index in the texts given).
+    pub text: usize,
 }
 
 /// The damper tags on a sheet's texts: a text that is a code the set's legends or the rules
@@ -296,7 +311,7 @@ pub(crate) fn tags(
     known: &dyn Fn(&str) -> bool,
 ) -> Vec<Tag> {
     let mut out = Vec::new();
-    for t in texts.iter().take(MAX_TEXTS).filter(|t| t.height > 0.0 && t.at.is_finite() && t.rotation.is_finite()) {
+    for (ti, t) in texts.iter().enumerate().take(MAX_TEXTS).filter(|(_, t)| t.height > 0.0 && t.at.is_finite() && t.rotation.is_finite()) {
         if out.len() >= MAX_TAGS_PER_SHEET {
             break;
         }
@@ -347,7 +362,7 @@ pub(crate) fn tags(
             }
             end
         });
-        out.push(Tag { code, number, at: c, height: h, points_to, enclosed });
+        out.push(Tag { code, number, at: c, height: h, points_to, enclosed, text: ti });
     }
     out
 }
@@ -401,6 +416,45 @@ pub(crate) struct Found {
     pub enclosed: bool,
     /// The keynote beside it (number, text).
     pub keynote: Option<(String, String)>,
+    /// What it was read from: `text`, `block text` (a symbol's text), `attribute`.
+    pub read_as: String,
+}
+
+impl Found {
+    /// The tag as printed (`FSD-2`, `FD`).
+    pub(crate) fn tag_text(&self) -> String {
+        if self.number.is_empty() { self.code.clone() } else { format!("{}-{}", self.code, self.number) }
+    }
+}
+
+/// A tag the dedupe merged into a damper kept from another tag: the evidence a reviewer needs to
+/// tell one tag read twice from two dampers close together.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Merged {
+    /// The merged tag as it was read.
+    pub found: Found,
+    /// How far apart the two dampers would have been in the duct, and the two tags (plan units).
+    pub apart: f64,
+    pub tags_apart: f64,
+}
+
+impl Merged {
+    /// What the pair most likely is, from the evidence: the same tag read twice (one sheet, the
+    /// tags on top of each other), the same damper on two sheets, or two tags close together.
+    pub(crate) fn reading(&self, kept: &Found, upf: f64) -> String {
+        let r = rules();
+        if self.found.sheet != kept.sheet {
+            format!("the same damper on two sheets ({} and {})", kept.sheet, self.found.sheet)
+        } else if self.tags_apart <= r.same_tag_ft * upf {
+            format!("one tag read twice on {} ({} and {}, {:.1} ft apart)", kept.sheet, kept.read_as, self.found.read_as, self.tags_apart / upf)
+        } else {
+            format!(
+                "two tags {:.1} ft apart on {} put at the same place in the duct: maybe two dampers close together, check the plan",
+                self.tags_apart / upf,
+                kept.sheet
+            )
+        }
+    }
 }
 
 /// A damper in its duct.
@@ -420,6 +474,10 @@ pub(crate) struct Placed {
     pub why: String,
     /// The other sheets showing the same damper (one count).
     pub also: Vec<String>,
+    /// The tags merged into it by the dedupe, with the evidence.
+    pub merged: Vec<Merged>,
+    /// Moved along its duct to a rated wall past the wall reach: how far along it (plan units).
+    pub moved_along: Option<f64>,
 }
 
 fn same_level(a: &str, b: &str) -> bool {
@@ -578,9 +636,26 @@ pub(crate) fn place(found: Vec<Found>, ducts: &[Duct], walls: &[Wall], upf: f64)
             if k.found.keynote.is_none() {
                 k.found.keynote = f.keynote.clone();
             }
+            let (apart, tags_apart) = ((k.at - at).len(), (k.found.tag_at - f.tag_at).len());
+            if k.merged.len() < MAX_MERGED {
+                k.merged.push(Merged { found: f, apart, tags_apart });
+            }
             continue;
         }
-        placed.push(Placed { bottom_ft: d.bottom(segment), found: f, duct, segment, at, along, size_in, wall, why, also: Vec::new() });
+        placed.push(Placed {
+            bottom_ft: d.bottom(segment),
+            found: f,
+            duct,
+            segment,
+            at,
+            along,
+            size_in,
+            wall,
+            why,
+            also: Vec::new(),
+            merged: Vec::new(),
+            moved_along: None,
+        });
     }
     (placed, none)
 }
@@ -607,6 +682,321 @@ pub(crate) fn unprotected<'a>(ducts: &[Duct], walls: &[Wall], placed: &[Placed],
         }
     }
     out
+}
+
+/// The wall crossings met walking along the duct from a damper's place, both ways, carried on
+/// into the duct pieces joined to it (ends or a tee within the rules' join distance past the
+/// pieces' half widths) and on the same level: each crossing of `all` (index) with the distance
+/// along the ducts to it, up to `reach` (plan units), nearest first.
+pub(crate) fn crossings_along(ducts: &[Duct], all: &[Crossing], p: &Placed, reach: f64, upf: f64) -> Vec<(usize, f64)> {
+    let r = rules();
+    let Some(level) = ducts.get(p.duct).map(|d| d.level.clone()) else { return Vec::new() };
+    // The level's duct pieces: (duct, segment, ends, half width).
+    let pieces: Vec<(usize, usize, Vec2, Vec2, f64)> = ducts
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| same_level(&d.level, &level))
+        .flat_map(|(di, d)| d.points.windows(2).enumerate().map(move |(si, w)| (di, si, w[0], w[1], d.size_in[0].max(0.0) / 24.0 * upf)))
+        .take(MAX_CROSSINGS)
+        .collect();
+    let mut best: BTreeMap<(usize, usize), f64> = BTreeMap::new();
+    best.insert((p.duct, p.segment), 0.0);
+    let mut queue: Vec<(usize, usize, Vec2, f64)> = vec![(p.duct, p.segment, p.at, 0.0)];
+    let mut met: BTreeMap<usize, f64> = BTreeMap::new();
+    let mut steps = 0usize;
+    while let Some((di, si, from, base)) = queue.pop() {
+        steps += 1;
+        if steps > MAX_WALK {
+            break;
+        }
+        if best.get(&(di, si)).is_some_and(|b| *b < base) {
+            continue;
+        }
+        let Some(&(_, _, a, b, half)) = pieces.iter().find(|x| x.0 == di && x.1 == si) else { continue };
+        for (ci, c) in all.iter().enumerate().filter(|(_, c)| c.duct == di && c.segment == si) {
+            let dd = base + (c.at - from).len();
+            if dd <= reach && met.get(&ci).is_none_or(|m| dd < *m) {
+                met.insert(ci, dd);
+            }
+        }
+        for end in [a, b] {
+            let de = base + (end - from).len();
+            if de > reach {
+                continue;
+            }
+            for &(dj, sj, c, d, half_j) in &pieces {
+                if (dj, sj) == (di, si) {
+                    continue;
+                }
+                let (q, gap) = nearest_on(c, d, end);
+                if gap > half.max(half_j) + r.duct_join_ft * upf {
+                    continue;
+                }
+                let dq = de + gap;
+                if dq <= reach && best.get(&(dj, sj)).is_none_or(|x| dq < *x) {
+                    best.insert((dj, sj), dq);
+                    queue.push((dj, sj, q, dq));
+                }
+            }
+        }
+    }
+    let mut out: Vec<(usize, f64)> = met.into_iter().collect();
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
+/// A wall type tag on an architectural plan (a mark of the partition legend), with its type's
+/// rating and where that came from.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WallTypeTag {
+    pub level: String,
+    pub mark: String,
+    /// Where it is printed, on the level's plan.
+    pub at: Vec2,
+    pub rating: Option<String>,
+    pub rating_source: String,
+    /// The sheet it is printed on (a typical room plan's tag: that sheet, stamped into the room).
+    pub sheet: String,
+}
+
+/// A wall the architectural plans tag rated where the model has none rated: a wall-model finding.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WallModelFinding {
+    /// The wall type tag (mark, rating, where, its sheet).
+    pub tag: WallTypeTag,
+    /// The built wall nearest the tag within the tag reach ([`Wall`] index), none: no wall there.
+    pub wall: Option<usize>,
+    /// What the model has there.
+    pub model: String,
+}
+
+/// What looking along a rated damper's duct found, when no wall was within the wall reach.
+#[derive(Clone, Debug)]
+pub(crate) enum AlongDuct {
+    /// A rated wall the duct crosses: the crossing ([`Crossing`] index in the list given) and the
+    /// distance along the duct (plan units).
+    RatedWall { crossing: usize, along: f64 },
+    /// The plans tag a rated wall there that the model has without its rating or not at all; the
+    /// crossing of the model's wall when the duct crosses it in reach (the damper goes there).
+    WallModel { finding: WallModelFinding, crossing: Option<(usize, f64)> },
+    /// Nothing within reach: the damper stays where its tag points.
+    Nothing,
+}
+
+fn polygon_dist(hull: &[Vec2], p: Vec2) -> f64 {
+    if hull.len() >= 3 && cadaddy_geom::point_in_polygon(hull, p) {
+        return 0.0;
+    }
+    let n = hull.len();
+    (0..n).filter_map(|i| Some(nearest_on(*hull.get(i)?, *hull.get((i + 1) % n)?, p).1)).fold(f64::INFINITY, f64::min)
+}
+
+/// For a rated damper placed with no wall in reach ([`Placed::wall`] none): the rated wall its
+/// duct crosses within the rules' reach along the duct, else a rated wall the plans' wall type
+/// tags (`tags`) put beside that stretch of duct that the model has without its rating, without
+/// the duct crossing it, or not at all. Never moves a damper off its duct.
+pub(crate) fn along_duct(p: &Placed, ducts: &[Duct], walls: &[Wall], all: &[Crossing], tags: &[WallTypeTag], upf: f64) -> AlongDuct {
+    let r = rules();
+    if p.wall.is_some() || !kind_rule(&p.found.kind).is_some_and(|k| k.rated) {
+        return AlongDuct::Nothing;
+    }
+    let reach = r.along_duct_reach_ft * upf;
+    let met = crossings_along(ducts, all, p, reach, upf);
+    let rated = |ci: usize| all.get(ci).and_then(|c| walls.get(c.wall)).is_some_and(|w| w.rating.is_some());
+    if let Some(&(crossing, along)) = met.iter().find(|(ci, _)| rated(*ci)) {
+        return AlongDuct::RatedWall { crossing, along };
+    }
+    // The stretch of duct looked along: the damper's place and the crossings met.
+    let level = ducts.get(p.duct).map(|d| d.level.as_str()).unwrap_or("");
+    let tag_reach = r.wall_tag_reach_ft * upf;
+    let near_path = |t: &WallTypeTag| (t.at - p.at).len() <= reach;
+    let Some(tag) = tags
+        .iter()
+        .filter(|t| t.rating.is_some() && same_level(&t.level, level) && near_path(t))
+        .min_by(|a, b| (a.at - p.at).len().total_cmp(&(b.at - p.at).len()))
+    else {
+        return AlongDuct::Nothing;
+    };
+    // The built wall the tag is beside.
+    let wall = walls
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| same_level(&w.level, level))
+        .map(|(i, w)| (i, polygon_dist(&w.hull, tag.at)))
+        .filter(|(_, d)| *d <= tag_reach)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(i, _)| i);
+    let crossing = wall.and_then(|wi| met.iter().find(|(ci, _)| all.get(*ci).is_some_and(|c| c.wall == wi)).copied());
+    let mark = format!("{} ({})", tag.mark, tag.rating.clone().unwrap_or_default());
+    let model = match wall.and_then(|i| walls.get(i)) {
+        None => format!("no wall in the model within {} ft of the plan's {mark} tag", r.wall_tag_reach_ft),
+        Some(w) if w.rating.is_none() => {
+            let as_type = if w.wall_type.is_empty() { "an untyped wall".to_string() } else { format!("wall type {}", w.wall_type) };
+            if crossing.is_some() {
+                format!("the model has the wall the duct goes through as {as_type}, without the plan tag's rating {mark}")
+            } else {
+                format!("the model has the wall beside the plan's {mark} tag as {as_type}, without its rating, and the duct doesn't cross it")
+            }
+        }
+        Some(w) => format!(
+            "the model has the wall rated ({} {}), but the duct doesn't cross it here (the duct or the wall is drawn short)",
+            w.wall_type,
+            w.rating.clone().unwrap_or_default()
+        ),
+    };
+    AlongDuct::WallModel { finding: WallModelFinding { tag: tag.clone(), wall, model }, crossing }
+}
+
+/// [`along_duct`] for every rated damper placed with no wall in reach: one the duct takes to a
+/// rated wall (or to the wall the plans tag rated) is set there, in its duct; the wall-model
+/// findings (the damper's index in `placed`, the finding).
+pub(crate) fn walls_along_ducts(
+    placed: &mut [Placed],
+    ducts: &[Duct],
+    walls: &[Wall],
+    all: &[Crossing],
+    tags: &[WallTypeTag],
+    upf: f64,
+) -> Vec<(usize, WallModelFinding)> {
+    let r = rules();
+    let mut out = Vec::new();
+    for (i, p) in placed.iter_mut().enumerate() {
+        let (to, finding) = match along_duct(p, ducts, walls, all, tags, upf) {
+            AlongDuct::Nothing => continue,
+            AlongDuct::RatedWall { crossing, along } => (Some((crossing, along)), None),
+            AlongDuct::WallModel { finding, crossing } => (crossing, Some(finding)),
+        };
+        if let Some((ci, along)) = to
+            && let Some(c) = all.get(ci)
+            && let Some(d) = ducts.get(c.duct)
+            && walls.get(c.wall).is_some()
+        {
+            let dir = match d.points.get(c.segment).zip(d.points.get(c.segment + 1)) {
+                Some((a, b)) if (*b - *a).len() > 1e-9 => (*b - *a) * (1.0 / (*b - *a).len()),
+                _ => p.along,
+            };
+            p.duct = c.duct;
+            p.segment = c.segment;
+            p.at = c.at;
+            p.along = dir;
+            p.wall = Some(c.wall);
+            if d.size_in[0] > 0.0 {
+                p.size_in = d.size_in;
+            }
+            p.bottom_ft = d.bottom(c.segment);
+            p.moved_along = Some(along);
+            p.why = format!(
+                "no wall within {} ft of the tag; the wall its duct crosses {:.1} ft along the duct (within {} ft)",
+                r.wall_reach_ft,
+                along / upf,
+                r.along_duct_reach_ft
+            );
+        }
+        if let Some(f) = finding {
+            out.push((i, f));
+        }
+    }
+    out
+}
+
+/// A panel schedule circuit whose description names a damper kind.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ScheduleCircuit {
+    pub kind: String,
+    pub panel: String,
+    pub circuit: String,
+    /// The room or area the schedule's row says it serves (empty: none printed).
+    pub room: String,
+    pub source: String,
+}
+
+/// Where a panel is and what it serves, as the documents say.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct PanelPlace {
+    pub panel: String,
+    /// Its level (empty: no document places it).
+    pub level: String,
+    pub level_source: String,
+    /// The texts naming its place and the area it serves (its schedule's location, a served-area
+    /// note), each with its source.
+    pub area: Vec<(String, String)>,
+}
+
+/// How a damper's circuit was chosen among the panel schedules' damper circuits.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum CircuitPick {
+    /// One circuit (its index in the list given) and why.
+    One { circuit: usize, why: String },
+    /// Several circuits the documents can't tell apart: the candidates, and what was weighed.
+    Tied { candidates: Vec<usize>, why: String },
+    /// No schedule circuit names the kind.
+    NoneNamed,
+}
+
+/// Whether `text` names the room `key` (a room number: one of its words; a name: its words in
+/// order).
+pub(crate) fn names_room(text: &str, key: &str) -> bool {
+    let (t, k) = (words(text), words(key));
+    if k.is_empty() || t.len() < k.len() {
+        return false;
+    }
+    t.windows(k.len()).any(|w| w == k.as_slice())
+}
+
+/// The circuit a powered damper of `kind` on `level`, in the rooms `rooms` (its room numbers or
+/// names, both sides of its wall), takes from the panel schedules' damper circuits when no note
+/// names one: the only one naming its kind; else the one whose row names the damper's room or
+/// whose panel is in (or serves) that room; else the one whose panel serves the damper's level;
+/// never the first match. Still tied: the candidates (a review item and an RFI).
+pub(crate) fn pick_circuit(kind: &str, level: &str, rooms: &[String], circuits: &[ScheduleCircuit], panels: &[PanelPlace]) -> CircuitPick {
+    let cands: Vec<usize> = circuits.iter().enumerate().filter(|(_, c)| same_duty(&c.kind, kind)).map(|(i, _)| i).collect();
+    match cands[..] {
+        [] => return CircuitPick::NoneNamed,
+        [one] => return CircuitPick::One { circuit: one, why: "the only panel schedule circuit naming this kind of damper".into() },
+        _ => {}
+    }
+    let place = |panel: &str| panels.iter().find(|p| p.panel.eq_ignore_ascii_case(panel));
+    // (score, why): 2 the damper's room, 1 its level, 0 nothing known, -1 another level.
+    let weigh = |c: &ScheduleCircuit| -> (i32, String) {
+        let room_hit = |text: &str| rooms.iter().find(|k| names_room(text, k)).cloned();
+        if let Some(k) = room_hit(&c.room) {
+            return (2, format!("its schedule row serves {k} ({})", c.source));
+        }
+        let Some(pp) = place(&c.panel) else { return (0, format!("panel {}: no document places it", c.panel)) };
+        if let Some((text, src, k)) = pp.area.iter().find_map(|(t, s)| room_hit(t).map(|k| (t, s, k))) {
+            return (2, format!("panel {} is in or serves {k} ({src}: {text})", c.panel));
+        }
+        if let Some((text, src)) = pp.area.iter().find(|(t, _)| !level.trim().is_empty() && names_room(t, level)) {
+            return (1, format!("panel {} serves {level} ({src}: {text})", c.panel));
+        }
+        match pp.level.as_str() {
+            "" => (0, format!("panel {}: its level is not known", c.panel)),
+            l if same_level(l, level) => (1, format!("panel {} is on {l} ({})", c.panel, pp.level_source)),
+            l => (-1, format!("panel {} is on {l} ({}), not the damper's level", c.panel, pp.level_source)),
+        }
+    };
+    let weighed: Vec<(usize, i32, String)> = cands
+        .iter()
+        .filter_map(|i| circuits.get(*i).map(|c| (*i, c)))
+        .map(|(i, c)| {
+            let (s, w) = weigh(c);
+            (i, s, w)
+        })
+        .collect();
+    let top = weighed.iter().map(|w| w.1).max().unwrap_or(0);
+    let best: Vec<&(usize, i32, String)> = weighed.iter().filter(|w| w.1 == top).collect();
+    let why = weighed
+        .iter()
+        .map(|(i, _, w)| {
+            let c = circuits.get(*i);
+            format!("{}-{}: {w}", c.map_or("", |c| c.panel.as_str()), c.map_or("", |c| c.circuit.as_str()))
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    match best[..] {
+        [one] if top > 0 => CircuitPick::One { circuit: one.0, why },
+        _ => CircuitPick::Tied { candidates: best.iter().map(|w| w.0).collect(), why },
+    }
 }
 
 /// A note naming the circuit powered dampers go on.
@@ -1075,5 +1465,195 @@ mod tests {
             w.top_ft = Some(9.0);
         }
         assert_eq!(crossings(&ducts, &low).len(), 2);
+    }
+
+    fn circuit(kind: &str, panel: &str, number: &str, room: &str) -> ScheduleCircuit {
+        ScheduleCircuit {
+            kind: kind.into(),
+            panel: panel.into(),
+            circuit: number.into(),
+            room: room.into(),
+            source: format!("E-601 panel {panel} schedule, circuit {number}"),
+        }
+    }
+
+    fn panel_at(panel: &str, level: &str, location: &str) -> PanelPlace {
+        PanelPlace {
+            panel: panel.into(),
+            level: level.into(),
+            level_source: format!("panel {panel}'s element on {level}"),
+            area: vec![(location.into(), format!("E-601 panel {panel} schedule, location"))],
+        }
+    }
+
+    /// MUST 1: two schedule circuits name the same damper kind and no note names one: the panel
+    /// serving the damper's room, else its level, wins; still tied: the candidates (RFI); never
+    /// the first match.
+    #[test]
+    fn a_damper_circuit_is_chosen_by_the_panel_serving_the_damper_never_the_first_match() {
+        let circuits = vec![
+            circuit("motorized", "P1", "19", ""),
+            circuit("motorized", "P3", "34", ""),
+            circuit("motorized", "P2", "7", ""),
+            circuit("fire_smoke", "P1", "27", ""),
+        ];
+        let panels =
+            vec![panel_at("P1", "Level 1", "MECHANICAL 120"), panel_at("P3", "Level 1", "LAUNDRY 130"), panel_at("P2", "Level 2", "STORAGE 205")];
+        let one = |kind: &str, level: &str, rooms: &[&str], panels: &[PanelPlace]| {
+            let rooms: Vec<String> = rooms.iter().map(|r| r.to_string()).collect();
+            pick_circuit(kind, level, &rooms, &circuits, panels)
+        };
+        // The damper's level has one of the panels (the first match, P1, is on another level).
+        let got = one("motorized", "Level 2", &["210"], &panels);
+        assert!(matches!(&got, CircuitPick::One { circuit: 2, why } if why.contains("panel P2 is on Level 2")), "{got:?}");
+        // Two panels on the damper's level: the one in the damper's room (either side of its wall).
+        let got = one("motorized", "Level 1", &["131", "130"], &panels);
+        assert!(matches!(&got, CircuitPick::One { circuit: 1, why } if why.contains("130")), "{got:?}");
+        // Neither panel serves the damper's room: tied, both candidates, not the first match.
+        let got = one("motorized", "Level 1", &["150"], &panels);
+        assert!(matches!(&got, CircuitPick::Tied { candidates, .. } if candidates == &vec![0, 1]), "{got:?}");
+        // The schedule row says what it serves.
+        let mut rows = circuits.clone();
+        if let Some(c) = rows.get_mut(0) {
+            c.room = "ROOM 150".into();
+        }
+        let got = pick_circuit("motorized", "Level 1", &["150".to_string()], &rows, &panels);
+        assert!(matches!(&got, CircuitPick::One { circuit: 0, why } if why.contains("schedule row serves 150")), "{got:?}");
+        // A served-area note naming the level.
+        let notes = vec![
+            PanelPlace {
+                panel: "P1".into(),
+                area: vec![("SERVES LEVEL 3 CORRIDOR".into(), "E-601 panel P1 schedule, serves".into())],
+                ..PanelPlace::default()
+            },
+            PanelPlace {
+                panel: "P3".into(),
+                area: vec![("SERVES LEVEL 1".into(), "E-601 panel P3 schedule, serves".into())],
+                ..PanelPlace::default()
+            },
+        ];
+        let got = one("motorized", "Level 3", &[], &notes);
+        assert!(matches!(&got, CircuitPick::One { circuit: 0, .. }), "{got:?}");
+        // No document places the panels: tied.
+        assert!(matches!(one("motorized", "Level 1", &["150"], &[]), CircuitPick::Tied { .. }));
+        // The only circuit of its kind (a smoke damper takes the fire/smoke dampers' circuit).
+        assert!(matches!(one("smoke", "Level 4", &[], &panels), CircuitPick::One { circuit: 3, .. }));
+        assert_eq!(one("backdraft", "Level 1", &[], &panels), CircuitPick::NoneNamed);
+        assert!(names_room("GUEST LAUNDRY 149", "149") && !names_room("ROOM 1490", "149") && names_room("MECH ROOM", "MECH ROOM"));
+        assert!(!names_room("ROOM", "MECH ROOM") && !names_room("", "149"));
+    }
+
+    fn placed_one(kind: &str, code: &str, at: Vec2, ducts: &[Duct], walls: &[Wall]) -> Placed {
+        let (mut placed, none) = place(vec![found(kind, code, "M-101", at, false)], ducts, walls, 12.0);
+        assert!(none.is_empty(), "{none:?}");
+        placed.pop().expect("placed")
+    }
+
+    /// MUST 2: a rated damper with no wall within the wall reach goes to the rated wall its duct
+    /// crosses farther along (across a joint between two duct runs); with no rated wall there,
+    /// a rated wall type tag the model has without its rating, or not at all, is a wall-model
+    /// finding with the tag's source. The damper never leaves its duct.
+    #[test]
+    fn a_rated_damper_far_from_a_wall_finds_the_rated_wall_along_its_duct() {
+        let (ducts, walls) = plan();
+        // 7.5 ft from the rated wall: past the 5 ft reach, within the reach along the duct.
+        let mut p = placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &ducts, &walls);
+        assert_eq!(p.wall, None);
+        let all = crossings(&ducts, &walls);
+        let mut list = vec![p.clone()];
+        let findings = walls_along_ducts(&mut list, &ducts, &walls, &all, &[], 12.0);
+        assert!(findings.is_empty());
+        let moved = list.first().expect("moved");
+        assert_eq!((moved.duct, moved.wall), (0, Some(0)));
+        assert!((moved.at - Vec2::new(240.0, 100.0)).len() < 1e-6, "{:?}", moved.at);
+        assert!(moved.moved_along.is_some_and(|a| (a - 90.0).abs() < 1e-6) && moved.why.contains("7.5 ft along"), "{moved:?}");
+        // The duct in two runs joined end to end: the walk carries on into the other run.
+        let mut split = ducts.clone();
+        if let Some(d) = split.get_mut(0) {
+            d.points = vec![Vec2::new(300.0, 100.0), Vec2::new(720.0, 100.0)];
+        }
+        split.push(Duct { run: 2, points: vec![Vec2::new(0.0, 100.0), Vec2::new(299.0, 100.0)], ..ducts.first().cloned().unwrap_or_default() });
+        let all2 = crossings(&split, &walls);
+        let mut list = vec![placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &split, &walls)];
+        walls_along_ducts(&mut list, &split, &walls, &all2, &[], 12.0);
+        assert!(list.first().is_some_and(|m| m.duct == 2 && m.wall == Some(0)), "{list:?}");
+        // A motorized damper isn't rated: left where it is.
+        let mut md = vec![placed_one("motorized", "MD", Vec2::new(330.0, 104.0), &ducts, &walls)];
+        walls_along_ducts(&mut md, &ducts, &walls, &all, &[], 12.0);
+        assert!(md.first().is_some_and(|m| m.wall.is_none() && m.moved_along.is_none()));
+
+        // The model has the corridor wall untyped; the architectural plan tags it 1B (1 HR).
+        let tag = WallTypeTag {
+            level: "Level 2".into(),
+            mark: "1B".into(),
+            at: Vec2::new(232.0, 130.0),
+            rating: Some("1 HR".into()),
+            rating_source: "A-001 wall type legend, tag 1B".into(),
+            sheet: "A-101".into(),
+        };
+        let mut untyped = walls.clone();
+        if let Some(w) = untyped.get_mut(0) {
+            w.rating = None;
+            w.wall_type = String::new();
+        }
+        let all3 = crossings(&ducts, &untyped);
+        p = placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &ducts, &untyped);
+        let mut list = vec![p.clone()];
+        let found = walls_along_ducts(&mut list, &ducts, &untyped, &all3, std::slice::from_ref(&tag), 12.0);
+        let (i, f) = found.first().expect("a wall-model finding");
+        assert_eq!((*i, f.wall), (0, Some(0)));
+        assert!(f.model.contains("untyped wall") && f.model.contains("1B (1 HR)") && f.tag.sheet == "A-101", "{f:?}");
+        assert!(list.first().is_some_and(|m| m.wall == Some(0) && (m.at - Vec2::new(240.0, 100.0)).len() < 1e-6));
+        // The model lacks the wall: a finding, and the damper stays where its tag points, in its duct.
+        let lacking: Vec<Wall> = walls.iter().skip(1).cloned().collect();
+        let all4 = crossings(&ducts, &lacking);
+        p = placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &ducts, &lacking);
+        let before = p.at;
+        let mut list = vec![p];
+        let found = walls_along_ducts(&mut list, &ducts, &lacking, &all4, std::slice::from_ref(&tag), 12.0);
+        let (_, f) = found.first().expect("a wall-model finding");
+        assert!(f.wall.is_none() && f.model.contains("no wall in the model"), "{f:?}");
+        let kept = list.first().expect("kept");
+        assert!(kept.wall.is_none() && (kept.at - before).len() < 1e-9 && (kept.at.y - 100.0).abs() < 1e-9);
+        // A tag beyond the reach along the duct, or of an unrated type: nothing.
+        let far = WallTypeTag { at: Vec2::new(100.0, 130.0), ..tag.clone() };
+        let unrated = WallTypeTag { rating: None, ..tag.clone() };
+        let mut list = vec![placed_one("fire_smoke", "FSD", Vec2::new(330.0, 104.0), &ducts, &lacking)];
+        assert!(walls_along_ducts(&mut list, &ducts, &lacking, &all4, &[far, unrated], 12.0).is_empty());
+    }
+
+    /// MUST 3: each pair the dedupe merges keeps both readings and their distances, so one tag
+    /// read twice tells from two dampers close together.
+    #[test]
+    fn a_merged_pair_keeps_both_readings_and_the_distance() {
+        let (ducts, walls) = plan();
+        let mut text = found("fire_smoke", "FSD", "M-501", Vec2::new(250.0, 104.0), true);
+        text.read_as = "text".into();
+        let mut attribute = found("fire_smoke", "FSD", "M-501", Vec2::new(250.5, 104.0), true);
+        attribute.read_as = "attribute".into();
+        let (placed, _) = place(vec![text, attribute], &ducts, &walls, 12.0);
+        assert_eq!(placed.len(), 1);
+        let one = placed.first().expect("one");
+        let m = one.merged.first().expect("merged");
+        assert!((m.tags_apart - 0.5).abs() < 1e-9 && m.apart < 1e-9, "{m:?}");
+        let reading = m.reading(&one.found, 12.0);
+        assert!(reading.contains("one tag read twice") && reading.contains("text") && reading.contains("attribute"), "{reading}");
+        // Two tags two feet apart at the same wall: kept as evidence of maybe two dampers.
+        let a = found("fire_smoke", "FSD", "M-501", Vec2::new(250.0, 104.0), true);
+        let b = Found { number: "2".into(), ..found("fire_smoke", "FSD", "M-501", Vec2::new(226.0, 104.0), true) };
+        let (placed, _) = place(vec![a, b], &ducts, &walls, 12.0);
+        let one = placed.first().expect("one");
+        let m = one.merged.first().expect("merged");
+        assert_eq!(m.found.tag_text(), "FSD-2");
+        assert!((m.tags_apart - 24.0).abs() < 1e-9);
+        assert!(m.reading(&one.found, 12.0).contains("2.0 ft apart") && m.reading(&one.found, 12.0).contains("maybe two dampers"));
+        // A floor plan's and an enlarged plan's: the same damper on two sheets, both named.
+        let floor = found("fire_smoke", "FSD", "M-101", Vec2::new(250.0, 108.0), false);
+        let enlarged = found("fire_smoke", "FSD", "M-501", Vec2::new(236.0, 98.0), true);
+        let (placed, _) = place(vec![floor, enlarged], &ducts, &walls, 12.0);
+        let one = placed.first().expect("one");
+        let m = one.merged.first().expect("merged");
+        assert_eq!((one.found.sheet.as_str(), m.found.sheet.as_str()), ("M-501", "M-101"));
+        assert!(m.reading(&one.found, 12.0).contains("two sheets (M-501 and M-101)"));
     }
 }
