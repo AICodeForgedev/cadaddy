@@ -579,7 +579,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             "color": req.and_then(|r| r.color.clone()), "configuration": config.clone().or_else(|| req.and_then(|r| r.config.clone())),
             "rating": req.and_then(|r| r.rating.clone()), "features": features,
         });
-        let src = req.map_or_else(Source::computed, spec_src);
+        // The record's source: the section that speaks for its kind, else the submittal its maker
+        // comes from.
+        let src = req.map(spec_src).or_else(|| maker.as_ref().map(|m| m.1.clone())).unwrap_or_else(Source::computed);
         let mut set = |key: &str, value: Value, source: Source| {
             let keep = store.get(key).is_some_and(|old| old.source.kind == SourceKind::User);
             if !keep && !value.is_null() {

@@ -747,3 +747,33 @@ fn a_recessed_room_panel_is_built_in_its_wall() {
     assert!((b.max.x - b.min.x - 14.0).abs() < 0.01, "along the wall: {b:?}");
     assert!(panel.common.xdata.iter().any(|t| t.value.starts_with("prop:HOST_WALL=")), "{:?}", panel.common.xdata);
 }
+
+#[test]
+fn a_product_no_section_speaks_for_cites_the_submittal_its_maker_comes_from() {
+    use cadaddy_engine::doc::props::{self, Prop, Source, SourceKind};
+    let mut s = plan();
+    fill(&mut s);
+    // A made-up submittal's maker on receptacle A; the section read speaks for switches only.
+    let a = find(&mut s, "device", json!({"type_mark": "A"}));
+    let h = cadaddy_engine::doc::Handle::parse_hex(&a[0]).unwrap();
+    assert!(s.doc_mut().unwrap().model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        store.set("manufacturer", Prop::new("MAKER ONE", Source::from_doc(SourceKind::Submittal, "Submittal 26 27 26-1 p.2")));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-sub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Maker Two.\n\
+         PART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["product"]["source"]["kind"], "submittal", "{a:#}");
+    assert_eq!(a["product"]["source"]["doc"], "Submittal 26 27 26-1 p.2", "{a:#}");
+    assert!(a["approved_makers"].is_null(), "no section's makers: {a:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
