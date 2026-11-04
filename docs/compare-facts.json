@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1232,
-    "count": 1232,
+    "callableAsJson": 1235,
+    "count": 1235,
     "ids": [
       "-attedit",
       "-block",
@@ -272,6 +272,9 @@
       "concrete.set",
       "concrete.signoff",
       "conduit.read",
+      "conduit.reroute",
+      "conduit.route",
+      "conduit.takeoff",
       "cone",
       "constraintbar",
       "constraintbar.hideall",
@@ -1236,7 +1239,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 534,
+    "inMenus": 537,
     "typed": 564
   },
   "features": {
