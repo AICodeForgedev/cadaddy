@@ -3213,7 +3213,15 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|r| (r.number.clone(), r.kind.clone(), r.rect))
             .collect()
     };
-    if let Some((gear_json, asks, pages, kinds)) = super::validate_gear::for_packet(d, &sp, &frame, &area, gear_docs.as_ref(), &regions) {
+    if let Some((gear_json, asks, pages, kinds)) = super::validate_gear::for_packet(
+        d,
+        &sp,
+        &frame,
+        &area,
+        gear_docs.as_ref(),
+        &regions,
+        &super::validate_gear::job_pages(job.as_ref().and_then(|j| j.sheets.as_ref())),
+    ) {
         let n = gear_json["gear"].as_array().map_or(0, Vec::len);
         here.objects["gear"] = gear_json;
         here.objects["counts"]["gear"] = json!(n);

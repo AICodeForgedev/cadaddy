@@ -1612,6 +1612,39 @@ fn in_area<'a, 'b>(gear: &'a [Placed<'b>], area: &'a Area) -> impl Iterator<Item
     })
 }
 
+/// A sheet of the job's set that the drawing doesn't hold (a schedule or diagram): its number,
+/// title and type words, and its PDF file (in the job's prints folder) and page.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct JobPage {
+    pub number: String,
+    /// Its discipline letters as the index gives them (empty: read off its number).
+    pub discipline: String,
+    pub words: String,
+    pub file: String,
+    pub page: u32,
+}
+
+/// The job's sheet index (`job.sheets`): every numbered sheet with its file and page.
+pub(crate) fn job_pages(sheets: Option<&Value>) -> Vec<JobPage> {
+    let list = sheets.and_then(|v| v.get("sheets")).and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+    list.iter()
+        .take(10_000)
+        .filter_map(|c| {
+            let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().chars().take(200).collect::<String>();
+            let number = text("number");
+            let file = text("file");
+            let page = u32::try_from(c.get("page")?.as_u64()?).ok().filter(|p| *p > 0)?;
+            (!number.is_empty() && !file.is_empty()).then(|| JobPage {
+                words: format!("{} {} {}", text("title"), text("type"), text("sheet_type")),
+                discipline: text("discipline"),
+                number,
+                file,
+                page,
+            })
+        })
+        .collect()
+}
+
 /// Is a sheet's title a riser or one-line diagram?
 fn riser_title(t: &str) -> bool {
     let u = t.to_ascii_uppercase().replace('-', " ");
@@ -1629,6 +1662,7 @@ pub(crate) fn for_packet(
     area: &Area,
     docs: Option<&GearDocs>,
     regions: &[(String, String, [f64; 4])],
+    job_pages: &[JobPage],
 ) -> Option<(Value, Vec<super::validate_keynote::CropAsk>, Vec<(String, String)>, BTreeSet<String>)> {
     let (gear, _) = placed(d, sp, frame);
     let here: Vec<&Placed> = in_area(&gear, area).collect();
@@ -1640,8 +1674,14 @@ pub(crate) fn for_packet(
     let mut pages: Vec<(String, String)> = Vec::new();
     // The sheets a packet can show: the spec's sheet links, and the job's other imported sheets
     // (schedules and diagrams are no plan: the job keeps only their rectangles).
-    let numbers: Vec<&str> =
-        sp.sheets.iter().map(|l| l.number.as_str()).chain(regions.iter().map(|r| r.0.as_str())).filter(|n| !n.trim().is_empty()).collect();
+    let numbers: Vec<&str> = sp
+        .sheets
+        .iter()
+        .map(|l| l.number.as_str())
+        .chain(regions.iter().map(|r| r.0.as_str()))
+        .chain(job_pages.iter().map(|p| p.number.as_str()))
+        .filter(|n| !n.trim().is_empty())
+        .collect();
     let mut want_sheet = |text: &str, kind: &'static str, why: String| {
         let words: BTreeSet<String> =
             text.to_ascii_uppercase().split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')')).map(str::to_string).collect();
@@ -1697,17 +1737,45 @@ pub(crate) fn for_packet(
         }));
     }
     // The riser or one-line diagrams: a sheet titled so, or a job sheet of that kind.
+    // An electrical one (a fire alarm or low-voltage riser is another system's).
+    let electrical = |number: &str, given: Option<&str>| {
+        let d = given.map(str::trim).filter(|d| !d.is_empty()).map_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(number), str::to_string);
+        d.eq_ignore_ascii_case("E")
+    };
     let risers: Vec<(String, String)> = sp
         .sheets
         .iter()
-        .filter(|l| l.view.is_none() && riser_title(&l.title))
+        .filter(|l| l.view.is_none() && riser_title(&l.title) && electrical(&l.number, l.discipline.as_deref()))
         .map(|l| (l.number.clone(), format!("{} {}", l.number, l.title)))
-        .chain(regions.iter().filter(|r| riser_title(&r.1.replace('_', " "))).map(|r| (r.0.clone(), format!("{} ({})", r.0, r.1))))
+        .chain(
+            regions
+                .iter()
+                .filter(|r| riser_title(&r.1.replace('_', " ")) && electrical(&r.0, None))
+                .map(|r| (r.0.clone(), format!("{} ({})", r.0, r.1))),
+        )
+        .chain(
+            job_pages
+                .iter()
+                .filter(|p| riser_title(&p.words.replace('_', " ")) && electrical(&p.number, Some(&p.discipline)))
+                .map(|p| (p.number.clone(), format!("{} {}", p.number, p.words.trim()))),
+        )
         .take(2)
         .collect();
     for (n, why) in risers {
         if !sheets.iter().any(|(s, _, _)| s.eq_ignore_ascii_case(&n)) && sheets.len() < MAX_GEAR_SHEETS {
             sheets.insert(0, (n, "gear_riser", why));
+        }
+    }
+    // A sheet the drawing doesn't hold is shown as its PDF page (`<file> p.<n>`).
+    for (n, _, why) in &sheets {
+        let in_drawing =
+            sp.sheets.iter().any(|l| l.number.eq_ignore_ascii_case(n) && l.rect.is_some()) || regions.iter().any(|r| r.0.eq_ignore_ascii_case(n));
+        if in_drawing {
+            continue;
+        }
+        if let Some(p) = job_pages.iter().find(|p| p.number.eq_ignore_ascii_case(n)) {
+            let file = p.file.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(&p.file).to_string();
+            pages.push((format!("{file} p.{}", p.page), format!("sheet {n}: {why}")));
         }
     }
     let asks: Vec<super::validate_keynote::CropAsk> = sheets
@@ -1849,6 +1917,21 @@ mod tests {
         assert_eq!(recorded_box(&e).0, Some([24.0, 14.0, 4.0]));
         e.properties.insert("BOX".into(), "50 H x 20 W x 5.75 D in".into());
         assert_eq!(recorded_box(&e).0, Some([50.0, 20.0, 5.75]));
+    }
+
+    #[test]
+    fn the_job_sheet_index_gives_each_numbered_sheet_its_page() {
+        let v = json!({"sheets": [
+            {"number": "X-1", "title": "ONE-LINE DIAGRAM", "type": "diagram", "discipline": "E", "file": "set/Elec.pdf", "page": 2},
+            {"number": "X-2", "file": "Elec.pdf", "page": 0},
+            {"number": "", "file": "Elec.pdf", "page": 3},
+            {"number": "X-3", "page": 4},
+            {"number": "X-4", "file": "Elec.pdf", "page": 99999999999u64}
+        ]});
+        let pages = job_pages(Some(&v));
+        assert_eq!(pages.len(), 1, "{pages:?}");
+        assert!(pages[0].number == "X-1" && pages[0].page == 2 && riser_title(&pages[0].words), "{pages:?}");
+        assert!(job_pages(None).is_empty() && job_pages(Some(&json!("x"))).is_empty());
     }
 
     #[test]
