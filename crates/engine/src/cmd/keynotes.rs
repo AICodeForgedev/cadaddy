@@ -514,7 +514,6 @@ const MAX_NOTE_LINES: usize = 12;
 /// their numbers: `21`, `PROVIDE UNDER SLAB CONDUIT…`) and the paragraphs outside the lists, each
 /// joined from the lines left-aligned with the one naming the work, one under the next (a site
 /// plan's callout: `TWO (2) 5" SCH. 40 PVC CONDUIT … MIN. 48" BELOW GRADE …`).
-#[cfg(test)]
 pub(crate) fn buried_notes(texts: &[TextItem]) -> Vec<(Option<String>, String)> {
     notes_matching(texts, buried)
 }

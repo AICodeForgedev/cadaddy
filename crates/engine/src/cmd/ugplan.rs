@@ -582,11 +582,16 @@ fn centre(e: &MepEquipment) -> [f64; 2] {
 }
 
 /// A room of the slab level: its name (capitals) and outline (plan, sheet units).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Room {
     pub level: String,
     pub name: String,
     pub outline: Vec<[f64; 2]>,
+    /// The names other trades' sheets give it and its function's (`MDF`), capitals (Q6180): a
+    /// note's room is found by them too.
+    pub aka: String,
+    /// What it is for, from the rules' room names (`mdf`, `idf`, `telecom`), when known.
+    pub function: Option<String>,
 }
 
 fn room_centre(r: &Room) -> Option<[f64; 2]> {
@@ -819,13 +824,20 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
                 let elevation = |l: &str| sp.level(l).map_or(f64::INFINITY, |v| v.elevation_ft);
                 let mut ordered: Vec<&Room> = rooms.iter().collect();
                 ordered.sort_by(|a, b| elevation(&a.level).total_cmp(&elevation(&b.level)));
-                let named = |w: &str| ordered.iter().copied().find(|rm| has_word(&rm.name, w));
-                // The room the note names, else a telecom room by the rules' names.
+                let called = |rm: &Room, w: &str| has_word(&rm.name, w) || has_word(&rm.aka, w);
+                let named = |w: &str| ordered.iter().copied().find(|rm| called(rm, w));
+                // The room the note names (by any of its names), else a telecom room: by its
+                // function (the service enters at the MDF), else by the rules' names.
+                let by_function = || {
+                    ["mdf", "telecom", "idf"]
+                        .iter()
+                        .find_map(|f| ordered.iter().copied().find(|rm| rm.function.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(f))))
+                };
                 let target = ordered
                     .iter()
                     .copied()
-                    .find(|rm| !room_word.is_empty() && room_word.split_whitespace().all(|w| has_word(&rm.name, w)))
-                    .or_else(|| if room_word.is_empty() { r.telecom_rooms.iter().find_map(|w| named(w)) } else { None })
+                    .find(|rm| !room_word.is_empty() && room_word.split_whitespace().all(|w| called(rm, w)))
+                    .or_else(|| if room_word.is_empty() { by_function().or_else(|| r.telecom_rooms.iter().find_map(|w| named(w))) } else { None })
                     .and_then(|rm| room_centre(rm).map(|p| (rm.name.clone(), rm.level.clone(), p)));
                 let room_word = if room_word.is_empty() { r.telecom_rooms.join("/") } else { room_word };
                 let Some((name, room_level, at)) = target else {
@@ -1989,6 +2001,7 @@ mod tests {
             level: "Level 1".into(),
             name: "COMM ROOM 105".into(),
             outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]],
+            ..Room::default()
         }];
         let mk = |what: &str, text: &str| Callout {
             trade: "E".into(),
@@ -2053,8 +2066,12 @@ mod tests {
         let (sr, _) = place(&sp, &rooms, &[steel], &|_| false);
         assert!(sr.iter().all(|r| r.height_source.contains("steel elbows and risers")));
         // A telecom room upstairs: under the slab to the riser below it, up to it.
-        let up =
-            vec![Room { level: "Level 2".into(), name: "DATA 201".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
+        let up = vec![Room {
+            level: "Level 2".into(),
+            name: "DATA 201".into(),
+            outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]],
+            ..Room::default()
+        }];
         let mut t2 = mk("telecom", "PROVIDE (1) 4\" CONDUIT FROM STREET TELCO TO DATA ROOM");
         t2.room = Some("DATA".into());
         let (tr, tf) = place(&sp, &up, &[t2], &|_| false);
@@ -2067,8 +2084,12 @@ mod tests {
     fn called_work_the_model_has_no_place_for_is_asked_by_rfi_never_guessed() {
         let sp = spec();
         // The model's only room is an office: the note's telecom room isn't in it.
-        let rooms =
-            vec![Room { level: "Level 1".into(), name: "OFFICE 101".into(), outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]] }];
+        let rooms = vec![Room {
+            level: "Level 1".into(),
+            name: "OFFICE 101".into(),
+            outline: vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]],
+            ..Room::default()
+        }];
         let mk = |what: &str, text: &str, room: Option<&str>| Callout {
             trade: "E".into(),
             sheet: "E-100".into(),
@@ -2112,6 +2133,43 @@ mod tests {
         let (_, placed) = place(&sp, &server, &called[..1], &|_| false);
         assert_eq!((placed[0].status, placed[0].ask.is_none()), ("placed", true));
         assert!(unplaced_rfis(&sp, &called[..1], &placed, 10).is_empty());
+    }
+
+    /// Q6180: a room the architectural plans call something else that another trade's sheet
+    /// names the MDF (its other name and function) takes the telecom service conduits, by the
+    /// note's room word and, for a note naming no room, by its function.
+    #[test]
+    fn telecom_conduits_find_the_room_a_trade_names_by_its_other_name_or_function() {
+        let sp = spec();
+        let square = vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [20.0, 80.0]];
+        let rooms = vec![
+            Room {
+                level: "Level 1".into(),
+                name: "OFFICE 101".into(),
+                outline: square.iter().map(|p| [p[0] + 300.0, p[1]]).collect(),
+                ..Room::default()
+            },
+            Room { level: "Level 2".into(), name: "STORAGE 201".into(), outline: square.clone(), aka: "MDF".into(), function: Some("mdf".into()) },
+        ];
+        let mk = |text: &str, room: Option<&str>| Callout {
+            trade: "E".into(),
+            sheet: "E-100".into(),
+            from: "note",
+            what: "telecom".into(),
+            text: text.into(),
+            room: room.map(Into::into),
+            ..Callout::default()
+        };
+        for c in [mk("TWO 3\" CONDUITS FROM THE TELEPHONE UTILITY TO THE MDF", Some("MDF")), mk("PROVIDE (2) 4\" CONDUITS FOR TELCO SERVICE", None)] {
+            let (runs, fates) = place(&sp, &rooms, &[c], &|_| false);
+            assert_eq!(fates[0].status, "placed", "{fates:?}");
+            assert!(fates[0].how.contains("room STORAGE 201") && fates[0].how.contains("rising to it on Level 2"), "{}", fates[0].how);
+            assert!(runs.iter().any(|r| r.height_source.contains("telecom")), "{runs:?}");
+        }
+        // Without the trade's name the note's MDF is in no room.
+        let plain: Vec<Room> = rooms.iter().map(|r| Room { aka: String::new(), function: None, ..r.clone() }).collect();
+        let (_, fates) = place(&sp, &plain, &[mk("TWO 3\" CONDUITS FROM THE TELEPHONE UTILITY TO THE MDF", Some("MDF"))], &|_| false);
+        assert_eq!(fates[0].status, "not_placed", "{fates:?}");
     }
 
     #[test]

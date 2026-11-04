@@ -95,6 +95,9 @@ const MAX_IMAGES: usize = 200;
 const MAX_ENTITIES: usize = super::validate::MAX_ENTITIES;
 /// Objects drawn in one picture, at most.
 const MAX_CROP_ENTITIES: usize = 400_000;
+/// Generated underground sheets drawn per packet, at most, and their long side (pixels).
+const MAX_UNDERGROUND_SHEETS: usize = 4;
+const MAX_UNDERGROUND_PX: f64 = 6_000.0;
 const MAX_AREAS: usize = 50_000;
 const DEFAULT_AREA_LIMIT: usize = 100;
 const MAX_AREA_LIMIT: usize = 500;
@@ -1758,6 +1761,11 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
+    if counts.get("underground_callouts").and_then(Value::as_u64).unwrap_or(0) > 0
+        || counts.get("underground_sheets").and_then(Value::as_u64).unwrap_or(0) > 0
+    {
+        s.push_str("- `objects.json` `underground`: the documents' callouts for work below grade or under the slab (what each calls for: trade, count, size, material, least depth, what it serves), this level's underground sheets (the set's own, and the ones CADaddy generated: whole, as `underground_sheet` prints, their run and stub-up schedules down the side) and the model's buried runs and stub-ups. G-UNDERGROUND in `prescreen` matched each callout to a run and read each stub-up's dimensions off the schedule; dashed PROPOSED runs are CADaddy's, not the documents'.\n");
+    }
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -1816,6 +1824,8 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         "- Say UNSURE rather than guess: when the image is unreadable, the document is not in the packet, or the print and the notes disagree.\n",
     );
     s.push_str("- Check every rule above for every element it applies to; a pass is a finding too.\n");
+    s.push_str("- Elements with the same verdict on the same evidence may share one finding: `\"handles\": [\"<handle>\", …]` (it counts once per handle). Send each rule and element once: a repeat is merged into the first.\n");
+    s.push_str("- More than 1000 findings: report them in parts (`\"part\": 1`, `\"part\": 2`, …; the last one with `\"final\": true`); the area is done on the final part.\n");
     s
 }
 
@@ -3239,7 +3249,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => Vec::new(),
     };
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -3303,6 +3313,17 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         here.objects["keynotes"] = keynotes_json;
         here.objects["counts"]["keynote_markers"] = json!(marker_count);
         here.counts["keynote_markers"] = json!(marker_count);
+    }
+    // The level's buried work and its underground sheets (G-UNDERGROUND's reading): the
+    // generated sheets go in whole as pictures.
+    let mut ug_layouts: Vec<(String, String)> = Vec::new();
+    if let Some((ug_json, layouts)) = super::validate_underground::for_packet(d, &sp, &frame, &area.level) {
+        let callouts = ug_json["callouts"].as_array().map_or(0, Vec::len);
+        here.objects["underground"] = ug_json;
+        here.objects["counts"]["underground_callouts"] = json!(callouts);
+        here.counts["underground_callouts"] = json!(callouts);
+        here.counts["underground_sheets"] = json!(layouts.len());
+        ug_layouts = layouts;
     }
     let Planned { mut crops, mut left_out } =
         plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
@@ -3688,6 +3709,25 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             None => {
                 write_png(&c.file, None, &mut left_out)?;
             }
+        }
+    }
+    // The generated underground sheets of the area's level, whole (no PDF page to compare).
+    for (k, (number, layout)) in ug_layouts.iter().enumerate().take(MAX_UNDERGROUND_SHEETS) {
+        let Some(lay) = d.layouts.iter().find(|l| &l.name == layout) else { continue };
+        let ents: Vec<&Entity> = lay.entities.iter().map(|e| e.as_ref()).take(MAX_CROP_ENTITIES).collect();
+        let b = ents.iter().map(|e| cadaddy_doc::entity_bounds(d, e, 0)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b));
+        let Some(b) = b.filter(|b| b.width() > 0.0 && b.height() > 0.0 && b.width().is_finite() && b.height().is_finite()) else { continue };
+        // Paper inches at the packet's dpi, the long side at most MAX_UNDERGROUND_PX.
+        let ppu = dpi.min(MAX_UNDERGROUND_PX / b.width().max(b.height()));
+        let px = [(b.width() * ppu).round().max(1.0) as u32, (b.height() * ppu).round().max(1.0) as u32];
+        let rect = [b.min.x, b.min.y, b.max.x, b.max.y];
+        let file = format!("prints/ug{:02}_{}_underground_sheet.png", k + 1, safe(number));
+        if write_png(&file, png_of(d, &ents, rect, px), &mut left_out)? {
+            prints_out.push(json!({
+                "file": file, "sheet": number, "title": layout, "kind": "underground_sheet", "trade": "electrical", "layout": layout,
+                "sheet_rect": [r4(rect[0]), r4(rect[1]), r4(rect[2]), r4(rect[3])], "px": px, "px_per_unit": r4(ppu), "dpi": r2(ppu),
+                "placed_by": "generated", "generated": true,
+            }));
         }
     }
     // Each crop against its sheet's PDF page read again, at the same rectangle and pixels.

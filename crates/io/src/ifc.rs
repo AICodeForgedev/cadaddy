@@ -92,6 +92,10 @@ enum Class {
     Condenser,
     FlowMeter,
     Transformer,
+    /// Dampers in their ducts (fire, smoke, combination, motorized, backdraft, volume).
+    Damper,
+    /// Fire alarm control and monitor modules.
+    Controller,
     // Concrete.
     Footing,
     Pile,
@@ -150,6 +154,8 @@ impl Class {
             Class::Condenser => ("IfcCondenser", "NOTDEFINED"),
             Class::FlowMeter => ("IfcFlowMeter", "NOTDEFINED"),
             Class::Transformer => ("IfcTransformer", "VOLTAGE"),
+            Class::Damper => ("IfcDamper", "NOTDEFINED"),
+            Class::Controller => ("IfcController", "NOTDEFINED"),
             Class::Footing => ("IfcFooting", "NOTDEFINED"),
             Class::Pile => ("IfcPile", "BORED"),
             Class::ReinforcingBar => ("IfcReinforcingBar", "MAIN"),
@@ -205,6 +211,8 @@ impl Class {
             "Condenser" => Class::Condenser,
             "FlowMeter" => Class::FlowMeter,
             "Transformer" => Class::Transformer,
+            "Damper" => Class::Damper,
+            "Controller" => Class::Controller,
             "Footing" => Class::Footing,
             "Pile" => Class::Pile,
             "ReinforcingBar" => Class::ReinforcingBar,
@@ -259,6 +267,18 @@ fn equipment_class(kind: &str) -> (Class, &'static str) {
         "switchboard" | "switchgear" => (Class::ElectricDistributionBoard, "SWITCHBOARD"),
         "transformer" => (Class::Transformer, "VOLTAGE"),
         "disconnect" => (Class::SwitchingDevice, "SWITCHDISCONNECTOR"),
+        // Dampers (Q6182): their IFC4 damper types.
+        "fire_smoke_damper" => (Class::Damper, "FIRESMOKEDAMPER"),
+        "fire_damper" | "ceiling_radiation_damper" => (Class::Damper, "FIREDAMPER"),
+        "smoke_damper" => (Class::Damper, "SMOKEDAMPER"),
+        "motorized_damper" => (Class::Damper, "CONTROLDAMPER"),
+        "backdraft_damper" => (Class::Damper, "BACKDRAFTDAMPER"),
+        "volume_damper" => (Class::Damper, "BALANCINGDAMPER"),
+        k if k.ends_with("_damper") => (Class::Damper, "NOTDEFINED"),
+        // A damper's power box and its fire alarm modules.
+        "damper_power_box" => (Class::JunctionBox, "POWER"),
+        "fa_control_module" => (Class::Controller, "TWOPOSITION"),
+        "fa_monitor_module" => (Class::Controller, "NOTDEFINED"),
         _ => (Class::Proxy, "NOTDEFINED"),
     }
 }
@@ -2772,6 +2792,27 @@ pub fn ifc_tag(e: &Entity) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dampers_and_their_modules_are_written_as_their_ifc_classes() {
+        let class = |k: &str| {
+            let (c, pre) = equipment_class(k);
+            (c.ifc().0, pre)
+        };
+        assert_eq!(class("fire_smoke_damper"), ("IfcDamper", "FIRESMOKEDAMPER"));
+        assert_eq!(class("fire_damper"), ("IfcDamper", "FIREDAMPER"));
+        assert_eq!(class("ceiling_radiation_damper"), ("IfcDamper", "FIREDAMPER"));
+        assert_eq!(class("smoke_damper"), ("IfcDamper", "SMOKEDAMPER"));
+        assert_eq!(class("motorized_damper"), ("IfcDamper", "CONTROLDAMPER"));
+        assert_eq!(class("odd_damper"), ("IfcDamper", "NOTDEFINED"));
+        assert_eq!(class("damper_power_box"), ("IfcJunctionBox", "POWER"));
+        assert_eq!(class("fa_control_module"), ("IfcController", "TWOPOSITION"));
+        assert_eq!(class_of_read("Damper"), Some("IfcDamper"));
+    }
+
+    fn class_of_read(name: &str) -> Option<&'static str> {
+        Class::of_read(name).map(|c| c.ifc().0)
+    }
 
     #[test]
     fn strings_and_reals_are_valid_step() {

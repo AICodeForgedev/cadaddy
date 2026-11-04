@@ -635,7 +635,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // In its wall, its front on the wall's face (where the device's is: on the face,
                 // or flush in it); with no face found, behind the device.
                 let depth_plan = (plan.max - plan.min).dot(Vec2::new(o.x.abs(), o.y.abs()));
-                let face = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf)
+                let face = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, None)
                     .filter(|f| f.out.dot(o) > 0.5)
                     .map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
                 let mid = face - o * (bd / 2.0);
