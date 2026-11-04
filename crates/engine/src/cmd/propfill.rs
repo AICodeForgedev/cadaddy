@@ -475,14 +475,56 @@ pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
-        .filter_map(|e| {
-            let EntityKind::Mesh(m) = &e.kind else { return None };
-            let h = super::mep::hull(&m.vertices.iter().map(|v| v.xy()).collect::<Vec<_>>());
-            let z = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
-            (h.len() >= 3).then(|| (super::bspec::made_level(e), e.handle, h, z))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Mesh(m) => Some((e, m)),
+            _ => None,
+        })
+        .flat_map(|(e, m)| {
+            let level = super::bspec::made_level(e);
+            mesh_pieces(m).into_iter().filter_map(move |(outline, z)| {
+                let h = super::mep::hull(&outline);
+                (h.len() >= 3).then(|| (level.clone(), e.handle, h, z))
+            })
         })
         .take(MAX_ELEMENTS)
         .collect()
+}
+
+/// A wall mesh's pieces: each flat footprint once (a box's bottom and top are one), from its
+/// lowest face to its highest; a mesh with no flat faces is one piece, its hull. The boxes over an
+/// opening start at its head.
+fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
+    let all = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
+    let tol = ((all[1] - all[0]).abs() * 1e-6).max(1e-9);
+    let mut at: BTreeMap<Vec<(i64, i64)>, usize> = BTreeMap::new();
+    let mut out: Vec<(Vec<Vec2>, [f64; 2])> = Vec::new();
+    for f in m.faces.iter().take(100_000) {
+        let vs: Vec<cadaddy_geom::Vec3> = f.v.iter().take(64).filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+        let Some(z) = vs.first().map(|v| v.z) else { continue };
+        if vs.len() < 3 || !vs.iter().all(|v| (v.z - z).abs() <= tol) {
+            continue;
+        }
+        let mut key: Vec<(i64, i64)> = vs.iter().map(|p| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64)).collect();
+        key.sort_unstable();
+        key.dedup();
+        match at.get(&key).and_then(|i| out.get_mut(*i)) {
+            Some((_, zr)) => *zr = [zr[0].min(z), zr[1].max(z)],
+            None => {
+                at.insert(key, out.len());
+                out.push((vs.iter().map(|v| v.xy()).collect(), [z, z]));
+            }
+        }
+    }
+    // Walls whose faces stand on the floor with a cap over them: a cap spans from the floor up.
+    if !out.iter().any(|(_, zr)| (zr[0] - all[0]).abs() <= tol) {
+        for (_, zr) in out.iter_mut().filter(|(_, zr)| (zr[1] - zr[0]).abs() <= tol) {
+            zr[0] = all[0];
+        }
+    }
+    if out.is_empty() && all[0].is_finite() {
+        out.push((m.vertices.iter().map(|v| v.xy()).collect(), all));
+    }
+    out
 }
 
 /// A built wall's piece: its level, handle, plan outline and the heights it spans (drawing units;
@@ -1435,5 +1477,17 @@ mod tests {
         assert_eq!(beside.wall, Handle(2));
         assert!((beside.at.x - 36.0).abs() < 1e-9 && (beside.at.y - 6.0).abs() < 1e-9, "at the jamb: {:?}", beside.at);
         assert!(wall_face(&walls, "L1", at, 6.0, Some(48.0)).is_none(), "out of reach: stays for review");
+    }
+
+    /// A wall built of boxes: the one beside the door from the floor, the one over the door from
+    /// its head; each is a piece of its own height.
+    #[test]
+    fn a_wall_meshs_pieces_keep_their_heights() {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(36.0, 3.0), Vec2::new(120.0, 3.0), 6.0, 0.0, 108.0);
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 3.0), Vec2::new(36.0, 3.0), 6.0, 84.0, 108.0);
+        let mut z: Vec<[f64; 2]> = mesh_pieces(&m).into_iter().map(|(_, z)| z).collect();
+        z.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        assert_eq!(z, vec![[0.0, 108.0], [84.0, 108.0]]);
     }
 }
