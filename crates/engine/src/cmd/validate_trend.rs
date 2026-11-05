@@ -21,7 +21,8 @@
 //!   appends a row to the trend file (JSON lines, append-only), then compares the newest row
 //!   with the one before it by the rules data (`validate_trend.json`: each metric's better
 //!   direction and tolerance). A metric worse beyond its tolerance is a REGRESSION finding naming
-//!   the metric, both values and both commits, the commits between (`commits`, as the caller's
+//!   the metric, both values and both commits (a stable count that rose is a CHANGE to explain,
+//!   listed, no step back), the commits between (`commits`, as the caller's
 //!   git gives them) and, with the merger's batch log, the batches and branches merged between
 //!   the two builds as the suspects. It returns a table of the last N rows (and writes it, and a
 //!   small SVG plot, when asked).
@@ -88,7 +89,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .files(),
         CommandSpec::new(CMD_TREND, "Accuracy Trend", run_trend)
             .params(
-                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `TIME BATCH merged BRANCH(notes) BRANCH -> next COMMIT`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, compared?: {from, to}, regressions, findings: [{metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them.",
+                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `TIME BATCH merged BRANCH(notes) BRANCH -> next COMMIT`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, compared?: {from, to}, regressions, changes, findings: [{verdict: regression|change, metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them (a stable count that rose: a CHANGE, listed, no step back).",
             )
             .noundo()
             .files(),
@@ -652,12 +653,17 @@ pub struct Regression {
     pub why: String,
     /// How far past its tolerance, in tolerances (the ranking).
     pub over: f64,
+    /// A step back (`regression`), or a stable count that rose: a `change` to explain (new
+    /// elements a merge builds), listed but no step back.
+    pub verdict: &'static str,
 }
 
 /// The newest row against the one before, metric by metric, by the rules: worse beyond the
 /// tolerance (`abs`, or `share` of the earlier value, whichever is larger) is a regression; a
 /// metric the earlier row had and the newest lacks is one too ("not measured now"), unless the
-/// rule says it is `optional` (a number the caller gives). Ranked by how far past the tolerance.
+/// rule says it is `optional` (a number the caller gives). A `stable` count that fell (elements
+/// or quantities lost) is a regression; one that rose is a `change` to explain. Regressions
+/// first, each group ranked by how far past the tolerance.
 pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> {
     let mut out = Vec::new();
     let keys: BTreeSet<&String> = previous.metrics.keys().chain(current.metrics.keys()).collect();
@@ -678,6 +684,7 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
                 better: rule.better.clone(),
                 why: "not measured now".into(),
                 over: 1.0,
+                verdict: "regression",
             });
             continue;
         };
@@ -694,6 +701,7 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
                 _ => "fell",
             };
             let over = if allowed > 0.0 { worse / allowed } else { worse.max(1.0) * 1_000.0 };
+            let verdict = if rule.better != "higher" && rule.better != "lower" && b > a { "change" } else { "regression" };
             out.push(Regression {
                 metric: k.clone(),
                 previous: Some(a),
@@ -702,10 +710,13 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
                 better: rule.better.clone(),
                 why: why.into(),
                 over,
+                verdict,
             });
         }
     }
-    out.sort_by(|x, y| y.over.total_cmp(&x.over).then_with(|| x.metric.cmp(&y.metric)));
+    out.sort_by(|x, y| {
+        (x.verdict != "regression").cmp(&(y.verdict != "regression")).then(y.over.total_cmp(&x.over)).then_with(|| x.metric.cmp(&y.metric))
+    });
     out
 }
 
@@ -718,7 +729,7 @@ fn fmt(v: Option<f64>) -> String {
 }
 
 /// The last rows as a Markdown table of the rules data's columns; a value that regressed against
-/// the row before is marked `(!)`.
+/// the row before is marked `(!)`, a stable count that rose past its tolerance `(~)`.
 pub fn table(rules: &Rules, rows: &[Row]) -> String {
     let mut t = String::from("| commit | at | label |");
     for c in &rules.table {
@@ -730,11 +741,14 @@ pub fn table(rules: &Rules, rows: &[Row]) -> String {
     }
     t.push('\n');
     for (i, r) in rows.iter().enumerate() {
-        let regressed: BTreeSet<String> =
-            i.checked_sub(1).and_then(|j| rows.get(j)).map(|p| compare(rules, p, r).into_iter().map(|g| g.metric).collect()).unwrap_or_default();
+        let marked: BTreeMap<String, &str> = i
+            .checked_sub(1)
+            .and_then(|j| rows.get(j))
+            .map(|p| compare(rules, p, r).into_iter().map(|g| (g.metric, if g.verdict == "regression" { " (!)" } else { " (~)" })).collect())
+            .unwrap_or_default();
         t.push_str(&format!("| {} | {} | {} |", r.short(), cut(&r.at, 16), r.label));
         for c in &rules.table {
-            let mark = if regressed.contains(&c.key) { " (!)" } else { "" };
+            let mark = marked.get(&c.key).copied().unwrap_or("");
             t.push_str(&format!(" {}{mark} |", fmt(r.metrics.get(&c.key).copied())));
         }
         t.push('\n');
@@ -903,7 +917,8 @@ fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
                 };
                 let why_rule = rules.rule_for(&g.metric).map(|r| r.why.clone()).unwrap_or_default();
                 let mut issue = format!(
-                    "REGRESSION {}: {} {} -> {} (allowed {}, {} is better) between {} and {}",
+                    "{} {}: {} {} -> {} (allowed {}, {} is better) between {} and {}",
+                    if g.verdict == "regression" { "REGRESSION" } else { "CHANGE" },
                     g.metric,
                     g.why,
                     fmt(g.previous),
@@ -920,7 +935,7 @@ fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
                     issue.push_str(&format!("; suspects: {}", named.join("; ")));
                 }
                 json!({
-                    "verdict": "regression",
+                    "verdict": g.verdict,
                     "metric": g.metric,
                     "previous": g.previous,
                     "current": g.current,
@@ -938,7 +953,8 @@ fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
             })
             .collect();
         out["compared"] = json!({"from": prev.commit, "to": cur.commit, "from_at": prev.at, "to_at": cur.at});
-        out["regressions"] = json!(found.len());
+        out["regressions"] = json!(found.iter().filter(|g| g.verdict == "regression").count());
+        out["changes"] = json!(found.iter().filter(|g| g.verdict == "change").count());
         out["findings"] = json!(findings);
         out["suspects"] = json!(sus_json);
     } else {
@@ -1044,6 +1060,12 @@ mod tests {
         let g = compare(r, &a, &c);
         let names: Vec<&str> = g.iter().map(|x| x.metric.as_str()).collect();
         assert!(names.contains(&"elements.total") && !names.contains(&"build.job_s"), "{names:?}");
+        assert_eq!(g.iter().find(|x| x.metric == "elements.total").map(|x| (x.verdict, x.why.as_str())), Some(("regression", "fell")));
+        // A stable count that rose (new elements a merge builds): a change, after the regressions.
+        let e = row("eeeeeee5", &[("gate_a.host_pass_pct", 90.0), ("gate_a.host_fail_far", 100.0), ("elements.total", 2000.0)]);
+        let g = compare(r, &a, &e);
+        let got: Vec<(&str, &str)> = g.iter().map(|x| (x.metric.as_str(), x.verdict)).collect();
+        assert_eq!(got, [("gate_a.host_pass_pct", "regression"), ("elements.total", "change")], "{g:?}");
         assert!(!names.contains(&"gate_a.host_pass_pct") && !names.contains(&"gate_a.host_fail_far"), "{names:?}");
         assert_eq!(g.iter().find(|x| x.metric == "gate_a.host_fail_far").map(|x| x.why.as_str()), None, "{g:?}");
         // A metric the newest row lacks: "not measured now", unless the caller gives it (the job's

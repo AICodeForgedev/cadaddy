@@ -28,7 +28,7 @@ and the label come from the measuring machine's config, never from code.
 `validate.trend` appends the row to the trend file. The file is JSON lines, one row per line, and
 is only ever appended to. The command then compares the newest row with the one before it, using
 the rules data in `crates/engine/src/cmd/validate_trend.json`. Each metric pattern has a better
-direction (`higher`, `lower`, or `stable`, where any move counts) and a tolerance: `abs`, or
+direction (`higher`, `lower`, or `stable` for counts and quantities) and a tolerance: `abs`, or
 `share` of the earlier value, whichever is larger.
 
 A metric that is worse beyond its tolerance is a **REGRESSION** finding. The finding names:
@@ -40,10 +40,14 @@ A metric that is worse beyond its tolerance is a **REGRESSION** finding. The fin
   their branches, as the suspects.
 
 A metric the earlier row had and the newest row lacks also regresses ("not measured now"), unless its rule is `optional`: the job's time and peak memory, which the caller gives.
-`cadaddy-cli accuracy` exits with status **2** when anything regressed.
+A `stable` count that falls beyond its tolerance (elements or quantities lost) is a regression.
+One that rises is a **CHANGE** finding: the merge built something new, so it gets explained, but
+it is not a step back. If the new elements are wrong, the accuracy metrics regress beside it.
+
+`cadaddy-cli accuracy` exits with status **2** when anything regressed. Changes alone don't set it.
 
 The table of the last N rows (`--last`, default 10) is printed and written as Markdown (`--table`).
-A value that regressed is marked `(!)`. A small SVG plot of the percentages is written too
+A value that regressed is marked `(!)`, and a count that changed `(~)`. A small SVG plot of the percentages is written too
 (`--svg`).
 
 ## Running it
