@@ -29,6 +29,9 @@ pub(crate) struct Built {
     pub tier: String,
     pub items: Vec<scope::Item>,
     pub atoms: Vec<(super::super::mepatoms::Atom, String, String, String)>,
+    /// The design's pieces it replaces besides its circuits' (the boxes and rings its devices
+    /// are set in otherwise).
+    pub replaces: Vec<Handle>,
     pub value: Value,
 }
 
@@ -214,7 +217,15 @@ pub(crate) fn store(s: &mut Session, built: &[Built]) -> Result<Value> {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect(),
-            replaces: b.items.iter().flat_map(|i| i.design.iter().map(|h| h.hex())).collect::<std::collections::BTreeSet<_>>().into_iter().collect(),
+            replaces: b
+                .items
+                .iter()
+                .flat_map(|i| i.design.iter())
+                .chain(b.replaces.iter())
+                .map(|h| h.hex())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             pieces,
             layer: layer.clone(),
             shown: false,

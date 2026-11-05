@@ -48,9 +48,14 @@ fn code_texts(construction: &str) -> Value {
 /// typical schedule U, fed from DPA by feeder 1 (aluminum 2/0, 2" EMT); circuit U-1 in each
 /// unit; a common-area circuit LP1-1 and a service-room circuit LP1-3 on panel LP1.
 fn building(dir: &std::path::Path) -> Session {
+    building_with(dir, Vec::new())
+}
+
+/// [`building`] with more tags (devices) in it.
+fn building_with(dir: &std::path::Path, more: Vec<Value>) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
-    let tags = vec![
+    let mut tags = vec![
         receptacle(1, 5.0, 5.0, "U-1"),
         receptacle(2, 12.0, 5.0, "U-1"),
         receptacle(3, 45.0, 5.0, "U-1"),
@@ -62,6 +67,7 @@ fn building(dir: &std::path::Path) -> Session {
         circuit("circuit:L1:E-101:LP1-1", "LP1-1", "LP1"),
         circuit("circuit:L1:E-101:LP1-3", "LP1-3", "LP1"),
     ];
+    tags.extend(more);
     let spec = json!({
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
@@ -426,5 +432,162 @@ fn hostile_value_engineering_params_never_panic() {
     let mut empty = Session::empty();
     empty.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     let _ = empty.execute("ve.study", &json!({}));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A takeoff's lines summed by kind, item and size.
+fn lines_of(t: &Value) -> std::collections::BTreeMap<(String, String, String), f64> {
+    let mut out = std::collections::BTreeMap::new();
+    for l in t["lines"].as_array().into_iter().flatten() {
+        let k = (
+            l["kind"].as_str().unwrap_or_default().to_string(),
+            l["item"].as_str().unwrap_or_default().to_string(),
+            l["size"].as_str().unwrap_or_default().to_string(),
+        );
+        *out.entry(k).or_default() += l["qty"].as_f64().unwrap_or(0.0);
+    }
+    out
+}
+
+/// Sets `key` on the model's elements `pick` chooses (as the build's fills would).
+fn set_prop(s: &mut Session, key: &str, value: &str, pick: impl Fn(&cadaddy_engine::doc::props::Props) -> bool) -> usize {
+    use cadaddy_engine::doc::props::{self, Prop, Source};
+    let d = s.doc_mut().expect("doc");
+    let hs: Vec<_> = d.model.iter().filter(|e| pick(&props::read(&e.common.xdata))).map(|e| e.handle).collect();
+    for h in &hs {
+        let _ = d.modify_entity(*h, |e| {
+            let mut p = props::read(&e.common.xdata);
+            p.set(key, Prop::new(value, Source::computed()));
+            e.common.xdata = props::write(&e.common.xdata, &p).into();
+        });
+    }
+    hs.len()
+}
+
+#[test]
+fn the_nm_scenarios_takeoff_has_what_nm_work_uses_and_drops_the_raceway_it_replaces() {
+    // The units' circuit U-1 (four receptacles; the last two share one plate) and a data outlet
+    // in the same room, 101.
+    let dir = tmp("nmwork");
+    let data = json!({"id": "device:L1:20", "kind": "data_outlet", "level": "L1", "at_ft": [8.0, 5.0], "fields": {
+        "type": {"value": "D", "source": "plan"}, "symbol": {"value": "3A0", "source": "plan"}, "sheet": {"value": "T-101", "source": "plan"},
+        "mount_height_in": {"value": "18", "source": "note"}
+    }});
+    let mut s = building_with(&dir, vec![data]);
+    let txt = |p: &cadaddy_engine::doc::props::Props, k: &str| p.get(k).map(|x| x.text()).unwrap_or_default();
+    // The room the build's room fill would give them; the plate group the device reader would.
+    assert!(set_prop(&mut s, "room", "101", |p| txt(p, "circuit") == "U-1" || txt(p, "kind") == "data_outlet") > 4);
+    let data_box = set_prop(&mut s, "room", "101", |p| txt(p, "atom") == "box" && txt(p, "circuit").is_empty());
+    assert_eq!(data_box, 1, "the data outlet's box");
+    // The two receptacles farthest along (45 and 52 ft) share one plate.
+    let far: Vec<String> = {
+        let d = s.doc().expect("doc");
+        let mut devs: Vec<(f64, String)> = d
+            .model
+            .iter()
+            .filter(|e| {
+                let p = cadaddy_engine::doc::props::read(&e.common.xdata);
+                txt(&p, "atom").is_empty() && txt(&p, "circuit") == "U-1"
+            })
+            .map(|e| {
+                let b = cadaddy_engine::doc::entity_bounds(d, e, 0);
+                (b.min.x, e.handle.hex())
+            })
+            .collect();
+        devs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        devs.iter().rev().take(2).map(|x| x.1.clone()).collect()
+    };
+    assert_eq!(far.len(), 2);
+    for h in &far {
+        s.execute("bim.props.set", &json!({"handle": h, "key": "plate_group", "value": "101/W1#2"})).expect("plate group");
+    }
+    let v = study(&mut s, &dir, json!({}));
+    let nm = scenario(&v, "nm_unit_branch");
+    let cw = &nm["cable_work"];
+    // Each cable entry: the units' panels (an NM connector each, NEC 312.5(C)); the boxes it is
+    // set in now (their own clamps, 314.17(C)).
+    assert_eq!(cw["cable_entries"], json!({"gear": 2, "nonmetallic": 6}), "{cw}");
+    // The four 4" square boxes: three nonmetallic new-work boxes (two 1 gang; the shared plate's
+    // two devices in one 2 gang box).
+    assert_eq!(cw["boxes_replaced"], json!(4), "{cw}");
+    assert_eq!(cw["new_boxes"], json!({"1 gang": 2, "2 gang": 1}), "{cw}");
+    assert_eq!(cw["lv_brackets"], json!(1), "{cw}");
+    // A nail plate where each drop passes the top plate: at each receptacle and over each panel.
+    assert_eq!(cw["nail_plates"]["top_bottom_plates"], json!(6), "{cw}");
+    assert_eq!(cw["nail_plates"]["studs"], json!(0), "bored in the studs' middle: 1-5/16 in to each edge: {cw}");
+    let staples = cw["supports"]["count"].as_u64().unwrap_or(0);
+    assert!(staples > 0 && cw["supports"]["source"].as_str().is_some_and(|t| t.contains("334.30")), "{cw}");
+    let cites = cw["sources"].to_string();
+    for c in ["300.4(A)(1)", "312.5(C)", "314.17(C)", "314.16(A)(2)"] {
+        assert!(cites.contains(c), "{c}: {cites}");
+    }
+    // Both takeoffs exact: with the scenario on, the design's lines it replaces are gone and its
+    // own are there, every other line as designed.
+    let off = lines_of(&s.execute("conduit.takeoff", &json!({"group_by": [], "price": false})).expect("takeoff"));
+    let on = lines_of(&s.execute("conduit.takeoff", &json!({"group_by": [], "price": false, "scenario": "nm_unit_branch"})).expect("takeoff"));
+    let side = |k: &str| {
+        let mut m: std::collections::BTreeMap<(String, String, String), f64> = std::collections::BTreeMap::new();
+        for l in nm[k]["lines"].as_array().into_iter().flatten() {
+            let key = (
+                l["kind"].as_str().unwrap_or_default().to_string(),
+                l["item"].as_str().unwrap_or_default().to_string(),
+                l["size"].as_str().unwrap_or_default().to_string(),
+            );
+            *m.entry(key).or_default() += l["qty"].as_f64().unwrap_or(0.0);
+        }
+        m
+    };
+    let (design, alt) = (side("as_designed"), side("alternative"));
+    // The takeoff names a cable by its conductors' size (`#8`), the study by its makeup (`8/2 w/G`).
+    let cable_ft =
+        |m: &std::collections::BTreeMap<(String, String, String), f64>| m.iter().filter(|(k, _)| k.0 == "cable").map(|(_, q)| q).sum::<f64>();
+    assert!((cable_ft(&on) - cable_ft(&alt)).abs() < 0.05 && cable_ft(&alt) > 0.0, "{on:?} {alt:?}");
+    let keys: std::collections::BTreeSet<_> =
+        off.keys().chain(on.keys()).chain(design.keys()).chain(alt.keys()).filter(|k| k.0 != "cable" && k.0 != "firestop").cloned().collect();
+    for k in keys {
+        let want = off.get(&k).copied().unwrap_or(0.0) - design.get(&k).copied().unwrap_or(0.0) + alt.get(&k).copied().unwrap_or(0.0);
+        let got = on.get(&k).copied().unwrap_or(0.0);
+        assert!((want - got).abs() < 0.05, "{k:?}: off {:?} design {:?} alt {:?} on {got}", off.get(&k), design.get(&k), alt.get(&k));
+    }
+    let q = |m: &std::collections::BTreeMap<(String, String, String), f64>, kind: &str, item: &str, size: &str| {
+        m.get(&(kind.to_string(), item.to_string(), size.to_string())).copied().unwrap_or(0.0)
+    };
+    // Off: the design's boxes; on: its new boxes, the bracket, the connectors and plates, no
+    // raceway left on the units' circuit.
+    assert_eq!(
+        q(&off, "box", "Box, 4\" square", "4\" square") - q(&on, "box", "Box, 4\" square", "4\" square"),
+        5.0,
+        "four device boxes and the data outlet's"
+    );
+    assert_eq!(q(&on, "box", "Device box, 1 gang, nonmetallic", "1 gang"), 2.0);
+    assert_eq!(q(&on, "box", "Device box, 2 gang, nonmetallic", "2 gang"), 1.0);
+    assert_eq!(q(&on, "bracket", "Low-voltage mounting bracket", "1 gang"), 1.0);
+    assert_eq!(q(&on, "connector", "NM cable connector", "3/8\""), 2.0);
+    assert_eq!(q(&on, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"), 6.0);
+    assert_eq!(q(&on, "strap", "Cable staple", "#8"), staples as f64);
+    assert_eq!(
+        q(&off, "connector", "NM cable connector", "3/8\"") + q(&off, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"),
+        0.0
+    );
+    let feeder_conduit = q(&off, "conduit", "EMT conduit", "2\"");
+    assert!(feeder_conduit > 0.0 && q(&on, "conduit", "EMT conduit", "2\"") == feeder_conduit, "the feeders stay as designed");
+    // Its $ and labor are the new lines': each priced or named unpriced, never dropped.
+    let priced = nm["alternative"]["lines"].as_array().cloned().unwrap_or_default();
+    let unpriced = nm["alternative"]["unpriced"].to_string();
+    for item in ["NM cable connector", "Nail plate (stud guard)", "Device box, 2 gang, nonmetallic", "Low-voltage mounting bracket"] {
+        assert!(
+            priced.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with(item)) && (l["material"].is_number() || unpriced.contains(item))),
+            "{item}: {priced:?} {unpriced}"
+        );
+    }
+    // The SER scenario: its connectors sized to the cable, a locknut at each.
+    let ser = scenario(&v, "se_unit_feeders");
+    let lines = ser["alternative"]["lines"].as_array().cloned().unwrap_or_default();
+    let has = |kind: &str, size: &str, n: f64| lines.iter().any(|l| l["kind"] == json!(kind) && l["size"] == json!(size) && l["qty"] == json!(n));
+    assert!(has("connector", "1-1/4\"", 4.0) && has("locknut", "1-1/4\"", 4.0), "two feeders, a connector and its locknut at each end: {lines:?}");
+    // Shown, the design's boxes it replaces are hidden with its circuits' pieces.
+    let shown = s.execute("ve.scenario", &json!({"id": "nm_unit_branch", "show": true})).expect("show");
+    let hidden = s.doc().map(|d| d.model.iter().filter(|e| !e.common.visible).count()).unwrap_or(0);
+    assert_eq!(hidden as u64, shown["replaces"].as_u64().unwrap_or(0));
     let _ = std::fs::remove_dir_all(&dir);
 }

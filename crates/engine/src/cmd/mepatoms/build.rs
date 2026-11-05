@@ -320,6 +320,11 @@ pub(crate) fn body(a: &Atom, upf: f64) -> Mesh {
         "elbow" | "offset" => tube(&mut m, a.a - dir * (r * 1.5), a.a + dir * (r * 1.5), r * 1.15, SIDES),
         // A field bend is part of its stick: a thin band marks it.
         "bend" => tube(&mut m, a.a - dir * (r * 0.3), a.a + dir * (r * 0.3), r * 1.05, SIDES),
+        // A value engineering scenario's own boxes, brackets, plates and fittings (Q6202).
+        "box" | "bracket" | "nail_plate" | "fitting" => {
+            let s = a.body_in.max(0.1) / 12.0 * upf;
+            block(&mut m, a.a, plan, s, s * 0.5, s);
+        }
         _ => {}
     }
     m
@@ -346,7 +351,7 @@ pub(crate) fn body_of(ps: &Props) -> f64 {
 }
 
 /// What kind of box a device takes (none: a plumbing fixture, equipment).
-fn box_kind(kind: &str, layer: &str) -> Option<&'static str> {
+pub(crate) fn box_kind(kind: &str, layer: &str) -> Option<&'static str> {
     let k = kind.replace('_', " ").to_ascii_lowercase();
     let layer = layer.to_ascii_uppercase();
     if layer.contains("PLUMB") || k.contains("plumbing") || k.contains("sprinkler") {
