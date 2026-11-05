@@ -20,7 +20,7 @@ fn unknown(kind: &str) -> EntityKind {
 
 /// A drawing with objects of `types`, which DWG can't keep, opened from a DWG file on disk.
 fn opened(tag: &str, types: &[&str]) -> (CadApp, PathBuf) {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None });
+    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let dir = std::env::temp_dir().join(format!("cadaddy-loss-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

@@ -142,7 +142,9 @@ fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
     let e = s.execute("qsave", &json!({})).unwrap_err().to_string();
     assert!(e.contains("read-only"), "{e}");
     assert_eq!(std::fs::read(&ro).unwrap(), b"original");
-    // A drawing with its own permissions keeps them, and saving twice replaces the .bak.
+    // A drawing with its own permissions keeps them. This test's writer saves bytes that aren't
+    // a drawing, so the second save keeps the first .bak: a file that doesn't look like a whole
+    // drawing never replaces one (real drawings rotate it: tests/save_backup.rs).
     let rw = d.join("rw.dxf");
     std::fs::write(&rw, b"first").unwrap();
     std::fs::set_permissions(&rw, std::fs::Permissions::from_mode(0o750)).unwrap();
@@ -151,7 +153,7 @@ fn a_read_only_file_is_not_saved_over_and_permissions_are_kept() {
     s.cmdline("circle 0,0 6").unwrap();
     s.execute("qsave", &json!({})).unwrap();
     assert_eq!(std::fs::metadata(&rw).unwrap().permissions().mode() & 0o777, 0o750);
-    assert_eq!(std::fs::read(d.join("rw.dxf.bak")).unwrap(), b"saved");
+    assert_eq!(std::fs::read(d.join("rw.dxf.bak")).unwrap(), b"first");
     std::fs::set_permissions(&ro, std::fs::Permissions::from_mode(0o644)).unwrap();
     std::fs::remove_dir_all(&d).ok();
 }

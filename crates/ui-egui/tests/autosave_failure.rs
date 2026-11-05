@@ -37,7 +37,7 @@ fn painted_text(app: &mut CadApp, ctx: &egui::Context) -> String {
 
 #[test]
 fn a_failed_autosave_is_shown_until_a_write_works() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None });
+    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
     let root = std::env::temp_dir().join(format!("cadaddy-autosave-failure-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
