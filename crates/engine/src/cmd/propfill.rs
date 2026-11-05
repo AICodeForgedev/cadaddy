@@ -748,7 +748,7 @@ fn edge_dist(outline: &[Vec2], p: Vec2) -> f64 {
 /// A panel's breakers as built, over its printed schedule: the project rule
 /// `custom/breaker_protection.<PANEL>` = `AF/GF` or `AF/GF except PTAC` (a printed circuit whose
 /// description has a word after `except` keeps what is printed; so does a row with no
-/// description, a multi-pole breaker's next row).
+/// description, a multi-pole breaker's next row, and a space, which has no breaker).
 pub(crate) struct AsBuiltBreakers {
     pub codes: Vec<String>,
     pub source: String,
@@ -768,7 +768,8 @@ pub(crate) fn as_built_breakers(d: &Drawing, panel: &str, description: &str) -> 
     // Whole words: PTAC isn't in RECEPTACLES.
     let words = |t: &str| t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect::<Vec<_>>();
     let said = words(&upper);
-    if words(except).iter().any(|w| said.contains(w)) {
+    // A space has no breaker (a spare has).
+    if said.iter().any(|w| w == "SPACE") || words(except).iter().any(|w| said.contains(w)) {
         return None;
     }
     let codes: Vec<String> = codes.split(['/', ',']).map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();

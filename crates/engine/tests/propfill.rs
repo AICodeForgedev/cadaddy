@@ -375,7 +375,8 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     let mut s = plan();
     let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
         "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"},
-                     {"number": "5", "description": "PTAC-1", "breaker": "20", "poles": 2, "protection": [], "source": "E-601"}]}]}});
+                     {"number": "5", "description": "PTAC-1", "breaker": "20", "poles": 2, "protection": [], "source": "E-601"},
+                     {"number": "7", "description": "SPACE ONLY", "breaker": "", "poles": 1, "protection": [], "source": "E-601"}]}]}});
     s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
     fill(&mut s);
     assert_eq!(device_of(&mut s, "A")["gfci_breaker"]["value"], "no", "as printed");
@@ -401,6 +402,7 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     assert_eq!(c("3")["protection"]["codes"], json!(["AF"]));
     assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
     assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
+    assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
 }
 
 #[test]
