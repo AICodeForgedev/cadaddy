@@ -33,7 +33,7 @@ const PRODUCT_KINDS: &[&str] = &["device", "light_fixture", "fixture", "equipmen
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Apply Submittals", run)
-            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay")
+            .params("{paths: [path] (submittal PDFs, or folders of them)} → {products: {mark: {manufacturer, catalog_number, category, quantity, doc}}, files: [{file, products, marks}], applied: {mark: elements}, elements, catalog, dimming: {mark: control}, dimmers: {protocol: n}, no_submittal: {mark: elements}, not_in_model: [mark], questions: [{mark, text}], unread: [{file, error}]}: each device, fixture and equipment element of a type mark gets its submittal product (manufacturer, catalog_number, dimming, and what its cut sheet says of voltage, finish, mounting_type, cct, lumens, wattage; submittal), with the submittal and page as the source; the products go into the type catalog; each dimmer takes the dimming of the fixtures on its leg (mixed: a question); a person's values stay; luminaire_boxes_removed / luminaire_boxes_needed: a luminaire whose cut sheet gives it its own junction box (canless, remote driver, integral) loses the outlet box the build gave it (one that now needs one gets it at the next build)")
             .menu(&["Tools", "Building", "Apply Submittals"]),
     ]
 }
@@ -162,6 +162,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             (keys::CCT, "cct"),
             (keys::LUMENS, "lumens"),
             (keys::WATTAGE, "wattage"),
+            (super::spec_import::JUNCTION_BOX, "junction_box"),
         ] {
             if let Some(v) = product.value(key) {
                 set.push((prop_key, Prop::new(v, src.clone())));
@@ -191,6 +192,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             changed += 1;
         }
     }
+    // The pieces follow: a luminaire whose cut sheet gives it its own junction box loses the
+    // outlet box the build gave it.
+    let (boxes_removed, boxes_needed) =
+        if changed > 0 && d.embedded.contains_key(super::mepatoms::INDEX_FILE) { super::mepatoms::build::sync_luminaire_boxes(d) } else { (0, 0) };
 
     // Each dimmer: the way the fixtures on its leg dim now, unless its own product or a person
     // says. One worked out before and no longer settled goes.
@@ -258,6 +263,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "not_in_model": not_in_model,
         "questions": questions,
         "unread": unread,
+        "luminaire_boxes_removed": boxes_removed,
+        "luminaire_boxes_needed": boxes_needed,
     }))
 }
 

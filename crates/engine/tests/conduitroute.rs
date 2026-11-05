@@ -120,7 +120,15 @@ fn circuits_are_routed_square_around_the_ducts_and_into_every_box() {
     assert!(st.iter().all(|(c, _, _)| !c.is_empty()), "{st:?}");
     assert!(st.iter().any(|(c, _, _)| c == "LP1-1,3"), "{:?}", st.iter().map(|x| &x.0).collect::<std::collections::BTreeSet<_>>());
     let home_wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-1,3"}));
-    assert_eq!(home_wires["count"], json!(5), "4#12 + 1#12G: {home_wires}");
+    // 4#12 + 1#12G on each of its pieces: where LP1-5's homerun runs on its path the two are one
+    // raceway (Q6206, the shared stretch carries all three circuits), its own pieces each side.
+    let n = home_wires["count"].as_u64().unwrap_or(0);
+    assert!(n >= 5 && n.is_multiple_of(5), "4#12 + 1#12G: {home_wires}");
+    let sh = &r["shared_raceway"];
+    assert!(n == 5 || sh["stretches"].as_u64().unwrap_or(0) >= 1, "{sh}");
+    if let Some(it) = sh["items"].as_array().and_then(|a| a.first()) {
+        assert_eq!(it["circuits"], json!(["LP1-1", "LP1-3", "LP1-5"]), "{it}");
+    }
     // Every receptacle has a raceway landing in its box, and its drop ends on the box's top.
     let devices: Vec<String> = {
         let d = s.doc().expect("doc");
@@ -958,10 +966,11 @@ fn a_two_device_circuits_length_is_its_route_with_every_drop_and_the_makeup() {
     assert!(near(&area["in_area_ft"], joint), "joint {joint}: {area}");
     assert!(near(&area["home_ft"], home), "homerun {home}: {area}");
     assert!(near(&r["routed_ft"], joint + home), "{}", r["routed_ft"]);
-    // Three conductors in each: 1' of makeup at each box, 3' at the panel (rules data).
-    assert_eq!(r["makeup"]["box_ft"], json!(1.0));
-    assert_eq!(r["makeup"]["panel_ft"], json!(3.0));
-    let wire = 3.0 * (joint + 2.0) + 3.0 * (home + 1.0 + 3.0);
+    // Three conductors in each: at each box NEC 300.14's 6" and the 12" field allowance (rules
+    // data, 1.5'); at the panel down half its 4' can to the breaker and a box's makeup (3.5').
+    assert_eq!(r["makeup"]["box_ft"], json!(1.5));
+    assert_eq!((r["makeup"]["box_min_in"].as_f64(), r["makeup"]["box_allowance_in"].as_f64()), (Some(6.0), Some(12.0)));
+    let wire = 3.0 * (joint + 3.0) + 3.0 * (home + 1.5 + 3.5);
     assert!(near(&area["conductor_ft"], wire), "conductors {wire}: {area}");
     // The pieces carry the same: the circuit's wire in the takeoff, the panel's makeup on the
     // homerun's conductors.

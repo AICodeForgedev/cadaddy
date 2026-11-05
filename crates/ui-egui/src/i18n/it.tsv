@@ -3466,3 +3466,38 @@ menu	Modify	Edita
 	Underground Plan Report	Rapporto pianta impianti interrati
 	Update Model from Plans	Aggiorna modello dalle piante
 	Load Calculation	Calcolo dei carichi
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Un rapporto sull'arresto è stato conservato su questo computer: Guida > Segnala un problema lo propone.
+	A recovery copy of the drawing with unsaved changes was autosaved.	È stata salvata automaticamente una copia di ripristino del disegno con modifiche non salvate.
+	Autosave failed	Salvataggio automatico non riuscito
+	Autosave failed: {message}	Salvataggio automatico non riuscito: {message}
+	Backup copies are off, so the current file will be replaced.	Le copie di backup sono disattivate, quindi il file attuale verrà sostituito.
+	Backup copy	Copia di backup
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy non è riuscito a scrivere una copia di ripristino, quindi le modifiche recenti andrebbero perse se l'app si fermasse ora.
+	CADaddy has to close	CADaddy deve chiudersi
+	Close CADaddy	Chiudi CADaddy
+	Create backup copy with each save	Crea una copia di backup a ogni salvataggio
+	DXF keeps them. Use Save As to keep them in the drawing.	Il DXF li conserva. Usa Salva con nome per mantenerli nel disegno.
+	Details	Dettagli
+	Dismiss	Ignora
+	Drawing Recovery offers them at the next start.	Ripristino disegni li proporrà al prossimo avvio.
+	Internal error	Errore interno
+	No drawing needed a new recovery copy.	Nessun disegno richiedeva una nuova copia di ripristino.
+	Part of CADaddy failed, and the app kept running.	Una parte di CADaddy non ha funzionato e l'app è rimasta in esecuzione.
+	Part of CADaddy keeps failing, so it can't continue.	Una parte di CADaddy continua a non funzionare, quindi non può proseguire.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Sono state salvate automaticamente copie di ripristino di {count} disegni con modifiche non salvate.
+	Save Anyway	Salva comunque
+	Save cancelled: {path} was not changed.	Salvataggio annullato: {path} non è stato modificato.
+	Save your work and restart CADaddy.	Salva il lavoro e riavvia CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Salva il lavoro. Il salvataggio automatico riprova dopo l'intervallo SAVETIME; la sua cartella è in Opzioni.
+	Saving {name} will remove content	Il salvataggio di {name} rimuoverà dei contenuti
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Il file attuale non sembra completo, quindi {name} resta com'è e il file attuale verrà sostituito.
+	The current file is kept as {name} until the next save.	Il file attuale viene conservato come {name} fino al prossimo salvataggio.
+	This format can't keep these objects yet: {objects}.	Questo formato non può ancora conservare questi oggetti: {objects}.
+	{count} more types	altri {count} tipi
+	Review by Impact	Revisione per impatto
+	Resolve Review Item by Impact	Risolvi voce di revisione per impatto
+	Open Review Item	Apri voce di revisione
+	Review Audit Trail	Registro di controllo della revisione
+	Accuracy Trend	Andamento della precisione
+	Measure Build Accuracy	Misura la precisione del modello
+	Panel Breakers	Interruttori del quadro

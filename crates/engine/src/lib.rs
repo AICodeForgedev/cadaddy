@@ -2588,7 +2588,29 @@ impl Session {
     // ---------------- programmatic execution ----------------
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
+    ///
+    /// The command itself is guarded below, where its own panic can be told apart. This guard is
+    /// for everything around it: the passes after a command (constraints, associativity, groups)
+    /// are as able to panic as the command, and a panic there restores the drawing the same way.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute_guarded(id, params))) {
+            Ok(r) => r,
+            Err(p) => {
+                let msg = crate::guard::message(&*p);
+                crash_report::record(self, id, &msg);
+                if let Some((doc, sel, uid)) = before
+                    && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
+                {
+                    st.doc = doc;
+                    st.selection = sel;
+                }
+                Err(EngineError::Internal(id.into(), msg))
+            }
+        }
+    }
+
+    fn execute_guarded(&mut self, id: &str, params: &Value) -> Result<Value> {
         self.poll_background();
         // An agent's outermost call: parameters the command doesn't take are refused (before a
         // dry run too), then a dry run or a confirmation ([`agent`]).
@@ -3406,7 +3428,23 @@ impl Session {
         }
     }
 
+    /// End a command: every way out of one comes through here. The passes after a command
+    /// (constraints, associativity, groups) can panic like the command itself; a panic restores
+    /// the drawing as it was before the command, as a panic in its `input` does.
     fn finish(&mut self, run: Running, cancelled: bool) {
+        let (id, before, selection) = (run.id.clone(), run.before.clone(), run.selection_before.clone());
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.finish_guarded(run, cancelled))) {
+            let msg = crate::guard::message(&*p);
+            crash_report::record(self, &id, &msg);
+            if let Ok(st) = self.state_mut() {
+                st.doc = before;
+                st.selection = selection;
+            }
+            self.echo(format!("Internal error in {id}: {msg}"));
+        }
+    }
+
+    fn finish_guarded(&mut self, run: Running, cancelled: bool) {
         self.event("command.ended", serde_json::json!({ "command": run.id, "cancelled": cancelled }));
         let id = run.id.clone();
         let rhai_before = (self.rhai_watching() && !cmd::rhai_cmd::is_rhai(&id))
@@ -3487,6 +3525,8 @@ impl Session {
     /// started in, so associativity is not applied across a document switch; `ok` is false for a
     /// failed or non-undoable programmatic command, which skips the constraint pass.
     fn after_command(&mut self, before: Option<&Arc<Drawing>>, uid: Option<u64>, ok: bool) {
+        #[cfg(test)]
+        crate::guard::tests::panic_if_armed();
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);

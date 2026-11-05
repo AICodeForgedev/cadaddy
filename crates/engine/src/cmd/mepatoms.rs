@@ -49,12 +49,12 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|breaker (a panel's, from its schedule row), a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
-            .params("{handle, limit?: elements (2000)} → {from, path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
+            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
             .noundo(),
     ]
 }
@@ -143,6 +143,79 @@ pub(crate) struct RingRule {
     pub source: String,
 }
 
+/// What conductors of one material are bought as (`feeder_conductors`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ConductorKind {
+    pub insulation: String,
+    pub item: String,
+    pub ground_item: String,
+}
+
+/// One rule of whether a luminaire takes an outlet box: words in what its documents say of it.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LuminaireBoxRule {
+    pub words: Vec<String>,
+    #[serde(rename = "box")]
+    pub takes_box: bool,
+    /// A cut sheet's words: read off the submittal (the schedule's mounting words are not).
+    pub cut_sheet: bool,
+    pub source: String,
+}
+
+/// Whether a luminaire takes an outlet box (`luminaire_box`): the first rule (in order) whose
+/// words one of its `fields` holds decides; none: the default box.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LuminaireBox {
+    pub fields: Vec<String>,
+    pub rules: Vec<LuminaireBoxRule>,
+    pub default_source: String,
+}
+
+/// What decided a luminaire's box: whether it takes one, the words found, the field they were in
+/// and the document it came from (empty: the default), and the rule's source.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BoxDecision {
+    pub takes_box: bool,
+    pub found: String,
+    pub field: String,
+    pub doc: String,
+    pub source: String,
+}
+
+impl LuminaireBox {
+    /// The decision from what a luminaire's documents say: `(field, value, document)` each.
+    pub(crate) fn decide(&self, said: &[(String, String, String)]) -> BoxDecision {
+        for r in &self.rules {
+            for f in &self.fields {
+                for (k, v, doc) in said.iter().filter(|s| &s.0 == f) {
+                    let up = v.to_ascii_uppercase();
+                    if let Some(w) = r.words.iter().find(|w| !w.is_empty() && up.contains(&w.to_ascii_uppercase())) {
+                        return BoxDecision {
+                            takes_box: r.takes_box,
+                            found: w.to_ascii_lowercase(),
+                            field: k.clone(),
+                            doc: doc.clone(),
+                            source: r.source.clone(),
+                        };
+                    }
+                }
+            }
+        }
+        BoxDecision { takes_box: true, source: self.default_source.clone(), ..BoxDecision::default() }
+    }
+    /// The first rule's words a cut sheet's lines hold (the junction box it says it has or needs).
+    pub(crate) fn cut_sheet_words(&self, lines: &[String]) -> Option<String> {
+        self.rules
+            .iter()
+            .filter(|r| r.cut_sheet)
+            .find_map(|r| r.words.iter().find(|w| !w.is_empty() && lines.iter().any(|l| l.to_ascii_uppercase().contains(&w.to_ascii_uppercase()))))
+            .map(|w| w.to_ascii_lowercase())
+    }
+}
+
 /// The rules data (`mepatoms.json`).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -157,10 +230,16 @@ pub(crate) struct AtomRules {
     pub default_raceway_source: String,
     pub insulation: String,
     pub insulation_source: String,
+    /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
+    /// when the rules give them (their sum), else as given.
     pub makeup_ft: f64,
+    pub makeup_min_in: f64,
+    pub makeup_allowance_in: f64,
     pub makeup_source: String,
-    /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
+    /// Each conductor's makeup where it ends at a panel (to its breaker), feet, when its height
+    /// isn't known; else the share of its height it runs down the can (and a box's makeup).
     pub panel_makeup_ft: f64,
+    pub panel_makeup_height_share: f64,
     pub panel_makeup_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
@@ -176,12 +255,24 @@ pub(crate) struct AtomRules {
     pub joint_tol_in: f64,
     pub box_reach_ft: f64,
     pub panel_reach_ft: f64,
+    pub feeder_makeup_ft: f64,
+    pub feeder_makeup_source: String,
+    pub feeder_conductors: BTreeMap<String, ConductorKind>,
+    pub feeder_conductors_source: String,
+    pub luminaire_box: LuminaireBox,
 }
 
 /// The rules data, read once.
 pub(crate) fn rules() -> &'static AtomRules {
     static R: std::sync::OnceLock<AtomRules> = std::sync::OnceLock::new();
-    R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
+    R.get_or_init(|| {
+        let mut r: AtomRules = serde_json::from_str(RULES).unwrap_or_default();
+        let parts = r.makeup_min_in.max(0.0) + r.makeup_allowance_in.max(0.0);
+        if parts.is_finite() && parts > 0.0 {
+            r.makeup_ft = parts / 12.0;
+        }
+        r
+    })
 }
 
 impl AtomRules {
@@ -265,7 +356,7 @@ pub(crate) struct Atom {
 }
 
 impl Atom {
-    fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
+    pub(crate) fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
         Atom { kind, item, ty: ty.into(), size: size.into(), body_in, a: at, b: at + dir, source: source.into(), ..Atom::default() }
     }
 }
@@ -751,13 +842,37 @@ pub(crate) fn cable_pieces(path: &[Vec3], upf: f64, kind: &str, cr: &CableRule, 
 /// run's plus makeup at each end). `circuits`: the panel circuit numbers (`1,3,5`), for the
 /// phases; `voltage`: `120/208`.
 pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], voltage: &str, rules: &AtomRules) -> Vec<Atom> {
+    let m = rules.makeup_ft.max(0.0);
+    wires_with(path, upf, makeup, circuits, voltage, rules, &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source })
+}
+
+/// How a run's conductors differ from a branch circuit's: what they are bought as (`None`: THHN
+/// copper, the rules' insulation) and the makeup at each end, feet.
+pub(crate) struct WireOpts<'a> {
+    pub kind: Option<(&'a ConductorKind, &'a str)>,
+    pub makeup_ft: [f64; 2],
+    pub makeup_source: &'a str,
+}
+
+/// [`wires`], the conductors' kind and each end's makeup as `opts` say.
+pub(crate) fn wires_with(
+    path: &[Vec3],
+    upf: f64,
+    makeup: &str,
+    circuits: &[u32],
+    voltage: &str,
+    rules: &AtomRules,
+    opts: &WireOpts<'_>,
+) -> Vec<Atom> {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let pts = clean_path(path, upf);
     let (Some(a), Some(b)) = (pts.first().copied(), pts.last().copied()) else { return Vec::new() };
     if pts.len() < 2 {
         return Vec::new();
     }
-    let len = path_ft(&pts, upf) + 2.0 * rules.makeup_ft.max(0.0);
+    let ends = opts.makeup_ft.map(|m| if m.is_finite() { m.max(0.0) } else { 0.0 });
+    let len = path_ft(&pts, upf) + ends[0] + ends[1];
+    let makeup_text = if (ends[0] - ends[1]).abs() < 1e-9 { format!("{}", ends[0]) } else { format!("{} + {}", ends[0], ends[1]) };
     let mut phases: Vec<&str> = circuits.iter().map(|c| phase_of(*c)).collect();
     if phases.is_empty() {
         phases.push("A");
@@ -775,17 +890,25 @@ pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], vol
                 "N"
             };
             let color = rules.color(voltage, role).unwrap_or_default();
+            let (item, ty, source) = match opts.kind {
+                Some((k, src)) => (if ground { k.ground_item.clone() } else { k.item.clone() }, k.insulation.clone(), src.to_string()),
+                None => (
+                    if ground { "Copper ground, green".into() } else { "THHN copper".into() },
+                    rules.insulation.clone(),
+                    rules.insulation_source.clone(),
+                ),
+            };
             let mut w = Atom {
                 kind: "wire",
-                item: if ground { "Copper ground, green".into() } else { "THHN copper".into() },
-                ty: rules.insulation.clone(),
+                item,
+                ty,
                 size: wire_size(&size),
                 body_in: 0.15,
                 length_ft: len,
                 a,
                 b,
                 path: pts.clone(),
-                source: rules.insulation_source.clone(),
+                source,
                 ..Atom::default()
             };
             w.extra.push(("color", color.to_string(), rules.colors_source.clone()));
@@ -800,7 +923,7 @@ pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], vol
                 },
                 rules.phase_source.clone(),
             ));
-            w.extra.push(("makeup_ft", format!("{}", rules.makeup_ft), rules.makeup_source.clone()));
+            w.extra.push(("makeup_ft", makeup_text.clone(), opts.makeup_source.to_string()));
             out.push(w);
         }
     }
@@ -1118,6 +1241,7 @@ fn norm_kind(s: &str) -> String {
         "mud_ring" | "plaster_ring" | "rings" => "ring".into(),
         "wires" | "conductor" | "conductors" => "wire".into(),
         "cables" | "romex" => "cable".into(),
+        "breakers" | "circuit_breaker" | "circuit_breakers" | "cb" => "breaker".into(),
         "outlet" | "receptacles" => "receptacle".into(),
         "light" | "light_fixture" | "luminaires" => "luminaire".into(),
         _ => k,
@@ -1531,8 +1655,25 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
             _ => break,
         }
     }
+    // The breaker its circuit leaves the panel on (Q6166): the device's, else a piece's on the way.
+    let breaker = std::iter::once(h)
+        .chain(path.iter().copied())
+        .filter_map(|x| d.model.get(x))
+        .find_map(|e| props::read(&e.common.xdata).get("breaker_handle").and_then(|p| Handle::parse_hex(p.text().trim())))
+        .and_then(|b| d.model.get(b))
+        .map(|e| {
+            let ps = props::read(&e.common.xdata);
+            let mut j = node_json(e);
+            for k in ["type", "trip_a", "poles", "load", "panel", "source_row"] {
+                if let Some(v) = ps.get(k).filter(|v| v.has_value()) {
+                    j[k] = v.value.clone();
+                }
+            }
+            j
+        });
     Ok(json!({
         "from": node_json(&start),
+        "breaker": breaker,
         "path": path.iter().filter_map(|x| d.model.get(*x)).map(|e| node_json(e)).collect::<Vec<_>>(),
         "source": found.and_then(|x| d.model.get(x)).map(|e| node_json(e)),
         "upstream": upstream,
@@ -1657,6 +1798,56 @@ mod tests {
         p.atoms.iter().filter(|a| a.kind == kind).count()
     }
 
+    fn said(v: &[(&str, &str)]) -> Vec<(String, String, String)> {
+        v.iter().map(|(k, x)| (k.to_string(), x.to_string(), format!("doc of {k}"))).collect()
+    }
+
+    #[test]
+    fn a_luminaires_box_is_decided_by_the_strongest_words_its_documents_say() {
+        let lb = &rules().luminaire_box;
+        // The cut sheet's canless wafer beats the schedule's "surface".
+        let d = lb.decide(&said(&[("installation", "SURFACE/CEILING"), ("junction_box", "canless")]));
+        assert!(!d.takes_box, "{d:?}");
+        assert_eq!((d.found.as_str(), d.field.as_str(), d.doc.as_str()), ("canless", "junction_box", "doc of junction_box"));
+        // A recessed row whose cut sheet mounts it on a junction box: a box.
+        assert!(lb.decide(&said(&[("installation", "Recessed"), ("junction_box", "compatible junction box")])).takes_box);
+        // The schedule's words alone, in any case and column.
+        assert!(!lb.decide(&said(&[("fixture_description", "2x4 lay-in troffer")])).takes_box);
+        assert!(!lb.decide(&said(&[("mounting_type", "recessed")])).takes_box);
+        assert!(lb.decide(&said(&[("installation", "Pendant, 12' AFF")])).takes_box);
+        // Nothing said: the usual box, said so.
+        let none = lb.decide(&[]);
+        assert!(none.takes_box && none.found.is_empty() && !none.source.is_empty(), "{none:?}");
+        // A field the rules don't read decides nothing.
+        assert!(lb.decide(&said(&[("finish", "recessed bronze")])).found.is_empty());
+    }
+
+    #[test]
+    fn a_cut_sheet_is_read_for_its_junction_box_words_only() {
+        let lb = &rules().luminaire_box;
+        let lines = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(lb.cut_sheet_words(&lines(&["ML9 4in CANLESS downlight", "Remote driver / junction box"])).as_deref(), Some("canless"));
+        assert_eq!(lb.cut_sheet_words(&lines(&["Housing with integral junction box", "canless"])).as_deref(), Some("integral junction box"));
+        assert_eq!(lb.cut_sheet_words(&lines(&["Universal J-box pattern on back plate"])).as_deref(), Some("j-box pattern"));
+        // Mounting words on a cut sheet (recessed, surface, ceiling) are not its junction box.
+        assert_eq!(lb.cut_sheet_words(&lines(&["Recessed or surface ceiling mounting", "LED 90 CRI"])), None);
+    }
+
+    #[test]
+    fn a_feeders_wires_are_of_its_material_with_the_makeup_each_end_takes() {
+        let rl = rules();
+        let al = rl.feeder_conductors.get("al").expect("aluminum");
+        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear" };
+        let w = wires_with(&line(20.0), 12.0, "3#4/0 + 1#4/0 + 1#4G", &[1, 3, 5], "120/208", rl, &opts);
+        assert_eq!(w.len(), 5);
+        assert!(w.iter().all(|a| (a.length_ft - 23.0).abs() < 1e-9 && a.item == "XHHW aluminum" && a.ty == "XHHW-2"), "{w:?}");
+        assert_eq!(w.iter().filter(|a| a.size == "#4/0").count(), 4);
+        // A branch circuit's wires stay THHN copper with the box makeup at both ends.
+        let b = wires(&line(20.0), 12.0, "2#12 + 1#12G", &[1], "120/208", rl);
+        assert!(b.iter().all(|a| (a.length_ft - (20.0 + 2.0 * rl.makeup_ft)).abs() < 1e-9), "{b:?}");
+        assert_eq!(b.iter().filter(|a| a.item == "Copper ground, green").count(), 1);
+    }
+
     #[test]
     fn a_37_ft_run_of_1_inch_emt_is_four_sticks_three_couplings_two_connectors() {
         let r = rules();
@@ -1760,7 +1951,7 @@ mod tests {
         let c = &p.atoms[0];
         assert_eq!((c.kind, c.ty.as_str(), c.size.as_str(), c.item.as_str()), ("cable", "NM 12/2 w/G", "#12", "NM-B cable"));
         assert!((p.length_ft - 25.0).abs() < 1e-9);
-        assert!((c.length_ft - 27.0).abs() < 1e-9, "25' of run plus 1' makeup at each end: {}", c.length_ft);
+        assert!((c.length_ft - 28.0).abs() < 1e-9, "25' of run plus 1.5' makeup at each end (300.14's 6\" and a 12\" allowance): {}", c.length_ft);
         assert_eq!(c.extra.iter().find(|x| x.0 == "conductors").map(|x| x.1.as_str()), Some("3"));
         // Staples within 12" of each box, at most 4-1/2' apart.
         let st: Vec<f64> = p
@@ -1788,7 +1979,7 @@ mod tests {
         let w = wires(&line(30.0), 12.0, "2#12 + 1#12G", &[3], "120/208", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["red", "white", "green"], "circuit 3 is phase B");
-        assert!(w.iter().all(|a| (a.length_ft - 32.0).abs() < 1e-9));
+        assert!(w.iter().all(|a| (a.length_ft - 33.0).abs() < 1e-9), "30' and 1.5' at each end");
         let w = wires(&line(10.0), 12.0, "3#10 + 1#10G", &[1, 3, 5], "277/480", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["brown", "orange", "yellow", "green"]);

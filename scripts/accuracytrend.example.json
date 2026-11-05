@@ -1,0 +1,19 @@
+{
+  "repo": "~/repos/ourcad",
+  "hub": "origin",
+  "branch": "next",
+  "workdir": "~/trendrun",
+  "target_dir": "~/repos/ourcad/target",
+  "cargo_jobs": 4,
+  "checkpoint": "~/jobs/project-a/ckpt-before-bim.cdy",
+  "job": {"pdfs": "~/jobs/project-a/prints", "submittals": "~/jobs/project-a/submittals", "goal": "takeoff"},
+  "rooms": ["901", "902", {"room": "915", "level": "Level 9"}],
+  "skip_rules": [],
+  "label": "Project A",
+  "trend": "~/trendrun/trend.jsonl",
+  "fetch_merge_log": "hub:merger/merge.log",
+  "copy_to": "hub:cadwork/tasks/fixtures/trend/",
+  "lock": "~/trendrun/job-run.lock",
+  "time_limit_s": 7200,
+  "last": 10
+}

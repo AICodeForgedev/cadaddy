@@ -3181,3 +3181,38 @@
 	Underground Plan Report	Rapport du plan des réseaux enterrés
 	Update Model from Plans	Mettre à jour le modèle depuis les plans
 	Load Calculation	Calcul des charges
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Un rapport d'incident a été conservé sur cet ordinateur : Aide > Signaler un problème le propose.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Une copie de récupération du dessin aux modifications non enregistrées a été enregistrée automatiquement.
+	Autosave failed	Échec de l'enregistrement automatique
+	Autosave failed: {message}	Échec de l'enregistrement automatique : {message}
+	Backup copies are off, so the current file will be replaced.	Les copies de sauvegarde sont désactivées : le fichier actuel sera remplacé.
+	Backup copy	Copie de sauvegarde
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy n'a pas pu écrire de copie de récupération : les modifications récentes seraient perdues si l'application s'arrêtait maintenant.
+	CADaddy has to close	CADaddy doit se fermer
+	Close CADaddy	Fermer CADaddy
+	Create backup copy with each save	Créer une copie de sauvegarde à chaque enregistrement
+	DXF keeps them. Use Save As to keep them in the drawing.	Le DXF les conserve. Utilisez Enregistrer sous pour les garder dans le dessin.
+	Details	Détails
+	Dismiss	Ignorer
+	Drawing Recovery offers them at the next start.	La récupération de dessins les proposera au prochain démarrage.
+	Internal error	Erreur interne
+	No drawing needed a new recovery copy.	Aucun dessin n'avait besoin d'une nouvelle copie de récupération.
+	Part of CADaddy failed, and the app kept running.	Une partie de CADaddy a échoué, et l'application a continué de fonctionner.
+	Part of CADaddy keeps failing, so it can't continue.	Une partie de CADaddy échoue sans cesse : il ne peut pas continuer.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Des copies de récupération de {count} dessins aux modifications non enregistrées ont été enregistrées automatiquement.
+	Save Anyway	Enregistrer quand même
+	Save cancelled: {path} was not changed.	Enregistrement annulé : {path} n'a pas été modifié.
+	Save your work and restart CADaddy.	Enregistrez votre travail et redémarrez CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Enregistrez votre travail. L'enregistrement automatique réessaiera après l'intervalle SAVETIME ; son dossier se trouve dans Options.
+	Saving {name} will remove content	L'enregistrement de {name} supprimera du contenu
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Le fichier actuel ne semble pas complet : {name} reste tel quel et le fichier actuel sera remplacé.
+	The current file is kept as {name} until the next save.	Le fichier actuel est conservé sous {name} jusqu'au prochain enregistrement.
+	This format can't keep these objects yet: {objects}.	Ce format ne peut pas encore conserver ces objets : {objects}.
+	{count} more types	{count} autres types
+	Review by Impact	Revue par impact
+	Resolve Review Item by Impact	Résoudre l'élément de revue par impact
+	Open Review Item	Ouvrir l'élément de revue
+	Review Audit Trail	Journal d'audit de la revue
+	Accuracy Trend	Tendance de précision
+	Measure Build Accuracy	Mesurer la précision du modèle
+	Panel Breakers	Disjoncteurs du tableau

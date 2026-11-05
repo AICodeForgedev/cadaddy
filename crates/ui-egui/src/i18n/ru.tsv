@@ -3182,3 +3182,38 @@
 	Underground Plan Report	Отчёт по плану подземных сетей
 	Update Model from Plans	Обновить модель по планам
 	Load Calculation	Расчёт нагрузок
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Отчёт о сбое сохранён на этом компьютере: его предлагает Справка > Сообщить о проблеме.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Резервная копия чертежа с несохранёнными изменениями сохранена автоматически.
+	Autosave failed	Ошибка автосохранения
+	Autosave failed: {message}	Ошибка автосохранения: {message}
+	Backup copies are off, so the current file will be replaced.	Резервные копии отключены, поэтому текущий файл будет заменён.
+	Backup copy	Резервная копия
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy не удалось записать резервную копию, поэтому последние изменения будут потеряны, если приложение сейчас остановится.
+	CADaddy has to close	CADaddy должен закрыться
+	Close CADaddy	Закрыть CADaddy
+	Create backup copy with each save	Создавать резервную копию при каждом сохранении
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF их сохраняет. Используйте «Сохранить как», чтобы оставить их в чертеже.
+	Details	Подробности
+	Dismiss	Закрыть
+	Drawing Recovery offers them at the next start.	Восстановление чертежей предложит их при следующем запуске.
+	Internal error	Внутренняя ошибка
+	No drawing needed a new recovery copy.	Ни одному чертежу не потребовалась новая резервная копия.
+	Part of CADaddy failed, and the app kept running.	Часть CADaddy дала сбой, но приложение продолжает работать.
+	Part of CADaddy keeps failing, so it can't continue.	Часть CADaddy продолжает давать сбои, поэтому он не может продолжить работу.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Резервные копии чертежей с несохранёнными изменениями ({count}) сохранены автоматически.
+	Save Anyway	Всё равно сохранить
+	Save cancelled: {path} was not changed.	Сохранение отменено: {path} не изменён.
+	Save your work and restart CADaddy.	Сохраните работу и перезапустите CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Сохраните работу. Автосохранение повторит попытку через интервал SAVETIME; его папка указана в Параметрах.
+	Saving {name} will remove content	При сохранении {name} часть содержимого будет удалена
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Текущий файл выглядит неполным, поэтому {name} остаётся без изменений, а текущий файл будет заменён.
+	The current file is kept as {name} until the next save.	Текущий файл сохраняется как {name} до следующего сохранения.
+	This format can't keep these objects yet: {objects}.	Этот формат пока не может сохранить эти объекты: {objects}.
+	{count} more types	ещё типов: {count}
+	Review by Impact	Проверка по влиянию
+	Resolve Review Item by Impact	Решить пункт проверки по влиянию
+	Open Review Item	Открыть пункт проверки
+	Review Audit Trail	Журнал аудита проверки
+	Accuracy Trend	Динамика точности
+	Measure Build Accuracy	Измерить точность модели
+	Panel Breakers	Автоматы щита

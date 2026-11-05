@@ -122,7 +122,7 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         self.fit_first_window(ctx);
-        self.cad.logic(ctx);
+        self.cad.guarded_logic(ctx);
         self.spacemouse.poll(&mut self.cad, ctx);
         self.persist_workspace(false);
         if std::mem::take(&mut self.cad.quit_requested) {
@@ -135,7 +135,7 @@ impl eframe::App for App {
         cadaddy_ui_egui::cmdline::capture_tab(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.cad.ui(ui);
+        self.cad.guarded_ui(ui);
         self.persist_workspace(false);
     }
     /// A normal exit: the workspace is saved, and this run's autosave files are not needed (a
@@ -453,6 +453,11 @@ fn open_in_redline(path: &str) -> Result<bool, String> {
 }
 
 fn main() -> eframe::Result {
+    // A copy of this program started to read or write a DWG file does only that.
+    if let Some(code) = cadaddy_io::dwg_worker::serve_if_asked() {
+        std::process::exit(code);
+    }
+    cadaddy_io::dwg_worker::use_own_worker();
     cadaddy_engine::crash_report::install_hook();
     // --debug: verbose logging (set before the logger installs so it reads the right level).
     let debug = std::env::args_os().any(|a| a == "--debug");

@@ -3393,3 +3393,38 @@ menu	Modify	수정
 	Underground Plan Report	지중 배관 계획 보고서
 	Update Model from Plans	도면에서 모델 업데이트
 	Load Calculation	부하 계산
+	A crash report was kept on this computer: Help > Report a Problem offers it.	충돌 보고서가 이 컴퓨터에 저장되었습니다. 도움말 > 문제 보고에서 제공합니다.
+	A recovery copy of the drawing with unsaved changes was autosaved.	저장하지 않은 변경 내용이 있는 도면의 복구 사본이 자동 저장되었습니다.
+	Autosave failed	자동 저장 실패
+	Autosave failed: {message}	자동 저장 실패: {message}
+	Backup copies are off, so the current file will be replaced.	백업 사본이 꺼져 있으므로 현재 파일이 바뀝니다.
+	Backup copy	백업 사본
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy가 복구 사본을 쓰지 못했습니다. 지금 앱이 멈추면 최근 변경 내용이 사라집니다.
+	CADaddy has to close	CADaddy를 닫아야 합니다
+	Close CADaddy	CADaddy 닫기
+	Create backup copy with each save	저장할 때마다 백업 사본 만들기
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF는 이를 유지합니다. 도면에 유지하려면 다른 이름으로 저장을 사용하세요.
+	Details	세부 정보
+	Dismiss	닫기
+	Drawing Recovery offers them at the next start.	다음 시작 시 도면 복구에서 제공합니다.
+	Internal error	내부 오류
+	No drawing needed a new recovery copy.	새 복구 사본이 필요한 도면이 없었습니다.
+	Part of CADaddy failed, and the app kept running.	CADaddy의 일부에서 오류가 발생했지만 앱은 계속 실행 중입니다.
+	Part of CADaddy keeps failing, so it can't continue.	CADaddy의 일부에서 오류가 계속 발생해 계속할 수 없습니다.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	저장하지 않은 변경 내용이 있는 도면 {count}개의 복구 사본이 자동 저장되었습니다.
+	Save Anyway	그래도 저장
+	Save cancelled: {path} was not changed.	저장이 취소되었습니다. {path}은(는) 바뀌지 않았습니다.
+	Save your work and restart CADaddy.	작업을 저장하고 CADaddy를 다시 시작하세요.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	작업을 저장하세요. 자동 저장은 SAVETIME 간격이 지나면 다시 시도하며, 폴더는 옵션에 있습니다.
+	Saving {name} will remove content	{name}을(를) 저장하면 내용이 제거됩니다
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	현재 파일이 완전하지 않은 것 같아 {name}은(는) 그대로 두고 현재 파일을 바꿉니다.
+	The current file is kept as {name} until the next save.	현재 파일은 다음 저장 때까지 {name}(으)로 유지됩니다.
+	This format can't keep these objects yet: {objects}.	이 형식은 아직 다음 객체를 유지할 수 없습니다: {objects}.
+	{count} more types	{count}개 형식 더
+	Review by Impact	영향별 검토
+	Resolve Review Item by Impact	영향별 검토 항목 해결
+	Open Review Item	검토 항목 열기
+	Review Audit Trail	검토 감사 기록
+	Accuracy Trend	정확도 추세
+	Measure Build Accuracy	빌드 정확도 측정
+	Panel Breakers	분전반 차단기

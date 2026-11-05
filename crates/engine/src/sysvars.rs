@@ -91,6 +91,7 @@ const SESSION_VARS: &[&str] = &[
     "ACTIVITYLOG",
     "DCTMAIN",
     "DCTCUST",
+    "ISAVEBAK",
 ];
 
 pub fn get(s: &Session, name: &str) -> Option<Value> {
@@ -199,6 +200,7 @@ pub fn get(s: &Session, name: &str) -> Option<Value> {
         "DCTCUST" => json!(crate::cmd::spell::dctcust()),
         "SUNSTATUS" => json!(i32::from(s.doc().ok()?.sun.on)),
         "RENDEREXPOSURE" => json!(s.doc().ok()?.sun.exposure),
+        "ISAVEBAK" => json!(i32::from(crate::autosave::isavebak())),
         "CMDNAMES" => json!(s.running.as_ref().map(|r| r.id.to_ascii_uppercase()).unwrap_or_default()),
         // A drawing not saved yet is named as AutoCAD names it, "Drawing1.dwg".
         "DWGNAME" => json!(
@@ -876,6 +878,7 @@ pub fn set(s: &mut Session, name: &str, v: &Value) -> Result<()> {
         "ACTIVITYLOG" => crate::activity::set_enabled(as_bool(v).ok_or_else(bad)?),
         "DCTMAIN" => crate::cmd::spell::set_main_code(s.doc_mut()?, v.as_str().ok_or_else(bad)?)?,
         "DCTCUST" => crate::cmd::spell::set_dctcust(file_text(&n, v)?),
+        "ISAVEBAK" => crate::autosave::set_isavebak(as_bool(v).ok_or_else(bad)?),
         // A number is in degrees; text is an angle typed in AUNITS (SETVAR at the command line).
         "ANGBASE" => {
             let a = match v {

@@ -1483,6 +1483,15 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
                 p.bim_type.set_field(bimspec::keys::MOUNTING, SpecField::new("wall").with_source(source).with_confidence(Confidence::Inferred));
             }
         }
+        // What its cut sheet says of its junction box (its own, a remote driver box, or the
+        // outlet box it mounts on): whether it takes an outlet box (rules `luminaire_box`).
+        if p.bim_type.category == "luminaire"
+            && p.bim_type.get_field(JUNCTION_BOX).is_none()
+            && let Some(w) = super::mepatoms::rules().luminaire_box.cut_sheet_words(lines)
+        {
+            let source = format!("{} (its cut sheet: {w})", p.file_source);
+            p.bim_type.set_field(JUNCTION_BOX, SpecField::new(w).with_source(source));
+        }
         if p.bim_type.get_field(bimspec::keys::DIMMING).is_some() {
             continue;
         }
@@ -1513,6 +1522,10 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
 
 /// A submitted product's field: how many were ordered.
 pub(crate) const QUANTITY: &str = "quantity";
+
+/// A submitted luminaire's field: what its cut sheet says of its junction box (`canless`,
+/// `integral junction box`, `compatible junction box`…).
+pub(crate) const JUNCTION_BOX: &str = "junctionBox";
 
 fn parse_submittal_detail(line: &str, sub: &mut SubmittalRecord, types: &mut Vec<SpecProposal>, stamps: &mut Vec<String>, page: &str) {
     let lower = line.to_ascii_lowercase();

@@ -109,6 +109,8 @@ fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
                     "duct" => "duct",
                     "pipe" => "pipe",
                     "conduit" | "cable" | "tray" | "grounding" => "conduit",
+                    // A breaker in its panel (Q6166): a piece, not a piece of equipment.
+                    "breaker" => "breaker",
                     _ => "equipment",
                 }
             }
