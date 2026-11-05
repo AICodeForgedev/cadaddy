@@ -3468,3 +3468,31 @@
 	Underground Plan Report	地下管线平面报告
 	Update Model from Plans	从平面图更新模型
 	Load Calculation	负荷计算
+	A crash report was kept on this computer: Help > Report a Problem offers it.	崩溃报告已保存在此计算机上：可在“帮助 > 报告问题”中找到。
+	A recovery copy of the drawing with unsaved changes was autosaved.	已自动保存含未保存更改的图形的恢复副本。
+	Autosave failed	自动保存失败
+	Autosave failed: {message}	自动保存失败：{message}
+	Backup copies are off, so the current file will be replaced.	备份副本已关闭，因此将替换当前文件。
+	Backup copy	备份副本
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy 无法写入恢复副本，如果应用现在停止，最近的更改将丢失。
+	CADaddy has to close	CADaddy 必须关闭
+	Close CADaddy	关闭 CADaddy
+	Create backup copy with each save	每次保存时创建备份副本
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF 会保留它们。请使用“另存为”将它们保留在图形中。
+	Details	详细信息
+	Dismiss	关闭
+	Drawing Recovery offers them at the next start.	下次启动时，“图形恢复”会提供它们。
+	Internal error	内部错误
+	No drawing needed a new recovery copy.	没有图形需要新的恢复副本。
+	Part of CADaddy failed, and the app kept running.	CADaddy 的一部分出错，应用仍在运行。
+	Part of CADaddy keeps failing, so it can't continue.	CADaddy 的一部分持续出错，无法继续。
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	已自动保存 {count} 个含未保存更改的图形的恢复副本。
+	Save Anyway	仍然保存
+	Save cancelled: {path} was not changed.	已取消保存：{path} 未更改。
+	Save your work and restart CADaddy.	请保存您的工作并重新启动 CADaddy。
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	请保存您的工作。自动保存会在 SAVETIME 间隔后重试；其文件夹在“选项”中。
+	Saving {name} will remove content	保存 {name} 将删除部分内容
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	当前文件看起来不完整，因此 {name} 保持不变，并将替换当前文件。
+	The current file is kept as {name} until the next save.	当前文件将保留为 {name}，直到下次保存。
+	This format can't keep these objects yet: {objects}.	此格式暂时无法保留这些对象：{objects}。
+	{count} more types	另外 {count} 种类型
