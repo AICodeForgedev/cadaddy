@@ -62,8 +62,8 @@ THHN wire,#1/0,ft,2.30,0.06,electrical,starter — replace with your own
 XHHW aluminum,#4,ft,0.40,0.02,electrical,starter — replace with your own
 XHHW aluminum,#2/0,ft,0.94,0.03,electrical,starter — replace with your own
 SER cable aluminum,2/0-2/0-2/0-4,ft,4.03,0.06,electrical,starter — replace with your own
-NM cable copper,12-2 WG,ft,0.58,0.015,electrical,starter — replace with your own
-NM cable copper,10-2 WG,ft,0.95,0.018,electrical,starter — replace with your own
+NM-B cable,12/2 w/G,ft,0.58,0.015,electrical,starter — replace with your own
+NM-B cable,10/2 w/G,ft,0.95,0.018,electrical,starter — replace with your own
 Wire nut,,each,0.08,0.01,electrical,starter — replace with your own
 Insulating bushing,,each,1.20,0.05,electrical,starter — replace with your own
 Panel,100A,each,180.00,4.00,electrical,starter — replace with your own

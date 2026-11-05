@@ -293,6 +293,16 @@ fn the_starter_book_prices_the_aluminum_ser_alternative_both_ways() {
         })
         .collect();
     assert!(!unpriced.iter().any(|u| u.starts_with("SER cable") || u.starts_with("XHHW aluminum")), "{ser}");
+    // The same for the units' branch circuits in NM: the starter book carries NM-B by its size.
+    let nm = scenario(&v, "nm_unit_branch");
+    let unpriced: Vec<&str> = ["unpriced", "as_designed", "alternative"]
+        .iter()
+        .flat_map(|k| {
+            let u = if *k == "unpriced" { &nm["unpriced"] } else { &nm[*k]["unpriced"] };
+            u.as_array().into_iter().flatten().filter_map(Value::as_str)
+        })
+        .collect();
+    assert!(!unpriced.iter().any(|u| u.starts_with("NM-B cable")), "{nm}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
