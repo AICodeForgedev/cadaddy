@@ -492,6 +492,10 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
         p
     };
     for t in sp.tags.iter().take(MAX_LINES) {
+        // A pathway's tag is its outlet's run, not a device: its pieces are the model's.
+        if t.kind == lv {
+            continue;
+        }
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
         // Its circuit, when what was read beside it is one (`D-7`, not a sheet number).
