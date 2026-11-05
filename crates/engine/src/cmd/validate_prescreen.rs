@@ -1930,6 +1930,13 @@ fn print_sheet(d: &Drawing, handle: &str, upf: f64) -> Option<String> {
 // ---------------------------------------------------------------- the command
 
 fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
+    prescreen(s, p, false).map(|(r, _)| r)
+}
+
+/// The prescreen's answer and, with `keep`, every finding it listed (as its `path` file holds
+/// them, at most [`MAX_WRITTEN`]): the accuracy measure (`validate.measure`) reads them whole
+/// without a file between.
+pub(crate) fn prescreen(s: &mut Session, p: &Value, keep: bool) -> Result<(Value, Vec<Value>)> {
     let start = web_time::Instant::now();
     let cursor = p.get("cursor").and_then(Value::as_u64).map_or(0, |c| c.min(10_000_000) as usize);
     let limit = match p.get("limit") {
@@ -2069,7 +2076,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         r["rooms_without_set"] = json!(out.without_set.len());
         r["no_room"] = json!({"elements": out.no_room.len()});
     }
-    Ok(r)
+    let kept: Vec<Value> = if keep { listed.iter().take(MAX_WRITTEN).map(|f| (*f).clone()).collect() } else { Vec::new() };
+    Ok((r, kept))
 }
 
 /// The walls G-HOST measures against on the scope's levels: the pieces standing on the floor,

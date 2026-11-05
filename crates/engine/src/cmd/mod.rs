@@ -213,6 +213,7 @@ pub mod validate_register;
 pub mod validate_rules;
 pub mod validate_run;
 pub mod validate_tr;
+pub mod validate_trend;
 pub mod validate_underground;
 pub mod validate_value;
 pub mod valueeng;
@@ -852,6 +853,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(validate_rules::specs());
         v.extend(validate_packet::specs());
         v.extend(validate_prescreen::specs());
+        v.extend(validate_trend::specs());
         v.extend(validate_run::specs());
         v.extend(automation::specs());
         v.extend(printrev::specs());
