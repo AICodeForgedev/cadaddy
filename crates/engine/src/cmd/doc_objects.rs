@@ -412,7 +412,7 @@ fn room_type_after(w: &[String], class_at: usize) -> Vec<String> {
 }
 
 /// The rooms of a note's room type: each room whose name holds every word of the type that names
-/// one (`GUEST SUITE` names the rooms `GUEST SUITE 201`, `GUEST SUITES` too; `ROOM` alone names
+/// one (`GUEST SUITE` names the rooms `GUEST SUITE 1201`, `GUEST SUITES` too; `ROOM` alone names
 /// none). The longest run of the type's first words that names any room is the type (`GUEST SUITE
 /// DOOR`: `GUEST SUITE`). `rooms`: (level, name, outline).
 pub(crate) fn rooms_of_type<T>(type_words: &[String], rooms: &[(String, String, T)]) -> Vec<usize> {
@@ -803,7 +803,7 @@ mod tests {
     fn a_note_calling_for_a_class_in_each_room_of_a_type_names_those_rooms() {
         // Made-up rooms, (level, name, outline): two suites of the type (one named in the plural
         // form), a corridor and a storage room whose name shares one word.
-        let rooms: Vec<(String, String, ())> = ["GUEST SUITE 201", "CORRIDOR 200", "GUEST SUITES 202", "SUITE STORAGE 203", "OFFICE 101"]
+        let rooms: Vec<(String, String, ())> = ["GUEST SUITE 1201", "CORRIDOR 1200", "GUEST SUITES 1202", "SUITE STORAGE 1203", "OFFICE 1101"]
             .iter()
             .map(|n| ("Level 2".to_string(), n.to_string(), ()))
             .collect();
