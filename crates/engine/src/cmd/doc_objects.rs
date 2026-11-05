@@ -440,20 +440,46 @@ pub(crate) fn rooms_of_type<T>(type_words: &[String], rooms: &[(String, String, 
 }
 
 /// Each object read paired with the object already in the model that is it, nearest pairs first,
-/// each one used once: `pairs` (distance, read, in the model) within reach. So a keynote calling
-/// for two where the plan already draws one adds one. Returns, per object read, its pair.
-pub(crate) fn pair_nearest(mut pairs: Vec<(f64, usize, usize)>, read: usize) -> Vec<Option<usize>> {
+/// each one used once: `pairs` (distance, read, in the model) within reach; `same[j]` the place
+/// object `j` stands for (the parts the build made for one object, a luminaire and its box, share
+/// one: [`places`]). So a keynote calling for two where the plan already draws one adds one.
+/// Returns, per object read, its pair.
+pub(crate) fn pair_nearest(mut pairs: Vec<(f64, usize, usize)>, read: usize, same: &[usize]) -> Vec<Option<usize>> {
     pairs.retain(|p| p.0.is_finite());
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
     let mut out: Vec<Option<usize>> = vec![None; read];
     let mut used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for (_, i, j) in pairs {
-        if used.contains(&j) {
+        let place = same.get(j).copied().unwrap_or(j);
+        if used.contains(&place) {
             continue;
         }
         if let Some(slot) = out.get_mut(i).filter(|s| s.is_none()) {
             *slot = Some(j);
-            used.insert(j);
+            used.insert(place);
+        }
+    }
+    out
+}
+
+/// The place each object stands for: objects on one level within `reach` of each other (chained)
+/// are one place, numbered by its first object. `at`: (level, point).
+pub(crate) fn places(at: &[(&str, Vec2)], reach: f64) -> Vec<usize> {
+    let mut out: Vec<usize> = (0..at.len()).collect();
+    for i in 0..at.len().min(200_000) {
+        let Some((li, pi)) = at.get(i) else { continue };
+        for j in 0..i {
+            let Some((lj, pj)) = at.get(j) else { continue };
+            if li.eq_ignore_ascii_case(lj) && (*pi - *pj).len() <= reach {
+                let root = out.get(j).copied().unwrap_or(j);
+                if let Some(o) = out.get_mut(i) {
+                    *o = root;
+                }
+                break;
+            }
+            if j >= 5_000 {
+                break;
+            }
         }
     }
     out
@@ -812,13 +838,21 @@ mod tests {
         // the plan already draws: one pair, one left to add. Each object in the model is used once,
         // the nearest pairs first.
         assert_eq!(note_count("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR.", class("exit_sign")), 2);
-        let there = pair_nearest(vec![(1.5, 0, 0), (1.6, 1, 0)], 2);
+        let there = pair_nearest(vec![(1.5, 0, 0), (1.6, 1, 0)], 2, &[0]);
         assert_eq!(there, vec![Some(0), None]);
+        // The drawn sign and the box the build made for it are one place: still one pair.
+        let at = [("Level 2", Vec2::new(100.0, 50.0)), ("Level 2", Vec2::new(101.0, 50.5)), ("Level 3", Vec2::new(100.0, 50.0))];
+        let same = places(&at, 36.0);
+        assert_eq!(same, vec![0, 0, 2], "another level's is another place");
+        assert_eq!(pair_nearest(vec![(1.5, 0, 0), (1.6, 1, 1)], 2, &same), vec![Some(0), None]);
         // Two markers, one drawn sign between them nearer the second: the second's.
-        assert_eq!(pair_nearest(vec![(4.0, 0, 0), (2.0, 1, 0), (9.0, 1, 1)], 2), vec![None, Some(0)]);
-        // Hostile distances are no pair; nothing to pair is all new.
-        assert_eq!(pair_nearest(vec![(f64::NAN, 0, 0), (f64::INFINITY, 1, 0)], 2), vec![None, None]);
-        assert_eq!(pair_nearest(vec![(1.0, 5, 0)], 1), vec![None]);
+        assert_eq!(pair_nearest(vec![(4.0, 0, 0), (2.0, 1, 0), (9.0, 1, 1)], 2, &[0, 1]), vec![None, Some(0)]);
+        // Hostile distances are no pair; nothing to pair is all new; a place list too short is
+        // each object its own place.
+        assert_eq!(pair_nearest(vec![(f64::NAN, 0, 0), (f64::INFINITY, 1, 0)], 2, &[0]), vec![None, None]);
+        assert_eq!(pair_nearest(vec![(1.0, 5, 0)], 1, &[]), vec![None]);
+        assert_eq!(pair_nearest(vec![(1.0, 0, 3), (1.0, 1, 4)], 2, &[]), vec![Some(3), Some(4)]);
+        assert!(places(&[], 1.0).is_empty());
         // An exit sign luminaire is the class by its schedule row's words, whatever its kind.
         assert!(is_class(class("exit_sign"), "light_fixture", "X1 EDGE-LIT EXIT SIGN, UNIVERSAL MOUNT"));
         assert!(!is_class(class("exit_sign"), "light_fixture", "A 2X4 RECESSED TROFFER"));

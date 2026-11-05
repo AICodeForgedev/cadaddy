@@ -13667,7 +13667,9 @@ fn doc_objects_step(
             }
         }
     }
-    let there = dob::pair_nearest(pairs, found.len());
+    // A luminaire and the parts built for it (its box, its twin) are one object there.
+    let same = dob::places(&existing.iter().map(|(_, _, l, at, _)| (l.as_str(), *at)).collect::<Vec<_>>(), r.dedupe_ft * upf);
+    let there = dob::pair_nearest(pairs, found.len(), &same);
     // The ones a keynote calls for beside one the model has: the same keynote's type (a note
     // sending the reader to the fixture schedule, beside its exit sign).
     let marker_reach = upf;

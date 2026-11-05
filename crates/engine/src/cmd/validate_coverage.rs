@@ -1434,9 +1434,22 @@ pub(crate) fn read(inp: &Input) -> Reading {
     Reading { sheets, defs, marks, typ, pages_read, unmeasured, inventory, sheet_trade }
 }
 
-/// The model's elements on the levels `on_scope` keeps, each to the kinds it matches best
-/// (`best`), and to every kind it matches well (`any`: a kind with no element of its own may
-/// share another's, two rows naming one kind).
+/// The model's elements on the scope's levels, each to the kinds it matches best (`model`), and
+/// to every kind it matches well (`any`: a kind with no element of its own may share another's,
+/// two rows naming one kind). Matched once per screen: G-COVERAGE counts them, G-PRESENT reads
+/// which kind an element is.
+pub(crate) struct Assigned<'c> {
+    model: Vec<Vec<&'c Census>>,
+    any: Vec<Vec<&'c Census>>,
+}
+
+/// Each element of the scope's levels to its kinds.
+pub(crate) fn assigned<'c>(inp: &Input<'c>, rd: &Reading) -> Assigned<'c> {
+    let levels: BTreeSet<String> = inp.areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
+    let (model, any) = assign(inp, rd, &|l: &str| levels.contains(&l.to_ascii_lowercase()));
+    Assigned { model, any }
+}
+
 fn assign<'c>(inp: &Input<'c>, rd: &Reading, on_scope: &dyn Fn(&str) -> bool) -> (Vec<Vec<&'c Census>>, Vec<Vec<&'c Census>>) {
     let defs = &rd.defs;
     let mut model: Vec<Vec<&Census>> = defs.list.iter().map(|_| Vec::new()).collect();
@@ -1483,9 +1496,8 @@ pub(crate) struct Stand {
 
 /// The prints' marks placed on their levels' plans, and per kind the elements that are it (best
 /// match), for G-PRESENT: an element a mark of its kind stands by is one the prints show.
-pub(crate) fn stands(inp: &Input, rd: &Reading) -> (Vec<Stand>, Vec<BTreeSet<String>>) {
-    let (model, _) = assign(inp, rd, &|_| true);
-    let of_kind: Vec<BTreeSet<String>> = model.iter().map(|v| v.iter().map(|e| e.handle.to_ascii_uppercase()).collect()).collect();
+pub(crate) fn stands(rd: &Reading, asg: &Assigned) -> (Vec<Stand>, Vec<BTreeSet<String>>) {
+    let of_kind: Vec<BTreeSet<String>> = asg.model.iter().map(|v| v.iter().map(|e| e.handle.to_ascii_uppercase()).collect()).collect();
     let mut out = Vec::new();
     for m in &rd.marks {
         let Some(def) = rd.defs.list.get(m.def) else { continue };
@@ -1499,7 +1511,7 @@ pub(crate) fn stands(inp: &Input, rd: &Reading) -> (Vec<Stand>, Vec<BTreeSet<Str
     (out, of_kind)
 }
 
-pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading) -> Got {
+pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading, asg: &Assigned) -> Got {
     let mut got = Got::default();
     let (share, abs) = (tol(r, "count_share", DEFAULT_SHARE), tol(r, "count_abs", DEFAULT_ABS));
     let dedupe = tol(r, "dedupe_ft", DEFAULT_DEDUPE_FT).max(0.01);
@@ -1527,7 +1539,7 @@ pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading) -> Got {
     let units = super::validate_prescreen::Units::of(inp.d);
 
     // The model's elements, each to the kinds it matches best.
-    let (model, any) = assign(inp, rd, &on_scope);
+    let (model, any) = (&asg.model, &asg.any);
 
     // Each kind's marks: raw by sheet, the typical plans' per room, the plans' deduped by level.
     struct Count {

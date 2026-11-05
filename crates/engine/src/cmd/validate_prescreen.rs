@@ -1390,6 +1390,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     };
     let cov_inp = vc::Input { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, census: &census };
     let reading = cov_on.then(|| vc::read(&cov_inp));
+    let kinds_of = reading.as_ref().map(|rd| vc::assigned(&cov_inp, rd));
     // G-PRESENT: each room's expected set — what its unit type's enlarged plans (else its
     // level's trade plans) show in it, and its room type's project-rule set.
     let (sets, bad_sets) = expected_sets(&sc.d.project_rules);
@@ -1402,7 +1403,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
         // The prints' marks of each kind (G-COVERAGE's reading): an element no symbol the job
         // read stands for, with a mark of its own kind by it, is one the prints show.
-        let (stands, of_kind) = reading.as_ref().map(|rd| vc::stands(&cov_inp, rd)).unwrap_or_default();
+        let (stands, of_kind) = reading.as_ref().zip(kinds_of.as_ref()).map(|(rd, asg)| vc::stands(rd, asg)).unwrap_or_default();
         let mark_ft = tol(r, "mark_ft", vp::MARK_REACH_FT);
         let mut stands_at: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, st) in stands.iter().enumerate() {
@@ -1832,8 +1833,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     }
     // G-COVERAGE: kind by kind, the prints' marks against the model's elements.
     let mut coverage = None;
-    if let (Some(r), Some(rd)) = (on(vc::RULE), reading.as_ref()) {
-        let got = vc::check(&cov_inp, r, rd);
+    if let (Some(r), Some(rd), Some(asg)) = (on(vc::RULE), reading.as_ref(), kinds_of.as_ref()) {
+        let got = vc::check(&cov_inp, r, rd, asg);
         for (rank, verdict, f) in got.findings {
             tally(vc::RULE, verdict);
             findings.push((rank, f));
