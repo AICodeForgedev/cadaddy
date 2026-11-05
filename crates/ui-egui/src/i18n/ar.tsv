@@ -3517,3 +3517,4 @@ menu	View	عرض
 	overrides built-in	يتجاوز المدمج
 	{alias} is already defined; select it and use Edit.	{alias} معرَّف مسبقاً؛ حدده واستخدم «تحرير».
 	{command} is an unknown command.	{command} أمر غير معروف.
+	Multiple Insert	إدراج متعدد
