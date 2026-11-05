@@ -1211,6 +1211,12 @@ pub struct Mep {
     /// and panels'), as printed: what the model's load calculation is compared with.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub load_summaries: Vec<LoadSummary>,
+    /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
+    /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy_source: String,
     /// Equipment connections' electrical data from their submittals, beside what the drawings
     /// give them (protection, feeder): what the build checks and reports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1508,6 +1514,7 @@ impl Mep {
             && self.feeders.is_empty()
             && self.panel_schedules.is_empty()
             && self.load_summaries.is_empty()
+            && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
             && self.gear_rules.is_none()

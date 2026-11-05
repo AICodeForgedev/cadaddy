@@ -13408,6 +13408,13 @@ fn load_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate:
     }
     let mut params = json!({"force": true});
     if let Some((number, words)) = code_sheet(job) {
+        // The code sheet's occupancies kept with the spec: a later calculation uses them too.
+        let groups = super::valueeng::occupancies(&words);
+        if let (Some((_, text)), Ok((mut sp, true))) = (groups.first(), super::bspec::current(s, "bim_build")) {
+            sp.mep.occupancy = groups.iter().map(|g| g.0.as_str()).collect::<Vec<_>>().join(", ");
+            sp.mep.occupancy_source = format!("{number}: {text}");
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+        }
         params["code_texts"] = json!(words);
         params["code_sheet"] = json!(number);
     }
