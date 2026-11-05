@@ -235,7 +235,8 @@ fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines(
     assert_eq!((plate["system"].clone(), plate["system_why"].as_str().map(|w| w.contains("LP1-5"))), (json!("lighting"), Some(true)), "{plate}");
     assert_eq!(find(&v, "THHN copper", "#10", Some("LP1-1"))["system"], json!("power"));
     assert_eq!(find(&v, "EMT conduit", "2\"", None)["system"], json!("gear"));
-    assert_eq!(find(&v, "THHN copper", "#2/0", None)["system"], json!("gear"));
+    // The aluminum feeder's conductors along its routes (Q6201: its schedule's material).
+    assert_eq!(find(&v, "XHHW aluminum", "#2/0", None)["system"], json!("gear"));
     for l in &all {
         assert!(!l["system_why"].as_str().unwrap_or_default().is_empty(), "every line says why: {l}");
     }

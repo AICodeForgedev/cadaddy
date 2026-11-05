@@ -11,7 +11,7 @@ use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun};
 use serde_json::{Value, json};
 
 use super::super::propfill::WithNote;
-use super::{Atom, Pieces, X3, cable_pieces, large_conductors, raceway_pieces, rule_source, rules, trade_size, wires};
+use super::{Atom, Pieces, WireOpts, X3, cable_pieces, large_conductors, raceway_pieces, rule_source, rules, trade_size, wires, wires_with};
 
 /// Most runs, devices and atoms the build makes (hostile specs).
 const MAX_RUNS: usize = 50_000;
@@ -74,6 +74,8 @@ struct Method {
     estimated: bool,
     /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
     routed: bool,
+    /// A feeder's run (`mep.feeders` index): its conductors are the feeder's, landing on gear.
+    feeder: Option<usize>,
 }
 
 /// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
@@ -459,7 +461,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if pts.len() < 2 {
             continue;
         }
-        let ctag = super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string();
+        // A feeder's run: its feeder's conductors (its schedule's), grouped by its route.
+        let feeder = super::super::ugplan::is_feeder_run(r).then(|| feeder_of_run(sp, r)).flatten();
+        let ctag = match feeder {
+            Some(_) => r.source_sheet.clone(),
+            None => super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string(),
+        };
         let tag = circuits.get(ctag.as_str()).copied();
         let estimated = r.height_source == super::super::printcond::ESTIMATED || r.system == super::super::printcond::CIRCUIT_SYSTEM;
         // A routed run (Q6152) ends at its box's top: moved onto the box's entry like an estimate.
@@ -524,10 +531,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let src = Source::from_doc(SourceKind::Rule, &why);
                 (true, c, src.clone(), makeup, src, r.source_sheet.clone())
             }
-            None => (cable, name, source, conductors, csrc, ctag),
+            None => match feeder.and_then(|fi| sp.mep.feeders.get(fi)) {
+                Some(f) => {
+                    let doc = if f.source.is_empty() { format!("feeder {}", f.tag) } else { format!("feeder {}: {}", f.tag, f.source) };
+                    (cable, name, source, feeder_makeup(f), Source::from_doc(SourceKind::Print, &doc), ctag)
+                }
+                None => (cable, name, source, conductors, csrc, ctag),
+            },
+        };
+        let panel = match feeder.and_then(|fi| sp.mep.feeders.get(fi)) {
+            Some(f) => f.from.clone(),
+            None => panel,
         };
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed };
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, feeder };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -592,6 +609,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
     let scope = super::super::scope::decisions(d);
     let sr = super::super::scope::rules();
+    // Luminaires by type: (with a box, without, why).
+    let mut lum_boxes: BTreeMap<String, (usize, usize, BTreeSet<String>)> = BTreeMap::new();
     // A switch's or sensor's box with no circuit of its own is on the circuit of what it
     // controls (the router joins it to that circuit: its switch leg lands in it).
     let circuit_of: HashMap<Handle, String> =
@@ -610,6 +629,22 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A device placed outside its level's footprint is flagged for review: no box with it.
         if ps.get("misplaced").is_some() {
             continue;
+        }
+        // A luminaire takes an outlet box only when its type needs one: what its schedule and
+        // its submittal say of it (rules `luminaire_box`).
+        let lum_box = (bk == "luminaire").then(|| luminaire_box(ps, &sp.mep.fixture_schedule));
+        if let Some(dec) = &lum_box {
+            let mark = ps.get("type_mark").map(Prop::text).filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "(no type)".into());
+            let row = lum_boxes.entry(mark).or_insert_with(|| (0, 0, BTreeSet::new()));
+            if dec.takes_box {
+                row.0 += 1;
+            } else {
+                row.1 += 1;
+            }
+            row.2.insert(why_box(dec));
+            if !dec.takes_box {
+                continue;
+            }
         }
         // A device of no known kind at the ceiling takes a ceiling box.
         let ceiling = sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
@@ -672,6 +707,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         a.extra.push(("depth_in", format!("{}", br.depth_in), br.source.clone()));
         a.extra.push(("material", br.material.clone(), br.source.clone()));
         a.extra.push(("box_of", h.hex(), "computed".into()));
+        if let Some(dec) = &lum_box {
+            a.extra.push(("box_needed", why_box(dec), dec.source.clone()));
+        }
         let bi = atoms.len();
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
@@ -714,6 +752,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    let (mut feeder_chains, mut feeder_wire_ft) = (0usize, 0.0_f64);
     let mut landing_ft = 0.0_f64;
     let mut bend_notes: Vec<(usize, [Option<usize>; 2], String, String)> = Vec::new();
     // The box a run end at `p` lands in: on its level, within reach of the box's entry; a box
@@ -747,7 +786,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let mut junction_at: HashMap<usize, usize> = HashMap::new();
         for c in &chains {
             for n in c.ends {
-                if nodes.degree(n) >= 3 && !brk.get(n).copied().unwrap_or(false) && !junction_at.contains_key(&n) && atoms.len() < MAX_ATOMS {
+                if m.feeder.is_none()
+                    && nodes.degree(n) >= 3
+                    && !brk.get(n).copied().unwrap_or(false)
+                    && !junction_at.contains_key(&n)
+                    && atoms.len() < MAX_ATOMS
+                {
                     let Some(at) = nodes.at.get(n).copied() else { continue };
                     let Some(br) = rl.boxes.get("junction") else { continue };
                     let [bw, bh, bd] = br.dims_in.map(|v| v.max(0.5) / 12.0 * upf);
@@ -794,8 +838,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 }
                 let Some(p) = (if end == 0 { c.pts.first() } else { c.pts.last() }).copied() else { continue };
                 let pp = Vec2::new(p.x, p.y);
-                let near_box =
-                    box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
+                // A feeder lands on gear, never in a device's box.
+                let near_box = box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box)
+                    .filter(|_| m.feeder.is_none())
+                    .and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
                     let gap = (entry.z - p.z).abs();
@@ -810,11 +856,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     *land = Some(Land::Atom(atom));
                     continue;
                 }
-                let g = gear.iter().filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp)).min_by(|a, b| {
-                    let pa = if !m.panel.is_empty() && a.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
-                    let pb = if !m.panel.is_empty() && b.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
-                    (pa, a.plan.center().dist(pp)).partial_cmp(&(pb, b.plan.center().dist(pp))).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                let feeder_gear = |g: &Gear| m.feeder.and_then(|fi| sp.mep.feeders.get(fi)).is_none_or(|f| feeder_lands_on(f, &g.tag));
+                let g = gear
+                    .iter()
+                    .filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp) && feeder_gear(g))
+                    .min_by(|a, b| {
+                        let pa = if !m.panel.is_empty() && a.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
+                        let pb = if !m.panel.is_empty() && b.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
+                        (pa, a.plan.center().dist(pp)).partial_cmp(&(pb, b.plan.center().dist(pp))).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                 if let Some(g) = g {
                     *land = Some(Land::Gear(g.handle));
                 }
@@ -884,6 +934,51 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     atoms.push((w, wctx));
                 }
             }
+            // A feeder's conductors in each of its raceways (its sets shared among them), with
+            // the makeup at each end that lands on gear.
+            if let Some(f) = m.feeder.filter(|_| !m.cable).and_then(|fi| sp.mep.feeders.get(fi)) {
+                let per = f.sets.max(1).div_ceil(f.conduits.max(1)).clamp(1, 12);
+                let phases: Vec<u32> = [1u32, 3, 5].into_iter().take(f.phases.clamp(1, 3) as usize).collect();
+                let voltage = gear_voltage(sp, &f.to).or_else(|| gear_voltage(sp, &f.from)).unwrap_or_else(|| rl.default_voltage.clone());
+                let mk = if rl.feeder_makeup_ft.is_finite() { rl.feeder_makeup_ft.max(0.0) } else { 0.0 };
+                let mut ends_mk = [0usize, 1].map(|end| if matches!(lands.get(end), Some(Some(Land::Gear(_)))) { mk } else { 0.0 });
+                // Both ends by one piece of gear: one termination, at the end nearer its middle;
+                // a riser on into the floor above (a feed-through) ends in the gear up there too.
+                if let [Some(Land::Gear(g0)), Some(Land::Gear(g1))] = &lands
+                    && g0 == g1
+                {
+                    let (a, b) = (c.pts.first().copied().unwrap_or(Vec3::ZERO), c.pts.last().copied().unwrap_or(Vec3::ZERO));
+                    let top = sp.level(&key.level).map_or(f64::INFINITY, |l| (l.elevation_ft + l.height_ft) * upf);
+                    let riser_up = Vec2::new(a.x, a.y).dist(Vec2::new(b.x, b.y)) < tol && a.z.max(b.z) >= top - tol;
+                    if !riser_up {
+                        let mid = gear.iter().find(|g| g.handle == *g0).map_or(Vec2::new(a.x, a.y), |g| g.plan.center());
+                        let far = if Vec2::new(a.x, a.y).dist(mid) <= Vec2::new(b.x, b.y).dist(mid) { 1 } else { 0 };
+                        if let Some(x) = ends_mk.get_mut(far) {
+                            *x = 0.0;
+                        }
+                    }
+                }
+                let material = f.material.trim().to_ascii_lowercase();
+                let kind = rl.feeder_conductors.get(&material).or_else(|| rl.feeder_conductors.get("cu"));
+                let opts = WireOpts {
+                    kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())),
+                    makeup_ft: ends_mk,
+                    makeup_source: &rl.feeder_makeup_source,
+                };
+                let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
+                let doc = m.conductors_source.doc.clone().unwrap_or_default();
+                for _ in 0..per {
+                    for mut w in wires_with(&c.pts, upf, &m.conductors, &phases, &voltage, rl, &opts) {
+                        w.connects = ends.clone();
+                        w.extra.push(("conductors_of_feeder", format!("{} per set", m.conductors), doc.clone()));
+                        feeder_wire_ft += w.length_ft;
+                        let mut wctx = ctx.clone();
+                        wctx.src = Source::from_doc(m.conductors_source.kind, &format!("{doc} — {}", rl.feeder_conductors_source));
+                        atoms.push((w, wctx));
+                    }
+                }
+                feeder_chains += 1;
+            }
             for &(_, end, ft) in gaps.iter().filter(|g| g.0 == ci) {
                 if let Some(a) = pieces.ends.get(end).copied().flatten().and_then(|e| atoms.get_mut(e + base)) {
                     a.0.extra.push((
@@ -928,10 +1023,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
     // -- Feeders where they enter their gear: each raceway's pieces and one set's conductors,
     // landing on the gear. --
+    // A feeder routed gear to gear has its raceway into each gear in its route: no stub of its own.
+    let routed_feeders: BTreeSet<usize> =
+        sp.mep.runs.iter().take(MAX_RUNS).filter(|r| super::super::ugplan::is_feeder_run(r)).filter_map(|r| feeder_of_run(sp, r)).collect();
     let mut feeder_stubs = 0usize;
     for st in super::super::mep::feeder_stubs(sp, &d.bim_types, upf) {
         if atoms.len() >= MAX_ATOMS {
             break;
+        }
+        if routed_feeders.contains(&st.index) {
+            continue;
         }
         let Some(f) = sp.mep.feeders.get(st.index) else { continue };
         let Some((rname, rw)) = rl.raceways.get_key_value(rl.default_raceway.as_str()) else { break };
@@ -968,7 +1069,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let phases: Vec<u32> = [1u32, 3, 5].into_iter().take(f.phases.clamp(1, 3) as usize).collect();
         let voltage = gear_voltage(sp, &f.to).unwrap_or_else(|| rl.default_voltage.clone());
         let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
-        for mut w in wires(&path, upf, &makeup, &phases, &voltage, rl) {
+        let material = f.material.trim().to_ascii_lowercase();
+        let kind = rl.feeder_conductors.get(&material).or_else(|| rl.feeder_conductors.get("cu"));
+        let m = rl.makeup_ft.max(0.0);
+        let opts = WireOpts { kind: kind.map(|k| (k, rl.feeder_conductors_source.as_str())), makeup_ft: [m, m], makeup_source: &rl.makeup_source };
+        for mut w in wires_with(&path, upf, &makeup, &phases, &voltage, rl, &opts) {
             w.connects = ends.clone();
             let mut wctx = ctx.clone();
             wctx.src = Source::from_doc(SourceKind::Print, &format!("feeder schedule {}: {makeup} per set", f.tag));
@@ -1192,6 +1297,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "landingFt": (landing_ft * 10.0).round() / 10.0,
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
+        "feederRunsWired": feeder_chains,
+        "luminaireBoxes": lum_boxes
+            .iter()
+            .take(500)
+            .map(|(m, (with, without, why))| json!({"type": m, "boxes": with, "no_box": without, "why": why.iter().take(4).collect::<Vec<_>>()}))
+            .collect::<Vec<_>>(),
+        "feederWireFt": (feeder_wire_ft * 10.0).round() / 10.0,
         "atomIndexRows": rows,
         "atomsMs": (started.elapsed().as_secs_f64() * 1000.0).round(),
         "atomNotes": notes,
@@ -1287,6 +1399,137 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     if end == 0 {
         pts.reverse();
     }
+}
+
+/// Whether a luminaire takes an outlet box, from what its properties say (its schedule's and its
+/// submittal's words; rules `luminaire_box`), and its type's fixture schedule row where its
+/// properties don't carry the row yet.
+pub(crate) fn luminaire_box(ps: &Props, schedule: &[cadaddy_walk3d::FixtureType]) -> super::BoxDecision {
+    let lb = &rules().luminaire_box;
+    let mut said: Vec<(String, String, String)> =
+        lb.fields.iter().filter_map(|k| ps.get(k).map(|p| (k.clone(), p.text(), p.source.doc.clone().unwrap_or_default()))).collect();
+    let mark = ps.get("type_mark").map(Prop::text).unwrap_or_default();
+    if let Some(row) = schedule.iter().find(|r| !mark.trim().is_empty() && r.tag.trim().eq_ignore_ascii_case(mark.trim())) {
+        let doc = format!("{} type {}", row.source, row.tag);
+        for (k, v) in [("installation", &row.installation), ("fixture_description", &row.description)] {
+            if !v.trim().is_empty() && !said.iter().any(|s| s.0 == k) {
+                said.push((k.to_string(), v.clone(), doc.clone()));
+            }
+        }
+    }
+    lb.decide(&said)
+}
+
+/// The luminaires' boxes as their types need them now (a submittal applied since the build may
+/// say a type has its own junction box): a box its luminaire no longer needs goes, and what ran
+/// into it lands on the luminaire. How many went, and how many luminaires need a box they have
+/// not got (the next build or `conduit.reroute` makes them).
+pub(crate) fn sync_luminaire_boxes(d: &mut Drawing) -> (usize, usize) {
+    let schedule = d.building_spec.as_deref().and_then(|j| BuildingSpec::from_json(j).ok()).map(|sp| sp.mep.fixture_schedule).unwrap_or_default();
+    let mut gone: HashMap<Handle, Handle> = HashMap::new();
+    let mut boxed: BTreeSet<Handle> = BTreeSet::new();
+    for e in d.model.iter().take(super::MAX_ELEMENTS) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
+            continue;
+        }
+        let Some(dev) = ps.get("box_of").and_then(|p| Handle::parse_hex(p.text().trim())) else { continue };
+        let Some(de) = d.model.get(dev) else { continue };
+        let dps = props::read(&de.common.xdata);
+        let kind = dps.get("kind").map(Prop::text).unwrap_or_default();
+        if box_kind(&kind, &de.common.layer) != Some("luminaire") {
+            continue;
+        }
+        boxed.insert(dev);
+        if !luminaire_box(&dps, &schedule).takes_box {
+            gone.insert(e.handle, dev);
+        }
+    }
+    // Luminaires that need a box and have none (one a person or the scope left out aside).
+    let missing = d
+        .model
+        .iter()
+        .take(super::MAX_ELEMENTS)
+        .filter(|e| super::super::wallgen::made_as(e).as_deref() == Some("device") && !boxed.contains(&e.handle))
+        .filter(|e| {
+            let ps = props::read(&e.common.xdata);
+            let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
+            box_kind(&kind, &e.common.layer) == Some("luminaire")
+                && ps.get("misplaced").is_none()
+                && ps.get("junction_box").is_some()
+                && luminaire_box(&ps, &schedule).takes_box
+        })
+        .count();
+    if gone.is_empty() {
+        return (0, missing);
+    }
+    // Whatever names a box that goes names its luminaire instead; the luminaire loses its box.
+    let mut changes: Vec<(Handle, Props)> = Vec::new();
+    for e in d.model.iter().take(super::MAX_ELEMENTS) {
+        if gone.contains_key(&e.handle) {
+            continue;
+        }
+        let ps = props::read(&e.common.xdata);
+        let own_box = ps.get("box").and_then(|p| Handle::parse_hex(p.text().trim())).filter(|b| gone.contains_key(b));
+        let cn = super::connects_of(e);
+        if own_box.is_none() && !cn.iter().any(|h| gone.contains_key(h)) {
+            continue;
+        }
+        let mut ps2 = ps.clone();
+        if own_box.is_some() {
+            ps2.remove("box");
+            let fed = ps.get("fed_by").map(Prop::text).unwrap_or_default();
+            if fed.trim().is_empty() {
+                ps2.remove("connects");
+            } else {
+                ps2.set("connects", Prop::new(fed, Source::computed()));
+            }
+        } else {
+            let mut now: Vec<Handle> = cn.iter().map(|h| gone.get(h).copied().unwrap_or(*h)).collect();
+            now.dedup();
+            ps2.set("connects", Prop::new(now.iter().map(|h| h.hex()).collect::<Vec<_>>().join(","), Source::computed()));
+        }
+        changes.push((e.handle, ps2));
+    }
+    for (h, ps) in changes {
+        let _ = d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &ps).into());
+    }
+    let n = gone.len();
+    for b in gone.into_keys() {
+        d.remove_entity(b);
+    }
+    super::reindex(d);
+    (n, missing)
+}
+
+/// Why a luminaire takes a box or none, in words: the words found and where.
+fn why_box(dec: &super::BoxDecision) -> String {
+    let yes = if dec.takes_box { "box" } else { "no box" };
+    if dec.found.is_empty() {
+        return format!("{yes}: {}", dec.source);
+    }
+    let doc = if dec.doc.is_empty() { String::new() } else { format!(", {}", dec.doc) };
+    format!("{yes}: {} \"{}\"{doc}", dec.field, dec.found)
+}
+
+/// The feeder a feeder's run is routed for (`mep.feeders` index): its source names the feeder's
+/// tag and source (`feeder F7 PA→U-101→U-201`), and the gear it goes to first is the feeder's
+/// end, or a copy of it (`U-101` of a typical `U`). Feeders alike in all three are one type: the
+/// first.
+pub(crate) fn feeder_of_run(sp: &BuildingSpec, r: &MepRun) -> Option<usize> {
+    let rest = r.source_sheet.strip_prefix("feeder ")?;
+    sp.mep.feeders.iter().take(MAX_RUNS).position(|f| {
+        rest.strip_prefix(&format!("{} {}→", f.tag, f.from)).is_some_and(|to| {
+            let first = to.split('→').next().unwrap_or_default();
+            !f.to.trim().is_empty() && feeder_lands_on(f, first)
+        })
+    })
+}
+
+/// Whether a piece of gear is one a feeder lands on: its source, its end, or a copy of its end.
+pub(crate) fn feeder_lands_on(f: &cadaddy_walk3d::Feeder, tag: &str) -> bool {
+    let (t, to) = (tag.trim().to_ascii_uppercase(), f.to.trim().to_ascii_uppercase());
+    t == f.from.trim().to_ascii_uppercase() || t == to || (!to.is_empty() && t.strip_prefix(&to).is_some_and(|x| x.starts_with('-')))
 }
 
 /// A cable's or wire's makeup at the panels its run ends in (`ends`: none, one or both): each

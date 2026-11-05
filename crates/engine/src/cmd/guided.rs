@@ -11127,6 +11127,13 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     for (h, store) in &changes {
         let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, store).into());
     }
+    // The luminaires' boxes follow what their rows and submittals now say of how they mount (a
+    // recessed or canless type has its own junction box).
+    if !changes.is_empty() && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        let (gone, needed) = super::mepatoms::build::sync_luminaire_boxes(d);
+        result["luminaire_boxes_removed"] = json!(gone);
+        result["luminaire_boxes_needed"] = json!(needed);
+    }
     // The documents against each other: the types, each type's fields.
     let mut conflicts: Vec<Conflict> = lt::type_conflicts(&lt::TypeCheck {
         schedule: &types,
