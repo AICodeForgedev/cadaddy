@@ -2111,6 +2111,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 any_level.entry(l.to_ascii_uppercase()).or_default().push(t);
             }
         }
+        // The panels the sheets' notes name (key notes, the riser's notes).
+        let noted = gap::noted_panels(&drawing_texts(d));
         let mut groups: BTreeMap<(String, String, Option<String>), Vec<usize>> = BTreeMap::new();
         for di in &tagless {
             let Some(dv) = devs.get(*di) else { continue };
@@ -2131,7 +2133,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 *m.entry(d.kind.as_str()).or_default() += 1;
                 m
             });
-            match gap::resolve_label(sp, &label, &others, rl) {
+            match gap::resolve_label(sp, &label, &others, &noted, rl) {
                 Ok(r) => {
                     let panel = super::printcond::parse_circuit(&label).map(|(p, _)| p).unwrap_or_default();
                     if feeder_of(sp, &panel, &label).is_some() {

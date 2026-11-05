@@ -104,27 +104,50 @@ pub(crate) struct Resolved {
     pub other_tag: Option<String>,
 }
 
-/// What names `panel` as a panel: its schedule, a feeder to or from it (the riser), the
-/// panel among the equipment.
-pub(crate) fn panel_evidence(sp: &BuildingSpec, panel: &str, rl: &RouteRules) -> Option<String> {
+/// The panels the sheets' notes name (`... TO PANEL LP2 ...`, `PNL 'D'`): each panel's first
+/// note, from the drawing's texts (the key notes and the riser's notes among them).
+pub(crate) fn noted_panels(texts: &[String]) -> BTreeMap<String, String> {
+    let mut out: BTreeMap<String, String> = BTreeMap::new();
+    for t in texts.iter().take(super::MAX_TEXTS) {
+        let up: String = t.chars().take(400).collect::<String>().to_ascii_uppercase();
+        let words: Vec<&str> = up.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '(' | ')' | '.')).filter(|w| !w.is_empty()).collect();
+        for w in words.windows(2).take(200) {
+            let [a, b] = w else { continue };
+            if let Some(name) = super::super::printcond::panel_lettering(&format!("{a} {b}"))
+                && out.len() < 2_000
+            {
+                out.entry(name).or_insert_with(|| t.chars().take(160).collect());
+            }
+        }
+    }
+    out
+}
+
+/// What names `panel` as a panel: its schedule, a feeder to or from it (the riser), the panel
+/// among the equipment, a sheet's note (`noted`, [`noted_panels`]); the kind of source and its
+/// words.
+pub(crate) fn panel_evidence(sp: &BuildingSpec, panel: &str, noted: &BTreeMap<String, String>, rl: &RouteRules) -> Option<(&'static str, String)> {
     let p = panel.trim();
     if p.is_empty() {
         return None;
     }
     if let Some(s) = sp.mep.panel_schedules.iter().find(|s| s.panel.trim().eq_ignore_ascii_case(p)) {
-        return Some(format!("panel {} schedule{}", s.panel.trim(), if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }));
+        return Some((
+            "schedule",
+            format!("panel {} schedule{}", s.panel.trim(), if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }),
+        ));
     }
     if let Some(f) = sp.mep.feeders.iter().find(|f| f.to.trim().eq_ignore_ascii_case(p) || f.from.trim().eq_ignore_ascii_case(p)) {
-        return Some(format!("riser: feeder {} {} → {}", f.tag, f.from, f.to));
+        return Some(("riser", format!("riser: feeder {} {} → {}", f.tag, f.from, f.to)));
     }
-    sp.mep
-        .equipment
-        .iter()
-        .find(|e| {
-            let k = format!("{} {}", e.kind, e.title).to_ascii_lowercase();
-            e.tag.trim().eq_ignore_ascii_case(p) && rl.gear.kinds.iter().any(|w| k.contains(w.as_str()))
-        })
-        .map(|e| format!("riser: {} {} in the equipment", e.kind, e.tag))
+    let gear = sp.mep.equipment.iter().find(|e| {
+        let k = format!("{} {}", e.kind, e.title).to_ascii_lowercase();
+        e.tag.trim().eq_ignore_ascii_case(p) && rl.gear.kinds.iter().any(|w| k.contains(w.as_str()))
+    });
+    if let Some(e) = gear {
+        return Some(("riser", format!("riser: {} {} in the equipment", e.kind, e.tag)));
+    }
+    noted.get(&p.to_ascii_uppercase()).map(|t| ("note", format!("a sheet's note names panel {p}: \"{t}\"")))
 }
 
 /// The conductors a schedule row's wire size gives (`12` → `2#12 + 1#12G`; a two- or
@@ -142,7 +165,13 @@ pub(crate) fn schedule_conductors(wire: &str, poles: u32) -> Option<String> {
 /// carries it (Q6206): its panel's schedule listing its number, else a tag of it on another
 /// level (its panel named by a schedule, the riser or the equipment), else the panel the riser
 /// names. `others`: the circuit tags of the label on other levels. Err: why not (no panel).
-pub(crate) fn resolve_label(sp: &BuildingSpec, label: &str, others: &[&ElementTag], rl: &RouteRules) -> Result<Resolved, String> {
+pub(crate) fn resolve_label(
+    sp: &BuildingSpec,
+    label: &str,
+    others: &[&ElementTag],
+    noted: &BTreeMap<String, String>,
+    rl: &RouteRules,
+) -> Result<Resolved, String> {
     let Some((panel, nums)) = super::super::printcond::parse_circuit(label) else {
         return Err(format!("`{label}` is not a circuit label (panel-number)"));
     };
@@ -162,8 +191,8 @@ pub(crate) fn resolve_label(sp: &BuildingSpec, label: &str, others: &[&ElementTa
             other_tag: others.first().map(|t| t.id.clone()),
         });
     }
-    let evidence = panel_evidence(sp, &panel, rl);
-    if let (Some(ev), Some(t)) = (&evidence, others.first()) {
+    let evidence = panel_evidence(sp, &panel, noted, rl);
+    if let (Some((_, ev)), Some(t)) = (&evidence, others.first()) {
         let sheet = t.fields.get("sheet").map(|f| f.value.clone()).unwrap_or_default();
         return Ok(Resolved {
             by: "plan",
@@ -177,10 +206,13 @@ pub(crate) fn resolve_label(sp: &BuildingSpec, label: &str, others: &[&ElementTa
         });
     }
     match evidence {
-        Some(ev) => {
-            Ok(Resolved { by: "riser", source: format!("{ev}: circuit {first} not in a schedule read; {src}"), conductors: None, other_tag: None })
-        }
-        None => Err(format!("no panel schedule, riser or panel in the equipment names a panel {panel}: not read as a circuit")),
+        Some((by, ev)) => Ok(Resolved {
+            by: if by == "note" { "note" } else { "riser" },
+            source: format!("{ev}: circuit {first} not in a schedule read; {src}"),
+            conductors: None,
+            other_tag: None,
+        }),
+        None => Err(format!("no panel schedule, riser, panel in the equipment or sheet note names a panel {panel}: not read as a circuit")),
     }
 }
 
@@ -590,24 +622,30 @@ mod tests {
     #[test]
     fn a_label_resolves_by_the_schedule_then_another_levels_tag_then_the_riser() {
         let rl = super::super::rules();
+        let none = BTreeMap::new();
         let sp = spec(json!({"version": 1, "mep": {
             "panel_schedules": [{"panel": "LP1", "source": "E-601", "circuits": [{"number": "11", "description": "RECEPTACLES", "room": "", "breaker": "20A", "poles": 1, "wire": "10"}]}],
             "feeders": [{"tag": "F2", "from": "DPA", "to": "LP2"}]
         }}));
-        let r = resolve_label(&sp, "LP1-11", &[], rl).expect("schedule");
+        let r = resolve_label(&sp, "LP1-11", &[], &none, rl).expect("schedule");
         assert_eq!((r.by, r.conductors.as_deref()), ("schedule", Some("2#10 + 1#10G")));
         assert!(r.source.contains("E-601") && r.source.contains("circuit 11"), "{}", r.source);
         // Not in the schedule, tagged on another level: that tag (its panel's schedule names it).
         let mut other = ElementTag { id: "circuit:L1:E-101:LP1-13".into(), kind: "circuit".into(), level: "L1".into(), ..ElementTag::default() };
         other.set("conductors", "2#8 + 1#8G", "plan");
         other.set("sheet", "E-101", "plan");
-        let r = resolve_label(&sp, "LP1-13", &[&other], rl).expect("plan");
+        let r = resolve_label(&sp, "LP1-13", &[&other], &none, rl).expect("plan");
         assert_eq!((r.by, r.conductors.as_deref(), r.other_tag.as_deref()), ("plan", Some("2#8 + 1#8G"), Some("circuit:L1:E-101:LP1-13")));
         // Only the riser names LP2.
-        assert_eq!(resolve_label(&sp, "LP2-4", &[], rl).map(|r| r.by), Ok("riser"));
+        assert_eq!(resolve_label(&sp, "LP2-4", &[], &none, rl).map(|r| r.by), Ok("riser"));
+        // Only a sheet's note names LP3.
+        let noted = noted_panels(&["KEY NOTE 4: CONNECT TO PANEL LP3 IN THE CORRIDOR.".to_string(), "PNL 'Q9' BY OTHERS".to_string()]);
+        assert_eq!(noted.keys().cloned().collect::<Vec<_>>(), vec!["LP3".to_string(), "Q9".to_string()]);
+        let r = resolve_label(&sp, "LP3-2", &[], &noted, rl).expect("note");
+        assert!(r.by == "note" && r.source.contains("KEY NOTE 4"), "{r:?}");
         // Nothing names a panel XQ, even with a tag of the label elsewhere: no circuit.
-        assert!(resolve_label(&sp, "XQ-2", &[&other], rl).is_err());
-        assert!(resolve_label(&sp, "not a label", &[], rl).is_err());
+        assert!(resolve_label(&sp, "XQ-2", &[&other], &noted, rl).is_err());
+        assert!(resolve_label(&sp, "not a label", &[], &none, rl).is_err());
     }
 
     #[test]
