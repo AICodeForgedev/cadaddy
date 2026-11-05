@@ -368,6 +368,17 @@ fn a_label_whose_point_sits_just_outside_its_room_names_it() {
     let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
     let rooms = r["rooms"].as_array().unwrap();
     assert_eq!(room(rooms, "CHECK IN")["number"], "142", "{rooms:?}");
+    // A note whose point is farther out (5" across, its text 6" tall) names nothing there.
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [16.0, 120.0], "FOR GUEST ROOM LAYOUTS AND SIZES");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
 }
 
 /// The import took three closets' `AHU` boxes for a repeated symbol (a `PDF-SYM-` insert, the
