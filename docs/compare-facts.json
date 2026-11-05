@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1240,
-    "count": 1240,
+    "callableAsJson": 1245,
+    "count": 1245,
     "ids": [
       "-attedit",
       "-block",
@@ -705,6 +705,7 @@
       "model.overlay",
       "model.render",
       "model.revise",
+      "model.update",
       "models3d.list",
       "models3d.place",
       "models3d.twins",
@@ -892,6 +893,10 @@
       "pspace",
       "publish",
       "publishlist",
+      "pull.cutlist",
+      "pull.release",
+      "pull.schedule",
+      "pull.sheets",
       "purge",
       "pyramid",
       "qdim",
@@ -1244,7 +1249,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 540,
+    "inMenus": 544,
     "typed": 564
   },
   "features": {
