@@ -50,5 +50,7 @@
     {"kinds": ["water_heater"], "words": ["POWER BURNER", "POWERED ANODE", "POWER VENT", "DIRECT VENT FAN", "BLOWER", "ELECTRIC", "IGNITER", "120V", "120 V"], "basis": "its documents give it a power burner, blower, igniter or powered anodes: a 120 V equipment connection by the electrical trade (NEC 422.31)"},
     {"kinds": ["water_cooler"], "words": ["GPH", "CHILL", "REFRIGERAT", "115V", "120V"], "basis": "a chilled drinking fountain or bottle filler has a compressor: a 120 V equipment connection by the electrical trade (NEC 422.52 GFCI where listed)"}
   ],
+  "water_systems": ["CW", "HW", "HWR", "DCW", "DHW", "DHWR"],
+  "water_systems_source": "the domestic water systems' usual abbreviations (cold, hot, hot water return) as plumbing legends letter them",
   "water_derived": "its level's water lines are proposed (copied from a level whose layout matches, not drawn): its water connections are derived, not design-issued"
 }

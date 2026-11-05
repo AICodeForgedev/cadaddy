@@ -274,8 +274,8 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
         on_row.retain(|t| t.at.x >= lo && t.at.x < hi && t.value.split_whitespace().count() <= MAX_HEADER_WORDS);
         let mut heads: Vec<(String, f64)> = on_row.iter().map(|t| (t.value.trim().to_string(), middle(t))).collect();
         let cols: Vec<Col> = heads.iter().map(|(v, _)| col_of(v)).collect();
-        let strong = cols.iter().any(|c| *c == Col::Fixture { strong: true });
-        let weak = cols.iter().any(|c| *c == Col::Fixture { strong: false });
+        let strong = cols.contains(&Col::Fixture { strong: true });
+        let weak = cols.contains(&Col::Fixture { strong: false });
         let maker_or_model = cols.iter().any(|c| matches!(c, Col::Maker | Col::Model));
         // A weak fixture column (`TYPE`) only under a fixture schedule's title.
         let titled = || {

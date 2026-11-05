@@ -57,6 +57,8 @@ const MAX_PRODUCTS: usize = 40;
 const MAX_VALUE: usize = 240;
 /// Conflicts raised, at most.
 const MAX_CONFLICTS: usize = 400;
+/// The supply voltages a cut sheet's lone voltage is taken for.
+const SUPPLY_VOLTS: [f64; 11] = [110.0, 115.0, 120.0, 208.0, 220.0, 230.0, 240.0, 277.0, 460.0, 480.0, 575.0];
 /// Fixtures listed per reason in the report.
 const MAX_LISTED: usize = 30;
 
@@ -107,6 +109,7 @@ pub(crate) struct Rules {
     sniff_pages: u32,
     powered: Vec<Powered>,
     water_derived: String,
+    water_systems: Vec<String>,
 }
 
 /// The rules data (empty lists when it can't be read: nothing classified, nothing powered).
@@ -191,6 +194,11 @@ fn catalog_key(c: &str) -> String {
     c.chars().filter(char::is_ascii_alphanumeric).take(80).collect::<String>().to_ascii_uppercase()
 }
 
+/// A long text's letters and digits, capitals (a cut sheet's text to look a catalog number up in).
+fn catalog_key_long(c: &str) -> String {
+    c.chars().filter(char::is_ascii_alphanumeric).take(400_000).collect::<String>().to_ascii_uppercase()
+}
+
 /// Whether a text reads like a catalog number: a few words at most, with a digit, at least three
 /// characters (`B832/T8-HET`, `71370110`, `ST-42V`).
 fn catalog_like(v: &str) -> bool {
@@ -198,6 +206,40 @@ fn catalog_like(v: &str) -> bool {
     let words = t.split_whitespace().count();
     let alnum = t.chars().filter(char::is_ascii_alphanumeric).count();
     (1..=3).contains(&words) && (3..=40).contains(&alnum) && t.chars().any(|c| c.is_ascii_digit()) && t.len() <= 60
+}
+
+/// The catalog number a label's text starts with: its first word (a word that has a digit), and
+/// the words a slash or dash joins to it (`B872 /T8-HET`); none when the first word has no digit
+/// (`ex: …`, a table's `S` header) or is under three characters (a figure's `17`).
+fn catalog_at(v: &str) -> Option<String> {
+    let mut ws = v.split_whitespace();
+    let mut out = ws.next()?.trim_end_matches([',', ';', '.']).to_string();
+    for w in ws.take(4) {
+        if out.ends_with(['/', '-']) || w.starts_with(['/', '-']) {
+            out.push(' ');
+            out.push_str(w.trim_end_matches([',', ';', '.']));
+        } else {
+            break;
+        }
+    }
+    let first_ok = out.chars().any(|c| c.is_ascii_digit()) && out.chars().filter(char::is_ascii_alphanumeric).count() >= 3;
+    (first_ok && catalog_like(&out)).then_some(out)
+}
+
+/// Whether two catalog numbers are one product's: the same, one in the other, or one maker's
+/// family and its full order code (`Z1400` and `ZN1400NH`: the same first letter and the shorter
+/// one's run of digits, three or more, in the longer).
+fn same_catalog(a: &str, b: &str) -> bool {
+    let (x, y) = (catalog_key(a), catalog_key(b));
+    if x.is_empty() || y.is_empty() {
+        return false;
+    }
+    if x == y || x.contains(&y) || y.contains(&x) {
+        return true;
+    }
+    let digits = |k: &str| k.split(|c: char| !c.is_ascii_digit()).filter(|r| r.len() >= 3).max_by_key(|r| r.len()).map(str::to_string);
+    let (short, long) = if x.len() <= y.len() { (&x, &y) } else { (&y, &x) };
+    short.chars().next() == long.chars().next() && digits(short).is_some_and(|d| long.contains(&d))
 }
 
 /// A PDF text line's cells (its column breaks).
@@ -276,8 +318,10 @@ pub(crate) struct SubItem {
     pub catalogs: Vec<(String, Option<u32>, bool)>,
     /// What its cut sheets say electrically (volts, phase, amps…), and the page.
     pub electrical: Option<(cadaddy_walk3d::EquipmentElectrical, Option<u32>)>,
-    /// Its cut sheets' text (the first product's pages), for the power words.
+    /// Its cut sheets' text (the first product's pages), for the power words, and the same as one
+    /// key (letters and digits) to find a catalog number in.
     pub sheet_text: String,
+    pub sheet_key: String,
 }
 
 /// A plumbing submittal read: its file, revision and items by tag.
@@ -357,7 +401,7 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
                     let tag = cs.get(i).map(|c| tag_key(c)).unwrap_or_default();
                     let code = cs.get(1..i).and_then(|m| m.iter().rev().find(|c| c.len() <= 2 && c.chars().all(|ch| ch.is_ascii_digit()))).cloned();
                     let said = cs.get(i + 1..).map(|m| m.join(" ")).unwrap_or_default();
-                    let mut response = pending.drain(..).collect::<Vec<_>>();
+                    let mut response = std::mem::take(&mut pending);
                     response.push(said);
                     let response = clean(&response.join(" "));
                     let status = code
@@ -478,7 +522,7 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
         // the label is a strong one, `Model:` or `Catalog No.`, not a bare `Model`).
         let mut labels: Vec<(String, bool)> = r.catalog_labels.iter().map(|l| (l.to_ascii_uppercase(), true)).collect();
         labels.extend(r.weak_catalog_labels.iter().map(|l| (l.to_ascii_uppercase(), false)));
-        labels.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        labels.sort_by_key(|l| std::cmp::Reverse(l.0.len()));
         let mut found: Vec<(String, Option<u32>, bool)> = Vec::new();
         for (pg, text) in &mine {
             for line in text.lines().take(4_000) {
@@ -494,17 +538,21 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
                     let Some((end, strong)) = hit else { continue };
                     let rest = c.get(end..).unwrap_or_default().trim().trim_start_matches([':', '#', '.']).trim();
                     let value = if rest.is_empty() { cs.get(ci + 1).cloned().unwrap_or_default() } else { rest.to_string() };
-                    let value = value.trim().trim_end_matches(['.', ',']).to_string();
-                    if catalog_like(&value) && !value.contains(',') && found.len() < 40 && !found.iter().any(|f| catalog_key(&f.0) == catalog_key(&value)) {
+                    if let Some(value) = catalog_at(&value)
+                        && found.len() < 40
+                        && !found.iter().any(|f| catalog_key(&f.0) == catalog_key(&value))
+                    {
                         found.push((clean(&value), *pg, strong));
                     }
                 }
             }
         }
-        it.catalog = found.iter().find(|f| f.2).or_else(|| (found.len() == 1).then(|| found.first()).flatten()).map(|f| (f.0.clone(), f.1));
-        if it.catalog.is_none() && first.description.split_whitespace().count() == 1 && catalog_like(&first.description) {
-            it.catalog = Some((first.description.clone(), first.page));
-        }
+        // The submitter's own model (an item listed by its catalog number), else the cut sheet's.
+        it.catalog = if first.description.split_whitespace().count() == 1 && catalog_like(&first.description) {
+            Some((first.description.clone(), first.page))
+        } else {
+            found.iter().find(|f| f.2).or_else(|| (found.len() == 1).then(|| found.first()).flatten()).map(|f| (f.0.clone(), f.1))
+        };
         it.catalogs = found;
         let joined: String = mine.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
         let e = super::equipsub::text_electrical(&joined);
@@ -512,6 +560,7 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
             it.electrical = Some((e, mine.first().and_then(|(p, _)| *p)));
         }
         it.sheet_text = joined.chars().take(200_000).collect();
+        it.sheet_key = catalog_key_long(&it.sheet_text);
     }
     Some(sub)
 }
@@ -725,6 +774,19 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
     }
     let schedule_src = |what: &str| Source::from_doc(SourceKind::Schedule, &format!("plumbing fixture schedule {}{what}", docs.sheet));
     let found = fixtures(s.doc()?, &docs.rows);
+    // The levels whose water mains are proposed (copied from another level, not drawn).
+    let water_proposed_levels: BTreeSet<String> = {
+        let d = s.doc()?;
+        let water: BTreeSet<String> = r.water_systems.iter().map(|x| x.to_ascii_uppercase()).collect();
+        d.model
+            .iter()
+            .filter(|e| super::bimlook::made_tag(e, "kind") == Some("pipe"))
+            .filter(|e| super::bimlook::made_tag(e, "status").is_some_and(|v| v.eq_ignore_ascii_case(super::mep::PROPOSED)))
+            .filter(|e| super::bimlook::made_tag(e, "system").is_some_and(|v| water.contains(&v.to_ascii_uppercase())))
+            .filter_map(|e| super::bspec::made_level(e))
+            .take(MAX_ELEMENTS)
+            .collect()
+    };
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     let mut by_tag: BTreeMap<String, Vec<Handle>> = BTreeMap::new();
     let mut maker_from: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -795,14 +857,17 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         let sub_catalog = approved.and_then(|(sb, it)| {
             let printed = |m: &str| {
                 let k = catalog_key(m);
-                k.len() >= 3 && (it.catalogs.iter().any(|c| catalog_key(&c.0) == k) || catalog_key(&it.sheet_text).contains(&k))
+                k.len() >= 3 && (it.catalogs.iter().any(|c| catalog_key(&c.0) == k) || it.sheet_key.contains(&k))
             };
             let page = it.products.first().and_then(|p| p.page);
             sched_model
                 .as_ref()
                 .filter(|_| same)
                 .and_then(|m| {
-                    m.split(['/', ',']).map(str::trim).find(|x| printed(x)).map(|x| (x.to_string(), m.clone()))
+                    m.split(['/', ','])
+                        .map(str::trim)
+                        .find(|x| printed(x) || it.catalog.as_ref().is_some_and(|(c, _)| same_catalog(x, c)))
+                        .map(|x| (x.to_string(), m.clone()))
                 })
                 .map(|(_, m)| (m, format!("{} (the schedule's model, on its cut sheet)", sb.doc(page))))
                 .or_else(|| it.catalog.as_ref().map(|(c, pg)| (c.clone(), sb.doc(*pg))))
@@ -827,7 +892,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         if let Some((c, src, from)) = &catalog {
             let mut p = Prop::new(clean(c), src.clone());
             if *from == "submittal"
-                && let Some(sc) = sched_model.as_ref().filter(|sc| catalog_key(sc) != catalog_key(c))
+                && let Some(sc) = sched_model.as_ref().filter(|sc| !same_catalog(sc, c))
             {
                 p = p.with_note(&format!("the approved submittal's cut sheet; the schedule gives {sc} (kept as design_catalog)"));
                 put(&mut st, "design_catalog", Prop::new(clean(sc), schedule_src("")));
@@ -890,10 +955,12 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         if !sizes.is_empty() {
             *rough_from.entry(if row.is_some_and(|x| !x.connections.is_empty()) { "schedule" } else { "rough_in_table" }).or_default() += 1;
         }
-        // Its water: derived where its level's water lines are proposed (not drawn).
-        let proposed_water = ["cold_water", "hot_water"]
-            .iter()
-            .any(|k| st.get(k).and_then(|p| p.note.as_deref()).is_some_and(|n| n.to_ascii_lowercase().contains("proposed")));
+        // Its water: derived where it is on a proposed water line, or its level's water mains are
+        // proposed (the level has no water plan of its own: its branches aren't design-issued).
+        let proposed_water = water_proposed_levels.contains(&f.level)
+            || ["cold_water", "hot_water"]
+                .iter()
+                .any(|k| st.get(k).and_then(|p| p.note.as_deref()).is_some_and(|n| n.to_ascii_lowercase().contains("proposed")));
         for (k, v, src, note) in &sizes {
             let key = format!("{k}_size");
             let mut p = Prop::new(clean(v), src.clone()).with_unit("in");
@@ -915,8 +982,11 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         } else if st.get("cold_water").is_some() || st.get("hot_water").is_some() {
             put(&mut st, "water_provenance", Prop::new("drawn", Source::computed()).with_note("its water lines are on its level's own water plan"));
         }
-        // Powered: its documents' electrical data, else the rules data's kinds and words.
+        // Powered: its documents' electrical data (the schedule's columns, the cut sheet's amps),
+        // else the rules data: a word of its documents (sensor, line voltage, a power burner: its
+        // power is derived from them), else its kind alone (a pump: inferred).
         let sub_elec = approved.and_then(|(sb, it)| it.electrical.as_ref().map(|(e, pg)| (e.clone(), sb.doc(*pg))));
+        let sub_full = sub_elec.as_ref().filter(|(e, _)| super::equipsub::has_data(e));
         let doc_text = format!(
             "{} {} {}",
             name,
@@ -925,32 +995,49 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         )
         .to_ascii_uppercase();
         let sched_elec = row.filter(|x| !x.electrical.is_empty());
-        let rule = r.powered.iter().find(|p| {
+        let rule = r.powered.iter().find_map(|p| {
             let kind_ok = p.kinds.is_empty() || kind.as_ref().is_some_and(|k| p.kinds.iter().any(|x| x == k));
-            let word_ok = p.words.is_empty() || p.words.iter().any(|w| doc_text.contains(&w.to_ascii_uppercase()));
-            kind_ok && word_ok && !(p.kinds.is_empty() && p.words.is_empty())
+            let word = p.words.iter().find(|w| doc_text.contains(&w.to_ascii_uppercase()));
+            let word_ok = p.words.is_empty() || word.is_some();
+            (kind_ok && word_ok && !(p.kinds.is_empty() && p.words.is_empty())).then_some((p, word))
         });
-        let elec: Option<(String, Source, &'static str)> = if let Some((e, doc)) = sub_elec.as_ref().filter(|(e, _)| !electrical_words(e).is_empty())
-        {
-            Some((electrical_words(e), Source::from_doc(SourceKind::Submittal, doc), "documented"))
-        } else if let Some(x) = sched_elec {
+        // A cut sheet's voltage alone counts only as a supply voltage (not a rating's 250 V).
+        let supply_volts =
+            sub_elec.as_ref().and_then(|(e, doc)| e.volts.filter(|v| SUPPLY_VOLTS.iter().any(|x| (x - v).abs() < 0.5)).map(|v| (v, doc.clone())));
+        let elec: Option<(String, Source, &'static str)> = if let Some(x) = sched_elec {
             Some((x.electrical.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "), schedule_src(""), "documented"))
+        } else if let Some((e, doc)) = sub_full.filter(|(e, _)| !electrical_words(e).is_empty()) {
+            Some((electrical_words(e), Source::from_doc(SourceKind::Submittal, doc), "documented"))
         } else {
-            rule.map(|p| {
-                (
-                    "equipment connection".to_string(),
-                    Source::from_doc(SourceKind::Rule, &format!("plumbproducts.json powered: {}", p.basis)),
-                    "inferred",
-                )
+            rule.map(|(p, word)| {
+                let volts = supply_volts.as_ref().map(|(v, doc)| format!(", {v} V ({doc})")).unwrap_or_default();
+                match word {
+                    Some(w) => (
+                        format!("equipment connection{volts}"),
+                        Source::from_doc(
+                            SourceKind::Rule,
+                            &format!("plumbproducts.json powered: {}; its documents say \"{}\"", p.basis, w.to_ascii_lowercase()),
+                        ),
+                        "derived",
+                    ),
+                    None => (
+                        format!("equipment connection{volts}"),
+                        Source::from_doc(SourceKind::Rule, &format!("plumbproducts.json powered: {}", p.basis)),
+                        "inferred",
+                    ),
+                }
             })
         };
         if let Some((w, src, how)) = &elec {
             let mut p = Prop::new(clean(w), src.clone());
             if *how == "inferred" {
                 p = p.with_note("inferred: its documents give no electrical data; the rule's basis says why it takes power");
+            } else if *how == "derived" {
+                p = p.with_note("derived: its documents say it is powered but give no amps; the rule's basis names the connection");
             }
             put(&mut st, "electrical_connection", p);
-            if let Some((e, doc)) = &sub_elec {
+            put(&mut st, "electrical_provenance", Prop::new(*how, src.clone()));
+            if let Some((e, doc)) = sub_full {
                 let s2 = Source::from_doc(SourceKind::Submittal, doc);
                 if let Some(v) = e.volts {
                     put(&mut st, "volts", Prop::new(v, s2.clone()).with_unit("V"));
@@ -964,9 +1051,11 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                 if let Some(h) = e.hp {
                     put(&mut st, "hp", Prop::new(h, s2.clone()));
                 }
+            } else if let Some((v, doc)) = &supply_volts {
+                put(&mut st, "volts", Prop::new(*v, Source::from_doc(SourceKind::Submittal, doc)).with_unit("V"));
             }
             let basis = match (how, rule) {
-                (&"inferred", Some(p)) => p.basis.clone(),
+                (&"inferred" | &"derived", Some((p, _))) => p.basis.clone(),
                 _ => format!("its documents ({}) give it an electrical connection", src.doc.clone().unwrap_or_default()),
             };
             powered.push((f.handle, f.tag.clone(), f.level.clone(), f.at, basis, None, how));
@@ -1011,7 +1100,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
     }
     // The type catalog: each tag's product as the documents give it (for Validate's checks).
     let mut typed = 0usize;
-    for (tag, _) in &by_tag {
+    for tag in by_tag.keys() {
         let Some(row) = row_of(&docs.rows, tag) else { continue };
         let mut ty = d.bim_types.get(tag).cloned().unwrap_or_else(|| cadaddy_doc::bimspec::BimType::new(tag.clone()));
         if ty.category.is_empty() {
@@ -1080,8 +1169,8 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                     ));
                 } else if let (Some(row), Some((c, pg))) = (row, &it.catalog)
                     && !row.model.is_empty()
-                    && catalog_key(&row.model) != catalog_key(c)
-                    && !row.model.split(['/', ' ', ',']).any(|m| !m.is_empty() && catalog_key(m) == catalog_key(c))
+                    && !same_catalog(&row.model, c)
+                    && !row.model.split(['/', ',']).any(|m| !m.trim().is_empty() && same_catalog(m, c))
                 {
                     conflicts.push(conflict(
                         "catalog number",
@@ -1228,7 +1317,10 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         "catalog_from": catalog_from,
         "rough_in_from": rough_from,
         "water_derived": water_derived,
+        "water_proposed_levels": water_proposed_levels,
         "powered": powered.len(),
+        "powered_list": powered.iter().take(MAX_LISTED).map(|(h, tag, level, _, basis, _, how)| json!({"handle": h.hex(), "tag": tag, "level": level, "how": how, "basis": clean(basis)})).collect::<Vec<_>>(),
+        "elements_by_tag": by_tag.iter().map(|(t, hs)| (t.clone(), hs.len())).collect::<BTreeMap<_, _>>(),
         "connection_boxes": boxes,
         "connections_by": by_basis,
         "conflicts": conflicts.len(),
@@ -1316,7 +1408,14 @@ mod tests {
     #[test]
     fn a_submittal_gives_each_items_products_review_and_catalog_number() {
         let r = rules();
-        let sub = read_submittal(&r, &package(), "Plumbing Package", "/job/Rev 1-0/Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1", "FD-1"])).expect("read");
+        let sub = read_submittal(
+            &r,
+            &package(),
+            "Plumbing Package",
+            "/job/Rev 1-0/Plumbing Package.pdf",
+            &known(&["WC-1", "LV-1", "SK-1", "RP-1", "FD-1"]),
+        )
+        .expect("read");
         assert!(sub.reviewed);
         let wc = sub.items.get("WC-1").expect("WC-1");
         assert_eq!(wc.status, Status::Approved);
@@ -1396,9 +1495,13 @@ mod tests {
 
     /// A built fixture element (a box the build makes for a read device) of `mark` on Level 1.
     fn fixture_el(s: &mut Session, mark: &str, x: f64, extra: &[(&str, Prop)]) -> Handle {
+        fixture_on(s, "Level 1", mark, x, extra)
+    }
+
+    fn fixture_on(s: &mut Session, level: &str, mark: &str, x: f64, extra: &[(&str, Prop)]) -> Handle {
         let mut m = super::super::wallgen::empty_mesh();
         super::super::wallgen::add_box(&mut m, Vec2::new(x, 0.0), Vec2::new(x + 12.0, 0.0), 12.0, 0.0, 12.0);
-        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 1", Handle(0));
+        let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, level, Handle(0));
         let mut store = Props::default();
         if !mark.is_empty() {
             store.set("type_mark", Prop::new(mark, Source::print("P-2", None)));
@@ -1442,7 +1545,10 @@ mod tests {
                 sizes: [("waste".to_string(), "3\"".to_string()), ("cw".to_string(), "1/2\"".to_string())].into_iter().collect(),
             }],
             sheet: "P-1".into(),
-            submittals: vec![read_submittal(&rules(), &package(), "Plumbing Package", "Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1"])).expect("read")],
+            submittals: vec![
+                read_submittal(&rules(), &package(), "Plumbing Package", "Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1"]))
+                    .expect("read"),
+            ],
             ..Docs::default()
         };
         let reqs = vec![Requirement {
@@ -1495,6 +1601,25 @@ mod tests {
         assert!(sp.rfis.iter().any(|r| r.topic == "plumbing: maker" && r.sides.len() == 2), "{:?}", sp.rfis);
         assert_eq!(v["with_product"], 4, "{v}");
         assert_eq!(v["no_product_data"], 2, "{v}");
+        // A level whose water mains are proposed (no water plan of its own): its fixtures' water
+        // is derived, whatever pipe they are on.
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 40.0), Vec2::new(400.0, 40.0), 1.0, 100.0, 101.0);
+        // As the MEP build tags a pipe: its app, `mep`, level, source, then its keys.
+        let mut tags = vec![cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() }];
+        for t in ["mep", "Level 2", "0", "system:CW", "kind:pipe", "part:run", "status:proposed"] {
+            tags.push(cadaddy_doc::RawTag { code: 1000, value: t.into() });
+        }
+        s.doc_mut()
+            .expect("doc")
+            .add(&Space::Model, Common { layer: "P-CW-PROPOSED".into(), xdata: tags.into(), ..Common::default() }, EntityKind::Mesh(m))
+            .expect("pipe");
+        let up =
+            fixture_on(&mut s, "Level 2", "LV-1", 300.0, &[("cold_water", Prop::new("B2", Source::computed()).with_note("the nearest CW pipe"))]);
+        let v2 = apply(&mut s, &docs, &reqs).expect("again");
+        assert_eq!(prop(&s, up, "water_provenance").map(|p| p.text()).as_deref(), Some("derived"), "{v2}");
+        assert!(prop(&s, up, "cw_size").and_then(|p| p.note).is_some_and(|n| n.starts_with("derived")));
+        assert_eq!(prop(&s, lv, "water_provenance").map(|p| p.text()), None, "Level 1's own water: not flagged (no water line known)");
         // A person's value stays.
         let mine = fixture_el(&mut s, "WC-1", 240.0, &[("manufacturer", Prop::new("MINE", Source::user()))]);
         apply(&mut s, &docs, &reqs).expect("again");
