@@ -3421,3 +3421,7 @@ menu	Modify	수정
 	The current file is kept as {name} until the next save.	현재 파일은 다음 저장 때까지 {name}(으)로 유지됩니다.
 	This format can't keep these objects yet: {objects}.	이 형식은 아직 다음 객체를 유지할 수 없습니다: {objects}.
 	{count} more types	{count}개 형식 더
+Review by Impact	영향별 검토
+Resolve Review Item by Impact	영향별 검토 항목 해결
+Open Review Item	검토 항목 열기
+Review Audit Trail	검토 감사 기록

@@ -3402,3 +3402,7 @@ menu	Modify	Modifikace
 	The current file is kept as {name} until the next save.	Aktuální soubor zůstane jako {name} až do příštího uložení.
 	This format can't keep these objects yet: {objects}.	Tento formát zatím nedokáže zachovat tyto objekty: {objects}.
 	{count} more types	další typy: {count}
+Review by Impact	Kontrola podle dopadu
+Resolve Review Item by Impact	Vyřešit položku kontroly podle dopadu
+Open Review Item	Otevřít položku kontroly
+Review Audit Trail	Auditní záznam kontroly
