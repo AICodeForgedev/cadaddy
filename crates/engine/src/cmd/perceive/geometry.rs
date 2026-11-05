@@ -791,6 +791,26 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // around the tag) bound no room.
     let mut tag_blocks = std::collections::HashSet::new();
     let mut tag_numbers: Vec<Label> = Vec::new();
+    // A room's name the import took for a repeated symbol's mark (three equipment closets' `AHU`
+    // boxes alike: a symbol, the word its TAG): still the room's name where it was printed. (Names
+    // only: a number on a symbol is a door's or a device's.)
+    let mut symbol_names: Vec<Label> = Vec::new();
+    for e in &on_tags {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        if !i.block.starts_with("PDF-SYM-") {
+            continue;
+        }
+        for a in i.attribs.iter().filter(|a| a.tag.eq_ignore_ascii_case("TAG")) {
+            let v = a.text.value.trim();
+            let (at, h) = (a.text.justify_point(), a.text.height);
+            let word = EQUIPMENT_WORDS.contains(&v.to_ascii_uppercase().as_str()) || room_name_score(v) >= 3;
+            let printed = all.iter().any(|(_, t, q, _, _)| t.trim().eq_ignore_ascii_case(v) && q.dist(at) <= 0.5 * h.max(1e-9));
+            if !v.is_empty() && v.chars().count() <= 40 && h.is_finite() && h > 0.0 && word && !room_number(v) && !printed {
+                symbol_names.push((e.handle, v.to_string(), at, h, false));
+            }
+        }
+    }
+    all.extend(symbol_names);
     for e in &on_tags {
         let EntityKind::Insert(i) = &e.kind else { continue };
         // A title block (its sheet number, title, project, date) is not a room tag.
