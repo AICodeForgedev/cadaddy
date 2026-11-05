@@ -5,8 +5,8 @@
 //!   `fixture_va`), a receptacle's by rule (180 VA a yoke, NEC 220.14(I)), equipment from its
 //!   submittal (kW, else volts × full-load / nameplate / minimum circuit amps), a control device
 //!   none; a circuit with no load in the model keeps its schedule's (said so).
-//! - **Per circuit → panel → feeder → service**: a circuit naming another panel (`PANELBOARD DP1`,
-//!   `PANELBOARD G (4 UNITS)`) is that panel's feeder, its units' loads under it; the panel no
+//! - **Per circuit → panel → feeder → service**: a circuit naming another panel (`PANELBOARD DP-N`,
+//!   `PANELBOARD U (4 UNITS)`) is that panel's feeder, its units' loads under it; the panel no
 //!   circuit feeds is the service. A typical panel (`TYPICAL OF n`) is one unit's: its devices
 //!   over the rooms that have them.
 //! - **Demand factors** from rules data (`loadcalc.json`, each with its cite): the occupancy is
@@ -122,6 +122,8 @@ pub(crate) struct Rules {
     pub feeder_words: Vec<String>,
     pub unit_words: Vec<String>,
     pub summary_titles: Vec<String>,
+    /// A summary whose title has one of these is a feeder's (matched by its units), not the service's.
+    pub feeder_summary_words: Vec<String>,
     pub service_size_words: Vec<String>,
     pub occupancies: Vec<Occupancy>,
     pub receptacle_steps: Vec<(Option<f64>, f64)>,
@@ -231,7 +233,7 @@ struct Dev {
     documented: bool,
 }
 
-/// A device's circuit number as its label gives it: `A-5` → `5`, `G-13,15` → `13`, `7` → `7`.
+/// A device's circuit number as its label gives it: `LP-5` → `5`, `Q-13,15` → `13`, `7` → `7`.
 fn circuit_number(label: &str, panel: &str) -> String {
     let t = label.trim().to_ascii_uppercase();
     let p = panel.trim().to_ascii_uppercase();
@@ -270,7 +272,7 @@ fn model_devices(d: &cadaddy_doc::Drawing, rules: &Rules) -> BTreeMap<(String, S
         let doc_of = |k: &str| st.get(k).and_then(|p| p.source.doc.clone()).unwrap_or_default();
         // Its own rating first (the fixture schedule's VA, a nameplate the documents give it).
         let own = ["fixture_va", "load_va", "va", "wattage"].iter().find_map(|k| {
-            let p = st.get(*k).filter(|p| p.has_value())?;
+            let p = st.get(k).filter(|p| p.has_value())?;
             let v = p.value.as_f64().or_else(|| first_number(&p.text())).filter(|v| v.is_finite() && *v >= 0.0 && *v < 1e9)?;
             Some((v, *k))
         });
@@ -366,13 +368,15 @@ fn described(c: &PanelCircuit, rules: &Rules) -> Cat {
     }
 }
 
-/// The panel a circuit feeds and how many of it (`PANELBOARD G (4 UNITS)` → G, 4): a feeder word
+/// The panel a circuit feeds and how many of it (`PANELBOARD U (4 UNITS)` → U, 4): a feeder word
 /// then a panel's tag, or a feeder record from this panel naming it.
 fn feeds(c: &PanelCircuit, panel: &str, tags: &BTreeSet<String>, feeders: &[Feeder], rules: &Rules) -> Option<(String, u32)> {
     let ws = words(&c.description);
     let named = ws
         .windows(2)
-        .find(|w| w.first().is_some_and(|f| rules.feeder_words.iter().any(|x| x.eq_ignore_ascii_case(f))) && w.get(1).is_some_and(|t| tags.contains(t)))
+        .find(|w| {
+            w.first().is_some_and(|f| rules.feeder_words.iter().any(|x| x.eq_ignore_ascii_case(f))) && w.get(1).is_some_and(|t| tags.contains(t))
+        })
         .and_then(|w| w.get(1).cloned())
         .or_else(|| {
             feeders
@@ -410,7 +414,11 @@ fn equipment_load(c: &PanelCircuit, panel: &str, eqs: &[EquipmentElectrical]) ->
         .map(|a| (a, "full-load"))
         .or_else(|| e.nameplate_a.map(|a| (a, "nameplate")))
         .or_else(|| e.mca.map(|a| (a, "minimum circuit (with 125% of its largest motor)")))?;
-    Some((volts * a * ph, motor || e.mca.is_some(), format!("{}: {volts:.0} V x {a} A {what}{} ({src})", e.tag, if ph > 1.0 { " x 1.732" } else { "" })))
+    Some((
+        volts * a * ph,
+        motor || e.mca.is_some(),
+        format!("{}: {volts:.0} V x {a} A {what}{} ({src})", e.tag, if ph > 1.0 { " x 1.732" } else { "" }),
+    ))
 }
 
 /// One circuit, calculated.
@@ -521,7 +529,8 @@ fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (
     let mut steps = Vec::new();
     let get = |c: &str| t.cats.get(c).copied().unwrap_or_default();
     // Units with cooking, where the occupancy wires them as dwelling units: the dwelling rules.
-    let as_dwelling = (!occ.cooking_units_as.is_empty() && t.units > 0 && t.cooking_units >= t.units).then(|| rules.occupancy(&occ.cooking_units_as)).flatten();
+    let as_dwelling =
+        (!occ.cooking_units_as.is_empty() && t.units > 0 && t.cooking_units >= t.units).then(|| rules.occupancy(&occ.cooking_units_as)).flatten();
     let u = as_dwelling.unwrap_or(occ);
     let note = if as_dwelling.is_some() { format!("; {}", occ.cooking_cite) } else { String::new() };
     // The optional method: three or more units, each with cooking and heating or cooling.
@@ -553,10 +562,20 @@ fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (
             if u.unit_receptacles_in_lighting && ru > 0.0 {
                 cite = format!("{cite}; {}", u.unit_receptacles_cite);
             }
-            steps.push(Step { what: format!("general lighting, {}", u.name), connected: unit_general, demand: stepped(unit_general, &u.lighting_steps), cite });
+            steps.push(Step {
+                what: format!("general lighting, {}", u.name),
+                connected: unit_general,
+                demand: stepped(unit_general, &u.lighting_steps),
+                cite,
+            });
         }
         if !u.unit_receptacles_in_lighting && ru > 0.0 {
-            steps.push(Step { what: "unit rooms' receptacles".into(), connected: ru, demand: stepped(ru, &rules.receptacle_steps), cite: rules.receptacle_cite.clone() });
+            steps.push(Step {
+                what: "unit rooms' receptacles".into(),
+                connected: ru,
+                demand: stepped(ru, &rules.receptacle_steps),
+                cite: rules.receptacle_cite.clone(),
+            });
         }
         // The unit rooms' fixed appliances (dwelling rule: four or more at 75%).
         let appliances = ku + eu;
@@ -567,22 +586,47 @@ fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (
             steps.push(Step { what: "unit rooms' appliances".into(), connected: appliances, demand: appliances * f, cite });
         }
         if mu > 0.0 {
-            steps.push(Step { what: "unit rooms' motors and HVAC".into(), connected: mu, demand: mu, cite: "NEC 220.50, 430.24: at their ratings".into() });
+            steps.push(Step {
+                what: "unit rooms' motors and HVAC".into(),
+                connected: mu,
+                demand: mu,
+                cite: "NEC 220.50, 430.24: at their ratings".into(),
+            });
         }
         if uu > 0.0 {
-            steps.push(Step { what: "unit rooms' loads the schedule gives".into(), connected: uu, demand: uu, cite: "the panel schedule's VA, at 100%".into() });
+            steps.push(Step {
+                what: "unit rooms' loads the schedule gives".into(),
+                connected: uu,
+                demand: uu,
+                cite: "the panel schedule's VA, at 100%".into(),
+            });
         }
     }
     // The other rooms (house loads).
     if lo > 0.0 {
-        steps.push(Step { what: "lighting, other areas".into(), connected: lo, demand: stepped(lo, &commercial.lighting_steps), cite: commercial.lighting_cite.clone() });
+        steps.push(Step {
+            what: "lighting, other areas".into(),
+            connected: lo,
+            demand: stepped(lo, &commercial.lighting_steps),
+            cite: commercial.lighting_cite.clone(),
+        });
     }
     if ro > 0.0 {
-        steps.push(Step { what: "receptacles".into(), connected: ro, demand: stepped(ro, &rules.receptacle_steps), cite: rules.receptacle_cite.clone() });
+        steps.push(Step {
+            what: "receptacles".into(),
+            connected: ro,
+            demand: stepped(ro, &rules.receptacle_steps),
+            cite: rules.receptacle_cite.clone(),
+        });
     }
     if ko > 0.0 {
         let f = by_count(t.kitchen_units, &rules.kitchen_units).unwrap_or(1.0);
-        steps.push(Step { what: format!("kitchen equipment ({} units)", t.kitchen_units), connected: ko, demand: ko * f, cite: rules.kitchen_cite.clone() });
+        steps.push(Step {
+            what: format!("kitchen equipment ({} units)", t.kitchen_units),
+            connected: ko,
+            demand: ko * f,
+            cite: rules.kitchen_cite.clone(),
+        });
     }
     if mo > 0.0 {
         steps.push(Step { what: "motors and HVAC".into(), connected: mo, demand: mo, cite: "NEC 220.50, 430.24: at their ratings".into() });
@@ -591,7 +635,12 @@ fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (
         steps.push(Step { what: "other equipment".into(), connected: eo, demand: eo, cite: "NEC 220.14(A): at its rating".into() });
     }
     if uo > 0.0 {
-        steps.push(Step { what: "loads the schedule gives (no model load)".into(), connected: uo, demand: uo, cite: "the panel schedule's VA, at 100%".into() });
+        steps.push(Step {
+            what: "loads the schedule gives (no model load)".into(),
+            connected: uo,
+            demand: uo,
+            cite: "the panel schedule's VA, at 100%".into(),
+        });
     }
     // Continuous loads at 125% (their share of the demand; the optional method's units have
     // their own factor), and the largest motor's extra 25%.
@@ -606,7 +655,12 @@ fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (
     }
     let motor = if optional.is_some() { t.largest_motor_va } else { t.largest_motor_va.max(t.largest_unit_motor_va) };
     if motor > 0.0 {
-        steps.push(Step { what: "largest motor's extra 25%".into(), connected: motor, demand: motor * rules.largest_motor_factor, cite: rules.largest_motor_cite.clone() });
+        steps.push(Step {
+            what: "largest motor's extra 25%".into(),
+            connected: motor,
+            demand: motor * rules.largest_motor_factor,
+            cite: rules.largest_motor_cite.clone(),
+        });
     }
     (steps.iter().map(|s| s.demand).sum(), steps, method)
 }
@@ -642,7 +696,7 @@ fn va(v: f64) -> String {
     let s = n.abs().to_string();
     let mut out = String::new();
     for (i, ch) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -714,7 +768,8 @@ fn circuits_of(
 ) -> (Vec<Circuit>, usize) {
     let key = sch.panel.trim().to_ascii_uppercase();
     // A typical panel's units: the rooms its devices are in.
-    let rooms: BTreeSet<String> = devs.iter().filter(|((p, _), _)| *p == key).flat_map(|(_, v)| v.iter().map(|d| d.room.clone())).filter(|r| !r.is_empty()).collect();
+    let rooms: BTreeSet<String> =
+        devs.iter().filter(|((p, _), _)| *p == key).flat_map(|(_, v)| v.iter().map(|d| d.room.clone())).filter(|r| !r.is_empty()).collect();
     let typical = sch.typical_of.is_some();
     let mut out = Vec::new();
     for c in sch.circuits.iter().take(MAX_CIRCUITS) {
@@ -747,11 +802,15 @@ fn circuits_of(
             cc.devices = on.len();
             cc.unit = typical || on.iter().filter(|d| unit_rooms(&d.room)).count() * 2 > on.len();
             // A unit room's kitchen counter circuit: a small-appliance branch circuit (its VA by rule).
-            let small = cc.unit && !rules.small_appliance.words.is_empty() && has_word(&ws, &rules.small_appliance.words) && rules.small_appliance.va > 0.0;
+            let small =
+                cc.unit && !rules.small_appliance.words.is_empty() && has_word(&ws, &rules.small_appliance.words) && rules.small_appliance.va > 0.0;
             // A circuit naming a piece of equipment (no lighting or receptacle words): its
             // receptacles and connections are that equipment's; its load the equipment's.
             let names_equipment = !small && matches!(desc, Cat::Kitchen | Cat::Motor | Cat::Equipment) && !has_l && !has_r;
-            let connection = |d: &Dev| matches!(d.cat, Cat::Receptacle | Cat::Equipment | Cat::Unknown | Cat::Motor | Cat::Kitchen) && !(d.documented && d.cat == Cat::Lighting);
+            let connection = |d: &Dev| {
+                matches!(d.cat, Cat::Receptacle | Cat::Equipment | Cat::Unknown | Cat::Motor | Cat::Kitchen)
+                    && !(d.documented && d.cat == Cat::Lighting)
+            };
             let replaced = small || names_equipment;
             let mut sum = 0.0;
             let mut srcs: BTreeMap<String, (usize, f64)> = BTreeMap::new();
@@ -788,11 +847,26 @@ fn circuits_of(
             } else if names_equipment {
                 let from = equipment_load(c, &key, &sp.mep.equipment_electrical).map(|(v, m, src)| (v, src, m)).or_else(|| {
                     cc.schedule_va.filter(|v| *v > 0.0).map(|v| {
-                        (v, format!("the panel schedule's {} VA for the {} it names ({})", va(v), c.description.trim(), if sch.source.is_empty() { "schedule" } else { sch.source.as_str() }), desc == Cat::Motor)
+                        (
+                            v,
+                            format!(
+                                "the panel schedule's {} VA for the {} it names ({})",
+                                va(v),
+                                c.description.trim(),
+                                if sch.source.is_empty() { "schedule" } else { sch.source.as_str() }
+                            ),
+                            desc == Cat::Motor,
+                        )
                     })
                 });
                 if let Some((v, src, motor)) = from {
-                    let cat = if motor { "motor" } else if desc == Cat::Kitchen { "kitchen" } else { "equipment" };
+                    let cat = if motor {
+                        "motor"
+                    } else if desc == Cat::Kitchen {
+                        "kitchen"
+                    } else {
+                        "equipment"
+                    };
                     *cc.cats.entry(cat).or_default() += v;
                     if motor {
                         cc.largest_motor_va = v;
@@ -869,7 +943,11 @@ fn circuits_of(
                 if cat == Cat::Lighting || cont_words {
                     cc.continuous_va = v;
                 }
-                cc.sources.push(format!("the panel schedule's {} VA ({}): no load in the model on it", va(v), if sch.source.is_empty() { "schedule" } else { sch.source.as_str() }));
+                cc.sources.push(format!(
+                    "the panel schedule's {} VA ({}): no load in the model on it",
+                    va(v),
+                    if sch.source.is_empty() { "schedule" } else { sch.source.as_str() }
+                ));
             }
             cc.unit = typical;
         }
@@ -882,7 +960,14 @@ fn circuits_of(
 }
 
 impl Calc {
-    fn new(sp: &BuildingSpec, devs: &BTreeMap<(String, String), Vec<Dev>>, rules: Rules, occ: Occupancy, occ_from: String, unit_rooms: &dyn Fn(&str) -> bool) -> Calc {
+    fn new(
+        sp: &BuildingSpec,
+        devs: &BTreeMap<(String, String), Vec<Dev>>,
+        rules: Rules,
+        occ: Occupancy,
+        occ_from: String,
+        unit_rooms: &dyn Fn(&str) -> bool,
+    ) -> Calc {
         let commercial = rules.occupancy("commercial").cloned().unwrap_or_default();
         let tags: BTreeSet<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
         let mut panels = Vec::new();
@@ -973,9 +1058,10 @@ impl Calc {
 
     /// Who feeds a panel: (panel, circuit index).
     fn fed_by(&self, tag: &str) -> Option<(usize, usize)> {
-        self.panels.iter().enumerate().find_map(|(pi, p)| {
-            p.circuits.iter().position(|c| c.feeds.as_ref().is_some_and(|(t, _)| t.eq_ignore_ascii_case(tag))).map(|ci| (pi, ci))
-        })
+        self.panels
+            .iter()
+            .enumerate()
+            .find_map(|(pi, p)| p.circuits.iter().position(|c| c.feeds.as_ref().is_some_and(|(t, _)| t.eq_ignore_ascii_case(tag))).map(|ci| (pi, ci)))
     }
 
     /// The service: the panel nothing feeds with the most under it.
@@ -1016,6 +1102,29 @@ fn summary_facts(s: &LoadSummary, rules: &Rules) -> (Option<f64>, Option<f64>, O
     (service, demand_va, demand_a, connected_va)
 }
 
+/// Is a summary one feeder's (`UNIT FEEDER DEMAND CALCULATION`)?
+fn feeder_summary(s: &LoadSummary, rules: &Rules) -> bool {
+    s.panel.is_empty() && has_word(&words(&s.title), &rules.feeder_summary_words)
+}
+
+/// The units a summary is for: `FOR 4 SUITES` in a label, or a line led by a unit word
+/// (`12 UNITS WITH A TOTAL SF OF: 9000`) and its first number.
+fn summary_units(s: &LoadSummary, rules: &Rules) -> Option<u32> {
+    let unit = |w: &str| rules.unit_words.iter().any(|u| u.eq_ignore_ascii_case(w));
+    for l in &s.lines {
+        let ws = words(&l.label);
+        if let Some(n) = ws.windows(2).find(|w| w.get(1).is_some_and(|x| unit(x))).and_then(|w| w.first()?.parse::<u32>().ok()) {
+            return Some(n).filter(|n| (1..=MAX_UNITS).contains(n));
+        }
+        if ws.first().is_some_and(|w| unit(w))
+            && let Some(v) = l.values.first().filter(|v| v.fract() == 0.0 && **v >= 1.0 && **v <= f64::from(MAX_UNITS))
+        {
+            return Some(*v as u32);
+        }
+    }
+    None
+}
+
 /// The calculation and its checks: the report as JSON, CSV and text.
 fn calculate(c: &Calc) -> (Value, String, String) {
     let rules = &c.rules;
@@ -1026,12 +1135,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
     let cell = |v: &str| if v.contains([',', '"', '\n']) { format!("\"{}\"", v.replace('"', "\"\"")) } else { v.to_string() };
     let opt = |v: Option<f64>| v.map(|x| format!("{:.0}", x)).unwrap_or_default();
     let mut text = String::new();
-    text.push_str(&format!(
-        "LOAD CALCULATION (model) - occupancy: {} [{}] ({})\n",
-        c.occ.name,
-        c.occ.groups.join(", "),
-        c.occ_from
-    ));
+    text.push_str(&format!("LOAD CALCULATION (model) - occupancy: {} [{}] ({})\n", c.occ.name, c.occ.groups.join(", "), c.occ_from));
     text.push_str("Connected loads: luminaires at the fixture schedule's VA, receptacles by rule, equipment from its submittal, else the panel schedule's VA (said so on the line).\n\n");
     let mut panels_json = Vec::new();
     let service = c.service().map(|p| p.tag.clone());
@@ -1059,6 +1163,8 @@ fn calculate(c: &Calc) -> (Value, String, String) {
         }
     }
     let mut service_json = Value::Null;
+    // Feeder summaries compared once per feeder kind (its panel and units).
+    let mut feeder_seen: BTreeSet<(String, u32)> = BTreeSet::new();
     for tag in &order {
         let Some(p) = c.panel(tag) else { continue };
         let sys = system(&p.sys_text);
@@ -1091,7 +1197,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
             let used = c.circuit_va(cc);
             model_sum += used;
             sched_sum += cc.schedule_va.unwrap_or(0.0);
-            let ph = phases_of(&cc.number, cc.poles, sys.phases.max(2).min(3));
+            let ph = phases_of(&cc.number, cc.poles, sys.phases.clamp(2, 3));
             for k in &ph {
                 if let Some(slot) = phase.get_mut(*k) {
                     *slot += used / ph.len() as f64;
@@ -1125,7 +1231,13 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                         level: "circuit",
                         panel: p.tag.clone(),
                         circuit: cc.number.clone(),
-                        message: format!("{} {} ({}): {side} {} VA is {load_a:.1} A on a {b:.0} A breaker{why}", p.tag, cc.number, cc.description, va(used)),
+                        message: format!(
+                            "{} {} ({}): {side} {} VA is {load_a:.1} A on a {b:.0} A breaker{why}",
+                            p.tag,
+                            cc.number,
+                            cc.description,
+                            va(used)
+                        ),
                         likely,
                         cite: rules.circuit_limit_cite.clone(),
                     });
@@ -1209,7 +1321,8 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                     let swapped = p.circuits.iter().filter(|o| o.number != cc.number).find_map(|o| {
                         let (oc, on) = o.feeds.as_ref()?;
                         let ot = c.panel(oc)?.printed.get("connected_va").copied()? * f64::from(*on);
-                        ((row - ot).abs() <= rules.tolerance(row, ot)).then(|| format!(" - it is {oc}'s total: rows {} and {} look swapped", cc.number, o.number))
+                        ((row - ot).abs() <= rules.tolerance(row, ot))
+                            .then(|| format!(" - it is {oc}'s total: rows {} and {} look swapped", cc.number, o.number))
                     });
                     notes.push(format!("row {} VA vs {child}'s {} VA", va(row), va(ct)));
                     findings.push(Finding {
@@ -1242,6 +1355,30 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 let fa = panel_amps(fd, if cc.poles >= 3 { sys } else { System { phases: 1, ..child_sys } });
                 demand_cells = (format!("{fd:.0}"), format!("{fa:.1}"));
                 amps_cell = format!("{fa:.1}");
+                // The documents' demand calculation for a feeder of this many units.
+                for s in c.summaries.iter().filter(|s| feeder_summary(s, rules) && summary_units(s, rules) == Some(*n)) {
+                    let (_, _, da, _) = summary_facts(s, rules);
+                    let Some(da) = da else { continue };
+                    notes.push(format!("{} ({}) gives {da:.0} A", s.title, s.source));
+                    if feeder_seen.insert((child.clone(), *n)) && (da - fa).abs() > (rules.tolerance_pct / 100.0 * da.max(fa)).max(5.0) {
+                        findings.push(Finding {
+                            rule: "E-LOAD-SCHEDULE",
+                            level: "feeder",
+                            panel: p.tag.clone(),
+                            circuit: cc.number.clone(),
+                            message: format!(
+                                "{} {} feeds {child} ({n} units): the documents' {} ({}) gives {da:.0} A demand{}; the model's {fa:.0} A",
+                                p.tag,
+                                cc.number,
+                                s.title,
+                                s.source,
+                                if s.basis.is_empty() { String::new() } else { format!(" by NEC {}", s.basis) }
+                            ),
+                            likely: "either",
+                            cite: rules.tolerance_cite.clone(),
+                        });
+                    }
+                }
                 if let Some(b) = cc.breaker
                     && fa > b + 1e-6
                 {
@@ -1331,7 +1468,11 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 cc.feeds.as_ref().map_or(cc.model_va.map(va).unwrap_or_default(), |_| va(used)),
                 va(used),
                 cc.used_from,
-                if notes.is_empty() { sources.chars().take(160).collect::<String>() } else { format!("{} | {}", notes.join("; "), sources.chars().take(120).collect::<String>()) }
+                if notes.is_empty() {
+                    sources.chars().take(160).collect::<String>()
+                } else {
+                    format!("{} | {}", notes.join("; "), sources.chars().take(120).collect::<String>())
+                }
             ));
         }
         // E-LOAD-SCHEDULE: the schedule's own totals against its circuits.
@@ -1430,7 +1571,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
         let docs: Vec<&LoadSummary> = c
             .summaries
             .iter()
-            .filter(|s| if s.panel.is_empty() { is_service } else { s.panel.eq_ignore_ascii_case(&p.tag) })
+            .filter(|s| if s.panel.is_empty() { is_service && !feeder_summary(s, rules) } else { s.panel.eq_ignore_ascii_case(&p.tag) })
             .collect();
         let mut doc_json = Vec::new();
         for s in &docs {
@@ -1444,7 +1585,13 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 .and_then(|o| by_count(tree.units, &o.optional_units).map(|f| (f, o.optional_cite.clone())));
             let optional_text = optional.as_ref().map_or(String::new(), |(f, _)| {
                 let ov = tree.connected_va * f;
-                format!("; by NEC 220.84 on the model's loads ({} units at {:.0}%): {} VA = {:.0} A", tree.units, f * 100.0, va(ov), panel_amps(ov, sys))
+                format!(
+                    "; by NEC 220.84 on the model's loads ({} units at {:.0}%): {} VA = {:.0} A",
+                    tree.units,
+                    f * 100.0,
+                    va(ov),
+                    panel_amps(ov, sys)
+                )
             });
             if s.basis == "220.84" && method.optional.is_none() {
                 findings.push(Finding {
@@ -1470,7 +1617,6 @@ fn calculate(c: &Calc) -> (Value, String, String) {
             if let Some(da) = da
                 && (da - dem_a).abs() > (rules.tolerance_pct / 100.0 * da.max(dem_a)).max(5.0)
             {
-
                 findings.push(Finding {
                     rule: "E-LOAD-SCHEDULE",
                     level,
@@ -1504,7 +1650,8 @@ fn calculate(c: &Calc) -> (Value, String, String) {
         }
         // A typical panel's units: the feeders' unit counts against its `typical of`.
         if let Some(t) = p.typical_of {
-            let fed_units: u32 = c.panels.iter().flat_map(|x| &x.circuits).filter_map(|cc| cc.feeds.as_ref()).filter(|(ch, _)| ch == &p.tag).map(|(_, n)| *n).sum();
+            let fed_units: u32 =
+                c.panels.iter().flat_map(|x| &x.circuits).filter_map(|cc| cc.feeds.as_ref()).filter(|(ch, _)| ch == &p.tag).map(|(_, n)| *n).sum();
             if fed_units > 0 && fed_units != t {
                 findings.push(Finding {
                     rule: "E-LOAD-SCHEDULE",
@@ -1536,15 +1683,26 @@ fn calculate(c: &Calc) -> (Value, String, String) {
             "  demand: model {} VA = {dem_a:.1} A{}{}\n",
             va(dem),
             p.rating_a.map(|r| format!(" ({:.0}% of {r:.0} A)", dem_a / r * 100.0)).unwrap_or_default(),
-            printed("demand_va").map(|v| format!("; schedule prints {} VA{}", va(v), printed("demand_a").map(|a| format!(" / {a:.0} A")).unwrap_or_default())).unwrap_or_default()
+            printed("demand_va")
+                .map(|v| format!("; schedule prints {} VA{}", va(v), printed("demand_a").map(|a| format!(" / {a:.0} A")).unwrap_or_default()))
+                .unwrap_or_default()
         ));
         text.push_str(&format!(
             "  phases (VA): model {}{}\n",
             model_ph.iter().map(|v| va(*v)).collect::<Vec<_>>().join(" / "),
-            if printed_ph.is_empty() { String::new() } else { format!("; schedule {}", printed_ph.iter().map(|v| va(*v)).collect::<Vec<_>>().join(" / ")) }
+            if printed_ph.is_empty() {
+                String::new()
+            } else {
+                format!("; schedule {}", printed_ph.iter().map(|v| va(*v)).collect::<Vec<_>>().join(" / "))
+            }
         ));
         for s in &docs {
-            text.push_str(&format!("  documents: {} ({}){}\n", s.title, s.source, if s.basis.is_empty() { String::new() } else { format!(", based on NEC {}", s.basis) }));
+            text.push_str(&format!(
+                "  documents: {} ({}){}\n",
+                s.title,
+                s.source,
+                if s.basis.is_empty() { String::new() } else { format!(", based on NEC {}", s.basis) }
+            ));
             for l in s.lines.iter().filter(|l| !l.values.is_empty()).take(60) {
                 text.push_str(&format!("    {}\n", l.text));
             }
@@ -1631,7 +1789,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (sp, stored) = super::bspec::current(s, CMD)?;
     if !stored || sp.mep.panel_schedules.is_empty() {
-        return Ok(json!({"panels": [], "findings": [], "note": "no panel schedules in this drawing: a job reads them off the electrical sheets (job.start)"}));
+        return Ok(
+            json!({"panels": [], "findings": [], "note": "no panel schedules in this drawing: a job reads them off the electrical sheets (job.start)"}),
+        );
     }
     let rules = rules();
     let code_texts: Vec<String> = p
@@ -1646,7 +1806,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let groups = if code_texts.is_empty() { Vec::new() } else { super::valueeng::occupancies(&code_texts) };
     let given = str_param(p, "occupancy");
     let (occ, occ_from) = pick_occupancy(&rules, given, &groups)
-        .map(|(o, f)| (o.clone(), str_param(p, "code_sheet").map_or(f.clone(), |sh| f.replacen("the code sheet", &format!("code sheet {}", sh.chars().take(40).collect::<String>()), 1))))
+        .map(|(o, f)| {
+            (
+                o.clone(),
+                str_param(p, "code_sheet")
+                    .map_or(f.clone(), |sh| f.replacen("the code sheet", &format!("code sheet {}", sh.chars().take(40).collect::<String>()), 1)),
+            )
+        })
         .ok_or_else(|| bad(CMD, format!("unknown occupancy {}: hotel, dwelling, commercial or a group (R-1, R-2, B…)", given.unwrap_or_default())))?;
     let d = s.doc()?;
     let devs = model_devices(d, &rules);
@@ -1664,12 +1830,24 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let calc = Calc::new(&sp, &devs, rules, occ, occ_from, &unit_rooms);
     let (mut out, csv, text) = calculate(&calc);
     if let Some(want) = str_param(p, "panel").map(str::trim).filter(|x| !x.is_empty()) {
-        let keep: Vec<Value> = out["panels"].as_array().into_iter().flatten().filter(|x| x["panel"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(want))).cloned().collect();
+        let keep: Vec<Value> = out["panels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|x| x["panel"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(want)))
+            .cloned()
+            .collect();
         if keep.is_empty() {
             return Err(bad(CMD, format!("no schedule for panel {want}")));
         }
         out["panels"] = json!(keep);
-        let f: Vec<Value> = out["findings"].as_array().into_iter().flatten().filter(|x| x["panel"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(want))).cloned().collect();
+        let f: Vec<Value> = out["findings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|x| x["panel"].as_str().is_some_and(|t| t.eq_ignore_ascii_case(want)))
+            .cloned()
+            .collect();
         out["findings"] = json!(f);
     }
     if let Some(path) = str_param(p, "csv").map(str::trim).filter(|x| !x.is_empty()) {

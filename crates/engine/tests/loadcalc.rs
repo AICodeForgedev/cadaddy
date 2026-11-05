@@ -38,7 +38,11 @@ fn dev(d: &mut Drawing, x: f64, ps: &[(&str, Value)]) -> Handle {
     ];
     let mut store = Props::default();
     for (k, val) in ps {
-        let src = if *k == "fixture_va" { Source::from_doc(SourceKind::Schedule, "X-2 LIGHT FIXTURE SCHEDULE type L1") } else { Source::print("Sample Sheet E-101", None) };
+        let src = if *k == "fixture_va" {
+            Source::from_doc(SourceKind::Schedule, "X-2 LIGHT FIXTURE SCHEDULE type L1")
+        } else {
+            Source::print("Sample Sheet E-101", None)
+        };
         store.set(k, Prop::new(val.clone(), src));
     }
     e.common.xdata = props::write(&x, &store).into();
@@ -49,7 +53,11 @@ fn dev(d: &mut Drawing, x: f64, ps: &[(&str, Value)]) -> Handle {
 
 fn luminaires(d: &mut Drawing, panel: &str, circuit: &str, n: usize, va: f64, room: &str) {
     for i in 0..n {
-        dev(d, i as f64, &[("kind", json!("luminaire")), ("panel", json!(panel)), ("circuit", json!(circuit)), ("fixture_va", json!(va)), ("room", json!(room))]);
+        dev(
+            d,
+            i as f64,
+            &[("kind", json!("luminaire")), ("panel", json!(panel)), ("circuit", json!(circuit)), ("fixture_va", json!(va)), ("room", json!(room))],
+        );
     }
 }
 
@@ -154,11 +162,18 @@ fn the_model_s_loads_are_checked_circuit_by_circuit_against_breakers_and_the_sch
     assert!(s3.first().is_some_and(|f| f["likely_wrong"] == "either" && f["message"].as_str().unwrap().contains("129 VA a receptacle")), "{s3:?}");
     // The schedule prints 20,000 VA; its circuits add to 13,500.
     let tot = find(&v, "E-LOAD-SCHEDULE", "LP1", "");
-    assert!(tot.iter().any(|f| f["message"].as_str().unwrap().contains("circuits read add to 13,500 VA") && f["likely_wrong"] == "schedule"), "{tot:?}");
+    assert!(
+        tot.iter().any(|f| f["message"].as_str().unwrap().contains("circuits read add to 13,500 VA") && f["likely_wrong"] == "schedule"),
+        "{tot:?}"
+    );
     // A lighting circuit the model puts receptacles on: over its breaker by the model only, the
     // model likely wrong (the schedule's 300 VA is well under).
     let c7 = find(&v, "E-LOAD-CIRCUIT", "LP1", "7");
-    assert!(c7.first().is_some_and(|f| f["likely_wrong"] == "model" && f["message"].as_str().unwrap().contains("12 receptacle(s) on this lighting circuit")), "{c7:?}");
+    assert!(
+        c7.first()
+            .is_some_and(|f| f["likely_wrong"] == "model" && f["message"].as_str().unwrap().contains("12 receptacle(s) on this lighting circuit")),
+        "{c7:?}"
+    );
     let s7 = find(&v, "E-LOAD-SCHEDULE", "LP1", "7");
     assert_eq!(s7.first().map(|f| f["likely_wrong"].clone()), Some(json!("model")), "{s7:?}");
     // No finding on the spare.
@@ -189,7 +204,10 @@ fn a_panel_over_its_bus_a_feeder_over_its_breaker_and_conductors_and_swapped_row
     assert!(swapped.iter().any(|f| f["message"].as_str().unwrap().contains("look swapped") && f["likely_wrong"] == "schedule"), "{swapped:?}");
     // The phases: LP1's schedule prints 9,000 / 2,000 / 2,200 VA.
     let ph = find(&v, "E-LOAD-PHASE", "LP1", "");
-    assert!(ph.iter().any(|f| f["message"].as_str().unwrap().starts_with("LP1: the schedule's phase loads") && f["likely_wrong"] == "schedule"), "{ph:?}");
+    assert!(
+        ph.iter().any(|f| f["message"].as_str().unwrap().starts_with("LP1: the schedule's phase loads") && f["likely_wrong"] == "schedule"),
+        "{ph:?}"
+    );
     // The service: MSB, nothing feeds it; its documents' summary read beside it.
     assert_eq!(v["service"]["panel"], "MSB");
     assert_eq!(v["service"]["documents"][0]["service_size_a"], json!(400.0));
@@ -244,9 +262,15 @@ fn lodging_spec(units_on_feeders: [u32; 2], cooking: bool) -> Value {
                  "circuits": unit,
                  "totals": {"connected_va": unit_total}}
             ],
-            "load_summaries": [{"title": "PANELBOARD DP DEMAND CALCULATION", "panel": "DP", "basis": "220.84", "source": "X-4", "lines": [
-                {"label": "TOTAL AMPS AT 208V, 3PH:", "values": [90.0]}
-            ]}]
+            "load_summaries": [
+                {"title": "PANELBOARD DP DEMAND CALCULATION", "panel": "DP", "basis": "220.84", "source": "X-4", "lines": [
+                    {"label": "TOTAL AMPS AT 208V, 3PH:", "values": [90.0]}
+                ]},
+                {"title": "UNIT FEEDER DEMAND CALCULATION", "basis": "220.84", "source": "X-4", "lines": [
+                    {"label": "HEATING/COOLING FOR 3 SUITES:", "values": [9.0]},
+                    {"label": "TOTAL AMPS AT 208V, 1PH:", "values": [500.0]}
+                ]}
+            ]
         }
     })
 }
@@ -284,12 +308,31 @@ fn typical_unit_panels_roll_up_through_their_feeders_with_the_code_sheet_s_occup
     let steps = dp["demand_steps"].as_array().unwrap();
     let general = steps.iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
     assert!(general["cite"].as_str().unwrap().contains("Table 220.42, hotels"), "{general}");
-    assert_eq!(general["connected_va"], json!(6.0 * 2_460.0), "the units' receptacles and small-appliance circuits in their general lighting: {general}");
+    assert_eq!(
+        general["connected_va"],
+        json!(6.0 * 2_460.0),
+        "the units' receptacles and small-appliance circuits in their general lighting: {general}"
+    );
     assert_eq!(general["demand_va"], json!(7_380.0), "{general}");
     // The documents' demand calculation uses the multifamily optional method on a hotel.
     let doc = find(&v, "E-LOAD-SCHEDULE", "DP", "");
     assert!(doc.iter().any(|f| f["likely_wrong"] == "documents" && f["message"].as_str().unwrap().contains("220.84")), "{doc:?}");
     assert!(doc.iter().any(|f| f["message"].as_str().unwrap().contains("6 units at 44%")), "Table 220.84 on the model's loads: {doc:?}");
+    // A feeder's own demand calculation: its units (3) match DP's feeders to U; compared once.
+    let fd: Vec<&Value> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["level"] == "feeder" && f["message"].as_str().unwrap().contains("UNIT FEEDER DEMAND"))
+        .collect();
+    assert_eq!(fd.len(), 1, "{fd:?}");
+    assert!(
+        fd[0]["message"].as_str().unwrap().contains("feeds U (3 units)") && fd[0]["message"].as_str().unwrap().contains("gives 500 A"),
+        "{}",
+        fd[0]
+    );
+    // It is no service summary.
+    assert_eq!(dp["documents"].as_array().unwrap().len(), 1, "{dp}");
     // The feeders' unit counts are the typical panel's.
     assert!(find(&v, "E-LOAD-SCHEDULE", "U", "").iter().all(|f| !f["message"].as_str().unwrap().contains("typical of")), "{v:#}");
 }
@@ -305,7 +348,12 @@ fn the_dwelling_rules_and_a_unit_count_the_feeders_dont_match() {
     assert_eq!(general["demand_va"], json!(6_255.0), "{general}");
     // The documents' optional method needs units with cooking: these have none.
     let doc = find(&v, "E-LOAD-SCHEDULE", "DP", "");
-    assert!(doc.iter().any(|f| f["likely_wrong"] == "documents" && f["message"].as_str().unwrap().contains("5 unit(s), 0 with cooking, 5 with heating or cooling")), "{doc:?}");
+    assert!(
+        doc.iter()
+            .any(|f| f["likely_wrong"] == "documents"
+                && f["message"].as_str().unwrap().contains("5 unit(s), 0 with cooking, 5 with heating or cooling")),
+        "{doc:?}"
+    );
     let typ = find(&v, "E-LOAD-SCHEDULE", "U", "");
     assert!(typ.iter().any(|f| f["message"].as_str().unwrap().contains("typical of 6; the feeder rows feed 5 units")), "{typ:?}");
 }
@@ -325,7 +373,13 @@ fn the_report_is_written_as_csv_and_text_with_a_source_on_every_line() {
     let circuits: Vec<&str> = c.lines().filter(|l| l.starts_with("circuit,LP1,")).collect();
     assert_eq!(circuits.len(), 6, "{c}");
     // Every circuit line with a load says where it came from.
-    assert!(circuits.iter().filter(|l| !l.contains(",SPARE,")).all(|l| l.contains("X-2 LIGHT FIXTURE SCHEDULE") || l.contains("220.14") || l.contains("schedule")), "{c}");
+    assert!(
+        circuits
+            .iter()
+            .filter(|l| !l.contains(",SPARE,"))
+            .all(|l| l.contains("X-2 LIGHT FIXTURE SCHEDULE") || l.contains("220.14") || l.contains("schedule")),
+        "{c}"
+    );
     assert!(c.lines().any(|l| l.starts_with("service,MSB,")), "{c}");
     assert!(c.lines().any(|l| l.starts_with("finding,") && l.contains("E-LOAD-CIRCUIT")), "{c}");
     let t = std::fs::read_to_string(&txt).unwrap();

@@ -24,12 +24,14 @@ const CHAR_W: f64 = 0.62;
 /// The empty band that parts two tables side by side, in line heights (a summary's labels can
 /// stand well apart from their numbers).
 const BAND: f64 = 8.0;
+/// How far either side of its title another title still ends a summary, in title heights.
+const OVER: f64 = 10.0;
 /// A title is at least this much taller than its lines.
 const TITLE_OVER_LINES: f64 = 1.2;
 /// Lines further apart than this many line steps end the summary.
 const GAP_STEPS: f64 = 4.0;
 
-/// A number as a summary prints it: `2,221,327`, `4123.00`, `49.04`, `2,000A` (not `125%`).
+/// A number as a summary prints it: `1,234,567`, `5120.00`, `12.50`, `2,000A` (not `125%`).
 pub(crate) fn number(v: &str) -> Option<f64> {
     let t = v.trim();
     if t.contains('%') {
@@ -67,7 +69,7 @@ pub(crate) fn basis(text: &str) -> Option<String> {
     None
 }
 
-/// The panel a summary's title names: `PANELBOARD DP1 DEMAND CALCULATION` → `DP1`; none for the
+/// The panel a summary's title names: `PANELBOARD R2 DEMAND CALCULATION` → `R2`; none for the
 /// building's (`COMMERCIAL LOAD SUMMARY`, `PANEL LOAD SUMMARY`).
 pub(crate) fn title_panel(title: &str, rules: &Rules) -> String {
     let u = title.trim().to_ascii_uppercase();
@@ -93,8 +95,6 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, rules: &Rules) -> Vec<LoadSu
         .filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.x.is_finite() && t.at.y.is_finite() && !t.value.trim().is_empty())
         .collect();
     let titles: Vec<&&TextItem> = flat.iter().filter(|t| is_title(&t.value, rules)).take(MAX_SUMMARIES).collect();
-    // Other tables' titles end a summary going down (a panel schedule's, another summary's).
-    let stops: Vec<&&TextItem> = flat.iter().filter(|t| is_title(&t.value, rules) || super::super::panelsched::title_panel(&t.value).is_some()).collect();
     let mut out = Vec::new();
     for title in titles {
         let h = title.height;
@@ -110,19 +110,23 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, rules: &Rules) -> Vec<LoadSu
         if near.is_empty() {
             continue;
         }
-        let mut hs: Vec<f64> = near.iter().map(|t| t.height).collect();
+        // Its lines' height: the texts under its own title's width (not the tables beside it).
+        let (tx0, tx1) = (title.at.x - OVER * h, extent(title).1 + OVER * h);
+        let mut hs: Vec<f64> = near.iter().filter(|t| t.at.x >= tx0 && t.at.x <= tx1).map(|t| t.height).collect();
         hs.sort_by(f64::total_cmp);
         let line_h = hs.get(hs.len() / 2).copied().unwrap_or(h);
         if h < TITLE_OVER_LINES * line_h {
             continue;
         }
-        // Down to the next title under this one, or a gap of a few lines.
+        // Down to the next title or heading under this one (another table's: taller than these
+        // lines), or a gap of a few lines.
         let mut ys: Vec<f64> = near.iter().map(|t| t.at.y).collect();
         ys.sort_by(|a, b| b.total_cmp(a));
-        let next_title = stops
+        let next_title = flat
             .iter()
-            .filter(|t| t.at.y < title.at.y - 0.3 * h && !std::ptr::eq::<TextItem>(***t, *title) && t.height >= TITLE_OVER_LINES * line_h)
-            .filter(|t| extent(t).0 < title.at.x + RIGHT_REACH * h && extent(t).1 > title.at.x - LEFT_REACH * h)
+            .filter(|t| t.at.y < title.at.y - 0.3 * h && !std::ptr::eq::<TextItem>(**t, *title) && t.height >= TITLE_OVER_LINES * line_h)
+            // Over this summary (a schedule's title off to its side is another column's).
+            .filter(|t| extent(t).0 < tx1 && extent(t).1 > tx0)
             .map(|t| t.at.y)
             .max_by(f64::total_cmp);
         let mut bottom = next_title.map_or(f64::NEG_INFINITY, |y| y + 0.3 * line_h);
@@ -148,8 +152,10 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str, rules: &Rules) -> Vec<LoadSu
         // A panel schedule beside it starts at its circuit-number column.
         let ckt = |t: &TextItem| matches!(t.value.trim().to_ascii_uppercase().as_str(), "CKT" | "CKT." | "CKT #" | "CKT NO." | "CIR");
         let right = near.iter().filter(|t| t.at.y > bottom && ckt(t) && t.at.x > title.at.x + 2.0 * h).map(|t| t.at.x).fold(f64::INFINITY, f64::min);
-        let left = near.iter().filter(|t| t.at.y > bottom && ckt(t) && t.at.x < title.at.x - 2.0 * h).map(|t| t.at.x).fold(f64::NEG_INFINITY, f64::max);
-        let rows: Vec<&&TextItem> = near.iter().copied().filter(|t| t.at.y > bottom && t.at.x < right - 0.5 * line_h && t.at.x > left + 0.5 * line_h).collect();
+        let left =
+            near.iter().filter(|t| t.at.y > bottom && ckt(t) && t.at.x < title.at.x - 2.0 * h).map(|t| t.at.x).fold(f64::NEG_INFINITY, f64::max);
+        let rows: Vec<&&TextItem> =
+            near.iter().copied().filter(|t| t.at.y > bottom && t.at.x < right - 0.5 * line_h && t.at.x > left + 0.5 * line_h).collect();
         // Across: the texts' extents merged; the summary is the run of them its title starts in,
         // as far as an empty band either side.
         let mut spans: Vec<(f64, f64)> = rows.iter().map(|t| extent(t)).chain(std::iter::once(extent(title))).collect();

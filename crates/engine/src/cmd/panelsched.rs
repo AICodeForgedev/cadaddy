@@ -123,7 +123,7 @@ const PHASE_HEADS: [&str; 7] = ["A", "B", "C", "*", "\u{d8}A", "\u{d8}B", "\u{d8
 /// How many rows below its last circuit a schedule's totals reach, in row steps.
 const TOTALS_ROWS: f64 = 8.0;
 
-/// A total's value as printed: `2,221,327`, `1,607`, `16.2` (kVA).
+/// A total's value as printed: `1,234,567`, `1,250`, `16.2` (kVA).
 fn amount(v: &str) -> Option<f64> {
     let d = v.trim().trim_end_matches(['A', 'W']).trim().replace(',', "");
     (!d.is_empty() && d.len() <= 12 && d.chars().all(|c| c.is_ascii_digit() || c == '.'))
@@ -328,7 +328,14 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let (x0, x1) = (lnum - 8.0 * row_h, if two { rnum + 8.0 * row_h } else { lnum + 120.0 * row_h });
         let mut below: Vec<&&TextItem> = flat.iter().filter(|t| t.at.y < head_bottom - 0.5 * row_h && t.at.x >= x0 && t.at.x <= x1).collect();
         below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-        // Rows, line by line, until the subtotals, a gap of a few rows, or the next title.
+        // Rows, line by line, until the subtotals, a gap of a few rows, or the next title. A
+        // subtotal's line ends the rows whichever of its texts comes first (its number can sit a
+        // hair above its label).
+        let ends = |v: &str| {
+            let u = v.trim().to_ascii_uppercase();
+            u.starts_with("PER PHASE") || u.starts_with("TOTAL") || u.contains("SUB-TOTAL") || u.contains("SUBTOTAL")
+        };
+        let end_ys: Vec<f64> = below.iter().filter(|t| ends(&t.value)).map(|t| t.at.y).collect();
         let mut lines: Vec<Vec<&TextItem>> = Vec::new();
         let mut last_y = head_bottom;
         let mut step: Option<f64> = None;
@@ -338,10 +345,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                 _ => {
                     let u = t.value.trim().to_ascii_uppercase();
                     let gap = last_y - t.at.y;
-                    if u.starts_with("PER PHASE")
-                        || u.starts_with("TOTAL")
-                        || u.contains("SUB-TOTAL")
-                        || u.contains("SUBTOTAL")
+                    if end_ys.iter().any(|y| (y - t.at.y).abs() <= 0.6 * row_h)
                         || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
                         || step.is_some_and(|s| gap > 2.6 * s)
                         || (step.is_none() && gap > 4.0 * row_h)
@@ -470,7 +474,10 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
         let header = header_facts(&flat, top + 0.6 * row_h, title.at.y, l.at.x - 2.0 * row_h, head_x1 + 8.0 * row_h, row_h);
         // The phase columns between the sides' loads (`A B C`, or `*` where phases vary).
-        let (lo, hi) = (sides.first().and_then(|s| s.load.or(s.poles)).unwrap_or(lnum), if two { sides.get(1).and_then(|s| s.load.or(s.poles)).unwrap_or(rnum) } else { x1 });
+        let (lo, hi) = (
+            sides.first().and_then(|s| s.load.or(s.poles)).unwrap_or(lnum),
+            if two { sides.get(1).and_then(|s| s.load.or(s.poles)).unwrap_or(rnum) } else { x1 },
+        );
         let phases: Vec<f64> = head
             .iter()
             .filter(|t| PHASE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && t.at.x > lo + row_h && t.at.x < hi - row_h)
@@ -1048,7 +1055,11 @@ mod tests {
             t(375.0, 490.0, "DESCRIPTION", 6.0),
             t(470.0, 490.0, "CKT", 6.0),
         ];
-        let rows = [("1", "LIGHTING EAST", "2,000", "2", "RECEPTACLES WEST", "1,000"), ("3", "LIGHTING WEST", "600", "4", "SPARE", "400"), ("5", "SIGN", "300", "6", "SPACE", "200")];
+        let rows = [
+            ("1", "LIGHTING EAST", "2,000", "2", "RECEPTACLES WEST", "1,000"),
+            ("3", "LIGHTING WEST", "600", "4", "SPARE", "400"),
+            ("5", "SIGN", "300", "6", "SPACE", "200"),
+        ];
         for (i, (ln, ld, ll, rn, rd, rl)) in rows.iter().enumerate() {
             let y = 472.0 - 10.0 * i as f64;
             v.extend([t(100.0, y, ln, 6.0), t(115.0, y, ld, 6.0), t(202.0, y, "20", 6.0), t(215.0, y, "1", 6.0), t(230.0, y, ll, 6.0)]);
@@ -1075,7 +1086,9 @@ mod tests {
     fn one_sided_kva() -> Vec<TextItem> {
         let mut v = vec![t(100.0, 300.0, "PANEL SCHEDULE - LP2", 9.0), t(80.0, 285.0, "CKT", 5.0), t(95.0, 285.0, "DESCRIPTION", 5.0)];
         v.extend([t(200.0, 285.0, "TRIP", 5.0), t(220.0, 285.0, "POLES", 5.0), t(250.0, 285.0, "LOAD", 5.0)]);
-        for (i, (n, d, l)) in [("1", "LIGHTING LOBBY", "1,500"), ("2", "RECEPTACLES LOBBY", "1,000"), ("3", "WATER COOLER", "2,000")].iter().enumerate() {
+        for (i, (n, d, l)) in
+            [("1", "LIGHTING LOBBY", "1,500"), ("2", "RECEPTACLES LOBBY", "1,000"), ("3", "WATER COOLER", "2,000")].iter().enumerate()
+        {
             let y = 270.0 - 8.0 * i as f64;
             v.extend([t(82.0, y, n, 5.0), t(95.0, y, d, 5.0), t(202.0, y, "20", 5.0), t(222.0, y, "1", 5.0), t(250.0, y, l, 5.0)]);
         }
@@ -1097,14 +1110,30 @@ mod tests {
         let h = got.iter().find(|p| p.panel == "H1").unwrap();
         assert_eq!(h.circuits.len(), 6, "{:#?}", h.circuits);
         let want: BTreeMap<String, f64> =
-            [("phase_a_va", 3000.0), ("phase_b_va", 1000.0), ("phase_c_va", 500.0), ("connected_va", 4500.0), ("demand_a", 7.0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+            [("phase_a_va", 3000.0), ("phase_b_va", 1000.0), ("phase_c_va", 500.0), ("connected_va", 4500.0), ("demand_a", 7.0)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
         assert_eq!(h.totals, want, "the legend beside a total is no value of it");
         let got = read(&one_sided_kva(), "X-2");
         let lp = got.iter().find(|p| p.panel == "LP2").unwrap();
         assert_eq!(lp.circuits.len(), 3, "{:#?}", lp.circuits);
-        let want: BTreeMap<String, f64> =
-            [("connected_va", 4500.0), ("demand_va", 5100.0), ("phase_a_va", 2500.0), ("phase_b_va", 2000.0)].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let want: BTreeMap<String, f64> = [("connected_va", 4500.0), ("demand_va", 5100.0), ("phase_a_va", 2500.0), ("phase_b_va", 2000.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
         assert_eq!(lp.totals, want, "kVA reads as VA; phases in order without phase columns");
+        // A total's number a hair above its label (the import's rounding): still the totals, never
+        // more rows of the last circuit.
+        let mut nudged = two_sided_with_totals();
+        for t in nudged.iter_mut().filter(|t| t.value.chars().all(|c| c.is_ascii_digit() || c == ',') && t.at.y < 450.0) {
+            t.at.y += 0.01;
+        }
+        let h = read(&nudged, "X-1").into_iter().find(|p| p.panel == "H1").unwrap();
+        assert_eq!(h.circuits.len(), 6, "{:#?}", h.circuits);
+        assert_eq!(h.totals.get("connected_va"), Some(&4500.0), "{:?}", h.totals);
+        assert_eq!(h.totals.get("phase_a_va"), Some(&3000.0), "{:?}", h.totals);
+        assert_eq!(h.circuits.iter().find(|c| c.number == "5").and_then(|c| c.load_va), Some(300.0), "{:#?}", h.circuits);
         // The older fixture: its subtotal line has no numbers.
         let g = read(&panel_g(), "E-601");
         assert!(g.iter().all(|p| p.totals.values().all(|v| v.is_finite())));
