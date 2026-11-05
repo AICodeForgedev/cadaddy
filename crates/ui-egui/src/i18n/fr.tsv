@@ -3209,7 +3209,9 @@
 	The current file is kept as {name} until the next save.	Le fichier actuel est conservé sous {name} jusqu'au prochain enregistrement.
 	This format can't keep these objects yet: {objects}.	Ce format ne peut pas encore conserver ces objets : {objects}.
 	{count} more types	{count} autres types
-Review by Impact	Revue par impact
-Resolve Review Item by Impact	Résoudre l'élément de revue par impact
-Open Review Item	Ouvrir l'élément de revue
-Review Audit Trail	Journal d'audit de la revue
+	Review by Impact	Revue par impact
+	Resolve Review Item by Impact	Résoudre l'élément de revue par impact
+	Open Review Item	Ouvrir l'élément de revue
+	Review Audit Trail	Journal d'audit de la revue
+	Accuracy Trend	Tendance de précision
+	Measure Build Accuracy	Mesurer la précision du modèle

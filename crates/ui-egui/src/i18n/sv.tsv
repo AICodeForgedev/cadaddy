@@ -3585,7 +3585,9 @@ menu	Modify	Ändra
 	The current file is kept as {name} until the next save.	Den aktuella filen behålls som {name} till nästa sparning.
 	This format can't keep these objects yet: {objects}.	Det här formatet kan inte behålla de här objekten än: {objects}.
 	{count} more types	{count} typer till
-Review by Impact	Granskning efter påverkan
-Resolve Review Item by Impact	Lös granskningspunkt efter påverkan
-Open Review Item	Öppna granskningspunkt
-Review Audit Trail	Granskningslogg
+	Review by Impact	Granskning efter påverkan
+	Resolve Review Item by Impact	Lös granskningspunkt efter påverkan
+	Open Review Item	Öppna granskningspunkt
+	Review Audit Trail	Granskningslogg
+	Accuracy Trend	Precisionstrend
+	Measure Build Accuracy	Mät byggets precision
