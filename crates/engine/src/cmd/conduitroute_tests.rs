@@ -333,3 +333,78 @@ fn a_breaker_that_feeds_gear_is_its_feeder_not_a_branch_circuit() {
     sp.mep.panel_schedules[0].circuits.push(row("9", &"U ".repeat(10_000), &"FEEDER ".repeat(5_000)));
     let _ = feeder_of(&sp, "P2", "P2-9");
 }
+
+#[test]
+fn a_cable_runs_through_the_studs_along_its_wall_and_round_a_corner() {
+    let rl = rules();
+    let (x, y) = (Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0));
+    // Two boxes of one wall (faces +y, the wall along x), 10' apart, their tops at 18": up 12"
+    // over the higher one to 2'-6", 10' through the studs, down: 12'.
+    let (pts, bot) =
+        stud_path((Vec2::new(0.0, 0.0), 18.0, Some(y), "101"), (Vec2::new(120.0, 0.0), 18.0, Some(y), "101"), 0.0, UPF, rl).expect("in the wall");
+    let mut r = super::super::printcond::run(BRANCH_SYSTEM, "L1", "", pts, 0.75, 0.0);
+    r.bottoms_ft = bot;
+    assert_eq!(r.bottoms_ft.len() + 1, r.points.len(), "{r:?}");
+    assert!((run_ft(&r, UPF) - 12.0).abs() < 1e-9, "{}", run_ft(&r, UPF));
+    // One of them higher (a switch at 4'): over it, 5', so 3'-6" up from the receptacle, 1' up
+    // from the switch, and the 10' between.
+    let (pts, bot) =
+        stud_path((Vec2::new(0.0, 0.0), 18.0, Some(y), "101"), (Vec2::new(120.0, 0.0), 48.0, Some(y), "101"), 0.0, UPF, rl).expect("in the wall");
+    r.points = pts;
+    r.bottoms_ft = bot;
+    assert!((run_ft(&r, UPF) - (10.0 + 3.5 + 1.0)).abs() < 1e-9, "{}", run_ft(&r, UPF));
+    // Two walls meeting at a corner: along the first to the corner, along the second: 5' + 6'.
+    let (pts, bot) = stud_path((Vec2::new(0.0, 60.0), 18.0, Some(x), "101"), (Vec2::new(72.0, 0.0), 18.0, Some(y), "101"), 0.0, UPF, rl)
+        .expect("round the corner");
+    assert!(pts.iter().any(|p| p[0].abs() < 1e-9 && p[1].abs() < 1e-9), "by the corner: {pts:?}");
+    r.points = pts;
+    r.bottoms_ft = bot;
+    assert!((run_ft(&r, UPF) - (11.0 + 2.0)).abs() < 1e-9, "{}", run_ft(&r, UPF));
+    // Facing each other (opposite walls), in two rooms, without a face, or farther than the
+    // rules' reach: over the ceiling instead.
+    let far = rl.cable.in_wall_max_ft * UPF + 12.0;
+    assert!(stud_path((Vec2::new(0.0, 0.0), 18.0, Some(y), "101"), (Vec2::new(0.0, 120.0), 18.0, Some(y * -1.0), "101"), 0.0, UPF, rl).is_none());
+    assert!(stud_path((Vec2::new(0.0, 0.0), 18.0, Some(y), "101"), (Vec2::new(120.0, 0.0), 18.0, Some(y), "102"), 0.0, UPF, rl).is_none());
+    assert!(stud_path((Vec2::new(0.0, 0.0), 18.0, None, "101"), (Vec2::new(120.0, 0.0), 18.0, Some(y), "101"), 0.0, UPF, rl).is_none());
+    assert!(stud_path((Vec2::new(0.0, 0.0), 18.0, Some(y), "101"), (Vec2::new(far, 0.0), 18.0, Some(y), "101"), 0.0, UPF, rl).is_none());
+    assert!(!rl.cable.source.is_empty() && rl.cable.above_box_in > 0.0);
+}
+
+#[test]
+fn a_switch_is_on_the_circuit_most_of_what_it_controls_is_on() {
+    let circuit_of: HashMap<Handle, String> =
+        [(Handle(1), "A-1".to_string()), (Handle(2), "A-3".to_string()), (Handle(3), "A-3".to_string())].into_iter().collect();
+    assert_eq!(controlled_circuit(&[Handle(1), Handle(2), Handle(3)], &circuit_of).as_deref(), Some("A-3"));
+    assert_eq!(controlled_circuit(&[Handle(1), Handle(2)], &circuit_of).as_deref(), Some("A-1"), "a tie: the first named");
+    assert_eq!(controlled_circuit(&[Handle(9)], &circuit_of), None);
+    let mut ps = props::Props::default();
+    ps.set("controls", Prop::new("1A2B, 3c4d,zz, 0", props::Source::computed()));
+    assert_eq!(controls_of(&ps), vec![Handle(0x1A2B), Handle(0x3C4D)]);
+}
+
+#[test]
+fn the_lengths_are_reported_by_unit_type_common_area_and_level() {
+    let sp: BuildingSpec = serde_json::from_value(json!({
+        "version": 1, "units_per_foot": 12, "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+        "unit_types": [{"id": "SUITE-A", "name": "Suite A"}],
+        "unit_instances": [{"number": "11", "level": "L1", "unit_type": "SUITE-A"}, {"number": "12", "level": "L1", "unit_type": "SUITE-A"}]
+    }))
+    .expect("spec");
+    let l = |home: f64, in_area: f64, wire: f64| Lens { in_area, home, wire };
+    let rows = vec![
+        ("L1".to_string(), "11".to_string(), l(10.0, 30.0, 150.0)),
+        ("L1".to_string(), "11".to_string(), l(6.0, 20.0, 90.0)),
+        ("L1".to_string(), "12".to_string(), l(12.0, 40.0, 170.0)),
+        ("L1".to_string(), "LOBBY".to_string(), l(50.0, 70.0, 400.0)),
+    ];
+    let r = lengths_report(&sp, &rows);
+    let ty = &r["unit_types"][0];
+    assert_eq!((ty["unit_type"].as_str(), ty["name"].as_str(), ty["rooms"].as_u64()), (Some("SUITE-A"), Some("Suite A"), Some(2)), "{r}");
+    assert_eq!(ty["per_room"], json!({"circuits": 1.5, "home_ft": 14.0, "in_area_ft": 45.0, "total_ft": 59.0, "conductor_ft": 205.0}), "{r}");
+    assert_eq!(r["typical_rooms"].as_array().map(Vec::len), Some(2));
+    assert_eq!(r["common_areas"][0]["room"], json!("LOBBY"));
+    assert_eq!(r["common_areas"][0]["total_ft"], json!(120.0));
+    assert_eq!(r["levels"][0]["total_ft"], json!(238.0));
+    assert_eq!(r["total"]["circuits"], json!(4.0));
+    assert_eq!(r["total"]["conductor_ft"], json!(810.0));
+}

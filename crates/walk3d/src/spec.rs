@@ -1207,6 +1207,16 @@ pub struct Mep {
     /// or not.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub panel_schedules: Vec<PanelSchedule>,
+    /// The load summaries and demand calculations the electrical sheets print (the service's
+    /// and panels'), as printed: what the model's load calculation is compared with.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub load_summaries: Vec<LoadSummary>,
+    /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
+    /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy_source: String,
     /// Equipment connections' electrical data from their submittals, beside what the drawings
     /// give them (protection, feeder): what the build checks and reports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1503,6 +1513,8 @@ impl Mep {
             && self.revisions.is_empty()
             && self.feeders.is_empty()
             && self.panel_schedules.is_empty()
+            && self.load_summaries.is_empty()
+            && self.occupancy.is_empty()
             && self.equipment_electrical.is_empty()
             && self.fixture_schedule.is_empty()
             && self.gear_rules.is_none()
@@ -1874,6 +1886,39 @@ pub struct PanelSchedule {
     /// Its header's facts as printed: `bus amps` → `125A`, `volts/phase`, `mounting`, `location`…
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub header: BTreeMap<String, String>,
+    /// The totals printed under its circuits: `connected_va`, `connected_a`, `demand_va`,
+    /// `demand_a`, and the per-phase subtotals `phase_a_va`, `phase_b_va`, `phase_c_va`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub totals: BTreeMap<String, f64>,
+}
+
+/// A load summary or demand calculation the electrical sheets print (the service's, or one
+/// panel's): each line's label and its numbers as printed, left to right.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoadSummary {
+    /// Its title as printed, and the panel it names (empty: the building's, the service).
+    pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub panel: String,
+    /// The code section it says it is based on (`220.84`), when it names one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub basis: String,
+    /// The sheet it is on.
+    pub source: String,
+    pub lines: Vec<LoadSummaryLine>,
+}
+
+/// One line of a load summary: its label and its numbers (VA, kVA, amps or percent as printed;
+/// the units are the label's).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoadSummaryLine {
+    pub label: String,
+    pub values: Vec<f64>,
+    /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.

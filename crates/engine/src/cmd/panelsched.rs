@@ -118,6 +118,86 @@ fn header_facts(flat: &[&TextItem], y0: f64, y1: f64, x0: f64, x1: f64, row_h: f
     out
 }
 
+/// The headers a schedule's per-phase columns carry (`*` where the phases vary by feeder).
+const PHASE_HEADS: [&str; 7] = ["A", "B", "C", "*", "\u{d8}A", "\u{d8}B", "\u{d8}C"];
+/// How many rows below its last circuit a schedule's totals reach, in row steps.
+const TOTALS_ROWS: f64 = 8.0;
+
+/// A total's value as printed: `1,234,567`, `1,250`, `16.2` (kVA).
+fn amount(v: &str) -> Option<f64> {
+    let d = v.trim().trim_end_matches(['A', 'W']).trim().replace(',', "");
+    (!d.is_empty() && d.len() <= 12 && d.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .then(|| d.parse::<f64>().ok())
+        .flatten()
+        .filter(|x| x.is_finite() && *x >= 0.0)
+}
+
+/// What a totals line under the circuits gives: `TOTAL CONNECTED PANELBOARD (VA)` →
+/// `connected_va`, `TOTAL PANELBOARD DEMAND (AMPS)` → `demand_a`; `PER PHASE SUB-TOTALS` (and
+/// `CONNECTED PER PHASE`) is the phases' line. (key, scale): kVA reads as VA.
+fn total_key(label: &str) -> Option<(&'static str, f64)> {
+    let u = label.trim().to_ascii_uppercase();
+    if u.starts_with("PER PHASE") || u.contains("PER PHASE") {
+        return Some(("phase", 1.0));
+    }
+    if !(u.starts_with("TOTAL") || u.contains("SUB-TOTAL") || u.contains("SUBTOTAL")) {
+        return None;
+    }
+    let amps = u.contains("AMP");
+    let kva = u.contains("KVA");
+    let demand = u.contains("DEMAND");
+    if !(demand || u.contains("CONNECTED") || u.contains("LOAD")) {
+        return None;
+    }
+    Some(match (demand, amps) {
+        (true, true) => ("demand_a", 1.0),
+        (true, false) => ("demand_va", if kva { 1000.0 } else { 1.0 }),
+        (false, true) => ("connected_a", 1.0),
+        (false, false) => ("connected_va", if kva { 1000.0 } else { 1.0 }),
+    })
+}
+
+/// The totals printed under a schedule's circuits (between `y0` and `y1`, below its rows): each
+/// line's label and the numbers right of it on its line (a legend beside them ends the line).
+/// The per-phase line's numbers go to the phase columns nearest them, else left to right.
+fn totals_of(flat: &[&TextItem], y0: f64, y1: f64, x0: f64, x1: f64, row_h: f64, phases: &[f64]) -> BTreeMap<String, f64> {
+    let mut out = BTreeMap::new();
+    let near: Vec<&&TextItem> = flat.iter().filter(|t| t.at.y <= y0 && t.at.y >= y1 && t.at.x >= x0 && t.at.x <= x1).collect();
+    let mut labels: Vec<&&&TextItem> = near.iter().filter(|t| total_key(&t.value).is_some()).collect();
+    labels.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
+    for l in labels {
+        let Some((key, scale)) = total_key(&l.value) else { continue };
+        let mut on: Vec<&&&TextItem> = near.iter().filter(|t| (t.at.y - l.at.y).abs() <= 0.6 * row_h && t.at.x > l.at.x + 0.1 * row_h).collect();
+        on.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        let mut values: Vec<(f64, f64)> = Vec::new();
+        for t in on {
+            if t.value.trim().trim_end_matches(':').eq_ignore_ascii_case("LEGEND") || legend_line(&t.value).is_some() {
+                break;
+            }
+            if let Some(v) = amount(&t.value) {
+                values.push((t.at.x, v * scale));
+            }
+        }
+        if key == "phase" {
+            let mut cols: Vec<f64> = phases.to_vec();
+            cols.sort_by(f64::total_cmp);
+            for (i, (x, v)) in values.iter().take(3).enumerate() {
+                let at = if cols.len() >= values.len().min(3) {
+                    cols.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map_or(i, |(k, _)| k)
+                } else {
+                    i
+                };
+                if let Some(name) = ["phase_a_va", "phase_b_va", "phase_c_va"].get(at) {
+                    out.entry((*name).to_string()).or_insert(*v);
+                }
+            }
+        } else if let Some((_, v)) = values.first() {
+            out.entry(key.to_string()).or_insert(*v);
+        }
+    }
+    out
+}
+
 /// The schedules on one sheet's texts (its PDF page re-read, or the drawing's).
 pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
     let flat: Vec<&TextItem> =
@@ -248,7 +328,14 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         let (x0, x1) = (lnum - 8.0 * row_h, if two { rnum + 8.0 * row_h } else { lnum + 120.0 * row_h });
         let mut below: Vec<&&TextItem> = flat.iter().filter(|t| t.at.y < head_bottom - 0.5 * row_h && t.at.x >= x0 && t.at.x <= x1).collect();
         below.sort_by(|a, b| b.at.y.total_cmp(&a.at.y).then(a.at.x.total_cmp(&b.at.x)));
-        // Rows, line by line, until the subtotals, a gap of a few rows, or the next title.
+        // Rows, line by line, until the subtotals, a gap of a few rows, or the next title. A
+        // subtotal's line ends the rows whichever of its texts comes first (its number can sit a
+        // hair above its label).
+        let ends = |v: &str| {
+            let u = v.trim().to_ascii_uppercase();
+            u.starts_with("PER PHASE") || u.starts_with("TOTAL") || u.contains("SUB-TOTAL") || u.contains("SUBTOTAL")
+        };
+        let end_ys: Vec<f64> = below.iter().filter(|t| ends(&t.value)).map(|t| t.at.y).collect();
         let mut lines: Vec<Vec<&TextItem>> = Vec::new();
         let mut last_y = head_bottom;
         let mut step: Option<f64> = None;
@@ -258,10 +345,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                 _ => {
                     let u = t.value.trim().to_ascii_uppercase();
                     let gap = last_y - t.at.y;
-                    if u.starts_with("PER PHASE")
-                        || u.starts_with("TOTAL")
-                        || u.contains("SUB-TOTAL")
-                        || u.contains("SUBTOTAL")
+                    if end_ys.iter().any(|y| (y - t.at.y).abs() <= 0.6 * row_h)
                         || (title_panel(&u).is_some() && t.height >= TITLE_OVER_CELLS * row_h)
                         || step.is_some_and(|s| gap > 2.6 * s)
                         || (step.is_none() && gap > 4.0 * row_h)
@@ -389,7 +473,20 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
         }
         circuits.sort_by_key(|c| c.number.parse::<u32>().unwrap_or(u32::MAX));
         let header = header_facts(&flat, top + 0.6 * row_h, title.at.y, l.at.x - 2.0 * row_h, head_x1 + 8.0 * row_h, row_h);
-        out.push(PanelSchedule { panel, typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header });
+        // The phase columns between the sides' loads (`A B C`, or `*` where phases vary).
+        let (lo, hi) = (
+            sides.first().and_then(|s| s.load.or(s.poles)).unwrap_or(lnum),
+            if two { sides.get(1).and_then(|s| s.load.or(s.poles)).unwrap_or(rnum) } else { x1 },
+        );
+        let phases: Vec<f64> = head
+            .iter()
+            .filter(|t| PHASE_HEADS.contains(&t.value.trim().to_ascii_uppercase().as_str()) && t.at.x > lo + row_h && t.at.x < hi - row_h)
+            .filter(|t| sides.iter().all(|s| s.amps.is_none_or(|a| (a - t.at.x).abs() > 0.5 * row_h)))
+            .map(|t| t.at.x)
+            .collect();
+        let end = step.map_or(last_y - 4.0 * row_h, |s| last_y - TOTALS_ROWS * s);
+        let totals = totals_of(&flat, last_y + 0.6 * row_h, end, x0, x1, row_h, &phases);
+        out.push(PanelSchedule { panel, typical_of, source: sheet.to_string(), circuits, legend: legend.clone(), header, totals });
     }
     out
 }
@@ -935,5 +1032,110 @@ mod tests {
         assert_eq!(title_panel("PANELBOARD SHALL BE"), None);
         assert_eq!(title_panel("PANELBOARD DP1 DEMAND CALCULATION"), None);
         assert_eq!(title_panel("TOTAL CONNECTED PANELBOARD (VA)"), None);
+    }
+
+    /// A two-sided schedule with its phase columns (`A B C`) between the sides' loads, and its
+    /// totals under the circuits with the legend beside them.
+    fn two_sided_with_totals() -> Vec<TextItem> {
+        let mut v = vec![
+            t(250.0, 520.0, "PANELBOARD H1", 10.0),
+            t(120.0, 505.0, "VOLTS/PHASE:", 6.0),
+            t(190.0, 505.0, "480Y/277V, 3PH, 4W", 6.0),
+            t(100.0, 490.0, "CKT", 6.0),
+            t(115.0, 490.0, "DESCRIPTION", 6.0),
+            t(200.0, 490.0, "AMPS", 6.0),
+            t(215.0, 490.0, "P", 6.0),
+            t(230.0, 490.0, "LOAD", 6.0),
+            t(260.0, 490.0, "A", 6.0),
+            t(280.0, 490.0, "B", 6.0),
+            t(300.0, 490.0, "C", 6.0),
+            t(330.0, 490.0, "LOAD", 6.0),
+            t(345.0, 490.0, "P", 6.0),
+            t(360.0, 490.0, "AMPS", 6.0),
+            t(375.0, 490.0, "DESCRIPTION", 6.0),
+            t(470.0, 490.0, "CKT", 6.0),
+        ];
+        let rows = [
+            ("1", "LIGHTING EAST", "2,000", "2", "RECEPTACLES WEST", "1,000"),
+            ("3", "LIGHTING WEST", "600", "4", "SPARE", "400"),
+            ("5", "SIGN", "300", "6", "SPACE", "200"),
+        ];
+        for (i, (ln, ld, ll, rn, rd, rl)) in rows.iter().enumerate() {
+            let y = 472.0 - 10.0 * i as f64;
+            v.extend([t(100.0, y, ln, 6.0), t(115.0, y, ld, 6.0), t(202.0, y, "20", 6.0), t(215.0, y, "1", 6.0), t(230.0, y, ll, 6.0)]);
+            v.extend([t(330.0, y, rl, 6.0), t(345.0, y, "1", 6.0), t(362.0, y, "20", 6.0), t(375.0, y, rd, 6.0), t(470.0, y, rn, 6.0)]);
+        }
+        v.extend([
+            t(150.0, 445.0, "PER PHASE SUB-TOTALS", 6.0),
+            t(258.0, 445.0, "3,000", 6.0),
+            t(278.0, 445.0, "1,000", 6.0),
+            t(298.0, 445.0, "500", 6.0),
+            t(400.0, 445.0, "LEGEND:", 6.0),
+            t(150.0, 435.0, "TOTAL CONNECTED PANELBOARD (VA)", 6.0),
+            t(278.0, 435.0, "4,500", 6.0),
+            t(400.0, 435.0, "GF - GROUND FAULT", 6.0),
+            t(150.0, 425.0, "TOTAL PANELBOARD DEMAND (AMPS)", 6.0),
+            t(280.0, 425.0, "7", 6.0),
+            t(400.0, 425.0, "ST - SHUNT TRIP 12", 6.0),
+        ]);
+        v
+    }
+
+    /// A one-sided schedule (`TRIP`, `POLES`, `LOAD` columns) whose totals are in kVA and whose
+    /// phase subtotals have no phase columns: in order.
+    fn one_sided_kva() -> Vec<TextItem> {
+        let mut v = vec![t(100.0, 300.0, "PANEL SCHEDULE - LP2", 9.0), t(80.0, 285.0, "CKT", 5.0), t(95.0, 285.0, "DESCRIPTION", 5.0)];
+        v.extend([t(200.0, 285.0, "TRIP", 5.0), t(220.0, 285.0, "POLES", 5.0), t(250.0, 285.0, "LOAD", 5.0)]);
+        for (i, (n, d, l)) in
+            [("1", "LIGHTING LOBBY", "1,500"), ("2", "RECEPTACLES LOBBY", "1,000"), ("3", "WATER COOLER", "2,000")].iter().enumerate()
+        {
+            let y = 270.0 - 8.0 * i as f64;
+            v.extend([t(82.0, y, n, 5.0), t(95.0, y, d, 5.0), t(202.0, y, "20", 5.0), t(222.0, y, "1", 5.0), t(250.0, y, l, 5.0)]);
+        }
+        v.extend([
+            t(95.0, 245.0, "TOTAL CONNECTED LOAD (KVA)", 5.0),
+            t(250.0, 245.0, "4.5", 5.0),
+            t(95.0, 237.0, "TOTAL DEMAND LOAD (KVA)", 5.0),
+            t(250.0, 237.0, "5.1", 5.0),
+            t(95.0, 229.0, "CONNECTED PER PHASE", 5.0),
+            t(230.0, 229.0, "2,500", 5.0),
+            t(260.0, 229.0, "2,000", 5.0),
+        ]);
+        v
+    }
+
+    #[test]
+    fn a_schedules_totals_and_phase_subtotals_are_read_by_their_columns_whatever_the_layout() {
+        let got = read(&two_sided_with_totals(), "X-1");
+        let h = got.iter().find(|p| p.panel == "H1").unwrap();
+        assert_eq!(h.circuits.len(), 6, "{:#?}", h.circuits);
+        let want: BTreeMap<String, f64> =
+            [("phase_a_va", 3000.0), ("phase_b_va", 1000.0), ("phase_c_va", 500.0), ("connected_va", 4500.0), ("demand_a", 7.0)]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+        assert_eq!(h.totals, want, "the legend beside a total is no value of it");
+        let got = read(&one_sided_kva(), "X-2");
+        let lp = got.iter().find(|p| p.panel == "LP2").unwrap();
+        assert_eq!(lp.circuits.len(), 3, "{:#?}", lp.circuits);
+        let want: BTreeMap<String, f64> = [("connected_va", 4500.0), ("demand_va", 5100.0), ("phase_a_va", 2500.0), ("phase_b_va", 2000.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        assert_eq!(lp.totals, want, "kVA reads as VA; phases in order without phase columns");
+        // A total's number a hair above its label (the import's rounding): still the totals, never
+        // more rows of the last circuit.
+        let mut nudged = two_sided_with_totals();
+        for t in nudged.iter_mut().filter(|t| t.value.chars().all(|c| c.is_ascii_digit() || c == ',') && t.at.y < 450.0) {
+            t.at.y += 0.01;
+        }
+        let h = read(&nudged, "X-1").into_iter().find(|p| p.panel == "H1").unwrap();
+        assert_eq!(h.circuits.len(), 6, "{:#?}", h.circuits);
+        assert_eq!(h.totals.get("connected_va"), Some(&4500.0), "{:?}", h.totals);
+        assert_eq!(h.totals.get("phase_a_va"), Some(&3000.0), "{:?}", h.totals);
+        assert_eq!(h.circuits.iter().find(|c| c.number == "5").and_then(|c| c.load_va), Some(300.0), "{:#?}", h.circuits);
+        // The older fixture: its subtotal line has no numbers.
+        let g = read(&panel_g(), "E-601");
+        assert!(g.iter().all(|p| p.totals.values().all(|v| v.is_finite())));
     }
 }

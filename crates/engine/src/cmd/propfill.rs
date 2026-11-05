@@ -72,7 +72,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -1645,11 +1645,14 @@ fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
 
 /// Fill the built model's elements from what the readers found; per kind, how many values went
 /// on each key.
-pub(crate) fn fill(s: &mut Session) -> Result<Value> {
+/// `built_only`: the build's rooms alone (after a job's build: its rooms stage already traced the
+/// plans sheet by sheet, so tracing the whole drawing again finds nothing new and, on a set of
+/// many imported plans, takes very long).
+pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     let (mut sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
-    let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
+    let rooms3 = if built_only { super::rooms3d::built(s).unwrap_or_default() } else { super::rooms3d::rooms(s).unwrap_or_default() };
     let rooms: Vec<RoomShape> = rooms3
         .iter()
         .filter(|r| r.outline.len() >= 3)
@@ -2199,7 +2202,8 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Their boxes and the raceways' drops go with them.
     let rerouted = super::conduitroute::follow_reseated(s, reseated);
-    let mut r = fill(s)?;
+    let built_only = super::str_param(p, "rooms").is_some_and(|r| r.eq_ignore_ascii_case("built"));
+    let mut r = fill(s, built_only)?;
     r["reseated"] = json!(reseated);
     match rerouted {
         Some(Ok(v)) => r["rerouted"] = v,

@@ -159,6 +159,9 @@ pub(crate) struct AtomRules {
     pub insulation_source: String,
     pub makeup_ft: f64,
     pub makeup_source: String,
+    /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
+    pub panel_makeup_ft: f64,
+    pub panel_makeup_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
     pub bushing_source: String,
