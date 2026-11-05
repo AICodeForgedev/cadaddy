@@ -877,11 +877,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     *land = Some(Land::Atom(atom));
                     continue;
                 }
-                let g = gear.iter().filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp)).min_by(|a, b| {
-                    let pa = if !m.panel.is_empty() && a.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
-                    let pb = if !m.panel.is_empty() && b.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
-                    (pa, a.plan.center().dist(pp)).partial_cmp(&(pb, b.plan.center().dist(pp))).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                // A low-voltage pathway ends only in a telecom room's gear (its rack), never a panel.
+                let g = gear
+                    .iter()
+                    .filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp))
+                    .filter(|g| m.devices.is_empty() || super::super::conduitroute::lv::telecom_gear(&g.tag))
+                    .min_by(|a, b| {
+                        let pa = if !m.panel.is_empty() && a.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
+                        let pb = if !m.panel.is_empty() && b.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
+                        (pa, a.plan.center().dist(pp)).partial_cmp(&(pb, b.plan.center().dist(pp))).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                 if let Some(g) = g {
                     *land = Some(Land::Gear(g.handle));
                 }

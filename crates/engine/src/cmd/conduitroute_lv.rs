@@ -247,6 +247,12 @@ fn has_any(hay: &str, phrases: &[String]) -> bool {
     phrases.iter().any(|p| find(hay, p).is_some() || parts.as_deref().is_some_and(|x| find(x, p).is_some()))
 }
 
+/// Whether a piece of equipment (its tag, kind or title) is a telecom room's (an MDF or IDF rack,
+/// a backboard): the only gear a low-voltage pathway ends in.
+pub(crate) fn telecom_gear(words: &str) -> bool {
+    has_any(&norm(words), &rules().statements.to_room)
+}
+
 /// Whether a sheet's title names the low-voltage systems (`LOW VOLTAGE PLANS`, `TELECOM`).
 pub(crate) fn lv_sheet_title(title: &str) -> bool {
     has_any(&norm(title), &rules().statements.sheet_title_words)
@@ -1709,6 +1715,14 @@ mod tests {
             json!({"number": "E-909", "title": "ELECTRICAL LEGEND", "file": "set.pdf", "page": 2}),
         ];
         assert_eq!(lv_sheets(&sheets), vec![0, 1, 3]);
+    }
+
+    #[test]
+    fn a_pathway_ends_in_a_telecom_rooms_gear_only() {
+        assert!(telecom_gear("IDF-2 rack"));
+        assert!(telecom_gear("MDF backboard"));
+        assert!(!telecom_gear("LP1 panel PANELBOARD"));
+        assert!(!telecom_gear("AHU-1 air handler"));
     }
 
     #[test]
