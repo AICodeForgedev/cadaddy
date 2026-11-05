@@ -3496,4 +3496,10 @@
 	The current file is kept as {name} until the next save.	当前文件将保留为 {name}，直到下次保存。
 	This format can't keep these objects yet: {objects}.	此格式暂时无法保留这些对象：{objects}。
 	{count} more types	另外 {count} 种类型
+	Review by Impact	按影响审查
+	Resolve Review Item by Impact	按影响处理审查项
+	Open Review Item	打开审查项
+	Review Audit Trail	审查审计记录
+	Accuracy Trend	精度趋势
+	Measure Build Accuracy	测量构建精度
 	Panel Breakers	配电盘断路器

@@ -3563,4 +3563,10 @@
 	The current file is kept as {name} until the next save.	Поточний файл зберігається як {name} до наступного збереження.
 	This format can't keep these objects yet: {objects}.	Цей формат поки що не може зберегти ці об'єкти: {objects}.
 	{count} more types	ще типів: {count}
+	Review by Impact	Перевірка за впливом
+	Resolve Review Item by Impact	Вирішити пункт перевірки за впливом
+	Open Review Item	Відкрити пункт перевірки
+	Review Audit Trail	Журнал аудиту перевірки
+	Accuracy Trend	Динаміка точності
+	Measure Build Accuracy	Виміряти точність моделі
 	Panel Breakers	Автомати щита
