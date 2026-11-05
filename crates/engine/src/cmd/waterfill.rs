@@ -356,11 +356,11 @@ pub(crate) fn is_main(r: &MepRun) -> bool {
     r.top_ft.is_some() || r.points.len() < 2 || provenance(r) != DRAWN
 }
 
-/// The water lines a floor with no water plan still needs, from its runs (`runs`: the floor's,
-/// its derived mains among them) and its fixtures: each fixture's line with no pipe of its system
-/// within `reach_ft` (as a fixture is connected), and each group of joined branches (a room's,
-/// from the enlarged details) that touches no main or riser.
-pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: f64, ru: &FillRules) -> Vec<Need> {
+/// The water lines a floor still needs, from its runs (`runs`: the floor's, derived mains among
+/// them) and its fixtures: each fixture's line with no pipe of its system within `reach_ft` (as a
+/// fixture is connected), and on a floor with no water plan (`branches`) each group of joined
+/// branches (a room's, from the enlarged details) that touches no main or riser.
+pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: f64, ru: &FillRules, branches: bool) -> Vec<Need> {
     let mut out = Vec::new();
     let reach = reach_ft.max(0.0) * upf;
     let joint = ru.joint_ft.max(0.0) * upf;
@@ -378,7 +378,7 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
         }
     }
     // The branches, grouped where their pieces touch.
-    for sys in &ru.water {
+    for sys in ru.water.iter().filter(|_| branches) {
         let br: Vec<&MepRun> = runs.iter().filter(|r| &r.system == sys && !is_main(r)).take(MAX_ITEMS).copied().collect();
         let mut group: Vec<usize> = (0..br.len()).collect();
         fn root(g: &[usize], mut i: usize) -> usize {
@@ -682,7 +682,7 @@ mod tests {
             Fixture { at: [70.0 * 12.0, 30.0 * 12.0], what: "P-92".into(), lines: vec!["CW".into(), "HW".into()] },
             Fixture { at: [400.0 * 12.0, 30.0 * 12.0], what: "P-93".into(), lines: vec!["CW".into()] },
         ];
-        let n = needs(&mains, &fixtures, 15.0, 12.0, &r);
+        let n = needs(&mains, &fixtures, 15.0, 12.0, &r, true);
         // CW for all three (none within 15 ft), HW for the second; SAN is not water.
         assert_eq!(n.len(), 4, "{n:?}");
         let inf = infer("Level 2", &mains, n, 12.0, &r);
@@ -707,7 +707,7 @@ mod tests {
         assert_eq!(inf.runs.len(), 3);
         // A fixture with water in reach needs nothing.
         let near = vec![Fixture { at: [20.0 * 12.0, 10.0 * 12.0], what: "P-94".into(), lines: vec!["CW".into()] }];
-        assert!(needs(&mains, &near, 15.0, 12.0, &r).is_empty());
+        assert!(needs(&mains, &near, 15.0, 12.0, &r, true).is_empty());
     }
 
     #[test]
@@ -722,7 +722,9 @@ mod tests {
         let mut b3 = run("CW", "Level 2", &[[10.0, 2.5], [10.0, 9.0]]);
         b3.size_in = [0.75, 0.0];
         let all = vec![&main, &b1, &b1b, &b2, &b3];
-        let n = needs(&all, &[], 15.0, 12.0, &r);
+        // A floor with a water plan: its rooms' branches are its own to join.
+        assert!(needs(&all, &[], 15.0, 12.0, &r, false).is_empty());
+        let n = needs(&all, &[], 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 2, "{n:?}");
         assert!(n.iter().any(|x| x.what == "the branches of 2 run(s)"));
         let inf = infer("Level 2", &[&main], n, 12.0, &r);
