@@ -118,7 +118,7 @@ fn upper_words(t: &str) -> BTreeSet<String> {
     t.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '#')).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect()
 }
 
-/// The letters a connection's submittal is found by (`ELEV-1` → `ELEV`, at least three).
+/// The letters a connection's submittal is found by (`CHIL-2` → `CHIL`, at least three).
 fn stem(tag: &str) -> Option<String> {
     let s: String = tag.trim().chars().take_while(|c| c.is_ascii_alphabetic()).collect::<String>().to_ascii_uppercase();
     (s.len() >= 3).then_some(s)
@@ -259,7 +259,7 @@ fn words_of(t: &str) -> Vec<String> {
 }
 
 /// The panel schedule row that is the connection's: one naming its tag, else one whose whole
-/// description is a word starting with its letters (`ELEVATOR` for `ELEV-1`); the source panel the
+/// description is a word starting with its letters (`CHILLER` for `CHIL-2`); the source panel the
 /// record names first.
 fn circuit_of<'a>(sp: &'a BuildingSpec, tag: &str, panel: &str) -> Option<(&'a str, &'a PanelCircuit)> {
     let st = stem(tag);
@@ -414,7 +414,7 @@ fn amps_in(v: &str) -> Option<f64> {
     n.parse::<f64>().ok().filter(|a| a.is_finite() && *a > 0.0 && *a < 100_000.0)
 }
 
-/// A fault current as printed (`57,287A`, `22 kA`, `65kAIC`), amps.
+/// A fault current as printed (`41,500A`, `22 kA`, `65kAIC`), amps.
 fn fault_amps(v: &str) -> Option<f64> {
     let u = v.trim().to_ascii_uppercase().replace(',', "");
     let n: String = u.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit() || *c == '.').collect();
@@ -746,7 +746,7 @@ fn o(check: &'static str, verdict: &'static str, issue: String, expected: String
     Outcome { check, verdict, issue, expected, found, recomputed }
 }
 
-/// The build's equipment-connection RFI: (tag, check) from its `about` (`DOAS-1 (protection)`).
+/// The build's equipment-connection RFI: (tag, check) from its `about` (`RTU-4 (protection)`).
 fn rfi_subject(about: &str) -> Option<(String, String)> {
     let a = about.trim();
     let (tag, rest) = a.split_once('(')?;
@@ -1385,7 +1385,7 @@ mod tests {
 
     #[test]
     fn fault_currents_and_amps_read_as_printed() {
-        assert_eq!(fault_amps("57,287A"), Some(57_287.0));
+        assert_eq!(fault_amps("41,500A"), Some(41_500.0));
         assert_eq!(fault_amps("22 kA"), Some(22_000.0));
         assert_eq!(amps_in("70A/3P"), Some(70.0));
         assert_eq!(amps_in("none"), None);

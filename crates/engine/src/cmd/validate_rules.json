@@ -438,7 +438,7 @@
       "prescreen": null,
       "examples": {
         "pass": "The pump's submittal gives MCA 22 A and MOP 35 A; its circuit is a 30 A breaker on #10 copper (35 A) in 3/4 in conduit, its fused disconnect 30 A; its SCCR of 5 kA is above the 3 kA at its panel.",
-        "fail": "The unit's submittal allows at most 80 A of protection (p. 5); the model protects it with a 90 A breaker."
+        "fail": "The unit's submittal allows at most 45 A of protection (p. 5); the model protects it with a 50 A breaker."
       }
     },
     {

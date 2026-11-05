@@ -8,7 +8,7 @@
 //! - RTU-1, a rooftop unit: MCA 46 A, MOP 60 A, SCCR 5 kA; protected at 70 A from a panel with
 //!   22 kA available. Protection fails (the build's RFI says so too), SCCR fails (no RFI: missing).
 //!   The model follows its first revision; a later approved one exists.
-//! - ELEV-1, an elevator: its submittal is a scan with no answer: unsure (the build's RFI about it
+//! - LIFT-1, a lift: its submittal is a scan with no answer: unsure (the build's RFI about it
 //!   has no failure behind it: extra).
 //! - FAN-1 and FAN-2: scanned too; an agent answered both, FAN-1's answer cites no page (unsure),
 //!   FAN-2's cites page 3 (checked, the page reported).
@@ -105,8 +105,8 @@ fn submittals(root: &Path) {
     let rtu: &[&str] = &["RTU-1 ROOFTOP UNIT", "208 V 3 PH", "46 Amps MCA", "60 Amps MOP", "SCCR: 5 kAmp"];
     write(&root.join("Rooftop Units/Rev 1-0/RTU-1 Submittal First.pdf"), &pdf(&[cover, rtu]));
     write(&root.join("Rooftop Units/Rev 1-1/RTU-1 Submittal.pdf"), &pdf(&[cover, rtu]));
-    // The elevator and the fans: scans (no text).
-    write(&root.join("Elevator/Rev 1-0/ELEV Shop Drawings.pdf"), &pdf(&[&[], &[]]));
+    // The lift and the fans: scans (no text).
+    write(&root.join("Lift/Rev 1-0/LIFT Shop Drawings.pdf"), &pdf(&[&[], &[]]));
     write(&root.join("Fans/Rev 1-0/FAN Submittal.pdf"), &pdf(&[&[], &[], &[]]));
     // The chiller: its first revision's text gives values; the later one (another maker) is a scan.
     write(&root.join("Chillers/Rev 1-0/CHL-1 Submittal.pdf"), &pdf(&[cover, &["CHL-1 CHILLER", "46 Amps MCA", "50 Amps MOP"]]));
@@ -136,16 +136,16 @@ fn spec() -> Value {
             "panel_schedules": [
                 {"panel": "LP1", "source": "X-601", "header": {"volts/phase": "208Y/120V, 3PH, 4W", "afc value": "3,200A"},
                  "circuits": [circuit("1", "PMP-1", "30", "feeder 10: 1 set(s) of 4 10 cu, ground 10, in 0.75\" conduit"), circuit("3", "FAN-1", "20", "12"), circuit("5", "FAN-2", "20", "12")]},
-                {"panel": "DP1", "source": "X-601", "header": {"volts/phase": "208Y/120V, 3PH, 4W", "afc value": "22 kA"},
-                 "circuits": [circuit("2", "RTU-1", "70", "feeder 60: 1 set(s) of 4 6 cu, ground 10, in 1\" conduit"), circuit("4", "ELEVATOR", "60", "feeder 61: 1 set(s) of 4 6 cu, ground 10, in 1\" conduit")]}
+                {"panel": "DPB", "source": "X-601", "header": {"volts/phase": "208Y/120V, 3PH, 4W", "afc value": "22 kA"},
+                 "circuits": [circuit("2", "RTU-1", "70", "feeder 60: 1 set(s) of 4 6 cu, ground 10, in 1\" conduit"), circuit("4", "LIFT", "60", "feeder 61: 1 set(s) of 4 6 cu, ground 10, in 1\" conduit")]}
             ],
             "equipment_electrical": [
                 row("PMP-1", "PMP-1", "LP1", "30A/3P", "submittal PMP-1 Pump Submittal.pdf"),
-                row("RTU-1", "RTU-1", "DP1", "70A/3P", "submittal RTU-1 Submittal First.pdf"),
-                row("ELEV-1", "ELEVATOR", "DP1", "60A/3P", ""),
+                row("RTU-1", "RTU-1", "DPB", "70A/3P", "submittal RTU-1 Submittal First.pdf"),
+                row("LIFT-1", "LIFT", "DPB", "60A/3P", ""),
                 row("FAN-1", "FAN-1", "LP1", "20A/3P", ""),
                 row("FAN-2", "FAN-2", "LP1", "20A/3P", ""),
-                row("CHL-1", "CHL-1", "DP1", "70A/3P", "")
+                row("CHL-1", "CHL-1", "DPB", "70A/3P", "")
             ],
             "devices": [
                 {"tag": "DS-PMP-1", "kind": "disconnect", "level": "L1", "room": "11", "panel": "LP1", "circuit": "1", "properties": {"RATING": "30A", "TYPE": "NON-FUSED"}}
@@ -153,7 +153,7 @@ fn spec() -> Value {
         },
         "rfis": [
             rfi("RFI-E1", "RTU-1 (protection)"),
-            rfi("RFI-E2", "ELEV-1 (protection)"),
+            rfi("RFI-E2", "LIFT-1 (protection)"),
             rfi("RFI-E3", "PMP-1 (conductors)"),
             {"id": "RFI-D1", "kind": "equipment_electrical", "severity": "high", "about": "Fire damper power", "issue": "no circuit", "assumed": "none", "status": "open"}
         ]
@@ -318,15 +318,15 @@ fn a_scanned_submittal_with_no_answer_is_unsure_never_a_pass() {
     let mut j = job("scan");
     let (r, fs) = screen(&mut j.s);
     for check in ["protection", "conductors", "disconnect", "sccr"] {
-        let f = finding(&fs, "ELEV-1", check, "unsure");
+        let f = finding(&fs, "LIFT-1", check, "unsure");
         assert!(f["issue"].as_str().unwrap().contains("scanned"), "{f}");
     }
     assert!(
-        !fs.iter().any(|f| f["tag"] == "ELEV-1" && f["verdict"] == "pass" && f["measured"]["check"] != "conduit_fill"),
+        !fs.iter().any(|f| f["tag"] == "LIFT-1" && f["verdict"] == "pass" && f["measured"]["check"] != "conduit_fill"),
         "only the fill, which needs no submittal, may pass"
     );
     // The build's RFI about it: Validate can't confirm it.
-    let x = finding(&fs, "ELEV-1", "protection", "extra");
+    let x = finding(&fs, "LIFT-1", "protection", "extra");
     assert_eq!(x["measured"]["validate"], "unsure", "{x}");
     // An answer with no page cited is no source.
     let f = finding(&fs, "FAN-1", "protection", "unsure");
@@ -362,7 +362,7 @@ fn with_no_job_the_models_record_is_checked_and_an_unsourced_one_is_unsure() {
     let mut sp = spec();
     sp["mep"]["equipment_electrical"] = json!([
         {"tag": "PMP-1", "source_panel": "LP1", "drawing_ocpd": "30A/3P", "mca": 20.0, "max_ocpd_a": 25.0, "fla": 16.0, "sccr_a": 5000.0, "source": "submittal PMP-1 Pump Submittal.pdf"},
-        {"tag": "RTU-1", "source_panel": "DP1", "drawing_ocpd": "70A/3P", "mca": 46.0, "max_ocpd_a": 80.0, "source": ""}
+        {"tag": "RTU-1", "source_panel": "DPB", "drawing_ocpd": "70A/3P", "mca": 46.0, "max_ocpd_a": 80.0, "source": ""}
     ]);
     let mut s = model(sp);
     let (_, fs) = screen(&mut s);
