@@ -1909,7 +1909,7 @@ pub struct LoadSummary {
 pub struct LoadSummaryLine {
     pub label: String,
     pub values: Vec<f64>,
-    /// The line's texts after its label, as printed (`4,180 x 125% = 5,225`).
+    /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub text: String,
 }

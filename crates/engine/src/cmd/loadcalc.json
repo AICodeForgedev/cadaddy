@@ -31,6 +31,7 @@
   "feeder_words": ["PANELBOARD", "PANEL", "PNL", "SWITCHBOARD", "TRANSFORMER", "XFMR", "MCC"],
   "unit_words": ["UNITS", "UNIT", "PANELS", "SUITES", "ROOMS"],
   "summary_titles": ["LOAD SUMMARY", "LOAD CALCULATION", "DEMAND CALCULATION", "SERVICE CALCULATION", "SERVICE LOAD", "LOAD CALC"],
+  "feeder_summary_words": ["FEEDER", "FEEDERS"],
   "service_size_words": ["SERVICE SIZE", "SERVICE RATING", "SERVICE AMPS"],
   "occupancies": [
     {

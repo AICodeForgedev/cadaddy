@@ -40,6 +40,8 @@ fn sheet() -> Vec<TextItem> {
         t(700.0, 772.0, "20", 6.0),
         t(600.0, 762.0, "3", 6.0),
         t(700.0, 762.0, "20", 6.0),
+        // The next schedule's title in that column, lower than some of the summary's lines.
+        t(650.0, 745.0, "PANELBOARD Q2", 12.0),
     ];
     // Under it, another table: a panel's demand calculation, its lines in kVA.
     v.extend([
@@ -55,6 +57,10 @@ fn sheet() -> Vec<TextItem> {
         t(370.0, 636.0, "KVA", 8.0),
         t(100.0, 624.0, "TOTAL AMPS AT 120/208V, 3PH:", 8.0),
         t(330.0, 624.0, "342", 8.0),
+        // Another table right under it, its heading taller than the lines: not this summary's.
+        t(100.0, 606.0, "BRANCH CIRCUIT WIRING TABLE", 11.0),
+        t(100.0, 594.0, "RATING (A)", 8.0),
+        t(330.0, 594.0, "480", 8.0),
     ]);
     v
 }
@@ -83,6 +89,7 @@ fn a_load_summary_is_read_as_far_as_the_band_that_parts_it_from_the_schedule_bes
     assert_eq!(size, None);
     assert_eq!(dva.map(|v| v.round()), Some(123_210.0), "kVA reads as VA: {calc:#?}");
     assert_eq!(da, Some(342.0), "`120/208V` and `3PH` are no amps: {calc:#?}");
+    assert!(calc.lines.iter().all(|l| !l.text.contains("RATING")), "the table under it is its own: {calc:#?}");
 }
 
 #[test]
