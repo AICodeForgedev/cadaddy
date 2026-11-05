@@ -386,6 +386,64 @@ fn a_callouts_sheet_number_is_no_rooms_number() {
     assert!(room(rooms, "STORAGE")["number"].is_null(), "{rooms:?}");
 }
 
+/// The import took three closets' `AHU` boxes for a repeated symbol (a `PDF-SYM-` insert, the
+/// word its TAG): the word over the room's number still names the room.
+#[test]
+fn an_equipment_rooms_name_taken_for_a_symbols_mark_still_names_it() {
+    use cadaddy_engine::doc::{Attrib, AttribModes, AttribProps, Block, Common, HAlign, Insert, Space, Text, VAlign};
+    use cadaddy_engine::geom::Vec3;
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 105.0], "152");
+    text(&mut s, [340.0, 120.0], "OFFICE");
+    text(&mut s, [340.0, 105.0], "101");
+    let d = s.doc_mut().unwrap();
+    d.blocks.insert("PDF-SYM-7".into(), std::sync::Arc::new(Block::new("PDF-SYM-7")));
+    let t = Text {
+        insert: Vec3::new(100.0, 120.0, 0.0),
+        align_pt: None,
+        height: 6.0,
+        value: "AHU".into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::default(),
+        valign: VAlign::default(),
+    };
+    let attrib = Attrib {
+        tag: "TAG".into(),
+        text: t,
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: AttribProps::default(),
+        multiline: None,
+        modes: AttribModes::default(),
+    };
+    let ins = Insert {
+        block: "PDF-SYM-7".into(),
+        insert: Vec3::new(100.0, 112.0, 0.0),
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![attrib],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+        clip: None,
+    };
+    d.add(&Space::Model, Common { layer: "A-ANNO".into(), ..Common::default() }, EntityKind::Insert(ins)).unwrap();
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert_eq!(room(rooms, "OFFICE")["number"], "101", "{rooms:?}");
+}
+
 /// An equipment room tagged by the unit it houses (`AHU` over its number) is a room; an equipment
 /// tag with its own number (`AHU-1`) names none.
 #[test]
