@@ -6,7 +6,14 @@ use cadaddy_doc::{Drawing, VportConfig, VportTile};
 use cadaddy_io::{read_dxf, write_dxf};
 
 fn tile(min: (f64, f64), max: (f64, f64), twist_deg: f64) -> VportTile {
-    VportTile { min: Vec2::new(min.0, min.1), max: Vec2::new(max.0, max.1), center: Vec2::new(1.0, 2.0), height: 4.0, aspect: 1.0, twist: twist_deg.to_radians() }
+    VportTile {
+        min: Vec2::new(min.0, min.1),
+        max: Vec2::new(max.0, max.1),
+        center: Vec2::new(1.0, 2.0),
+        height: 4.0,
+        aspect: 1.0,
+        twist: twist_deg.to_radians(),
+    }
 }
 
 /// The values of group 51 in the file's VPORT table.
@@ -79,7 +86,10 @@ fn a_turned_untiled_view_fits_the_turned_extents() {
     d.add(
         &cadaddy_doc::Space::Model,
         cadaddy_doc::Common::default(),
-        cadaddy_doc::EntityKind::Line(cadaddy_doc::Line { a: cadaddy_doc::geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_doc::geom::Vec3::new(100.0, 10.0, 0.0) }),
+        cadaddy_doc::EntityKind::Line(cadaddy_doc::Line {
+            a: cadaddy_doc::geom::Vec3::new(0.0, 0.0, 0.0),
+            b: cadaddy_doc::geom::Vec3::new(100.0, 10.0, 0.0),
+        }),
     )
     .unwrap();
     d.vports = vec![VportConfig { name: VportConfig::ACTIVE.into(), tiles: vec![tile((0.0, 0.0), (1.0, 1.0), 90.0)] }];

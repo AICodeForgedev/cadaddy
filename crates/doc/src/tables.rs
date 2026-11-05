@@ -1044,7 +1044,8 @@ pub struct VportTile {
     pub height: f64,
     /// Width / height of the tile on screen when it was saved (0: unknown).
     #[serde(default)]
-    pub aspect: f64,    /// The tile's view twist (radians, counterclockwise; DXF VPORT group 51 in degrees).
+    pub aspect: f64,
+    /// The tile's view twist (radians, counterclockwise; DXF VPORT group 51 in degrees).
     #[serde(default)]
     pub twist: f64,
 }

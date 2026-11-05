@@ -312,4 +312,3 @@ fn a_moved_dimension_keeps_its_group_12_offset() {
     let own = &q[at..q[at + 1..].iter().position(|(c, _)| *c == 0).map(|k| at + 1 + k).unwrap()];
     assert!(!own.iter().any(|(c, _)| *c == 12), "regenerated geometry keeps a stale offset");
 }
-

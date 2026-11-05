@@ -957,8 +957,7 @@ fn compare_tables(a: &Drawing, b: &Drawing, out: &mut Out) {
             format!("{n} anonymous blocks nothing refers to (e.g. {first}) were not saved"),
         );
     }
-    let bb: Vec<&cadaddy_doc::Block> =
-        b.blocks.values().map(|x| x.as_ref()).filter(|x| !renamed_to.contains(&x.name.to_ascii_uppercase())).collect();
+    let bb: Vec<&cadaddy_doc::Block> = b.blocks.values().map(|x| x.as_ref()).filter(|x| !renamed_to.contains(&x.name.to_ascii_uppercase())).collect();
     let mut pairs: Vec<(&cadaddy_doc::Block, &cadaddy_doc::Block)> = Vec::new();
     for (from, to) in &out.renamed {
         if let (Some(x), Some(y)) = (a.block(from), b.block(to)) {

@@ -1227,7 +1227,10 @@ mod native {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, dxf_to_dwg_named_noted, dxf_to_dwg_noted};
+pub use native::{
+    custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named, dxf_to_dwg_named_noted,
+    dxf_to_dwg_noted,
+};
 
 /// What saving as DWG left out: how many records of each DXF type (upper case) the DWG writer
 /// can't write.

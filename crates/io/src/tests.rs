@@ -635,7 +635,8 @@ fn dxf_roundtrips_page_setup() {
 // Round trips of styles, overrides, associativity, constraints and tables.
 
 fn dim(kind: DimKind, p13: Vec3, p14: Vec3) -> Dimension {
-    Dimension { insertion_point: Default::default(),
+    Dimension {
+        insertion_point: Default::default(),
         kind,
         defpt: Vec3::new(p13.x, p13.y - 2.0, 0.0),
         text_mid: Vec3::ZERO,

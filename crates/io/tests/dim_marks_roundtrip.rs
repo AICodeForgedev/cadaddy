@@ -7,7 +7,8 @@ use cadaddy_geom::Vec3;
 use cadaddy_io::{read_dxf, write_dxf};
 
 fn dim(kind: DimKind, marks: DimMarks) -> EntityKind {
-    EntityKind::Dimension(Box::new(Dimension { insertion_point: Default::default(),
+    EntityKind::Dimension(Box::new(Dimension {
+        insertion_point: Default::default(),
         kind,
         defpt: Vec3::new(0.0, 3.0, 0.0),
         text_mid: Vec3::ZERO,

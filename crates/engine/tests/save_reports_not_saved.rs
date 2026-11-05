@@ -63,7 +63,14 @@ fn save_lists_the_entities_the_file_does_not_keep() {
 /// only, and keeps other programs' custom entities through DWG.)
 #[test]
 fn export_and_wblock_say_what_a_dwg_leaves_out() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Err("no reader in this test".into()),
+        write: |_, _| Ok(b"0\nEOF\n".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     let mut d = Drawing::new_imperial();
     let h = d.add(&Space::Model, Common::default(), unknown("REGION")).unwrap().hex();
     let mut s = Session::empty();
@@ -142,7 +149,14 @@ fn ole_frames_are_not_reported_as_not_saved() {
 /// there), so the save leaves it out and says so; 2010 and earlier keep it (#2334).
 #[test]
 fn saving_sat_text_solids_as_dxf_2013_reports_them() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Err("no reader in this test".into()),
+        write: |_, _| Ok(b"0\nEOF\n".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     set_write_as(|_, _, _: &SaveAs| Ok(b"x".to_vec()));
     let mut d = Drawing::new_imperial();
     let sat = EntityKind::Unknown(Unknown {
@@ -172,7 +186,14 @@ fn saving_sat_text_solids_as_dxf_2013_reports_them() {
 /// note, not the edited block's (#2334).
 #[test]
 fn the_note_counts_the_host_drawing_while_a_block_is_edited() {
-    set_io(IoHooks { read: |_, _| Err("no reader in this test".into()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Err("no reader in this test".into()),
+        write: |_, _| Ok(b"0\nEOF\n".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     set_write_as(|_, _, _: &SaveAs| Ok(b"x".to_vec()));
     let mut d = Drawing::new_imperial();
     let sat = EntityKind::Unknown(Unknown {

@@ -2,8 +2,8 @@
 //! 75/76/78/79/48/49/50, tabs as `^I`, carets as `^ `.
 
 use cadaddy_doc::{Common, Drawing, EntityKind, MText, MTextColumnType, MTextColumns, Space};
-use cadaddy_geom::Vec3;
 use cadaddy_dxf::Tag;
+use cadaddy_geom::Vec3;
 use cadaddy_io::{SaveOptions, Version, entity_from_groups, read_dxf, write_dxf, write_with};
 
 fn mtext(contents: &str, rotation: f64, columns: Option<MTextColumns>) -> MText {
