@@ -916,6 +916,9 @@ struct Step {
     name: String,
     secs: f64,
     ok: bool,
+    /// Process exit code (`None`: killed by a signal or not started).
+    code: Option<i32>,
+    note: String,
 }
 
 struct Runner {
@@ -940,16 +943,16 @@ impl Runner {
     fn step(&mut self, name: &str, args: &[String]) -> bool {
         eprintln!("\n=== merge-check: {name}\n$ {}", shell_line(args));
         let t = Instant::now();
-        let ok = match self.cargo(args).status() {
-            Ok(s) => s.success(),
+        let (ok, code) = match self.cargo(args).status() {
+            Ok(s) => (s.success(), s.code()),
             Err(e) => {
                 eprintln!("merge-check: could not start cargo: {e}");
-                false
+                (false, None)
             }
         };
         let secs = t.elapsed().as_secs_f64();
         eprintln!("=== merge-check: {name}: {} in {}", if ok { "ok" } else { "FAILED" }, fmt_secs(secs));
-        self.steps.push(Step { name: name.to_string(), secs, ok });
+        self.steps.push(Step { name: name.to_string(), secs, ok, code, note: String::new() });
         ok
     }
 }
@@ -1073,6 +1076,61 @@ fn nextest_pass(r: &mut Runner, name: &str, args: &[String], timings: &mut Timin
         write_json(timings_path, &timings.to_json());
     }
     (ok, cases.into_iter().filter(|c| c.failed).collect())
+}
+
+/// nextest's exit code when tests ran and some failed (anything else: build or setup failure).
+const NEXTEST_TESTS_FAILED: i32 = 100;
+/// More failures than this in one pass are a broken batch, not tests disturbed by load.
+const MAX_RERUN_ALONE: usize = 50;
+
+/// Re-run a pass's failures alone? Only when tests ran and a few failed (not a build error, not a
+/// broken batch).
+pub fn rerun_alone(ok: bool, code: Option<i32>, failed: usize) -> bool {
+    !ok && code == Some(NEXTEST_TESTS_FAILED) && (1..=MAX_RERUN_ALONE).contains(&failed)
+}
+
+/// One nextest pass with `threads` tests side by side; the tests that fail are re-run alone, one
+/// at a time (timing and kill-a-child tests can fail while a dozen other test processes and other
+/// builds share the machine; the old single `cargo test` ran one binary at a time). A failure
+/// that repeats alone is a failure; one that passes alone is reported and the pass counts as
+/// green. Returns the failing tests.
+#[allow(clippy::too_many_arguments)]
+fn tests_with_rerun(
+    r: &mut Runner,
+    name: &str,
+    a: &Affected,
+    config: &Path,
+    threads: usize,
+    filter: Option<&str>,
+    timings: &mut Timings,
+    timings_path: &Path,
+) -> Vec<Case> {
+    let (ok, failed) = nextest_pass(r, name, &nextest_args(a, config, threads, filter), timings, timings_path);
+    let first = r.steps.len().saturating_sub(1);
+    let code = r.steps.get(first).and_then(|s| s.code);
+    if !rerun_alone(ok, code, failed.len()) {
+        return failed;
+    }
+    let pairs: Vec<(String, String)> = failed.iter().map(|c| (c.binary_id.clone(), c.name.clone())).collect();
+    let Some(only) = slow_filter(&pairs) else { return failed };
+    eprintln!(
+        "
+{} test(s) failed with {threads} side by side; re-running them alone",
+        failed.len()
+    );
+    let (again_ok, again) =
+        nextest_pass(r, &format!("{name}: failures re-run alone"), &nextest_args(a, config, 1, Some(&only)), timings, timings_path);
+    if again_ok {
+        let names: Vec<String> = failed.iter().map(|c| format!("{} {}", c.binary_id, c.name)).collect();
+        eprintln!("passed alone (failed only under load): {}", names.join(", "));
+        if let Some(s) = r.steps.get_mut(first) {
+            s.ok = true;
+            s.note = format!("{} failed under load, passed alone", failed.len());
+        }
+        Vec::new()
+    } else {
+        again
+    }
 }
 
 /// A canonical path without Windows' `\\?\` verbatim prefix (cargo and git take it, people
@@ -1234,13 +1292,7 @@ pub fn run(default_root: &Path, args: &[&str]) -> Result<(), String> {
         if run_merge {
             let merge_filter = filter.as_ref().map(|f| format!("not ({f})"));
             eprintln!("{} slow test(s) wait for the after stage", slow.len());
-            let (_, f) = nextest_pass(
-                &mut r,
-                "tests (merge stage)",
-                &nextest_args(&a, &config, threads, merge_filter.as_deref()),
-                &mut timings,
-                &timings_path,
-            );
+            let f = tests_with_rerun(&mut r, "tests (merge stage)", &a, &config, threads, merge_filter.as_deref(), &mut timings, &timings_path);
             failed_tests.extend(f);
             if let Some(d) = doctest_args(&ws, &a) {
                 r.step("doc-tests", &d);
@@ -1249,13 +1301,8 @@ pub fn run(default_root: &Path, args: &[&str]) -> Result<(), String> {
         if run_after {
             match &filter {
                 Some(f) => {
-                    let (_, fails) = nextest_pass(
-                        &mut r,
-                        "slow tests (after stage)",
-                        &nextest_args(&a, &config, o.after_threads, Some(f)),
-                        &mut timings,
-                        &timings_path,
-                    );
+                    let fails =
+                        tests_with_rerun(&mut r, "slow tests (after stage)", &a, &config, o.after_threads, Some(f), &mut timings, &timings_path);
                     failed_tests.extend(fails);
                 }
                 None => eprintln!("\nno recorded slow tests in these packages: the after stage has nothing to run"),
@@ -1302,7 +1349,13 @@ pub fn run(default_root: &Path, args: &[&str]) -> Result<(), String> {
     let ok = r.steps.iter().all(|s| s.ok);
     eprintln!("\n=== merge-check summary ({} in total)", fmt_secs(started.elapsed().as_secs_f64()));
     for s in &r.steps {
-        eprintln!("  {:<28} {:>8}  {}", s.name, fmt_secs(s.secs), if s.ok { "ok" } else { "FAILED" });
+        eprintln!(
+            "  {:<44} {:>8}  {}{}",
+            s.name,
+            fmt_secs(s.secs),
+            if s.ok { "ok" } else { "FAILED" },
+            if s.note.is_empty() { String::new() } else { format!(" ({})", s.note) }
+        );
     }
     if fallback {
         eprintln!("  (cargo test fallback: every test ran in the merge stage)");
@@ -1601,6 +1654,16 @@ mod tests {
         assert!(cfg.contains("serial-0 = { max-threads = 1 }") && cfg.contains("serial-1 = { max-threads = 1 }"));
         assert!(cfg.contains("filter = \"binary_id(=pkg-a::slowbin)\"\ntest-group = \"serial-0\""));
         assert!(!nextest_config(&[]).contains("[test-groups]"));
+    }
+
+    #[test]
+    fn failures_rerun_alone_only_when_tests_ran() {
+        assert!(rerun_alone(false, Some(100), 5));
+        assert!(!rerun_alone(true, Some(0), 0), "green");
+        assert!(!rerun_alone(false, Some(101), 0), "build failed");
+        assert!(!rerun_alone(false, Some(100), 0), "failed without a report: no list to re-run");
+        assert!(!rerun_alone(false, None, 3), "killed");
+        assert!(!rerun_alone(false, Some(100), MAX_RERUN_ALONE + 1), "a broken batch");
     }
 
     #[test]

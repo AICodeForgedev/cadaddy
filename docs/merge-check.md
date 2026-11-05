@@ -35,6 +35,11 @@ cargo merge-check <base> HEAD --dry-run                 # what changed, which pa
      the **after** stage instead (`--stage after`, `--after-threads`, default 2). The two stages'
      filters are exact complements, so together they run every test the single `cargo test` ran.
      A test with no record yet (new) runs in the merge stage.
+   - **Failures under load.** Timing tests and kill-a-child tests can fail while a dozen test
+     processes and other builds share the machine. When some tests fail (at most 50, and the
+     build was fine), merge-check re-runs just those, alone, one at a time: a failure that repeats
+     fails the check; one that passes alone is listed ("passed alone") and the pass counts as
+     green, as a merger re-running a flaky test by hand would decide.
    - **Serialized test files.** An integration test file that serializes its tests with a
      `static ...: Mutex<()>` runs one test at a time (a nextest test group per binary), as it did
      inside one `cargo test` process.
