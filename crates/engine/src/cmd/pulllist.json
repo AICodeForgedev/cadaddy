@@ -3,7 +3,7 @@
   "about": "What the field paperwork (Q6195 pulllist) adds to the model's pieces: the slack left at each end of a pull and in each pull box, the pull boxes the bend rule asks for and their size, the standard reels and coils wire and cable come on, and which pieces go out at rough-in and which at trim. Values are the code's (with the section) or the trade's usual stock (marked so); a project's own documents win where they say otherwise.",
   "box_end_slack_source": "the model's own makeup at each box (mepatoms.json makeup_ft): the length the takeoff counts; NEC 300.14 asks at least 6 in",
   "gear_end_slack_ft": 3.0,
-  "gear_end_slack_source": "3 ft of each conductor at a panel or gear end, to reach its farthest terminal (company default; the takeoff's makeup is 1 ft of it)",
+  "gear_end_slack_source": "3 ft of each conductor at a panel or gear end, to reach its farthest terminal (company default; the takeoff's panel makeup, mepatoms panel_makeup_ft, is counted in it: a feeder conductor this schedule cuts itself carries a box's 1 ft)",
   "pull_box_loop_ft": 2.0,
   "pull_box_loop_source": "a 2 ft loop of each conductor left in each pull box, so it can be pulled on and dressed (company default; NEC 300.14 asks free conductor only where spliced or terminated)",
   "pull_box": {
