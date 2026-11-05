@@ -1630,6 +1630,69 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
         // and fire alarm modules are electrical lines of their own, on their circuit.
         let kind = st(&e, "kind").to_ascii_lowercase();
         let prop = |k: &str| e["properties"][k].as_str().unwrap_or_default().to_string();
+        // The documents' other objects (Q6192) and the connections they get: ours on our lines;
+        // another trade's in its trade, or by others with our rough-in when the scope split says.
+        if !prop("DOC_OBJECT").is_empty() && !kind.ends_with("_damper") {
+            let connection = prop("DOC_OBJECT") == "connection";
+            if !connection
+                && let Some(dec) =
+                    sr.class_of(&prop("SCOPE_KIND"), &fa_kind).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others())
+            {
+                let ours = dec.ours_for(&prop("SCOPE_KIND"), &fa_kind);
+                others_entry(others, dec, &st(&e, "tag"), &format!("{} {}", prop("NAME"), st(&e, "tag")), &st(&e, "level"), &ours);
+                rough_in_lines(lines, dec, &ours, false, &st(&e, "tag"), &st(&e, "level"), "");
+                continue;
+            }
+            let ours = connection || prop("SCOPE").starts_with("ours");
+            let trade = match prop("TRADE").as_str() {
+                _ if ours => "electrical",
+                "plumbing" => "plumbing",
+                "mechanical" => "mechanical",
+                _ => "general",
+            };
+            let category = if connection {
+                match kind.as_str() {
+                    "equipment_power_box" => "equipment connections",
+                    "data_outlet" => "low voltage",
+                    _ => "fire alarm",
+                }
+            } else {
+                match prop("TRADE").as_str() {
+                    "fire alarm" => "fire alarm",
+                    "electrical" => "devices",
+                    "low voltage" => "low voltage",
+                    "plumbing" => "plumbing equipment",
+                    "mechanical" => "mechanical equipment",
+                    _ => "specialties",
+                }
+            };
+            let proposed = prop("STATUS") == "proposed";
+            add(
+                lines,
+                Line {
+                    trade,
+                    category: category.into(),
+                    item: if connection { st(&e, "title") } else { prop("NAME") },
+                    size: prop("SIZE"),
+                    unit: "each",
+                    net: 1.0,
+                    status: if connection || proposed { "rule" } else { "firm" },
+                    rule: if connection {
+                        Some(prop("RULE")).filter(|r| !r.is_empty())
+                    } else {
+                        proposed.then(|| "proposed: only a note names it, its place to confirm".to_string())
+                    },
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
+                    circuit: match (prop("PANEL"), prop("CIRCUIT")) {
+                        (p, c) if !p.is_empty() && !c.is_empty() && c != "not named" => format!("{p}-{c}"),
+                        _ => String::new(),
+                    },
+                    ..Line::default()
+                },
+            );
+            continue;
+        }
         if kind.ends_with("_damper") || matches!(kind.as_str(), "damper_power_box" | "fa_control_module" | "fa_monitor_module") {
             let damper = kind.ends_with("_damper");
             let ours = prop("SCOPE").starts_with("ours");

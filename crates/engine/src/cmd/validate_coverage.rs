@@ -130,6 +130,14 @@ struct Data {
     page_words: Vec<String>,
     /// The connecting trades' own objects (a disconnect, a box): never another trade's.
     own_nouns: Vec<String>,
+    /// English words that read as codes (`CAB` of an elevator, `DUAL` starting a description):
+    /// never a code in an abbreviation list or a note.
+    ordinary_words: Vec<String>,
+    /// A meaning starting so names a place (`BACK OF CURB`), no object.
+    datum_phrases: Vec<String>,
+    /// A note's object right after one of these is where something goes (`ABOVE THE CABINET`),
+    /// not what it connects or provides.
+    location_words: Vec<String>,
     max_pages: usize,
     max_code_chars: usize,
     max_phrase_words: usize,
@@ -212,6 +220,10 @@ fn head(key: &str) -> Option<&str> {
 /// Whether a meaning names an object (one of the rules data's nouns, or a compound).
 fn names_object(meaning: &str) -> bool {
     let d = data();
+    let up = format!("{} ", words_of(meaning).join(" "));
+    if d.datum_phrases.iter().any(|p| up.starts_with(&format!("{} ", p.to_ascii_uppercase()))) {
+        return false;
+    }
     let ws: Vec<String> = words_of(meaning).iter().map(|w| singular(w)).collect();
     let joined = format!(" {} ", ws.join(" "));
     ws.iter().any(|w| listed(&d.object_nouns, w)) || d.compound_nouns.iter().any(|c| joined.contains(&format!(" {} ", c.to_ascii_uppercase())))
@@ -280,6 +292,16 @@ fn phrases(text: &str) -> Vec<(String, String, bool, bool)> {
             start -= 1;
         }
         let Some(span) = sing.get(start..=i) else { continue };
+        // A place the note names (`MOUNT … ABOVE THE CABINET`), no object of it.
+        let before = start.checked_sub(1).and_then(|p| sing.get(p));
+        if before.is_some_and(|p| listed(&d.location_words, p))
+            || start
+                .checked_sub(2)
+                .and_then(|p| sing.get(p))
+                .is_some_and(|p| listed(&d.location_words, p) && before.is_some_and(|b| listed(&d.stop_words, b)))
+        {
+            continue;
+        }
         if span.iter().any(|w| listed(&d.not_new_words, w))
             || start.checked_sub(1).and_then(|p| sing.get(p)).is_some_and(|p| listed(&d.not_new_words, p))
         {
@@ -631,6 +653,12 @@ impl Defs {
         if key.is_empty() {
             return None;
         }
+        // A kind needs a word of its own (three letters or more, not its code): a legend row
+        // printing only its code (`QB QB`) defines nothing.
+        let own_word = key.split(' ').any(|w| w.chars().filter(char::is_ascii_alphabetic).count() >= 3 && code.as_deref() != Some(w));
+        if !own_word {
+            return None;
+        }
         let trades: BTreeSet<&'static str> = if trade == "general" { BTreeSet::new() } else { [trade].into_iter().collect() };
         let overlaps = |d: &Def| d.trades.is_empty() || trades.is_empty() || d.trades.iter().any(|t| trades.contains(t));
         let h = head(&key).map(str::to_string);
@@ -711,7 +739,7 @@ fn abbreviates(code: &str, meaning: &str) -> bool {
 /// extents.
 fn abbreviations(texts: &[TextItem]) -> (Vec<(String, String)>, Vec<[f64; 4]>) {
     let d = data();
-    let mark = |v: &str| super::validate_kind::looks_like_mark(v) && v.len() <= d.max_code_chars;
+    let mark = |v: &str| super::validate_kind::looks_like_mark(v) && v.len() <= d.max_code_chars && !listed(&d.ordinary_words, v);
     let mut pairs = Vec::new();
     let mut regions = Vec::new();
     let headings = texts.iter().filter(|t| {
@@ -959,7 +987,10 @@ fn read_connections(sheets: &[Sheet], keynotes: &super::validate_keynote::Keynot
         // Kinds named by a code (`POWER TO FSD`): another trade's codes of two letters or more.
         for (i, def) in defs.list.iter().enumerate() {
             let building = def.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other"));
-            if building && def.codes.iter().any(|c| c.len() >= 3 && codes.iter().any(|w| w == c)) && !def.trades.contains(trade) {
+            if building
+                && def.codes.iter().any(|c| c.len() >= 3 && !listed(&d.ordinary_words, c) && codes.iter().any(|w| w == c))
+                && !def.trades.contains(trade)
+            {
                 hits.push(i);
             }
         }
@@ -1781,5 +1812,28 @@ mod tests {
         let c = defs.add(key_of("FLOOR DRAINS"), "FLOOR DRAINS".into(), Some("QD".into()), "plumbing", src());
         assert_ne!(a, b, "another head noun is another kind");
         assert_eq!(a, c, "the same words are one kind");
+        // A legend row printing only its code (and stray letters) defines nothing.
+        assert_eq!(defs.add(key_of("QB"), "QB".into(), Some("QB".into()), "general", src()), None);
+        assert_eq!(defs.add(key_of("QB T A T X"), "QB T A T X".into(), Some("QB".into()), "general", src()), None);
+    }
+
+    #[test]
+    fn places_and_ordinary_words_are_no_kinds() {
+        // A datum names a place, not an object.
+        assert!(!names_object("BACK OF CURB") && !names_object("TOP OF CURB") && names_object("ROOF CURB"));
+        // An English word starting a description is no code.
+        let texts = vec![
+            item("ABBREVIATIONS", 0.0, 100.0),
+            item("DUAL DRAIN WASHER OUTLET BOX WITH VALVES", 0.0, 88.0),
+            item("QDD", 0.0, 76.0),
+            item("QUAD DECK DRAIN", 40.0, 76.0),
+        ];
+        let (pairs, _) = abbreviations(&texts);
+        assert!(pairs.iter().all(|(c, _)| c != "DUAL"), "{pairs:?}");
+        assert!(pairs.contains(&("QDD".into(), "QUAD DECK DRAIN".into())), "{pairs:?}");
+        // An object a note names as where something goes is no connection to it.
+        let p = phrases("MOUNT THE RECEPTACLE ABOVE INTERIOR CABINET. PROVIDE 30A RECEPTACLE FOR THE RANGE.");
+        assert!(!p.iter().any(|(k, ..)| k.contains("cabinet")), "{p:?}");
+        assert!(p.iter().any(|(k, ..)| k == "range"), "{p:?}");
     }
 }
