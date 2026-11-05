@@ -159,6 +159,7 @@ pub mod part;
 pub mod parts;
 pub mod pdfplans;
 mod perceive;
+pub(crate) mod pipefollow;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
