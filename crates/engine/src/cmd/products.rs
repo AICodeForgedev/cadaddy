@@ -41,7 +41,7 @@ const PRODUCT_DIVISIONS: &[&str] = &["22", "23", "26", "27", "28"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Product Data", run)
-        .params("{specs: [path] (specification section PDFs or text, a project manual, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these)} → {sections: [{section, file, requirements}] (those with products), sections_read: [\"26 27 26 WIRING DEVICES\"…] (every section read; a project manual's product-division sections each), files: n, requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}]}: each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
+        .params("{specs: [path] (specification section PDFs or text, a project manual, or folders of them, searched below), sections?: [\"26 27 26\"…] (only these), submittals?: [path] (the plumbing submittals, files or folders; default the job's), plumbing?: bool (default true: the plumbing fixtures' records first)} → {sections: [{section, file, requirements}] (those with products), sections_read: [\"26 27 26 WIRING DEVICES\"…] (every section read; a project manual's product-division sections each), files: n, requirements: n, elements: n, by_kind: {kind: {elements, with_spec, with_submittal}}, no_product_data: {kind: why}, unread: [{file, error}], plumbing: {schedule: {sheet, rows, headers, rough_in_rows}, submittals: [{file, revision, reviewed, items, approved, sent_back, catalogs}], fixtures, elements, with_product, no_product_data, no_product_data_by_tag: {tag: {elements, why}}, maker_from, catalog_from, rough_in_from, water_derived, powered, connection_boxes, connections_by, conflicts, conflicts_by_topic, types}}: first each plumbing fixture and piece of plumbing equipment gets its product from the documents, each field with its source: the plumbing fixture schedule's row (fixture, maker, model, description, remarks, parts; connection sizes from its columns, else the rough-in table by the fixture's name), the latest plumbing submittal not sent back (its product list's maker and description, the review letter's response, the cut sheet's catalog number and electrical data), then the Division 22 makers; where they disagree the submittal is kept, the schedule's value beside it (design_manufacturer, design_catalog) and a conflict review item raised; one with no document data says why (product_gap); a powered one (pump; sensor, line-voltage or power-burner by its documents; rules data) gets its electrical_connection and an equipment connection box in the spec for the electrical takeoff; water on a level whose water lines are proposed is marked derived. Then each device, fixture and equipment element gets a `product` record (JSON text) {required (spec: makers, substitution, rating, configuration, colour, features; section + page), approved (submittal maker/catalog + which, or \"no submittal for this kind\"), resolved}, and its approved_makers, color, configuration, rating and required_features as properties with their sources; a person's values stay")
         .menu(&["Tools", "Building", "Apply Product Data"])]
 }
 
@@ -563,7 +563,14 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
             } else {
                 "as listed"
             };
-            let Some(kind) = kind_of_product(&product) else { continue };
+            // A plumbing section's products by the plumbing kinds' words too (rules data).
+            let plumbing_section = section.trim_start().starts_with("22") || file.trim_start().starts_with("22");
+            let Some(kind) = kind_of_product(&product)
+                .map(str::to_string)
+                .or_else(|| plumbing_section.then(|| super::plumbproducts::plumbing_kind(&product)).flatten())
+            else {
+                continue;
+            };
             let item_level = if level >= 4 { 4 } else { level + 1 };
             // A list on the same line (`Manufacturers: Acuity; Wattstopper.`).
             let inline: Vec<String> = said
@@ -574,7 +581,7 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
                 .unwrap_or_default();
             open = Some((
                 Requirement {
-                    kind: kind.to_string(),
+                    kind,
                     product,
                     section: if section.is_empty() { file.to_string() } else { section.clone() },
                     page: page.clone(),
@@ -683,8 +690,16 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
             ("switch".into(), config.map(str::to_string))
         }
         "plumbing_fixture" | "fixture" => {
-            let k2 = kind_of_product(&name).unwrap_or("plumbing_fixture");
-            (k2.to_string(), None)
+            // Its plumbing kind (the plumbing records' `product_kind`, else its schedule names'
+            // words), before the general names (a sump pump's `OIL SWITCH` is no switch).
+            let named = format!("{} {} {name}", text("fixture"), text("type"));
+            let k2 = Some(text("product_kind"))
+                .filter(|k| !k.is_empty())
+                .map(|k| k.to_ascii_lowercase())
+                .or_else(|| super::plumbproducts::plumbing_kind(&named))
+                .or_else(|| kind_of_product(&named).map(str::to_string))
+                .unwrap_or_else(|| "plumbing_fixture".to_string());
+            (k2, None)
         }
         "equipment" | "equipment_connection" => match mark.as_str() {
             m if m.starts_with("PTAC") => ("ptac".into(), None),
@@ -786,6 +801,9 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             reqs.extend(got);
         }
     }
+    // The plumbing fixtures' products first (the schedule, the plumbing submittals, these
+    // sections' makers), so their records below are built from them.
+    let plumbing = if p.get("plumbing").and_then(Value::as_bool) == Some(false) { Value::Null } else { plumbing_products(s, p, &reqs)? };
     // Each product element: its record.
     let d = s.doc()?;
     let mut changes: Vec<(Handle, props::Props)> = Vec::new();
@@ -893,7 +911,41 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "by_kind": by_kind.iter().map(|(k, (n, sp, sb))| (k.clone(), json!({"elements": n, "with_spec": sp, "with_submittal": sb}))).collect::<serde_json::Map<String, Value>>(),
         "no_product_data": no_data,
         "unread": unread,
+        "plumbing": plumbing,
     }))
+}
+
+/// The plumbing fixtures' product records ([`super::plumbproducts`]): the job's plumbing fixture
+/// schedule (else one on the drawing), the plumbing submittals among `submittals` (else the
+/// job's), the sections' requirements read.
+fn plumbing_products(s: &mut Session, p: &Value, reqs: &[Requirement]) -> Result<Value> {
+    use super::plumbproducts as pp;
+    let job = super::guided::load_job(s).ok().flatten();
+    let mut given: Vec<String> = Vec::new();
+    match p.get("submittals") {
+        None | Some(Value::Null) => given.extend(job.as_ref().map(|j| j.submittals.clone()).unwrap_or_default()),
+        Some(Value::String(t)) => given.push(t.clone()),
+        Some(Value::Array(a)) => {
+            for v in a.iter().take(MAX_SPEC_FILES) {
+                given.push(v.as_str().ok_or_else(|| bad(CMD, "`submittals` takes paths (strings)"))?.to_string());
+            }
+        }
+        Some(_) => return Err(bad(CMD, "`submittals` takes a path or a list of paths")),
+    }
+    let d = s.doc()?;
+    let found = match &job {
+        Some(j) => super::guided::plumbing_schedule_docs(d, j),
+        None => None,
+    }
+    .or_else(|| cadaddy_mepfix::fixture_schedule::read(d).map(|sch| (sch, cadaddy_mepfix::fixture_schedule::read_connections_on(d), String::new())));
+    let Some((schedule, connections, sheet)) = found else {
+        return Ok(json!({"schedule": Value::Null, "why": "no plumbing fixture schedule was read"}));
+    };
+    let r = pp::rules();
+    let mut docs = pp::Docs { rows: schedule.rows, connections, sheet, headers: schedule.headers, ..pp::Docs::default() };
+    let files = super::submittals::pdf_files(&given);
+    pp::read_submittals(&r, &files, &docs.rows.clone(), &mut docs);
+    pp::apply(s, &docs, reqs)
 }
 
 #[cfg(test)]

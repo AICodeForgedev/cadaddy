@@ -1,0 +1,53 @@
+{
+  "about": "Rules data for the plumbing fixtures' product records (bim.plumbing.products, Q6205): the kinds of plumbing product a schedule row, a submittal item or a Division 22 section names (first match wins, so a narrower word comes before a wider one), the words a submittal's product list and review letter are read by, and which fixtures take an electrical connection. Each list says where it comes from.",
+  "kinds_source": "the usual names of plumbing products in fixture schedules and CSI Division 22 sections (MasterFormat 22 13 19, 22 11 19, 22 11 23, 22 14 29, 22 34 00, 22 42 00, 22 45 00, 22 47 00)",
+  "kinds": [
+    {"kind": "floor_drain", "words": ["FLOOR DRAIN", "FLOOR SINK", "AREA DRAIN", "SHOWER DRAIN", "TRENCH DRAIN"]},
+    {"kind": "cleanout", "words": ["CLEANOUT", "CLEAN OUT", "CLEAN-OUT"]},
+    {"kind": "water_closet", "words": ["WATER CLOSET", "TOILET"]},
+    {"kind": "urinal", "words": ["URINAL"]},
+    {"kind": "lavatory", "words": ["LAVATORY", "LAVATORIES"]},
+    {"kind": "sump_pump", "words": ["SUMP", "EFFLUENT", "SEWAGE EJECTOR"]},
+    {"kind": "booster_pump", "words": ["BOOSTER"]},
+    {"kind": "pump", "words": ["CIRCULATOR", "CIRCULATING PUMP", "RECIRCULATION PUMP", "RECIRCULATING PUMP", "IN-LINE", "CENTRIFUGAL PUMP"]},
+    {"kind": "water_heater", "words": ["WATER HEATER"]},
+    {"kind": "expansion_tank", "words": ["EXPANSION TANK"]},
+    {"kind": "mixing_valve", "words": ["MIXING VALVE", "TMV"]},
+    {"kind": "trap_primer", "words": ["TRAP PRIMER"]},
+    {"kind": "backflow_preventer", "words": ["BACKFLOW"]},
+    {"kind": "washer_box", "words": ["WASHER BOX", "WASHING MACHINE", "WASHER OUTLET", "OUTLET BOX"]},
+    {"kind": "interceptor", "words": ["INTERCEPTOR"]},
+    {"kind": "eyewash", "words": ["EYEWASH", "EYE WASH", "EMERGENCY SHOWER"]},
+    {"kind": "water_cooler", "words": ["BOTTLE FILLING", "BOTTLE FILLER", "DRINKING FOUNTAIN", "WATER COOLER"]},
+    {"kind": "hose_bibb", "words": ["HOSE BIBB", "HOSE BIB", "WALL HYDRANT", "WALL FAUCET", "YARD HYDRANT"]},
+    {"kind": "shower", "words": ["SHOWER", "BATHTUB", "BATH TUB", "TUB"]},
+    {"kind": "sink", "words": ["SINK", "MOP BASIN", "SERVICE BASIN", "LAUNDRY TRAY"]}
+  ],
+  "narrowing_words": ["COMMERCIAL", "INDUSTRIAL", "MEDICAL", "LABORATORY", "PUBLIC"],
+  "narrowing_why": "a rough-in row for a narrower use (a commercial kitchen's sink) applies only when the schedule's fixture says so; the general row is the usual one (trade practice)",
+  "list_headers": {
+    "maker": ["VENDOR", "MANUFACTURER", "MFR", "MAKER", "BRAND"],
+    "description": ["DESCRIPTION", "PRODUCT", "ITEM"],
+    "page": ["PAGE", "PG", "PAGES"],
+    "source": "a submittal package's table of contents and its item cover pages: the item tag, then each product's maker, description and the package page its cut sheet starts on"
+  },
+  "catalog_labels": ["MODEL NUMBER", "MODEL NO", "MODEL #", "MODEL:", "CATALOG NUMBER", "CATALOG NO", "CATALOG #", "CAT. NO", "CAT NO", "ITEM NO", "ITEM #", "PRODUCT NO", "PART NO", "ORDER NO"],
+  "catalog_source": "the labels a maker's cut sheet prints its catalog or model number under",
+  "review": {
+    "sent_back": ["REVISE", "RESUBMIT", "REJECT", "NOT APPROVED", "DISAPPROVED", "NOT ACCEPTED"],
+    "not_reviewed": ["NOT REVIEWED", "FOR INFORMATION ONLY", "NO ACTION TAKEN", "RECEIVED"],
+    "approved": ["NO EXCEPTION", "NOTE CORRECTION", "CORRECTIONS NOTED", "MAKE CORRECTIONS", "FURNISH AS CORRECTED", "APPROVED AS NOTED", "APPROVED", "REVIEWED", "ACCEPTED"],
+    "unlisted": ["NOT LISTED", "RETURNED"],
+    "source": "the response codes of design-team submittal review stamps and letters (AIA G810-style actions): sent back first, not reviewed next, then approved, so NOT APPROVED and NOT REVIEWED aren't read as approved"
+  },
+  "submittal_name_words": ["PLUMB", "FIXTURE", "#22", " 22 ", "DIVISION 22", "WATER HEATER"],
+  "submittal_name_why": "files named for plumbing or Division 22 are read whole; others only when their first pages list the schedule's tags",
+  "sniff_pages": 8,
+  "powered": [
+    {"kinds": ["pump", "booster_pump", "sump_pump"], "words": [], "basis": "trade practice: a pump's motor is wired by the electrical trade to a disconnecting means within sight of it (NEC 430.102)"},
+    {"kinds": [], "words": ["SENSOR", "INFRARED", "ELECTRONIC FLUSH", "ELECTRONIC FAUCET", "HARDWIRE", "120V", "120 V", "115V", "115 VAC", "120 VAC", "TRANSFORMER"], "basis": "its documents say it is powered (sensor, electronic or line-voltage operation): an equipment connection by the electrical trade (NEC 422)"},
+    {"kinds": ["water_heater"], "words": ["POWER BURNER", "POWERED ANODE", "POWER VENT", "DIRECT VENT FAN", "BLOWER", "ELECTRIC", "IGNITER", "120V", "120 V"], "basis": "its documents give it a power burner, blower, igniter or powered anodes: a 120 V equipment connection by the electrical trade (NEC 422.31)"},
+    {"kinds": ["water_cooler"], "words": ["GPH", "CHILL", "REFRIGERAT", "115V", "120V"], "basis": "a chilled drinking fountain or bottle filler has a compressor: a 120 V equipment connection by the electrical trade (NEC 422.52 GFCI where listed)"}
+  ],
+  "water_derived": "its level's water lines are proposed (copied from a level whose layout matches, not drawn): its water connections are derived, not design-issued"
+}

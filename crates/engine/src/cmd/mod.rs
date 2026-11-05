@@ -170,6 +170,7 @@ pub(crate) mod plotstamp;
 pub mod plotters;
 pub mod plugins_cmd;
 pub mod plumbing;
+pub(crate) mod plumbproducts;
 pub(crate) mod printcond;
 pub(crate) mod printmep;
 pub mod printrev;

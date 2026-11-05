@@ -7105,6 +7105,30 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     );
     report_progress(s, json!({"step": "products", "elements": v.get("elements")}), &line);
     s.echo(line);
+    // The plumbing fixtures' products (Q6205).
+    if let Some(pl) = v.get("plumbing").filter(|pl| pl.get("fixtures").is_some()) {
+        let n = |k: &str| pl.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let line = format!(
+            "  plumbing products: {} fixtures, {} with a product (maker from {}, catalog from {}), {} with no document data {}; rough-in sizes from {}; submittals {}; powered {} ({} connection boxes {}); water derived on {}; conflicts {} {}",
+            n("fixtures"),
+            n("with_product"),
+            pl.get("maker_from").map(Value::to_string).unwrap_or_default(),
+            pl.get("catalog_from").map(Value::to_string).unwrap_or_default(),
+            n("no_product_data"),
+            pl.get("no_product_data_by_tag").map(Value::to_string).unwrap_or_default(),
+            pl.get("rough_in_from").map(Value::to_string).unwrap_or_default(),
+            pl.get("submittals").map(Value::to_string).unwrap_or_default(),
+            n("powered"),
+            n("connection_boxes"),
+            pl.get("connections_by").map(Value::to_string).unwrap_or_default(),
+            n("water_derived"),
+            n("conflicts"),
+            pl.get("conflicts_by_topic").map(Value::to_string).unwrap_or_default()
+        );
+        report_progress(s, json!({"step": "plumbing products", "fixtures": n("fixtures"), "with_product": n("with_product")}), &line);
+        s.echo(line);
+        result["plumbing_products"] = pl.clone();
+    }
     let none: Vec<String> = v
         .get("no_product_data")
         .and_then(Value::as_object)
@@ -16987,6 +17011,27 @@ fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadadd
         .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
 }
 
+/// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
+/// rough-in table: on the schedule's sheet, else on another plumbing sheet that isn't a plan.
+pub(crate) fn plumbing_schedule_docs(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let pages = non_plan_pages(job, "P");
+    let found = pages.iter().find_map(|(name, page)| fsch::read(page).map(|s| (s, fsch::read_connections_on(page), name.clone()))).or_else(|| {
+        job_sheet_refs(job).iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P")).take(MAX_LEGEND_SHEETS).find_map(|r| {
+            let sd = super::printmep::sheet_drawing(d, r);
+            fsch::read(&sd).map(|s| (s, fsch::read_connections_on(&sd), r.number.clone()))
+        })
+    });
+    let (schedule, mut connections, sheet) = found?;
+    if connections.is_empty() {
+        connections = pages.iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
+    }
+    Some((schedule, connections, sheet))
+}
+
 /// Most plumbing fixtures read from a set's plans.
 const MAX_FIXTURES: usize = 20_000;
 
@@ -23744,7 +23789,8 @@ mod tests {
         job.sheet_regions = vec![region("P-4", 0.0), region("P-7", 5000.0)];
         job.sheet_spans = vec![SheetSpan { sheet: "P-4".into(), lo, hi }];
         let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
-        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-7")], extent: [0.0; 4] };
+        let schedule =
+            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-7")], extent: [0.0; 4], ..Default::default() };
         let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
         let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
         tags.sort_by(|a, b| a.1.total_cmp(&b.1));
