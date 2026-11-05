@@ -1044,7 +1044,7 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
     // Lines that aren't even group codes: the size is reported before anything is parsed.
     let text = "not a group code\nx\n".repeat(60);
     let e = cadaddy_dxf::parse_with_limit(text.as_bytes(), 50).unwrap_err();
-    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADaddy reads");
+    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADaddy reads (set CADADDY_MAX_DXF_TAGS to read more)");
 }
 
 /// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the

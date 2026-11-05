@@ -62,6 +62,18 @@ pub const STALE_LOCK_SECS: u64 = 5 * 60;
 const HEARTBEAT_SECS: f64 = 60.0;
 
 static SAVETIME: AtomicU32 = AtomicU32::new(DEFAULT_SAVETIME);
+static ISAVEBAK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// ISAVEBAK: whether saving over a drawing keeps the previous file as `<name>.bak` (on by
+/// default, as in AutoCAD). A profile setting like SAVETIME.
+pub fn isavebak() -> bool {
+    ISAVEBAK.load(Ordering::Relaxed)
+}
+
+/// Turn ISAVEBAK on or off.
+pub fn set_isavebak(on: bool) {
+    ISAVEBAK.store(on, Ordering::Relaxed);
+}
 static SAVEFILEPATH: Mutex<String> = Mutex::new(String::new());
 
 /// SAVETIME: minutes between autosaves; 0 turns autosave off.
@@ -87,10 +99,22 @@ pub fn set_savefilepath(path: &str) {
 
 /// The autosave file name for drawing `uid` titled `title`, written by app instance `instance`.
 pub fn file_name(title: &str, instance: &str, uid: u64) -> String {
-    let stem: String = title.chars().map(|c| if c.is_alphanumeric() || " .-_()".contains(c) { c } else { '-' }).take(80).collect();
+    // File systems limit a name to 255 bytes, so the stem gets what the suffix leaves, cut at a character boundary.
+    let suffix = format!("_{instance}_{uid}.{EXT}");
+    let budget = 255usize.saturating_sub(suffix.len());
+    let mut used = 0;
+    let stem: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() || " .-_()".contains(c) { c } else { '-' })
+        .take(80)
+        .take_while(|c| {
+            used += c.len_utf8();
+            used <= budget
+        })
+        .collect();
     let stem = stem.trim().trim_matches('.');
     let stem = if stem.is_empty() { "Drawing" } else { stem };
-    format!("{stem}_{instance}_{uid}.{EXT}")
+    format!("{stem}{suffix}")
 }
 
 /// Whether `s` has the form of an app instance id (`<process id>-<start time in hex>`, see
@@ -176,9 +200,12 @@ pub struct Autosaver {
     docs: HashMap<u64, Tracked>,
     /// Drawings whose autosave is being written right now.
     busy: HashSet<u64>,
-    /// Writes in progress; each tells whether its file was written.
+    /// Why the last autosave of each drawing failed, until one succeeds or the drawing no longer
+    /// needs it. Ordered, so [`Autosaver::failure`] doesn't change between frames.
+    failed: std::collections::BTreeMap<u64, String>,
+    /// Writes in progress; each ends with why its file wasn't written, if it wasn't.
     #[cfg(not(target_arch = "wasm32"))]
-    running: Vec<(u64, std::thread::JoinHandle<Option<native::Held>>)>,
+    running: Vec<(u64, std::thread::JoinHandle<std::result::Result<native::Held, String>>)>,
     #[cfg(not(target_arch = "wasm32"))]
     start: web_time::Instant,
     #[cfg(not(target_arch = "wasm32"))]
@@ -193,6 +220,7 @@ impl Autosaver {
             instance: instance.into(),
             docs: HashMap::new(),
             busy: HashSet::new(),
+            failed: std::collections::BTreeMap::new(),
             #[cfg(not(target_arch = "wasm32"))]
             running: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -215,6 +243,11 @@ impl Autosaver {
     /// The autosave files this app has written or adopted.
     pub fn files(&self) -> Vec<String> {
         self.docs.values().filter_map(|t| t.file.clone()).collect()
+    }
+
+    /// The drawings with no up-to-date recovery copy and why, for the host to show the user.
+    pub fn failures(&self) -> impl Iterator<Item = (u64, &str)> {
+        self.failed.iter().map(|(uid, why)| (*uid, why.as_str()))
     }
 
     /// What to do at `now` (seconds, any fixed origin) with SAVETIME `minutes` and autosave folder
@@ -250,6 +283,7 @@ impl Autosaver {
                     jobs.push(Job::Delete { path });
                 }
                 *t = Tracked::default();
+                self.failed.remove(&st.uid);
                 continue;
             }
             let same = |w: &Option<Weak<Drawing>>, d: &Arc<Drawing>| w.as_ref().is_some_and(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(d)));
@@ -293,6 +327,8 @@ impl Autosaver {
             t.since = None;
             jobs.push(Job::Write { uid: st.uid, path, doc });
         }
+        let docs = &self.docs;
+        self.failed.retain(|uid, _| docs.contains_key(uid));
         jobs
     }
 
@@ -440,10 +476,11 @@ mod native {
     pub fn prune_locks(dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         let names: Vec<String> = entries.flatten().take(10_000).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        // The instances that own autosave files, parsed once rather than once per lock file.
+        let with_files: HashSet<&str> = names.iter().filter_map(|f| parse_file_name(f)).map(|(_, i, _)| i).collect();
         for n in &names {
             let Some(instance) = parse_lock_name(n) else { continue };
-            let has_files = names.iter().any(|f| parse_file_name(f).is_some_and(|(_, i, _)| i == instance));
-            if !has_files && !instance_running(dir, instance) {
+            if !with_files.contains(instance) && !instance_running(dir, instance) {
                 let _ = std::fs::remove_file(dir.join(n));
             }
         }
@@ -476,8 +513,24 @@ mod native {
         if let Some(dir) = Path::new(path).parent() {
             create_folder(dir).map_err(|e| e.to_string())?;
         }
-        crate::writefile::write_atomic(path, bytes).map_err(|e| e.to_string())?;
+        // The file holds unsaved work: owner-only from its creation, whatever the umask.
+        write_private(Path::new(path), &bytes).map_err(|e| e.to_string())?;
         Ok(held)
+    }
+
+    /// Owner read/write only (`None` where file modes don't exist).
+    fn private_mode() -> Option<std::fs::Permissions> {
+        #[cfg(unix)]
+        return Some(std::os::unix::fs::PermissionsExt::from_mode(0o600));
+        #[cfg(not(unix))]
+        None
+    }
+
+    /// Replace the file at `path` with `bytes`, owner-only: an exclusive temporary file renamed
+    /// into place, so a link planted at `path` is replaced, never written through (CWE-59).
+    fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        crate::writefile::check(path)?;
+        crate::atomic_write::write_atomic_with(path, private_mode(), |f| std::io::Write::write_all(f, bytes))
     }
 
     /// Append `doc`'s changes to the .cdy autosave at `path` (holding `held`, `from` bytes long).
@@ -535,6 +588,19 @@ mod native {
             self.running.is_empty()
         }
 
+        /// Whether a background write hasn't finished yet. Its file can exist before it finishes
+        /// (the folder is synced after the rename), and until [`Autosaver::reap`] takes it in, the
+        /// drawing is left out of planning.
+        pub fn writing(&self) -> bool {
+            self.running.iter().any(|(_, h)| !h.is_finished())
+        }
+
+        /// Whether a write's result hasn't been taken in yet, finished or not: the host needs
+        /// another [`Autosaver::tick`] to learn whether it failed.
+        pub fn results_pending(&self) -> bool {
+            !self.running.is_empty()
+        }
+
         /// Take in the writes that have finished ([`Autosaver::tick`] does this first). A drawing
         /// whose write failed is no longer counted as autosaved: the next plan restarts its clock,
         /// so it is tried again SAVETIME later even if it doesn't change.
@@ -542,25 +608,58 @@ mod native {
             let (done, running) = std::mem::take(&mut self.running).into_iter().partition::<Vec<_>, _>(|(_, h)| h.is_finished());
             self.running = running;
             for (uid, h) in done {
-                self.busy.remove(&uid);
-                match h.join() {
-                    Ok(Some(held)) => {
-                        if let Some(t) = self.docs.get_mut(&uid) {
-                            t.held = held;
-                        }
-                    }
-                    _ => self.unwritten(uid),
-                }
+                self.settle(uid, h);
             }
         }
 
-        fn unwritten(&mut self, uid: u64) {
+        fn settle(&mut self, uid: u64, h: std::thread::JoinHandle<std::result::Result<Held, String>>) {
+            self.busy.remove(&uid);
+            match h.join().unwrap_or_else(|_| Err("the autosave writer stopped unexpectedly".to_string())) {
+                Ok(held) => {
+                    self.failed.remove(&uid);
+                    if let Some(t) = self.docs.get_mut(&uid) {
+                        t.held = held;
+                    }
+                }
+                Err(e) => self.unwritten(uid, e),
+            }
+        }
+
+        /// Write every drawing with changes not yet autosaved and wait until it is done, because
+        /// the app has gone wrong and may not get another frame. Unlike [`Autosaver::save_now`]
+        /// this also runs when SAVETIME is 0: unsaved work comes before that preference. Returns
+        /// how many drawings were written.
+        pub fn emergency_save(&mut self, s: &Session) -> usize {
+            for (uid, h) in std::mem::take(&mut self.running) {
+                self.settle(uid, h);
+            }
+            let now = self.start.elapsed().as_secs_f64();
+            let dir = savefilepath();
+            let jobs = self.plan_with(s, now, savetime().max(1), &dir, true);
+            let uids: Vec<u64> = jobs
+                .iter()
+                .filter_map(|j| match j {
+                    Job::Write { uid, .. } | Job::Append { uid, .. } => Some(*uid),
+                    Job::Delete { .. } => None,
+                })
+                .collect();
+            self.perform(jobs);
+            self.last_beat = None;
+            self.heartbeat(&dir, now);
+            for (uid, h) in std::mem::take(&mut self.running) {
+                self.settle(uid, h);
+            }
+            uids.iter().filter(|uid| !self.failed.contains_key(uid)).count()
+        }
+
+        fn unwritten(&mut self, uid: u64, why: String) {
             if let Some(t) = self.docs.get_mut(&uid) {
                 t.written = None;
                 // The file's state is unknown now: the next write is a whole one.
                 t.held = None;
                 t.full_at = None;
             }
+            self.failed.insert(uid, why);
         }
 
         /// Carry out jobs from [`Autosaver::plan`]: writes on a background thread, deletes now.
@@ -571,6 +670,7 @@ mod native {
                     Job::Write { uid, .. } | Job::Append { uid, .. } => {
                         let Some(write) = crate::cmd::file::io().map(|h| h.write) else {
                             log::warn!("autosave: file formats are not available in this build");
+                            self.unwritten(uid, "file formats are not available in this build".to_string());
                             continue;
                         };
                         let spawned = std::thread::Builder::new().name("autosave".into()).spawn(move || {
@@ -582,11 +682,11 @@ mod native {
                             match r {
                                 Ok(held) => {
                                     log::debug!("autosaved {path}");
-                                    Some(held)
+                                    Ok(held)
                                 }
                                 Err(e) => {
                                     log::warn!("autosave {path}: {e}");
-                                    None
+                                    Err(format!("{path}: {e}"))
                                 }
                             }
                         });
@@ -597,7 +697,7 @@ mod native {
                             }
                             Err(e) => {
                                 log::warn!("autosave: {e}");
-                                self.unwritten(uid);
+                                self.unwritten(uid, e.to_string());
                             }
                         }
                     }
@@ -612,7 +712,9 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r = create_folder(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            // Replaced, never written through: another account sharing the folder could plant a
+            // link at the lock's name and have it truncate a file of this user's.
+            let r = create_folder(dir).and_then(|()| write_private(&lock_path(dir, &self.instance), std::process::id().to_string().as_bytes()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }
@@ -633,6 +735,47 @@ mod native {
             if !dir.is_empty() && is_instance_id(&self.instance) {
                 let _ = std::fs::remove_file(lock_path(Path::new(&dir), &self.instance));
             }
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    mod link_tests {
+        use super::*;
+
+        /// A symlink planted at the lock path is replaced, never written through, and autosave
+        /// files are owner-only whatever the umask.
+        #[test]
+        fn lock_writes_do_not_follow_a_planted_link_and_files_are_private() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join(format!("cadaddy-lock-link-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let victim = dir.join("victim.txt");
+            std::fs::write(&victim, b"precious").unwrap();
+            let link = dir.join("1-a.lock");
+            std::os::unix::fs::symlink(&victim, &link).unwrap();
+            write_private(&link, b"42").unwrap();
+            assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+            assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+            assert_eq!(std::fs::read(&link).unwrap(), b"42");
+            assert_eq!(std::fs::metadata(&link).unwrap().permissions().mode() & 0o777, 0o600);
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_name_fits_255_bytes_for_multibyte_titles() {
+        let instance = "12345-abcdef0123456789";
+        for title in ["图".repeat(100), "😀".repeat(100), "aé图😀".repeat(40), "a".repeat(300)] {
+            let name = file_name(&title, instance, u64::MAX);
+            assert!(name.len() <= 255, "{} bytes", name.len());
+            let (t, i, u) = parse_file_name(&name).expect("round trips");
+            assert_eq!((i, u), (instance, u64::MAX));
+            assert!(!t.is_empty());
         }
     }
 }

@@ -90,7 +90,7 @@ fn common(t: &T) -> Common {
 /// Apply the OCS → WCS transform for 2D entities with a non-default extrusion.
 /// A VIEWPORT's view twist (51, degrees) in radians; 0 when absent or not finite.
 fn viewport_twist(t: &T) -> f64 {
-    t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians())
+    t.f(51).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()))
 }
 
 /// An object whose points were turned into the world system on reading: its extrusion is plain
@@ -1763,7 +1763,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 };
                 // 70 bit 1: a paper space view; its layout is CADaddy xdata.
                 let layout = (t.i(70).unwrap_or(0) & 1 != 0).then(|| field("LAYOUT").unwrap_or_default());
-                let twist = t.f(50).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians());
+                let twist = t.f(50).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
                 // The view direction: the plan view when missing, zero or not a number.
                 let dir = Some(t.p(11)).filter(|d| d.is_finite() && d.len() > 1e-12).map(|d| d.normalized()).filter(|d| (*d - Vec3::Z).len() > 1e-9);
                 let ucs = (t.i(72).unwrap_or(0) == 1)
@@ -3051,6 +3051,10 @@ fn page_setup(t: &T) -> PageSetup {
     }
     .into();
     p.plot_style_table = t.s(7).unwrap_or_default();
+    // Paper image origin: kept as the file has it, so a save puts the sheet back where it was.
+    // 0,0 is what a page without one writes, so it reads back as none.
+    p.image_origin =
+        t.f(148).zip(t.f(149)).map(|(x, y)| Vec2::new(x, y)).filter(|o| o.is_finite() && o.x.abs() < 1e12 && o.y.abs() < 1e12 && *o != Vec2::ZERO);
     p
 }
 

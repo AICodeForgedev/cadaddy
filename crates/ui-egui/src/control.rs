@@ -798,7 +798,8 @@ pub fn handle(app: &mut CadApp, ctx: &egui::Context, req: &ControlRequest) -> Ou
         }
         "app.save" => {
             let was = std::mem::replace(&mut app.session.agent.from_agent, true);
-            let r = app.run(if s("path").is_some() { "saveas" } else { "qsave" }, p.clone());
+            // Never `null` params: those mean a user's Save, which may pick a file or ask.
+            let r = app.run(if s("path").is_some() { "saveas" } else { "qsave" }, if p.is_null() { json!({}) } else { p.clone() });
             app.session.agent.from_agent = was;
             wrap(r)
         }

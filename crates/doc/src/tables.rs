@@ -852,6 +852,10 @@ pub struct PageSetup {
     pub mm_units: Option<bool>,
     /// Plots of this page setup carry the drawing's plot stamp ([`crate::plotstamp`]).
     pub plot_stamp: bool,
+    /// The paper image origin (DXF groups 148/149, in plot paper units) as the file had it, so a
+    /// save keeps where the sheet sits; `None` for a page CADaddy made, written as 0,0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_origin: Option<Vec2>,
 }
 
 impl Default for PageSetup {
@@ -874,6 +878,7 @@ impl Default for PageSetup {
             plot_transparency: false,
             mm_units: None,
             plot_stamp: false,
+            image_origin: None,
         }
     }
 }
