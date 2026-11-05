@@ -278,6 +278,25 @@ fn both_ways_are_priced_from_the_takeoff_with_labor_dollars_turned_into_man_hour
 }
 
 #[test]
+fn the_starter_book_prices_the_aluminum_ser_alternative_both_ways() {
+    // No cost DB: the starter book carries aluminum XHHW-2 and aluminum SER, so neither side of
+    // the SER alternative leaves an aluminum line unpriced.
+    let dir = tmp("starter");
+    let mut s = building(&dir);
+    let v = study(&mut s, &dir, json!({}));
+    let ser = scenario(&v, "se_unit_feeders");
+    let unpriced: Vec<&str> = ["unpriced", "as_designed", "alternative"]
+        .iter()
+        .flat_map(|k| {
+            let u = if *k == "unpriced" { &ser["unpriced"] } else { &ser[*k]["unpriced"] };
+            u.as_array().into_iter().flatten().filter_map(Value::as_str)
+        })
+        .collect();
+    assert!(!unpriced.iter().any(|u| u.starts_with("SER cable") || u.starts_with("XHHW aluminum")), "{ser}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_needs_rfi_option_drafts_its_rfi_with_citations_intent_savings_and_a_sketch() {
     let dir = tmp("rfi");
     let mut s = building(&dir);
