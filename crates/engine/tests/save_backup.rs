@@ -28,7 +28,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 }
 
 fn circles(path: &std::path::Path) -> usize {
-    let d = cadaddy_io::read(&std::fs::read(path).unwrap(), &*path.to_string_lossy()).unwrap();
+    let d = cadaddy_io::read(&std::fs::read(path).unwrap(), &path.to_string_lossy()).unwrap();
     d.model.iter().filter(|e| matches!(e.kind, cadaddy_engine::doc::EntityKind::Circle(_))).count()
 }
 

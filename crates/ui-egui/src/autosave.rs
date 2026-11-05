@@ -361,7 +361,7 @@ pub fn failure_notice(app: &mut CadApp, ctx: &egui::Context) {
     let t = Tokens::get();
     let mut dismiss = false;
     egui::Window::new(crate::tl!("Autosave failed"))
-        .id(egui::Id::unique("cc_autosave_notice"))
+        .id(egui::Id::new("cc_autosave_notice"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 48.0))

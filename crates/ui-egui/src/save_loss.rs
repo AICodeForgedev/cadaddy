@@ -115,7 +115,7 @@ pub fn prompt(app: &mut CadApp, ctx: &egui::Context) {
     let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| pending.path().to_string());
     let backup = backup_path(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut choice = None;
-    crate::modal::instant(ctx, egui::Id::unique("cc_save_loss_prompt")).show(ctx, |ui| {
+    crate::modal::instant(ctx, egui::Id::new("cc_save_loss_prompt")).show(ctx, |ui| {
         ui.set_width(420.0);
         ui.label(RichText::new(crate::tf!("Saving {name} will remove content", name = file)).strong());
         ui.add_space(4.0);

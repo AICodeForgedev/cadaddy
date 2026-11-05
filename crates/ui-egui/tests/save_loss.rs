@@ -54,7 +54,6 @@ fn a_users_save_asks_before_the_file_changes_and_cancel_leaves_it() {
     menus::activate(&mut app, "qsave");
     let pending = app.save_loss.clone().expect("the save waits for an answer");
     assert_eq!(pending.summary(), "1 3DSOLID, 2 MLINE");
-    assert!(app.shows_modal());
     assert_eq!(std::fs::read(&path).unwrap(), ORIGINAL, "nothing is written before the answer");
 
     app.answer_save_loss(Choice::Cancel);

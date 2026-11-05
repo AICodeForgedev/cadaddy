@@ -92,7 +92,7 @@ fn notice(app: &mut CadApp, ctx: &egui::Context) {
     let t = Tokens::get();
     let mut dismiss = false;
     egui::Window::new(crate::tl!("Internal error"))
-        .id(egui::Id::unique("cc_fault_notice"))
+        .id(egui::Id::new("cc_fault_notice"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 48.0))
@@ -119,7 +119,7 @@ fn notice(app: &mut CadApp, ctx: &egui::Context) {
 fn broken_window(app: &CadApp, ctx: &egui::Context) {
     let t = Tokens::get();
     egui::Window::new(crate::tl!("CADaddy has to close"))
-        .id(egui::Id::unique("cc_fault_broken"))
+        .id(egui::Id::new("cc_fault_broken"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
