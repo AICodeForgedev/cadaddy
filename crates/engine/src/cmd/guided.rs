@@ -6515,9 +6515,7 @@ fn stamp_typical_rooms(
                           turn: RoomFit,
                           panels: &mut BTreeMap<String, Vec<(String, [f64; 2])>>,
                           panel_rooms: &mut BTreeMap<String, (String, Vec<cadaddy_geom::Vec2>, bool)>| {
-            // A room's panels from the first view that letters them (a view of the room with no
-            // panel lettering, a mechanical one, leaves the room for the next).
-            if panels.get(&room).is_some_and(|v| !v.is_empty()) {
+            if panels.contains_key(&room) {
                 return;
             }
             let at: Vec<(String, [f64; 2])> =
