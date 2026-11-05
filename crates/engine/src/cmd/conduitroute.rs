@@ -49,6 +49,9 @@ pub(crate) const BRANCH_SYSTEM: &str = "E-BRANCH";
 pub(crate) const ROUTED: &str = "routed";
 /// The routing's report among the drawing's embedded files.
 pub(crate) const REPORT_FILE: &str = "route/report.json";
+/// Each routed leg's path as a cable runs it where that is not the raceway's (through the studs
+/// of the room's walls): what a cable alternative is measured on.
+pub(crate) const CABLE_FILE: &str = "route/cable.json";
 /// The specification's wiring methods as the job read them (the router's input).
 pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
@@ -76,6 +79,8 @@ const ROOM_PANEL_FT: f64 = 60.0;
 const LANE_AT: f64 = 0.25;
 /// Bucket size of the obstacle grid, feet.
 const CELL_FT: f64 = 8.0;
+/// Most devices one switch or sensor names as what it controls.
+const MAX_CONTROLS: usize = 256;
 
 // ─── Rules ───────────────────────────────────────────────────────────────────
 
@@ -94,6 +99,24 @@ pub(crate) struct RouteRules {
     pub framing: FramingRules,
     pub entry: Entry,
     pub gear: GearRules,
+    pub cable: CableRoute,
+    pub switch_legs: SwitchLegs,
+}
+
+/// How a cable (NM, MC, AC) runs between the boxes of a room's walls (Q6200 branchruns).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct CableRoute {
+    pub above_box_in: f64,
+    pub in_wall_max_ft: f64,
+    pub source: String,
+}
+
+/// A switch or sensor on the circuit of what it controls.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SwitchLegs {
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1281,6 +1304,81 @@ struct Dev {
     /// Its face's outward direction (a wall device).
     face: Option<Vec2>,
     yoke: bool,
+    /// What it controls (a switch's or sensor's luminaires), by handle.
+    controls: Vec<Handle>,
+}
+
+/// The devices a switch or sensor controls: its `controls` (their handles).
+pub(crate) fn controls_of(ps: &props::Props) -> Vec<Handle> {
+    ps.get("controls")
+        .map(Prop::text)
+        .unwrap_or_default()
+        .split([',', ' ', ';'])
+        .filter_map(|h| u64::from_str_radix(h.trim(), 16).ok())
+        .filter(|h| *h != 0)
+        .take(MAX_CONTROLS)
+        .map(Handle)
+        .collect()
+}
+
+/// The circuit of a device the prints give none, from what it controls (a switch's leg): the
+/// circuit most of them are on, the first named breaking a tie.
+pub(crate) fn controlled_circuit(controls: &[Handle], circuit_of: &HashMap<Handle, String>) -> Option<String> {
+    let mut votes: Vec<(String, usize)> = Vec::new();
+    for c in controls.iter().filter_map(|h| circuit_of.get(h)) {
+        match votes.iter_mut().find(|v| v.0.eq_ignore_ascii_case(c)) {
+            Some(v) => v.1 += 1,
+            None => votes.push((c.trim().to_string(), 1)),
+        }
+    }
+    let most = votes.iter().map(|v| v.1).max()?;
+    votes.into_iter().find(|v| v.1 == most).map(|v| v.0)
+}
+
+/// A cable's leg between two boxes in the walls of one room (Q6200): up from the lower box to
+/// the rules' height over the higher one, through the studs along its wall (round the corner
+/// onto the other's wall when they are on two walls), and down into the other box; plan points
+/// and each segment's height above `floor` (feet), as the routed runs carry them. None when the
+/// boxes are not both in a wall of the same room, face away from each other (opposite walls:
+/// the cable goes over the ceiling), or are farther apart along the walls than the rules allow.
+pub(crate) fn stud_path(
+    a: (Vec2, f64, Option<Vec2>, &str),
+    b: (Vec2, f64, Option<Vec2>, &str),
+    floor: f64,
+    upf: f64,
+    rl: &RouteRules,
+) -> Option<(Vec<[f64; 2]>, Vec<f64>)> {
+    let ((pa, ta, fa, ra), (pb, tb, fb, rb)) = (a, b);
+    let (fa, fb) = (fa?, fb?);
+    if ra.trim().is_empty() || !ra.trim().eq_ignore_ascii_case(rb.trim()) || fa.dot(fb) < -0.5 {
+        return None;
+    }
+    let tol = upf / 96.0;
+    // Along its wall, then onto the other's: the corner where they meet (none on one wall).
+    let along = Vec2::new(-fa.y, fa.x);
+    let corner = if fa.dot(fb) > 0.9 {
+        let off = (pb - pa).dot(fa);
+        // Parallel faces a little apart (a jog in the wall): across at the jog.
+        (off.abs() > tol).then(|| pa + along * (pb - pa).dot(along))
+    } else {
+        // Two walls: along `a`'s to the line of `b`'s.
+        Some(pa + along * (pb - pa).dot(along))
+    };
+    let mut plan = vec![pa];
+    plan.extend(corner.filter(|c| c.dist(pa) > tol && c.dist(pb) > tol));
+    plan.push(pb);
+    let flat = poly_len(&plan);
+    if !(flat.is_finite() && flat <= rl.cable.in_wall_max_ft.max(0.0) * upf) {
+        return None;
+    }
+    let z = ta.max(tb) + rl.cable.above_box_in.max(0.0) / 12.0 * upf;
+    let mut pts = vec![[pa.x, pa.y]];
+    let mut bot = vec![(ta - floor) / upf];
+    pts.extend(plan.iter().map(|p| [p.x, p.y]));
+    bot.extend(std::iter::repeat_n((z - floor) / upf, plan.len().saturating_sub(1)));
+    pts.push([pb.x, pb.y]);
+    bot.push((tb - floor) / upf);
+    Some((pts, bot))
 }
 
 /// A gear element a homerun lands on.
@@ -1406,6 +1504,8 @@ pub(crate) struct Routed {
     /// The circuit tags (ids) that are feeders to gear, not branch circuits: the feeder's own
     /// routing carries them, so their estimated branch routes go too.
     pub feeders: BTreeSet<String>,
+    /// Each leg's path as a cable runs it where that is not the raceway's ([`CABLE_FILE`]).
+    pub cable: Vec<MepRun>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -1435,6 +1535,122 @@ pub(crate) fn feeder_of<'a>(sp: &'a BuildingSpec, panel: &str, label: &str) -> O
         let tag = f.tag.trim().to_ascii_uppercase();
         words.contains(&to)
             || (!tag.is_empty() && wire.strip_prefix("FEEDER ").is_some_and(|w| w.split([':', ' ', ',']).next() == Some(tag.as_str())))
+    })
+}
+
+/// One circuit's routed lengths, feet: its legs in its area, its share of the homeruns (to the
+/// panel), and its conductors with their makeup.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Lens {
+    pub in_area: f64,
+    pub home: f64,
+    pub wire: f64,
+}
+
+/// The routed lengths by room and level (Q6200): each typical room by its unit type (the
+/// spec's unit instances: their average and each room), each common area, each level, all of
+/// them. `rows`: each routed circuit (or part) with its level and room. Raceway (or cable) feet
+/// in the room and to the panel, and the conductors' feet with their makeup.
+pub(crate) fn lengths_report(sp: &BuildingSpec, rows: &[(String, String, Lens)]) -> Value {
+    #[derive(Default, Clone, Copy)]
+    struct Sum {
+        n: usize,
+        l: Lens,
+    }
+    let add = |s: &mut Sum, l: &Lens| {
+        s.n += 1;
+        s.l.in_area += l.in_area;
+        s.l.home += l.home;
+        s.l.wire += l.wire;
+    };
+    let row = |s: &Sum, per: f64| {
+        let per = if per > 0.0 { per } else { 1.0 };
+        json!({
+            "circuits": r1(s.n as f64 / per), "home_ft": r1(s.l.home / per), "in_area_ft": r1(s.l.in_area / per),
+            "total_ft": r1((s.l.home + s.l.in_area) / per), "conductor_ft": r1(s.l.wire / per),
+        })
+    };
+    // Each unit instance's room (by number, on its level where it says) and its type.
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::trim).unwrap_or_default().to_string();
+    let instances: Vec<(String, String, String)> = sp
+        .unit_instances
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_ITEMS)
+        .map(|u| {
+            let ty = text(u, "unit_type");
+            (text(u, "number").to_ascii_uppercase(), text(u, "level").to_ascii_lowercase(), if ty.is_empty() { text(u, "type") } else { ty })
+        })
+        .filter(|(n, _, t)| !n.is_empty() && !t.is_empty())
+        .collect();
+    let names: HashMap<String, String> = sp
+        .unit_types
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(MAX_ITEMS)
+        .map(|t| (text(t, "id"), text(t, "name")))
+        .filter(|(i, _)| !i.is_empty())
+        .collect();
+    let unit_of = |level: &str, room: &str| -> Option<String> {
+        let (n, l) = (room.trim().to_ascii_uppercase(), level.trim().to_ascii_lowercase());
+        let all: Vec<&(String, String, String)> = instances.iter().filter(|(un, _, _)| *un == n).collect();
+        let only = if all.len() == 1 { all.first() } else { None };
+        all.iter().find(|(_, ul, _)| *ul == l).or_else(|| all.iter().find(|(_, ul, _)| ul.is_empty())).or(only).map(|x| x.2.clone())
+    };
+    let mut rooms: BTreeMap<(String, String), Sum> = BTreeMap::new();
+    let mut levels: BTreeMap<String, Sum> = BTreeMap::new();
+    let mut total = Sum::default();
+    for (level, room, l) in rows.iter().take(MAX_CIRCUITS) {
+        add(rooms.entry((level.clone(), room.clone())).or_default(), l);
+        add(levels.entry(level.clone()).or_default(), l);
+        add(&mut total, l);
+    }
+    let mut types: BTreeMap<String, (usize, Sum)> = BTreeMap::new();
+    let mut typical: Vec<Value> = Vec::new();
+    let mut common: Vec<Value> = Vec::new();
+    for ((level, room), sm) in &rooms {
+        let mut v = row(sm, 1.0);
+        v["level"] = json!(level);
+        v["room"] = json!(if room.is_empty() { "(no room)" } else { room.as_str() });
+        match (!room.is_empty()).then(|| unit_of(level, room)).flatten() {
+            Some(ty) => {
+                let t = types.entry(ty.clone()).or_default();
+                t.0 += 1;
+                t.1.n += sm.n;
+                t.1.l.in_area += sm.l.in_area;
+                t.1.l.home += sm.l.home;
+                t.1.l.wire += sm.l.wire;
+                v["unit_type"] = json!(ty);
+                if typical.len() < MAX_ITEMS {
+                    typical.push(v);
+                }
+            }
+            None if common.len() < MAX_ITEMS => common.push(v),
+            None => {}
+        }
+    }
+    let by_type: Vec<Value> = types
+        .iter()
+        .map(|(ty, (n, sm))| {
+            json!({
+                "unit_type": ty, "name": names.get(ty).cloned().unwrap_or_default(), "rooms": n,
+                "per_room": row(sm, *n as f64), "all": row(sm, 1.0),
+            })
+        })
+        .collect();
+    let by_level: Vec<Value> = levels
+        .iter()
+        .map(|(l, sm)| {
+            let mut v = row(sm, 1.0);
+            v["level"] = json!(l);
+            v
+        })
+        .collect();
+    json!({
+        "unit_types": by_type, "typical_rooms": typical, "common_areas": common, "levels": by_level, "total": row(&total, 1.0),
+        "note": "home_ft: the homeruns to the panel (a shared homerun counted once, on its lead circuit; a member's tap on its own); in_area_ft: the legs device to device with their drops and rises; conductor_ft: each conductor's length with its makeup at each box and panel",
     })
 }
 
@@ -1578,6 +1794,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 top: hi.z,
                 face: face_of(&ps),
                 yoke,
+                controls: controls_of(&ps),
             });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
@@ -1790,9 +2007,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let near = NEAR_RUN_FT * upf;
     let mut no_circuit = 0usize;
     let mut no_tag = 0usize;
+    let mut controllers: Vec<usize> = Vec::new();
     for (di, dv) in devs.iter().enumerate() {
         if dv.circuit.is_empty() {
-            no_circuit += 1;
+            if dv.controls.is_empty() {
+                no_circuit += 1;
+            } else {
+                controllers.push(di);
+            }
             continue;
         }
         let Some(cands) = by_label.get(&(dv.level.to_ascii_lowercase(), dv.circuit.to_ascii_uppercase())) else {
@@ -1819,6 +2041,40 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         match chosen.and_then(|ci| circs.get_mut(ci)) {
             Some(c) => c.devs.push(di),
             None => no_tag += 1,
+        }
+    }
+    // -- A switch or sensor the prints give no circuit to is on the circuit of what it controls
+    // (its switch leg): with the circuit most of its luminaires are on, the nearest of them
+    // breaking a tie, so its box gets its drop and the leg to them is routed and measured. --
+    let mut switch_legs = 0usize;
+    if !controllers.is_empty() {
+        let dev_at: HashMap<Handle, usize> = devs.iter().enumerate().map(|(i, d)| (d.handle, i)).collect();
+        let mut circ_of: HashMap<usize, usize> = HashMap::new();
+        for (ci, c) in circs.iter().enumerate() {
+            for d in &c.devs {
+                circ_of.insert(*d, ci);
+            }
+        }
+        for di in controllers {
+            let Some(dv) = devs.get(di) else { continue };
+            let mut votes: BTreeMap<usize, (usize, f64)> = BTreeMap::new();
+            for t in dv.controls.iter().filter_map(|h| dev_at.get(h)) {
+                let Some((ci, other)) = circ_of.get(t).copied().zip(devs.get(*t)) else { continue };
+                if !same_level(&other.level, &dv.level) {
+                    continue;
+                }
+                let v = votes.entry(ci).or_insert((0, f64::INFINITY));
+                v.0 += 1;
+                v.1 = v.1.min(other.at.dist(dv.at));
+            }
+            let best = votes.into_iter().max_by(|a, b| a.1.0.cmp(&b.1.0).then(b.1.1.total_cmp(&a.1.1))).map(|(ci, _)| ci);
+            match best.and_then(|ci| circs.get_mut(ci)) {
+                Some(c) => {
+                    c.devs.push(di);
+                    switch_legs += 1;
+                }
+                None => no_circuit += 1,
+            }
         }
     }
 
@@ -1999,6 +2255,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut box_in: HashMap<usize, Vec<(u32, String)>> = HashMap::new();
     let mut in_wall_legs = 0usize;
     let mut ceiling_legs = 0usize;
+    // Each routed leg's path as a cable runs it where that differs (through the studs).
+    let mut cable_paths: Vec<MepRun> = Vec::new();
+    let mut stud_legs = 0usize;
+    // Each circuit's (part's) lengths: its legs in its area, its share of the homeruns (the
+    // lead's homerun, a member's tap), and its conductors' feet with their makeup.
+    let mut lens: HashMap<usize, Lens> = HashMap::new();
+    let ar = super::mepatoms::rules();
+    let box_makeup = ar.makeup_ft.max(0.0);
+    let panel_makeup = ar.panel_makeup_ft.max(box_makeup);
+    let wires_in = |parts: &[Part]| -> f64 { f64::from(parts.iter().fold(0u32, |n, p| n.saturating_add(p.0))) };
     let mut drops_moved = 0usize;
     let mut drop_clashes = 0usize;
     let r_of = |size_in: f64| size_in / 24.0 * upf;
@@ -2145,7 +2411,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 _ => false,
             };
             let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), Vec::new(), size, 0.0);
-            if same_wall {
+            // A cable between two boxes of a room's walls runs through the studs.
+            let stud = stud_path((a.at, a.top, a.face, &a.room), (b.at, b.top, b.face, &b.room), floor, upf, rl);
+            if let Some((pts, bot)) = stud.as_ref().filter(|_| cable) {
+                in_wall_legs += 1;
+                stud_legs += 1;
+                r.points = pts.clone();
+                r.bottoms_ft = bot.clone();
+                r.source_sheet = IN_WALL.into();
+                tree_len += run_ft(&r, upf);
+            } else if same_wall {
                 // Along the wall between the boxes: through the bored studs above them.
                 in_wall_legs += 1;
                 let zw = a.top.max(b.top) + rl.route.in_wall_above_box_in / 12.0 * upf;
@@ -2200,6 +2475,19 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             r.id = format!("{cid}#{leg_n}");
             r.size_source = format!("minimum: {min_src}");
             r.height_source = ROUTED.into();
+            if let Some((pts, bot)) = stud.filter(|_| !cable)
+                && cable_paths.len() < MAX_RUNS
+            {
+                let mut alt = r.clone();
+                alt.points = pts;
+                alt.bottoms_ft = bot;
+                alt.source_sheet = IN_WALL.into();
+                cable_paths.push(alt);
+            }
+            let l = lens.entry(ci).or_default();
+            let ft = run_ft(&r, upf);
+            l.in_area += ft;
+            l.wire += (ft + 2.0 * box_makeup) * wires_in(&parts);
             runs.push(r);
             box_in.entry(c.devs.get(*u).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
             box_in.entry(c.devs.get(*v).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
@@ -2440,6 +2728,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 r.size_source = format!("minimum: {min_src}");
                 r.height_source = ROUTED.into();
                 tap_ft = poly_len(&leg.pts) / upf + 2.0 * ((tiers.first().copied().unwrap_or(0.0) - lead_dev.top).abs() / upf);
+                let l = lens.entry(h.circ).or_default();
+                let ft = run_ft(&r, upf);
+                l.home += ft;
+                l.wire += (ft + 2.0 * box_makeup) * wires_in(&super::mepatoms::conductor_parts(&mk));
                 runs.push(r);
                 penetrate(&mut penetrations, &rated, &c.level, &leg, &c.label, min_in, upf, floor, rl);
                 for bl in bore(&mut bored, field, &leg, &c.label, &c.level, min_in, upf, rl) {
@@ -2765,6 +3057,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         r.id = format!("{gid}#home");
         r.size_source = ssrc.clone();
         r.height_source = ROUTED.into();
+        let l = lens.entry(lead_h.circ).or_default();
+        let ft = run_ft(&r, upf);
+        l.home += ft;
+        l.wire += (ft + box_makeup + panel_makeup) * wires_in(&combined);
         penetrate(&mut penetrations, &rated, &lead_h.level, &seat_leg, &labels.join(","), size_in, upf, floor, rl);
         for bl in bore(&mut bored, field, &seat_leg, &labels.join(","), &lead_h.level, size_in, upf, rl) {
             add_clash(&mut clashes, field, &bl, "homerun", &labels.join(","), &lead_h.level, size_in);
@@ -2948,6 +3244,20 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         .flat_map(|r| r.points.windows(2))
         .filter(|w| matches!(w, [a, b] if (a[0] - b[0]).abs() > hair && (a[1] - b[1]).abs() > hair))
         .count();
+    // The lengths by room (each circuit's: the room most of its devices are in) and level.
+    let mut rows: Vec<(String, String, Lens)> = Vec::new();
+    let mut keys: Vec<usize> = lens.keys().copied().collect();
+    keys.sort_unstable();
+    for ci in keys {
+        let (Some(c), Some(l)) = (circs.get(ci), lens.get(&ci)) else { continue };
+        let mut n: BTreeMap<&str, usize> = BTreeMap::new();
+        for r in c.devs.iter().filter_map(|i| devs.get(*i)).map(|d| d.room.trim()).filter(|r| !r.is_empty()) {
+            *n.entry(r).or_default() += 1;
+        }
+        let room = n.iter().max_by_key(|(_, k)| **k).map(|(r, _)| (*r).to_string()).unwrap_or_default();
+        rows.push((c.level.clone(), room, *l));
+    }
+    let lengths = lengths_report(sp, &rows);
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),
@@ -2991,6 +3301,20 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
     });
+    // What Q6200 adds: the switch legs, the cable's paths, the makeup, the lengths by room.
+    let more = json!({
+        "switch_legs": switch_legs,
+        "switch_legs_source": rl.switch_legs.source,
+        "cable_stud_legs": stud_legs,
+        "cable_paths": cable_paths.len(),
+        "cable_source": rl.cable.source,
+        "makeup": {"box_ft": box_makeup, "panel_ft": panel_makeup, "source": format!("{}; {}", ar.makeup_source, ar.panel_makeup_source)},
+        "lengths": lengths,
+    });
+    if let (Some(o), Value::Object(m)) = (out.report.as_object_mut(), more) {
+        o.extend(m);
+    }
+    out.cable = cable_paths;
     out.runs = runs;
     out.tags = tags;
     out
@@ -3306,6 +3630,31 @@ pub(crate) fn stored_report(d: &Drawing) -> Option<Value> {
     d.embedded.get(REPORT_FILE).and_then(|b| serde_json::from_slice(b).ok())
 }
 
+/// Store each leg's cable path (where a cable runs other than the raceway) among the drawing's
+/// embedded files; none: the file goes.
+pub(crate) fn store_cable(d: &mut Drawing, routed: &Routed) {
+    if routed.cable.is_empty() {
+        d.embedded.remove(CABLE_FILE);
+        return;
+    }
+    if let Ok(b) = serde_json::to_vec(&routed.cable) {
+        d.embedded.insert(CABLE_FILE.into(), std::sync::Arc::new(b));
+    }
+}
+
+/// The legs' cable paths the last routing stored, by run id.
+pub(crate) fn cable_paths(d: &Drawing) -> HashMap<String, MepRun> {
+    d.embedded
+        .get(CABLE_FILE)
+        .and_then(|b| serde_json::from_slice::<Vec<MepRun>>(b).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .take(MAX_RUNS)
+        .filter(|r| !r.id.is_empty())
+        .map(|r| (r.id.clone(), r))
+        .collect()
+}
+
 /// Route the circuits again over the model as it stands now (after the job placed its gear and
 /// feeders, the levels stacked): the routed runs into the stored spec (each level's own plan),
 /// the pieces cut again where the model's are (the stacking move kept on them), the report stored.
@@ -3399,6 +3748,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     let mut report = routed.report.clone();
     check_box_fill(d, &mut report);
     store_report(d, &report);
+    store_cable(d, &routed);
     store_base(d, &replaced);
     d.building_spec = Some(sp.to_json());
     s.touch();

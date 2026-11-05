@@ -895,3 +895,108 @@ fn a_breaker_that_feeds_a_panel_is_left_to_the_feeders_and_its_estimate_goes() {
     assert_eq!(r2["feeder_circuits"], json!(1), "{r2}");
     assert_eq!(count(&mut s, json!({"kind": "conduit", "circuit": "LP1-7"}))["count"], json!(0));
 }
+
+/// A made-up room with panel LP1 (its top at 6'-6", a 10" x 4" top conduit area) and `tags`.
+fn small_room(tags: Vec<Value>) -> Session {
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {"equipment": [
+            {"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
+             "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}
+        ]}
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s
+}
+
+/// Each built device's handle, plan point and top (sheet inches), by its kind.
+fn devices(s: &Session) -> Vec<(String, String, [f64; 3])> {
+    let d = s.doc().expect("doc");
+    d.model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device"))
+        .filter_map(|e| {
+            let cadaddy_engine::doc::EntityKind::Mesh(m) = &e.kind else { return None };
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for v in &m.vertices {
+                for (k, x) in [v.x, v.y, v.z].into_iter().enumerate() {
+                    lo[k] = lo[k].min(x);
+                    hi[k] = hi[k].max(x);
+                }
+            }
+            let kind = cadaddy_engine::doc::props::read(&e.common.xdata).get("kind").map(|p| p.text()).unwrap_or_default();
+            Some((e.handle.hex(), kind, [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, hi[2]]))
+        })
+        .collect()
+}
+
+#[test]
+fn a_two_device_circuits_length_is_its_route_with_every_drop_and_the_makeup() {
+    // LP1-7: receptacles at (20', 10') and (30', 10'), no walls: each joint and the homerun run
+    // over the 9' ceiling (the first tier 3" above it, 9'-3").
+    let mut s = small_room(vec![receptacle(1, 20.0, 10.0, "LP1-7"), receptacle(2, 30.0, 10.0, "LP1-7"), circuit("LP1-7")]);
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    let dv = devices(&s);
+    assert_eq!(dv.len(), 2, "{dv:?}");
+    let top = |x: f64| dv.iter().find(|d| (d.2[0] - x).abs() < 1.0).map(|d| d.2[2]).expect("device");
+    let (t1, t2) = (top(240.0), top(360.0));
+    let z0 = 111.0;
+    // The joint: up from the first box to 9'-3", 10' across, down into the second.
+    let joint = 10.0 + (z0 - t1) / 12.0 + (z0 - t2) / 12.0;
+    // The homerun from the box nearest the panel: up, square to the panel's first entry slot
+    // (the window's corner slot: 3-7/8" and 7/8" in from its centre, a 3/4" raceway's 1-3/4"
+    // locknut and 1/2" apart), down onto its top at 6'-6".
+    let land = (-14.0 - 3.875, -0.875);
+    let home = (z0 - t1) / 12.0 + ((240.0 - land.0) + (120.0 - land.1)) / 12.0 + (z0 - 78.0) / 12.0;
+    let area = &r["lengths"]["common_areas"][0];
+    let near = |v: &Value, want: f64| v.as_f64().is_some_and(|x| (x - want).abs() < 0.06);
+    assert!(near(&area["in_area_ft"], joint), "joint {joint}: {area}");
+    assert!(near(&area["home_ft"], home), "homerun {home}: {area}");
+    assert!(near(&r["routed_ft"], joint + home), "{}", r["routed_ft"]);
+    // Three conductors in each: 1' of makeup at each box, 3' at the panel (rules data).
+    assert_eq!(r["makeup"]["box_ft"], json!(1.0));
+    assert_eq!(r["makeup"]["panel_ft"], json!(3.0));
+    let wire = 3.0 * (joint + 2.0) + 3.0 * (home + 1.0 + 3.0);
+    assert!(near(&area["conductor_ft"], wire), "conductors {wire}: {area}");
+    // The pieces carry the same: the circuit's wire in the takeoff, the panel's makeup on the
+    // homerun's conductors.
+    let w = count(&mut s, json!({"kind": "wire", "circuit": "LP1-7"}));
+    assert!(w["length_ft"].as_f64().is_some_and(|x| (x - wire).abs() < 0.5), "{wire} vs {w}");
+}
+
+#[test]
+fn a_switch_with_no_circuit_is_wired_to_the_luminaires_it_controls() {
+    let lum = |n: usize, x: f64| {
+        json!({"id": format!("device:L1:L{n}"), "kind": "luminaire", "level": "L1", "at_ft": [x, -20.0], "fields": {
+            "type": {"value": "A", "source": "plan"}, "symbol": {"value": format!("{:X}", 0x2A0 + n), "source": "plan"},
+            "sheet": {"value": "E-101", "source": "plan"}, "circuit": {"value": "LP1-9", "source": "plan"}
+        }})
+    };
+    let switch = json!({"id": "device:L1:S1", "kind": "switch", "level": "L1", "at_ft": [12.0, -20.0], "fields": {
+        "type": {"value": "S", "source": "plan"}, "symbol": {"value": "2B0", "source": "plan"},
+        "sheet": {"value": "E-101", "source": "plan"}, "mount_height_in": {"value": "48", "source": "note"}
+    }});
+    let mut s = small_room(vec![lum(1, 20.0), lum(2, 30.0), switch, circuit("LP1-9")]);
+    let before = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(before["switch_legs"], json!(0), "{before}");
+    let dv = devices(&s);
+    let sw = dv.iter().find(|d| d.1 == "switch").map(|d| d.0.clone()).unwrap_or_else(|| panic!("the switch: {dv:?}"));
+    let lums: Vec<String> = dv.iter().filter(|d| d.1 == "luminaire").map(|d| d.0.clone()).collect();
+    assert_eq!(lums.len(), 2, "{dv:?}");
+    // The plans' switch leg: the switch controls both luminaires.
+    s.execute("bim.props.set", &json!({"handle": sw, "key": "controls", "value": lums.join(", ")})).expect("set");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let after = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(after["switch_legs"], json!(1), "{after}");
+    // Its leg: up from the switch box into the ceiling space and over to the nearer luminaire.
+    let gain = after["routed_ft"].as_f64().unwrap_or(0.0) - before["routed_ft"].as_f64().unwrap_or(0.0);
+    assert!(gain > 8.0, "the switch leg adds its drop and the 8' to the luminaire: {gain}");
+    // Its box is on the circuit (a box for each of the three devices).
+    let boxes = count(&mut s, json!({"kind": "box", "circuit": "LP1-9"}));
+    assert_eq!(boxes["count"], json!(3), "{boxes}");
+}

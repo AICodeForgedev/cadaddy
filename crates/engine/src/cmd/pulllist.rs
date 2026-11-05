@@ -140,8 +140,14 @@ fn pos(v: f64) -> f64 {
 }
 
 impl Rules {
-    /// The extra each conductor gets at a gear end over the box makeup the takeoff counts.
+    /// The extra each of the model's conductors gets at a gear end over the panel makeup the
+    /// takeoff already counts there (the atoms' rule).
     fn gear_extra(&self) -> f64 {
+        (pos(self.gear_end_slack_ft) - panel_makeup()).max(0.0)
+    }
+    /// The extra a conductor this schedule cuts itself (a feeder's, along its route) gets at a
+    /// gear end over the box makeup its length carries.
+    fn computed_gear_extra(&self) -> f64 {
         (pos(self.gear_end_slack_ft) - makeup()).max(0.0)
     }
     /// The standard lengths a size (`#12`, `250 kcmil`) or a cable type (`NM 12/2 w/G`) comes
@@ -176,6 +182,11 @@ impl Rules {
 /// The takeoff's makeup at each end of a wire or cable (the atoms' rule).
 fn makeup() -> f64 {
     pos(super::mepatoms::rules().makeup_ft)
+}
+
+/// The takeoff's makeup where a wire or cable ends at a panel (the atoms' rule, at least a box's).
+fn panel_makeup() -> f64 {
+    pos(super::mepatoms::rules().panel_makeup_ft).max(makeup())
 }
 
 // ─── The model's pieces ──────────────────────────────────────────────────────
@@ -936,7 +947,7 @@ fn feeder_conductors(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder, path: &mut P
     let r = rules();
     let wires = feeder_wires(sp, f, path.raceway_ft, upf);
     path.box_size = pull_box_size(path.raceway.split_whitespace().next().unwrap_or_default(), &wires);
-    let extra = r.gear_extra() * f64::from(path.gear_ends()) + pos(r.pull_box_loop_ft) * path.boxes.len() as f64;
+    let extra = r.computed_gear_extra() * f64::from(path.gear_ends()) + pos(r.pull_box_loop_ft) * path.boxes.len() as f64;
     let per = (f.sets / f.conduits.max(1)).clamp(1, 12);
     path.conductors = conductors_of(&wires, extra);
     for c in &mut path.conductors {
