@@ -684,6 +684,7 @@ name = "cadaddy-dwg"
 version = "0.7.10"
 dependencies = [
  "acadrust",
+ "log",
 ]
 
 [[package]]

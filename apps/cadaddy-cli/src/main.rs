@@ -1578,6 +1578,11 @@ mod help_tests {
 }
 
 fn main() -> ExitCode {
+    // A copy of this program started to read or write a DWG file does only that.
+    if let Some(code) = cadaddy_io::dwg_worker::serve_if_asked() {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+    cadaddy_io::dwg_worker::use_own_worker();
     let code = cli();
     if STDOUT_ERROR.load(Ordering::Relaxed) { ExitCode::FAILURE } else { code }
 }

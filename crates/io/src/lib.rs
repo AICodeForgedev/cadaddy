@@ -12,6 +12,13 @@ pub mod dgn;
 pub mod dwfx;
 mod dwg_fixup;
 mod dwg_keep;
+/// How a program runs the DWG bridge in a child process (`cadaddy_dwg::worker`): a decoder that
+/// dies there ends one open or save, not the app.
+pub mod dwg_worker {
+    pub use cadaddy_dwg::{WORKER_ARG, serve_if_asked, use_own_worker};
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use cadaddy_dwg::{crash_worker_for_test, use_worker};
+}
 pub mod dwg_native;
 pub mod dwg_read;
 pub mod dwg_write;
@@ -197,7 +204,7 @@ pub fn write_dwg(d: &Drawing, version: Version, engine: DwgEngine) -> Result<Vec
     }
     let (dxf, linetypes) = dxf_write::dwg_bridge(d, version);
     let tags = dxf.iter().filter(|&&b| b == b'\n').count() / 2;
-    let bytes = cadaddy_dwg::dxf_to_dwg_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
+    let bytes = cadaddy_dwg::encode_named(&dxf, version.code(), &linetypes).map_err(IoError::Format)?;
     drop(dxf);
     let (floor, ceil) = tag_caps();
     check_reopens("DWG", tags, dwg_tag_limit(bytes.len(), floor, ceil))?;
@@ -260,7 +267,7 @@ fn read_dwg_bridge_capped(bytes: &[u8], floor: usize, ceil: usize) -> Result<Dra
     let limit = dwg_tag_limit(bytes.len(), floor, ceil);
     let renamed = dwg_fixup::underlay_classes_renamed(bytes);
     let bytes = renamed.as_deref().unwrap_or(bytes);
-    let (dxf, notes) = cadaddy_dwg::dwg_to_dxf_noted(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
+    let (dxf, notes) = cadaddy_dwg::decode(bytes, cadaddy_dwg::Limits::DEFAULT).map_err(IoError::Format)?;
     // Custom records CADaddy kept through the DWG (`dwg_keep`), back where they were.
     let dxf = dwg_keep::unstash(&dxf).unwrap_or(dxf);
     let bad = |e: String| IoError::Format(format!("{e} (in the DXF converted from this DWG)"));

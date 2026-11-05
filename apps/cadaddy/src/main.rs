@@ -453,6 +453,11 @@ fn open_in_redline(path: &str) -> Result<bool, String> {
 }
 
 fn main() -> eframe::Result {
+    // A copy of this program started to read or write a DWG file does only that.
+    if let Some(code) = cadaddy_io::dwg_worker::serve_if_asked() {
+        std::process::exit(code);
+    }
+    cadaddy_io::dwg_worker::use_own_worker();
     cadaddy_engine::crash_report::install_hook();
     // --debug: verbose logging (set before the logger installs so it reads the right level).
     let debug = std::env::args_os().any(|a| a == "--debug");
