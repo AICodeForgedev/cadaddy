@@ -11,12 +11,15 @@ mod installtest;
 mod layers;
 mod mcptest;
 mod mepfix;
+mod mergecheck;
 mod parity;
+#[cfg(feature = "app")]
 mod pdfstats;
 mod perf;
 mod pubcost;
 mod release;
 mod release_cmd;
+#[cfg(feature = "app")]
 mod repro;
 mod secrets;
 mod signing;
@@ -46,6 +49,11 @@ commands:
                   made-up floor plans of 10k-500k objects (seeded) round-tripped through DXF, DWG
                   and .cdy: exact differences and save/open/regen times against budgets (warnings);
                   report in target/corpus/report.md
+  merge-check <base> <head> [--stage merge|after|all] [--dry-run] [--slow-secs S] [--cap-gb N] ...
+                  verify a merge batch: clippy once for the packages the batch can affect (changed +
+                  their dependents), their tests with cargo-nextest (slow tests by recorded time in a
+                  later --stage after), doc-tests; warm build cache with a size cap (docs/merge-check.md;
+                  light build: `cargo merge-check`)
   pdfstats FILE.pdf [FILE2.pdf ...]
                   print PDF import statistics: entity counts, scale, layers, quality metrics
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
@@ -153,7 +161,11 @@ fn main() -> ExitCode {
         Some("compare-facts") => cmd_compare_facts(),
         Some("mcptest") => mcptest::run(&root(), &rest),
         Some("perf") => perf::run(&root(), &rest),
+        #[cfg(feature = "app")]
         Some("repro") => repro::run_repro(&rest),
+        #[cfg(not(feature = "app"))]
+        Some("repro" | "pdfstats") => Err("this xtask was built without the `app` feature (--no-default-features); use `cargo xtask`".into()),
+        Some("merge-check") => mergecheck::run(&root(), &rest),
         Some("mep-fixtures") => mepfix::run(&root(), &rest),
         Some("webtest" | "web") => webtest::run(&root(), &rest),
         Some("installtest") => installtest::run(&root(), &rest),
@@ -163,6 +175,7 @@ fn main() -> ExitCode {
         Some("verify-release") => release::verify_cmd(&root(), &rest),
         Some("soak") => soak::run(&root(), &rest),
         Some("fetch-pubcost") => pubcost::run(&root(), &args),
+        #[cfg(feature = "app")]
         Some("pdfstats") => pdfstats::run(&root(), &rest),
         Some("supplychain") => supplychain::run(&root()),
         Some("advisories") => supplychain::advisories(&root()),
