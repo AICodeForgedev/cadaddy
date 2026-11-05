@@ -16,12 +16,12 @@ const OY: f64 = 500.0;
 /// One sheet, drawing inches, and where each starts along x.
 const SW: f64 = 3456.0;
 const SH: f64 = 2304.0;
-const A101: f64 = 0.0;
-const E101: f64 = 4000.0;
-const M101: f64 = 8000.0;
-const P101: f64 = 12000.0;
-const A121: f64 = 16000.0;
-const F101: f64 = 20000.0;
+const A201: f64 = 0.0;
+const E201: f64 = 4000.0;
+const M201: f64 = 8000.0;
+const P201: f64 = 12000.0;
+const A221: f64 = 16000.0;
+const F201: f64 = 20000.0;
 /// Half a wall's thickness (4 7/8"), feet.
 const HALF_FT: f64 = 4.875 / 24.0;
 
@@ -110,7 +110,7 @@ fn sheet(number: &str, title: &str, discipline: &str, x: f64) -> Value {
         "number": number, "title": title, "discipline": discipline, "level": "L1", "source": "model",
         "rect": [x, 0.0, x + SW, SH],
         // What the job recorded: drawn alike, `x` along (off for the shifted, turned and scaled sheets).
-        "registration": {"reference": "A-101", "method": method, "a": 1.0, "b": 0.0, "tx": -x, "ty": 0.0, "matched": 4},
+        "registration": {"reference": "A-201", "method": method, "a": 1.0, "b": 0.0, "tx": -x, "ty": 0.0, "matched": 4},
     })
 }
 
@@ -123,14 +123,14 @@ fn spec() -> Value {
             {"layer": "A-ROOM-TAG", "role": "room_tag"}
         ],
         "wall_types": [{"name": "Partition", "thickness_in": 4.875, "from": "centerline"}],
-        "rooms": [{"name": "Lounge", "number": "105"}, {"name": "Office", "number": "101"}],
+        "rooms": [{"name": "Reading", "number": "B12"}, {"name": "Office", "number": "B10"}],
         "sheets": [
-            sheet("A-101", "FLOOR PLAN - LEVEL 1", "A", A101),
-            sheet("E-101", "POWER PLAN - LEVEL 1", "E", E101),
-            sheet("M-101", "MECHANICAL PLAN - LEVEL 1", "M", M101),
-            sheet("P-101", "PLUMBING PLAN - LEVEL 1", "P", P101),
-            sheet("A-121", "REFLECTED CEILING PLAN - LEVEL 1", "A", A121),
-            sheet("F-101", "FIRE PROTECTION PLAN - LEVEL 1", "F", F101),
+            sheet("A-201", "FLOOR PLAN - LEVEL 1", "A", A201),
+            sheet("E-201", "POWER PLAN - LEVEL 1", "E", E201),
+            sheet("M-201", "MECHANICAL PLAN - LEVEL 1", "M", M201),
+            sheet("P-201", "PLUMBING PLAN - LEVEL 1", "P", P201),
+            sheet("A-221", "REFLECTED CEILING PLAN - LEVEL 1", "A", A221),
+            sheet("F-201", "FIRE PROTECTION PLAN - LEVEL 1", "F", F201),
         ]
     })
 }
@@ -139,24 +139,24 @@ fn job() -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL-CL");
     for (a, b) in centrelines() {
-        line(&mut s, on(A101, &same, a), on(A101, &same, b));
+        line(&mut s, on(A201, &same, a), on(A201, &same, b));
     }
     layer(&mut s, "A-ROOM-TAG");
-    for (p, t) in [([44.0, 38.0], "LOUNGE"), ([6.0, 9.0], "OFFICE")] {
-        s.execute("text", &json!({"at": on(A101, &same, p), "text": t, "height": 6})).unwrap();
+    for (p, t) in [([44.0, 38.0], "READING"), ([6.0, 9.0], "OFFICE")] {
+        s.execute("text", &json!({"at": on(A201, &same, p), "text": t, "height": 6})).unwrap();
     }
     layer(&mut s, "G-BKGD");
     for (a, b) in faces() {
-        line(&mut s, on(A101, &same, a), on(A101, &same, b));
+        line(&mut s, on(A201, &same, a), on(A201, &same, b));
     }
-    trade_plan(&mut s, E101, &shifted);
-    trade_plan(&mut s, M101, &turned);
-    trade_plan(&mut s, P101, &scaled);
-    trade_plan(&mut s, A121, &same);
+    trade_plan(&mut s, E201, &shifted);
+    trade_plan(&mut s, M201, &turned);
+    trade_plan(&mut s, P201, &scaled);
+    trade_plan(&mut s, A221, &same);
     // A sheet whose lines are not the floor: a coarse grid of long lines.
     for k in 0..12 {
         let v = f64::from(k) * 7.3 - 5.0;
-        line(&mut s, [F101 + OX + v * 12.0, OY - 120.0], [F101 + OX + v * 12.0, OY + 700.0]);
+        line(&mut s, [F201 + OX + v * 12.0, OY - 120.0], [F201 + OX + v * 12.0, OY + 700.0]);
     }
     s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
@@ -173,11 +173,13 @@ fn read_json(p: &Path) -> Value {
     serde_json::from_str(&std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))).unwrap()
 }
 
-fn lounge(s: &mut Session) -> (String, Vec<f64>) {
+fn reading_room(s: &mut Session) -> (String, Vec<f64>) {
     let r = s.execute("validate.areas", &json!({})).unwrap();
     let all = r["areas"].as_array().cloned().unwrap_or_default();
-    let a =
-        all.iter().find(|a| a["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case("lounge"))).unwrap_or_else(|| panic!("no lounge in {all:#?}"));
+    let a = all
+        .iter()
+        .find(|a| a["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case("reading")))
+        .unwrap_or_else(|| panic!("no reading room in {all:#?}"));
     (a["id"].as_str().unwrap().to_string(), a["box"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect())
 }
 
@@ -201,50 +203,50 @@ fn num(v: &Value, key: &str) -> f64 {
 #[test]
 fn crops_placed_off_the_walls_are_refitted_kept_or_marked() {
     let mut s = job();
-    let (id, bx) = lounge(&mut s);
+    let (id, bx) = reading_room(&mut s);
     let out = dir("packet");
     s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "compare": false})).unwrap();
     let m = read_json(&out.join("manifest.json"));
 
     // The reference plan and the truly registered ceiling plan: kept.
-    for sheet in ["A-101", "A-121"] {
+    for sheet in ["A-201", "A-221"] {
         let r = &plan(&m, sheet)["registration"];
         assert_eq!(r["status"], "ok", "{sheet}: {r}");
         assert!(num(r, "residual_ft") < 0.1 && num(r, "coverage") > 0.8, "{sheet}: {r}");
     }
-    let rcp = plan(&m, "A-121");
-    let x0 = A121 + OX + (bx[0] - 5.0) * 12.0;
+    let rcp = plan(&m, "A-221");
+    let x0 = A221 + OX + (bx[0] - 5.0) * 12.0;
     assert!((rect_of(rcp)[0] - x0).abs() < 1.0, "the true crop stays where it was: {rcp}");
 
     // The 3 ft shift: found and the crop placed again where the sheet has the room.
-    let e = plan(&m, "E-101");
+    let e = plan(&m, "E-201");
     let r = &e["registration"];
     assert_eq!(r["status"], "refitted", "{r}");
     assert!((num(r, "residual_ft") - 3.0).abs() < 0.15, "{r}");
     assert!((r["shift_ft"][0].as_f64().unwrap() - 3.0).abs() < 0.15 && r["shift_ft"][1].as_f64().unwrap().abs() < 0.15, "{r}");
     assert!(num(r, "fit_ft") < 0.1 && num(r, "coverage") > 0.8, "{r}");
     assert!(r["read"].as_str().unwrap().contains("placed again"), "{r}");
-    let want_x0 = E101 + OX + (bx[0] - 5.0 + 3.0) * 12.0;
+    let want_x0 = E201 + OX + (bx[0] - 5.0 + 3.0) * 12.0;
     let want_y1 = OY + (bx[3] + 5.0) * 12.0;
     let got = rect_of(e);
     assert!((got[0] - want_x0).abs() < 2.0 && (got[3] - want_y1).abs() < 2.0, "{got:?} vs {want_x0}, {want_y1}");
 
     // The 3° turn and the 1.1 scale: measured and placed again.
-    let r = &plan(&m, "M-101")["registration"];
+    let r = &plan(&m, "M-201")["registration"];
     assert_eq!(r["status"], "refitted", "{r}");
     assert!((num(r, "rotation_deg") - 3.0).abs() < 0.1 && (num(r, "scale") - 1.0).abs() < 0.005, "{r}");
     assert!(num(r, "residual_ft") > 1.0, "{r}");
-    let r = &plan(&m, "P-101")["registration"];
+    let r = &plan(&m, "P-201")["registration"];
     assert_eq!(r["status"], "refitted", "{r}");
     assert!((num(r, "scale") - 1.1).abs() < 0.005 && num(r, "rotation_deg").abs() < 0.1, "{r}");
     assert!(num(r, "residual_ft") > 1.0, "{r}");
 
     // The sheet whose lines aren't the floor: marked, with the numbers.
-    let f = plan(&m, "F-101");
+    let f = plan(&m, "F-201");
     let r = &f["registration"];
     assert_eq!(r["status"], "misregistered", "{r}");
     assert!(r["why"].as_str().is_some_and(|w| !w.is_empty()) && r["coverage"].is_number() && r["residual_ft"].is_number(), "{r}");
-    let fx0 = F101 + OX + (bx[0] - 5.0) * 12.0;
+    let fx0 = F201 + OX + (bx[0] - 5.0) * 12.0;
     assert!((rect_of(f)[0] - fx0).abs() < 1.0, "a misregistered crop is not moved: {f}");
 
     // The manifest's summary, worst first; the prompt names the crops placed off the walls.
@@ -255,16 +257,16 @@ fn crops_placed_off_the_walls_are_refitted_kept_or_marked() {
     assert_eq!(sm["counts"]["misregistered"], 1, "{sm}");
     assert_eq!(sm["counts"]["ok"], 2, "{sm}");
     let order: Vec<&str> = sm["by_residual"].as_array().unwrap().iter().map(|r| r["sheet"].as_str().unwrap()).collect();
-    assert_eq!(order.first(), Some(&"F-101"), "{order:?}");
-    assert_eq!(order.get(1), Some(&"E-101"), "the 3 ft shift is the largest residual: {sm}");
-    assert!(order.ends_with(&["A-101", "A-121"]) || order.ends_with(&["A-121", "A-101"]), "{order:?}");
+    assert_eq!(order.first(), Some(&"F-201"), "{order:?}");
+    assert_eq!(order.get(1), Some(&"E-201"), "the 3 ft shift is the largest residual: {sm}");
+    assert!(order.ends_with(&["A-201", "A-221"]) || order.ends_with(&["A-221", "A-201"]), "{order:?}");
     let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
     for c in [e, f] {
         assert!(prompt.contains(c["file"].as_str().unwrap()), "{prompt}");
     }
 
     // The overlay over the refitted crop draws the model's walls on the sheet's walls: the
-    // lounge's west wall face (blue) where the shifted sheet has it.
+    // reading room's west wall face (blue) where the shifted sheet has it.
     let ov = m["model"].as_array().unwrap().iter().find(|x| x["of"] == e["file"]).unwrap();
     let img = image::open(out.join(ov["file"].as_str().unwrap())).unwrap().to_rgba8();
     let ppu = num(e, "px_per_unit");
@@ -280,7 +282,7 @@ fn crops_placed_off_the_walls_are_refitted_kept_or_marked() {
             })
         })
     };
-    let wall_at = on(E101, &shifted, [36.5 - HALF_FT, 34.0]);
+    let wall_at = on(E201, &shifted, [36.5 - HALF_FT, 34.0]);
     assert!(blue_at(wall_at), "the model's wall should be drawn over the sheet's at {wall_at:?}");
     let _ = std::fs::remove_dir_all(&out);
 }
@@ -288,7 +290,7 @@ fn crops_placed_off_the_walls_are_refitted_kept_or_marked() {
 #[test]
 fn the_threshold_is_the_projects_and_status_lists_the_sheets_worst_first() {
     let mut s = job();
-    let (id, _) = lounge(&mut s);
+    let (id, _) = reading_room(&mut s);
     // A bad value is refused; 4 ft keeps the 3 ft shift as placed.
     for bad in ["-2", "wide", "80"] {
         assert!(
@@ -309,7 +311,7 @@ fn the_threshold_is_the_projects_and_status_lists_the_sheets_worst_first() {
     let out = dir("loose");
     s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "compare": false})).unwrap();
     let m = read_json(&out.join("manifest.json"));
-    assert_eq!(plan(&m, "E-101")["registration"]["status"], "ok", "3 ft is within 4");
+    assert_eq!(plan(&m, "E-201")["registration"]["status"], "ok", "3 ft is within 4");
     assert_eq!(m["registration"]["threshold_ft"].as_f64(), Some(4.0));
     assert!(m["registration"]["threshold_from"].as_str().unwrap().contains("validate.registration.residual_ft"), "{}", m["registration"]);
     let _ = std::fs::remove_dir_all(&out);
@@ -325,8 +327,8 @@ fn the_threshold_is_the_projects_and_status_lists_the_sheets_worst_first() {
     let st = s.execute("validate.status", &json!({"run": run})).unwrap();
     let reg = &st["registration"];
     let sheets: Vec<&str> = reg["sheets"].as_array().unwrap().iter().map(|r| r["sheet"].as_str().unwrap()).collect();
-    assert_eq!(sheets.first(), Some(&"F-101"), "misregistered first: {reg:#}");
-    assert_eq!(sheets.get(1), Some(&"E-101"), "then the largest residual: {reg:#}");
+    assert_eq!(sheets.first(), Some(&"F-201"), "misregistered first: {reg:#}");
+    assert_eq!(sheets.get(1), Some(&"E-201"), "then the largest residual: {reg:#}");
     let first = &reg["sheets"][0];
     assert_eq!(first["status"], "misregistered");
     assert_eq!(first["worst"]["area"], json!(id));

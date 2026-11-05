@@ -2340,6 +2340,14 @@ fn sheet_views(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, String, [f64; 4])
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
+/// Whether a sheet (or its view) is of `level`: its level tag, else a title naming the level.
+fn names_level(l: &SheetLink, level: &str) -> bool {
+    shows_level(l, level)
+        || (l.level.is_none()
+            && l.levels.is_empty()
+            && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), level))
+}
+
 pub(crate) fn shows_level(l: &SheetLink, level: &str) -> bool {
     l.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(level)) || l.levels.iter().any(|x| x.eq_ignore_ascii_case(level))
 }
@@ -2403,8 +2411,7 @@ fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Pl
 
 /// The sheet's straight lines in `r` as the page prints them: lines, polyline pieces and the
 /// edges of solid fills (a wall's poche), cut to `r`.
-fn sheet_lines(d: &Drawing, r: [f64; 4]) -> Vec<vreg::Seg> {
-    let index = PrintIndex::of(d, &[r]);
+fn sheet_lines(d: &Drawing, index: &PrintIndex, r: [f64; 4]) -> Vec<vreg::Seg> {
     let ents = as_printed(d, &index.within(r));
     let mut out: Vec<vreg::Seg> = Vec::new();
     let cap = vreg::MAX_PRINT_LINES * 4;
@@ -2561,12 +2568,7 @@ fn plan_crops(
         .collect();
     // 1. The plans, enlarged plans and RCPs of the area's level (its level tag, or a title naming
     //    the level), placed by their registration; an unplaced one is offered in 1c.
-    let names_level = |l: &SheetLink| {
-        shows_level(l, &area.level)
-            || (l.level.is_none()
-                && l.levels.is_empty()
-                && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), &area.level))
-    };
+    let names_level = |l: &SheetLink| names_level(l, &area.level);
     let mut pending: Vec<&SheetLink> = Vec::new();
     // Placed, but the placement puts the area outside the view: looked for by the room's tag.
     let mut missed: Vec<&SheetLink> = Vec::new();
@@ -3490,12 +3492,15 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // Each placed crop's registration against the model's walls (Q6141).
     let (reg_threshold, reg_rule) = vreg::threshold(&d.project_rules);
+    // The level's sheets' objects, once, for their straight lines.
+    let level_sheets: Vec<[f64; 4]> = sp.sheets.iter().filter(|l| names_level(l, &area.level)).filter_map(|l| l.rect.map(norm_rect)).collect();
+    let line_index = PrintIndex::of(d, &level_sheets);
     let register = |place: &Place, r: [f64; 4]| -> vreg::Registered {
         let unit = upf * place.scale();
         vreg::judge(
             vreg::fit_walls(
                 &wall_faces(&model, &frame, &area, margin, place, r),
-                &sheet_lines(d, grow(r, vreg::REACH_FT * unit)),
+                &sheet_lines(d, &line_index, grow(r, vreg::REACH_FT * unit)),
                 unit,
                 [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0],
             ),

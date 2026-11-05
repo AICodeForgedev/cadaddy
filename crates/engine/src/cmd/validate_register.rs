@@ -132,7 +132,7 @@ impl Line {
     fn of(a: [f64; 2], b: [f64; 2]) -> Option<Line> {
         let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
         let len = dx.hypot(dy);
-        if !(len.is_finite() && len >= MIN_LINE_FT) || !a.iter().chain(b.iter()).all(|v| v.is_finite()) {
+        if !(len.is_finite() && len >= MIN_LINE_FT && a.iter().chain(b.iter()).all(|v| v.is_finite())) {
             return None;
         }
         let ang = dy.atan2(dx).rem_euclid(std::f64::consts::PI);
@@ -360,6 +360,7 @@ fn refine(samples: &[Sample], grid: &Grid, start: Sim) -> Sim {
 }
 
 /// `A·x = b` for a 4 × 4 system (partial pivoting); none when singular.
+#[allow(clippy::needless_range_loop)]
 fn solve4(mut a: [[f64; 4]; 4], mut b: [f64; 4]) -> Option<[f64; 4]> {
     let scale = a.iter().flat_map(|r| r.iter()).fold(0.0f64, |m, v| m.max(v.abs()));
     if !(scale.is_finite() && scale > 0.0) {
@@ -484,7 +485,7 @@ fn shift_votes(model: &[(f64, f64)], print: &[(f64, f64)], s: f64) -> Vec<f64> {
 /// Fit the sheet's lines (`print`, sheet units) to the model's wall faces as placed (`model`,
 /// sheet units), `unit` sheet units a foot, round `centre`. Err: why it can't be checked.
 pub(crate) fn fit_walls(model: &[Seg], print: &[Seg], unit: f64, centre: [f64; 2]) -> Result<Fit, String> {
-    if !(unit.is_finite() && unit > 0.0) || !centre.iter().all(|v| v.is_finite()) {
+    if !(unit.is_finite() && unit > 0.0 && centre.iter().all(|v| v.is_finite())) {
         return Err("the crop's scale is unknown".into());
     }
     let local = |p: [f64; 2]| [(p[0] - centre[0]) / unit, (p[1] - centre[1]) / unit];
