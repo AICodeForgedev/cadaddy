@@ -682,7 +682,7 @@ impl Defs {
 
 /// Whether `code` abbreviates `meaning`: its first letter starts one of the meaning's words and
 /// its letters follow in order from there (`FSD` FIRE/SMOKE DAMPER, `SD` DUCT MOUNTED SMOKE
-/// DETECTOR, `FCO` FLOOR CLEANOUT). A code with a digit is a type tag (`P-1`, `EF-2`): it names
+/// DETECTOR, `FCO` FLOOR CLEANOUT). A code with a digit is a type tag (`Q-7`, `QF-2`): it names
 /// no words, any meaning goes.
 fn abbreviates(code: &str, meaning: &str) -> bool {
     if code.chars().any(|c| c.is_ascii_digit()) {
@@ -1134,9 +1134,18 @@ fn read_marks(
     };
     for s in sheets.iter().filter(|s| s.plan) {
         let mut here: Vec<(usize, [f64; 2], f64)> = Vec::new();
-        for t in &s.texts {
-            // Its tables' lettering, and its own number (the title block's), are no tags.
-            if s.tables.iter().any(|r| inside(*r, t.at)) || t.text.trim().eq_ignore_ascii_case(&s.number) {
+        // Its own number at its tallest is the title block's (a type tag may print the same
+        // letters elsewhere on it).
+        let title = s
+            .texts
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.text.trim().eq_ignore_ascii_case(&s.number))
+            .max_by(|a, b| a.1.h.total_cmp(&b.1.h))
+            .map(|(i, _)| i);
+        for (ti, t) in s.texts.iter().enumerate() {
+            // Its tables' lettering is no tag.
+            if s.tables.iter().any(|r| inside(*r, t.at)) || Some(ti) == title {
                 continue;
             }
             let mut hit: BTreeSet<usize> = BTreeSet::new();
@@ -1233,7 +1242,7 @@ pub(crate) struct Census {
     pub mark: Option<String>,
     pub name: Option<String>,
     pub level: String,
-    /// Where it was traced from (`E-201 @ 12'-3", 40'-0"`): its sheet's trade guards a tag match.
+    /// Where it was traced from (`E-901 @ 12'-3", 40'-0"`): its sheet's trade guards a tag match.
     pub source: Option<String>,
 }
 
@@ -1729,7 +1738,7 @@ mod tests {
         assert!(abbreviates("QSMD", "QUIET SMOKE DAMPER"));
         assert!(abbreviates("SD", "DUCT MOUNTED SMOKE DETECTOR"));
         assert!(abbreviates("FCO", "FLOOR CLEANOUT"));
-        assert!(abbreviates("P-12", "WATER CLOSET"), "a type tag names no words");
+        assert!(abbreviates("Q-12", "WATER CLOSET"), "a type tag names no words");
         assert!(!abbreviates("UC", "MOTORIZED DAMPER ACTUATOR"));
         assert!(!abbreviates("FIRE", "EXTINGUISHER CABINET"));
         assert!(!abbreviates("DUAL", "DUAL DRAIN BOX"), "its own first word is no abbreviation");
