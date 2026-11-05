@@ -288,8 +288,8 @@ pub(crate) struct DeviceBuild {
     pub heights: BTreeMap<&'static str, usize>,
     /// The devices whose height no document gives, by kind.
     pub defaults: BTreeMap<String, usize>,
-    /// The plumbing fixtures whose rough-in height no document gives, by type (`P-8 WASHING
-    /// MACHINE BOX`): one review item a type.
+    /// The plumbing fixtures whose rough-in height no document gives, by type (`WB-1 WASHER
+    /// BOX`): one review item a type.
     pub fixture_defaults: BTreeMap<String, usize>,
     /// Wall devices set in a wall's face, and those with no wall within reach.
     pub in_wall: usize,
