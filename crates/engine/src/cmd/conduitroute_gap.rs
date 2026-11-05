@@ -592,7 +592,7 @@ mod tests {
         let rl = super::super::rules();
         let sp = spec(json!({"version": 1, "mep": {
             "panel_schedules": [{"panel": "LP1", "source": "E-601", "circuits": [{"number": "11", "description": "RECEPTACLES", "room": "", "breaker": "20A", "poles": 1, "wire": "10"}]}],
-            "feeders": [{"tag": "F2", "from": "MDP", "to": "LP2"}]
+            "feeders": [{"tag": "F2", "from": "DPA", "to": "LP2"}]
         }}));
         let r = resolve_label(&sp, "LP1-11", &[], rl).expect("schedule");
         assert_eq!((r.by, r.conductors.as_deref()), ("schedule", Some("2#10 + 1#10G")));

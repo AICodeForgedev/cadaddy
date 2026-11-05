@@ -3538,7 +3538,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
                 .min_by(|a, b| manhattan(gear_ctr(a), dv.at).total_cmp(&manhattan(gear_ctr(b), dv.at)));
             let Some(g) = near_gear else { continue };
-            // A unit's copy (`G-101`) has its typical panel's schedule (`G`).
+            // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
             let sched_of = |t: &str| {
                 let (sp_, sc) = gap::spare_circuits(sp, t);
                 if sp_.is_empty() && sc.is_empty() {
