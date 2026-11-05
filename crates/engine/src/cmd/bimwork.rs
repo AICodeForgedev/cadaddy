@@ -11,7 +11,9 @@
 //!   each with its element handles, and what changed since the last takeoff ([`takeoff`]).
 //!   `bim.takeoff.show {line}` selects a line's elements and frames them in 3D.
 //! - `bim.estimate {cost_table}`: the takeoff priced from a cost table (CSV or XLSX: item, unit,
-//!   material, labor_hrs, optional waste), with a change order against an earlier estimate.
+//!   material, labor_hrs, optional waste), with a change order against an earlier estimate; or
+//!   `bim.estimate {price_book}`: its material priced from a price-book workbook by each line's
+//!   catalog number, else its Item Map row ([`priced`]).
 //! - `bim.issue.*`: issues, RFIs and punch items pinned to elements, with a photo, an assignee, a
 //!   status and a viewpoint, kept as BCF topics ([`super::bcf`]) and so exported and imported as
 //!   BCF 2.1 or 3.0; `bim.issue.marks` puts them on the plan (the sheets) as numbered marks.
@@ -33,6 +35,7 @@ use crate::{Result, Session};
 
 mod clash;
 mod issues;
+mod priced;
 mod takeoff;
 
 /// The embedded file the work state is kept in.
