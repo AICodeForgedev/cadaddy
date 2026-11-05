@@ -230,10 +230,16 @@ pub(crate) struct AtomRules {
     pub default_raceway_source: String,
     pub insulation: String,
     pub insulation_source: String,
+    /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
+    /// when the rules give them (their sum), else as given.
     pub makeup_ft: f64,
+    pub makeup_min_in: f64,
+    pub makeup_allowance_in: f64,
     pub makeup_source: String,
-    /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
+    /// Each conductor's makeup where it ends at a panel (to its breaker), feet, when its height
+    /// isn't known; else the share of its height it runs down the can (and a box's makeup).
     pub panel_makeup_ft: f64,
+    pub panel_makeup_height_share: f64,
     pub panel_makeup_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
@@ -259,7 +265,14 @@ pub(crate) struct AtomRules {
 /// The rules data, read once.
 pub(crate) fn rules() -> &'static AtomRules {
     static R: std::sync::OnceLock<AtomRules> = std::sync::OnceLock::new();
-    R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
+    R.get_or_init(|| {
+        let mut r: AtomRules = serde_json::from_str(RULES).unwrap_or_default();
+        let parts = r.makeup_min_in.max(0.0) + r.makeup_allowance_in.max(0.0);
+        if parts.is_finite() && parts > 0.0 {
+            r.makeup_ft = parts / 12.0;
+        }
+        r
+    })
 }
 
 impl AtomRules {
@@ -1920,7 +1933,7 @@ mod tests {
         let c = &p.atoms[0];
         assert_eq!((c.kind, c.ty.as_str(), c.size.as_str(), c.item.as_str()), ("cable", "NM 12/2 w/G", "#12", "NM-B cable"));
         assert!((p.length_ft - 25.0).abs() < 1e-9);
-        assert!((c.length_ft - 27.0).abs() < 1e-9, "25' of run plus 1' makeup at each end: {}", c.length_ft);
+        assert!((c.length_ft - 28.0).abs() < 1e-9, "25' of run plus 1.5' makeup at each end (300.14's 6\" and a 12\" allowance): {}", c.length_ft);
         assert_eq!(c.extra.iter().find(|x| x.0 == "conductors").map(|x| x.1.as_str()), Some("3"));
         // Staples within 12" of each box, at most 4-1/2' apart.
         let st: Vec<f64> = p
@@ -1948,7 +1961,7 @@ mod tests {
         let w = wires(&line(30.0), 12.0, "2#12 + 1#12G", &[3], "120/208", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["red", "white", "green"], "circuit 3 is phase B");
-        assert!(w.iter().all(|a| (a.length_ft - 32.0).abs() < 1e-9));
+        assert!(w.iter().all(|a| (a.length_ft - 33.0).abs() < 1e-9), "30' and 1.5' at each end");
         let w = wires(&line(10.0), 12.0, "3#10 + 1#10G", &[1, 3, 5], "277/480", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["brown", "orange", "yellow", "green"]);
