@@ -32,8 +32,15 @@ mod scope;
 mod sketch;
 
 pub(crate) use price::read_cost_db;
+pub(crate) use scenario::Sc as KeptScenario;
 pub(crate) use scenario::{VE_ATOM, approved_circuits, approved_feeders, decide, takeoff_view};
 pub(crate) use scope::feeder_makeup;
+
+/// The scenarios the drawing keeps (their pieces, the design's pieces each replaces, their RFI
+/// and decision): what Validate checks ([`super::validate_value`]).
+pub(crate) fn kept_scenarios(d: &cadaddy_doc::Drawing) -> Vec<KeptScenario> {
+    scenario::state(d).scenarios
+}
 
 const CMD: &str = "ve.study";
 /// The alternatives and the methods' words.

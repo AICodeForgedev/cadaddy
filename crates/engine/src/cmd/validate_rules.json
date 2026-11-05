@@ -535,6 +535,79 @@
       "examples": {"pass": "3/4\" EMT: 412.6 ft recounted, 412.6 ft in the index and the takeoff.", "fail": "EMT coupling 3/4\": 14 recounted, 15 in the index."}
     },
     {
+      "id": "G-VE-TIER",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "An ALLOWED NOW value-engineering option is permitted by both the specification paragraph for every area it covers and the code rule it cites, every condition met; an option the specification contradicts is NEEDS RFI, never allowed now.",
+      "how": [
+        "The prescreen placed the option's cable pieces in their areas, found the specification's wiring-methods paragraph for each (as the job read 26 05 19) and the code rule it cites (rules data: construction types, concealed only, thermal barrier, areas never allowed). Start from its findings.",
+        "A ceiling the documents don't type, a construction type not read or no paragraph for an area is 'unsure', never a pass: read the RCP, finish schedule and code sheet to decide it."
+      ],
+      "documents": ["spec", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Branch circuits concealed in the units in NM: 26 05 19 lists NM for them, NEC 334.10(3) allows it in Type V-A, gypsum ceilings over every piece.", "fail": "SER for the unit feeders tiered allowed now while 26 05 19 lists single conductors in raceway only for feeders."}
+    },
+    {
+      "id": "G-VE-AREA",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "No NM or other cable option runs where its method is never used (rules data): NM never in common, exposed, plenum or below-slab areas.",
+      "how": [
+        "The prescreen placed each of the option's cable pieces by the room it lies in, the design piece it runs beside, its circuit's area, the ceiling over it and its height against the lowest floor. Start from its findings.",
+        "A piece in no room and on no circuit whose area is known is 'unsure'."
+      ],
+      "documents": ["plan", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The NM option's cable runs only in the guest units.", "fail": "The NM option's homerun runs along the corridor to the panel."}
+    },
+    {
+      "id": "G-VE-COST",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "A value-engineering saving is recomputed from a recount of the model's pieces and the price book within cost_pct (1%), and its man-hours are labor dollars divided by the stated manpower rate.",
+      "how": [
+        "The prescreen recounted the design's pieces each scenario replaces and the scenario's own pieces by kind against the study's lines, priced every line again from the price book (labor in dollars) and compared the saving's material, labor, cost and man-hours. Start from its findings.",
+        "No price book on this machine, or a line it has no price for, is 'unsure'."
+      ],
+      "documents": ["schedule", "spec"],
+      "tolerance": {"cost_pct": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "NM in the units saves $12,400 and 190 man-hours: recomputed $12,396 and 190.7 h at the stated $50/h.", "fail": "The saving's man-hours were taken at another rate than the one stated."}
+    },
+    {
+      "id": "G-VE-RFI",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "Every NEEDS RFI value-engineering option has its method-choice RFI (a review item of kind rfi) giving each of the option's code citations and the design's intent.",
+      "how": [
+        "The prescreen found each NEEDS RFI option's RFI on the RFI list and read its text for the option's citations and its intent line. Start from its findings."
+      ],
+      "documents": ["spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "The SER RFI quotes 26 05 19, cites NEC 338.10(B)(4)(a), 334.10(3) and 300.21 and states the specifier-default and future-capacity intent.", "fail": "A NEEDS RFI option with no RFI drafted."}
+    },
+    {
+      "id": "G-VE-DESIGN",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "The as-designed model is unchanged by any value-engineering scenario that isn't approved: the design pieces it replaces are all there and still the design, its own pieces aren't counted and stay on their hidden layer, its circuits keep their designed method; one that became the design was approved by its RFI or chosen (allowed now).",
+      "how": [
+        "The prescreen compared each scenario the drawing keeps with the model: the design pieces it replaces, its own pieces and layer, its circuits' method and its decision. Start from its findings."
+      ],
+      "documents": ["plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The MC scenario's pieces are on their hidden layer; every EMT piece it would replace is still the design.", "fail": "The NM scenario's cable was made the design with its RFI still open."}
+    },
+    {
       "id": "E-LUM",
       "trade": "electrical",
       "applies_to": {"kinds": ["light_fixture", "luminaire", "wall_luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
