@@ -21,7 +21,11 @@ bim.export.ar {room: "101", context: "off", small: true, formats: ["usdz"], path
   `mechanical`, `fire_protection`, `architecture`…), the system (`devices`, `lights`, `conduit`,
   `pipe_sanitary`…) or the category; `kinds` matches the element's kind (`receptacle`, `switch`,
   `box`, `duct`…), its build part or its type. An element belongs to a room when its plan box
-  comes within `scope.room_margin_ft` of the room's outline.
+  comes within `scope.room_margin_ft` of the room's outline. Geometry is cut to the scope's plan
+  box (the rooms' outlines grown by that margin, within `box` when given), so a corridor wall or
+  a conduit run that goes on past the room ends at its edge (`cut_to_scope` counts them; the
+  element's metadata says `cut_to_scope: true`); `clip: false` keeps every element whole. A level
+  scope is never cut.
 - **Files.** `path` names `NAME`, `NAME.glb`, `NAME.usdz` or `NAME.json`; all three are written
   beside each other (`formats` picks glb and/or usdz; the sidecar is always written). Without
   `path` they go beside the drawing as `DRAWING-ar-SCOPE.*`, never over an earlier export. An
@@ -70,6 +74,7 @@ matches its entities to the sidecar by `node`):
 | `trade`, `system`, `category`, `type` | the BIM view's classification |
 | `level`, `room`, `devid`, `part`, `source` | where it is and what it was built from |
 | `context` | true for the shell (walls, floors, ceilings, doors…) |
+| `cut_to_scope` | true when its geometry was cut at the scope's plan box |
 | `simplified` | `box` when a cap made it its bounding box |
 | `position` | (sidecar) the node's translation, metres |
 
@@ -85,7 +90,7 @@ abstract `class` prim `/CADaddy_AR/Prototypes` that each element references.
              "plan_x", "plan_y", "plan_units": "ft", "floor_elevation_ft", "how", "entry", "model": [0,0,0]},
   "scope": {...}, "rules": {...}, "counts": {"nodes", "meshes", "triangles"},
   "dropped": {"small_parts": {...}, "context_off", "filtered", "not_meshes", "over_element_cap", "over_caps": {...}},
-  "simplified": "nothing"|"context as boxes"|"context left out"|"context left out, the elements furthest from the anchor left out",
+  "cut_to_scope": n, "simplified": "nothing"|"context as boxes"|"context left out"|"context left out, the elements furthest from the anchor left out",
   "points": [{"name": "101 GUEST corner 1", "kind": "room_corner", "level", "plan": [x, y], "position": [x, y, z]}],
   "elements": [{...the metadata above..., "position": [x, y, z]}] }
 ```
@@ -108,6 +113,9 @@ goes back):
 - `small_parts`: the trades' loose pieces left out unless `small: true`: build parts (`atom`),
   run pieces (`strap`, `staple`, `connector`, `wire`…) and anything under `max_size_mm` across.
 - `colors`: RGB by system (the BIM view's trade keys), then by trade, then `default`.
+- `kind_trades`: a kind's trade and system when the BIM view's layer-based classification
+  doesn't say it (a plumbing fixture on a device layer is plumbing; fire alarm devices are their
+  own trade).
 - `scope`: the room margin and the entry probes (feet past a door's far face).
 
 ## Files are valid

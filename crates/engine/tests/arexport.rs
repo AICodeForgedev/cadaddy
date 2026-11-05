@@ -129,6 +129,7 @@ fn built(extra: Value) -> Session {
         device(8.0, 0.8, "REC", "receptacle", "1F0", json!({"mount_height_in": "18", "circuit": "LP-1"})),
         device(12.0, 0.8, "S", "switch", "1F1", json!({"mount_height_in": "48"})),
         device(16.0, 9.2, "T", "thermostat", "1F2", json!({"mount_height_in": "60"})),
+        device(10.0, 9.2, "P-1", "plumbing_fixture", "1F3", json!({"fixture": "LAVATORY"})),
     ];
     let mut sp = json!({
         "version": 1, "units_per_foot": 12,
@@ -306,7 +307,21 @@ fn a_room_round_trips_with_its_devices_where_the_model_has_them() {
     assert_eq!(nodes.len(), side["elements"].as_array().unwrap().len());
     assert_eq!(g.doc["nodes"][0]["children"].as_array().unwrap().len(), nodes.len(), "the root holds every element");
     let devices: Vec<&Value> = nodes.iter().filter(|n| n["extras"]["devid"].is_string()).collect();
-    assert_eq!(devices.len(), 3, "{:#}", r);
+    assert_eq!(devices.len(), 4, "{:#}", r);
+    // A plumbing fixture is plumbing (the rules' kind trades), whatever its layer.
+    let lav = devices.iter().find(|n| n["extras"]["tag"] == json!("P-1")).expect("the lavatory");
+    assert_eq!(lav["extras"]["trade"], json!("plumbing"), "{:#}", lav["extras"]);
+    // Everything is cut to the room and its margin: the walls running on past it too.
+    // (The room's outline as the build traced it, its door swings included.)
+    let xs: Vec<f64> = side["points"].as_array().unwrap().iter().map(|p| p["plan"][0].as_f64().unwrap()).collect();
+    let (xmin, xmax) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
+    assert!(xmax < 30.0, "the corridor is not the guest room: {xs:?}");
+    let (x0, x1) = ((xmin - 1.0 - ax) * 0.3048 - 1e-3, (xmax + 1.0 - ax) * 0.3048 + 1e-3);
+    for n in &nodes {
+        let (lo, hi) = g.node_box(n);
+        assert!(lo[0] >= x0 && hi[0] <= x1, "{} within the room {x0}..{x1}: {lo:?}..{hi:?} {n}", n["name"]);
+    }
+    assert!(r["cut_to_scope"].as_u64().unwrap() > 0, "{r:#}");
     let m = 0.3048 / 12.0;
     for (tag, kind, height) in [("REC", "receptacle", 18.0), ("S", "switch", 48.0), ("T", "thermostat", 60.0)] {
         let n = devices.iter().find(|n| n["extras"]["tag"] == json!(tag)).unwrap_or_else(|| panic!("{tag}: {devices:#?}"));
@@ -340,8 +355,23 @@ fn a_room_round_trips_with_its_devices_where_the_model_has_them() {
     assert!(nodes.iter().any(|n| n["extras"]["kind"] == json!("wall") && n["extras"]["context"] == json!(true)), "walls as context");
     let mats = g.doc["materials"].as_array().unwrap();
     assert!(mats.iter().any(|m| m["alphaMode"] == json!("BLEND")), "the context is translucent");
-    // The three device boxes are one shape: instanced when equal.
-    assert!(r["meshes"].as_u64().unwrap() <= r["nodes"].as_u64().unwrap());
+    // Equal parts share a mesh: the receptacle and the switch boxes along one wall are one shape.
+    let rec_mesh = |tag: &str| devices.iter().find(|n| n["extras"]["tag"] == json!(tag)).unwrap()["mesh"].clone();
+    assert_eq!(rec_mesh("REC"), rec_mesh("S"), "one mesh for the two equal device boxes");
+    assert!(r["meshes"].as_u64().unwrap() < r["nodes"].as_u64().unwrap(), "{r:#}");
+    // Uncut, the walls run the plan's length.
+    let whole = export(&mut s, &d, "whole", json!({"room": "101", "clip": false, "formats": ["glb"]}));
+    assert_eq!(whole["cut_to_scope"], json!(0));
+    let gw = read_glb(&d.join("whole.glb"));
+    let widest = gw
+        .element_nodes()
+        .iter()
+        .map(|n| {
+            let (lo, hi) = gw.node_box(n);
+            hi[0] - lo[0]
+        })
+        .fold(0.0, f64::max);
+    assert!(widest > 50.0 * 0.3048, "an outer wall's 60 ft: {widest}");
 }
 
 #[test]

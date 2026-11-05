@@ -61,7 +61,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Export for AR", run)
             .params(
-                "{room?: number or name, rooms?: [number or name] (default: one room, the first built), level?: name (all of it, or the level of `box`/`room`), box?: {min: [x, y], max: [x, y], z?: [from, to]} (building feet on the level; z feet above its floor), trades?: [trade or system] (electrical, plumbing, lights, conduit), kinds?: [kind] (receptacle, device, duct), anchor?: {corner: n (1-based, the sidecar's points) | grid: \"A-1\" | name: text, at?: [x, y] (building feet; without it the plan text `name`)} (default: the room corner nearest its entry), context?: \"translucent\"|\"solid\"|\"off\", small?: bool (keep the trades' loose pieces), formats?: [\"glb\", \"usdz\"] (default both), max_triangles?, max_bytes? (lower the rules' caps), path?: where to write (NAME.glb / NAME.usdz / NAME.json beside each other; default beside the drawing), force?: bool (replace existing files)} → {files: {glb?, usdz?, sidecar}, bytes, nodes, meshes, triangles, kinds, trades, anchor, scope, dropped, simplified, seconds, checks}",
+                "{room?: number or name, rooms?: [number or name] (default: one room, the first built), level?: name (all of it, or the level of `box`/`room`), box?: {min: [x, y], max: [x, y], z?: [from, to]} (building feet on the level; z feet above its floor), trades?: [trade or system] (electrical, plumbing, lights, conduit), kinds?: [kind] (receptacle, device, duct), anchor?: {corner: n (1-based, the sidecar's points) | grid: \"A-1\" | name: text, at?: [x, y] (building feet; without it the plan text `name`)} (default: the room corner nearest its entry), context?: \"translucent\"|\"solid\"|\"off\", small?: bool (keep the trades' loose pieces), clip?: bool (default true: cut what runs past the rooms or box, as a wall running on down the corridor), formats?: [\"glb\", \"usdz\"] (default both), max_triangles?, max_bytes? (lower the rules' caps), path?: where to write (NAME.glb / NAME.usdz / NAME.json beside each other; default beside the drawing), force?: bool (replace existing files)} → {files: {glb?, usdz?, sidecar}, bytes, nodes, meshes, triangles, kinds, trades, anchor, scope, dropped, simplified, cut_to_scope, seconds, checks}",
             )
             .noundo()
             .files(),
@@ -83,6 +83,18 @@ pub struct Rules {
     pub small_parts: Small,
     pub colors: Colors,
     pub scope: ScopeRules,
+    pub kind_trades: Vec<KindTrade>,
+}
+
+/// An element kind's trade and system when the BIM view's classification (by layer) doesn't
+/// say it: a plumbing fixture on a device layer is still plumbing.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct KindTrade {
+    /// A word of the kind (`plumbing` matches `plumbing_fixture`).
+    pub kind: String,
+    pub trade: String,
+    pub system: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -157,16 +169,29 @@ impl Rules {
     }
 
     /// RGB 0–1 of an element's system, else its trade, else the default.
-    fn rgb(&self, c: &Class) -> [f32; 3] {
+    fn rgb(&self, system: &str, trade: &str) -> [f32; 3] {
         let pick = self
             .colors
             .by_system
-            .get(c.key)
-            .or_else(|| self.colors.by_trade.get(&slug(c.group)))
+            .get(system)
+            .or_else(|| self.colors.by_trade.get(trade))
             .copied()
             .or(self.colors.default)
             .unwrap_or([200.0, 200.0, 200.0]);
         pick.map(|v| if v.is_finite() { (v / 255.0).clamp(0.0, 1.0) as f32 } else { 0.8 })
+    }
+
+    /// The trade and system of an element of `kind` classified as `c`.
+    fn trade_of(&self, kind: &str, c: &Class) -> (String, String) {
+        let k = slug(kind);
+        for r in self.kind_trades.iter().take(500) {
+            let w = slug(&r.kind);
+            if !w.is_empty() && !r.trade.trim().is_empty() && k.contains(&w) {
+                let system = if r.system.trim().is_empty() { c.key.to_string() } else { r.system.trim().to_string() };
+                return (slug(&r.trade), system);
+            }
+        }
+        (slug(c.group), c.key.to_string())
     }
 
     fn is(list: &[String], word: &str) -> bool {
@@ -842,6 +867,8 @@ struct Item<'a> {
     hi: [f64; 3],
     context: bool,
     room: Option<String>,
+    trade: String,
+    system: String,
 }
 
 #[derive(Default)]
@@ -924,7 +951,8 @@ fn collect<'a>(
         }
         let kind = kind_of(e, &part);
         let context = Rules::is(&rules.context.parts, &part);
-        if !matches_filter(&sc.trades, &[class.group, class.key, &class.category])
+        let (trade, system) = rules.trade_of(&kind, &class);
+        if !matches_filter(&sc.trades, &[&trade, &system, class.group, class.key, &class.category])
             || !matches_filter(&sc.kinds, &[&kind, &part, &class.category, &class.ty])
         {
             // The shell stays as context unless it is filtered out by name.
@@ -941,7 +969,7 @@ fn collect<'a>(
             } else if let Some(pc) = piece.as_deref().filter(|pc| Rules::is(&rules.small_parts.mep_pieces, pc)) {
                 Some(format!("mep:{pc}"))
             } else if rules.small_parts.max_size_mm > 0.0 && size_m * 1000.0 < rules.small_parts.max_size_mm {
-                Some("under the size limit".into())
+                Some(format!("under {} mm: {kind}", rules.small_parts.max_size_mm))
             } else {
                 None
             };
@@ -958,7 +986,7 @@ fn collect<'a>(
             dropped.capped_elements += 1;
             continue;
         }
-        out.push(Item { e, class, part, kind, level, lo, hi, context, room: room.map(Room::label) });
+        out.push(Item { e, class, part, kind, level, lo, hi, context, room: room.map(Room::label), trade, system });
     }
     out
 }
@@ -1038,8 +1066,8 @@ fn meta_of(d: &Drawing, it: &Item, floor_ft: f64) -> Map<String, Value> {
     put("manufacturer", json!(product.manufacturer));
     put("type_mark", json!(product.type_mark));
     put("product_source", json!(product.source));
-    put("trade", json!(slug(it.class.group)));
-    put("system", json!(it.class.key));
+    put("trade", json!(it.trade));
+    put("system", json!(it.system));
     put("category", json!(it.class.category));
     put("type", json!(it.class.ty));
     put("level", json!(it.level));
@@ -1082,6 +1110,8 @@ struct Place<'a> {
     frame: &'a Frame,
     anchor: [f64; 2],
     floor_ft: f64,
+    /// The plan box everything is cut to (output x0, x1, z0, z1, metres), when the scope has one.
+    clip: Option<[f64; 4]>,
 }
 
 impl Place<'_> {
@@ -1095,6 +1125,58 @@ impl Place<'_> {
     fn of_ft(&self, ft: [f64; 3]) -> [f64; 3] {
         [(ft[0] - self.anchor[0]) * M_PER_FT, (ft[2] - self.floor_ft) * M_PER_FT, -(ft[1] - self.anchor[1]) * M_PER_FT]
     }
+}
+
+/// A polygon cut to `p[k] ≥ v` (`sign` 1) or `p[k] ≤ v` (`sign` −1).
+fn clip_poly(poly: &[[f64; 3]], k: usize, v: f64, sign: f64) -> Vec<[f64; 3]> {
+    let inside = |p: &[f64; 3]| (p.get(k).copied().unwrap_or(0.0) - v) * sign >= 0.0;
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    let n = poly.len();
+    for i in 0..n {
+        let (Some(a), Some(b)) = (poly.get(i), poly.get((i + 1) % n)) else { continue };
+        if inside(a) {
+            out.push(*a);
+        }
+        if inside(a) != inside(b) {
+            let (ak, bk) = (a.get(k).copied().unwrap_or(0.0), b.get(k).copied().unwrap_or(0.0));
+            let t = (v - ak) / (bk - ak);
+            if t.is_finite() {
+                out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+            }
+        }
+    }
+    out
+}
+
+/// Triangles cut to the plan box `[x0, x1, z0, z1]` (output metres); whether any was cut.
+fn clip_triangles(tris: Vec<([[f64; 3]; 3], [f64; 3])>, b: [f64; 4]) -> (Vec<([[f64; 3]; 3], [f64; 3])>, bool) {
+    let mut out = Vec::with_capacity(tris.len());
+    let mut cut = false;
+    for (t, n) in tris {
+        if t.iter().all(|p| p[0] >= b[0] && p[0] <= b[1] && p[2] >= b[2] && p[2] <= b[3]) {
+            out.push((t, n));
+            continue;
+        }
+        cut = true;
+        let mut poly = t.to_vec();
+        for (k, v, sign) in [(0, b[0], 1.0), (0, b[1], -1.0), (2, b[2], 1.0), (2, b[3], -1.0)] {
+            poly = clip_poly(&poly, k, v, sign);
+            if poly.len() < 3 {
+                break;
+            }
+        }
+        let Some(first) = poly.first().copied() else { continue };
+        for w in poly.get(1..).unwrap_or(&[]).windows(2) {
+            if let [p, q] = w {
+                let (e1, e2) = ([p[0] - first[0], p[1] - first[1], p[2] - first[2]], [q[0] - first[0], q[1] - first[1], q[2] - first[2]]);
+                let c = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+                if (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt() > 2e-7 {
+                    out.push(([first, *p, *q], n));
+                }
+            }
+        }
+    }
+    (out, cut)
 }
 
 /// A face's triangles: quads and triangles fanned, larger faces ear-clipped in their plane.
@@ -1199,8 +1281,8 @@ fn to_geometry(tris: &[([[f64; 3]; 3], [f64; 3])], material: usize) -> Option<([
             }
         }
     }
-    // A millimetre grid for the frame, so instances of one part line up exactly.
-    let lo = lo.map(|v| (v * 1000.0).floor() / 1000.0);
+    // The frame at the shape's own low corner: one part placed twice has the same local
+    // coordinates both times (to rounding), so it is one mesh.
     let mut g = Geometry { material, ..Geometry::default() };
     for (t, n) in tris {
         let base = u32::try_from(g.positions.len()).ok()?;
@@ -1263,6 +1345,8 @@ enum Step {
 struct Built {
     scene: Scene,
     dropped_far: BTreeMap<String, usize>,
+    /// Elements cut at the scope's plan box (a corridor wall running past the room).
+    clipped: usize,
 }
 
 fn materials_for(items: &[Item], rules: &Rules, mode: &str) -> (Vec<Material>, Vec<usize>) {
@@ -1270,9 +1354,9 @@ fn materials_for(items: &[Item], rules: &Rules, mode: &str) -> (Vec<Material>, V
     let mut of = Vec::with_capacity(items.len());
     let opacity = if mode == "solid" { 1.0 } else { rules.opacity() as f32 };
     for it in items {
-        let rgb = rules.rgb(&it.class);
+        let rgb = rules.rgb(&it.system, &it.trade);
         let op = if it.context { opacity } else { 1.0 };
-        let name = format!("{}{}", it.class.key, if it.context && op < 1.0 { "_context" } else { "" });
+        let name = format!("{}{}", it.system, if it.context && op < 1.0 { "_context" } else { "" });
         let i = match mats.iter().position(|m| m.name == name) {
             Some(i) => i,
             None => {
@@ -1302,6 +1386,7 @@ fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: 
         ia.map(|x| x.context).cmp(&ib.map(|x| x.context)).then_with(|| ia.map_or(0.0, dist).total_cmp(&ib.map_or(0.0, dist)))
     });
     let mut drawn = 0usize;
+    let mut clipped = 0usize;
     let mut dropped_far: BTreeMap<String, usize> = BTreeMap::new();
     for i in order {
         let (Some(it), Some(&mat)) = (items.get(i), mat_of.get(i)) else { continue };
@@ -1315,6 +1400,10 @@ fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: 
             box_triangles([a[0].min(b[0]), a[1].min(b[1]), a[2].min(b[2])], [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])])
         } else {
             element_triangles(place, &it.level, it.e)
+        };
+        let (tris, cut) = match place.clip {
+            Some(b) => clip_triangles(tris, b),
+            None => (tris, false),
         };
         let Some((at, g)) = to_geometry(&tris, mat) else { continue };
         if drawn + g.triangles() > tri_cap {
@@ -1341,9 +1430,13 @@ fn build_scene(d: &Drawing, items: &[Item], place: &Place, rules: &Rules, mode: 
         if as_box {
             meta.insert("simplified".into(), json!("box"));
         }
+        if cut {
+            meta.insert("cut_to_scope".into(), json!(true));
+            clipped += 1;
+        }
         scene.nodes.push(Node { name, geometry: gi, translation: at, meta });
     }
-    Built { scene, dropped_far }
+    Built { scene, dropped_far, clipped }
 }
 
 // ─── The command ─────────────────────────────────────────────────────────────
@@ -1416,6 +1509,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(CMD, "`context` must be translucent, solid or off"));
     }
     let small = bool_param(CMD, p, "small")?.unwrap_or(false);
+    let clip = bool_param(CMD, p, "clip")?.unwrap_or(true);
     // The paths first: nothing is read or written for a refused file name.
     if let Some(x) = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
         super::exchange::guard_output(s, CMD, p, x)?;
@@ -1455,7 +1549,13 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if items.is_empty() {
         return Err(bad(CMD, format!("nothing built in that scope ({}): check the room, level, box and filters", scope_name)));
     }
-    let place = Place { frame: &frame, anchor: anchor.at, floor_ft: anchor.floor_ft };
+    // Cut to the scope's plan box: the rooms (and the margin), else the box; a level is whole.
+    let clip_ft = if clip { clip_box(&sc, rules.margin_ft()) } else { None };
+    let clip_m = clip_ft.map(|(lo, hi)| {
+        let (ax, ay) = (anchor.at[0], anchor.at[1]);
+        [(lo[0] - ax) * M_PER_FT, (hi[0] - ax) * M_PER_FT, -(hi[1] - ay) * M_PER_FT, -(lo[1] - ay) * M_PER_FT]
+    });
+    let place = Place { frame: &frame, anchor: anchor.at, floor_ft: anchor.floor_ft, clip: clip_m };
     let stem_name = std::path::Path::new(&stem).file_name().map_or("model".into(), |n| n.to_string_lossy().into_owned());
     // Over a cap: the context as boxes, then none, then the elements furthest from the anchor
     // (the triangle cap drops those as the scene is built, nearest first).
@@ -1537,12 +1637,33 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         "scope": sidecar["scope"],
         "dropped": sidecar["dropped"],
         "simplified": sidecar["simplified"],
+        "cut_to_scope": sidecar["cut_to_scope"],
         "seconds": seconds,
         "checks": {
             "usdz": "uncompressed zip, 64-byte aligned, root layer first (checked on write)",
             "usdchecker": "not checkable here — the coordinator checks on the Mac",
         },
     }))
+}
+
+/// The plan box (building feet) a scope cuts to: its rooms' (grown by `margin`), within its box.
+fn clip_box(sc: &Scope, margin: f64) -> Option<([f64; 2], [f64; 2])> {
+    let mut b: Option<([f64; 2], [f64; 2])> = None;
+    for p in sc.rooms.iter().flat_map(|r| r.outline.iter()) {
+        let (lo, hi) = b.get_or_insert((*p, *p));
+        *lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+        *hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+    }
+    let b = b.map(|(lo, hi)| ([lo[0] - margin, lo[1] - margin], [hi[0] + margin, hi[1] + margin]));
+    match (b, &sc.region) {
+        (Some((lo, hi)), Some((rlo, rhi, _))) => {
+            let (lo, hi) = ([lo[0].max(rlo[0]), lo[1].max(rlo[1])], [hi[0].min(rhi[0]), hi[1].min(rhi[1])]);
+            (lo[0] < hi[0] && lo[1] < hi[1]).then_some((lo, hi))
+        }
+        (Some(b), None) => Some(b),
+        (None, Some((rlo, rhi, _))) => Some((*rlo, *rhi)),
+        (None, None) => None,
+    }
 }
 
 fn next_step(s: Step) -> Step {
@@ -1621,6 +1742,7 @@ fn sidecar_json(built: &Built, summary: &Value, points: &[Value], stem: &str, gl
         "over_element_cap": dropped.capped_elements,
         "over_caps": built.dropped_far,
     });
+    v["cut_to_scope"] = json!(built.clipped);
     v["simplified"] = json!(match step {
         Step::Full => "nothing",
         Step::ContextBoxes => "context as boxes",
