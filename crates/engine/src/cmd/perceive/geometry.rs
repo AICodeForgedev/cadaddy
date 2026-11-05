@@ -372,6 +372,18 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
         let k = (tol / cell).ceil() as i64;
         (-k..=k).any(|dx| (-k..=k).any(|dy| ends.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
     };
+    // The end of other linework nearest `p`, within `tol`, not on the swing's own circle.
+    let nearest_jamb = |p: Vec2, tol: f64, hinge: Vec2, r: f64| {
+        let (cx, cy) = key(p);
+        let k = (tol / cell).ceil() as i64;
+        (-k..=k)
+            .flat_map(|dx| (-k..=k).map(move |dy| (cx + dx, cy + dy)))
+            .filter_map(|c| ends.get(&c))
+            .flatten()
+            .copied()
+            .filter(|q| q.dist(p) <= tol && (q.dist(hinge) - r).abs() > tol / 4.0)
+            .min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
+    };
     let mut out = Vec::new();
     for e in d.model.iter() {
         if out.len() >= MAX_LEAVES {
@@ -413,6 +425,14 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
             if hinge.is_finite() && end.is_finite() {
                 let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
                 out.push((e.common.clone(), line));
+                // A wide swing's arc can stop just short of the jamb (a frame's depth): on to it.
+                if wide
+                    && let Some(q) = nearest_jamb(end, 2.0 * tol, hinge, hinge.dist(end))
+                    && out.len() < MAX_LEAVES
+                {
+                    let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(end.x, end.y, 0.0), b: cadaddy_geom::Vec3::new(q.x, q.y, 0.0) };
+                    out.push((e.common.clone(), line));
+                }
             }
         }
     }
@@ -1108,7 +1128,9 @@ mod tests {
         let wide = arc(170.0, 16);
         assert_eq!(leaves(std::slice::from_ref(&wide)), 0);
         let leaf = vec![[0.0, 0.0], wide[16]];
-        assert_eq!(leaves(&[wide, leaf]), 2);
+        assert_eq!(leaves(&[wide.clone(), leaf.clone()]), 2);
+        // Its arc stopping 2" short of a wall's end: a leaf on to the jamb as well.
+        assert_eq!(leaves(&[wide, leaf, vec![[-60.0, 0.0], [-38.0, 0.0]]]), 3);
         // A quarter swing needs no leaf drawn.
         assert_eq!(leaves(&[arc(90.0, 16)]), 2);
         // Past a half circle: no door's.

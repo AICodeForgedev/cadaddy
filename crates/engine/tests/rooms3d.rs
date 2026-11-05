@@ -401,8 +401,8 @@ fn a_door_opening_back_against_its_wall_closes_its_room() {
     s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
     rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
     rect(&mut s, [6.0, 6.0], [474.0, 234.0]);
-    // The closet's walls, 36" of door opening between (400,120) and the hinge at (436,120).
-    s.execute("pline", &json!({"vertices": [[340, 234], [340, 120], [400, 120]], "closed": false})).unwrap();
+    // The closet's walls, a 36" door hinged at (436,120), its arc stopping 2" short of the wall.
+    s.execute("pline", &json!({"vertices": [[340, 234], [340, 120], [398, 120]], "closed": false})).unwrap();
     s.execute("pline", &json!({"vertices": [[436, 120], [474, 120]], "closed": false})).unwrap();
     s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
     let swing: Vec<[f64; 2]> = (0..=16)
