@@ -982,6 +982,43 @@ mod tests {
     }
 
     #[test]
+    fn gate_a_and_coverage_read_the_prescreen_as_the_gate_a_script_does() {
+        let r = json!({
+            "elements": 10,
+            "checked": {"G-HOST": {"pass": 8, "fail": 2}, "G-HEIGHT": {"pass": 3, "fail": 1, "default": 5}},
+            "unmeasured": {"G-HEIGHT": {"receptacle": 4, "switch": 2, "why": "text, not a count"}},
+            "coverage": {"kinds_defined": 12, "by_verdict": {"fail": 3, "pass": 5, "not_marked": 4}, "zero_in_model": 2, "unexplained_groups": 7,
+                "kinds": [{"name": "MADE-UP DAMPER", "verdict": "fail", "plan_marks": 3, "model": 0}, {"name": "X", "verdict": "pass"}]}
+        });
+        let findings = [
+            json!({"rule": "G-HOST", "verdict": "fail", "handle": "A1", "measured": {"off_face_in": 30.0}, "level": "L1", "at": [5.0, 5.0]}),
+            json!({"rule": "G-HOST", "verdict": "fail", "handle": "A2", "measured": {"off_face_in": 6.0}, "level": "L1", "at": [5.0, 5.0]}),
+            json!({"rule": "G-HOST", "verdict": "pass", "handle": "A3", "level": "L1", "at": [100.0, 100.0]}),
+            json!({"rule": "G-HEIGHT", "verdict": "pass", "handle": "A3", "level": "L1", "at": [100.0, 100.0]}),
+            json!({"rule": "G-HOST", "verdict": "pass", "handle": "A4", "level": "L1", "at": [11.5, 5.0]}),
+            json!({"rule": "G-LAYOUT", "verdict": "pass", "level": "L1", "at": [50.0, 50.0]}),
+            json!({"rule": "G-LAYOUT", "verdict": "pass", "level": "L1", "at": [60.0, 60.0]}),
+            json!({"rule": "G-HOST", "verdict": "pass", "handle": "A5", "level": "L9", "at": [100.0, 100.0]}),
+            json!({"rule": "G-HOST", "verdict": "pass", "handle": "A6", "level": "L1", "at": "junk"}),
+        ];
+        let boxes: BTreeMap<String, Vec<[f64; 4]>> = [("L1".to_string(), vec![[0.0, 0.0, 10.0, 10.0]])].into_iter().collect();
+        let mut m = BTreeMap::new();
+        gate_a(&mut m, &r, &findings, &boxes);
+        let g = |k: &str| m.get(k).copied();
+        assert_eq!((g("gate_a.host_pass_pct"), g("gate_a.host_fail_far"), g("gate_a.height_pass_pct")), (Some(80.0), Some(1.0), Some(75.0)));
+        assert_eq!((g("gate_a.height_measured"), g("gate_a.height_unmeasured"), g("gate_a.elements")), (Some(4.0), Some(6.0), Some(10.0)));
+        // Outside every box (+2 ft): A3 once, the two with no handle once together; A4 is within
+        // 2 ft, A5's level has no areas, A6 has no point.
+        assert_eq!(g("gate_a.outside_building"), Some(2.0), "{m:?}");
+        let failing = coverage(&mut m, &r);
+        assert_eq!((m.get("coverage.zero_in_model"), m.get("coverage.fail"), m.get("coverage.unsure")), (Some(&2.0), Some(&3.0), Some(&0.0)));
+        assert_eq!(failing, ["MADE-UP DAMPER (3 marks, 0 in the model)"]);
+        // A prescreen without G-COVERAGE: no coverage metrics.
+        let mut m = BTreeMap::new();
+        assert!(coverage(&mut m, &json!({})).is_empty() && m.is_empty());
+    }
+
+    #[test]
     fn glob_stars_match_any_run() {
         assert!(glob("a.*.b", "a.x.y.b"));
         assert!(glob("takeoff.*", "takeoff.electrical/power.ft"));

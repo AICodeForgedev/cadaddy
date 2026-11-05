@@ -175,6 +175,8 @@ fn one_build_measured_is_one_row_keyed_by_its_commit() {
     assert_eq!(metric(&r, "gate_a.host_fail_far"), 0.0);
     assert!(metric(&r, "gate_a.host_pass") >= 6.0, "{r}");
     assert_eq!(metric(&r, "gate_a.outside_building"), 0.0);
+    // G-COVERAGE ran over the building (its counts in the row, whatever the job defines).
+    assert!(r["metrics"]["coverage.kinds_defined"].is_number() && r["metrics"]["building.G-COVERAGE.problems"].is_number(), "{r}");
     // Every prescreen rule over the building, and over the fixed rooms (two of three found).
     assert_eq!(metric(&r, "building.G-HOST.accuracy_pct"), 100.0);
     assert!(r["metrics"]["building.G-HEIGHT.problems"].is_number(), "{r}");
