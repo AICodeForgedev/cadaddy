@@ -1,0 +1,37 @@
+{
+  "source": "CADaddy's own accuracy-trend tolerances (Q6193): how far each measured number of one build (validate.measure) may move against the build before it, and in which direction it gets worse. Tightened from the spread of repeat runs of one build: the deterministic checks (Gate A, prescreen, coverage, takeoff, counts) repeat exactly, so their tolerances only absorb rounding and small reading changes; the job time and peak memory vary with the machine's load.",
+  "metrics": [
+    {"key": "gate_a.host_pass_pct", "better": "higher", "abs": 0.5, "why": "Gate A: wall devices within tolerance of a wall face"},
+    {"key": "gate_a.height_pass_pct", "better": "higher", "abs": 0.5, "why": "Gate A: devices at their documented height"},
+    {"key": "gate_a.host_fail_far", "better": "lower", "abs": 2, "share": 0.05, "why": "Gate A: devices more than 12 in off any wall face (floaters)"},
+    {"key": "gate_a.height_unmeasured", "better": "lower", "abs": 5, "share": 0.05, "why": "Gate A: devices with no documented height"},
+    {"key": "gate_a.outside_building", "better": "lower", "abs": 2, "share": 0.05, "why": "Gate A: devices outside every room and corridor of their level"},
+    {"key": "gate_a.height_measured", "better": "higher", "abs": 5, "share": 0.05, "why": "Gate A: devices a document gives a height for"},
+    {"key": "coverage.zero_in_model", "better": "lower", "abs": 0, "why": "G-COVERAGE: kinds the plans mark with no model element"},
+    {"key": "coverage.fail", "better": "lower", "abs": 0, "why": "G-COVERAGE: kinds failing"},
+    {"key": "coverage.pass", "better": "higher", "abs": 0, "why": "G-COVERAGE: kinds whose model count matches the plans"},
+    {"key": "rooms.found", "better": "higher", "abs": 0, "why": "fixed Validate rooms the model still has"},
+    {"key": "rooms.*.accuracy_pct", "better": "higher", "abs": 1.0, "why": "prescreen accuracy on the fixed Validate rooms: pass / (pass + fail + missing + extra)"},
+    {"key": "rooms.*.problems", "better": "lower", "abs": 2, "share": 0.05, "why": "prescreen fail + missing + extra + conflict on the fixed Validate rooms"},
+    {"key": "building.*.accuracy_pct", "better": "higher", "abs": 0.5, "why": "prescreen accuracy over the building"},
+    {"key": "building.*.problems", "better": "lower", "abs": 5, "share": 0.02, "why": "prescreen fail + missing + extra + conflict over the building"},
+    {"key": "takeoff.*", "better": "stable", "abs": 1, "share": 0.1, "why": "takeoff totals by trade and system: a move beyond 10% is a change to explain"},
+    {"key": "elements.total", "better": "stable", "abs": 10, "share": 0.05, "why": "model elements in all"},
+    {"key": "elements.*", "better": "stable", "abs": 3, "share": 0.1, "why": "model elements by kind"},
+    {"key": "build.job_s", "better": "lower", "abs": 120, "share": 0.25, "why": "the job's wall time"},
+    {"key": "build.peak_mb", "better": "lower", "abs": 256, "share": 0.15, "why": "the job's peak memory"}
+  ],
+  "table": [
+    {"key": "elements.total", "title": "elements"},
+    {"key": "gate_a.host_pass_pct", "title": "host %"},
+    {"key": "gate_a.height_pass_pct", "title": "height %"},
+    {"key": "gate_a.host_fail_far", "title": "far"},
+    {"key": "gate_a.outside_building", "title": "outside"},
+    {"key": "coverage.zero_in_model", "title": "cov zero"},
+    {"key": "coverage.fail", "title": "cov fail"},
+    {"key": "rooms.all.accuracy_pct", "title": "rooms %"},
+    {"key": "build.job_s", "title": "job s"},
+    {"key": "build.peak_mb", "title": "peak MB"}
+  ],
+  "plot": ["gate_a.host_pass_pct", "gate_a.height_pass_pct", "rooms.all.accuracy_pct", "building.all.accuracy_pct"]
+}
