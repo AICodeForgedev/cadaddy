@@ -3867,7 +3867,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
 /// An MEP run's piece (a stick, fitting, box, cable, wire): not a building trade's (studs,
 /// sheets, joists are atoms too, and a reroute keeps them).
 pub(crate) fn mep_piece(e: &Entity) -> bool {
-    super::mepatoms::is_atom(e) && !super::tradeatoms::is_trade_piece(e)
+    super::mepatoms::is_atom(e) && !super::tradeatoms::is_trade_piece(e) && !super::breakers::is_breaker(e)
 }
 
 /// The sheet a circuit was read on (its tag's), for the run's source.
@@ -4292,6 +4292,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
             let _ = d.modify_entity(h, |e| e.common.xdata = super::bspec::with_stacked(&e.common.xdata, o).into());
         }
     }
+    // The breakers again: the runs they feed were cut again (Q6166).
+    super::breakers::build(d, &sp);
     let mut report = routed.report.clone();
     check_box_fill(d, &mut report);
     store_report(d, &report);
