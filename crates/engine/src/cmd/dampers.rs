@@ -1025,7 +1025,7 @@ fn clean(tok: &str) -> &str {
 
 /// The panel and circuit a note names after its circuit word: `CIRCUIT H-31` (panel H, 31),
 /// `CKT 12` with `PANEL LA` elsewhere in it, `PANEL 2HA CIRCUIT 5,7`.
-fn circuit_in(text: &str, panels: &[String]) -> Option<(String, String)> {
+pub(crate) fn circuit_in(text: &str, panels: &[String]) -> Option<(String, String)> {
     let p = &rules().power;
     let toks: Vec<&str> = text.split_whitespace().take(400).collect();
     let up = |t: &str| clean(t).to_ascii_uppercase();
