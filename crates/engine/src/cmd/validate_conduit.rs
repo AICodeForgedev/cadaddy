@@ -904,7 +904,14 @@ fn breaker(sp: &BuildingSpec, panel: &str, number: &str) -> Option<(f64, u32, Op
         .iter()
         .find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))
         .or_else(|| sp.mep.panel_schedules.iter().find(|p| is_panel(panel, &p.panel)))?;
-    let c = s.circuits.iter().find(|c| c.number.trim() == number.trim())?;
+    // Its own row, else the multi-pole breaker whose poles take it (13 of a 2-pole at 11).
+    let n: Option<u32> = number.trim().parse().ok();
+    let c = s.circuits.iter().find(|c| c.number.trim() == number.trim()).or_else(|| {
+        let n = n?;
+        s.circuits
+            .iter()
+            .find(|c| c.poles >= 2 && c.number.trim().parse::<u32>().is_ok_and(|f| f < n && (n - f) % 2 == 0 && (n - f) / 2 < c.poles.min(3)))
+    })?;
     let digits: String = c.breaker.chars().skip_while(|ch| !ch.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
     let amps = digits.parse::<f64>().ok().filter(|a| (5.0..=4000.0).contains(a))?;
     let src =
@@ -2427,6 +2434,23 @@ mod tests {
         assert_eq!(c.conductors(), Some((2, "12".into(), true)));
         let c = Cable { ty: "MC 10/3".into(), ..c };
         assert_eq!(c.conductors(), Some((3, "10".into(), false)));
+    }
+
+    #[test]
+    fn a_circuit_on_a_two_pole_breakers_second_pole_takes_its_breaker() {
+        let mut sp = BuildingSpec::default();
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "LPX".into(),
+            circuits: vec![
+                cadaddy_walk3d::PanelCircuit { number: "1".into(), breaker: "20A".into(), poles: 1, ..Default::default() },
+                cadaddy_walk3d::PanelCircuit { number: "13".into(), breaker: "30A".into(), poles: 2, load_va: Some(2000.0), ..Default::default() },
+            ],
+            ..Default::default()
+        });
+        assert_eq!(breaker(&sp, "LPX", "1").map(|b| b.0), Some(20.0));
+        assert_eq!(breaker(&sp, "LPX", "15").map(|b| (b.0, b.1)), Some((30.0, 2)));
+        assert_eq!(breaker(&sp, "LPX", "17"), None);
+        assert_eq!(breaker(&sp, "LPX", "3"), None);
     }
 
     #[test]
