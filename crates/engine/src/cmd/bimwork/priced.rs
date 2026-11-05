@@ -34,16 +34,16 @@ const STALE_DAYS: i64 = 90;
 const MAX_LINES: usize = 50_000;
 /// Price keys one line adds at most (the Item Map's columns).
 const MAX_KEYS: usize = 3;
-const PRICE_SHEET: &str = "Price List";
+pub(super) const PRICE_SHEET: &str = "Price List";
 const TAKEOFF_SHEET: &str = "Priced Takeoff";
 
 /// A catalog number as compared: its letters and digits, upper case (`LDN6-35/15` = `ldn6 35 15`).
-fn catalog_key(c: &str) -> String {
+pub(super) fn catalog_key(c: &str) -> String {
     c.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).take(120).collect()
 }
 
 /// What pricing a line came to.
-enum Outcome {
+pub(super) enum Outcome {
     Priced { by: &'static str, parts: Vec<Chosen> },
     Excluded(String),
     Unpriced(String),
@@ -55,7 +55,7 @@ fn sized(item: &str, size: &str) -> String {
 }
 
 /// How the book prices one takeoff line.
-fn price(book: &Book, by_catalog: &BTreeMap<String, BTreeSet<String>>, l: &Value) -> Outcome {
+pub(super) fn price(book: &Book, by_catalog: &BTreeMap<String, BTreeSet<String>>, l: &Value) -> Outcome {
     let s = |k: &str| l[k].as_str().unwrap_or_default().trim().to_string();
     let (item, size, unit, catalog) = (s("item"), s("size"), s("unit"), s("catalog"));
     // 1. Its catalog number in the Price List: the cheapest key carrying it in the line's unit.
@@ -113,9 +113,21 @@ fn price(book: &Book, by_catalog: &BTreeMap<String, BTreeSet<String>>, l: &Value
     Outcome::Priced { by: "item_map", parts }
 }
 
+/// The Price List's keys by catalog number (as compared).
+pub(super) fn catalog_index(book: &Book) -> BTreeMap<String, BTreeSet<String>> {
+    let mut by_catalog: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for q in book.quotes.values().flatten() {
+        let c = catalog_key(&q.catalog);
+        if !c.is_empty() {
+            by_catalog.entry(c).or_default().insert(q.key.clone());
+        }
+    }
+    by_catalog
+}
+
 /// The line's quantity bought: its net and the waste its category takes (whole units of counted
 /// items, as the BOM does).
-fn bought(l: &Value) -> (f64, f64, f64) {
+pub(super) fn bought(l: &Value) -> (f64, f64, f64) {
     let qty = l["qty"].as_f64().filter(|v| v.is_finite()).unwrap_or(0.0);
     let pct = l["waste_pct"].as_f64().filter(|w| w.is_finite() && (0.0..=200.0).contains(w)).unwrap_or(0.0);
     let waste = qty * pct / 100.0;
@@ -155,7 +167,7 @@ const KEY_COL: usize = 14;
 const UNIT_COL: usize = 17;
 const EXT_COL: usize = 18;
 
-fn col(c: usize) -> String {
+pub(super) fn col(c: usize) -> String {
     let mut s = Vec::new();
     let mut c = c + 1;
     while c > 0 {
@@ -210,13 +222,7 @@ pub(super) fn run(p: &Value, lines: &[Value]) -> Result<Value> {
     if book.quotes.is_empty() {
         return Err(bad(CMD, format!("{path}: no \"{PRICE_SHEET}\" rows with a key and a unit price")));
     }
-    let mut by_catalog: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for q in book.quotes.values().flatten() {
-        let c = catalog_key(&q.catalog);
-        if !c.is_empty() {
-            by_catalog.entry(c).or_default().insert(q.key.clone());
-        }
-    }
+    let by_catalog = catalog_index(&book);
 
     let mut priced = Vec::new();
     let mut unpriced = Vec::new();
@@ -351,7 +357,7 @@ fn csv(rows: &[Vec<Cell>]) -> String {
 
 /// The priced takeoff workbook: the lines with live price formulas, the totals by group with the
 /// tax line, the unpriced and excluded lines, and the price book's own two sheets.
-fn workbook(
+pub(super) fn workbook(
     book: &Book,
     rows: &[(Value, Option<Vec<Chosen>>)],
     groups: &BTreeMap<(String, String), (usize, f64)>,
