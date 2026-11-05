@@ -162,6 +162,7 @@ pub mod parts;
 pub mod pdfplans;
 mod perceive;
 pub(crate) mod pipefollow;
+pub mod review_impact;
 /// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
 mod pline_opts;
@@ -913,6 +914,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     v.extend(panelsched::specs());
         v.extend(dimcheck::specs());
         v.extend(agentready::specs());
+        v.extend(review_impact::specs());
         v.extend(underlay::specs());
         v.extend(dgn::specs());
         v.extend(takeoff::specs());
