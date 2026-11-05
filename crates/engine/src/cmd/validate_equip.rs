@@ -519,6 +519,8 @@ pub(crate) struct Settled {
     pub unit_disconnect: Option<String>,
     /// Every revision looked at: (folder, revision, status, has data).
     pub history: Vec<Value>,
+    /// An older revision whose text gives values the latest (a scan) supersedes.
+    pub superseded: Option<String>,
 }
 
 fn approved(status: &str) -> Option<bool> {
@@ -584,24 +586,26 @@ pub(crate) fn settle(c: &Connection, docs: Option<&EquipDocs>) -> Settled {
             "files": fs.iter().map(|f| json!({"file": f.name, "data": f.data.is_some(), "scanned": f.scanned, "unread": f.unread})).collect::<Vec<_>>(),
         }));
     }
-    for ((a, b, folder), fs) in &ordered {
-        let status = folder_status(fs);
-        if approved(&status) == Some(false) {
-            continue;
-        }
+    // The latest revision not sent back wins, its text or (a scan) an agent's reading of it; an
+    // older revision's values are superseded, kept as history only.
+    let latest = ordered.iter().find(|(_, fs)| approved(&folder_status(fs)) != Some(false));
+    if let Some(((a, b, folder), fs)) = latest {
         if let Some(f) = fs.iter().find(|f| f.data.is_some()) {
             out.data = f.data.clone();
             out.from = "submittal";
             out.cite = format!("{} p.{}", f.name, f.pages.iter().map(u32::to_string).collect::<Vec<_>>().join(","));
-            out.status = status;
+            out.status = folder_status(fs);
             out.revision = Some((*a, *b));
             out.folder = folder.clone();
             out.unit_disconnect = fs.iter().find_map(|f| f.unit_disconnect.clone());
             return out;
         }
+        if let Some(((oa, ob, _), _)) =
+            ordered.iter().skip_while(|(k, _)| (k.0, k.1, &k.2) != (*a, *b, folder)).skip(1).find(|(_, fs)| fs.iter().any(|f| f.data.is_some()))
+        {
+            out.superseded = Some(format!("{oa}-{ob}"));
+        }
     }
-    // The latest revision not sent back, for an answer's status.
-    let latest = ordered.iter().find(|(_, fs)| approved(&folder_status(fs)) != Some(false));
     if let Some(a) = docs.and_then(|d| d.answers.get(&key)) {
         let e = super::equipsub::from_answer(a);
         let src = a.get("source").and_then(Value::as_str).unwrap_or("").trim().to_string();
@@ -628,7 +632,11 @@ pub(crate) fn settle(c: &Connection, docs: Option<&EquipDocs>) -> Settled {
         out.why = if ordered.iter().all(|(_, fs)| approved(&folder_status(fs)) == Some(false)) && files.iter().any(|f| f.data.is_some()) {
             "its submittals are all sent back (revise and resubmit / rejected): no approved values".into()
         } else if scanned > 0 {
-            format!("its submittal is scanned ({scanned} file(s) with no electrical text) and no agent has answered `equip:{}` with the page", c.tag)
+            let older = out.superseded.as_ref().map(|r| format!("; revision {r}'s values are superseded")).unwrap_or_default();
+            format!(
+                "its latest submittal revision is scanned ({scanned} file(s) with no electrical text) and no agent has answered `equip:{}` with the page{older}",
+                c.tag
+            )
         } else {
             format!("its submittal files could not be read ({unread})")
         };

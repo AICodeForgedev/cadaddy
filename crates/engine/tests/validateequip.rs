@@ -108,6 +108,9 @@ fn submittals(root: &Path) {
     // The elevator and the fans: scans (no text).
     write(&root.join("Elevator/Rev 1-0/ELEV Shop Drawings.pdf"), &pdf(&[&[], &[]]));
     write(&root.join("Fans/Rev 1-0/FAN Submittal.pdf"), &pdf(&[&[], &[], &[]]));
+    // The chiller: its first revision's text gives values; the later one (another maker) is a scan.
+    write(&root.join("Chillers/Rev 1-0/CHL-1 Submittal.pdf"), &pdf(&[cover, &["CHL-1 CHILLER", "46 Amps MCA", "50 Amps MOP"]]));
+    write(&root.join("Chillers/Rev 2-0/CHL-1 Submittal.pdf"), &pdf(&[&[]]));
 }
 
 fn row(tag: &str, desc: &str, panel: &str, ocpd: &str, source: &str) -> Value {
@@ -141,7 +144,8 @@ fn spec() -> Value {
                 row("RTU-1", "RTU-1", "DP1", "70A/3P", "submittal RTU-1 Submittal First.pdf"),
                 row("ELEV-1", "ELEVATOR", "DP1", "60A/3P", ""),
                 row("FAN-1", "FAN-1", "LP1", "20A/3P", ""),
-                row("FAN-2", "FAN-2", "LP1", "20A/3P", "")
+                row("FAN-2", "FAN-2", "LP1", "20A/3P", ""),
+                row("CHL-1", "CHL-1", "DP1", "70A/3P", "")
             ],
             "devices": [
                 {"tag": "DS-PMP-1", "kind": "disconnect", "level": "L1", "room": "11", "panel": "LP1", "circuit": "1", "properties": {"RATING": "30A", "TYPE": "NON-FUSED"}}
@@ -331,6 +335,9 @@ fn a_scanned_submittal_with_no_answer_is_unsure_never_a_pass() {
     let f = finding(&fs, "FAN-2", "protection", "pass");
     assert_eq!(f["measured"]["submittal"]["from"], "agent", "{f}");
     assert_eq!(f["measured"]["submittal"]["page"], 3, "{f}");
+    // A later revision that is a scan supersedes an earlier one's text: unsure, not a fail.
+    let f = finding(&fs, "CHL-1", "protection", "unsure");
+    assert!(f["issue"].as_str().unwrap().contains("revision 1-0's values are superseded"), "{f}");
     // The damper-power RFI of the same kind is about no connection: counted, not matched.
     let why = r["unmeasured"]["E-EQUIP-ELEC"].to_string();
     assert!(why.contains("about no equipment connection"), "{why}");
