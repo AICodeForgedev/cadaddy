@@ -43,6 +43,8 @@ const RULES: &str = include_str!("pulllist.json");
 const MAX_ELEMENTS: usize = 4_000_000;
 const MAX_PIECES: usize = 2_000_000;
 const MAX_WALK: usize = 50_000;
+/// Spec runs looked at for the feeders' routes.
+const MAX_SPEC_RUNS: usize = 500_000;
 /// Rows a call lists by default, and at most.
 const DEFAULT_MAX: usize = 200;
 const MAX_LISTED: usize = 100_000;
@@ -673,6 +675,8 @@ struct PullPath {
     takeoff_ft: f64,
     gear_ft: f64,
     loops_ft: f64,
+    /// Read from the spec's routed runs: the model holds no pieces for it (in no takeoff).
+    from_spec: bool,
 }
 
 impl PullPath {
@@ -858,103 +862,30 @@ fn plan(d: &Drawing, sp: &BuildingSpec) -> Plan {
         path.box_size = pull_box_size(&rp.size, &rp.wires);
         pl.paths.push(path);
     }
-    // Each feeder leg: its conduits, each its chains end to end (a chain on the leg's first level
-    // starts the next conduit; one on another level continues it: the riser goes on).
-    for f in sp.mep.feeders.iter().take(MAX_LISTED) {
-        let pre = format!("feeder {} {}\u{2192}", f.tag, f.from);
-        let mine: Vec<(&String, &Vec<(usize, usize)>)> = legs.iter().filter(|(leg, _)| leg.starts_with(&pre)).collect();
-        if mine.is_empty() {
-            pl.unrouted_feeders.push(json!({"feeder": f.tag, "from": f.from, "to": f.to, "why": "no routed raceway in the model: the pull schedule has no path for it (its entry stubs only)"}));
-            continue;
+    // Each feeder leg (`feeder <tag> <from>→<to>…`, as the routing names its runs): from its
+    // pieces when the build cut it into them, else from its routed runs in the spec.
+    let mut spec_legs: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, sr) in sp.mep.runs.iter().enumerate().take(MAX_SPEC_RUNS) {
+        if super::ugplan::is_feeder_run(sr) && sr.source_sheet.starts_with("feeder ") && !legs.contains_key(&sr.source_sheet) {
+            spec_legs.entry(sr.source_sheet.clone()).or_default().push(i);
         }
-        for (leg, chains) in mine {
-            let to_gear = leg.strip_prefix(&pre).unwrap_or(&f.to).to_string();
-            let mut chains = chains.clone();
-            chains.sort();
-            let first_level = chains.first().and_then(|(_, ri)| runs.get(*ri)).map(|r| r.level.clone()).unwrap_or_default();
-            let mut conduits: Vec<Vec<&RunPlan>> = Vec::new();
-            for (_, ri) in &chains {
-                let Some(rp) = runs.get(*ri) else { continue };
-                let goes_on = !rp.level.eq_ignore_ascii_case(&first_level);
-                match conduits.last_mut() {
-                    Some(c) if goes_on => c.push(rp),
-                    _ => conduits.push(vec![rp]),
-                }
-            }
-            // Paths alike (the same length and bends) are one row of `conduits` paths.
-            let mut rows: Vec<PullPath> = Vec::new();
-            for c in conduits {
-                let mut bends = Vec::new();
-                let mut s0 = 0.0;
-                for rp in &c {
-                    bends.extend(rp.bends.iter().map(|b| Bend { station_ft: b.station_ft + s0, ..*b }));
-                    s0 += rp.raceway_ft;
-                }
-                let (Some(a), Some(z)) = (c.first(), c.last()) else { continue };
-                let cable = c.iter().any(|rp| rp.cable);
-                let max_bends = a.max_bends;
-                let boxes = pull_points(&bends, max_bends);
-                let vertical: f64 = c.iter().map(|rp| rp.vertical_ft).sum();
-                let mut path = PullPath {
-                    kind: "feeder",
-                    id: format!("{} to {to_gear}", f.tag),
-                    level: a.level.clone(),
-                    panel: f.from.clone(),
-                    runs: c.iter().map(|rp| rp.run.clone()).collect(),
-                    from: if a.from.label == "open end" { End { label: f.from.clone(), gear: true } } else { a.from.clone() },
-                    to: if z.to.label == "open end" { End { label: to_gear.clone(), gear: true } } else { z.to.clone() },
-                    raceway: a.raceway_text(),
-                    raceway_ft: s0,
-                    vertical_ft: vertical,
-                    bends,
-                    max_bends,
-                    max_source: a.max_source.clone(),
-                    boxes,
-                    conduits: 1,
-                    cable,
-                    estimated: false,
-                    status: "proposed feeder route".into(),
-                    ..PullPath::default()
-                };
-                let gear_extra = extra_gear * f64::from(path.gear_ends());
-                let loops = loop_ft * path.boxes.len() as f64;
-                if cable {
-                    let ft: f64 = c.iter().map(|rp| rp.cable_ft).sum();
-                    path.conductors = vec![Conductor {
-                        size: a.size.clone(),
-                        ty: a.material.clone(),
-                        item: a.material.clone(),
-                        count: 1,
-                        cut_ft: ft + gear_extra,
-                        takeoff_ft: ft,
-                        ..Conductor::default()
-                    }];
-                    path.takeoff_ft = ft;
-                    path.gear_ft = gear_extra;
-                } else {
-                    let wires = feeder_wires(sp, f, s0, upf);
-                    path.box_size = pull_box_size(&a.size, &wires);
-                    path.conductors = conductors_of(&wires, gear_extra + loops);
-                    for c in &mut path.conductors {
-                        c.takeoff_ft = 0.0;
-                    }
-                }
-                match rows.iter_mut().find(|r| {
-                    (r.raceway_ft - path.raceway_ft).abs() < 0.01
-                        && r.bends.len() == path.bends.len()
-                        && r.boxes.len() == path.boxes.len()
-                        && r.cable == path.cable
-                }) {
-                    Some(r) => {
-                        r.conduits += 1;
-                        r.runs.extend(path.runs);
-                        r.takeoff_ft += path.takeoff_ft;
-                        r.gear_ft += path.gear_ft;
-                    }
-                    None => rows.push(path),
-                }
-            }
-            pl.paths.extend(rows);
+    }
+    let names: BTreeSet<String> = legs.keys().chain(spec_legs.keys()).cloned().collect();
+    for leg in names.iter().take(MAX_LISTED) {
+        let Some((f, dest)) = feeder_for(sp, leg) else { continue };
+        let rows = match legs.get(leg) {
+            Some(chains) => feeder_rows_from_pieces(sp, f, &dest, chains, &runs, upf),
+            None => feeder_rows_from_spec(sp, f, &dest, spec_legs.get(leg).map(Vec::as_slice).unwrap_or_default(), upf),
+        };
+        pl.paths.extend(rows);
+    }
+    // The feeders no leg routes (one line for feeders alike: a typical panel's).
+    let mut seen_unrouted: BTreeSet<(String, String, String)> = BTreeSet::new();
+    for f in sp.mep.feeders.iter().take(MAX_LISTED) {
+        let routed = names.iter().any(|leg| feeder_for(sp, leg).is_some_and(|(g, _)| g.tag == f.tag && g.from == f.from && g.to == f.to))
+            || names.iter().any(|leg| leg_dest(f, leg).is_some_and(|d| first_gear(&d).starts_with(&f.to.trim().to_ascii_uppercase())));
+        if !routed && seen_unrouted.insert((f.tag.clone(), f.from.clone(), f.to.clone())) {
+            pl.unrouted_feeders.push(json!({"feeder": f.tag, "from": f.from, "to": f.to, "why": "no routed raceway in the model or its runs: the pull schedule has no path for it"}));
         }
     }
     // The levels, lowest first (the spec's order), then any other the pieces name.
@@ -971,8 +902,283 @@ fn plan(d: &Drawing, sp: &BuildingSpec) -> Plan {
     pl
 }
 
+/// What a leg goes to after its feeder's prefix (`feeder 7 PA→`): `PB-2→PB-3`.
+fn leg_dest(f: &cadaddy_walk3d::Feeder, leg: &str) -> Option<String> {
+    leg.strip_prefix(&format!("feeder {} {}\u{2192}", f.tag, f.from)).map(str::to_string)
+}
+
+/// The first gear a leg goes to, upper case.
+fn first_gear(dest: &str) -> String {
+    dest.split('\u{2192}').next().unwrap_or_default().trim().to_ascii_uppercase()
+}
+
+/// The feeder a leg is of and what it goes to: the one whose `to` the leg goes to first, else
+/// the first of its tag and source.
+fn feeder_for<'a>(sp: &'a BuildingSpec, leg: &str) -> Option<(&'a cadaddy_walk3d::Feeder, String)> {
+    let cands: Vec<(&cadaddy_walk3d::Feeder, String)> =
+        sp.mep.feeders.iter().take(MAX_LISTED).filter_map(|f| leg_dest(f, leg).map(|d| (f, d))).collect();
+    cands
+        .iter()
+        .find(|(f, d)| first_gear(d) == f.to.trim().to_ascii_uppercase())
+        .or_else(|| cands.iter().find(|(f, d)| first_gear(d).starts_with(&f.to.trim().to_ascii_uppercase())))
+        .or(cands.first())
+        .cloned()
+}
+
+/// A feeder path's conductors: its schedule's sets per raceway (`sets` over `conduits`), each
+/// cut with the slack at its gear ends and pull boxes.
+fn feeder_conductors(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder, path: &mut PullPath, upf: f64) {
+    let r = rules();
+    let wires = feeder_wires(sp, f, path.raceway_ft, upf);
+    path.box_size = pull_box_size(path.raceway.split_whitespace().next().unwrap_or_default(), &wires);
+    let extra = r.gear_extra() * f64::from(path.gear_ends()) + pos(r.pull_box_loop_ft) * path.boxes.len() as f64;
+    let per = (f.sets / f.conduits.max(1)).max(1).min(12);
+    path.conductors = conductors_of(&wires, extra);
+    for c in &mut path.conductors {
+        c.count = c.count.saturating_mul(per);
+        c.takeoff_ft = 0.0;
+    }
+}
+
+/// Paths alike (the same ends, length and bends) as one row of `conduits` paths.
+fn add_alike(rows: &mut Vec<PullPath>, path: PullPath) {
+    match rows.iter_mut().find(|r| {
+        r.from.label == path.from.label
+            && r.to.label == path.to.label
+            && (r.raceway_ft - path.raceway_ft).abs() < 0.5
+            && r.bends.len() == path.bends.len()
+            && r.boxes.len() == path.boxes.len()
+            && r.cable == path.cable
+    }) {
+        Some(r) => {
+            r.conduits += 1;
+            r.runs.extend(path.runs);
+            r.takeoff_ft += path.takeoff_ft;
+            r.gear_ft += path.gear_ft;
+        }
+        None => rows.push(path),
+    }
+}
+
+/// A feeder leg the build cut into pieces: its conduits, each its chains end to end (a chain on
+/// the leg's first level starts the next conduit; one on another level continues it: the riser
+/// goes on).
+fn feeder_rows_from_pieces(
+    sp: &BuildingSpec,
+    f: &cadaddy_walk3d::Feeder,
+    dest: &str,
+    chains: &[(usize, usize)],
+    runs: &[RunPlan],
+    upf: f64,
+) -> Vec<PullPath> {
+    let mut chains = chains.to_vec();
+    chains.sort();
+    let first_level = chains.first().and_then(|(_, ri)| runs.get(*ri)).map(|r| r.level.clone()).unwrap_or_default();
+    let mut conduits: Vec<Vec<&RunPlan>> = Vec::new();
+    for (_, ri) in &chains {
+        let Some(rp) = runs.get(*ri) else { continue };
+        let goes_on = !rp.level.eq_ignore_ascii_case(&first_level);
+        match conduits.last_mut() {
+            Some(c) if goes_on => c.push(rp),
+            _ => conduits.push(vec![rp]),
+        }
+    }
+    let to_gear = dest.rsplit('\u{2192}').next().unwrap_or(dest).to_string();
+    let mut rows: Vec<PullPath> = Vec::new();
+    for c in conduits {
+        let mut bends = Vec::new();
+        let mut s0 = 0.0;
+        for rp in &c {
+            bends.extend(rp.bends.iter().map(|b| Bend { station_ft: b.station_ft + s0, ..*b }));
+            s0 += rp.raceway_ft;
+        }
+        let (Some(a), Some(z)) = (c.first(), c.last()) else { continue };
+        let cable = c.iter().any(|rp| rp.cable);
+        let boxes = if cable { Vec::new() } else { pull_points(&bends, a.max_bends) };
+        let mut path = PullPath {
+            kind: "feeder",
+            id: format!("{} to {dest}", f.tag),
+            level: a.level.clone(),
+            panel: f.from.clone(),
+            runs: c.iter().map(|rp| rp.run.clone()).collect(),
+            from: if a.from.label == "open end" { End { label: f.from.clone(), gear: true } } else { a.from.clone() },
+            to: if z.to.label == "open end" { End { label: to_gear.clone(), gear: true } } else { z.to.clone() },
+            raceway: a.raceway_text(),
+            raceway_ft: s0,
+            vertical_ft: c.iter().map(|rp| rp.vertical_ft).sum(),
+            bends,
+            max_bends: a.max_bends,
+            max_source: a.max_source.clone(),
+            boxes,
+            conduits: 1,
+            cable,
+            status: "proposed feeder route".into(),
+            ..PullPath::default()
+        };
+        if cable {
+            let gear_extra = rules().gear_extra() * f64::from(path.gear_ends());
+            let ft: f64 = c.iter().map(|rp| rp.cable_ft).sum();
+            path.conductors = vec![Conductor {
+                size: a.size.clone(),
+                ty: a.material.clone(),
+                item: a.material.clone(),
+                count: 1,
+                cut_ft: ft + gear_extra,
+                takeoff_ft: ft,
+                ..Conductor::default()
+            }];
+            path.takeoff_ft = ft;
+            path.gear_ft = gear_extra;
+        } else {
+            feeder_conductors(sp, f, &mut path, upf);
+        }
+        add_alike(&mut rows, path);
+    }
+    rows
+}
+
+/// A path's length, its vertical part (feet) and its bends: the turn at each corner.
+fn geometry(pts: &[Vec3], upf: f64) -> (f64, f64, Vec<Bend>) {
+    let (mut len, mut vert) = (0.0, 0.0);
+    let mut bends = Vec::new();
+    for (i, w) in pts.windows(2).enumerate() {
+        let [a, b] = w else { continue };
+        if i > 0
+            && let Some(p) = pts.get(i - 1)
+        {
+            let (u, v) = (*a - *p, *b - *a);
+            let (lu, lv) = (u.len(), v.len());
+            if lu > 1e-9 && lv > 1e-9 {
+                let deg = (u.dot(v) / (lu * lv)).clamp(-1.0, 1.0).acos().to_degrees();
+                if deg >= 1.0 {
+                    bends.push(Bend { station_ft: len, deg, at: *a });
+                }
+            }
+        }
+        len += dist(*a, *b) / upf;
+        vert += (b.z - a.z).abs() / upf;
+    }
+    (len, vert, bends)
+}
+
+/// A feeder leg the model holds only as routed runs (not cut into pieces: in no takeoff): its
+/// runs stitched end to end (each level's plan from its own corner, so a riser meets the floor
+/// above), each path's ends named by the leg's gear they are at (a feed-through chain is a path
+/// per panel; parallel conduits are one row).
+fn feeder_rows_from_spec(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder, dest: &str, idx: &[usize], upf: f64) -> Vec<PullPath> {
+    let ar = super::mepatoms::rules();
+    let base = |level: &str| sp.level(level).map(|l| (l.elevation_ft * upf, l.region.map_or([0.0, 0.0], |r| [r[0], r[1]])));
+    let tol = pos(ar.joint_tol_in).max(0.01) / 12.0 * upf;
+    let mut polys: Vec<(Vec<Vec3>, Vec<String>)> = Vec::new();
+    let mut first: Option<&cadaddy_walk3d::MepRun> = None;
+    for r in idx.iter().filter_map(|i| sp.mep.runs.get(*i)) {
+        let Some((z0, c)) = base(&r.level) else { continue };
+        let pts: Vec<Vec3> = super::mepatoms::build::run_path(r, z0, upf).into_iter().map(|p| Vec3::new(p.x - c[0], p.y - c[1], p.z)).collect();
+        let (Some(a), Some(b)) = (pts.first().copied(), pts.last().copied()) else { continue };
+        if pts.len() < 2 {
+            continue;
+        }
+        first = first.or(Some(r));
+        let id = super::mep::run_base(r);
+        let near = |p: Vec3, q: Vec3| dist(p, q) <= tol;
+        let mut placed = false;
+        for (pl, ids) in polys.iter_mut() {
+            let (Some(s), Some(e)) = (pl.first().copied(), pl.last().copied()) else { continue };
+            if pl.len() > 4_000 {
+                continue;
+            }
+            if near(e, a) {
+                pl.extend(pts.iter().skip(1).copied());
+            } else if near(e, b) {
+                pl.extend(pts.iter().rev().skip(1).copied());
+            } else if near(s, b) {
+                let mut v = pts.clone();
+                v.pop();
+                v.extend(pl.iter().copied());
+                *pl = v;
+            } else if near(s, a) {
+                let mut v: Vec<Vec3> = pts.iter().rev().copied().collect();
+                v.pop();
+                v.extend(pl.iter().copied());
+                *pl = v;
+            } else {
+                continue;
+            }
+            ids.push(id.clone());
+            placed = true;
+            break;
+        }
+        if !placed {
+            polys.push((pts, vec![id]));
+        }
+    }
+    let Some(first) = first else { return Vec::new() };
+    // The gear along the leg, in its order, and which of them a point is at.
+    let gears: Vec<String> =
+        std::iter::once(f.from.clone()).chain(dest.split('\u{2192}').map(|g| g.trim().to_string())).filter(|g| !g.is_empty()).collect();
+    let reach = pos(ar.panel_reach_ft) * upf;
+    let gear_at = |p: Vec3| -> Option<usize> {
+        gears.iter().enumerate().find_map(|(k, g)| {
+            let e = sp.mep.equipment.iter().find(|e| e.tag.trim().eq_ignore_ascii_case(g))?;
+            let (z0, c) = base(&e.level)?;
+            let (x0, x1) = (e.min[0].min(e.max[0]) - c[0] - reach, e.min[0].max(e.max[0]) - c[0] + reach);
+            let (y0, y1) = (e.min[1].min(e.max[1]) - c[1] - reach, e.min[1].max(e.max[1]) - c[1] + reach);
+            let (zb, zt) = (z0 + (e.bottom_ft - 1.0) * upf, z0 + (e.bottom_ft + e.height_ft + 1.0) * upf);
+            (p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1 && p.z >= zb && p.z <= zt).then_some(k)
+        })
+    };
+    let sy = sp.mep.systems.iter().find(|y| y.name == first.system);
+    let words = sy.map_or_else(|| first.system.clone(), |y| format!("{} {}", y.name, y.layer));
+    let (material, rule) = ar
+        .raceway_named(&words)
+        .or_else(|| ar.raceways.get_key_value(ar.default_raceway.as_str()).map(|(k, v)| (k.as_str(), v)))
+        .map_or(("", None), |(k, v)| (k, Some(v)));
+    let size = super::mepatoms::trade_size(first.size_in[0]);
+    let level_of = |run: &str| {
+        idx.iter().filter_map(|i| sp.mep.runs.get(*i)).find(|r| super::mep::run_base(r) == run).map(|r| r.level.clone()).unwrap_or_default()
+    };
+    let mut rows = Vec::new();
+    for (mut pts, ids) in polys {
+        let (mut ka, mut kb) = (pts.first().and_then(|p| gear_at(*p)), pts.last().and_then(|p| gear_at(*p)));
+        if ka.unwrap_or(usize::MAX) > kb.unwrap_or(usize::MAX) {
+            pts.reverse();
+            std::mem::swap(&mut ka, &mut kb);
+        }
+        let label = |k: Option<usize>| {
+            k.and_then(|k| gears.get(k)).map_or_else(|| End { label: "open end".into(), gear: false }, |g| End { label: g.clone(), gear: true })
+        };
+        let (len, vert, bends) = geometry(&pts, upf);
+        let max_bends = rule.map_or(0.0, |r| pos(r.max_bends_deg));
+        let mut path = PullPath {
+            kind: "feeder",
+            id: format!("{} to {dest}", f.tag),
+            level: ids.first().map(|r| level_of(r)).unwrap_or_default(),
+            panel: f.from.clone(),
+            from: label(ka),
+            to: label(kb),
+            raceway: format!("{size} {material}").trim().to_string(),
+            raceway_ft: len,
+            vertical_ft: vert,
+            boxes: pull_points(&bends, max_bends),
+            bends,
+            max_bends,
+            max_source: rule.map(|r| r.max_bends_source.clone()).unwrap_or_default(),
+            runs: ids,
+            conduits: 1,
+            from_spec: true,
+            status: "proposed feeder route, held as runs: not cut into pieces, in no takeoff".into(),
+            ..PullPath::default()
+        };
+        feeder_conductors(sp, f, &mut path, upf);
+        add_alike(&mut rows, path);
+    }
+    rows
+}
+
 fn r2(v: f64) -> f64 {
-    if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 }
+    let r = if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 };
+    // No `-0`: a straight riser turns 0 degrees.
+    if r == 0.0 { 0.0 } else { r }
 }
 
 /// Feet as a schedule shows them: `12.5`.
@@ -1025,6 +1231,7 @@ fn path_json(p: &PullPath, upf: f64) -> Value {
             "pull_box_ft": pos(r.pull_box_loop_ft), "pull_box_source": r.pull_box_loop_source,
         },
         "estimated": p.estimated,
+        "in_takeoff": !p.from_spec,
         "status": p.status,
     });
     j[if p.kind == "feeder" { "feeder" } else { "circuit" }] = json!(p.id);
@@ -1391,6 +1598,12 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
             "reel_ft": r2(reel_ft),
             "waste_ft": r2(reel_ft - used),
         },
+        "feeders_not_in_takeoff": {
+            "paths": paths.iter().filter(|x| x.from_spec).map(|x| x.conduits.max(1) as usize).sum::<usize>(),
+            "raceway_ft": r2(paths.iter().filter(|x| x.from_spec).map(|x| x.raceway_ft * f64::from(x.conduits.max(1))).sum()),
+            "conductor_ft": r2(paths.iter().filter(|x| x.from_spec).map(|x| x.conductor_ft()).sum()),
+            "why": "routed feeders the model holds as runs, not cut into pieces: their raceway and conductors are in no takeoff yet",
+        },
         "unrouted_feeders": pl.unrouted_feeders,
         "empty_raceways": {"runs": pl.empty_raceways.0, "raceway_ft": r2(pl.empty_raceways.1), "why": "raceway on no circuit and no feeder: nothing to pull"},
         "rules": {
@@ -1574,13 +1787,19 @@ fn cut_totals(pl: &Plan, p: &Value) -> BTreeMap<(String, String, String, String)
 }
 
 /// Each total against another count of the same pieces: matches, how many compared, the ones
-/// that differ.
-fn compare(mine: &BTreeMap<(String, String, String, String), f64>, theirs: &BTreeMap<(String, String, String, String), f64>) -> Value {
+/// that differ (to the cent of a foot; `lines`: the lines of theirs a total adds, each rounded
+/// to it).
+fn compare(
+    mine: &BTreeMap<(String, String, String, String), f64>,
+    theirs: &BTreeMap<(String, String, String, String), f64>,
+    lines: &BTreeMap<(String, String, String, String), usize>,
+) -> Value {
     let keys: BTreeSet<&(String, String, String, String)> = mine.keys().chain(theirs.keys()).collect();
     let mut diffs = Vec::new();
     for k in &keys {
         let (a, b) = (mine.get(*k).copied().unwrap_or(0.0), theirs.get(*k).copied().unwrap_or(0.0));
-        if (a - b).abs() > 0.01 && diffs.len() < 50 {
+        let tol = 0.005 * lines.get(*k).copied().unwrap_or(0).max(1) as f64 + 1e-6;
+        if (a - b).abs() > tol && diffs.len() < 50 {
             diffs.push(json!({"level": k.0, "kind": k.1, "item": k.2, "size": k.3, "cut_list": r2(a), "takeoff": r2(b)}));
         }
     }
@@ -1596,14 +1815,19 @@ fn run_cutlist(s: &mut Session, p: &Value) -> Result<Value> {
     // The conduit takeoff's lines (the same pieces counted by the takeoff) and the model's count
     // index (what bim.takeoff and the bill of materials read).
     let mut theirs: BTreeMap<(String, String, String, String), f64> = BTreeMap::new();
-    let ct = s.execute("conduit.takeoff", &json!({"group_by": ["level", "circuit"], "price": false}))?;
+    let mut lines_of: BTreeMap<(String, String, String, String), usize> = BTreeMap::new();
+    let by_circuit = str_param(p, "circuit").is_some_and(|c| !c.trim().is_empty());
+    let groups = if by_circuit { json!(["level", "circuit"]) } else { json!(["level"]) };
+    let ct = s.execute("conduit.takeoff", &json!({"group_by": groups, "price": false}))?;
     for l in ct["lines"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let g = |k: &str| l[k].as_str().unwrap_or_default().to_string();
         let kind = g("kind");
         if !CUT_KINDS.contains(&kind.as_str()) || !level_ok(p, &g("level")) || !circuit_ok(p, &g("circuit")) {
             continue;
         }
-        *theirs.entry((g("level"), kind, g("item"), g("size"))).or_insert(0.0) += l["qty"].as_f64().unwrap_or(0.0);
+        let key = (g("level"), kind, g("item"), g("size"));
+        *lines_of.entry(key.clone()).or_insert(0) += 1;
+        *theirs.entry(key).or_insert(0.0) += l["qty"].as_f64().unwrap_or(0.0);
     }
     let mut index: BTreeMap<(String, String, String, String), f64> = BTreeMap::new();
     let stored = super::mepatoms::stored(s.doc()?);
@@ -1615,8 +1839,9 @@ fn run_cutlist(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let r_conduit = compare(&mine, &theirs);
-    let r_index = if stored.is_some() { compare(&mine, &index) } else { json!({"matches": false, "why": "the model keeps no count index"}) };
+    let r_conduit = compare(&mine, &theirs, &lines_of);
+    let r_index =
+        if stored.is_some() { compare(&mine, &index, &BTreeMap::new()) } else { json!({"matches": false, "why": "the model keeps no count index"}) };
     let by_size: Vec<Value> = mine
         .iter()
         .map(|((level, kind, item, size), q)| {
@@ -1628,6 +1853,11 @@ fn run_cutlist(s: &mut Session, p: &Value) -> Result<Value> {
         "runs": runs.iter().take(max).map(|r| cut_json(r)).collect::<Vec<_>>(),
         "by_size_floor": by_size,
         "takeoff_check": {"conduit_takeoff": r_conduit, "model_index": r_index},
+        "feeders_not_cut": {
+            "paths": pl.paths.iter().filter(|x| x.from_spec && level_ok(p, &x.level)).map(|x| x.conduits.max(1) as usize).sum::<usize>(),
+            "raceway_ft": r2(pl.paths.iter().filter(|x| x.from_spec && level_ok(p, &x.level)).map(|x| x.raceway_ft * f64::from(x.conduits.max(1))).sum()),
+            "why": "routed feeders the model holds as runs, not cut into pieces: neither this list nor the takeoff has their sticks and fittings",
+        },
         "totals": {
             "runs": runs.len(),
             "sticks": runs.iter().map(|r| r.full_sticks as usize + r.cut_pieces.len()).sum::<usize>(),
@@ -2140,6 +2370,16 @@ mod tests {
         assert_eq!(r.reels_for("cable", "NM 12/2 w/G").0, vec![250.0, 1000.0]);
         assert_eq!(r.phase_of("wire"), "rough-in");
         assert_eq!(r.phase_of("device"), "trim");
+    }
+
+    #[test]
+    fn numbers_read_plainly() {
+        assert_eq!(ft(-0.0), "0");
+        assert_eq!(ft(-1e-9), "0");
+        assert_eq!(ft(12.5), "12.5");
+        assert_eq!(ft(f64::NAN), "0");
+        assert_eq!(r2(-0.004), 0.0);
+        assert!(r2(-0.004).is_sign_positive());
     }
 
     #[test]

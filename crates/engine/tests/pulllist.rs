@@ -371,3 +371,76 @@ fn files_and_filters_and_hostile_params() {
     assert!(empty.execute("pull.sheets", &json!({"pdf": true})).is_err(), "pdf needs a folder");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A feeder the routing added after the build (as the job does): routed runs in the spec, no
+/// pieces in the model. F2 from MDP up a riser to LP2 on the floor above, whose plan sits at its
+/// own corner of the sheet.
+fn with_spec_feeder(s: &mut Session) {
+    let got = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = got["spec"].clone();
+    spec["levels"]
+        .as_array_mut()
+        .expect("levels")
+        .push(json!({"name": "L2", "elevation_ft": 12, "height_ft": 12, "ceiling_ft": 9, "region": [-300, 2900, 700, 3900]}));
+    let mep = spec["mep"].as_object_mut().expect("mep");
+    mep["equipment"].as_array_mut().expect("equipment").push(json!({"tag": "LP2", "kind": "panel", "level": "L2", "min": [76, 3190], "max": [96, 3210], "height_ft": 4, "bottom_ft": 2, "properties": {"VOLTS": "208Y/120"}}));
+    mep["feeders"].as_array_mut().expect("feeders").push(json!({"tag": "F2", "from": "MDP", "to": "LP2", "sets": 1, "phases": 3, "size": "#3", "material": "cu", "neutrals": 1, "grounds": 1, "ground_size": "#8", "conduits": 1, "conduit_in": 1, "entry": "top"}));
+    if !mep["systems"].as_array().expect("systems").iter().any(|y| y["name"] == json!("E-FEEDER")) {
+        mep["systems"]
+            .as_array_mut()
+            .expect("systems")
+            .push(json!({"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [1, 0], "bottom_ft": 10, "show": true}));
+    }
+    let leg = "feeder F2 MDP\u{2192}LP2";
+    let runs = mep["runs"].as_array_mut().expect("runs");
+    for r in [
+        json!({"points": [[-160, 130]], "bottoms_ft": [7], "top_ft": 10, "level": "L1"}),
+        json!({"points": [[-160, 130], [404, 130], [404, 300]], "bottoms_ft": [10, 10], "level": "L1"}),
+        json!({"points": [[404, 300]], "bottoms_ft": [10], "top_ft": 22, "level": "L1"}),
+        json!({"points": [[104, 3200], [86, 3200]], "bottoms_ft": [10], "level": "L2"}),
+        json!({"points": [[86, 3200]], "bottoms_ft": [6], "top_ft": 10, "level": "L2"}),
+    ] {
+        let mut r = r;
+        r["system"] = json!("E-FEEDER");
+        r["source_sheet"] = json!(leg);
+        r["size_in"] = json!([1, 0]);
+        r["size_source"] = json!("feeder schedule");
+        r["height_source"] = json!("proposed");
+        runs.push(r);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+}
+
+#[test]
+fn a_feeder_held_only_as_routed_runs_is_pulled_from_them_and_said_to_be_in_no_takeoff() {
+    let mut s = building(None, false, None);
+    with_spec_feeder(&mut s);
+    let r = s.execute("pull.schedule", &json!({})).expect("schedule");
+    let p = pull(&r, "F2 to LP2");
+    assert!(p.is_object(), "{r}");
+    assert_eq!((p["from"].as_str(), p["to"].as_str()), (Some("MDP"), Some("LP2")), "{p}");
+    assert_eq!(p["in_takeoff"], json!(false), "{p}");
+    assert_eq!(p["raceway"], json!("1\" EMT"), "{p}");
+    // Out of MDP's top (3 ft), across (47 + 14.17 ft), up a floor (12 ft), across (1.5 ft) and
+    // down into LP2 (4 ft): the floors joined at the riser.
+    assert!((f(&p["raceway_ft"]) - 81.67).abs() < 0.05, "{p}");
+    assert!((f(&p["vertical_ft"]) - 19.0).abs() < 0.05, "{p}");
+    assert!((f(&p["bends_deg"]) - 450.0).abs() < 1.0, "{p}");
+    // #3 conductors: a pull box 8 x 1" long (NEC 314.28) in the straight before the fifth bend.
+    assert_eq!(p["pull_boxes"].as_array().map(Vec::len), Some(1), "{p}");
+    assert!(p["pull_boxes"][0]["size"].as_str().is_some_and(|b| b.starts_with("8\" long")), "{p}");
+    let mut colors: Vec<&str> = p["conductors"].as_array().into_iter().flatten().filter_map(|c| c["color"].as_str()).collect();
+    colors.sort_unstable();
+    assert_eq!(colors, vec!["black", "blue", "green", "red", "white"], "{p}");
+    for c in p["conductors"].as_array().into_iter().flatten() {
+        // Both ends at gear (3 ft each), one pull box loop (2 ft).
+        assert!((f(&c["cut_ft"]) - (f(&p["raceway_ft"]) + 6.0 + 2.0)).abs() < 0.05, "{c} {p}");
+    }
+    assert!((f(&r["feeders_not_in_takeoff"]["raceway_ft"]) - f(&p["raceway_ft"])).abs() < 0.05, "{r}");
+    assert_eq!(r["wire"]["matches"], json!(true), "{}", r["wire"]);
+    assert!(!r["unrouted_feeders"].as_array().into_iter().flatten().any(|u| u["feeder"] == json!("F2")), "{r}");
+    // The cut list says it has no pieces for it, and still equals the takeoff.
+    let c = s.execute("pull.cutlist", &json!({})).expect("cutlist");
+    assert!((f(&c["feeders_not_cut"]["raceway_ft"]) - f(&p["raceway_ft"])).abs() < 0.05, "{c}");
+    assert_eq!(c["takeoff_check"]["conduit_takeoff"]["matches"], json!(true), "{c}");
+}
