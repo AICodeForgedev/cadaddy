@@ -616,11 +616,17 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
                     .get(at.saturating_sub(1)..(at + 4).min(words.len()))
                     .is_some_and(|ws| ws.iter().any(|x| w.minimum_words.iter().any(|m| m.trim_end_matches('.').eq_ignore_ascii_case(x))));
             }
+            // A print's text can run a word into the next (`CORRIDORLOCATION`): a long place word
+            // at a word's start is that place.
+            let glued = |places: &[String]| {
+                n.split_whitespace()
+                    .any(|t| places.iter().any(|c| c.len() >= 6 && !c.contains(' ') && t.len() > c.len() && t.starts_with(c.as_str())))
+            };
             st.to = if has_any(&n, &w.to_room) && (has_any(&n, &w.home_words) || has_any(&n, &w.pathway_words)) {
                 "room"
             } else if has_any(&n, &w.to_enclosure) && !has_any(&n, &w.box_words) {
                 "enclosure"
-            } else if has_any(&n, &w.to_corridor) {
+            } else if has_any(&n, &w.to_corridor) || glued(&w.to_corridor) {
                 "corridor"
             } else if has_any(&n, &w.to_sleeve) && !has_any(&n, &w.to_ceiling) {
                 "sleeve"
@@ -1664,6 +1670,14 @@ mod tests {
         all.push(marked);
         let r = read(&all);
         assert!(r.statements.is_empty(), "{:#?}", r.statements);
+        // A word the print ran into the next still says where the pathway goes.
+        let glued = read(&[doc(
+            "T-903",
+            Some("low voltage"),
+            SourceTier::DrawingRevision,
+            &["OFFICE OUTLETS: PROVIDE CONDUIT FROM EACH BOX TO ABOVE THE CORRIDORCEILING."],
+        )]);
+        assert_eq!(glued.statements.first().map(|s| s.to.as_str()), Some("corridor"), "{:#?}", glued.statements);
         // A typical room's keynote naming the room is its outlets' rule.
         let mut typical = doc(
             "E-908",
