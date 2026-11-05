@@ -101,6 +101,7 @@ pub(crate) struct Rules {
     narrowing_why: String,
     list_headers: ListHeaders,
     catalog_labels: Vec<String>,
+    weak_catalog_labels: Vec<String>,
     review: Review,
     submittal_name_words: Vec<String>,
     sniff_pages: u32,
@@ -271,6 +272,8 @@ pub(crate) struct SubItem {
     pub response: String,
     /// The catalog number its first product's cut sheet prints, and the page.
     pub catalog: Option<(String, Option<u32>)>,
+    /// Every value its first product's pages print under a catalog label (value, page, strong).
+    pub catalogs: Vec<(String, Option<u32>, bool)>,
     /// What its cut sheets say electrically (volts, phase, amps…), and the page.
     pub electrical: Option<(cadaddy_walk3d::EquipmentElectrical, Option<u32>)>,
     /// Its cut sheets' text (the first product's pages), for the power words.
@@ -307,10 +310,10 @@ fn list_header(r: &Rules, line: &str) -> bool {
 /// lists (a table of contents, an item's cover page), the review letter's responses, each item's
 /// cut sheets (their pages carry the item's tag first), and on them its catalog number and
 /// electrical data. None when it lists none of the tags.
-pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, known: &BTreeSet<String>) -> Option<Submittal> {
+pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, known: &BTreeSet<String>) -> Option<Submittal> {
     let is_known = |t: &str| known.contains(&tag_key(t));
     let pages: Vec<&str> = text.split("--- page ").skip(1).collect();
-    let mut sub = Submittal { file: file.to_string(), revision: super::equipsub::revision(file), ..Submittal::default() };
+    let mut sub = Submittal { file: file.to_string(), revision: super::equipsub::revision(path), ..Submittal::default() };
     // The package's own numbering: the most common `of N` among the footers.
     let mut of_count: BTreeMap<u32, usize> = BTreeMap::new();
     for p in &pages {
@@ -471,25 +474,38 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, known: &BTreeSet
                 _ => true,
             })
             .collect();
-        let labels: Vec<String> = r.catalog_labels.iter().map(|l| l.to_ascii_uppercase()).collect();
-        'pages: for (pg, text) in &mine {
-            for line in text.lines() {
-                for (ci, c) in cells(line).iter().enumerate() {
+        // Every value printed under a catalog label on its pages, in order: (value, page, whether
+        // the label is a strong one, `Model:` or `Catalog No.`, not a bare `Model`).
+        let mut labels: Vec<(String, bool)> = r.catalog_labels.iter().map(|l| (l.to_ascii_uppercase(), true)).collect();
+        labels.extend(r.weak_catalog_labels.iter().map(|l| (l.to_ascii_uppercase(), false)));
+        labels.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        let mut found: Vec<(String, Option<u32>, bool)> = Vec::new();
+        for (pg, text) in &mine {
+            for line in text.lines().take(4_000) {
+                let cs = cells(line);
+                for (ci, c) in cs.iter().enumerate() {
                     let up = c.to_ascii_uppercase();
-                    let Some(lab) = labels.iter().find(|l| up.starts_with(l.as_str())) else { continue };
-                    let rest = c.get(lab.len()..).unwrap_or_default().trim().trim_start_matches([':', '#', '.']).trim();
-                    let rest = rest.strip_prefix("ber").map(str::trim).unwrap_or(rest).trim_start_matches([':', '#']).trim();
-                    let value = if rest.is_empty() { cells(line).get(ci + 1).cloned().unwrap_or_default() } else { rest.to_string() };
-                    if catalog_like(&value) {
-                        it.catalog = Some((clean(&value), *pg));
-                        break 'pages;
+                    // The longest label in the cell at a word's start.
+                    let hit = labels.iter().find_map(|(l, strong)| {
+                        let at = up.find(l.as_str())?;
+                        let before = up.get(..at).and_then(|b| b.chars().last());
+                        before.is_none_or(|ch| !ch.is_ascii_alphanumeric()).then_some((at + l.len(), *strong))
+                    });
+                    let Some((end, strong)) = hit else { continue };
+                    let rest = c.get(end..).unwrap_or_default().trim().trim_start_matches([':', '#', '.']).trim();
+                    let value = if rest.is_empty() { cs.get(ci + 1).cloned().unwrap_or_default() } else { rest.to_string() };
+                    let value = value.trim().trim_end_matches(['.', ',']).to_string();
+                    if catalog_like(&value) && !value.contains(',') && found.len() < 40 && !found.iter().any(|f| catalog_key(&f.0) == catalog_key(&value)) {
+                        found.push((clean(&value), *pg, strong));
                     }
                 }
             }
         }
+        it.catalog = found.iter().find(|f| f.2).or_else(|| (found.len() == 1).then(|| found.first()).flatten()).map(|f| (f.0.clone(), f.1));
         if it.catalog.is_none() && first.description.split_whitespace().count() == 1 && catalog_like(&first.description) {
             it.catalog = Some((first.description.clone(), first.page));
         }
+        it.catalogs = found;
         let joined: String = mine.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>().join("\n");
         let e = super::equipsub::text_electrical(&joined);
         if super::equipsub::has_data(&e) || e.volts.is_some() {
@@ -603,7 +619,7 @@ pub(crate) fn read_submittals(r: &Rules, files: &[String], rows: &[ScheduledFixt
             }
         }
         match super::spec_import::pdf_text_pages(&bytes, f, MAX_PAGES) {
-            Ok(text) => match read_submittal(r, &text, &name, &known) {
+            Ok(text) => match read_submittal(r, &text, &name, f, &known) {
                 Some(s) => docs.submittals.push(s),
                 None => docs.skipped += 1,
             },
@@ -770,11 +786,27 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
             let m = q.makers.first().cloned().unwrap_or_default();
             maker = Some((m, Source::from_doc(SourceKind::Spec, &format!("{} p.{} ({})", q.section, q.page, q.product)), "spec"));
         }
-        let sub_catalog = approved.and_then(|(sb, it)| it.catalog.as_ref().map(|(c, pg)| (c.clone(), sb.doc(*pg))));
         let same = match (&sub_maker, &sched_maker) {
             (Some(a), Some(b)) => same_maker(a, b),
             _ => true,
         };
+        // The cut sheet's catalog number: the schedule's model where the same maker's cut sheet
+        // prints it, else the value under its catalog label.
+        let sub_catalog = approved.and_then(|(sb, it)| {
+            let printed = |m: &str| {
+                let k = catalog_key(m);
+                k.len() >= 3 && (it.catalogs.iter().any(|c| catalog_key(&c.0) == k) || catalog_key(&it.sheet_text).contains(&k))
+            };
+            let page = it.products.first().and_then(|p| p.page);
+            sched_model
+                .as_ref()
+                .filter(|_| same)
+                .and_then(|m| {
+                    m.split(['/', ',']).map(str::trim).find(|x| printed(x)).map(|x| (x.to_string(), m.clone()))
+                })
+                .map(|(_, m)| (m, format!("{} (the schedule's model, on its cut sheet)", sb.doc(page))))
+                .or_else(|| it.catalog.as_ref().map(|(c, pg)| (c.clone(), sb.doc(*pg))))
+        });
         let mut catalog: Option<(String, Source, &'static str)> = None;
         if let Some((c, doc)) = &sub_catalog {
             catalog = Some((c.clone(), Source::from_doc(SourceKind::Submittal, doc), "submittal"));
@@ -1180,7 +1212,11 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         "schedule": {"sheet": docs.sheet, "rows": docs.rows.len(), "headers": docs.headers, "rough_in_rows": docs.connections.len()},
         "submittals": docs.submittals.iter().map(|sb| json!({"file": sb.file, "revision": format!("{}-{}", sb.revision.0, sb.revision.1), "reviewed": sb.reviewed, "items": sb.items.len(),
             "approved": sb.items.values().filter(|i| i.status == Status::Approved).count(), "sent_back": sb.items.values().filter(|i| i.status == Status::SentBack).count(),
-            "catalogs": sb.items.values().filter(|i| i.catalog.is_some()).count()})).collect::<Vec<_>>(),
+            "catalogs": sb.items.values().filter(|i| i.catalog.is_some()).count(),
+            "by_item": sb.items.iter().take(80).map(|(t, i)| (t.clone(), json!({"status": i.status.words(), "products": i.products.len(),
+                "first": i.products.first().map(|p| format!("{} | {} | p.{}", p.vendor, p.description, p.page.map(|n| n.to_string()).unwrap_or_default())),
+                "catalog": i.catalog.as_ref().map(|c| c.0.clone()), "labels": i.catalogs.iter().take(6).map(|c| c.0.clone()).collect::<Vec<_>>(),
+                "electrical": i.electrical.as_ref().map(|e| electrical_words(&e.0)), "sheet_chars": i.sheet_text.len()}))).collect::<serde_json::Map<String, Value>>()})).collect::<Vec<_>>(),
         "submittal_files_skipped": docs.skipped,
         "unread": docs.unread,
         "fixtures": found.len(),
@@ -1280,7 +1316,7 @@ mod tests {
     #[test]
     fn a_submittal_gives_each_items_products_review_and_catalog_number() {
         let r = rules();
-        let sub = read_submittal(&r, &package(), "Plumbing Package Rev 1-0", &known(&["WC-1", "LV-1", "SK-1", "RP-1", "FD-1"])).expect("read");
+        let sub = read_submittal(&r, &package(), "Plumbing Package", "/job/Rev 1-0/Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1", "FD-1"])).expect("read");
         assert!(sub.reviewed);
         let wc = sub.items.get("WC-1").expect("WC-1");
         assert_eq!(wc.status, Status::Approved);
@@ -1302,7 +1338,8 @@ mod tests {
         assert_eq!((e.volts, e.phase, e.fla), (Some(115.0), Some(1), Some(1.2)));
         assert!(!sub.items.contains_key("FD-1"), "a tag no page lists");
         // A file listing none of the schedule's tags is no plumbing submittal.
-        assert!(read_submittal(&r, &package(), "x", &known(&["ZZ-9"])).is_none());
+        assert!(read_submittal(&r, &package(), "x", "x.pdf", &known(&["ZZ-9"])).is_none());
+        assert_eq!(sub.revision, (1, 0), "its revision from its folder");
     }
 
     #[test]
@@ -1405,7 +1442,7 @@ mod tests {
                 sizes: [("waste".to_string(), "3\"".to_string()), ("cw".to_string(), "1/2\"".to_string())].into_iter().collect(),
             }],
             sheet: "P-1".into(),
-            submittals: vec![read_submittal(&rules(), &package(), "Plumbing Package", &known(&["WC-1", "LV-1", "SK-1", "RP-1"])).expect("read")],
+            submittals: vec![read_submittal(&rules(), &package(), "Plumbing Package", "Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1"])).expect("read")],
             ..Docs::default()
         };
         let reqs = vec![Requirement {
@@ -1464,5 +1501,41 @@ mod tests {
         assert_eq!(prop(&s, mine, "manufacturer").map(|p| p.text()).as_deref(), Some("MINE"));
         let (sp, _) = super::super::bspec::current(&s, "test").expect("spec");
         assert_eq!(sp.mep.equipment.iter().filter(|e| e.properties.contains_key("PLUMBING_FIXTURE")).count(), 1, "a run again replaces its boxes");
+    }
+
+    #[test]
+    fn bim_products_reads_a_drawn_schedule_onto_the_fixtures_records() {
+        let mut s = Session::new();
+        // A schedule whose maker column comes first and whose tag header is MARK.
+        for (t, x, y) in [
+            ("MFR", 10.0, 30.0),
+            ("MARK", 14.0, 30.0),
+            ("FIXTURE", 15.5, 30.0),
+            ("MODEL NO.", 19.0, 30.0),
+            ("MAKER TWO", 9.8, 29.5),
+            ("WC-1", 14.0, 29.5),
+            ("WATER CLOSET", 15.2, 29.5),
+            ("PF-1", 19.0, 29.5),
+            ("MAKER FIVE", 9.8, 29.0),
+            ("FD-1", 14.0, 29.0),
+            ("FLOOR DRAIN", 15.2, 29.0),
+            ("ZN-4", 19.0, 29.0),
+        ] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": 0.1})).expect("text");
+        }
+        let wc = fixture_el(&mut s, "WC-1", 0.0, &[]);
+        let fd = fixture_el(&mut s, "FD-1", 40.0, &[]);
+        let v = s.execute("bim.products", &json!({"submittals": []})).expect("bim.products");
+        assert_eq!(v["plumbing"]["with_product"], 2, "{v}");
+        assert_eq!(prop(&s, wc, "manufacturer").map(|p| (p.text(), p.source.kind)), Some(("MAKER TWO".to_string(), SourceKind::Schedule)));
+        assert_eq!(prop(&s, fd, "catalog_number").map(|p| p.text()).as_deref(), Some("ZN-4"));
+        assert_eq!(prop(&s, fd, "product_kind").map(|p| p.text()).as_deref(), Some("floor_drain"));
+        // Its product record is built from them.
+        let rec: Value = serde_json::from_str(&prop(&s, wc, "product").map(|p| p.text()).unwrap_or_default()).expect("record");
+        assert_eq!(rec["resolved"]["maker"], "MAKER TWO", "{rec}");
+        assert_eq!(rec["resolved"]["catalog"], "PF-1", "{rec}");
+        // `plumbing: false` leaves them alone.
+        let v = s.execute("bim.products", &json!({"plumbing": false})).expect("bim.products");
+        assert!(v["plumbing"].is_null(), "{v}");
     }
 }

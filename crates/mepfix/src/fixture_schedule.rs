@@ -31,6 +31,8 @@ const CHAR_EM: f64 = 0.6;
 const DESCRIPTION_H: f64 = 40.0;
 /// The lines of a fixture's parts reach this many heights below its last row at most.
 const LAST_ROW_PARTS_H: f64 = 12.0;
+/// Words of one column header, at most (a longer text on the header's line is a note).
+const MAX_HEADER_WORDS: usize = 5;
 /// Rows of one rough-in table, at most.
 const MAX_CONNECTION_ROWS: usize = 80;
 /// A rough-in table's header lines lie within this many heights of its fixture header.
@@ -268,7 +270,8 @@ pub fn read_lettering(texts: &[TextItem], verticals: &[(f64, f64, f64)]) -> Opti
         let lo = tag_xs.iter().copied().filter(|x| *x < tag_head.at.x - h).fold(None, |m: Option<f64>, x| Some(m.map_or(x, |m| m.max(x))));
         let lo = if lo.is_some() { tag_head.at.x - h } else { f64::NEG_INFINITY };
         let hi = tag_xs.iter().copied().filter(|x| *x > tag_head.at.x + h).fold(f64::INFINITY, f64::min) - h;
-        on_row.retain(|t| t.at.x >= lo && t.at.x < hi);
+        // A header is a few words: a note lettered on the header's line is no column.
+        on_row.retain(|t| t.at.x >= lo && t.at.x < hi && t.value.split_whitespace().count() <= MAX_HEADER_WORDS);
         let mut heads: Vec<(String, f64)> = on_row.iter().map(|t| (t.value.trim().to_string(), middle(t))).collect();
         let cols: Vec<Col> = heads.iter().map(|(v, _)| col_of(v)).collect();
         let strong = cols.iter().any(|c| *c == Col::Fixture { strong: true });
@@ -678,6 +681,7 @@ mod tests {
             t("V", 21.0, 30.0),
             t("VOLTS", 22.0, 30.0),
             t("REMARKS", 23.5, 30.0),
+            t("FURNISH: THE TERM FURNISH IS USED TO MEAN SUPPLY", 26.0, 30.0),
             t("MAKER TWO", 9.8, 29.5),
             t("AB-100", 12.0, 29.5),
             t("WC-1", 14.0, 29.5),
@@ -703,6 +707,7 @@ mod tests {
         assert!(!wc.connections.contains_key("hw"), "a `--` cell is no connection");
         assert_eq!(wc.remarks, "PROVIDE SEAT AND STOP.", "the remarks' second line stays with its row");
         assert!(s.headers.iter().any(|h| h == "CATALOG NO."), "{:?}", s.headers);
+        assert_eq!(s.headers.last().map(String::as_str), Some("REMARKS"), "a note on the header's line is no column: {:?}", s.headers);
         let pump = &s.rows[1];
         assert_eq!(pump.electrical.get("volts").map(String::as_str), Some("120"));
         assert_eq!(pump.model, "CP-9");

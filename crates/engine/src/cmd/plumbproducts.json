@@ -31,8 +31,9 @@
     "page": ["PAGE", "PG", "PAGES"],
     "source": "a submittal package's table of contents and its item cover pages: the item tag, then each product's maker, description and the package page its cut sheet starts on"
   },
-  "catalog_labels": ["MODEL NUMBER", "MODEL NO", "MODEL #", "MODEL:", "CATALOG NUMBER", "CATALOG NO", "CATALOG #", "CAT. NO", "CAT NO", "ITEM NO", "ITEM #", "PRODUCT NO", "PART NO", "ORDER NO"],
-  "catalog_source": "the labels a maker's cut sheet prints its catalog or model number under",
+  "catalog_labels": ["MODEL NUMBER", "MODEL NO", "MODEL #", "MODEL:", "MODEL(S)", "CATALOG NUMBER", "CATALOG NO", "CATALOG #", "CAT. NO", "CAT NO", "PRODUCT NO", "ORDER NO", "DWG. NO", "DWG NO"],
+  "weak_catalog_labels": ["MODEL", "ITEM NO", "ITEM #", "PART NO"],
+  "catalog_source": "the labels a maker's cut sheet prints its catalog or model number under (a product drawing number is the product's number on a drainage maker's sheet); a weak label (a bare MODEL, a parts list's ITEM NO) counts only when it is the page's one value",
   "review": {
     "sent_back": ["REVISE", "RESUBMIT", "REJECT", "NOT APPROVED", "DISAPPROVED", "NOT ACCEPTED"],
     "not_reviewed": ["NOT REVIEWED", "FOR INFORMATION ONLY", "NO ACTION TAKEN", "RECEIVED"],
