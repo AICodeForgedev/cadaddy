@@ -170,6 +170,7 @@ pub mod printrev;
 pub mod printset;
 pub mod projrules;
 mod props;
+pub mod pulllist;
 pub mod readers;
 pub mod redline;
 pub mod revise3d;
@@ -827,6 +828,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mepqty::specs());
         v.extend(mepatoms::specs());
         v.extend(conduitroute::specs());
+        v.extend(pulllist::specs());
         v.extend(tradeatoms::specs());
         v.extend(ifcref::specs());
         v.extend(ifcmodel::specs());

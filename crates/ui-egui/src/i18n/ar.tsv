@@ -3377,6 +3377,10 @@ menu	View	عرض
 	Conduit Routing Report	تقرير مسارات الأنابيب الكهربائية
 	Reroute Conduit	إعادة توجيه الأنابيب الكهربائية
 	Conduit Takeoff	حصر كميات الأنابيب الكهربائية
+	Wire Pull Schedule	جدول سحب الأسلاك
+	Conduit Cut and Bend List	قائمة قص وثني الأنابيب الكهربائية
+	Material Release List	قائمة إصدار المواد
+	Field Paperwork Sheets	أوراق مستندات الموقع
 	Scope by Trade	نطاق العمل حسب الحرفة
 	Value Engineering Scenario	سيناريو هندسة القيمة
 	Value Engineering Decision	قرار هندسة القيمة

@@ -18,6 +18,7 @@ const GUARDED: &[&str] = &[
     "cmd/fieldview.rs",
     "cmd/ifcmodel.rs",
     "cmd/projrules.rs",
+    "cmd/pulllist.rs",
     "cmd/render.rs",
     "cmd/rfi.rs",
     "cmd/table/cells.rs",

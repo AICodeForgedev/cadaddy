@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "about": "What the field paperwork (Q6195 pulllist) adds to the model's pieces: the slack left at each end of a pull and in each pull box, the pull boxes the bend rule asks for and their size, the standard reels and coils wire and cable come on, and which pieces go out at rough-in and which at trim. Values are the code's (with the section) or the trade's usual stock (marked so); a project's own documents win where they say otherwise.",
+  "box_end_slack_source": "the model's own makeup at each box (mepatoms.json makeup_ft): the length the takeoff counts; NEC 300.14 asks at least 6 in",
+  "gear_end_slack_ft": 3.0,
+  "gear_end_slack_source": "3 ft of each conductor at a panel or gear end, to reach its farthest terminal (company default; the takeoff's makeup is 1 ft of it)",
+  "pull_box_loop_ft": 2.0,
+  "pull_box_loop_source": "a 2 ft loop of each conductor left in each pull box, so it can be pulled on and dressed (company default; NEC 300.14 asks free conductor only where spliced or terminated)",
+  "pull_box": {
+    "sized_min_awg": 4,
+    "straight_times": 8.0,
+    "straight_source": "NEC 314.28(A)(1): for #4 and larger, a straight pull's box at least 8 times the largest raceway's trade size long",
+    "small": [[1.0, "4\" square, 2-1/8\" deep"], [1.25, "4-11/16\" square, 2-1/8\" deep"]],
+    "small_source": "NEC 314.16 and 314.28 (conductors smaller than #4): the trade's usual box for the raceway's knockout (company default)",
+    "large_source": "a raceway over 1-1/4\" takes a box sized as for #4 and larger, 8 times its trade size long (company default, after NEC 314.28(A)(1))",
+    "where": "in the straight before the bend that would pass the bend limit"
+  },
+  "reels": [
+    { "words": ["#14", "#12", "#10"], "kind": "wire", "lengths_ft": [500, 2500], "source": "trade stock: #14-#10 building wire on 500 ft spools and 2,500 ft reels" },
+    { "words": ["#8", "#6"], "kind": "wire", "lengths_ft": [500, 1000, 2500], "source": "trade stock: #8-#6 on 500, 1,000 and 2,500 ft reels" },
+    { "words": ["#4", "#3", "#2", "#1", "#1/0", "#2/0", "#3/0", "#4/0"], "kind": "wire", "lengths_ft": [500, 1000], "source": "trade stock: #4-#4/0 on 500 and 1,000 ft reels" },
+    { "words": ["kcmil"], "kind": "wire", "lengths_ft": [500, 1000], "source": "trade stock: 250 kcmil and larger on 500 and 1,000 ft reels" },
+    { "words": ["NM", "NM-B"], "kind": "cable", "lengths_ft": [250, 1000], "source": "trade stock: NM-B in 250 ft coils and 1,000 ft reels" },
+    { "words": ["MC", "AC"], "kind": "cable", "lengths_ft": [250, 1000], "source": "trade stock: MC and AC cable in 250 ft coils and 1,000 ft reels" },
+    { "words": ["SER"], "kind": "cable", "lengths_ft": [500, 1000], "source": "trade stock: SER cable on 500 and 1,000 ft reels" }
+  ],
+  "reel_default_ft": [500, 1000],
+  "reel_default_source": "trade stock: 500 and 1,000 ft reels where no other row names the size",
+  "cut_to_length_source": "longer than the largest standard reel: ordered cut to length (one reel of its own)",
+  "phases": {
+    "rough-in": ["conduit", "coupling", "connector", "elbow", "offset", "strap", "locknut", "bushing", "box", "ring", "cable", "wire"],
+    "trim": ["device", "plate"]
+  },
+  "phases_source": "rough-in: the raceway, boxes, rings, cable and wire, in before the walls close; trim: the devices and their plates, after finishes (the trade's usual release split)",
+  "plate_kinds": ["receptacle", "switch", "data_outlet"],
+  "plate_item": "Device plate",
+  "plate_size": "1 gang",
+  "plate_source": "one plate per wall device (company default; as the bill of materials counts them)"
+}
