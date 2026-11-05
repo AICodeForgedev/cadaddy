@@ -2342,7 +2342,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // A fire alarm symbol's subscript (a small `R` at an `S`'s lower right: a resident room's
         // smoke detector with sounder base) is part of its mark, not a device of its own: the
         // import may hang the letter on another symbol nearby.
-        let (subscript_of, compound) = if fire_alarm_sheet { fire_alarm_subscripts(syms) } else { Default::default() };
+        let (subscript_of, compound) =
+            if fire_alarm_sheet { fire_alarm_subscripts(syms, texts.get(g).map_or(&[][..], Vec::as_slice)) } else { Default::default() };
         for (tag, at, h, tag_at) in syms {
             if subscript_of.contains(h) {
                 *c.not_device.entry("a fire alarm symbol's subscript (part of its mark)").or_default() += 1;
@@ -7567,6 +7568,7 @@ const SUBSCRIPT_REACH_H: (f64, f64) = (0.3, 2.0);
 #[allow(clippy::type_complexity)]
 fn fire_alarm_subscripts(
     syms: &[(String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>)],
+    free: &[cadaddy_mepfix::sheet_facts::TextItem],
 ) -> (BTreeSet<cadaddy_doc::Handle>, BTreeMap<cadaddy_doc::Handle, String>) {
     let mut subs: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
     let mut compound: BTreeMap<cadaddy_doc::Handle, String> = BTreeMap::new();
@@ -7595,6 +7597,31 @@ fn fire_alarm_subscripts(
         {
             subs.insert(*h);
             compound.insert(bh, format!("{bt}{t}"));
+        }
+    }
+    // A subscript the import hung on no symbol is still printed there: a lone letter among the
+    // sheet's texts at a base's lower right (each letter once).
+    let at_subscript = |q: cadaddy_geom::Vec2, bht: f64, t: &cadaddy_mepfix::sheet_facts::TextItem| {
+        let (dx, dy) = ((t.at.x - q.x) / bht, (q.y - t.at.y) / bht);
+        (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dx)
+            && (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dy)
+            && (0.6..=1.5).contains(&(t.height / bht))
+    };
+    let mut used: BTreeSet<usize> = BTreeSet::new();
+    for (bt, _, bh, bat) in syms.iter().take(MAX_STAMPED) {
+        let Some((q, bht)) = bat.filter(|(_, ht)| ht.is_finite() && *ht > 0.0) else { continue };
+        if !letters(bt, 2) || subs.contains(bh) || compound.contains_key(bh) {
+            continue;
+        }
+        let lone = free
+            .iter()
+            .enumerate()
+            .take(MAX_SHEET_TEXTS)
+            .filter(|(i, t)| !used.contains(i) && letters(&t.value, 1) && at_subscript(q, bht, t))
+            .min_by(|a, b| a.1.at.dist(q).total_cmp(&b.1.at.dist(q)));
+        if let Some((i, t)) = lone {
+            used.insert(i);
+            compound.insert(*bh, format!("{bt}{}", t.value));
         }
     }
     (subs, compound)
@@ -14757,6 +14784,31 @@ mod tests {
         let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
         // The next note's thermostat and what follows it are not this note's.
         assert_eq!(got, vec![("panel", 75.75), ("switch", 45.75), ("receptacle", 18.0)]);
+    }
+
+    /// A detector's subscript `R` the import hung on no symbol (a lone letter among the sheet's
+    /// texts at its `S`'s lower right) still makes it `SR`; a letter at its left (`P` by a pull
+    /// station) or one already used does not.
+    #[test]
+    fn a_subscript_left_as_free_text_still_joins_its_mark() {
+        use cadaddy_geom::Vec2;
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let sym = |t: &str, x: f64, n: u64| (t.to_string(), Vec2::new(x, 0.0), cadaddy_doc::Handle(n), Some((Vec2::new(x, 0.0), 1.0)));
+        let syms = vec![sym("S", 0.0, 1), sym("S", 10.0, 2), sym("S", 20.0, 3), sym("S", 30.0, 4), sym("R", 30.9, 5)];
+        let text = |v: &str, x: f64, y: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: 1.0, rotation: 0.0 };
+        // An R at the first S, a P at the left of the second, nothing by the third; the fourth's R
+        // is a symbol's tag (at its lower right).
+        let free = vec![text("R", 0.9, -0.8), text("P", 8.5, -0.8)];
+        let syms = {
+            let mut v = syms;
+            v[4].3 = Some((Vec2::new(30.9, -0.8), 1.0));
+            v
+        };
+        let (subs, compound) = fire_alarm_subscripts(&syms, &free);
+        assert_eq!(compound.get(&cadaddy_doc::Handle(1)).map(String::as_str), Some("SR"));
+        assert_eq!(compound.get(&cadaddy_doc::Handle(4)).map(String::as_str), Some("SR"));
+        assert!(!compound.contains_key(&cadaddy_doc::Handle(2)) && !compound.contains_key(&cadaddy_doc::Handle(3)));
+        assert_eq!(subs.into_iter().collect::<Vec<_>>(), vec![cadaddy_doc::Handle(5)]);
     }
 
     /// A fire alarm symbol list as E-7 prints it: each row's letters (an `S` with its subscript
