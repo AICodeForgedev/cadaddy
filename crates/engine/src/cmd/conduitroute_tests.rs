@@ -390,17 +390,24 @@ fn the_lengths_are_reported_by_unit_type_common_area_and_level() {
         "unit_instances": [{"number": "11", "level": "L1", "unit_type": "SUITE-A"}, {"number": "12", "level": "L1", "unit_type": "SUITE-A"}]
     }))
     .expect("spec");
-    let l = |home: f64, in_area: f64, wire: f64| Lens { in_area, home, wire };
+    let l = |home: f64, in_area: f64, wire: f64| Lens { in_area, home, wire, cable: home + in_area, ..Lens::default() };
+    let sz = |v: f64| BTreeMap::from([("12/2 w/G".to_string(), v)]);
     let rows = vec![
-        ("L1".to_string(), "11".to_string(), l(10.0, 30.0, 150.0)),
-        ("L1".to_string(), "11".to_string(), l(6.0, 20.0, 90.0)),
-        ("L1".to_string(), "12".to_string(), l(12.0, 40.0, 170.0)),
-        ("L1".to_string(), "LOBBY".to_string(), l(50.0, 70.0, 400.0)),
+        ("L1".to_string(), "11".to_string(), l(10.0, 30.0, 150.0), sz(40.0)),
+        ("L1".to_string(), "11".to_string(), l(6.0, 20.0, 90.0), sz(26.0)),
+        ("L1".to_string(), "12".to_string(), l(12.0, 40.0, 170.0), sz(52.0)),
+        ("L1".to_string(), "LOBBY".to_string(), l(50.0, 70.0, 400.0), sz(120.0)),
     ];
     let r = lengths_report(&sp, &rows);
     let ty = &r["unit_types"][0];
     assert_eq!((ty["unit_type"].as_str(), ty["name"].as_str(), ty["rooms"].as_u64()), (Some("SUITE-A"), Some("Suite A"), Some(2)), "{r}");
-    assert_eq!(ty["per_room"], json!({"circuits": 1.5, "home_ft": 14.0, "in_area_ft": 45.0, "total_ft": 59.0, "conductor_ft": 205.0}), "{r}");
+    let pr = &ty["per_room"];
+    for (k, v) in [("circuits", 1.5), ("home_ft", 14.0), ("in_area_ft", 45.0), ("total_ft", 59.0), ("conductor_ft", 205.0), ("cable_ft", 59.0)] {
+        assert_eq!(pr[k], json!(v), "{k}: {r}");
+    }
+    // Each circuit's own cable by size (Q6206): per room, per level, in all.
+    assert_eq!(pr["cable_ft_by_size"], json!({"12/2 w/G": 59.0}), "{r}");
+    assert_eq!(r["levels"][0]["cable_ft_by_size"], json!({"12/2 w/G": 238.0}), "{r}");
     assert_eq!(r["typical_rooms"].as_array().map(Vec::len), Some(2));
     assert_eq!(r["common_areas"][0]["room"], json!("LOBBY"));
     assert_eq!(r["common_areas"][0]["total_ft"], json!(120.0));

@@ -36,6 +36,8 @@ struct Gear {
     level: String,
     tag: String,
     plan: Bounds2,
+    /// Its can's height, feet (a conductor's makeup down it to the breaker).
+    height_ft: Option<f64>,
 }
 
 /// A run's 3D path (sheet units) and what it is.
@@ -538,11 +540,24 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .filter(|e| super::super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment")))
         .filter_map(|e| {
             let b = cadaddy_doc::entity_bounds(d, e, 0);
+            let height_ft = match &e.kind {
+                EntityKind::Mesh(m) => {
+                    let (lo, hi) = m
+                        .vertices
+                        .iter()
+                        .take(100_000)
+                        .filter(|p| p.z.is_finite())
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
+                    Some((hi - lo) / upf).filter(|h| h.is_finite() && *h > 0.0)
+                }
+                _ => None,
+            };
             (!b.is_empty()).then(|| Gear {
                 handle: e.handle,
                 level: super::super::bspec::made_level(e).unwrap_or_default(),
                 tag: super::super::bimlook::made_tag(e, "tag").unwrap_or_default().to_string(),
                 plan: Bounds2::from_points([b.min, b.max]),
+                height_ft,
             })
         })
         .take(MAX_DEVICES)
@@ -714,6 +729,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    // Run ends that land in nothing: where two or more meet (a homerun joining a raceway shared
+    // with others, Q6206) they meet in a junction box.
+    let mut open_at: Vec<(usize, Vec3, AtomCtx, bool)> = Vec::new();
     let mut landing_ft = 0.0_f64;
     let mut bend_notes: Vec<(usize, [Option<usize>; 2], String, String)> = Vec::new();
     // The box a run end at `p` lands in: on its level, within reach of the box's entry; a box
@@ -855,13 +873,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 src: m.source.clone(),
             };
             // Its conductors' makeup at a panel it ends in: to the breaker, not a box's.
-            let at_panel = lands.iter().filter(|l| matches!(l, Some(Land::Gear(_)))).count();
+            let at_panel: Vec<Option<f64>> = lands
+                .iter()
+                .filter_map(|l| match l {
+                    Some(Land::Gear(g)) => Some(gear.iter().find(|x| x.handle == *g).and_then(|x| x.height_ft)),
+                    _ => None,
+                })
+                .collect();
             for mut a in pieces.atoms {
                 for x in &mut a.connects {
                     *x += base;
                 }
                 if a.kind == "cable" {
-                    panel_makeup(&mut a, at_panel, rl);
+                    panel_makeup(&mut a, &at_panel, rl);
                 }
                 atoms.push((a, ctx.clone()));
             }
@@ -874,7 +898,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
                 for mut w in wires(&c.pts, upf, &m.conductors, &nums, &voltage, rl) {
                     w.connects = ends.clone();
-                    panel_makeup(&mut w, at_panel, rl);
+                    panel_makeup(&mut w, &at_panel, rl);
                     w.extra.push(("conductors_of_circuit", m.conductors.clone(), m.conductors_source.doc.clone().unwrap_or_default()));
                     let mut wctx = ctx.clone();
                     wctx.src = Source::from_doc(
@@ -912,12 +936,63 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         external.push((e, *g));
                         to_gear += 1;
                     }
-                    None => open_ends += 1,
+                    None => {
+                        open_ends += 1;
+                        let p = if end == 0 { c.pts.first() } else { c.pts.last() };
+                        if let Some(p) = p.copied()
+                            && open_at.len() < MAX_ATOMS
+                        {
+                            open_at.push((e, p, ctx.clone(), run_id.contains(":shared-")));
+                        }
+                    }
                 }
             }
         }
     }
 
+    // -- Open ends that meet: one junction box for them. --
+    if let Some(br) = rl.boxes.get("junction") {
+        let mut used = vec![false; open_at.len()];
+        for i in 0..open_at.len().min(20_000) {
+            if used.get(i).copied().unwrap_or(true) || atoms.len() >= MAX_ATOMS {
+                continue;
+            }
+            let Some((_, p, ctx, _)) = open_at.get(i).cloned() else { continue };
+            let near: Vec<usize> = (i..open_at.len().min(20_000))
+                .filter(|j| !used.get(*j).copied().unwrap_or(true))
+                .filter(|j| open_at.get(*j).is_some_and(|(_, q, c, _)| c.level.eq_ignore_ascii_case(&ctx.level) && (*q - p).len() <= tol))
+                .collect();
+            // Only where a shared raceway's run ends (Q6206): the homeruns join it there.
+            if near.len() < 2 || !near.iter().any(|j| open_at.get(*j).is_some_and(|o| o.3)) {
+                continue;
+            }
+            let [bw, bh, bd] = br.dims_in.map(|v| v.max(0.5) / 12.0 * upf);
+            let mut a = Atom { kind: "box", item: br.item.clone(), ty: br.size.clone(), size: br.size.clone(), a: p, b: p, ..Atom::default() };
+            a.extra.push(("cubic_in", format!("{}", br.cubic_in), br.source.clone()));
+            a.extra.push(("junction", near.len().to_string(), "computed: the runs that meet there (a homerun joining a shared raceway)".into()));
+            let mut jctx = ctx.clone();
+            jctx.run = String::new();
+            jctx.source = Handle(0);
+            jctx.body = Some((p, Vec2::new(1.0, 0.0), bw, bh, bd));
+            jctx.src = rule_source(&br.source);
+            let ji = atoms.len();
+            atoms.push((a, jctx));
+            junctions += 1;
+            for j in near {
+                if let Some(u) = used.get_mut(j) {
+                    *u = true;
+                }
+                let Some(e) = open_at.get(j).map(|o| o.0) else { continue };
+                if let Some(x) = atoms.get_mut(e) {
+                    x.0.connects.push(ji);
+                }
+                if let Some(b) = atoms.get_mut(ji) {
+                    b.0.connects.push(e);
+                }
+                open_ends = open_ends.saturating_sub(1);
+            }
+        }
+    }
     for (base, ends, deg, cite) in bend_notes {
         for e in ends.iter().flatten() {
             if let Some(a) = atoms.get_mut(base + e) {
@@ -1291,11 +1366,15 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
 
 /// A cable's or wire's makeup at the panels its run ends in (`ends`: none, one or both): each
 /// end a panel's makeup in place of a box's.
-fn panel_makeup(a: &mut Atom, ends: usize, rl: &super::AtomRules) {
-    let more = (rl.panel_makeup_ft - rl.makeup_ft.max(0.0)).max(0.0) * ends.min(2) as f64;
+/// `ends`: each panel end's can height, feet, where known (Q6206: the makeup runs down the can to
+/// the breaker).
+fn panel_makeup(a: &mut Atom, ends: &[Option<f64>], rl: &super::AtomRules) {
+    let each: Vec<f64> = ends.iter().take(2).map(|h| super::super::conduitroute::panel_end_makeup_ft(*h)).collect();
+    let more: f64 = each.iter().map(|m| (m - rl.makeup_ft.max(0.0)).max(0.0)).sum();
     if more > 0.0 && more.is_finite() {
         a.length_ft += more;
-        a.extra.push(("panel_makeup_ft", format!("{}", rl.panel_makeup_ft), rl.panel_makeup_source.clone()));
+        let shown = each.iter().map(|m| format!("{:.2}", m)).collect::<Vec<_>>().join(", ");
+        a.extra.push(("panel_makeup_ft", shown, rl.panel_makeup_source.clone()));
     }
 }
 
