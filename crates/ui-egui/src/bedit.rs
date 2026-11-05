@@ -247,7 +247,7 @@ fn save_question(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let current = app.session.state().ok().and_then(|st| st.block_editor().map(str::to_string)).unwrap_or_default();
     let mut answer: Option<Option<bool>> = None;
     egui::Window::new(crate::tl!("Edit Block Definition"))
-        .id(egui::Id::unique("Edit Block Definition"))
+        .id(egui::Id::new("Edit Block Definition"))
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::CENTER_CENTER)
