@@ -90,6 +90,7 @@ fn office_spec() -> Value {
                     ckt("2", "WATER HEATER", "30", 3, Some(9_000.0)),
                     ckt("3", "RECEPTACLES OPEN OFFICE", "20", 1, Some(1_800.0)),
                     ckt("5", "RECEPTACLES COPY ROOM", "20", 1, Some(900.0)),
+                    ckt("7", "LIGHTING CORRIDOR", "20", 1, Some(300.0)),
                     ckt("8", "SPARE", "20", 1, Some(0.0))
                  ],
                  "totals": {"connected_va": 20_000.0, "phase_a_va": 9_000.0, "phase_b_va": 2_000.0, "phase_c_va": 2_200.0}},
@@ -119,6 +120,7 @@ fn office() -> Session {
     devices(&mut d, "receptacle", "LP1", "LP1-5", 2, "103");
     devices(&mut d, "junction_box", "LP1", "LP1-5", 1, "103");
     devices(&mut d, "switch", "LP1", "LP1-1", 2, "101");
+    devices(&mut d, "receptacle", "LP1", "LP1-7", 12, "104");
     session(office_spec(), d)
 }
 
@@ -134,7 +136,7 @@ fn the_model_s_loads_are_checked_circuit_by_circuit_against_breakers_and_the_sch
     let lp1 = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "LP1").unwrap();
     // 20 x 100 VA luminaires + 16 receptacles at 180 VA + the schedule's water heater; the switches
     // and the junction box carry nothing.
-    assert_eq!(lp1["connected_va"]["model"], json!(2_000.0 + 14.0 * 180.0 + 2.0 * 180.0 + 9_000.0), "{lp1}");
+    assert_eq!(lp1["connected_va"]["model"], json!(2_000.0 + 14.0 * 180.0 + 2.0 * 180.0 + 9_000.0 + 12.0 * 180.0), "{lp1}");
     // The lighting circuit: 2,000 VA continuous is 83% of its 20 A breaker (over 80%).
     let c1 = find(&v, "E-LOAD-CIRCUIT", "LP1", "1");
     assert_eq!(c1.len(), 1, "{v:#}");
@@ -150,9 +152,15 @@ fn the_model_s_loads_are_checked_circuit_by_circuit_against_breakers_and_the_sch
     assert_eq!(s5.first().map(|f| f["likely_wrong"].clone()), Some(json!("model")), "{s5:?}");
     let s3 = find(&v, "E-LOAD-SCHEDULE", "LP1", "3");
     assert!(s3.first().is_some_and(|f| f["likely_wrong"] == "either" && f["message"].as_str().unwrap().contains("129 VA a receptacle")), "{s3:?}");
-    // The schedule prints 20,000 VA; its circuits add to 13,200.
+    // The schedule prints 20,000 VA; its circuits add to 13,500.
     let tot = find(&v, "E-LOAD-SCHEDULE", "LP1", "");
-    assert!(tot.iter().any(|f| f["message"].as_str().unwrap().contains("circuits read add to 13,200 VA") && f["likely_wrong"] == "schedule"), "{tot:?}");
+    assert!(tot.iter().any(|f| f["message"].as_str().unwrap().contains("circuits read add to 13,500 VA") && f["likely_wrong"] == "schedule"), "{tot:?}");
+    // A lighting circuit the model puts receptacles on: over its breaker by the model only, the
+    // model likely wrong (the schedule's 300 VA is well under).
+    let c7 = find(&v, "E-LOAD-CIRCUIT", "LP1", "7");
+    assert!(c7.first().is_some_and(|f| f["likely_wrong"] == "model" && f["message"].as_str().unwrap().contains("12 receptacle(s) on this lighting circuit")), "{c7:?}");
+    let s7 = find(&v, "E-LOAD-SCHEDULE", "LP1", "7");
+    assert_eq!(s7.first().map(|f| f["likely_wrong"].clone()), Some(json!("model")), "{s7:?}");
     // No finding on the spare.
     assert!(find(&v, "E-LOAD-CIRCUIT", "LP1", "8").is_empty());
 }
@@ -212,7 +220,7 @@ fn the_phases_of_the_model_follow_the_circuit_numbers() {
 }
 
 fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
-    let unit_total = 1_000.0 + 900.0 + 3_000.0;
+    let unit_total = 1_000.0 + 900.0 + 3_000.0 + 1_500.0;
     json!({
         "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12}],
@@ -224,7 +232,7 @@ fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
                     ckt("2", &format!("PANELBOARD U ({} UNITS)", units_on_feeders[1]), "100", 2, Some(unit_total * f64::from(units_on_feeders[1])))
                  ]},
                 {"panel": "U", "typical_of": 6, "source": "X-4", "header": {"volts/phase": "208Y/120V, 1PH, 3W", "bus amps": "100A"},
-                 "circuits": [ckt("1", "LIGHTING AND RECEPTACLES", "20", 1, Some(1_000.0)), ckt("2", "REFRIGERATOR", "20", 1, Some(900.0)), ckt("3", "AC UNIT", "20", 2, Some(3_000.0))],
+                 "circuits": [ckt("1", "LIGHTING AND RECEPTACLES", "20", 1, Some(1_000.0)), ckt("2", "REFRIGERATOR", "20", 1, Some(900.0)), ckt("3", "AC UNIT", "20", 2, Some(3_000.0)), ckt("4", "KITCHEN COUNTER", "20", 1, Some(1_500.0))],
                  "totals": {"connected_va": unit_total}}
             ],
             "load_summaries": [{"title": "PANELBOARD DP DEMAND CALCULATION", "panel": "DP", "basis": "220.84", "source": "X-4", "lines": [
@@ -237,9 +245,10 @@ fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
 fn lodging(units_on_feeders: [u32; 2]) -> Session {
     let mut d = Drawing::new_imperial();
     for room in ["201", "202", "203", "204", "205", "206"] {
-        luminaires(&mut d, "U", "U-1", 4, 50.0, room);
+        luminaires(&mut d, "U", "U-1", 4, 150.0, room);
         devices(&mut d, "receptacle", "U", "U-1", 2, room);
         devices(&mut d, "receptacle", "U", "U-2", 1, room);
+        devices(&mut d, "receptacle", "U", "U-4", 2, room);
     }
     session(lodging_spec(units_on_feeders), d)
 }
@@ -253,16 +262,21 @@ fn typical_unit_panels_roll_up_through_their_feeders_with_the_code_sheet_s_occup
     assert!(v["occupancy"]["from"].as_str().unwrap().contains("code sheet X-0"), "{}", v["occupancy"]);
     let u = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "U").unwrap();
     assert_eq!(u["units_in_model"], json!(6));
-    // One unit: 4 x 50 VA + 2 x 180 VA on circuit 1, a receptacle on 2, the schedule's 3,000 VA unit.
-    assert_eq!(u["connected_va"]["model"], json!(200.0 + 360.0 + 180.0 + 3_000.0), "{u}");
+    // One unit: 4 x 150 VA + 2 x 180 VA on circuit 1; circuit 2 names its appliance, whose
+    // receptacle is its connection: the schedule's 900 VA; the schedule's 3,000 VA unit; the
+    // kitchen counter's small-appliance circuit at 1,500 VA by rule.
+    assert_eq!(u["connected_va"]["model"], json!(600.0 + 360.0 + 900.0 + 3_000.0 + 1_500.0), "{u}");
+    let u4 = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "U").unwrap();
+    assert_eq!(u4["from_model"], json!(3), "{u4}");
+    assert!(find(&v, "E-LOAD-SCHEDULE", "U", "2").is_empty(), "the appliance's load is the schedule's: {v:#}");
     let dp = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "DP").unwrap();
     assert_eq!(dp["units_under"], json!(6), "{dp}");
-    assert_eq!(dp["connected_va"]["model"], json!(6.0 * 3_740.0), "{dp}");
+    assert_eq!(dp["connected_va"]["model"], json!(6.0 * 6_360.0), "{dp}");
     let steps = dp["demand_steps"].as_array().unwrap();
     let general = steps.iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
     assert!(general["cite"].as_str().unwrap().contains("Table 220.42, hotels"), "{general}");
-    assert_eq!(general["connected_va"], json!(6.0 * 740.0), "the units' receptacles in their general lighting: {general}");
-    assert_eq!(general["demand_va"], json!(2_220.0), "{general}");
+    assert_eq!(general["connected_va"], json!(6.0 * 2_460.0), "the units' receptacles and small-appliance circuits in their general lighting: {general}");
+    assert_eq!(general["demand_va"], json!(7_380.0), "{general}");
     // The documents' demand calculation uses the multifamily optional method on a hotel.
     let doc = find(&v, "E-LOAD-SCHEDULE", "DP", "");
     assert!(doc.iter().any(|f| f["likely_wrong"] == "documents" && f["message"].as_str().unwrap().contains("220.84")), "{doc:?}");
@@ -278,8 +292,8 @@ fn the_dwelling_rules_and_a_unit_count_the_feeders_dont_match() {
     assert_eq!(v["occupancy"]["id"], "dwelling");
     let dp = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "DP").unwrap();
     let general = dp["demand_steps"].as_array().unwrap().iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
-    // 5 units x 740 VA: 3,000 VA at 100%, the rest at 35%.
-    assert_eq!(general["demand_va"], json!(3_245.0), "{general}");
+    // 5 units x 2,460 VA: 3,000 VA at 100%, the rest at 35%.
+    assert_eq!(general["demand_va"], json!(6_255.0), "{general}");
     // A dwelling occupancy's own optional method is no finding.
     assert!(find(&v, "E-LOAD-SCHEDULE", "DP", "").iter().all(|f| f["likely_wrong"] != "documents"), "{v:#}");
     let typ = find(&v, "E-LOAD-SCHEDULE", "U", "");
@@ -299,7 +313,7 @@ fn the_report_is_written_as_csv_and_text_with_a_source_on_every_line() {
     let head = c.lines().next().unwrap();
     assert!(head.starts_with("level,panel,circuit,") && head.ends_with(",findings,sources"), "{head}");
     let circuits: Vec<&str> = c.lines().filter(|l| l.starts_with("circuit,LP1,")).collect();
-    assert_eq!(circuits.len(), 5, "{c}");
+    assert_eq!(circuits.len(), 6, "{c}");
     // Every circuit line with a load says where it came from.
     assert!(circuits.iter().filter(|l| !l.contains(",SPARE,")).all(|l| l.contains("X-2 LIGHT FIXTURE SCHEDULE") || l.contains("220.14") || l.contains("schedule")), "{c}");
     assert!(c.lines().any(|l| l.starts_with("service,MSB,")), "{c}");

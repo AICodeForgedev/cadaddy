@@ -7,6 +7,7 @@
     {"kinds": ["equipment_connection", "motor", "appliance", "disconnect", "fan", "exhaust_fan", "water_heater", "hand_dryer"], "category": "equipment", "cite": "NEC 220.14(A): the appliance's or equipment's rating (its submittal's)"},
     {"kinds": ["switch", "dimmer", "occupancy_sensor", "vacancy_sensor", "thermostat", "low_voltage_outlet", "data_outlet", "telephone_outlet", "catv_outlet", "speaker", "keypad", "card_reader", "bda_antenna_box", "bda_riser_box", "smoke_detector", "fire_alarm_device", "horn", "strobe", "pull_station"], "category": "control", "va": 0, "cite": "a control or low-voltage device: no load of its own"}
   ],
+  "small_appliance": {"words": ["KITCHEN", "COUNTER", "COUNTERTOP", "KITCHENETTE"], "va": 1500, "cite": "NEC 220.52(A): a unit's small-appliance branch circuit (its kitchen counter receptacles) at 1,500 VA, in its general lighting load under the demand factors"},
   "continuous": {
     "categories": ["lighting"],
     "description_words": ["LTG", "LIGHTING", "LIGHTS", "SIGN", "SIGNAGE", "HEAT", "HEATER", "HEATING", "WATER HEATER"],
