@@ -448,9 +448,14 @@ pub(crate) fn fill_from_oneline(
 /// What a circuit's breaker protects against, by its codes and the legend: (ground fault, arc
 /// fault). `None` when its codes don't say (no codes, or ones the legend doesn't define).
 pub(crate) fn protection(c: &PanelCircuit, legend: &BTreeMap<String, String>) -> (bool, bool) {
+    protection_of(&c.protection, legend)
+}
+
+/// [`protection`] of a breaker's codes.
+pub(crate) fn protection_of(codes: &[String], legend: &BTreeMap<String, String>) -> (bool, bool) {
     let mut gf = false;
     let mut af = false;
-    for code in &c.protection {
+    for code in codes {
         let meaning = legend.get(code).map(String::as_str).unwrap_or_default();
         if matches!(code.as_str(), "GF" | "GFI" | "GFCI" | "GFP" | "GFEP" | "DF" | "DFCI")
             || meaning.contains("GROUND FAULT")

@@ -745,6 +745,60 @@ fn edge_dist(outline: &[Vec2], p: Vec2) -> f64 {
 
 /// Set `key` unless a person set it (their value stays) or the store already has a value read
 /// from the prints that the fill would only replace with an assumption.
+/// A panel's breakers as built, over its printed schedule: the project rule
+/// `custom/breaker_protection.<PANEL>` = `AF/GF` or `AF/GF except PTAC` (a printed circuit whose
+/// description has a word after `except` keeps what is printed; so does a row with no
+/// description, a multi-pole breaker's next row).
+pub(crate) struct AsBuiltBreakers {
+    pub codes: Vec<String>,
+    pub source: String,
+}
+
+const AS_BUILT_RULE: &str = "breaker_protection.";
+
+pub(crate) fn as_built_breakers(d: &Drawing, panel: &str, description: &str) -> Option<AsBuiltBreakers> {
+    let upper = description.to_ascii_uppercase();
+    if upper.trim().is_empty() {
+        return None;
+    }
+    let entries = d.project_rules.list_domain(cadaddy_doc::projrules::RuleDomain::Custom);
+    let rule = entries.iter().find(|e| e.key.strip_prefix(AS_BUILT_RULE).is_some_and(|k| k.trim().eq_ignore_ascii_case(panel.trim())))?;
+    let value = rule.active.value.to_ascii_uppercase();
+    let (codes, except) = value.split_once(" EXCEPT ").unwrap_or((value.as_str(), ""));
+    // Whole words: PTAC isn't in RECEPTACLES.
+    let words = |t: &str| t.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    let said = words(&upper);
+    if words(except).iter().any(|w| said.contains(w)) {
+        return None;
+    }
+    let codes: Vec<String> = codes.split(['/', ',']).map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
+    let source = if rule.active.source.is_empty() { format!("project rule {}", rule.key) } else { rule.active.source.clone() };
+    (!codes.is_empty()).then_some(AsBuiltBreakers { codes, source })
+}
+
+/// Where a panel's breakers as built aren't what its schedule prints: one line a panel, for a
+/// finding (two documents disagreeing is never settled silently).
+pub(crate) fn as_built_differences(d: &Drawing, schedules: &[cadaddy_walk3d::PanelSchedule]) -> Vec<String> {
+    let mut out = Vec::new();
+    for ps in schedules {
+        let mut differ = Vec::new();
+        let mut built_as = None;
+        for c in &ps.circuits {
+            if let Some(b) = as_built_breakers(d, &ps.panel, &c.description) {
+                let same = b.codes.len() == c.protection.len() && b.codes.iter().all(|x| c.protection.iter().any(|y| y.eq_ignore_ascii_case(x)));
+                if !same {
+                    differ.push(c.number.clone());
+                    built_as = Some((b.codes.join("/"), b.source));
+                }
+            }
+        }
+        if let Some((codes, source)) = built_as {
+            out.push(format!("panel {}: {codes} as built ({source}); {} prints otherwise on circuits {}", ps.panel, ps.source, differ.join(", ")));
+        }
+    }
+    out
+}
+
 fn put(store: &mut Props, key: &str, prop: Prop, filled: &mut BTreeMap<String, usize>) {
     if !prop.has_value() {
         return;
@@ -1145,17 +1199,34 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                         if let Some(ps) = printed.filter(|ps| ps.circuits.iter().any(|x| !x.protection.is_empty()))
                             && let Some(pc) = ps.circuits.iter().find(on)
                         {
-                            let (gf, af) = super::panelsched::protection(pc, &ps.legend);
+                            // What was built, where the project says so, over what was printed.
+                            let built = as_built_breakers(d, p, &pc.description);
+                            let codes_of = built.as_ref().map_or(&pc.protection, |b| &b.codes);
+                            let (gf, af) = super::panelsched::protection_of(codes_of, &ps.legend);
                             let kind = match (gf, af) {
                                 (true, true) => "GFCI + AFCI (dual function)",
                                 (true, false) => "GFCI",
                                 (false, true) => "AFCI",
                                 (false, false) => "standard",
                             };
-                            let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} circuit {}", ps.source, ps.panel, pc.number));
+                            let printed_as = format!("{} panel {} circuit {}", ps.source, ps.panel, pc.number);
                             let codes = if pc.protection.is_empty() { "none".to_string() } else { pc.protection.join("/") };
-                            put(&mut store, "breaker_type", Prop::new(kind.to_string(), row_src.clone()).with_note(&format!("codes {codes}")), tally);
-                            put(&mut store, "gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), row_src), tally);
+                            if let Some(b) = &built {
+                                // A person's word on what was built: over any reading, the print's kept in the note.
+                                let src = Source::from_doc(SourceKind::User, &b.source);
+                                let note = format!("as built {}; {printed_as} prints {codes}", b.codes.join("/"));
+                                store.set("breaker_type", Prop::new(kind.to_string(), src.clone()).with_note(&note));
+                                store.set("gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), src));
+                            } else {
+                                let row_src = Source::from_doc(SourceKind::Schedule, &printed_as);
+                                put(
+                                    &mut store,
+                                    "breaker_type",
+                                    Prop::new(kind.to_string(), row_src.clone()).with_note(&format!("codes {codes}")),
+                                    tally,
+                                );
+                                put(&mut store, "gfci_breaker", Prop::new(if gf { "yes" } else { "no" }.to_string(), row_src), tally);
+                            }
                         }
                         if !c.breaker.trim().is_empty() {
                             put(&mut store, "breaker", Prop::new(c.breaker.trim().to_string(), src.clone()), tally);
