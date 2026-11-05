@@ -1941,7 +1941,7 @@ mod tests {
         tv["fields"]["circuit"] = json!({"value": "LP1-1", "source": "plan"});
         let mut rec = outlet("R1", "receptacle", 14.0, 10.0);
         rec["fields"]["circuit"] = json!({"value": "LP1-1", "source": "plan"});
-        let circuit = json!({"id": "circuit:L1:E-1:LP1-1", "kind": "circuit", "level": "L1", "at_ft": [0.0, 0.0], "fields": {
+        let circuit = json!({"id": "circuit:L1:E-901:LP1-1", "kind": "circuit", "level": "L1", "at_ft": [0.0, 0.0], "fields": {
             "circuit": {"value": "LP1-1", "source": "plan"}, "panel": {"value": "LP1", "source": "plan"},
             "conductors": {"value": "2#12 + 1#12G", "source": "default"}}});
         let mut s = building(
