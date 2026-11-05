@@ -4847,11 +4847,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // finding; when another level's layout matches it, that level's mains are
                 // proposed for it (copied, marked not drawn, priced apart, with an RFI), never
                 // put in silently.
-                let missing_water = levels_without_water(&sp.mep.runs);
+                let floor_plan = |r: &cadaddy_walk3d::MepRun| !enlarged.contains(&sheet_key(&r.source_sheet));
+                let roof = |l: &str| super::wallgen::roof_level(&sp.levels, l);
+                let missing_water = levels_without_water(&sp.mep.runs, &floor_plan, &roof);
                 let layout_rooms = if missing_water.is_empty() { Vec::new() } else { job_rooms(job) };
                 for level in missing_water {
                     progress_line(&format!("  {level}: drainage drawn, no domestic water drawn"));
-                    let matched = water_from_matching_level(&layout_rooms, &sp.mep.runs, &level, upf_runs);
+                    let matched = water_from_matching_level(&layout_rooms, &sp.mep.runs, &level, upf_runs, &floor_plan);
                     let proposal = matched.as_ref().filter(|m| m.share >= LAYOUT_MATCH_SHARE && !m.runs.is_empty());
                     let layout = matched.as_ref().map_or_else(
                         || "no level with water has rooms to compare".to_string(),
@@ -6045,6 +6047,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["misplaced"]
         );
         progress_line(&line);
+        // A plumbing fixture type whose rough-in height no schedule, detail or note gives: one
+        // review item a type, not a silent default.
+        if let Some(types) = db.get("fixture_defaults_by_type").and_then(Value::as_object) {
+            for (ty, n) in types {
+                let n = n.as_u64().unwrap_or(0);
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("No rough-in height for plumbing fixture {ty}"),
+                    &format!(
+                        "No fixture schedule, detail or note gives the mounting height of {ty} ({n} in the model): they stand at the rules data's usual height, marked a default"
+                    ),
+                    2,
+                    vec!["Find the height in the fixture's detail or cut sheet, or ask the engineer (RFI)".into(), "Set the type's height".into()],
+                    None,
+                    false,
+                );
+            }
+        }
     }
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
@@ -10155,18 +10175,25 @@ const ROOM_PIPE_DRAWN_SHARE: f64 = 0.6;
 /// Two rooms are the same size when each side is within this share of the other's.
 const ROOM_SIZE_SHARE: f64 = 0.2;
 
-/// The levels whose plans draw sanitary piping (fixtures drained there) but no domestic water
-/// (cold, hot, hot-water return), in order of first appearance. A roof's vents and storm drains
-/// alone need no water.
-fn levels_without_water(runs: &[cadaddy_walk3d::MepRun]) -> Vec<String> {
+/// The levels whose plans draw drainage (sanitary, or the vents of a waste and vent plan: fixtures
+/// drained there) but no domestic water (cold, hot, hot-water return), in order of first
+/// appearance. A roof's vents and storm drains alone need no water (`roof`: whether a level is
+/// the roof). `floor_plan`: whether a run was read from a floor's plan; a typical room's enlarged
+/// plan draws that room's branches, not the floor's water (its mains).
+fn levels_without_water(
+    runs: &[cadaddy_walk3d::MepRun],
+    floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
+    roof: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     const WATER: [&str; 3] = ["CW", "HW", "HWR"];
     let mut order: Vec<&str> = Vec::new();
     let mut water: BTreeSet<&str> = BTreeSet::new();
     for r in runs {
-        if r.system == "SAN" && !order.contains(&r.level.as_str()) {
+        let drained = r.system == "SAN" || (r.system == "V" && !roof(&r.level));
+        if drained && !order.contains(&r.level.as_str()) {
             order.push(&r.level);
         }
-        if WATER.contains(&r.system.as_str()) {
+        if WATER.contains(&r.system.as_str()) && floor_plan(r) {
             water.insert(&r.level);
         }
     }
@@ -10179,11 +10206,8 @@ fn fnv32(s: &str) -> u32 {
 }
 
 /// A level's layout matches another's when this share of their rooms (of the larger count) are
-/// the same type and size at the same place (coordinator 11-04, Q6161).
+/// the same type at the same place (coordinator 11-04, Q6161).
 const LAYOUT_MATCH_SHARE: f64 = 0.9;
-/// Two rooms are at the same place when their centres are within this (feet) once the levels'
-/// plans are laid over each other.
-const LAYOUT_MATCH_FT: f64 = 2.0;
 /// The rooms of a level compared at most (the match is quadratic in them).
 const MAX_LAYOUT_ROOMS: usize = 1_000;
 
@@ -10203,11 +10227,20 @@ struct WaterMatch {
 
 /// For a level whose plans draw its drainage but no water: the level with water whose layout
 /// best matches it (its rooms' types and sizes at the same places, from the model's rooms, the
-/// plans laid over each other by the move most of the rooms agree on) and that level's water
+/// plans laid over each other by the move most like rooms agree on; two rooms are at the same
+/// place when each one's centre lies in the other's box, so a room traced a little larger or
+/// smaller on one floor still matches) and that level's water
 /// mains (cold, hot, return) moved onto it, each marked `proposed` and "copied from <level>, not
-/// drawn". A room's own branches (a run wholly in one room) are not mains: the rooms of a type
-/// take their type's branches. `None` when no level with water has rooms to compare.
-fn water_from_matching_level(rooms: &[JobRoom], runs: &[cadaddy_walk3d::MepRun], level: &str, upf: f64) -> Option<WaterMatch> {
+/// drawn". A room's own branches (a run wholly in one room, or from a typical room's enlarged plan:
+/// not `floor_plan`'s) are not mains: the rooms of a type take their type's branches. `None` when
+/// no level with water has rooms to compare.
+fn water_from_matching_level(
+    rooms: &[JobRoom],
+    runs: &[cadaddy_walk3d::MepRun],
+    level: &str,
+    upf: f64,
+    floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
+) -> Option<WaterMatch> {
     const WATER: [&str; 3] = ["CW", "HW", "HWR"];
     let storey = |l: &str| {
         let d: String = l.chars().filter(char::is_ascii_digit).collect();
@@ -10243,7 +10276,7 @@ fn water_from_matching_level(rooms: &[JobRoom], runs: &[cadaddy_walk3d::MepRun],
     }
     // The levels with water, by their runs' names.
     let mut sources: BTreeMap<String, String> = BTreeMap::new();
-    for r in runs.iter().filter(|r| WATER.contains(&r.system.as_str())) {
+    for r in runs.iter().filter(|r| WATER.contains(&r.system.as_str()) && floor_plan(r)) {
         let st = storey(&r.level);
         if st != here {
             sources.entry(st).or_insert_with(|| r.level.clone());
@@ -10282,10 +10315,13 @@ fn water_from_matching_level(rooms: &[JobRoom], runs: &[cadaddy_walk3d::MepRun],
         let mut used = vec![false; theirs.len()];
         let mut matched = 0usize;
         for a in &mine {
+            let inside = |p: [f64; 2], b: &[f64; 4]| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
             let hit = theirs.iter().enumerate().find(|(j, b)| {
+                let moved = [b.b[0] + off[0], b.b[1] + off[1], b.b[2] + off[0], b.b[3] + off[1]];
                 !used.get(*j).copied().unwrap_or(true)
-                    && same(a, b)
-                    && (b.c[0] + off[0] - a.c[0]).hypot(b.c[1] + off[1] - a.c[1]) <= LAYOUT_MATCH_FT * upf
+                    && a.words == b.words
+                    && inside(a.c, &moved)
+                    && inside([b.c[0] + off[0], b.c[1] + off[1]], &a.b)
             });
             if let Some((j, _)) = hit
                 && let Some(u) = used.get_mut(j)
@@ -10314,7 +10350,10 @@ fn water_from_matching_level(rooms: &[JobRoom], runs: &[cadaddy_walk3d::MepRun],
             r.points.iter().all(|p| p[0] >= t.b[0] - margin && p[0] <= t.b[2] + margin && p[1] >= t.b[1] - margin && p[1] <= t.b[3] + margin)
         })
     };
-    for r in runs.iter().filter(|r| WATER.contains(&r.system.as_str()) && storey(&r.level) == st && !r.points.is_empty() && !in_one_room(r)) {
+    for r in runs
+        .iter()
+        .filter(|r| WATER.contains(&r.system.as_str()) && floor_plan(r) && storey(&r.level) == st && !r.points.is_empty() && !in_one_room(r))
+    {
         let mut copy = r.clone();
         copy.points = r.points.iter().map(|p| [p[0] + off[0], p[1] + off[1]]).collect();
         copy.level = level.to_string();
@@ -20833,6 +20872,7 @@ fn placement_summary(job: &GuidedJob) -> Value {
         "devices": {
             "heights_from": db.get("heights_from").cloned().unwrap_or(Value::Null),
             "defaults_by_kind": db.get("defaults_by_kind").cloned().unwrap_or(Value::Null),
+            "fixture_defaults_by_type": db.get("fixture_defaults_by_type").cloned().unwrap_or(Value::Null),
             "in_wall": db.get("in_wall").cloned().unwrap_or(Value::Null),
             "no_wall": db.get("no_wall").cloned().unwrap_or(Value::Null),
             "no_wall_first": db.get("no_wall_first").cloned().unwrap_or(Value::Null),
@@ -24181,11 +24221,19 @@ mod tests {
             run("HW", "Level 3"),
             run("SAN", "Level 3"),
             run("SAN", "Level 4"),
+            // A waste and vent plan read only for its vents: drained there all the same.
+            run("V", "Level 5"),
             run("V", "Roof"),
             run("ST", "Roof"),
         ];
-        assert_eq!(levels_without_water(&runs), vec!["Level 2".to_string(), "Level 4".to_string()]);
-        assert!(levels_without_water(&[]).is_empty());
+        let any = |_: &cadaddy_walk3d::MepRun| true;
+        let roof = |l: &str| l == "Roof";
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(levels_without_water(&runs, &any, &roof), names(&["Level 2", "Level 4", "Level 5"]));
+        assert!(levels_without_water(&[], &any, &roof).is_empty());
+        // All of it read from a typical room's enlarged plan (P-9 here): no floor's water plan.
+        let floor_plan = |r: &cadaddy_walk3d::MepRun| r.source_sheet != "P-9";
+        assert_eq!(levels_without_water(&runs, &floor_plan, &roof), names(&["Level 1", "Level 2", "Level 3", "Level 4", "Level 5"]));
     }
 
     /// A floor of made-up rooms at `(x0, y0)` (feet, upf 12): a row of `n` 12' x 15' rooms named
@@ -24238,7 +24286,7 @@ mod tests {
             water("CW", "Level 1", &[[1001.0, 2.0], [1040.0, 2.0]]),
             water("SAN", "Level 2", &[[1.0, 8.0], [1.0, 2.0]]),
         ];
-        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0).expect("a level to compare");
+        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|_| true).expect("a level to compare");
         assert_eq!(m.from, "Level 3");
         assert_eq!((m.matched, m.of), (12, 12));
         assert!((m.share - 1.0).abs() < 1e-9);
@@ -24252,22 +24300,25 @@ mod tests {
             assert!((x[0] - 1.0).abs() < 1e-6 && (x[1] - 119.0).abs() < 1e-6, "{x:?}");
         }
         assert_eq!(m.runs.iter().map(|r| r.system.as_str()).collect::<Vec<_>>(), ["CW", "HW"]);
+        // A run read from an enlarged plan (here: the HW one) is no floor's main.
+        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|r| r.system != "HW").expect("compared");
+        assert_eq!(m.runs.iter().map(|r| r.system.as_str()).collect::<Vec<_>>(), ["CW"]);
 
-        // Another room type and size (floor 3's rooms 14' wide), or a floor missing rooms: below
-        // 90%, nothing proposed by the job (the share says why).
+        // Another room type, or a floor missing rooms: below 90%, nothing proposed by the job
+        // (the share says why).
         let mut rooms = floor("Level 2", 0.0, 0.0, 10, "GUEST ROOM", &[2, 5]);
         rooms.extend(floor("Level 3", 500.0, 0.0, 10, "GUEST ROOM", &[]));
-        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0).expect("compared");
+        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|_| true).expect("compared");
         assert_eq!((m.matched, m.of), (10, 12));
         assert!(m.share < LAYOUT_MATCH_SHARE);
         let mut rooms = floor("Level 2", 0.0, 0.0, 10, "SUITE", &[]);
         rooms.extend(floor("Level 3", 500.0, 0.0, 10, "GUEST ROOM", &[]));
-        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0).expect("compared");
+        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|_| true).expect("compared");
         assert!(m.share < LAYOUT_MATCH_SHARE, "{}", m.share);
         // No rooms on the level, or no level with water: nothing to compare.
-        assert!(water_from_matching_level(&[], &runs, "Level 2", 12.0).is_none());
+        assert!(water_from_matching_level(&[], &runs, "Level 2", 12.0, &|_| true).is_none());
         let rooms = floor("Level 2", 0.0, 0.0, 10, "GUEST ROOM", &[]);
-        assert!(water_from_matching_level(&rooms, &runs[4..], "Level 2", 12.0).is_none());
+        assert!(water_from_matching_level(&rooms, &runs[4..], "Level 2", 12.0, &|_| true).is_none());
     }
 
     #[test]
@@ -24278,10 +24329,26 @@ mod tests {
         let mut b = floor("Level 3", 250.3, 39.8, 8, "KING", &[]);
         rooms.append(&mut b);
         let runs = vec![water("CW", "Level 3", &[[251.0, 41.5], [345.0, 41.5]])];
-        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0).expect("compared");
+        let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|_| true).expect("compared");
         assert_eq!((m.matched, m.of), (10, 10), "{}", m.share);
         let p = m.runs.first().expect("the main").points.first().copied().expect("a point");
         assert!((p[0] / 12.0 - 0.7).abs() < 0.01 && (p[1] / 12.0 - 1.7).abs() < 0.01, "{p:?}");
+
+        // A room traced 4' wider on one floor (it took in its neighbour's wall) is still that
+        // room; one of another type there is not.
+        let mut wide = rooms.clone();
+        if let Some(r) = wide.iter_mut().find(|r| r.1 == "Level 3" && r.3 == "3") {
+            for p in r.2.iter_mut().filter(|p| p.x > (250.3 + 40.0) * 12.0) {
+                p.x += 48.0;
+            }
+        }
+        let m = water_from_matching_level(&wide, &runs, "Level 2", 12.0, &|_| true).expect("compared");
+        assert_eq!((m.matched, m.of), (10, 10));
+        if let Some(r) = wide.iter_mut().find(|r| r.1 == "Level 3" && r.3 == "5") {
+            r.0 = "SUITE".into();
+        }
+        let m = water_from_matching_level(&wide, &runs, "Level 2", 12.0, &|_| true).expect("compared");
+        assert_eq!((m.matched, m.of), (9, 10));
     }
 
     #[test]

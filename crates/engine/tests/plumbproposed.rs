@@ -36,6 +36,11 @@ fn run(system: &str, points: Value, height_source: &str) -> Value {
 /// A water closet at (10', 5') with its waste and vent drawn beside it, and a cold water main
 /// past it that no plan draws (`cw`: its height source).
 fn built(cw: &str) -> Session {
+    built_with(cw).0
+}
+
+/// [`built`], with a washer box beside the water closet, and the build's result.
+fn built_with(cw: &str) -> (Session, Value) {
     let mut s = Session::empty();
     s.open_drawing(room(), "Plumbing Room", None);
     let fixture = json!({
@@ -48,6 +53,17 @@ fn built(cw: &str) -> Session {
             "symbol": {"value": "1F8", "source": "plan"},
         },
     });
+    // No schedule, detail or note gives its height.
+    let washer = json!({
+        "id": "device:L1:14.0,0.8:WB-7", "kind": "plumbing_fixture", "level": "L1", "at_ft": [14.0, 0.8],
+        "fields": {
+            "type": {"value": "WB-7", "source": "plan"},
+            "fixture": {"value": "WASHING MACHINE BOX", "source": "schedule"},
+            "device_type": {"value": "WASHING MACHINE BOX", "source": "schedule"},
+            "sheet": {"value": "P-101", "source": "plan"},
+            "symbol": {"value": "1F9", "source": "plan"},
+        },
+    });
     let runs = json!([
         run("SAN", json!([[96.0, 48.0], [96.0, 240.0]]), "default"),
         run("V", json!([[132.0, 48.0], [132.0, 240.0]]), "default"),
@@ -58,12 +74,12 @@ fn built(cw: &str) -> Session {
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
         "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
         "wall_types": [{"name": "Partition", "thickness_in": 6}],
-        "tags": [fixture],
+        "tags": [fixture, washer],
         "mep": {"systems": [pipe("SAN"), pipe("V"), pipe("CW")], "runs": runs},
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
-    s.execute("model.build", &json!({})).expect("build");
-    s
+    let r = s.execute("model.build", &json!({})).expect("build");
+    (s, r)
 }
 
 fn layers(s: &Session) -> Vec<String> {
@@ -123,4 +139,13 @@ fn a_proposed_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
     assert!(p["cold_water"]["value"].as_str().is_some(), "{p:#}");
     assert!(p["cold_water"]["note"].as_str().is_some_and(|n| n.contains("proposed")), "{p:#}");
     assert!(p.get("unconnected").is_none_or(Value::is_null), "{p:#}");
+}
+
+#[test]
+fn a_fixture_type_with_no_documented_height_is_listed_by_type() {
+    let (_, r) = built_with("tag");
+    let by = &r["deviceBuild"]["fixture_defaults_by_type"];
+    assert_eq!(by["WB-7 WASHING MACHINE BOX"], json!(1), "{by}");
+    // The water closet stands on the floor: no default.
+    assert!(by.as_object().is_some_and(|o| o.len() == 1), "{by}");
 }

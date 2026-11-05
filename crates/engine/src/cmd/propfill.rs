@@ -267,6 +267,9 @@ fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
     t.id.starts_with("device:") && t.fields.contains_key("symbol") && t.at_ft.iter().all(|v| v.is_finite())
 }
 
+/// Plumbing fixture types with a default height listed, at most (one review item each).
+const MAX_FIXTURE_DEFAULT_TYPES: usize = 200;
+
 /// The WALLGEN tag key linking a built device to its spec tag.
 const DEVID: &str = "devid";
 
@@ -285,6 +288,9 @@ pub(crate) struct DeviceBuild {
     pub heights: BTreeMap<&'static str, usize>,
     /// The devices whose height no document gives, by kind.
     pub defaults: BTreeMap<String, usize>,
+    /// The plumbing fixtures whose rough-in height no document gives, by type (`P-8 WASHING
+    /// MACHINE BOX`): one review item a type.
+    pub fixture_defaults: BTreeMap<String, usize>,
     /// Wall devices set in a wall's face, and those with no wall within reach.
     pub in_wall: usize,
     pub no_wall: Vec<Value>,
@@ -302,6 +308,7 @@ impl DeviceBuild {
             "built": self.built,
             "heights_from": self.heights,
             "defaults_by_kind": self.defaults,
+            "fixture_defaults_by_type": self.fixture_defaults,
             "in_wall": self.in_wall,
             "no_wall": self.no_wall.len(),
             "no_wall_first": self.no_wall.iter().take(20).collect::<Vec<_>>(),
@@ -1025,6 +1032,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
             *report.defaults.entry(vkind.clone()).or_default() += 1;
+            if kind == "plumbing fixture" && report.fixture_defaults.len() < MAX_FIXTURE_DEFAULT_TYPES {
+                let ty = [mark.trim(), name.as_deref().unwrap_or("").trim()].iter().filter(|w| !w.is_empty()).copied().collect::<Vec<_>>().join(" ");
+                *report.fixture_defaults.entry(if ty.is_empty() { "untyped".into() } else { ty }).or_default() += 1;
+            }
         }
         let (w, l, bh) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0, BOX_IN[2] * upf / 12.0);
         let at_z = floor + height.inches / 12.0 * upf;
