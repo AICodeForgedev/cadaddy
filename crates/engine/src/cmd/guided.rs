@@ -4522,6 +4522,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
     // The circuits whose estimated routes were all in typical-room views (their tags not stored).
     let mut room_view_circuits: BTreeSet<String> = BTreeSet::new();
+    // The levels whose plans draw their drainage but no water (found before other floors' room
+    // pipes are laid into their rooms): the fixtures' water is inferred there.
+    let mut no_water_levels: Vec<String> = Vec::new();
     // The trades' documents read before (a resumed job): the draft starts the spec again.
     let prev_trades = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp).filter(super::tradeatoms::has_facts).map(|sp| sp.trades);
     let draft_result = s.execute("bspec.draft", &draft_params);
@@ -4855,6 +4858,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let missing_water = levels_without_water(&sp.mep.runs, &floor_plan, &roof);
                 let layout_rooms = if missing_water.is_empty() { Vec::new() } else { job_rooms(job) };
                 let fill = super::waterfill::rules();
+                no_water_levels.clone_from(&missing_water);
                 for level in missing_water {
                     progress_line(&format!("  {level}: drainage drawn, no domestic water drawn"));
                     let sources = water_sources(&sp, &layout_rooms, &level, &floor_plan, &fill);
@@ -5634,7 +5638,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // A floor with no water plan: the water its derived mains don't reach, inferred from its
         // fixtures and its rooms' branches.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-            let inferred = infer_missing_water(job, &mut sp, &devices, schedule.as_ref());
+            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
             if inferred.as_object().is_some_and(|o| !o.is_empty()) {
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
@@ -10334,29 +10338,24 @@ fn water_sources(
     out
 }
 
-/// The water a level with no water plan still lacks once its derived mains are in, inferred
-/// ([`super::waterfill::infer`]): each fixture (the plumbing plans' fixtures, its lines by its
+/// The water the levels with no water plan (`levels`, as the derive step found them, before other
+/// floors' room pipes were laid into their rooms) still lack once their derived mains and their
+/// rooms' pipes are in, inferred ([`super::waterfill::infer`]): each fixture (the plumbing plans' fixtures, its lines by its
 /// schedule row) with no pipe of a line it takes in reach, and each room's branches joined to no
 /// main, run from the nearest main or riser of the system. Each level's result is a finding
 /// (what was inferred, on what basis, what is still unconnected). The counts.
 fn infer_missing_water(
     job: &mut GuidedJob,
     sp: &mut cadaddy_walk3d::BuildingSpec,
+    levels: &[String],
     devices: &[super::readers::ReadDevice],
     schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
 ) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let enlarged: BTreeSet<String> = job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
-    let floor_plan =
-        |r: &cadaddy_walk3d::MepRun| !enlarged.contains(&sheet_key(&r.source_sheet)) && super::waterfill::provenance(r) == super::waterfill::DRAWN;
-    let levels = {
-        let roof = |l: &str| super::wallgen::roof_level(&sp.levels, l);
-        levels_without_water(&sp.mep.runs, &floor_plan, &roof)
-    };
     let fill = super::waterfill::rules();
     let mut out = serde_json::Map::new();
     for level in levels {
-        let key = storey_key(&level);
+        let key = storey_key(level);
         let fixtures: Vec<super::waterfill::Fixture> = devices
             .iter()
             .filter(|d| d.kind == "plumbing fixture" && storey_key(&d.level) == key)
@@ -10407,7 +10406,7 @@ fn infer_missing_water(
                 false,
             );
         }
-        out.insert(level.clone(), json!({"needs": n_needs, "served": inf.served, "runs": inf.runs.len(), "ft": ft, "unserved": inf.unserved}));
+        out.insert(level.to_string(), json!({"needs": n_needs, "served": inf.served, "runs": inf.runs.len(), "ft": ft, "unserved": inf.unserved}));
         sp.mep.runs.extend(inf.runs);
     }
     Value::Object(out)
