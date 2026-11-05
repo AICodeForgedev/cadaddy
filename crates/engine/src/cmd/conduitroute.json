@@ -121,9 +121,12 @@
     "window_margin_in": 1.5,
     "source": "NEC 110.26(A) working space (3 ft deep for 0-150 V to ground, condition 1; 6-1/2 ft high), 110.26(E)(1) dedicated electrical space (the footprint to 6 ft above the equipment); a window the submittal doesn't give is the box's top less 1-1/2 in margins (derived)"
   },
-  "takeoff": {
-    "wire_makeup_ft": 1.0,
-    "panel_makeup_ft": 3.0,
-    "source": "company default makeup: 1 ft at each box, 3 ft at each panel (the atoms already carry their makeup)"
+  "cable": {
+    "above_box_in": 12,
+    "in_wall_max_ft": 30.0,
+    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling"
+  },
+  "switch_legs": {
+    "source": "a switch or sensor with no circuit of its own is on the circuit of what it controls (the switch leg: the device's box joined to its luminaires' circuit, NEC 404.2(C) brings the grounded conductor to it)"
   }
 }

@@ -156,6 +156,8 @@
   "insulation_source": "THHN/THWN-2 copper where the specifications name no other (company default)",
   "makeup_ft": 1.0,
   "makeup_source": "1 ft of each conductor left at each box for makeup (company default; NEC 300.14 asks at least 6 in)",
+  "panel_makeup_ft": 3.0,
+  "panel_makeup_source": "3 ft of each conductor at a panel: down its gutter to the breaker or the bus and its termination (company default; NEC 312.6 bending space)",
   "bushing_min_awg": 4,
   "bushing_item": "Insulating bushing (bang-on)",
   "bushing_source": "NEC 300.4(G): an insulating bushing where #4 or larger conductors enter a box or enclosure",
