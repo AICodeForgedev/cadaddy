@@ -143,6 +143,79 @@ pub(crate) struct RingRule {
     pub source: String,
 }
 
+/// What conductors of one material are bought as (`feeder_conductors`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ConductorKind {
+    pub insulation: String,
+    pub item: String,
+    pub ground_item: String,
+}
+
+/// One rule of whether a luminaire takes an outlet box: words in what its documents say of it.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LuminaireBoxRule {
+    pub words: Vec<String>,
+    #[serde(rename = "box")]
+    pub takes_box: bool,
+    /// A cut sheet's words: read off the submittal (the schedule's mounting words are not).
+    pub cut_sheet: bool,
+    pub source: String,
+}
+
+/// Whether a luminaire takes an outlet box (`luminaire_box`): the first rule (in order) whose
+/// words one of its `fields` holds decides; none: the default box.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LuminaireBox {
+    pub fields: Vec<String>,
+    pub rules: Vec<LuminaireBoxRule>,
+    pub default_source: String,
+}
+
+/// What decided a luminaire's box: whether it takes one, the words found, the field they were in
+/// and the document it came from (empty: the default), and the rule's source.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct BoxDecision {
+    pub takes_box: bool,
+    pub found: String,
+    pub field: String,
+    pub doc: String,
+    pub source: String,
+}
+
+impl LuminaireBox {
+    /// The decision from what a luminaire's documents say: `(field, value, document)` each.
+    pub(crate) fn decide(&self, said: &[(String, String, String)]) -> BoxDecision {
+        for r in &self.rules {
+            for f in &self.fields {
+                for (k, v, doc) in said.iter().filter(|s| &s.0 == f) {
+                    let up = v.to_ascii_uppercase();
+                    if let Some(w) = r.words.iter().find(|w| !w.is_empty() && up.contains(&w.to_ascii_uppercase())) {
+                        return BoxDecision {
+                            takes_box: r.takes_box,
+                            found: w.to_ascii_lowercase(),
+                            field: k.clone(),
+                            doc: doc.clone(),
+                            source: r.source.clone(),
+                        };
+                    }
+                }
+            }
+        }
+        BoxDecision { takes_box: true, source: self.default_source.clone(), ..BoxDecision::default() }
+    }
+    /// The first rule's words a cut sheet's lines hold (the junction box it says it has or needs).
+    pub(crate) fn cut_sheet_words(&self, lines: &[String]) -> Option<String> {
+        self.rules
+            .iter()
+            .filter(|r| r.cut_sheet)
+            .find_map(|r| r.words.iter().find(|w| !w.is_empty() && lines.iter().any(|l| l.to_ascii_uppercase().contains(&w.to_ascii_uppercase()))))
+            .map(|w| w.to_ascii_lowercase())
+    }
+}
+
 /// The rules data (`mepatoms.json`).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
@@ -173,6 +246,11 @@ pub(crate) struct AtomRules {
     pub joint_tol_in: f64,
     pub box_reach_ft: f64,
     pub panel_reach_ft: f64,
+    pub feeder_makeup_ft: f64,
+    pub feeder_makeup_source: String,
+    pub feeder_conductors: BTreeMap<String, ConductorKind>,
+    pub feeder_conductors_source: String,
+    pub luminaire_box: LuminaireBox,
 }
 
 /// The rules data, read once.
@@ -748,13 +826,37 @@ pub(crate) fn cable_pieces(path: &[Vec3], upf: f64, kind: &str, cr: &CableRule, 
 /// run's plus makeup at each end). `circuits`: the panel circuit numbers (`1,3,5`), for the
 /// phases; `voltage`: `120/208`.
 pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], voltage: &str, rules: &AtomRules) -> Vec<Atom> {
+    let m = rules.makeup_ft.max(0.0);
+    wires_with(path, upf, makeup, circuits, voltage, rules, &WireOpts { kind: None, makeup_ft: [m, m], makeup_source: &rules.makeup_source })
+}
+
+/// How a run's conductors differ from a branch circuit's: what they are bought as (`None`: THHN
+/// copper, the rules' insulation) and the makeup at each end, feet.
+pub(crate) struct WireOpts<'a> {
+    pub kind: Option<(&'a ConductorKind, &'a str)>,
+    pub makeup_ft: [f64; 2],
+    pub makeup_source: &'a str,
+}
+
+/// [`wires`], the conductors' kind and each end's makeup as `opts` say.
+pub(crate) fn wires_with(
+    path: &[Vec3],
+    upf: f64,
+    makeup: &str,
+    circuits: &[u32],
+    voltage: &str,
+    rules: &AtomRules,
+    opts: &WireOpts<'_>,
+) -> Vec<Atom> {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let pts = clean_path(path, upf);
     let (Some(a), Some(b)) = (pts.first().copied(), pts.last().copied()) else { return Vec::new() };
     if pts.len() < 2 {
         return Vec::new();
     }
-    let len = path_ft(&pts, upf) + 2.0 * rules.makeup_ft.max(0.0);
+    let ends = opts.makeup_ft.map(|m| if m.is_finite() { m.max(0.0) } else { 0.0 });
+    let len = path_ft(&pts, upf) + ends[0] + ends[1];
+    let makeup_text = if (ends[0] - ends[1]).abs() < 1e-9 { format!("{}", ends[0]) } else { format!("{} + {}", ends[0], ends[1]) };
     let mut phases: Vec<&str> = circuits.iter().map(|c| phase_of(*c)).collect();
     if phases.is_empty() {
         phases.push("A");
@@ -772,17 +874,25 @@ pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], vol
                 "N"
             };
             let color = rules.color(voltage, role).unwrap_or_default();
+            let (item, ty, source) = match opts.kind {
+                Some((k, src)) => (if ground { k.ground_item.clone() } else { k.item.clone() }, k.insulation.clone(), src.to_string()),
+                None => (
+                    if ground { "Copper ground, green".into() } else { "THHN copper".into() },
+                    rules.insulation.clone(),
+                    rules.insulation_source.clone(),
+                ),
+            };
             let mut w = Atom {
                 kind: "wire",
-                item: if ground { "Copper ground, green".into() } else { "THHN copper".into() },
-                ty: rules.insulation.clone(),
+                item,
+                ty,
                 size: wire_size(&size),
                 body_in: 0.15,
                 length_ft: len,
                 a,
                 b,
                 path: pts.clone(),
-                source: rules.insulation_source.clone(),
+                source,
                 ..Atom::default()
             };
             w.extra.push(("color", color.to_string(), rules.colors_source.clone()));
@@ -797,7 +907,7 @@ pub(crate) fn wires(path: &[Vec3], upf: f64, makeup: &str, circuits: &[u32], vol
                 },
                 rules.phase_source.clone(),
             ));
-            w.extra.push(("makeup_ft", format!("{}", rules.makeup_ft), rules.makeup_source.clone()));
+            w.extra.push(("makeup_ft", makeup_text.clone(), opts.makeup_source.to_string()));
             out.push(w);
         }
     }
@@ -1652,6 +1762,56 @@ mod tests {
 
     fn count(p: &Pieces, kind: &str) -> usize {
         p.atoms.iter().filter(|a| a.kind == kind).count()
+    }
+
+    fn said(v: &[(&str, &str)]) -> Vec<(String, String, String)> {
+        v.iter().map(|(k, x)| (k.to_string(), x.to_string(), format!("doc of {k}"))).collect()
+    }
+
+    #[test]
+    fn a_luminaires_box_is_decided_by_the_strongest_words_its_documents_say() {
+        let lb = &rules().luminaire_box;
+        // The cut sheet's canless wafer beats the schedule's "surface".
+        let d = lb.decide(&said(&[("installation", "SURFACE/CEILING"), ("junction_box", "canless")]));
+        assert!(!d.takes_box, "{d:?}");
+        assert_eq!((d.found.as_str(), d.field.as_str(), d.doc.as_str()), ("canless", "junction_box", "doc of junction_box"));
+        // A recessed row whose cut sheet mounts it on a junction box: a box.
+        assert!(lb.decide(&said(&[("installation", "Recessed"), ("junction_box", "compatible junction box")])).takes_box);
+        // The schedule's words alone, in any case and column.
+        assert!(!lb.decide(&said(&[("fixture_description", "2x4 lay-in troffer")])).takes_box);
+        assert!(!lb.decide(&said(&[("mounting_type", "recessed")])).takes_box);
+        assert!(lb.decide(&said(&[("installation", "Pendant, 12' AFF")])).takes_box);
+        // Nothing said: the usual box, said so.
+        let none = lb.decide(&[]);
+        assert!(none.takes_box && none.found.is_empty() && !none.source.is_empty(), "{none:?}");
+        // A field the rules don't read decides nothing.
+        assert!(lb.decide(&said(&[("finish", "recessed bronze")])).found.is_empty());
+    }
+
+    #[test]
+    fn a_cut_sheet_is_read_for_its_junction_box_words_only() {
+        let lb = &rules().luminaire_box;
+        let lines = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(lb.cut_sheet_words(&lines(&["ML9 4in CANLESS downlight", "Remote driver / junction box"])).as_deref(), Some("canless"));
+        assert_eq!(lb.cut_sheet_words(&lines(&["Housing with integral junction box", "canless"])).as_deref(), Some("integral junction box"));
+        assert_eq!(lb.cut_sheet_words(&lines(&["Universal J-box pattern on back plate"])).as_deref(), Some("j-box pattern"));
+        // Mounting words on a cut sheet (recessed, surface, ceiling) are not its junction box.
+        assert_eq!(lb.cut_sheet_words(&lines(&["Recessed or surface ceiling mounting", "LED 90 CRI"])), None);
+    }
+
+    #[test]
+    fn a_feeders_wires_are_of_its_material_with_the_makeup_each_end_takes() {
+        let rl = rules();
+        let al = rl.feeder_conductors.get("al").expect("aluminum");
+        let opts = WireOpts { kind: Some((al, "rule")), makeup_ft: [3.0, 0.0], makeup_source: "gear" };
+        let w = wires_with(&line(20.0), 12.0, "3#4/0 + 1#4/0 + 1#4G", &[1, 3, 5], "120/208", rl, &opts);
+        assert_eq!(w.len(), 5);
+        assert!(w.iter().all(|a| (a.length_ft - 23.0).abs() < 1e-9 && a.item == "XHHW aluminum" && a.ty == "XHHW-2"), "{w:?}");
+        assert_eq!(w.iter().filter(|a| a.size == "#4/0").count(), 4);
+        // A branch circuit's wires stay THHN copper with the box makeup at both ends.
+        let b = wires(&line(20.0), 12.0, "2#12 + 1#12G", &[1], "120/208", rl);
+        assert!(b.iter().all(|a| (a.length_ft - (20.0 + 2.0 * rl.makeup_ft)).abs() < 1e-9), "{b:?}");
+        assert_eq!(b.iter().filter(|a| a.item == "Copper ground, green").count(), 1);
     }
 
     #[test]

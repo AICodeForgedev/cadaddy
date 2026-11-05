@@ -3347,10 +3347,26 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         })
         .map(|e| e.handle)
         .collect();
+    // The feeders' routed runs are cut into their pieces too (a job routes them after the build,
+    // as whole runs): those whole runs go.
+    let feeder_whole = feeder_whole_runs(d, &sp);
     let mut shifted = sp.clone();
-    shifted.mep.runs.retain(|r| systems.contains(&r.system));
-    // A feeder's entry stubs are cut again only where they were pieces already.
-    shifted.mep.feeders.retain(|f| systems.contains(&f.tag));
+    shifted.mep.runs.retain(|r| systems.contains(&r.system) || super::ugplan::is_feeder_run(r));
+    // A feeder's entry stubs are cut again only where they were pieces already; a routed feeder
+    // is kept for its conductors.
+    let routed_feeders: BTreeSet<usize> = shifted
+        .mep
+        .runs
+        .iter()
+        .filter(|r| super::ugplan::is_feeder_run(r))
+        .filter_map(|r| super::mepatoms::build::feeder_of_run(&shifted, r))
+        .collect();
+    let mut fi = 0usize;
+    shifted.mep.feeders.retain(|f| {
+        let keep = systems.contains(&f.tag) || routed_feeders.contains(&fi);
+        fi += 1;
+        keep
+    });
     for r in &mut shifted.mep.runs {
         let o = off_of(&r.level);
         r.points.iter_mut().for_each(|p| *p = [p[0] + o.x, p[1] + o.y]);
@@ -3360,7 +3376,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         e.min = [e.min[0] + o.x, e.min[1] + o.y];
         e.max = [e.max[0] + o.x, e.max[1] + o.y];
     }
-    for h in &old {
+    for h in old.iter().chain(&feeder_whole) {
         d.remove_entity(*h);
     }
     let before: BTreeSet<Handle> = d.model.handles().into_iter().collect();
@@ -3384,6 +3400,25 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
     }))
+}
+
+/// The whole-run objects (not pieces) of the spec's feeder runs: on the feeder system, or a run's
+/// own (its id begins with the run's).
+fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
+    let bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
+    if bases.is_empty() {
+        return Vec::new();
+    }
+    d.model
+        .iter()
+        .filter(|e| !super::mepatoms::is_atom(e))
+        .filter(|e| {
+            let Some(sy) = super::bimlook::made_tag(e, "system") else { return false };
+            sy == super::gearbuild::FEEDER_SYSTEM
+                || super::bimlook::made_tag(e, "mepid").and_then(|id| id.rsplit_once('/')).is_some_and(|(base, _)| bases.contains(base))
+        })
+        .map(|e| e.handle)
+        .collect()
 }
 
 fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
