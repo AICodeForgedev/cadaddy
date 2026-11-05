@@ -6051,6 +6051,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["dampers_error"] = json!(e.to_string());
     }
     bim_step(s, job, "dampers", t);
+    // The other objects the documents define and mark (duct detectors, door holders, keynoted
+    // sensors and signs, objects a connection note names) (Q6192).
+    let t = web_time::Instant::now();
+    if let Err(e) = doc_objects_step(s, job, &pages, placer.as_deref(), &mut result) {
+        result["doc_objects_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "documented objects", t);
     // The feeders' conduit, gear to gear (proposed).
     let t = web_time::Instant::now();
     if let Err(e) = feeder_step(s, job, &mut result) {
@@ -13299,6 +13306,730 @@ fn dampers_step(
 }
 
 /// The visible attributes of the blocks inserted on a drawing, as texts where they are printed.
+/// The objects the documents define and mark that no other step makes (Q6192,
+/// [`super::doc_objects`]): each plan tag whose code a legend or abbreviation list gives one of
+/// the rules data's classes, each keynote marker whose note calls for one, on its level's plan;
+/// for a class nothing marks, one per the count of the note that names it, proposed. Each gets
+/// the connection its notes give (an equipment connection box on the circuit named, a fire alarm
+/// module, a data outlet); one the model already has there is left alone.
+fn doc_objects_step(
+    s: &mut Session,
+    job: &mut GuidedJob,
+    pages: &[(String, cadaddy_doc::Drawing)],
+    place: Option<&dyn Fn([f64; 2], &str) -> Option<cadaddy_mepfix::tagid::Sim>>,
+    result: &mut Value,
+) -> crate::Result<()> {
+    use super::doc_objects::{self as dob, Found, How};
+    use cadaddy_geom::Vec2;
+    use cadaddy_mepfix::sheet_facts::TextItem;
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+    let r = dob::rules();
+    // A build run again: this step's own elements of the last run go first.
+    sp.mep.equipment.retain(|e| !e.properties.contains_key("DOC_OBJECT"));
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let is_plan = |k: &str| matches!(k, "plan" | "enlarged_plan");
+    let all_refs = job_sheet_refs(job);
+    // Every plan (a site plan's marks can't be placed on a level, but they count a class only a
+    // note names).
+    // The trades the classes are tagged on, and the general and low-voltage letters.
+    let trades: BTreeSet<&str> =
+        r.classes.iter().flat_map(|c| std::iter::once(c.trade.as_str()).chain(c.tag_trades.iter().map(String::as_str))).collect();
+    let wanted = |dsc: &str| {
+        let t = dob::trade_of_discipline(dsc);
+        trades.contains(t) || t == "electrical" || matches!(dsc.trim().to_ascii_uppercase().chars().next(), Some('G' | 'L'))
+    };
+    let refs: Vec<super::printmep::SheetRef> = all_refs
+        .iter()
+        .filter(|r| (r.kind.contains("plan") || super::printmep::building_level(&r.level)) && wanted(&r.discipline))
+        .take(r.max_sheets.max(1))
+        .cloned()
+        .collect();
+    struct Sheet {
+        r: super::printmep::SheetRef,
+        texts: Vec<TextItem>,
+        segs: Vec<(Vec2, Vec2)>,
+        rounds: Vec<(Vec2, f64)>,
+    }
+    let sheets: Vec<Sheet> = {
+        let d = s.doc()?;
+        let attribs = attribute_texts(d);
+        refs.into_iter()
+            .map(|r| {
+                let sub = super::printmep::sheet_drawing(d, &r);
+                let mut texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+                texts.extend(block_texts(&sub));
+                let [x0, y0, x1, y1] = r.view.unwrap_or(r.rect);
+                let inside = |p: Vec2| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1);
+                for a in attribs.iter().filter(|a| inside(a.at)) {
+                    if !texts.iter().any(|t| t.value == a.value && (t.at - a.at).len() < 0.1 * a.height) {
+                        texts.push(a.clone());
+                    }
+                }
+                let segs = super::keynotes::sheet_segments(&sub, r.view.unwrap_or(r.rect));
+                let rounds = sub
+                    .model
+                    .iter()
+                    .filter_map(|e| match &e.kind {
+                        cadaddy_doc::EntityKind::Circle(c) => Some((c.center.xy(), c.radius)),
+                        _ => None,
+                    })
+                    .take(200_000)
+                    .collect();
+                Sheet { r, texts, segs, rounds }
+            })
+            .collect()
+    };
+    // The legends and abbreviation lists, each with its sheet's discipline: the plans' own, each
+    // discipline's legend sheets, the electrical pages.
+    let mut rows: Vec<(String, super::dampers::LegendEntry)> = Vec::new();
+    let mut disciplines: BTreeSet<String> = all_refs.iter().map(|r| r.discipline.to_ascii_uppercase()).collect();
+    disciplines.insert("G".into());
+    let mut legend_pages: Vec<(String, String, Vec<TextItem>)> = Vec::new();
+    for dsc in &disciplines {
+        for (number, sub) in non_plan_pages(job, dsc) {
+            legend_pages.push((dsc.clone(), number, cadaddy_mepfix::sheet_facts::texts(&sub)));
+        }
+    }
+    for (number, sub) in pages {
+        if !legend_pages.iter().any(|(_, n, _)| n == number) {
+            legend_pages.push(("E".into(), number.clone(), cadaddy_mepfix::sheet_facts::texts(sub)));
+        }
+    }
+    let mut own_rows: BTreeMap<String, Vec<super::dampers::LegendEntry>> = BTreeMap::new();
+    for sh in &sheets {
+        let mut mine = super::dampers::legend(&sh.texts, &sh.r.number);
+        mine.extend(dob::legend_rows(&sh.texts, &sh.r.number));
+        for e in &mine {
+            rows.push((sh.r.discipline.clone(), e.clone()));
+        }
+        own_rows.insert(sh.r.number.clone(), mine);
+    }
+    for (dsc, number, texts) in &legend_pages {
+        for e in super::dampers::legend(texts, number).into_iter().chain(dob::legend_rows(texts, number)) {
+            rows.push((dsc.clone(), e));
+        }
+    }
+    rows.truncate(40_000);
+    let legend_used: Vec<Value> = rows
+        .iter()
+        .filter(|(_, e)| dob::class_of(&e.meaning).is_some())
+        .take(100)
+        .map(|(d, e)| json!({"sheet": e.sheet, "discipline": d, "code": e.code, "meaning": e.meaning, "class": dob::class_of(&e.meaning).map(|c| c.kind.clone())}))
+        .collect();
+    // The objects, onto their levels' plans.
+    let mut found: Vec<Found> = Vec::new();
+    let mut unregistered: BTreeMap<String, usize> = BTreeMap::new();
+    let mut read_by_sheet: Vec<Value> = Vec::new();
+    // class → (marks, sheet, source) on plans of no level (a site plan).
+    let mut unplaced: BTreeMap<String, (u32, String, String)> = BTreeMap::new();
+    // class → keynote markers beside another object's tag (that object, described).
+    let mut tagged_by_keynote: BTreeMap<String, usize> = BTreeMap::new();
+    for sh in &sheets {
+        let mut levels = vec![sh.r.level.clone()];
+        for l in &sh.r.levels {
+            if !levels.iter().any(|x| x.eq_ignore_ascii_case(l)) {
+                levels.push(l.clone());
+            }
+        }
+        // (sheet point, how, code, number, meaning, source, keynote) of each mark.
+        let mut marks: Vec<(Vec2, How, String, String, String, String, Option<(String, String)>, &'static dob::Class)> = Vec::new();
+        let known = |c: &str| {
+            dob::meaning(c, &sh.r.number, &sh.r.discipline, &rows)
+                .and_then(|e| dob::class_of(&e.meaning))
+                .is_some_and(|k| k.from_tags && dob::tagged_on(k, &sh.r.discipline))
+        };
+        let mine = own_rows.get(&sh.r.number).cloned().unwrap_or_default();
+        // Every tag of the sheet a legend gives a meaning (another step's objects too): a keynote
+        // marker beside one describes that object (`RATED DAMPER …` beside an `FSD` tag).
+        let any_code = |c: &str| dob::meaning(c, &sh.r.number, &sh.r.discipline, &rows).is_some();
+        let described: Vec<(Vec2, f64, String)> = super::dampers::tags(&sh.texts, &sh.segs, &sh.rounds, &mine, &any_code)
+            .into_iter()
+            .filter_map(|g| dob::meaning(&g.code, &sh.r.number, &sh.r.discipline, &rows).map(|e| (g.at, g.height, e.meaning.to_ascii_uppercase())))
+            .collect();
+        let lists = super::keynotes::lists(&sh.texts);
+        let mut ktags: Vec<(String, String, Vec2)> = Vec::new();
+        for list in &lists {
+            let me = super::keynotes::subject(list);
+            let others: Vec<String> = lists.iter().map(super::keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
+            for (num, at) in super::keynotes::tags(&sh.texts, &sh.segs, &[], &sh.rounds, &others, list) {
+                let Some(n) = list.notes.iter().find(|n| n.number == num) else { continue };
+                let at = Vec2::new(at[0], at[1]);
+                ktags.push((num.clone(), n.text.clone(), at));
+                // A keynote calling for one of its trade's classes (not a rule over all of them):
+                // its count of objects at each of its markers.
+                let Some(named) = dob::note_objects(&n.text).into_iter().find(|x| !x.all && dob::tagged_on(x.class, &sh.r.discipline)) else {
+                    continue;
+                };
+                let reach = r.tag_reach_ft.max(1.0) * list.number_h.max(0.1);
+                if described.iter().any(|(p, h, m)| (*p - at).len() <= reach.max(r.tag_reach_ft * h) && dob::same_noun(named.class, m)) {
+                    *tagged_by_keynote.entry(named.class.kind.clone()).or_default() += 1;
+                    continue;
+                }
+                for k in 0..named.count {
+                    marks.push((
+                        at + Vec2::new(0.0, f64::from(k) * 0.5 * list.number_h.max(0.1)),
+                        How::Keynote,
+                        String::new(),
+                        String::new(),
+                        n.text.chars().take(KEYNOTE_TEXT_CHARS).collect(),
+                        format!("{} keynote {num}", sh.r.number),
+                        Some((num.clone(), n.text.chars().take(KEYNOTE_TEXT_CHARS).collect())),
+                        named.class,
+                    ));
+                }
+            }
+        }
+        for tag in super::dampers::tags(&sh.texts, &sh.segs, &sh.rounds, &mine, &known) {
+            let Some(e) = dob::meaning(&tag.code, &sh.r.number, &sh.r.discipline, &rows) else { continue };
+            let Some(class) = dob::class_of(&e.meaning).filter(|c| c.from_tags && dob::tagged_on(c, &sh.r.discipline)) else { continue };
+            let keynote = ktags
+                .iter()
+                .filter(|(_, _, at)| (*at - tag.at).len() < r.tag_reach_ft.max(1.0) * tag.height)
+                .min_by(|a, b| (a.2 - tag.at).len().total_cmp(&(b.2 - tag.at).len()))
+                .map(|(n, t, _)| (n.clone(), t.chars().take(KEYNOTE_TEXT_CHARS).collect()));
+            marks.push((
+                tag.points_to.unwrap_or(tag.at),
+                How::Tag,
+                tag.code.clone(),
+                tag.number.clone(),
+                e.meaning.clone(),
+                format!("{} legend: {} = {}", e.sheet, e.code, e.meaning),
+                keynote,
+                class,
+            ));
+        }
+        let mut by_class: BTreeMap<String, usize> = BTreeMap::new();
+        for m in &marks {
+            *by_class.entry(format!("{} {}", m.1.label(), m.7.kind)).or_default() += 1;
+        }
+        if !by_class.is_empty() {
+            read_by_sheet.push(json!({"sheet": sh.r.number, "level": sh.r.level, "marks": by_class}));
+        }
+        let placed_level = super::printmep::building_level(&sh.r.level);
+        for (at, how, code, number, meaning, source, keynote, class) in marks {
+            if !placed_level {
+                // A site plan's mark: it counts its class, placed by the notes below.
+                let e = unplaced.entry(class.kind.clone()).or_insert((0, sh.r.number.clone(), source.clone()));
+                e.0 += 1;
+                continue;
+            }
+            for lc in &levels {
+                let level = super::printmep::level_name(lc);
+                let Some(sim) = place.and_then(|p| p([at.x, at.y], &level)) else {
+                    *unregistered.entry(format!("{} on {level}", sh.r.number)).or_default() += 1;
+                    continue;
+                };
+                let q = sim.apply([at.x, at.y]);
+                let on = Vec2::new(q[0], q[1]);
+                let by_region = sp.levels.iter().find(|l| {
+                    l.region.is_some_and(|g| on.x >= g[0].min(g[2]) && on.x <= g[0].max(g[2]) && on.y >= g[1].min(g[3]) && on.y <= g[1].max(g[3]))
+                });
+                found.push(Found {
+                    kind: class.kind.clone(),
+                    how,
+                    sheet: sh.r.number.clone(),
+                    enlarged: sh.r.kind == "enlarged_plan" || sim.scale() < 0.8,
+                    level: by_region
+                        .or_else(|| sp.levels.iter().find(|l| same_level_name(&l.name, &level)))
+                        .map_or(level.clone(), |l| l.name.clone()),
+                    code: code.clone(),
+                    number: number.clone(),
+                    meaning: meaning.clone(),
+                    source: source.clone(),
+                    at: on,
+                    keynote: keynote.clone(),
+                    ..Found::default()
+                });
+            }
+        }
+    }
+    let marks_read = found.len();
+    let mut found = dob::dedupe(found, r.dedupe_ft * upf);
+    // What the model already has: an element there naming the same class (another step's).
+    let existing: Vec<(String, String, String, Vec2)> = {
+        let d = s.doc()?;
+        d.model
+            .iter()
+            .take(2_000_000)
+            .filter(|e| super::wallgen::made_as(e).is_some())
+            .filter_map(|e| {
+                let kind = super::elemprops::element_kind(e)?;
+                let kind = super::elemprops::reported_kind(e, kind);
+                let ty = cadaddy_doc::props::read(&e.common.xdata).get("type").map(|p| p.text()).unwrap_or_default();
+                if !r.classes.iter().any(|c| dob::is_class(c, &kind, &ty)) {
+                    return None;
+                }
+                let level = super::elemprops::level_of(e)?;
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                if b.is_empty() {
+                    return None;
+                }
+                Some((kind, ty, level, b.center() - super::bspec::stacked_by(e)))
+            })
+            .take(200_000)
+            .collect()
+    };
+    let mut already: BTreeMap<String, usize> = BTreeMap::new();
+    found.retain(|f| {
+        let Some(class) = dob::class_by_kind(&f.kind) else { return false };
+        // A keynote's marker stands off its object (on a leader): a wider reach.
+        let reach = if f.how == How::Keynote { r.keynote_reach_ft.max(r.existing_reach_ft) } else { r.existing_reach_ft } * upf;
+        let there = existing.iter().any(|(k, ty, l, at)| dob::is_class(class, k, ty) && same_level_name(l, &f.level) && (*at - f.at).len() <= reach);
+        if there {
+            *already.entry(f.kind.clone()).or_default() += 1;
+        }
+        !there
+    });
+    // The notes naming the classes: the electrical, fire alarm and low-voltage pages' and plans'
+    // keynotes and general notes; and the panel schedules' circuits naming one.
+    let level_of_sheet = |number: &str| {
+        job.sheet_regions
+            .iter()
+            .find(|g| g.number.eq_ignore_ascii_case(number) && is_plan(&g.kind) && g.not_built.is_empty())
+            .map(|g| super::printmep::level_name(&g.level))
+            .unwrap_or_default()
+    };
+    let connecting = |dsc: &str| matches!(dob::trade_of_discipline(dsc), "electrical" | "fire alarm" | "low voltage");
+    let mut notes: Vec<(String, String, String)> = Vec::new();
+    let note_sources = legend_pages
+        .iter()
+        .filter(|(d, _, _)| connecting(d))
+        .map(|(_, n, t)| (n.clone(), t))
+        .chain(sheets.iter().filter(|sh| connecting(&sh.r.discipline)).map(|sh| (sh.r.number.clone(), &sh.texts)));
+    for (number, texts) in note_sources {
+        let level = level_of_sheet(&number);
+        for list in
+            super::keynotes::lists(texts).into_iter().chain(super::keynotes::lists_under(texts, |u| u.contains("NOTES") && !u.contains("KEYNOTES")))
+        {
+            for n in list.notes {
+                if !notes.iter().any(|(sn, _, t)| *sn == number && *t == n.text) {
+                    notes.push((number.clone(), level.clone(), n.text));
+                }
+            }
+        }
+    }
+    notes.truncate(20_000);
+    let panels: Vec<String> = sp.mep.panel_schedules.iter().map(|p| p.panel.clone()).collect();
+    // class → (count, via, sheet, level, text): the note giving it the most.
+    let mut named: BTreeMap<String, (u32, String, String, String, String)> = BTreeMap::new();
+    // class → (via, the note): what connects it, for the ones the plans mark too.
+    let mut connected: BTreeMap<String, (String, String, Option<(String, String)>)> = BTreeMap::new();
+    // class → the notes speaking of every one there is (a rule, no new object).
+    let mut rules_over_all: BTreeMap<String, String> = BTreeMap::new();
+    for (number, level, text) in &notes {
+        for nm in dob::note_objects(text) {
+            let (class, n, via) = (nm.class, nm.count, nm.via);
+            let cite = format!("{number} note: {}", text.chars().take(KEYNOTE_TEXT_CHARS).collect::<String>());
+            if !via.is_empty() {
+                let pc = circuit_of(text, &panels);
+                connected.entry(class.kind.clone()).or_insert((via.to_string(), cite.clone(), pc));
+            }
+            if nm.all {
+                rules_over_all.entry(class.kind.clone()).or_insert(cite);
+                continue;
+            }
+            let e = named.entry(class.kind.clone()).or_insert((0, via.to_string(), number.clone(), level.clone(), cite.clone()));
+            // The note connecting it first (a note merely naming it says nothing of it), then the
+            // larger count.
+            if (!via.is_empty() && e.1.is_empty()) || (n > e.0 && via.is_empty() == e.1.is_empty()) {
+                *e = (n, via.to_string(), number.clone(), level.clone(), cite);
+            }
+        }
+    }
+    // A site plan's marks of a class a note names give its count.
+    for (kind, (n, sheet, src)) in &unplaced {
+        if let Some(e) = named.get_mut(kind)
+            && *n > e.0
+        {
+            e.0 = (*n).min(r.max_note_count.max(1));
+            e.4 = format!("{} ({n} marks on {sheet}: {src})", e.4);
+        }
+    }
+    // A class nothing marks (or only a note names): the note's count, proposed, at its sheet's
+    // level (else the lowest), where its circuit's panel stands, else in the level's middle.
+    let marked: BTreeSet<String> = found.iter().map(|f| f.kind.clone()).collect();
+    let lowest =
+        sp.levels.iter().min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).map(|l| l.name.clone()).unwrap_or_else(|| "Level 1".into());
+    let mut proposed: Vec<String> = Vec::new();
+    for (kind, (n, via, number, level, cite)) in &named {
+        let Some(class) = dob::class_by_kind(kind) else { continue };
+        if marked.contains(kind) || already.contains_key(kind) || existing.iter().any(|(k, ty, _, _)| dob::is_class(class, k, ty)) {
+            continue;
+        }
+        // Only a connection note makes an object nothing draws (a note merely naming it is no
+        // call for one).
+        if via.is_empty() {
+            continue;
+        }
+        let level = if level.is_empty() { lowest.clone() } else { level.clone() };
+        let pc = circuit_of(cite, &panels);
+        let at = pc
+            .as_ref()
+            .and_then(|(p, _)| sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(p) && same_level_name(&e.level, &level)))
+            .map(|e| Vec2::new(e.max[0] + upf, (e.min[1] + e.max[1]) / 2.0))
+            .or_else(|| {
+                sp.levels
+                    .iter()
+                    .find(|l| same_level_name(&l.name, &level))
+                    .and_then(|l| l.region)
+                    .map(|g| Vec2::new((g[0] + g[2]) / 2.0, (g[1] + g[3]) / 2.0))
+            })
+            .unwrap_or(Vec2::ZERO);
+        for i in 0..*n {
+            found.push(Found {
+                kind: kind.clone(),
+                how: How::Note,
+                sheet: number.clone(),
+                level: level.clone(),
+                meaning: class.name.clone(),
+                source: cite.clone(),
+                at: at + Vec2::new(0.0, f64::from(i) * 2.0 * upf),
+                via: via.clone(),
+                via_source: cite.clone(),
+                ..Found::default()
+            });
+        }
+        proposed.push(format!("{n} {} ({cite})", class.name));
+    }
+    for f in found.iter_mut().filter(|f| f.via.is_empty()) {
+        if let Some((via, cite, _)) = connected.get(&f.kind) {
+            f.via = via.clone();
+            f.via_source = cite.clone();
+        }
+    }
+    found.truncate(r.max_elements.max(1));
+    // The ducts (a duct-mounted class sits in the nearest one).
+    let duct_systems: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+    let ducts: Vec<(String, Vec<Vec2>, [f64; 2], Vec<f64>, String)> = sp
+        .mep
+        .runs
+        .iter()
+        .filter(|r| duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none())
+        .map(|r| (r.level.clone(), r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect(), r.size_in, r.bottoms_ft.clone(), r.system.clone()))
+        .collect();
+    // The fire alarm drawings: remote test stations shown.
+    let fa_texts: Vec<String> = legend_pages
+        .iter()
+        .filter(|(d, _, _)| dob::trade_of_discipline(d) == "fire alarm")
+        .flat_map(|(_, _, t)| t.iter().map(|x| x.value.clone()))
+        .chain(
+            sheets
+                .iter()
+                .filter(|sh| dob::trade_of_discipline(&sh.r.discipline) == "fire alarm")
+                .flat_map(|sh| sh.texts.iter().map(|x| x.value.clone())),
+        )
+        .take(400_000)
+        .collect();
+    let remote_tests = dob::shows_remote_tests(&fa_texts);
+    let rooms: Vec<(String, String, Vec<Vec2>)> = {
+        let d = s.doc()?;
+        super::bspec::room_elements(d)
+            .into_iter()
+            .map(|rm| {
+                let off = d.model.get(rm.handle).map_or(Vec2::ZERO, |e| super::bspec::stacked_by(e));
+                let name = match &rm.number {
+                    Some(n) if !rm.name.contains(n.as_str()) => format!("{} {n}", rm.name),
+                    _ => rm.name.clone(),
+                };
+                (rm.level, name, rm.outline.iter().map(|p| *p - off).collect())
+            })
+            .collect()
+    };
+    let room_at = |level: &str, p: Vec2| {
+        rooms
+            .iter()
+            .filter(|(l, _, o)| same_level_name(l, level) && o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p))
+            .min_by(|a, b| cadaddy_geom::shoelace(&a.2).abs().total_cmp(&cadaddy_geom::shoelace(&b.2).abs()))
+            .map(|(_, n, _)| n.clone())
+            .unwrap_or_default()
+    };
+    // Whose work: the scope split for a class it names, else ours for the electrical, fire alarm
+    // and low-voltage classes and the other trades' otherwise.
+    let decisions: Vec<Value> = result["scope"]["decisions"].as_array().cloned().unwrap_or_default();
+    let scope_of = |c: &dob::Class| {
+        let key = if c.scope_kind.is_empty() { c.name.to_ascii_lowercase() } else { c.scope_kind.to_ascii_lowercase() };
+        let dec = decisions.iter().find(|dcs| {
+            dcs["class"].as_str().is_some_and(|k| {
+                let k = k.to_ascii_lowercase();
+                k == c.trade || key.contains(&k) || k.contains(&key)
+            })
+        });
+        match dec.and_then(|d| d["by_others"].as_bool()) {
+            Some(true) => format!("by others: {} (the scope split)", c.trade),
+            Some(false) => "ours (the scope split)".to_string(),
+            None if c.trade == "electrical" => "ours (electrical)".to_string(),
+            None => format!("by others: {} (no scope split says ours)", c.trade),
+        }
+    };
+    let used: BTreeSet<String> = sp.mep.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let mut new_equipment: BTreeSet<String> = BTreeSet::new();
+    let mut seq: BTreeMap<String, usize> = BTreeMap::new();
+    let mut listed: Vec<Value> = Vec::new();
+    let mut by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut boxes: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unpowered: Vec<String> = Vec::new();
+    for f in &found {
+        let Some(class) = dob::class_by_kind(&f.kind) else { continue };
+        // A tag read off the plan keeps its code; another object is named by its kind (never
+        // initials: `RD` would read as another kind's code).
+        let prefix = if f.code.is_empty() { class.kind.to_ascii_uppercase() } else { f.code.clone() };
+        let tag = loop {
+            let n = seq.entry(prefix.clone()).or_insert(0);
+            *n += 1;
+            let t = format!("{prefix}-{n}");
+            if !used.contains(&t.to_ascii_uppercase()) && !new_equipment.contains(&t.to_ascii_uppercase()) {
+                break t;
+            }
+            if *n > 100_000 {
+                break format!("{prefix}-X{}", listed.len() + 1);
+            }
+        };
+        let lvl = sp.level(&f.level);
+        let (floor_h, ceiling) = lvl.map_or((10.0, 9.0), |l| (l.height_ft, if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft.min(9.0) }));
+        let [w_in, d_in, h_in] = class.size_in;
+        let h_ft = (h_in / 12.0).max(0.1);
+        let mut at = f.at;
+        let mut bottom = match class.mount.as_str() {
+            "wall" => (class.height_in / 12.0 - h_ft / 2.0).max(0.0),
+            "ceiling" => (ceiling - h_ft).max(0.0),
+            "ceiling_below" => (ceiling - 1.0 - h_ft).max(0.0),
+            _ => 0.0,
+        };
+        let mut position = match f.how {
+            How::Tag => format!("{} tag {}{}", f.sheet, f.code, if f.number.is_empty() { String::new() } else { format!("-{}", f.number) }),
+            How::Keynote => format!("{}, at its marker", f.source),
+            How::Note => format!("proposed: {} names it but no plan draws where", f.source),
+        };
+        let mut systems: Vec<String> = Vec::new();
+        if class.mount == "duct" {
+            let near = ducts
+                .iter()
+                .filter(|d| same_level_name(&d.0, &f.level))
+                .filter_map(|d| dob::nearest_on_run(&d.1, f.at, r.duct_reach_ft * upf).map(|(seg, q, dist)| (d, seg, q, dist)))
+                .min_by(|a, b| a.3.total_cmp(&b.3));
+            match near {
+                Some((d, seg, q, _)) => {
+                    at = q;
+                    bottom = d.3.get(seg).or(d.3.last()).copied().filter(|v| v.is_finite()).unwrap_or(ceiling - 1.0);
+                    systems.push(d.4.clone());
+                    position.push_str(&format!(", in its duct ({} {}x{})", d.4, d.2[0], d.2[1]));
+                }
+                None => {
+                    bottom = (ceiling - 1.0).max(0.0);
+                    position.push_str(&format!(": no duct within {} ft, set where the plan shows it", r.duct_reach_ft));
+                }
+            }
+        }
+        let _ = floor_h;
+        let (hw, hd) = (w_in / 24.0 * upf, d_in / 24.0 * upf);
+        let room = room_at(&f.level, at);
+        let scope = scope_of(class);
+        let mut props: BTreeMap<String, String> = BTreeMap::new();
+        props.insert("DOC_OBJECT".into(), f.how.label().into());
+        props.insert("NAME".into(), class.name.clone());
+        props.insert("DOCUMENTS_CALL_IT".into(), f.meaning.chars().take(KEYNOTE_TEXT_CHARS).collect());
+        props.insert("TRADE".into(), class.trade.clone());
+        props.insert("SCOPE".into(), scope.clone());
+        if !class.scope_kind.is_empty() {
+            props.insert("SCOPE_KIND".into(), class.scope_kind.clone());
+        }
+        if !class.fa_kind.is_empty() {
+            props.insert("FA_KIND".into(), class.fa_kind.clone());
+        }
+        if !f.code.is_empty() {
+            props.insert("CODE".into(), f.code.clone());
+        }
+        props.insert("TAG_SHEET".into(), f.sheet.clone());
+        if !f.also.is_empty() {
+            props.insert("ALSO_ON".into(), f.also.join(", "));
+        }
+        if let Some((n, t)) = &f.keynote {
+            props.insert("KEYNOTE".into(), format!("{} keynote {n}: {t}", f.sheet));
+        }
+        if !room.is_empty() {
+            props.insert("ROOM".into(), room.clone());
+        }
+        if f.how == How::Note {
+            props.insert("STATUS".into(), "proposed".into());
+        }
+        let mut sources = BTreeMap::new();
+        sources.insert("kind".to_string(), format!("{} ({})", f.source, class.source));
+        sources.insert("position".to_string(), position.clone());
+        sources.insert("size".to_string(), format!("rules data: {}", class.source));
+        sources.insert(
+            "elevation".to_string(),
+            if systems.is_empty() { format!("rules data: {} mount", class.mount) } else { "its duct's bottom".into() },
+        );
+        // Its connection: what its note says, else its class's.
+        let via = if f.via.is_empty() { class.connection.clone() } else { f.via.clone() };
+        let mut conn: Value = Value::Null;
+        let side = Vec2::new(hw + 0.5 * upf, 0.0);
+        let mut add_box = |sp: &mut cadaddy_walk3d::BuildingSpec, b: &dob::BoxRule, k: usize, extra: BTreeMap<String, String>, why: String| {
+            // Named by its own kind, its object in `FOR` (a box tagged with its object's tag
+            // reads as one more of that object).
+            let n = boxes.get(&b.kind).copied().unwrap_or(0) + 1;
+            let btag = format!("{}-{n}", b.kind.to_ascii_uppercase());
+            let half = b.box_in[0] / 24.0 * upf;
+            let p = at + side + Vec2::new(0.0, k as f64 * upf);
+            let mut bp = extra;
+            bp.insert("DOC_OBJECT".into(), "connection".into());
+            bp.insert("FOR".into(), tag.clone());
+            bp.insert("RULE".into(), b.source.clone());
+            bp.insert("SIZE".into(), format!("{}\"x{}\"x{}\"", b.box_in[0], b.box_in[1], b.box_in[2]));
+            let mut bs = BTreeMap::new();
+            bs.insert("position".to_string(), format!("beside {tag} (rules data)"));
+            bs.insert("why".to_string(), why);
+            let b_bottom = if b.height_in > 0.0 { (b.height_in / 12.0 - b.box_in[2] / 24.0).max(0.0) } else { bottom };
+            sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+                tag: btag.clone(),
+                kind: b.kind.clone(),
+                level: f.level.clone(),
+                min: [p.x - half, p.y - half],
+                max: [p.x + half, p.y + half],
+                bottom_ft: b_bottom,
+                height_ft: (b.box_in[2] / 12.0).max(0.05),
+                systems: vec![if b.kind.starts_with("fa_") { "FA".into() } else { "E-EQUIP".into() }],
+                title: b.name.clone(),
+                properties: bp,
+                sources: bs,
+                confidence: 0.5,
+                ..Default::default()
+            });
+            new_equipment.insert(btag.to_ascii_uppercase());
+            *boxes.entry(b.kind.clone()).or_default() += 1;
+            btag
+        };
+        match via.as_str() {
+            "power" => {
+                let pc = circuit_of(&f.via_source, &panels);
+                let mut extra = BTreeMap::new();
+                match &pc {
+                    Some((p, c)) => {
+                        extra.insert("PANEL".into(), p.clone());
+                        extra.insert("CIRCUIT".into(), c.clone());
+                        props.insert("POWER".into(), format!("panel {p}, circuit {c}"));
+                    }
+                    None => {
+                        extra.insert("CIRCUIT".into(), "not named".into());
+                        unpowered.push(format!("{tag} ({} {})", f.level, f.sheet));
+                    }
+                }
+                let why = if f.via_source.is_empty() { format!("rules data: {} takes power", class.name) } else { f.via_source.clone() };
+                let b = add_box(&mut sp, &r.power_box, 0, extra, why.clone());
+                conn = json!({"via": "power", "box": b, "panel": pc.as_ref().map(|x| x.0.clone()), "circuit": pc.as_ref().map(|x| x.1.clone()), "source": why});
+            }
+            "data" => {
+                let why = f.via_source.clone();
+                let b = add_box(&mut sp, &r.data_outlet, 0, BTreeMap::new(), why.clone());
+                conn = json!({"via": "data", "box": b, "source": why});
+            }
+            "fire_alarm" => {
+                let why = f.via_source.clone();
+                let b = add_box(&mut sp, &r.fa_module, 0, BTreeMap::new(), why.clone());
+                conn = json!({"via": "fire_alarm", "module": b, "source": why});
+            }
+            _ => {}
+        }
+        // The fire alarm class's own modules and its remote test station.
+        let mut modules = 0u32;
+        for k in 0..class.fa_modules {
+            let why = format!("rules data: {}", class.source);
+            add_box(&mut sp, &r.fa_module, k as usize + 1, BTreeMap::new(), why);
+            modules += 1;
+        }
+        let rts = class.remote_test && remote_tests;
+        if rts {
+            add_box(
+                &mut sp,
+                &r.remote_test,
+                0,
+                BTreeMap::new(),
+                format!("the fire alarm drawings show remote test stations; {}", r.remote_test.source),
+            );
+        }
+        if modules > 0 {
+            props.insert("FA_MODULES".into(), format!("{modules} ({})", class.source));
+        }
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: tag.clone(),
+            kind: class.kind.clone(),
+            level: f.level.clone(),
+            min: [at.x - hw, at.y - hd],
+            max: [at.x + hw, at.y + hd],
+            bottom_ft: bottom,
+            height_ft: h_ft,
+            systems,
+            title: if f.code.is_empty() { class.name.clone() } else { format!("{} ({})", class.name, f.code) },
+            properties: props,
+            sources,
+            confidence: match f.how {
+                How::Tag => 0.8,
+                How::Keynote => 0.7,
+                How::Note => 0.4,
+            },
+            ..Default::default()
+        });
+        new_equipment.insert(tag.to_ascii_uppercase());
+        *by_kind.entry(class.kind.clone()).or_default().entry(f.level.clone()).or_default() += 1;
+        if listed.len() < 300 {
+            listed.push(json!({
+                "tag": tag, "kind": class.kind, "read_as": f.how.label(), "sheet": f.sheet, "also_on": f.also, "level": f.level, "room": room,
+                "code": f.code, "documents_call_it": f.meaning.chars().take(120).collect::<String>(), "source": f.source,
+                "at_ft": [(at.x / upf * 10.0).round() / 10.0, (at.y / upf * 10.0).round() / 10.0], "bottom_ft": (bottom * 100.0).round() / 100.0,
+                "scope": scope, "connection": conn, "fa_modules": modules, "remote_test_station": rts, "proposed": f.how == How::Note,
+            }));
+        }
+    }
+    let made = build_new_mep(s, sp, Vec::new(), &new_equipment)?;
+    let _ = made;
+    if !proposed.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} object(s) only a note names, proposed where no plan draws them", proposed.len()),
+            &format!(
+                "each is in the model as proposed, its location to confirm: {}",
+                proposed.iter().take(12).cloned().collect::<Vec<_>>().join("; ")
+            ),
+            2,
+            vec!["Locate each on the plans (or ask where it goes) and move it there".into()],
+            None,
+            false,
+        );
+    }
+    if !unpowered.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} object(s) take power but no note names their circuit", unpowered.len()),
+            &format!("each has its connection box on no circuit: {}", unpowered.iter().take(20).cloned().collect::<Vec<_>>().join(", ")),
+            2,
+            vec!["Find the circuit on the panel schedules or ask the engineer".into()],
+            None,
+            false,
+        );
+    }
+    let total: usize = by_kind.values().flat_map(|m| m.values()).sum();
+    progress_line(&format!(
+        "  documented objects: {total} built ({} marks read; {} already in the model; {} proposed from notes): {}",
+        marks_read,
+        already.values().sum::<usize>(),
+        found.iter().filter(|f| f.how == How::Note).count(),
+        by_kind.iter().map(|(k, m)| format!("{k} {}", m.values().sum::<usize>())).collect::<Vec<_>>().join(", ")
+    ));
+    result["doc_objects"] = json!({
+        "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
+        "proposed": proposed, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
+        "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered,
+        "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite))| json!({"kind": k, "count": n, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
+    });
+    Ok(())
+}
+
+/// The panel and circuit a note names (`… CIRCUIT LA-12`, `PANEL LA CKT 9`), by the panel
+/// schedules' names.
+fn circuit_of(text: &str, panels: &[String]) -> Option<(String, String)> {
+    super::dampers::circuit_in(text, panels).filter(|(p, c)| !p.is_empty() && !c.is_empty())
+}
+
 fn attribute_texts(d: &cadaddy_doc::Drawing) -> Vec<cadaddy_mepfix::sheet_facts::TextItem> {
     let mut out = Vec::new();
     for e in d.model.iter() {
@@ -19146,6 +19877,7 @@ fn cmd_report(s: &mut Session, _p: &Value) -> Result<Value> {
         "placement": placement_summary(&job),
         "keynote_systems": keynote_summary(&job),
         "dampers": dampers_summary(&job),
+        "documented_objects": doc_objects_summary(&job),
         "property_coverage": s.doc().map(super::propuse::coverage).unwrap_or(Value::Null),
         "specifications": specs_report(&job),
     }))
@@ -19232,6 +19964,7 @@ fn job_status_value(job: &GuidedJob, stats: Option<&ModelStats>) -> Value {
         v["placement"] = placement_summary(job);
         v["keynote_systems"] = keynote_summary(job);
         v["dampers"] = dampers_summary(job);
+        v["documented_objects"] = doc_objects_summary(job);
     }
     if !warnings.is_empty() {
         v["warnings"] = json!(warnings);
@@ -19344,6 +20077,19 @@ fn dampers_summary(job: &GuidedJob) -> Value {
         c.truncate(50);
     }
     v
+}
+
+/// What the build's documented-objects step did (Q6192): its counts by kind and level, each
+/// object with where it was read and its connection, what it proposed from notes and why other
+/// notes built nothing; null before.
+fn doc_objects_summary(job: &GuidedJob) -> Value {
+    job.stages
+        .iter()
+        .find(|st| st.name == StageName::BimBuild)
+        .and_then(|st| st.result.as_ref())
+        .and_then(|r| r.get("doc_objects"))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 fn keynote_summary(job: &GuidedJob) -> Value {

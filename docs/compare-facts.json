@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1245,
-    "count": 1245,
+    "callableAsJson": 1246,
+    "count": 1246,
     "ids": [
       "-attedit",
       "-block",
@@ -119,6 +119,7 @@
       "bim.atoms.edit",
       "bim.atoms.report",
       "bim.atoms.rules",
+      "bim.bid",
       "bim.bom",
       "bim.build",
       "bim.chain",
@@ -1249,7 +1250,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 544,
+    "inMenus": 545,
     "typed": 564
   },
   "features": {

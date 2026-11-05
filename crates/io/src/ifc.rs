@@ -96,6 +96,15 @@ enum Class {
     Damper,
     /// Fire alarm control and monitor modules.
     Controller,
+    /// The documents' other objects (Q6192): detectors and sensors, door holders, annunciators,
+    /// valves, drains, cameras, appliances.
+    Sensor,
+    Actuator,
+    UnitaryControlElement,
+    Valve,
+    WasteTerminal,
+    AudioVisualAppliance,
+    ElectricAppliance,
     // Concrete.
     Footing,
     Pile,
@@ -156,6 +165,13 @@ impl Class {
             Class::Transformer => ("IfcTransformer", "VOLTAGE"),
             Class::Damper => ("IfcDamper", "NOTDEFINED"),
             Class::Controller => ("IfcController", "NOTDEFINED"),
+            Class::Sensor => ("IfcSensor", "NOTDEFINED"),
+            Class::Actuator => ("IfcActuator", "NOTDEFINED"),
+            Class::UnitaryControlElement => ("IfcUnitaryControlElement", "NOTDEFINED"),
+            Class::Valve => ("IfcValve", "NOTDEFINED"),
+            Class::WasteTerminal => ("IfcWasteTerminal", "NOTDEFINED"),
+            Class::AudioVisualAppliance => ("IfcAudioVisualAppliance", "NOTDEFINED"),
+            Class::ElectricAppliance => ("IfcElectricAppliance", "NOTDEFINED"),
             Class::Footing => ("IfcFooting", "NOTDEFINED"),
             Class::Pile => ("IfcPile", "BORED"),
             Class::ReinforcingBar => ("IfcReinforcingBar", "MAIN"),
@@ -213,6 +229,13 @@ impl Class {
             "Transformer" => Class::Transformer,
             "Damper" => Class::Damper,
             "Controller" => Class::Controller,
+            "Sensor" => Class::Sensor,
+            "Actuator" => Class::Actuator,
+            "UnitaryControlElement" => Class::UnitaryControlElement,
+            "Valve" => Class::Valve,
+            "WasteTerminal" => Class::WasteTerminal,
+            "AudioVisualAppliance" => Class::AudioVisualAppliance,
+            "ElectricAppliance" => Class::ElectricAppliance,
             "Footing" => Class::Footing,
             "Pile" => Class::Pile,
             "ReinforcingBar" => Class::ReinforcingBar,
@@ -274,11 +297,30 @@ fn equipment_class(kind: &str) -> (Class, &'static str) {
         "motorized_damper" => (Class::Damper, "CONTROLDAMPER"),
         "backdraft_damper" => (Class::Damper, "BACKDRAFTDAMPER"),
         "volume_damper" => (Class::Damper, "BALANCINGDAMPER"),
+        "rated_damper" => (Class::Damper, "FIREDAMPER"),
         k if k.ends_with("_damper") => (Class::Damper, "NOTDEFINED"),
         // A damper's power box and its fire alarm modules.
         "damper_power_box" => (Class::JunctionBox, "POWER"),
         "fa_control_module" => (Class::Controller, "TWOPOSITION"),
         "fa_monitor_module" => (Class::Controller, "NOTDEFINED"),
+        // The documents' other objects (Q6192) and their connections.
+        "duct_smoke_detector" => (Class::Sensor, "SMOKESENSOR"),
+        "occupancy_sensor" => (Class::Sensor, "MOVEMENTSENSOR"),
+        "door_holder" => (Class::Actuator, "ELECTRICACTUATOR"),
+        "fire_alarm_annunciator" => (Class::UnitaryControlElement, "ALARMPANEL"),
+        "exit_sign" => (Class::LightFixture, "SECURITYLIGHTING"),
+        "sump_pump" => (Class::Pump, "SUMPPUMP"),
+        "recirculation_pump" => (Class::Pump, "CIRCULATOR"),
+        "wall_hydrant" => (Class::Valve, "DRAWOFFCOCK"),
+        "deck_drain" => (Class::WasteTerminal, "FLOORTRAP"),
+        "roof_drain" => (Class::WasteTerminal, "ROOFDRAIN"),
+        "grille_register" => (Class::AirTerminal, "GRILLE"),
+        "site_camera" => (Class::AudioVisualAppliance, "CAMERA"),
+        "range" => (Class::ElectricAppliance, "ELECTRICCOOKER"),
+        "rooftop_unit" => (Class::UnitaryEquipment, "ROOFTOPUNIT"),
+        "equipment_power_box" => (Class::JunctionBox, "POWER"),
+        "data_outlet" => (Class::Outlet, "DATAOUTLET"),
+        "fa_remote_test_station" => (Class::SwitchingDevice, "KEYPAD"),
         _ => (Class::Proxy, "NOTDEFINED"),
     }
 }
@@ -2807,6 +2849,11 @@ mod tests {
         assert_eq!(class("odd_damper"), ("IfcDamper", "NOTDEFINED"));
         assert_eq!(class("damper_power_box"), ("IfcJunctionBox", "POWER"));
         assert_eq!(class("fa_control_module"), ("IfcController", "TWOPOSITION"));
+        assert_eq!(class("duct_smoke_detector"), ("IfcSensor", "SMOKESENSOR"));
+        assert_eq!(class("door_holder"), ("IfcActuator", "ELECTRICACTUATOR"));
+        assert_eq!(class("roof_drain"), ("IfcWasteTerminal", "ROOFDRAIN"));
+        assert_eq!(class("equipment_power_box"), ("IfcJunctionBox", "POWER"));
+        assert_eq!(class_of_read("Sensor"), Some("IfcSensor"));
         assert_eq!(class_of_read("Damper"), Some("IfcDamper"));
     }
 
