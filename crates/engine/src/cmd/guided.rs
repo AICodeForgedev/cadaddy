@@ -24293,6 +24293,41 @@ mod tests {
     /// main passing by isn't the room's, the room the plan draws gets no second copy, and a room of
     /// the name but another size gets none.
     #[test]
+    fn a_level_with_no_water_plan_is_piped_like_the_storey_below_first_then_above() {
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10},
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10},
+                {"name": "Level 3", "elevation_ft": 20, "height_ft": 10},
+                {"name": "Level 4", "elevation_ft": 30, "height_ft": 10},
+                {"name": "Level 5", "elevation_ft": 40, "height_ft": 10},
+            ],
+            "mep": {"runs": [
+                {"system": "CW", "level": "Level 1", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                {"system": "HW", "level": "3", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                {"system": "CW", "level": "Level 5", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                // Read from a typical room's enlarged plan: no floor's water.
+                {"system": "CW", "level": "Level 2", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9], "source_sheet": "P-99"},
+                {"system": "SAN", "level": "Level 4", "points": [[0, 0], [10, 0]], "size_in": [4, 0], "bottoms_ft": [9]},
+            ]},
+        }))
+        .expect("spec");
+        let fill = super::super::waterfill::rules();
+        let plan = |r: &cadaddy_walk3d::MepRun| r.source_sheet != "P-99";
+        let names = |v: Vec<super::super::waterfill::Source>| v.into_iter().map(|s| s.level).collect::<Vec<_>>();
+        // Level 4: Level 3 under it (its runs name it "3"), then Level 1; then Level 5 over it.
+        assert_eq!(names(water_sources(&sp, &[], "Level 4", &plan, &fill)), ["3", "Level 1", "Level 5"]);
+        // Level 2: its own enlarged-plan water is no source; Level 1, then 3 and 5.
+        assert_eq!(names(water_sources(&sp, &[], "Level 2", &plan, &fill)), ["Level 1", "3", "Level 5"]);
+        // The lowest: only those over it.
+        assert_eq!(names(water_sources(&sp, &[], "Level 1", &plan, &fill)), ["3", "Level 5"]);
+        assert!(water_sources(&sp, &[], "Mezzanine", &plan, &fill).is_empty(), "no height known: no order");
+        assert_eq!(storey_key("Level 12"), "12");
+        assert_eq!(storey_key(" roof "), "ROOF");
+    }
+
+    #[test]
     fn a_level_with_sanitary_but_no_water_drawn_is_named() {
         let run = |system: &str, level: &str| cadaddy_walk3d::MepRun {
             system: system.into(),

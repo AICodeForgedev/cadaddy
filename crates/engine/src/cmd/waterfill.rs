@@ -3,7 +3,7 @@
 //! whose plans draw its drainage but no domestic water is piped the way the field pipes it:
 //! - DERIVED: over the area where its rooms stack on the floor it is piped like (the floor below;
 //!   above when no floor below has water: rules data `stack_on`), that floor's drawn mains are
-//!   copied, and only there: a main under a lobby is not the guest rooms' over it.
+//!   copied, and only there: a main under a shared space is not the rooms' over it.
 //! - INFERRED: where nothing stacks, each fixture of the floor's own waste plan with no water line
 //!   in reach, and each room's branches (the enlarged details') joined to no main, are run from the
 //!   nearest main or riser of their system the way a plumber runs them: the main carried on along
@@ -590,14 +590,14 @@ mod tests {
     }
 
     /// A floor at `(x0, y0)`: `n` 12' x 15' rooms along a 5' corridor; `commons`: the rooms of
-    /// the row replaced by one lobby on this floor.
+    /// the row replaced by one atrium on this floor.
     fn floor(x0: f64, y0: f64, n: usize, typ: &str, commons: std::ops::Range<usize>) -> Vec<AreaRoom> {
         let mut v: Vec<AreaRoom> =
             (0..n).filter(|i| !commons.contains(i)).map(|i| rect(typ, x0 + 12.0 * i as f64, y0 + 5.0, 12.0, 15.0, &format!("{typ} {i}"))).collect();
         if !commons.is_empty() {
             let (a, b) = (commons.start as f64, commons.end as f64);
-            v.push(rect("LOBBY", x0 + 12.0 * a, y0, 12.0 * (b - a), 20.0, "LOBBY"));
-            // The corridor stops at the lobby.
+            v.push(rect("ATRIUM", x0 + 12.0 * a, y0, 12.0 * (b - a), 20.0, "ATRIUM"));
+            // The corridor stops at the atrium.
             v.push(rect("CORRIDOR", x0, y0, 12.0 * a, 5.0, "CORRIDOR W"));
             v.push(rect("CORRIDOR", x0 + 12.0 * b, y0, 12.0 * (n as f64 - b), 5.0, "CORRIDOR E"));
         } else {
@@ -612,10 +612,10 @@ mod tests {
 
     #[test]
     fn a_floor_takes_the_mains_of_the_floor_below_only_over_the_area_its_rooms_stack_on() {
-        // Floor 1 (drawn 400' east): guest rooms 0-3 and 7-9, a lobby under rooms 4-6 of floor 2.
-        let below = floor(400.0, 0.0, 10, "KING", 4..7);
-        let mine = floor(0.0, 0.0, 10, "KING", 0..0);
-        // Floor 1's corridor main the whole length (through the lobby), and a room branch.
+        // Floor 1 (drawn 400' east): guest rooms 0-3 and 7-9, an atrium under rooms 4-6 of floor 2.
+        let below = floor(400.0, 0.0, 10, "STUDIO", 4..7);
+        let mine = floor(0.0, 0.0, 10, "STUDIO", 0..0);
+        // Floor 1's corridor main the whole length (through the atrium), and a room branch.
         let runs = vec![run("CW", "Level 1", &[[401.0, 2.5], [519.0, 2.5]]), run("CW", "Level 1", &[[403.0, 8.0], [403.0, 12.0]])];
         let src = Source { level: "Level 1".into(), rooms: below, runs };
         let d = derive(&mine, "Level 2", &[src], 12.0, &ru()).expect("derived");
@@ -624,8 +624,8 @@ mod tests {
         // floor 1's are two: neither of those is the same place).
         assert_eq!(d.rooms, 11);
         assert_eq!(d.stacked, 7, "{:?}", d.unstacked);
-        assert!(d.unstacked.iter().any(|l| l == "KING 5"), "{:?}", d.unstacked);
-        // The main copied where the corridor stacks on the corridor: x 1..48 and 84..119, not over the lobby.
+        assert!(d.unstacked.iter().any(|l| l == "STUDIO 5"), "{:?}", d.unstacked);
+        // The main copied where the corridor stacks on the corridor: x 1..48 and 84..119, not over the atrium.
         let mut spans: Vec<(f64, f64)> = d.runs.iter().map(|r| (r.points[0][0] / 12.0, r.points.last().unwrap()[0] / 12.0)).collect();
         spans.sort_by(|a, b| a.0.total_cmp(&b.0));
         assert_eq!(spans.len(), 2, "{spans:?}");
@@ -649,7 +649,7 @@ mod tests {
         let empty = Source { level: "Level 9".into(), rooms: Vec::new(), runs: vec![run("CW", "Level 9", &[[0.0, 0.0], [10.0, 0.0]])] };
         let other = Source {
             level: "Level 3".into(),
-            rooms: floor(300.0, 0.0, 6, "KING", 0..0),
+            rooms: floor(300.0, 0.0, 6, "STUDIO", 0..0),
             runs: vec![run("CW", "Level 3", &[[301.0, 2.5], [371.0, 2.5]]), run("CW", "Level 3", &[[301.0, 10.0], [371.0, 10.0]])],
         };
         // The first has no rooms: the next is used. Its guest rooms are of another type: only the
