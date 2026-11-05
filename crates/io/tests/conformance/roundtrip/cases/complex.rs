@@ -106,7 +106,7 @@ pub(crate) fn dimensions() -> Vec<Case> {
             let mut case = entity_case(
                 &format!("dimension/{kind:?}"),
                 Common::default(),
-                EntityKind::Dimension(Box::new(Dimension {
+                EntityKind::Dimension(Box::new(Dimension { insertion_point: Default::default(),
                     kind,
                     defpt: Vec3::new(0.0, 3.0, 0.0),
                     text_mid: Vec3::new(5.0, 4.0, 0.0),

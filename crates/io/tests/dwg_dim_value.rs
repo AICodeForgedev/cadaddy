@@ -12,7 +12,7 @@ fn v(x: f64, y: f64) -> Vec3 {
 }
 
 fn dim(kind: DimKind, defpt: Vec3, p13: Vec3, p14: Vec3, p15: Vec3, p16: Vec3, measurement: f64) -> Dimension {
-    Dimension {
+    Dimension { insertion_point: Default::default(),
         kind,
         defpt,
         text_mid: v(5.0, 6.0),
