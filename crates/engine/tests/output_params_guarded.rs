@@ -36,6 +36,9 @@ const UNCHECKED: &[&str] = &[
     "cmd/asbuilt.rs",
     "cmd/audit.rs",
     "cmd/bcf.rs",
+    // bim.estimate {price_book, file}: its only caller, run_estimate in bimwork/takeoff.rs, runs
+    // guard_params on `file` before it hands over
+    "cmd/bimwork/priced.rs",
     "cmd/blocks.rs",
     "cmd/calibrate.rs",
     "cmd/cam.rs",
