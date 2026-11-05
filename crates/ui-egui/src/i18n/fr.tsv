@@ -3209,3 +3209,4 @@
 	The current file is kept as {name} until the next save.	Le fichier actuel est conservé sous {name} jusqu'au prochain enregistrement.
 	This format can't keep these objects yet: {objects}.	Ce format ne peut pas encore conserver ces objets : {objects}.
 	{count} more types	{count} autres types
+	Panel Breakers	Disjoncteurs du tableau

@@ -3494,3 +3494,4 @@ menu	Modify	Edita
 	The current file is kept as {name} until the next save.	Il file attuale viene conservato come {name} fino al prossimo salvataggio.
 	This format can't keep these objects yet: {objects}.	Questo formato non può ancora conservare questi oggetti: {objects}.
 	{count} more types	altri {count} tipi
+	Panel Breakers	Interruttori del quadro

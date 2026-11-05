@@ -49,12 +49,12 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|breaker (a panel's, from its schedule row), a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
-            .params("{handle, limit?: elements (2000)} → {from, path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
+            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
             .noundo(),
     ]
 }
@@ -1118,6 +1118,7 @@ fn norm_kind(s: &str) -> String {
         "mud_ring" | "plaster_ring" | "rings" => "ring".into(),
         "wires" | "conductor" | "conductors" => "wire".into(),
         "cables" | "romex" => "cable".into(),
+        "breakers" | "circuit_breaker" | "circuit_breakers" | "cb" => "breaker".into(),
         "outlet" | "receptacles" => "receptacle".into(),
         "light" | "light_fixture" | "luminaires" => "luminaire".into(),
         _ => k,
@@ -1531,8 +1532,25 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
             _ => break,
         }
     }
+    // The breaker its circuit leaves the panel on (Q6166): the device's, else a piece's on the way.
+    let breaker = std::iter::once(h)
+        .chain(path.iter().copied())
+        .filter_map(|x| d.model.get(x))
+        .find_map(|e| props::read(&e.common.xdata).get("breaker_handle").and_then(|p| Handle::parse_hex(p.text().trim())))
+        .and_then(|b| d.model.get(b))
+        .map(|e| {
+            let ps = props::read(&e.common.xdata);
+            let mut j = node_json(e);
+            for k in ["type", "trip_a", "poles", "load", "panel", "source_row"] {
+                if let Some(v) = ps.get(k).filter(|v| v.has_value()) {
+                    j[k] = v.value.clone();
+                }
+            }
+            j
+        });
     Ok(json!({
         "from": node_json(&start),
+        "breaker": breaker,
         "path": path.iter().filter_map(|x| d.model.get(*x)).map(|e| node_json(e)).collect::<Vec<_>>(),
         "source": found.and_then(|x| d.model.get(x)).map(|e| node_json(e)),
         "upstream": upstream,

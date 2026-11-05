@@ -3210,3 +3210,4 @@
 	The current file is kept as {name} until the next save.	Текущий файл сохраняется как {name} до следующего сохранения.
 	This format can't keep these objects yet: {objects}.	Этот формат пока не может сохранить эти объекты: {objects}.
 	{count} more types	ещё типов: {count}
+	Panel Breakers	Автоматы щита

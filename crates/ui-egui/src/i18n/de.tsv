@@ -3238,3 +3238,4 @@
 	The current file is kept as {name} until the next save.	Die aktuelle Datei bleibt bis zum nächsten Speichern als {name} erhalten.
 	This format can't keep these objects yet: {objects}.	Dieses Format kann diese Objekte noch nicht behalten: {objects}.
 	{count} more types	{count} weitere Typen
+	Panel Breakers	Schutzschalter der Verteilung

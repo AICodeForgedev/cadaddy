@@ -6278,6 +6278,45 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     route_report_step(s, job, &mut result);
     bim_step(s, job, "conduit routes final", t);
+    // Each panel-schedule row a breaker inside its panel, linked to the circuits and devices as
+    // they stand now (Q6166); the plans and the schedules that don't meet are review items.
+    let t = web_time::Instant::now();
+    match s.execute("bim.breakers", &json!({"limit": 20})) {
+        Ok(v) => {
+            let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+            let by_kind = v.get("mismatches_by_kind").map(Value::to_string).unwrap_or_default();
+            progress_line(&format!(
+                "  breakers: {} and {} spares in {} panels, {} spaces; devices on them {} (not linked {}); plans vs schedules: {} {by_kind}",
+                n("breakers"),
+                n("spares"),
+                n("panels_total"),
+                n("spaces"),
+                n("devices_linked"),
+                n("devices_unlinked"),
+                n("mismatches_total")
+            ));
+            if n("mismatches_total") > 0 {
+                let first: Vec<String> =
+                    v["mismatches"].as_array().into_iter().flatten().take(5).filter_map(|m| m["title"].as_str().map(str::to_string)).collect();
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{} circuits on the plans and rows of the panel schedules don't meet", n("mismatches_total")),
+                    &first.join("; "),
+                    2,
+                    vec!["review.list {kind: \"conflict\"} lists them; the schedule or the plans settle each".into()],
+                    None,
+                    false,
+                );
+            }
+            let mut compact = v.clone();
+            if let Some(o) = compact.as_object_mut() {
+                o.remove("panels");
+            }
+            result["breakers"] = compact;
+        }
+        Err(e) => result["breakers_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "breakers", t);
     // The wiring-method alternatives the code and the spec allow, priced from the final routes
     // (after the last reroute: the scenarios replace the pieces as they stand).
     let t = web_time::Instant::now();

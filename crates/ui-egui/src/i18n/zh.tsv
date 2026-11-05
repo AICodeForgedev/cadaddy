@@ -3496,3 +3496,4 @@
 	The current file is kept as {name} until the next save.	当前文件将保留为 {name}，直到下次保存。
 	This format can't keep these objects yet: {objects}.	此格式暂时无法保留这些对象：{objects}。
 	{count} more types	另外 {count} 种类型
+	Panel Breakers	配电盘断路器

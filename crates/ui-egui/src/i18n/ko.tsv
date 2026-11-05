@@ -3421,3 +3421,4 @@ menu	Modify	수정
 	The current file is kept as {name} until the next save.	현재 파일은 다음 저장 때까지 {name}(으)로 유지됩니다.
 	This format can't keep these objects yet: {objects}.	이 형식은 아직 다음 객체를 유지할 수 없습니다: {objects}.
 	{count} more types	{count}개 형식 더
+	Panel Breakers	분전반 차단기

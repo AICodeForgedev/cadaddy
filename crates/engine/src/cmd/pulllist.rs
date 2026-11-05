@@ -262,7 +262,7 @@ fn scan(d: &Drawing) -> Scan {
     let mut sc = Scan::default();
     for e in d.model.iter().filter(|e| !e.common.xdata.is_empty()).take(MAX_ELEMENTS) {
         if super::mepatoms::is_atom(e) {
-            if super::tradeatoms::is_trade_piece(e) || sc.pieces.len() >= MAX_PIECES {
+            if super::tradeatoms::is_trade_piece(e) || super::breakers::is_breaker(e) || sc.pieces.len() >= MAX_PIECES {
                 continue;
             }
             let ps = props::read(&e.common.xdata);

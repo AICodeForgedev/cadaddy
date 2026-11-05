@@ -3416,3 +3416,4 @@ menu	View	عرض
 	The current file is kept as {name} until the next save.	يُحتفظ بالملف الحالي باسم {name} حتى الحفظ التالي.
 	This format can't keep these objects yet: {objects}.	لا يمكن لهذا التنسيق الاحتفاظ بهذه الكائنات بعد: {objects}.
 	{count} more types	{count} أنواع أخرى
+	Panel Breakers	قواطع اللوحة
