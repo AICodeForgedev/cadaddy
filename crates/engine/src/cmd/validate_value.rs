@@ -74,6 +74,12 @@ const BESIDE_FT: f64 = 3.0;
 /// A scenario piece is placed at points this far apart along its edges, feet; at most this many.
 const SAMPLE_FT: f64 = 2.0;
 const MAX_SAMPLES: usize = 400;
+/// Points of a piece an area needs to hold it (each about [`SAMPLE_FT`]), unless all are there.
+const MIN_POINTS: usize = 2;
+/// The flags a point may carry (not areas).
+const FLAG_NAMES: [&str; 6] = ["corridor", "plenum", "below_slab", "suspended", "open_ceiling", "ceiling_unknown"];
+/// What marks a homerun's own circuit tag (`circuit:<level>:home:<group>`), the router's.
+const HOME_PART: &str = ":home:";
 /// A cost or quantity off by more than this share fails (percent).
 const DEFAULT_COST_PCT: f64 = 1.0;
 /// Differences under these are rounding (dollars, man-hours, feet or each).
@@ -333,6 +339,10 @@ struct Place {
     areas: BTreeSet<&'static str>,
     /// The rooms of each of its areas.
     rooms: BTreeMap<&'static str, BTreeSet<String>>,
+    /// Its points in each area and with each flag (each about [`SAMPLE_FT`] of it).
+    points: BTreeMap<&'static str, usize>,
+    /// The areas and flags only a point or so of it touches (not held: its edge).
+    edges: BTreeMap<&'static str, usize>,
 }
 
 /// A scenario piece: its handle, kind, level, plan centre and lowest point.
@@ -443,14 +453,36 @@ impl<'a> Places<'a> {
             let key = (level, (at.x / cell).floor().clamp(-1e12, 1e12) as i64, (at.y / cell).floor().clamp(-1e12, 1e12) as i64);
             beside.entry(key).or_default().push((Vec2::new(at.x, at.y), room));
         }
-        let mut circuit_area: HashMap<&str, String> = HashMap::new();
-        for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_PIECES) {
+        // Each circuit's area as the router gave it (a typical room's circuit is a unit's); a
+        // homerun's, its circuits' when they agree (its own tag carries none).
+        let tag_area = |t: &cadaddy_walk3d::tags::ElementTag| -> String {
             let a = t.fields.get("area").map(|f| f.value.trim().to_ascii_lowercase()).unwrap_or_default();
-            let a = if t.id.contains(":room-") { "unit".to_string() } else { a };
-            if !a.is_empty() {
-                circuit_area.insert(t.id.as_str(), a);
+            if t.id.contains(":room-") { "unit".to_string() } else { a }
+        };
+        let mut circuit_area: HashMap<&str, String> = HashMap::new();
+        let mut groups: HashMap<(String, String), BTreeSet<String>> = HashMap::new();
+        for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_PIECES) {
+            let a = tag_area(t);
+            if a.is_empty() {
+                continue;
             }
+            if let Some(g) = t.fields.get("homerun_group").map(|f| f.value.trim().replace(['/', '#', '@'], "-")).filter(|g| !g.is_empty()) {
+                groups.entry((t.level.to_ascii_lowercase(), g)).or_default().insert(a.clone());
+            }
+            circuit_area.insert(t.id.as_str(), a);
         }
+        let homeruns: Vec<(&str, String)> = sp
+            .tags
+            .iter()
+            .filter(|t| t.kind == "circuit" && !circuit_area.contains_key(t.id.as_str()))
+            .take(MAX_PIECES)
+            .filter_map(|t| {
+                let (_, g) = t.id.split_once(HOME_PART)?;
+                let set = groups.get(&(t.level.to_ascii_lowercase(), g.to_string()))?;
+                (set.len() == 1).then(|| set.iter().next().map(|a| (t.id.as_str(), a.clone()))).flatten()
+            })
+            .collect();
+        circuit_area.extend(homeruns);
         let lowest_z = sp.levels.iter().filter(|l| l.elevation_ft.is_finite()).map(|l| l.elevation_ft * upf).min_by(f64::total_cmp);
         Places { rooms, beside, circuit_area, lowest_z, sp, upf, data }
     }
@@ -507,11 +539,15 @@ impl<'a> Places<'a> {
     fn place(&self, p: &Piece) -> Place {
         let mut all = Place::default();
         let points: Vec<Vec3> = if p.samples.is_empty() { vec![p.at] } else { p.samples.clone() };
-        let mut areas: BTreeSet<&'static str> = BTreeSet::new();
+        let total = points.len();
+        let mut flags: BTreeSet<&'static str> = BTreeSet::new();
         for q in points {
             let one = self.place_at(p, q);
-            areas.insert(one.area);
-            all.flags.extend(one.flags);
+            *all.points.entry(one.area).or_default() += 1;
+            for f in &one.flags {
+                *all.points.entry(f).or_default() += 1;
+            }
+            flags.extend(one.flags);
             if !one.room.is_empty() {
                 let e = all.rooms.entry(one.area).or_default();
                 if e.len() < MAX_NAMED {
@@ -526,11 +562,24 @@ impl<'a> Places<'a> {
             }
             all.area = one.area;
         }
+        // An area or a flag holds the piece where at least [`MIN_POINTS`] of its points are (about
+        // 4 ft), or all of them: one point is a cable grazing a room's edge along its wall.
+        let holds = |n: usize| n >= MIN_POINTS.min(total) || n == total;
+        let mut edges: BTreeMap<&'static str, usize> = BTreeMap::new();
+        for (k, n) in &all.points {
+            if !holds(*n) {
+                edges.insert(k, *n);
+            }
+        }
+        all.areas = all.points.iter().filter(|(k, n)| holds(**n) && !flags.contains(*k) && !FLAG_NAMES.contains(*k)).map(|(k, _)| *k).collect();
+        if all.areas.is_empty() {
+            all.areas = all.points.iter().filter(|(k, _)| !FLAG_NAMES.contains(*k)).max_by_key(|(_, n)| **n).map(|(k, _)| *k).into_iter().collect();
+        }
+        all.flags = flags.into_iter().filter(|f| all.points.get(f).is_some_and(|n| holds(*n))).collect();
+        all.edges = edges;
         if self.lowest_z.is_some_and(|z| p.z_min < z - 0.1 * self.upf) {
             all.flags.insert("below_slab");
         }
-        // The piece's areas: every one it passes through (unplaced when any point is).
-        all.areas = areas;
         all.area = all
             .areas
             .iter()
@@ -839,14 +888,22 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 ),
                 (Some(never), false) => {
                     let mut bad: BTreeMap<&str, (usize, Option<Handle>, BTreeSet<&str>)> = BTreeMap::new();
+                    // About how much of the cable is there, feet (its points there).
+                    let mut feet: BTreeMap<&str, f64> = BTreeMap::new();
                     let mut unknown = 0usize;
+                    // Pieces that only graze a never area (a point at its edge): said, not failed.
+                    let mut grazing: BTreeMap<&str, usize> = BTreeMap::new();
                     for (p, pl) in &cables {
+                        for k in pl.edges.keys().filter(|k| never.contains_key(**k)) {
+                            *grazing.entry(k).or_default() += 1;
+                        }
                         let mut hit: Vec<&str> = pl.areas.iter().copied().filter(|a| !a.is_empty() && never.contains_key(*a)).collect();
                         hit.extend(pl.flags.iter().copied().filter(|f| never.contains_key(*f)));
                         if pl.areas.contains("") && never.keys().any(|k| matches!(k.as_str(), "common" | "exposed" | "unit")) {
                             unknown += 1;
                         }
                         for h in hit {
+                            *feet.entry(h).or_default() += pl.points.get(h).copied().unwrap_or(1) as f64 * SAMPLE_FT;
                             let e = bad.entry(h).or_insert((0, Some(p.handle), BTreeSet::new()));
                             e.0 += 1;
                             // The rooms of that area (a flag: all of the piece's rooms).
@@ -864,20 +921,22 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                     }
                     let mut measured = measured_base;
                     measured["never"] = json!(never);
+                    measured["grazing"] = json!(grazing);
                     if !bad.is_empty() {
                         measured["in_never_areas"] = json!(
                             bad.iter()
                                 .map(|(a, (n, h, rooms))| (
                                     a.to_string(),
-                                    json!({"pieces": n, "first": h.map(|h| h.hex()), "rooms": rooms, "why": never.get(*a)})
+                                    json!({"pieces": n, "about_ft": feet.get(a).copied().unwrap_or(0.0), "first": h.map(|h| h.hex()), "rooms": rooms, "why": never.get(*a)})
                                 ))
                                 .collect::<BTreeMap<_, _>>()
                         );
                         let said = bad.iter().map(|(a, (n, _, rooms))| {
                             let rooms: Vec<&str> = rooms.iter().copied().take(4).collect();
                             format!(
-                                "{n} piece(s) {}{}",
+                                "{n} piece(s) {} (about {:.0} ft){}",
                                 a.replace('_', " "),
+                                feet.get(a).copied().unwrap_or(0.0),
                                 if rooms.is_empty() { String::new() } else { format!(" ({})", rooms.join(", ")) }
                             )
                         });
