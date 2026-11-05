@@ -4906,7 +4906,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 // The guest rooms the plumbing plans don't draw take the pipes of a room of their
                 // type that they do, as its fixtures do.
-                let (room_pipes, room_pipe_report) = copy_room_pipes(s.doc()?, job, &sp.mep.runs, &|r| pipes.contains(&r.system));
+                // (Drawn pipes only: a floor's derived mains are no room's to copy.)
+                let (room_pipes, room_pipe_report) = copy_room_pipes(s.doc()?, job, &sp.mep.runs, &|r| {
+                    pipes.contains(&r.system) && super::waterfill::provenance(r) == super::waterfill::DRAWN
+                });
                 if !room_pipes.is_empty() {
                     let ft = room_pipes
                         .iter()

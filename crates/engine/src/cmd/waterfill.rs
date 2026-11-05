@@ -26,12 +26,13 @@ pub(crate) const INFERRED: &str = "inferred";
 /// A run a plan draws.
 pub(crate) const DRAWN: &str = "drawn";
 
-/// What a run is by its marks: [`DRAWN`], [`DERIVED`] or [`INFERRED`].
+/// What a run is by its marks: [`DRAWN`], [`DERIVED`] or [`INFERRED`]: the first word of its
+/// `height_source` (a later step may add to it: `derived (capped under the floor above)`).
 pub(crate) fn provenance(r: &MepRun) -> &'static str {
-    let h = r.height_source.trim();
-    if h.eq_ignore_ascii_case(DERIVED) {
+    let first = r.height_source.trim().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
+    if first.eq_ignore_ascii_case(DERIVED) {
         DERIVED
-    } else if h.eq_ignore_ascii_case(INFERRED) {
+    } else if first.eq_ignore_ascii_case(INFERRED) {
         INFERRED
     } else {
         DRAWN
@@ -733,6 +734,25 @@ mod tests {
         assert_eq!(on, vec![(24.0, 40.0), (40.0, 60.0)], "{:?}", inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>());
         let total: f64 = inf.runs.iter().map(ft).sum();
         assert!((total - (16.0 + 3.5 + 20.0 + 3.5)).abs() < 1e-6, "{total}");
+    }
+
+    #[test]
+    fn a_runs_provenance_is_the_first_word_of_its_height_source() {
+        let mut r = run("CW", "Level 2", &[[0.0, 0.0], [1.0, 0.0]]);
+        for (h, p) in [
+            ("derived", DERIVED),
+            ("derived (capped under the floor above)", DERIVED),
+            ("Inferred", INFERRED),
+            ("inferred (capped under the floor above)", INFERRED),
+            ("default", DRAWN),
+            ("tag", DRAWN),
+            ("", DRAWN),
+            ("derivedish", DRAWN),
+            ("below slab: company default", DRAWN),
+        ] {
+            r.height_source = h.into();
+            assert_eq!(provenance(&r), p, "{h}");
+        }
     }
 
     #[test]
