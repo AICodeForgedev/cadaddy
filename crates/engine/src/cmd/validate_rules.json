@@ -413,6 +413,128 @@
       }
     },
     {
+      "id": "E-CONDUIT-CONTINUITY",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each device on a branch circuit is joined to its panel by that circuit's raceway or cable, end to end, and every drop ends on the device's box.",
+      "how": [
+        "The prescreen (E-CONDUIT-CONTINUITY) followed each circuit's conduit sticks by their stored ends from the device's box to the panel's box: ends within `touch_in` meet, and a box their ends touch joins them. It never reads the router's report. Start from its findings.",
+        "A 'fail' names the gap: a drop that stops short of its box (by how many inches), a device no piece of its circuit reaches, or a raceway that never lands on its panel. Look at the device on the plan crop and in the model; a broken run is a 'fail' until it is rerouted.",
+        "A cable run (NM, MC) is followed by its pieces' links, because a cable's two ends aren't stored."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule"],
+      "tolerance": {"touch_in": 1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Receptacle on LP1-3: its drop ends on the box's top and the circuit's raceway runs unbroken to panel LP1.", "fail": "The drop to the receptacle stops 12 in above its box; the receptacle isn't joined to its panel."}
+    },
+    {
+      "id": "E-CONDUIT-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each raceway's conductors fill at most the share of its area NEC Chapter 9 Table 1 allows: 53% for one conductor, 31% for two, 40% for more.",
+      "how": [
+        "The prescreen counted each raceway run's wires (count and size) against its trade size's area (Chapter 9 Tables 4 and 5, rules data). Start from its findings.",
+        "A raceway material or conductor size the tables don't list is 'unsure', never a pass."
+      ],
+      "documents": ["spec", "schedule", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Four #12 THHN and one #12 ground in 3/4\" EMT: 0.067 sq in of 0.213 sq in allowed.", "fail": "Four #4 THHN in 3/4\" EMT: 0.33 sq in, 62% of the raceway."}
+    },
+    {
+      "id": "E-BOX-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each box holds what enters it (NEC 314.16(B)): each conductor entering counts once at its size's volume, all grounds once at the largest, a device yoke twice the largest conductor on it.",
+      "how": [
+        "The prescreen counted the conductors of every raceway or cable whose end touches the box against the box's recorded volume. Start from its findings.",
+        "A box with no recorded volume, or a conductor size the table doesn't list, is 'unsure'."
+      ],
+      "documents": ["spec", "plan"],
+      "tolerance": {"touch_in": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "A receptacle box of 22.5 cu in takes 4 #12, a ground and the yoke: 15.75 cu in.", "fail": "A 4\" square box of 21 cu in takes 8 #12, a ground and a yoke: 24.75 cu in."}
+    },
+    {
+      "id": "E-DERATE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "In each raceway with more than three current-carrying conductors, the NEC 310.15(C)(1) adjustment is applied: every conductor's adjusted ampacity (90 C column times the factor, never above the 75 C column, 110.14(C), nor the 240.4(D) limit) carries the largest breaker of the circuits in it.",
+      "how": [
+        "The prescreen counted each raceway's current-carrying conductors (every one but the grounds), took the factor for that number from the rules data and the breakers from the panel schedule. Start from its findings.",
+        "A breaker the schedule doesn't give is 'unsure'. Feeder raceways are checked at their gear (E-GEAR-FILL)."
+      ],
+      "documents": ["schedule", "spec", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Four #12 on 20 A breakers: 30 A x 0.8 = 24 A, limited to 20 A by 240.4(D): carries 20 A.", "fail": "Four #8 on 50 A breakers: 55 A x 0.8 = 44 A, under 50 A."}
+    },
+    {
+      "id": "E-VDROP",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each branch circuit's conductor size suits its length: the drawing's length table when it prints one (0-60' = #12), else at most 3% voltage drop (NEC 210.19(A) Informational Note 4) at the schedule's load.",
+      "how": [
+        "The prescreen measured each circuit's length along its raceway from its panel to its farthest device (the sticks' own lengths) and took its smallest conductor. Start from its findings.",
+        "With no load in the schedule the rule's share of the breaker is used; a drop over 3% on that assumed load is 'unsure', not a fail.",
+        "A size the table doesn't cover, an unknown breaker or voltage is 'unsure'."
+      ],
+      "documents": ["legend", "schedule", "spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "130 ft on #8 at 16 A, 120 V: 1.0% drop.", "fail": "The legend's table asks #10 from 60 to 100 ft; the circuit runs 85 ft on #12."}
+    },
+    {
+      "id": "E-METHOD",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each run's wiring method (EMT, MC, NM…) is one the specification's wiring-methods table allows for the area it runs in (a guest or dwelling unit, an exposed room, concealed elsewhere), or the project's wiring-method rule, or an approved value-engineering alternative.",
+      "how": [
+        "The prescreen took each run's method from its pieces' type and the area from the rooms its pieces are in, and the allowed methods from the specification's table as the job read it (26 05 19). Start from its findings.",
+        "No table read for an area is 'unsure', never a pass."
+      ],
+      "documents": ["spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "The guest-room branch is MC cable; the table allows MC concealed in units.", "fail": "The corridor homerun is NM cable; the table allows EMT or MC concealed in common areas."}
+    },
+    {
+      "id": "G-CLASH",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "No conduit comes within the clearance (rules data) of a duct, pipe, terminal, structure, equipment, other conduit, or a piece of gear's working space (NEC 110.26(A)); the router's own clash items are carried into the run.",
+      "how": [
+        "The prescreen tested every conduit stick against the other trades' elements, the structure, the equipment and the gear's working space, each grown by its clearance, and against other runs' sticks away from where they meet. The router's clash items come in with source 'build'. Start from those findings.",
+        "Look at the spot on the plan and the section: a clash the build can't avoid needs a reroute or an RFI."
+      ],
+      "documents": ["plan", "section", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The homerun passes 3 in over a supply duct with 1 in clearance asked.", "fail": "The tap runs through a 24 in return duct at 9.5 ft above the floor."}
+    },
+    {
+      "id": "E-TAKEOFF",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "The takeoff (the stored count index the BOM reads, and conduit.takeoff's lines) equals a recount of the model's pieces within takeoff_pct (1%): conduit feet by size from the sticks' ends, wire and cable feet, each fitting and box.",
+      "how": [
+        "The prescreen recounted every raceway piece of the levels in scope and compared each kind, item and size with the stored index and conduit.takeoff. Start from its findings.",
+        "A line off by more than the tolerance is a 'fail': the index is stale (bim.count {refresh: true}) or the takeoff misses pieces."
+      ],
+      "documents": ["plan"],
+      "tolerance": {"takeoff_pct": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "3/4\" EMT: 412.6 ft recounted, 412.6 ft in the index and the takeoff.", "fail": "EMT coupling 3/4\": 14 recounted, 15 in the index."}
+    },
+    {
       "id": "E-LUM",
       "trade": "electrical",
       "applies_to": {"kinds": ["light_fixture", "luminaire", "wall_luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
