@@ -2596,7 +2596,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // A fire alarm symbol's subscript (a small `R` at an `S`'s lower right: a resident room's
         // smoke detector with sounder base) is part of its mark, not a device of its own: the
         // import may hang the letter on another symbol nearby.
-        let (subscript_of, compound) = if fire_alarm_sheet { fire_alarm_subscripts(syms) } else { Default::default() };
+        let (subscript_of, compound) =
+            if fire_alarm_sheet { fire_alarm_subscripts(syms, texts.get(g).map_or(&[][..], Vec::as_slice)) } else { Default::default() };
         for (tag, at, h, tag_at) in syms {
             if subscript_of.contains(h) {
                 *c.not_device.entry("a fire alarm symbol's subscript (part of its mark)").or_default() += 1;
@@ -5263,7 +5264,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
                     }
                 }
-                let booked = book_into_units(&mut out, &footprints, &own, &fed);
+                // Each unit's type (the words of its name: SINGLE Q), for the fixtures its type has.
+                let unit_types: BTreeMap<String, BTreeSet<String>> = job_rooms(job)
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _, _, number))| (stamped_room(name, number, i), type_words(name, None)))
+                    .collect();
+                let booked = book_into_units(&mut out, &footprints, &own, &fed, &unit_types, NEIGHBOUR_FIXTURE_FT * upf_dev);
                 if booked > 0 {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
@@ -9378,9 +9385,12 @@ fn book_into_units(
     footprints: &[Footprint],
     own: &BTreeMap<String, BTreeSet<String>>,
     panels: &BTreeMap<String, BTreeSet<String>>,
+    types: &BTreeMap<String, BTreeSet<String>>,
+    reach: f64,
 ) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
+    let mut booked: BTreeSet<usize> = BTreeSet::new();
     // The tags each unit was booked so far, and those it holds already.
     let mut held: BTreeSet<(String, String)> = devices
         .iter()
@@ -9390,7 +9400,7 @@ fn book_into_units(
     // Devices in one unit's footprint first, then those where two overlap (at the wall they
     // share): by then each unit holds its own, and a fixture there goes to the one lacking it.
     for pass in 0..2 {
-        for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
+        for (i, dv) in devices.iter_mut().enumerate().filter(|(_, dv)| dv.room.trim().is_empty()) {
             // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
             let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
             // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
@@ -9427,8 +9437,48 @@ fn book_into_units(
             }) {
                 held.insert((room.clone(), mine.clone()));
                 dv.room = room.clone();
+                booked.insert(i);
                 n += 1;
             }
+        }
+    }
+    // A unit booked two of a fixture while the unit across the wall, its footprint fitted a
+    // little short of its own bath, has none within `reach`: the one nearer that unit is its. (Only
+    // a fixture another unit of that unit's type holds: an accessible unit's second sink is not
+    // the standard unit's next door.)
+    let key = |dv: &super::readers::ReadDevice| (dv.room.clone(), format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet)));
+    for _ in 0..devices.len().min(MAX_STAMPED) {
+        let mut count: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for dv in devices.iter().filter(|dv| !dv.room.trim().is_empty()) {
+            *count.entry(key(dv)).or_default() += 1;
+        }
+        let mut best: Option<(usize, String, f64)> = None;
+        for &i in &booked {
+            let Some(dv) = devices.get(i).filter(|dv| dv.kind.starts_with("plumbing")) else { continue };
+            let (room, mine) = key(dv);
+            if count.get(&(room.clone(), mine.clone())).copied().unwrap_or(0) < 2 {
+                continue;
+            }
+            let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+            for (l, other, poly, _) in footprints {
+                let level = *l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
+                if !level || *other == room || count.contains_key(&(other.clone(), mine.clone())) || poly.len() < 3 {
+                    continue;
+                }
+                let Some(kind) = types.get(other).filter(|k| !k.is_empty()) else { continue };
+                let its_type_has = count.keys().any(|(r, t)| r != other && *t == mine && types.get(r) == Some(kind));
+                if !its_type_has {
+                    continue;
+                }
+                let d = if cadaddy_geom::point_in_polygon(poly, p) { 0.0 } else { edge_distance(poly, p) };
+                if d <= reach && best.as_ref().is_none_or(|b| d < b.2) {
+                    best = Some((i, other.clone(), d));
+                }
+            }
+        }
+        let Some((i, other, _)) = best else { break };
+        if let Some(dv) = devices.get_mut(i) {
+            dv.room = other;
         }
     }
     n
@@ -9503,6 +9553,7 @@ const SUBSCRIPT_REACH_H: (f64, f64) = (0.3, 2.0);
 #[allow(clippy::type_complexity)]
 fn fire_alarm_subscripts(
     syms: &[(String, cadaddy_geom::Vec2, cadaddy_doc::Handle, Option<(cadaddy_geom::Vec2, f64)>)],
+    free: &[cadaddy_mepfix::sheet_facts::TextItem],
 ) -> (BTreeSet<cadaddy_doc::Handle>, BTreeMap<cadaddy_doc::Handle, String>) {
     let mut subs: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
     let mut compound: BTreeMap<cadaddy_doc::Handle, String> = BTreeMap::new();
@@ -9531,6 +9582,31 @@ fn fire_alarm_subscripts(
         {
             subs.insert(*h);
             compound.insert(bh, format!("{bt}{t}"));
+        }
+    }
+    // A subscript the import hung on no symbol is still printed there: a lone letter among the
+    // sheet's texts at a base's lower right (each letter once).
+    let at_subscript = |q: cadaddy_geom::Vec2, bht: f64, t: &cadaddy_mepfix::sheet_facts::TextItem| {
+        let (dx, dy) = ((t.at.x - q.x) / bht, (q.y - t.at.y) / bht);
+        (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dx)
+            && (SUBSCRIPT_REACH_H.0..=SUBSCRIPT_REACH_H.1).contains(&dy)
+            && (0.6..=1.5).contains(&(t.height / bht))
+    };
+    let mut used: BTreeSet<usize> = BTreeSet::new();
+    for (bt, _, bh, bat) in syms.iter().take(MAX_STAMPED) {
+        let Some((q, bht)) = bat.filter(|(_, ht)| ht.is_finite() && *ht > 0.0) else { continue };
+        if !letters(bt, 2) || subs.contains(bh) || compound.contains_key(bh) {
+            continue;
+        }
+        let lone = free
+            .iter()
+            .enumerate()
+            .take(MAX_SHEET_TEXTS)
+            .filter(|(i, t)| !used.contains(i) && letters(&t.value, 1) && at_subscript(q, bht, t))
+            .min_by(|a, b| a.1.at.dist(q).total_cmp(&b.1.at.dist(q)));
+        if let Some((i, t)) = lone {
+            used.insert(i);
+            compound.insert(*bh, format!("{bt}{}", t.value));
         }
     }
     (subs, compound)
@@ -9826,6 +9902,9 @@ const DUPLICATE_FIXTURE_FT: f64 = 2.0;
 /// Two sheets' tags of one plumbing fixture (the sanitary and the water plans'), at most this far
 /// apart (feet): less than two water closets back to back across a wall.
 const CROSS_SHEET_FIXTURE_FT: f64 = 2.75;
+/// A unit's second fixture of a tag this near (feet) a unit with none is that unit's: its own,
+/// across the wall they share, where its footprint was fitted a little short.
+const NEIGHBOUR_FIXTURE_FT: f64 = 3.0;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
@@ -11049,6 +11128,13 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     let d = s.doc_mut()?;
     for (h, store) in &changes {
         let _ = d.modify_entity(*h, |e| e.common.xdata = props::write(&e.common.xdata, store).into());
+    }
+    // The luminaires' boxes follow what their rows and submittals now say of how they mount (a
+    // recessed or canless type has its own junction box).
+    if !changes.is_empty() && d.embedded.contains_key(super::mepatoms::INDEX_FILE) {
+        let (gone, needed) = super::mepatoms::build::sync_luminaire_boxes(d);
+        result["luminaire_boxes_removed"] = json!(gone);
+        result["luminaire_boxes_needed"] = json!(needed);
     }
     // The documents against each other: the types, each type's fields.
     let mut conflicts: Vec<Conflict> = lt::type_conflicts(&lt::TypeCheck {
@@ -21546,12 +21632,31 @@ mod tests {
         let own: BTreeMap<String, BTreeSet<String>> =
             [("202".to_string(), ["P-1@P".to_string()].into()), ("204".to_string(), ["P-1@P".to_string()].into())].into();
         let none = BTreeMap::new();
-        assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
+        assert_eq!(book_into_units(&mut devices, &foot, &own, &none, &BTreeMap::new(), 0.0), 3);
         // Read before the unit's own (only in its footprint): a water closet at the shared wall
         // still goes to the unit that has none, whatever order the plans list them in.
         let mut order = vec![wc(138.0, 60.0, "Level 2"), wc(40.0, 30.0, "Level 2")];
-        assert_eq!(book_into_units(&mut order, &foot, &own, &none), 2);
+        assert_eq!(book_into_units(&mut order, &foot, &own, &none, &BTreeMap::new(), 0.0), 2);
         assert_eq!(order.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["204", "202"]);
+        // The second unit's footprint fitted short of its own bath (from 160): its water closet at
+        // 150, only in the first's footprint, is still its own, not the first's second.
+        let short = vec![foot[0].clone(), ("2".to_string(), "204".to_string(), quad(160.0, 0.0, 300.0, 348.0), quad(160.0, 100.0, 300.0, 348.0))];
+        let mut back = vec![wc(150.0, 60.0, "Level 2"), wc(138.0, 60.0, "Level 2")];
+        let same: BTreeMap<String, BTreeSet<String>> =
+            [("202".to_string(), ["Q".to_string()].into()), ("204".to_string(), ["Q".to_string()].into())].into();
+        assert_eq!(book_into_units(&mut back, &short, &own, &none, &same, 36.0), 2);
+        assert_eq!(back.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["204", "202"]);
+        // Out of reach it stays where it was booked.
+        let mut far = vec![wc(150.0, 60.0, "Level 2"), wc(138.0, 60.0, "Level 2")];
+        assert_eq!(book_into_units(&mut far, &short, &own, &none, &same, 6.0), 2);
+        assert_eq!(far.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "202"]);
+        // Nor to a unit of another type, none of whose kind has that fixture (the accessible
+        // unit's second sink is its own).
+        let other: BTreeMap<String, BTreeSet<String>> =
+            [("202".to_string(), ["ADA".to_string(), "Q".to_string()].into()), ("204".to_string(), ["Q".to_string()].into())].into();
+        let mut ada = vec![wc(150.0, 60.0, "Level 2"), wc(138.0, 60.0, "Level 2")];
+        assert_eq!(book_into_units(&mut ada, &short, &own, &none, &other, 36.0), 2);
+        assert_eq!(ada.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "202"]);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
         // no tag the unit's plans show, stays out.
         let mut fa = vec![super::super::readers::ReadDevice {
@@ -21561,9 +21666,9 @@ mod tests {
             level: "Level 2".into(),
             ..Default::default()
         }];
-        assert_eq!(book_into_units(&mut fa, &foot, &own, &none), 1);
+        assert_eq!(book_into_units(&mut fa, &foot, &own, &none, &BTreeMap::new(), 0.0), 1);
         let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
-        assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
+        assert_eq!(book_into_units(&mut g, &foot, &own, &none, &BTreeMap::new(), 0.0), 0);
         // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
         // corridor's, across the entry wall) is not.
         let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC@E".to_string(), "F@E".to_string()].into())].into();
@@ -21585,7 +21690,7 @@ mod tests {
             ..Default::default()
         };
         let mut recs = vec![rec("G-9"), rec("A-3"), rec(""), f_on("M-2"), f_on("E-3")];
-        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 3);
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed, &BTreeMap::new(), 0.0), 3);
         assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
@@ -21674,6 +21779,31 @@ mod tests {
         let got: Vec<(&str, f64)> = typical_mounting_heights(&[("E-1".into(), d)]).iter().map(|t| (t.kind, t.inches)).collect();
         // The next note's thermostat and what follows it are not this note's.
         assert_eq!(got, vec![("panel", 75.75), ("switch", 45.75), ("receptacle", 18.0)]);
+    }
+
+    /// A detector's subscript `R` the import hung on no symbol (a lone letter among the sheet's
+    /// texts at its `S`'s lower right) still makes it `SR`; a letter at its left (`P` by a pull
+    /// station) or one already used does not.
+    #[test]
+    fn a_subscript_left_as_free_text_still_joins_its_mark() {
+        use cadaddy_geom::Vec2;
+        use cadaddy_mepfix::sheet_facts::TextItem;
+        let sym = |t: &str, x: f64, n: u64| (t.to_string(), Vec2::new(x, 0.0), cadaddy_doc::Handle(n), Some((Vec2::new(x, 0.0), 1.0)));
+        let syms = vec![sym("S", 0.0, 1), sym("S", 10.0, 2), sym("S", 20.0, 3), sym("S", 30.0, 4), sym("R", 30.9, 5)];
+        let text = |v: &str, x: f64, y: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: 1.0, rotation: 0.0 };
+        // An R at the first S, a P at the left of the second, nothing by the third; the fourth's R
+        // is a symbol's tag (at its lower right).
+        let free = vec![text("R", 0.9, -0.8), text("P", 8.5, -0.8)];
+        let syms = {
+            let mut v = syms;
+            v[4].3 = Some((Vec2::new(30.9, -0.8), 1.0));
+            v
+        };
+        let (subs, compound) = fire_alarm_subscripts(&syms, &free);
+        assert_eq!(compound.get(&cadaddy_doc::Handle(1)).map(String::as_str), Some("SR"));
+        assert_eq!(compound.get(&cadaddy_doc::Handle(4)).map(String::as_str), Some("SR"));
+        assert!(!compound.contains_key(&cadaddy_doc::Handle(2)) && !compound.contains_key(&cadaddy_doc::Handle(3)));
+        assert_eq!(subs.into_iter().collect::<Vec<_>>(), vec![cadaddy_doc::Handle(5)]);
     }
 
     /// A fire alarm symbol list as E-7 prints it: each row's letters (an `S` with its subscript

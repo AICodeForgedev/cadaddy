@@ -219,5 +219,23 @@
   "offset_max_ft": 1.0,
   "joint_tol_in": 1.0,
   "box_reach_ft": 3.0,
-  "panel_reach_ft": 5.0
+  "panel_reach_ft": 5.0,
+  "feeder_makeup_ft": 3.0,
+  "feeder_makeup_source": "3 ft of each feeder conductor at each gear it lands on: from where its raceway enters, through the gutter's bending space to the lug (company default; NEC 312.6)",
+  "feeder_conductors": {
+    "cu": { "insulation": "THHN", "item": "THHN copper", "ground_item": "Copper ground, green" },
+    "al": { "insulation": "XHHW-2", "item": "XHHW aluminum", "ground_item": "XHHW aluminum" }
+  },
+  "feeder_conductors_source": "a feeder's conductors of the material its schedule names: copper THHN/THWN-2, aluminum XHHW-2 with an insulated aluminum ground, where the specifications name no other (company default; NEC 310.104)",
+  "luminaire_box": {
+    "fields": ["junction_box", "installation", "mounting_type", "fixture_description", "description"],
+    "rules": [
+      { "words": ["INTEGRAL JUNCTION BOX", "INTEGRAL J-BOX", "INTEGRAL JBOX", "JUNCTION BOX INCLUDED", "J-BOX INCLUDED", "WITH JUNCTION BOX", "WIRING COMPARTMENT"], "box": false, "cut_sheet": true, "source": "the luminaire's own junction box or wiring compartment, listed with it (UL 1598): fed straight, no outlet box" },
+      { "words": ["CANLESS", "WAFER", "REMOTE DRIVER"], "box": false, "cut_sheet": true, "source": "a canless (wafer) luminaire ships with its remote driver / junction box: no outlet box" },
+      { "words": ["COMPATIBLE JUNCTION BOX", "J-BOX PATTERN", "TO JUNCTION BOX", "TO A JUNCTION BOX", "OCTAGONAL BOX", "OCTAGON BOX", "OUTLET BOX", "MOUNTS TO STANDARD", "J-BOXES"], "box": true, "cut_sheet": true, "source": "its cut sheet mounts it on an outlet (junction) box: one box (NEC 314.27(A))" },
+      { "words": ["RECESSED", "TROFFER", "LAY-IN", "LAY IN", "IN-GRADE", "IN GRADE"], "box": false, "source": "a recessed luminaire's housing carries its own junction box (UL 1598): fed by a whip or straight, no outlet box" },
+      { "words": ["PENDANT", "SURFACE", "CEILING", "WALL", "SCONCE", "STEM", "CHAIN", "CANOPY", "AFF"], "box": true, "source": "a surface, wall or pendant luminaire hangs on an outlet box (NEC 314.27(A))" }
+    ],
+    "default_source": "the trade's usual 4 in octagon at a luminaire where neither its schedule nor its submittal says how it mounts (company default)"
+  }
 }

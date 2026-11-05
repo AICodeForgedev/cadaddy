@@ -3416,3 +3416,9 @@ menu	View	عرض
 	The current file is kept as {name} until the next save.	يُحتفظ بالملف الحالي باسم {name} حتى الحفظ التالي.
 	This format can't keep these objects yet: {objects}.	لا يمكن لهذا التنسيق الاحتفاظ بهذه الكائنات بعد: {objects}.
 	{count} more types	{count} أنواع أخرى
+	Review by Impact	المراجعة حسب الأثر
+	Resolve Review Item by Impact	حسم بند المراجعة حسب الأثر
+	Open Review Item	فتح بند المراجعة
+	Review Audit Trail	سجل تدقيق المراجعة
+	Accuracy Trend	اتجاه الدقة
+	Measure Build Accuracy	قياس دقة البناء
