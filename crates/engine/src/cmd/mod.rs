@@ -35,6 +35,7 @@ mod dampers;
 mod dash_styles;
 pub mod dimcheck;
 pub(crate) mod dimreader;
+mod doc_objects;
 mod draw;
 mod draw2;
 mod draworder;

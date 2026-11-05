@@ -1,5 +1,5 @@
 {
-  "source": "rules data: the nouns construction documents name installed objects by (CSI MasterFormat divisions 21-28 product names, NFPA 72 / NEC / IMC device and equipment terms), the words electrical, fire alarm and low-voltage notes connect another trade's object with (power, a circuit, a fire alarm module, a data drop), and drafting stop words; trade vocabulary, no job's words",
+  "source": "rules data: the nouns construction documents name installed objects by (CSI MasterFormat divisions 21-28 product names, NFPA 72 / NEC / IMC device and equipment terms), the words electrical, fire alarm and low-voltage notes connect another trade's object with (power, a circuit, a fire alarm module, a data drop), and drafting stop words; English words that read as codes (`CAB`, `DUAL`), datum phrases that name a place, not an object (`BACK OF CURB`), the location words a note names a place by (`ABOVE THE CABINET`), and the title words of a low-voltage sheet whose letter landscape uses too; trade vocabulary, no job's words",
   "object_nouns": [
     "DAMPER", "DETECTOR", "SENSOR", "VALVE", "FAN", "PUMP", "HEATER", "BOILER", "CHILLER", "HUMIDIFIER", "DEHUMIDIFIER",
     "THERMOSTAT", "HUMIDISTAT", "UNIT", "AHU", "RTU", "VAV", "FCU", "PTAC", "CURTAIN", "COMPRESSOR", "CONDENSER", "EVAPORATOR",
@@ -33,6 +33,10 @@
   "connecting_trades": ["electrical"],
   "abbreviation_headings": ["ABBREVIATION", "ABBREVIATIONS", "ABBREV", "LEGEND", "LEGENDS", "SYMBOL", "SYMBOLS"],
   "not_object_words": ["PLAN", "SECTION", "DETAIL", "ELEVATION", "SHEET", "SYMBOL", "NUMBER", "TAG", "TYPE", "RCP", "DRAWING", "VIEW", "NOTE", "SCHEDULE", "MATCHLINE", "GRID", "LINE"],
+  "ordinary_words": ["CAB", "DUAL", "SINGLE", "DOUBLE", "TRIPLE", "QUAD", "FULL", "HALF", "EACH", "ALL", "NEW", "TYPICAL", "OPEN", "CLOSED", "LOW", "HIGH", "TOP", "BASE"],
+  "datum_phrases": ["BACK OF", "BACK TO BACK", "TOP OF", "BOTTOM OF", "FACE OF", "EDGE OF", "CENTER OF", "CENTERLINE OF", "FLOW LINE", "FINISH FLOOR", "FINISHED FLOOR", "FINISH GRADE", "FINISHED GRADE"],
+  "location_words": ["ABOVE", "BELOW", "BEHIND", "UNDER", "UNDERNEATH", "OVER", "BESIDE", "ADJACENT", "NEXT", "INSIDE", "WITHIN", "BENEATH", "BETWEEN"],
+  "low_voltage_titles": ["LOW VOLTAGE", "TECHNOLOGY", "TELECOM", "TELECOMMUNICATION", "TELECOMMUNICATIONS", "COMMUNICATIONS", "DATA", "SECURITY", "SPECIAL SYSTEMS", "AUDIO VISUAL", "STRUCTURED CABLING"],
   "page_words": ["LEGEND", "SYMBOL", "ABBREVIATION", "SCHEDULE", "GENERAL NOTES", "NOTES", "COVER", "LEGENDS"],
   "own_nouns": ["DISCONNECT", "RECEPTACLE", "OUTLET", "BOX", "SWITCH", "DIMMER", "PANEL", "PANELBOARD", "BREAKER", "MODULE", "RELAY", "STARTER", "CONTACTOR", "TRANSFORMER", "JACK", "STROBE", "HORN", "SPEAKER"],
   "max_pages": 40,
