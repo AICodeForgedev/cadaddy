@@ -19,10 +19,8 @@
 //!   crashing.
 //!
 //! These bound the input- and output-size variants. A small file that declares a huge internal
-//! table or section can still make the dependency allocate before any size is known; fully fixing
-//! that requires an upstream fix in `acadrust` (validate declared sizes against a decoded-memory
-//! budget) or running the decode in a separate worker with an OS memory limit. The limits here
-//! keep the blast radius bounded in the meantime.
+//! table or section can still make the dependency allocate before any size is known, so the app
+//! and the CLI run both directions in a child process ([`worker`]): what that kills is the child.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -961,6 +959,30 @@ mod native {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
+
+/// The bridge in a child process, so a decoder that dies ends one open or save, not the app.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worker;
+#[cfg(not(target_arch = "wasm32"))]
+pub use worker::{WORKER_ARG, crash_worker_for_test, decode, encode_named, serve_if_asked, use_own_worker, use_worker};
+
+/// There's no worker in the web build.
+#[cfg(target_arch = "wasm32")]
+pub const WORKER_ARG: &str = "--dwg-worker";
+#[cfg(target_arch = "wasm32")]
+pub fn serve_if_asked() -> Option<i32> {
+    None
+}
+#[cfg(target_arch = "wasm32")]
+pub fn use_own_worker() {}
+#[cfg(target_arch = "wasm32")]
+pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
+    dwg_to_dxf_noted(bytes, limits)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+    dxf_to_dwg_named(dxf, version, linetypes)
+}
 
 /// The error for a DWG version CADaddy can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]

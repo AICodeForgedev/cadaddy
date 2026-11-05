@@ -140,7 +140,7 @@ fn existing_outputs_are_skipped_renamed_or_overwritten() {
     over["overwrite"] = json!("overwrite");
     let r = run(&mut s, over.clone());
     assert_eq!(files(&r, "converted", "to").len(), 1, "{r}");
-    assert!(dir.join("plan.bak").is_file(), "the original is the .bak");
+    assert!(dir.join("plan.dxf.bak").is_file(), "the original is the .bak");
     over["bak"] = json!(false);
     let r = run(&mut s, over);
     assert_eq!(files(&r, "skipped", "file").len(), 1, "never over itself without a .bak: {r}");

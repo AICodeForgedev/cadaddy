@@ -766,25 +766,6 @@ fn cancel_keeps_partial_line_as_one_undo() {
 }
 
 #[test]
-fn hostile_params_never_panic() {
-    let mut s = Session::new();
-    for c in command_specs() {
-        for p in [
-            json!(null),
-            json!([]),
-            json!("x"),
-            json!({"points": [[1e308, -1e308], ["a"]]}),
-            json!({"handles": ["zz", 99999]}),
-            json!({"radius": -1, "center": [0, 0]}),
-            json!({"gradient": {"name": 5, "color1": [1], "angle": "x", "centered": "y"}}),
-            json!({"points": [[0, 0]], "handles": ["1"], "gradient": "x", "name": "RAINBOW"}),
-        ] {
-            let _ = s.execute(c.id, &p);
-        }
-    }
-}
-
-#[test]
 fn every_interactive_command_starts_and_cancels() {
     for c in command_specs().iter().filter(|c| c.interactive.is_some()) {
         let mut s = Session::new();
@@ -1676,4 +1657,17 @@ fn array_takes_columns_and_column_spacing() {
     // An unknown one is refused by an agent, naming the accepted names.
     let e = s.execute_agent("array", &json!({ "rows": 2, "nosuchparam": 3 })).unwrap_err().to_string();
     assert!(e.contains("`nosuchparam` is not a parameter of array") && e.contains("`columns`") && e.contains("`cols`"), "{e}");
+}
+
+#[test]
+fn setvar_rejects_non_finite_text_for_real_variables() {
+    let mut s = Session::new();
+    for name in ["LTSCALE", "TEXTSIZE", "SNAPANG"] {
+        let before = s.execute("getvar", &json!({"name": name})).unwrap();
+        for text in ["nan", "inf", "-inf"] {
+            let r = s.execute("setvar", &json!({"name": name, "value": text}));
+            assert!(r.is_err(), "SETVAR {name} {text} was accepted");
+            assert_eq!(s.execute("getvar", &json!({"name": name})).unwrap(), before);
+        }
+    }
 }

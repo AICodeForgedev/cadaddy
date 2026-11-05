@@ -157,7 +157,6 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("HPOBJWARNING", Kind::Int(1, 1_073_741_823), Def::Int(10_000)),
     ("HPSPACE", Kind::Real { min: 0.0, strict: true }, Def::Real(1.0)),
     ("HPTRANSPARENCY", Kind::Transparency(true), Def::Str("use current")),
-    ("ISAVEBAK", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("ISAVEPERCENT", Kind::Int(0, 100), Def::Int(50)),
     ("ISOLINES", Kind::Int(0, 2047), Def::Int(4)),
     ("LENSLENGTH", Kind::Real { min: 0.0, strict: true }, Def::Real(50.0)),
