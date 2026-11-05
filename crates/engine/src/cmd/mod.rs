@@ -192,6 +192,7 @@ pub(crate) mod underlay;
 mod unitmarks;
 mod unittypes;
 pub mod validate;
+pub mod validate_conduit;
 pub mod validate_gear;
 pub mod validate_height;
 pub mod validate_keynote;
