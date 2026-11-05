@@ -3170,8 +3170,13 @@
 	Conduit Routing Report	Rapport de tracé des conduits
 	Reroute Conduit	Retracer les conduits
 	Conduit Takeoff	Métré des conduits
+	Wire Pull Schedule	Tableau de tirage des câbles
+	Conduit Cut and Bend List	Liste de coupe et de cintrage des conduits
+	Material Release List	Liste de lancement des matériaux
+	Field Paperwork Sheets	Feuilles de documents de chantier
 	Scope by Trade	Périmètre par corps de métier
 	Value Engineering Scenario	Scénario d'ingénierie de la valeur
 	Value Engineering Decision	Décision d'ingénierie de la valeur
 	Read Drawn Dimensions	Lire les cotes dessinées
 	Underground Plan Report	Rapport du plan des réseaux enterrés
+	Update Model from Plans	Mettre à jour le modèle depuis les plans

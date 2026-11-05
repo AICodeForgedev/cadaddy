@@ -1275,7 +1275,7 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
 }
 
 /// One set of a feeder's conductors as a makeup (`3#1 + 1#1 + 1#6G`).
-fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
+pub(crate) fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
     let size = |s: &str| -> String {
         let t = s.trim().trim_start_matches('#').to_ascii_lowercase();
         t.split_whitespace().next().unwrap_or_default().to_string()
@@ -1295,7 +1295,7 @@ fn feeder_makeup(f: &cadaddy_walk3d::Feeder) -> String {
 
 /// A panel's voltage from its schedule row's properties (`VOLTS`, `VOLTAGE`), as the colour
 /// table names it.
-fn gear_voltage(sp: &BuildingSpec, panel: &str) -> Option<String> {
+pub(crate) fn gear_voltage(sp: &BuildingSpec, panel: &str) -> Option<String> {
     let e = sp.mep.equipment.iter().find(|e| !panel.is_empty() && e.tag.trim().eq_ignore_ascii_case(panel.trim()))?;
     let v = e.properties.iter().find(|(k, _)| k.to_ascii_uppercase().contains("VOLT")).map(|(_, v)| v.to_ascii_uppercase())?;
     if v.contains("480") || v.contains("277") {

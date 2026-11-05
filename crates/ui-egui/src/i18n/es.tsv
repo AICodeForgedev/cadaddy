@@ -3389,8 +3389,13 @@
 	Conduit Routing Report	Informe de trazado de conductos eléctricos
 	Reroute Conduit	Retrazar conductos eléctricos
 	Conduit Takeoff	Cómputo de conductos eléctricos
+	Wire Pull Schedule	Programa de tendido de cables
+	Conduit Cut and Bend List	Lista de cortes y curvas de conductos
+	Material Release List	Lista de liberación de materiales
+	Field Paperwork Sheets	Hojas de documentación de obra
 	Scope by Trade	Alcance por oficio
 	Value Engineering Scenario	Escenario de ingeniería de valor
 	Value Engineering Decision	Decisión de ingeniería de valor
 	Read Drawn Dimensions	Leer cotas dibujadas
 	Underground Plan Report	Informe del plan de instalación subterránea
+	Update Model from Plans	Actualizar modelo desde planos

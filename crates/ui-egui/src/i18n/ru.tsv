@@ -3171,8 +3171,13 @@
 	Conduit Routing Report	Отчёт о трассировке кабельных труб
 	Reroute Conduit	Перетрассировать кабельные трубы
 	Conduit Takeoff	Ведомость кабельных труб
+	Wire Pull Schedule	Ведомость протяжки проводов
+	Conduit Cut and Bend List	Ведомость резки и гибки труб
+	Material Release List	Ведомость отпуска материалов
+	Field Paperwork Sheets	Листы полевой документации
 	Scope by Trade	Объём работ по специальности
 	Value Engineering Scenario	Сценарий стоимостного инжиниринга
 	Value Engineering Decision	Решение по стоимостному инжинирингу
 	Read Drawn Dimensions	Прочитать начерченные размеры
 	Underground Plan Report	Отчёт по плану подземных сетей
+	Update Model from Plans	Обновить модель по планам

@@ -83,7 +83,7 @@ field. `engine.commands` returns a separate command catalog, not a list of addit
 | `ui.focus` | | Activate the native window. Does not assign focus to a widget. |
 | `ui.screenshot` | `{path?}` | PNG of the window (needs a presented frame). |
 | `ui.render` | `{path?, width?, height?, fit?}` | Headless render. `fit` (default true) frames the whole drawing; `false` uses the current view. Replies `{pngBase64, width, height, bytes, path?}`. |
-| `app.open` / `app.save` / `app.quit` | `{path}` (open) · `{path?, force?}` (save; `force: true` overwrites a file changed on disk) · `{save?, discard?}` (quit) | File operations. `app.quit {save: true}` saves every modified drawing first. |
+| `app.open` / `app.save` / `app.quit` | `{path}` (open) · `{path?, force?, version?, binary?}` (save; `force: true` overwrites a file changed on disk; `version`/`binary` choose the DWG/DXF version and binary DXF of a save with a `path`) · `{save?, discard?}` (quit) | File operations. `app.quit {save: true}` saves every modified drawing first. |
 | `app.closePrompt` | | The drawing an open "Save changes to …?" question is about (`{title}` or `{title: null}`). |
 | `app.answerClose` | `{choice: save\|discard\|cancel}` | Answer that question as the user would. |
 | `control.methods` | | Every method this server answers: `{method, params, description}`. Headless (`cadaddy-cli mcp`) lists only the methods it serves. |

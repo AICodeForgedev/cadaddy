@@ -134,11 +134,29 @@ impl Server {
                 }
             }
         });
-        while let Ok(next) = rx.recv() {
+        // While the client pauses, the backend's waiting work runs (a 3D model the plan's edits
+        // left behind is built once edits stop for a moment).
+        let mut wait: Option<std::time::Duration> = None;
+        loop {
+            let next = match wait {
+                Some(w) => match rx.recv_timeout(w) {
+                    Ok(next) => next,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        wait = self.backend.idle();
+                        continue;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                },
+                None => match rx.recv() {
+                    Ok(next) => next,
+                    Err(_) => break,
+                },
+            };
             match next? {
                 Some(line) => self.serve_line(line, &mut output)?,
                 None => break,
             }
+            wait = self.backend.idle();
         }
         Ok(())
     }

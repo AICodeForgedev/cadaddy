@@ -141,6 +141,10 @@
       "sets": "equipment_electrical",
       "rule": "An equipment connection follows its approved submittal: its protection no larger than the maker's maximum (fuse class as named), its conductors' ampacity at least 125% of its nameplate / full-load current (its minimum circuit amps when given), its controller's short-circuit current rating at least the available fault current where it is installed. Where the drawings differ, the build reports both values and the fix.",
       "conductor_factor": 1.25,
+      "disconnect_factor": 1.15,
+      "disconnect_sizes_a": [30, 60, 100, 200, 400, 600, 800, 1200],
+      "disconnect_cite": "NEC 430.110(A) (a motor's disconnect at least 115% of its full-load current), 440.12(A) (an air-conditioning unit's at least 115% of its rated-load or nameplate current), 620.51 (an elevator's: fused or circuit breaker, lockable open); standard switch sizes",
+      "unit_disconnect_words": ["UNIT MOUNTED DISCONNECT", "UNIT-MOUNTED DISCONNECT", "FACTORY MOUNTED DISCONNECT", "FACTORY-MOUNTED DISCONNECT", "FACTORY INSTALLED DISCONNECT", "FACTORY-INSTALLED DISCONNECT", "INTEGRAL DISCONNECT", "DISCONNECT, FACTORY", "DISCONNECT (FACTORY"],
       "ampacity_75c": {
         "cu": {
           "14": 20,

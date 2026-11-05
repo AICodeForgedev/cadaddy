@@ -198,8 +198,13 @@ fn shaded(d: &Drawing, opts: &Value, shade: &Value) -> Result<Vec<u8>> {
     w *= shrink;
     h *= shrink;
     let (wp, hp) = ((w.round() as u32).max(1), (h.round() as u32).max(1));
-    let raster =
-        shade::render_fitted(d, proj, style, wp, hp, Rgb(255, 255, 255)).ok_or_else(|| IoError::Format("model space has nothing to plot".into()))?;
+    // Nothing that shades (no 3D objects, or nothing at all): a blank page, as the plan's plot of
+    // an empty model space is (S5-007).
+    let raster = match shade::render_fitted(d, proj, style, wp, hp, Rgb(255, 255, 255)) {
+        Some(r) => r,
+        None => cadaddy_render::images::Raster::new(wp, hp, vec![255; (wp as usize).saturating_mul(hp as usize).saturating_mul(4)])
+            .ok_or_else(|| IoError::Format("the sheet is too large to plot".into()))?,
+    };
     if png {
         return raster.encode_png().ok_or_else(|| IoError::Format("PNG encoding failed".into()));
     }
@@ -263,6 +268,17 @@ mod tests {
         assert_ne!(plot(&flat, &Space::Model, &opts).unwrap(), a);
         let shaded = json!({ "output": "png", "resolution": 40, "paper": "A4", "shade": { "style": "Shaded", "dir": [-1, -1, 1] } });
         assert_ne!(plot(&d, &Space::Model, &shaded).unwrap(), a);
+    }
+
+    /// S5-007: an empty model space in a shaded 3D view plots a blank page, as its plan plot does.
+    #[test]
+    fn an_empty_model_in_a_shaded_view_plots_a_blank_page() {
+        let d = Drawing::new_metric();
+        let png = json!({ "output": "png", "resolution": 40, "paper": "A4", "shade": { "style": "Realistic", "dir": [-1, -1, 1] } });
+        let page = tiny_skia::Pixmap::decode_png(&plot(&d, &Space::Model, &png).unwrap()).unwrap();
+        assert!(page.width() > 1 && page.data().iter().all(|b| *b == 255), "a white page");
+        let pdf = json!({ "paper": "A4", "shade": { "style": "Realistic", "dir": [-1, -1, 1] } });
+        assert!(plot(&d, &Space::Model, &pdf).unwrap().starts_with(b"%PDF"));
     }
 
     #[test]

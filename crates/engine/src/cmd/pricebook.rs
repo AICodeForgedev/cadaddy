@@ -323,7 +323,7 @@ pub(crate) enum Found {
     Excluded(String),
 }
 
-fn same_unit(a: &str, b: &str) -> bool {
+pub(crate) fn same_unit(a: &str, b: &str) -> bool {
     let n = |u: &str| match u.trim().to_ascii_lowercase().as_str() {
         "ft" | "lf" | "foot" | "feet" => "ft".to_string(),
         "ea" | "each" | "" => "each".to_string(),
@@ -443,7 +443,7 @@ fn to_history(dir: &Path, old: &Quote, on: &str, why: &str) -> std::io::Result<(
     writeln!(f, "{},{},{}", quote_line(old), csv_cell(on), csv_cell(why))
 }
 
-fn days_between(a: &str, b: &str) -> Option<i64> {
+pub(crate) fn days_between(a: &str, b: &str) -> Option<i64> {
     Some(super::estimate::parse_date(b)? - super::estimate::parse_date(a)?)
 }
 
@@ -861,6 +861,35 @@ fn table_rows(cells: &[Vec<String>], raw: Option<&[Vec<String>]>, want: &str) ->
         .collect()
 }
 
+/// A price-book workbook's rows: its `Price List` sheet's (else its first sheet's) quote rows and
+/// its `Item Map` sheet's rows, by column name.
+type Rows = Vec<BTreeMap<String, String>>;
+fn workbook_rows(bytes: &[u8]) -> std::result::Result<(Rows, Rows), String> {
+    let wb = super::table::xlsx::open(bytes)?;
+    let read = |name: Option<&str>| (wb.cells(name, None).unwrap_or_default(), wb.values(name, None).unwrap_or_default());
+    let (shown, raw) = read(Some("Price List"));
+    let mut quotes = table_rows(&shown, Some(&raw), "unit_price");
+    if quotes.is_empty() {
+        let (shown, raw) = read(None);
+        quotes = table_rows(&shown, Some(&raw), "unit_price");
+    }
+    let (map, _) = read(Some("Item Map"));
+    Ok((quotes, table_rows(&map, None, "item")))
+}
+
+/// A price-book workbook (`Price List` and `Item Map` sheets) as a book of its own: its quotes
+/// and map only, read on `today`, each key's price the lowest quote no older than `stale_days`
+/// (else the lowest).
+pub(crate) fn workbook_book(bytes: &[u8], today: &str, stale_days: i64) -> std::result::Result<Book, String> {
+    let (quotes, map) = workbook_rows(bytes)?;
+    let mut b = Book { today: today.to_string(), rule: Rule { stale_days, ..Rule::default() }, ..Book::default() };
+    for q in quotes.iter().filter_map(|r| quote_of(r, "local")) {
+        b.quotes.entry(q.key.clone()).or_default().push(q);
+    }
+    b.map = map.iter().filter_map(|r| map_of(r, "local")).collect();
+    Ok(b)
+}
+
 fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "pricebook.import";
     let path =
@@ -881,16 +910,7 @@ fn run_import(s: &mut Session, p: &Value) -> Result<Value> {
     let (quote_rows, map_rows) = if !invoice_rows.is_empty() {
         (Vec::new(), Vec::new())
     } else if path.to_ascii_lowercase().ends_with(".xlsx") {
-        let wb = super::table::xlsx::open(&bytes).map_err(|e| bad(C, format!("{path}: {e}")))?;
-        let read = |name: Option<&str>| (wb.cells(name, None).unwrap_or_default(), wb.values(name, None).unwrap_or_default());
-        let (shown, raw) = read(Some("Price List"));
-        let mut quotes = table_rows(&shown, Some(&raw), "unit_price");
-        if quotes.is_empty() {
-            let (shown, raw) = read(None);
-            quotes = table_rows(&shown, Some(&raw), "unit_price");
-        }
-        let (map, _) = read(Some("Item Map"));
-        (quotes, table_rows(&map, None, "item"))
+        workbook_rows(&bytes).map_err(|e| bad(C, format!("{path}: {e}")))?
     } else {
         let text = String::from_utf8(bytes).map_err(|e| bad(C, format!("{path}: {e}")))?;
         let cells = super::estimate::csv_cells(&text);

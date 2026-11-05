@@ -170,7 +170,7 @@ fn picture(s: &mut Session, sp: &BuildingSpec, r: &Rfi, path: &str) -> Option<()
     s.execute("model.render", &req).ok().map(|_| ())
 }
 
-fn text(d: &mut Drawing, at: Vec2, h: f64, value: &str) {
+pub(crate) fn text(d: &mut Drawing, at: Vec2, h: f64, value: &str) {
     let kind = EntityKind::Text(Text {
         insert: Vec3::new(at.x, at.y, 0.0),
         align_pt: None,
@@ -186,12 +186,12 @@ fn text(d: &mut Drawing, at: Vec2, h: f64, value: &str) {
     let _ = d.add(&Space::Model, Common::default(), kind);
 }
 
-fn line(d: &mut Drawing, a: Vec2, b: Vec2) {
+pub(crate) fn line(d: &mut Drawing, a: Vec2, b: Vec2) {
     let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) }));
 }
 
 /// Words wrapped to lines of at most `n` characters.
-fn wrap(s: &str, n: usize) -> Vec<String> {
+pub(crate) fn wrap(s: &str, n: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     for w in s.split_whitespace() {

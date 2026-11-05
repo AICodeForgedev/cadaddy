@@ -783,6 +783,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         let gear_docs = if super::validate_gear::wanted(&all, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
         let conduit_takeoff = super::validate_conduit::read_takeoff(s, &all, &only);
         let value = super::validate_value::read(s, p, &all, &only).map_err(|e| bad(CMD_START, e))?;
+        let equip_docs = if super::validate_equip::wanted(&all, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
         let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
             d,
             sp: &sp,
@@ -797,6 +798,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             conduit: true,
             conduit_takeoff: conduit_takeoff.as_ref(),
             value: value.as_ref(),
+            equip_docs: equip_docs.as_ref(),
         });
         pre["measured"] = measured.summary();
     }

@@ -20,6 +20,11 @@ pub trait Backend {
     fn canceller(&self) -> Option<Box<dyn Fn() + Send>> {
         None
     }
+    /// Work that waits for the client to pause (a 3D model the plan's edits left behind is built
+    /// then): done when due. Returns how long until it is due when some waits, else `None`.
+    fn idle(&mut self) -> Option<Duration> {
+        None
+    }
 }
 
 /// A running CADaddy app reached through its loopback control port.
@@ -406,7 +411,11 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
     ),
     ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
-    ("app.save", "{path?, force?}", "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk."),
+    (
+        "app.save",
+        "{path?, force?, version?, binary?}",
+        "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk; version/binary choose the DWG/DXF version and binary DXF of a Save As.",
+    ),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
 ];
@@ -450,6 +459,9 @@ fn state(s: &Session) -> Value {
 }
 
 impl Backend for Headless {
+    fn idle(&mut self) -> Option<Duration> {
+        self.session.update_model_when_idle(cadaddy_engine::cmd::wallgen::IDLE_REBUILD)
+    }
     fn call(&mut self, method: &str, p: Value) -> Result<Value, String> {
         let s = &mut self.session;
         let str_p = |k: &str| p.get(k).and_then(Value::as_str).map(str::to_string);
@@ -681,6 +693,9 @@ impl Auto {
 impl Backend for Auto {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.chosen.get_mut().get_or_insert_with(Self::choose).call(method, params)
+    }
+    fn idle(&mut self) -> Option<Duration> {
+        self.chosen.get_mut().as_mut().and_then(|b| b.idle())
     }
     fn has_ui(&self) -> bool {
         self.chosen.borrow_mut().get_or_insert_with(Self::choose).has_ui()

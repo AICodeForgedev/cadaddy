@@ -55,6 +55,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(
             "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
         ),
+        CommandSpec::new("model.update", "Update Model from Plans", run_update)
+            .params("{} → {behind: bool (the plan had changed since the associative model was last built), rebuilt: bool}: build the model again now when edits to the plan have left it behind (it is built again anyway before the next command that reads it, and when editing stops for a moment)")
+            .noundo(),
         CommandSpec::new("wallgen.plan", "Planned Walls", run_plan)
             .params("{level: name (of the building spec), window?: [[x,y],[x,y]] (only walls with an end inside), limit?: walls listed (2000, at most 20000)} → {level, walls: [{a: [x,y], b: [x,y], thickness}], total, truncated, notes}: what the level's plan was read as — the walls model.build would build there (centrelines and thickness, sheet units, before openings are cut)")
             .noundo(),
@@ -785,40 +788,322 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
-/// The objects on the rules' layers, by handle, as the drawing holds them (shared pointers: an
-/// edit replaces the object's).
-fn plan(d: &Drawing, g: &WallGen) -> Vec<(Handle, *const Entity)> {
-    let watched = |layer: &str| {
-        g.rules.layer(layer).is_some() || g.spec.as_ref().and_then(|sp| sp.role(layer)).is_some_and(|r| r.role != cadaddy_walk3d::Role::Ignore)
-    };
-    d.model.iter().filter(|e| made_as(e).is_none() && watched(&e.common.layer)).map(|e| (e.handle, Arc::as_ptr(e))).collect()
+/// Whether `layer` holds plan objects the model is built from (the rules' layers, the spec's
+/// roles other than ignored ones).
+fn watched(g: &WallGen, layer: &str) -> bool {
+    g.rules.layer(layer).is_some() || g.spec.as_ref().and_then(|sp| sp.role(layer)).is_some_and(|r| r.role != cadaddy_walk3d::Role::Ignore)
 }
 
-/// After a command: when the drawing has an associative WALLGEN and an object on its rules'
-/// layers changed, build again (in the same undo step).
+/// Whether a plan object (an object on the rules' layers that the build didn't make) differs
+/// between `a` and `b`: added, removed, changed, or moved to or from a plan layer. Only the
+/// objects that changed are looked at (shared chunks are skipped whole), so the cost follows the
+/// edit, not the drawing's size.
+fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
+    if a.model.unchanged_from(&b.model) {
+        return Vec::new();
+    }
+    let (added, modified, erased) = a.model.changes(&b.model);
+    let plan_obj = |e: &Entity| made_as(e).is_none() && watched(g, &e.common.layer);
+    added
+        .into_iter()
+        .chain(modified)
+        .chain(erased)
+        .filter(|h| a.model.get(*h).is_some_and(|e| plan_obj(e)) || b.model.get(*h).is_some_and(|e| plan_obj(e)))
+        .collect()
+}
+
+/// Whether object `h` is the very same in `a` and `b` (or in neither).
+fn same_object(a: &Drawing, b: &Drawing, h: Handle) -> bool {
+    match (a.model.get(h), b.model.get(h)) {
+        (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// How long a person or agent must stop editing before a model the plan has moved past is built
+/// again ([`Session::update_model_when_idle`] in the app's frame loop and the MCP server).
+pub const IDLE_REBUILD: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Most drawing states remembered as behind their model.
+const MAX_BEHIND: usize = 4096;
+
+/// The drawing states (the drawing as one command left it, shared with undo) whose plan has
+/// changed since the associative model was last built: an edit to the plan marks the model
+/// behind instead of building it again on the spot (a large building takes minutes to build; 10
+/// wall lines took 10 builds). The model is built again once, before the next command that reads
+/// it, or when editing stops for [`IDLE_REBUILD`]. Undo and redo bring back states as they are,
+/// so a state left behind is still known as one when undo returns to it.
+#[derive(Clone, Debug, Default)]
+pub struct Behind {
+    /// Each state, with the build it is behind (the drawing that build left).
+    states: Vec<(std::sync::Weak<Drawing>, Option<std::sync::Weak<Drawing>>)>,
+    /// When the last command in a state behind the plan ran.
+    last_edit: Option<web_time::Instant>,
+}
+
+fn same_state(w: &std::sync::Weak<Drawing>, d: &Arc<Drawing>) -> bool {
+    std::ptr::eq(w.as_ptr(), Arc::as_ptr(d))
+}
+
+impl Behind {
+    fn find(&self, d: &Arc<Drawing>) -> Option<&Option<std::sync::Weak<Drawing>>> {
+        self.states.iter().find(|(w, _)| same_state(w, d)).map(|(_, b)| b)
+    }
+    fn holds(&self, d: &Arc<Drawing>) -> bool {
+        self.find(d).is_some()
+    }
+    /// Whether `d` is a state behind and `built` (the last build's drawing) is newer than the
+    /// build it is behind.
+    fn rebuilt_since(&self, d: &Arc<Drawing>, built: Option<&Arc<Drawing>>) -> bool {
+        match (self.find(d), built) {
+            (Some(Some(was)), Some(b)) => !same_state(was, b),
+            (Some(None), Some(_)) => true,
+            _ => false,
+        }
+    }
+    fn add(&mut self, d: &Arc<Drawing>, built: Option<&Arc<Drawing>>) {
+        if self.holds(d) {
+            return;
+        }
+        // States nothing holds any more (undo forgot them) can't come back.
+        self.states.retain(|(w, _)| w.strong_count() > 0);
+        if self.states.len() >= MAX_BEHIND {
+            self.states.remove(0);
+        }
+        self.states.push((Arc::downgrade(d), built.map(Arc::downgrade)));
+    }
+    fn forget(&mut self, d: &Arc<Drawing>) {
+        self.states.retain(|(w, _)| !same_state(w, d));
+    }
+    /// Whether `d` (a drawing state) is one the plan has moved past the model in.
+    pub fn holds_doc(&self, d: &Arc<Drawing>) -> bool {
+        self.holds(d)
+    }
+    /// How long since the last command in a state behind the plan (none yet: long ago).
+    pub fn since_last_edit(&self) -> std::time::Duration {
+        self.last_edit.map_or(std::time::Duration::MAX, |t| t.elapsed())
+    }
+}
+
+/// Whether the active drawing's associative model is behind its plan (built again before the
+/// next command that reads it, [`update_model`]).
+pub fn model_behind(s: &Session) -> bool {
+    s.state().is_ok_and(|st| st.model_behind.holds(&st.doc))
+}
+
+/// After a command: when the drawing has an associative model and an object on its rules'
+/// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
-    let Some(g) = st.wallgen.clone().filter(|g| g.auto) else { return };
-    // Model space untouched (a command that drew on a sheet's paper space): no plan object
-    // changed, and comparing the plans (each read from the whole model) isn't needed.
-    if Arc::ptr_eq(before, &st.doc) || st.doc.model.unchanged_from(&before.model) || plan(before, &g) == plan(&st.doc, &g) {
+    let Some(g) = st.wallgen.as_ref().filter(|g| g.auto) else { return };
+    if Arc::ptr_eq(before, &st.doc) {
+        touch(s);
         return;
     }
-    // Built during this command (a guided job builds as one of its steps) from the plan as it
-    // is now: the model is current.
     let built = st.model_record.as_ref().and_then(|r| r.built.as_ref());
-    if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc) || plan(&b.0, &g) == plan(&st.doc, &g)) {
+    if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc)) {
         return;
     }
-    // Rebuilt keeping the hand edits whose plan objects didn't change; the edits that conflict
-    // are echoed and kept in the drawing's last revision (`model.revise {last: true}`).
+    if st.model_behind.rebuilt_since(before, built.map(|b| &b.0)) {
+        // A drawing behind, and a build newer than the one it was behind (this command's:
+        // `model.update`, `model.revise`, `model.build`; or one on another branch of the undo
+        // history): current when that build's plan objects are the plan's now.
+        if built.is_some_and(|b| plan_touched(&b.0, &st.doc, g).is_empty()) {
+            return;
+        }
+    } else if !st.model_behind.holds(before) {
+        // Model space untouched (a command that drew on a sheet's paper space), or no plan
+        // object changed: the model is as current as it was.
+        let touched = plan_touched(before, &st.doc, g);
+        if touched.is_empty() {
+            return;
+        }
+        // Built during this command (a guided job builds as one of its steps) from the plan as
+        // it is now: the model is current. (Only the plan objects this command changed are
+        // compared with the build's: the rest of the drawing may have changed a lot since.)
+        if built.is_some_and(|b| touched.iter().all(|h| same_object(&b.0, &st.doc, *h))) {
+            return;
+        }
+    }
+    // Otherwise a drawing behind stays behind whatever changed (no plan to compare).
+    let built = built.map(|b| Arc::clone(&b.0));
+    let Ok(st) = s.state_mut() else { return };
+    let doc = Arc::clone(&st.doc);
+    st.model_behind.add(&doc, built.as_ref());
+    st.model_behind.last_edit = Some(web_time::Instant::now());
+}
+
+/// A command ran (undo and redo too): editing hasn't stopped, so an idle rebuild waits.
+pub(crate) fn touch(s: &mut Session) {
+    if let Ok(st) = s.state_mut()
+        && st.model_behind.holds(&st.doc)
+    {
+        st.model_behind.last_edit = Some(web_time::Instant::now());
+    }
+}
+
+/// Commands that run before a model behind its plan is built again: plain 2D drawing and editing,
+/// layers, views, selection, undo and redo, the session's drawing list. They don't read the model,
+/// so they don't wait for a build. Every other command (anything that reads, lists, counts,
+/// checks, saves or plots the model) builds it first: a command missing here only waits for the
+/// build, it never reads a model behind its plan.
+pub(crate) fn runs_with_model_behind(id: &str) -> bool {
+    const PLAIN: &[&str] = &[
+        "line",
+        "xline",
+        "ray",
+        "pline",
+        "polyline",
+        "lwpolyline",
+        "circle",
+        "arc",
+        "ellipse",
+        "rectang",
+        "rectangle",
+        "polygon",
+        "donut",
+        "spline",
+        "point",
+        "text",
+        "mtext",
+        "dtext",
+        "leader",
+        "mleader",
+        "qleader",
+        "hatch",
+        "gradient",
+        "boundary",
+        "revcloud",
+        "wipeout",
+        "solid",
+        "trace",
+        "move",
+        "copy",
+        "rotate",
+        "scale",
+        "mirror",
+        "offset",
+        "trim",
+        "extend",
+        "fillet",
+        "chamfer",
+        "break",
+        "join",
+        "stretch",
+        "lengthen",
+        "explode",
+        "erase",
+        "delete",
+        "oops",
+        "align",
+        "arrayrect",
+        "arraypolar",
+        "arraypath",
+        "array",
+        "properties.set",
+        "chprop",
+        "change",
+        "matchprop",
+        "draworder",
+        "block",
+        "insert",
+        "attdef",
+        "undo",
+        "redo",
+        "u",
+        "mredo",
+        "regen",
+        "regenall",
+        "redraw",
+        "redrawall",
+        "select",
+        "pselect",
+        "qselect",
+        "id",
+        "dist",
+        "list",
+        "area",
+        "measuregeom",
+        "cancel",
+        "zoom",
+        "pan",
+        "view",
+        "ddim",
+        "dimstyle",
+        "style",
+        "ltscale",
+        "units",
+        "model.update",
+        // The session's drawings: listing, switching and closing them read no model (the MCP
+        // server lists them after every call).
+        "document.list",
+        "document.switch",
+        "document.close",
+        "document.closeall",
+        "new",
+        "qnew",
+        "open",
+        // A LISP routine: the commands it runs follow this list one by one; what it reads
+        // itself (entget, ssget) is the drawing as it is.
+        "lisp",
+    ];
+    // Builds that replace the model whole (building it first would be thrown away), and
+    // `model.revise`, which compares the plan with the last build itself.
+    const REBUILDS: &[&str] = &["model.build", "wallgen", "model.revise"];
+    let id = id.to_ascii_lowercase();
+    PLAIN.contains(&id.as_str())
+        || REBUILDS.contains(&id.as_str())
+        || ["layer.", "view.", "zoom.", "pan.", "dim", "select.", "selection.", "draw.", "osnap", "snap", "grid", "ortho", "polar"]
+            .iter()
+            .any(|p| id.starts_with(p))
+}
+
+/// Build the active drawing's associative model again when the plan has moved past it, keeping
+/// the hand edits whose plan objects didn't change (the edits that conflict are echoed and kept
+/// in the drawing's last revision, `model.revise {last: true}`). The rebuild joins the drawing
+/// state it was made for: no undo step of its own (the plan edit's undo takes it back too).
+/// True when it built.
+pub fn update_model(s: &mut Session) -> bool {
+    if s.model_updating {
+        return false;
+    }
+    let Ok(st) = s.state() else { return false };
+    if !st.model_behind.holds(&st.doc) {
+        return false;
+    }
+    let behind = Arc::clone(&st.doc);
+    let Some(g) = st.wallgen.clone().filter(|g| g.auto) else {
+        if let Ok(st) = s.state_mut() {
+            st.model_behind.forget(&behind);
+        }
+        return false;
+    };
     let (old, rooms) =
         st.model_record.as_ref().map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
-    if let Err(e) = super::revise3d::revise(s, &g, old, rooms, &how) {
+    s.model_updating = true;
+    let r = super::revise3d::revise(s, &g, old, rooms, &how);
+    s.model_updating = false;
+    if let Err(e) = &r {
         s.echo(e.to_string());
     }
+    // Built (the drawing is a new state now), or nothing to build, or the build failed: either
+    // way this state isn't built again before every command.
+    if let Ok(st) = s.state_mut()
+        && Arc::ptr_eq(&st.doc, &behind)
+    {
+        st.model_behind.forget(&behind);
+    }
+    r.is_ok_and(|v| v.get("rebuilt").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// `model.update`: build an associative model behind its plan now ([`update_model`]).
+fn run_update(s: &mut Session, _p: &Value) -> Result<Value> {
+    let behind = model_behind(s);
+    let built = update_model(s);
+    Ok(json!({ "behind": behind, "rebuilt": built }))
 }
 
 // ---------- walls from the plan's face pairs ----------

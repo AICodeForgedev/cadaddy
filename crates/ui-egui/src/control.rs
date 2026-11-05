@@ -341,7 +341,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("ui.screenshot", "{path?}", "PNG of the window (needs a presented frame)."),
     ("ui.render", "{path?, width?, height?, fit?}", "Headless render of the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
-    ("app.save", "{path?, force?}", "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk."),
+    (
+        "app.save",
+        "{path?, force?, version?, binary?}",
+        "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk; version/binary choose the DWG/DXF version and binary DXF of a Save As.",
+    ),
     (
         "app.quit",
         "{save?: bool, discard?: bool}",
