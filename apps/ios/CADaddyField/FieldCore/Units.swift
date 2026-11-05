@@ -11,7 +11,7 @@ public enum Units {
     public static func meters(fromFeet ft: Double) -> Double { ft * metersPerFoot }
 
     /// Formats metres as feet-inches rounded to 1/`denominator` inch (default 1/8"), e.g. `8' 6 1/2"`,
-    /// `0' 3/8"`, `-1' 2"`. Non-finite input gives "—".
+    /// `13' 0 3/4"`, `0' 3/8"`, `-1' 2"`. Non-finite input gives "—".
     public static func feetInches(_ meters: Double, denominator: Int = 8) -> String {
         guard meters.isFinite, denominator > 0, denominator <= 64 else { return "—" }
         let negative = meters < 0
@@ -27,7 +27,7 @@ public enum Units {
         while num > 0 && num % 2 == 0 && den % 2 == 0 { num /= 2; den /= 2 }
         let sign = (negative && units > 0) ? "-" : ""
         if num == 0 { return "\(sign)\(feet)' \(whole)\"" }
-        if whole == 0 { return "\(sign)\(feet)' \(num)/\(den)\"" }
+        if whole == 0 && feet == 0 { return "\(sign)0' \(num)/\(den)\"" }
         return "\(sign)\(feet)' \(whole) \(num)/\(den)\""
     }
 

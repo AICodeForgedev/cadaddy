@@ -71,7 +71,7 @@ final class PreviewController: NSObject {
         v.environment.background = .color(UIColor.secondarySystemBackground)
         anchor.addChild(builder.root)
         let light = DirectionalLight()
-        light.light.intensity = 3000
+        light.light.intensity = 600
         light.look(at: .zero, from: SIMD3(3, 6, 4), relativeTo: nil)
         anchor.addChild(light)
         anchor.addChild(camera)
@@ -148,7 +148,8 @@ final class PreviewController: NSObject {
                 fpsSamples.append(fps)
                 if fpsSamples.count == 10 {
                     let sorted = fpsSamples.sorted()
-                    print(String(format: "FIELD-PERF fps avg %.1f min %.1f max %.1f over 10 s (orbiting)", fpsSamples.reduce(0, +) / 10, sorted.first ?? 0, sorted.last ?? 0))
+                    print(String(format: "FIELD-PERF fps avg %.1f min %.1f max %.1f over 10 s (orbiting); per second: ", fpsSamples.reduce(0, +) / 10, sorted.first ?? 0, sorted.last ?? 0)
+                          + fpsSamples.map { String(format: "%.0f", $0) }.joined(separator: " "))
                 }
             }
             #endif

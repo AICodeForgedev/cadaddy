@@ -79,13 +79,25 @@ struct PlanView: View {
                                 let w = m * SIMD4(prim.positions[ix], 1)
                                 return fit.toScreen(SIMD3(w.x, w.y, w.z))
                             }
-                            if pts.count == 3 { path.addLines(pts); path.closeSubpath() }
+                            if pts.count == 3 {
+                                // Opposite faces of a solid project with opposite winding and would cancel
+                                // under the non-zero fill rule: give every triangle the same winding and
+                                // skip the edge-on (zero-area) ones.
+                                let area = (pts[1].x - pts[0].x) * (pts[2].y - pts[0].y) - (pts[2].x - pts[0].x) * (pts[1].y - pts[0].y)
+                                if abs(area) > 0.01 {
+                                    path.addLines(area > 0 ? pts : [pts[0], pts[2], pts[1]])
+                                    path.closeSubpath()
+                                }
+                            }
                             i += 3; budget -= 1
                         }
                     }
                 }
-                if e.info.kind?.lowercased() == "wall" { ctx.fill(path, with: .color(color.opacity(0.9))) }
-                else { ctx.fill(path, with: .color(color.opacity(0.12))) }
+                // Context is drawn in a fixed plan tone (exported wall colours are near-white, invisible on paper).
+                let kind = e.info.kind?.lowercased() ?? ""
+                if kind.hasPrefix("wall") { ctx.fill(path, with: .color(Color.primary.opacity(0.6))) }
+                else if kind.hasPrefix("floor") || kind.hasPrefix("slab") { ctx.fill(path, with: .color(Color.secondary.opacity(0.10))) }
+                else if !kind.hasPrefix("ceiling") && !kind.hasPrefix("roof") { ctx.fill(path, with: .color(Color.secondary.opacity(0.25))) }
             } else {
                 let p = fit.toScreen(e.origin)
                 let r: CGFloat = session.selected == e.index ? 7 : 4

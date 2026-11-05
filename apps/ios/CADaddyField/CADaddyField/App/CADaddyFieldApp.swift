@@ -131,7 +131,9 @@ final class AppModel: ObservableObject {
         guard let library else { return }
         if library.list().isEmpty {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("demo", isDirectory: true)
-            _ = try? SamplePackage.write(to: dir)
+            let args = ProcessInfo.processInfo.arguments
+            let rooms = args.firstIndex(of: "-demorooms").flatMap { args.indices.contains($0 + 1) ? Int(args[$0 + 1]) : nil } ?? 1
+            _ = try? SamplePackage.write(to: dir, rooms: rooms, title: rooms > 1 ? "Sample Floor (\(rooms) rooms)" : SamplePackage.title)
             if let r = try? library.importItem(at: dir) {
                 let marks = [
                     Mark(elementID: "E-1010", elementKind: "Receptacle", elementTag: "R1", status: .installed, note: "Plate on, height checks out"),
@@ -144,6 +146,6 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: dir)
         }
         reload()
-        selection = packages.first?.id
+        if demoScreen != "library" { selection = packages.first?.id }
     }
 }

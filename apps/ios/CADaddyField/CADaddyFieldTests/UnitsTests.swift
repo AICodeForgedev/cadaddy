@@ -8,6 +8,8 @@ final class UnitsTests: XCTestCase {
         XCTAssertEqual(Units.feetInches(0.003175), "0' 1/8\"")
         XCTAssertEqual(Units.feetInches(0.009525), "0' 3/8\"")
         XCTAssertEqual(Units.feetInches(0.0), "0' 0\"")
+        // Under an inch past a whole foot keeps the 0 so it can't be read as 13 3/4 ft.
+        XCTAssertEqual(Units.feetInches(Units.meters(fromInches: 156.75)), "13' 0 3/4\"")
         XCTAssertEqual(Units.feetInches(-0.3556), "-1' 2\"")
         XCTAssertEqual(Units.feetInches(.nan), "—")
         XCTAssertEqual(Units.feetInches(.infinity), "—")
