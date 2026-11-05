@@ -476,10 +476,11 @@ mod native {
     pub fn prune_locks(dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         let names: Vec<String> = entries.flatten().take(10_000).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        // The instances that own autosave files, parsed once rather than once per lock file.
+        let with_files: HashSet<&str> = names.iter().filter_map(|f| parse_file_name(f)).map(|(_, i, _)| i).collect();
         for n in &names {
             let Some(instance) = parse_lock_name(n) else { continue };
-            let has_files = names.iter().any(|f| parse_file_name(f).is_some_and(|(_, i, _)| i == instance));
-            if !has_files && !instance_running(dir, instance) {
+            if !with_files.contains(instance) && !instance_running(dir, instance) {
                 let _ = std::fs::remove_file(dir.join(n));
             }
         }
@@ -512,8 +513,24 @@ mod native {
         if let Some(dir) = Path::new(path).parent() {
             create_folder(dir).map_err(|e| e.to_string())?;
         }
-        crate::writefile::write_atomic(path, bytes).map_err(|e| e.to_string())?;
+        // The file holds unsaved work: owner-only from its creation, whatever the umask.
+        write_private(Path::new(path), &bytes).map_err(|e| e.to_string())?;
         Ok(held)
+    }
+
+    /// Owner read/write only (`None` where file modes don't exist).
+    fn private_mode() -> Option<std::fs::Permissions> {
+        #[cfg(unix)]
+        return Some(std::os::unix::fs::PermissionsExt::from_mode(0o600));
+        #[cfg(not(unix))]
+        None
+    }
+
+    /// Replace the file at `path` with `bytes`, owner-only: an exclusive temporary file renamed
+    /// into place, so a link planted at `path` is replaced, never written through (CWE-59).
+    fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        crate::writefile::check(path)?;
+        crate::atomic_write::write_atomic_with(path, private_mode(), |f| std::io::Write::write_all(f, bytes))
     }
 
     /// Append `doc`'s changes to the .cdy autosave at `path` (holding `held`, `from` bytes long).
@@ -692,7 +709,9 @@ mod native {
             }
             self.last_beat = Some(now);
             let dir = Path::new(dir);
-            let r = create_folder(dir).and_then(|()| crate::writefile::write(lock_path(dir, &self.instance), std::process::id().to_string()));
+            // Replaced, never written through: another account sharing the folder could plant a
+            // link at the lock's name and have it truncate a file of this user's.
+            let r = create_folder(dir).and_then(|()| write_private(&lock_path(dir, &self.instance), std::process::id().to_string().as_bytes()));
             if let Err(e) = r {
                 log::warn!("autosave: lock file in {}: {e}", dir.display());
             }
@@ -713,6 +732,30 @@ mod native {
             if !dir.is_empty() && is_instance_id(&self.instance) {
                 let _ = std::fs::remove_file(lock_path(Path::new(&dir), &self.instance));
             }
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    mod link_tests {
+        use super::*;
+
+        /// A symlink planted at the lock path is replaced, never written through, and autosave
+        /// files are owner-only whatever the umask.
+        #[test]
+        fn lock_writes_do_not_follow_a_planted_link_and_files_are_private() {
+            use std::os::unix::fs::PermissionsExt;
+            let dir = std::env::temp_dir().join(format!("cadaddy-lock-link-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let victim = dir.join("victim.txt");
+            std::fs::write(&victim, b"precious").unwrap();
+            let link = dir.join("1-a.lock");
+            std::os::unix::fs::symlink(&victim, &link).unwrap();
+            write_private(&link, b"42").unwrap();
+            assert_eq!(std::fs::read(&victim).unwrap(), b"precious");
+            assert!(!std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+            assert_eq!(std::fs::read(&link).unwrap(), b"42");
+            assert_eq!(std::fs::metadata(&link).unwrap().permissions().mode() & 0o777, 0o600);
+            std::fs::remove_dir_all(dir).unwrap();
         }
     }
 }
