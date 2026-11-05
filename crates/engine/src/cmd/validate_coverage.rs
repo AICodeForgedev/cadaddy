@@ -67,8 +67,12 @@ const MAX_SHEET_TEXTS: usize = 200_000;
 const MAX_SHEET_SYMBOLS: usize = 200_000;
 /// Sheets read, kinds kept, marks counted, at most.
 const MAX_SHEETS: usize = 2_000;
+/// A PDF read for its legend pages, at most this big.
+const MAX_PDF_BYTES: usize = 200 * 1024 * 1024;
 const MAX_DEFS: usize = 5_000;
 const MAX_MARKS: usize = 2_000_000;
+/// Elements kept per kind for a kind with none of its own, at most.
+const MAX_SHARED: usize = 100_000;
 /// Sources, connections and handles listed per kind, examples per group, at most.
 const MAX_SOURCES: usize = 8;
 const MAX_LISTED: usize = 12;
@@ -80,6 +84,10 @@ const MAX_TAG_CHARS: usize = 14;
 /// A note's longest text read, and quoted.
 const MAX_NOTE_CHARS: usize = 1_200;
 const QUOTE_CHARS: usize = 200;
+/// A legend row's words end at a gap this many of its text heights wide (the next column).
+const COLUMN_GAP_H: f64 = 8.0;
+/// An abbreviation's longest meaning.
+const MAX_MEANING: usize = 60;
 /// A row's sample symbol sits within this many of its row's text heights of the row's tag.
 const SAMPLE_REACH_H: f64 = 12.0;
 /// The same tag printed twice on one sheet (a text and an attribute) within this many heights.
@@ -115,6 +123,14 @@ struct Data {
     connections: Vec<Connection>,
     connecting_trades: Vec<String>,
     abbreviation_headings: Vec<String>,
+    /// Drafting words: a meaning holding one names a sheet's mark (a plan, a section, a symbol),
+    /// no object.
+    not_object_words: Vec<String>,
+    /// Words of a sheet's title or type that make its page worth reading for definitions.
+    page_words: Vec<String>,
+    /// The connecting trades' own objects (a disconnect, a box): never another trade's.
+    own_nouns: Vec<String>,
+    max_pages: usize,
     max_code_chars: usize,
     max_phrase_words: usize,
     max_groups: usize,
@@ -127,6 +143,7 @@ fn data() -> &'static Data {
         d.max_code_chars = d.max_code_chars.clamp(1, 12);
         d.max_phrase_words = d.max_phrase_words.clamp(1, 8);
         d.max_groups = d.max_groups.clamp(1, 500);
+        d.max_pages = d.max_pages.min(200);
         d
     })
 }
@@ -206,11 +223,8 @@ fn names_object(meaning: &str) -> bool {
 fn name_of(description: &str) -> String {
     let cut = description.find([',', '(', ';', '[']).map_or(description, |i| description.get(..i).unwrap_or(description));
     let cut = cut.split(" - ").next().unwrap_or(cut);
-    let ws: Vec<&str> = cut
-        .split_whitespace()
-        .filter(|w| w.chars().any(|c| c.is_ascii_alphabetic()) && !w.chars().any(|c| c.is_ascii_digit()))
-        .take(8)
-        .collect();
+    let ws: Vec<&str> =
+        cut.split_whitespace().filter(|w| w.chars().any(|c| c.is_ascii_alphabetic()) && !w.chars().any(|c| c.is_ascii_digit())).take(6).collect();
     ws.join(" ").trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_ascii_uppercase()
 }
 
@@ -266,7 +280,8 @@ fn phrases(text: &str) -> Vec<(String, String, bool, bool)> {
             start -= 1;
         }
         let Some(span) = sing.get(start..=i) else { continue };
-        if span.iter().any(|w| listed(&d.not_new_words, w)) || start.checked_sub(1).and_then(|p| sing.get(p)).is_some_and(|p| listed(&d.not_new_words, p))
+        if span.iter().any(|w| listed(&d.not_new_words, w))
+            || start.checked_sub(1).and_then(|p| sing.get(p)).is_some_and(|p| listed(&d.not_new_words, p))
         {
             continue;
         }
@@ -304,6 +319,14 @@ fn connection_via(text: &str) -> Option<&'static str> {
 fn quote(t: &str) -> String {
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
     if t.chars().count() <= QUOTE_CHARS { t } else { format!("{}…", t.chars().take(QUOTE_CHARS).collect::<String>()) }
+}
+
+/// How near two prints of one tag lie (a text and its block's attribute): the larger of their
+/// heights, at most four times the smaller (an odd giant text swallows no tags round it); an
+/// unknown height (0) takes the other's.
+fn same_reach(a: f64, b: f64) -> f64 {
+    let (lo, hi) = (a.min(b), a.max(b));
+    if lo <= 0.0 { hi } else { hi.min(4.0 * lo) }
 }
 
 /// The code a tag prints: the whole text, or its letters before a number (`FSD-1`, `EF 2`,
@@ -354,6 +377,26 @@ fn discipline_of(l: &SheetLink) -> String {
     l.discipline.clone().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| l.number.chars().take_while(|c| c.is_ascii_alphabetic()).collect())
 }
 
+/// A sheet's trade by its discipline: a building trade, else `civil`, `landscape`, `structural`
+/// or `other` (their kinds are marked on their own sheets), `general` only for a general sheet.
+fn trade_of(discipline: &str) -> &'static str {
+    let t = trade_of_discipline(discipline);
+    if t != "general" {
+        return t;
+    }
+    match discipline.trim().to_ascii_uppercase().chars().next() {
+        None | Some('G') => "general",
+        Some('C') => "civil",
+        Some('L') => "landscape",
+        Some('S') => "structural",
+        _ => "other",
+    }
+}
+
+fn new_sheet(number: &str, rect: [f64; 4], trade: &'static str, plan: bool) -> Sheet {
+    Sheet { number: number.to_string(), rect, trade, plan, texts: Vec::new(), symbols: Vec::new(), notes: Vec::new(), tables: Vec::new() }
+}
+
 fn read_sheets(d: &Drawing, sp: &BuildingSpec) -> Vec<Sheet> {
     let mut sheets: Vec<Sheet> = Vec::new();
     for l in &sp.sheets {
@@ -366,19 +409,16 @@ fn read_sheets(d: &Drawing, sp: &BuildingSpec) -> Vec<Sheet> {
         if sheets.len() >= MAX_SHEETS {
             break;
         }
-        sheets.push(Sheet {
-            number: l.number.clone(),
-            rect: r,
-            trade: trade_of_discipline(&discipline_of(l)),
-            plan,
-            texts: Vec::new(),
-            symbols: Vec::new(),
-            notes: Vec::new(),
-            tables: Vec::new(),
-        });
+        sheets.push(new_sheet(&l.number, r, trade_of(&discipline_of(l)), plan));
     }
+    fill(d, &mut sheets);
+    sheets
+}
+
+/// Each sheet's lettering, symbols and notes: what lies in its rectangle.
+fn fill(d: &Drawing, sheets: &mut [Sheet]) {
     if sheets.is_empty() {
-        return sheets;
+        return;
     }
     let which = |p: [f64; 2]| sheets.iter().position(|s| inside(s.rect, p));
     let mut texts: Vec<Vec<Txt>> = sheets.iter().map(|_| Vec::new()).collect();
@@ -438,7 +478,11 @@ fn read_sheets(d: &Drawing, sp: &BuildingSpec) -> Vec<Sheet> {
                 for a in ins.attribs.iter().filter(|a| !a.invisible || a.tag.eq_ignore_ascii_case("TAG")).take(20) {
                     let v = a.text.value.trim();
                     let (ap, h) = (a.text.insert.xy(), a.text.height.abs());
-                    let (ap, h) = if ok(ap, h) && inside(sheets.get(i).map_or([0.0; 4], |s| s.rect), [ap.x, ap.y]) { (ap, h) } else { (p, 1.0) };
+                    let (ap, h) = if ok(ap, h) && inside(sheets.get(i).map_or([0.0; 4], |s| s.rect), [ap.x, ap.y]) {
+                        (ap, h)
+                    } else {
+                        (p, if h.is_finite() && h > 0.0 { h } else { 0.0 })
+                    };
                     if !v.is_empty()
                         && let Some(list) = texts.get_mut(i).filter(|l| l.len() < MAX_SHEET_TEXTS)
                     {
@@ -454,7 +498,92 @@ fn read_sheets(d: &Drawing, sp: &BuildingSpec) -> Vec<Sheet> {
         s.symbols = syms.get_mut(i).map(std::mem::take).unwrap_or_default();
         s.notes = notes.get_mut(i).map(std::mem::take).unwrap_or_default();
     }
-    sheets
+}
+
+/// The job, as the drawing keeps it (`job.start`'s state), when there is one.
+fn job_of(d: &Drawing) -> Option<super::guided::GuidedJob> {
+    let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
+    serde_json::from_value(agent.get("guided_job")?.clone()).ok()
+}
+
+/// The set's sheets the drawing doesn't hold whose page may define kinds (a legend, a schedule,
+/// an abbreviation list, general notes: its title or type says so), read off the job's PDFs
+/// (the job's sheet index gives each one's file and page). What can't be read is said, by why.
+fn read_pages(d: &Drawing, loaded: &BTreeSet<String>, unmeasured: &mut BTreeMap<String, u64>) -> Vec<Sheet> {
+    let mut out = Vec::new();
+    let Some(job) = job_of(d) else { return out };
+    let dt = data();
+    let entries: Vec<&Value> =
+        job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).into_iter().flatten().take(5_000).collect();
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    let mut wanted: Vec<(String, String, String, u64)> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for e in entries {
+        if !text(e, "superseded_by").is_empty() {
+            continue;
+        }
+        let number = text(e, "number");
+        let base = number.split('/').next().unwrap_or("").trim().to_ascii_uppercase();
+        if base.is_empty() || loaded.contains(&base) || !cadaddy_mepfix::sheet_facts::is_sheet_number(&base) || !seen.insert(base.clone()) {
+            continue;
+        }
+        let what = format!("{} {} {}", text(e, "title"), text(e, "type"), text(e, "sheet_type")).to_ascii_uppercase();
+        if !dt.page_words.iter().any(|w| what.contains(&w.to_ascii_uppercase())) {
+            continue;
+        }
+        let (file, page) = (text(e, "file"), e.get("page").and_then(Value::as_u64).filter(|p| *p >= 1).unwrap_or(1));
+        if file.is_empty() {
+            *unmeasured.entry("a legend or schedule sheet the job keeps no PDF file for".into()).or_default() += 1;
+            continue;
+        }
+        let disc =
+            Some(text(e, "discipline")).filter(|x| !x.is_empty()).unwrap_or_else(|| base.chars().take_while(|c| c.is_ascii_alphabetic()).collect());
+        wanted.push((base, disc, file, page));
+    }
+    if wanted.is_empty() {
+        return out;
+    }
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
+        unmeasured.insert("legend and schedule sheets the drawing doesn't hold: no PDF reader in this build".into(), wanted.len() as u64);
+        return out;
+    };
+    let dir = std::path::PathBuf::from(&job.pdfs_path);
+    let dir = if dir.is_file() { dir.parent().map(std::path::Path::to_path_buf).unwrap_or_default() } else { dir };
+    let mut files: BTreeMap<String, std::result::Result<Vec<u8>, String>> = BTreeMap::new();
+    let total = wanted.len();
+    for (number, disc, file, page) in wanted.into_iter().take(dt.max_pages) {
+        let named = std::path::PathBuf::from(&file);
+        let path = if named.is_absolute() && named.is_file() { named } else { dir.join(named.file_name().unwrap_or_default()) };
+        let key = path.to_string_lossy().to_string();
+        let bytes = files.entry(key).or_insert_with(|| {
+            crate::readfile::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|b| if b.len() > MAX_PDF_BYTES { Err("the file is over 200 MB".to_string()) } else { Ok(b) })
+        });
+        let got = match bytes {
+            Ok(b) => read_pdf(b, &json!({"page": page, "text": true, "images": false})).map(|(p, _)| p),
+            Err(e) => Err(e.clone()),
+        };
+        match got {
+            Ok(pd) => {
+                let b = pd.extents(&cadaddy_doc::Space::Model);
+                let rect = [b.min.x, b.min.y, b.max.x, b.max.y];
+                if b.is_empty() || !rect.iter().all(|v| v.is_finite()) {
+                    continue;
+                }
+                let mut one = vec![new_sheet(&number, rect, trade_of(&disc), false)];
+                fill(&pd, &mut one);
+                out.extend(one);
+            }
+            Err(why) => {
+                *unmeasured.entry(format!("a legend or schedule sheet's page could not be read ({})", quote(&why))).or_default() += 1;
+            }
+        }
+    }
+    if total > dt.max_pages {
+        unmeasured.insert("legend and schedule sheets past the rules data's max_pages, not read".into(), (total - dt.max_pages) as u64);
+    }
+    out
 }
 
 fn items_of(texts: &[Txt]) -> Vec<TextItem> {
@@ -504,7 +633,9 @@ impl Defs {
         }
         let trades: BTreeSet<&'static str> = if trade == "general" { BTreeSet::new() } else { [trade].into_iter().collect() };
         let overlaps = |d: &Def| d.trades.is_empty() || trades.is_empty() || d.trades.iter().any(|t| trades.contains(t));
-        let by_code = code.as_ref().and_then(|c| self.list.iter().position(|d| d.codes.contains(c) && overlaps(d)));
+        let h = head(&key).map(str::to_string);
+        let same_head = |d: &Def| h.is_none() || head(&d.key).is_none() || head(&d.key) == h.as_deref();
+        let by_code = code.as_ref().and_then(|c| self.list.iter().position(|d| d.codes.contains(c) && overlaps(d) && same_head(d)));
         let at = match self.by_key.get(&key).copied().or(by_code) {
             Some(i) => i,
             None => {
@@ -549,48 +680,123 @@ impl Defs {
     }
 }
 
-/// An abbreviation list's pairs: code → meaning, read row by row (several pairs to a row when
-/// the list runs in columns).
+/// Whether `code` abbreviates `meaning`: its first letter starts one of the meaning's words and
+/// its letters follow in order from there (`FSD` FIRE/SMOKE DAMPER, `SD` DUCT MOUNTED SMOKE
+/// DETECTOR, `FCO` FLOOR CLEANOUT). A code with a digit is a type tag (`P-1`, `EF-2`): it names
+/// no words, any meaning goes.
+fn abbreviates(code: &str, meaning: &str) -> bool {
+    if code.chars().any(|c| c.is_ascii_digit()) {
+        return true;
+    }
+    let letters: Vec<char> = code.chars().filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).collect();
+    let Some((first, rest)) = letters.split_first() else { return false };
+    let ws = words_of(meaning);
+    if ws.first().is_some_and(|w| w.eq_ignore_ascii_case(code.trim())) {
+        return false;
+    }
+    ws.iter().enumerate().any(|(i, w)| {
+        if !w.starts_with(*first) {
+            return false;
+        }
+        let tail: String = ws.get(i..).map(|x| x.concat()).unwrap_or_default();
+        let mut it = tail.chars().skip(1);
+        rest.iter().all(|c| it.any(|x| x == *c))
+    })
+}
+
+/// The code–meaning pairs of the sheet's abbreviation lists and symbol legends, read row by row
+/// (several pairs to a row when the list runs in columns): a code beside its meaning, or both in
+/// one text; a code alone on its line takes the meaning on the line next to it that it
+/// abbreviates. Every pair's code abbreviates its meaning ([`abbreviates`]). With the pairs'
+/// extents.
 fn abbreviations(texts: &[TextItem]) -> (Vec<(String, String)>, Vec<[f64; 4]>) {
     let d = data();
+    let mark = |v: &str| super::validate_kind::looks_like_mark(v) && v.len() <= d.max_code_chars;
     let mut pairs = Vec::new();
     let mut regions = Vec::new();
     let headings = texts.iter().filter(|t| {
         let u = t.value.trim().to_ascii_uppercase();
         u.len() <= 40 && words_of(&u).iter().any(|w| listed(&d.abbreviation_headings, w))
     });
-    for h in headings.take(20) {
+    for h in headings.take(40) {
         let rows = super::validate_kind::rows_under(h, texts);
-        let mut ext = [h.at.x, h.at.y, h.at.x, h.at.y + h.height];
-        for row in rows.iter().take(2_000) {
+        let mut ext: Option<[f64; 4]> = None;
+        let mut grow = |t: &TextItem| {
+            let r = [t.at.x, t.at.y, t.at.x + t.height * t.value.chars().count() as f64, t.at.y + t.height];
+            ext = Some(match ext {
+                None => r,
+                Some(e) => [e[0].min(r[0]), e[1].min(r[1]), e[2].max(r[2]), e[3].max(r[3])],
+            });
+        };
+        for (ri, row) in rows.iter().enumerate().take(2_000) {
             let mut k = 0;
             while let Some(t) = row.get(k) {
-                ext = [ext[0].min(t.at.x), ext[1].min(t.at.y), ext[2].max(t.at.x + t.height * t.value.chars().count() as f64), ext[3].max(t.at.y + t.height)];
                 let v = t.value.trim();
                 // `FSD  FIRE/SMOKE DAMPER` in one text, or `FSD = …`, `FSD - …`.
                 let one = v.split_once([' ', '=', '\t']).map(|(c, m)| (c.trim(), m.trim().trim_start_matches(['=', '-']).trim()));
                 match one {
-                    Some((c, m)) if super::validate_kind::looks_like_mark(c) && c.len() <= d.max_code_chars && m.len() >= 3 => {
+                    Some((c, m)) if mark(c) && m.len() >= 3 && abbreviates(c, m) => {
                         pairs.push((c.to_string(), m.to_string()));
+                        grow(t);
                         k += 1;
                     }
-                    _ if super::validate_kind::looks_like_mark(v) && v.len() <= d.max_code_chars => {
-                        match row.get(k + 1) {
-                            Some(n) if !super::validate_kind::looks_like_mark(n.value.trim()) => {
+                    _ if mark(v) => {
+                        let beside = row.get(k + 1).filter(|n| !mark(n.value.trim()) && abbreviates(v, &n.value));
+                        // Alone on its line: the next line's or the last line's meaning.
+                        let near = || {
+                            [ri.checked_sub(1), Some(ri + 1)]
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|j| rows.get(j))
+                                .flatten()
+                                .filter(|n| (n.at.y - t.at.y).abs() <= 1.6 * t.height.max(n.height))
+                                .find(|n| !mark(n.value.trim()) && abbreviates(v, &n.value))
+                        };
+                        match beside {
+                            Some(n) => {
                                 pairs.push((v.to_string(), n.value.trim().to_string()));
-                                ext = [ext[0], ext[1].min(n.at.y), ext[2].max(n.at.x + n.height * n.value.chars().count() as f64), ext[3]];
+                                grow(t);
+                                grow(n);
                                 k += 2;
                             }
-                            _ => k += 1,
+                            None => {
+                                if row.len() == 1
+                                    && let Some(n) = near()
+                                {
+                                    pairs.push((v.to_string(), n.value.trim().to_string()));
+                                    grow(t);
+                                }
+                                k += 1;
+                            }
                         }
                     }
                     _ => k += 1,
                 }
             }
         }
-        regions.push(ext);
+        if let Some(e) = ext {
+            regions.push(e);
+        }
     }
     (pairs, regions)
+}
+
+/// The words of a legend row beside its tag: the texts on its line right of it, left to right,
+/// up to the next column (a gap of [`COLUMN_GAP_H`] text heights, or another type tag).
+fn row_words(texts: &[Txt], tag: &Txt) -> String {
+    let mut row: Vec<&Txt> =
+        texts.iter().filter(|t| !std::ptr::eq(*t, tag) && (t.at[1] - tag.at[1]).abs() <= 0.5 * tag.h.min(t.h) && t.at[0] > tag.at[0]).collect();
+    row.sort_by(|a, b| a.at[0].total_cmp(&b.at[0]));
+    let mut out: Vec<&str> = Vec::new();
+    let mut right = tag.at[0] + tag.h * tag.text.chars().count() as f64 * 0.8;
+    for t in row {
+        if t.at[0] - right > COLUMN_GAP_H * tag.h || (!out.is_empty() && cadaddy_mepfix::sheet_facts::is_type_tag(&t.text)) {
+            break;
+        }
+        out.push(t.text.trim());
+        right = t.at[0] + t.h * t.text.chars().count() as f64 * 0.8;
+    }
+    out.join(" ")
 }
 
 fn read_defs(sheets: &mut [Sheet], keynotes: &super::validate_keynote::Keynotes, inventory: Option<&super::inventory::Inventory>) -> Defs {
@@ -604,27 +810,28 @@ fn read_defs(sheets: &mut [Sheet], keynotes: &super::validate_keynote::Keynotes,
         // Each row's sample symbol: a block on the row, left of its tag (a block drawn on two
         // rows says nothing).
         let mut samples: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let mut words: BTreeMap<String, String> = BTreeMap::new();
         for tag in legend.rows.keys() {
             let Some(t) = s.texts.iter().find(|t| t.text.trim().eq_ignore_ascii_case(tag) && legend.covers(Vec2::new(t.at[0], t.at[1]))) else {
                 continue;
             };
+            words.insert(tag.clone(), row_words(&s.texts, t));
             let near = s
                 .symbols
                 .iter()
-                .filter(|(_, p)| {
-                    (p[1] - (t.at[1] + 0.5 * t.h)).abs() <= t.h && p[0] <= t.at[0] + 2.0 * t.h && p[0] >= t.at[0] - SAMPLE_REACH_H * t.h
-                })
+                .filter(|(_, p)| (p[1] - (t.at[1] + 0.5 * t.h)).abs() <= t.h && p[0] <= t.at[0] + 2.0 * t.h && p[0] >= t.at[0] - SAMPLE_REACH_H * t.h)
                 .min_by(|a, b| (t.at[0] - a.1[0]).abs().total_cmp(&(t.at[0] - b.1[0]).abs()));
             if let Some((block, _)) = near {
                 samples.entry(block.clone()).or_default().insert(tag.clone());
             }
         }
         for (tag, row) in &legend.rows {
-            let name = name_of(&row.description);
+            let description = words.get(tag).filter(|w| !w.is_empty()).unwrap_or(&row.description);
+            let name = name_of(description);
             let key = key_of(&name);
             let from = if row.table.to_ascii_uppercase().contains("SCHEDULE") { "schedule" } else { "legend" };
             let code = tag.trim().to_ascii_uppercase();
-            let src = Source { from, sheet: s.number.clone(), text: quote(&format!("{} — {} {}", row.table, tag, row.description)) };
+            let src = Source { from, sheet: s.number.clone(), text: quote(&format!("{} — {} {}", row.table, tag, description)) };
             if let Some(i) = defs.add(key, name, Some(code), s.trade, src) {
                 for (block, tags) in &samples {
                     if tags.len() == 1
@@ -643,7 +850,14 @@ fn read_defs(sheets: &mut [Sheet], keynotes: &super::validate_keynote::Keynotes,
         s.tables.extend(regions);
         pairs.extend(abbr.into_iter().map(|(k, v)| (k, v, "abbreviation")));
         for (code, meaning, from) in pairs {
-            if !names_object(&meaning) || code.len() > d.max_code_chars {
+            // A meaning is a few words (`FIRE DAMPER`), not a note the list runs into.
+            let drafting = words_of(&meaning).iter().any(|w| listed(&d.not_object_words, &singular(w)));
+            if drafting
+                || !names_object(&meaning)
+                || code.len() > d.max_code_chars
+                || meaning.chars().count() > MAX_MEANING
+                || meaning.split_whitespace().count() > 8
+            {
                 continue;
             }
             let name = name_of(&meaning);
@@ -686,7 +900,7 @@ fn read_defs(sheets: &mut [Sheet], keynotes: &super::validate_keynote::Keynotes,
             if kind.is_empty() || super::validate_kind::is_generic(kind) {
                 continue;
             }
-            let trade = trade_of_discipline(&m.trade);
+            let trade = trade_of(&m.trade);
             let code = m.text.trim().to_ascii_uppercase();
             let code = (m.what == "legend_row" || m.what == "tag" || m.what == "symbol")
                 .then_some(code)
@@ -725,7 +939,12 @@ fn read_connections(sheets: &[Sheet], keynotes: &super::validate_keynote::Keynot
         let mut hits: Vec<usize> = Vec::new();
         // Kinds named by their words after `TO`, `FOR`…; a kind of the notes' own words only so.
         for (key, name, after_prep, _) in phrases(text) {
-            match defs.find(&key) {
+            if head(&key).is_some_and(|h| listed(&d.own_nouns, h)) {
+                continue;
+            }
+            let building =
+                |i: usize| defs.list.get(i).is_some_and(|d| d.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other")));
+            match defs.find(&key).filter(|i| building(*i)) {
                 Some(i) => hits.push(i),
                 None if after_prep => {
                     // Another trade's object, whose trade the note doesn't say.
@@ -739,7 +958,8 @@ fn read_connections(sheets: &[Sheet], keynotes: &super::validate_keynote::Keynot
         }
         // Kinds named by a code (`POWER TO FSD`): another trade's codes of two letters or more.
         for (i, def) in defs.list.iter().enumerate() {
-            if def.codes.iter().any(|c| c.len() >= 2 && codes.iter().any(|w| w == c)) && !def.trades.contains(trade) {
+            let building = def.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other"));
+            if building && def.codes.iter().any(|c| c.len() >= 3 && codes.iter().any(|w| w == c)) && !def.trades.contains(trade) {
                 hits.push(i);
             }
         }
@@ -881,7 +1101,14 @@ fn place(sp: &BuildingSpec, frame: &Frame, sheet: &str, p: [f64; 2]) -> Result<V
     Ok(out)
 }
 
-fn read_marks(sp: &BuildingSpec, frame: &Frame, sheets: &[Sheet], defs: &Defs, keynotes: &super::validate_keynote::Keynotes, typ: &Typicals) -> Vec<PlanMark> {
+fn read_marks(
+    sp: &BuildingSpec,
+    frame: &Frame,
+    sheets: &[Sheet],
+    defs: &Defs,
+    keynotes: &super::validate_keynote::Keynotes,
+    typ: &Typicals,
+) -> Vec<PlanMark> {
     let mut by_code: HashMap<&str, Vec<usize>> = HashMap::new();
     let mut by_symbol: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, def) in defs.list.iter().enumerate() {
@@ -908,11 +1135,16 @@ fn read_marks(sp: &BuildingSpec, frame: &Frame, sheets: &[Sheet], defs: &Defs, k
     for s in sheets.iter().filter(|s| s.plan) {
         let mut here: Vec<(usize, [f64; 2], f64)> = Vec::new();
         for t in &s.texts {
-            if s.tables.iter().any(|r| inside(*r, t.at)) {
+            // Its tables' lettering, and its own number (the title block's), are no tags.
+            if s.tables.iter().any(|r| inside(*r, t.at)) || t.text.trim().eq_ignore_ascii_case(&s.number) {
                 continue;
             }
             let mut hit: BTreeSet<usize> = BTreeSet::new();
             for c in tag_codes(&t.text) {
+                // A lone letter is as often a stroke, a grid or a note's letter as a tag.
+                if c.chars().count() < 2 {
+                    continue;
+                }
                 for i in by_code.get(c.as_str()).into_iter().flatten() {
                     if defs.list.get(*i).is_some_and(|d| shows(d, s.trade)) {
                         hit.insert(*i);
@@ -922,9 +1154,12 @@ fn read_marks(sp: &BuildingSpec, frame: &Frame, sheets: &[Sheet], defs: &Defs, k
                     break;
                 }
             }
+            if hit.iter().any(|i| defs.list.get(*i).is_some_and(|d| d.trades.contains(s.trade))) {
+                hit.retain(|i| defs.list.get(*i).is_some_and(|d| d.trades.contains(s.trade)));
+            }
             for i in hit {
                 // The same tag twice in one place (a text and its block's attribute) is one.
-                if here.iter().any(|(j, p, h)| *j == i && (p[0] - t.at[0]).hypot(p[1] - t.at[1]) <= SAME_TAG_H * h.max(t.h)) {
+                if here.iter().any(|(j, p, h)| *j == i && (p[0] - t.at[0]).hypot(p[1] - t.at[1]) <= SAME_TAG_H * same_reach(*h, t.h)) {
                     continue;
                 }
                 here.push((i, t.at, t.h));
@@ -998,13 +1233,18 @@ pub(crate) struct Census {
     pub mark: Option<String>,
     pub name: Option<String>,
     pub level: String,
+    /// Where it was traced from (`E-201 @ 12'-3", 40'-0"`): its sheet's trade guards a tag match.
+    pub source: Option<String>,
 }
 
 /// How well an element matches a kind: 5 its mark is one of the kind's codes, 4 its mark is a
 /// code numbered (`FSD-3`) or its kind's words are the kind's, 3 its type's words are, 2 it holds
-/// the kind's words with the same head noun; 0 no match.
-fn score(def: &Def, el: &Census, el_key: &str, name_key: &str) -> u8 {
-    if let Some(m) = el.mark.as_deref().map(|m| m.trim().to_ascii_uppercase()).filter(|m| !m.is_empty()) {
+/// the kind's words with the same head noun, 1 its kind's words are among the kind's; 0 no match.
+fn score(def: &Def, el: &Census, el_key: &str, name_key: &str, el_trade: Option<&str>) -> u8 {
+    // A tag is the kind's only on its own trade's sheets (`SD` a duct detector on the mechanical
+    // plans, a smoke detector on the electrical ones).
+    let own = def.trades.is_empty() || el_trade.is_none_or(|t| t == "general" || def.trades.contains(t));
+    if let Some(m) = el.mark.as_deref().map(|m| m.trim().to_ascii_uppercase()).filter(|m| !m.is_empty() && own) {
         if def.codes.contains(&m) {
             return 5;
         }
@@ -1025,7 +1265,20 @@ fn score(def: &Def, el: &Census, el_key: &str, name_key: &str) -> u8 {
     if dk.is_subset(&have) && (head(el_key) == Some(h) || head(name_key) == Some(h)) {
         return 2;
     }
+    // Its kind's words (two or more) inside the kind's longer words, with the same head noun
+    // (`occupancy_sensor` for `FULL AUTOMATIC OCCUPANCY SENSOR`): the weakest match, taken only
+    // when no kind matches better.
+    let ek = tokens(el_key);
+    if ek.len() >= 2 && ek.is_subset(&dk) && head(el_key) == Some(h) {
+        return 1;
+    }
     0
+}
+
+/// Whether an element carries one of the kind's tags as its mark (`FSD`, `FSD-3`).
+fn by_mark(def: &Def, el: &Census, el_trade: Option<&str>) -> bool {
+    let own = def.trades.is_empty() || el_trade.is_none_or(|t| t == "general" || def.trades.contains(t));
+    own && el.mark.as_deref().map(|m| m.trim().to_ascii_uppercase()).is_some_and(|m| tag_codes(&m).iter().any(|c| def.codes.contains(c)))
 }
 
 // ---------------------------------------------------------------- checking
@@ -1035,6 +1288,8 @@ fn score(def: &Def, el: &Census, el_key: &str, name_key: &str) -> u8 {
 #[derive(Default)]
 pub(crate) struct Got {
     pub findings: Vec<(u8, &'static str, Value)>,
+    /// The sheets the drawing doesn't hold whose pages were read for their definitions.
+    pub pages_read: Vec<String>,
     pub unmeasured: BTreeMap<String, u64>,
     pub table: Value,
 }
@@ -1077,10 +1332,23 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
     let (repeat_sheets, repeat_marks) =
         (tol(r, "repeat_sheets", DEFAULT_REPEAT_SHEETS).max(1.0) as usize, tol(r, "repeat_marks", DEFAULT_REPEAT_MARKS).max(1.0) as usize);
     let levels: BTreeSet<String> = inp.areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
-    let all_levels = inp.whole_levels && inp.sp.levels.iter().all(|l| levels.contains(&l.name.to_ascii_lowercase()));
+    // The whole building: every level that has rooms is in scope.
+    let all_levels =
+        inp.whole_levels && super::validate_packet::model_areas(inp.d, inp.frame).iter().all(|a| levels.contains(&a.level.to_ascii_lowercase()));
     let on_scope = |level: &str| levels.contains(&level.to_ascii_lowercase());
+    // A level as the inventory names it (its name, or its number: `1` for `Level 1`).
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let level_digits: BTreeSet<String> = levels.iter().map(|l| digits(l)).filter(|d| !d.is_empty()).collect();
+    let on_scope_inv = |l: &str| on_scope(l) || (!digits(l).is_empty() && level_digits.contains(&digits(l)));
 
     let mut sheets = read_sheets(inp.d, inp.sp);
+    // The legend, schedule and abbreviation sheets the drawing doesn't hold, off their pages.
+    if !sheets.is_empty() {
+        let loaded: BTreeSet<String> = sheets.iter().map(|s| s.number.split('/').next().unwrap_or("").trim().to_ascii_uppercase()).collect();
+        let pages = read_pages(inp.d, &loaded, &mut got.unmeasured);
+        got.pages_read = pages.iter().map(|p| p.number.clone()).collect();
+        sheets.extend(pages);
+    }
     if sheets.is_empty() {
         *got.unmeasured.entry("the drawing holds no print sheets (sheet links with a place on the drawing)".into()).or_default() += 1;
         got.table = json!({"kinds": [], "unexplained_groups": [], "source": data().source});
@@ -1095,13 +1363,37 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
     let units = super::validate_prescreen::Units::of(inp.d);
 
     // The model's elements, each to the kinds it matches best.
+    let sheet_trade: HashMap<String, &'static str> = sheets.iter().map(|s| (s.number.to_ascii_uppercase(), s.trade)).collect();
+    let trade_of_el = |el: &Census| -> Option<&'static str> {
+        let src = el.source.as_deref()?.split_whitespace().next()?.trim_end_matches([',', ';', ':']).to_ascii_uppercase();
+        sheet_trade.get(&src).copied()
+    };
+    // Else its kind's trade (a smoke detector is electrical): it guards a building trade's
+    // kinds only (a sheet letter like `L` means another trade from set to set).
+    let trade_of_el = |el: &Census, def: &Def| -> Option<&'static str> {
+        trade_of_el(el).or_else(|| {
+            let building = def.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other"));
+            Some(super::validate_packet::trade_of_kind(&el.kind, &[])).filter(|t| *t != "general" && building)
+        })
+    };
     let mut model: Vec<Vec<&Census>> = defs.list.iter().map(|_| Vec::new()).collect();
+    // Each kind's elements by any match, the best or not: a kind with no element of its own may
+    // share another kind's (two rows naming one kind).
+    let mut any: Vec<Vec<&Census>> = defs.list.iter().map(|_| Vec::new()).collect();
     for el in inp.census.iter().filter(|e| on_scope(&e.level)) {
         let ek = key_of(&el.kind);
         let nk = el.name.as_deref().map(key_of).unwrap_or_default();
-        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk)).collect();
+        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk, trade_of_el(el, d))).collect();
+        for (i, s) in scores.iter().enumerate() {
+            if *s >= 2
+                && let Some(v) = any.get_mut(i)
+                && v.len() < MAX_SHARED
+            {
+                v.push(el);
+            }
+        }
         let best = scores.iter().copied().max().unwrap_or(0);
-        if best < 2 {
+        if best < 1 {
             continue;
         }
         for (i, s) in scores.iter().enumerate() {
@@ -1154,20 +1446,15 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
             c.placed.push((l.clone(), m.sheet.clone(), *at, m.sheet_at));
         }
     }
-    let typ_areas: Vec<(&Area, String)> = inp
-        .areas
-        .iter()
-        .filter_map(|a| units.get(&a.level, a.number.as_deref()).map(|u| (a, u.id.to_ascii_uppercase())))
-        .collect();
+    let typ_areas: Vec<(&Area, String)> =
+        inp.areas.iter().filter_map(|a| units.get(&a.level, a.number.as_deref()).map(|u| (a, u.id.to_ascii_uppercase()))).collect();
     let mut rows: Vec<(u8, Value)> = Vec::new();
     let mut not_marked = 0u64;
     for (i, def) in defs.list.iter().enumerate() {
         let Some(c) = counts.get_mut(i) else { continue };
         // A floor plan's mark in a room of a unit type whose plan shows this kind is that plan's.
         let shown: BTreeSet<String> = c.typical.keys().map(|t| t.to_ascii_uppercase()).collect();
-        c.placed.retain(|(l, _, at, _)| {
-            !typ_areas.iter().any(|(a, ty)| shown.contains(ty) && a.level.eq_ignore_ascii_case(l) && in_area(a, *at))
-        });
+        c.placed.retain(|(l, _, at, _)| !typ_areas.iter().any(|(a, ty)| shown.contains(ty) && a.level.eq_ignore_ascii_case(l) && in_area(a, *at)));
         // The same kind within `dedupe` on another sheet of the level is the same object.
         let mut kept: Vec<(String, String, [f64; 2], [f64; 2])> = Vec::new();
         let mut placed = std::mem::take(&mut c.placed);
@@ -1189,7 +1476,9 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
         }
         let unplaced_n: usize = c.unplaced.values().sum();
         let expected = kept.len() + typical_n + unplaced_n;
-        let elements = model.get(i).map_or(&[][..], Vec::as_slice);
+        let own_elements = model.get(i).map_or(&[][..], Vec::as_slice);
+        let shared = own_elements.is_empty() && any.get(i).is_some_and(|v| !v.is_empty());
+        let elements = if shared { any.get(i).map_or(&[][..], Vec::as_slice) } else { own_elements };
         let m_n = elements.len();
         let connected = !def.connected.is_empty();
         let raw: usize = c.by_sheet.values().sum();
@@ -1208,8 +1497,14 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
         } else if m_n == 0 {
             ("fail", if connected { 0 } else { 1 }, "high")
         } else {
-            let off = m_n.abs_diff(expected) as f64;
-            if expected > 0 && off > abs.max((share * expected as f64).round()) { ("fail", 2, "medium") } else { ("pass", 4, "low") }
+            // Fewer than the plans show is a fail; more only when the elements carry the kind's
+            // own tag (an element matched by its kind's words may be one the plans mark otherwise,
+            // and a keynote marks only the ones it calls for).
+            let slack = abs.max((share * expected as f64).round());
+            let marked = elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def))).count();
+            let under = expected as f64 - m_n as f64 > slack;
+            let over = !def.codes.is_empty() && marked as f64 - expected as f64 > slack;
+            if expected > 0 && (under || over) { ("fail", 2, "medium") } else { ("pass", 4, "low") }
         };
         let sheets_said = sheets_words(&c.by_sheet);
         let name = label(def);
@@ -1226,7 +1521,9 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
         };
         let issue = match (verdict, m_n) {
             ("fail", 0) if expected == 0 => format!("{name}: the electrical sheets connect to it, 0 in the model{}", connect_words()),
-            ("fail", 0) => format!("{name}: {expected} marks on {sheets_said}, 0 in the model{}", if connected { connect_words() } else { String::new() }),
+            ("fail", 0) => {
+                format!("{name}: {expected} marks on {sheets_said}, 0 in the model{}", if connected { connect_words() } else { String::new() })
+            }
             ("fail", _) => format!("{name}: {expected} marks on the plans ({sheets_said}), {m_n} in the model"),
             ("pass", _) => format!("{name}: {expected} marks on the plans, {m_n} in the model"),
             _ => format!("{name}: defined, no mark on a plan in scope"),
@@ -1247,6 +1544,8 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
             "typical": typical_json,
             "unplaced": c.unplaced,
             "model": m_n,
+            "model_by_tag": elements.iter().filter(|e| by_mark(def, e, trade_of_el(e, def))).count(),
+            "model_shared": shared,
             "model_elements": elements.iter().take(MAX_LISTED).map(|e| e.handle.clone()).collect::<Vec<_>>(),
             "model_kinds": elements.iter().map(|e| e.kind.as_str()).collect::<BTreeSet<_>>().into_iter().take(6).collect::<Vec<_>>(),
             "connected": def.connected.iter().map(|(s, v, t)| json!({"sheet": s, "via": v, "text": t})).collect::<Vec<_>>(),
@@ -1306,10 +1605,13 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
             let codes: BTreeSet<&str> = defs.list.iter().flat_map(|d| d.codes.iter().map(String::as_str)).collect();
             let mut groups: BTreeMap<(String, String), (BTreeSet<String>, usize, Vec<Value>)> = BTreeMap::new();
             for m in inv.marks.iter().take(MAX_MARKS) {
-                if m.status != super::inventory::UNEXPLAINED || m.level.trim().is_empty() || !matches!(m.what.as_str(), "tag" | "symbol" | "text" | "block") {
+                if m.status != super::inventory::UNEXPLAINED
+                    || m.level.trim().is_empty()
+                    || !matches!(m.what.as_str(), "tag" | "symbol" | "text" | "block")
+                {
                     continue;
                 }
-                let in_scope = all_levels || m.level.split(',').any(|l| on_scope(l.trim()));
+                let in_scope = all_levels || m.level.split(',').any(|l| on_scope_inv(l.trim()));
                 if !in_scope {
                     continue;
                 }
@@ -1373,6 +1675,7 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
         "about": "every kind the documents define (legend and schedule rows, abbreviations, keynotes, notes, the print inventory's kinds): its plan marks (per sheet and level, a floor plan and an enlarged plan deduped by registration, a typical unit plan once per room of its type), the model's elements of that kind and the verdict; zero-element kinds first",
         "kinds": kinds,
         "kinds_defined": defs.list.len(),
+        "pages_read": got.pages_read,
         "unexplained_groups": groups_json,
         "source": data().source,
     });

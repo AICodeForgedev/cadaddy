@@ -1,6 +1,6 @@
 //! G-COVERAGE (Q6183) on a made-up one-storey job: a 40' × 24' shell with a corridor (100) and
 //! two rooms (101, 102). Its mechanical plan M-101 carries a legend (`QSD` a combination fire/smoke
-//! damper, `QVD` a volume damper, `QXD` a dual duct detector) and an abbreviation list (`QFD`
+//! damper, `QVD` a volume damper, `QXD` a dual duct detector) and an abbreviation list (`FRD`
 //! FIRE DAMPER, `AFF` above finished floor); an enlarged plan M-501 of part of the level
 //! (registered onto M-101) repeats some of its tags; the power plan E-101 (registered too) has a
 //! keynote list whose note powers a motorized damper, with its marker. The codes, sheets and
@@ -88,7 +88,7 @@ fn mechanical_legend(s: &mut Session) {
     }
     let a = at([50.0, 6.0]);
     text(s, a, "ABBREVIATIONS", 9.0);
-    for (i, (code, words)) in [("AFF", "ABOVE FINISHED FLOOR"), ("QFD", "FIRE DAMPER"), ("TYP", "TYPICAL")].iter().enumerate() {
+    for (i, (code, words)) in [("AFF", "ABOVE FINISHED FLOOR"), ("FRD", "FIRE DAMPER"), ("TYP", "TYPICAL")].iter().enumerate() {
         let y = a[1] - 16.0 - 12.0 * i as f64;
         text(s, [a[0], y], code, 6.0);
         text(s, [a[0] + 40.0, y], words, 6.0);
@@ -100,11 +100,8 @@ fn electrical_keynotes(s: &mut Session) {
     layer(s, "E-ANNO-TEXT");
     let o = on([50.0, 22.0], E);
     text(s, o, "ELECTRICAL KEYNOTES:", 9.0);
-    let lines = [
-        (0.0, "1. PROVIDE 120V POWER CONNECTION TO MOTORIZED DAMPER"),
-        (14.0, "ACTUATOR ABOVE THE CEILING."),
-        (0.0, "2. RECEPTACLE AT 48\" AFF."),
-    ];
+    let lines =
+        [(0.0, "1. PROVIDE 120V POWER CONNECTION TO MOTORIZED DAMPER"), (14.0, "ACTUATOR ABOVE THE CEILING."), (0.0, "2. RECEPTACLE AT 48\" AFF.")];
     for (i, (dx, t)) in lines.iter().enumerate() {
         text(s, [o[0] + dx, o[1] - 14.0 - 10.0 * i as f64], t, 6.0);
     }
@@ -187,7 +184,7 @@ fn spec() -> Value {
             {"name": "Storage", "number": "101", "level": "L1"},
             {"name": "Office", "number": "102", "level": "L1"}
         ],
-        "devices": {"by_type": {"QSD": dev, "QFD": dev}},
+        "devices": {"by_type": {"QSD": dev, "FRD": dev}},
         "sheets": [
             {"number": "M-101", "title": "MECHANICAL PLAN - L1", "discipline": "M", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH],
              "registration": reg("M-101", 0.0, 0.0)},
@@ -199,9 +196,9 @@ fn spec() -> Value {
     })
 }
 
-/// The job: the shell and rooms, M-101's legend and tags (three QSD, two QFD, four QXD),
+/// The job: the shell and rooms, M-101's legend and tags (three QSD, two FRD, four QXD),
 /// M-501 repeating two of the QSD (and nothing else), E-101's keynote and its marker, and the
-/// model's dampers (`qsd` of the QSD kind, `qfd` of the QFD kind).
+/// model's dampers (`qsd` of the QSD kind, `qfd` of the FRD kind).
 fn job(qsd: usize, qfd: usize) -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
@@ -219,8 +216,8 @@ fn job(qsd: usize, qfd: usize) -> Session {
     for p in [[5.0, 12.0], [15.0, 12.0], [25.0, 12.0]] {
         tag(&mut s, p, M, "QSD");
     }
-    tag(&mut s, [20.0, 16.0], M, "QFD-1");
-    tag(&mut s, [20.0, 20.0], M, "QFD-2");
+    tag(&mut s, [20.0, 16.0], M, "FRD-1");
+    tag(&mut s, [20.0, 20.0], M, "FRD-2");
     for p in [[8.0, 4.0], [16.0, 4.0], [24.0, 4.0], [32.0, 4.0]] {
         tag(&mut s, p, M, "QXD");
     }
@@ -235,7 +232,7 @@ fn job(qsd: usize, qfd: usize) -> Session {
         items.push((*p, "QSD"));
     }
     for p in [[20.3, 16.0], [20.3, 20.0]].iter().take(qfd) {
-        items.push((*p, "QFD"));
+        items.push((*p, "FRD"));
     }
     let (s, hs) = if items.is_empty() { (s, Vec::new()) } else { devices(s, &items) };
     let mut s = s;
@@ -290,7 +287,7 @@ fn a_legend_kind_tagged_on_the_plans_with_no_model_elements_fails_first() {
     assert_eq!(qsd["measured"]["defined_by"][0]["sheet"], "M-101");
     let qfd = kind(&fs, "fire damper");
     assert_eq!(qfd["verdict"], "fail", "{qfd}");
-    assert_eq!(qfd["measured"]["plan_marks"], 2, "numbered tags QFD-1, QFD-2: {qfd}");
+    assert_eq!(qfd["measured"]["plan_marks"], 2, "numbered tags FRD-1, FRD-2: {qfd}");
     assert_eq!(qfd["measured"]["defined_by"][0]["from"], "abbreviation", "{qfd}");
     assert!(fs.iter().all(|f| f["kind"] != "above finished floor"), "AFF is no object");
     // Zero-element kinds come before any other finding.
@@ -342,9 +339,7 @@ fn a_floor_plan_and_an_enlarged_plan_tag_count_once() {
 #[test]
 fn an_unexplained_tag_repeated_across_sheets_is_listed() {
     let s = job(3, 2);
-    let m = |id: usize, sheet: &str, text: &str, p: [f64; 2], d: [f64; 2]| {
-        json!({"id": id, "sheet": sheet, "trade": &sheet[..1], "what": "tag", "text": text, "at": on(p, d), "level": "L1", "status": "unexplained", "reason": "a mark no legend or schedule lists"})
-    };
+    let m = |id: usize, sheet: &str, text: &str, p: [f64; 2], d: [f64; 2]| json!({"id": id, "sheet": sheet, "trade": &sheet[..1], "what": "tag", "text": text, "at": on(p, d), "level": "L1", "status": "unexplained", "reason": "a mark no legend or schedule lists"});
     let mut marks = vec![
         m(0, "M-101", "QZ", [3.0, 3.0], M),
         m(1, "M-101", "QZ", [9.0, 3.0], M),
@@ -362,7 +357,8 @@ fn an_unexplained_tag_repeated_across_sheets_is_listed() {
     ];
     // A legend row the inventory read on E-101 (a night glow marker, its own kind) and two of its
     // tags on the plan: no model element.
-    marks.push(json!({"id": 13, "sheet": "E-101", "trade": "E", "what": "legend_row", "text": "NG", "at": on([60.0, 2.0], E), "status": "not_object",
+    marks
+        .push(json!({"id": 13, "sheet": "E-101", "trade": "E", "what": "legend_row", "text": "NG", "at": on([60.0, 2.0], E), "status": "not_object",
         "reason": "legend or schedule row", "kind": "legend:night glow marker", "source": "E-101 ELECTRICAL LEGEND: NG NIGHT GLOW MARKER"}));
     let mut s = with_inventory(s, json!(marks));
     {
@@ -371,7 +367,10 @@ fn an_unexplained_tag_repeated_across_sheets_is_listed() {
         for p in [[12.0, 8.0], [28.0, 8.0]] {
             let q = on(p, E);
             let h = d.new_handle();
-            d.model.push(Entity::new(h, EntityKind::Text(Text { value: "NG".into(), insert: Vec3::new(q[0], q[1], 0.0), height: 6.0, ..style.clone() })));
+            d.model.push(Entity::new(
+                h,
+                EntityKind::Text(Text { value: "NG".into(), insert: Vec3::new(q[0], q[1], 0.0), height: 6.0, ..style.clone() }),
+            ));
         }
         let mut s2 = Session::empty();
         s2.open_drawing(d, "Sample Job", None);
@@ -456,7 +455,10 @@ fn no_sheets_or_junk_never_panic() {
     s.execute("new", &json!({})).unwrap();
     let _ = s.execute("validate.prescreen", &json!({"rules": ["G-COVERAGE"]}));
     let s = job(0, 0);
-    let mut s = with_inventory(s, json!([{"id": 0, "sheet": "", "what": "tag", "text": "\u{0}\u{1}", "at": [1e308, -1e308], "level": ",,,", "status": "unexplained"}]));
+    let mut s = with_inventory(
+        s,
+        json!([{"id": 0, "sheet": "", "what": "tag", "text": "\u{0}\u{1}", "at": [1e308, -1e308], "level": ",,,", "status": "unexplained"}]),
+    );
     let (_, fs) = coverage(&mut s);
     assert!(fs.iter().all(|f| f["verdict"] != "unsure"), "{}", Value::Array(fs));
 }
