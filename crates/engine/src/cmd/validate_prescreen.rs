@@ -1705,7 +1705,14 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         use super::validate_coverage as vc;
         let census: Vec<vc::Census> = all
             .iter()
-            .map(|it| vc::Census { handle: it.handle.clone(), kind: it.kind.clone(), mark: it.mark.clone(), name: it.name.clone(), level: it.level.clone() })
+            .map(|it| vc::Census {
+                handle: it.handle.clone(),
+                kind: it.kind.clone(),
+                mark: it.mark.clone(),
+                name: it.name.clone(),
+                level: it.level.clone(),
+                source: it.source.clone(),
+            })
             .collect();
         let inp = vc::Input { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, census: &census };
         let got = vc::check(&inp, r);
