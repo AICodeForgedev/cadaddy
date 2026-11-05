@@ -339,6 +339,8 @@ const SWING_MAX_DEG: f64 = 100.0;
 /// A door that opens back flat against its wall swings about this far. Only with something drawn
 /// at the arc's centre (the leaf from its hinge): a half circle alone is no door.
 const WIDE_SWING_MAX_DEG: f64 = 185.0;
+/// Most lines from a wide swing's leaf end on to the wall ends near it.
+const WIDE_SWING_JAMBS: usize = 4;
 
 /// The closed leaf of every door swing in `d` (an arc of 60–100° with a door's radius, or a
 /// flattened one, or a door opening back against its wall): a line from the hinge to the end of
@@ -352,18 +354,25 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
     let cell = (2.0 * k).max(1e-9);
     let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
     let mut ends: std::collections::HashMap<(i64, i64), Vec<Vec2>> = std::collections::HashMap::new();
-    let mut file = |p: Vec2| {
+    // Those on layers that are on: what a room is traced by.
+    let mut shown: std::collections::HashMap<(i64, i64), Vec<Vec2>> = std::collections::HashMap::new();
+    let off: std::collections::HashSet<&str> = d.layers.iter().filter(|l| !l.on).map(|l| l.name.as_str()).collect();
+    let mut file = |p: Vec2, on: bool| {
         if p.is_finite() {
             ends.entry(key(p)).or_default().push(p);
+            if on {
+                shown.entry(key(p)).or_default().push(p);
+            }
         }
     };
     for e in d.model.iter().take(MAX_LEAF_SCAN) {
+        let on = !off.contains(e.common.layer.as_str());
         match &e.kind {
             EntityKind::Line(l) => {
-                file(l.a.xy());
-                file(l.b.xy());
+                file(l.a.xy(), on);
+                file(l.b.xy(), on);
             }
-            EntityKind::LwPolyline(p) => p.vertices.iter().take(10_000).for_each(|v| file(v.p)),
+            EntityKind::LwPolyline(p) => p.vertices.iter().take(10_000).for_each(|v| file(v.p, on)),
             _ => {}
         }
     }
@@ -372,17 +381,21 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
         let k = (tol / cell).ceil() as i64;
         (-k..=k).any(|dx| (-k..=k).any(|dy| ends.get(&(cx + dx, cy + dy)).is_some_and(|v| v.iter().any(|q| q.dist(p) <= tol))))
     };
-    // The end of other linework nearest `p`, within `tol`, not on the swing's own circle.
-    let nearest_jamb = |p: Vec2, tol: f64, hinge: Vec2, r: f64| {
+    // The ends of other shown linework nearest `p`, within `tol`, not on the swing's own circle.
+    // (Several: a dashed grid line's end can lie nearer than the wall's.)
+    let jambs_near = |p: Vec2, tol: f64, hinge: Vec2, r: f64| {
         let (cx, cy) = key(p);
         let k = (tol / cell).ceil() as i64;
-        (-k..=k)
+        let mut near: Vec<Vec2> = (-k..=k)
             .flat_map(|dx| (-k..=k).map(move |dy| (cx + dx, cy + dy)))
-            .filter_map(|c| ends.get(&c))
+            .filter_map(|c| shown.get(&c))
             .flatten()
             .copied()
-            .filter(|q| q.dist(p) <= tol && (q.dist(hinge) - r).abs() > tol / 4.0)
-            .min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
+            .filter(|q| q.dist(p) <= tol && (q.dist(hinge) - r).abs() > r * 0.0125)
+            .collect();
+        near.sort_by(|a, b| a.dist(p).total_cmp(&b.dist(p)));
+        near.truncate(WIDE_SWING_JAMBS);
+        near
     };
     let mut out = Vec::new();
     for e in d.model.iter() {
@@ -425,13 +438,15 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
             if hinge.is_finite() && end.is_finite() {
                 let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(hinge.x, hinge.y, 0.0), b: cadaddy_geom::Vec3::new(end.x, end.y, 0.0) };
                 out.push((e.common.clone(), line));
-                // A wide swing's arc can stop just short of the jamb (a frame's depth): on to it.
-                if wide
-                    && let Some(q) = nearest_jamb(end, 2.0 * tol, hinge, hinge.dist(end))
-                    && out.len() < MAX_LEAVES
-                {
-                    let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(end.x, end.y, 0.0), b: cadaddy_geom::Vec3::new(q.x, q.y, 0.0) };
-                    out.push((e.common.clone(), line));
+                // A wide swing's arc can stop short of the wall: a frame's depth (a quarter of the
+                // door's width at most), or a jamb the import filed as lettering. On to the wall.
+                if wide {
+                    for q in jambs_near(end, 5.0 * tol, hinge, hinge.dist(end)) {
+                        if out.len() < MAX_LEAVES {
+                            let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(end.x, end.y, 0.0), b: cadaddy_geom::Vec3::new(q.x, q.y, 0.0) };
+                            out.push((e.common.clone(), line));
+                        }
+                    }
                 }
             }
         }
@@ -1130,7 +1145,9 @@ mod tests {
         let leaf = vec![[0.0, 0.0], wide[16]];
         assert_eq!(leaves(&[wide.clone(), leaf.clone()]), 2);
         // Its arc stopping 2" short of a wall's end: a leaf on to the jamb as well.
-        assert_eq!(leaves(&[wide, leaf, vec![[-60.0, 0.0], [-38.0, 0.0]]]), 3);
+        assert_eq!(leaves(&[wide.clone(), leaf.clone(), vec![[-60.0, 0.0], [-38.0, 0.0]]]), 3);
+        // A grid line's dash nearer than the wall's end: on to both.
+        assert_eq!(leaves(&[wide, leaf, vec![[-60.0, 0.0], [-42.0, 0.0]], vec![[-38.0, 3.0], [-38.0, 40.0]]]), 4);
         // A quarter swing needs no leaf drawn.
         assert_eq!(leaves(&[arc(90.0, 16)]), 2);
         // Past a half circle: no door's.
