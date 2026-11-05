@@ -252,6 +252,22 @@ pub(crate) fn lv_sheet_title(title: &str) -> bool {
     has_any(&norm(title), &rules().statements.sheet_title_words)
 }
 
+/// The set's low-voltage sheets (indices into the sheet index): each titled for the low-voltage
+/// systems, and the other sheets of its series (its number's letters, in its file: `V-1` beside
+/// `V-2 LOW VOLTAGE PLANS`; a title block can be misread, and another file's `V-9` is another
+/// series).
+pub(crate) fn lv_sheets(classified: &[Value]) -> Vec<usize> {
+    let text = |c: &Value, k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let series = |c: &Value| {
+        let letters: String = text(c, "number").chars().take_while(char::is_ascii_alphabetic).collect::<String>().to_ascii_uppercase();
+        (letters, text(c, "file"))
+    };
+    let titled = |c: &Value| lv_sheet_title(&text(c, "title"));
+    let lv_series: BTreeSet<(String, String)> =
+        classified.iter().take(MAX_ROWS).filter(|c| titled(c)).map(series).filter(|(l, f)| !l.is_empty() && !f.is_empty()).collect();
+    classified.iter().enumerate().take(MAX_ROWS).filter(|(_, c)| titled(c) || lv_series.contains(&series(c))).map(|(i, _)| i).collect()
+}
+
 /// The trade sizes a text names (`3/4"`, `1-inch`, `1-1/4 IN`, `3/4-INCH (21-MM)`), with where
 /// each is (in the normalised text's words: the index of the size's last word). 0.5–4 in only.
 fn sizes(raw: &str) -> Vec<(f64, usize)> {
@@ -412,8 +428,8 @@ impl LvDocs {
     }
 }
 
-/// The scope party a sentence gives a thing to (`... PROVIDED AND INSTALLED BY LOW VOLTAGE
-/// VENDOR`): the party named after `BY`, else the one named first.
+/// The scope party a sentence gives a thing to (`... FIRESTOPPING OF CABLE PENETRATIONS BY THE
+/// CABLING CONTRACTOR`): the party named after `BY`, else the one named first.
 fn party_in(sentence: &str) -> Option<String> {
     let sr = scope::rules();
     let n = norm(sentence);
@@ -439,6 +455,11 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
     for doc in docs {
         let lv_doc = doc.trade.as_deref() == Some("low voltage");
         let spec = doc.tier == cadaddy_doc::projrules::SourceTier::Spec;
+        // A product's data sheet says nothing of how its pathway is installed; a specification
+        // section of another division's power raceways nothing of the low-voltage outlets'.
+        if doc.tier == cadaddy_doc::projrules::SourceTier::Submittal || (spec && !lv_doc) {
+            continue;
+        }
         let mut any = false;
         for para in &doc.paras {
             if out.statements.len() >= MAX_STATEMENTS {
@@ -461,7 +482,7 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
                     out.firestop_source = format!("{} {}: \"{}\"", doc.name, para.at, s.chars().take(200).collect::<String>());
                 }
                 if find(&n, "HOOK").or_else(|| find(&n, "HOOKS")).is_some() {
-                    // `Space hooks no more than 5 feet (1.5 m) o.c.`
+                    // `Hang cable hooks 5 feet apart at most.`
                     let ws: Vec<&str> = n.split_whitespace().collect();
                     let ft = ws.windows(2).find_map(|p| match p {
                         [v, u] if matches!(*u, "FEET" | "FT" | "FOOT") => v.parse::<f64>().ok().filter(|x| (1.0..=20.0).contains(x)),
@@ -479,7 +500,7 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
                         out.jhooks_source = format!("{} {}: \"{}\"", doc.name, para.at, s.chars().take(200).collect::<String>());
                     }
                 }
-                // The minimum pathway size (`Minimum Pathway Size: 3/4-inch trade size`).
+                // The minimum pathway size (`Minimum raceway size is 3/4-inch`).
                 if has_any(&n, &w.minimum_words)
                     && (find(&n, "PATHWAY SIZE").is_some() || find(&n, "RACEWAY SIZE").is_some() || find(&n, "CONDUIT SIZE").is_some())
                     && let Some((v, _)) = sizes(s).first()
@@ -504,31 +525,62 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
             if has_any(&whole, &w.power_words) && !has_any(&whole, &w.lv_words) {
                 continue;
             }
-            // Its subject: the kinds of outlet, the areas it names (an area named only as where
-            // the pathway goes, `GUEST ROOM CORRIDOR`, isn't one), all outlets.
-            let mut subject = whole.clone();
+            // Its subject, from the sentences that name the pathway (and the heading they are
+            // under): the kinds of outlet, the areas it names (an area named only as where the
+            // pathway goes, `GUEST ROOM CORRIDOR`, isn't one), all outlets.
+            // The kinds from those sentences; the areas from the whole note (`OFFICE OUTLETS: ...
+            // CONDUIT FROM EACH BOX ...`).
+            let said: String = path_sentences.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
+            let mut subject = norm(&format!("{} {said}", para.heading));
+            let mut area_text = whole.clone();
             for a in w.unit_words.iter().chain(&w.common_words) {
                 for c in &w.to_corridor {
                     let both = norm(&format!("{a} {c}"));
                     subject = subject.replace(both.as_str(), " ");
+                    area_text = area_text.replace(both.as_str(), " ");
                 }
             }
             let kinds: Vec<String> = w.kind_words.iter().filter(|(_, ws)| has_any(&subject, ws)).map(|(k, _)| k.clone()).collect();
             let mut areas = Vec::new();
-            if has_any(&subject, &w.unit_words) {
+            if has_any(&area_text, &w.unit_words) {
                 areas.push("unit".to_string());
             }
-            if has_any(&subject, &w.common_words) {
+            if has_any(&area_text, &w.common_words) {
                 areas.push("common".to_string());
             }
-            let all = has_any(&subject, &w.all_words);
+            let all = has_any(&area_text, &w.all_words);
             let application = if spec {
                 w.spec_application_words.iter().find(|(_, ws)| has_any(&whole, ws)).map(|(k, _)| k.clone()).unwrap_or_default()
             } else {
                 String::new()
             };
+            // A specification gives the method by application (and the minimum size, the hooks'
+            // spacing, read above); where each outlet's pathway goes is the drawings'.
+            if spec && application.is_empty() {
+                continue;
+            }
             if kinds.is_empty() && areas.is_empty() && !all && application.is_empty() {
-                // A backbone conduit, a riser sleeve: not an outlet's pathway.
+                // Not said of the outlets (a riser sleeve, a service conduit).
+                continue;
+            }
+            // A keynote is said of the places it is marked at: one that names no area (a
+            // typical room's) is not the outlets' rule.
+            if norm(&para.heading).contains(" KEYNOTE") && areas.is_empty() && !all {
+                continue;
+            }
+            // A backbone: conduit from the corridor or a telecom room on to another, or two inches
+            // and up (the cabling's trunk, not an outlet's pathway).
+            let said_n = norm(&said);
+            let words: Vec<&str> = said_n.split_whitespace().collect();
+            let from_trunk = words.iter().enumerate().any(|(i, x)| {
+                *x == "FROM"
+                    && words.get(i + 1..(i + 6).min(words.len())).is_some_and(|after| {
+                        let tail = format!(" {} ", after.join(" "));
+                        has_any(&tail, &w.to_corridor) || has_any(&tail, &w.to_room)
+                    })
+            });
+            let trunk_size = sizes(&said).iter().any(|(v, _)| *v >= 2.0 - 1e-9);
+            if from_trunk || trunk_size {
                 continue;
             }
             let text: String = path_sentences.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(" ");
@@ -1512,7 +1564,7 @@ mod tests {
     fn sizes_are_read_in_every_way_the_documents_write_them() {
         let got: Vec<f64> = sizes("PROVIDE 3/4\" CONDUIT, A 1-INCH SLEEVE, 1-1/4 IN. EMT AND 2'' PVC; 12 BOXES").into_iter().map(|x| x.0).collect();
         assert_eq!(got, vec![0.75, 1.0, 1.25, 2.0]);
-        assert_eq!(sizes("Minimum Pathway Size: 3/4-inch (21-mm) trade size").first().map(|x| x.0), Some(0.75));
+        assert_eq!(sizes("Minimum raceway size is 3/4-inch (21-mm) for copper.").first().map(|x| x.0), Some(0.75));
         assert!(sizes("A 12\" X 12\" HATCH").is_empty(), "not a trade size");
         // An abbreviation's full stop doesn't end the sentence.
         assert_eq!(sentences("PROVIDE 3/4\" MIN. CONDUIT TO THE CEILING. LABEL BOTH ENDS.").len(), 2);
@@ -1522,24 +1574,24 @@ mod tests {
     fn statements_say_method_size_end_and_subject_and_the_lv_documents_govern() {
         let docs = vec![
             doc(
-                "E-9",
+                "E-901",
                 Some("electrical"),
                 SourceTier::DrawingRevision,
                 &[
-                    "NOTE: LOW VOLTAGE DEVICES TO BE ROUGH-IN ONLY. PROVIDE EACH ROUGH-IN WITH A BOX AND 3/4\" CONDUIT MINIMUM STUBBED INTO ACCESSIBLE CEILING SPACE ABOVE.",
-                    "PROVIDE 1\" LOW-VOLTAGE CONDUIT WITH PULL STRING FROM THE BOX IN EACH GUEST ROOM TO THE CORRIDOR.",
+                    "LOW VOLTAGE DEVICES ARE ROUGH-IN ONLY: EVERY OUTLET GETS A BACK BOX WITH A 3/4\" CONDUIT MINIMUM STUB-UP TO ABOVE THE ACCESSIBLE CEILING.",
+                    "EACH GUEST ROOM: 1\" CONDUIT FOR LOW VOLTAGE, BOX TO THE CORRIDOR, A PULL LINE IN IT.",
                     "RECEPTACLES ON 20A CIRCUITS IN 3/4\" EMT.",
                 ],
             ),
             doc(
-                "T-1",
+                "T-901",
                 Some("low voltage"),
                 SourceTier::DrawingRevision,
                 &[
-                    "EACH GUEST ROOM SHALL HAVE ONE 3/4\" MINIMUM CONDUIT OR SMURF TUBE STUBBED OUT INTO THE GUEST ROOM CORRIDOR FROM THE DESK DATA LOCATION.",
-                    "CAMERAS NOT IN THE CORRIDOR REQUIRE A PATHWAY ABOVE CEILING TO THE GUEST ROOM CORRIDOR. 3/4\" CONDUIT.",
+                    "ONE PATHWAY PER GUEST ROOM: 3/4\" MINIMUM CONDUIT OR SMURF TUBE FROM THE DATA OUTLET AT THE DESK, ENDING IN THE CORRIDOR CEILING.",
+                    "CAMERAS OUTSIDE THE CORRIDOR NEED A PATHWAY OVER THE CEILING TO THE GUEST ROOM CORRIDOR. USE 3/4\" CONDUIT.",
                     "PROVIDE TWO 3\" CONDUITS FROM THE CORRIDOR TO THE MDF ROOM.",
-                    "GC/EC SHALL PROVIDE ALL BOXES, RACEWAYS, STUBS. FIRE CAULK PROVIDED AND INSTALLED BY LOW VOLTAGE VENDOR.",
+                    "THE ELECTRICAL CONTRACTOR FURNISHES BOXES AND RACEWAYS FOR DATA. FIRESTOPPING OF THE CABLE PENETRATIONS IS BY THE LOW VOLTAGE CONTRACTOR.",
                 ],
             ),
             doc(
@@ -1547,9 +1599,9 @@ mod tests {
                 Some("low voltage"),
                 SourceTier::Spec,
                 &[
-                    "Concealed in Ceilings and Interior Walls and Partitions: EMT.",
-                    "Minimum Pathway Size: 3/4-inch (21-mm) trade size for copper cables.",
-                    "Space hooks no more than 5 feet (1.5 m) o.c.",
+                    "Concealed in walls and ceilings: EMT.",
+                    "Minimum raceway size is 3/4-inch (21-mm) for copper cabling.",
+                    "Hang cable hooks 5 feet apart at most, and one at each turn.",
                 ],
             ),
         ];
@@ -1563,7 +1615,7 @@ mod tests {
         // trade's) over the electrical note's 1".
         let c = choose(&r, &["data".to_string()], "unit", false);
         assert_eq!((c.method.as_str(), c.size_in, c.to.as_str(), c.one_per_room), ("ENT", 0.75, "corridor", true), "{c:?}");
-        assert!(c.method_source.contains("T-1"), "{}", c.method_source);
+        assert!(c.method_source.contains("T-901"), "{}", c.method_source);
         // A guest room's TV outlet: the room-wide note (1", corridor; no material: the spec's
         // concealed method).
         let tv = choose(&r, &["tv".to_string()], "unit", false);
@@ -1578,6 +1630,65 @@ mod tests {
         let none = choose(&LvDocs::default(), &[], "unit", false);
         assert_eq!((none.method.as_str(), none.size_in, none.to.as_str()), ("ENT", 0.75, "corridor"));
         assert!(none.method_source.starts_with("rules default"), "{}", none.method_source);
+    }
+
+    #[test]
+    fn product_data_other_trades_specs_marked_keynotes_and_backbones_are_not_outlet_rules() {
+        let docs = vec![
+            // A product's data sheet and a power raceway section.
+            doc("Submittal 1", Some("low voltage"), SourceTier::Submittal, &["Data cabling in 3/4\" PVC conduit to each outlet."]),
+            doc("26 05 33", Some("electrical"), SourceTier::Spec, &["Concealed in walls: EMT, also for data and telephone outlets."]),
+            // A communications section's paragraph that isn't an application.
+            doc("27 05 44", Some("low voltage"), SourceTier::Spec, &["Sleeves for pathways through masonry-unit walls: steel pipe sleeves."]),
+            doc(
+                "T-902",
+                Some("low voltage"),
+                SourceTier::DrawingRevision,
+                &[
+                    // The trunk from the corridor to the telecom room.
+                    "RUN A HORIZONTAL PATHWAY FROM THE CORRIDOR CEILING TO THE MDF SERVING EVERY GUEST ROOM.",
+                    "FOUR 2\" CONDUITS ARE REQUIRED FOR ALL GUEST ROOMS AND OFFICES.",
+                ],
+            ),
+        ];
+        let mut marked = doc(
+            "E-907",
+            Some("electrical"),
+            SourceTier::DrawingRevision,
+            &["TELEPHONE JACK BY THE CAB CONTROLLER IN 3/4\" CONDUIT WITH A PULL LINE."],
+        );
+        if let Some(p) = marked.paras.first_mut() {
+            p.heading = "ELEVATOR KEYNOTES".into();
+        }
+        let mut all = docs;
+        all.push(marked);
+        let r = read(&all);
+        assert!(r.statements.is_empty(), "{:#?}", r.statements);
+        // A typical room's keynote naming the room is its outlets' rule.
+        let mut typical = doc(
+            "E-908",
+            Some("electrical"),
+            SourceTier::DrawingRevision,
+            &["1\" LV CONDUIT WITH PULL LINE FROM THE GUESTROOM DESK BOX TO THE CORRIDOR."],
+        );
+        if let Some(p) = typical.paras.first_mut() {
+            p.heading = "ELECTRICAL KEYNOTES".into();
+        }
+        let r = read(&[typical]);
+        assert_eq!(r.statements.len(), 1);
+        assert_eq!((r.statements[0].areas.clone(), r.statements[0].to.clone()), (vec!["unit".to_string()], "corridor".to_string()));
+    }
+
+    #[test]
+    fn a_misread_title_block_is_still_a_low_voltage_sheet_beside_its_series() {
+        let sheets = vec![
+            json!({"number": "V-1", "title": "1st Floor", "file": "set.pdf", "page": 20}),
+            json!({"number": "V-2", "title": "LOW VOLTAGE PLANS - FIRST FLOOR", "file": "set.pdf", "page": 21}),
+            json!({"number": "V-3", "title": "LANDSCAPE PLAN", "file": "civil.pdf", "page": 3}),
+            json!({"number": "T-901", "title": "TELECOMMUNICATIONS RISER", "file": "civil.pdf", "page": 9}),
+            json!({"number": "E-909", "title": "ELECTRICAL LEGEND", "file": "set.pdf", "page": 2}),
+        ];
+        assert_eq!(lv_sheets(&sheets), vec![0, 1, 3]);
     }
 
     #[test]
@@ -1645,7 +1756,7 @@ mod tests {
     fn outlet(id: &str, kind: &str, x: f64, y: f64) -> Value {
         json!({"id": format!("device:L1:{id}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": {
             "type": {"value": "D", "source": "plan"}, "symbol": {"value": format!("{:X}", 0x5A0 + id.len()), "source": "plan"},
-            "sheet": {"value": "T-101", "source": "plan"}, "mount_height_in": {"value": "18", "source": "note"}}})
+            "sheet": {"value": "T-911", "source": "plan"}, "mount_height_in": {"value": "18", "source": "note"}}})
     }
 
     /// Each built device's plan point and top (sheet inches).
@@ -1674,12 +1785,12 @@ mod tests {
 
     #[test]
     fn an_outlet_with_a_stub_up_note_gets_its_stub_into_the_ceiling_with_a_bushing() {
-        let note = "LOW VOLTAGE DEVICES: PROVIDE EACH ROUGH-IN WITH A BOX AND 3/4\" EMT STUBBED INTO THE ACCESSIBLE CEILING SPACE ABOVE.";
+        let note = "EVERY LOW VOLTAGE OUTLET: A BACK BOX AND A 3/4\" EMT STUB-UP TO ABOVE THE ACCESSIBLE CEILING.";
         let mut s = building(
             vec![outlet("D1", "data_outlet", 20.0, 10.0)],
             json!({}),
-            vec![doc("E-001", Some("electrical"), SourceTier::DrawingRevision, &[note])],
-            &[("device:L1:D1", "105")],
+            vec![doc("E-911", Some("electrical"), SourceTier::DrawingRevision, &[note])],
+            &[("device:L1:D1", "R12")],
         );
         let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
         assert_eq!((r["outlets"].clone(), r["built"].clone(), r["ends"]["ceiling"].clone()), (json!(1), json!(1), json!(1)), "{r}");
@@ -1689,7 +1800,7 @@ mod tests {
             (json!("EMT"), json!(0.75), json!("ceiling"), json!("common")),
             "{o}"
         );
-        assert!(o["method_source"].as_str().is_some_and(|m| m.contains("E-001")), "{o}");
+        assert!(o["method_source"].as_str().is_some_and(|m| m.contains("E-911")), "{o}");
         // Up from the box's top to 6" over the 9' ceiling.
         let top = tops(&s).first().map(|t| t[2]).expect("device");
         let want = (9.5 * 12.0 - top) / 12.0;
@@ -1715,8 +1826,8 @@ mod tests {
         let mut s = building(
             vec![outlet("D2", "data_outlet", 10.0, 10.0)],
             json!({"mep": {"equipment": [{"tag": "IDF-1", "kind": "rack", "level": "L1", "min": [480, -12], "max": [504, 0], "height_ft": 7, "bottom_ft": 0}]}}),
-            vec![doc("T-001", Some("low voltage"), SourceTier::DrawingRevision, &[note])],
-            &[("device:L1:D2", "110")],
+            vec![doc("T-912", Some("low voltage"), SourceTier::DrawingRevision, &[note])],
+            &[("device:L1:D2", "R14")],
         );
         let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
         let o = &r["outlet_list"][0];
@@ -1746,10 +1857,10 @@ mod tests {
                 "wall_types": [{"name": "P1", "thickness_in": 4.875, "from": "pairs", "assembly": rated}],
                 "walls": [{"level": "L1", "a": [0.0, 240.0], "b": [720.0, 240.0], "wall_type": "P1"}],
                 "circulation": [{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [360, 276], "rects": [[[0, 240], [720, 312]]]}],
-                "unit_instances": [{"number": "201", "level": "L1", "type": "KING-A"}],
+                "unit_instances": [{"number": "U7", "level": "L1", "type": "KING-A"}],
             }),
             Vec::new(),
-            &[("device:L1:D3", "201")],
+            &[("device:L1:D3", "U7")],
         );
         let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
         let o = &r["outlet_list"][0];

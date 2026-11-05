@@ -14327,11 +14327,12 @@ fn lv_pathways_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]
     let mut lv_sheets: Vec<String> = Vec::new();
     let read_pdf = super::file::io().and_then(|h| h.read_pdf);
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let text = |c: &Value, k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let wanted: BTreeSet<usize> = super::conduitroute::lv::lv_sheets(&classified).into_iter().collect();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    for c in classified.iter().take(5_000) {
-        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let number = text("number");
-        if number.is_empty() || !super::conduitroute::lv::lv_sheet_title(&text("title")) || lv_sheets.len() >= MAX_LEGEND_SHEETS * 2 {
+    for (i, c) in classified.iter().enumerate().take(5_000) {
+        let number = text(c, "number");
+        if number.is_empty() || !wanted.contains(&i) || lv_sheets.len() >= MAX_LEGEND_SHEETS * 2 {
             continue;
         }
         let name = number.split('/').next().unwrap_or("").to_string();
