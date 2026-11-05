@@ -750,6 +750,11 @@ fn load_font(doc: &Document, fd: &Dictionary) -> Font {
     {
         parse_cmap(&data, &mut font);
     }
+    // A simple font's codes are one byte each, whatever code space its ToUnicode CMap declares
+    // (some writers declare <0000> <FFFF> and map single bytes): only a composite font's are two.
+    if subtype != b"Type0" {
+        font.two_byte = false;
+    }
     font
 }
 
