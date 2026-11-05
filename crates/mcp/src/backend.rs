@@ -406,7 +406,11 @@ const HEADLESS_METHODS: &[(&str, &str, &str)] = &[
     ),
     ("ui.render", "{path?, width?, height?, fit?}", "Render the drawing; replies pngBase64."),
     ("app.open", "{path}", "Open a drawing."),
-    ("app.save", "{path?, force?}", "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk."),
+    (
+        "app.save",
+        "{path?, force?, version?, binary?}",
+        "Save the drawing (Save As with a path); force: true overwrites a file that changed on disk; version/binary choose the DWG/DXF version and binary DXF of a Save As.",
+    ),
     ("control.methods", "", "This list."),
     ("ping", "", "Replies \"pong\"."),
 ];

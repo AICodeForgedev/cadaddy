@@ -260,7 +260,7 @@ mod tests {
     fn many_undo_drops_use_one_free_thread_and_free_everything() {
         let doc = Arc::new(cadaddy_doc::Drawing::default());
         for i in 0..2000 {
-            let step = Snapshot { label: format!("step {i}"), doc: Arc::clone(&doc), selection: Vec::new(), bytes: 0 };
+            let step = Snapshot { label: format!("step {i}"), doc: Arc::clone(&doc), selection: Vec::new(), bytes: 0, look: None };
             drop_later(vec![step]);
         }
         assert!(free_threads() <= 1, "{} undo-free threads", free_threads());
