@@ -335,6 +335,95 @@ fn a_breaker_that_feeds_gear_is_its_feeder_not_a_branch_circuit() {
 }
 
 #[test]
+fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_by_the_reroute() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Feeder Reroute", None);
+    // A made-up storey: switchboard SB1, panel PA, feeder F3 (one set of 250 kcmil copper, a 4/0
+    // neutral, a #4 ground in 2-1/2") from the riser diagram; built before its route exists.
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "mep": {
+            "systems": [
+                {"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2.5, 0], "bottom_ft": 10},
+                {"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": -1.5}
+            ],
+            "equipment": [
+                {"tag": "SB1", "kind": "switchboard", "level": "L1", "min": [0, 0], "max": [48, 24], "height_ft": 7, "bottom_ft": 0},
+                {"tag": "PA", "kind": "panel", "level": "L1", "min": [480, 0], "max": [504, 24], "height_ft": 3, "bottom_ft": 4}
+            ],
+            "feeders": [{"tag": "F3", "from": "SB1", "to": "PA", "sets": 1, "phases": 3, "size": "250 kcmil", "material": "cu", "neutrals": 1,
+                         "neutral_size": "4/0", "grounds": 1, "ground_size": "#4", "conduits": 1, "conduit_in": 2.5, "entry": "top", "source": "riser diagram E-602"}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    // The job's feeder step: its route into the spec, built as whole runs (up 3', 38' across, down 3').
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    let on = |system: &str, src: &str, pts: Vec<[f64; 2]>, z: f64, top: Option<f64>| -> MepRun {
+        serde_json::from_value(json!({"system": system, "level": "L1", "bottoms_ft": vec![z; pts.len().saturating_sub(1).max(1)], "points": pts,
+            "size_in": [2.5, 0.0], "top_ft": top, "source_sheet": src, "height_source": "proposed"}))
+        .unwrap()
+    };
+    let run = |pts: Vec<[f64; 2]>, z: f64, top: Option<f64>| on("E-FEEDER", "feeder F3 SB1→PA", pts, z, top);
+    let mut runs =
+        vec![run(vec![[36.0, 6.0]], 7.0, Some(10.0)), run(vec![[36.0, 6.0], [492.0, 6.0]], 10.0, None), run(vec![[492.0, 6.0]], 7.0, Some(10.0))];
+    // A buried leg of the feeder, and the underground plan's own run on the same buried system.
+    runs.push(on("E-UG", "feeder F3 SB1→PA", vec![[30.0, 2.0], [30.0, -100.0]], -1.5, None));
+    runs.push(on("E-UG", "underground plan", vec![[200.0, -200.0], [400.0, -200.0]], -2.0, None));
+    sp.mep.runs.extend(runs.iter().cloned());
+    let mut part = sp.clone();
+    part.mep.runs = runs;
+    let d = s.doc_mut().unwrap();
+    d.building_spec = Some(sp.to_json());
+    super::mep::build(d, &part);
+    let whole = |s: &crate::Session| {
+        s.doc().unwrap().model.iter().filter(|e| !super::mepatoms::is_atom(e) && super::bimlook::made_tag(e, "system") == Some("E-FEEDER")).count()
+    };
+    assert!(whole(&s) > 0, "the job's whole runs");
+    let r = s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    // Again (the job reroutes once its devices are reseated): the feeder's buried pieces don't
+    // make the underground plan's run pieces; it stays whole, once.
+    s.execute("conduit.reroute", &json!({})).unwrap();
+    let ug = |s: &crate::Session, atom: bool| {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| super::mepatoms::is_atom(e) == atom && super::bimlook::made_tag(e, "system") == Some("E-UG"))
+            .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.starts_with("@200.00,-200.00")))
+            .count()
+    };
+    assert!(ug(&s, false) > 0, "the underground plan's run stays whole");
+    assert_eq!(ug(&s, true), 0, "and is not cut into pieces besides");
+    assert_eq!(whole(&s), 0, "the whole runs give way to the pieces");
+    let d = s.doc().unwrap();
+    let wire: Vec<(String, String, f64)> = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("wire"))
+        .map(|p| {
+            let g = |k: &str| p.get(k).map(Prop::text).unwrap_or_default();
+            (g("system"), g("size"), g("length_ft").parse::<f64>().unwrap_or(0.0))
+        })
+        .collect();
+    // Along its 44' route with 3' at each gear: 50' a conductor; no entry stubs (system F3).
+    let ft = |size: &str| wire.iter().filter(|w| w.0 == "E-FEEDER" && w.1 == size).map(|w| w.2).sum::<f64>();
+    assert!((ft("250 kcmil") - 150.0).abs() < 0.05, "{wire:?}");
+    assert!((ft("#4/0") - 50.0).abs() < 0.05, "{wire:?}");
+    assert!(!wire.iter().any(|w| w.0 == "F3"), "{wire:?}");
+    let sticks = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("conduit") && p.get("system").map(Prop::text).as_deref() == Some("E-FEEDER"))
+        .count();
+    assert!(sticks >= 5, "44' of 2-1/2\" in 10' sticks: {sticks}");
+}
+
+#[test]
 fn a_cable_runs_through_the_studs_along_its_wall_and_round_a_corner() {
     let rl = rules();
     let (x, y) = (Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0));
@@ -407,4 +496,23 @@ fn the_lengths_are_reported_by_unit_type_common_area_and_level() {
     assert_eq!(r["levels"][0]["total_ft"], json!(238.0));
     assert_eq!(r["total"]["circuits"], json!(4.0));
     assert_eq!(r["total"]["conductor_ft"], json!(810.0));
+}
+
+#[test]
+fn a_feeders_raceway_stays_in_the_way_of_the_branch_routes_once_cut_into_pieces() {
+    let el = |category: &str, system: &str, run: &str| super::bimwork::El {
+        handle: Handle(0x10),
+        trade: "electrical",
+        category: category.into(),
+        system: system.into(),
+        level: "L1".into(),
+        lo: Vec3::new(0.0, 0.0, 0.0),
+        hi: Vec3::new(1.0, 1.0, 1.0),
+        run: run.into(),
+        in_wall: false,
+    };
+    assert!(is_obstacle(&el("conduit", "E-COND", "")), "drawn conduit");
+    assert!(is_obstacle(&el("conduit", super::gearbuild::FEEDER_SYSTEM, "@1.00,2.00#0")), "a feeder's sticks");
+    assert!(!is_obstacle(&el("conduit", BRANCH_SYSTEM, "@1.00,2.00#0")), "the branch pieces this routing cuts again");
+    assert!(!is_obstacle(&el("device", "", "")));
 }
