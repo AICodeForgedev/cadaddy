@@ -512,7 +512,7 @@ mod tests {
         let lum = |id: &str, ty: &str| tag(id, "luminaire", json!({"type": {"value": ty, "source": "plan"}}));
         let dev = |id: &str, ty: &str| tag(id, "receptacle", json!({"device_type": {"value": ty, "source": "legend"}}));
         let dim = |id: &str| {
-            tag(id, "switch", json!({"device_type": {"value": "switch, dimmer", "source": "legend"}, "type": {"value": "SD", "source": "plan"}}))
+            tag(id, "switch", json!({"device_type": {"value": "switch, dimmer", "source": "legend"}, "type": {"value": "XD", "source": "plan"}}))
         };
         let tags = json!([
             lum("L1", "A"),
@@ -539,7 +539,12 @@ mod tests {
             built(
                 &mut s,
                 id,
-                &[("type_mark", "SD", SourceKind::Print), ("switch_leg", leg, SourceKind::Print), ("dimming", how, SourceKind::Submittal)],
+                &[
+                    ("type_mark", "XD", SourceKind::Print),
+                    ("type", "switch, dimmer", SourceKind::Legend),
+                    ("switch_leg", leg, SourceKind::Print),
+                    ("dimming", how, SourceKind::Submittal),
+                ],
             );
         }
         s

@@ -200,7 +200,7 @@ fn dimming_word(v: &str) -> String {
     if v.eq_ignore_ascii_case("non-dim") || v.eq_ignore_ascii_case("none") { "none".into() } else { v.chars().take(40).collect() }
 }
 
-/// Where a property's value came from, as a line says it (`submittal: Lighting Package p.25`).
+/// Where a property's value came from, as a line says it (`submittal: Package p.4`).
 fn source_words(src: &cadaddy_doc::props::Source) -> String {
     use cadaddy_doc::props::SourceKind as K;
     let kind = match src.kind {
@@ -216,6 +216,8 @@ fn source_words(src: &cadaddy_doc::props::Source) -> String {
         _ => "computed",
     };
     match src.doc.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        // A source that names its kind already (`the legend: …`) says it once.
+        Some(d) if d.to_ascii_lowercase().trim_start_matches("the ").starts_with(kind) => d.chars().take(200).collect(),
         Some(d) => format!("{kind}: {}", d.chars().take(200).collect::<String>()),
         None => kind.to_string(),
     }
@@ -2730,7 +2732,7 @@ mod tests {
 
     #[test]
     fn each_line_carries_its_product_and_lines_split_by_it() {
-        use cadaddy_doc::props::SourceKind::{Print, Spec, Submittal, User};
+        use cadaddy_doc::props::SourceKind::{Legend, Print, Spec, Submittal, User};
         use cadaddy_walk3d::Part::Device;
         let mut s = Session::new();
         s.execute("new", &json!({})).unwrap();
@@ -2745,9 +2747,9 @@ mod tests {
             lum("L3", "A"),
             lum("L4", "B"),
             lum("L5", "C"),
-            dev("D1", "switch, dimmer", "SD"),
-            dev("D2", "switch, dimmer", "SD"),
-            dev("D3", "switch, dimmer", "SD"),
+            dev("D1", "switch, dimmer", "XD"),
+            dev("D2", "switch, dimmer", "XD"),
+            dev("D3", "switch, dimmer", "XD"),
             tag("R1", "receptacle", json!({"device_type": {"value": "duplex receptacle", "source": "legend"}})),
         ]);
         s.execute("bspec.set", &json!({"replace": true, "spec": {"levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}], "tags": tags}}))
@@ -2787,7 +2789,12 @@ mod tests {
                 &mut s,
                 id,
                 Device,
-                &[("type_mark", "SD", Print, "E-1"), ("switch_leg", leg, Print, "E-1"), ("dimming", how, Submittal, "Devices p.2")],
+                &[
+                    ("type_mark", "XD", Print, "E-1"),
+                    ("type", "switch, dimmer", Legend, "E-1"),
+                    ("switch_leg", leg, Print, "E-1"),
+                    ("dimming", how, Submittal, "Devices p.2"),
+                ],
             );
         }
         let record = json!({"required": {"section": "26 27 26 WIRING DEVICES", "page": "262726 - 3"}, "approved": {"none": "no submittal for this kind"}, "resolved": {"maker": "Maker Three"}}).to_string();
@@ -2818,7 +2825,7 @@ mod tests {
         assert_eq!((phase[0]["net"].clone(), phase[0]["dimming"].clone()), (json!(2.0), json!("phase")), "{lines:?}");
         assert_eq!(
             (zero_ten[0]["net"].clone(), zero_ten[0]["dimming"].clone(), zero_ten[0]["type_mark"].clone()),
-            (json!(1.0), json!("0-10V"), json!("SD"))
+            (json!(1.0), json!("0-10V"), json!("XD"))
         );
         // The spec's one maker, from its section and page.
         let rec = of("duplex receptacle");
@@ -2830,6 +2837,14 @@ mod tests {
         let csv = r["csv"].as_str().unwrap();
         assert!(csv.lines().next().unwrap().ends_with("type_mark,manufacturer,catalog,dimming,product_source"), "{csv}");
         assert!(csv.contains("AB12 L48,0-10V,submittal: Package p.4"), "{csv}");
+    }
+
+    #[test]
+    fn a_products_source_says_its_kind_once() {
+        use cadaddy_doc::props::{Source, SourceKind};
+        assert_eq!(source_words(&Source::from_doc(SourceKind::Submittal, "Package p.4")), "submittal: Package p.4");
+        assert_eq!(source_words(&Source::from_doc(SourceKind::Legend, "the legend: wall sensor")), "the legend: wall sensor");
+        assert_eq!(source_words(&Source::user()), "user");
     }
 
     #[test]
