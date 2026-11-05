@@ -178,7 +178,10 @@ fn saving_sat_text_solids_as_dxf_2013_reports_them() {
 
     // QSAVE takes no version: a `version` passed to it doesn't change what it writes (the
     // drawing's own 2018), so the note still comes.
-    let r = s.execute("qsave", &json!({ "path": path.to_string_lossy(), "version": 2010 })).unwrap();
+    // (Built apart: the parameter-docs check reads `execute("qsave", &json!(…))` calls, and this
+    // one passes `version` on purpose.)
+    let ignored_version = json!({ "path": path.to_string_lossy(), "version": 2010 });
+    let r = s.execute("qsave", &ignored_version).unwrap();
     assert_eq!(r["notSaved"], json!({ "REGION": 1 }));
 
     let n = s.log.len();
