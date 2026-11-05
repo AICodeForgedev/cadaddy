@@ -920,10 +920,17 @@ mod tests {
         let one = s.execute(CMD_RULES, &json!({"id": "m-ef"})).unwrap();
         assert_eq!(one["total"], 1);
         assert_eq!(one["rules"][0]["id"], "M-EF");
+        // The kind's rules, every page (the answer cap may page them before the limit).
         let fan = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50})).unwrap();
-        let ids: Vec<&str> = fan["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).collect();
-        assert!(ids.contains(&"M-EF") && ids.contains(&"G-ROOM"), "{ids:?}");
         assert_eq!(fan["kind_known"], true);
+        let mut ids: Vec<String> = Vec::new();
+        let mut pg = fan;
+        for _ in 0..20 {
+            ids.extend(pg["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str().map(str::to_string)));
+            let Some(c) = pg["next"].as_u64() else { break };
+            pg = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50, "cursor": c})).unwrap();
+        }
+        assert!(ids.iter().any(|i| i == "M-EF") && ids.iter().any(|i| i == "G-ROOM"), "{ids:?}");
 
         // Paging walks every rule once.
         let mut seen = Vec::new();
