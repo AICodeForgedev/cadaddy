@@ -549,6 +549,8 @@ fn a_two_sided_schedule_on_a_page_the_drawing_does_not_hold_is_read() {
     let (r, fs) = screen(&mut j.s);
     let tables = &r["fixtures"]["schedule"];
     assert!(tables["pages_read"].to_string().contains("X-602"), "{tables}");
+    // One table (the answer counts them; the path file lists them), both halves' types read.
+    assert_eq!((tables["tables"].as_u64(), tables["types"].as_u64()), (Some(1), Some(4)), "{tables}");
     let f = of_handle(&fs, &j.t2);
     assert_eq!(f["verdict"], "fail", "{f}");
     assert!(f["issue"].as_str().unwrap().contains("X-602 LUMINAIRE SCHEDULE, type T2"), "{f}");

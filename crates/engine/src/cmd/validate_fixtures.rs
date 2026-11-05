@@ -578,6 +578,13 @@ fn read_tables(texts: &[TextItem], segs: &[(Vec2, Vec2)], sheet: &str, docs: &mu
                 docs.no_substitutions = no_subs;
             }
             let sides = sides_of(&tb.headers).len();
+            if sides == 0 {
+                *docs
+                    .unmeasured
+                    .entry("lettering under a schedule's title with no fixture header (a tag and two fixture columns): not read as a schedule".into())
+                    .or_default() += 1;
+                continue;
+            }
             let types: Vec<String> = rows.iter().map(|r| r.tag.clone()).collect();
             docs.tables.push(json!({"key": key, "sheet": sheet, "title": title, "headers": tb.headers, "sides": sides, "types": types}));
             // A type two tables name: the row that gives more of its fields.
@@ -878,6 +885,9 @@ fn read_submittals(s: &mut crate::Session, job: &super::guided::GuidedJob, docs:
             }
         }
         marks.dedup();
+        if marks.is_empty() {
+            *docs.unmeasured.entry("a lighting submittal file that gave no type (a scan, or no type read in its text)".into()).or_default() += 1;
+        }
         docs.files.push(json!({"file": name, "revision": format!("{}-{}", revision.0, revision.1), "types": marks}));
     }
     for (mark, mut list) in all {
