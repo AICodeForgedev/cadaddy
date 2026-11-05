@@ -853,3 +853,21 @@ fn a_product_no_section_speaks_for_cites_the_submittal_its_maker_comes_from() {
     assert!(a["approved_makers"].is_null(), "no section's makers: {a:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A device a typical plan stamped into a unit, drawn on the line of the next room's wall (an
+/// entry's receptacle on the corridor's wall line), is fed from its unit's own panel.
+#[test]
+fn a_stamped_device_on_a_neighbours_wall_line_is_fed_from_its_units_panel() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["tags"][0]["fields"]["room"] = json!({"value": "102", "source": "rule"});
+    sp["mep"]["equipment"][1]["tag"] = json!("LP1-102");
+    sp["mep"]["equipment"][1]["circuits"] = json!([]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["room"]["value"], "101", "it stands in 101: {a:#}");
+    let panel = find(&mut s, "equipment", json!({"type_mark": "LP1-102"}));
+    assert_eq!(a["fed_from_handle"]["value"], json!(panel[0]), "its unit's panel: {a:#}");
+}

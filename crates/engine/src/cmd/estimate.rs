@@ -758,7 +758,7 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
 }
 
 /// Price the lines of a BOM (`bim.bom`'s result).
-fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
+pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let lines = bom["lines"].as_array().cloned().unwrap_or_default();
     let crew = setting(st, "crew_rate", 0.0);
     let today_str = st.get("settings").and_then(|x| x["today"].as_str()).unwrap_or_default().to_string();

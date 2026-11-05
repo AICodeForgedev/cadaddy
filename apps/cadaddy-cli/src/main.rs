@@ -73,6 +73,7 @@ const USAGE: &str = "usage:
   cadaddy-cli check-import FILE.(cdy|dwg|dxf) [--json]
   cadaddy-cli run [FILE | --sample | --metric] [--script TEXT] [--script-file F.scr] [--cmd 'id {json}']... [--cmd-file F (one `id {json}` per line)] [--save OUT.dxf] [--export OUT.(png|svg|pdf)] [FRAMING]
   cadaddy-cli plot IN_FOLDER OUT_FOLDER [--layouts NAME,...] [--stamp | --no-stamp]
+  cadaddy-cli accuracy MODEL.cdy [--config C.json] [--commit SHA] [--job-s S] [--peak-mb MB] [--trend T.jsonl ...] (exit 2: a regression)
   cadaddy-cli commands [FILTER]
   cadaddy-cli mcp [--headless | --connect HOST:PORT [--lazy] [--no-launch]]
   cadaddy-cli perf [N | FILE]
@@ -168,6 +169,12 @@ const CLI_COMMANDS: &[CliCommand] = &[
                   --cmd takes any drawing command with JSON parameters (`cadaddy-cli help COMMAND` shows them); --cmd-file \
                   reads one `id {json}` per line; --script runs command-line text.",
         example: "cadaddy-cli run model.cdy --cmd 'bim.takeoff {\"group_by\":\"level\"}'",
+    },
+    CliCommand {
+        name: "accuracy",
+        usage: "cadaddy-cli accuracy MODEL.cdy [--config C.json] [--commit SHA] [--label TEXT] [--job-s S] [--peak-mb MB] [--row OUT.json]                 [--trend T.jsonl [--merge-log LOG] [--commits FILE] [--last N] [--table OUT.md] [--svg OUT.svg]] [--force]",
+        summary: "Measures one built model with no agent (validate.measure: Gate A, G-COVERAGE, every prescreen rule over the building                   and the fixed rooms, the takeoff by trade and system, elements by kind, job time and peak memory) and prints the                   row keyed by --commit; with --trend appends it to the trend file and compares it with the build before                   (validate.trend): exit status 2 when a metric regressed beyond its tolerance. --config holds the fixed rooms and                   defaults: {rooms, skip_rules, label, trend, merge_log, last, table, svg}; --commits is `git log --oneline` of the                   commits between the two builds.",
+        example: "cadaddy-cli accuracy built.cdy --config trend-config.json --commit 1a2b3c4 --job-s 1800 --peak-mb 3100 --trend trend.jsonl",
     },
     CliCommand {
         name: "plot",
@@ -742,6 +749,101 @@ fn bim(args: &[String]) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// `cadaddy-cli accuracy MODEL.cdy …`: the build measured (`validate.measure`), then with
+/// `--trend` appended to the trend file and compared with the build before (`validate.trend`).
+/// Prints the row, then the trend's answer (its table on stderr); true when a metric regressed.
+fn accuracy(args: &[String]) -> Result<bool, String> {
+    const OPTIONS: &[OptionSpec] = &[
+        OptionSpec { name: "--config", takes_value: true },
+        OptionSpec { name: "--commit", takes_value: true },
+        OptionSpec { name: "--label", takes_value: true },
+        OptionSpec { name: "--job-s", takes_value: true },
+        OptionSpec { name: "--peak-mb", takes_value: true },
+        OptionSpec { name: "--row", takes_value: true },
+        OptionSpec { name: "--trend", takes_value: true },
+        OptionSpec { name: "--merge-log", takes_value: true },
+        OptionSpec { name: "--commits", takes_value: true },
+        OptionSpec { name: "--last", takes_value: true },
+        OptionSpec { name: "--table", takes_value: true },
+        OptionSpec { name: "--svg", takes_value: true },
+        OptionSpec { name: "--force", takes_value: false },
+    ];
+    validate_options("accuracy", args, OPTIONS)?;
+    let value = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
+    let force = args.iter().any(|a| a == "--force");
+    let mut skip_next = false;
+    let mut model = None;
+    for a in args {
+        if std::mem::take(&mut skip_next) {
+            continue;
+        }
+        if let Some(spec) = OPTIONS.iter().find(|o| o.name == a) {
+            skip_next = spec.takes_value;
+        } else if model.is_none() {
+            model = Some(a.clone());
+        } else {
+            return Err(format!("accuracy: one model only (also got {a})"));
+        }
+    }
+    let model = model.ok_or("accuracy: name the built model (MODEL.cdy)")?;
+    let config: Value = match value("--config") {
+        Some(f) => {
+            serde_json::from_str(&std::fs::read_to_string(&f).map_err(|e| format!("--config {f}: {e}"))?).map_err(|e| format!("--config {f}: {e}"))?
+        }
+        None => json!({}),
+    };
+    if !config.is_object() {
+        return Err("--config holds a JSON object: {rooms, skip_rules, label, trend, merge_log, last, table, svg}".into());
+    }
+    let number = |name: &str| -> Result<Option<f64>, String> {
+        value(name).map(|v| v.trim().parse::<f64>().map_err(|_| format!("{name} is a number, not {v}"))).transpose()
+    };
+    let mut m = json!({"force": force});
+    for k in ["rooms", "skip_rules", "label"] {
+        if !config[k].is_null() {
+            m[k] = config[k].clone();
+        }
+    }
+    for (flag, k) in [("--commit", "commit"), ("--label", "label"), ("--row", "path")] {
+        if let Some(v) = value(flag) {
+            m[k] = json!(v);
+        }
+    }
+    for (flag, k) in [("--job-s", "job_s"), ("--peak-mb", "peak_mb")] {
+        if let Some(v) = number(flag)? {
+            m[k] = json!(v);
+        }
+    }
+    let mut s = Session::for_app();
+    open(&mut s, &model)?;
+    let row = s.execute("validate.measure", &m).map_err(|e| e.to_string())?;
+    outln!("{row}");
+    let text_of = |flag: &str, key: &str| value(flag).or_else(|| config[key].as_str().map(str::to_string));
+    let Some(trend) = text_of("--trend", "trend") else { return Ok(false) };
+    let mut t = json!({"path": trend, "row": row, "force": force});
+    for (flag, k) in [("--merge-log", "merge_log"), ("--table", "table"), ("--svg", "svg")] {
+        if let Some(v) = text_of(flag, k) {
+            t[k] = json!(v);
+        }
+    }
+    if let Some(n) = number("--last")?.map(|n| json!(n as u64)).or_else(|| config.get("last").filter(|v| v.is_u64()).cloned()) {
+        t["last"] = n;
+    }
+    if let Some(f) = value("--commits") {
+        let text = std::fs::read_to_string(&f).map_err(|e| format!("--commits {f}: {e}"))?;
+        t["commits"] = json!(text.lines().map(str::trim).filter(|l| !l.is_empty()).take(500).collect::<Vec<_>>());
+    }
+    let r = s.execute("validate.trend", &t).map_err(|e| e.to_string())?;
+    if let Some(table) = r["table"].as_str() {
+        eprintln!("{table}");
+    }
+    for f in r["findings"].as_array().into_iter().flatten().filter_map(|f| f["issue"].as_str()) {
+        eprintln!("{f}");
+    }
+    outln!("{r}");
+    Ok(r["regressions"].as_u64().is_some_and(|n| n > 0))
 }
 
 fn check_import(args: &[String]) -> Result<(), String> {
@@ -1770,6 +1872,12 @@ fn cli() -> ExitCode {
             validate_options("verify", &rest, NO_OPTIONS).and_then(|_| rest.first().ok_or_else(|| USAGE.to_string())).and_then(|p| verify(p))
         }
         Some("plot") => plot(&rest),
+        Some("accuracy") => match accuracy(&rest) {
+            // Measured, and worse than the build before: its own exit status.
+            Ok(true) => return ExitCode::from(2),
+            Ok(false) => Ok(()),
+            Err(e) => Err(e),
+        },
         Some("run") => run(&rest),
         Some("perf") => validate_options("perf", &rest, NO_OPTIONS).and_then(|_| perf(&rest)),
         Some("sample") => validate_options("sample", &rest, NO_OPTIONS).and_then(|_| sample(&rest)),
