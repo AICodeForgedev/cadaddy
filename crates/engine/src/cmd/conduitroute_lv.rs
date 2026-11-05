@@ -635,10 +635,11 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
                 "room"
             } else if has_any(&n, &w.to_enclosure) && !has_any(&n, &w.box_words) {
                 "enclosure"
+            } else if has_any(&n, &w.to_sleeve) && !has_any(&n, &w.to_ceiling) {
+                // `... TO A SLEEVE THROUGH THE CORRIDOR WALL`: it ends at the sleeve.
+                "sleeve"
             } else if has_any(&n, &w.to_corridor) || glued(&w.to_corridor) {
                 "corridor"
-            } else if has_any(&n, &w.to_sleeve) && !has_any(&n, &w.to_ceiling) {
-                "sleeve"
             } else if has_any(&n, &w.to_ceiling) {
                 "ceiling"
             } else {
@@ -1963,6 +1964,67 @@ mod tests {
         assert!(c["length_ft"].as_f64().is_some_and(|x| (x - ft).abs() < 0.5), "{ft} vs {c}");
         assert_eq!(lv_count(&mut s, "connector")["count"], json!(3));
         assert_eq!(lv_count(&mut s, "bushing")["count"], json!(1));
+    }
+
+    /// The guest room beside a rated corridor wall (made up: the wall along y = 20', the corridor
+    /// north of it), one data outlet at (10', 10'), the documents' `note`.
+    fn rated_corridor(note: &str) -> crate::Session {
+        let rated = json!({"tag": "P1", "description": "RATED PARTITION", "fire_rating": "1 HR", "layers": []});
+        building(
+            vec![outlet("D6", "data_outlet", 10.0, 10.0)],
+            json!({
+                "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "P1"}],
+                "wall_types": [{"name": "P1", "thickness_in": 4.875, "from": "pairs", "assembly": rated}],
+                "walls": [{"level": "L1", "a": [0.0, 240.0], "b": [720.0, 240.0], "wall_type": "P1"}],
+                "circulation": [{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [360, 276], "rects": [[[0, 240], [720, 312]]]}],
+                "unit_instances": [{"number": "U9", "level": "L1", "type": "KING-C"}],
+            }),
+            vec![doc("T-905", Some("low voltage"), SourceTier::DrawingRevision, &[note])],
+            &[("device:L1:D6", "U9")],
+        )
+    }
+
+    #[test]
+    fn a_pathway_the_documents_end_at_a_sleeve_stops_there_and_its_outlet_takes_a_bracket() {
+        let mut s =
+            rated_corridor("EACH GUEST ROOM DATA OUTLET: 3/4\" ENT TO A SLEEVE THROUGH THE CORRIDOR WALL. A LOW VOLTAGE BRACKET IN PLACE OF A BOX.");
+        let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
+        let o = &r["outlet_list"][0];
+        assert_eq!((o["to"].clone(), o["bracket"].clone()), (json!("sleeve"), json!(true)), "{o}");
+        assert_eq!(r["ends"]["sleeve"], json!(1), "{r}");
+        // One sleeve in the rated wall, one size over the pathway; the raceway stops at the wall's
+        // face (2'-6-ish short of the corridor), so it makes no penetration of its own.
+        let sl = r["sleeves"].as_array().cloned().unwrap_or_default();
+        assert_eq!(sl.len(), 1, "{r}");
+        assert_eq!((sl[0]["rating"].clone(), sl[0]["size"].clone()), (json!("1 HR"), json!("1\"")));
+        assert_eq!(r["penetrations"].as_array().map_or(0, Vec::len), 0);
+        assert_eq!(r["firestop"]["count"], json!(1));
+        let t = tops(&s).first().copied().expect("device");
+        let to_wall = (111.0 - t[2]) / 12.0 + (240.0 - 4.875 / 2.0 - t[1]) / 12.0;
+        assert!(o["ft"].as_f64().is_some_and(|f| (f - to_wall).abs() < 0.1), "{to_wall} vs {o}");
+        // The bracket in place of the box (and no ring); the sleeve in the takeoff.
+        let b = s.execute("bim.count", &json!({"kind": "box", "group_by": "item"})).expect("count");
+        assert_eq!(b["rows"][0]["item"], json!("Low-voltage mounting bracket"), "{b}");
+        assert_eq!(s.execute("bim.count", &json!({"kind": "ring"})).expect("count")["count"], json!(0));
+        let tk = s.execute("conduit.takeoff", &json!({"price": false})).expect("takeoff");
+        assert!(tk["lines"].as_array().into_iter().flatten().any(|l| l["kind"] == json!("sleeve") && l["type"] == json!("1 HR")), "{tk}");
+    }
+
+    #[test]
+    fn open_cable_on_j_hooks_is_no_raceway_but_its_hooks_and_sleeve_are_counted() {
+        let mut s = rated_corridor("GUEST ROOM DATA OUTLETS: OPEN CABLE ON J-HOOKS TO THE CORRIDOR.");
+        let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
+        assert_eq!(r["outlet_list"][0]["method"], json!("J-HOOK"), "{r}");
+        // No raceway pieces: the cable hangs on hooks every 5' (rules: TIA-569) over the 11' to
+        // the corridor, and passes the rated wall in a sleeve.
+        assert_eq!(lv_count(&mut s, "conduit")["count"], json!(0));
+        assert_eq!((r["jhooks"]["count"].clone(), r["jhooks"]["ours"].clone()), (json!(3), json!(false)), "{r}");
+        assert_eq!(r["sleeves"].as_array().map_or(0, Vec::len), 1, "{r}");
+        assert_eq!(r["by_others"], json!(1));
+        // The cabling's hooks are listed as the low-voltage contractor's, not taken off as ours.
+        let tk = s.execute("conduit.takeoff", &json!({"price": false})).expect("takeoff");
+        assert!(tk["lines"].as_array().into_iter().flatten().all(|l| l["kind"] != json!("j-hook")), "{tk}");
+        assert!(tk["lv_by_others"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str().is_some_and(|t| t.contains("J-hooks")))), "{tk}");
     }
 
     #[test]
