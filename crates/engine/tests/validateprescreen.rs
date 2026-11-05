@@ -521,7 +521,16 @@ fn the_prescreen_is_deterministic_paged_written_and_in_the_validate_run() {
             None => break,
         }
     }
-    assert_eq!(seen, findings(&a).iter().map(|f| f["id"].clone()).collect::<Vec<_>>());
+    // The whole list: `a` and the pages after it (an answer holds what fits in its budget).
+    let mut whole: Vec<Value> = findings(&a).iter().map(|f| f["id"].clone()).collect();
+    let mut next = a["next"]["cursor"].as_u64();
+    while let Some(c) = next {
+        let r = j.s.execute("validate.prescreen", &json!({"all": true, "limit": 50, "cursor": c})).unwrap();
+        whole.extend(findings(&r).into_iter().map(|f| f["id"].clone()));
+        next = r["next"]["cursor"].as_u64();
+    }
+    assert_eq!(whole.len(), total);
+    assert_eq!(seen, whole);
     // Every finding into a file, through the output guard.
     let d = dir("file");
     std::fs::create_dir_all(&d).unwrap();

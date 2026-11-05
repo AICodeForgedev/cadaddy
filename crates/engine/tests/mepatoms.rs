@@ -306,3 +306,60 @@ fn a_wall_box_takes_its_ring_and_the_ring_follows_the_wall() {
     assert_eq!(rings.len(), 1, "{rings:?}");
     assert_eq!(rings[0]["size"], json!("1 gang, 5/8\" deep"));
 }
+
+/// `bim.count` from the stored index is a recount's, row by row (the takeoff, BOM and estimate
+/// against a recount: tests/takeoff_edits.rs).
+fn agrees_with_a_recount(s: &mut Session, step: &str) -> Value {
+    let c = count(s, json!({"verify": true}));
+    assert_eq!(c["verify"]["matches"], json!(true), "{step}: bim.count is the stored index's, not a recount: {c}");
+    let rows = count(s, json!({"group_by": "kind"}))["rows"].clone();
+    count(s, json!({"refresh": true}));
+    assert_eq!(rows, count(s, json!({"group_by": "kind"}))["rows"], "{step}");
+    c
+}
+
+#[test]
+fn plain_edits_of_model_pieces_keep_the_count_index_and_the_saved_model_current() {
+    // Soak S5-002: ERASE, COPY, EXPLODE and MOVE of model pieces with the plain drawing commands
+    // left the stored index (and so bim.count, the BOM's pieces and the takeoff) as built, and the
+    // .cdy saved it so.
+    let mut s = building(None);
+    let n = |c: &Value| c["count"].as_u64().unwrap_or(0);
+    let built = agrees_with_a_recount(&mut s, "built");
+    let conduit_ft = |s: &mut Session| count(s, json!({"kind": "conduit", "size": "1\""}))["length_ft"].as_f64().unwrap_or(0.0);
+    let sticks = handles_of(&mut s, "conduit", "1\"");
+    assert_eq!(sticks.len(), 4);
+    let ft0 = conduit_ft(&mut s);
+    s.execute("erase", &json!({"handles": [sticks[0], sticks[1]]})).expect("erase");
+    let erased = agrees_with_a_recount(&mut s, "erase");
+    assert_eq!(n(&erased), n(&built) - 2);
+    assert!(conduit_ft(&mut s) < ft0 - 1.0, "the erased sticks' length is gone");
+    s.execute("copy", &json!({"handles": [sticks[2]], "delta": [0, 48]})).expect("copy");
+    assert_eq!(n(&agrees_with_a_recount(&mut s, "copy")), n(&built) - 1);
+    s.execute("explode", &json!({"handles": [sticks[3]]})).expect("explode");
+    let exploded = agrees_with_a_recount(&mut s, "explode");
+    s.execute("move", &json!({"handles": [sticks[2]], "delta": [12, 0]})).expect("move");
+    assert_eq!(n(&agrees_with_a_recount(&mut s, "move")), n(&exploded));
+    for (cmd, k) in [("undo", 1), ("undo", 3), ("redo", 2), ("undo", 10), ("redo", 10)] {
+        s.execute(cmd, &json!({"count": k})).expect(cmd);
+        agrees_with_a_recount(&mut s, &format!("{cmd} {k}"));
+    }
+    // Saved as .cdy and opened again: the index it keeps is the current one.
+    let edited = n(&count(&mut s, json!({})));
+    let bytes = cadaddy_io::write(s.doc().expect("doc"), "model.cdy").expect("save");
+    let mut s2 = Session::empty();
+    s2.open_drawing(cadaddy_io::read(&bytes, "model.cdy").expect("open"), "Sample Floor Plan", None);
+    let reopened = count(&mut s2, json!({"verify": true}));
+    assert_eq!((reopened["from"].clone(), n(&reopened)), (json!("index"), edited), "{reopened}");
+    assert_eq!(reopened["verify"]["matches"], json!(true), "{reopened}");
+}
+
+#[test]
+fn an_edit_off_the_model_leaves_the_stored_index_as_it_is() {
+    // A line drawn on the sheet changes no piece: the index (its bytes) is not rewritten.
+    let mut s = building(None);
+    let before = s.doc().expect("doc").embedded.get("atoms/index.json").cloned().expect("index");
+    s.execute("line", &json!({"points": [[-500, -500], [-400, -500]]})).expect("line");
+    let after = s.doc().expect("doc").embedded.get("atoms/index.json").cloned().expect("index");
+    assert!(std::sync::Arc::ptr_eq(&before, &after));
+}

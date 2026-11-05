@@ -1,0 +1,39 @@
+{
+  "_doc": "Validate's value-engineering rules (Q6155), as data: what Validate checks a wiring-method alternative against, independent of the study that proposed it. `cables`: a scenario's cable (its pieces' type) to the method key of a specification's wiring-methods table. `never`: the areas each cable method is never proposed in (G-VE-AREA), with why; a method with no row is unsure there. `words`: the room and ceiling words that make a place a corridor or a plenum (the unit and exposed-room words are the router's, conduitroute.json methods). `code`: the code rules a scenario may cite to permit a method (G-VE-TIER): the construction types they allow (empty: any), whether the method must be concealed, whether it needs a thermal barrier (a documented, not suspended, ceiling over it: 334.10(3), 334.12(A)(2)), and the areas they never allow. `same_either_way`: the piece kinds a scenario leaves as they are (its boxes and rings), so no saving is counted on them. `rfi_no_intent`: the words of an RFI's intent line that state no intent. The cites are NEC numbering (2017 through 2023 keep these numbers).",
+  "cables": {"NM": "nm", "NM-B": "nm", "SER": "se", "SE": "se", "MC": "mc", "AC": "ac", "UF": "uf"},
+  "never": {
+    "nm": {
+      "common": "NM stays in the dwelling and guest units: never in common areas (company rule from the owner's projects; NEC 334.10(3) concealed only)",
+      "exposed": "NEC 334.15(B): not exposed where subject to damage (mechanical, electrical and service rooms)",
+      "plenum": "NEC 300.22(C): not in other spaces used for environmental air",
+      "below_slab": "NEC 334.12(B)(4) and 300.5: not in wet locations, in concrete or underground"
+    },
+    "se": {
+      "exposed": "NEC 338.10(B)(4)(a) with 334.15(B): interior SE follows the NM rules, not exposed where subject to damage",
+      "plenum": "NEC 300.22(C): not in other spaces used for environmental air",
+      "below_slab": "NEC 338.12(B)(1) and 300.5: not underground or in concrete below the slab"
+    },
+    "mc": {
+      "below_slab": "NEC 330.10(A)(5): below the slab or underground only where identified for direct burial: designed in raceway"
+    },
+    "ac": {
+      "below_slab": "NEC 320.12: not in wet locations, in concrete or underground"
+    }
+  },
+  "words": {
+    "corridor": ["CORRIDOR", "CORR.", "HALL"],
+    "plenum": ["PLENUM"]
+  },
+  "code": [
+    {"cite": "NEC 334.10(3)", "methods": ["nm"], "construction": ["III", "IV", "V"], "concealed": true, "thermal_barrier": true, "not_in": ["plenum", "below_slab", "suspended"],
+     "says": "NM in structures of Types III, IV and V construction, concealed within walls, floors or ceilings behind a thermal barrier of at least a 15-minute finish rating; never in a suspended ceiling's cavity in other than dwellings (334.12(A)(2)), a plenum (300.22(C)) or below the slab (334.12(B)(4))"},
+    {"cite": "NEC 338.10(B)(4)(a)", "methods": ["se"], "construction": ["III", "IV", "V"], "concealed": true, "thermal_barrier": true, "not_in": ["plenum", "below_slab", "suspended"],
+     "says": "SE cable as interior wiring, feeders included, installed under Parts I and II of Article 334: 334.10(3)'s construction types and thermal barrier apply"},
+    {"cite": "NEC 330.10(A)", "methods": ["mc"], "construction": [], "concealed": false, "thermal_barrier": false, "not_in": ["below_slab"],
+     "says": "MC cable for feeders and branch circuits, exposed or concealed, in any construction type; below the slab only where identified for direct burial"},
+    {"cite": "NEC 320.10", "methods": ["ac"], "construction": [], "concealed": false, "thermal_barrier": false, "not_in": ["below_slab"],
+     "says": "AC cable for feeders and branch circuits, exposed or concealed, in dry locations"}
+  ],
+  "same_either_way": ["box", "ring", ""],
+  "rfi_no_intent": ["NO REASON FOR THE SPECIFIED METHOD FOUND"]
+}

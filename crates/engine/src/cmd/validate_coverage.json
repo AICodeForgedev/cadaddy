@@ -1,0 +1,42 @@
+{
+  "source": "rules data: the nouns construction documents name installed objects by (CSI MasterFormat divisions 21-28 product names, NFPA 72 / NEC / IMC device and equipment terms), the words electrical, fire alarm and low-voltage notes connect another trade's object with (power, a circuit, a fire alarm module, a data drop), and drafting stop words; trade vocabulary, no job's words",
+  "object_nouns": [
+    "DAMPER", "DETECTOR", "SENSOR", "VALVE", "FAN", "PUMP", "HEATER", "BOILER", "CHILLER", "HUMIDIFIER", "DEHUMIDIFIER",
+    "THERMOSTAT", "HUMIDISTAT", "UNIT", "AHU", "RTU", "VAV", "FCU", "PTAC", "CURTAIN", "COMPRESSOR", "CONDENSER", "EVAPORATOR",
+    "PANEL", "PANELBOARD", "SWITCHBOARD", "SWITCHGEAR", "TRANSFORMER", "DISCONNECT", "STARTER", "CONTACTOR", "RELAY", "MODULE",
+    "SWITCH", "DIMMER", "RECEPTACLE", "OUTLET", "BOX", "LUMINAIRE", "FIXTURE", "LIGHT", "SIGN", "STROBE", "HORN", "SPEAKER", "CHIME", "BELL",
+    "STATION", "ANNUNCIATOR", "CAMERA", "READER", "KEYPAD", "INTERCOM", "BUTTON", "HOLDER", "MAGNET", "ANTENNA",
+    "CHARGER", "METER", "GENERATOR", "BREAKER", "CABINET", "ENCLOSURE", "RACK", "JACK",
+    "GRILLE", "REGISTER", "DIFFUSER", "LOUVER", "HOOD", "CURB",
+    "DRAIN", "CLEANOUT", "HYDRANT", "SPRINKLER", "EXTINGUISHER", "STANDPIPE", "INTERCEPTOR", "SINK", "LAVATORY", "CLOSET", "URINAL", "SHOWER",
+    "TUB", "FAUCET", "FOUNTAIN", "COOLER", "DISPENSER", "WASHER", "DRYER", "DISHWASHER", "DISPOSER", "REFRIGERATOR", "RANGE", "OVEN", "ICEMAKER"
+  ],
+  "compound_nouns": ["ACCESS POINT", "PULL STATION", "DOOR HOLDER", "WATER HEATER", "EXHAUST FAN", "CEILING FAN", "HAND DRYER", "SMOKE CURTAIN"],
+  "stop_words": [
+    "A", "AN", "THE", "AND", "OR", "WITH", "W", "OF", "TO", "FOR", "IN", "ON", "AT", "BY", "AS", "FROM", "INTO", "EACH", "ALL", "ANY", "PER", "ITS",
+    "NEW", "TYP", "TYPICAL", "SEE", "REFER", "NOTE", "NOTES", "SIMILAR", "SIM", "U", "UNO", "AFF", "MOUNTED", "MOUNT", "ABOVE", "BELOW", "NEAR", "ONE", "TWO",
+    "THIS", "THAT", "THESE", "THOSE", "IS", "ARE", "BE", "SHALL", "WHERE", "EQUAL", "SPECIFIED", "SCHEDULED", "SHOWN", "INDICATED", "LOCATION", "LOCATIONS"
+  ],
+  "phrase_breaks": [
+    "PROVIDE", "INSTALL", "FURNISH", "CONNECT", "CONNECTION", "CONNECTIONS", "EXTEND", "ROUTE", "RUN", "POWER", "FEED", "SERVE", "SERVING", "CIRCUIT",
+    "CKT", "WIRE", "WIRING", "CONDUIT", "RELOCATE", "REMOVE", "COORDINATE", "VERIFY", "DEDICATED", "LOCATE", "PLACE", "REPLACE", "SUPPLY",
+    "MONITOR", "RELEASE", "CONTROL", "CONTROLS", "INTERLOCK", "DATA", "DROP", "CABLE"
+  ],
+  "not_new_words": ["EXISTING", "EX", "ABANDONED", "REMOVED", "DEMOLISHED", "RELOCATED"],
+  "prepositions": ["TO", "FOR", "AT", "SERVING", "SERVES", "AND", "OF"],
+  "provide_words": ["PROVIDE", "INSTALL", "FURNISH", "NEW", "ADD"],
+  "connections": [
+    {"via": "power", "words": ["POWER", "CONNECT", "CONNECTION", "FEED", "CIRCUIT", "CKT", "120V", "208V", "277V", "480V", "JUNCTION BOX", "DISCONNECT", "WHIP"]},
+    {"via": "fire_alarm", "words": ["FIRE ALARM", "FACP", "MODULE", "RELAY", "MONITOR", "RELEASE", "SHUTDOWN", "SHUT DOWN", "INTERLOCK"]},
+    {"via": "data", "words": ["DATA", "DROP", "NETWORK", "CAT6", "CAT 6", "CAT5E", "ETHERNET", "BACNET", "BMS", "BAS"]}
+  ],
+  "connecting_trades": ["electrical"],
+  "abbreviation_headings": ["ABBREVIATION", "ABBREVIATIONS", "ABBREV", "LEGEND", "LEGENDS", "SYMBOL", "SYMBOLS"],
+  "not_object_words": ["PLAN", "SECTION", "DETAIL", "ELEVATION", "SHEET", "SYMBOL", "NUMBER", "TAG", "TYPE", "RCP", "DRAWING", "VIEW", "NOTE", "SCHEDULE", "MATCHLINE", "GRID", "LINE"],
+  "page_words": ["LEGEND", "SYMBOL", "ABBREVIATION", "SCHEDULE", "GENERAL NOTES", "NOTES", "COVER", "LEGENDS"],
+  "own_nouns": ["DISCONNECT", "RECEPTACLE", "OUTLET", "BOX", "SWITCH", "DIMMER", "PANEL", "PANELBOARD", "BREAKER", "MODULE", "RELAY", "STARTER", "CONTACTOR", "TRANSFORMER", "JACK", "STROBE", "HORN", "SPEAKER"],
+  "max_pages": 40,
+  "max_code_chars": 6,
+  "max_phrase_words": 4,
+  "max_groups": 40
+}
