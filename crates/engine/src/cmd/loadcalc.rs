@@ -86,11 +86,21 @@ pub(crate) struct Occupancy {
     pub optional_cite: String,
 }
 
+/// A unit room's small-appliance branch circuits: the words that name one, its VA, the cite.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct SmallAppliance {
+    pub words: Vec<String>,
+    pub va: f64,
+    pub cite: String,
+}
+
 /// The load calculation's rules (`loadcalc.json`).
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct Rules {
     pub unit_loads: Vec<UnitLoad>,
+    pub small_appliance: SmallAppliance,
     pub continuous: Continuous,
     pub circuit_limit_pct: f64,
     pub circuit_limit_cite: String,
@@ -415,6 +425,9 @@ struct Circuit {
     unknown: usize,
     documented: bool,
     rule_receptacles: usize,
+    /// Devices of a kind its description doesn't name (receptacles on a lighting circuit).
+    foreign: usize,
+    foreign_what: String,
     units: usize,
     cats: BTreeMap<&'static str, f64>,
     continuous_va: f64,
@@ -669,18 +682,25 @@ fn circuits_of(
             continue;
         }
         let on = devs.get(&(key.clone(), num)).cloned().unwrap_or_default();
+        let desc = described(c, rules);
+        let (has_l, has_r) = (has_word(&ws, &rules.lighting_words), has_word(&ws, &rules.receptacle_words));
         if !on.is_empty() {
             // A typical panel's circuit: one unit's devices (the rooms that have it).
             let units = if typical { on.iter().map(|d| d.room.clone()).filter(|r| !r.is_empty()).collect::<BTreeSet<_>>().len().max(1) } else { 1 };
+            let per = 1.0 / units as f64;
             cc.units = units;
             cc.devices = on.len();
-            cc.unknown = on.iter().filter(|d| d.va.is_none() && d.cat != Cat::Control).count();
-            cc.rule_receptacles = on.iter().filter(|d| d.cat == Cat::Receptacle && !d.documented).count();
-            cc.documented = on.iter().filter(|d| d.cat != Cat::Control).all(|d| d.documented);
-            let per = 1.0 / units as f64;
+            cc.unit = typical || on.iter().filter(|d| unit_rooms(&d.room)).count() * 2 > on.len();
+            // A unit room's kitchen counter circuit: a small-appliance branch circuit (its VA by rule).
+            let small = cc.unit && !rules.small_appliance.words.is_empty() && has_word(&ws, &rules.small_appliance.words) && rules.small_appliance.va > 0.0;
+            // A circuit naming a piece of equipment (no lighting or receptacle words): its
+            // receptacles and connections are that equipment's; its load the equipment's.
+            let names_equipment = !small && matches!(desc, Cat::Kitchen | Cat::Motor | Cat::Equipment) && !has_l && !has_r;
+            let connection = |d: &Dev| matches!(d.cat, Cat::Receptacle | Cat::Equipment | Cat::Unknown | Cat::Motor | Cat::Kitchen) && !(d.documented && d.cat == Cat::Lighting);
+            let replaced = small || names_equipment;
             let mut sum = 0.0;
             let mut srcs: BTreeMap<String, (usize, f64)> = BTreeMap::new();
-            for d in &on {
+            for d in on.iter().filter(|d| !(replaced && connection(d))) {
                 let Some(v) = d.va else { continue };
                 sum += v * per;
                 *cc.cats.entry(d.cat.name()).or_default() += v * per;
@@ -691,12 +711,64 @@ fn circuits_of(
                 e.0 += 1;
                 e.1 += v;
             }
-            cc.unit = typical || on.iter().filter(|d| unit_rooms(&d.room)).count() * 2 > on.len();
-            let has_load = on.iter().any(|d| d.va.is_some_and(|v| v > 0.0));
+            let rest: Vec<&Dev> = on.iter().filter(|d| !(replaced && connection(d))).collect();
+            cc.unknown = rest.iter().filter(|d| d.va.is_none() && d.cat != Cat::Control).count();
+            cc.rule_receptacles = rest.iter().filter(|d| d.cat == Cat::Receptacle && !d.documented).count();
+            cc.documented = rest.iter().filter(|d| d.cat != Cat::Control).all(|d| d.documented);
+            // Devices the description doesn't name: receptacles on a lighting circuit, luminaires
+            // on a receptacle circuit.
+            let recs = on.iter().filter(|d| d.cat == Cat::Receptacle).count();
+            let lums = on.iter().filter(|d| d.cat == Cat::Lighting).count();
+            if desc == Cat::Lighting && !has_r && recs > 0 {
+                cc.foreign = recs;
+                cc.foreign_what = format!("the model puts {recs} receptacle(s) on this lighting circuit");
+            } else if desc == Cat::Receptacle && !has_l && lums > 0 {
+                cc.foreign = lums;
+                cc.foreign_what = format!("the model puts {lums} luminaire(s) on this receptacle circuit");
+            }
+            let mut extra: Option<(f64, String, bool)> = None;
+            if small {
+                extra = Some((rules.small_appliance.va, rules.small_appliance.cite.clone(), true));
+                *cc.cats.entry("receptacle").or_default() += rules.small_appliance.va;
+            } else if names_equipment {
+                let from = equipment_load(c, &key, &sp.mep.equipment_electrical).map(|(v, m, src)| (v, src, m)).or_else(|| {
+                    cc.schedule_va.filter(|v| *v > 0.0).map(|v| {
+                        (v, format!("the panel schedule's {} VA for the {} it names ({})", va(v), c.description.trim(), if sch.source.is_empty() { "schedule" } else { sch.source.as_str() }), desc == Cat::Motor)
+                    })
+                });
+                if let Some((v, src, motor)) = from {
+                    let cat = if motor { "motor" } else if desc == Cat::Kitchen { "kitchen" } else { "equipment" };
+                    *cc.cats.entry(cat).or_default() += v;
+                    if motor {
+                        cc.largest_motor_va = v;
+                    }
+                    if cont_words {
+                        cc.continuous_va += v;
+                    }
+                    extra = Some((v, src, true));
+                    cc.documented = cc.documented || rest.iter().all(|d| d.cat == Cat::Control);
+                } else {
+                    // Nothing documents the equipment: its connections' rule values.
+                    for d in on.iter().filter(|d| connection(d)) {
+                        let Some(v) = d.va else { continue };
+                        sum += v * per;
+                        *cc.cats.entry(d.cat.name()).or_default() += v * per;
+                        let e = srcs.entry(format!("{} ({})", d.kind, d.source)).or_default();
+                        e.0 += 1;
+                        e.1 += v;
+                    }
+                    cc.unknown += on.iter().filter(|d| connection(d) && d.va.is_none()).count();
+                }
+            }
+            let has_load = extra.is_some() || on.iter().any(|d| d.va.is_some_and(|v| v > 0.0));
             if has_load {
-                cc.model_va = Some(sum);
-                cc.used_va = sum;
+                let total = sum + extra.as_ref().map_or(0.0, |e| e.0);
+                cc.model_va = Some(total);
+                cc.used_va = total;
                 cc.used_from = "model";
+                if let Some((v, src, _)) = &extra {
+                    cc.sources.push(format!("{} VA: {src}", va(*v)));
+                }
                 for (s, (n, v)) in srcs.iter().take(8) {
                     let n = if typical { format!("{:.1}", *n as f64 / units as f64) } else { n.to_string() };
                     cc.sources.push(format!("{n} x {s} = {} VA", va(v / units as f64)));
@@ -970,6 +1042,19 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 let load_a = circuit_amps(used, cc.poles, sys);
                 let pct = circuit_amps(cont, cc.poles, sys) / b * 100.0;
                 let side = if cc.used_from == "model" || cc.used_from == "submittal" { "the model's" } else { "the schedule's" };
+                // The schedule's own load over the limit too: the design; else the model's
+                // devices the circuit doesn't name, else either.
+                let sched_over = cc.schedule_va.is_some_and(|sv| {
+                    let sc = if cc.continuous_va > 0.0 { sv } else { 0.0 };
+                    circuit_amps(sc * rules.continuous.factor + (sv - sc), cc.poles, sys) > b + 1e-6
+                });
+                let (likely, why) = if sched_over || side == "the schedule's" {
+                    ("design", String::new())
+                } else if cc.foreign > 0 {
+                    ("model", format!("; {}", cc.foreign_what))
+                } else {
+                    ("either", cc.schedule_va.map_or(String::new(), |sv| format!("; the schedule gives {} VA", va(sv))))
+                };
                 if load_a > b + 1e-6 {
                     notes.push(format!("over its breaker: {load_a:.1} A on {b:.0} A"));
                     findings.push(Finding {
@@ -977,8 +1062,8 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                         level: "circuit",
                         panel: p.tag.clone(),
                         circuit: cc.number.clone(),
-                        message: format!("{} {}: {side} {} VA is {load_a:.1} A on a {b:.0} A breaker", p.tag, cc.number, va(used)),
-                        likely: "design",
+                        message: format!("{} {} ({}): {side} {} VA is {load_a:.1} A on a {b:.0} A breaker{why}", p.tag, cc.number, cc.description, va(used)),
+                        likely,
                         cite: rules.circuit_limit_cite.clone(),
                     });
                 } else if cont > 0.0 && need > b + 1e-6 {
@@ -989,14 +1074,14 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                         panel: p.tag.clone(),
                         circuit: cc.number.clone(),
                         message: format!(
-                            "{} {} ({}): {side} continuous load {} VA is {pct:.0}% of its {b:.0} A breaker (over {:.0}%): {need:.1} A with 125% of it",
+                            "{} {} ({}): {side} continuous load {} VA is {pct:.0}% of its {b:.0} A breaker (over {:.0}%): {need:.1} A with 125% of it{why}",
                             p.tag,
                             cc.number,
                             cc.description,
                             va(cont),
                             rules.circuit_limit_pct
                         ),
-                        likely: "design",
+                        likely,
                         cite: rules.circuit_limit_cite.clone(),
                     });
                 }
@@ -1006,18 +1091,22 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 && cc.feeds.is_none()
                 && (m - s).abs() > rules.tolerance(m, s)
             {
-                let (likely, why) = if cc.unknown > 0 && m < s {
+                let (likely, why) = if cc.foreign > 0 {
+                    ("model", cc.foreign_what.clone())
+                } else if cc.unknown > 0 && m < s {
                     ("model", format!("{} device(s) on it have no load in the model", cc.unknown))
                 } else if cc.documented && cc.unknown == 0 {
                     ("schedule", format!("the model's loads are all documented ({})", cc.sources.first().cloned().unwrap_or_default()))
                 } else if cc.rule_receptacles > 0 {
+                    // A unit's receptacles: the count over its rooms.
+                    let n = (cc.rule_receptacles as f64 / cc.units.max(1) as f64).max(1e-9);
                     (
                         "either",
                         format!(
                             "{} receptacle(s) at 180 VA by rule; the schedule's {} VA is {} VA a receptacle if they are all its load",
-                            cc.rule_receptacles,
+                            if cc.units > 1 { format!("{n:.1}") } else { format!("{n:.0}") },
                             va(s),
-                            va(s / cc.rule_receptacles as f64)
+                            va(s / n)
                         ),
                     )
                 } else {
