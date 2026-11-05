@@ -76,6 +76,9 @@ struct Method {
     estimated: bool,
     /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
     routed: bool,
+    /// A low-voltage pathway's outlets (its own, and the one it joins): its ends land in their
+    /// boxes only, whatever circuit a box is on.
+    devices: Vec<Handle>,
 }
 
 /// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
@@ -547,7 +550,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             None => (cable, name, source, conductors, csrc, ctag),
         };
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed };
+        let devices: Vec<Handle> = pathway
+            .map(|t| {
+                ["device", "joins"]
+                    .iter()
+                    .filter_map(|k| t.fields.get(*k).and_then(|f| u64::from_str_radix(f.value.trim(), 16).ok()).map(Handle))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -839,8 +850,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 }
                 let Some(p) = (if end == 0 { c.pts.first() } else { c.pts.last() }).copied() else { continue };
                 let pp = Vec2::new(p.x, p.y);
-                let near_box =
-                    box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
+                // A low-voltage pathway lands only in its outlets' boxes (by device).
+                let own_outlet = || {
+                    boxes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| m.devices.contains(&b.device) && b.level.eq_ignore_ascii_case(&key.level))
+                        .map(|(bi, b)| (bi, Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+                        .filter(|(_, dp, dz)| *dp <= reach && *dz <= 3.0 * upf)
+                        .min_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
+                        .map(|(bi, _, _)| bi)
+                };
+                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box) } else { own_outlet() };
+                let near_box = near.and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
                     let gap = (entry.z - p.z).abs();

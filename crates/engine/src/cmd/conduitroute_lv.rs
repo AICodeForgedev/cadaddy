@@ -572,12 +572,15 @@ pub(crate) fn read(docs: &[scope::Doc]) -> LvDocs {
             // and up (the cabling's trunk, not an outlet's pathway).
             let said_n = norm(&said);
             let words: Vec<&str> = said_n.split_whitespace().collect();
+            // Where it starts: the words after `FROM` up to `TO` (`FROM THE OUTLETS TO THE
+            // CORRIDOR` starts at the outlets).
             let from_trunk = words.iter().enumerate().any(|(i, x)| {
-                *x == "FROM"
-                    && words.get(i + 1..(i + 6).min(words.len())).is_some_and(|after| {
-                        let tail = format!(" {} ", after.join(" "));
-                        has_any(&tail, &w.to_corridor) || has_any(&tail, &w.to_room)
-                    })
+                *x == "FROM" && {
+                    let origin: Vec<&str> =
+                        words.iter().skip(i + 1).take(6).take_while(|y| !matches!(**y, "TO" | "INTO" | "THROUGH" | "UP")).copied().collect();
+                    let tail = format!(" {} ", origin.join(" "));
+                    has_any(&tail, &w.to_corridor) || has_any(&tail, &w.to_room)
+                }
             });
             let trunk_size = sizes(&said).iter().any(|(v, _)| *v >= 2.0 - 1e-9);
             if from_trunk || trunk_size {
@@ -1313,7 +1316,7 @@ pub(super) fn route(cx: &Ctx) -> Out {
     let mut rows: Vec<Value> = Vec::new();
     let mut conflicts: Vec<Value> = Vec::new();
     let mut notes: BTreeMap<String, usize> = BTreeMap::new();
-    for p in &paths {
+    for (pi, p) in paths.iter().enumerate() {
         let Some(dv) = cx.devs.get(p.dev) else { continue };
         let raceway = lr.is_raceway(&p.choice.method);
         let key = format!("{} {}", p.choice.method, super::super::mepatoms::trade_size(p.choice.size_in));
@@ -1386,6 +1389,9 @@ pub(super) fn route(cx: &Ctx) -> Out {
         t.set("to", p.choice.to.clone(), src_kind(&p.choice.to_source));
         t.set("ends", p.ends.clone(), "computed");
         t.set("device", dv.handle.hex(), "computed");
+        if let Some(lead) = lead_of.get(&pi).and_then(|l| paths.get(*l)).and_then(|l| cx.devs.get(l.dev)) {
+            t.set("joins", lead.handle.hex(), "computed");
+        }
         t.set("devid", devid, "computed");
         t.set("room", p.room.clone(), "computed");
         t.set("area", p.area, "computed");
@@ -1908,6 +1914,41 @@ mod tests {
         let again = s.execute("conduit.reroute", &json!({})).expect("again");
         let r2 = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
         assert_eq!(r2["ft"], r["ft"], "{again}");
+    }
+
+    #[test]
+    fn one_pathway_per_room_lands_in_its_outlets_boxes_even_on_a_power_circuits_box() {
+        // A unit's TV outlet carries the power circuit read beside it (its box is on LP1-1 with
+        // the receptacle); the room's data outlet joins its pathway, which goes on to the corridor.
+        let note = "ONE PATHWAY PER GUEST ROOM: 3/4\" ENT FROM THE OUTLETS TO THE CORRIDOR CEILING.";
+        let mut tv = outlet("D4", "low_voltage_outlet", 10.0, 10.0);
+        tv["fields"]["type"] = json!({"value": "TV", "source": "plan"});
+        tv["fields"]["circuit"] = json!({"value": "LP1-1", "source": "plan"});
+        let mut rec = outlet("R1", "receptacle", 14.0, 10.0);
+        rec["fields"]["circuit"] = json!({"value": "LP1-1", "source": "plan"});
+        let circuit = json!({"id": "circuit:L1:E-1:LP1-1", "kind": "circuit", "level": "L1", "at_ft": [0.0, 0.0], "fields": {
+            "circuit": {"value": "LP1-1", "source": "plan"}, "panel": {"value": "LP1", "source": "plan"},
+            "conductors": {"value": "2#12 + 1#12G", "source": "default"}}});
+        let mut s = building(
+            vec![tv, rec, outlet("D5", "data_outlet", 4.0, 2.0), circuit],
+            json!({
+                "circulation": [{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [360, 276], "rects": [[[0, 240], [720, 312]]]}],
+                "unit_instances": [{"number": "U8", "level": "L1", "type": "KING-B"}],
+                "mep": {"equipment": [{"tag": "LP1", "kind": "panel", "level": "L1", "min": [-24, -6], "max": [-4, 6], "height_ft": 4, "bottom_ft": 2.5,
+                    "enclosure": {"top_entry_in": [10.0, 4.0], "bottom_entry_in": [10.0, 4.0], "gutter_in": [0.0, 0.0]}}]},
+            }),
+            vec![doc("T-904", Some("low voltage"), SourceTier::DrawingRevision, &[note])],
+            &[("device:L1:D4", "U8"), ("device:L1:D5", "U8"), ("device:L1:R1", "U8")],
+        );
+        let r = s.execute("conduit.route", &json!({"section": "lv_pathways"})).expect("report");
+        assert_eq!((r["outlets"].clone(), r["ends"]["corridor"].clone(), r["ends"]["joined"].clone()), (json!(2), json!(1), json!(1)), "{r}");
+        // The pieces are the routed pathways, foot for foot: each end in its own outlet's box
+        // (the joined leg's far end in the lead's), the corridor end a bushing.
+        let c = lv_count(&mut s, "conduit");
+        let ft = r["ft"].as_f64().unwrap_or(0.0);
+        assert!(c["length_ft"].as_f64().is_some_and(|x| (x - ft).abs() < 0.5), "{ft} vs {c}");
+        assert_eq!(lv_count(&mut s, "connector")["count"], json!(3));
+        assert_eq!(lv_count(&mut s, "bushing")["count"], json!(1));
     }
 
     #[test]
