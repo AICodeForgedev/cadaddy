@@ -2094,6 +2094,13 @@ fn settle_ocr(
         .collect();
     let mut taken: Vec<Option<RecoveredText>> = (0..hidden.len()).map(|_| None).collect();
     let mut kept = Vec::new();
+    // The lettering's height on a plan lettered in real text, from that text (not the OCR's
+    // readings: most of them there are walls and furniture misread). A page with little text has
+    // none to go by.
+    let mut heights: Vec<f64> = texts.iter().map(|t| t.height).filter(|h| h.is_finite() && *h > 0.0).collect();
+    heights.sort_by(f64::total_cmp);
+    let lettering_height = if heights.len() < OCR_REAL_TEXT_LIMIT { 0.0 } else { heights.get(heights.len() / 2).copied().unwrap_or(0.0) };
+    let tall = |h: f64, times: f64| lettering_height > 0.0 && h > times * lettering_height;
     let (mut from_hidden, mut circles, mut weak) = (0usize, 0usize, 0usize);
     for rt in ocr {
         let on = hidden.iter().position(|(_, b)| rt.at.0 >= b[0] && rt.at.0 <= b[2] && rt.at.1 >= b[1] && rt.at.1 <= b[3]);
@@ -2141,13 +2148,25 @@ fn settle_ocr(
             None if !hidden.is_empty() && rt.confidence.is_some_and(|c| c < OCR_MIN_CONFIDENCE) => weak += 1,
             // On a page whose lettering has hidden copies, a reading where none is that reads like
             // no word is kept for review, not as the sheet's text.
-            None if !hidden.is_empty() && !reads_as_word(&rt.value) => kept.push(RecoveredText { review: true, strokes_stay: true, ..rt }),
-            None => kept.push(RecoveredText { strokes_stay: !hidden.is_empty(), ..rt }),
+            None if !hidden.is_empty() && !reads_as_word(&rt.value) => {
+                let strokes_stay = tall(rt.height, OCR_TALL_MARKS);
+                kept.push(RecoveredText { review: true, strokes_stay, ..rt });
+            }
+            None => {
+                let strokes_stay = !hidden.is_empty() && tall(rt.height, OCR_TALL_READING);
+                kept.push(RecoveredText { strokes_stay, ..rt });
+            }
         }
     }
     kept.extend(taken.into_iter().flatten());
     (kept, from_hidden, circles, weak)
 }
+
+/// How many times the page's usual lettering height an OCR reading no hidden string confirms may
+/// stand and still be taken for lettering.
+const OCR_TALL_READING: f64 = 2.5;
+/// The same for one that reads like no word (a period or a parenthesis read alone stays lettering).
+const OCR_TALL_MARKS: f64 = 1.5;
 
 /// Whether an OCR reading reads like a word, a number or a mark a drawing prints (`151`, `A-1`,
 /// `XA`, `#12`): two letters or digits at least, making up most of it (not `U`, not `M L#.'`).
@@ -2248,8 +2267,9 @@ struct RecoveredText {
     confidence: Option<f64>,
     /// An OCR reading for review only ([`OCR_REVIEW_LAYER`]).
     review: bool,
-    /// An OCR reading no hidden string confirms on a page with hidden text: its strokes stay
-    /// linework (a misread wall corner or jamb must not leave the plan).
+    /// An OCR reading no hidden string confirms, on a page with hidden text, standing far taller
+    /// than the page's lettering: its strokes stay linework (a misread wall corner or jamb must
+    /// not leave the plan).
     strokes_stay: bool,
     /// The lettering's direction in degrees, counter-clockwise (90: reading up the sheet).
     rotation: f64,
@@ -5781,8 +5801,8 @@ mod tests {
         let (kept, _, _, _) = settle_ocr(ocr, &[hidden], &[], &mut []);
         let review: Vec<(&str, bool)> = kept.iter().map(|r| (r.value.as_str(), r.review)).collect();
         assert_eq!(review, [("U", true), ("M L#.'", true), ("151", false), ("A-1", false)]);
-        // No hidden string says these are lettering: their strokes stay on the plan.
-        assert!(kept.iter().all(|r| r.strokes_stay));
+        // At the page's lettering height these are lettering: their strokes leave the plan.
+        assert!(kept.iter().all(|r| !r.strokes_stay));
         // A page with no hidden text keeps its readings as lettering (its sheets register by them).
         let (kept, _, _, _) = settle_ocr(vec![read("U", (300.0, 300.0))], &[], &[], &mut []);
         assert!(kept.iter().all(|r| !r.review));
@@ -5800,8 +5820,27 @@ mod tests {
             style: None,
             order: 0,
         };
-        let (kept, _, _, _) = settle_ocr(vec![on_it], &[hidden2], &[], &mut []);
-        assert!(kept.iter().all(|r| !r.strokes_stay));
+        // Far taller than the page's lettering (its hidden string's 6) they are walls misread:
+        // strokes stay, the marks' sooner than a word's.
+        let tall = |v: &str, h: f64| RecoveredText { height: h, ..read(v, (500.0, 300.0)) };
+        let readings = vec![on_it, tall("T1", 12.0), tall("T1", 18.0), tall("--O'", 12.0), tall("--O'", 8.0)];
+        let note = |at: (f64, f64), layer: Option<String>, value: &str| TextOut {
+            at,
+            end: (at.0 + 30.0, at.1),
+            height: 6.0,
+            rotation: 0.0,
+            width_factor: 1.0,
+            value: value.into(),
+            pen,
+            layer,
+            style: None,
+            order: 0,
+        };
+        let mut lettered: Vec<TextOut> = (0..OCR_REAL_TEXT_LIMIT).map(|i| note((1000.0 + i as f64 * 50.0, 900.0), None, "NOTE")).collect();
+        lettered.push(hidden2);
+        let (kept, _, _, _) = settle_ocr(readings, &lettered, &[], &mut []);
+        let stay: Vec<(&str, bool)> = kept.iter().map(|r| (r.value.as_str(), r.strokes_stay)).collect();
+        assert_eq!(stay, [("Hello", false), ("T1", false), ("T1", true), ("--O'", true), ("--O'", false)]);
     }
 
     #[test]
