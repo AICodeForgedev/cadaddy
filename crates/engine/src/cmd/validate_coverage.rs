@@ -1835,6 +1835,14 @@ mod tests {
     }
 
     #[test]
+    fn a_letter_two_trades_use_takes_the_one_its_title_names() {
+        assert_eq!(trade_of_sheet("L", "LOW VOLTAGE PLAN - SECOND FLOOR"), "electrical");
+        assert_eq!(trade_of_sheet("L", "TECHNOLOGY LEGEND AND NOTES"), "electrical");
+        assert_eq!(trade_of_sheet("L", "LANDSCAPE PLAN"), "landscape");
+        assert_eq!(trade_of_sheet("M", "LOW VOLTAGE CONTROLS"), "mechanical", "a trade's own letter keeps its trade");
+    }
+
+    #[test]
     fn places_and_ordinary_words_are_no_kinds() {
         // A datum names a place, not an object.
         assert!(!names_object("BACK OF CURB") && !names_object("TOP OF CURB") && names_object("ROOF CURB"));
