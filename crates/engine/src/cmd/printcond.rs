@@ -816,10 +816,11 @@ pub(crate) fn room_panel_equipment(
         let [w, dp, _] = size.map(|v| v / 12.0 * upf);
         let mut at_front = Vec::new();
         for (name, at) in ps.iter().take(8) {
-            let Some((front, along, out_n)) = on_wall(*at, outline, w, ROOM_PANEL_WALL_FT * upf) else {
-                at_front.push((name.clone(), *at));
-                continue;
-            };
+            // On the wall of the room's outline nearest its lettering; none that near (the panel on
+            // a wall the room's traced outline leaves out: its bath's, its entry's), at the
+            // lettering, square to the plan (the build puts it on the wall it stands at).
+            let walled = on_wall(*at, outline, w, ROOM_PANEL_WALL_FT * upf);
+            let (front, along, out_n) = walled.unwrap_or((*at, [1.0, 0.0], [0.0, 1.0]));
             // Recessed: its back in the wall; on the face: its front in the room.
             let (front, back) = if *typical {
                 (front, [front[0] + out_n[0] * dp, front[1] + out_n[1] * dp])
@@ -842,7 +843,14 @@ pub(crate) fn room_panel_equipment(
                 ("height", rule.clone()),
                 ("elevation", "rule: top of trim 6'-6\", the highest breaker handle within 6'-7\"".to_string()),
                 ("position", ROOM_PANEL_POSITION.to_string()),
-                ("footprint", "rule: on the room's wall nearest the lettering".to_string()),
+                (
+                    "footprint",
+                    if walled.is_some() {
+                        "rule: on the room's wall nearest the lettering".to_string()
+                    } else {
+                        "rule: at the lettering (no wall of the room's traced outline within 3 ft)".to_string()
+                    },
+                ),
                 ("status", "unconfirmed".to_string()),
             ]
             .into_iter()
@@ -1094,6 +1102,7 @@ mod tests {
             ("101".to_string(), ("Level 1".to_string(), square(0.0), true)),
             ("102".to_string(), ("Level 1".to_string(), square(200.0), true)),
             ("160".to_string(), ("Level 1".to_string(), askew, false)),
+            ("104".to_string(), ("Level 1".to_string(), square(600.0), true)),
         ]
         .into_iter()
         .collect();
@@ -1104,11 +1113,17 @@ mod tests {
             ("102".to_string(), vec![("G".to_string(), [206.0, 4.0])]),
             ("103".to_string(), vec![("G".to_string(), [500.0, 50.0])]),
             ("160".to_string(), vec![("A".to_string(), [406.0, 100.0])]),
+            // 104's lettered in the middle of its traced outline (its panel on a wall the outline
+            // leaves out): at the lettering.
+            ("104".to_string(), vec![("G".to_string(), [672.0, 90.0])]),
         ]
         .into_iter()
         .collect();
         let (gear, moved) = room_panel_equipment(&panels, &rooms, 12.0);
-        assert_eq!(gear.len(), 3, "{gear:#?}");
+        assert_eq!(gear.len(), 4, "{gear:#?}");
+        let g104 = gear.iter().find(|e| e.tag == "G-104").expect("G-104 at its lettering");
+        assert!(g104.min[0] < 672.0 && g104.max[0] > 672.0 && g104.min[1] <= 90.0, "{g104:#?}");
+        assert!(g104.sources["footprint"].contains("at the lettering"), "{g104:#?}");
         // The MEP room's panel is the building's A, a panelboard square to the plan, on the face
         // of the wall (in the room).
         let a = gear.iter().find(|e| e.tag == "A").expect("A");
@@ -1143,7 +1158,7 @@ mod tests {
         });
         store_room_panels(&mut spec, gear.clone());
         store_room_panels(&mut spec, gear);
-        assert_eq!(spec.mep.equipment.len(), 3);
+        assert_eq!(spec.mep.equipment.len(), 4);
         assert_eq!(spec.mep.equipment.iter().filter(|e| e.tag == "A").count(), 1);
         let mut s = Session::new();
         s.execute("bspec.set", &json!({"replace": true, "spec": serde_json::from_str::<Value>(&spec.to_json()).expect("spec")})).expect("set");
@@ -1151,7 +1166,7 @@ mod tests {
         let net = |item: &str| -> f64 {
             bom["lines"].as_array().into_iter().flatten().filter(|l| l["item"] == item).filter_map(|l| l["net"].as_f64()).sum()
         };
-        assert_eq!((net("panel G, one per room"), net("Panel cover/trim, flush: panel G")), (2.0, 2.0), "{bom:#}");
+        assert_eq!((net("panel G, one per room"), net("Panel cover/trim, flush: panel G")), (3.0, 3.0), "{bom:#}");
         // A room's load center takes no lug kit (the building's panel A does).
         let lug = |c: &&Value| c["item"] == "Lug kit" && c["detail"].as_str().is_some_and(|d| d.contains("panel G"));
         assert!(!bom["spec_check"].as_array().into_iter().flatten().any(|c| lug(&c)), "{bom:#}");
