@@ -4609,7 +4609,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         fed.entry(dv.room.clone()).or_default().insert(p.to_ascii_uppercase());
                     }
                 }
-                let booked = book_into_units(&mut out, &footprints, &own, &fed);
+                let booked = book_into_units(&mut out, &footprints, &own, &fed, NEIGHBOUR_FIXTURE_FT * upf_dev);
                 if booked > 0 {
                     progress_line(&format!("  devices booked to their unit by its plan's footprint (bath, entry): {booked}"));
                 }
@@ -7443,9 +7443,11 @@ fn book_into_units(
     footprints: &[Footprint],
     own: &BTreeMap<String, BTreeSet<String>>,
     panels: &BTreeMap<String, BTreeSet<String>>,
+    reach: f64,
 ) -> usize {
     let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let mut n = 0;
+    let mut booked: BTreeSet<usize> = BTreeSet::new();
     // The tags each unit was booked so far, and those it holds already.
     let mut held: BTreeSet<(String, String)> = devices
         .iter()
@@ -7455,7 +7457,7 @@ fn book_into_units(
     // Devices in one unit's footprint first, then those where two overlap (at the wall they
     // share): by then each unit holds its own, and a fixture there goes to the one lacking it.
     for pass in 0..2 {
-        for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
+        for (i, dv) in devices.iter_mut().enumerate().filter(|(_, dv)| dv.room.trim().is_empty()) {
             // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
             let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
             // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
@@ -7492,8 +7494,41 @@ fn book_into_units(
             }) {
                 held.insert((room.clone(), mine.clone()));
                 dv.room = room.clone();
+                booked.insert(i);
                 n += 1;
             }
+        }
+    }
+    // A unit booked two of a fixture while the unit across the wall, its footprint fitted a
+    // little short of its own bath, has none within `reach`: the one nearer that unit is its.
+    let key = |dv: &super::readers::ReadDevice| (dv.room.clone(), format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet)));
+    for _ in 0..devices.len().min(MAX_STAMPED) {
+        let mut count: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for dv in devices.iter().filter(|dv| !dv.room.trim().is_empty()) {
+            *count.entry(key(dv)).or_default() += 1;
+        }
+        let mut best: Option<(usize, String, f64)> = None;
+        for &i in &booked {
+            let Some(dv) = devices.get(i).filter(|dv| dv.kind.starts_with("plumbing")) else { continue };
+            let (room, mine) = key(dv);
+            if count.get(&(room.clone(), mine.clone())).copied().unwrap_or(0) < 2 {
+                continue;
+            }
+            let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+            for (l, other, poly, _) in footprints {
+                let level = *l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
+                if !level || *other == room || count.contains_key(&(other.clone(), mine.clone())) || poly.len() < 3 {
+                    continue;
+                }
+                let d = if cadaddy_geom::point_in_polygon(poly, p) { 0.0 } else { edge_distance(poly, p) };
+                if d <= reach && best.as_ref().is_none_or(|b| d < b.2) {
+                    best = Some((i, other.clone(), d));
+                }
+            }
+        }
+        let Some((i, other, _)) = best else { break };
+        if let Some(dv) = devices.get_mut(i) {
+            dv.room = other;
         }
     }
     n
@@ -7917,6 +7952,9 @@ const DUPLICATE_FIXTURE_FT: f64 = 2.0;
 /// Two sheets' tags of one plumbing fixture (the sanitary and the water plans'), at most this far
 /// apart (feet): less than two water closets back to back across a wall.
 const CROSS_SHEET_FIXTURE_FT: f64 = 2.75;
+/// A unit's second fixture of a tag this near (feet) a unit with none is that unit's: its own,
+/// across the wall they share, where its footprint was fitted a little short.
+const NEIGHBOUR_FIXTURE_FT: f64 = 3.0;
 /// How far (feet) a connection tag in no room may be from the equipment it is for.
 const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
@@ -14656,12 +14694,22 @@ mod tests {
         let own: BTreeMap<String, BTreeSet<String>> =
             [("202".to_string(), ["P-1@P".to_string()].into()), ("204".to_string(), ["P-1@P".to_string()].into())].into();
         let none = BTreeMap::new();
-        assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
+        assert_eq!(book_into_units(&mut devices, &foot, &own, &none, 0.0), 3);
         // Read before the unit's own (only in its footprint): a water closet at the shared wall
         // still goes to the unit that has none, whatever order the plans list them in.
         let mut order = vec![wc(138.0, 60.0, "Level 2"), wc(40.0, 30.0, "Level 2")];
-        assert_eq!(book_into_units(&mut order, &foot, &own, &none), 2);
+        assert_eq!(book_into_units(&mut order, &foot, &own, &none, 0.0), 2);
         assert_eq!(order.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["204", "202"]);
+        // The second unit's footprint fitted short of its own bath (from 160): its water closet at
+        // 150, only in the first's footprint, is still its own, not the first's second.
+        let short = vec![foot[0].clone(), ("2".to_string(), "204".to_string(), quad(160.0, 0.0, 300.0, 348.0), quad(160.0, 100.0, 300.0, 348.0))];
+        let mut back = vec![wc(150.0, 60.0, "Level 2"), wc(138.0, 60.0, "Level 2")];
+        assert_eq!(book_into_units(&mut back, &short, &own, &none, 36.0), 2);
+        assert_eq!(back.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["204", "202"]);
+        // Out of reach it stays where it was booked.
+        let mut far = vec![wc(150.0, 60.0, "Level 2"), wc(138.0, 60.0, "Level 2")];
+        assert_eq!(book_into_units(&mut far, &short, &own, &none, 6.0), 2);
+        assert_eq!(far.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "202"]);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
         // no tag the unit's plans show, stays out.
         let mut fa = vec![super::super::readers::ReadDevice {
@@ -14671,9 +14719,9 @@ mod tests {
             level: "Level 2".into(),
             ..Default::default()
         }];
-        assert_eq!(book_into_units(&mut fa, &foot, &own, &none), 1);
+        assert_eq!(book_into_units(&mut fa, &foot, &own, &none, 0.0), 1);
         let mut g = vec![super::super::readers::ReadDevice { tag: "G".into(), at: [40.0, 30.0], level: "Level 2".into(), ..Default::default() }];
-        assert_eq!(book_into_units(&mut g, &foot, &own, &none), 0);
+        assert_eq!(book_into_units(&mut g, &foot, &own, &none, 0.0), 0);
         // A receptacle on the unit's panel is the unit's; one on a house panel's circuit (the
         // corridor's, across the entry wall) is not.
         let own: BTreeMap<String, BTreeSet<String>> = [("202".to_string(), ["REC@E".to_string(), "F@E".to_string()].into())].into();
@@ -14695,7 +14743,7 @@ mod tests {
             ..Default::default()
         };
         let mut recs = vec![rec("G-9"), rec("A-3"), rec(""), f_on("M-2"), f_on("E-3")];
-        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed), 3);
+        assert_eq!(book_into_units(&mut recs, &foot, &own, &fed, 0.0), 3);
         assert_eq!(recs.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "202", "", "202"]);
         assert_eq!(devices.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["202", "", "", "204", "202"]);
     }
