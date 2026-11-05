@@ -10276,7 +10276,11 @@ fn water_from_matching_level(
     }
     // The levels with water, by their runs' names.
     let mut sources: BTreeMap<String, String> = BTreeMap::new();
-    for r in runs.iter().filter(|r| WATER.contains(&r.system.as_str()) && floor_plan(r)) {
+    // Drawn water only: a level's proposed mains (copied themselves) are no level's to copy.
+    let drawn = |r: &cadaddy_walk3d::MepRun| {
+        WATER.contains(&r.system.as_str()) && floor_plan(r) && !r.height_source.eq_ignore_ascii_case(super::mep::PROPOSED)
+    };
+    for r in runs.iter().filter(|r| drawn(r)) {
         let st = storey(&r.level);
         if st != here {
             sources.entry(st).or_insert_with(|| r.level.clone());
@@ -10350,10 +10354,7 @@ fn water_from_matching_level(
             r.points.iter().all(|p| p[0] >= t.b[0] - margin && p[0] <= t.b[2] + margin && p[1] >= t.b[1] - margin && p[1] <= t.b[3] + margin)
         })
     };
-    for r in runs
-        .iter()
-        .filter(|r| WATER.contains(&r.system.as_str()) && floor_plan(r) && storey(&r.level) == st && !r.points.is_empty() && !in_one_room(r))
-    {
+    for r in runs.iter().filter(|r| drawn(r) && storey(&r.level) == st && !r.points.is_empty() && !in_one_room(r)) {
         let mut copy = r.clone();
         copy.points = r.points.iter().map(|p| [p[0] + off[0], p[1] + off[1]]).collect();
         copy.level = level.to_string();
@@ -24300,6 +24301,17 @@ mod tests {
             assert!((x[0] - 1.0).abs() < 1e-6 && (x[1] - 119.0).abs() < 1e-6, "{x:?}");
         }
         assert_eq!(m.runs.iter().map(|r| r.system.as_str()).collect::<Vec<_>>(), ["CW", "HW"]);
+        // A level's proposed mains are no level's to copy: floor 4 (no water either) matches floor
+        // 2's layout, but floor 2's water is floor 3's, proposed; floor 4 takes floor 3's.
+        let mut with2 = rooms.clone();
+        with2.extend(floor("Level 4", 0.0, 500.0, 10, "GUEST ROOM", &[]));
+        let mut runs2 = runs.clone();
+        runs2.extend(m.runs.iter().cloned());
+        let m4 = water_from_matching_level(&with2, &runs2, "Level 4", 12.0, &|_| true).expect("compared");
+        assert_eq!(m4.from, "Level 3");
+        assert!(m4.runs.iter().all(|r| r.size_source == "copied from Level 3, not drawn"));
+        let only2: Vec<cadaddy_walk3d::MepRun> = runs2.iter().filter(|r| r.level == "Level 2").cloned().collect();
+        assert!(water_from_matching_level(&with2, &only2, "Level 4", 12.0, &|_| true).is_none(), "only proposed water: nothing to copy");
         // A run read from an enlarged plan (here: the HW one) is no floor's main.
         let m = water_from_matching_level(&rooms, &runs, "Level 2", 12.0, &|r| r.system != "HW").expect("compared");
         assert_eq!(m.runs.iter().map(|r| r.system.as_str()).collect::<Vec<_>>(), ["CW"]);
