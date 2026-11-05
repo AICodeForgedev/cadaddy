@@ -3359,7 +3359,6 @@ fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
         "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e13\n",
         "0\nARC\n8\n0\n10\n0\n20\n0\n40\n1e300\n50\n0\n51\n90\n",
         "0\nTEXT\n8\n0\n10\n0\n20\n0\n40\n1e300\n1\nbig\n",
-        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
         "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e13\n",
         "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e300\n42\n1e300\n",
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e300\n10\n10\n20\n0\n",
@@ -3372,6 +3371,8 @@ fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n0.5\n10\n10\n20\n0\n",
         // A segment barely bent: a huge radius, but it stays by its chord.
         "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e-9\n10\n10000\n20\n0\n",
+        // A garbage wrap width only narrows an MTEXT's box (#2465): its box is its text.
+        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
     ];
     let dxf = format!("{block}0\nSECTION\n2\nENTITIES\n{}{}0\nENDSEC\n0\nEOF\n", far.concat(), kept.concat());
     let d = read(dxf.as_bytes(), "sizes.dxf").unwrap();
