@@ -592,6 +592,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
     let scope = super::super::scope::decisions(d);
     let sr = super::super::scope::rules();
+    // A switch's or sensor's box with no circuit of its own is on the circuit of what it
+    // controls (the router joins it to that circuit: its switch leg lands in it).
+    let circuit_of: HashMap<Handle, String> =
+        devices.iter().filter_map(|(h, _, ps, ..)| Some((*h, ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty())?))).collect();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
@@ -610,7 +614,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A device of no known kind at the ceiling takes a ceiling box.
         let ceiling = sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
         let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling.is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
-        let circuit = ps.get("circuit").map(Prop::text).unwrap_or_default();
+        let circuit = ps
+            .get("circuit")
+            .map(Prop::text)
+            .filter(|c| !c.trim().is_empty())
+            .or_else(|| super::super::conduitroute::controlled_circuit(&super::super::conduitroute::controls_of(ps), &circuit_of))
+            .unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
         let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
         let ring = ring && theirs.is_none_or(|(_, r)| r);
@@ -845,9 +854,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 body: None,
                 src: m.source.clone(),
             };
+            // Its conductors' makeup at a panel it ends in: to the breaker, not a box's.
+            let at_panel = lands.iter().filter(|l| matches!(l, Some(Land::Gear(_)))).count();
             for mut a in pieces.atoms {
                 for x in &mut a.connects {
                     *x += base;
+                }
+                if a.kind == "cable" {
+                    panel_makeup(&mut a, at_panel, rl);
                 }
                 atoms.push((a, ctx.clone()));
             }
@@ -860,6 +874,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let ends: Vec<usize> = pieces.ends.iter().flatten().map(|e| e + base).collect();
                 for mut w in wires(&c.pts, upf, &m.conductors, &nums, &voltage, rl) {
                     w.connects = ends.clone();
+                    panel_makeup(&mut w, at_panel, rl);
                     w.extra.push(("conductors_of_circuit", m.conductors.clone(), m.conductors_source.doc.clone().unwrap_or_default()));
                     let mut wctx = ctx.clone();
                     wctx.src = Source::from_doc(
@@ -1271,6 +1286,16 @@ fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     }
     if end == 0 {
         pts.reverse();
+    }
+}
+
+/// A cable's or wire's makeup at the panels its run ends in (`ends`: none, one or both): each
+/// end a panel's makeup in place of a box's.
+fn panel_makeup(a: &mut Atom, ends: usize, rl: &super::AtomRules) {
+    let more = (rl.panel_makeup_ft - rl.makeup_ft.max(0.0)).max(0.0) * ends.min(2) as f64;
+    if more > 0.0 && more.is_finite() {
+        a.length_ft += more;
+        a.extra.push(("panel_makeup_ft", format!("{}", rl.panel_makeup_ft), rl.panel_makeup_source.clone()));
     }
 }
 

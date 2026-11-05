@@ -2140,6 +2140,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     let mut sp_routed = sp_read;
     super::conduitroute::apply(&mut sp_routed, &routed);
     super::conduitroute::store_report(d, &routed.report);
+    super::conduitroute::store_cable(d, &routed);
     mark("conduit routed");
     // The electrical runs as their pieces (sticks, fittings, boxes, cable, wire) and the count
     // index (Q6157).
