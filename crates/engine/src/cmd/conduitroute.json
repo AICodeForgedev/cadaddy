@@ -124,9 +124,35 @@
   "cable": {
     "above_box_in": 12,
     "in_wall_max_ft": 30.0,
-    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling"
+    "below_floor_in": 6,
+    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling; a circuit fed from below (its panel on a lower storey) goes down from each box through the bottom plate and across in the floor framing, 6 in under the floor, up into the next box"
   },
   "switch_legs": {
     "source": "a switch or sensor with no circuit of its own is on the circuit of what it controls (the switch leg: the device's box joined to its luminaires' circuit, NEC 404.2(C) brings the grounded conductor to it)"
+  },
+  "branchgap": {
+    "tag_reading": {
+      "source": "a circuit label with no circuit tag on its level is the circuit its panel's schedule lists by that number (the schedule is the panel's circuit list for every level it serves), else the same circuit as tagged on another level's plan, else on the panel the riser names"
+    },
+    "switch_loop": {
+      "single": 3,
+      "three_way": 4,
+      "four_way": 5,
+      "kinds": ["switch", "dimmer", "occupancy sensor", "vacancy sensor"],
+      "source": "a leg into a switch's box carries the line, the switched leg and the grounded conductor (NEC 404.2(C)), with the ground: 3 insulated for a single-pole switch; a 3-way's leg the common and its 2 travelers with the grounded conductor (4); a 4-way's its 2 pairs of travelers with the grounded conductor (5)"
+    },
+    "shared": {
+      "max_ccc": 9,
+      "same_path_in": 1.0,
+      "merge": false,
+      "merge_source": "off by default: with it on, each stretch is built as its one raceway and the homeruns join it in a junction box; Validate's box fill counts the conductors that pass through such a box once per run (314.16(B)(1) counts them once), so the stretches are reported (each as its one raceway would be) and the homeruns keep their own raceways until that check counts pass-through conductors once",
+      "source": "company default: homeruns of one panel on one path (the same line and tier) are one raceway, up to 9 current-carrying conductors (NEC 310.15(C)(1): 70 % keeps #12 THHN (90 °C, 30 A) at 21 A over its 20 A breaker); more take another raceway beside it; each sized by NEC Chapter 9 Table 1 / Table 4 / Table 5 with its ground"
+    },
+    "proposed": {
+      "kinds": ["receptacle", "duplex receptacle", "gfci receptacle", "quad receptacle", "device", "junction box", "equipment connection", "disconnect"],
+      "spare_words": ["SPARE"],
+      "space_words": ["SPACE"],
+      "source": "a power device the prints give no circuit: proposed on the nearest panel of its level with a spare breaker (else a new one), not drawn, priced apart from the takeoff, with a review item and an RFI (the documents don't say; nothing is guessed silently)"
+    }
   }
 }

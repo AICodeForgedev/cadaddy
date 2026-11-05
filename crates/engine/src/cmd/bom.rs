@@ -778,7 +778,36 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     if let Some(ix) = atoms {
         atom_lines(lines, &ix);
     }
+    // The panels' breakers (Q6166), whether or not the runs were built as pieces.
+    if let Some(ix) = s.doc().ok().and_then(super::mepatoms::stored) {
+        breaker_lines(lines, &ix);
+    }
     Ok(())
+}
+
+/// The breakers in the model's panels (Q6166), from its count index: by what each is bought as
+/// (its type and its panel's type), trip and poles, per level. A spare is bought like the rest.
+fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
+    for (k, t) in ix.rows.iter().filter(|(k, _)| k.kind == super::breakers::KIND).take(MAX_LINES) {
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: "breakers".into(),
+                item: if k.item.is_empty() { "Circuit breaker".into() } else { k.item.clone() },
+                size: k.size.clone(),
+                unit: "each",
+                net: t.count as f64,
+                status: "firm",
+                rule: Some("one per panel-schedule row with a breaker (spares included, spaces not), in each panel the schedule is for; counted in the model (bim.count {kind: breaker})".into()),
+                level: k.level.clone(),
+                elements: Vec::new(),
+                waste_qty: None,
+                circuit: String::new(),
+                product: Product::default(),
+            },
+        );
+    }
 }
 
 /// The BOM lines of a model built with its pieces (Q6157): each counted piece of its index by

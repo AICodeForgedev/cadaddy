@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1255,
-    "count": 1255,
+    "callableAsJson": 1254,
+    "count": 1254,
     "ids": [
       "-attedit",
       "-block",
@@ -121,6 +121,7 @@
       "bim.atoms.rules",
       "bim.bid",
       "bim.bom",
+      "bim.breakers",
       "bim.build",
       "bim.chain",
       "bim.clash",
@@ -133,8 +134,6 @@
       "bim.dimming",
       "bim.element",
       "bim.estimate",
-      "bim.export.ar",
-      "bim.export.ar.rules",
       "bim.faces",
       "bim.field.link",
       "bim.form.create",

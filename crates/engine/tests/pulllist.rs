@@ -116,13 +116,14 @@ fn a_route_past_360_degrees_of_bends_gets_a_pull_box_and_its_slack() {
     assert!((f(&p["raceway_ft"]) - (50.0 + drop)).abs() < 0.05, "{p}");
     assert_eq!(p["from"], json!("LP1"), "{p}");
     assert_eq!(p["to"], json!("receptacle box"), "{p}");
-    // 2#12 + 1#12G on circuit 3 (phase B): red, white, green; each cut the path plus 1 ft at
-    // the box, 3 ft at the panel and a 2 ft loop in the pull box.
+    // 2#12 + 1#12G on circuit 3 (phase B): red, white, green; each cut the path plus the
+    // takeoff's makeup, 1.5 ft at the box (300.14's 6" and a 12" allowance) and 3.5 ft at the
+    // panel (half its 4 ft can and a box's makeup), and a 2 ft loop in the pull box.
     let mut colors: Vec<&str> = p["conductors"].as_array().into_iter().flatten().filter_map(|c| c["color"].as_str()).collect();
     colors.sort_unstable();
     assert_eq!(colors, vec!["green", "red", "white"], "{p}");
     for c in p["conductors"].as_array().into_iter().flatten() {
-        assert!((f(&c["cut_ft"]) - (f(&p["raceway_ft"]) + 1.0 + 3.0 + 2.0)).abs() < 0.05, "{c} {p}");
+        assert!((f(&c["cut_ft"]) - (f(&p["raceway_ft"]) + 1.5 + 3.5 + 2.0)).abs() < 0.05, "{c} {p}");
     }
     // The straight circuit: no pull box, one pull.
     let q = pull(&r, "LP1-1");

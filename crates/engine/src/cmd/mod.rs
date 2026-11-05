@@ -109,6 +109,7 @@ pub mod agentready;
 pub mod archread;
 pub mod arexport;
 pub mod bcf;
+pub mod breakers;
 pub mod callouts;
 pub mod casework;
 pub mod clashreport;
@@ -833,6 +834,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
     v.extend(ugsheets::specs());
     v.extend(valueeng::specs());
     v.extend(loadcalc::specs());
+    v.extend(breakers::specs());
     v.extend(sheetsout::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
