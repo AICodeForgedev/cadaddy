@@ -307,6 +307,12 @@ fn ordinal(word: &str) -> Option<u32> {
     if matches!(suffix, "ST" | "ND" | "RD" | "TH") { digits.parse().ok().filter(|n| *n > 0 && *n < 200) } else { None }
 }
 
+/// A word that, before `FLOOR` or `LEVEL`, names the first floor: `GROUND FLOOR`, `GRADE LEVEL`,
+/// `MAIN FLOOR`, `STREET LEVEL`.
+fn is_first_floor_word(word: &str) -> bool {
+    matches!(word, "GROUND" | "GRADE" | "MAIN" | "STREET")
+}
+
 fn detect_level(title: &str) -> Option<String> {
     detect_levels(title).into_iter().next()
 }
@@ -397,6 +403,10 @@ pub fn detect_levels(title: &str) -> Vec<String> {
                     // `FLOOR 2`, `FLOORS 3 AND 4`, `FLOORS 2-4`.
                     before = numbers_after(words.get(i + 1..).unwrap_or_default());
                 }
+                if before.is_empty() && i > 0 && words.get(i - 1).is_some_and(|p| is_first_floor_word(p)) {
+                    // `GROUND FLOOR PLAN`, `MAIN FLOOR`: the first floor.
+                    before.push(1);
+                }
                 if before.is_empty() && saw_typical {
                     has_typical = true;
                 } else {
@@ -406,7 +416,10 @@ pub fn detect_levels(title: &str) -> Vec<String> {
             "LEVEL" | "LEVELS" => {
                 let rest = words.get(i + 1..).unwrap_or_default();
                 let numbers = numbers_after(rest);
-                if numbers.is_empty() {
+                if numbers.is_empty() && i > 0 && words.get(i - 1).is_some_and(|p| is_first_floor_word(p)) {
+                    // `GROUND LEVEL PLAN`, `GRADE LEVEL`: the first floor.
+                    found.push("1".into());
+                } else if numbers.is_empty() {
                     // `LEVEL B1`, `LEVEL R`.
                     found.extend(rest.first().and_then(|n| level_code(n)));
                 } else {
@@ -1888,6 +1901,17 @@ mod tests {
         assert_eq!(detect_levels("LEVELS 2-4"), vec!["2", "3", "4"]);
         // Single named floor is not typical.
         assert_eq!(detect_levels("SECOND FLOOR PLAN"), vec!["2"]);
+    }
+
+    #[test]
+    fn detect_levels_ground_floor_is_the_first() {
+        for t in ["GROUND FLOOR PLAN", "MAIN FLOOR - POWER", "GRADE LEVEL PLAN", "STREET LEVEL LIGHTING PLAN"] {
+            assert_eq!(detect_levels(t), vec!["1"], "{t}");
+        }
+        // Not a floor's name: an underfloor plan, a plain floor plan, a level mark.
+        assert!(detect_levels("UNDERFLOOR PLAN - PLUMBING").is_empty());
+        assert!(detect_levels("FLOOR PLAN - ELECTRICAL").is_empty());
+        assert!(detect_levels("GROUND FAULT NOTES").is_empty());
     }
 
     #[test]

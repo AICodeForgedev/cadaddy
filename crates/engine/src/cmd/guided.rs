@@ -6093,9 +6093,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     bim_step(s, job, "underground", t);
     let t = web_time::Instant::now();
+    // The build's rooms only: the rooms stage traced the plans sheet by sheet already.
     let fill = match &panel_top {
-        Some((top, doc)) => json!({"panel_top_in": top, "panel_top_doc": doc}),
-        None => json!({}),
+        Some((top, doc)) => json!({"panel_top_in": top, "panel_top_doc": doc, "rooms": "built"}),
+        None => json!({"rooms": "built"}),
     };
     match s.execute("bim.props.fill", &fill) {
         Ok(v) => {
@@ -6507,6 +6508,18 @@ fn sheet_page(
     sheet_page_read(job, c, files, read_pdf, false)
 }
 
+/// The path of one of the set's files (`file` as the sheet index names it): in the prints
+/// folder, or beside the PDF when the set is one PDF (a combined bid set given as its file).
+fn set_file_path(pdfs: &str, file: &str) -> std::path::PathBuf {
+    let named = std::path::Path::new(file);
+    if named.is_absolute() {
+        return named.to_path_buf();
+    }
+    let set = std::path::Path::new(pdfs);
+    let dir = if set.is_file() { set.parent().unwrap_or_else(|| std::path::Path::new(".")) } else { set };
+    dir.join(named)
+}
+
 /// [`sheet_page`], `as_drawn`: every stroke kept as the PDF draws it (no lettering read off
 /// strokes, no repeated clusters made blocks).
 fn sheet_page_read(
@@ -6520,7 +6533,7 @@ fn sheet_page_read(
         return Err("the sheet index gives it no file and page".into());
     };
     if !files.contains_key(file) {
-        let bytes = crate::readfile::read(std::path::Path::new(&job.pdfs_path).join(file)).map_err(|e| format!("{file}: {e}"))?;
+        let bytes = crate::readfile::read(set_file_path(&job.pdfs_path, file)).map_err(|e| format!("{file}: {e}"))?;
         files.insert(file.to_string(), bytes);
     }
     let bytes = files.get(file).ok_or_else(|| format!("{file}: not read"))?;
@@ -7192,7 +7205,7 @@ fn identity_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
             result[key] = json!(n.saturating_sub(gone));
         }
     }
-    let graph = super::identity::graph(s, true).ok();
+    let graph = super::identity::graph_with(s, true, true).ok();
     let findings: Vec<Value> = run.answer.get("findings").and_then(Value::as_array).cloned().unwrap_or_default();
     for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
         let msg = f.get("message").and_then(Value::as_str).unwrap_or("element identity finding");
@@ -18173,9 +18186,26 @@ fn is_room_like_name(name: &str) -> bool {
 /// Q6021 MUST 1: in auto mode, implausible defaults are **rejected** (not confirmed): the
 /// answer is `"Rejected"` with `answered_by = "auto_guard"`, and the question is listed in
 /// the report.  How many were answered (accepted + rejected).
+/// A plan given its one-storey building's floor, to confirm (`level_source` `default`: a set of
+/// one storey only): its level question's default ("Level 1"), taken by a person or by auto
+/// mode, is that floor, so the plan is built on it. What it changed, or None for another answer.
+fn confirm_plan_level(job: &mut GuidedJob, q: &Question, text: &str) -> Option<String> {
+    if q.stage != StageName::Classify || !q.question.contains("names no level") || q.default.as_deref() != Some(text) {
+        return None;
+    }
+    let level = text.strip_prefix("Level")?.trim().to_string();
+    if level.is_empty() || level.len() > 8 || cadaddy_walk3d::levels::is_datum_name(&level) {
+        return None;
+    }
+    let number = q.evidence.as_ref().and_then(|e| e.sheet.clone()).filter(|n| !n.is_empty())?;
+    set_sheet_fact(job, &number, "level", &level);
+    Some(format!("sheet {number} is level {level}"))
+}
+
 fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
     let (auto, always) = (job.auto, std::mem::take(&mut job.always_ask));
     let mut answered = Vec::new();
+    let mut confirmed: Vec<Question> = Vec::new();
     if let Some(st) = job.stage_mut(name) {
         let asked = st.questions.iter_mut().chain(st.completeness.iter_mut()).map(|q| (q, !auto));
         let samples = st.verify.iter_mut().enumerate().map(|(i, q)| (q, !auto && i < VERIFY_ASKED));
@@ -18185,6 +18215,7 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
                     let def = q.default.clone().unwrap_or_default();
                     q.answer = Some(Value::String(def));
                     q.answered_by = Some("default".into());
+                    confirmed.push(q.clone());
                 } else {
                     q.answer = Some(Value::String("Rejected".into()));
                     q.answered_by = Some("auto_guard".into());
@@ -18194,6 +18225,12 @@ fn auto_answer(job: &mut GuidedJob, name: StageName) -> usize {
         }
     }
     job.always_ask = always;
+    // A default that is a plan's level is applied as the answer would be.
+    for q in &confirmed {
+        if let Some(def) = q.default.as_deref() {
+            let _ = confirm_plan_level(job, q, def);
+        }
+    }
     sync_worklist(job);
     answered.len()
 }
@@ -18566,6 +18603,9 @@ fn answer_effect(job: &mut GuidedJob, q: &Question) -> (Option<StageName>, Strin
             return (None, "recorded".into());
         }
         return (None, format!("recorded; answer with an elevation (\"12'-6\\\"\") or {{\"name\": \"…\"}} to change level {level}"));
+    }
+    if let Some(effect) = confirm_plan_level(job, q, text) {
+        return (Some(StageName::Rooms), effect);
     }
     if !text.is_empty() && q.default.as_deref() == Some(text) {
         return (None, "kept what the job read".into());
@@ -20486,6 +20526,23 @@ mod ckpt_tests {
         assert_ne!(prints_stamp(&a), prints_stamp(&[pf("A-101.pdf", 11, "00000000000000aa")]));
         // A known value: the same on every machine and build.
         assert_eq!(prints_stamp(&[]), "content:cbf29ce484222325");
+    }
+
+    /// A set given as one combined PDF: its sheets' file is that PDF, beside it (not inside it,
+    /// as a folder); a set given as a folder: in it.
+    #[test]
+    fn a_sets_files_are_found_whether_it_is_a_folder_or_one_pdf() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let root = std::env::temp_dir().join(format!("cadaddy_onepdf_unit_{}_{nanos}", std::process::id()));
+        std::fs::create_dir_all(root.join("Sub")).unwrap();
+        let pdf = root.join("Bid Set.pdf");
+        std::fs::write(&pdf, b"%PDF-1.4 set").unwrap();
+        assert_eq!(set_file_path(&pdf.display().to_string(), "Bid Set.pdf"), pdf);
+        assert_eq!(set_file_path(&root.display().to_string(), "Bid Set.pdf"), pdf);
+        assert_eq!(set_file_path(&root.display().to_string(), "Sub/E.pdf"), root.join("Sub/E.pdf"));
+        let abs = root.join("Sub").join("E.pdf");
+        assert_eq!(set_file_path(&pdf.display().to_string(), &abs.display().to_string()), abs);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Q6156: the same files in two folders with other change times are the same prints; one
@@ -24227,6 +24284,29 @@ mod tests {
         let one = json!({"number": "P-101", "title": "PLUMBING PLAN", "level": "1", "level_source": "default"});
         let q = plan_level_question(&mut job, &one, &codes[..1]);
         assert_eq!(q.default.as_deref(), Some("Level 1"));
+        // Its default taken, by a person or by auto mode, is that floor: the plan is built on it.
+        for auto in [false, true] {
+            let mut job = GuidedJob::new("/tmp/prints", JobGoal::Bim);
+            job.sheets = Some(json!({"sheets": [one.clone()]}));
+            let mut r = region("P-101", "1", "P", "plan", 0.0);
+            r.not_built = not_built_reason("P", "PLUMBING PLAN", "1", "default").to_string();
+            assert_eq!(r.not_built, "no level");
+            job.sheet_regions = vec![r];
+            let mut q = plan_level_question(&mut job, &one, &codes[..1]);
+            if auto {
+                job.auto = true;
+                if let Some(st) = job.stage_mut(StageName::Classify) {
+                    st.questions.push(q);
+                }
+                assert_eq!(auto_answer(&mut job, StageName::Classify), 1);
+            } else {
+                q.answer = Some(json!("Level 1"));
+                let (rerun, said) = answer_effect(&mut job, &q);
+                assert_eq!((rerun, said.as_str()), (Some(StageName::Rooms), "sheet P-101 is level 1"));
+            }
+            assert_eq!((job.sheet_regions[0].level.as_str(), job.sheet_regions[0].not_built.as_str()), ("1", ""), "auto {auto}");
+            assert!(job_sheet_refs(&job).iter().all(|r| r.builds()), "auto {auto}");
+        }
     }
 
     /// Q6037: level_name canonicalises aliases to one name per real level.

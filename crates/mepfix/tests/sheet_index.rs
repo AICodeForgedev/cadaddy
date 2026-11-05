@@ -351,3 +351,57 @@ fn in_a_building_of_one_level_a_plan_naming_none_is_on_it() {
     assert_eq!((p.level.as_str(), p.level_source.as_str()), ("1", "default"));
     assert_eq!(index.plans_without_level, ["P-201"]);
 }
+
+#[test]
+fn a_ground_floor_plan_is_the_first_floor() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A1.1", &["GROUND FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A1.2", &["MAIN LEVEL - ENLARGED"], "")),
+        ("Set.pdf", 3, sheet("A1.3", &["ROOF PLAN"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let a = index.sheets.iter().find(|s| s.number == "A1.1").expect("A1.1");
+    assert_eq!((a.level.as_str(), a.level_source.as_str()), ("1", "title"));
+    let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["1", "R"]);
+}
+
+/// A one-storey building whose plans name no floor (`FLOOR PLAN`), only its roof plan a level:
+/// the floor is still a level, and every plan naming none is on it (to be confirmed), whichever
+/// discipline's and in whichever order the set prints them.
+#[test]
+fn a_one_storey_building_named_only_by_its_roof_plan_has_its_floor() {
+    for order in [[0, 1, 2], [2, 0, 1], [1, 2, 0]] {
+        let all = [
+            ("Bid Set.pdf", 1, sheet("E201", &["FLOOR PLAN - ELECTRICAL"], "")),
+            ("Bid Set.pdf", 2, sheet("A-110", &["ROOF PLAN"], "")),
+            ("Bid Set.pdf", 3, sheet("A-100", &["FLOOR PLAN"], "")),
+        ];
+        let project = classify(order.iter().map(|&i| all[i].clone()).collect());
+        let index = printset::sheet_index(&project);
+        let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["1", "R"], "{order:?}");
+        for n in ["E201", "A-100"] {
+            let s = index.sheets.iter().find(|s| s.number == n).expect("sheet");
+            assert_eq!((s.level.as_str(), s.level_source.as_str()), ("1", "default"), "{n} {order:?}");
+        }
+        let first = index.levels.first().map(|l| l.sheets.len());
+        assert_eq!(first, Some(2), "the floor's plans: {:?}", index.levels);
+    }
+}
+
+/// A building of one floor and a roof: a plan naming no level is on the floor (to be
+/// confirmed), not left for someone to say which.
+#[test]
+fn a_floor_and_its_roof_are_one_storey() {
+    let project = classify(vec![
+        ("Set.pdf", 1, sheet("A101", &["FIRST FLOOR PLAN"], "")),
+        ("Set.pdf", 2, sheet("A102", &["ROOF PLAN"], "")),
+        ("Set.pdf", 3, sheet("P-201", &["PLUMBING PLAN"], "")),
+    ]);
+    let index = printset::sheet_index(&project);
+    let p = index.sheets.iter().find(|s| s.number == "P-201").expect("P-201");
+    assert_eq!((p.level.as_str(), p.level_source.as_str()), ("1", "default"));
+    let names: Vec<&str> = index.levels.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(names, ["1", "R"]);
+}

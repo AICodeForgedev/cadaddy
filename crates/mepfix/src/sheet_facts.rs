@@ -167,7 +167,7 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
             .iter()
             .filter(|t| {
                 horizontal(t)
-                    && (t.at.x - l.at.x).abs() <= 3.0 * h
+                    && ((t.at.x - l.at.x).abs() <= 3.0 * h || (centre_x(t) - centre_x(l)).abs() <= 3.0 * h)
                     && t.at.y < l.at.y
                     && t.at.y > l.at.y - 14.0 * h
                     && t.height >= 0.9 * h
@@ -229,6 +229,16 @@ pub fn identify_sheet(texts: &[TextItem]) -> Option<SheetIdent> {
             source: "largest_number".into(),
         })
 }
+
+/// The middle of a line's lettering, from its start and an average letter width (a title block
+/// may centre its title under the label, so the lines start at other places than the label).
+fn centre_x(t: &TextItem) -> f64 {
+    let letters = t.value.trim_end().chars().count().min(200) as f64;
+    t.at.x + 0.5 * letters * AVG_LETTER_WIDTH * t.height
+}
+
+/// An average letter's width over its height, for block lettering.
+const AVG_LETTER_WIDTH: f64 = 0.6;
 
 /// A title-block label the sheet number sits beside (`SHEET NO.`, `DWG NO:`, `SHEET NUMBER`).
 fn is_number_label(t: &str) -> bool {
@@ -763,6 +773,24 @@ mod tests {
         text(&mut d, "C-3.1", 1810.0, 30.0, 12.0);
         let s = identify_sheet(&texts(&d)).expect("number label");
         assert_eq!((s.number.as_str(), s.discipline.as_str(), s.source.as_str()), ("C-3.1", "C", "number_label"));
+    }
+
+    /// A title block that centres its title lines under the label (they start left of it, each
+    /// at its own place), the number under its own label: the title is read either way.
+    #[test]
+    fn a_centred_title_under_its_label_is_the_sheets_title() {
+        for (label_x, first_x, second_x) in [(1800.0, 1789.0, 1806.0), (1800.0, 1800.0, 1800.0), (1700.0, 1691.0, 1704.0)] {
+            let mut d = Drawing::default();
+            text(&mut d, "SHEET TITLE:", label_x, 120.0, 4.0);
+            text(&mut d, "LIFE SAFETY STANDARDS", first_x, 110.0, 4.0);
+            text(&mut d, "(LOCAL)", second_x, 104.0, 4.0);
+            text(&mut d, "SHEET NO.:", label_x, 60.0, 4.0);
+            text(&mut d, "G9.02", label_x - 10.0, 30.0, 12.0);
+            // A consultant's lines higher up the strip are no title.
+            text(&mut d, "CONSULTING ENGINEERS", label_x - 30.0, 300.0, 3.0);
+            let s = identify_sheet(&texts(&d)).expect("title block");
+            assert_eq!((s.number.as_str(), s.title.as_str()), ("G9.02", "LIFE SAFETY STANDARDS (LOCAL)"), "label at {label_x}");
+        }
     }
 
     #[test]

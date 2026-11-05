@@ -1528,6 +1528,26 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     }
     let mut codes: Vec<String> = by_level.keys().cloned().collect();
     codes.sort_by_key(|c| level_key(c));
+    // The storeys are the levels but the roof (a roof plan shows the top of the building, no
+    // floor). A building of one storey may name it nowhere: its plans are titled `FLOOR PLAN`
+    // and only the roof plan names a level. Its plans that name none are on that one floor,
+    // which is a level of the building even though no title names it.
+    let floors: Vec<&String> = codes.iter().filter(|c| c.as_str() != "R").collect();
+    let one_level = floors.len() <= 1;
+    let lowest = floors.iter().find(|c| c.parse::<u32>().is_ok()).map_or_else(|| "1".to_string(), |c| (*c).clone());
+    if one_level && !codes.contains(&lowest) {
+        let unnamed: Vec<serde_json::Value> = out
+            .sheets
+            .iter()
+            .filter(|s| is_level_plan_type(&s.sheet_type) && s.level.is_empty())
+            .map(|s| serde_json::json!({"sheet": s.number, "typical": false}))
+            .collect();
+        if !unnamed.is_empty() {
+            by_level.insert(lowest.clone(), unnamed);
+            codes.push(lowest.clone());
+            codes.sort_by_key(|c| level_key(c));
+        }
+    }
     // Elevations: the value most marks give per level; above the first floor at 100'-0". A
     // civil or site sheet's marks are spot elevations on the site datum, never the levels'.
     let mut marks: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -1578,8 +1598,6 @@ pub fn sheet_index(project: &PrintSetProject) -> SheetIndex {
     // (given it, to be confirmed); with several the level is uncertain, so the sheet stays off
     // every level until someone says which (`ask`), never put on the lowest. An enlarged plan
     // with no level belongs to its parent floor's region, found by where it is drawn.
-    let lowest = codes.iter().find(|c| c.parse::<u32>().is_ok()).cloned().unwrap_or_else(|| "1".into());
-    let one_level = codes.len() <= 1;
     for s in out.sheets.iter_mut().filter(|s| is_level_plan_type(&s.sheet_type) && s.level.is_empty()) {
         if one_level {
             s.level = lowest.clone();
