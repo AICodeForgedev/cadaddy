@@ -644,10 +644,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     if lines.is_empty() && allow.is_empty() {
-        return Err(bad(
-            CMD,
-            format!("nothing to bid: the model has no takeoff lines of {} (build the model first: model.build or the job)", trades.join(", ")),
-        ));
+        return Err(crate::EngineError::Other(format!(
+            "{CMD}: nothing to bid: the model has no takeoff lines of {} (build the model first: model.build or the job)",
+            trades.join(", ")
+        )));
     }
     // ---- totals ----
     let base: Vec<&Line> = lines.iter().filter(|l| l.bid == Bid::Base).collect();
@@ -831,7 +831,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let bom = s.execute("bim.bom", &json!({})).unwrap_or(Value::Null);
     let mut by_others: BTreeMap<(String, String), (usize, String, Vec<String>, String)> = BTreeMap::new();
     for x in bom["by_others"].as_array().into_iter().flatten().take(MAX_LINES) {
-        let kind = x["kind"].as_str().unwrap_or_default().to_string();
+        let kind = x["kind"].as_str().unwrap_or_default().replace('_', " ");
         let owner = x["owner"].as_str().or(x["scope"].as_str()).unwrap_or_default().to_string();
         let e =
             by_others.entry((kind, owner)).or_insert_with(|| (0, x["source"].as_str().unwrap_or_default().to_string(), Vec::new(), String::new()));
@@ -871,10 +871,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let mut clarifications: Vec<Value> = Vec::new();
     if !prop.is_empty() {
         let items: Vec<String> = prop.iter().map(|l| format!("{} {} {}", l.name(), r3(l.qty), l.s("unit"))).collect();
+        let no_price = prop.iter().filter(|l| l.unit_price.is_none()).count();
+        let priced_text = if no_price == 0 {
+            money(prop_total)
+        } else {
+            format!(
+                "{} for its priced lines ({no_price} of {} lines have no price: sheet Priced Takeoff, Bid PROPOSED)",
+                money(prop_total),
+                prop.len()
+            )
+        };
         clarifications.push(entry(
             format!(
-                "PROPOSED work not called on the documents is priced apart, not in the base bid: {} ({}); confirm by RFI.",
-                money(prop_total),
+                "PROPOSED work not called on the documents is priced apart, not in the base bid: {priced_text}; {}; confirm by RFI.",
                 items.join("; ")
             ),
             "the underground plan's proposed runs (ugsheets.check)",
@@ -1473,14 +1482,17 @@ fn letter(c: &Ctx) -> std::result::Result<Vec<u8>, String> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|a| {
-            let v = a["add_deduct"].as_f64()?;
-            Some(format!(
+        .map(|a| {
+            format!(
                 "{} ({}): {}",
                 a["name"].as_str().unwrap_or_default(),
                 a["tier"].as_str().unwrap_or_default().replace('_', " "),
-                if v <= 0.0 { format!("deduct {}", money(-v)) } else { format!("add {}", money(v)) }
-            ))
+                match a["add_deduct"].as_f64() {
+                    Some(v) if v <= 0.0 => format!("deduct {}", money(-v)),
+                    Some(v) => format!("add {}", money(v)),
+                    None => "price pending (see the bid workbook)".to_string(),
+                }
+            )
         })
         .collect();
     section(&mut d, &mut y, "Alternates (not in the base bid)", alts, 5);

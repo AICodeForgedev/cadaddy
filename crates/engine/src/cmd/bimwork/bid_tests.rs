@@ -1,23 +1,12 @@
 //! Tests of Q6196 bidpackage: the bid package from the model (`bim.bid`): the takeoff by system and floor,
 //! material from a price-book workbook with its quotes, labor hours from labor-unit data with
 //! their source, allowances and markups as their own lines, the value-engineering alternates,
-//! inclusions, exclusions and clarifications, the Web Prices workbook and a one-page letter.
+//! inclusions, exclusions and clarifications and the Web Prices workbook (the letter, plotted by
+//! the app's plotter, is tested in `tests/bidpackage_letter.rs`).
 
 use crate::Session;
-use crate::cmd::file::{IoHooks, set_io};
 use crate::doc::Drawing;
 use serde_json::{Value, json};
-
-fn hooks() {
-    set_io(IoHooks {
-        read: |b, name| cadaddy_io::read(b, name).map_err(|e| e.to_string()),
-        write: |d, name| cadaddy_io::write(d, name).map_err(|e| e.to_string()),
-        plot: Some(|d, space, opts| cadaddy_io::plotter::plot(d, space, opts).map_err(|e| e.to_string())),
-        read_pdf: None,
-        read_dwf: None,
-        write_dwfx: None,
-    });
-}
 
 fn receptacle(n: usize, x: f64, y: f64, circuit: &str) -> Value {
     json!({"id": format!("device:L1:{n}"), "kind": "receptacle", "level": "L1", "at_ft": [x, y], "fields": {
@@ -233,7 +222,6 @@ fn money(v: &Value) -> f64 {
 
 #[test]
 fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines() {
-    hooks();
     let dir = tmp("roll");
     let mut s = building(&dir);
     let v = bid(&mut s, &dir, json!({}));
@@ -327,14 +315,12 @@ fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines(
 }
 
 #[test]
-fn the_workbook_keeps_live_formulas_and_the_letter_is_one_page() {
-    hooks();
+fn the_workbook_keeps_live_formulas_into_its_price_list_and_rates() {
     let dir = tmp("export");
     let mut s = building(&dir);
     let file = dir.join("bid.xlsx");
-    let pdf = dir.join("proposal.pdf");
-    let v = bid(&mut s, &dir, json!({"file": file.to_string_lossy(), "letter": pdf.to_string_lossy()}));
-    assert_eq!((v["path"].as_str(), v["letter"].as_str()), (Some(file.to_string_lossy().as_ref()), Some(pdf.to_string_lossy().as_ref())));
+    let v = bid(&mut s, &dir, json!({"file": file.to_string_lossy()}));
+    assert_eq!(v["path"].as_str(), Some(file.to_string_lossy().as_ref()));
     let wb = crate::cmd::table::xlsx::open(&std::fs::read(&file).unwrap()).unwrap();
     let names: Vec<&str> = wb.sheets.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, ["Bid Summary", "Priced Takeoff", "Alternates", "Allowances", "Scope", "Quotes", "Price List", "Item Map"]);
@@ -360,12 +346,6 @@ fn the_workbook_keeps_live_formulas_and_the_letter_is_one_page() {
     assert!(sf.iter().any(|(_, f)| f.starts_with("SUMIFS('Priced Takeoff'!$U:$U,'Priced Takeoff'!$C:$C,$A")), "{sf:?}");
     let scope = wb.values(Some("Scope"), None).unwrap();
     assert!(scope.iter().any(|r| r[0] == "Exclusion" && r[1].contains("smoke detector")));
-    // One page, plotted by the app's plotter.
-    let bytes = std::fs::read(&pdf).unwrap();
-    assert!(bytes.starts_with(b"%PDF"));
-    let text = String::from_utf8_lossy(&bytes);
-    std::fs::copy(&pdf, "/tmp/bp/proposal.pdf").ok();
-    assert!(text.contains("/Count 1") && !text.contains("/Count 2"), "one page");
     // A file that exists is refused without force.
     assert!(s.execute("bim.bid", &json!({"file": file.to_string_lossy(), "alternates": false})).is_err());
     std::fs::remove_dir_all(&dir).ok();
@@ -373,7 +353,6 @@ fn the_workbook_keeps_live_formulas_and_the_letter_is_one_page() {
 
 #[test]
 fn the_alternates_carry_their_add_or_deduct_from_value_engineering() {
-    hooks();
     let dir = tmp("alt");
     let mut s = building(&dir);
     let spec = dir.join("260519 - Conductors.txt").to_string_lossy().to_string();
@@ -420,7 +399,6 @@ fn the_alternates_carry_their_add_or_deduct_from_value_engineering() {
 
 #[test]
 fn labor_units_in_another_layout_give_the_same_hours_and_the_inputs_are_kept() {
-    hooks();
     let dir = tmp("layout");
     let mut s = building(&dir);
     let a = bid(&mut s, &dir, json!({}));
@@ -454,7 +432,6 @@ fn labor_units_in_another_layout_give_the_same_hours_and_the_inputs_are_kept() {
 
 #[test]
 fn hostile_bid_params_are_refused_never_a_panic() {
-    hooks();
     let dir = tmp("hostile");
     let mut s = building(&dir);
     let pb = book(&dir);
