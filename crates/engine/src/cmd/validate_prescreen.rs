@@ -592,6 +592,9 @@ struct Item {
     /// A build proposed it (only a rule or a note calls for it, no document draws it): not
     /// counted as present or as a luminaire.
     proposed: bool,
+    /// Proposed by a rule alone (no document names it either): not counted for its kind
+    /// (G-COVERAGE).
+    rule_only: bool,
 }
 
 /// An element's mounting height as its record has it from the documents (not a rule's or a
@@ -644,6 +647,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
                 source: e.source.clone().filter(|s| !s.trim().is_empty()),
                 proposed: ent.is_some_and(super::bimlook::made_proposed),
+                rule_only: ent.is_some_and(super::bimlook::made_by_rule_only),
             }
         })
         .collect();
@@ -721,6 +725,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             sheet_at: None,
             source: None,
             proposed: super::bimlook::made_proposed(e),
+            rule_only: super::bimlook::made_by_rule_only(e),
         });
     }
     for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
@@ -1376,6 +1381,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     let cov_on = on("G-PRESENT").is_some() || on(vc::RULE).is_some();
     let census: Vec<vc::Census> = if cov_on {
         all.iter()
+            .filter(|it| !it.rule_only)
             .map(|it| vc::Census {
                 handle: it.handle.clone(),
                 kind: it.kind.clone(),
@@ -2505,6 +2511,7 @@ mod tests {
             sheet_at: None,
             source: None,
             proposed: false,
+            rule_only: false,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));
