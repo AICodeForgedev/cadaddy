@@ -29,7 +29,13 @@
 //!     its own sheet it overlaps most; each crop is compared with its sheet's PDF page read
 //!     again (the job's file and page, `prints` when the job's folder isn't here) at the same
 //!     rectangle and pixels, the similarity in the manifest, a low one flagged there and in
-//!     `prompt.md`. Only pictures whose files were written are listed.
+//!     `prompt.md`. Only pictures whose files were written are listed. Each crop placed on the
+//!     level's plan has its registration checked against the model's walls (Q6141,
+//!     [`super::validate_register`]): the residual, turn and scale of the sheet's wall lines
+//!     against the model's walls in the area; a crop off by more than the threshold (1 ft, the
+//!     project rule `validate.registration.residual_ft`) is placed again from the wall lines
+//!     when they fit well, else marked `misregistered` with the numbers (manifest
+//!     `registration`, and in `prompt.md`).
 //!   - `model/`: the model over each plan crop (the print in grey, the model by trade colour:
 //!     architecture blue, electrical red, mechanical green, plumbing cyan, fire magenta), a
 //!     clean plan of the model alone, and when the model is built a 3D view of the area and an
@@ -71,6 +77,7 @@ use super::bspec::current;
 use super::validate::{Frame, PROV_APP, model_of, prints_from_job, prints_of};
 use super::validate_kind::{Kinds, Resolved};
 use super::validate_prescreen::{self as ps, UnitOf};
+use super::validate_register as vreg;
 use super::validate_rules::{self as vr, Effective};
 use super::*;
 use crate::{Result, Session};
@@ -146,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true, registration?: {status: ok|refitted|misregistered|not_checked, residual_ft, rotation_deg, scale, shift_ft, fit_ft, coverage, coverage_before, walls_ft, lines, threshold_ft, why?, read?} (a placed crop's registration against the model's walls: refitted crops are placed again from the sheet's wall lines)}], registration: {about, threshold_ft (1, project rule validate.registration.residual_ft), threshold_from, counts, by_residual: [{file, sheet, view?, status, residual_ft}] (worst first)}, similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -653,6 +660,20 @@ impl Place {
             Place::Fit(r) => r.to_sheet(p),
         }
     }
+    /// Placed again: `c` carries a point this placement puts on the sheet to where the sheet
+    /// really has it (a wall-line fit, [`super::validate_register`]).
+    fn corrected(&self, c: &vreg::Sim, reference: &str, matched: usize, fit: f64) -> Option<Place> {
+        let to_project = match self {
+            Place::Same => vreg::Sim::IDENTITY,
+            Place::Fit(r) => vreg::Sim { a: r.a, b: r.b, tx: r.tx, ty: r.ty },
+        };
+        let m = to_project.after(&c.inverse()?);
+        let reference = match self {
+            Place::Fit(r) => r.reference.clone(),
+            Place::Same => reference.to_string(),
+        };
+        Some(Place::Fit(SheetRegistration { reference, method: "walls".into(), a: m.a, b: m.b, tx: m.tx, ty: m.ty, matched, residual: Some(fit) }))
+    }
     /// Sheet units per project unit.
     fn scale(&self) -> f64 {
         match self {
@@ -693,6 +714,8 @@ struct Crop {
     cited: bool,
     /// The whole view on the sheet (its tiles share it).
     whole: [f64; 4],
+    /// A placed crop's registration against the model's walls (Q6141).
+    registration: Option<Value>,
 }
 
 impl Crop {
@@ -728,6 +751,9 @@ impl Crop {
             }
             if self.cited {
                 m.insert("cited".into(), json!(true));
+            }
+            if let Some(r) = &self.registration {
+                m.insert("registration".into(), r.clone());
             }
         }
         o
@@ -2318,6 +2344,113 @@ pub(crate) fn shows_level(l: &SheetLink, level: &str) -> bool {
     l.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(level)) || l.levels.iter().any(|x| x.eq_ignore_ascii_case(level))
 }
 
+/// `a`–`b` cut to `r`, if any of it is inside.
+fn clip_seg(a: [f64; 2], b: [f64; 2], r: [f64; 4]) -> Option<vreg::Seg> {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-dx, a[0] - r[0]), (dx, r[2] - a[0]), (-dy, a[1] - r[1]), (dy, r[3] - a[1])] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    let at = |t: f64| [a[0] + dx * t, a[1] + dy * t];
+    let out = (at(t0), at(t1));
+    out.0.iter().chain(out.1.iter()).all(|v| v.is_finite()).then_some(out)
+}
+
+/// The model's wall faces round the area (both faces of each wall, its centreline when it has no
+/// thickness), carried onto a sheet as a crop is placed and cut to the crop's rectangle.
+fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Place, r: [f64; 4]) -> Vec<vreg::Seg> {
+    let near = grow(area.bbox, margin + vreg::REACH_FT);
+    let to = |q: [f64; 2]| {
+        let p = frame.to_sheet(&area.level, q);
+        place.to_sheet([p.x, p.y])
+    };
+    let mut out = Vec::new();
+    for w in model.walls.iter().filter(|w| w.level.eq_ignore_ascii_case(&area.level) && segment_touches(near, w.a, w.b)).take(MAX_OBJECTS) {
+        let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+        let l = dx.hypot(dy);
+        if !(l.is_finite() && l > 1e-9) {
+            continue;
+        }
+        let half = (w.thickness_in / 24.0).max(0.0);
+        let (nx, ny) = (-dy / l * half, dx / l * half);
+        let sides: &[f64] = if half > 0.0 { &[-1.0, 1.0] } else { &[0.0] };
+        for s in sides {
+            let (Some(a), Some(b)) = (to([w.a[0] + nx * s, w.a[1] + ny * s]), to([w.b[0] + nx * s, w.b[1] + ny * s])) else { continue };
+            if let Some(seg) = clip_seg(a, b, r) {
+                out.push(seg);
+            }
+        }
+        if out.len() >= vreg::MAX_MODEL_LINES {
+            break;
+        }
+    }
+    out
+}
+
+/// The sheet's straight lines in `r` as the page prints them: lines, polyline pieces and the
+/// edges of solid fills (a wall's poche), cut to `r`.
+fn sheet_lines(d: &Drawing, r: [f64; 4]) -> Vec<vreg::Seg> {
+    let index = PrintIndex::of(d, &[r]);
+    let ents = as_printed(d, &index.within(r));
+    let mut out: Vec<vreg::Seg> = Vec::new();
+    let cap = vreg::MAX_PRINT_LINES * 4;
+    let mut add = |out: &mut Vec<vreg::Seg>, a: [f64; 2], b: [f64; 2]| {
+        if out.len() < cap
+            && let Some(s) = clip_seg(a, b, r)
+        {
+            out.push(s);
+        }
+    };
+    let ring =
+        |out: &mut Vec<vreg::Seg>, add: &mut dyn FnMut(&mut Vec<vreg::Seg>, [f64; 2], [f64; 2]), v: &[cadaddy_geom::PolyVertex], closed: bool| {
+            let n = v.len().min(100_000);
+            for i in 0..n {
+                let (Some(p), Some(q)) = (v.get(i), v.get(if i + 1 < n { i + 1 } else { 0 })) else { continue };
+                if (i + 1 >= n && !closed) || p.bulge.abs() > 1e-9 {
+                    continue;
+                }
+                add(out, [p.p.x, p.p.y], [q.p.x, q.p.y]);
+            }
+        };
+    for e in ents {
+        if out.len() >= cap {
+            break;
+        }
+        match &e.kind {
+            EntityKind::Line(l) => add(&mut out, [l.a.x, l.a.y], [l.b.x, l.b.y]),
+            EntityKind::LwPolyline(p) => ring(&mut out, &mut add, &p.vertices, p.closed),
+            EntityKind::Polyline3d(p) => {
+                for w in p.points.windows(2).take(100_000) {
+                    if let [a, b] = w {
+                        add(&mut out, [a.x, a.y], [b.x, b.y]);
+                    }
+                }
+            }
+            EntityKind::Hatch(h) if h.solid => {
+                for lp in h.loops.iter().take(10_000) {
+                    ring(&mut out, &mut add, &lp.vertices, true);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 struct Planned {
     crops: Vec<Crop>,
     left_out: Vec<(String, String)>,
@@ -2336,6 +2469,7 @@ fn plan_crops(
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
     keynotes: &[super::validate_keynote::CropAsk],
+    register: &dyn Fn(&Place, [f64; 4]) -> vreg::Registered,
 ) -> Planned {
     let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
@@ -2412,6 +2546,7 @@ fn plan_crops(
                 unregistered: false,
                 cited: false,
                 whole: rect,
+                registration: None,
             });
         }
     };
@@ -2460,7 +2595,7 @@ fn plan_crops(
             }
         };
         let on_sheet: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| place.to_sheet(*q)).collect();
-        let Some(r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
+        let Some(mut r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
             misses.push((
                 l.number.clone(),
                 view_label(l),
@@ -2469,11 +2604,39 @@ fn plan_crops(
             missed.push(*l);
             continue;
         };
+        // Its registration against the model's walls (Q6141): a crop placed well off them is
+        // placed again from the sheet's wall lines when they fit, else marked.
+        let mut place = place;
+        let mut reg = register(&place, r);
+        if let Some(c) = reg.correction {
+            let fit = reg.json["fit_ft"].as_f64().unwrap_or(0.0) * frame.upf() * place.scale();
+            let reference = l.registration.as_ref().map_or_else(String::new, |x| x.reference.clone());
+            let refit = place.corrected(&c, &reference, reg.json["lines"].as_u64().unwrap_or(0) as usize, fit).and_then(|p| {
+                let on: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| p.to_sheet(*q)).collect();
+                bbox(&on).filter(|_| on.len() == 4).and_then(|b| intersect(b, clip)).map(|b| (p, b))
+            });
+            match refit {
+                Some((p, b)) => {
+                    place = p;
+                    r = b;
+                }
+                None => {
+                    reg.json["status"] = json!("misregistered");
+                    reg.json["why"] = json!("the wall-line fit puts the area outside this view");
+                    reg.json["read"] =
+                        json!("misregistered: the wall-line fit puts the area outside this view: measure from the walls, not from the overlay");
+                }
+            }
+        }
         let orientation = match &place {
             Place::Fit(reg) if kind == "enlarged_plan" || turn_deg(reg.b.atan2(reg.a)).abs() > 0.05 => Some(orientation_of(reg, by)),
             _ => None,
         };
+        let before = crops.len();
         push(&mut crops, l, kind, trade, r, by, Some(place), None, orientation);
+        for c in crops.iter_mut().skip(before) {
+            c.registration = Some(reg.json.clone());
+        }
     }
     // 1b. The enlarged views of the room's unit type (every trade's: the typical room's
     //     mechanical, plumbing and power plans), turned and mirrored as the room is.
@@ -3325,8 +3488,22 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         here.counts["underground_sheets"] = json!(layouts.len());
         ug_layouts = layouts;
     }
+    // Each placed crop's registration against the model's walls (Q6141).
+    let (reg_threshold, reg_rule) = vreg::threshold(&d.project_rules);
+    let register = |place: &Place, r: [f64; 4]| -> vreg::Registered {
+        let unit = upf * place.scale();
+        vreg::judge(
+            vreg::fit_walls(
+                &wall_faces(&model, &frame, &area, margin, place, r),
+                &sheet_lines(d, grow(r, vreg::REACH_FT * unit)),
+                unit,
+                [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0],
+            ),
+            reg_threshold,
+        )
+    };
     let Planned { mut crops, mut left_out } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &register);
     // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
     // lies in), not by the link that brought it in.
     let views = sheet_views(d, &sp);
@@ -3863,6 +4040,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     }
+    let registration_json = vreg::summary(&prints_out, reg_threshold, reg_rule.as_deref());
+    prompt.push_str(&vreg::prompt_section(&prints_out));
     left_out.sort();
     left_out.dedup();
     let manifest = json!({
@@ -3878,6 +4057,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "submittals_unlisted": unlisted_json,
         "specs": specs_out,
         "similarity": similarity_json,
+        "registration": registration_json,
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
