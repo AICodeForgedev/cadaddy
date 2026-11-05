@@ -17,7 +17,7 @@ use crate::{Accept, Input, Interactive, Prompt, Result, Session, Step};
 /// keeps "Object conversion=Delete" as the setting. OOPS brings them back, as after ERASE.
 pub(super) fn dash_wblock_spec() -> CommandSpec {
     CommandSpec::new("-wblock", "Write Block", run_dash_wblock)
-        .params("{path, name? | handles?, base?} (the objects written are erased)")
+        .params("{path, name? | handles?, base?, force?: bool (replace an existing file)} (the objects written are erased)")
         .interactive(|_| Ok(Box::new(DashWblockM::default())))
 }
 
