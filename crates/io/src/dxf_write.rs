@@ -3249,7 +3249,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         // The built-in font goes out as `txt`, which every reader has, and a Linux font as its
         // Windows one with portable fonts; CADaddy's own name travels in `CADADDY` xdata
         // (`1000 FONT`, name) so the style reopens with it.
-        let file = if s.font.eq_ignore_ascii_case("CADaddy Stroke") { "txt" } else { cadaddy_fonts::windows::written_font(&s.font, d.portable_fonts) };
+        let file =
+            if s.font.eq_ignore_ascii_case("CADaddy Stroke") { "txt" } else { cadaddy_fonts::windows::written_font(&s.font, d.portable_fonts) };
         w.s(3, file);
         w.s(4, &s.big_font);
         if s.annotative {

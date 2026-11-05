@@ -1401,8 +1401,8 @@ impl AreaM {
             return Step::Done;
         }
         self.total = total;
-                // AREA: in Add and Subtract mode the running total.
-                s.last_used.area = total;
+        // AREA: in Add and Subtract mode the running total.
+        s.last_used.area = total;
         s.echo(format!("Total area = {}", fmt_area(s, self.total)));
         Step::Continue
     }

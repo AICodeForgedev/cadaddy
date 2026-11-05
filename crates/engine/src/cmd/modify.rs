@@ -1645,7 +1645,8 @@ fn placed_ellipse(ell: cadaddy_geom::Ellipse, m: &Mat3, z: f64) -> Option<Entity
 /// or an arc becomes an ellipse or an elliptical arc, a polyline with arc segments (and no
 /// widths) its lines and elliptical arcs. `None`: the object transforms as itself.
 fn stretched_pieces(be: &Entity, m: &Mat3) -> Option<Vec<Entity>> {
-    let circular = |center: Vec2, radius: f64, start: f64, end: f64| cadaddy_geom::Ellipse { center, major: Vec2::X * radius, ratio: 1.0, start, end };
+    let circular =
+        |center: Vec2, radius: f64, start: f64, end: f64| cadaddy_geom::Ellipse { center, major: Vec2::X * radius, ratio: 1.0, start, end };
     let kinds = match &be.kind {
         EntityKind::Circle(c) => vec![placed_ellipse(cadaddy_geom::Ellipse::full(c.center.xy(), Vec2::X * c.radius, 1.0), m, c.center.z)?],
         EntityKind::Arc(a) => vec![placed_ellipse(circular(a.center.xy(), a.radius, a.start, a.end), m, a.center.z)?],

@@ -786,7 +786,6 @@ impl Session {
         (self.lisp.active && self.lisp.steps.uid == uid).then_some(uid)
     }
 
-
     /// The commands the active drawing's LISP defines (`c:` functions), uppercase and sorted.
     pub fn lisp_commands(&self) -> Vec<String> {
         let Ok(uid) = self.state().map(|s| s.uid) else { return Vec::new() };

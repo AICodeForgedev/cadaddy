@@ -420,7 +420,13 @@ impl DocState {
         if let Some(l) = snap.look {
             self.set_model_look(l);
         }
-        let cur = Snapshot { label: snap.label, doc: std::mem::replace(&mut self.doc, snap.doc), selection: std::mem::take(&mut self.selection), bytes: snap.bytes, look };
+        let cur = Snapshot {
+            label: snap.label,
+            doc: std::mem::replace(&mut self.doc, snap.doc),
+            selection: std::mem::take(&mut self.selection),
+            bytes: snap.bytes,
+            look,
+        };
         self.follow_layout(&cur.doc);
         // Views aren't all part of the drawing's undo: the untiled twist record follows the
         // live model view again.

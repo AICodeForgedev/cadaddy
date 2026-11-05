@@ -1096,13 +1096,7 @@ impl Interactive for EllipseM {
                 // 232.716° ends the arc at 87.375° from the major axis).
                 let st = self.start.unwrap_or(0.0);
                 let end = ge.param_of(e.center + Vec2::from_angle((ge.at_param(st) - e.center).angle() + incl));
-                s.add_entity(EntityKind::Ellipse(cadaddy_doc::Ellipse {
-                    center: v3(e.center),
-                    major: v3(e.major),
-                    ratio: e.ratio,
-                    start: st,
-                    end,
-                }))?;
+                s.add_entity(EntityKind::Ellipse(cadaddy_doc::Ellipse { center: v3(e.center), major: v3(e.major), ratio: e.ratio, start: st, end }))?;
                 return Ok(Step::Done);
             }
             let ang = match i {
