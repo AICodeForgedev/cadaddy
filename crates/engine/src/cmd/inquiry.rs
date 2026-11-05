@@ -1215,7 +1215,7 @@ impl Interactive for DistM {
                 if !(b - a).len().is_finite() {
                     // The first point stays LASTPOINT, as after a measurement.
                     s.last_point = paper.0;
-                    return Err(bad("dist", "the distance is too large"));
+                    return Err(bad("dist", DIST_TOO_LARGE));
                 }
                 s.last_used.distance = flat;
                 let t = dist_text(s, a, b);
@@ -1275,7 +1275,7 @@ impl DistM {
         let model = model_points(&self.sources);
         let d = model.as_deref().or(self.multi.as_deref()).map_or(0.0, |p| path_len(p, &self.bulges));
         if !d.is_finite() {
-            return Err(bad("dist", "the distance is too large"));
+            return Err(bad("dist", DIST_TOO_LARGE));
         }
         s.echo(distance_line(s, d));
         // DISTANCE: the total of Multiple points.

@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1254,
-    "count": 1254,
+    "callableAsJson": 1256,
+    "count": 1256,
     "ids": [
       "-attedit",
       "-block",
@@ -13,6 +13,7 @@
       "-plot",
       "-plottermanager",
       "-style",
+      "-units",
       "-vports",
       "-wblock",
       "-xref",
@@ -686,6 +687,7 @@
       "mep.qty.refresh",
       "mep.read",
       "mep.read_devices",
+      "minsert",
       "mirror",
       "mkltype",
       "mkshape",
@@ -1259,7 +1261,7 @@
       "zoom.window"
     ],
     "inMenus": 546,
-    "typed": 565
+    "typed": 567
   },
   "features": {
     "ifcExport": true,
