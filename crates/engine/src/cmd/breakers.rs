@@ -9,7 +9,8 @@
 //!   (`TYPICAL OF n`) is every room panel of its letter's (a guest room's `G-<room>`): each built
 //!   panel takes its own set, stamped like the devices.
 //! - **What it connects to**: its panel, the raceway or cable its circuit lands on the panel
-//!   with, and the devices on the circuit (their `breaker_handle`), so `bim.chain` reaches it.
+//!   with, and the devices and equipment on the circuit (their `breaker_handle`), so
+//!   `bim.chain` reaches it.
 //! - **Spares and spaces**: a spare is a breaker (bought, no load); a space is a place with no
 //!   breaker. Each panel says how many of each, the poles it uses and has.
 //! - **Plans against schedules**: a circuit the plans use that its panel's schedule has no row
@@ -407,7 +408,41 @@ struct Dev {
     fed_from: Option<Handle>,
 }
 
+/// Gear that is fed rather than feeding: it holds no breakers, though its record names a panel.
+const GEAR_KINDS: [&str; 9] = ["panel", "panelboard", "load_center", "loadcenter", "panel_board", "switchboard", "switchgear", "transformer", "mcc"];
+
+/// A piece of equipment on a circuit (a damper's power box, a water heater): its record's
+/// `PANEL` and `CIRCUIT`.
+fn equipment_load(e: &Entity) -> Option<Dev> {
+    let part = super::bimlook::made_tag(e, "part")?;
+    let kind = part.strip_prefix("equipment:")?;
+    if GEAR_KINDS.iter().any(|g| kind.trim().eq_ignore_ascii_case(g)) {
+        return None;
+    }
+    let (panel, circuit) = (made_prop(e, "PANEL")?.to_ascii_uppercase(), made_prop(e, "CIRCUIT")?);
+    if panel.is_empty() || circuit.is_empty() {
+        return None;
+    }
+    let label = if circuit.to_ascii_uppercase().starts_with(&panel) { circuit.clone() } else { format!("{panel}-{circuit}") };
+    let numbers = circuit_numbers(&label, &panel);
+    (!numbers.is_empty()).then(|| Dev {
+        handle: e.handle,
+        fed_from: None,
+        room: made_prop(e, "ROOM").unwrap_or_default(),
+        level: super::bspec::made_level(e).unwrap_or_default(),
+        panel,
+        label,
+        numbers,
+    })
+}
+
 fn devices_of(d: &Drawing) -> Vec<Dev> {
+    let equipment = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("mep")))
+        .filter_map(|e| equipment_load(e))
+        .take(MAX_DEVICES);
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).is_some_and(|p| p.eq_ignore_ascii_case("device") || p.eq_ignore_ascii_case("light")))
@@ -430,6 +465,7 @@ fn devices_of(d: &Drawing) -> Vec<Dev> {
             })
         })
         .take(MAX_DEVICES)
+        .chain(equipment)
         .collect()
 }
 

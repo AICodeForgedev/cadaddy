@@ -60,7 +60,7 @@ fn building() -> Session {
                      {"number": "5", "description": "", "breaker": "", "poles": 1, "source": "X-3"}
                  ]},
                 {"tag": "DPB-1", "kind": "damper_power_box", "level": "L1", "min": [700, 110], "max": [706, 114], "height_ft": 1, "bottom_ft": 9,
-                 "properties": {"PANEL": "LP1", "CIRCUIT": "8"}},
+                 "properties": {"PANEL": "LP1", "CIRCUIT": "7"}},
                 {"tag": "RTU-1", "kind": "rooftop_unit", "level": "L1", "min": [-300, 300], "max": [-200, 400], "height_ft": 4},
                 {"tag": "MDP", "kind": "switchboard", "level": "L1", "min": [-200, 100], "max": [-150, 140], "height_ft": 7}
             ],
@@ -189,8 +189,14 @@ fn each_schedule_row_is_a_breaker_inside_its_panel_with_what_the_row_says() {
     let cn = val(&pp, "connects").as_str().unwrap_or_default().to_string();
     assert_eq!(lp1.iter().filter(|b| b["connects"]["value"].as_str().is_some_and(|c| c.contains(&ph))).count(), 6);
     assert!(cn.split(',').count() >= 6, "{cn}");
-    // Gear whose `PANEL` is the panel feeding it (a damper's power box) holds no breakers.
+    // Gear whose `PANEL` is the panel feeding it (a damper's power box) holds no breakers; it is
+    // a load on its circuit, linked to the breaker.
     assert!(breakers_of(&mut s, "DPB-1").is_empty());
+    let dpb = panel_handle(&mut s, "DPB-1");
+    let copier = by_circuit("LP1-7");
+    assert!(val(&copier, "connects").as_str().is_some_and(|c| c.split(',').any(|h| h == dpb)), "{copier}");
+    let b = val(&props_of(&mut s, &dpb), "breaker_handle").as_str().unwrap_or_default().to_string();
+    assert_eq!(val(&props_of(&mut s, &b), "circuit"), "LP1-7");
     // A switchboard numbering its breakers (1, 2, 3 of three poles each), not their poles.
     let mh = panel_handle(&mut s, "MDP");
     let mp = props_of(&mut s, &mh);
