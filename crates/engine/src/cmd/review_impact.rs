@@ -114,6 +114,8 @@ struct Rules {
     like_categories: Vec<String>,
     run_categories: Vec<String>,
     run_item: String,
+    /// Rules whose rows name elements only to show them (their price isn't what the row moves).
+    shown_not_priced: BTreeMap<String, String>,
 }
 
 fn rules() -> &'static Rules {
@@ -272,6 +274,8 @@ struct Item {
     share: f64,
     /// Settled where it came from (an RFI marked sent: `rfi_sent`).
     source_status: Option<&'static str>,
+    /// Why its elements are shown but not priced (rules data), when they aren't.
+    not_priced: Option<String>,
 }
 
 impl Item {
@@ -471,6 +475,7 @@ fn validate_items(rows: &[Value], places: &Places, out: &mut Vec<Item>) {
                 it.level = f["level"].as_str().unwrap_or_default().to_string();
                 it.severity = sev_rank(f["severity"].as_str().unwrap_or_default());
                 it.count = 0;
+                it.not_priced = r.shown_not_priced.get(rule).cloned();
                 let src = &f["expected_source"];
                 it.sheet = match (pt_of(&src["at"]), pt_of(&f["at"])) {
                     (Some(p), _) => Some(places.at_drawing(src["sheet"].as_str().unwrap_or_default(), p)),
@@ -507,7 +512,7 @@ fn validate_items(rows: &[Value], places: &Places, out: &mut Vec<Item>) {
         } else if f["handle"].as_str().is_none() && it.effect == "missing" {
             // A symbol or a set's item with no element: its kind and how many are short.
             let (kind, mark, qty) = shortfall(f);
-            let like = it.like.get_or_insert_with(|| Like { kind, mark, qty: 0.0 });
+            let like = it.like.get_or_insert(Like { kind, mark, qty: 0.0 });
             like.qty = (like.qty + qty).min(MAX_QTY);
         }
         // Gear rows name their gear by its tag.
@@ -974,7 +979,14 @@ impl Pricer<'_> {
         }
         let line = json!({"trade": "", "category": "", "item": words.trim(), "size": "", "unit": "each", "total": qty, "net": qty});
         let (priced, _) = super::estimate::price_lines(&self.p.st, &json!({ "lines": [line] }));
-        let pr = priced.first().filter(|p| !p.match_kind.is_empty())?;
+        // A row found by family words only counts when it names every word of the kind (a
+        // smoke hatch is no smoke detector).
+        let pr = priced.first().filter(|p| !p.match_kind.is_empty()).filter(|p| {
+            !p.match_kind.contains("family") || {
+                let via = p.via.to_ascii_lowercase();
+                words.split_whitespace().filter(|w| w.len() >= 3).all(|w| via.contains(w))
+            }
+        })?;
         let labor = if pr.labor_cost > 0.0 { pr.labor_cost } else { pr.labor_hours * self.p.rate };
         Some(Unit {
             material: pr.material,
@@ -1022,6 +1034,10 @@ impl Pricer<'_> {
 
     fn impact(&self, it: &Item) -> Impact {
         let mut im = Impact::default();
+        if let Some(why) = &it.not_priced {
+            im.basis.push(format!("its elements are shown, not priced: {why}"));
+            return im;
+        }
         let share = it.share.clamp(0.0, 1.0);
         let mut counted = 0usize;
         for h in &it.handles {
@@ -1640,12 +1656,13 @@ mod tests {
                    "measured": {"item": "thermostat=2+", "count": 0}}),
             json!({"id": "PS-6", "rule": "G-PRESENT", "verdict": "missing", "issue": "Room 8 holds 0 of the 2 thermostat its type expects", "level": "L1",
                    "measured": {"item": "thermostat=2+", "count": 1}}),
+            json!({"id": "PS-7", "rule": "G-CLASH", "verdict": "fail", "handle": "1A", "issue": "the router's clash: drop × framing", "level": "L1"}),
         ];
         let mut items = Vec::new();
         validate_items(&rows, &places, &mut items);
         assert_eq!(
             items.iter().map(|i| i.source).collect::<Vec<_>>(),
-            vec!["coverage", "coverage", "coverage", "validate"],
+            vec!["coverage", "coverage", "coverage", "validate", "validate"],
             "the pass is left out, the two rooms' rows are one"
         );
         assert!(items.iter().take(3).all(|i| i.effect == "missing"));
@@ -1669,6 +1686,9 @@ mod tests {
         assert_eq!(items[3].count, 2);
         let t = pricer.impact(&items[3]);
         assert!((t.unit.dollars - 240.0).abs() < 1e-6, "{t:?}");
+        // A clash names the element it runs into: shown, not priced.
+        let clash = pricer.impact(&items[4]);
+        assert!(!clash.known && items[4].handles == vec!["1A".to_string()] && clash.basis.join(" ").contains("not priced"), "{clash:?}");
         // A proposed run by the foot like its size's line.
         let mut run = Item::new("proposed", "run");
         run.run = Some(("3/4\"".into(), 25.0));

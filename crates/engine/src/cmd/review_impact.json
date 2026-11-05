@@ -40,5 +40,9 @@
   "like_categories": ["devices", "equipment", "fixtures", "plumbing fixtures", "fire alarm", "terminals", "dampers", "boxes"],
   "run_categories": ["conduit"],
   "run_item": "EMT conduit",
+  "shown_not_priced": {
+    "G-CLASH": "a clash costs the rework of a route, not the price of the element it runs into (the row names the obstacle)",
+    "E-CONDUIT-CONTINUITY": "a raceway gap costs the missing piece of raceway, not the device the row names"
+  },
   "_run_item": "what a laid-out run is priced as (through the estimate's prices, the price book, the starter book) when the takeoff has no line of its size"
 }

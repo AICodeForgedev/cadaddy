@@ -252,7 +252,7 @@ fn every(s: &mut Session, status: &str) -> Vec<Value> {
     out
 }
 
-fn by<'a>(all: &'a [Value], f: impl Fn(&Value) -> bool) -> Option<&'a Value> {
+fn by(all: &[Value], f: impl Fn(&Value) -> bool) -> Option<&Value> {
     all.iter().find(|i| f(i))
 }
 
