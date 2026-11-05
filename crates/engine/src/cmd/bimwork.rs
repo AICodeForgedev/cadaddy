@@ -17,6 +17,10 @@
 //! - `bim.issue.*`: issues, RFIs and punch items pinned to elements, with a photo, an assignee, a
 //!   status and a viewpoint, kept as BCF topics ([`super::bcf`]) and so exported and imported as
 //!   BCF 2.1 or 3.0; `bim.issue.marks` puts them on the plan (the sheets) as numbered marks.
+//! - `bim.bid {price_book?, labor_units?, …}`: the bid package (Q6196): the takeoff by system and
+//!   floor with material, labor hours from labor-unit data, allowances and markups, the value
+//!   engineering alternates, inclusions/exclusions/clarifications, a Web Prices workbook and a
+//!   one-page proposal letter ([`bid`]).
 //! - `bim.field.link {at, from}`: a sheet point to a 3D view of that spot, and a 3D point back to
 //!   its level and sheet point.
 //!
@@ -33,6 +37,9 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod bid;
+#[cfg(test)]
+mod bid_tests;
 mod clash;
 mod issues;
 mod priced;
@@ -47,6 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
     let mut v = clash::specs();
     v.extend(takeoff::specs());
     v.extend(issues::specs());
+    v.extend(bid::specs());
     v
 }
 
