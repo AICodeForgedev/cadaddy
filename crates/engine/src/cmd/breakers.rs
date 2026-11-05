@@ -246,26 +246,65 @@ pub(crate) fn circuit_numbers(label: &str, panel: &str) -> Vec<u32> {
         .collect()
 }
 
-/// The circuit numbers a breaker takes: its number and, for each further pole, the next on its
-/// bus side; only its number on a schedule that numbers its breakers, not their poles.
-fn takes(c: &PanelCircuit, by_breaker: bool) -> Vec<u32> {
-    let Ok(n) = c.number.trim().parse::<u32>() else { return Vec::new() };
-    if by_breaker {
-        return vec![n];
-    }
-    let step = rules().step();
-    (0..c.poles.clamp(1, 3)).map(|k| n + k * step).collect()
+/// The circuit numbers each row of a schedule takes, and whether the schedule numbers its
+/// breakers rather than their poles.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Layout {
+    pub by_breaker: bool,
+    /// Per row (as the schedule's circuits): the numbers its breaker's poles take.
+    pub rows: Vec<Vec<u32>>,
 }
 
-/// Whether a schedule numbers its breakers (a switchboard's `1, 2, 3`, each of three poles)
-/// rather than their poles: a multi-pole row's further poles would be numbers other rows have.
-pub(crate) fn numbered_by_breaker(s: &PanelSchedule) -> bool {
+impl Layout {
+    fn row_holding(&self, n: u32) -> Option<usize> {
+        self.rows.iter().position(|r| r.contains(&n))
+    }
+    fn highest(&self) -> u32 {
+        self.rows.iter().flatten().max().copied().unwrap_or(0)
+    }
+}
+
+/// How a schedule's rows take the bus: a multi-pole breaker's poles are the numbers on its bus
+/// side from its printed number, or round it (a three-pole breaker printed on its middle row),
+/// or up to it; the first of those no other row prints. A schedule where some multi-pole row fits
+/// none of them numbers its breakers (a switchboard's `1, 2, 3`, each of three poles): each row
+/// takes its own number only.
+pub(crate) fn layout(s: &PanelSchedule) -> Layout {
     let step = rules().step();
-    let nums: BTreeSet<u32> = s.circuits.iter().take(MAX_ROWS).filter_map(|c| c.number.trim().parse::<u32>().ok()).collect();
-    s.circuits
-        .iter()
-        .take(MAX_ROWS)
-        .any(|c| c.poles > 1 && c.number.trim().parse::<u32>().is_ok_and(|n| (1..c.poles.min(3)).any(|k| nums.contains(&(n + k * step)))))
+    let rows: Vec<(Option<u32>, u32)> =
+        s.circuits.iter().take(MAX_ROWS).map(|c| (c.number.trim().parse::<u32>().ok().filter(|n| *n <= 1000), c.poles.clamp(1, 3))).collect();
+    let nums: BTreeSet<u32> = rows.iter().filter_map(|r| r.0).collect();
+    let mut by_breaker = false;
+    let mut out: Vec<Vec<u32>> = Vec::with_capacity(rows.len());
+    for (n, poles) in &rows {
+        let Some(n) = *n else {
+            out.push(Vec::new());
+            continue;
+        };
+        if *poles == 1 {
+            out.push(vec![n]);
+            continue;
+        }
+        // From its number, round it, up to it.
+        let firsts: Vec<i64> =
+            vec![i64::from(n), i64::from(n) - i64::from(step) * i64::from(poles / 2), i64::from(n) - i64::from(step) * i64::from(poles - 1)];
+        let fits = firsts
+            .into_iter()
+            .filter(|f| *f >= 1)
+            .map(|f| (0..*poles).filter_map(|k| u32::try_from(f + i64::from(k * step)).ok()).collect::<Vec<u32>>())
+            .find(|set| set.iter().all(|x| *x == n || !nums.contains(x)));
+        match fits {
+            Some(set) => out.push(set),
+            None => {
+                by_breaker = true;
+                out.push(vec![n]);
+            }
+        }
+    }
+    if by_breaker {
+        out = rows.iter().map(|(n, _)| n.map(|n| vec![n]).unwrap_or_default()).collect();
+    }
+    Layout { by_breaker, rows: out }
 }
 
 // ─── The model's facts ───────────────────────────────────────────────────────
@@ -564,8 +603,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let panels = panels;
     let devices = devices_of(d);
     // Whether each schedule numbers its breakers rather than their poles.
-    let by_breaker: BTreeMap<String, bool> = scheds.iter().map(|(k, s)| (k.clone(), numbered_by_breaker(s))).collect();
-    let bb = |k: &str| by_breaker.get(k).copied().unwrap_or(false);
+    let layouts: BTreeMap<String, Layout> = scheds.iter().map(|(k, s)| (k.clone(), layout(s))).collect();
+    let none = Layout::default();
+    let lay = |k: &str| layouts.get(k).unwrap_or(&none);
     // -- Each panel's schedule: its own, else the typical one its letter names. --
     let sched_of = |p: &PanelEl| -> Option<(&String, &PanelSchedule)> {
         scheds.get_key_value(&p.tag.to_ascii_uppercase()).or_else(|| p.typical.as_ref().and_then(|t| scheds.get_key_value(&t.to_ascii_uppercase())))
@@ -652,7 +692,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     for (pi, p) in panels.iter().enumerate() {
         let Some((skey, s)) = sched_of(p) else { continue };
         let panel_type = s.panel.trim().to_string();
-        let by_breaker = bb(skey);
+        let by_breaker = lay(skey).by_breaker;
         let mut u = PanelUse {
             panel: p.tag.clone(),
             panel_type: panel_type.clone(),
@@ -662,7 +702,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         };
         let mut taken: BTreeSet<u32> = BTreeSet::new();
         for (ri, c) in s.circuits.iter().enumerate().take(MAX_ROWS) {
-            let t = takes(c, by_breaker);
+            let t = lay(skey).rows.get(ri).cloned().unwrap_or_default();
             if t.is_empty() {
                 continue;
             }
@@ -716,7 +756,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             handles.push(None);
             continue;
         };
-        let mesh = body(p, m, s, bb(skey), upf);
+        let mesh = body(p, m, lay(skey).highest(), upf);
         if mesh.faces.is_empty() {
             handles.push(None);
             continue;
@@ -767,13 +807,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} schedule, circuit {}", s.source, s.panel.trim(), c.number.trim()));
         let tr = trip(&c.breaker);
         let mut cn: Vec<Handle> = vec![p.handle];
-        let first = m.numbers.first().copied().unwrap_or(0);
-        let runs = lands.get(&(m.panel, first)).cloned().unwrap_or_default();
+        let mut runs: Vec<Handle> = m.numbers.iter().flat_map(|n| lands.get(&(m.panel, *n)).cloned().unwrap_or_default()).collect();
+        runs.sort_unstable();
+        runs.dedup();
         cn.extend(runs.iter().take(MAX_LINKS));
         for rh in &runs {
             run_breaker.insert(*rh, h);
         }
-        let devs = on.get(&(m.panel, first)).cloned().unwrap_or_default();
+        let mut devs: Vec<usize> = m.numbers.iter().flat_map(|n| on.get(&(m.panel, *n)).cloned().unwrap_or_default()).collect();
+        devs.sort_unstable();
+        devs.dedup();
         for di in &devs {
             if let Some(dv) = devices.get(*di) {
                 if cn.len() < MAX_LINKS * 2 {
@@ -986,7 +1029,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             }
             continue;
         };
-        let row = s.circuits.iter().take(MAX_ROWS).find(|c| takes(c, bb(panel)).contains(n));
+        let row = lay(panel).row_holding(*n).and_then(|i| s.circuits.get(i));
         if row.is_none_or(|c| row_of(c) == Row::Space) {
             mism.push(Mismatch {
                 kind: "plan_no_row".into(),
@@ -1007,11 +1050,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         mism.push(Mismatch { kind: "no_schedule".into(), panel: panel.clone(), level: level.clone(), devices: *count, ..Mismatch::default() });
     }
     for (key, s) in &scheds {
-        for c in s.circuits.iter().take(MAX_ROWS) {
+        for (ri, c) in s.circuits.iter().enumerate().take(MAX_ROWS) {
             if row_of(c) != Row::Breaker {
                 continue;
             }
-            let t = takes(c, bb(key));
+            let t = lay(key).rows.get(ri).cloned().unwrap_or_default();
             let used = t.iter().any(|n| plan.contains_key(&(key.clone(), *n)) || landed.contains(&(key.clone(), *n)));
             if used || feeds_gear(c, key, &tags, sp) || serves_equipment(c, &equipment) {
                 continue;
@@ -1066,7 +1109,7 @@ fn size_text(trip: Option<f64>, poles: u32) -> String {
 
 /// A breaker's body inside its panel's box: odd circuits on the left, even on the right, top
 /// down, each pole a row's height.
-fn body(p: &PanelEl, m: &Made, s: &PanelSchedule, by_breaker: bool, upf: f64) -> cadaddy_doc::Mesh {
+fn body(p: &PanelEl, m: &Made, highest: u32, upf: f64) -> cadaddy_doc::Mesh {
     let mut mesh = super::wallgen::empty_mesh();
     let (dx, dy, dz) = (p.hi.x - p.lo.x, p.hi.y - p.lo.y, p.hi.z - p.lo.z);
     let along_x = dx >= dy;
@@ -1074,7 +1117,7 @@ fn body(p: &PanelEl, m: &Made, s: &PanelSchedule, by_breaker: bool, upf: f64) ->
     if !(w > 1e-9 && dz > 1e-9) {
         return mesh;
     }
-    let highest = s.circuits.iter().take(MAX_ROWS).flat_map(|c| takes(c, by_breaker)).max().unwrap_or(2).max(2);
+    let highest = highest.max(2);
     let rows = f64::from(highest.div_ceil(2).max(1));
     let n = m.numbers.first().copied().unwrap_or(1).max(1);
     let row = f64::from((n - 1) / 2);
@@ -1203,20 +1246,37 @@ mod tests {
         assert_eq!(circuit_numbers("LP1-3", "LP1"), vec![3]);
         assert_eq!(circuit_numbers("LP1-3", ""), vec![3]);
         assert_eq!(circuit_numbers("7", "A"), vec![7]);
-        assert_eq!(takes(&ckt("13", "PTAC", "20", 2, &[]), false), vec![13, 15]);
-        assert_eq!(takes(&ckt("1", "MAIN", "100", 3, &[]), false), vec![1, 3, 5]);
-        assert_eq!(takes(&ckt("1", "MAIN", "100", 3, &[]), true), vec![1]);
     }
 
     #[test]
     fn a_schedule_numbers_its_poles_or_its_breakers() {
         let sched = |rows: Vec<PanelCircuit>| PanelSchedule { panel: "S".into(), circuits: rows, ..PanelSchedule::default() };
-        // Two-sided by poles: 13 is two poles (13, 15), and 15 is no row of its own.
-        let poles = sched(vec![ckt("1", "A", "20", 1, &[]), ckt("2", "B", "20", 1, &[]), ckt("13", "C", "20", 2, &[]), ckt("14", "D", "20", 1, &[])]);
-        assert!(!numbered_by_breaker(&poles));
+        // Two-sided by poles: 13 is two poles (13, 15), and 15 is no row of its own; a three-pole
+        // breaker printed on its middle row (39: 37, 39, 41, as 43 is another row's); one printed
+        // on its last (9: 5, 7, 9, as 11 is another row's and 3 a single pole's).
+        let poles = sched(vec![
+            ckt("1", "A", "20", 1, &[]),
+            ckt("2", "B", "20", 1, &[]),
+            ckt("3", "B", "20", 1, &[]),
+            ckt("9", "M", "30", 3, &[]),
+            ckt("11", "N", "20", 1, &[]),
+            ckt("13", "C", "20", 2, &[]),
+            ckt("14", "D", "20", 1, &[]),
+            ckt("39", "E", "15", 3, &[]),
+            ckt("43", "F", "20", 1, &[]),
+        ]);
+        let l = layout(&poles);
+        assert!(!l.by_breaker);
+        assert_eq!(l.rows[3], vec![5, 7, 9]);
+        assert_eq!(l.rows[5], vec![13, 15]);
+        assert_eq!(l.rows[7], vec![37, 39, 41]);
+        assert_eq!(l.row_holding(41), Some(7));
+        assert_eq!(l.highest(), 43);
         // A switchboard's rows 1, 2, 3, each of three poles: by breaker.
         let rows = sched(vec![ckt("1", "PANEL A", "200", 3, &[]), ckt("2", "PANEL B", "200", 3, &[]), ckt("3", "SPACE", "", 3, &[])]);
-        assert!(numbered_by_breaker(&rows));
+        let l = layout(&rows);
+        assert!(l.by_breaker);
+        assert_eq!(l.rows, vec![vec![1], vec![2], vec![3]]);
         assert_eq!(size_text(Some(20.0), 1), "20A 1P");
         assert_eq!(size_text(None, 2), "2P");
     }
