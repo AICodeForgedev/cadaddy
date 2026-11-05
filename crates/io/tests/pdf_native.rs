@@ -1603,3 +1603,44 @@ fn e_sheet_without_a_note_stays_sheet_size_even_when_asked() {
     assert!(r.do_not_scale);
     assert!(!r.needs_registration, "no scale note to register with");
 }
+
+/// A simple Type 1 font whose ToUnicode CMap declares a two-byte code space (`<0000> <FFFF>`, as
+/// some writers do) while mapping single bytes: its strings are still one byte per character
+/// (they read whole, not their last character).
+#[test]
+fn a_simple_fonts_two_byte_cmap_code_space_keeps_one_byte_codes() {
+    let mut cmap =
+        String::from("/CIDInit /ProcSet findresource begin 12 dict begin begincmap\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+    let chars: Vec<char> = "ModelPDE0379KSGR".chars().collect();
+    cmap.push_str(&format!("{} beginbfchar\n", chars.len()));
+    for c in &chars {
+        cmap.push_str(&format!("<{:02X}> <{:04X}>\n", *c as u32, *c as u32));
+    }
+    cmap.push_str("endbfchar\nendcmap CMapName currentdict /CMap defineresource pop end end\n");
+    let content = b"BT /F1 1 Tf 6.5 0 0 6.5 40 600 Tm (Model)Tj 19.527 0 Td (PDE07K3SGR3)Tj ET";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{}\nendstream", content.len(), String::from_utf8_lossy(content)),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /ToUnicode 6 0 R >>".into(),
+        format!("<< /Length {} >>\nstream\n{}\nendstream", cmap.len(), cmap),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{}\nendobj\n", i + 1, o).as_bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for off in offsets {
+        pdf.extend(format!("{off:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let r = pdf_read::read(&pdf, &PdfOptions::default()).expect("PDF read");
+    let texts: Vec<String> =
+        r.drawing.model.iter().filter_map(|e| if let EntityKind::Text(t) = &e.kind { Some(t.value.clone()) } else { None }).collect();
+    assert!(texts.iter().any(|t| t == "Model"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "PDE07K3SGR3"), "{texts:?}");
+}

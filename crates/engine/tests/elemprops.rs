@@ -441,3 +441,46 @@ fn a_room_volume_shows_its_tag_and_area_and_keeps_user_edits_through_rooms_build
     let h2 = Handle::parse_hex(again["handles"][0].as_str().unwrap()).unwrap();
     assert_eq!(get(&mut s, h2)["props"]["ceiling_height"]["source"]["kind"], "user");
 }
+
+#[test]
+fn every_element_find_lists_opens_in_bim_element_and_the_tree_counts_the_same() {
+    // Soak S5-003: a room volume (rooms.build) of a room the model holds no room element for was
+    // an element to `bim.props.find` but "not part of the built model" to bim.element and
+    // bim.tree. One meaning of model element for all three.
+    let mut d = Drawing::new_imperial();
+    room(&mut d, 0.0);
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    s.execute("layer.new", &json!({"name": "A-ROOM-TAG", "current": true})).unwrap();
+    s.execute("text", &json!({"at": [120, 60], "text": "OFFICE 101", "height": 6})).unwrap();
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}]
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    let r = s.execute("rooms.build", &json!({})).unwrap();
+    assert!(r["built"].as_u64().unwrap() >= 1, "{r}");
+    // The model's room element dropped (erased): its volume is the room now.
+    let modelled: Vec<String> = s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("room")).map(|e| e.handle.hex()).collect();
+    assert!(!modelled.is_empty());
+    s.execute("erase", &json!({"handles": modelled})).unwrap();
+    let found = s.execute("bim.props.find", &json!({"limit": 5000})).unwrap();
+    let handles: Vec<String> = found["handles"].as_array().unwrap().iter().filter_map(|h| h.as_str().map(str::to_string)).collect();
+    assert_eq!(found["count"].as_u64(), Some(handles.len() as u64), "{found}");
+    let kinds: Vec<&str> = found["elements"].as_array().unwrap().iter().filter_map(|e| e["kind"].as_str()).collect();
+    assert!(kinds.contains(&"room") && kinds.contains(&"wall"), "a volume of a room the model doesn't hold, and the walls: {kinds:?}");
+    for h in &handles {
+        let el = s.execute("bim.element", &json!({"handle": h}));
+        assert!(el.is_ok(), "{h}: {el:?}");
+    }
+    let tree = s.execute("bim.tree", &json!({"limit": 1})).unwrap();
+    assert_eq!(tree["total"].as_u64(), Some(handles.len() as u64), "{tree}");
+    let room = &handles[kinds.iter().position(|k| *k == "room").unwrap()];
+    let el = s.execute("bim.element", &json!({"handle": room})).unwrap();
+    assert_eq!(el["category"], json!("Rooms"), "{el}");
+    // A line of the sheet is still no element.
+    let sheet_line = s.doc().unwrap().model.iter().find(|e| made_as(e).is_none() && element_kind(e).is_none()).map(|e| e.handle.hex()).unwrap();
+    assert!(s.execute("bim.element", &json!({"handle": sheet_line})).is_err());
+}

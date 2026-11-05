@@ -122,6 +122,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if super::validate_height::is_height_key(key) {
         super::validate_height::check_height_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
     }
+    // The registration threshold of a packet's crops (validate.registration.residual_ft, feet).
+    if super::validate_register::is_register_key(key) {
+        super::validate_register::check_register_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
+    }
     // A room type's expected set (prescreen.expect.<room type>) must read.
     if super::validate_prescreen::is_expect_key(key) {
         super::validate_prescreen::check_expect_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
