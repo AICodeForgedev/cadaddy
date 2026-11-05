@@ -6024,6 +6024,21 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         ));
         result["panel_schedules"] = json!(schedules.len());
         sp.mep.panel_schedules = schedules;
+        // The load summaries and demand calculations beside them (the load calculation's check).
+        let lc = super::loadcalc::rules();
+        let mut summaries: Vec<cadaddy_walk3d::LoadSummary> = Vec::new();
+        for (number, sub) in &pages {
+            summaries.extend(super::loadcalc::read_summaries(&cadaddy_mepfix::sheet_facts::texts(sub), number, &lc));
+        }
+        if !summaries.is_empty() {
+            progress_line(&format!(
+                "  load summaries: {} ({})",
+                summaries.len(),
+                summaries.iter().map(|x| format!("{} {}", x.source, x.title)).collect::<Vec<_>>().join("; ")
+            ));
+            result["load_summaries"] = json!(summaries.len());
+        }
+        sp.mep.load_summaries = summaries;
         s.doc_mut()?.building_spec = Some(sp.to_json());
     }
     bim_step(s, job, "panel schedules", t);
@@ -6269,6 +6284,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["value_engineering_error"] = json!(e.to_string());
     }
     bim_step(s, job, "value engineering", t);
+    // The load calculation from the model, checked against the documents.
+    let t = web_time::Instant::now();
+    if let Err(e) = load_step(s, job, &mut result) {
+        result["load_calc_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "load calculation", t);
     // Check for warnings.
     if let Some(warnings) = result.get("warnings").and_then(Value::as_array) {
         for w in warnings.iter().take(MAX_QUESTIONS_PER_STAGE) {
@@ -14093,6 +14114,60 @@ fn same_level_name(a: &str, b: &str) -> bool {
     if ka.is_empty() || kb.is_empty() { a.trim().eq_ignore_ascii_case(b.trim()) } else { ka == kb }
 }
 
+/// The building's code-analysis sheet: the general sheets', else the architectural ones', the
+/// first that gives a construction type; its number and its texts in reading order.
+fn code_sheet(job: &GuidedJob) -> Option<(String, Vec<String>)> {
+    for disc in ["G", "A"] {
+        for (number, sub) in non_plan_pages(job, disc) {
+            let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+            let words = super::valueeng::reading_order(texts);
+            if super::valueeng::construction_type(&words).is_some() {
+                return Some((number, words));
+            }
+        }
+    }
+    None
+}
+
+/// The load calculation (Q6194, [`super::loadcalc`]): the model's loads per circuit, panel,
+/// feeder and service by the code sheet's occupancy, checked against the panel schedules and the
+/// documents' load summaries; its CSV and text report beside the job's drawing.
+fn load_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate::Result<()> {
+    match super::bspec::current(s, "bim_build") {
+        Ok((sp, true)) if !sp.mep.panel_schedules.is_empty() => {}
+        _ => return Ok(()),
+    }
+    let mut params = json!({"force": true});
+    if let Some((number, words)) = code_sheet(job) {
+        params["code_texts"] = json!(words);
+        params["code_sheet"] = json!(number);
+    }
+    if let Some(ck) = job.checkpoint.clone().filter(|_| job.checkpoint_given) {
+        let p = std::path::Path::new(&ck);
+        let stem = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "job".into());
+        params["csv"] = json!(p.with_file_name(format!("{stem}-loadcalc.csv")).to_string_lossy().to_string());
+        params["text"] = json!(p.with_file_name(format!("{stem}-loadcalc.txt")).to_string_lossy().to_string());
+    }
+    let v = s.execute("bim.loadcalc", &params)?;
+    let by = v["by_rule"].as_object().map(|m| m.iter().map(|(k, n)| format!("{k} {n}")).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let svc = &v["service"];
+    progress_line(&format!(
+        "  load calculation ({}): {} panels; service {} demand {} VA = {} A (rated {}); findings {} ({by})",
+        v["occupancy"]["name"].as_str().unwrap_or("?"),
+        v["panels"].as_array().map_or(0, Vec::len),
+        svc["panel"].as_str().unwrap_or("-"),
+        svc["demand_va"],
+        svc["demand_a"],
+        svc["rating_a"],
+        v["findings_total"]
+    ));
+    result["load_calc"] = json!({
+        "occupancy": v["occupancy"], "service": {"panel": svc["panel"], "demand_va": svc["demand_va"], "demand_a": svc["demand_a"], "rating_a": svc["rating_a"]},
+        "panels": v["panels"].as_array().map_or(0, Vec::len), "findings": v["findings_total"], "by_rule": v["by_rule"], "csv": v["csv"], "text": v["text"],
+    });
+    Ok(())
+}
+
 /// Value engineering (Q6154, [`super::valueeng`]): the building's code-analysis sheet (the
 /// general sheets', else the architectural ones': the first that gives a construction type), the
 /// specs' wiring-methods tables, each alternative tiered, priced with its manpower and modelled;
@@ -14102,17 +14177,7 @@ fn value_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate
         return Ok(());
     }
     let specs = job_specs(job);
-    let mut code: Option<(String, Vec<String>)> = None;
-    'find: for disc in ["G", "A"] {
-        for (number, sub) in non_plan_pages(job, disc) {
-            let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-            let words = super::valueeng::reading_order(texts);
-            if super::valueeng::construction_type(&words).is_some() {
-                code = Some((number, words));
-                break 'find;
-            }
-        }
-    }
+    let code = code_sheet(job);
     // Its files beside the job's own drawing.
     let beside = job.checkpoint.clone().filter(|_| job.checkpoint_given).map(|ck| {
         let p = std::path::Path::new(&ck);

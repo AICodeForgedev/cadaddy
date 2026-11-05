@@ -139,6 +139,7 @@ pub mod lightbake;
 pub mod lighting;
 pub mod lights;
 pub mod lightsched;
+pub mod loadcalc;
 mod lisp;
 pub mod materials;
 mod measuregeom;
@@ -827,6 +828,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(concrete::specs());
     v.extend(ugsheets::specs());
     v.extend(valueeng::specs());
+    v.extend(loadcalc::specs());
     v.extend(sheetsout::specs());
         v.extend(gear::specs());
         v.extend(labels::specs());
