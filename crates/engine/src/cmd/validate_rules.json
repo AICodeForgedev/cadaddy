@@ -115,8 +115,8 @@
       "severity": "high",
       "prescreen": null,
       "examples": {
-        "pass": "The mechanical legend defines FSD as a combination fire/smoke damper; the mechanical plans tag eight of them, and the model holds eight fire/smoke dampers.",
-        "fail": "The plans tag eight FSD, the electrical keynote powers them, and the model has no damper at all."
+        "pass": "The mechanical legend defines FSD as a combination fire/smoke damper; the mechanical plans tag five of them, and the model holds five fire/smoke dampers.",
+        "fail": "The plans tag five FSD, the electrical keynote powers them, and the model has no damper at all."
       }
     },
     {

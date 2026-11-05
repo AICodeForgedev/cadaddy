@@ -1,5 +1,5 @@
-//! G-COVERAGE (Q6183) on a made-up one-storey job: a 40' × 24' shell with a corridor (100) and
-//! two rooms (101, 102). Its mechanical plan M-101 carries a legend (`QSD` a combination fire/smoke
+//! G-COVERAGE (Q6183) on a made-up one-storey job: a 40' × 24' shell with a corridor (900) and
+//! two rooms (901, 902). Its mechanical plan M-101 carries a legend (`QSD` a combination fire/smoke
 //! damper, `QVD` a volume damper, `QXD` a dual duct detector) and an abbreviation list (`FRD`
 //! FIRE DAMPER, `AFF` above finished floor); an enlarged plan M-501 of part of the level
 //! (registered onto M-101) repeats some of its tags; the power plan E-101 (registered too) has a
@@ -180,9 +180,9 @@ fn spec() -> Value {
             {"name": "Partition", "thickness_in": 4.875, "from": "centerline"}
         ],
         "rooms": [
-            {"name": "Corridor", "number": "100", "level": "L1"},
-            {"name": "Storage", "number": "101", "level": "L1"},
-            {"name": "Office", "number": "102", "level": "L1"}
+            {"name": "Corridor", "number": "900", "level": "L1"},
+            {"name": "Storage", "number": "901", "level": "L1"},
+            {"name": "Office", "number": "902", "level": "L1"}
         ],
         "devices": {"by_type": {"QSD": dev, "FRD": dev}},
         "sheets": [
@@ -208,9 +208,9 @@ fn job(qsd: usize, qfd: usize) -> Session {
     line(&mut s, [0.5, 12.0], [39.5, 12.0]);
     line(&mut s, [20.0, 12.0], [20.0, 23.5]);
     layer(&mut s, "A-ROOM-TAG");
-    text(&mut s, at([30.0, 6.0]), "100", 6.0);
-    text(&mut s, at([10.0, 18.0]), "101", 6.0);
-    text(&mut s, at([30.0, 18.0]), "102", 6.0);
+    text(&mut s, at([30.0, 6.0]), "900", 6.0);
+    text(&mut s, at([10.0, 18.0]), "901", 6.0);
+    text(&mut s, at([30.0, 18.0]), "902", 6.0);
     mechanical_legend(&mut s);
     // M-101: three fire/smoke dampers, two fire dampers, four duct detectors.
     for p in [[5.0, 12.0], [15.0, 12.0], [25.0, 12.0]] {
@@ -224,7 +224,7 @@ fn job(qsd: usize, qfd: usize) -> Session {
     // M-501 (the enlarged plan) shows two of the same fire/smoke dampers.
     tag(&mut s, [5.0, 12.0], ENL, "QSD");
     tag(&mut s, [15.2, 12.1], ENL, "QSD");
-    // E-101: the keynote powering a motorized damper, and its marker in room 102.
+    // E-101: the keynote powering a motorized damper, and its marker in room 902.
     electrical_keynotes(&mut s);
     marker(&mut s, [30.0, 20.0], E, "1");
     let mut items: Vec<([f64; 2], &str)> = Vec::new();
@@ -429,7 +429,7 @@ fn an_agent_answer_citing_no_print_page_is_kept_unsure() {
     let out = dir("agent");
     let run = s.execute("validate", &json!({"level": "L1", "out_dir": out.to_string_lossy()})).unwrap();
     let run = run["run"].as_str().unwrap().to_string();
-    let area = "L1/101".to_string();
+    let area = "L1/901".to_string();
     let n = s.execute("validate.next", &json!({"run": run, "area": area})).unwrap();
     let pdir = PathBuf::from(n["packet"]["dir"].as_str().unwrap());
     let manifest: Value = serde_json::from_str(&std::fs::read_to_string(pdir.join("manifest.json")).unwrap()).unwrap();
