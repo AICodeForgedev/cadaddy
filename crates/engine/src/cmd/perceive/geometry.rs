@@ -976,10 +976,13 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
             let islands: Vec<Vec<Vec2>> = loops.iter().filter(|l| !l.outer).map(polygon).filter(|p| p.len() >= 3).collect();
             let in_room = |c: Vec2| cadaddy_geom::point_in_polygon(&poly, c) || islands.iter().any(|p| cadaddy_geom::point_in_polygon(p, c));
             // (The label in it: its point, or its whole box where its point sits on a line - a
-            // storefront's - just outside: within half its height of the outline. A note's point
-            // farther out is no room's label.)
+            // storefront's - just outside: within half its height of the outline, the room's
+            // number in it too. A note's point farther out, or a note on a notes box's edge, is no
+            // room's label.)
             let whole = corners.iter().all(|c| in_room(*c));
-            let on_edge = in_room(at) || crate::cmd::guided::edge_distance(&poly, at) <= 0.5 * th;
+            let on_edge = in_room(at)
+                || (crate::cmd::guided::edge_distance(&poly, at) <= 0.5 * th
+                    && numbers.iter().any(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q)));
             if area < min_area || !(i == 0 || in_room(at) || (whole && on_edge)) {
                 continue;
             }
