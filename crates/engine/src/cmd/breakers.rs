@@ -265,44 +265,64 @@ impl Layout {
 }
 
 /// How a schedule's rows take the bus: a multi-pole breaker's poles are the numbers on its bus
-/// side from its printed number, or round it (a three-pole breaker printed on its middle row),
-/// or up to it; the first of those no other row prints. A schedule where some multi-pole row fits
-/// none of them numbers its breakers (a switchboard's `1, 2, 3`, each of three poles): each row
-/// takes its own number only.
-pub(crate) fn layout(s: &PanelSchedule) -> Layout {
+/// side from its printed number, round it (a three-pole breaker printed on its middle row) or up
+/// to it, whichever no other row prints. Where more than one fits: the one a circuit on the plans
+/// names (`hints`: `LP-37,39,41`), else the way the schedule prints its other multi-pole rows
+/// (one that fits only round its number says the schedule prints them so), else from its number.
+/// A schedule where some multi-pole row fits none numbers its breakers (a switchboard's `1, 2,
+/// 3`, each of three poles): each row takes its own number only.
+pub(crate) fn layout(s: &PanelSchedule, hints: &BTreeSet<Vec<u32>>) -> Layout {
     let step = rules().step();
     let rows: Vec<(Option<u32>, u32)> =
         s.circuits.iter().take(MAX_ROWS).map(|c| (c.number.trim().parse::<u32>().ok().filter(|n| *n <= 1000), c.poles.clamp(1, 3))).collect();
     let nums: BTreeSet<u32> = rows.iter().filter_map(|r| r.0).collect();
-    let mut by_breaker = false;
+    // Each multi-pole row's sets that fit, by where its number is printed (0 first, 1 middle,
+    // 2 last).
+    let fits: Vec<Vec<(usize, Vec<u32>)>> = rows
+        .iter()
+        .map(|(n, poles)| {
+            let (Some(n), true) = (*n, *poles > 1) else { return Vec::new() };
+            let firsts = [i64::from(n), i64::from(n) - i64::from(step) * i64::from(poles / 2), i64::from(n) - i64::from(step) * i64::from(poles - 1)];
+            let mut out: Vec<(usize, Vec<u32>)> = Vec::new();
+            for (at, f) in firsts.into_iter().enumerate().filter(|(_, f)| *f >= 1) {
+                let set: Vec<u32> = (0..*poles).filter_map(|k| u32::try_from(f + i64::from(k * step)).ok()).collect();
+                if set.iter().all(|x| *x == n || !nums.contains(x)) && !out.iter().any(|(_, o)| *o == set) {
+                    out.push((at, set));
+                }
+            }
+            out
+        })
+        .collect();
+    let by_breaker = rows.iter().zip(&fits).any(|((n, poles), f)| n.is_some() && *poles > 1 && f.is_empty());
+    if by_breaker {
+        return Layout { by_breaker, rows: rows.iter().map(|(n, _)| n.map(|n| vec![n]).unwrap_or_default()).collect() };
+    }
+    // The schedule's way: a row the plans name, else a row that can't be printed on its first
+    // pole (it fits only round or up to its number).
+    let named = fits.iter().flatten().find(|(_, set)| hints.contains(set)).map(|(at, _)| *at);
+    // (Printed on its middle row before its last, as the schedules print them.)
+    let forced = fits.iter().filter(|f| !f.is_empty() && !f.iter().any(|(at, _)| *at == 0)).filter_map(|f| f.first().map(|(at, _)| *at)).min();
+    let way = named.or(forced).unwrap_or(0);
+    // Each row its set, no two rows sharing a pole.
+    let mut taken: BTreeSet<u32> = BTreeSet::new();
     let mut out: Vec<Vec<u32>> = Vec::with_capacity(rows.len());
-    for (n, poles) in &rows {
+    for ((n, _), f) in rows.iter().zip(&fits) {
         let Some(n) = *n else {
             out.push(Vec::new());
             continue;
         };
-        if *poles == 1 {
-            out.push(vec![n]);
-            continue;
-        }
-        // From its number, round it, up to it.
-        let firsts: Vec<i64> =
-            vec![i64::from(n), i64::from(n) - i64::from(step) * i64::from(poles / 2), i64::from(n) - i64::from(step) * i64::from(poles - 1)];
-        let fits = firsts
-            .into_iter()
-            .filter(|f| *f >= 1)
-            .map(|f| (0..*poles).filter_map(|k| u32::try_from(f + i64::from(k * step)).ok()).collect::<Vec<u32>>())
-            .find(|set| set.iter().all(|x| *x == n || !nums.contains(x)));
-        match fits {
-            Some(set) => out.push(set),
-            None => {
-                by_breaker = true;
-                out.push(vec![n]);
-            }
-        }
-    }
-    if by_breaker {
-        out = rows.iter().map(|(n, _)| n.map(|n| vec![n]).unwrap_or_default()).collect();
+        let free = |set: &Vec<u32>| set.iter().all(|x| !taken.contains(x));
+        let pick = if f.is_empty() {
+            vec![n]
+        } else {
+            f.iter()
+                .find(|(_, set)| hints.contains(set) && free(set))
+                .or_else(|| f.iter().find(|(at, set)| *at == way && free(set)))
+                .or_else(|| f.iter().find(|(_, set)| free(set)))
+                .map_or_else(|| vec![n], |(_, set)| set.clone())
+        };
+        taken.extend(pick.iter().copied());
+        out.push(pick);
     }
     Layout { by_breaker, rows: out }
 }
@@ -603,7 +623,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let panels = panels;
     let devices = devices_of(d);
     // Whether each schedule numbers its breakers rather than their poles.
-    let layouts: BTreeMap<String, Layout> = scheds.iter().map(|(k, s)| (k.clone(), layout(s))).collect();
+    // The multi-pole circuits the plans name (`LP-37,39,41`), per panel letter or tag.
+    let mut hints: BTreeMap<String, BTreeSet<Vec<u32>>> = BTreeMap::new();
+    for dv in devices.iter().filter(|d| d.numbers.len() > 1) {
+        hints.entry(dv.panel.clone()).or_default().insert(dv.numbers.clone());
+    }
+    for t in sp.tags.iter().filter(|t| t.kind == "circuit").take(MAX_DEVICES) {
+        let f = |k: &str| t.fields.get(k).map(|v| v.value.trim().to_string()).unwrap_or_default();
+        let panel = f("panel").to_ascii_uppercase();
+        let nums = circuit_numbers(&f("circuit"), &panel);
+        if nums.len() > 1 {
+            hints.entry(panel).or_default().insert(nums);
+        }
+    }
+    let no_hints = BTreeSet::new();
+    let layouts: BTreeMap<String, Layout> = scheds.iter().map(|(k, s)| (k.clone(), layout(s, hints.get(k).unwrap_or(&no_hints)))).collect();
     let none = Layout::default();
     let lay = |k: &str| layouts.get(k).unwrap_or(&none);
     // -- Each panel's schedule: its own, else the typical one its letter names. --
@@ -1265,7 +1299,8 @@ mod tests {
             ckt("39", "E", "15", 3, &[]),
             ckt("43", "F", "20", 1, &[]),
         ]);
-        let l = layout(&poles);
+        let none = BTreeSet::new();
+        let l = layout(&poles, &none);
         assert!(!l.by_breaker);
         assert_eq!(l.rows[3], vec![5, 7, 9]);
         assert_eq!(l.rows[5], vec![13, 15]);
@@ -1274,9 +1309,23 @@ mod tests {
         assert_eq!(l.highest(), 43);
         // A switchboard's rows 1, 2, 3, each of three poles: by breaker.
         let rows = sched(vec![ckt("1", "PANEL A", "200", 3, &[]), ckt("2", "PANEL B", "200", 3, &[]), ckt("3", "SPACE", "", 3, &[])]);
-        let l = layout(&rows);
+        let l = layout(&rows, &none);
         assert!(l.by_breaker);
         assert_eq!(l.rows, vec![vec![1], vec![2], vec![3]]);
+        // Two three-pole rows that fit either way: from their numbers, unless the plans name a
+        // circuit (`37,39,41`): then both are printed on their middle rows.
+        let either =
+            sched(vec![ckt("35", "W", "20", 1, &[]), ckt("36", "X", "20", 1, &[]), ckt("39", "P1", "20", 3, &[]), ckt("40", "P2", "20", 3, &[])]);
+        let l = layout(&either, &none);
+        assert_eq!((l.rows[2].clone(), l.rows[3].clone()), (vec![39, 41, 43], vec![40, 42, 44]));
+        let named: BTreeSet<Vec<u32>> = [vec![37, 39, 41]].into_iter().collect();
+        let l = layout(&either, &named);
+        assert_eq!((l.rows[2].clone(), l.rows[3].clone()), (vec![37, 39, 41], vec![38, 40, 42]));
+        assert_eq!(l.highest(), 42);
+        // One row printed on its middle (43 is another's) and the schedule's other prints so too.
+        let forced = sched(vec![ckt("33", "Q", "15", 3, &[]), ckt("39", "R", "15", 3, &[]), ckt("43", "S", "20", 1, &[])]);
+        let l = layout(&forced, &none);
+        assert_eq!((l.rows[0].clone(), l.rows[1].clone()), (vec![31, 33, 35], vec![37, 39, 41]));
         assert_eq!(size_text(Some(20.0), 1), "20A 1P");
         assert_eq!(size_text(None, 2), "2P");
     }
