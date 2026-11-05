@@ -854,7 +854,11 @@ fn ocr_reports_clusters_and_confidence() {
     assert_eq!((r.ocr.clusters, r.ocr.glyphs), (14, 14), "{:?}", r.ocr);
     assert_eq!(r.stats.get("SHX OCR glyph clusters").copied(), Some(14));
     assert_eq!(r.stats.get("SHX text (OCR) recovered").copied(), Some(2));
-    assert!(r.stats.contains_key("SHX OCR mean confidence %"));
+    // B11-002: the stat and the note give the mean of the words the import kept, not of none (0%)
+    let pct = (r.ocr.mean_confidence() * 100.0).round() as usize;
+    assert!(pct > 0, "{:?}", r.ocr);
+    assert_eq!(r.stats.get("SHX OCR mean confidence %").copied(), Some(pct));
+    assert!(r.notes.iter().any(|n| n.starts_with("SHX OCR:") && n.contains(&format!("mean confidence {pct}%"))), "{:?}", r.notes);
     // the PDFIMPORT report carries the same
     let (_, report) = pdf_read::read_json(&pdf, &serde_json::json!({})).expect("read_json");
     assert_eq!(report["ocr"]["clusters"], 14);

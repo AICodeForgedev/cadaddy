@@ -227,6 +227,27 @@ pub struct Snapshot {
     /// Roughly the memory this step holds that the drawing after it doesn't share (set when it is
     /// recorded; 0 until then). Undo keeps the total under [`undoctl::UNDO_BUDGET`].
     pub bytes: usize,
+    /// Model space's look before the step, when the step turned its view or changed its visual
+    /// style: undo puts it back with the drawing (a BIM build leaves the model in a shaded SW iso
+    /// view; undone, the empty drawing was still shown, and plotted, that way: S5-007).
+    pub look: Option<ModelLook>,
+}
+
+/// How model space is looked at: its view direction and twist, visual style and view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelLook {
+    pub dir: cadaddy_geom::Vec3,
+    pub twist: f64,
+    pub style: cadaddy_render::shade::VisualStyle,
+    pub view: Option<View>,
+}
+
+impl ModelLook {
+    /// Whether `other` looks from the same direction in the same style (a pan or zoom alone is not
+    /// a change an undo step puts back).
+    pub fn same_3d(&self, other: &ModelLook) -> bool {
+        self.dir == other.dir && self.twist == other.twist && self.style == other.style
+    }
 }
 
 /// The extents of a space, remembered for the last few drawings: a drawing is never changed in
@@ -537,6 +558,23 @@ impl DocState {
     /// The projection the current space's display list is built with: [`Self::projection`],
     /// except in a layout, whose sheet is drawn flat (an MSPACE viewport's model space is drawn
     /// through the viewport).
+    /// Model space's look ([`ModelLook`]).
+    pub fn model_look(&self) -> ModelLook {
+        let view = self.views.iter().find(|(s, _)| *s == Space::Model).map(|(_, v)| *v);
+        ModelLook { dir: self.view_dir, twist: self.view_twist, style: self.visual_style, view }
+    }
+    /// Put model space's look back (whichever space is current).
+    pub fn set_model_look(&mut self, l: ModelLook) {
+        self.view_dir = l.dir;
+        self.view_twist = l.twist;
+        self.visual_style = l.style;
+        if let Some(v) = l.view.filter(usable_view) {
+            match self.views.iter_mut().find(|(s, _)| *s == Space::Model) {
+                Some((_, slot)) => *slot = v,
+                None => self.views.push((Space::Model, v)),
+            }
+        }
+    }
     pub fn list_projection(&self) -> Option<cadaddy_geom::view3::Projection> {
         if self.space != Space::Model { None } else { self.projection() }
     }
@@ -2614,7 +2652,13 @@ impl Session {
         let undoable = find_command(&owner.id).is_some_and(|c| c.undoable);
         if undoable && !Arc::ptr_eq(&owner.before, &st.doc) {
             let label = find_command(&owner.id).map_or("Command", |c| c.label);
-            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&owner.before), selection: owner.selection_before.clone(), bytes: 0 });
+            st.push_undo(Snapshot {
+                label: label.to_string(),
+                doc: Arc::clone(&owner.before),
+                selection: owner.selection_before.clone(),
+                bytes: 0,
+                look: None,
+            });
             st.revision += 1;
         }
         owner.before = Arc::clone(&st.doc);
@@ -2638,9 +2682,9 @@ impl Session {
         let call_label = find_command(&cmd::resolve_alias(id)).map_or("Command", |c| c.label);
         let Some(st) = self.docs.get_mut(idx) else { return };
         if undoable && !Arc::ptr_eq(&before, &doc) {
-            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0 });
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0, look: None });
         }
-        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0 });
+        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0, look: None });
         st.revision += 1;
         self.rebase_running(uid);
     }
@@ -2713,6 +2757,7 @@ impl Session {
             return Err(EngineError::Disabled(spec.id.into(), why));
         }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let look_before = self.state().ok().map(DocState::model_look);
         let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
         let run = spec.run;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
@@ -2767,7 +2812,8 @@ impl Session {
         {
             // Inside a LISP routine the routine's single undo step records it.
             if !grouped {
-                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0 });
+                let look = look_before.filter(|l| !l.same_3d(&st.model_look()));
+                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0, look });
             }
             st.revision += 1;
         }
@@ -3382,7 +3428,7 @@ impl Session {
         if let Ok(st) = self.state_mut()
             && (keep || !Arc::ptr_eq(&run.before, &st.doc))
         {
-            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0 });
+            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0, look: None });
             st.revision += 1;
         }
     }
@@ -3814,7 +3860,11 @@ impl Session {
     pub fn undo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.undo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
+        let look = snap.look.map(|_| st.model_look());
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
+        if let Some(l) = snap.look {
+            st.set_model_look(l);
+        }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
@@ -3825,7 +3875,11 @@ impl Session {
     pub fn redo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.redo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
+        let look = snap.look.map(|_| st.model_look());
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
+        if let Some(l) = snap.look {
+            st.set_model_look(l);
+        }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
