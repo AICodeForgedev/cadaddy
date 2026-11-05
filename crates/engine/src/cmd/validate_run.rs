@@ -16,7 +16,9 @@
 //!   but a pass becomes a review item of kind `validation`, ranked by severity × confidence.
 //! - `validate.status {run?}`: areas done, findings by trade, rule and verdict, the accuracy per
 //!   trade and per rule (pass / (pass + fail + missing + extra)), the judge's false-alarm rate
-//!   from the items a person rejected, and on a planted copy the planted errors caught and missed.
+//!   from the items a person rejected, on a planted copy the planted errors caught and missed,
+//!   and the sheets by their print crops' registration against the model's walls (Q6141),
+//!   misregistered first, then by the largest residual.
 //! - `validate.plant {count, kinds?, seed}`: a copy of the drawing (opened beside it) with known
 //!   errors planted, recorded in the copy only; the same seed plants the same errors.
 //! - `validate.cancel {run?}`: stops handing out a run's areas (the Validate panel's Cancel); what
@@ -65,6 +67,8 @@ const MISSING_SLACK: usize = 100;
 /// Parts of one area's report, at most.
 const MAX_PARTS: u64 = 10_000;
 const WARNINGS_SHOWN: usize = 10;
+/// Sheets `validate.status` lists by their registration, at most.
+const MAX_REGISTRATION_ROWS: usize = 50;
 /// Objects of a packet's `objects.json` read for checking a report, at most (per list).
 const MAX_PACKET_OBJECTS: usize = 5_000;
 const MAX_EVIDENCE: usize = 8;
@@ -94,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new(CMD_STATUS, "Validation Run Status", run_status)
             .params(
-                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged, in_parts}, findings: {total (per handle), by_verdict, by_trade, by_rule}, accuracy: {overall, judged_pairs, unsure_pairs, pairs_asked, coverage, by_trade, by_rule, coverage_by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra) over the element × rule pairs judged, a pair judged twice by its worse verdict; coverage: the pairs the packets asked for that a pass, fail or extra judged), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, per_run: [{run, scope, areas, findings, accuracy, judged_pairs, pairs_asked, coverage}], totals: {runs, areas_judged, findings, accuracy} (every run of the drawing, an area judged in several runs once, from the latest), next}: how far the run is and how the model scores, and the totals over every run",
+                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged, in_parts}, findings: {total (per handle), by_verdict, by_trade, by_rule}, accuracy: {overall, judged_pairs, unsure_pairs, pairs_asked, coverage, by_trade, by_rule, coverage_by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra) over the element × rule pairs judged, a pair judged twice by its worse verdict; coverage: the pairs the packets asked for that a pass, fail or extra judged), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, registration: {threshold_ft, threshold_from, sheets: [{sheet, view?, status (the worst crop's: misregistered|refitted|ok|not_checked), residual_ft, rotation_deg, scale, worst: {area, file}, crops, areas, ok, refitted, misregistered, not_checked}] (the sheets by their print crops' registration against the model's walls, worst first: misregistered, then the largest residual), more?}, runs, per_run: [{run, scope, areas, findings, accuracy, judged_pairs, pairs_asked, coverage}], totals: {runs, areas_judged, findings, accuracy} (every run of the drawing, an area judged in several runs once, from the latest), next}: how far the run is and how the model scores, and the totals over every run",
             )
             .noundo(),
         CommandSpec::new(CMD_PLANT, "Plant Validation Errors", run_plant)
@@ -168,6 +172,74 @@ struct RunArea {
     /// and runs by each of the packet's rules that applies to it) and how many of them a pass,
     /// fail or extra judged (an `unsure` pair is not judged): counted when a report comes in.
     pairs: BTreeMap<String, [usize; 2]>,
+    /// Its placed print crops' registration against the model's walls (Q6141).
+    registration: Vec<CropRegistration>,
+}
+
+/// One placed print crop's registration as its packet measured it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct CropRegistration {
+    file: String,
+    sheet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view: Option<String>,
+    /// `ok`, `refitted`, `misregistered` or `not_checked`.
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_ft: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rotation_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scale: Option<f64>,
+}
+
+/// The registration of the run's print crops by sheet (and view), worst first: misregistered,
+/// then by the largest residual.
+fn registration_by_sheet(run: &Run, threshold_ft: f64, rule: Option<&str>) -> Value {
+    let mut by: BTreeMap<(String, Option<String>), Vec<(&str, &CropRegistration)>> = BTreeMap::new();
+    for a in &run.areas {
+        for c in &a.registration {
+            by.entry((c.sheet.clone(), c.view.clone())).or_default().push((a.id.as_str(), c));
+        }
+    }
+    let mut rows: Vec<((u8, f64), Value)> = by
+        .into_iter()
+        .filter_map(|((sheet, view), crops)| {
+            let (area, worst) = crops.iter().min_by(|x, y| {
+                let (kx, ky) = (vr_rank(x.1), vr_rank(y.1));
+                kx.0.cmp(&ky.0).then(kx.1.total_cmp(&ky.1))
+            })?;
+            let areas: BTreeSet<&str> = crops.iter().map(|c| c.0).collect();
+            let n = |st: &str| crops.iter().filter(|c| c.1.status == st).count();
+            let mut o = json!({
+                "sheet": sheet, "status": worst.status, "residual_ft": worst.residual_ft, "rotation_deg": worst.rotation_deg, "scale": worst.scale,
+                "worst": {"area": area, "file": worst.file},
+                "crops": crops.len(), "areas": areas.len(),
+                "ok": n("ok"), "refitted": n("refitted"), "misregistered": n("misregistered"), "not_checked": n("not_checked"),
+            });
+            if let Some(v) = view {
+                o["view"] = json!(v);
+            }
+            Some((vr_rank(worst), o))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)).then(a.1["sheet"].as_str().cmp(&b.1["sheet"].as_str())));
+    let total = rows.len();
+    let mut out = json!({
+        "about": "each sheet's print crops in this run's packets, by their registration against the model's walls (validate.packet `registration`), worst first: misregistered, then the largest residual",
+        "threshold_ft": vp::r2(threshold_ft),
+        "threshold_from": rule.map_or_else(|| "default".to_string(), |k| format!("project rule {k}")),
+        "sheets": rows.into_iter().take(MAX_REGISTRATION_ROWS).map(|r| r.1).collect::<Vec<_>>(),
+    });
+    if total > MAX_REGISTRATION_ROWS {
+        out["more"] = json!(total - MAX_REGISTRATION_ROWS);
+    }
+    out
+}
+
+fn vr_rank(c: &CropRegistration) -> (u8, f64) {
+    super::validate_register::rank(&c.status, c.residual_ft)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -882,6 +954,24 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
             Some((f, c["sheet"].as_str().unwrap_or_default().to_string(), over))
         })
         .collect();
+    let registration: Vec<CropRegistration> = manifest["prints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let r = c.get("registration")?;
+            Some(CropRegistration {
+                file: c["file"].as_str()?.to_string(),
+                sheet: c["sheet"].as_str().unwrap_or_default().to_string(),
+                view: c["view"].as_str().map(str::to_string),
+                status: r["status"].as_str().unwrap_or_default().to_string(),
+                residual_ft: r["residual_ft"].as_f64(),
+                rotation_deg: r["rotation_deg"].as_f64(),
+                scale: r["scale"].as_f64(),
+            })
+        })
+        .take(MAX_PACKET_OBJECTS)
+        .collect();
     let rules: Vec<String> = read_json(&dir.join("rules.json"))
         .map(|r| r["rules"].as_array().into_iter().flatten().filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
         .unwrap_or_default();
@@ -903,6 +993,7 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
         a.dir = folder;
         a.images = images.clone();
         a.prints = prints;
+        a.registration = registration;
         a.rules = rules.clone();
         a.fp = fp;
         a.findings.clear();
@@ -1941,6 +2032,9 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(plant) = plant_of(d) {
         out["planted"] = planted_report(&plant, run, &all, reveal);
     }
+    // The sheets by their crops' registration against the model's walls.
+    let (thr, rule) = super::validate_register::threshold(&d.project_rules);
+    out["registration"] = registration_by_sheet(run, thr, rule.as_deref());
     if run.cancelled {
         out["cancelled"] = json!(true);
         if left > 0 {
@@ -1960,6 +2054,14 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
         out["totals"]["findings"]["by_rule"] = json!("over the answer's size: see totals.accuracy.by_rule");
         if let Some(pl) = out.get_mut("planted").and_then(Value::as_object_mut) {
             pl.insert("errors".into(), json!("too many to list here"));
+        }
+        let more = out["registration"]["more"].as_u64().unwrap_or(0) as usize;
+        if let Some(list) = out["registration"].get_mut("sheets").and_then(Value::as_array_mut)
+            && list.len() > 10
+        {
+            let more = list.len() - 10 + more;
+            list.truncate(10);
+            out["registration"]["more"] = json!(more);
         }
     }
     if out.to_string().len() > super::agentready::ANSWER_MAX
