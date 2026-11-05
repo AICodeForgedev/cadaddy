@@ -119,15 +119,15 @@ PEAK = re.compile(r"peak (?:memory )?(\d+) MB")
 
 
 def run_job(cfg, cli, commit, work):
-    """The job on a fresh copy of the checkpoint: (built model, wall seconds, peak MB)."""
+    """The job on a fresh copy of the checkpoint: (built model, wall seconds, peak MB). The job
+    starts in a new drawing and goes on from the copy (a drawing holding the job open would be
+    "a job already running")."""
     short = commit[:10]
-    opened = os.path.join(work, f"open-{short}.cdy")
     ckpt = os.path.join(work, f"ckpt-{short}.cdy")
     built = os.path.join(work, f"built-{short}.cdy")
-    for p in (opened, ckpt, built):
+    for p in (ckpt, built):
         if os.path.exists(p):
             os.remove(p)
-    shutil.copy2(cfg["checkpoint"], opened)
     shutil.copy2(cfg["checkpoint"], ckpt)
     params = {"goal": "takeoff", "auto": True, "resume": "any"}
     params.update(cfg.get("job", {}))
@@ -141,7 +141,7 @@ def run_job(cfg, cli, commit, work):
     log(f"job started (limit {limit:.0f} s)")
     t0 = time.time()
     with open(out, "w", encoding="utf-8") as fo, open(err, "w", encoding="utf-8") as fe:
-        p = subprocess.Popen([cli, "run", opened, "--cmd-file", cmds, "--save", built], stdout=fo, stderr=fe)
+        p = subprocess.Popen([cli, "run", "--cmd-file", cmds, "--save", built], stdout=fo, stderr=fe)
         try:
             code = p.wait(timeout=limit)
         except subprocess.TimeoutExpired:
@@ -163,11 +163,10 @@ def run_job(cfg, cli, commit, work):
         log(f"the job failed (exit {code}); see {err}")
         sys.exit(1)
     log(f"job done in {secs:.0f} s, peak {peak} MB")
-    for p in (opened, ckpt):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
+    try:
+        os.remove(ckpt)
+    except OSError:
+        pass
     return built, secs, peak
 
 
