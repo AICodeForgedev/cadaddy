@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(got("through_wall_unit"), set(&["M-PTAC"]));
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
         assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
-        assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN"]));
+        assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN", "E-EQUIP-ELEC"]));
         // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
         // one's drivers and the room's count (Q6145).
         let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT"]);

@@ -3255,6 +3255,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         whole_levels: false,
         only: &[],
         gear_docs: gear_docs.as_ref(),
+        equip_docs: None,
     });
     // Each element's expected height and where the documents give it (G-HEIGHT's reading).
     if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {

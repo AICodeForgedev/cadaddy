@@ -709,6 +709,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if asked.is_empty() || !only.is_empty() {
         let gear_docs = if super::validate_gear::wanted(&all, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
+        let equip_docs = if super::validate_equip::wanted(&all, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
         let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
             d,
             sp: &sp,
@@ -720,6 +721,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             whole_levels: matches!(scope_name.as_str(), "building" | "level"),
             only: &only,
             gear_docs: gear_docs.as_ref(),
+            equip_docs: equip_docs.as_ref(),
         });
         pre["measured"] = measured.summary();
     }

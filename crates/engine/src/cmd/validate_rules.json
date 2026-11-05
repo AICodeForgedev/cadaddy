@@ -413,6 +413,35 @@
       }
     },
     {
+      "id": "E-EQUIP-ELEC",
+      "trade": "electrical",
+      "applies_to": {
+        "kinds": [
+          "equipment_connection"
+        ],
+        "categories": [],
+        "marks": []
+      },
+      "check": "Each equipment connection follows its latest approved submittal and the code: protection no larger than the maker's maximum (and of the fuse class it names), conductors at least its minimum circuit amps (else 125% of its full-load or nameplate amps), its conductors within the conduit fill, a disconnect rated and of the type it needs, and its short-circuit current rating at least the available fault current at its source.",
+      "how": [
+        "E-EQUIP-ELEC in `prescreen` recomputed each connection from the job's submittals (read again; the latest approved revision; a scanned one through an agent's answer citing its page) and the code rules data, and compared the model's circuit (its panel schedule row, its disconnect, its source panel's available fault current). Each finding's `measured` has the submittal's values and page, the model's circuit and the recomputed values.",
+        "Read the submittal page it cites (MCA, MOP or max fuse and class, FLA or nameplate amps, SCCR) and the panel schedule row and one-line for the model's breaker, conductors and conduit: a value the documents don't give is 'unsure', never a pass.",
+        "Every `equipment_electrical` RFI the build raised must match a failure here, and every failure must have an RFI: a failure with none is 'missing', an RFI with no failure 'extra' (its `working` shows why)."
+      ],
+      "documents": [
+        "submittal",
+        "schedule",
+        "riser_diagram"
+      ],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The pump's submittal gives MCA 22 A and MOP 35 A; its circuit is a 30 A breaker on #10 copper (35 A) in 3/4 in conduit, its fused disconnect 30 A; its SCCR of 5 kA is above the 3 kA at its panel.",
+        "fail": "The unit's submittal allows at most 80 A of protection (p. 5); the model protects it with a 90 A breaker."
+      }
+    },
+    {
       "id": "E-LUM",
       "trade": "electrical",
       "applies_to": {"kinds": ["light_fixture", "luminaire", "wall_luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},

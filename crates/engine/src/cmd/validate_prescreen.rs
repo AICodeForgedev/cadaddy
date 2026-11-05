@@ -58,6 +58,10 @@
 //!     headroom and dedicated space, the raceways, gutter, bending space and lugs of what lands on
 //!     it, and its box against the submittal's ([`super::validate_gear`]), recomputed from the
 //!     documents.
+//!   - **E-EQUIP-ELEC**: each equipment connection's protection, conductors, conduit fill,
+//!     disconnect and SCCR against its latest approved submittal (re-read) and the code rules
+//!     data, the revision the model follows, and the build's `equipment_electrical` RFIs matched
+//!     against the verdicts ([`super::validate_equip`]).
 //!
 //! Project-rule sets are never built in: domain `custom`, key
 //! `prescreen.expect.<room type>`, value a list such as
@@ -103,7 +107,7 @@ pub const CMD: &str = "validate.prescreen";
 /// The project-rule key prefix of a room type's expected set.
 pub const EXPECT_PREFIX: &str = "prescreen.expect.";
 /// The rules the prescreen measures.
-pub const RULES: [&str; 18] = [
+pub const RULES: [&str; 19] = [
     "G-HOST",
     "G-HEIGHT",
     super::walllayout::RULE,
@@ -122,6 +126,7 @@ pub const RULES: [&str; 18] = [
     super::validate_gear::SPACE,
     super::validate_gear::FILL,
     super::validate_gear::SIZE,
+    super::validate_equip::RULE,
 ];
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
@@ -144,7 +149,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE|G-UNDERGROUND|E-GEAR-SPACE|E-GEAR-FILL|E-GEAR-SIZE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature; G-UNDERGROUND: pass|fail|missing|extra|proposed|unsure; E-GEAR-*: pass|fail|unsure|conflict, the gear's `tag` and `measured.check`), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known); and each callout of the documents for buried work against the model's runs below the slab and the underground sheets (G-UNDERGROUND: pass, fail for another size, count or material or too shallow, missing when no run or no underground sheet has it, unsure; each run CADaddy proposes `proposed`, never a pass, with its review item; a buried run nothing accounts for `extra`; each stub-up two dimensions from a slab edge or a grid line, else fail); and each piece of electrical gear against NEC 110.26 and its documents, recomputed from the schedules, the one-line and the gear submittals (re-read when the job's are on this machine), never from the build's own gear review: E-GEAR-SPACE its working space (depth by its voltage to ground — unsure where only condition 1 holds or the voltage isn't known — width, height, clear of walls, equipment and door swings; a door whose swing nothing gives is unsure), headroom and dedicated space (no duct or pipe over it to 6 ft above); E-GEAR-FILL the raceways each side takes on its conduit area (drawn in the submittal; else the box less the rule's margins, a pass only with half to spare), the gutter fill (NEC 312.8), the bending space (NEC 312.6) and the lugs against each feeder's parallel sets, size and metal (gutter or bending dimensions the documents don't give: unsure, never a pass), and the feeders its schedule names without a record; E-GEAR-SIZE its built box against the submittal's; the build's conflict review items about gear come in as conflicts (source build)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE|G-UNDERGROUND|E-GEAR-SPACE|E-GEAR-FILL|E-GEAR-SIZE|E-EQUIP-ELEC], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature; G-UNDERGROUND: pass|fail|missing|extra|proposed|unsure; E-GEAR-*: pass|fail|unsure|conflict, the gear's `tag` and `measured.check`; E-EQUIP-ELEC: pass|fail|unsure|missing|extra, the connection's `tag` and `measured.check` protection|conductors|conduit_fill|disconnect|sccr|revision with `measured.submittal` (values, cite, page, status, revision), `measured.model` (panel, circuit, disconnect) and `measured.recomputed`), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known); and each callout of the documents for buried work against the model's runs below the slab and the underground sheets (G-UNDERGROUND: pass, fail for another size, count or material or too shallow, missing when no run or no underground sheet has it, unsure; each run CADaddy proposes `proposed`, never a pass, with its review item; a buried run nothing accounts for `extra`; each stub-up two dimensions from a slab edge or a grid line, else fail); and each piece of electrical gear against NEC 110.26 and its documents, recomputed from the schedules, the one-line and the gear submittals (re-read when the job's are on this machine), never from the build's own gear review: E-GEAR-SPACE its working space (depth by its voltage to ground — unsure where only condition 1 holds or the voltage isn't known — width, height, clear of walls, equipment and door swings; a door whose swing nothing gives is unsure), headroom and dedicated space (no duct or pipe over it to 6 ft above); E-GEAR-FILL the raceways each side takes on its conduit area (drawn in the submittal; else the box less the rule's margins, a pass only with half to spare), the gutter fill (NEC 312.8), the bending space (NEC 312.6) and the lugs against each feeder's parallel sets, size and metal (gutter or bending dimensions the documents don't give: unsure, never a pass), and the feeders its schedule names without a record; E-GEAR-SIZE its built box against the submittal's; the build's conflict review items about gear come in as conflicts (source build); and each equipment connection against its latest approved submittal (re-read; a scanned one through an agent's `equip:<TAG>` answer citing its page) and the code rules data, never the build's own checks (E-EQUIP-ELEC: protection no larger than the maker's maximum and of its fuse class, conductors at least its MCA or 125% of its full-load amps, conduit fill, the disconnect's rating and type, its SCCR against its source's available fault current, the revision the model follows; a value nothing gives is unsure; a failure the build raised no `equipment_electrical` RFI for is `missing`, an RFI with no failure `extra`)")
             .noundo()
             .files(),
     ]
@@ -848,6 +853,8 @@ pub(crate) struct Scope<'a> {
     pub only: &'a [String],
     /// The job's gear submittals, re-read ([`super::validate_gear::read_docs`]).
     pub gear_docs: Option<&'a super::validate_gear::GearDocs>,
+    /// The job's equipment submittals, re-read ([`super::validate_equip::read_docs`]).
+    pub equip_docs: Option<&'a super::validate_equip::EquipDocs>,
 }
 
 /// Run the three checks over a scope.
@@ -914,6 +921,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         (super::validate_gear::SPACE, &super::validate_gear::VERDICTS[..]),
         (super::validate_gear::FILL, &super::validate_gear::VERDICTS[..]),
         (super::validate_gear::SIZE, &super::validate_gear::VERDICTS[..]),
+        (super::validate_equip::RULE, &super::validate_equip::VERDICTS[..]),
     ] {
         if on(id).is_some() {
             checked.insert(id.to_string(), verdicts.iter().map(|v| (v.to_string(), 0)).collect());
@@ -1652,6 +1660,22 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             }
         }
     }
+    // Equipment connections against their submittals and the code (E-EQUIP-ELEC).
+    if let Some(r) = on(super::validate_equip::RULE) {
+        use super::validate_equip as ve;
+        let cx = ve::Ctx { sp: sc.sp, docs: sc.equip_docs, frame: sc.frame, areas: sc.areas, whole: sc.whole_levels };
+        let got = ve::check(&cx, r);
+        for (rank, verdict, f) in got.findings {
+            tally(ve::RULE, verdict);
+            findings.push((rank, f));
+        }
+        if !got.unmeasured.is_empty() {
+            let notes = unmeasured.entry(ve::RULE.to_string()).or_default();
+            for (why, n) in got.unmeasured {
+                *notes.entry(why).or_default() += n;
+            }
+        }
+    }
     let mut products = super::validate_product::Tally::default();
     if let Some(found) = product {
         for (rule, verdicts) in found.checked {
@@ -1805,6 +1829,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
     let gear_docs = if super::validate_gear::wanted(&rules, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
+    let equip_docs = if super::validate_equip::wanted(&rules, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
     let sc = Scope {
         d,
         sp: &sp,
@@ -1816,6 +1841,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         whole_levels: whole,
         only: &only,
         gear_docs: gear_docs.as_ref(),
+        equip_docs: equip_docs.as_ref(),
     };
     let out = screen(&sc);
     let wall_list = walls_summary(&model, &areas);
@@ -2101,6 +2127,7 @@ mod tests {
             frame: &frame,
             prints: None,
             gear_docs: None,
+            equip_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: true,
@@ -2176,6 +2203,7 @@ mod tests {
             frame: &frame,
             prints: None,
             gear_docs: None,
+            equip_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: false,
