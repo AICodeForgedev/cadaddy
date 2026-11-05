@@ -343,7 +343,7 @@ pub(crate) struct Atom {
 }
 
 impl Atom {
-    fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
+    pub(crate) fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
         Atom { kind, item, ty: ty.into(), size: size.into(), body_in, a: at, b: at + dir, source: source.into(), ..Atom::default() }
     }
 }
