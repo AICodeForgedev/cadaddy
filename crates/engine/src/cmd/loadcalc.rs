@@ -1629,15 +1629,19 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                     panel: p.tag.clone(),
                     circuit: String::new(),
                     message: format!(
-                        "{}: the documents' {} ({}) gives {da:.0} A demand{}; the model's calculation {dem_a:.0} A ({} rules){optional_text}",
+                        "{}: the documents' {} ({}) gives {da:.0} A demand{}; the model's calculation {dem_a:.0} A ({}){optional_text}",
                         p.tag,
                         s.title,
                         s.source,
                         if s.basis.is_empty() { String::new() } else { format!(" by NEC {}", s.basis) },
-                        c.occ.name
+                        match (method.optional, method.dwelling) {
+                            (Some(f), _) => format!("the optional method, {} units at {:.0}%", tree.units, f * 100.0),
+                            (None, true) => "dwelling rules, its units having cooking: NEC 210.18".to_string(),
+                            (None, false) => format!("{} rules", c.occ.name),
+                        }
                     ),
                     likely: "either",
-                    cite: if s.basis == "220.84" { c.occ.optional_cite.clone() } else { c.occ.lighting_cite.clone() },
+                    cite: optional.as_ref().map_or_else(|| c.occ.lighting_cite.clone(), |(_, cite)| cite.clone()),
                 });
             }
             if let Some(size) = size
