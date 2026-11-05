@@ -1014,7 +1014,25 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     }
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    let score = |(_, t, _, _, tag): &Label| if *tag { 4 } else { room_name_score(t) };
+    // An equipment room tagged by the unit it houses: the word alone (`AHU`) over a room number,
+    // as a room's tag prints its name over its number. (A plan's equipment tag has its own number:
+    // `AHU-1`.)
+    let numbered_below = |t: &str, at: Vec2, h: f64| {
+        let w = t.trim().to_ascii_uppercase();
+        EQUIPMENT_WORDS.contains(&w.as_str())
+            && all.iter().any(|(_, n, q, nh, _)| {
+                room_number(n) && (*nh - h).abs() <= 0.3 * h && at.y - q.y >= 0.5 * h && at.y - q.y <= 3.0 * h && (q.x - at.x).abs() <= 3.0 * h
+            })
+    };
+    let score = |(_, t, at, h, tag): &Label| {
+        if *tag {
+            4
+        } else if numbered_below(t, *at, *h) {
+            1
+        } else {
+            room_name_score(t)
+        }
+    };
     let mut names: Vec<Label> = all
         .iter()
         .filter(|(_, t, _, _, tag)| t.chars().count() <= 40 && (*tag || !note_like(t)))

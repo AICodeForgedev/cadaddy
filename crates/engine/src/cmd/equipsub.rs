@@ -302,6 +302,112 @@ pub(crate) fn schedule_row(sp: &cadaddy_walk3d::BuildingSpec, tag: &str) -> Opti
     best.map(|(_, d, p)| (d, p))
 }
 
+/// A text line's cells (the PDF text's column breaks).
+fn cells(line: &str) -> Vec<&str> {
+    line.split("   ").map(str::trim).filter(|c| !c.is_empty()).collect()
+}
+
+/// A number in a cell (`3,600` → 3600, `19.9` → 19.9).
+fn cell_number(c: &str) -> Option<f64> {
+    c.trim().replace(',', "").parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// Whether a cell reads like a maker's model number: letters and digits, at least six.
+fn model_like(c: &str) -> bool {
+    c.len() >= 6
+        && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+        && c.chars().any(|ch| ch.is_ascii_digit())
+        && c.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+/// The model a submittal's item schedule gives a tag: the line that starts with the tag
+/// (`PTAC-1   127   9000   208/230V   PDH09K3SGR3`), its last model-like cell.
+pub(crate) fn model_of(text: &str, tag: &str) -> Option<String> {
+    text.lines().find_map(|l| {
+        let c = cells(l);
+        (c.first().is_some_and(|f| f.eq_ignore_ascii_case(tag)) && c.len() >= 2)
+            .then(|| c.iter().skip(1).rev().find(|x| model_like(x)).map(|x| x.to_string()))?
+    })
+}
+
+/// A model's column in a submittal's tables: each row under a `Model` line that names it, with as
+/// many cells as that line, its label and the model's value (to the next `Model` line).
+pub(crate) fn model_column(text: &str, model: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut at: Option<(usize, usize)> = None;
+    for l in text.lines().take(20_000) {
+        let c = cells(l);
+        if c.first().is_some_and(|f| f.eq_ignore_ascii_case("MODEL")) {
+            at = c.iter().position(|x| x.eq_ignore_ascii_case(model)).map(|i| (i, c.len()));
+            continue;
+        }
+        let Some((i, n)) = at else { continue };
+        if c.len() == n
+            && let (Some(label), Some(v)) = (c.first(), c.get(i))
+        {
+            out.push((label.to_string(), v.to_string()));
+        }
+    }
+    out
+}
+
+/// A unit's power-cord rating for its heater at its voltage, from the cord table's rows
+/// (`PXPCZ23020A   230/208   20   19.9 3,600`: cord, volts, branch circuit amps, MCA and watts):
+/// the row at the voltage whose watts are the heater's (within a fifth). (Branch amps, MCA.)
+pub(crate) fn cord_rating(text: &str, heater_kw: f64, volts: &str) -> Option<(f64, f64)> {
+    if !(heater_kw.is_finite() && heater_kw > 0.0) {
+        return None;
+    }
+    let want = heater_kw * 1000.0;
+    text.lines()
+        .take(20_000)
+        .filter_map(|l| {
+            let c = cells(l);
+            if c.len() < 4 || !c.get(1).is_some_and(|v| v.contains(volts)) || !c.first().is_some_and(|x| model_like(x)) {
+                return None;
+            }
+            let branch = c.get(2).and_then(|x| cell_number(x))?;
+            let rest: Vec<f64> = c.get(3)?.split_whitespace().filter_map(cell_number).collect();
+            let (mca, watts) = (*rest.first()?, *rest.last()?);
+            ((watts - want).abs() <= 0.2 * want && rest.len() >= 2).then_some((branch, mca, (watts - want).abs()))
+        })
+        .min_by(|a, b| a.2.total_cmp(&b.2))
+        .map(|(b, m, _)| (b, m))
+}
+
+/// A multi-model submittal's data for a tag: its model (the item schedule), the model's column
+/// (voltage, phase, heater size) and, for a unit wired by a cord, the cord rating for its heater
+/// at the lower of its voltages (its branch circuit amps the most protection, its MCA).
+pub(crate) fn submittal_for_model(text: &str, tag: &str) -> Option<EquipmentElectrical> {
+    let model = model_of(text, tag)?;
+    let col = model_column(text, &model);
+    if col.is_empty() {
+        return None;
+    }
+    let row = |words: &[&str]| {
+        col.iter().find(|(l, _)| {
+            let u = l.to_ascii_uppercase();
+            words.iter().all(|w| u.contains(w))
+        })
+    };
+    let volts_cell = row(&["VOLTAGE"]).map(|(_, v)| v.clone()).unwrap_or_default();
+    // `230/208`: the lower, the building's.
+    let volts = volts_cell.split('/').filter_map(cell_number).fold(f64::INFINITY, f64::min);
+    let phase = row(&["VOLTAGE"]).and_then(|(l, _)| l.to_ascii_uppercase().contains("1 PHASE").then_some(1));
+    let heater = row(&["HEATER", "KW"]).and_then(|(_, v)| cell_number(v));
+    let mut e =
+        EquipmentElectrical { tag: tag.to_string(), volts: volts.is_finite().then_some(volts), phase, kw: heater, ..EquipmentElectrical::default() };
+    if let (Some(kw), true) = (heater, volts.is_finite()) {
+        let key = format!("{volts:.0}");
+        if let Some((branch, mca)) = cord_rating(text, kw, &key) {
+            e.max_ocpd_a = Some(branch);
+            e.mca = Some(mca);
+        }
+    }
+    e.source = format!("model {model}");
+    Some(e)
+}
+
 /// Every connection's data merged: a value the text gives over nothing.
 pub(crate) fn merge(into: &mut EquipmentElectrical, from: &EquipmentElectrical) {
     macro_rules! take {
@@ -332,6 +438,26 @@ pub(crate) fn merge(into: &mut EquipmentElectrical, from: &EquipmentElectrical) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A PTAC submittal of several models: the tag's model (its item line), its column (230/208 V,
+    /// 1 phase, a 3.5 kW heater) and the cord for that heater at 208 V (20 A branch, MCA 19.9).
+    #[test]
+    fn a_multi_model_submittals_data_is_the_tags_model() {
+        let text = "ITEM   PLAN DESIGNATION   QUANTITY   COOLING Btu   VOLTAGE   FRIEDRICH MODEL\n\
+            PTAC-1   127   9000   208/230V   PDH09K3SGR3\n\
+            Model   PDH07K3SGR3   PDH07R3SGR3   PDH09K3SGR3   PDH09R3SGR3   PDH15K5SGR3\n\
+            Heater Size (kW)   3.5   3.5   3.5   3.5   5\n\
+            Voltage (1 Phase, 60 Hz)   230/208   265   230/208   265   230/208\n\
+            POWER CORD #   VOLTAGE   BRANCH CKT AMPS   MCA   WATTS\n\
+            PXPCZ23015A   230/208   15   13.9 2,500   Receptacles\n\
+            PXPCZ23020A   230/208   20   19.9 3,600\n\
+            PXPCZ23030A   230/208   30   27.5 5,000\n\
+            PXPCZ26520A   265V   20   16.8 3,500\n";
+        assert_eq!(model_of(text, "PTAC-1").as_deref(), Some("PDH09K3SGR3"));
+        let e = submittal_for_model(text, "PTAC-1").expect("data");
+        assert_eq!((e.volts, e.phase, e.kw, e.max_ocpd_a, e.mca), (Some(208.0), Some(1), Some(3.5), Some(20.0), Some(19.9)));
+        assert!(submittal_for_model(text, "PTAC-2").is_none());
+    }
     use cadaddy_geom::Vec2;
 
     fn t(x: f64, y: f64, v: &str) -> TextItem {
