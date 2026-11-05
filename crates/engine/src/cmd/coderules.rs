@@ -68,6 +68,12 @@ pub(crate) struct CodeRule {
     /// ampacities by material and size (75 C column).
     pub conductor_factor: Option<f64>,
     pub ampacity_75c: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Equipment connections' disconnects: the factor over full-load amps, the standard switch
+    /// sizes (amps), the articles, and the words that say the equipment brings its own.
+    pub disconnect_factor: Option<f64>,
+    pub disconnect_sizes_a: Vec<f64>,
+    pub disconnect_cite: String,
+    pub unit_disconnect_words: Vec<String>,
 }
 
 /// A place by the words its name has (all of them), and the rule's article.

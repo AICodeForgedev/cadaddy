@@ -194,6 +194,7 @@ mod unittypes;
 pub mod validate;
 pub mod validate_conduit;
 pub(crate) mod validate_coverage;
+pub mod validate_equip;
 pub mod validate_gear;
 pub mod validate_height;
 pub mod validate_keynote;
