@@ -780,6 +780,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         asked.iter().filter(|r| super::validate_prescreen::RULES.contains(&r.as_str())).cloned().collect()
     };
     if asked.is_empty() || !only.is_empty() {
+        let gear_docs = if super::validate_gear::wanted(&all, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
         let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
             d,
             sp: &sp,
@@ -790,6 +791,7 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             areas: &areas,
             whole_levels: matches!(scope_name.as_str(), "building" | "level"),
             only: &only,
+            gear_docs: gear_docs.as_ref(),
         });
         pre["measured"] = measured.summary();
     }
