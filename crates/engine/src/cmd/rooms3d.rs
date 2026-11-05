@@ -95,6 +95,11 @@ pub fn rooms(s: &mut Session) -> Result<Vec<Room3>> {
     rooms_in(s, None)
 }
 
+/// The built model's rooms alone (none when the build made none): never a trace of the plan.
+pub fn built(s: &mut Session) -> Result<Vec<Room3>> {
+    Ok(built_rooms(s)?.unwrap_or_default())
+}
+
 /// [`rooms`]; before a build, with `regions` (sheet rectangles), the labels are read only inside
 /// them, sheet by sheet (a whole print set's floors, each read in full).
 pub fn rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<Room3>> {
