@@ -455,7 +455,11 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         let cs = corners(&pts, &bottoms);
         let rise_ft: f64 = cs.iter().map(|c| if let Corner::Drop(d) = c { *d } else { 0.0 }).sum();
         let length = plan_ft.iter().sum::<f64>() + rise_ft;
-        let (lk, sk) = (st.key_level(&r.level), st.key_system(&r.system));
+        let (lk, mut sk) = (st.key_level(&r.level), st.key_system(&r.system));
+        // Proposed pipe (copied work no plan draws) is counted apart from the drawn.
+        if sy.kind == MepKind::Pipe && r.height_source.eq_ignore_ascii_case(super::mep::PROPOSED) {
+            sk = format!("{sk} ({})", super::mep::PROPOSED);
+        }
         let size = size_label(sy.kind, r.size_in);
         counted.push((id, r, sy));
 

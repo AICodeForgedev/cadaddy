@@ -31,6 +31,9 @@ mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
 const MAX_RUNS: usize = 20_000;
+/// A run's `height_source` when CADaddy proposes it (no document draws it): priced apart, its
+/// elements on a layer of their own and tagged `status:proposed`.
+pub(crate) const PROPOSED: &str = "proposed";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
@@ -2697,9 +2700,24 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.push(t(1000, format!("mepid:{}", id.chars().take(200).collect::<String>())));
         x
     };
+    // A proposed pipe (copied work no plan draws) apart from the drawn: its own layer and a tag.
+    let proposed = |r: &MepRun, sy: &MepSystem| sy.kind == MepKind::Pipe && r.height_source.eq_ignore_ascii_case(PROPOSED);
+    let layer_of = |r: &MepRun, sy: &MepSystem, level: &str| {
+        if proposed(r, sy) {
+            mep_layer_name(&format!("{}-{}", sy.name, PROPOSED.to_ascii_uppercase()), level)
+        } else {
+            mep_layer_name(&sy.name, level)
+        }
+    };
+    let mark = |r: &MepRun, sy: &MepSystem, mut x: Vec<RawTag>| {
+        if proposed(r, sy) {
+            x.push(t(1000, format!("status:{PROPOSED}")));
+        }
+        x
+    };
     for (i, s) in shown.iter().enumerate() {
         let (r, sy) = (s.run, s.sy);
-        let layer = mep_layer_name(&sy.name, &s.level);
+        let layer = layer_of(r, sy, &s.level);
         ensure_layer(d, &layer, sy.aci_color());
         let source = source_of(&r.objects);
         let base = run_base(r);
@@ -2715,7 +2733,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let mut seg_mesh = super::wallgen::empty_mesh();
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
-                let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+                let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
                 if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                     .is_ok()
                 {
@@ -2730,7 +2748,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             piece_mesh(&mut seg_mesh, p, upf);
         }
         if !seg_mesh.faces.is_empty() {
-            let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+            let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
             if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
             {
                 total_runs += 1;
@@ -2747,7 +2765,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let ks = fitting_kind_str(p.kind);
             let n = nth.entry(ks).or_default();
             *n += 1;
-            let x = tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}"));
+            let x = mark(r, sy, tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}")));
             if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_fittings += 1;
             }
@@ -2763,7 +2781,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         if m.faces.is_empty() {
             continue;
         }
-        let layer = mep_layer_name(&s.sy.name, &s.level);
+        let layer = layer_of(s.run, s.sy, &s.level);
         ensure_layer(d, &layer, s.sy.aci_color());
         let ks = fitting_kind_str(j.kind);
         // The main size, then the smallest other one (a tee's branch, a transition's other end).
@@ -2775,7 +2793,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             .min_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0))))
             .map(|e| e.size);
         let sizes: Vec<[f64; 2]> = std::iter::once(main).chain(other).collect();
-        let x = tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y));
+        let x = mark(
+            s.run,
+            s.sy,
+            tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y)),
+        );
         if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_fittings += 1;
             match j.kind {

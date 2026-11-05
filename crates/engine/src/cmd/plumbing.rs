@@ -208,6 +208,8 @@ struct PipeEl {
     level: String,
     b: Bounds2,
     riser: bool,
+    /// Proposed (copied work no plan draws, `status:proposed`), not drawn.
+    proposed: bool,
 }
 
 /// The lines (systems) a fixture takes, by the words of its schedule name (rules data `needs`).
@@ -245,7 +247,8 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let w = b.max - b.min;
                 w.x.max(w.y) <= 1.5 * upf
             };
-            pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser });
+            let proposed = super::bimlook::made_tag(e, "status").is_some_and(|v| v.eq_ignore_ascii_case(super::mep::PROPOSED));
+            pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, proposed });
             continue;
         }
         let ps = props::read(&e.common.xdata);
@@ -291,7 +294,10 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
     let mut on_pipe: HashMap<usize, Vec<Handle>> = HashMap::new();
     let mut whole = 0usize;
+    // Of the whole, those with a line on a proposed pipe (copied, not drawn).
+    let mut whole_proposed = 0usize;
     let mut by_system: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut proposed_by_system: BTreeMap<String, usize> = BTreeMap::new();
     let mut writes: Vec<(Handle, Vec<(String, Handle, String)>, Vec<String>)> = Vec::new();
     for (h, level, at, words) in &fixtures {
         let want = needs(&r, words);
@@ -300,6 +306,7 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         let mut got: Vec<(String, Handle, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
+        let mut on_proposed = false;
         for sys in want {
             let name = r.system_names.get(sys).cloned().unwrap_or_else(|| sys.to_ascii_lowercase());
             let mut hit = nearest(level, *at, &|p| p.system == *sys).map(|i| (i, format!("the nearest {sys} pipe")));
@@ -314,6 +321,11 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 Some((i, why)) => {
                     e.0 += 1;
                     if let Some(p) = pipes.get(i) {
+                        if p.proposed {
+                            on_proposed = true;
+                            *proposed_by_system.entry(sys.clone()).or_default() += 1;
+                        }
+                        let why = if p.proposed { format!("{why} (proposed: copied, not drawn)") } else { why };
                         got.push((name, p.handle, why));
                         on_pipe.entry(i).or_default().push(*h);
                     }
@@ -322,6 +334,7 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
         whole += usize::from(missing.is_empty());
+        whole_proposed += usize::from(missing.is_empty() && on_proposed);
         writes.push((*h, got, missing));
     }
     let computed = || Source::computed();
@@ -357,8 +370,16 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             e.common.xdata = x.into();
         });
     }
-    let by: BTreeMap<&String, Value> = by_system.iter().map(|(k, (c, n))| (k, json!({"connected": c, "of": n}))).collect();
-    json!({"fixtures": writes.len(), "fully_connected": whole, "by_system": by, "fixture_elements": fixtures.len(), "pipe_elements": pipes.len()})
+    let by: BTreeMap<&String, Value> = by_system
+        .iter()
+        .map(|(k, (c, n))| (k, json!({"connected": c, "of": n, "to_proposed": proposed_by_system.get(k).copied().unwrap_or(0)})))
+        .collect();
+    json!({
+        "fixtures": writes.len(), "fully_connected": whole,
+        "fully_connected_drawn": whole - whole_proposed, "fully_connected_with_proposed": whole_proposed,
+        "by_system": by, "fixture_elements": fixtures.len(), "pipe_elements": pipes.len(),
+        "proposed_pipe_elements": pipes.iter().filter(|p| p.proposed).count(),
+    })
 }
 
 #[cfg(test)]
