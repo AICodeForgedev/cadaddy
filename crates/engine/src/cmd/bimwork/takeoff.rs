@@ -42,10 +42,13 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
             .noundo(),
         CommandSpec::new(CMD_EST, "Model Estimate", run_estimate)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs, waste?}], labor_rate?: $/h (75, or the table's labor_rate column), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, material_unit, labor_hrs_unit, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), price_book?: .xlsx path (sheets \"Price List\": key, description, catalog, unit, unit price $, source type, vendor, URL, price date; \"Item Map\": CADaddy item, size, action price|exclude, price key 1, price key 2, note): material priced by each line's catalog number in the Price List, else its Item Map row (keys added), else listed unpriced, with stale_days?: n (90: an older price is flagged STALE), tax_pct?: percent (0), today?: YYYY-MM-DD, by_level?, filter?, file?: .xlsx (live INDEX/MATCH formulas into the book's Price List) | .csv → {lines: [{item, size, unit, qty, qty_total, type_mark?, manufacturer?, catalog?, dimming?, product_source?, matched_by: catalog|item_map, price_keys, unit_price, extended, price_date, age_days, source_type, vendor, price, flag?: STALE}], unpriced: [{…, reason}], excluded: [{…, reason}], counts, by_category, totals: {by_group: [{trade, category, lines, extended}], subtotal, tax: {rate_pct, amount}, total}, warnings, csv, path?} | cost_table: .csv|.xlsx path | csv: text | rows: [{item, unit, material, labor_hrs, waste?}], labor_rate?: $/h (75, or the table's labor_rate column), waste?: percent | {category: percent} (default the BOM's), by_level?: bool, filter?: as bim.takeoff, revision?: name (keep it), compare_to?: revision name | {lines}, file?: .csv|.xlsx} → {lines: [{item, size, unit, qty, waste_pct, qty_total, cost_item, material_unit, labor_hrs_unit, material, labor_hrs, labor, total, elements}], unmatched: [{item, size, unit, qty, reason}], unused_rows, material_total, labor_hours, labor_total, total, labor_rate, change_order?: {lines: [{item, size, unit, before_qty, after_qty, delta_qty, delta_cost}], total}, csv, path?}")
             .noundo(),
     ]
 }
+
+/// A BOM line's product fields (Q6164), kept on its takeoff line.
+pub(super) const PRODUCT_FIELDS: [&str; 5] = ["type_mark", "manufacturer", "catalog", "dimming", "product_source"];
 
 /// The quantity columns a unit fills.
 fn measure(unit: &str) -> Option<&'static str> {
@@ -219,15 +222,26 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if !circuit.is_empty() {
             line["circuit"] = json!(circuit);
         }
+        // What the line's items are as a product (Q6164): lines of two products stay two.
+        let mut product = String::new();
+        for k in PRODUCT_FIELDS {
+            if let Some(v) = l[k].as_str().filter(|v| !v.is_empty()) {
+                line[k] = json!(v);
+                if k != "product_source" {
+                    product.push('|');
+                    product.push_str(v);
+                }
+            }
+        }
         if !passes(filter, &line) {
             continue;
         }
         let key = match group_by {
-            "trade" => format!("{trade}|{category}|{item}|{size}|{unit}"),
-            "system" => format!("{system}|{item}|{size}|{unit}"),
-            "type" => format!("{item}|{size}|{unit}"),
-            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}"),
-            _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}"),
+            "trade" => format!("{trade}|{category}|{item}|{size}|{unit}{product}"),
+            "system" => format!("{system}|{item}|{size}|{unit}{product}"),
+            "type" => format!("{item}|{size}|{unit}{product}"),
+            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}{product}"),
+            _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}{product}"),
         };
         let qty = l["net"].as_f64().filter(|v| v.is_finite()).unwrap_or(0.0);
         let entry = grouped.entry(key.clone()).or_insert_with(|| {
@@ -594,6 +608,13 @@ fn match_row(rows: &[Cost], l: &Value) -> Option<(usize, &'static str)> {
 
 fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
     super::super::exchange::guard_params(s, "bim.estimate", p, &["file"])?;
+    // Q6164: material from a price-book workbook, by catalog number, then the Item Map.
+    if p.get("price_book").is_some_and(|v| !v.is_null()) {
+        let by_level = bool_or(p, "by_level", false);
+        let filter = p.get("filter").cloned().unwrap_or(Value::Null);
+        let lines = lines(s, if by_level { "level" } else { "type" }, &filter)?;
+        return super::priced::run(p, &lines);
+    }
     let rows = cost_rows(CMD_EST, p)?;
     // Q6012: starter cost book as fallback, same as estimate.status (estimate.rs price_lines).
     let starter: Vec<Cost> = crate::cmd::estimate::starter_prices()
