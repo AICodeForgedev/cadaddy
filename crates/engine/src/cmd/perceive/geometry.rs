@@ -975,10 +975,13 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
             // In the room: inside its outline or on one of its islands (furniture standing in it).
             let islands: Vec<Vec<Vec2>> = loops.iter().filter(|l| !l.outer).map(polygon).filter(|p| p.len() >= 3).collect();
             let in_room = |c: Vec2| cadaddy_geom::point_in_polygon(&poly, c) || islands.iter().any(|p| cadaddy_geom::point_in_polygon(p, c));
-            if area < min_area || !(i == 0 || in_room(at)) {
+            // (The label in it: its point, or its whole box where its point sits on a line - a
+            // storefront's - just outside.)
+            let whole = corners.iter().all(|c| in_room(*c));
+            if area < min_area || !(i == 0 || in_room(at) || whole) {
                 continue;
             }
-            if corners.iter().all(|c| in_room(*c)) {
+            if whole {
                 holds = Some((poly, area));
                 break;
             }
