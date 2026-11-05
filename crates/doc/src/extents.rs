@@ -395,6 +395,7 @@ mod tests {
 
     fn mtext(contents: &str, width: f64) -> crate::MText {
         crate::MText {
+            background: None,
             insert: Vec3::new(10.0, 10.0, 0.0),
             height: 2.5,
             width,
