@@ -297,20 +297,28 @@ mod chunk_tests {
     fn the_bridges_escapes_are_undone_per_entity() {
         let mut tags = vec![
             Tag::s(0, "MTEXT"),
-            Tag::s(1, "a^ Ib^ Jc^ d^ ^ Ie"),
+            Tag::s(1, "a^Ib^Jc^ d^ ^ Ie"),
             Tag::s(0, "TEXT"),
             Tag::s(1, "a^ Ib\tc"),
             Tag::s(0, "MULTILEADER"),
             Tag::s(304, "x^ J"),
+            Tag::s(0, "DIMENSION"),
+            Tag::s(1, "<>^ 2"),
+            Tag::s(3, "ISO^ 25"),
             Tag::s(0, "LINE"),
             Tag::s(1, "keep^ I"),
         ];
         bridge_carets_undone(&mut tags);
         let got: Vec<String> = tags.iter().map(Tag::str).collect();
-        assert_eq!(got[1], "a^Ib^Jc^ d^ ^Ie");
-        assert_eq!(decode_contents(&got[1]), "a\tb\nc^d^\te");
-        assert_eq!(got[3], "a^Ib\tc");
+        // MTEXT contents come escaped once: a tab, a line feed, then the typed carets.
+        assert_eq!(got[1], "a^Ib^Jc^ d^ ^ Ie");
+        assert_eq!(decode_contents(&got[1]), "a\tb\nc^d^^Ie");
+        // TEXT and dimension text keep `^ ` for decode_line.
+        assert_eq!(got[3], "a^ Ib\tc");
+        assert_eq!(decode_line(&got[3]), "a^Ib\tc");
         assert_eq!(got[5], "x^J");
-        assert_eq!(got[7], "keep^ I");
+        assert_eq!(got[7], "<>^ 2");
+        assert_eq!(got[8], "ISO^25");
+        assert_eq!(got[10], "keep^ I");
     }
 }
