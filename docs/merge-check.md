@@ -39,7 +39,11 @@ cargo merge-check <base> HEAD --dry-run                 # what changed, which pa
      processes and other builds share the machine. When some tests fail (at most 50, and the
      build was fine), merge-check re-runs just those, alone, one at a time: a failure that repeats
      fails the check; one that passes alone is listed ("passed alone") and the pass counts as
-     green, as a merger re-running a flaky test by hand would decide.
+     green, as a merger re-running a flaky test by hand would decide. A test that still fails
+     alone gets its whole test binary re-run with plain `cargo test` (all its tests in one
+     process, as the old check ran them): some tests only pass after another test in the same
+     process set up global state (an I/O hook, a cache). If the binary passes, its verdict is the
+     old verdict; the tests are listed so they can be fixed to run alone.
    - **Serialized test files.** An integration test file that serializes its tests with a
      `static ...: Mutex<()>` runs one test at a time (a nextest test group per binary), as it did
      inside one `cargo test` process.

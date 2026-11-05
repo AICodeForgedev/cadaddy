@@ -682,19 +682,43 @@ pub fn cargo_test_args(a: &Affected) -> Vec<String> {
 
 /// The command that re-runs one failing test with plain cargo.
 pub fn rerun_hint(binary_id: &str, name: &str) -> String {
+    let (pkg, target) = binary_target(binary_id);
+    let mut v = vec!["test".to_string(), "-p".to_string(), pkg];
+    v.extend(target);
+    format!("{} -- --exact {name}", shell_line(&v))
+}
+
+/// `cargo test` of one whole test binary (by its nextest binary id), selected among the same
+/// packages as the nextest run, so features resolve the same way and nothing is rebuilt.
+pub fn binary_test_args(a: &Affected, binary_id: &str) -> Vec<String> {
+    let mut v = vec!["test".to_string()];
+    v.extend(package_args(a));
+    v.extend(binary_target(binary_id).1);
+    v
+}
+
+/// The package and the cargo target selector of a nextest binary id (`pkg`, `pkg::test`,
+/// `pkg::bin/name`, `pkg::example/name`).
+fn binary_target(binary_id: &str) -> (String, Vec<String>) {
     let (pkg, bin) = match binary_id.split_once("::") {
         Some((p, b)) => (p, Some(b)),
         None => (binary_id, None),
     };
-    let target = match bin {
-        None => "--lib".to_string(),
+    let mut v = Vec::new();
+    match bin {
+        None => v.push("--lib".into()),
         Some(b) => match b.split_once('/') {
-            Some(("bin", n)) => format!("--bin {n}"),
-            Some((kind, n)) => format!("--{kind} {n}"),
-            None => format!("--test {b}"),
+            Some((kind, n)) => {
+                v.push(format!("--{kind}"));
+                v.push(n.to_string());
+            }
+            None => {
+                v.push("--test".into());
+                v.push(b.to_string());
+            }
         },
-    };
-    format!("cargo test -p {pkg} {target} -- --exact {name}")
+    }
+    (pkg.to_string(), v)
 }
 
 fn shell_line(args: &[String]) -> String {
@@ -1127,10 +1151,36 @@ fn tests_with_rerun(
             s.ok = true;
             s.note = format!("{} failed under load, passed alone", failed.len());
         }
-        Vec::new()
-    } else {
-        again
+        return Vec::new();
     }
+    let alone_step = r.steps.len().saturating_sub(1);
+    if r.steps.get(alone_step).and_then(|s| s.code) != Some(NEXTEST_TESTS_FAILED) || again.is_empty() {
+        return again;
+    }
+    // Still failing alone, each in its own process. The old check ran a test binary's tests
+    // together in one process, where a test can depend on state another test set up (a global
+    // hook, a cache). Re-run those binaries that way: their verdict is the old verdict.
+    let binaries: BTreeSet<String> = again.iter().map(|c| c.binary_id.clone()).collect();
+    let mut still = Vec::new();
+    for b in &binaries {
+        if !r.step(&format!("{b}: whole binary in one process (cargo test)"), &binary_test_args(a, b)) {
+            still.extend(again.iter().filter(|c| &c.binary_id == b).cloned());
+        }
+    }
+    if still.is_empty() {
+        let names: Vec<String> = again.iter().map(|c| format!("{} {}", c.binary_id, c.name)).collect();
+        eprintln!(
+            "passed with their binary's other tests in one process, not alone (they depend on another test's process state; fix them to run alone): {}",
+            names.join(", ")
+        );
+        for i in [first, alone_step] {
+            if let Some(s) = r.steps.get_mut(i) {
+                s.ok = true;
+                s.note = format!("{} pass only in their binary's process", again.len());
+            }
+        }
+    }
+    still
 }
 
 /// A canonical path without Windows' `\\?\` verbatim prefix (cargo and git take it, people
@@ -1642,6 +1692,10 @@ mod tests {
         assert_eq!(rerun_hint("engine::bigtest", "t"), "cargo test -p engine --test bigtest -- --exact t");
         assert_eq!(rerun_hint("engine", "m::t"), "cargo test -p engine --lib -- --exact m::t");
         assert_eq!(rerun_hint("app::bin/app", "t"), "cargo test -p app --bin app -- --exact t");
+        let a = Affected { packages: set(&["engine", "app"]), ..Affected::default() };
+        assert_eq!(shell_line(&binary_test_args(&a, "engine::bigtest")), "cargo test -p app -p engine --test bigtest");
+        assert_eq!(shell_line(&binary_test_args(&a, "engine")), "cargo test -p app -p engine --lib");
+        assert_eq!(shell_line(&binary_test_args(&a, "app::example/demo")), "cargo test -p app -p engine --example demo");
     }
 
     #[test]
