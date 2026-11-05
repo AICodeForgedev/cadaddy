@@ -1037,7 +1037,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .and_then(|t| t.fields.get("room"))
                     .map(|f| f.value.trim().to_string())
                     .filter(|r| !r.is_empty());
-                match (served, stamped) {
+                match (served, stamped.clone()) {
                     (Some((r, note)), stamped) => {
                         if stamped.is_none()
                             && !unit_rooms.contains(&r.label.trim().to_ascii_uppercase())
@@ -1118,9 +1118,12 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
                 let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
                 if let Some(p) = &panel {
-                    // The room's own panel of that letter (a guest room's G) before one elsewhere.
-                    let own = store.get("room").filter(|r| r.has_value()).map(|r| format!("{}-{}", p.trim(), r.text().trim()).to_ascii_uppercase());
-                    let key = own.filter(|k| gear.contains_key(k)).unwrap_or_else(|| p.trim().to_ascii_uppercase());
+                    // The room's own panel of that letter (a guest room's G) before one elsewhere: the
+                    // room it stands in, else the unit it was stamped into (an entry's receptacle on
+                    // the corridor's wall line is the unit's, on the unit's panel).
+                    let rooms = [store.get("room").filter(|r| r.has_value()).map(|r| r.text().trim().to_string()), stamped.clone()];
+                    let own = rooms.iter().flatten().map(|r| format!("{}-{}", p.trim(), r).to_ascii_uppercase()).find(|k| gear.contains_key(k));
+                    let key = own.unwrap_or_else(|| p.trim().to_ascii_uppercase());
                     if let Some(gh) = gear.get(&key) {
                         put(
                             &mut store,
