@@ -334,11 +334,18 @@ const MAX_LEAVES: usize = 200_000;
 /// Most plan objects looked at for the jambs door swings end on.
 const MAX_LEAF_SCAN: usize = 5_000_000;
 
+/// A door's swing is a quarter-ish circle up to here.
+const SWING_MAX_DEG: f64 = 100.0;
+/// A door that opens back flat against its wall swings about this far. Only with something drawn
+/// at the arc's centre (the leaf from its hinge): a half circle alone is no door.
+const WIDE_SWING_MAX_DEG: f64 = 185.0;
+
 /// The closed leaf of every door swing in `d` (an arc of 60–100° with a door's radius, or a
-/// flattened one): a line from the hinge to the end of the arc where the wall's jamb is (an end
-/// of other linework), so a room traced on the plan ends at its door instead of running on
-/// through the gap, and the swing stays in the room it opens into. When neither end (or both)
-/// meets a jamb, both leaves are drawn.
+/// flattened one, or a door opening back against its wall): a line from the hinge to the end of
+/// the arc where the wall's jamb is (an end of other linework), so a room traced on the plan ends
+/// at its door instead of running on through the gap, and the swing stays in the room it opens
+/// into. When neither end (or both) meets a jamb, both leaves are drawn; a door opening back
+/// against its wall always gets both (the end its leaf is drawn to is the open one).
 pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line)> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     // Ends of the plan's straight linework, filed by cell.
@@ -377,19 +384,27 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
                     sweep = std::f64::consts::TAU;
                 }
                 let c = a.center.xy();
-                ((60.0..=100.0).contains(&sweep.to_degrees()) && (rmin..=rmax).contains(&a.radius))
-                    .then(|| (c, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+                let deg = sweep.to_degrees();
+                ((60.0..=WIDE_SWING_MAX_DEG).contains(&deg) && (rmin..=rmax).contains(&a.radius))
+                    .then(|| (c, deg, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
             }
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                flat_swing(&pts).filter(|(_, r, _, _)| (rmin..=rmax).contains(r)).map(|(c, _, _, ends)| (c, ends))
+                flat_arc(&pts)
+                    .filter(|(_, r, deg, _)| (rmin..=rmax).contains(r) && (60.0..=WIDE_SWING_MAX_DEG).contains(deg))
+                    .map(|(c, _, deg, ends)| (c, deg, ends))
             }
             _ => None,
         };
-        let Some((hinge, arc_ends)) = swing else { continue };
+        let Some((hinge, deg, arc_ends)) = swing else { continue };
         let tol = 0.05 * hinge.dist(arc_ends[0]);
+        let wide = deg > SWING_MAX_DEG;
+        if wide && !jamb(hinge, 2.0 * tol) {
+            continue;
+        }
         let at_jamb = arc_ends.map(|p| jamb(p, tol));
         let leaves: Vec<Vec2> = match at_jamb {
+            _ if wide => arc_ends.to_vec(),
             [true, false] => vec![arc_ends[0]],
             [false, true] => vec![arc_ends[1]],
             _ => arc_ends.to_vec(),
@@ -407,6 +422,12 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
 /// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
 /// Its centre (the hinge), radius, sweep in degrees and two ends.
 pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
+    flat_arc(pts).filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg))
+}
+
+/// A run of points on one circle (within 5% of its radius): its centre, radius, sweep in degrees
+/// and two ends.
+fn flat_arc(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
     let (first, last) = (*pts.first()?, *pts.last()?);
     let mid = *pts.get(pts.len() / 2)?;
     let d = 2.0 * (first.x * (mid.y - last.y) + mid.x * (last.y - first.y) + last.x * (first.y - mid.y));
@@ -428,7 +449,7 @@ pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
     let sweep = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
     let (s_mid, s_end) = (sweep(ang(first), ang(mid)), sweep(ang(first), ang(last)));
     let deg = if s_mid <= s_end { s_end } else { std::f64::consts::TAU - s_end }.to_degrees();
-    (60.0..=100.0).contains(&deg).then_some((c, r, deg, [first, last]))
+    Some((c, r, deg, [first, last]))
 }
 
 pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1064,6 +1085,34 @@ mod tests {
         assert!(same_loop(&a, &b) && same_loop(&a, &c));
         assert!(!same_loop(&a, &[v(0.0, 0.0), v(11.0, 0.0), v(11.0, 5.0), v(0.0, 5.0)]));
         assert!(!same_loop(&a, &a[..3]));
+    }
+
+    /// A swing wider than a quarter circle is a door only with something drawn from its centre.
+    #[test]
+    fn a_half_circle_alone_is_no_door_but_a_wide_swing_with_its_leaf_is() {
+        let arc = |sweep: f64, n: u32| -> Vec<[f64; 2]> {
+            (0..=n)
+                .map(|i| {
+                    let a = (180.0 + sweep * f64::from(i) / f64::from(n)).to_radians();
+                    [36.0 * a.cos(), 36.0 * a.sin()]
+                })
+                .collect()
+        };
+        let leaves = |lines: &[Vec<[f64; 2]>]| {
+            let mut s = Session::new();
+            for l in lines {
+                s.execute("pline", &serde_json::json!({"vertices": l, "closed": false})).unwrap();
+            }
+            door_leaves(s.doc().unwrap(), 1.0).len()
+        };
+        let wide = arc(170.0, 16);
+        assert_eq!(leaves(std::slice::from_ref(&wide)), 0);
+        let leaf = vec![[0.0, 0.0], wide[16]];
+        assert_eq!(leaves(&[wide, leaf]), 2);
+        // A quarter swing needs no leaf drawn.
+        assert_eq!(leaves(&[arc(90.0, 16)]), 2);
+        // Past a half circle: no door's.
+        assert_eq!(leaves(&[arc(220.0, 16), vec![[0.0, 0.0], [36.0, 0.0]]]), 0);
     }
 
     #[test]

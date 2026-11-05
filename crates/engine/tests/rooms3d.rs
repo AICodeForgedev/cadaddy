@@ -392,6 +392,38 @@ fn a_label_whose_point_sits_just_outside_its_room_names_it() {
     assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
 }
 
+/// A closet's door that opens back flat against the wall outside (a 170° swing, flattened to a
+/// polyline as a PDF print arrives, its leaf drawn from the hinge) closes the closet: the trace
+/// stays in it instead of running on through the gap into the lounge.
+#[test]
+fn a_door_opening_back_against_its_wall_closes_its_room() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [474.0, 234.0]);
+    // The closet's walls, 36" of door opening between (400,120) and the hinge at (436,120).
+    s.execute("pline", &json!({"vertices": [[340, 234], [340, 120], [400, 120]], "closed": false})).unwrap();
+    s.execute("pline", &json!({"vertices": [[436, 120], [474, 120]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+    let swing: Vec<[f64; 2]> = (0..=16)
+        .map(|i| {
+            let a = (180.0 + 170.0 * f64::from(i) / 16.0_f64).to_radians();
+            [436.0 + 36.0 * a.cos(), 120.0 + 36.0 * a.sin()]
+        })
+        .collect();
+    s.execute("pline", &json!({"vertices": swing, "closed": false})).unwrap();
+    s.execute("pline", &json!({"vertices": [[436, 120], swing[16]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [380.0, 180.0], "AHU");
+    text(&mut s, [380.0, 172.0], "152");
+    text(&mut s, [150.0, 120.0], "LOUNGE");
+    text(&mut s, [150.0, 100.0], "150");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert_eq!(room(rooms, "LOUNGE")["number"], "150", "{rooms:?}");
+}
+
 /// The import took three closets' `AHU` boxes for a repeated symbol (a `PDF-SYM-` insert, the
 /// word its TAG): the word over the room's number still names the room.
 #[test]
