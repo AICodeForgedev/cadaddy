@@ -124,7 +124,8 @@
   "cable": {
     "above_box_in": 12,
     "in_wall_max_ft": 30.0,
-    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling"
+    "below_floor_in": 6,
+    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling; a circuit fed from below (its panel on a lower storey) goes down from each box through the bottom plate and across in the floor framing, 6 in under the floor, up into the next box"
   },
   "switch_legs": {
     "source": "a switch or sensor with no circuit of its own is on the circuit of what it controls (the switch leg: the device's box joined to its luminaires' circuit, NEC 404.2(C) brings the grounded conductor to it)"

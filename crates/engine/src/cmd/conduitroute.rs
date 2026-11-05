@@ -109,6 +109,8 @@ pub(crate) struct RouteRules {
 pub(crate) struct CableRoute {
     pub above_box_in: f64,
     pub in_wall_max_ft: f64,
+    /// A circuit fed from below: its cable across in the floor framing this far under the floor.
+    pub below_floor_in: f64,
     pub source: String,
 }
 
@@ -1384,6 +1386,25 @@ pub(crate) fn stud_path(
     Some((pts, bot))
 }
 
+/// A cable's leg between two boxes of a circuit fed from below (its panel on a lower storey,
+/// Q6206): down from the box through the bottom plate into the floor framing (the rules' depth
+/// under the floor), square across, and up into the other box; plan points and each segment's
+/// height above `floor` (feet), as the routed runs carry them.
+pub(crate) fn floor_path(a: (Vec2, f64), b: (Vec2, f64), floor: f64, upf: f64, rl: &RouteRules) -> (Vec<[f64; 2]>, Vec<f64>) {
+    let ((pa, ta), (pb, tb)) = (a, b);
+    let zp = -rl.cable.below_floor_in.max(0.0) / 12.0;
+    let corner = Vec2::new(pb.x, pa.y);
+    let mut pts = vec![[pa.x, pa.y], [pa.x, pa.y]];
+    let mut bot = vec![(ta - floor) / upf, zp];
+    if corner.dist(pa) > upf / 96.0 && corner.dist(pb) > upf / 96.0 {
+        pts.push([corner.x, corner.y]);
+        bot.push(zp);
+    }
+    pts.extend([[pb.x, pb.y], [pb.x, pb.y]]);
+    bot.push((tb - floor) / upf);
+    (pts, bot)
+}
+
 /// A gear element a homerun lands on.
 #[derive(Clone, Debug)]
 struct GearEl {
@@ -2394,6 +2415,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut switch_tags: BTreeMap<String, u8> = BTreeMap::new();
     let mut loop_tags: Vec<ElementTag> = Vec::new();
     let mut switch_loop_legs = 0usize;
+    // Cable legs of circuits fed from below, through the floor framing.
+    let mut floor_legs = 0usize;
     // Each circuit's own cable feet by size.
     let mut cable_sizes: HashMap<usize, BTreeMap<String, f64>> = HashMap::new();
     let mut cable_legs: HashMap<usize, BTreeMap<u32, f64>> = HashMap::new();
@@ -2515,6 +2538,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 .map(|(i, _, _)| i)
         });
         let panel_at = gi.and_then(|i| gear.get(i)).map(|g| carry(gear_ctr(g), &g.level, &c.level));
+        // Its panel on a lower storey: the circuit is fed from below.
+        let fed_below = gi.and_then(|i| gear.get(i)).is_some_and(|g| elev(&g.level) + 1e-6 < elev(&c.level));
         let pts: Vec<Vec2> = members.iter().map(|m| m.at).collect();
         let nearest_panel = |cand: &[usize]| {
             panel_at.and_then(|p| {
@@ -2580,7 +2605,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             };
             let mut r = super::printcond::run(BRANCH_SYSTEM, &c.level, &tag_sheet(tag), Vec::new(), size, 0.0);
             // A cable between two boxes of a room's walls runs through the studs.
-            let stud = stud_path((a.at, a.top, a.face, &a.room), (b.at, b.top, b.face, &b.room), floor, upf, rl);
+            // Through the studs where both boxes are in the room's walls; else, fed from below,
+            // through the floor framing (Q6206).
+            let in_studs = stud_path((a.at, a.top, a.face, &a.room), (b.at, b.top, b.face, &b.room), floor, upf, rl);
+            let by_floor = in_studs.is_none() && fed_below;
+            floor_legs += usize::from(by_floor);
+            let stud = in_studs.or_else(|| by_floor.then(|| floor_path((a.at, a.top), (b.at, b.top), floor, upf, rl)));
             if let Some((pts, bot)) = stud.as_ref().filter(|_| cable) {
                 in_wall_legs += 1;
                 stud_legs += 1;
@@ -3813,6 +3843,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "tags_unresolved": unresolved_rows,
         "switches_unjoined": switches_unjoined,
         "switch_loop_legs": switch_loop_legs,
+        "cable_floor_legs": floor_legs,
         "legs_fill_sized": legs_fill_sized,
         "switch_loop_source": gap::rules().switch_loop.source,
         "shared_raceway": shared_report,

@@ -324,3 +324,39 @@ fn each_leg_is_sized_by_its_fill_and_each_box_by_what_enters_it() {
     let rows = b["rows"].as_array().cloned().unwrap_or_default();
     assert!(rows.iter().any(|x| x["size"] == json!("4-11/16\" square")), "{b}");
 }
+
+#[test]
+fn an_nm_circuit_fed_from_below_runs_through_the_floor_framing() {
+    // LP1-23's two receptacles on L2, its panel LP1 on L1: fed from below. In NM, the leg goes
+    // down from the first box through the bottom plate into the floor framing 6" under the floor
+    // (rules data), 12' across and up into the other box.
+    let tags = vec![
+        device("R1", "receptacle", "L2", 20.0, 10.0, Some("LP1-23"), Some(18.0)),
+        device("R2", "receptacle", "L2", 32.0, 10.0, Some("LP1-23"), Some(18.0)),
+        circuit_tag("L2", "LP1-23", "2#12 + 1#12G"),
+    ];
+    let methods = json!({"applications": [
+        {"section": "26 05 19", "item": "B", "application": "Branch Circuits Concealed in Ceilings, Walls, and Partitions", "methods": ["nm"]}
+    ]});
+    let mut s = building(tags, vec![row(23, "RECEPTACLES", 20, "12")], Some(methods));
+    let r = report(&mut s);
+    assert_eq!(r["cable_floor_legs"], json!(1), "{r}");
+    let d = s.doc().expect("doc");
+    // The boxes' tops above L2's floor (12'), feet.
+    let top = d
+        .model
+        .iter()
+        .filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device"))
+        .filter_map(|e| match &e.kind {
+            cadaddy_engine::doc::EntityKind::Mesh(m) => Some(m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max)),
+            _ => None,
+        })
+        .fold(f64::NEG_INFINITY, f64::max)
+        / 12.0
+        - 12.0;
+    let leg = 12.0 + 2.0 * (top + 0.5);
+    let c = r["circuit_lengths"].as_array().and_then(|a| a.iter().find(|x| x["circuit"] == json!("LP1-23"))).cloned().unwrap_or_default();
+    let in_area = r["lengths"]["levels"].as_array().and_then(|a| a.iter().find(|l| l["level"] == json!("L2"))).map(|l| l["in_area_ft"].clone());
+    assert!(in_area.and_then(|v| v.as_f64()).is_some_and(|v| (v - leg).abs() < 0.06), "leg {leg}: {}", r["lengths"]);
+    assert!(c["cable_ft"].as_f64().is_some_and(|v| v > leg + 3.0), "the leg with its makeup and the homerun: {c}");
+}
