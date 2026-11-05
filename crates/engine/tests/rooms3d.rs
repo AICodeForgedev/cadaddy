@@ -386,6 +386,46 @@ fn a_callouts_sheet_number_is_no_rooms_number() {
     assert!(room(rooms, "STORAGE")["number"].is_null(), "{rooms:?}");
 }
 
+/// A label whose point sits just across a line from its room (CHECK IN beside a storefront's
+/// frame, its text running into the room) still names the room its whole box is in.
+#[test]
+fn a_label_whose_point_sits_just_outside_its_room_names_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    // A storefront's frame: a 15" strip (24 sq ft) down the room's side.
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [20.0, 120.0], "CHECK IN");
+    text(&mut s, [100.0, 100.0], "142");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "CHECK IN")["number"], "142", "{rooms:?}");
+    // A note whose point is farther out (5" across, its text 6" tall) names nothing there.
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [16.0, 120.0], "FOR GUEST ROOM LAYOUTS AND SIZES");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
+    // Nor a note on a notes box's edge (no room number in the box).
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [20.0, 120.0], "FOR GUEST ROOM LAYOUTS AND SIZES");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
+}
+
 /// The import took three closets' `AHU` boxes for a repeated symbol (a `PDF-SYM-` insert, the
 /// word its TAG): the word over the room's number still names the room.
 #[test]
