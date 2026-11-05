@@ -247,11 +247,25 @@ pub(crate) fn circuit_numbers(label: &str, panel: &str) -> Vec<u32> {
 }
 
 /// The circuit numbers a breaker takes: its number and, for each further pole, the next on its
-/// bus side.
-fn takes(c: &PanelCircuit) -> Vec<u32> {
+/// bus side; only its number on a schedule that numbers its breakers, not their poles.
+fn takes(c: &PanelCircuit, by_breaker: bool) -> Vec<u32> {
     let Ok(n) = c.number.trim().parse::<u32>() else { return Vec::new() };
+    if by_breaker {
+        return vec![n];
+    }
     let step = rules().step();
     (0..c.poles.clamp(1, 3)).map(|k| n + k * step).collect()
+}
+
+/// Whether a schedule numbers its breakers (a switchboard's `1, 2, 3`, each of three poles)
+/// rather than their poles: a multi-pole row's further poles would be numbers other rows have.
+pub(crate) fn numbered_by_breaker(s: &PanelSchedule) -> bool {
+    let step = rules().step();
+    let nums: BTreeSet<u32> = s.circuits.iter().take(MAX_ROWS).filter_map(|c| c.number.trim().parse::<u32>().ok()).collect();
+    s.circuits
+        .iter()
+        .take(MAX_ROWS)
+        .any(|c| c.poles > 1 && c.number.trim().parse::<u32>().is_ok_and(|n| (1..c.poles.min(3)).any(|k| nums.contains(&(n + k * step)))))
 }
 
 // ─── The model's facts ───────────────────────────────────────────────────────
@@ -281,7 +295,12 @@ struct PanelEl {
     lo: Vec3,
     hi: Vec3,
     stacked: Vec2,
+    /// A panelboard or load center (a room's own panel can only be one of those).
+    panel_kind: bool,
 }
+
+/// The kinds of gear a room's own panel is.
+const ROOM_PANEL_KINDS: [&str; 5] = ["panel", "panelboard", "load_center", "loadcenter", "panel_board"];
 
 fn panels_of(d: &Drawing) -> Vec<PanelEl> {
     d.model
@@ -307,6 +326,9 @@ fn panels_of(d: &Drawing) -> Vec<PanelEl> {
                 lo,
                 hi,
                 stacked: super::bspec::stacked_by(e),
+                panel_kind: super::bimlook::made_tag(e, "part")
+                    .and_then(|p| p.split_once(':'))
+                    .is_some_and(|(_, k)| ROOM_PANEL_KINDS.iter().any(|x| k.trim().eq_ignore_ascii_case(x))),
             })
         })
         .take(MAX_PANELS)
@@ -527,8 +549,23 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let scheds = schedules(sp);
     let tags: BTreeSet<String> = scheds.keys().cloned().chain(sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase())).collect();
     let equipment: BTreeSet<String> = sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
-    let panels = panels_of(d);
+    let mut panels = panels_of(d);
+    // A room's own panel: a panelboard whose `PANEL` names a typical schedule (or whose tag is
+    // `<letter>-<room>`). Other gear's `PANEL` is the panel feeding it (a damper's power box).
+    for p in &mut panels {
+        let keep = p.typical.as_ref().is_some_and(|t| {
+            let t = t.to_ascii_uppercase();
+            p.panel_kind && scheds.get(&t).is_some_and(|s| s.typical_of.is_some() || p.tag.to_ascii_uppercase().starts_with(&format!("{t}-")))
+        });
+        if !keep {
+            p.typical = None;
+        }
+    }
+    let panels = panels;
     let devices = devices_of(d);
+    // Whether each schedule numbers its breakers rather than their poles.
+    let by_breaker: BTreeMap<String, bool> = scheds.iter().map(|(k, s)| (k.clone(), numbered_by_breaker(s))).collect();
+    let bb = |k: &str| by_breaker.get(k).copied().unwrap_or(false);
     // -- Each panel's schedule: its own, else the typical one its letter names. --
     let sched_of = |p: &PanelEl| -> Option<(&String, &PanelSchedule)> {
         scheds.get_key_value(&p.tag.to_ascii_uppercase()).or_else(|| p.typical.as_ref().and_then(|t| scheds.get_key_value(&t.to_ascii_uppercase())))
@@ -613,8 +650,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let mut report = Report::default();
     let mut spaces_of: Vec<(usize, usize)> = Vec::new();
     for (pi, p) in panels.iter().enumerate() {
-        let Some((_, s)) = sched_of(p) else { continue };
+        let Some((skey, s)) = sched_of(p) else { continue };
         let panel_type = s.panel.trim().to_string();
+        let by_breaker = bb(skey);
         let mut u = PanelUse {
             panel: p.tag.clone(),
             panel_type: panel_type.clone(),
@@ -624,7 +662,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         };
         let mut taken: BTreeSet<u32> = BTreeSet::new();
         for (ri, c) in s.circuits.iter().enumerate().take(MAX_ROWS) {
-            let t = takes(c);
+            let t = takes(c, by_breaker);
             if t.is_empty() {
                 continue;
             }
@@ -649,6 +687,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 u.poles_total = n as u32;
                 u.poles_source = format!("{} header {k}: {v}", s.source);
             }
+            _ if by_breaker => {
+                u.poles_total = u.poles_used + u.spaces as u32;
+                u.poles_source = format!("the poles of its rows ({}): it numbers its breakers, not their poles", s.source);
+            }
             _ => {
                 u.poles_total = highest + highest % 2;
                 u.poles_source = format!("the highest circuit number on its schedule ({}), to an even count", s.source);
@@ -666,7 +708,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             handles.push(None);
             continue;
         };
-        let Some((_, s)) = sched_of(p) else {
+        let Some((skey, s)) = sched_of(p) else {
             handles.push(None);
             continue;
         };
@@ -674,7 +716,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             handles.push(None);
             continue;
         };
-        let mesh = body(p, m, s, upf);
+        let mesh = body(p, m, s, bb(skey), upf);
         if mesh.faces.is_empty() {
             handles.push(None);
             continue;
@@ -944,7 +986,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             }
             continue;
         };
-        let row = s.circuits.iter().take(MAX_ROWS).find(|c| takes(c).contains(n));
+        let row = s.circuits.iter().take(MAX_ROWS).find(|c| takes(c, bb(panel)).contains(n));
         if row.is_none_or(|c| row_of(c) == Row::Space) {
             mism.push(Mismatch {
                 kind: "plan_no_row".into(),
@@ -969,7 +1011,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             if row_of(c) != Row::Breaker {
                 continue;
             }
-            let t = takes(c);
+            let t = takes(c, bb(key));
             let used = t.iter().any(|n| plan.contains_key(&(key.clone(), *n)) || landed.contains(&(key.clone(), *n)));
             if used || feeds_gear(c, key, &tags, sp) || serves_equipment(c, &equipment) {
                 continue;
@@ -1024,7 +1066,7 @@ fn size_text(trip: Option<f64>, poles: u32) -> String {
 
 /// A breaker's body inside its panel's box: odd circuits on the left, even on the right, top
 /// down, each pole a row's height.
-fn body(p: &PanelEl, m: &Made, s: &PanelSchedule, upf: f64) -> cadaddy_doc::Mesh {
+fn body(p: &PanelEl, m: &Made, s: &PanelSchedule, by_breaker: bool, upf: f64) -> cadaddy_doc::Mesh {
     let mut mesh = super::wallgen::empty_mesh();
     let (dx, dy, dz) = (p.hi.x - p.lo.x, p.hi.y - p.lo.y, p.hi.z - p.lo.z);
     let along_x = dx >= dy;
@@ -1032,7 +1074,7 @@ fn body(p: &PanelEl, m: &Made, s: &PanelSchedule, upf: f64) -> cadaddy_doc::Mesh
     if !(w > 1e-9 && dz > 1e-9) {
         return mesh;
     }
-    let highest = s.circuits.iter().take(MAX_ROWS).flat_map(takes).max().unwrap_or(2).max(2);
+    let highest = s.circuits.iter().take(MAX_ROWS).flat_map(|c| takes(c, by_breaker)).max().unwrap_or(2).max(2);
     let rows = f64::from(highest.div_ceil(2).max(1));
     let n = m.numbers.first().copied().unwrap_or(1).max(1);
     let row = f64::from((n - 1) / 2);
@@ -1161,8 +1203,20 @@ mod tests {
         assert_eq!(circuit_numbers("LP1-3", "LP1"), vec![3]);
         assert_eq!(circuit_numbers("LP1-3", ""), vec![3]);
         assert_eq!(circuit_numbers("7", "A"), vec![7]);
-        assert_eq!(takes(&ckt("13", "PTAC", "20", 2, &[])), vec![13, 15]);
-        assert_eq!(takes(&ckt("1", "MAIN", "100", 3, &[])), vec![1, 3, 5]);
+        assert_eq!(takes(&ckt("13", "PTAC", "20", 2, &[]), false), vec![13, 15]);
+        assert_eq!(takes(&ckt("1", "MAIN", "100", 3, &[]), false), vec![1, 3, 5]);
+        assert_eq!(takes(&ckt("1", "MAIN", "100", 3, &[]), true), vec![1]);
+    }
+
+    #[test]
+    fn a_schedule_numbers_its_poles_or_its_breakers() {
+        let sched = |rows: Vec<PanelCircuit>| PanelSchedule { panel: "S".into(), circuits: rows, ..PanelSchedule::default() };
+        // Two-sided by poles: 13 is two poles (13, 15), and 15 is no row of its own.
+        let poles = sched(vec![ckt("1", "A", "20", 1, &[]), ckt("2", "B", "20", 1, &[]), ckt("13", "C", "20", 2, &[]), ckt("14", "D", "20", 1, &[])]);
+        assert!(!numbered_by_breaker(&poles));
+        // A switchboard's rows 1, 2, 3, each of three poles: by breaker.
+        let rows = sched(vec![ckt("1", "PANEL A", "200", 3, &[]), ckt("2", "PANEL B", "200", 3, &[]), ckt("3", "SPACE", "", 3, &[])]);
+        assert!(numbered_by_breaker(&rows));
         assert_eq!(size_text(Some(20.0), 1), "20A 1P");
         assert_eq!(size_text(None, 2), "2P");
     }

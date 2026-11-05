@@ -59,6 +59,8 @@ fn building() -> Session {
                      {"number": "3", "description": "WATER HEATER", "breaker": "30A", "poles": 2, "source": "X-3"},
                      {"number": "5", "description": "", "breaker": "", "poles": 1, "source": "X-3"}
                  ]},
+                {"tag": "DPB-1", "kind": "damper_power_box", "level": "L1", "min": [700, 110], "max": [706, 114], "height_ft": 1, "bottom_ft": 9,
+                 "properties": {"PANEL": "LP1", "CIRCUIT": "8"}},
                 {"tag": "RTU-1", "kind": "rooftop_unit", "level": "L1", "min": [-300, 300], "max": [-200, 400], "height_ft": 4},
                 {"tag": "MDP", "kind": "switchboard", "level": "L1", "min": [-200, 100], "max": [-150, 140], "height_ft": 7}
             ],
@@ -84,7 +86,9 @@ fn building() -> Session {
                      ckt("13", "ROOM HEAT PUMP", "20", 2, &[]),
                      ckt("4", "SPACE ONLY", "", 1, &[])
                  ]},
-                {"panel": "MDP", "source": "X-2", "circuits": [ckt("1", "PANELBOARD LP1", "100", 3, &[])]},
+                {"panel": "MDP", "source": "X-2", "circuits": [
+                    ckt("1", "PANELBOARD LP1", "100", 3, &[]), ckt("2", "PANELBOARD LP2", "100", 3, &[]), ckt("3", "SPACE", "", 3, &[])
+                ]},
                 {"panel": "P9", "source": "X-4", "circuits": [ckt("1", "PUMP", "15", 1, &[])]}
             ]
         }
@@ -185,6 +189,17 @@ fn each_schedule_row_is_a_breaker_inside_its_panel_with_what_the_row_says() {
     let cn = val(&pp, "connects").as_str().unwrap_or_default().to_string();
     assert_eq!(lp1.iter().filter(|b| b["connects"]["value"].as_str().is_some_and(|c| c.contains(&ph))).count(), 6);
     assert!(cn.split(',').count() >= 6, "{cn}");
+    // Gear whose `PANEL` is the panel feeding it (a damper's power box) holds no breakers.
+    assert!(breakers_of(&mut s, "DPB-1").is_empty());
+    // A switchboard numbering its breakers (1, 2, 3 of three poles each), not their poles.
+    let mh = panel_handle(&mut s, "MDP");
+    let mp = props_of(&mut s, &mh);
+    assert_eq!(
+        (val(&mp, "breakers"), val(&mp, "spaces"), val(&mp, "poles_used"), val(&mp, "poles_total")),
+        (&json!(2), &json!(3), &json!(6), &json!(9)),
+        "{mp}"
+    );
+    assert!(breakers_of(&mut s, "MDP").iter().any(|b| val(b, "circuit") == "MDP-2" && val(b, "poles") == 3));
     // A panel whose circuits are on its equipment record: those rows; a blank row is a space.
     let lp2 = breakers_of(&mut s, "LP2");
     assert_eq!(lp2.len(), 2, "{lp2:?}");
@@ -266,8 +281,8 @@ fn the_bom_lists_breakers_by_type_trip_and_poles_per_panel_type_and_level() {
     assert_eq!(line("Circuit breaker, HACR, panel LP1", "40A 2P"), Some(1.0));
     assert_eq!(line("Circuit breaker, shunt trip, panel LP1", "20A 1P"), Some(1.0));
     assert!(lines.iter().all(|l| l["level"] == "L1" && l["trade"] == "electrical" && l["unit"] == "each"), "{lines:?}");
-    // MDP's feeder breaker is in no panel of the model: MDP is a switchboard element too.
-    assert_eq!(line("Circuit breaker, panel MDP", "100A 3P"), Some(1.0));
+    // The switchboard's feeder breakers: MDP is gear of the model too.
+    assert_eq!(line("Circuit breaker, panel MDP", "100A 3P"), Some(2.0));
 }
 
 #[test]
@@ -291,7 +306,7 @@ fn plan_circuits_and_schedule_rows_that_dont_meet_are_review_items() {
     // The sign's row: nothing on the plans; the copier's row has a homerun tag; RTU-1's row
     // names equipment the model has; MDP's row feeds a panel; spares and spaces never count.
     assert!(m.contains(&("row_no_plan".into(), "LP1".into(), "LP1-8".into())), "{m:?}");
-    for c in ["LP1-7", "LP1-3", "LP1-4", "LP1-6", "MDP-1", "LP1-1", "LP1-2"] {
+    for c in ["LP1-7", "LP1-3", "LP1-4", "LP1-6", "MDP-1", "MDP-2", "LP1-1", "LP1-2"] {
         assert!(!m.iter().any(|x| x.2 == c), "{c}: {m:?}");
     }
     // LP2's water heater row: nothing on the plans either.
@@ -321,8 +336,8 @@ fn a_rebuild_replaces_the_breakers_and_keeps_the_count_index_true() {
     let n = s.execute("bim.count", &json!({"kind": "breaker", "verify": true})).expect("count");
     assert_eq!(n["count"], first, "{n}");
     assert_eq!(n["verify"]["matches"], true, "{n}");
-    // 6 in LP1, 3 in each room panel, 2 in LP2, 1 in MDP.
-    assert_eq!(first, json!(15));
+    // 6 in LP1, 3 in each room panel, 2 in LP2, 2 in MDP.
+    assert_eq!(first, json!(16));
     // Each breaker's body is inside its panel's box.
     let d = s.doc().expect("doc");
     for e in d.model.iter().filter(|e| cadaddy_engine::cmd::bimlook::made_tag(e, "part") == Some("atom:breaker")) {
