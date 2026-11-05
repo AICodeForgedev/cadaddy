@@ -1498,6 +1498,12 @@ fn calculate(c: &Calc) -> (Value, String, String) {
             && (pt - model_sum).abs() > rules.tolerance(pt, model_sum)
         {
             let differ = findings.iter().filter(|f| f.panel == p.tag && f.rule == "E-LOAD-SCHEDULE" && f.level == "circuit").count();
+            let fed: BTreeSet<String> = p.circuits.iter().filter_map(|x| x.feeds.as_ref().map(|f| f.0.clone())).collect();
+            let below = if differ == 0 && !fed.is_empty() {
+                format!(", the difference is in the panels it feeds: {}", fed.into_iter().collect::<Vec<_>>().join(", "))
+            } else {
+                String::new()
+            };
             let model_side = p.circuits.iter().filter(|x| x.unknown > 0).count();
             findings.push(Finding {
                 rule: "E-LOAD-SCHEDULE",
@@ -1505,7 +1511,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 panel: p.tag.clone(),
                 circuit: String::new(),
                 message: format!(
-                    "{}: the schedule prints {} VA connected, the model's loads {} VA ({differ} circuit(s) differ beyond tolerance{})",
+                    "{}: the schedule prints {} VA connected, the model's loads {} VA ({differ} circuit(s) differ beyond tolerance{below}{})",
                     p.tag,
                     va(pt),
                     va(model_sum),
@@ -1803,7 +1809,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|t| t.chars().take(2_000).collect())
         .take(20_000)
         .collect();
-    let groups = if code_texts.is_empty() { Vec::new() } else { super::valueeng::occupancies(&code_texts) };
+    // The code sheet's occupancies: given, else the ones the job kept with the spec.
+    let groups = if !code_texts.is_empty() {
+        super::valueeng::occupancies(&code_texts)
+    } else {
+        sp.mep
+            .occupancy
+            .split(',')
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .take(20)
+            .map(|g| (g.to_string(), sp.mep.occupancy_source.clone()))
+            .collect()
+    };
     let given = str_param(p, "occupancy");
     let (occ, occ_from) = pick_occupancy(&rules, given, &groups)
         .map(|(o, f)| {

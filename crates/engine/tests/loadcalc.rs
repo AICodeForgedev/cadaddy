@@ -439,3 +439,23 @@ fn guest_suites_with_cooking_are_dwelling_units_and_take_the_optional_method() {
     let general = u["demand_steps"].as_array().unwrap().iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
     assert!(general["cite"].as_str().unwrap().contains("dwelling units: first 3,000 VA"), "{general}");
 }
+
+#[test]
+fn the_occupancy_the_job_kept_with_the_spec_is_used_when_none_is_given() {
+    let mut spec = lodging_spec([3, 3], false);
+    spec["mep"]["occupancy"] = json!("R-1, B");
+    spec["mep"]["occupancy_source"] = json!("X-0: GROUP R-1 OCCUPANCY");
+    spec["mep"]["panel_schedules"][0]["totals"] = json!({"connected_va": 99_999.0});
+    let mut d = Drawing::new_imperial();
+    luminaires(&mut d, "U", "U-1", 4, 150.0, "201");
+    let mut s = session(spec, d);
+    let v = s.execute("bim.loadcalc", &json!({})).unwrap();
+    assert_eq!(v["occupancy"]["id"], "hotel", "{}", v["occupancy"]);
+    assert!(v["occupancy"]["from"].as_str().unwrap().contains("X-0: GROUP R-1 OCCUPANCY"), "{}", v["occupancy"]);
+    // Given, it wins.
+    let v = s.execute("bim.loadcalc", &json!({"occupancy": "commercial"})).unwrap();
+    assert_eq!(v["occupancy"]["id"], "commercial");
+    // A feeder panel whose difference is below it says so.
+    let dp = find(&v, "E-LOAD-SCHEDULE", "DP", "");
+    assert!(dp.iter().any(|f| f["message"].as_str().unwrap().contains("the difference is in the panels it feeds: U")), "{dp:?}");
+}
