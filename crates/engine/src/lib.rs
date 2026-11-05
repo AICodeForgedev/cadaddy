@@ -357,6 +357,11 @@ pub struct DocState {
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
     pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The drawing states the plan has moved past the associative model in: built again before
+    /// the next command that reads the model, or when editing stops ([`cmd::wallgen::Behind`]).
+    pub model_behind: cmd::wallgen::Behind,
+    /// The plan's rooms as last traced, by drawing state (`rooms_found` in `cmd::perceive`).
+    pub(crate) room_trace: cmd::RoomTraceCache,
     /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
     /// model does): every list whole, paged when `model.revise {last: true}` returns it.
     pub last_revision: Option<serde_json::Value>,
@@ -446,6 +451,8 @@ impl DocState {
             disk_id: None,
             wallgen: None,
             model_record: None,
+            model_behind: cmd::wallgen::Behind::default(),
+            room_trace: cmd::RoomTraceCache::default(),
             last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
@@ -2231,6 +2238,9 @@ pub struct Session {
     /// `model.issues`' findings for one revision of one drawing: its pages and kinds are read
     /// from them, not found again (a print set's checks took two minutes a call).
     pub(crate) issues_cache: Option<Box<cmd::verify::IssuesCache>>,
+    /// An associative model is being built again ([`cmd::wallgen::update_model`]): the commands
+    /// the build runs don't start another.
+    pub(crate) model_updating: bool,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -2354,6 +2364,7 @@ impl Session {
             plugin_depth: 0,
             one_undo_step: 0,
             issues_cache: None,
+            model_updating: false,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't
@@ -2374,6 +2385,23 @@ impl Session {
         for l in lines {
             self.echo(l);
         }
+    }
+
+    /// When the plan's edits have left the active drawing's associative model behind and nothing
+    /// has been edited for `idle`, build it again ([`cmd::wallgen::update_model`]). The app's frame
+    /// loop and the MCP server call it while waiting. Returns how long until it is due when a
+    /// model is behind but editing stopped less than `idle` ago (wake up then), else `None`.
+    pub fn update_model_when_idle(&mut self, idle: std::time::Duration) -> Option<std::time::Duration> {
+        let st = self.state().ok()?;
+        if !st.model_behind.holds_doc(&st.doc) {
+            return None;
+        }
+        let since = st.model_behind.since_last_edit();
+        if since < idle {
+            return Some(idle - since);
+        }
+        cmd::wallgen::update_model(self);
+        None
     }
 
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -2756,6 +2784,10 @@ impl Session {
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
             return Err(EngineError::Disabled(spec.id.into(), why));
         }
+        // A model the plan's edits left behind is built before a command that may read it.
+        if !cmd::wallgen::runs_with_model_behind(spec.id) {
+            cmd::wallgen::update_model(self);
+        }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
         let look_before = self.state().ok().map(DocState::model_look);
         let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
@@ -2788,6 +2820,8 @@ impl Session {
         // them (redo dropped an associative dimension's links: undofuzz).
         if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing && !moves_through_history(spec.id) {
             self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        } else {
+            cmd::wallgen::touch(self);
         }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
@@ -2959,6 +2993,10 @@ impl Session {
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
             return Err(EngineError::Disabled(spec.id.into(), why));
+        }
+        // A model the plan's edits left behind is built before a typed command that may read it.
+        if !nested && !cmd::wallgen::runs_with_model_behind(spec.id) {
+            cmd::wallgen::update_model(self);
         }
         if nested {
             // The outer command stays the one Enter repeats.

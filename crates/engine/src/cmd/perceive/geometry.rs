@@ -959,7 +959,85 @@ const TAG_NUMBER_REACH: f64 = 5.5;
 const OVERHUNG_ROOM_MIN_SQFT: f64 = 40.0;
 
 /// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
+/// Room traces remembered per drawing.
+const TRACES_KEPT: usize = 4;
+
+/// The rooms traced in a drawing state (the drawing as a command left it, shared with undo), so
+/// asking again in the same state reads them instead of tracing again: a model with no room
+/// elements traced its plan (up to 103 s) on every `rooms.list`, `rooms.build` and
+/// `bim_props fill`, and a job asked about 6 times. "No rooms" is remembered too. Any edit makes
+/// a new drawing state, so an edited wall or label is traced again.
+#[derive(Clone, Debug, Default)]
+pub struct TraceCache {
+    traces: Vec<Trace>,
+}
+
+#[derive(Clone, Debug)]
+struct Trace {
+    state: std::sync::Weak<Drawing>,
+    space: cadaddy_doc::Space,
+    regions: Option<Vec<[f64; 4]>>,
+    rooms: std::sync::Arc<Vec<FoundRoom>>,
+}
+
+/// Whether a trace of `old` holds for `now`: the same model objects (their chunks still shared:
+/// nothing in model space changed) and the same of everything else the trace reads (units and
+/// the other header values, layers, blocks, the building spec, the job's sheets). A command that
+/// took the drawing for writing and changed nothing there (`bim.props.fill` reseating no device)
+/// leaves a new state the old trace still holds for.
+fn trace_holds(old: &Drawing, now: &Drawing) -> bool {
+    old.model.unchanged_from(&now.model)
+        && old.blocks.same(&now.blocks)
+        && old.header == now.header
+        && old.building_spec == now.building_spec
+        && old.agent == now.agent
+        && old.layers == now.layers
+}
+
+impl TraceCache {
+    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+        let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions;
+        let exact = self.traces.iter().filter(same_ask).find(|t| std::ptr::eq(t.state.as_ptr(), std::sync::Arc::as_ptr(d)));
+        // In paper space only the very same state: its objects are a layout's, not compared here.
+        let holds =
+            || self.traces.iter().filter(same_ask).filter(|_| !space.is_paper()).find(|t| t.state.upgrade().is_some_and(|old| trace_holds(&old, d)));
+        exact.or_else(holds).map(|t| std::sync::Arc::clone(&t.rooms))
+    }
+    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+        // States nothing holds any more can't be asked about again.
+        self.traces.retain(|t| t.state.strong_count() > 0);
+        if self.traces.len() >= TRACES_KEPT {
+            self.traces.remove(0);
+        }
+        self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
+    }
+    /// How many traces are remembered.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.traces.len()
+    }
+}
+
+/// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
+/// ([`TraceCache`]).
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    let space = s.space();
+    let state = std::sync::Arc::clone(&s.state()?.doc);
+    if let Some(rooms) = s.state()?.room_trace.get(&state, &space, regions) {
+        return Ok(rooms.as_ref().clone());
+    }
+    let rooms = trace_rooms_in(s, regions)?;
+    // Traced in the state it was asked in (the trace changes nothing): remembered for it.
+    if let Ok(st) = s.state_mut()
+        && std::sync::Arc::ptr_eq(&st.doc, &state)
+    {
+        st.room_trace.put(&state, space, regions, std::sync::Arc::new(rooms.clone()));
+    }
+    Ok(rooms)
+}
+
+/// The rooms around the plan's name labels, traced.
+fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
     let started = web_time::Instant::now();
     let mut last = 0.0f64;
@@ -1465,5 +1543,58 @@ mod tests {
         // The best names first within a sheet.
         let scored = labels_to_trace(vec![(0, Vec2::new(5.0, 5.0)), (1, Vec2::new(6.0, 5.0))], |n| n.1, |n| u8::from(n.0 == 1), Some(&regions));
         assert_eq!(scored.first().map(|n| n.0), Some(1));
+    }
+
+    /// A 10' × 10' room outline (inches) with a name label inside, in a new imperial drawing.
+    fn one_room(label: bool) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("pline", &json!({"vertices": [[0, 0], [120, 0], [120, 120], [0, 120]], "closed": true})).unwrap();
+        if label {
+            s.execute("text", &json!({"at": [40, 60], "text": "OFFICE", "height": 6})).unwrap();
+        }
+        s
+    }
+
+    #[test]
+    fn a_room_trace_is_read_again_in_the_same_drawing_state_and_traced_again_after_an_edit() {
+        let mut s = one_room(true);
+        let first = rooms_found(&mut s).unwrap();
+        assert_eq!(first.len(), 1, "the labelled outline is a room");
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        // Asked again in the same state: read, not traced again (no second entry).
+        let again = rooms_found(&mut s).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again.first().map(|r| r.label), first.first().map(|r| r.label));
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        // Taken for writing and nothing changed (a new state, the old one kept by undo): still read.
+        let kept = std::sync::Arc::clone(&s.state().unwrap().doc);
+        let _ = s.doc_mut().unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&kept, &s.state().unwrap().doc), "a new drawing state");
+        assert_eq!(rooms_found(&mut s).unwrap().len(), 1);
+        assert_eq!(s.state().unwrap().room_trace.len(), 1, "the trace of the unchanged state holds");
+        // An edit to the plan: traced again, and the edit is seen (the outline erased: no room).
+        let outline = s.doc().unwrap().model.iter().find(|e| matches!(e.kind, EntityKind::LwPolyline(_))).map(|e| e.handle.hex()).unwrap();
+        s.execute("erase", &json!({"handles": [outline]})).unwrap();
+        assert!(rooms_found(&mut s).unwrap().is_empty(), "the erased outline bounds no room");
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
+        // Undo brings back the state the room was traced in: read again, not traced.
+        s.execute("undo", &json!({})).unwrap();
+        assert_eq!(rooms_found(&mut s).unwrap().len(), 1);
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
+    }
+
+    #[test]
+    fn no_rooms_is_remembered_too() {
+        // An outline with no label: the trace finds nothing, and that is kept for the state.
+        let mut s = one_room(false);
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 1, "\"no rooms\" read, not traced again");
+        // Different regions are a different question.
+        assert!(rooms_found_in(&mut s, Some(&[[0.0, 0.0, 200.0, 200.0]])).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
     }
 }

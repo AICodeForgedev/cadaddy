@@ -1196,6 +1196,14 @@ impl CadApp {
         if self.session.lisp_busy() {
             ctx.request_repaint();
         }
+        // A 3D model the plan's edits left behind is built once editing stops for a moment (not
+        // while a command or a LISP routine runs); a frame is asked for when it falls due.
+        if self.session.running.is_none()
+            && !self.session.lisp_busy()
+            && let Some(wait) = self.session.update_model_when_idle(cadaddy_engine::cmd::wallgen::IDLE_REBUILD)
+        {
+            ctx.request_repaint_after(wait);
+        }
         // Esc in a LISP routine's dialog is its Cancel, not the end of the routine.
         crate::lispdlg::escape(self, ctx);
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
