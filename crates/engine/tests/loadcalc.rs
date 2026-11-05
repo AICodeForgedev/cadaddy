@@ -219,8 +219,17 @@ fn the_phases_of_the_model_follow_the_circuit_numbers() {
     assert!(find(&v, "E-LOAD-CIRCUIT", "LP9", "1").is_empty(), "{v:#}");
 }
 
-fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
-    let unit_total = 1_000.0 + 900.0 + 3_000.0 + 1_500.0;
+fn lodging_spec(units_on_feeders: [u32; 2], cooking: bool) -> Value {
+    let unit_total = 1_000.0 + 900.0 + 3_000.0 + 1_500.0 + if cooking { 2_400.0 } else { 0.0 };
+    let mut unit = vec![
+        ckt("1", "LIGHTING AND RECEPTACLES", "20", 1, Some(1_000.0)),
+        ckt("2", "REFRIGERATOR", "20", 1, Some(900.0)),
+        ckt("3", "AC UNIT", "20", 2, Some(3_000.0)),
+        ckt("4", "KITCHEN COUNTER", "20", 1, Some(1_500.0)),
+    ];
+    if cooking {
+        unit.push(ckt("5", "RANGE", "30", 2, Some(2_400.0)));
+    }
     json!({
         "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12}],
@@ -232,7 +241,7 @@ fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
                     ckt("2", &format!("PANELBOARD U ({} UNITS)", units_on_feeders[1]), "100", 2, Some(unit_total * f64::from(units_on_feeders[1])))
                  ]},
                 {"panel": "U", "typical_of": 6, "source": "X-4", "header": {"volts/phase": "208Y/120V, 1PH, 3W", "bus amps": "100A"},
-                 "circuits": [ckt("1", "LIGHTING AND RECEPTACLES", "20", 1, Some(1_000.0)), ckt("2", "REFRIGERATOR", "20", 1, Some(900.0)), ckt("3", "AC UNIT", "20", 2, Some(3_000.0)), ckt("4", "KITCHEN COUNTER", "20", 1, Some(1_500.0))],
+                 "circuits": unit,
                  "totals": {"connected_va": unit_total}}
             ],
             "load_summaries": [{"title": "PANELBOARD DP DEMAND CALCULATION", "panel": "DP", "basis": "220.84", "source": "X-4", "lines": [
@@ -242,7 +251,7 @@ fn lodging_spec(units_on_feeders: [u32; 2]) -> Value {
     })
 }
 
-fn lodging(units_on_feeders: [u32; 2]) -> Session {
+fn lodging(units_on_feeders: [u32; 2], cooking: bool) -> Session {
     let mut d = Drawing::new_imperial();
     for room in ["201", "202", "203", "204", "205", "206"] {
         luminaires(&mut d, "U", "U-1", 4, 150.0, room);
@@ -250,12 +259,12 @@ fn lodging(units_on_feeders: [u32; 2]) -> Session {
         devices(&mut d, "receptacle", "U", "U-2", 1, room);
         devices(&mut d, "receptacle", "U", "U-4", 2, room);
     }
-    session(lodging_spec(units_on_feeders), d)
+    session(lodging_spec(units_on_feeders, cooking), d)
 }
 
 #[test]
 fn typical_unit_panels_roll_up_through_their_feeders_with_the_code_sheet_s_occupancy() {
-    let mut s = lodging([3, 3]);
+    let mut s = lodging([3, 3], false);
     let code = json!(["USE AND OCCUPANCY CLASSIFICATION", "RESIDENTIAL GROUP R-1 OCCUPANCY (310.2)", "GROUP B OCCUPANCY"]);
     let v = s.execute("bim.loadcalc", &json!({"code_texts": code, "code_sheet": "X-0"})).unwrap();
     assert_eq!(v["occupancy"]["id"], "hotel", "a unit occupancy before the others: {}", v["occupancy"]);
@@ -287,15 +296,16 @@ fn typical_unit_panels_roll_up_through_their_feeders_with_the_code_sheet_s_occup
 
 #[test]
 fn the_dwelling_rules_and_a_unit_count_the_feeders_dont_match() {
-    let mut s = lodging([3, 2]);
+    let mut s = lodging([3, 2], false);
     let v = s.execute("bim.loadcalc", &json!({"occupancy": "R-2"})).unwrap();
     assert_eq!(v["occupancy"]["id"], "dwelling");
     let dp = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "DP").unwrap();
     let general = dp["demand_steps"].as_array().unwrap().iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
     // 5 units x 2,460 VA: 3,000 VA at 100%, the rest at 35%.
     assert_eq!(general["demand_va"], json!(6_255.0), "{general}");
-    // A dwelling occupancy's own optional method is no finding.
-    assert!(find(&v, "E-LOAD-SCHEDULE", "DP", "").iter().all(|f| f["likely_wrong"] != "documents"), "{v:#}");
+    // The documents' optional method needs units with cooking: these have none.
+    let doc = find(&v, "E-LOAD-SCHEDULE", "DP", "");
+    assert!(doc.iter().any(|f| f["likely_wrong"] == "documents" && f["message"].as_str().unwrap().contains("5 unit(s), 0 with cooking, 5 with heating or cooling")), "{doc:?}");
     let typ = find(&v, "E-LOAD-SCHEDULE", "U", "");
     assert!(typ.iter().any(|f| f["message"].as_str().unwrap().contains("typical of 6; the feeder rows feed 5 units")), "{typ:?}");
 }
@@ -352,4 +362,26 @@ fn no_schedules_or_hostile_values_never_panic() {
     let mut s = session(spec, d);
     let v = s.execute("bim.loadcalc", &json!({"code_texts": [1, null, "x".repeat(100_000)]})).unwrap();
     assert!(v["panels"].as_array().unwrap().len() == 2, "{v}");
+}
+
+#[test]
+fn guest_suites_with_cooking_are_dwelling_units_and_take_the_optional_method() {
+    let mut s = lodging([3, 3], true);
+    let v = s.execute("bim.loadcalc", &json!({"occupancy": "R-1"})).unwrap();
+    assert_eq!(v["occupancy"]["id"], "hotel");
+    let dp = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "DP").unwrap();
+    let steps = dp["demand_steps"].as_array().unwrap();
+    let opt = steps.iter().find(|s| s["what"].as_str().unwrap().contains("by the optional method")).unwrap_or_else(|| panic!("{steps:?}"));
+    assert!(opt["what"].as_str().unwrap().starts_with("6 units by the optional method (44%)"), "{opt}");
+    let cite = opt["cite"].as_str().unwrap();
+    assert!(cite.contains("220.84") && cite.contains("210.18"), "{cite}");
+    // Every load of the units is under the factor: no other step for them.
+    assert_eq!(opt["connected_va"], dp["connected_va"]["model"], "{dp}");
+    assert!(steps.iter().all(|s| !s["what"].as_str().unwrap().starts_with("general lighting")), "{steps:?}");
+    // The documents use the same method: no finding about it.
+    assert!(find(&v, "E-LOAD-SCHEDULE", "DP", "").iter().all(|f| f["likely_wrong"] != "documents"), "{v:#}");
+    // One unit alone (its own panel): the dwelling rules' standard method.
+    let u = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "U").unwrap();
+    let general = u["demand_steps"].as_array().unwrap().iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
+    assert!(general["cite"].as_str().unwrap().contains("dwelling units: first 3,000 VA"), "{general}");
 }
