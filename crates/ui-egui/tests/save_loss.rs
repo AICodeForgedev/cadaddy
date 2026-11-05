@@ -99,16 +99,15 @@ fn programmatic_saves_never_ask() {
     cleanup(&path);
 }
 
-/// Type names come from the file: however many, however long, the warning stays readable.
+/// Type names come from the file: only the entity types DXF defines are counted as lost, so
+/// however many made-up names, however long, a file can't make the warning list them.
 #[test]
-fn a_hostile_list_of_types_is_capped() {
+fn a_hostile_list_of_types_is_not_listed() {
     let long = "X".repeat(5000);
     let many: Vec<String> = (0..50).map(|i| format!("{long}{i}")).collect();
     let refs: Vec<&str> = many.iter().map(String::as_str).collect();
     let (mut app, path) = opened("hostile", &refs);
     menus::activate(&mut app, "qsave");
-    let s = app.save_loss.as_ref().unwrap().summary();
-    assert!(s.chars().count() < 500, "{}", s.len());
-    assert!(s.ends_with("42 more types"), "{s}");
+    assert!(app.save_loss.is_none(), "{:?}", app.save_loss.as_ref().map(|p| p.summary().len()));
     cleanup(&path);
 }
