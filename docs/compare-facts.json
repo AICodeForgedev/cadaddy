@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1240,
-    "count": 1240,
+    "callableAsJson": 1246,
+    "count": 1246,
     "ids": [
       "-attedit",
       "-block",
@@ -119,6 +119,7 @@
       "bim.atoms.edit",
       "bim.atoms.report",
       "bim.atoms.rules",
+      "bim.bid",
       "bim.bom",
       "bim.build",
       "bim.chain",
@@ -705,6 +706,7 @@
       "model.overlay",
       "model.render",
       "model.revise",
+      "model.update",
       "models3d.list",
       "models3d.place",
       "models3d.twins",
@@ -892,6 +894,10 @@
       "pspace",
       "publish",
       "publishlist",
+      "pull.cutlist",
+      "pull.release",
+      "pull.schedule",
+      "pull.sheets",
       "purge",
       "pyramid",
       "qdim",
@@ -1244,7 +1250,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 540,
+    "inMenus": 545,
     "typed": 564
   },
   "features": {

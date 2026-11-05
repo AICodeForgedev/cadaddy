@@ -347,9 +347,10 @@ fn an_associative_rebuild_keeps_its_conflicts_for_model_revise() {
     let (south, eastw) = (wall(&s, true), wall(&s, false));
     recolor(&mut s, eastw, 3);
     s.log.clear();
-    // Moving the east wall's plan lines rebuilds the model at once: the recoloured east wall
-    // conflicts (its plan lines changed) and the rebuilt wall replaces it.
+    // Moving the east wall's plan lines leaves the model behind; the update rebuilds it: the
+    // recoloured east wall conflicts (its plan lines changed) and the rebuilt wall replaces it.
     s.execute("move", &json!({"handles": east(&s), "from": [0, 0], "to": [24, 0]})).unwrap();
+    s.execute("model.update", &json!({})).unwrap();
     assert!(s.log.iter().any(|l| l.contains("2 moved") && l.contains("1 conflict(s)")), "{:?}", s.log);
     let r = s.execute("model.revise", &json!({"last": true})).unwrap();
     assert_eq!(r["auto"], true, "{r}");

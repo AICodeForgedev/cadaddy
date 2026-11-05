@@ -3382,8 +3382,13 @@ menu	Modify	수정
 	Conduit Routing Report	전선관 경로 보고서
 	Reroute Conduit	전선관 경로 재설정
 	Conduit Takeoff	전선관 물량 산출
+	Wire Pull Schedule	전선 인입 일정표
+	Conduit Cut and Bend List	전선관 절단 및 벤딩 목록
+	Material Release List	자재 출고 목록
+	Field Paperwork Sheets	현장 문서 시트
 	Scope by Trade	공종별 범위
 	Value Engineering Scenario	가치 공학 시나리오
 	Value Engineering Decision	가치 공학 결정
 	Read Drawn Dimensions	그려진 치수 읽기
 	Underground Plan Report	지중 배관 계획 보고서
+	Update Model from Plans	도면에서 모델 업데이트
