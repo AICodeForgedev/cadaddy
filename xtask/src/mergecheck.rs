@@ -597,9 +597,12 @@ pub fn slow_filter(slow: &[(String, String)]) -> Option<String> {
 /// The nextest configuration this tool runs with: its profile (JUnit report for the timing data,
 /// failures printed as they happen and again at the end) and one-at-a-time groups for the test
 /// binaries that serialize their tests with a lock.
-pub fn nextest_config(serial_binaries: &[String]) -> String {
+pub fn nextest_config(store: &Path, serial_binaries: &[String]) -> String {
     let mut s = String::new();
     s.push_str("# Written by `cargo xtask merge-check`; regenerated each run.\n");
+    // nextest's default store is relative to the workspace, not $CARGO_TARGET_DIR: keep the
+    // reports with the build cache, where the next run reads them.
+    s.push_str(&format!("[store]\ndir = {}\n\n", toml_str(&store.to_string_lossy())));
     s.push_str(&format!("[profile.{PROFILE}]\n"));
     s.push_str("fail-fast = false\nfailure-output = \"immediate-final\"\nsuccess-output = \"never\"\nstatus-level = \"slow\"\nfinal-status-level = \"fail\"\nslow-timeout = { period = \"60s\" }\n\n");
     s.push_str(&format!("[profile.{PROFILE}.junit]\npath = \"junit.xml\"\nstore-success-output = false\nstore-failure-output = true\n\n"));
@@ -661,16 +664,15 @@ pub fn nextest_args(a: &Affected, config: &Path, threads: usize, filter: Option<
     v
 }
 
+/// Doc-tests of the affected libraries, selected among the same packages as the other test
+/// commands (cargo skips those without a library), so features resolve the same way and the
+/// libraries are not rebuilt.
 pub fn doctest_args(ws: &Workspace, a: &Affected) -> Option<Vec<String>> {
-    let libs: Vec<&Package> = ws.packages.iter().filter(|p| p.has_lib && a.packages.contains(&p.name)).collect();
-    if libs.is_empty() {
+    if !ws.packages.iter().any(|p| p.has_lib && a.packages.contains(&p.name)) {
         return None;
     }
     let mut v: Vec<String> = ["test", "--doc", "--no-fail-fast"].map(String::from).to_vec();
-    for p in libs {
-        v.push("-p".into());
-        v.push(p.name.clone());
-    }
+    v.extend(package_args(a));
     Some(v)
 }
 
@@ -1336,7 +1338,7 @@ pub fn run(default_root: &Path, args: &[&str]) -> Result<(), String> {
     }
     let use_nextest = o.nextest && ensure_nextest(&mut r, o.install);
     if use_nextest {
-        if let Err(e) = std::fs::write(&config, nextest_config(&serial)) {
+        if let Err(e) = std::fs::write(&config, nextest_config(&r.target.join("nextest"), &serial)) {
             return Err(format!("{}: {e}", config.display()));
         }
         if run_merge {
@@ -1681,7 +1683,7 @@ mod tests {
         for p in &mut w2.packages {
             p.has_lib = p.name != "cli";
         }
-        assert_eq!(doctest_args(&w2, &a).map(|d| shell_line(&d)), Some("cargo test --doc --no-fail-fast -p fonts -p render".to_string()));
+        assert_eq!(doctest_args(&w2, &a).map(|d| shell_line(&d)), Some("cargo test --doc --no-fail-fast -p cli -p fonts -p render".to_string()));
         let only_cli = affected(&w2, &files(&["apps/cli/src/main.rs"]), &BTreeMap::new());
         assert_eq!(doctest_args(&w2, &only_cli), None, "no library: no doc-tests");
         assert_eq!(shell_line(&["nextest".into(), "-E".into(), "not (test(=a))".into()]), "cargo nextest -E 'not (test(=a))'");
@@ -1703,11 +1705,12 @@ mod tests {
         assert!(uses_serial_lock("use std::sync::Mutex;\nstatic SERIAL: Mutex<()> = Mutex::new(());\n#[test] fn a() {}"));
         assert!(uses_serial_lock("    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());"));
         assert!(!uses_serial_lock("let m: Mutex<()> = Mutex::new(());\nstatic N: AtomicUsize = AtomicUsize::new(0);"));
-        let cfg = nextest_config(&["pkg-a::slowbin".to_string(), "pkg-b::x".to_string()]);
+        let cfg = nextest_config(Path::new(r"/c/t\x/nextest"), &["pkg-a::slowbin".to_string(), "pkg-b::x".to_string()]);
+        assert!(cfg.contains("[store]\ndir = \"/c/t\\\\x/nextest\"\n"), "{cfg}");
         assert!(cfg.contains("[profile.merge-check]") && cfg.contains("[profile.merge-check.junit]"));
         assert!(cfg.contains("serial-0 = { max-threads = 1 }") && cfg.contains("serial-1 = { max-threads = 1 }"));
         assert!(cfg.contains("filter = \"binary_id(=pkg-a::slowbin)\"\ntest-group = \"serial-0\""));
-        assert!(!nextest_config(&[]).contains("[test-groups]"));
+        assert!(!nextest_config(Path::new("t"), &[]).contains("[test-groups]"));
     }
 
     #[test]
