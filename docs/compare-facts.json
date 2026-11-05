@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1250,
-    "count": 1250,
+    "callableAsJson": 1247,
+    "count": 1247,
     "ids": [
       "-attedit",
       "-block",
@@ -157,6 +157,7 @@
       "bim.layout.object",
       "bim.layout.rehost",
       "bim.layout.tie",
+      "bim.loadcalc",
       "bim.look",
       "bim.prints",
       "bim.products",
@@ -948,10 +949,6 @@
       "review.approve",
       "review.batch",
       "review.defer",
-      "review.impact",
-      "review.impact.open",
-      "review.impact.resolve",
-      "review.impact.trail",
       "review.list",
       "review.log",
       "review.next",
@@ -1254,7 +1251,7 @@
       "zoom.realtime",
       "zoom.window"
     ],
-    "inMenus": 545,
+    "inMenus": 546,
     "typed": 564
   },
   "features": {

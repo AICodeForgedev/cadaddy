@@ -297,6 +297,11 @@ pub(crate) fn construction_type(texts: &[String]) -> Option<String> {
     facts::construction(texts, &rules()).map(|f| f.value)
 }
 
+/// The occupancy groups a code sheet names (`R-1`, `B`), each with the text it was read from.
+pub(crate) fn occupancies(texts: &[String]) -> Vec<(String, String)> {
+    facts::read(texts, &rules()).occupancies.into_iter().map(|f| (f.value, f.source)).collect()
+}
+
 /// A sheet's texts in reading order: down the sheet in rows of its usual text height, then
 /// across. Each text gets one key, so the order is total whatever the texts' heights.
 pub(crate) fn reading_order(texts: Vec<cadaddy_mepfix::sheet_facts::TextItem>) -> Vec<String> {
@@ -657,7 +662,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
         let (design_lines, atoms, alt_lines) = {
             let d = s.doc()?;
             let dl = scope::design_lines(d, &sp, &taken_ref, &fs_raceway);
-            let atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable);
+            let atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable, &super::conduitroute::cable_paths(d));
             let al = scope::alt_lines(&sp, &taken_ref, &atoms, &alt.cable, &fs_cable);
             (dl, atoms, al)
         };

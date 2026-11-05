@@ -697,7 +697,13 @@ fn run_graph(s: &mut Session, p: &Value) -> Result<Value> {
 /// Each door between the rooms on its two sides; with `set`, written on the doors as
 /// `from_room` / `to_room` (computed).
 pub(crate) fn graph(s: &mut Session, set: bool) -> Result<Value> {
-    let rooms = super::rooms3d::rooms(s)?;
+    graph_with(s, set, false)
+}
+
+/// [`graph`]; `built_only`: the build's rooms alone (after a job's build, whose rooms stage
+/// traced the plans already: a model with none has none, never the whole drawing traced again).
+pub(crate) fn graph_with(s: &mut Session, set: bool, built_only: bool) -> Result<Value> {
+    let rooms = if built_only { super::rooms3d::built(s)? } else { super::rooms3d::rooms(s)? };
     let d = s.doc()?;
     let upf = units_per_foot(spec_of(d).as_ref());
     let name_of = |r: &super::rooms3d::Room3| r.number.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| r.name.clone());

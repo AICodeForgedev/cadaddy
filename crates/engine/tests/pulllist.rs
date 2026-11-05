@@ -151,7 +151,8 @@ fn the_wire_pulled_reconciles_with_the_takeoff() {
     assert_eq!(f(&t["feeder_conductors_ft"]), 0.0, "{w}");
     // Two circuits' three conductors each, one pull box on LP1-3.
     assert!((f(&t["pull_box_loops_ft"]) - 3.0 * 2.0).abs() < 1e-6, "{w}");
-    assert!((f(&t["gear_end_slack_ft"]) - 6.0 * 2.0).abs() < 1e-6, "{w}");
+    // The takeoff's panel makeup (3 ft) already gives each conductor its slack at the panel.
+    assert!(f(&t["gear_end_slack_ft"]).abs() < 1e-6, "{w}");
 }
 
 #[test]
