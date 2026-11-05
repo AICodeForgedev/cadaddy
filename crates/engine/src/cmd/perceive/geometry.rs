@@ -1245,6 +1245,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         ];
         let mut first: Option<(Vec<Vec2>, f64)> = None;
         let mut holds: Option<(Vec<Vec2>, f64)> = None;
+        // Whether a loop holding its whole box took it for a note (below): no room is traced
+        // round it then either.
+        let mut note = false;
         for (i, seed) in seeds.into_iter().enumerate() {
             let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, seed, &mut outline_cache) else { continue };
             let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
@@ -1264,6 +1267,9 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             let on_edge = in_room(at)
                 || (crate::cmd::guided::edge_distance(&poly, at) <= 0.5 * th
                     && numbers.iter().any(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q)));
+            if whole && !on_edge && area >= min_area {
+                note = true;
+            }
             if area < min_area || !(i == 0 || in_room(at) || (whole && on_edge)) {
                 continue;
             }
@@ -1285,6 +1291,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
         let (poly, area, probed) = match holds.or(first) {
             Some((poly, area)) if area >= least => (poly, area, false),
+            _ if note => continue,
             _ => {
                 let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
                 if p.len() < 3 {
