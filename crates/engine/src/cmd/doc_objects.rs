@@ -389,16 +389,26 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
     out
 }
 
-/// The room type a note's words call an object for in each of, after the class's words (`PROVIDE
-/// ONE RANGE IN EACH GUEST SUITE`: `GUEST SUITE`): the words after an `ALL` / `EACH` word up to a
-/// stop word, at most the rules' `room_type_words`.
+/// The room type a note's words call an object for in each of (`PROVIDE ONE RANGE IN EACH GUEST
+/// SUITE`, `IN EACH GUEST SUITE PROVIDE ONE RANGE`: `GUEST SUITE`): the words after an `ALL` /
+/// `EACH` word up to a stop word or the class's words, at most the rules' `room_type_words`. An
+/// `ALL` right before the class's words is the class's own (`ALL ROOFTOP UNITS`), no room type.
 fn room_type_after(w: &[String], class_at: usize) -> Vec<String> {
     let r = rules();
     let is = |list: &[String], x: &str| list.iter().any(|a| a.eq_ignore_ascii_case(x));
-    let Some(k) = w.iter().enumerate().skip(class_at + 1).find(|(_, x)| is(&r.all_words, x)).map(|(i, _)| i) else {
+    let after = w.iter().enumerate().skip(class_at + 1).find(|(_, x)| is(&r.all_words, x)).map(|(i, _)| i);
+    let before = || w.iter().enumerate().take(class_at.saturating_sub(2)).find(|(_, x)| is(&r.all_words, x)).map(|(i, _)| i);
+    let Some(k) = after.or_else(before) else {
         return Vec::new();
     };
-    w.iter().skip(k + 1).take_while(|x| !is(&r.room_stop_words, x) && !is(&r.all_words, x)).take(r.room_type_words.max(1)).cloned().collect()
+    let end = if k < class_at { class_at } else { w.len() };
+    w.iter()
+        .take(end)
+        .skip(k + 1)
+        .take_while(|x| !is(&r.room_stop_words, x) && !is(&r.all_words, x))
+        .take(r.room_type_words.max(1))
+        .cloned()
+        .collect()
 }
 
 /// The rooms of a note's room type: each room whose name holds every word of the type that names
@@ -761,5 +771,56 @@ mod tests {
         assert_eq!(nearest_on_run(&run, Vec2::new(60.0, 60.0), 48.0).map(|n| n.0), Some(1));
         assert!(nearest_on_run(&run, Vec2::new(-80.0, 80.0), 48.0).is_none());
         assert!(nearest_on_run(&[], Vec2::ZERO, 48.0).is_none());
+    }
+
+    #[test]
+    fn a_note_calling_for_a_class_in_each_room_of_a_type_names_those_rooms() {
+        // Made-up rooms, (level, name, outline): two suites of the type (one named in the plural
+        // form), a corridor and a storage room whose name shares one word.
+        let rooms: Vec<(String, String, ())> = ["GUEST SUITE 201", "CORRIDOR 200", "GUEST SUITES 202", "SUITE STORAGE 203", "OFFICE 101"]
+            .iter()
+            .map(|n| ("Level 2".to_string(), n.to_string(), ()))
+            .collect();
+        // Either order, any count words, the type's extra words (`DOOR`) ignored.
+        for text in [
+            "PROVIDE ONE MAGNETIC DOOR HOLDER AT EACH GUEST SUITE DOOR.",
+            "IN ALL GUEST SUITES, PROVIDE A DOOR HOLDER CONNECTED TO THE FIRE ALARM SYSTEM.",
+            "Door holder in every guest suite; see riser.",
+        ] {
+            let named = note_objects(text);
+            let n = named.iter().find(|x| x.class.kind == "door_holder").unwrap_or_else(|| panic!("{text}: {named:?}"));
+            assert!(!n.all, "{text}: a room type, not every door holder there is");
+            assert_eq!(rooms_of_type(&n.rooms, &rooms), vec![0, 2], "{text}: {:?}", n.rooms);
+        }
+        // `ALL` before the class's own words is a rule over every one there is; a type no room
+        // has, or a type of generic words only, names no rooms.
+        let all = note_objects("ALL MAGNETIC DOOR HOLDER UNITS SHALL RELEASE ON ALARM.");
+        assert!(all.first().is_some_and(|n| n.all && n.rooms.is_empty()), "{all:?}");
+        let none = note_objects("PROVIDE A DOOR HOLDER AT EACH STAIR DOOR.");
+        assert!(rooms_of_type(&none[0].rooms, &rooms).is_empty(), "{none:?}");
+        let generic = note_objects("PROVIDE A DOOR HOLDER IN EACH ROOM.");
+        assert!(rooms_of_type(&generic[0].rooms, &rooms).is_empty(), "{generic:?}");
+        // A note with no room type keeps none (a plain call: its count, proposed where no plan
+        // draws it).
+        assert!(note_objects("PROVIDE POWER FOR TWO EV CHARGING STATIONS.")[0].rooms.is_empty());
+    }
+
+    #[test]
+    fn an_object_the_model_already_has_is_one_of_a_keynotes_count() {
+        let class = |k: &str| class_by_kind(k).unwrap();
+        // A keynote calling for two exit signs (`ONE … AND ONE …`) at a marker beside an exit sign
+        // the plan already draws: one pair, one left to add. Each object in the model is used once,
+        // the nearest pairs first.
+        assert_eq!(note_count("PROVIDE ONE EXIT SIGN UP HIGH AND ONE DOWN LOW.", class("exit_sign")), 2);
+        let there = pair_nearest(vec![(1.5, 0, 0), (1.6, 1, 0)], 2);
+        assert_eq!(there, vec![Some(0), None]);
+        // Two markers, one drawn sign between them nearer the second: the second's.
+        assert_eq!(pair_nearest(vec![(4.0, 0, 0), (2.0, 1, 0), (9.0, 1, 1)], 2), vec![None, Some(0)]);
+        // Hostile distances are no pair; nothing to pair is all new.
+        assert_eq!(pair_nearest(vec![(f64::NAN, 0, 0), (f64::INFINITY, 1, 0)], 2), vec![None, None]);
+        assert_eq!(pair_nearest(vec![(1.0, 5, 0)], 1), vec![None]);
+        // An exit sign luminaire is the class by its schedule row's words, whatever its kind.
+        assert!(is_class(class("exit_sign"), "light_fixture", "XA EXIT SIGN - CEILING/WALL MOUNTED"));
+        assert!(!is_class(class("exit_sign"), "light_fixture", "A 2X4 RECESSED TROFFER"));
     }
 }

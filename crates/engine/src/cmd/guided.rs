@@ -13579,9 +13579,9 @@ fn doc_objects_step(
     }
     let marks_read = found.len();
     let found = dob::dedupe(found, r.dedupe_ft * upf);
-    // What the model already has: an element there naming the same class (another step's), by
-    // its kind or its type's words (a luminaire whose schedule row reads `EXIT SIGN`); a plan
-    // element and the part built from it are one. (kind, words, level, point, type mark)
+    // What the model already has: a built element there naming the same class (another step's),
+    // by its kind or its type's words, its own or the plan element's it was built from (a
+    // luminaire whose schedule row reads `EXIT SIGN`). (kind, words, level, point, type mark)
     let existing: Vec<(String, String, String, Vec2, String)> = {
         let d = s.doc()?;
         let text_of = |e: &cadaddy_doc::Entity, k: &str| cadaddy_doc::props::read(&e.common.xdata).get(k).map(|p| p.text()).unwrap_or_default();
@@ -13591,16 +13591,9 @@ fn doc_objects_step(
         d.model
             .iter()
             .take(2_000_000)
+            .filter(|e| super::wallgen::made_as(e).is_some())
             .filter_map(|e| {
-                let made = super::wallgen::made_as(e).is_some();
-                // A part built from a plan element: the plan element stands for both.
-                let source = if made { super::bimlook::made_source(e).and_then(|h| d.model.get(h)) } else { None };
-                if source.is_some_and(|x| super::wallgen::made_as(x).is_none() && super::ifcref::tag(x).is_some()) {
-                    return None;
-                }
-                if !made && super::ifcref::tag(e).is_none() {
-                    return None;
-                }
+                let source = super::bimlook::made_source(e).and_then(|h| d.model.get(h));
                 let kind = super::elemprops::element_kind(e)?;
                 let kind = super::elemprops::reported_kind(e, kind);
                 let mut ty = words_of(e);
@@ -13617,7 +13610,7 @@ fn doc_objects_step(
                 }
                 let mark = ["type_mark", "type"]
                     .iter()
-                    .map(|k| text_of(e, k))
+                    .flat_map(|k| std::iter::once(text_of(e, k)).chain(source.map(|x| text_of(x, k))))
                     .map(|t| t.trim().to_string())
                     .find(|t| !t.is_empty() && t.len() <= r.legend_code_chars.max(1) + 2 && !t.contains(' '))
                     .unwrap_or_default();

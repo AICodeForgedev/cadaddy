@@ -402,3 +402,45 @@ fn the_prescreen_without_a_job_keeps_the_project_rule_sets_and_hostile_job_data_
         assert!(r["checked"]["G-PRESENT"].is_object(), "{r}");
     }
 }
+
+/// Q6204: an object the job's symbols don't hold, its kind tagged on one room's plan only. The
+/// power plan's own designation defines `DH`; the office's plan prints that tag beside one door
+/// holder. The other door holder in the office has no tag: no plan shows it. A receptacle a build
+/// proposed (only a rule calls for it, nothing draws it) is not counted at all.
+#[test]
+fn a_kind_tagged_on_one_rooms_plan_is_shown_there_only_and_a_proposed_element_is_not_counted() {
+    let mut j = job();
+    let (_, before) = present(&mut j.s, json!({"room": "103"}));
+    let extra_before = verdicts(&in_area(&before, "103")).2;
+    layer(&mut j.s, "E-ANNO");
+    text(&mut j.s, [E101 + 2900.0, 2100.0], "DH = MAGNETIC DOOR HOLDER");
+    text(&mut j.s, on_power_plan([44.0, 8.5]), "DH");
+    let (mut s, dh) = place(j.s, "DOORHOLD", "E-POWR", &[[44.0, 7.0], [56.0, 4.0]], "DH");
+    for h in &dh {
+        s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "E-101", "kind": "door_holder"})).unwrap();
+    }
+    // The proposed receptacle: a box the build made from the building spec, its record saying so.
+    let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    let (lo, hi) = (at([47.0, 1.0]), at([47.5, 1.5]));
+    sp["mep"]["equipment"] = json!([{
+        "tag": "RECEPTACLE-9", "kind": "receptacle", "level": "L1", "min": lo, "max": hi, "bottom_ft": 1.3, "height_ft": 0.3,
+        "properties": {"STATUS": "proposed", "NOT_DRAWN": "no document draws or names it: rules data (made-up test)"}, "confidence": 0.5
+    }]);
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.execute("model.build", &json!({})).unwrap();
+    let (r, fs) = present(&mut s, json!({"room": "103"}));
+    let office = in_area(&fs, "103");
+    let by_tag: Vec<&&Value> = office.iter().filter(|f| f["measured"]["basis"] == "plan_mark").collect();
+    assert_eq!(by_tag.len(), 1, "{r}");
+    assert_eq!(by_tag[0]["verdict"], "pass");
+    assert!(by_tag[0]["handle"].as_str().unwrap().eq_ignore_ascii_case(&dh[0]), "the tagged one: {}", by_tag[0]);
+    assert_eq!(by_tag[0]["measured"]["mark"]["sheet"], "E-101");
+    assert_eq!(by_tag[0]["measured"]["mark"]["how"], "tag");
+    let extras: Vec<&str> = office.iter().filter(|f| f["verdict"] == "extra").filter_map(|f| f["handle"].as_str()).collect();
+    assert!(extras.iter().any(|h| h.eq_ignore_ascii_case(&dh[1])), "the untagged door holder is extra: {r}");
+    assert!(!extras.iter().any(|h| h.eq_ignore_ascii_case(&dh[0])), "{r}");
+    // One more extra than before (the untagged door holder); the proposed receptacle none.
+    assert_eq!(extras.len(), extra_before + 1, "{r}");
+    let notes = r["unmeasured"]["G-PRESENT"].as_object().cloned().unwrap_or_default();
+    assert!(notes.keys().any(|k| k.contains("proposed")), "the proposed element is said not counted: {r}");
+}

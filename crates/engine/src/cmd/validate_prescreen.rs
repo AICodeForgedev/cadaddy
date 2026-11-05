@@ -1564,9 +1564,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 // Elements no symbol the job read stands for, with a plan mark of their own kind
                 // (a tag, a legend symbol, a keynote marker) within `mark_ft`: nearest pairs
                 // first, each mark once.
+                // Only an element that would be called extra: of a trade those plans show, read
+                // from a sheet compared here.
                 let mut by_mark: Vec<(f64, usize, usize)> = Vec::new();
                 for (j, it) in held.iter().enumerate() {
-                    if taken.contains(&j) {
+                    let trade = held_trade.get(j).copied().unwrap_or("general");
+                    if taken.contains(&j) || !set.trades.contains(trade) {
+                        continue;
+                    }
+                    let source_sheet = it.source.clone().or_else(|| print_sheet(sc.d, &it.handle, sc.frame.upf()));
+                    if !set.compares(source_sheet.as_deref()) {
                         continue;
                     }
                     let h = it.handle.to_ascii_uppercase();
@@ -2493,6 +2500,7 @@ mod tests {
             aff_documented: false,
             sheet_at: None,
             source: None,
+            proposed: false,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));

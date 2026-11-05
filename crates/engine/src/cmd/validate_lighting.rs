@@ -1796,4 +1796,16 @@ mod tests {
         assert_eq!(page_in("Lighting.pdf page 7"), Some(7));
         assert_eq!(file_of("Lighting Package p.32"), "Lighting Package");
     }
+
+    #[test]
+    fn a_tag_numbered_by_its_own_kind_is_no_type() {
+        // One object's tag (`EXIT_SIGN-3`) counts as its kind; a type mark as itself.
+        assert_eq!(type_key(Some("EXIT_SIGN-3"), "exit_sign"), "exit_sign");
+        assert_eq!(type_key(Some(" exit_sign-12 "), "exit_sign"), "exit_sign");
+        assert_eq!(type_key(Some("XA"), "exit_sign"), "XA");
+        assert_eq!(type_key(Some("A-4"), "light_fixture"), "A-4");
+        assert_eq!(type_key(Some("EXIT_SIGN-X"), "exit_sign"), "EXIT_SIGN-X");
+        assert_eq!(type_key(None, "light_fixture"), "light_fixture");
+        assert_eq!(type_key(Some(""), "light_fixture"), "light_fixture");
+    }
 }
