@@ -107,6 +107,7 @@ pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
 pub mod archread;
+pub mod arexport;
 pub mod bcf;
 pub mod callouts;
 pub mod casework;
@@ -915,6 +916,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(dimcheck::specs());
         v.extend(agentready::specs());
         v.extend(review_impact::specs());
+        v.extend(arexport::specs());
         v.extend(underlay::specs());
         v.extend(dgn::specs());
         v.extend(takeoff::specs());

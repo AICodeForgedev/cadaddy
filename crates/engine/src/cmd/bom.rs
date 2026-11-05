@@ -225,7 +225,7 @@ fn source_words(src: &cadaddy_doc::props::Source) -> String {
 
 /// A built element's product: its type mark, the submittal's (else the specification's one)
 /// maker, its catalog number, how it dims, and where the catalog (else the maker) comes from.
-fn element_product(e: &cadaddy_doc::Entity) -> Product {
+pub(crate) fn element_product(e: &cadaddy_doc::Entity) -> Product {
     use cadaddy_doc::props;
     let store = props::read(&e.common.xdata);
     let get = |k: &str| store.get(k).filter(|p| p.has_value());
@@ -256,7 +256,7 @@ fn element_product(e: &cadaddy_doc::Entity) -> Product {
 const NOT_PRODUCT_TYPES: &[&str] = &["door", "window", "wall", "partition", "room", "ceiling", "floor", "finish", "hardware", "roof", "slab"];
 
 /// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
-fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
+pub(crate) fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
     use cadaddy_doc::bimspec::keys;
     let mark = mark.trim();
     if mark.is_empty() {

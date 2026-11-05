@@ -1,0 +1,71 @@
+{
+  "_comment": "bim.export.ar rules (Q6207): what an AR export of the built model keeps, how it colours it and how big it may get. A job overrides any key in its building spec under `ar_export` (same shape); every list and number here is data, not code.",
+  "version": 1,
+  "caps": {
+    "max_triangles": 300000,
+    "max_bytes": 50000000,
+    "max_elements": 50000,
+    "source": "AR Quick Look guidance for a phone: a few hundred thousand triangles and tens of MB keep it smooth (owner 11-05 target: 300k triangles, 50 MB)"
+  },
+  "context": {
+    "parts": ["wall", "floor", "ceiling", "soffit", "roof", "cricket", "parapet", "grid", "curtainwall", "glass", "window", "door", "column", "beam", "footing", "brace", "railing", "stair", "ground", "site"],
+    "mode": "translucent",
+    "opacity": 0.25,
+    "source": "the building's shell and structure: shown for orientation, see-through so the trades read through it"
+  },
+  "skip_parts": {
+    "parts": ["room"],
+    "source": "a room element is a space (its floor outline), not something built"
+  },
+  "small_parts": {
+    "parts": ["atom"],
+    "mep_pieces": ["strap", "staple", "connector", "coupling", "wire", "cable", "ring", "locknut", "bushing", "clip", "hanger", "support", "bend", "fitting"],
+    "max_size_mm": 30,
+    "source": "the trades' loose pieces (studs, sheets, straps, staples, connectors, wire) and anything under 30 mm across: too small to see on a phone, and thousands of them"
+  },
+  "colors": {
+    "_comment": "RGB 0-255 by the element's system (the BIM view's trade keys), then by trade group; `default` for anything else. Context parts use their own colour with the context opacity.",
+    "by_system": {
+      "architecture": [214, 212, 206],
+      "openings": [176, 198, 212],
+      "structure": [198, 168, 124],
+      "site": [176, 188, 164],
+      "duct_supply": [28, 144, 232],
+      "duct_return": [40, 168, 92],
+      "duct_exhaust": [122, 186, 58],
+      "duct_outside": [0, 188, 188],
+      "duct": [92, 160, 212],
+      "terminals": [150, 200, 236],
+      "equipment": [190, 194, 200],
+      "pipe_cold": [30, 100, 222],
+      "pipe_hot": [236, 92, 38],
+      "pipe_sanitary": [198, 40, 170],
+      "pipe_vent": [138, 80, 202],
+      "pipe_storm": [84, 122, 150],
+      "pipe_gas": [232, 200, 20],
+      "pipe": [40, 160, 92],
+      "fixtures": [236, 240, 246],
+      "fire": [222, 30, 30],
+      "conduit": [246, 166, 24],
+      "tray": [236, 128, 20],
+      "devices": [250, 212, 40],
+      "lights": [255, 244, 196]
+    },
+    "by_trade": {
+      "architecture": [214, 212, 206],
+      "structure": [198, 168, 124],
+      "mechanical": [92, 160, 212],
+      "plumbing": [40, 160, 92],
+      "fire_protection": [222, 30, 30],
+      "electrical": [250, 212, 40],
+      "site": [176, 188, 164]
+    },
+    "default": [200, 200, 200],
+    "source": "the BIM view's trade colour table (bimlook TRADES), so the phone matches the desktop's 3D view"
+  },
+  "scope": {
+    "room_margin_ft": 1.0,
+    "entry_probe_ft": [0.5, 1.5, 3.0],
+    "source": "an element belongs to a room when its plan box comes within the margin of the room's outline (devices sit on the wall face, the wall straddles it); a door is a room's entry when a probe this far past its far face lands in another room or outside"
+  }
+}
