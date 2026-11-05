@@ -209,6 +209,20 @@ pub fn made_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
     })
 }
 
+/// The value of property `key` a build wrote on an element (`prop:STATUS=proposed`).
+pub fn made_prop<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
+    made_tags(e)?.iter().filter(|t| t.code == 1000).find_map(|t| {
+        let (k, v) = t.value.strip_prefix("prop:")?.split_once('=')?;
+        k.trim().eq_ignore_ascii_case(key).then_some(v.trim())
+    })
+}
+
+/// Whether a build proposed an element only a rule or a note calls for, no document drawing it
+/// (`prop:STATUS=proposed`): it is not counted as drawn.
+pub fn made_proposed(e: &Entity) -> bool {
+    made_prop(e, "STATUS").is_some_and(|v| v.eq_ignore_ascii_case("proposed"))
+}
+
 /// The plan object a built element was made from.
 pub fn made_source(e: &Entity) -> Option<Handle> {
     let h = made_tags(e)?.get(2).and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok())?;

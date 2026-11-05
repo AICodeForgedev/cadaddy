@@ -83,6 +83,15 @@ fn mark_key(m: &str) -> Option<String> {
     (!m.is_empty() && m.len() <= MAX_MARK).then(|| m.to_ascii_uppercase())
 }
 
+/// The type a luminaire or control counts as (E-LUM-COUNT): its type mark, else its kind. A tag
+/// numbered by its own kind's name (`EXIT_SIGN-3`) names one object, not a type.
+fn type_key(mark: Option<&str>, kind: &str) -> String {
+    let instance = |m: &str| {
+        m.trim().rsplit_once('-').is_some_and(|(stem, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && stem.eq_ignore_ascii_case(kind.trim()))
+    };
+    mark.filter(|m| !instance(m)).and_then(mark_key).unwrap_or_else(|| kind.to_string())
+}
+
 /// Do the words hold `a b` in a row (or `ab` as one word)?
 fn pair(w: &[String], a: &str, b: &str) -> bool {
     w.windows(2).any(|x| matches!(x, [p, q] if p == a && q == b)) || w.iter().any(|x| *x == format!("{a}{b}"))
@@ -1334,13 +1343,13 @@ fn counts(inp: &Input, r: &Effective, facts: &[Fact], out: &mut Found) {
         let Some(list) = all_by_level.get(&s.level.to_ascii_lowercase()) else { continue };
         let Some(home) = symbol_home(list, s.at) else { continue };
         let Some(a) = rooms.iter().find(|a| a.id == home.id) else { continue };
-        let key = s.mark.and_then(mark_key).unwrap_or_else(|| res.kind.clone());
+        let key = type_key(s.mark, &res.kind);
         *plan.entry(room_key(a)).or_default().entry(key).or_default() += 1;
     }
     let mut model: HashMap<String, BTreeMap<String, (u32, Vec<String>)>> = HashMap::new();
     for f in facts {
         let Some(rk) = &f.room else { continue };
-        let key = f.it.mark.and_then(mark_key).unwrap_or_else(|| f.it.kind.to_string());
+        let key = type_key(f.it.mark, f.it.kind);
         let e = model.entry(rk.clone()).or_default().entry(key).or_default();
         e.0 += 1;
         if e.1.len() < MAX_LISTED {

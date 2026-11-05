@@ -98,6 +98,13 @@ pub(crate) struct Rules {
     /// `ALL`, `EACH`: a note naming a class after one speaks of every one there is (a rule), not
     /// of new ones.
     pub all_words: Vec<String>,
+    /// Words that end a note's room type (`EACH GUEST ROOM SHALL …`: the type is `GUEST`).
+    pub room_stop_words: Vec<String>,
+    /// Words of a room type that name no type of their own (`ROOM`, `TYPE`): left out when the
+    /// type's words are matched with the rooms' names.
+    pub room_generic_words: Vec<String>,
+    /// The most words of a room type read after `ALL` / `EACH`.
+    pub room_type_words: usize,
     pub count_words: BTreeMap<String, u32>,
     /// Words a number after which is a circuit's, a panel's or a sheet's, no count.
     pub number_words: Vec<String>,
@@ -353,6 +360,9 @@ pub(crate) struct Named {
     /// The note speaks of every one there is (`ALL ROOFTOP UNITS SHALL SHUT DOWN`): a rule, not a call
     /// for new ones.
     pub all: bool,
+    /// The room type it is called for in every room of (`… IN EACH GUEST SUITE`: `GUEST SUITE`),
+    /// upper case; empty when the note names none.
+    pub rooms: Vec<String>,
 }
 
 /// The objects a note names (each sentence's first) with their count and what it connects them
@@ -373,7 +383,68 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
         // `ALL` right before the class's words (or its trade word: `ALL HVAC ROOFTOP UNITS`).
         let first = c.words.iter().filter_map(|g| g.first()).filter_map(|f| w.iter().position(|x| x.eq_ignore_ascii_case(f))).min().unwrap_or(0);
         let all = w.get(first.saturating_sub(2)..first).unwrap_or(&[]).iter().any(|x| r.all_words.iter().any(|a| a.eq_ignore_ascii_case(x)));
-        out.push(Named { class: c, count: note_count(part, c), via: connection_via(part).unwrap_or(via), all });
+        let rooms = if all { Vec::new() } else { room_type_after(&w, first) };
+        out.push(Named { class: c, count: note_count(part, c), via: connection_via(part).unwrap_or(via), all, rooms });
+    }
+    out
+}
+
+/// The room type a note's words call an object for in each of, after the class's words (`PROVIDE
+/// ONE RANGE IN EACH GUEST SUITE`: `GUEST SUITE`): the words after an `ALL` / `EACH` word up to a
+/// stop word, at most the rules' `room_type_words`.
+fn room_type_after(w: &[String], class_at: usize) -> Vec<String> {
+    let r = rules();
+    let is = |list: &[String], x: &str| list.iter().any(|a| a.eq_ignore_ascii_case(x));
+    let Some(k) = w.iter().enumerate().skip(class_at + 1).find(|(_, x)| is(&r.all_words, x)).map(|(i, _)| i) else {
+        return Vec::new();
+    };
+    w.iter().skip(k + 1).take_while(|x| !is(&r.room_stop_words, x) && !is(&r.all_words, x)).take(r.room_type_words.max(1)).cloned().collect()
+}
+
+/// The rooms of a note's room type: each room whose name holds every word of the type that names
+/// one (`GUEST SUITE` names the rooms `GUEST SUITE 201`, `GUEST SUITES` too; `ROOM` alone names
+/// none). The longest run of the type's first words that names any room is the type (`GUEST SUITE
+/// DOOR`: `GUEST SUITE`). `rooms`: (level, name, outline).
+pub(crate) fn rooms_of_type<T>(type_words: &[String], rooms: &[(String, String, T)]) -> Vec<usize> {
+    let r = rules();
+    let generic = |x: &str| r.room_generic_words.iter().any(|g| g.eq_ignore_ascii_case(x));
+    let sing = |x: &str| -> String {
+        let u = x.to_ascii_uppercase();
+        match u.strip_suffix('S') {
+            Some(b) if b.len() >= 3 && !b.ends_with('S') => b.to_string(),
+            _ => u,
+        }
+    };
+    let names: Vec<Vec<String>> = rooms.iter().map(|(_, n, _)| words(n).iter().map(|x| sing(x)).collect()).collect();
+    for n in (1..=type_words.len()).rev() {
+        let want: Vec<String> = type_words.iter().take(n).filter(|x| !generic(x)).map(|x| sing(x)).collect();
+        if want.is_empty() {
+            continue;
+        }
+        let hits: Vec<usize> = names.iter().enumerate().filter(|(_, have)| want.iter().all(|x| have.contains(x))).map(|(i, _)| i).collect();
+        if !hits.is_empty() {
+            return hits;
+        }
+    }
+    Vec::new()
+}
+
+/// Each object read paired with the object already in the model that is it, nearest pairs first,
+/// each one used once: `pairs` (distance, read, in the model) within reach. So a keynote calling
+/// for two where the plan already draws one adds one. Returns, per object read, its pair.
+pub(crate) fn pair_nearest(mut pairs: Vec<(f64, usize, usize)>, read: usize) -> Vec<Option<usize>> {
+    pairs.retain(|p| p.0.is_finite());
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut out: Vec<Option<usize>> = vec![None; read];
+    let mut used: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
+    for (_, i, j) in pairs {
+        if used.contains(&j) {
+            continue;
+        }
+        if let Some(slot) = out.get_mut(i).filter(|s| s.is_none()) {
+            *slot = Some(j);
+            used.insert(j);
+        }
     }
     out
 }
@@ -397,6 +468,9 @@ pub(crate) enum How {
     Keynote,
     /// A note naming it, its location not drawn.
     Note,
+    /// A note calling for it in every room of a type (`IN EACH GUEST SUITE`): one in each such
+    /// room, its place in the room not drawn.
+    Rooms,
 }
 
 impl How {
@@ -405,6 +479,7 @@ impl How {
             How::Tag => "tag",
             How::Keynote => "keynote",
             How::Note => "note",
+            How::Rooms => "note_rooms",
         }
     }
 }
@@ -434,6 +509,9 @@ pub(crate) struct Found {
     pub via_source: String,
     /// The other sheets showing the same object (one count).
     pub also: Vec<String>,
+    /// Its type mark, from the object the model already has beside it that the same keynote
+    /// describes (`XA`, the schedule's exit sign); empty when nothing gives one.
+    pub type_mark: String,
 }
 
 /// One object per place: the same kind on the same level within `reach` (plan units), read on

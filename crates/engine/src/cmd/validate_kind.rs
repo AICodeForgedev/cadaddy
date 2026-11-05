@@ -169,7 +169,10 @@ fn stored(e: &Entity) -> Option<String> {
 /// An element's mark: its build tag, its `type_mark` or `mark` property, else the BIM type it
 /// is assigned.
 pub fn mark_of(e: &Entity) -> Option<String> {
-    let tag = super::bimlook::made_tag(e, "tag").filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string());
+    // A type the build gave it (the schedule's type of the object a keynote describes) before
+    // its own numbered tag (`EXIT_SIGN-3` names one object, not a type).
+    let typed = super::bimlook::made_prop(e, "TYPE_MARK").filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string());
+    let tag = typed.or_else(|| super::bimlook::made_tag(e, "tag").filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string()));
     tag.or_else(|| {
         let props = cadaddy_doc::props::read(&e.common.xdata);
         ["type_mark", "mark"].iter().find_map(|k| props.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()))

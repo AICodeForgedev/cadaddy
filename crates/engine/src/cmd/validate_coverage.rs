@@ -1382,65 +1382,69 @@ fn sheets_words(by_sheet: &BTreeMap<String, usize>) -> String {
     if more > 0 { format!("{} and {more} more sheets", list.join(", ")) } else { list.join(", ") }
 }
 
-pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
-    let mut got = Got::default();
-    let (share, abs) = (tol(r, "count_share", DEFAULT_SHARE), tol(r, "count_abs", DEFAULT_ABS));
-    let dedupe = tol(r, "dedupe_ft", DEFAULT_DEDUPE_FT).max(0.01);
-    let (repeat_sheets, repeat_marks) =
-        (tol(r, "repeat_sheets", DEFAULT_REPEAT_SHEETS).max(1.0) as usize, tol(r, "repeat_marks", DEFAULT_REPEAT_MARKS).max(1.0) as usize);
-    let levels: BTreeSet<String> = inp.areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
-    // The whole building: every level that has rooms is in scope.
-    let all_levels =
-        inp.whole_levels && super::validate_packet::model_areas(inp.d, inp.frame).iter().all(|a| levels.contains(&a.level.to_ascii_lowercase()));
-    let on_scope = |level: &str| levels.contains(&level.to_ascii_lowercase());
-    // A level as the inventory names it (its name, or its number: `1` for `Level 1`).
-    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
-    let level_digits: BTreeSet<String> = levels.iter().map(|l| digits(l)).filter(|d| !d.is_empty()).collect();
-    let on_scope_inv = |l: &str| on_scope(l) || (!digits(l).is_empty() && level_digits.contains(&digits(l)));
+/// What G-COVERAGE reads off the prints, once per screen (G-PRESENT reads its marks too): the
+/// sheets, the kinds they define, every mark of each on the plans.
+pub(crate) struct Reading {
+    sheets: Vec<Sheet>,
+    defs: Defs,
+    marks: Vec<PlanMark>,
+    typ: Typicals,
+    pages_read: Vec<String>,
+    unmeasured: BTreeMap<String, u64>,
+    inventory: Option<super::inventory::Inventory>,
+    /// Each sheet's trade, by its number (upper case).
+    sheet_trade: HashMap<String, &'static str>,
+}
 
+impl Reading {
+    /// An element's trade for a kind: its source sheet's, else its kind's (a smoke detector is
+    /// electrical), which guards a building trade's kinds only (a sheet letter like `L` means
+    /// another trade from set to set).
+    fn trade_of(&self, el: &Census, def: &Def) -> Option<&'static str> {
+        let src = el.source.as_deref().and_then(|s| s.split_whitespace().next()).map(|s| s.trim_end_matches([',', ';', ':']).to_ascii_uppercase());
+        src.and_then(|s| self.sheet_trade.get(&s).copied()).or_else(|| {
+            let building = def.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other"));
+            Some(super::validate_packet::trade_of_kind(&el.kind, &[])).filter(|t| *t != "general" && building)
+        })
+    }
+}
+
+/// Read the prints' kinds and marks (the drawing's sheets, the legend pages it doesn't hold).
+pub(crate) fn read(inp: &Input) -> Reading {
+    let mut unmeasured = BTreeMap::new();
     let mut sheets = read_sheets(inp.d, inp.sp);
+    let mut pages_read = Vec::new();
     // The legend, schedule and abbreviation sheets the drawing doesn't hold, off their pages.
     if !sheets.is_empty() {
         let loaded: BTreeSet<String> = sheets.iter().map(|s| s.number.split('/').next().unwrap_or("").trim().to_ascii_uppercase()).collect();
-        let pages = read_pages(inp.d, &loaded, &mut got.unmeasured);
-        got.pages_read = pages.iter().map(|p| p.number.clone()).collect();
+        let pages = read_pages(inp.d, &loaded, &mut unmeasured);
+        pages_read = pages.iter().map(|p| p.number.clone()).collect();
         sheets.extend(pages);
     }
+    let typ = Typicals::of(inp.sp);
+    let sheet_trade: HashMap<String, &'static str> = sheets.iter().map(|s| (s.number.to_ascii_uppercase(), s.trade)).collect();
     if sheets.is_empty() {
-        *got.unmeasured.entry("the drawing holds no print sheets (sheet links with a place on the drawing)".into()).or_default() += 1;
-        got.table = json!({"kinds": [], "unexplained_groups": [], "source": data().source});
-        return got;
+        return Reading { sheets, defs: Defs::default(), marks: Vec::new(), typ, pages_read, unmeasured, inventory: None, sheet_trade };
     }
     let keynotes = super::validate_keynote::Keynotes::read(inp.d, inp.sp, inp.frame);
     let inventory = super::inventory::stored(inp.d);
     let mut defs = read_defs(&mut sheets, &keynotes, inventory.as_ref());
     read_connections(&sheets, &keynotes, &mut defs);
-    let typ = Typicals::of(inp.sp);
     let marks = read_marks(inp.sp, inp.frame, &sheets, &defs, &keynotes, &typ);
-    let units = super::validate_prescreen::Units::of(inp.d);
+    Reading { sheets, defs, marks, typ, pages_read, unmeasured, inventory, sheet_trade }
+}
 
-    // The model's elements, each to the kinds it matches best.
-    let sheet_trade: HashMap<String, &'static str> = sheets.iter().map(|s| (s.number.to_ascii_uppercase(), s.trade)).collect();
-    let trade_of_el = |el: &Census| -> Option<&'static str> {
-        let src = el.source.as_deref()?.split_whitespace().next()?.trim_end_matches([',', ';', ':']).to_ascii_uppercase();
-        sheet_trade.get(&src).copied()
-    };
-    // Else its kind's trade (a smoke detector is electrical): it guards a building trade's
-    // kinds only (a sheet letter like `L` means another trade from set to set).
-    let trade_of_el = |el: &Census, def: &Def| -> Option<&'static str> {
-        trade_of_el(el).or_else(|| {
-            let building = def.trades.iter().all(|t| !matches!(*t, "civil" | "landscape" | "structural" | "other"));
-            Some(super::validate_packet::trade_of_kind(&el.kind, &[])).filter(|t| *t != "general" && building)
-        })
-    };
+/// The model's elements on the levels `on_scope` keeps, each to the kinds it matches best
+/// (`best`), and to every kind it matches well (`any`: a kind with no element of its own may
+/// share another's, two rows naming one kind).
+fn assign<'c>(inp: &Input<'c>, rd: &Reading, on_scope: &dyn Fn(&str) -> bool) -> (Vec<Vec<&'c Census>>, Vec<Vec<&'c Census>>) {
+    let defs = &rd.defs;
     let mut model: Vec<Vec<&Census>> = defs.list.iter().map(|_| Vec::new()).collect();
-    // Each kind's elements by any match, the best or not: a kind with no element of its own may
-    // share another kind's (two rows naming one kind).
     let mut any: Vec<Vec<&Census>> = defs.list.iter().map(|_| Vec::new()).collect();
     for el in inp.census.iter().filter(|e| on_scope(&e.level)) {
         let ek = key_of(&el.kind);
         let nk = el.name.as_deref().map(key_of).unwrap_or_default();
-        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk, trade_of_el(el, d))).collect();
+        let scores: Vec<u8> = defs.list.iter().map(|d| score(d, el, &ek, &nk, rd.trade_of(el, d))).collect();
         for (i, s) in scores.iter().enumerate() {
             if *s >= 2
                 && let Some(v) = any.get_mut(i)
@@ -1461,6 +1465,69 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
             }
         }
     }
+    (model, any)
+}
+
+/// One mark of a kind on a level's plan, for G-PRESENT: where (plan feet), what (the kind in
+/// words), how it was read (`tag`, `symbol`, `keynote`) and on which sheet, and the elements of
+/// that kind (handles, upper case).
+pub(crate) struct Stand {
+    pub level: String,
+    pub at: [f64; 2],
+    pub what: String,
+    pub how: &'static str,
+    pub sheet: String,
+    pub sheet_at: [f64; 2],
+    pub def: usize,
+}
+
+/// The prints' marks placed on their levels' plans, and per kind the elements that are it (best
+/// match), for G-PRESENT: an element a mark of its kind stands by is one the prints show.
+pub(crate) fn stands(inp: &Input, rd: &Reading) -> (Vec<Stand>, Vec<BTreeSet<String>>) {
+    let (model, _) = assign(inp, rd, &|_| true);
+    let of_kind: Vec<BTreeSet<String>> = model.iter().map(|v| v.iter().map(|e| e.handle.to_ascii_uppercase()).collect()).collect();
+    let mut out = Vec::new();
+    for m in &rd.marks {
+        let Some(def) = rd.defs.list.get(m.def) else { continue };
+        for (level, at) in m.placed.iter().take(50) {
+            if out.len() >= MAX_MARKS {
+                break;
+            }
+            out.push(Stand { level: level.clone(), at: *at, what: label(def), how: m.how, sheet: m.sheet.clone(), sheet_at: m.sheet_at, def: m.def });
+        }
+    }
+    (out, of_kind)
+}
+
+pub(crate) fn check(inp: &Input, r: &Effective, rd: &Reading) -> Got {
+    let mut got = Got::default();
+    let (share, abs) = (tol(r, "count_share", DEFAULT_SHARE), tol(r, "count_abs", DEFAULT_ABS));
+    let dedupe = tol(r, "dedupe_ft", DEFAULT_DEDUPE_FT).max(0.01);
+    let (repeat_sheets, repeat_marks) =
+        (tol(r, "repeat_sheets", DEFAULT_REPEAT_SHEETS).max(1.0) as usize, tol(r, "repeat_marks", DEFAULT_REPEAT_MARKS).max(1.0) as usize);
+    let levels: BTreeSet<String> = inp.areas.iter().map(|a| a.level.to_ascii_lowercase()).collect();
+    // The whole building: every level that has rooms is in scope.
+    let all_levels =
+        inp.whole_levels && super::validate_packet::model_areas(inp.d, inp.frame).iter().all(|a| levels.contains(&a.level.to_ascii_lowercase()));
+    let on_scope = |level: &str| levels.contains(&level.to_ascii_lowercase());
+    // A level as the inventory names it (its name, or its number: `1` for `Level 1`).
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    let level_digits: BTreeSet<String> = levels.iter().map(|l| digits(l)).filter(|d| !d.is_empty()).collect();
+    let on_scope_inv = |l: &str| on_scope(l) || (!digits(l).is_empty() && level_digits.contains(&digits(l)));
+
+    got.unmeasured = rd.unmeasured.clone();
+    got.pages_read = rd.pages_read.clone();
+    if rd.sheets.is_empty() {
+        *got.unmeasured.entry("the drawing holds no print sheets (sheet links with a place on the drawing)".into()).or_default() += 1;
+        got.table = json!({"kinds": [], "unexplained_groups": [], "source": data().source});
+        return got;
+    }
+    let (defs, marks, typ, inventory) = (&rd.defs, &rd.marks, &rd.typ, &rd.inventory);
+    let trade_of_el = |el: &Census, def: &Def| rd.trade_of(el, def);
+    let units = super::validate_prescreen::Units::of(inp.d);
+
+    // The model's elements, each to the kinds it matches best.
+    let (model, any) = assign(inp, rd, &on_scope);
 
     // Each kind's marks: raw by sheet, the typical plans' per room, the plans' deduped by level.
     struct Count {
@@ -1483,7 +1550,7 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
             how: BTreeMap::new(),
         })
         .collect();
-    for m in &marks {
+    for m in marks {
         let Some(c) = counts.get_mut(m.def) else { continue };
         let in_scope = if m.placed.is_empty() { all_levels } else { m.placed.iter().any(|(l, _)| on_scope(l)) };
         if !in_scope {
@@ -1654,7 +1721,7 @@ pub(crate) fn check(inp: &Input, r: &Effective) -> Got {
 
     // Repeated unexplained marks: a kind the documents never define.
     let mut groups_json = Vec::new();
-    match &inventory {
+    match inventory {
         None => {
             got.unmeasured.insert("no print inventory in the drawing (the job's BIM build takes it): unexplained marks not grouped".into(), 1);
         }
