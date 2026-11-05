@@ -520,7 +520,7 @@ pub(crate) struct Found {
     /// The other sheets showing the same object (one count).
     pub also: Vec<String>,
     /// Its type mark, from the object the model already has beside it that the same keynote
-    /// describes (`XA`, the schedule's exit sign); empty when nothing gives one.
+    /// describes (the schedule's exit sign type); empty when nothing gives one.
     pub type_mark: String,
 }
 
@@ -811,7 +811,7 @@ mod tests {
         // A keynote calling for two exit signs (`ONE … AND ONE …`) at a marker beside an exit sign
         // the plan already draws: one pair, one left to add. Each object in the model is used once,
         // the nearest pairs first.
-        assert_eq!(note_count("PROVIDE ONE EXIT SIGN UP HIGH AND ONE DOWN LOW.", class("exit_sign")), 2);
+        assert_eq!(note_count("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR.", class("exit_sign")), 2);
         let there = pair_nearest(vec![(1.5, 0, 0), (1.6, 1, 0)], 2);
         assert_eq!(there, vec![Some(0), None]);
         // Two markers, one drawn sign between them nearer the second: the second's.
@@ -820,7 +820,7 @@ mod tests {
         assert_eq!(pair_nearest(vec![(f64::NAN, 0, 0), (f64::INFINITY, 1, 0)], 2), vec![None, None]);
         assert_eq!(pair_nearest(vec![(1.0, 5, 0)], 1), vec![None]);
         // An exit sign luminaire is the class by its schedule row's words, whatever its kind.
-        assert!(is_class(class("exit_sign"), "light_fixture", "XA EXIT SIGN - CEILING/WALL MOUNTED"));
+        assert!(is_class(class("exit_sign"), "light_fixture", "X1 EDGE-LIT EXIT SIGN, UNIVERSAL MOUNT"));
         assert!(!is_class(class("exit_sign"), "light_fixture", "A 2X4 RECESSED TROFFER"));
     }
 }

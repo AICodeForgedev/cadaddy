@@ -1804,7 +1804,7 @@ mod tests {
         // One object's tag (`EXIT_SIGN-3`) counts as its kind; a type mark as itself.
         assert_eq!(type_key(Some("EXIT_SIGN-3"), "exit_sign"), "exit_sign");
         assert_eq!(type_key(Some(" exit_sign-12 "), "exit_sign"), "exit_sign");
-        assert_eq!(type_key(Some("XA"), "exit_sign"), "XA");
+        assert_eq!(type_key(Some("X2"), "exit_sign"), "X2");
         assert_eq!(type_key(Some("A-4"), "light_fixture"), "A-4");
         assert_eq!(type_key(Some("EXIT_SIGN-X"), "exit_sign"), "EXIT_SIGN-X");
         assert_eq!(type_key(None, "light_fixture"), "light_fixture");

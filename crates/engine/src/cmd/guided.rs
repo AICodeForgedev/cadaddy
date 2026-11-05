@@ -13581,7 +13581,7 @@ fn doc_objects_step(
     let found = dob::dedupe(found, r.dedupe_ft * upf);
     // What the model already has: a built element there naming the same class (another step's),
     // by its kind or its type's words, its own or the plan element's it was built from, or its
-    // type's row in the fixture schedule (a luminaire of type `XA`, the schedule's `EXIT SIGN`).
+    // type's row in the fixture schedule (a luminaire whose type the schedule calls an exit sign).
     // (kind, words, level, point, type mark)
     let schedule: BTreeMap<String, String> = sp
         .mep
@@ -13668,8 +13668,8 @@ fn doc_objects_step(
         }
     }
     let there = dob::pair_nearest(pairs, found.len());
-    // The ones a keynote calls for beside one the model has: the same keynote's type (`SEE LIGHT
-    // FIXTURE SCHEDULE`, beside its exit sign).
+    // The ones a keynote calls for beside one the model has: the same keynote's type (a note
+    // sending the reader to the fixture schedule, beside its exit sign).
     let marker_reach = upf;
     let typed: Vec<(String, String, String, Vec2, String)> = found
         .iter()
