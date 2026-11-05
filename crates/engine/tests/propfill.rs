@@ -338,6 +338,36 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert!(j["circuit"].is_null() && j["fed_from"].is_null(), "{j:#}");
 }
 
+/// A receptacle the print or a sink calls GFCI on a GFCI breaker goes on the bill of materials as
+/// a standard one: the take-off follows the code rules' decision. A receptacle in a guest room is
+/// bought tamper-resistant.
+#[test]
+fn the_take_off_buys_what_the_code_rules_decided() {
+    let mut s = plan();
+    let got = s.execute("bspec.get", &json!({})).unwrap();
+    let mut tags = got["spec"]["tags"].as_array().unwrap().clone();
+    let a = tags.iter_mut().find(|t| t["fields"]["type"]["value"] == "A").unwrap();
+    a["kind"] = json!("receptacle");
+    a["fields"]["device_type"] = json!({"value": "GFCI receptacle", "source": "rule"});
+    let id = a["id"].as_str().unwrap().to_string();
+    let sched = json!({"tags": tags, "mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    let item = |s: &mut Session| -> String {
+        let b = s.execute("bim.bom", &json!({})).unwrap();
+        let on = |l: &&Value| l["category"] == "devices" && l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));
+        b["lines"].as_array().unwrap().iter().find(on).unwrap()["item"].as_str().unwrap().to_string()
+    };
+    assert_eq!(item(&mut s), "duplex receptacle");
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "101", "type": "Q", "hand": "normal"}]}})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(item(&mut s), "duplex receptacle, tamper-resistant");
+}
+
 #[test]
 fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     let mut s = plan();

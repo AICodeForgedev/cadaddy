@@ -16144,11 +16144,15 @@ fn trim_swallowed(rooms: &mut [JobRoom]) {
                 continue;
             }
             let inside = b[0] >= a[0] - tol && b[2] <= a[2] + tol && b[1] >= a[1] - tol && b[3] <= a[3] + tol;
-            if !inside {
-                continue;
-            }
             let full_y = b[1] <= a[1] + tol && b[3] >= a[3] - tol;
             let full_x = b[0] <= a[0] + tol && b[2] >= a[2] - tol;
+            // Or one reaching in from a side, as deep as the room (a neighbour the trace took
+            // half of: 232's took 230's bath side).
+            let side = (full_y && ((b[0] < a[0] - tol && b[2] > a[0] + tol) || (b[2] > a[2] + tol && b[0] < a[2] - tol)))
+                || (full_x && ((b[1] < a[1] - tol && b[3] > a[1] + tol) || (b[3] > a[3] + tol && b[1] < a[3] - tol)));
+            if !inside && !side {
+                continue;
+            }
             if full_y && b[0] <= a[0] + tol && b[2] < a[2] - tol {
                 a[0] = b[2];
                 cut = true;
@@ -21879,6 +21883,13 @@ mod tests {
         assert_eq!(xs(0), Some((0.0, 144.0)));
         assert_eq!(xs(2), Some((300.0, 444.0)));
         assert_eq!(xs(3), Some((0.0, 900.0)), "another level's room");
+        // A trace that took in part of its neighbour (the neighbour reaching in from its side, no
+        // smaller one inside) is cut back to where the neighbour ends.
+        let mut rooms: Vec<JobRoom> =
+            vec![("DOUBLE Q".into(), "2".into(), rect(0.0, 144.0), "230".into()), ("DOUBLE Q".into(), "2".into(), rect(64.0, 294.0), "232".into())];
+        trim_swallowed(&mut rooms);
+        assert_eq!(xs(1), Some((144.0, 294.0)), "232 cut back to where 230 ends");
+        assert_eq!(xs(0), Some((0.0, 144.0)));
     }
 
     /// A general note's typical mounting heights, item by item, to each one's centre.
