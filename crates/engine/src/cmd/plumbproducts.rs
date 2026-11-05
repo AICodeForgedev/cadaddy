@@ -154,7 +154,7 @@ fn tag_key(t: &str) -> String {
     t.chars().filter(|c| !c.is_whitespace()).take(40).collect::<String>().to_ascii_uppercase()
 }
 
-/// A maker's letters (`Bradley Corp.` → `BRADLEYCORP`).
+/// A maker's letters (`Maker Co.` → `MAKERCO`).
 fn maker_key(m: &str) -> String {
     m.chars().filter(char::is_ascii_alphanumeric).take(80).collect::<String>().to_ascii_uppercase()
 }
@@ -179,8 +179,8 @@ fn edits(a: &str, b: &str) -> usize {
     prev.last().copied().unwrap_or(0)
 }
 
-/// Whether two makers are one: the same letters, one the other's start (`STERLING` and `Sterling
-/// Plumbing`, `BRADLEY` and `Bradley Corp`), or a misspelling of it (two letters off in six or more).
+/// Whether two makers are one: the same letters, one the other's start (`ACME` and `Acme
+/// Plumbing`, `ACME` and `Acme Co`), or a misspelling of it (two letters off in six or more).
 pub(crate) fn same_maker(a: &str, b: &str) -> bool {
     let (x, y) = (maker_key(a), maker_key(b));
     if x.is_empty() || y.is_empty() {
@@ -200,7 +200,7 @@ fn catalog_key_long(c: &str) -> String {
 }
 
 /// Whether a text reads like a catalog number: a few words at most, with a digit, at least three
-/// characters (`B832/T8-HET`, `71370110`, `ST-42V`).
+/// characters (`AB12/C3-X`, `12345678`, `XT-30`).
 fn catalog_like(v: &str) -> bool {
     let t = v.trim().trim_matches(|c: char| c == ':' || c == '#' || c == '.').trim();
     let words = t.split_whitespace().count();
@@ -209,7 +209,7 @@ fn catalog_like(v: &str) -> bool {
 }
 
 /// The catalog number a label's text starts with: its first word (a word that has a digit), and
-/// the words a slash or dash joins to it (`B872 /T8-HET`); none when the first word has no digit
+/// the words a slash or dash joins to it (`AB12 /C3-X`); none when the first word has no digit
 /// (`ex: …`, a table's `S` header) or is under three characters (a figure's `17`).
 fn catalog_at(v: &str) -> Option<String> {
     let mut ws = v.split_whitespace();
@@ -227,7 +227,7 @@ fn catalog_at(v: &str) -> Option<String> {
 }
 
 /// Whether two catalog numbers are one product's: the same, one in the other, or one maker's
-/// family and its full order code (`Z1400` and `ZN1400NH`: the same first letter and the shorter
+/// family and its full order code (`Q200` and `QN200XB`: the same first letter and the shorter
 /// one's run of digits, three or more, in the longer).
 fn same_catalog(a: &str, b: &str) -> bool {
     let (x, y) = (catalog_key(a), catalog_key(b));
@@ -565,6 +565,22 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
     Some(sub)
 }
 
+/// The catalog number a submittal item gives: the schedule's model where the same maker's cut
+/// sheet prints it or its family (the cut sheet's `Q200` for the schedule's order code `QN200XB`),
+/// else the value under its cut sheet's catalog label; with the document it is from.
+fn submitted_catalog(sb: &Submittal, it: &SubItem, sched_model: Option<&str>, same: bool) -> Option<(String, String)> {
+    let printed = |m: &str| {
+        let k = catalog_key(m);
+        k.len() >= 3 && (it.catalogs.iter().any(|c| catalog_key(&c.0) == k) || it.sheet_key.contains(&k))
+    };
+    let page = it.products.first().and_then(|p| p.page);
+    sched_model
+        .filter(|_| same)
+        .filter(|m| m.split(['/', ',']).map(str::trim).any(|x| printed(x) || it.catalog.as_ref().is_some_and(|(c, _)| same_catalog(x, c))))
+        .map(|m| (m.to_string(), format!("{} (the schedule's model, on its cut sheet)", sb.doc(page))))
+        .or_else(|| it.catalog.as_ref().map(|(c, pg)| (c.clone(), sb.doc(*pg))))
+}
+
 /// The submittal item kept for a tag: one not sent back before one sent back, the later revision,
 /// a reviewed copy before an unreviewed one, the one with more products.
 fn chosen<'a>(subs: &'a [Submittal], tag: &str) -> Option<(&'a Submittal, &'a SubItem)> {
@@ -854,24 +870,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         };
         // The cut sheet's catalog number: the schedule's model where the same maker's cut sheet
         // prints it, else the value under its catalog label.
-        let sub_catalog = approved.and_then(|(sb, it)| {
-            let printed = |m: &str| {
-                let k = catalog_key(m);
-                k.len() >= 3 && (it.catalogs.iter().any(|c| catalog_key(&c.0) == k) || it.sheet_key.contains(&k))
-            };
-            let page = it.products.first().and_then(|p| p.page);
-            sched_model
-                .as_ref()
-                .filter(|_| same)
-                .and_then(|m| {
-                    m.split(['/', ','])
-                        .map(str::trim)
-                        .find(|x| printed(x) || it.catalog.as_ref().is_some_and(|(c, _)| same_catalog(x, c)))
-                        .map(|x| (x.to_string(), m.clone()))
-                })
-                .map(|(_, m)| (m, format!("{} (the schedule's model, on its cut sheet)", sb.doc(page))))
-                .or_else(|| it.catalog.as_ref().map(|(c, pg)| (c.clone(), sb.doc(*pg))))
-        });
+        let sub_catalog = approved.and_then(|(sb, it)| submitted_catalog(sb, it, sched_model.as_deref(), same));
         let mut catalog: Option<(String, Source, &'static str)> = None;
         if let Some((c, doc)) = &sub_catalog {
             catalog = Some((c.clone(), Source::from_doc(SourceKind::Submittal, doc), "submittal"));
@@ -1115,8 +1114,10 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                     ty.set_field("manufacturer", field(&p.vendor, sb.doc(p.page)));
                     ty.set_field("description", field(&p.description, sb.doc(p.page)));
                 }
-                if let Some((c, pg)) = &it.catalog {
-                    ty.set_field("catalogNumber", field(c, sb.doc(*pg)));
+                let same = it.products.first().is_none_or(|p| row.manufacturer.is_empty() || same_maker(&row.manufacturer, &p.vendor));
+                let model = (!row.model.is_empty()).then_some(row.model.as_str());
+                if let Some((c, doc)) = submitted_catalog(sb, it, model, same) {
+                    ty.set_field("catalogNumber", field(&c, doc));
                 }
                 ty.set_field("reviewStatus", field(it.status.words(), sb.doc(None)));
             }
@@ -1350,25 +1351,25 @@ mod tests {
             "--- page 1 of 7 ---",
             "SUBMITTAL REVIEW COMMENTS:",
             "Response Code:",
-            "1 – Note Corrections   3 – Rejected",
+            "1 – Make Corrections Noted   3 – Rejected",
             "2 – Revise and Resubmit   4 – Not Reviewed",
-            "• Items returned but not listed have been reviewed and are returned – No Exception Taken.",
+            "Items not listed below are returned: No Exception Taken.",
             "COMMENT   DESCRIPTION   RESPONSE",
             "1   WC-1   No exceptions taken.",
-            "Must have owner approval for the alternate",
-            "2   1   LV-1   lavatory. Engineer takes no",
-            "exception.",
+            "Owner to confirm the alternate",
+            "2   1   LV-1   lavatory before ordering. No",
+            "exception otherwise.",
             "3   2   SK-1   Provide the scheduled sink.",
             "Page 1 of 2",
             "--- page 2 of 7 ---",
             "Table of Contents",
             "VENDOR   DESCRIPTION   PAGE",
             "WC-1",
-            "Maker Nine   Elongated Toilet White   3",
-            "Seat Co   Elongated Wood Seat   4",
+            "Maker Nine   Two Piece Toilet   3",
+            "Seat Co   Toilet Seat   4",
             "LV-1",
-            "Maker Ten   Oval Undermount Lavatory With Overflow And",
-            "Clamp Assembly   5",
+            "Maker Ten   Round Lavatory With Overflow And",
+            "Mounting Kit   5",
             "SK-1",
             "Maker Eleven   Stainless Sink   6",
             "RP-1",
@@ -1378,18 +1379,18 @@ mod tests {
             "WC-1",
             "Qty: 1",
             "PHYSICAL PROPERTIES",
-            "Model: AB-832/T8",
+            "Model: QX-77/A1",
             "Rough-in: 12\"",
             "Page 3 of 8",
             "--- page 4 of 7 ---",
             "WC-1",
             "Qty: 1",
-            "Model: GL102WH",
+            "Model: ST-55",
             "Page 4 of 8",
             "--- page 5 of 7 ---",
             "LV-1",
             "Qty: 1",
-            "Catalog No.   K-2210-0",
+            "Catalog No.   LV-300-0",
             "Page 5 of 8",
             "--- page 6 of 7 ---",
             "SK-1",
@@ -1422,13 +1423,13 @@ mod tests {
         assert_eq!(wc.products.len(), 2, "{:?}", wc.products);
         assert_eq!((wc.products[0].vendor.as_str(), wc.products[0].page), ("Maker Nine", Some(3)));
         // The toilet's own cut sheet (p.3), not its seat's (p.4).
-        assert_eq!(wc.catalog, Some(("AB-832/T8".to_string(), Some(3))));
+        assert_eq!(wc.catalog, Some(("QX-77/A1".to_string(), Some(3))));
         let lv = sub.items.get("LV-1").expect("LV-1");
-        assert_eq!(lv.status, Status::Approved, "code 1, note corrections: approved as noted");
-        assert!(lv.response.contains("Note Corrections") && lv.response.contains("owner approval"), "{}", lv.response);
-        assert_eq!(lv.products[0].description, "Oval Undermount Lavatory With Overflow And Clamp Assembly");
+        assert_eq!(lv.status, Status::Approved, "code 1, corrections noted: approved as noted");
+        assert!(lv.response.contains("Make Corrections Noted") && lv.response.contains("Owner to confirm"), "{}", lv.response);
+        assert_eq!(lv.products[0].description, "Round Lavatory With Overflow And Mounting Kit");
         assert_eq!(lv.products[0].page, Some(5));
-        assert_eq!(lv.catalog.as_ref().map(|c| c.0.as_str()), Some("K-2210-0"));
+        assert_eq!(lv.catalog.as_ref().map(|c| c.0.as_str()), Some("LV-300-0"));
         assert_eq!(sub.items.get("SK-1").map(|i| i.status), Some(Status::SentBack), "code 2: revise and resubmit");
         // Not in the letter, which returns unlisted items with no exception taken.
         let rp = sub.items.get("RP-1").expect("RP-1");
@@ -1452,12 +1453,12 @@ mod tests {
             file: format!("rev {rev}"),
             revision: (rev, 0),
             reviewed: true,
-            items: [("P-1".to_string(), item(status, maker))].into_iter().collect(),
+            items: [("WC-9".to_string(), item(status, maker))].into_iter().collect(),
         };
         let subs = vec![sub(1, Status::Approved, "First"), sub(2, Status::SentBack, "Second"), sub(0, Status::Approved, "Zero")];
-        assert_eq!(chosen(&subs, "p-1").map(|(s, _)| s.revision), Some((1, 0)), "rev 2 was sent back: rev 1 stands");
+        assert_eq!(chosen(&subs, "wc-9").map(|(s, _)| s.revision), Some((1, 0)), "rev 2 was sent back: rev 1 stands");
         let subs = vec![sub(1, Status::Approved, "First"), sub(3, Status::Approved, "Third")];
-        assert_eq!(chosen(&subs, "P-1").and_then(|(_, i)| i.products.first()).map(|p| p.vendor.as_str()), Some("Third"));
+        assert_eq!(chosen(&subs, "WC-9").and_then(|(_, i)| i.products.first()).map(|p| p.vendor.as_str()), Some("Third"));
     }
 
     #[test]
@@ -1465,19 +1466,19 @@ mod tests {
         let r = rules();
         let cr = |f: &str, trap: &str| ConnectionRow { fixture: f.into(), sizes: [("trap".to_string(), trap.to_string())].into_iter().collect() };
         let rows = vec![
-            cr("WATER CLOSET-FLUSH TANK", "--"),
+            cr("WATER CLOSET (TANK)", "--"),
             cr("LAVATORY", "1-1/4\""),
-            cr("SINK-COMMERCIAL KITCHEN", "2\""),
-            cr("SINK-HAND, BAR, RESIDENTIAL KITCHEN", "1-1/2\""),
-            cr("MOP BASIN/SERVICE SINK", "3\""),
+            cr("SINK, COMMERCIAL KITCHEN", "2\""),
+            cr("SINK, RESIDENTIAL KITCHEN", "1-1/2\""),
+            cr("SERVICE SINK/MOP BASIN", "3\""),
         ];
         let pick = |f: &str, d: &str| connection_row(&r, &rows, f, d).map(|(x, _)| x.fixture.clone());
         assert_eq!(pick("ADA LAVATORY", "").as_deref(), Some("LAVATORY"));
-        assert_eq!(pick("WATER CLOSET", "").as_deref(), Some("WATER CLOSET-FLUSH TANK"));
+        assert_eq!(pick("WATER CLOSET", "").as_deref(), Some("WATER CLOSET (TANK)"));
         // A commercial row only for a fixture that says commercial.
-        assert_eq!(pick("KITCHEN SINK", "UNDERMOUNT SINGLE BASIN").as_deref(), Some("SINK-HAND, BAR, RESIDENTIAL KITCHEN"));
-        assert_eq!(pick("COMMERCIAL KITCHEN SINK", "").as_deref(), Some("SINK-COMMERCIAL KITCHEN"));
-        assert_eq!(pick("SERVICE SINK", "").as_deref(), Some("MOP BASIN/SERVICE SINK"));
+        assert_eq!(pick("KITCHEN SINK", "UNDERMOUNT SINGLE BASIN").as_deref(), Some("SINK, RESIDENTIAL KITCHEN"));
+        assert_eq!(pick("COMMERCIAL KITCHEN SINK", "").as_deref(), Some("SINK, COMMERCIAL KITCHEN"));
+        assert_eq!(pick("SERVICE SINK", "").as_deref(), Some("SERVICE SINK/MOP BASIN"));
         // `SINK` alone fits two rows: no row is guessed.
         assert_eq!(pick("LAUNDRY SINK", ""), None);
     }
@@ -1488,9 +1489,9 @@ mod tests {
         assert_eq!(plumbing_kind("Cast-Iron Floor Drains").as_deref(), Some("floor_drain"));
         assert_eq!(plumbing_kind("SUMP PUMP").as_deref(), Some("sump_pump"));
         assert_eq!(plumbing_kind("PEX TUBING"), None, "TUB is a word, not part of TUBING");
-        assert!(same_maker("BRADLEY", "Bradley Corp"));
-        assert!(same_maker("TOWEL WHITNEY", "Towle Whitney"), "a misspelt maker is the same maker");
-        assert!(!same_maker("PROFLO", "Western Pottery"));
+        assert!(same_maker("ACME", "Acme Co"));
+        assert!(same_maker("MAKERTON PUMPS", "Makertin Pumps"), "a misspelt maker is the same maker");
+        assert!(!same_maker("MAKER ONE", "Other Works"));
     }
 
     /// A built fixture element (a box the build makes for a read device) of `mark` on Level 1.
@@ -1531,7 +1532,7 @@ mod tests {
         let rp = fixture_el(&mut s, "RP-1", 120.0, &[]);
         let bare = fixture_el(&mut s, "ZZ-1", 160.0, &[]);
         let untagged = fixture_el(&mut s, "", 200.0, &[]);
-        let mut lav = row("LV-1", "LAVATORY", "MAKER TEN", "K-2210-0");
+        let mut lav = row("LV-1", "LAVATORY", "MAKER TEN", "LV-300-0");
         lav.connections = [("cw".to_string(), "1/2\"".to_string())].into_iter().collect();
         let docs = Docs {
             rows: vec![
@@ -1541,7 +1542,7 @@ mod tests {
                 row("RP-1", "RECIRCULATION PUMP", "", ""),
             ],
             connections: vec![ConnectionRow {
-                fixture: "WATER CLOSET-FLUSH TANK".into(),
+                fixture: "WATER CLOSET (TANK)".into(),
                 sizes: [("waste".to_string(), "3\"".to_string()), ("cw".to_string(), "1/2\"".to_string())].into_iter().collect(),
             }],
             sheet: "P-1".into(),
@@ -1567,7 +1568,7 @@ mod tests {
         assert_eq!(m.source.kind, SourceKind::Submittal);
         assert!(m.source.doc.as_deref().is_some_and(|d| d.contains("p.3")), "{m:?}");
         assert_eq!(prop(&s, wc, "design_manufacturer").map(|p| p.text()).as_deref(), Some("MAKER TWO"));
-        assert_eq!(prop(&s, wc, "catalog_number").map(|p| p.text()).as_deref(), Some("AB-832/T8"));
+        assert_eq!(prop(&s, wc, "catalog_number").map(|p| p.text()).as_deref(), Some("QX-77/A1"));
         assert_eq!(prop(&s, wc, "design_catalog").map(|p| p.text()).as_deref(), Some("PF-1"));
         // Its rough-in from the table by its name; its water derived (its level's water is proposed).
         assert_eq!(prop(&s, wc, "waste_size").map(|p| p.text()).as_deref(), Some("3\""));

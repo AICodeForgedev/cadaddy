@@ -691,7 +691,7 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
         }
         "plumbing_fixture" | "fixture" => {
             // Its plumbing kind (the plumbing records' `product_kind`, else its schedule names'
-            // words), before the general names (a sump pump's `OIL SWITCH` is no switch).
+            // words), before the general names (a pump's float switch is no switch).
             let named = format!("{} {} {name}", text("fixture"), text("type"));
             let k2 = Some(text("product_kind"))
                 .filter(|k| !k.is_empty())

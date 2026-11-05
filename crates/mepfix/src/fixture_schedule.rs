@@ -10,7 +10,7 @@
 //! two-sided sheet) are two tables: a header row ends at the next tag header.
 //!
 //! The rough-in table beside it ([`read_connections`]): a table keyed by fixture name (`LAVATORY`,
-//! `WATER CLOSET-FLUSH TANK`) whose columns give each fixture's trap, waste, vent, cold and hot water
+//! `WATER CLOSET (TANK)`) whose columns give each fixture's trap, waste, vent, cold and hot water
 //! sizes, its headers on one or more lines (`COLD` over `WATER`, `WASTE` over `ABOVE GRADE` and
 //! `BELOW GRADE`).
 
@@ -440,11 +440,11 @@ fn connection_key(label: &str) -> Option<&'static str> {
     let has = |x: &str| w.iter().any(|y| y == x);
     Some(if has("TRAP") {
         "trap"
-    } else if (has("WASTE") || has("SANITARY") || has("SOIL")) && has("BELOW") {
+    } else if (has("WASTE") || has("SANITARY") || has("SOIL") || has("SAN")) && has("BELOW") {
         "waste_below"
-    } else if has("WASTE") || has("SANITARY") || has("SOIL") || has("DRAIN") {
+    } else if has("WASTE") || has("SANITARY") || has("SOIL") || has("DRAIN") || has("SAN") || w == ["W"] {
         "waste"
-    } else if has("VENT") {
+    } else if has("VENT") || w == ["V"] {
         "vent"
     } else if has("COLD") || has("CW") || has("DCW") {
         "cw"
@@ -681,7 +681,7 @@ mod tests {
             t("V", 21.0, 30.0),
             t("VOLTS", 22.0, 30.0),
             t("REMARKS", 23.5, 30.0),
-            t("FURNISH: THE TERM FURNISH IS USED TO MEAN SUPPLY", 26.0, 30.0),
+            t("NOTE: A SENTENCE LETTERED ON THE HEADER LINE", 26.0, 30.0),
             t("MAKER TWO", 9.8, 29.5),
             t("AB-100", 12.0, 29.5),
             t("WC-1", 14.0, 29.5),
@@ -753,38 +753,38 @@ mod tests {
         // `WASTE` over `ABOVE GRADE` and `BELOW GRADE`, `COLD` over `WATER`: drawn y up.
         let h = 9.5;
         let texts = [
-            th("WASTE", 2275.4, 400.0, h),
-            th("COLD", 2384.6, 392.0, h),
-            th("HOT", 2432.6, 392.0, h),
-            th("PLUMBING FIXTURE", 2040.7, 386.6, h),
-            th("TRAP", 2212.2, 386.6, h),
-            th("VENT", 2344.3, 386.6, h),
-            th("ABOVE", 2253.5, 383.8, h),
-            th("BELOW", 2296.8, 383.8, h),
-            th("WATER", 2380.8, 381.4, h),
-            th("WATER", 2425.7, 381.4, h),
-            th("GRADE", 2253.0, 373.3, h),
-            th("GRADE", 2297.2, 373.3, h),
-            th("WATER CLOSET-FLUSH TANK", 2019.0, 354.4, h),
-            th("--", 2221.7, 354.4, h),
-            th("3\"", 2265.4, 354.4, h),
-            th("3\"", 2309.5, 354.4, h),
-            th("2\"", 2352.6, 354.4, h),
-            th("1/2\"", 2389.6, 354.4, h),
-            th("--", 2439.5, 354.4, h),
-            th("LAVATORY", 2061.6, 333.7, h),
-            th("1-1/2\"", 2212.4, 333.7, h),
-            th("1-1/2\"", 2257.2, 333.7, h),
-            th("2\"", 2309.5, 333.7, h),
-            th("1-1/2\"", 2344.4, 333.7, h),
-            th("1/2\"", 2389.6, 333.7, h),
-            th("1/2\"", 2434.4, 333.7, h),
-            th("GENERAL NOTES:", 2019.0, 200.0, h),
+            th("WASTE", 1271.7, 461.3, h),
+            th("COLD", 1380.9, 453.3, h),
+            th("HOT", 1428.9, 453.3, h),
+            th("PLUMBING FIXTURE", 1037.0, 447.9, h),
+            th("TRAP", 1208.5, 447.9, h),
+            th("VENT", 1340.6, 447.9, h),
+            th("ABOVE", 1249.8, 445.1, h),
+            th("BELOW", 1293.1, 445.1, h),
+            th("WATER", 1377.1, 442.7, h),
+            th("WATER", 1422.0, 442.7, h),
+            th("GRADE", 1249.3, 434.6, h),
+            th("GRADE", 1293.5, 434.6, h),
+            th("WATER CLOSET (TANK)", 1015.3, 415.7, h),
+            th("--", 1218.0, 415.7, h),
+            th("3\"", 1261.7, 415.7, h),
+            th("3\"", 1305.8, 415.7, h),
+            th("2\"", 1348.9, 415.7, h),
+            th("1/2\"", 1385.9, 415.7, h),
+            th("--", 1435.8, 415.7, h),
+            th("LAVATORY", 1057.9, 395.0, h),
+            th("1-1/2\"", 1208.7, 395.0, h),
+            th("1-1/2\"", 1253.5, 395.0, h),
+            th("2\"", 1305.8, 395.0, h),
+            th("1-1/2\"", 1340.7, 395.0, h),
+            th("1/2\"", 1385.9, 395.0, h),
+            th("1/2\"", 1430.7, 395.0, h),
+            th("GENERAL NOTES:", 1015.3, 261.3, h),
         ];
         let rows = read_connections(&texts);
         assert_eq!(rows.len(), 2, "{rows:?}");
         let wc = &rows[0];
-        assert_eq!(wc.fixture, "WATER CLOSET-FLUSH TANK");
+        assert_eq!(wc.fixture, "WATER CLOSET (TANK)");
         assert_eq!(wc.sizes.get("waste").map(String::as_str), Some("3\""));
         assert_eq!(wc.sizes.get("vent").map(String::as_str), Some("2\""));
         assert_eq!(wc.sizes.get("cw").map(String::as_str), Some("1/2\""));
@@ -793,6 +793,26 @@ mod tests {
         assert_eq!(lav.sizes.get("trap").map(String::as_str), Some("1-1/2\""));
         assert_eq!(lav.sizes.get("waste_below").map(String::as_str), Some("2\""));
         assert_eq!(lav.sizes.get("hw").map(String::as_str), Some("1/2\""));
+        // Another layout: one header line, the water columns first, abbreviated.
+        let texts = [
+            t("FIXTURE", 0.0, 10.0),
+            t("CW", 3.0, 10.0),
+            t("HW", 4.0, 10.0),
+            t("SAN", 5.0, 10.0),
+            t("VENT", 6.0, 10.0),
+            t("SHOWER", 0.0, 9.6),
+            t("1/2\"", 3.0, 9.6),
+            t("1/2\"", 4.0, 9.6),
+            t("2\"", 5.0, 9.6),
+            t("1-1/2\"", 6.0, 9.6),
+            t("HOSE BIBB", 0.0, 9.3),
+            t("3/4\"", 3.0, 9.3),
+        ];
+        let rows = read_connections(&texts);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].sizes.get("waste").map(String::as_str), Some("2\""), "SAN is the waste");
+        assert_eq!(rows[1].fixture, "HOSE BIBB");
+        assert_eq!(rows[1].sizes.len(), 1, "{rows:?}");
         // The fixture schedule's header (a tag column) is not a rough-in table.
         let sched = [t("TAG", 0.0, 10.0), t("FIXTURE", 1.0, 10.0), t("CW", 3.0, 10.0), t("HW", 4.0, 10.0), t("P-1", 0.0, 9.5), t("1/2\"", 3.0, 9.5)];
         assert!(read_connections(&sched).is_empty());
