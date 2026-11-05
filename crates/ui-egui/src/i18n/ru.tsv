@@ -3210,3 +3210,9 @@
 	The current file is kept as {name} until the next save.	Текущий файл сохраняется как {name} до следующего сохранения.
 	This format can't keep these objects yet: {objects}.	Этот формат пока не может сохранить эти объекты: {objects}.
 	{count} more types	ещё типов: {count}
+	Review by Impact	Проверка по влиянию
+	Resolve Review Item by Impact	Решить пункт проверки по влиянию
+	Open Review Item	Открыть пункт проверки
+	Review Audit Trail	Журнал аудита проверки
+	Accuracy Trend	Динамика точности
+	Measure Build Accuracy	Измерить точность модели
