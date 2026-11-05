@@ -173,7 +173,7 @@ fn circuit_of(label: &str) -> Option<(String, Vec<String>)> {
     (!nums.is_empty()).then_some((panel, nums))
 }
 
-/// Is `tag` (a piece of gear's) the panel `panel`, or a typical room's instance of it (`G-214`)?
+/// Is `tag` (a piece of gear's) the panel `panel`, or a typical room's instance of it (`RP-7`)?
 fn is_panel(tag: &str, panel: &str) -> bool {
     let (t, p) = (tag.trim().to_ascii_uppercase(), panel.trim().to_ascii_uppercase());
     !p.is_empty() && (t == p || t.starts_with(&format!("{p}-")))
@@ -2456,7 +2456,7 @@ mod tests {
     #[test]
     fn the_panel_of_a_typical_room_matches() {
         assert!(is_panel("LP1", "lp1"));
-        assert!(is_panel("Q-101", "Q"));
-        assert!(!is_panel("QA", "Q"));
+        assert!(is_panel("RP-7", "RP"));
+        assert!(!is_panel("RPA", "RP"));
     }
 }
