@@ -309,7 +309,10 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let mut on_proposed = false;
         for sys in want {
             let name = r.system_names.get(sys).cloned().unwrap_or_else(|| sys.to_ascii_lowercase());
-            let mut hit = nearest(level, *at, &|p| p.system == *sys).map(|i| (i, format!("the nearest {sys} pipe")));
+            // A drawn pipe in reach first; a proposed one (copied, not drawn) only where none is.
+            let mut hit = nearest(level, *at, &|p| p.system == *sys && !p.proposed)
+                .or_else(|| nearest(level, *at, &|p| p.system == *sys && p.proposed))
+                .map(|i| (i, format!("the nearest {sys} pipe")));
             // A vent: else the waste stack it drains to, carried up as the stack vent.
             if hit.is_none() && sys == "V" {
                 hit = nearest(level, *at, &|p| p.riser && r.drainage_systems.contains(&p.system))

@@ -142,6 +142,45 @@ fn a_proposed_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
 }
 
 #[test]
+fn a_drawn_pipe_in_reach_comes_before_a_nearer_proposed_one() {
+    // A drawn CW branch 6' from the water closet, a proposed main 2' from it: the drawn one.
+    let mut s = Session::empty();
+    s.open_drawing(room(), "Plumbing Room", None);
+    let fixture = json!({
+        "id": "device:L1:10.0,5.0:WC-9", "kind": "plumbing_fixture", "level": "L1", "at_ft": [10.0, 5.0],
+        "fields": {
+            "type": {"value": "WC-9", "source": "plan"},
+            "fixture": {"value": "WATER CLOSET", "source": "schedule"},
+            "device_type": {"value": "WATER CLOSET", "source": "schedule"},
+            "sheet": {"value": "P-101", "source": "plan"},
+            "symbol": {"value": "1F8", "source": "plan"},
+        },
+    });
+    let runs = json!([
+        run("SAN", json!([[96.0, 48.0], [96.0, 240.0]]), "default"),
+        run("V", json!([[132.0, 48.0], [132.0, 240.0]]), "default"),
+        run("CW", json!([[60.0, 132.0], [300.0, 132.0]]), "tag"),
+        run("CW", json!([[60.0, 84.0], [480.0, 84.0]]), "proposed"),
+    ]);
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [fixture],
+        "mep": {"systems": [pipe("SAN"), pipe("V"), pipe("CW")], "runs": runs},
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let r = s.execute("model.build", &json!({})).expect("build");
+    let p = fixture_props(&mut s);
+    assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("proposed"), "the drawn branch: {p:#}");
+    let pl = &r["plumbing"];
+    if !pl.is_null() {
+        assert_eq!(pl["fully_connected_with_proposed"], json!(0), "{pl}");
+    }
+}
+
+#[test]
 fn a_fixture_type_with_no_documented_height_is_listed_by_type() {
     let (_, r) = built_with("tag");
     let by = &r["deviceBuild"]["fixture_defaults_by_type"];
