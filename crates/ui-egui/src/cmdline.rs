@@ -467,7 +467,12 @@ pub fn submit(app: &mut CadApp) {
         return;
     }
     // A partly typed command name runs the highlighted (first) AutoComplete suggestion.
-    let completion = if app.session.prompting() { None } else { suggestions(text.trim()).into_iter().next() };
+    let set = app.ui.autocomplete;
+    let completion = if app.session.prompting() || !set.enabled {
+        None
+    } else {
+        crate::autocomplete::complete_commands(text.trim(), &set, &app.ui.command_usage, &[]).into_iter().next()
+    };
     app.cmdline_or(&text, completion.map(|s| s.id.to_ascii_lowercase()).as_deref());
 }
 
