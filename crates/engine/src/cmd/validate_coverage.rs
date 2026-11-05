@@ -1723,4 +1723,54 @@ mod tests {
         assert_eq!(tag_codes("S3"), vec!["S3".to_string()]);
         assert!(tag_codes("PROVIDE A NEW DAMPER HERE").is_empty());
     }
+
+    #[test]
+    fn a_code_abbreviates_its_meaning() {
+        assert!(abbreviates("QSMD", "QUIET SMOKE DAMPER"));
+        assert!(abbreviates("SD", "DUCT MOUNTED SMOKE DETECTOR"));
+        assert!(abbreviates("FCO", "FLOOR CLEANOUT"));
+        assert!(abbreviates("P-12", "WATER CLOSET"), "a type tag names no words");
+        assert!(!abbreviates("UC", "MOTORIZED DAMPER ACTUATOR"));
+        assert!(!abbreviates("FIRE", "EXTINGUISHER CABINET"));
+        assert!(!abbreviates("DUAL", "DUAL DRAIN BOX"), "its own first word is no abbreviation");
+        assert_eq!(same_reach(5.0, 80.0), 20.0, "a giant text reaches four of the small one's heights");
+        assert_eq!(same_reach(0.0, 6.0), 6.0, "an unknown height takes the other's");
+    }
+
+    fn item(v: &str, x: f64, y: f64) -> TextItem {
+        TextItem { value: v.into(), at: Vec2::new(x, y), height: 6.0, rotation: 0.0 }
+    }
+
+    #[test]
+    fn a_symbol_legend_pairs_codes_with_what_they_abbreviate() {
+        // Two columns of pairs; a code drawn in its symbol one line above its words; a code whose
+        // neighbour it doesn't abbreviate.
+        let texts = vec![
+            item("SYMBOL LEGEND", 0.0, 100.0),
+            item("QSMD", 0.0, 88.0),
+            item("QUIET SMOKE DAMPER", 40.0, 88.0),
+            item("AFF", 200.0, 88.0),
+            item("ABOVE FINISHED FLOOR", 240.0, 88.0),
+            item("XMD", 10.0, 76.0),
+            item("UC", 0.0, 70.0),
+            item("XTRA MOTOR DAMPER ACTUATOR", 40.0, 70.0),
+        ];
+        let (pairs, regions) = abbreviations(&texts);
+        assert!(pairs.contains(&("QSMD".into(), "QUIET SMOKE DAMPER".into())), "{pairs:?}");
+        assert!(pairs.contains(&("AFF".into(), "ABOVE FINISHED FLOOR".into())), "{pairs:?}");
+        assert!(pairs.contains(&("XMD".into(), "XTRA MOTOR DAMPER ACTUATOR".into())), "{pairs:?}");
+        assert!(!pairs.iter().any(|(c, _)| c == "UC"), "{pairs:?}");
+        assert_eq!(regions.len(), 1);
+    }
+
+    #[test]
+    fn one_code_two_meanings_stay_two_kinds() {
+        let mut defs = Defs::default();
+        let src = || Source { from: "abbreviation", sheet: "Q-1".into(), text: String::new() };
+        let a = defs.add(key_of("FLOOR DRAIN"), "FLOOR DRAIN".into(), Some("QD".into()), "general", src());
+        let b = defs.add(key_of("QUENCH DAMPER"), "QUENCH DAMPER".into(), Some("QD".into()), "mechanical", src());
+        let c = defs.add(key_of("FLOOR DRAINS"), "FLOOR DRAINS".into(), Some("QD".into()), "plumbing", src());
+        assert_ne!(a, b, "another head noun is another kind");
+        assert_eq!(a, c, "the same words are one kind");
+    }
 }
