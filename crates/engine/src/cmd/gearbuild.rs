@@ -1485,6 +1485,10 @@ mod feeder_route_tests {
         assert_eq!(through[0].bottoms_ft[0], 7.0);
         // G-201 sits 2 inches off G-101 on plan: no leg for that.
         assert!(!runs.iter().any(|r| r.source_sheet.contains("G-101") && r.level == "Level 2"));
+        // Every route is its feeder's (Q6201: its conductors ride it), a typical copy's too.
+        let mut with_runs = sp.clone();
+        with_runs.mep.runs = runs.clone();
+        assert!(runs.iter().all(|r| super::super::mepatoms::build::feeder_of_run(&with_runs, r) == Some(0)), "{runs:#?}");
         assert_eq!(tally(&[left.clone(), left.clone(), left.clone()].concat()), vec!["123 DP1→G: no placed copy of it left to feed ×3".to_string()]);
         sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(124), ..Default::default() });
         assert_eq!(typical_placed(&sp), vec![("G".to_string(), 4, 124)]);
