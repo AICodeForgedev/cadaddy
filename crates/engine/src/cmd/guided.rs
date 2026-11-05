@@ -14151,15 +14151,41 @@ fn equipment_step(
             }
         }
     }
-    if loads.is_empty() {
-        return Ok(());
-    }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
     // Every submittal PDF, in any folder under those given (revision folders: `Rev 1-1`).
     let mut files: Vec<String> = Vec::new();
     for root in &job.submittals {
         all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
+    }
+    // And the equipment a panel schedule feeds by tag (`GUESTROOM PTAC-1` on 20A/2P, #12) that has
+    // a submittal: its breaker the drawings' protection, its branch wire the conductors.
+    let mut branch_wire: BTreeMap<String, String> = BTreeMap::new();
+    let has_submittal = |tag: &str| {
+        equipsub::stem(tag).is_some_and(|st| {
+            files.iter().any(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
+        })
+    };
+    for p in sp.mep.panel_schedules.iter().take(MAX_EQUIPMENT_LOADS) {
+        for c in &p.circuits {
+            let up = c.description.to_ascii_uppercase();
+            let Some(tag) = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').find(|w| {
+                w.split_once('-').is_some_and(|(a, n)| {
+                    a.len() >= 2 && a.chars().all(|ch| ch.is_ascii_alphabetic()) && !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit())
+                })
+            }) else {
+                continue;
+            };
+            let breaker = c.breaker.trim().trim_end_matches(['A', 'a']).trim();
+            if breaker.parse::<f64>().is_err() || c.poles == 0 || loads.iter().any(|x| x.tag.eq_ignore_ascii_case(tag)) || !has_submittal(tag) {
+                continue;
+            }
+            loads.push(equipsub::OnelineLoad { tag: tag.to_string(), feeder: String::new(), ocpd: format!("{breaker}A/{}P", c.poles) });
+            branch_wire.insert(tag.to_string(), c.wire.trim().trim_start_matches('#').to_string());
+        }
+    }
+    if loads.is_empty() {
+        return Ok(());
     }
     let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
     let mut asked = 0usize;
@@ -14193,7 +14219,8 @@ fn equipment_step(
             if e.status.is_empty() {
                 e.status = equipsub::review_status(&text);
             }
-            let got = equipsub::text_electrical(&text);
+            // A submittal of several models: the tag's own (its item line), else the text's data.
+            let got = equipsub::submittal_for_model(&text, &l.tag).filter(equipsub::has_data).unwrap_or_else(|| equipsub::text_electrical(&text));
             if equipsub::has_data(&got) {
                 equipsub::merge(&mut e, &got);
                 e.source = format!("submittal {name}");
@@ -14221,7 +14248,10 @@ fn equipment_step(
             .find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel))
             .and_then(|p| p.header.get("afc value"))
             .and_then(|v| v.replace([',', 'A', 'a'], "").trim().parse::<f64>().ok());
-        for c in equipsub::check(&e, ft.map(|t| (t.size.as_str(), t.material.as_str())), afc, &rule) {
+        // A branch circuit's wire (copper) where a panel schedule feeds it.
+        let wire = branch_wire.get(&l.tag).filter(|w| !w.is_empty());
+        let conductors = ft.map(|t| (t.size.as_str(), t.material.as_str())).or(wire.map(|w| (w.as_str(), "cu")));
+        for c in equipsub::check(&e, conductors, afc, &rule) {
             conflicts_all.push((l.tag.clone(), c));
         }
         rows.push(e);
@@ -14259,7 +14289,7 @@ fn equipment_step(
         );
     }
     let line = format!(
-        "  equipment connections: {} on the one-line ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
+        "  equipment connections: {} on the one-line and the panel schedules ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
         rows.len(),
         rows.iter().map(|r| format!("{} {} {}", r.tag, r.drawing_ocpd, r.feeder)).collect::<Vec<_>>().join(", "),
         rows.iter().filter(|r| super::equipsub::has_data(r)).count(),
