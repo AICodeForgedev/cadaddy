@@ -70,7 +70,7 @@ pub(crate) fn basis(text: &str) -> Option<String> {
 }
 
 /// The panel a summary's title names: `PANELBOARD R2 DEMAND CALCULATION` → `R2`; none for the
-/// building's (`COMMERCIAL LOAD SUMMARY`, `PANEL LOAD SUMMARY`).
+/// building's (`SERVICE LOAD SUMMARY`, `PANEL LOAD SUMMARY`).
 pub(crate) fn title_panel(title: &str, rules: &Rules) -> String {
     let u = title.trim().to_ascii_uppercase();
     let Some(rest) = ["PANELBOARD ", "PANEL BOARD ", "PANEL "].iter().find_map(|p| u.strip_prefix(p)) else { return String::new() };
