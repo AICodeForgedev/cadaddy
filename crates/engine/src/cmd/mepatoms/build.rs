@@ -11,7 +11,10 @@ use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun};
 use serde_json::{Value, json};
 
 use super::super::propfill::WithNote;
-use super::{Atom, Pieces, WireOpts, X3, cable_pieces, large_conductors, raceway_pieces, rule_source, rules, trade_size, wires, wires_with};
+use super::{
+    Atom, BoxRule, Pieces, WireOpts, X3, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
+    wires, wires_with,
+};
 
 /// Most runs, devices and atoms the build makes (hostile specs).
 const MAX_RUNS: usize = 50_000;
@@ -76,6 +79,9 @@ struct Method {
     estimated: bool,
     /// Routed by [`super::super::conduitroute`]: its ends land on their boxes' entries.
     routed: bool,
+    /// A low-voltage pathway's outlets (its own, and the one it joins): its ends land in their
+    /// boxes only, whatever circuit a box is on.
+    devices: Vec<Handle>,
     /// A feeder's run (`mep.feeders` index): its conductors are the feeder's, landing on gear.
     feeder: Option<usize>,
 }
@@ -441,6 +447,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let wiring = wiring_method(d);
     let circuits: HashMap<&str, &cadaddy_walk3d::tags::ElementTag> =
         sp.tags.iter().filter(|t| t.kind == "circuit").map(|t| (t.id.as_str(), t)).collect();
+    // The low-voltage pathways' tags (Q6203): each outlet's method and its bracket.
+    let lv = super::super::conduitroute::lv::TAG_KIND;
+    let pathways: HashMap<&str, &cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| t.kind == lv).map(|t| (t.id.as_str(), t)).collect();
     let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| {
         t.fields.get(k).map(|f| (f.value.trim().to_string(), f.source.clone())).filter(|(v, _)| !v.is_empty())
     };
@@ -468,11 +477,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if pts.len() < 2 {
             continue;
         }
+        let pathway = (r.system == super::super::conduitroute::lv::LV_SYSTEM)
+            .then(|| r.id.split('#').next().and_then(|id| pathways.get(id)).copied())
+            .flatten();
         // A feeder's run: its feeder's conductors (its schedule's), grouped by its route.
         let feeder = super::super::ugplan::is_feeder_run(r).then(|| feeder_of_run(sp, r)).flatten();
-        let ctag = match feeder {
-            Some(_) => r.source_sheet.clone(),
-            None => super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string(),
+        let ctag = match (pathway, feeder) {
+            // Each outlet's pathway is its own group (its own method).
+            (Some(t), _) => t.id.clone(),
+            (None, Some(_)) => r.source_sheet.clone(),
+            (None, None) => super::super::printcond::circuit_of_run(r).unwrap_or_default().to_string(),
         };
         let tag = circuits.get(ctag.as_str()).copied();
         let estimated = r.height_source == super::super::printcond::ESTIMATED || r.system == super::super::printcond::CIRCUIT_SYSTEM;
@@ -496,8 +510,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // The raceway the documents name (the circuit's, the system's), else the project's wiring
         // method, else the default; a cable system or a cable wiring method is cable.
         let named = tag.and_then(|t| field(t, "conduit")).filter(|(_, s)| s != "default");
+        // A low-voltage pathway's method, as its tag says (the documents' or the rules' default).
+        let named = named.or_else(|| {
+            let (v, s) = field(pathway?, "conduit")?;
+            Some((v, if s == "default" { "rule".to_string() } else { s }))
+        });
         let from_named = named.as_ref().and_then(|(v, s)| {
-            let src = || src_of(s, &format!("circuit {circuit}: {v}"));
+            let src = || match pathway.and_then(|t| t.fields.get("method_source")) {
+                Some(f) => src_of(s, &format!("low-voltage pathway: {v} ({})", f.value)),
+                None => src_of(s, &format!("circuit {circuit}: {v}")),
+            };
             rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), src())).or_else(|| rl.cable_named(v).map(|(k, _)| (true, k.to_string(), src())))
         });
         let from_system = || {
@@ -551,7 +573,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             None => panel,
         };
         let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, feeder };
+        let devices: Vec<Handle> = pathway
+            .map(|t| {
+                ["device", "joins"]
+                    .iter()
+                    .filter_map(|k| t.fields.get(*k).and_then(|f| u64::from_str_radix(f.value.trim(), 16).ok()).map(Handle))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -650,6 +680,16 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // Another trade's devices (Q6167): a box and ring only where the documents make them ours.
     let scope = super::super::scope::decisions(d);
     let sr = super::super::scope::rules();
+    // The low-voltage outlets that take a bracket, by device handle: the source that says so.
+    let brackets: HashMap<Handle, String> = pathways
+        .values()
+        .filter(|t| t.fields.get("bracket").is_some_and(|f| f.value == "yes"))
+        .filter_map(|t| {
+            let h = t.fields.get("device").and_then(|f| u64::from_str_radix(f.value.trim(), 16).ok())?;
+            let src = t.fields.get("bracket_source").map(|f| f.value.clone()).filter(|v| !v.is_empty());
+            Some((Handle(h), src.unwrap_or_else(|| super::super::conduitroute::lv::rules().bracket.source.clone())))
+        })
+        .collect();
     // Luminaires by type: (with a box, without, why).
     let mut lum_boxes: BTreeMap<String, (usize, usize, BTreeSet<String>)> = BTreeMap::new();
     // A switch's or sensor's box with no circuit of its own is on the circuit of what it
@@ -738,6 +778,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             br
         };
         let ring = ring && theirs.is_none_or(|(_, r)| r);
+        // A low-voltage outlet the documents give a bracket (or mud ring) instead of a box.
+        let bracketed = brackets.get(h);
+        let lv_bracket = bracketed.map(|src| BoxRule {
+            item: super::super::conduitroute::lv::rules().bracket.item.clone(),
+            size: super::super::conduitroute::lv::rules().bracket.size.clone(),
+            depth_in: 0.5,
+            dims_in: [2.25, 3.75, 0.5],
+            cubic_in: 0.0,
+            material: "steel".into(),
+            source: src.clone(),
+        });
+        let (br, ring) = match &lv_bracket {
+            Some(b) => (b, false),
+            None => (br, ring),
+        };
         let c = plan.center();
         let out = ["face_normal", "host_face"].iter().find_map(|k| {
             let t = ps.get(k).map(Prop::text)?;
@@ -924,10 +979,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 }
                 let Some(p) = (if end == 0 { c.pts.first() } else { c.pts.last() }).copied() else { continue };
                 let pp = Vec2::new(p.x, p.y);
-                // A feeder lands on gear, never in a device's box.
-                let near_box = box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box)
-                    .filter(|_| m.feeder.is_none())
-                    .and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
+                // A low-voltage pathway lands only in its outlets' boxes (by device); a feeder on
+                // gear, never in a device's box.
+                let own_outlet = || {
+                    boxes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, b)| m.devices.contains(&b.device) && b.level.eq_ignore_ascii_case(&key.level))
+                        .map(|(bi, b)| (bi, Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+                        .filter(|(_, dp, dz)| *dp <= reach && *dz <= 3.0 * upf)
+                        .min_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
+                        .map(|(bi, _, _)| bi)
+                };
+                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box) } else { own_outlet() };
+                let near_box = near.filter(|_| m.feeder.is_none()).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
                     let gap = (entry.z - p.z).abs();
@@ -942,10 +1007,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     *land = Some(Land::Atom(atom));
                     continue;
                 }
+                // A low-voltage pathway ends only in a telecom room's gear (its rack), never a panel.
                 let feeder_gear = |g: &Gear| m.feeder.and_then(|fi| sp.mep.feeders.get(fi)).is_none_or(|f| feeder_lands_on(f, &g.tag));
                 let g = gear
                     .iter()
                     .filter(|g| g.level.eq_ignore_ascii_case(&key.level) && g.plan.expand(panel_reach).contains(pp) && feeder_gear(g))
+                    .filter(|g| m.devices.is_empty() || super::super::conduitroute::lv::telecom_gear(&g.tag))
                     .min_by(|a, b| {
                         let pa = if !m.panel.is_empty() && a.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
                         let pb = if !m.panel.is_empty() && b.tag.eq_ignore_ascii_case(&m.panel) { 0.0 } else { 1.0 };
@@ -963,12 +1030,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 .and_then(|r| r.objects.iter().find_map(|o| u64::from_str_radix(o, 16).ok()))
                 .map_or(Handle(0), Handle);
             let size_in = c.runs.first().and_then(|i| sp.mep.runs.get(*i)).map_or(0.75, |r| r.size_in[0]);
+            // A low-voltage pathway's end in no box (a stub into the ceiling space) takes a bushing.
+            let lv_run = key.system == super::super::conduitroute::lv::LV_SYSTEM;
+            let open = [lv_run && lands[0].is_none(), lv_run && lands[1].is_none()];
             let pieces: Pieces = if m.cable {
                 let Some(cr) = rl.cables.get(&m.name) else { continue };
                 cable_pieces(&c.pts, upf, &m.name, cr, &m.conductors, rl)
             } else {
                 let Some(rw) = rl.raceways.get(&m.name) else { continue };
-                raceway_pieces(&c.pts, upf, size_in, &m.name, rw, large_conductors(&m.conductors, rl.bushing_min_awg), rl)
+                raceway_pieces_ending(&c.pts, upf, size_in, &m.name, rw, large_conductors(&m.conductors, rl.bushing_min_awg), open, rl)
             };
             // More bends between its ends than the code allows between pull points.
             let max_bends = if m.cable { 0.0 } else { rl.raceways.get(&m.name).map_or(0.0, |r| r.max_bends_deg) };
