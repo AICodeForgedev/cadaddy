@@ -3411,6 +3411,8 @@ impl Session {
         cmd::annotate::dimbreak_after_command(self, before);
         fields::after_command(self, before);
         cmd::wallgen::after_command(self, before);
+        // After the live rebuild: the model's count index follows every change to its pieces.
+        cmd::mepatoms::after_command(self, before, uid);
         script_tools::monitor_after(self);
     }
 

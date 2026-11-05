@@ -54,7 +54,7 @@ pub const DOCUMENTS: [&str; 12] = [
     "riser_diagram",
 ];
 /// The tolerances a rule may have (inches unless the name says feet).
-pub const TOLERANCES: [&str; 12] = [
+pub const TOLERANCES: [&str; 15] = [
     "plan_in",
     "height_in",
     "route_ft",
@@ -62,11 +62,14 @@ pub const TOLERANCES: [&str; 12] = [
     "depth_in",
     "clear_width_in",
     "clear_depth_in",
+    "touch_in",
+    "takeoff_pct",
     "count_share",
     "count_abs",
     "dedupe_ft",
     "repeat_sheets",
     "repeat_marks",
+    "cost_pct",
 ];
 pub const SEVERITIES: [&str; 3] = ["high", "medium", "low"];
 /// Largest tolerance a project may set.
@@ -355,7 +358,10 @@ pub struct Override {
 
 /// Is `key` (a project rule key) a validation rule override?
 pub fn is_override_key(key: &str) -> bool {
-    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX) && !super::validate_kind::is_kind_key(key) && !super::validate_height::is_height_key(key)
+    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX)
+        && !super::validate_kind::is_kind_key(key)
+        && !super::validate_height::is_height_key(key)
+        && !super::validate_register::is_register_key(key)
 }
 
 /// Read a project rule as a validation rule override: the rule must exist, the field be one a
@@ -510,7 +516,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new(CMD_SET, "Change a Validation Rule", run_set).params(
-            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in, count_share, count_abs, dedupe_ft, repeat_sheets, repeat_marks), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
+            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in, touch_in, takeoff_pct, count_share, count_abs, dedupe_ft, repeat_sheets, repeat_marks, cost_pct), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
         ),
     ]
 }
@@ -914,15 +920,15 @@ mod tests {
         let one = s.execute(CMD_RULES, &json!({"id": "m-ef"})).unwrap();
         assert_eq!(one["total"], 1);
         assert_eq!(one["rules"][0]["id"], "M-EF");
+        // The kind's rules, every page (the answer cap may page them before the limit).
         let fan = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50})).unwrap();
         assert_eq!(fan["kind_known"], true);
-        // Its pages (a page may end early to keep the answer small).
         let mut ids: Vec<String> = Vec::new();
-        let mut page = fan;
+        let mut pg = fan;
         for _ in 0..20 {
-            ids.extend(page["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str().map(str::to_string)));
-            let Some(c) = page["next"]["cursor"].as_u64().or_else(|| page["next"].as_u64()) else { break };
-            page = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50, "cursor": c})).unwrap();
+            ids.extend(pg["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str().map(str::to_string)));
+            let Some(c) = pg["next"].as_u64() else { break };
+            pg = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50, "cursor": c})).unwrap();
         }
         assert!(ids.iter().any(|i| i == "M-EF") && ids.iter().any(|i| i == "G-ROOM"), "{ids:?}");
 

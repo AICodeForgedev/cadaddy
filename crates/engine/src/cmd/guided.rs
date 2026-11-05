@@ -12280,6 +12280,10 @@ fn dampers_step(
     struct Sheet {
         r: super::printmep::SheetRef,
         texts: Vec<TextItem>,
+        /// The texts' origins: the sheet's own texts first, then its symbols' texts, then the
+        /// attributes (`[own, own + blocks]`).
+        own: usize,
+        blocks: usize,
         segs: Vec<(Vec2, Vec2)>,
         rounds: Vec<(Vec2, f64)>,
     }
@@ -12293,8 +12297,10 @@ fn dampers_step(
             .map(|r| {
                 let sub = super::printmep::sheet_drawing(d, &r);
                 let mut texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+                let own = texts.len();
                 // A tag the import made a symbol (a repeated drawing of the page) is a block's text.
                 texts.extend(block_texts(&sub));
+                let blocks = texts.len() - own;
                 let [x0, y0, x1, y1] = r.view.unwrap_or(r.rect);
                 let inside = |p: Vec2| p.x >= x0.min(x1) && p.x <= x0.max(x1) && p.y >= y0.min(y1) && p.y <= y0.max(y1);
                 for a in attribs.iter().filter(|a| inside(a.at)) {
@@ -12312,7 +12318,7 @@ fn dampers_step(
                     })
                     .take(200_000)
                     .collect();
-                Sheet { r, texts, segs, rounds }
+                Sheet { r, texts, own, blocks, segs, rounds }
             })
             .collect()
     };
@@ -12425,6 +12431,14 @@ fn dampers_step(
                     tag_at: map(tag.at),
                     enclosed: tag.enclosed,
                     keynote: keynote.clone(),
+                    read_as: if tag.text < sh.own {
+                        "text"
+                    } else if tag.text < sh.own + sh.blocks {
+                        "block text"
+                    } else {
+                        "attribute"
+                    }
+                    .into(),
                 });
             }
         }
@@ -12446,16 +12460,16 @@ fn dampers_step(
             sheet: r.source_sheet.clone(),
         })
         .collect();
+    // The wall types' fire ratings, with where each came from.
+    let rating_of = |name: &str| {
+        sp.wall_types.iter().find(|w| w.name.eq_ignore_ascii_case(name)).and_then(|w| w.assembly.as_ref()).and_then(|a| {
+            let r = a.fire_rating.clone().filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))?;
+            Some((r, if a.source.is_empty() { format!("wall type {name}'s assembly") } else { a.source.clone() }))
+        })
+    };
     // The built walls on their levels' plans, with their types' ratings.
     let walls: Vec<Wall> = {
         let d = s.doc()?;
-        let rating_of = |name: &str| {
-            sp.wall_types.iter().find(|w| w.name.eq_ignore_ascii_case(name)).and_then(|w| w.assembly.as_ref()).and_then(|a| {
-                let r =
-                    a.fire_rating.clone().filter(|r| !r.trim().is_empty() && !r.trim().eq_ignore_ascii_case("none") && !r.trim().starts_with('0'))?;
-                Some((r, if a.source.is_empty() { format!("wall type {name}'s assembly") } else { a.source.clone() }))
-            })
-        };
         d.model
             .iter()
             .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
@@ -12477,9 +12491,81 @@ fn dampers_step(
             .collect()
     };
     let tags_read = found.len();
-    let (placed, unplaced) = dampers::place(found, &ducts, &walls, upf);
+    let (mut placed, unplaced) = dampers::place(found, &ducts, &walls, upf);
     let all_crossings = dampers::crossings(&ducts, &walls);
+    // A rated damper with no wall in reach: the rated wall along its duct, else the architectural
+    // plans' rated wall type tag there that the model has without its rating (or not at all).
+    let lonely = placed.iter().any(|p| p.wall.is_none() && dampers::kind_rule(&p.found.kind).is_some_and(|k| k.rated));
+    let wall_tags: Vec<dampers::WallTypeTag> = if lonely {
+        let d = s.doc()?;
+        let marks: BTreeSet<String> = sp.wall_types.iter().map(|w| w.name.to_ascii_uppercase()).collect();
+        let texts = cadaddy_mepfix::sheet_facts::texts(d);
+        let inside = |r: &[f64; 4], p: Vec2| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3]);
+        let mut out: Vec<dampers::WallTypeTag> = Vec::new();
+        let tag = |level: &str, mark: &str, at: Vec2, sheet: String| {
+            let (rating, rating_source) = match rating_of(mark) {
+                Some((r, src)) => (Some(r), src),
+                None => (None, String::new()),
+            };
+            dampers::WallTypeTag { level: level.to_string(), mark: mark.to_string(), at, rating, rating_source, sheet }
+        };
+        let stamped = if marks.is_empty() { BTreeMap::new() } else { typical_wall_tags(d, job, &marks) };
+        let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+        for l in sp.levels.iter().filter(|l| l.sheet.is_none() && !marks.is_empty()) {
+            let Some(region) = l.region else { continue };
+            let sheet = job
+                .sheet_regions
+                .iter()
+                .find(|g| g.kind == "plan" && g.rect.iter().zip(region).all(|(a, b)| (a - b).abs() < 1e-6 * upf.max(1.0)))
+                .map_or_else(|| format!("{} plan", l.name), |g| g.number.clone());
+            for t in texts.iter().filter(|t| inside(&region, t.at)) {
+                let v = t.value.trim().to_ascii_uppercase();
+                if marks.contains(&v) && out.len() < 100_000 {
+                    out.push(tag(&l.name, &v, t.at, sheet.clone()));
+                }
+            }
+            for (mark, at, view) in stamped.get(&digits(&l.name)).into_iter().flatten() {
+                if out.len() < 100_000 {
+                    out.push(tag(&l.name, mark, *at, format!("{view} (a typical room plan's tag, stamped into each room of its type)")));
+                }
+            }
+        }
+        out.retain(|t| t.rating.is_some());
+        out
+    } else {
+        Vec::new()
+    };
+    let wall_model = dampers::walls_along_ducts(&mut placed, &ducts, &walls, &all_crossings, &wall_tags, upf);
     let open = dampers::unprotected(&ducts, &walls, &placed, upf, &all_crossings);
+    // A rated damper still at no wall: what lies farther along its duct and the rated wall type
+    // tags near it (to three times the reach), for the reviewer.
+    let still_lonely = |p: &dampers::Placed| -> Value {
+        if p.wall.is_some() || !dampers::kind_rule(&p.found.kind).is_some_and(|k| k.rated) {
+            return Value::Null;
+        }
+        let far = 3.0 * r.along_duct_reach_ft * upf;
+        let met: Vec<Value> = dampers::crossings_along(&ducts, &all_crossings, p, far, upf)
+            .into_iter()
+            .take(8)
+            .filter_map(|(ci, d)| {
+                let w = walls.get(all_crossings.get(ci)?.wall)?;
+                Some(json!({"wall_type": w.wall_type, "rating": w.rating, "along_ft": (d / upf * 10.0).round() / 10.0}))
+            })
+            .collect();
+        let mut near: Vec<(f64, &dampers::WallTypeTag)> = wall_tags
+            .iter()
+            .filter(|t| same_level_name(&t.level, &p.found.level))
+            .map(|t| ((t.at - p.at).len(), t))
+            .filter(|(d, _)| *d <= far)
+            .collect();
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let tags: Vec<Value> = near
+            .iter()
+            .take(6)
+            .map(|(d, t)| json!({"mark": t.mark, "rating": t.rating, "sheet": t.sheet, "dist_ft": (d / upf * 10.0).round() / 10.0}))
+            .collect();
+        json!({"walls_along_duct": met, "rated_wall_tags_near": tags, "looked_to_ft": 3.0 * r.along_duct_reach_ft})
+    };
     // The rooms the dampers are in (on their levels' plans).
     let rooms: Vec<(String, String, Vec<Vec2>)> = {
         let d = s.doc()?;
@@ -12493,6 +12579,25 @@ fn dampers_step(
                 };
                 (rm.level, name, rm.outline.iter().map(|p| *p - off).collect())
             })
+            .collect()
+    };
+    // Each room's keys (its number, else its name), for the panel schedules' locations.
+    let room_keys: Vec<(String, String, Vec<Vec2>)> = {
+        let d = s.doc()?;
+        super::bspec::room_elements(d)
+            .into_iter()
+            .filter_map(|rm| {
+                let off = d.model.get(rm.handle).map_or(Vec2::ZERO, |e| super::bspec::stacked_by(e));
+                let key = rm.number.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| rm.name.clone());
+                (!key.trim().is_empty()).then(|| (rm.level, key.trim().to_string(), rm.outline.iter().map(|p| *p - off).collect()))
+            })
+            .collect()
+    };
+    let keys_at = |level: &str, p: Vec2| -> Vec<String> {
+        room_keys
+            .iter()
+            .filter(|(l, _, o)| same_level_name(l, level) && o.len() >= 3 && cadaddy_geom::point_in_polygon(o, p))
+            .map(|(_, k, _)| k.clone())
             .collect()
     };
     let room_at = |level: &str, p: Vec2| {
@@ -12526,7 +12631,7 @@ fn dampers_step(
         }
     }
     let circuit_notes = dampers::circuit_notes(&notes, &panels);
-    let schedule_circuits: Vec<(String, String, String, String)> = sp
+    let schedule_circuits: Vec<dampers::ScheduleCircuit> = sp
         .mep
         .panel_schedules
         .iter()
@@ -12534,12 +12639,57 @@ fn dampers_step(
         .filter_map(|(p, c)| {
             let k = dampers::kind_of_words(&c.description)?;
             let src = if c.source.is_empty() { p.source.clone() } else { c.source.clone() };
-            Some((
-                k.kind.clone(),
-                p.panel.clone(),
-                c.number.clone(),
-                format!("{src} panel {} schedule, circuit {}: {}", p.panel, c.number, c.description),
-            ))
+            Some(dampers::ScheduleCircuit {
+                kind: k.kind.clone(),
+                panel: p.panel.clone(),
+                circuit: c.number.clone(),
+                room: c.room.clone(),
+                source: format!("{src} panel {} schedule, circuit {}: {}", p.panel, c.number, c.description),
+            })
+        })
+        .collect();
+    // Where the panels with damper circuits are and what they serve: the schedule's location and
+    // served-area facts; the level of the panel's element (placed from the plans or its
+    // location), else of the room its location names, else a level its texts name.
+    let panel_places: Vec<dampers::PanelPlace> = sp
+        .mep
+        .panel_schedules
+        .iter()
+        .filter(|ps| schedule_circuits.iter().any(|c| c.panel.eq_ignore_ascii_case(&ps.panel)))
+        .map(|ps| {
+            let area: Vec<(String, String)> = ps
+                .header
+                .iter()
+                .filter(|(k, v)| {
+                    let k = k.to_ascii_uppercase();
+                    !v.trim().is_empty() && (k.contains("LOCATION") || k.contains("SERV") || k.contains("AREA"))
+                })
+                .map(|(k, v)| (v.trim().to_string(), format!("{} panel {} schedule, {k}", ps.source, ps.panel)))
+                .collect();
+            let gear = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&ps.panel) && !e.level.is_empty());
+            let by_room = || {
+                area.iter().find_map(|(t, src)| {
+                    room_keys
+                        .iter()
+                        .find(|(_, k, _)| k.chars().any(|c| c.is_ascii_digit()) && dampers::names_room(t, k))
+                        .map(|(l, k, _)| (l.clone(), format!("room {k} on {l}, named by {src}: {t}")))
+                })
+            };
+            let by_name = || {
+                area.iter()
+                    .find_map(|(t, src)| sp.levels.iter().find(|l| dampers::names_room(t, &l.name)).map(|l| (l.name.clone(), format!("{src}: {t}"))))
+            };
+            let (level, level_source) = match gear {
+                Some(e) => (
+                    e.level.clone(),
+                    match e.properties.get("PLACEMENT") {
+                        Some(pl) => format!("panel {}'s element on {}: {pl}", ps.panel, e.level),
+                        None => format!("panel {}'s element on {}", ps.panel, e.level),
+                    },
+                ),
+                None => by_room().or_else(by_name).unwrap_or_default(),
+            };
+            dampers::PanelPlace { panel: ps.panel.clone(), level, level_source, area }
         })
         .collect();
     // Fire alarm: the sequence of operations on the fire alarm and electrical sheets.
@@ -12569,6 +12719,8 @@ fn dampers_step(
     let mut seq: BTreeMap<String, usize> = BTreeMap::new();
     let mut listed: Vec<Value> = Vec::new();
     let mut unpowered: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // (kind name, the candidate circuits) → the dampers, and what was weighed.
+    let mut tied: BTreeMap<(String, String), (Vec<String>, String)> = BTreeMap::new();
     // (panel, circuit, level) → the boxes on it.
     let mut on_circuit: BTreeMap<(String, String, String), Vec<(String, Vec2, f64)>> = BTreeMap::new();
     let (mut boxes, mut control_modules, mut monitor_modules) = (0usize, 0u32, 0u32);
@@ -12581,7 +12733,7 @@ fn dampers_step(
         pts.iter()
             .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p.x), lo[1].min(p.y)], [hi[0].max(p.x), hi[1].max(p.y)]))
     };
-    for p in &placed {
+    for (pi, p) in placed.iter().enumerate() {
         let Some(kind) = dampers::kind_rule(&p.found.kind) else { continue };
         let tag = loop {
             let n = seq.entry(p.found.code.clone()).or_insert(0);
@@ -12643,6 +12795,55 @@ fn dampers_step(
         if !p.also.is_empty() {
             props.insert("ALSO_ON".into(), p.also.join(", "));
         }
+        // The tags the dedupe merged into it: both readings and how far apart.
+        let at_ft = |v: Vec2| [(v.x / upf * 10.0).round() / 10.0, (v.y / upf * 10.0).round() / 10.0];
+        let merged: Vec<Value> = p
+            .merged
+            .iter()
+            .map(|m| {
+                json!({"kept": {"sheet": p.found.sheet, "tag": p.found.tag_text(), "read_as": p.found.read_as, "tag_at_ft": at_ft(p.found.tag_at), "kind_source": p.found.kind_source},
+                    "merged": {"sheet": m.found.sheet, "tag": m.found.tag_text(), "read_as": m.found.read_as, "tag_at_ft": at_ft(m.found.tag_at), "kind_source": m.found.kind_source},
+                    "apart_in_duct_ft": (m.apart / upf * 10.0).round() / 10.0, "tags_apart_ft": (m.tags_apart / upf * 10.0).round() / 10.0,
+                    "reading": m.reading(&p.found, upf)})
+            })
+            .collect();
+        if !p.merged.is_empty() {
+            let text: Vec<String> = p
+                .merged
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{} {} ({}) at {:?} ft and {} {} ({}) at {:?} ft, tags {:.1} ft apart, {:.1} ft apart in the duct: {}",
+                        p.found.sheet,
+                        p.found.tag_text(),
+                        p.found.read_as,
+                        at_ft(p.found.tag_at),
+                        m.found.sheet,
+                        m.found.tag_text(),
+                        m.found.read_as,
+                        at_ft(m.found.tag_at),
+                        m.tags_apart / upf,
+                        m.apart / upf,
+                        m.reading(&p.found, upf)
+                    )
+                })
+                .collect();
+            props.insert("MERGED".into(), text.join("; ").chars().take(600).collect());
+        }
+        let wall_finding = wall_model.iter().find(|(i, _)| *i == pi).map(|(_, f)| f);
+        if let Some(f) = wall_finding {
+            props.insert(
+                "WALL_MODEL".into(),
+                format!(
+                    "{} tags {} ({}) here ({}): {}",
+                    f.tag.sheet,
+                    f.tag.mark,
+                    f.tag.rating.clone().unwrap_or_default(),
+                    f.tag.rating_source,
+                    f.model
+                ),
+            );
+        }
         if let Some((n, t)) = &p.found.keynote {
             props.insert("KEYNOTE".into(), format!("{} keynote {n}: {t}", p.found.sheet));
         }
@@ -12651,9 +12852,10 @@ fn dampers_step(
         sources.insert(
             "position".to_string(),
             match wall {
-                Some(w) => {
+                Some(w) if p.moved_along.is_none() => {
                     format!("{} tag {tag_text}, in its duct where it crosses wall {} (within {} ft)", p.found.sheet, w.wall_type, r.wall_reach_ft)
                 }
+                Some(w) => format!("{} tag {tag_text}, in its duct at wall {}: {}", p.found.sheet, w.wall_type, p.why),
                 None => format!("{} tag {tag_text}: {}", p.found.sheet, p.why),
             },
         );
@@ -12666,8 +12868,32 @@ fn dampers_step(
                 .iter()
                 .filter(|n| dampers::same_duty(&n.kind, &kind.kind))
                 .min_by_key(|n| if same_level_name(&n.level, &p.found.level) { 0 } else { 1 })
-                .map(|n| (n.panel.clone(), n.circuit.clone(), n.source.clone()))
-                .or_else(|| schedule_circuits.iter().find(|c| dampers::same_duty(&c.0, &kind.kind)).map(|c| (c.1.clone(), c.2.clone(), c.3.clone())));
+                .map(|n| (n.panel.clone(), n.circuit.clone(), n.source.clone()));
+            // No note: the panel schedules' damper circuits, by the panel serving the damper's
+            // room or level (never the first match).
+            let mut tie: Option<(Vec<String>, String)> = None;
+            let note = note.or_else(|| {
+                let mut keys: Vec<String> = Vec::new();
+                for q in [p.at, p.at + p.along * (2.0 * upf), p.at - p.along * (2.0 * upf)] {
+                    for k in keys_at(&p.found.level, q) {
+                        if !keys.contains(&k) {
+                            keys.push(k);
+                        }
+                    }
+                }
+                match dampers::pick_circuit(&kind.kind, &p.found.level, &keys, &schedule_circuits, &panel_places) {
+                    dampers::CircuitPick::One { circuit, why } => {
+                        schedule_circuits.get(circuit).map(|c| (c.panel.clone(), c.circuit.clone(), format!("{} (chosen: {why})", c.source)))
+                    }
+                    dampers::CircuitPick::Tied { candidates, why } => {
+                        let names: Vec<String> =
+                            candidates.iter().filter_map(|i| schedule_circuits.get(*i)).map(|c| format!("{}-{}", c.panel, c.circuit)).collect();
+                        tie = Some((names, why));
+                        None
+                    }
+                    dampers::CircuitPick::NoneNamed => None,
+                }
+            });
             let bx = r.power.box_in;
             let at = p.at + across * (half_w + 0.5 * upf);
             let hw = bx[0] / 24.0 * upf;
@@ -12707,11 +12933,22 @@ fn dampers_step(
                     });
                     power = json!({"panel": panel, "circuit": circuit, "source": src, "in_panel_schedule": in_schedule});
                 }
-                None => {
-                    bprops.insert("CIRCUIT".into(), "none named: RFI".into());
-                    unpowered.entry(kind.name.clone()).or_default().push(format!("{tag} ({} {})", p.found.level, p.found.sheet));
-                    power = json!({"circuit": null, "why": "no electrical note or panel schedule names the circuit"});
-                }
+                None => match &tie {
+                    Some((names, why)) => {
+                        bprops.insert("CIRCUIT".into(), "tied: RFI".into());
+                        bprops.insert("CANDIDATE_CIRCUITS".into(), names.join(", "));
+                        bsrc.insert("circuit".to_string(), format!("no note names the circuit; the schedules' circuits can't be told apart: {why}"));
+                        props.insert("POWER".into(), format!("one of {} (RFI)", names.join(", ")));
+                        let e = tied.entry((kind.name.clone(), names.join(", "))).or_insert_with(|| (Vec::new(), why.clone()));
+                        e.0.push(format!("{tag} ({} {})", p.found.level, p.found.sheet));
+                        power = json!({"circuit": null, "candidates": names, "why": why});
+                    }
+                    None => {
+                        bprops.insert("CIRCUIT".into(), "none named: RFI".into());
+                        unpowered.entry(kind.name.clone()).or_default().push(format!("{tag} ({} {})", p.found.level, p.found.sheet));
+                        power = json!({"circuit": null, "why": "no electrical note or panel schedule names the circuit"});
+                    }
+                },
             }
             sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
                 tag: btag.clone(),
@@ -12797,6 +13034,10 @@ fn dampers_step(
             "at_ft": [(p.at.x / upf * 10.0).round() / 10.0, (p.at.y / upf * 10.0).round() / 10.0], "kind_source": p.found.kind_source,
             "keynote": p.found.keynote.as_ref().map(|(n, t)| json!({"number": n, "text": t})), "power": power,
             "fa_modules": {"control": control, "monitor": monitor}, "why": p.why,
+            "read_as": p.found.read_as, "merged": merged, "no_wall_diagnostics": still_lonely(p),
+            "moved_along_duct_ft": p.moved_along.map(|a| (a / upf * 10.0).round() / 10.0),
+            "wall_model": wall_finding.map(|f| json!({"tag": f.tag.mark, "rating": f.tag.rating, "rating_source": f.tag.rating_source, "sheet": f.tag.sheet,
+                "tag_at_ft": at_ft(f.tag.at), "model": f.model, "model_wall": f.wall.and_then(|i| walls.get(i)).map(|w| w.wall_type.clone())})),
         }));
     }
     // The branch circuit conduit: box to box along each circuit on each level (nearest first),
@@ -12896,9 +13137,75 @@ fn dampers_step(
             false,
         );
     }
+    if !wall_model.is_empty() {
+        let what: Vec<String> = wall_model
+            .iter()
+            .take(24)
+            .filter_map(|(i, f)| {
+                let v = listed.get(*i)?;
+                Some(format!(
+                    "{} {} on {}: {} tags {} ({}, {}) at ({:.1}, {:.1}) ft; {}",
+                    v["tag"].as_str().unwrap_or_default(),
+                    v["read"].as_str().unwrap_or_default(),
+                    v["level"].as_str().unwrap_or_default(),
+                    f.tag.sheet,
+                    f.tag.mark,
+                    f.tag.rating.clone().unwrap_or_default(),
+                    f.tag.rating_source,
+                    f.tag.at.x / upf,
+                    f.tag.at.y / upf,
+                    f.model
+                ))
+            })
+            .collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} rated damper(s) where the architectural plans' rated wall and the wall model differ", wall_model.len()),
+            &format!("the architectural plans tag a rated wall where the damper's duct goes, the wall model differs: {}", what.join("; ")),
+            2,
+            vec!["Check the wall on the architectural plan: type the model's wall with the tagged rating, or add the wall the model lacks".into()],
+            None,
+            false,
+        );
+    }
     let mut rfis_added: Vec<String> = Vec::new();
-    if !unpowered.is_empty() {
+    if !unpowered.is_empty() || !tied.is_empty() {
         let Ok((mut sp2, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
+        for ((name, candidates), (tags, why)) in &tied {
+            let issue = format!(
+                "{} {name}(s) need power for their actuators; no electrical note names their circuit and the panel schedules list {candidates} for this kind of damper, which the documents don't tell apart ({why}): {}.",
+                tags.len(),
+                tags.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
+            );
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            for b in issue.bytes() {
+                h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            let id = format!("RFI-D{:08x}", h as u32);
+            if !sp2.rfis.iter().any(|x| x.id == id) && sp2.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
+                let kind = cadaddy_walk3d::RfiKind::EquipmentElectrical;
+                sp2.rfis.push(cadaddy_walk3d::Rfi {
+                    id: id.clone(),
+                    kind: Some(kind),
+                    severity: kind.severity(),
+                    about: format!("{name} circuit"),
+                    issue: issue.clone(),
+                    assumed: format!("Each damper has its power box at the actuator, on none of {candidates}, until answered."),
+                    proposed: Some(format!("Name which of {candidates} feeds each damper")),
+                    ..cadaddy_walk3d::Rfi::default()
+                });
+                rfis_added.push(id);
+            }
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("{name}s: {candidates} both name them, the circuit is not known"),
+                &issue,
+                3,
+                vec!["Answer the RFI with each damper's panel and circuit".into()],
+                None,
+                false,
+            );
+        }
         for (name, tags) in &unpowered {
             let issue = format!(
                 "{} {name}(s) need power for their actuators ({}), but no electrical note or panel schedule names their circuit: {}.",
@@ -12953,7 +13260,7 @@ fn dampers_step(
     let wire_ft = (conduit_ft + whips) * f64::from(r.power.conductors);
     let counts = dampers::by_level_kind(&placed);
     let line = format!(
-        "  dampers: {} tags read ({} on registered sheets), {} dampers in their ducts ({} at a wall, {} rated), {} not in a duct; by level {:?}; {} power boxes ({} with no circuit named), {:.0} ft branch conduit; fire alarm modules {} control, {} monitor; {} ducts through rated walls with no damper ({:.1} s)",
+        "  dampers: {} tags read ({} on registered sheets), {} dampers in their ducts ({} at a wall, {} rated), {} not in a duct; by level {:?}; {} power boxes ({} with no circuit named, {} on tied circuits), {:.0} ft branch conduit; fire alarm modules {} control, {} monitor; {} ducts through rated walls with no damper; {} moved along their ducts to a rated wall, {} wall-model findings, {} tags merged ({:.1} s)",
         read_on.values().sum::<usize>(),
         tags_read,
         placed.len(),
@@ -12963,10 +13270,14 @@ fn dampers_step(
         counts,
         boxes,
         unpowered.values().map(Vec::len).sum::<usize>(),
+        tied.values().map(|t| t.0.len()).sum::<usize>(),
         conduit_ft,
         control_modules,
         monitor_modules,
         code_findings.len(),
+        placed.iter().filter(|p| p.moved_along.is_some()).count(),
+        wall_model.len(),
+        placed.iter().map(|p| p.merged.len()).sum::<usize>(),
         started.elapsed().as_secs_f64()
     );
     progress_line(&line);
@@ -12976,8 +13287,10 @@ fn dampers_step(
         "not_in_a_duct": unplaced.iter().take(200).map(|(f, why)| json!({"sheet": f.sheet, "code": f.code, "level": f.level, "kind": f.kind, "at_ft": [(f.tag_at.x / upf * 10.0).round() / 10.0, (f.tag_at.y / upf * 10.0).round() / 10.0], "why": why})).collect::<Vec<_>>(),
         "not_registered": unregistered, "not_dampers": not_dampers.iter().map(|(c, (n, src))| json!({"code": c, "tags": n, "source": src})).collect::<Vec<_>>(),
         "keynotes_naming_dampers": keynote_dampers.into_iter().take(100).collect::<Vec<_>>(),
+        "wall_model": wall_model.len(), "tied_circuits": tied.iter().map(|((k, c), (t, w))| json!({"kind": k, "candidates": c, "dampers": t, "why": w})).collect::<Vec<_>>(),
+        "panel_places": panel_places.iter().map(|p| json!({"panel": p.panel, "level": p.level, "level_source": p.level_source, "area": p.area})).collect::<Vec<_>>(),
         "circuit_notes": circuit_notes.iter().map(|n| json!({"kind": n.kind, "panel": n.panel, "circuit": n.circuit, "sheet": n.sheet, "level": n.level, "text": n.text})).collect::<Vec<_>>(),
-        "schedule_circuits": schedule_circuits.iter().map(|c| json!({"kind": c.0, "panel": c.1, "circuit": c.2, "source": c.3})).collect::<Vec<_>>(),
+        "schedule_circuits": schedule_circuits.iter().map(|c| json!({"kind": c.kind, "panel": c.panel, "circuit": c.circuit, "room": c.room, "source": c.source})).collect::<Vec<_>>(),
         "fire_alarm": {"sequence": fa.iter().map(|a| json!({"sheet": a.sheet, "text": a.text, "release": a.release, "monitor": a.monitor, "kind": a.kind})).collect::<Vec<_>>(),
             "control_modules": control_modules, "monitor_modules": monitor_modules, "count_from": "rules data (one per damper); the shop drawings' own module count not read"},
         "code_check": code_findings.iter().take(500).cloned().collect::<Vec<_>>(), "code_check_count": code_findings.len(),
@@ -14569,15 +14882,41 @@ fn equipment_step(
             }
         }
     }
-    if loads.is_empty() {
-        return Ok(());
-    }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
     // Every submittal PDF, in any folder under those given (revision folders: `Rev 1-1`).
     let mut files: Vec<String> = Vec::new();
     for root in &job.submittals {
         all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
+    }
+    // And the equipment a panel schedule feeds by tag (`GUESTROOM PTAC-1` on 20A/2P, #12) that has
+    // a submittal: its breaker the drawings' protection, its branch wire the conductors.
+    let mut branch_wire: BTreeMap<String, String> = BTreeMap::new();
+    let has_submittal = |tag: &str| {
+        equipsub::stem(tag).is_some_and(|st| {
+            files.iter().any(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
+        })
+    };
+    for p in sp.mep.panel_schedules.iter().take(MAX_EQUIPMENT_LOADS) {
+        for c in &p.circuits {
+            let up = c.description.to_ascii_uppercase();
+            let Some(tag) = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').find(|w| {
+                w.split_once('-').is_some_and(|(a, n)| {
+                    a.len() >= 2 && a.chars().all(|ch| ch.is_ascii_alphabetic()) && !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit())
+                })
+            }) else {
+                continue;
+            };
+            let breaker = c.breaker.trim().trim_end_matches(['A', 'a']).trim();
+            if breaker.parse::<f64>().is_err() || c.poles == 0 || loads.iter().any(|x| x.tag.eq_ignore_ascii_case(tag)) || !has_submittal(tag) {
+                continue;
+            }
+            loads.push(equipsub::OnelineLoad { tag: tag.to_string(), feeder: String::new(), ocpd: format!("{breaker}A/{}P", c.poles) });
+            branch_wire.insert(tag.to_string(), c.wire.trim().trim_start_matches('#').to_string());
+        }
+    }
+    if loads.is_empty() {
+        return Ok(());
     }
     let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
     let mut asked = 0usize;
@@ -14611,7 +14950,8 @@ fn equipment_step(
             if e.status.is_empty() {
                 e.status = equipsub::review_status(&text);
             }
-            let got = equipsub::text_electrical(&text);
+            // A submittal of several models: the tag's own (its item line), else the text's data.
+            let got = equipsub::submittal_for_model(&text, &l.tag).filter(equipsub::has_data).unwrap_or_else(|| equipsub::text_electrical(&text));
             if equipsub::has_data(&got) {
                 equipsub::merge(&mut e, &got);
                 e.source = format!("submittal {name}");
@@ -14639,7 +14979,10 @@ fn equipment_step(
             .find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel))
             .and_then(|p| p.header.get("afc value"))
             .and_then(|v| v.replace([',', 'A', 'a'], "").trim().parse::<f64>().ok());
-        for c in equipsub::check(&e, ft.map(|t| (t.size.as_str(), t.material.as_str())), afc, &rule) {
+        // A branch circuit's wire (copper) where a panel schedule feeds it.
+        let wire = branch_wire.get(&l.tag).filter(|w| !w.is_empty());
+        let conductors = ft.map(|t| (t.size.as_str(), t.material.as_str())).or(wire.map(|w| (w.as_str(), "cu")));
+        for c in equipsub::check(&e, conductors, afc, &rule) {
             conflicts_all.push((l.tag.clone(), c));
         }
         rows.push(e);
@@ -14677,7 +15020,7 @@ fn equipment_step(
         );
     }
     let line = format!(
-        "  equipment connections: {} on the one-line ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
+        "  equipment connections: {} on the one-line and the panel schedules ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
         rows.len(),
         rows.iter().map(|r| format!("{} {} {}", r.tag, r.drawing_ocpd, r.feeder)).collect::<Vec<_>>().join(", "),
         rows.iter().filter(|r| super::equipsub::has_data(r)).count(),
@@ -16164,9 +16507,14 @@ fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
 
 /// The wall tags of the typical-room plans (unit plans): each legend mark a typical-room view
 /// prints, put at the same place in every room of the type the view's title names (as the
-/// devices are stamped). By level (its digits): (mark, where on the level's plan).
-fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet<String>) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> {
-    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2)>> = BTreeMap::new();
+/// devices are stamped). By level (its digits): (mark, where on the level's plan, the sheet and
+/// view it was read on).
+fn typical_wall_tags(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    marks: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<(String, cadaddy_geom::Vec2, String)>> {
+    let mut out: BTreeMap<String, Vec<(String, cadaddy_geom::Vec2, String)>> = BTreeMap::new();
     let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job
         .stage(StageName::Rooms)
         .and_then(|st| st.result.as_ref())
@@ -16206,13 +16554,16 @@ fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet
     for sh in refs.iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("A") && r.kind == "enlarged_plan").take(MAX_STAMP_SHEETS) {
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        let views: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+        let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
             .into_iter()
             .filter_map(|v| {
                 let upper = v.title.to_ascii_uppercase();
                 let plan = !["ELEVATION", "SECTION", "DETAIL", "RCP", "CEILING"].iter().any(|w| upper.contains(w));
                 let words = type_words(&v.title, Some(&vocabulary));
-                (plan && types.contains(&words)).then_some((v.region?, words))
+                if !plan || !types.contains(&words) {
+                    return None;
+                }
+                Some((v.region?, words, format!("{} {}", sh.number, v.title.trim())))
             })
             .collect();
         if views.is_empty() {
@@ -16226,12 +16577,12 @@ fn typical_wall_tags(d: &cadaddy_doc::Drawing, job: &GuidedJob, marks: &BTreeSet
             let p = [t.at.x, t.at.y];
             let inside = |r: &[f64; 4]| p[0] >= r[0] && p[0] <= r[2] && p[1] >= r[1] && p[1] <= r[3];
             let area = |r: &[f64; 4]| (r[2] - r[0]) * (r[3] - r[1]);
-            let Some((view, words)) = views.iter().filter(|(r, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
+            let Some((view, words, title)) = views.iter().filter(|(r, _, _)| inside(r)).min_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
                 continue;
             };
             for (_, level, outline) in rooms.iter().filter(|(n, _, _)| type_words(n, None) == *words) {
                 if let Some(q) = into_room(p, *view, bbox(outline)) {
-                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1])));
+                    out.entry(key(level)).or_default().push((mark.clone(), cadaddy_geom::Vec2::new(q[0], q[1]), title.clone()));
                 }
             }
         }
@@ -17168,7 +17519,7 @@ fn apply_wall_legend(s: &Session, sp: &mut cadaddy_walk3d::BuildingSpec, job: &G
             })
             .collect();
         let own = tags.len();
-        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().cloned());
+        tags.extend(stamped.get(&digits(&level)).into_iter().flatten().map(|(m, p, _)| (m.clone(), *p)));
         if tags.is_empty() {
             continue;
         }
@@ -18825,14 +19176,55 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(status);
     }
-    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
+    let units_note = prints_units(s)?;
+    if let Some(n) = &units_note {
+        s.echo(format!("job: {n}"));
+    }
+    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto, "units_note": units_note})));
 
     // Run the pipeline until it pauses or finishes.
     advance_pipeline(s, &mut job)?;
     save_job(s, &job)?;
 
     let stats = model_stats_from_session(s);
-    Ok(job_status_value(&job, stats.as_ref()))
+    let mut status = job_status_value(&job, stats.as_ref());
+    if let Some(n) = units_note {
+        status["units_note"] = json!(n);
+    }
+    Ok(status)
+}
+
+/// The job's drawing in the prints' units. The sheets are read in inches and every reader's
+/// reach is in sheet inches, so a drawing in other units (a metric one: mm) built a model 25.4
+/// times too small, with no rooms (soak S5-001). An empty drawing takes the prints' units (the
+/// model, rooms and takeoff are in feet and inches either way); one with work in it is refused,
+/// so nothing is built at the wrong size.
+fn prints_units(s: &mut Session) -> Result<Option<String>> {
+    let d = s.doc()?;
+    let per_inch = super::perceive::units_per_inch(d);
+    if (per_inch - 1.0).abs() < 1e-9 {
+        return Ok(None);
+    }
+    let units = match d.header.i64("INSUNITS", 0) {
+        2 => "feet",
+        5 => "centimetres",
+        6 => "metres",
+        _ => "millimetres",
+    };
+    if !d.model.is_empty() {
+        return Err(bad(
+            "job.start",
+            format!(
+                "this drawing is in {units} and has work in it: the job reads the prints in inches and would build the model at the wrong size. Start the job in a new imperial drawing (new_drawing), or in an empty one"
+            ),
+        ));
+    }
+    let h = &mut s.doc_mut()?.header;
+    h.set_i64("INSUNITS", 1);
+    h.set_i64("MEASUREMENT", 0);
+    Ok(Some(format!(
+        "the drawing was in {units} and empty: it now uses inches, the prints' units, so the model, rooms and takeoff come out at full size"
+    )))
 }
 
 /// `job.next` — return the next question, or "done".
