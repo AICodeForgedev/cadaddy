@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1247,
-    "count": 1247,
+    "callableAsJson": 1251,
+    "count": 1251,
     "ids": [
       "-attedit",
       "-block",
@@ -949,6 +949,10 @@
       "review.approve",
       "review.batch",
       "review.defer",
+      "review.impact",
+      "review.impact.open",
+      "review.impact.resolve",
+      "review.impact.trail",
       "review.list",
       "review.log",
       "review.next",
