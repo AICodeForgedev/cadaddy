@@ -25,6 +25,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod cablework;
 mod facts;
 mod price;
 mod scenario;
@@ -85,6 +86,8 @@ pub(crate) struct Rules {
     firestop: FirestopItems,
     intents: Vec<Intent>,
     alternatives: Vec<Alternative>,
+    /// What each cable's work needs besides the cable (Q6202), by cable.
+    cable_work: BTreeMap<String, cablework::CableWork>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -659,12 +662,15 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
         // Price both ways from the routed takeoff.
         let fs_raceway = rules.firestop.raceway_item.clone();
         let fs_cable = rules.firestop.cable_item.clone();
-        let (design_lines, atoms, alt_lines) = {
+        let (design_lines, atoms, alt_lines, work) = {
             let d = s.doc()?;
-            let dl = scope::design_lines(d, &sp, &taken_ref, &fs_raceway);
-            let atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable, &super::conduitroute::cable_paths(d));
+            let mut dl = scope::design_lines(d, &sp, &taken_ref, &fs_raceway);
+            let mut atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable, &super::conduitroute::cable_paths(d));
+            // The cable's work besides the cable: entries, boxes, nail plates, brackets, fittings.
+            let work = cablework::work(d, &sp, &taken_ref, &alt.cable, rules.cable_work.get(&alt.cable), &mut atoms);
+            dl = price::merge(dl, &work.design);
             let al = scope::alt_lines(&sp, &taken_ref, &atoms, &alt.cable, &fs_cable);
-            (dl, atoms, al)
+            (dl, atoms, al, work)
         };
         let priced = !taken_ref.is_empty();
         let (dv, xv) = if priced {
@@ -701,6 +707,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
                 "feet": r1(feet), "rated_penetrations": pens, "named": named,
             },
             "as_designed": dv, "alternative": xv, "saves": saves, "unpriced": unpriced,
+            "cable_work": work.summary,
         });
         if !why.is_empty() {
             v["why"] = json!(why);
@@ -714,7 +721,14 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
             }
         }
         if matches!(tier, "allowed_now" | "needs_rfi") {
-            built.push(scenario::Built { alt: alt.clone(), tier: tier.to_string(), items: sized.clone(), atoms, value: v.clone() });
+            built.push(scenario::Built {
+                alt: alt.clone(),
+                tier: tier.to_string(),
+                items: sized.clone(),
+                atoms,
+                replaces: work.replaces,
+                value: v.clone(),
+            });
         }
         scenarios.push(v);
     }

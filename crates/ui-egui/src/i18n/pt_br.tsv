@@ -3430,3 +3430,10 @@
 	The current file is kept as {name} until the next save.	O arquivo atual é mantido como {name} até o próximo salvamento.
 	This format can't keep these objects yet: {objects}.	Este formato ainda não consegue manter estes objetos: {objects}.
 	{count} more types	mais {count} tipos
+	Review by Impact	Revisão por impacto
+	Resolve Review Item by Impact	Resolver item de revisão por impacto
+	Open Review Item	Abrir item de revisão
+	Review Audit Trail	Trilha de auditoria da revisão
+	Accuracy Trend	Tendência de precisão
+	Measure Build Accuracy	Medir a precisão do modelo
+	Panel Breakers	Disjuntores do quadro

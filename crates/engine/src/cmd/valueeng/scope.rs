@@ -707,21 +707,29 @@ pub(crate) fn takes(alt: &Alternative, it: &Item) -> std::result::Result<(), Str
     Ok(())
 }
 
-/// The design's pieces as takeoff lines (boxes and rings stay as they are either way: left out)
-/// and its firestops; a feeder's conductors from its schedule where the model has no wire pieces.
+/// The design's pieces as takeoff lines (a junction box of its runs too: the scenario's takeoff
+/// leaves it out) and its firestops; a feeder's conductors as the model's wire pieces, else from
+/// its schedule. The device boxes a cable's work replaces are [`super::cablework`]'s.
 pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_item: &str) -> Vec<Line> {
     let mut by: BTreeMap<(String, String, String, String), f64> = BTreeMap::new();
     for it in items {
         let feeder = it.feeder.and_then(|i| sp.mep.feeders.get(i));
         let mut conduit = false;
+        // A feeder whose raceways carry its conductors in the model (its routed runs): those;
+        // else its schedule's (a model with entry stubs only carries one set at each gear).
+        let modelled_wire = feeder.is_some()
+            && it.design.iter().take(MAX_PIECES).filter_map(|h| d.model.get(*h)).any(|e| {
+                let ps = props::read(&e.common.xdata);
+                ps.get(mepatoms::ATOM_KEY).map(Prop::text).as_deref() == Some("wire") && ps.get("conductors_of_feeder").is_some()
+            });
         for h in it.design.iter().take(MAX_PIECES) {
             let Some(e) = d.model.get(*h) else { continue };
             let ps = props::read(&e.common.xdata);
             let g = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
             let kind = g(mepatoms::ATOM_KEY);
-            // Boxes and rings stay either way; a feeder's conductors come from its schedule
-            // (its raceways in the model carry one set's only at each gear).
-            if matches!(kind.as_str(), "box" | "ring" | "") || (feeder.is_some() && kind == "wire") {
+            // A feeder's conductors come from the model where its raceways carry them, else from
+            // its schedule (a model with entry stubs only carries one set at each gear).
+            if kind.is_empty() || (feeder.is_some() && kind == "wire" && !modelled_wire) {
                 continue;
             }
             conduit |= kind == "conduit";
@@ -729,7 +737,7 @@ pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_i
             let qty = if by_ft { g("length_ft").parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(0.0) } else { 1.0 };
             *by.entry((kind.clone(), g("item"), g("size"), if by_ft { "ft".into() } else { "ea".into() })).or_default() += qty;
         }
-        if let Some(f) = feeder {
+        if let Some(f) = feeder.filter(|_| !modelled_wire) {
             let al = f.material.trim().eq_ignore_ascii_case("al");
             let wire = if al { "XHHW aluminum" } else { "THHN copper" };
             let sets = f64::from(f.sets.max(1));

@@ -348,6 +348,7 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
             let category = match piece {
                 "conduit" => noun.to_string(),
                 "box" | "ring" => "Boxes".into(),
+                "breaker" => "Breakers".into(),
                 "strap" => format!("{noun} Supports"),
                 "cable" => "Cable".into(),
                 "wire" => "Wire".into(),

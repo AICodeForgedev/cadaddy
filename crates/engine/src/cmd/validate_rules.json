@@ -696,6 +696,25 @@
       }
     },
     {
+      "id": "E-LUM-SCHEDULE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Every luminaire carries its type's light fixture schedule row (basis of design, lamp, VA, voltage, installation), every scheduled type's approved lighting submittal is its basis of design (the same maker, brands of one maker being one, and the same series), the schedule's types are on the plans and the plans' types in the schedule, and every lighting RFI of the build about a fixture type is a failure here (and every failure has one).",
+      "how": [
+        "E-LUM-SCHEDULE in `prescreen` read the fixture schedule again from the sheets (its grid, any column order, one or two sides) and the lighting submittals again from the job's folders, never the build's stored copy. Each luminaire's finding (`measured.check` row) gives its type's row, the source of the row (sheet, title, type) and each field compared with where the model's value came from; each type's findings (scheduled, on_plan, submittal, submitted, fields, quantity) give the row and the submittal product with its page, stamp and revision.",
+        "Read the schedule row on the schedule crop and the cut sheet page the submittal finding cites: a field the documents don't give, or a luminaire with no row, is 'unsure', never a pass.",
+        "Every lighting RFI of the build about a fixture type must match a failure here and every type-level failure must have an RFI: a failure with none is 'missing', an RFI with no failure 'extra' (its `working` shows Validate's verdict and why); an RFI about a field Validate doesn't recompute (CCT, lumens, dimming) is 'unsure' with its sides."
+      ],
+      "documents": ["schedule", "submittal", "plan", "rcp"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {
+        "pass": "Type T1's schedule row says ACME AT-24 LED 38 VA 277 V recessed; the luminaire carries the same, and the approved submittal gives ACME AT24L40-MVOLT (one series, other options).",
+        "fail": "The schedule gives type T2 13 VA at 120 V; the model's T2 says 26 VA at 277 V."
+      }
+    },
+    {
       "id": "E-LUM-CONTROL",
       "trade": "electrical",
       "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},

@@ -1,0 +1,33 @@
+{
+  "about": "What Validate's E-LUM-SCHEDULE reads a light fixture schedule and the lighting submittals by (Q6179): the titles such schedules carry, the words of their column headers, which sheets' pages to read and which submittal files are lighting ones. Common practice on US electrical drawings; the sections are CSI MasterFormat division 26 lighting (26 51 interior, 26 52 safety, 26 55 special purpose, 26 56 exterior). Add a project's words here, never in code.",
+  "source": "validate_fixtures.json (E-LUM-SCHEDULE reading data)",
+  "titles": [
+    "LIGHT FIXTURE SCHEDULE",
+    "LIGHTING FIXTURE SCHEDULE",
+    "LUMINAIRE SCHEDULE",
+    "LIGHTING SCHEDULE",
+    "FIXTURE SCHEDULE - LIGHTING",
+    "LIGHT FIXTURE TYPES"
+  ],
+  "not_titles": ["PLUMBING", "SEE ", "REFER "],
+  "columns": [
+    {"field": "tag", "words": ["TAG", "MARK", "TYPE", "SYMBOL", "DESIGNATION"], "not": ["LAMP", "LAMPS", "MOUNTING", "MOUNT", "VOLTAGE", "DIMMING", "DRIVER", "LENS", "BALLAST", "SOURCE", "CONTROL", "INSTALLATION"]},
+    {"field": "manufacturer", "words": ["MANUFACTURER", "MANUFACTURERS", "MFR", "MFG", "MAKER", "BRAND", "BASIS"]},
+    {"field": "model", "words": ["MODEL", "CATALOG", "CAT", "SERIES", "PART"]},
+    {"field": "voltage", "words": ["VOLTAGE", "VOLTS", "VOLT"]},
+    {"field": "va", "words": ["VA", "WATTS", "WATTAGE", "INPUT", "LOAD"]},
+    {"field": "lamp", "words": ["LAMP", "LAMPS", "SOURCE", "LED"]},
+    {"field": "installation", "words": ["INSTALLATION", "MOUNTING", "MOUNT", "INSTALL"]},
+    {"field": "description", "words": ["DESCRIPTION", "DESC"]},
+    {"field": "quantity", "words": ["QTY", "QUANTITY", "COUNT"]},
+    {"field": "notes", "words": ["NOTES", "NOTE", "REMARKS", "COMMENTS"]}
+  ],
+  "page_words": ["LIGHTING", "LUMINAIRE"],
+  "page_disciplines": ["E"],
+  "max_pages": 40,
+  "submittal_words": ["LIGHT", "LUMINAIRE"],
+  "submittal_sections": ["2651", "2652", "2655", "2656"],
+  "max_submittal_files": 24,
+  "series_chars": 6,
+  "maker_cut": ["LAMP:", "BULB:", "LAMPS:"]
+}

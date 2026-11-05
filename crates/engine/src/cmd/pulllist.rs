@@ -262,7 +262,7 @@ fn scan(d: &Drawing) -> Scan {
     let mut sc = Scan::default();
     for e in d.model.iter().filter(|e| !e.common.xdata.is_empty()).take(MAX_ELEMENTS) {
         if super::mepatoms::is_atom(e) {
-            if super::tradeatoms::is_trade_piece(e) || sc.pieces.len() >= MAX_PIECES {
+            if super::tradeatoms::is_trade_piece(e) || super::breakers::is_breaker(e) || sc.pieces.len() >= MAX_PIECES {
                 continue;
             }
             let ps = props::read(&e.common.xdata);
@@ -814,6 +814,11 @@ fn plan(d: &Drawing, sp: &BuildingSpec) -> Plan {
         let base = rp.run.rsplit_once('#').map_or(rp.run.as_str(), |(b, _)| b);
         if let Some((si, leg)) = feeder_base.get(base) {
             legs.entry(leg.clone()).or_default().push((*si, ri));
+            // Its wire in the model is the feeder's: its pull is cut from the schedule along
+            // the whole route (with the gear ends' slack).
+            for w in &rp.wires {
+                *pl.not_in_pulls.entry(w.size.clone()).or_insert(0.0) += w.length_ft;
+            }
             continue;
         }
         if rp.run.starts_with("feeder:") {
@@ -1638,10 +1643,10 @@ fn run_schedule(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(out)
 }
 
-/// The pulls' wire against the takeoff's, by size: the takeoff's, less what no pull holds (a
-/// feeder's entry stubs), plus the slack the takeoff doesn't count (the gear ends' over the box
-/// makeup, the pull boxes' loops) and the feeders' conductors along their routes (the takeoff
-/// counts a feeder's wire only where it enters its gear), is what the pulls cut.
+/// The pulls' wire against the takeoff's, by size: the takeoff's, less what no branch pull holds
+/// (a feeder's wire in the model), plus the slack the takeoff doesn't count (the gear ends' over
+/// the box makeup, the pull boxes' loops) and the feeders' conductors along their routes (cut
+/// from their schedules), is what the pulls cut.
 fn reconcile(pl: &Plan, paths: &[&PullPath]) -> Value {
     #[derive(Default)]
     struct T {
@@ -1713,10 +1718,10 @@ fn reconcile(pl: &Plan, paths: &[&PullPath]) -> Value {
         "takeoff_ft": r2(tt),
         "pulled_ft": r2(tp),
         "terms": {
-            "not_in_pulls_ft": r2(tn), "not_in_pulls": "the model's wire no pull holds: a feeder's entry stubs (its pull runs gear to gear), a run on no circuit",
+            "not_in_pulls_ft": r2(tn), "not_in_pulls": "the model's wire no branch pull holds: a feeder's (its entry stubs, its routed raceways' wire: its pull is cut from its schedule gear to gear), a run on no circuit",
             "gear_end_slack_ft": r2(tg), "gear_end_slack": rules().gear_end_slack_source,
             "pull_box_loops_ft": r2(tl), "pull_box_loops": rules().pull_box_loop_source,
-            "feeder_conductors_ft": r2(tf), "feeder_conductors": "each routed feeder's conductors (its schedule's) along its route: the takeoff counts them only where it enters its gear",
+            "feeder_conductors_ft": r2(tf), "feeder_conductors": "each routed feeder's conductors (its schedule's) along its route, cut with its slack",
         },
         "identity": "pulled = takeoff - not_in_pulls + gear_end_slack + pull_box_loops + feeder_conductors",
         "matches": all_ok,

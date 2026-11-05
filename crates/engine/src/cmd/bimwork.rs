@@ -167,6 +167,7 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                     "strap" => "support",
                     "cable" => "cable",
                     "wire" => "wire",
+                    "breaker" => "breaker",
                     _ => "fitting",
                 });
                 let cat = if let Some(piece) = piece {

@@ -1,0 +1,70 @@
+{
+  "_about": "Breaker atoms (Q6166): how a panel schedule's breaker type codes and their legend meanings read as a breaker type, what a row says when it is a spare or a space, and what each type is bought as. A schedule's legend decides what its own codes mean; the code lists are the fallback for a code the legend does not define. Order matters: the first feature a code matches is its feature (equipment ground fault before personnel ground fault).",
+  "features": [
+    {
+      "feature": "dual",
+      "codes": ["DF", "DFCI", "DUAL", "CAFGF"],
+      "words": ["DUAL FUNCTION", "DUAL-FUNCTION", "DUAL PURPOSE", "COMBINATION ARC FAULT AND GROUND FAULT", "AFCI/GFCI", "AF/GF"],
+      "source": "UL 1699 / UL 943 combination devices: a dual-function breaker is both an AFCI and a GFCI"
+    },
+    {
+      "feature": "equipment_ground_fault",
+      "codes": ["GFEP", "GFPE", "EPD", "GFE", "EGFP"],
+      "words": ["EQUIPMENT PROTECTION", "EQUIPMENT GROUND FAULT", "GROUND FAULT EQUIPMENT", "EQUIPMENT PROTECTIVE"],
+      "source": "NEC 426.28 / 427.22 ground-fault protection of equipment (30 mA class), UL 1053"
+    },
+    {
+      "feature": "arc_fault",
+      "codes": ["AF", "AFCI", "AFI", "CAFCI", "CAF"],
+      "words": ["ARC FAULT", "ARC-FAULT", "AFCI"],
+      "source": "NEC 210.12 arc-fault circuit-interrupter protection, UL 1699"
+    },
+    {
+      "feature": "ground_fault",
+      "codes": ["GF", "GFI", "GFCI"],
+      "words": ["GROUND FAULT", "GROUND-FAULT", "GFCI", "GFI"],
+      "source": "NEC 210.8 ground-fault circuit-interrupter protection for personnel, UL 943"
+    },
+    {
+      "feature": "shunt_trip",
+      "codes": ["ST", "SHT", "SHUNT"],
+      "words": ["SHUNT"],
+      "description_words": ["SHUNT TRIP", "SHUNT-TRIP", "W/ SHUNT"],
+      "source": "a shunt-trip breaker (remote trip coil), as the schedule marks it"
+    },
+    {
+      "feature": "hacr",
+      "codes": ["HACR"],
+      "words": ["HACR", "HEATING, AIR"],
+      "description_words": ["HACR"],
+      "source": "NEC 440.22 / UL 489 HACR-rated breaker for heating, air-conditioning and refrigeration equipment"
+    }
+  ],
+  "types": [
+    {"type": "dual-function", "all": ["dual"]},
+    {"type": "dual-function", "all": ["arc_fault", "ground_fault"]},
+    {"type": "GFEP", "all": ["equipment_ground_fault"]},
+    {"type": "AFCI", "all": ["arc_fault"]},
+    {"type": "GFCI", "all": ["ground_fault"]},
+    {"type": "shunt", "all": ["shunt_trip"]},
+    {"type": "HACR", "all": ["hacr"]}
+  ],
+  "default_type": "standard",
+  "default_source": "a schedule row whose codes (and their legend) name no protection: a standard thermal-magnetic breaker",
+  "items": {
+    "standard": "Circuit breaker",
+    "GFCI": "Circuit breaker, GFCI",
+    "AFCI": "Circuit breaker, AFCI",
+    "dual-function": "Circuit breaker, dual-function AFCI/GFCI",
+    "GFEP": "Circuit breaker, ground-fault equipment protection",
+    "shunt": "Circuit breaker, shunt trip",
+    "HACR": "Circuit breaker, HACR"
+  },
+  "spare_words": ["SPARE", "SPARES"],
+  "space_words": ["SPACE", "SPACES", "SPACE ONLY", "SPACE ONLY.", "PROVISION", "PROVISION ONLY", "FUTURE", "FUTURE SPACE", "BLANK", "SPACE FOR FUTURE"],
+  "pole_step": 2,
+  "pole_step_source": "panelboard circuit numbering: odd numbers on the left bus side, even on the right, so a multi-pole breaker numbered n also takes n+2 (and n+4)",
+  "total_header_words": ["SPACES", "CIRCUITS", "POLES", "NO. OF CKTS", "CKTS"],
+  "aic_header_words": ["AIC", "KAIC", "INTERRUPTING"],
+  "frame_header_words": ["FRAME"]
+}

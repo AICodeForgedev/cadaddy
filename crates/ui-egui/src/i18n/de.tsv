@@ -3238,3 +3238,10 @@
 	The current file is kept as {name} until the next save.	Die aktuelle Datei bleibt bis zum nächsten Speichern als {name} erhalten.
 	This format can't keep these objects yet: {objects}.	Dieses Format kann diese Objekte noch nicht behalten: {objects}.
 	{count} more types	{count} weitere Typen
+	Review by Impact	Prüfung nach Auswirkung
+	Resolve Review Item by Impact	Prüfpunkt nach Auswirkung erledigen
+	Open Review Item	Prüfpunkt öffnen
+	Review Audit Trail	Prüfprotokoll
+	Accuracy Trend	Genauigkeitstrend
+	Measure Build Accuracy	Baugenauigkeit messen
+	Panel Breakers	Schutzschalter der Verteilung
