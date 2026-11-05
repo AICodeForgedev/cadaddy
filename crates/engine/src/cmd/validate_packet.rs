@@ -1014,7 +1014,10 @@ pub(crate) fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
     }
     let k = format!("_{}_", kind.to_ascii_lowercase().replace([' ', '-', '.'], "_"));
     let has = |w: &[&str]| w.iter().any(|x| k.contains(&format!("_{x}_")) || k.contains(x));
-    if has(&["wall", "door", "window", "room", "ceiling", "floor", "stair", "column", "roof"]) {
+    if has(&["door_holder"]) {
+        // A fire alarm device on the door, not the door.
+        "electrical"
+    } else if has(&["wall", "door", "window", "room", "ceiling", "floor", "stair", "column", "roof"]) {
         "architecture"
     } else if has(&["sprinkler", "standpipe"]) {
         "fire"
@@ -3980,6 +3983,13 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_door_holder_is_the_fire_alarm_side_not_the_door() {
+        assert_eq!(trade_of_kind("door_holder", &[]), "electrical");
+        assert_eq!(trade_of_kind("door", &[]), "architecture");
+        assert_eq!(trade_of_kind("duct_smoke_detector", &[]), "mechanical");
+    }
 
     #[test]
     fn rooms_are_told_apart_by_name() {

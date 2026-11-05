@@ -56,7 +56,18 @@ pub(crate) struct Class {
     pub remote_test: bool,
     /// Built only from the notes that name it (no plan marks it by a code of its own).
     pub note_only: bool,
+    /// Read from the plans' code tags (false: a class another step builds from its legend
+    /// symbols, an occupancy sensor; only its keynotes and notes are read here).
+    #[serde(default = "yes")]
+    pub from_tags: bool,
+    /// Kinds of other steps' elements that are this class there (`_damper`: any damper kind;
+    /// a leading `_` matches the end of the kind).
+    pub also_kinds: Vec<String>,
     pub source: String,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -97,6 +108,10 @@ pub(crate) struct Rules {
     pub fa_module: BoxRule,
     pub remote_test: BoxRule,
     pub tag_reach_ft: f64,
+    /// How far from its marker a keynote's object may stand (a marker sits off it, on a leader).
+    pub keynote_reach_ft: f64,
+    /// The most characters of a device legend's code.
+    pub legend_code_chars: usize,
     pub duct_reach_ft: f64,
     pub dedupe_ft: f64,
     pub existing_reach_ft: f64,
@@ -133,6 +148,28 @@ fn class_of_words(w: &[String]) -> Option<&'static Class> {
         c.words.iter().any(|g| !g.is_empty() && g.iter().all(|x| w.iter().any(|y| y.eq_ignore_ascii_case(x))))
             && !c.not_words.iter().any(|x| holds(w, x))
     })
+}
+
+/// Whether another step's element of `kind` (its words `words`) is one of the class's.
+pub(crate) fn is_class(class: &Class, kind: &str, words: &str) -> bool {
+    let k = kind.trim().to_ascii_lowercase();
+    class.kind.eq_ignore_ascii_case(&k)
+        || class.also_kinds.iter().any(|a| match a.strip_prefix('_') {
+            Some(end) => k.ends_with(&format!("_{end}")),
+            None => k == a.to_ascii_lowercase(),
+        })
+        || class_of(&format!("{} {words}", k.replace('_', " "))).is_some_and(|c| c.kind == class.kind)
+}
+
+/// Whether `meaning` (another tag's legend words) names the same kind of thing as `class`: the
+/// last word of one of its word groups (`DAMPER` of `RATED DAMPER` in `FIRE/SMOKE DAMPER`).
+pub(crate) fn same_noun(class: &Class, meaning: &str) -> bool {
+    let w = words(meaning);
+    class
+        .words
+        .iter()
+        .filter_map(|g| g.last())
+        .any(|n| w.iter().any(|x| x.eq_ignore_ascii_case(n) || x.strip_suffix('S').is_some_and(|y| y.eq_ignore_ascii_case(n))))
 }
 
 /// A class by its element kind.
@@ -243,7 +280,8 @@ pub(crate) fn legend_rows(texts: &[TextItem], sheet: &str) -> Vec<LegendEntry> {
             }
             continue;
         }
-        if !code_like(v) {
+        let short = |c: &str| code_like(c) && c.chars().count() <= rules().legend_code_chars.clamp(2, 6);
+        if !short(v) {
             continue;
         }
         let h = t.height;
@@ -254,13 +292,23 @@ pub(crate) fn legend_rows(texts: &[TextItem], sheet: &str) -> Vec<LegendEntry> {
             continue;
         }
         let end = t.at.x + 0.6 * h * v.chars().count() as f64;
-        let mut row: Vec<&&TextItem> = flat
-            .iter()
-            .filter(|o| o.at.x > end && o.at.x < t.at.x + 40.0 * h && (o.at.y - t.at.y).abs() <= 0.6 * h && !code_like(o.value.trim()))
-            .collect();
+        let mut row: Vec<&&TextItem> =
+            flat.iter().filter(|o| o.at.x > end && o.at.x < t.at.x + 40.0 * h && (o.at.y - t.at.y).abs() <= 0.6 * h).collect();
         row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
-        let what: String = row.iter().map(|o| o.value.trim()).collect::<Vec<_>>().join(" ");
-        if class_of(&what).is_some() {
+        // The row's own cells: up to the next code (another row of a legend in columns) or a gap
+        // wider than a column's.
+        let mut cells: Vec<&str> = Vec::new();
+        let mut reach = end;
+        for o in row {
+            let ov = o.value.trim();
+            if code_like(ov) || o.at.x > reach + 4.0 * h {
+                break;
+            }
+            cells.push(ov);
+            reach = o.at.x + 0.6 * o.height * ov.chars().count() as f64;
+        }
+        let what: String = cells.join(" ");
+        if what.chars().count() <= 80 && class_of(&what).is_some() {
             out.push(LegendEntry { code: v.to_string(), meaning: what, sheet: sheet.to_string(), at: t.at });
         }
     }
@@ -282,15 +330,15 @@ pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
     let numbered = |i: usize| i.checked_sub(1).and_then(|p| w.get(p)).is_some_and(|p| r.number_words.iter().any(|x| x.eq_ignore_ascii_case(p)));
     let before = (lo..at).rev().filter(|i| !numbered(*i)).find_map(|i| w.get(i).and_then(count_of));
     if let Some(n) = before {
-        // `ONE EXIT SIGN UP HIGH AND ONE DOWN LOW`: each `AND <count>` after it is more of it.
+        // `ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR`: each `AND <count>` after it is more of it.
         let more: u32 = w.windows(2).skip(at).filter(|p| p.first().is_some_and(|x| x == "AND")).filter_map(|p| p.get(1).and_then(count_of)).sum();
         return n.saturating_add(more).min(cap);
     }
     // `(QTY 2)` / `QTY: 2` anywhere.
-    if let Some(i) = w.iter().position(|x| x == "QTY" || x == "QUANTITY") {
-        if let Some(n) = w.get(i + 1).and_then(|x| x.parse::<u32>().ok()).filter(|n| (1..=cap).contains(n)) {
-            return n;
-        }
+    if let Some(i) = w.iter().position(|x| x == "QTY" || x == "QUANTITY")
+        && let Some(n) = w.get(i + 1).and_then(|x| x.parse::<u32>().ok()).filter(|n| (1..=cap).contains(n))
+    {
+        return n;
     }
     1
 }
@@ -302,7 +350,7 @@ pub(crate) struct Named {
     pub count: u32,
     /// What connects it (`power`), empty when the note says nothing of it.
     pub via: &'static str,
-    /// The note speaks of every one there is (`… ON ALL ROOF TOP UNITS`): a rule, not a call
+    /// The note speaks of every one there is (`ALL ROOFTOP UNITS SHALL SHUT DOWN`): a rule, not a call
     /// for new ones.
     pub all: bool,
 }
@@ -322,7 +370,7 @@ pub(crate) fn note_objects(text: &str) -> Vec<Named> {
         if out.iter().any(|o| o.class.kind == c.kind) {
             continue;
         }
-        // `ALL` right before the class's words (or its trade word: `ALL HVAC ROOF TOP UNITS`).
+        // `ALL` right before the class's words (or its trade word: `ALL HVAC ROOFTOP UNITS`).
         let first = c.words.iter().filter_map(|g| g.first()).filter_map(|f| w.iter().position(|x| x.eq_ignore_ascii_case(f))).min().unwrap_or(0);
         let all = w.get(first.saturating_sub(2)..first).unwrap_or(&[]).iter().any(|x| r.all_words.iter().any(|a| a.eq_ignore_ascii_case(x)));
         out.push(Named { class: c, count: note_count(part, c), via: connection_via(part).unwrap_or(via), all });
@@ -388,14 +436,16 @@ pub(crate) struct Found {
     pub also: Vec<String>,
 }
 
-/// One object per place: the same kind on the same level within `reach` (plan units) is one,
-/// the enlarged plan's position kept, the other sheets listed in `also`.
+/// One object per place: the same kind on the same level within `reach` (plan units), read on
+/// another sheet, is one, the enlarged plan's position kept, the other sheets listed in `also`.
 pub(crate) fn dedupe(mut found: Vec<Found>, reach: f64) -> Vec<Found> {
     // Enlarged plans first, so their positions are the ones kept.
     found.sort_by_key(|f| !f.enlarged);
     let mut out: Vec<Found> = Vec::new();
     for f in found {
-        let same = out.iter_mut().find(|o| o.kind == f.kind && o.level == f.level && o.how == f.how && (o.at - f.at).len() <= reach);
+        // Two marks of one sheet are two objects (a keynote's one at the head and one at the floor).
+        let same =
+            out.iter_mut().find(|o| o.kind == f.kind && o.level == f.level && o.how == f.how && o.sheet != f.sheet && (o.at - f.at).len() <= reach);
         match same {
             Some(o) => {
                 if o.sheet != f.sheet && !o.also.contains(&f.sheet) {
@@ -501,13 +551,13 @@ mod tests {
         let texts = vec![
             k(1000.0, 1000.0, "ELECTRICAL KEYNOTES:"),
             k(1000.0, 970.0, "1."),
-            k(1020.0, 970.0, "PROVIDE ONE EXIT SIGN UP HIGH AND ONE DOWN LOW, TYP."),
+            k(1020.0, 970.0, "PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR."),
             k(1000.0, 958.0, "2."),
             k(1020.0, 958.0, "PROVIDE CEILING OCCUPANCY SENSOR FOR THE CORRIDOR LIGHTING."),
             k(1000.0, 946.0, "3."),
             k(1020.0, 946.0, "EXISTING EXIT SIGN TO REMAIN."),
             k(1000.0, 934.0, "4."),
-            k(1020.0, 934.0, "PROVIDE SHUTDOWN RELAY FOR ALL ROOF TOP UNITS."),
+            k(1020.0, 934.0, "INTERLOCK ALL ROOFTOP UNITS WITH THE ALARM SYSTEM."),
             // The plan's markers, each alone in its box.
             k(200.0, 200.0, "1"),
             k(400.0, 300.0, "2"),
@@ -545,13 +595,19 @@ mod tests {
         assert_eq!(class_of("DUCT MOUNTED SMOKE DETECTOR").map(|c| c.kind.as_str()), Some("duct_smoke_detector"));
         assert_eq!(class_of("SMOKE DAMPER"), None);
         assert_eq!(class_of("Electromagnetic door holder, flush").map(|c| c.kind.as_str()), Some("door_holder"));
-        assert_eq!(class_of("PROVIDE FULL AUTOMATIC OCCUPANCY SENSOR").map(|c| c.kind.as_str()), Some("occupancy_sensor"));
+        assert_eq!(class_of("PROVIDE DUAL-TECHNOLOGY OCCUPANCY SENSOR").map(|c| c.kind.as_str()), Some("occupancy_sensor"));
         assert_eq!(class_of("BACK DRAFT DAMPER AT FAN DISCHARGE").map(|c| c.kind.as_str()), Some("backdraft_damper"));
         // A range hood or a mounting range is no range.
         assert_eq!(class_of("RANGE HOOD"), None);
         assert_eq!(class_of("MOUNTING HEIGHT RANGE 48 AFF"), None);
         assert_eq!(class_of("FIRE EXTINGUISHER CABINET"), None);
         assert!(rules().classes.iter().all(|c| !c.kind.is_empty() && !c.source.is_empty() && !c.words.is_empty()));
+        // The fire alarm control panel is no annunciator (the panels step's).
+        assert_eq!(class_of("FIRE ANNUNCIATOR CONTROL PANEL"), None);
+        assert_eq!(class_of("REMOTE ANNUNCIATOR PANEL").map(|c| c.kind.as_str()), Some("fire_alarm_annunciator"));
+        // A keynote's class and another tag's meaning: the same noun.
+        let rated = class_by_kind("rated_damper").unwrap();
+        assert!(same_noun(rated, "FIRE/SMOKE DAMPER") && same_noun(rated, "FIRE DAMPERS") && !same_noun(rated, "DUCT DETECTOR"));
     }
 
     #[test]
@@ -566,11 +622,11 @@ mod tests {
         assert_eq!(one("PROVIDE POWER FOR TWO SITE CAMERAS ON THE POLE"), Some(("site_camera".into(), 2, "power", false)));
         assert_eq!(one("CONNECT ROOF TOP UNIT TO FIRE ALARM FOR SHUTDOWN"), Some(("rooftop_unit".into(), 1, "fire_alarm", false)));
         // A rule over every one there is calls for none.
-        assert_eq!(one("PROVIDE SHUTDOWN RELAYS ON ALL HVAC ROOF TOP UNITS"), Some(("rooftop_unit".into(), 1, "fire_alarm", true)));
+        assert_eq!(one("INTERLOCK ALL ROOFTOP UNITS WITH THE FIRE ALARM"), Some(("rooftop_unit".into(), 1, "fire_alarm", true)));
         assert!(note_objects("EXISTING SUMP PUMP TO REMAIN, RECONNECT").is_empty());
         assert_eq!(one("SUMP PUMP (QTY 3): 120V CONNECTION").map(|n| n.1), Some(3));
         // One here and one there: two.
-        assert_eq!(one("PROVIDE ONE EXIT SIGN UP HIGH AND ONE DOWN LOW, SEE SCHEDULE").map(|n| n.1), Some(2));
+        assert_eq!(one("PROVIDE ONE EXIT SIGN AT THE HEAD AND ONE AT THE FLOOR").map(|n| n.1), Some(2));
         // A bare number far from the words is no count.
         assert_eq!(note_count("CIRCUIT 12 TO PANEL; PROVIDE SUMP PUMP CONNECTION", class_by_kind("sump_pump").unwrap()), 1);
     }
@@ -612,8 +668,8 @@ mod tests {
             at: Vec2::new(x, 0.0),
             ..Found::default()
         };
-        let got = dedupe(vec![f("M-101", false, 10.0), f("M-501", true, 12.0), f("M-101", false, 100.0)], 36.0);
-        assert_eq!(got.len(), 2);
+        let got = dedupe(vec![f("M-101", false, 10.0), f("M-501", true, 12.0), f("M-101", false, 100.0), f("M-501", true, 13.0)], 36.0);
+        assert_eq!(got.len(), 3, "two marks of one sheet stay two: {got:?}");
         assert_eq!(got[0].sheet, "M-501");
         assert_eq!(got[0].also, vec!["M-101".to_string()]);
     }

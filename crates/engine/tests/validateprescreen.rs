@@ -521,7 +521,11 @@ fn the_prescreen_is_deterministic_paged_written_and_in_the_validate_run() {
             None => break,
         }
     }
-    assert_eq!(seen, findings(&a).iter().map(|f| f["id"].clone()).collect::<Vec<_>>());
+    // The pages put together are the whole list, the first page its start (a page may end
+    // early to keep the answer small).
+    let first: Vec<Value> = findings(&a).iter().map(|f| f["id"].clone()).collect();
+    assert_eq!(seen.len(), total, "{seen:?}");
+    assert_eq!(seen.get(..first.len()), Some(first.as_slice()));
     // Every finding into a file, through the output guard.
     let d = dir("file");
     std::fs::create_dir_all(&d).unwrap();
