@@ -84,6 +84,9 @@ pub(crate) struct Occupancy {
     pub fixed_appliances_cite: String,
     pub optional_units: Vec<(u32, f64)>,
     pub optional_cite: String,
+    /// Units with cooking in them are wired as this occupancy's (`dwelling`), and why.
+    pub cooking_units_as: String,
+    pub cooking_cite: String,
 }
 
 /// A unit room's small-appliance branch circuits: the words that name one, its VA, the cite.
@@ -113,6 +116,8 @@ pub(crate) struct Rules {
     pub lighting_words: Vec<String>,
     pub motor_words: Vec<String>,
     pub kitchen_words: Vec<String>,
+    pub cooking_words: Vec<String>,
+    pub hvac_words: Vec<String>,
     pub spare_words: Vec<String>,
     pub feeder_words: Vec<String>,
     pub unit_words: Vec<String>,
@@ -465,6 +470,12 @@ struct Tree {
     units: u32,
     /// The unit rooms' appliance circuits (fixed appliances: 220.53 counts them per unit).
     appliances: u32,
+    /// Units with cooking, and with heating or cooling, in them; the unit rooms' continuous load
+    /// and their largest motor.
+    cooking_units: u32,
+    hvac_units: u32,
+    continuous_unit_va: f64,
+    largest_unit_motor_va: f64,
 }
 
 impl Tree {
@@ -481,6 +492,10 @@ impl Tree {
         self.kitchen_units = self.kitchen_units.saturating_add(o.kitchen_units.saturating_mul(n));
         self.units = self.units.saturating_add(o.units.saturating_mul(n));
         self.appliances = self.appliances.saturating_add(o.appliances.saturating_mul(n));
+        self.cooking_units = self.cooking_units.saturating_add(o.cooking_units.saturating_mul(n));
+        self.hvac_units = self.hvac_units.saturating_add(o.hvac_units.saturating_mul(n));
+        self.continuous_unit_va += o.continuous_unit_va * k;
+        self.largest_unit_motor_va = self.largest_unit_motor_va.max(o.largest_unit_motor_va);
     }
 }
 
@@ -493,67 +508,107 @@ struct Step {
     cite: String,
 }
 
+/// How a tree's demand was taken: its units as dwelling units (cooking in them), and the optional
+/// method's factor when it applies.
+#[derive(Clone, Copy, Debug, Default)]
+struct Method {
+    dwelling: bool,
+    optional: Option<f64>,
+}
+
 /// A tree's demand by the rules for an occupancy.
-fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (f64, Vec<Step>) {
+fn demand(t: &Tree, occ: &Occupancy, commercial: &Occupancy, rules: &Rules) -> (f64, Vec<Step>, Method) {
     let mut steps = Vec::new();
     let get = |c: &str| t.cats.get(c).copied().unwrap_or_default();
+    // Units with cooking, where the occupancy wires them as dwelling units: the dwelling rules.
+    let as_dwelling = (!occ.cooking_units_as.is_empty() && t.units > 0 && t.cooking_units >= t.units).then(|| rules.occupancy(&occ.cooking_units_as)).flatten();
+    let u = as_dwelling.unwrap_or(occ);
+    let note = if as_dwelling.is_some() { format!("; {}", occ.cooking_cite) } else { String::new() };
+    // The optional method: three or more units, each with cooking and heating or cooling.
+    let unit_total: f64 = t.cats.values().map(|(x, _)| x).sum();
+    let optional = (!u.optional_units.is_empty() && t.units >= 3 && t.cooking_units >= t.units && t.hvac_units >= t.units && unit_total > 0.0)
+        .then(|| by_count(t.units, &u.optional_units))
+        .flatten();
+    let method = Method { dwelling: as_dwelling.is_some(), optional };
     let (lu, lo) = get("lighting");
     let (ru, ro) = get("receptacle");
-    // The unit rooms' general lighting (their general-use receptacles in it).
-    let unit_general = lu + if occ.unit_receptacles_in_lighting { ru } else { 0.0 };
-    if unit_general > 0.0 {
-        let d = stepped(unit_general, &occ.lighting_steps);
-        let mut cite = occ.lighting_cite.clone();
-        if occ.unit_receptacles_in_lighting && ru > 0.0 {
-            cite = format!("{cite}; {}", occ.unit_receptacles_cite);
+    let (ku, ko) = get("kitchen");
+    let (eu, eo) = get("equipment");
+    let (mu, mo) = get("motor");
+    let (uu, uo) = get("unknown");
+    let mut unit_continuous = t.continuous_unit_va;
+    if let Some(f) = optional {
+        steps.push(Step {
+            what: format!("{} units by the optional method ({:.0}%)", t.units, f * 100.0),
+            connected: unit_total,
+            demand: unit_total * f,
+            cite: format!("{}{note}", u.optional_cite),
+        });
+        unit_continuous = 0.0;
+    } else {
+        // The unit rooms' general lighting (their general-use receptacles in it).
+        let unit_general = lu + if u.unit_receptacles_in_lighting { ru } else { 0.0 };
+        if unit_general > 0.0 {
+            let mut cite = format!("{}{note}", u.lighting_cite);
+            if u.unit_receptacles_in_lighting && ru > 0.0 {
+                cite = format!("{cite}; {}", u.unit_receptacles_cite);
+            }
+            steps.push(Step { what: format!("general lighting, {}", u.name), connected: unit_general, demand: stepped(unit_general, &u.lighting_steps), cite });
         }
-        steps.push(Step { what: format!("general lighting, {}", occ.name), connected: unit_general, demand: d, cite });
+        if !u.unit_receptacles_in_lighting && ru > 0.0 {
+            steps.push(Step { what: "unit rooms' receptacles".into(), connected: ru, demand: stepped(ru, &rules.receptacle_steps), cite: rules.receptacle_cite.clone() });
+        }
+        // The unit rooms' fixed appliances (dwelling rule: four or more at 75%).
+        let appliances = ku + eu;
+        if appliances > 0.0 {
+            let four = t.units > 0 && u.fixed_appliances_min.is_some_and(|m| t.appliances >= m.saturating_mul(t.units));
+            let f = u.fixed_appliances_factor.filter(|_| four).unwrap_or(1.0);
+            let cite = if f < 1.0 { u.fixed_appliances_cite.clone() } else { "NEC 220.14(A): the appliances' ratings at 100%".to_string() };
+            steps.push(Step { what: "unit rooms' appliances".into(), connected: appliances, demand: appliances * f, cite });
+        }
+        if mu > 0.0 {
+            steps.push(Step { what: "unit rooms' motors and HVAC".into(), connected: mu, demand: mu, cite: "NEC 220.50, 430.24: at their ratings".into() });
+        }
+        if uu > 0.0 {
+            steps.push(Step { what: "unit rooms' loads the schedule gives".into(), connected: uu, demand: uu, cite: "the panel schedule's VA, at 100%".into() });
+        }
     }
+    // The other rooms (house loads).
     if lo > 0.0 {
         steps.push(Step { what: "lighting, other areas".into(), connected: lo, demand: stepped(lo, &commercial.lighting_steps), cite: commercial.lighting_cite.clone() });
     }
-    let recs = ro + if occ.unit_receptacles_in_lighting { 0.0 } else { ru };
-    if recs > 0.0 {
-        steps.push(Step { what: "receptacles".into(), connected: recs, demand: stepped(recs, &rules.receptacle_steps), cite: rules.receptacle_cite.clone() });
+    if ro > 0.0 {
+        steps.push(Step { what: "receptacles".into(), connected: ro, demand: stepped(ro, &rules.receptacle_steps), cite: rules.receptacle_cite.clone() });
     }
-    let (ku, ko) = get("kitchen");
     if ko > 0.0 {
         let f = by_count(t.kitchen_units, &rules.kitchen_units).unwrap_or(1.0);
         steps.push(Step { what: format!("kitchen equipment ({} units)", t.kitchen_units), connected: ko, demand: ko * f, cite: rules.kitchen_cite.clone() });
     }
-    // The unit rooms' fixed appliances (dwelling rule: four or more at 75%).
-    let (eu, eo) = get("equipment");
-    let appliances = ku + eu;
-    if appliances > 0.0 {
-        let per_unit_four = t.units > 0 && occ.fixed_appliances_min.is_some_and(|m| t.appliances >= m.saturating_mul(t.units));
-        let f = occ.fixed_appliances_factor.filter(|_| per_unit_four).unwrap_or(1.0);
-        let cite = if f < 1.0 { occ.fixed_appliances_cite.clone() } else { "NEC 220.14(A): the appliances' ratings at 100%".to_string() };
-        steps.push(Step { what: "unit rooms' appliances".into(), connected: appliances, demand: appliances * f, cite });
-    }
-    let (mu, mo) = get("motor");
-    if mu + mo > 0.0 {
-        steps.push(Step { what: "motors and HVAC".into(), connected: mu + mo, demand: mu + mo, cite: "NEC 220.50, 430.24: at their ratings".into() });
+    if mo > 0.0 {
+        steps.push(Step { what: "motors and HVAC".into(), connected: mo, demand: mo, cite: "NEC 220.50, 430.24: at their ratings".into() });
     }
     if eo > 0.0 {
         steps.push(Step { what: "other equipment".into(), connected: eo, demand: eo, cite: "NEC 220.14(A): at its rating".into() });
     }
-    let (uu, uo) = get("unknown");
-    if uu + uo > 0.0 {
-        steps.push(Step { what: "loads the schedule gives (no model load)".into(), connected: uu + uo, demand: uu + uo, cite: "the panel schedule's VA, at 100%".into() });
+    if uo > 0.0 {
+        steps.push(Step { what: "loads the schedule gives (no model load)".into(), connected: uo, demand: uo, cite: "the panel schedule's VA, at 100%".into() });
     }
-    // Continuous loads at 125% (their share of the demand), and the largest motor's extra 25%.
+    // Continuous loads at 125% (their share of the demand; the optional method's units have
+    // their own factor), and the largest motor's extra 25%.
     let base: f64 = steps.iter().map(|s| s.demand).sum();
-    let cont = t.continuous_va.min(t.connected_va).max(0.0);
-    let cont_share = if t.connected_va > 0.0 { cont / t.connected_va } else { 0.0 };
-    let extra = base * cont_share * (rules.continuous.factor - 1.0).max(0.0);
+    let counted = if optional.is_some() { (t.connected_va - unit_total).max(0.0) } else { t.connected_va };
+    let cont = (t.continuous_va - t.continuous_unit_va + unit_continuous).clamp(0.0, counted.max(0.0));
+    let share = if counted > 0.0 { cont / counted } else { 0.0 };
+    let opt_part = steps.first().filter(|_| optional.is_some()).map_or(0.0, |s| s.demand);
+    let extra = (base - opt_part) * share * (rules.continuous.factor - 1.0).max(0.0);
     if extra > 0.0 {
         steps.push(Step { what: "continuous loads' extra 25%".into(), connected: cont, demand: extra, cite: rules.continuous.cite.clone() });
     }
-    if t.largest_motor_va > 0.0 {
-        let m = t.largest_motor_va * rules.largest_motor_factor;
-        steps.push(Step { what: "largest motor's extra 25%".into(), connected: t.largest_motor_va, demand: m, cite: rules.largest_motor_cite.clone() });
+    let motor = if optional.is_some() { t.largest_motor_va } else { t.largest_motor_va.max(t.largest_unit_motor_va) };
+    if motor > 0.0 {
+        steps.push(Step { what: "largest motor's extra 25%".into(), connected: motor, demand: motor * rules.largest_motor_factor, cite: rules.largest_motor_cite.clone() });
     }
-    (steps.iter().map(|s| s.demand).sum(), steps)
+    (steps.iter().map(|s| s.demand).sum(), steps, method)
 }
 
 // ---------------------------------------------------------------- findings
@@ -877,6 +932,9 @@ impl Calc {
         seen.push(p.tag.clone());
         if p.typical_of.is_some() {
             t.units = 1;
+            let any = |list: &[String]| p.circuits.iter().any(|c| c.feeds.is_none() && has_word(&words(&c.description), list));
+            t.cooking_units = u32::from(any(&self.rules.cooking_words));
+            t.hvac_units = u32::from(any(&self.rules.hvac_words));
         }
         for c in &p.circuits {
             if let Some((child, n)) = &c.feeds {
@@ -890,7 +948,12 @@ impl Calc {
                 if c.unit { e.0 += v } else { e.1 += v }
             }
             t.continuous_va += c.continuous_va;
-            t.largest_motor_va = t.largest_motor_va.max(c.largest_motor_va);
+            if c.unit {
+                t.continuous_unit_va += c.continuous_va;
+                t.largest_unit_motor_va = t.largest_unit_motor_va.max(c.largest_motor_va);
+            } else {
+                t.largest_motor_va = t.largest_motor_va.max(c.largest_motor_va);
+            }
             t.kitchen_units = t.kitchen_units.saturating_add(c.kitchen_units);
             if c.unit && (c.cats.contains_key("kitchen") || c.cats.contains_key("equipment")) {
                 t.appliances = t.appliances.saturating_add(1);
@@ -1000,7 +1063,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
         let Some(p) = c.panel(tag) else { continue };
         let sys = system(&p.sys_text);
         let tree = c.tree(&p.tag, 0, &mut Vec::new());
-        let (dem, steps) = demand(&tree, &c.occ, &c.commercial, rules);
+        let (dem, steps, method) = demand(&tree, &c.occ, &c.commercial, rules);
         let dem_a = panel_amps(dem, sys);
         let is_service = service.as_deref() == Some(p.tag.as_str());
         let level = if is_service { "service" } else { "panel" };
@@ -1174,7 +1237,7 @@ fn calculate(c: &Calc) -> (Value, String, String) {
             if let Some((child, n)) = &cc.feeds {
                 let mut sub = Tree::default();
                 sub.add(&c.tree(child, 1, &mut Vec::new()), *n);
-                let (fd, _) = demand(&sub, &c.occ, &c.commercial, rules);
+                let (fd, _, _) = demand(&sub, &c.occ, &c.commercial, rules);
                 let child_sys = c.panel(child).map_or(sys, |x| system(&x.sys_text));
                 let fa = panel_amps(fd, if cc.poles >= 3 { sys } else { System { phases: 1, ..child_sys } });
                 demand_cells = (format!("{fd:.0}"), format!("{fa:.1}"));
@@ -1383,19 +1446,22 @@ fn calculate(c: &Calc) -> (Value, String, String) {
                 let ov = tree.connected_va * f;
                 format!("; by NEC 220.84 on the model's loads ({} units at {:.0}%): {} VA = {:.0} A", tree.units, f * 100.0, va(ov), panel_amps(ov, sys))
             });
-            if s.basis == "220.84" && c.occ.optional_units.is_empty() {
+            if s.basis == "220.84" && method.optional.is_none() {
                 findings.push(Finding {
                     rule: "E-LOAD-SCHEDULE",
                     level,
                     panel: p.tag.clone(),
                     circuit: String::new(),
                     message: format!(
-                        "{}: the documents' {} ({}) uses NEC 220.84, the optional method for multifamily dwelling units; the code sheet's occupancy is {} ({}){optional_text}",
+                        "{}: the documents' {} ({}) uses NEC 220.84, the optional method for three or more dwelling units each with electric cooking and heating or cooling; under {} the model has {} unit(s), {} with cooking, {} with heating or cooling ({} rules){optional_text}",
                         p.tag,
                         s.title,
                         s.source,
-                        c.occ.name,
-                        c.occ.groups.join(", ")
+                        p.tag,
+                        tree.units,
+                        tree.cooking_units,
+                        tree.hvac_units,
+                        if method.dwelling { "dwelling".to_string() } else { c.occ.name.clone() }
                     ),
                     likely: "documents",
                     cite: optional.as_ref().map_or_else(|| "NEC 220.84".to_string(), |(_, c)| c.clone()),

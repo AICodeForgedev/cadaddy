@@ -25,6 +25,8 @@
   "lighting_words": ["LTG", "LIGHTING", "LIGHTS", "LUMINAIRES", "EXIT", "EMERG", "SIGN", "SIGNAGE"],
   "motor_words": ["MOTOR", "FAN", "EF", "PUMP", "AHU", "RTU", "DOAS", "FCU", "PTAC", "CU", "HP", "COMPRESSOR", "ELEVATOR", "ELEV"],
   "kitchen_words": ["RANGE", "OVEN", "COOKTOP", "MICROWAVE", "DISHWASHER", "FRYER", "GRIDDLE", "KETTLE", "STEAMER", "WARMER", "BOOSTER"],
+  "cooking_words": ["RANGE", "COOKTOP", "OVEN", "COOKING", "STOVE"],
+  "hvac_words": ["PTAC", "VTAC", "AC", "HVAC", "HEAT", "HEATING", "HEATER", "FCU", "AHU", "COOLING", "CONDENSING", "CU"],
   "spare_words": ["SPARE", "SPACE"],
   "feeder_words": ["PANELBOARD", "PANEL", "PNL", "SWITCHBOARD", "TRANSFORMER", "XFMR", "MCC"],
   "unit_words": ["UNITS", "UNIT", "PANELS", "SUITES", "ROOMS"],
@@ -40,7 +42,9 @@
       "unit_receptacles_in_lighting": true,
       "unit_receptacles_cite": "NEC 220.14 (guest rooms and guest suites of hotels and motels): general-use receptacle outlets are part of the general lighting load (the model counts them at 180 VA each, under the general lighting demand factors)",
       "lighting_steps": [[20000, 0.5], [100000, 0.4], [null, 0.3]],
-      "lighting_cite": "NEC Table 220.42, hotels and motels: first 20,000 VA at 50%, the next to 100,000 VA at 40%, the rest at 30% (not in areas whose lighting is all on at once: dining rooms, ballrooms)"
+      "lighting_cite": "NEC Table 220.42, hotels and motels: first 20,000 VA at 50%, the next to 100,000 VA at 40%, the rest at 30% (not in areas whose lighting is all on at once: dining rooms, ballrooms)",
+      "cooking_units_as": "dwelling",
+      "cooking_cite": "NEC 210.18: guest rooms and guest suites with permanent provisions for cooking are wired as dwelling units, their loads by the dwelling rules"
     },
     {
       "id": "dwelling",
