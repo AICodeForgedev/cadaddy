@@ -1498,8 +1498,8 @@ fn why_box(dec: &super::BoxDecision) -> String {
 }
 
 /// The feeder a feeder's run is routed for (`mep.feeders` index): its source names the feeder's
-/// tag and source (`feeder 123 DP1→G-101→G-201`), and the gear it goes to first is the feeder's
-/// end, or a copy of it (`G-101` of a typical `G`). Feeders alike in all three are one type: the
+/// tag and source (`feeder F7 PA→U-101→U-201`), and the gear it goes to first is the feeder's
+/// end, or a copy of it (`U-101` of a typical `U`). Feeders alike in all three are one type: the
 /// first.
 pub(crate) fn feeder_of_run(sp: &BuildingSpec, r: &MepRun) -> Option<usize> {
     let rest = r.source_sheet.strip_prefix("feeder ")?;
