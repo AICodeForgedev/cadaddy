@@ -145,7 +145,8 @@ fn long_input_is_clipped_in_errors_and_history() {
     assert_eq!(cadaddy_engine::clip_input("short"), "short");
 }
 
-/// B4-030: a file name of 255 bytes saves (and saves again); a longer one is refused in words.
+/// B4-030: the longest file name whose `.bak` also fits saves (and saves again): 255 bytes for a
+/// DWG (`plan.bak`), 251 for others (`plan.cdy.bak`); a longer one is refused in words.
 #[test]
 fn long_file_names_save_or_say_why_not() {
     let dir = std::env::temp_dir().join(format!("cadaddy-longname-{}", std::process::id()));
@@ -153,14 +154,19 @@ fn long_file_names_save_or_say_why_not() {
     hooks();
     let mut s = Session::new();
     s.execute("circle", &json!({ "center": [0, 0], "radius": 5 })).unwrap();
-    for ext in ["cdy", "dxf", "dwg"] {
-        // 255 bytes: multi-byte letters up front, the rest plain.
-        let name = format!("{}{}.{ext}", "é".repeat(50), "a".repeat(255 - 100 - 1 - ext.len()));
-        assert_eq!(name.len(), 255);
+    for (ext, longest) in [("cdy", 251), ("dxf", 251), ("dwg", 255)] {
+        // Multi-byte letters up front, the rest plain.
+        let name = format!("{}{}.{ext}", "é".repeat(50), "a".repeat(longest - 100 - 1 - ext.len()));
+        assert_eq!(name.len(), longest);
         let path = dir.join(&name);
         s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap_or_else(|e| panic!("{} bytes: {e}", name.len()));
         s.execute("saveas", &json!({ "path": path.to_string_lossy() })).unwrap_or_else(|e| panic!("again, {} bytes: {e}", name.len()));
     }
+    // 255 bytes of .cdy: its .cdy.bak (259) would not fit, so it is refused before anything is written.
+    let tight = dir.join(format!("{}.cdy", "a".repeat(251)));
+    let e = s.execute("saveas", &json!({ "path": tight.to_string_lossy() })).unwrap_err().to_string();
+    assert!(e.contains("file name is too long (259 bytes") && !e.contains("os error"), "{e}");
+    assert!(!tight.exists());
     let long = dir.join(format!("{}.dwg", "a".repeat(260)));
     let e = s.execute("saveas", &json!({ "path": long.to_string_lossy() })).unwrap_err().to_string();
     assert!(e.contains("file name is too long") && e.contains("255") && !e.contains("os error"), "{e}");
