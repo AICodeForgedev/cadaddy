@@ -15,5 +15,19 @@
     {"words": ["FLOOR DRAIN", "CLEANOUT", "CLEAN OUT", "INTERCEPTOR", "SUMP"], "systems": ["SAN"]},
     {"words": ["HOSE", "EYEWASH", "MIXING VALVE", "WATER VALVE", "BOOSTER", "EXPANSION TANK"], "systems": ["CW"]}
   ],
-  "system_names": {"SAN": "waste", "V": "vent", "CW": "cold_water", "HW": "hot_water"}
+  "system_names": {"SAN": "waste", "V": "vent", "CW": "cold_water", "HW": "hot_water"},
+  "fill_in": {
+    "water": ["CW", "HW", "HWR"],
+    "fixture_lines": ["CW", "HW"],
+    "stack_on": ["below", "above"],
+    "stack_basis": "trade practice: floors that stack are piped alike; where a floor's rooms stand on the same rooms of the floor below (above for the lowest), its water mains run as that floor's do, fed by the same risers",
+    "main_basis": "trade practice: a main is carried on along its line to the branches it serves, at its size",
+    "branch_basis": "trade practice: each fixture's or room's branch is teed off the nearest main of its system at right angles (the typical connection of the enlarged details); a fixture branch nothing sizes is 1/2 inch (IPC Table 604.5 minimum fixture supply sizes are 3/8 to 1/2 inch)",
+    "branch_size_in": 0.5,
+    "reach_ft": 150.0,
+    "joint_ft": 1.0,
+    "room_margin_ft": 1.0,
+    "sample_ft": 1.0,
+    "min_piece_ft": 2.0
+  }
 }

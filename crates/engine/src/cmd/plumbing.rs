@@ -208,14 +208,21 @@ struct PipeEl {
     level: String,
     b: Bounds2,
     riser: bool,
-    /// Proposed (copied work no plan draws, `status:proposed`), not drawn.
-    proposed: bool,
+    /// What it is: drawn, or filled in where no plan draws it (`status:derived`, `status:inferred`).
+    provenance: &'static str,
 }
 
 /// The lines (systems) a fixture takes, by the words of its schedule name (rules data `needs`).
 fn needs<'a>(r: &'a Rules, words: &str) -> &'a [String] {
     let up = format!(" {} ", words.to_ascii_uppercase());
     r.needs.iter().find(|n| n.words.iter().any(|w| up.contains(&w.to_ascii_uppercase()))).map_or(&[], |n| n.systems.as_slice())
+}
+
+/// The lines (systems) a fixture takes by the words of its tag and schedule row, and how far its
+/// connection reaches (feet): rules data.
+pub(crate) fn fixture_lines(words: &str) -> (Vec<String>, f64) {
+    let r = rules();
+    (needs(&r, words).to_vec(), r.connect_reach_ft)
 }
 
 fn bounds_dist(b: &Bounds2, p: Vec2) -> f64 {
@@ -247,8 +254,12 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let w = b.max - b.min;
                 w.x.max(w.y) <= 1.5 * upf
             };
-            let proposed = super::bimlook::made_tag(e, "status").is_some_and(|v| v.eq_ignore_ascii_case(super::mep::PROPOSED));
-            pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, proposed });
+            let provenance = match super::bimlook::made_tag(e, "status") {
+                Some(v) if v.eq_ignore_ascii_case(super::waterfill::DERIVED) => super::waterfill::DERIVED,
+                Some(v) if v.eq_ignore_ascii_case(super::waterfill::INFERRED) => super::waterfill::INFERRED,
+                _ => super::waterfill::DRAWN,
+            };
+            pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, provenance });
             continue;
         }
         let ps = props::read(&e.common.xdata);
@@ -294,10 +305,14 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
     let mut on_pipe: HashMap<usize, Vec<Handle>> = HashMap::new();
     let mut whole = 0usize;
-    // Of the whole, those with a line on a proposed pipe (copied, not drawn).
-    let mut whole_proposed = 0usize;
+    // Of the whole, by the least documented pipe they are on: drawn, derived, inferred.
+    let mut whole_by: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut by_system: BTreeMap<String, (usize, usize)> = BTreeMap::new();
-    let mut proposed_by_system: BTreeMap<String, usize> = BTreeMap::new();
+    // Lines on a pipe no plan draws, by system and what it is.
+    let mut filled_by_system: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
+    let mut unconnected_by_level: BTreeMap<String, usize> = BTreeMap::new();
+    const ORDER: [&str; 3] = [super::waterfill::DRAWN, super::waterfill::DERIVED, super::waterfill::INFERRED];
+    let rank = |p: &str| ORDER.iter().position(|o| *o == p).unwrap_or(0);
     let mut writes: Vec<(Handle, Vec<(String, Handle, String)>, Vec<String>)> = Vec::new();
     for (h, level, at, words) in &fixtures {
         let want = needs(&r, words);
@@ -306,12 +321,14 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         let mut got: Vec<(String, Handle, String)> = Vec::new();
         let mut missing: Vec<String> = Vec::new();
-        let mut on_proposed = false;
+        let mut worst = super::waterfill::DRAWN;
         for sys in want {
             let name = r.system_names.get(sys).cloned().unwrap_or_else(|| sys.to_ascii_lowercase());
-            // A drawn pipe in reach first; a proposed one (copied, not drawn) only where none is.
-            let mut hit = nearest(level, *at, &|p| p.system == *sys && !p.proposed)
-                .or_else(|| nearest(level, *at, &|p| p.system == *sys && p.proposed))
+            // A drawn pipe in reach first; one derived from another floor's plan only where none
+            // is, and one inferred from a rule last.
+            let mut hit = ORDER
+                .iter()
+                .find_map(|o| nearest(level, *at, &|p| p.system == *sys && p.provenance == *o))
                 .map(|i| (i, format!("the nearest {sys} pipe")));
             // A vent: else the waste stack it drains to, carried up as the stack vent.
             if hit.is_none() && sys == "V" {
@@ -324,11 +341,13 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 Some((i, why)) => {
                     e.0 += 1;
                     if let Some(p) = pipes.get(i) {
-                        if p.proposed {
-                            on_proposed = true;
-                            *proposed_by_system.entry(sys.clone()).or_default() += 1;
+                        if p.provenance != super::waterfill::DRAWN {
+                            *filled_by_system.entry(sys.clone()).or_default().entry(p.provenance).or_default() += 1;
+                            if rank(p.provenance) > rank(worst) {
+                                worst = p.provenance;
+                            }
                         }
-                        let why = if p.proposed { format!("{why} (proposed: copied, not drawn)") } else { why };
+                        let why = if p.provenance == super::waterfill::DRAWN { why } else { format!("{why} ({}: no plan draws it)", p.provenance) };
                         got.push((name, p.handle, why));
                         on_pipe.entry(i).or_default().push(*h);
                     }
@@ -337,7 +356,11 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
         whole += usize::from(missing.is_empty());
-        whole_proposed += usize::from(missing.is_empty() && on_proposed);
+        if missing.is_empty() {
+            *whole_by.entry(worst).or_default() += 1;
+        } else {
+            *unconnected_by_level.entry(level.clone()).or_default() += 1;
+        }
         writes.push((*h, got, missing));
     }
     let computed = || Source::computed();
@@ -375,13 +398,22 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
     let by: BTreeMap<&String, Value> = by_system
         .iter()
-        .map(|(k, (c, n))| (k, json!({"connected": c, "of": n, "to_proposed": proposed_by_system.get(k).copied().unwrap_or(0)})))
+        .map(|(k, (c, n))| {
+            let f = filled_by_system.get(k);
+            let of = |p: &str| f.and_then(|m| m.get(p)).copied().unwrap_or(0);
+            (k, json!({"connected": c, "of": n, "to_derived": of(super::waterfill::DERIVED), "to_inferred": of(super::waterfill::INFERRED)}))
+        })
         .collect();
+    let n_whole = |p: &str| whole_by.get(p).copied().unwrap_or(0);
+    let n_pipes = |p: &str| pipes.iter().filter(|x| x.provenance == p).count();
     json!({
         "fixtures": writes.len(), "fully_connected": whole,
-        "fully_connected_drawn": whole - whole_proposed, "fully_connected_with_proposed": whole_proposed,
+        "fully_connected_drawn": n_whole(super::waterfill::DRAWN),
+        "fully_connected_with_derived": n_whole(super::waterfill::DERIVED),
+        "fully_connected_with_inferred": n_whole(super::waterfill::INFERRED),
+        "unconnected_by_level": unconnected_by_level,
         "by_system": by, "fixture_elements": fixtures.len(), "pipe_elements": pipes.len(),
-        "proposed_pipe_elements": pipes.iter().filter(|p| p.proposed).count(),
+        "derived_pipe_elements": n_pipes(super::waterfill::DERIVED), "inferred_pipe_elements": n_pipes(super::waterfill::INFERRED),
     })
 }
 

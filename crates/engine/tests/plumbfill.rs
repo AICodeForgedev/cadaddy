@@ -1,6 +1,7 @@
-//! Q6161 plumbrebuild: water mains CADaddy proposes for a level whose plans draw no water (copied
-//! from a level whose layout matches) stay apart from the drawn piping: their own layer and tag,
-//! their own takeoff rows, and a fixture on one says so. Made-up plans only.
+//! Q6161 plumbrebuild: water CADaddy fills in for a level whose plans draw none (derived from the
+//! floor its rooms stack on, or inferred from a rule) stays apart from the drawn piping: its own
+//! layer, `status` and `basis` tags, its own takeoff rows, and a fixture on it says so. Nothing
+//! filled in reports as drawn. Made-up plans only.
 
 use cadaddy_engine::Session;
 use cadaddy_engine::doc::{Drawing, Entity, EntityKind, Handle, Line};
@@ -30,7 +31,12 @@ fn pipe(name: &str) -> Value {
 }
 
 fn run(system: &str, points: Value, height_source: &str) -> Value {
-    json!({"system": system, "level": "L1", "points": points, "size_in": [1.5, 0], "bottoms_ft": [9.0], "height_source": height_source})
+    let basis = match height_source {
+        "derived" => "derived from L2's drawn main where this floor's rooms stack on its: trade practice",
+        "inferred" => "inferred: trade practice: a branch teed off the nearest main",
+        _ => "tag",
+    };
+    json!({"system": system, "level": "L1", "points": points, "size_in": [1.5, 0], "bottoms_ft": [9.0], "height_source": height_source, "size_source": basis})
 }
 
 /// A water closet at (10', 5') with its waste and vent drawn beside it, and a cold water main
@@ -110,40 +116,43 @@ fn cw_rows(s: &mut Session) -> Vec<(String, f64)> {
 }
 
 #[test]
-fn a_proposed_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
-    // Drawn: one CW layer, one takeoff row, no word of a proposal.
+fn a_filled_in_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
+    // Drawn: one CW layer, one takeoff row, no word of filled-in work.
     let mut drawn = built("tag");
     assert!(layers(&drawn).iter().any(|l| l.starts_with("3D-MEP-CW-")), "{:?}", layers(&drawn));
-    assert!(!layers(&drawn).iter().any(|l| l.contains("PROPOSED")), "{:?}", layers(&drawn));
+    assert!(!layers(&drawn).iter().any(|l| l.contains("DERIVED") || l.contains("INFERRED")), "{:?}", layers(&drawn));
     assert_eq!(cw_rows(&mut drawn), vec![("CW".to_string(), 35.0)]);
     let p = fixture_props(&mut drawn);
     assert!(p["cold_water"]["value"].as_str().is_some(), "connected to the drawn main: {p:#}");
-    assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("proposed"), "{p:#}");
+    assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("no plan draws it"), "{p:#}");
+    let no_status = drawn.doc().expect("doc").model.iter().all(|e| !e.common.xdata.iter().any(|t| t.value.starts_with("status:")));
+    assert!(no_status, "drawn work carries no filled-in status");
 
-    // Proposed: its own layer (and nothing on the drawn one), its own row, the same feet.
-    let mut prop = built("proposed");
-    let ls = layers(&prop);
-    assert!(ls.iter().any(|l| l.starts_with("3D-MEP-CW-PROPOSED-")), "{ls:?}");
-    assert!(!ls.iter().any(|l| l.starts_with("3D-MEP-CW-") && !l.contains("PROPOSED")), "{ls:?}");
-    let tagged = prop
-        .doc()
-        .expect("doc")
-        .model
-        .iter()
-        .filter(|e| e.common.layer.contains("PROPOSED"))
-        .all(|e| e.common.xdata.iter().any(|t| t.value == "status:proposed"));
-    assert!(tagged, "every proposed element tagged");
-    assert_eq!(cw_rows(&mut prop), vec![("CW (proposed)".to_string(), 35.0)]);
-    // The fixture still connects, and says its water line is a proposal.
-    let p = fixture_props(&mut prop);
-    assert!(p["cold_water"]["value"].as_str().is_some(), "{p:#}");
-    assert!(p["cold_water"]["note"].as_str().is_some_and(|n| n.contains("proposed")), "{p:#}");
-    assert!(p.get("unconnected").is_none_or(Value::is_null), "{p:#}");
+    // Derived or inferred: its own layer (and nothing on the drawn one), its status and basis, its
+    // own row, the same feet. Never reported as drawn.
+    for (what, upper) in [("derived", "DERIVED"), ("inferred", "INFERRED")] {
+        let mut s = built(what);
+        let ls = layers(&s);
+        assert!(ls.iter().any(|l| l.starts_with(&format!("3D-MEP-CW-{upper}-"))), "{ls:?}");
+        assert!(!ls.iter().any(|l| l.starts_with("3D-MEP-CW-") && !l.contains(upper)), "{ls:?}");
+        let on: Vec<_> = s.doc().expect("doc").model.iter().filter(|e| e.common.layer.contains(upper)).collect();
+        assert!(!on.is_empty());
+        for e in &on {
+            assert!(e.common.xdata.iter().any(|t| t.value == format!("status:{what}")), "every {what} element tagged");
+            assert!(e.common.xdata.iter().any(|t| t.value.starts_with("basis:") && t.value.len() > 10), "every {what} element has its basis");
+            assert!(!e.common.xdata.iter().any(|t| t.value == "status:drawn"));
+        }
+        assert_eq!(cw_rows(&mut s), vec![(format!("CW ({what})"), 35.0)]);
+        // The fixture still connects, and says its water line is filled in.
+        let p = fixture_props(&mut s);
+        assert!(p["cold_water"]["value"].as_str().is_some(), "{p:#}");
+        assert!(p["cold_water"]["note"].as_str().is_some_and(|n| n.contains(&format!("{what}: no plan draws it"))), "{p:#}");
+        assert!(p.get("unconnected").is_none_or(Value::is_null), "{p:#}");
+    }
 }
 
-#[test]
-fn a_drawn_pipe_in_reach_comes_before_a_nearer_proposed_one() {
-    // A drawn CW branch 6' from the water closet, a proposed main 2' from it: the drawn one.
+/// The water closet with a CW run 6' from it (`far`: its height source) and one 2' from it (`near`).
+fn nearer(far: &str, near: &str) -> (Value, Value) {
     let mut s = Session::empty();
     s.open_drawing(room(), "Plumbing Room", None);
     let fixture = json!({
@@ -159,8 +168,8 @@ fn a_drawn_pipe_in_reach_comes_before_a_nearer_proposed_one() {
     let runs = json!([
         run("SAN", json!([[96.0, 48.0], [96.0, 240.0]]), "default"),
         run("V", json!([[132.0, 48.0], [132.0, 240.0]]), "default"),
-        run("CW", json!([[60.0, 132.0], [300.0, 132.0]]), "tag"),
-        run("CW", json!([[60.0, 84.0], [480.0, 84.0]]), "proposed"),
+        run("CW", json!([[60.0, 132.0], [300.0, 132.0]]), far),
+        run("CW", json!([[60.0, 84.0], [480.0, 84.0]]), near),
     ]);
     let spec = json!({
         "version": 1, "units_per_foot": 12,
@@ -172,11 +181,23 @@ fn a_drawn_pipe_in_reach_comes_before_a_nearer_proposed_one() {
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
     let r = s.execute("model.build", &json!({})).expect("build");
-    let p = fixture_props(&mut s);
-    assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("proposed"), "the drawn branch: {p:#}");
-    let pl = &r["plumbing"];
+    (fixture_props(&mut s), r["plumbing"].clone())
+}
+
+#[test]
+fn a_drawn_pipe_in_reach_comes_before_a_nearer_derived_one_and_a_derived_before_an_inferred() {
+    let (p, pl) = nearer("tag", "derived");
+    assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("no plan draws it"), "the drawn branch: {p:#}");
     if !pl.is_null() {
-        assert_eq!(pl["fully_connected_with_proposed"], json!(0), "{pl}");
+        assert_eq!(pl["fully_connected_drawn"], json!(1), "{pl}");
+        assert_eq!(pl["fully_connected_with_derived"], json!(0), "{pl}");
+    }
+    let (p, pl) = nearer("derived", "inferred");
+    assert!(p["cold_water"]["note"].as_str().is_some_and(|n| n.contains("derived: no plan draws it")), "{p:#}");
+    if !pl.is_null() {
+        assert_eq!(pl["fully_connected_with_derived"], json!(1), "{pl}");
+        assert_eq!(pl["fully_connected_with_inferred"], json!(0), "{pl}");
+        assert_eq!(pl["by_system"]["CW"]["to_derived"], json!(1), "{pl}");
     }
 }
 

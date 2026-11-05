@@ -31,9 +31,6 @@ mod twinline;
 
 /// Runs and segments handled, at most (hostile drawings).
 const MAX_RUNS: usize = 20_000;
-/// A run's `height_source` when CADaddy proposes it (no document draws it): priced apart, its
-/// elements on a layer of their own and tagged `status:proposed`.
-pub(crate) const PROPOSED: &str = "proposed";
 const MAX_SEGS: usize = 200_000;
 /// The next floor's slab depth under its level, feet (as WALLGEN builds it).
 const SLAB_FT: f64 = 0.5;
@@ -2700,18 +2697,20 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.push(t(1000, format!("mepid:{}", id.chars().take(200).collect::<String>())));
         x
     };
-    // A proposed pipe (copied work no plan draws) apart from the drawn: its own layer and a tag.
-    let proposed = |r: &MepRun, sy: &MepSystem| sy.kind == MepKind::Pipe && r.height_source.eq_ignore_ascii_case(PROPOSED);
-    let layer_of = |r: &MepRun, sy: &MepSystem, level: &str| {
-        if proposed(r, sy) {
-            mep_layer_name(&format!("{}-{}", sy.name, PROPOSED.to_ascii_uppercase()), level)
-        } else {
-            mep_layer_name(&sy.name, level)
-        }
+    // A pipe no plan draws (derived from another floor's, or inferred from a rule) apart from
+    // the drawn: its own layer, a `status` tag and its basis.
+    let filled = |r: &MepRun, sy: &MepSystem| {
+        let p = super::waterfill::provenance(r);
+        (sy.kind == MepKind::Pipe && p != super::waterfill::DRAWN).then_some(p)
+    };
+    let layer_of = |r: &MepRun, sy: &MepSystem, level: &str| match filled(r, sy) {
+        Some(p) => mep_layer_name(&format!("{}-{}", sy.name, p.to_ascii_uppercase()), level),
+        None => mep_layer_name(&sy.name, level),
     };
     let mark = |r: &MepRun, sy: &MepSystem, mut x: Vec<RawTag>| {
-        if proposed(r, sy) {
-            x.push(t(1000, format!("status:{PROPOSED}")));
+        if let Some(p) = filled(r, sy) {
+            x.push(t(1000, format!("status:{p}")));
+            x.push(t(1000, format!("basis:{}", r.size_source.chars().take(240).collect::<String>())));
         }
         x
     };
