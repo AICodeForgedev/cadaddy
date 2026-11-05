@@ -68,12 +68,12 @@ fn saveas_cdy_then_open_gives_the_drawing_exactly() {
     let r = t.execute("open", &json!({"path": p})).unwrap();
     assert_eq!(r["warnings"], json!([]), "{r}");
     assert_eq!(t.doc().unwrap(), &before);
-    // QSAVE writes .cdy again and keeps the previous file as .bak.
+    // QSAVE writes .cdy again and keeps the previous file as .cdy.bak.
     s.execute("line", &json!({"points": [[0, 0], [0, 9]]})).unwrap();
     let r = s.execute("qsave", &json!({})).unwrap();
     assert_eq!(r["path"], json!(p));
     assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(&p).unwrap()));
-    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Plan.bak")).unwrap()));
+    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Plan.cdy.bak")).unwrap()));
     // Opening by data (the web, agents) reads .cdy by its content whatever the name says.
     let mut u = Session::new();
     u.execute("open", &json!({"data": base64_encode(&bytes), "name": "upload.dxf"})).unwrap();
@@ -96,10 +96,10 @@ fn dwg_copy_is_saved_beside_a_cdy_file_when_asked() {
     let r = s.execute("qsave", &json!({})).unwrap();
     assert_eq!(r["dwgCopy"], json!(copy), "{r}");
     assert!(std::fs::read(&copy).unwrap().starts_with(b"AC10"), "DWG content");
-    // Saving again replaces the copy without a .bak of its own: Site.bak stays the drawing's.
+    // Saving again replaces the copy without a .bak of its own: Site.cdy.bak stays the drawing's.
     s.execute("line", &json!({"points": [[0, 0], [2, 2]]})).unwrap();
     s.execute("qsave", &json!({})).unwrap();
-    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Site.bak")).unwrap()));
+    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Site.cdy.bak")).unwrap()));
     // The copy doesn't become the drawing's file.
     assert_eq!(s.state().unwrap().path.as_deref(), Some(p.as_str()));
     // Saving into DWG itself makes no copy of a copy.
@@ -135,7 +135,7 @@ fn dwg_copy_keeps_an_existing_dwg_that_is_not_its_own_copy() {
     assert!(r.get("dwgCopyKept").is_none() && r.get("dwgCopyError").is_none(), "{r}");
     assert_eq!(std::fs::read(&bak).unwrap(), original_bytes);
     // The drawing's own .bak is not the DWG one.
-    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Site.bak")).unwrap()));
+    assert!(cadaddy_io::cdy::is_cdy(&std::fs::read(path(&dir, "Site.cdy.bak")).unwrap()));
     set_dwg_copy(false);
     let _ = std::fs::remove_dir_all(&dir);
 }
