@@ -2371,7 +2371,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut methods_used: BTreeMap<String, (usize, String)> = BTreeMap::new();
     let mut runs: Vec<MepRun> = Vec::new();
     let mut tags: Vec<ElementTag> = Vec::new();
-    let mut box_in: HashMap<usize, Vec<(u32, String)>> = HashMap::new();
+    // What enters each device's box: count and size, and the circuit (part) whose final size it
+    // takes (a circuit upsized for its voltage drop later in the routing), none: as given.
+    let mut box_in: HashMap<usize, Vec<(u32, String, Option<String>)>> = HashMap::new();
     let mut in_wall_legs = 0usize;
     let mut ceiling_legs = 0usize;
     // Each routed leg's path as a cable runs it where that differs (through the studs).
@@ -2512,10 +2514,48 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         });
         let panel_at = gi.and_then(|i| gear.get(i)).map(|g| carry(gear_ctr(g), &g.level, &c.level));
         let pts: Vec<Vec2> = members.iter().map(|m| m.at).collect();
-        let root = panel_at
-            .and_then(|p| pts.iter().enumerate().min_by(|a, b| manhattan(*a.1, p).total_cmp(&manhattan(*b.1, p))).map(|(i, _)| i))
-            .unwrap_or(0);
-        let tree = spanning_tree(&pts, root);
+        let nearest_panel = |cand: &[usize]| {
+            panel_at.and_then(|p| {
+                cand.iter().copied().min_by(|a, b| {
+                    let d = |i: usize| pts.get(i).map_or(f64::INFINITY, |q| manhattan(*q, p));
+                    d(*a).total_cmp(&d(*b))
+                })
+            })
+        };
+        // A switch's box is the end of its own loop (Q6206): the circuit's other devices joined
+        // device to device, each switch on a leg of its own from the nearest of what it controls
+        // (else the nearest of the rest). All switches, or none: device to device.
+        let core: Vec<usize> = (0..members.len()).filter(|i| members.get(*i).is_some_and(|m| !m.switch)).collect();
+        let (root, tree) = if core.is_empty() || core.len() == members.len() {
+            let all: Vec<usize> = (0..members.len()).collect();
+            let root = nearest_panel(&all).unwrap_or(0);
+            (root, spanning_tree(&pts, root))
+        } else {
+            let cpts: Vec<Vec2> = core.iter().filter_map(|i| pts.get(*i).copied()).collect();
+            let local: Vec<usize> = (0..core.len()).collect();
+            let croot = panel_at
+                .and_then(|p| {
+                    local.iter().copied().min_by(|a, b| {
+                        let d = |i: usize| cpts.get(i).map_or(f64::INFINITY, |q| manhattan(*q, p));
+                        d(*a).total_cmp(&d(*b))
+                    })
+                })
+                .unwrap_or(0);
+            let mut t: Vec<(usize, usize)> =
+                spanning_tree(&cpts, croot).into_iter().filter_map(|(a, b)| Some((*core.get(a)?, *core.get(b)?))).collect();
+            for (i, m) in members.iter().enumerate().filter(|(_, m)| m.switch) {
+                let ctl: Vec<usize> = core.iter().copied().filter(|j| members.get(*j).is_some_and(|x| m.controls.contains(&x.handle))).collect();
+                let pool = if ctl.is_empty() { &core } else { &ctl };
+                let near = pool.iter().copied().min_by(|a, b| {
+                    let d = |j: usize| pts.get(j).map_or(f64::INFINITY, |q| manhattan(*q, m.at));
+                    d(*a).total_cmp(&d(*b))
+                });
+                if let Some(j) = near {
+                    t.push((j, i));
+                }
+            }
+            (core.get(croot).copied().unwrap_or(0), t)
+        };
         let size = min_in;
         // A part of a split circuit is its own (the circuit's id and its panel's).
         let cid = if c.part.is_empty() { tag.id.clone() } else { format!("{}@{}", tag.id, c.part) };
@@ -2639,8 +2679,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             *cable_legs.entry(ci).or_default().entry(loop_n).or_default() += cable_leg_ft + 2.0 * box_makeup;
             runs.push(r);
             let leg_hots: Vec<(u32, String)> = leg_parts.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone())).collect();
-            box_in.entry(c.devs.get(*u).copied().unwrap_or(usize::MAX)).or_default().extend(leg_hots.iter().cloned());
-            box_in.entry(c.devs.get(*v).copied().unwrap_or(usize::MAX)).or_default().extend(leg_hots.iter().cloned());
+            for end in [*u, *v] {
+                box_in
+                    .entry(c.devs.get(end).copied().unwrap_or(usize::MAX))
+                    .or_default()
+                    .extend(leg_hots.iter().map(|(n, sz)| (*n, sz.clone(), Some(cid.clone()))));
+            }
         }
         let mut t = tag.clone();
         if !c.part.is_empty() {
@@ -2904,7 +2948,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 for bl in bore(&mut bored, field, &leg, &c.label, &c.level, min_in, upf, rl) {
                     add_clash(&mut clashes, field, &bl, "homerun tap", &c.label, &c.level, min_in);
                 }
-                let hots: Vec<(u32, String)> = super::mepatoms::conductor_parts(&mk).into_iter().filter(|p| !p.2).map(|p| (p.0, p.1)).collect();
+                let hots: Vec<(u32, String, Option<String>)> =
+                    super::mepatoms::conductor_parts(&mk).into_iter().filter(|p| !p.2).map(|p| (p.0, p.1, Some(tag.id.clone()))).collect();
                 box_in.entry(c.devs.get(h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
                 box_in.entry(lead_c.devs.get(lead_h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots);
             }
@@ -3260,7 +3305,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         box_in
             .entry(lead_c.devs.get(lead_h.root).copied().unwrap_or(usize::MAX))
             .or_default()
-            .extend(combined.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone())));
+            .extend(combined.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone(), None)));
         // The homerun's own tag: its circuits (one list: panel and numbers), conductors, raceway.
         let numbers: Vec<String> = labels.iter().filter_map(|l| super::printcond::parse_circuit(l).map(|(_, n)| n)).collect();
         let panel_name = circs.get(lead_h.circ).map(|c| c.panel.clone()).unwrap_or_default();
@@ -3318,6 +3363,28 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
     tags.extend(loop_tags);
+    // Each leg's and tap's raceway by the fill of what it carries (Q6206, NEC Chapter 9): its
+    // circuit's conductors as sized (a circuit upsized for its voltage drop is that size in its
+    // legs too), a switch loop's; never under the minimum. A homerun is sized with its group's.
+    let mut legs_fill_sized = 0usize;
+    {
+        let of: HashMap<&str, (&str, &str)> =
+            tags.iter().filter_map(|t| Some((t.id.as_str(), (field_of(t, "conductors")?, field_of(t, "conduit").unwrap_or_default())))).collect();
+        for r in runs.iter_mut().filter(|r| !r.id.contains(HOME_PART)).take(MAX_RUNS) {
+            let Some((mk, method)) = super::printcond::circuit_of_run(r).and_then(|c| of.get(c)).copied() else { continue };
+            if super::mepatoms::rules().raceway_named(method).is_none() {
+                continue;
+            }
+            let parts = super::mepatoms::conductor_parts(mk);
+            if let Some((t, area, allowed)) = fill_size(&parts, method, min_in, rl)
+                && t > r.size_in[0] + 1e-9
+            {
+                r.size_in[0] = t;
+                r.size_source = format!("computed: {mk}: {} sq in of conductors in {} sq in allowed ({})", r3(area), r3(allowed), rl.fill.source);
+                legs_fill_sized += 1;
+            }
+        }
+    }
     // -- Homeruns of one panel on one path (Q6206): each stretch one raceway carrying all their
     // circuits (up to the rules' conductors per raceway), sized by fill and derated. --
     let shared = gap::shared_runs(&home_segs, upf);
@@ -3526,11 +3593,23 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
 
     // -- Box fill (314.16): what enters each device's box, checked against the box the pieces
     // give it ([`check_box_fill`], once they are cut). --
+    let final_hot: HashMap<&str, String> = tags
+        .iter()
+        .filter_map(|t| Some((t.id.as_str(), super::mepatoms::conductor_parts(field_of(t, "conductors")?).into_iter().find(|p| !p.2)?.1)))
+        .collect();
+    let order_sz = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
     let box_conductors: Vec<Value> = box_in
         .iter()
         .filter_map(|(di, conds)| {
             let dv = devs.get(*di)?;
-            Some(json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": conds.iter().map(|(n, s)| json!([n, s])).collect::<Vec<_>>()}))
+            let sized: Vec<Value> = conds
+                .iter()
+                .map(|(n, sz, of)| {
+                    let up = of.as_deref().and_then(|c| final_hot.get(c)).filter(|f| order_sz(f) > order_sz(sz)).cloned();
+                    json!([n, up.unwrap_or_else(|| sz.clone())])
+                })
+                .collect();
+            Some(json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": sized}))
         })
         .take(MAX_DEVICES)
         .collect();
@@ -3732,6 +3811,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "tags_unresolved": unresolved_rows,
         "switches_unjoined": switches_unjoined,
         "switch_loop_legs": switch_loop_legs,
+        "legs_fill_sized": legs_fill_sized,
         "switch_loop_source": gap::rules().switch_loop.source,
         "shared_raceway": shared_report,
         "proposed_circuits": {"total": proposed.len(), "by_level_kind": proposed_by, "items": proposed, "source": gap::rules().proposed.source},
@@ -4152,6 +4232,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     for h in &old {
         d.remove_entity(*h);
     }
+    // The routing's report first: the takeoff sizes each box by the conductors entering it.
+    store_report(d, &routed.report);
     let before: BTreeSet<Handle> = d.model.handles().into_iter().collect();
     let atoms = super::mepatoms::build::build(d, &shifted);
     let made: Vec<Handle> = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();

@@ -570,6 +570,27 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
 
     // -- A box at each device, a ring on a wall box. --
     let mut boxes: Vec<DevBox> = Vec::new();
+    // The conductors the routing brings into each device's box (its report's box fill), the
+    // volume they need.
+    let box_fill_src = super::super::conduitroute::rules().box_fill.source.clone();
+    let box_need: HashMap<Handle, f64> = super::super::conduitroute::stored_report(d)
+        .and_then(|r| r["box_fill"]["pending"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_DEVICES)
+        .filter_map(|p| {
+            let h = Handle(u64::from_str_radix(p["device"].as_str()?, 16).ok()?);
+            let conds: Vec<(u32, String)> = p["conductors"]
+                .as_array()?
+                .iter()
+                .take(200)
+                .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
+                .collect();
+            let rl = super::super::conduitroute::rules();
+            Some((h, super::super::conduitroute::box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl)))
+        })
+        .collect();
+    let mut boxes_upsized = 0usize;
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -637,6 +658,45 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
         let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
+        // A box that holds what the routing brings into it (NEC 314.16, Q6206): the smallest
+        // steel box of the trade's table that does, else the largest with a review item.
+        let need = box_need.get(h).copied().unwrap_or(0.0);
+        let mut fill_note: Option<(&'static str, String, String)> = None;
+        let br = if need > br.cubic_in + 1e-9 && br.material == "steel" {
+            let mut bigger: Vec<&super::BoxRule> = rl
+                .boxes
+                .iter()
+                .filter(|(k, b)| {
+                    b.material == "steel"
+                        && b.cubic_in > br.cubic_in + 1e-9
+                        && (k.starts_with("sq") || k.starts_with("oct"))
+                        && !b.item.contains("fan")
+                })
+                .map(|(_, b)| b)
+                .collect();
+            bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
+            match bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied()) {
+                Some(b) => {
+                    boxes_upsized += 1;
+                    fill_note = Some(if b.cubic_in + 1e-9 >= need {
+                        ("box_fill", format!("{need:.1} cu in needed by the conductors entering it"), box_fill_src.clone())
+                    } else {
+                        (
+                            "review",
+                            format!(
+                                "{need:.1} cu in of conductors: more than the largest box ({} cu in) holds; a deeper box, an extension ring or a junction box above",
+                                b.cubic_in
+                            ),
+                            box_fill_src.clone(),
+                        )
+                    });
+                    b
+                }
+                None => br,
+            }
+        } else {
+            br
+        };
         let ring = ring && theirs.is_none_or(|(_, r)| r);
         let c = plan.center();
         let out = ["face_normal", "host_face"].iter().find_map(|k| {
@@ -684,6 +744,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         let mut a = Atom { kind: "box", item: br.item.clone(), ty: br.size.clone(), size: br.size.clone(), a: centre, b: centre, ..Atom::default() };
         a.extra.push(("cubic_in", format!("{}", br.cubic_in), br.source.clone()));
+        if let Some(n) = fill_note.take() {
+            a.extra.push(n);
+        }
         a.extra.push(("depth_in", format!("{}", br.depth_in), br.source.clone()));
         a.extra.push(("material", br.material.clone(), br.source.clone()));
         a.extra.push(("box_of", h.hex(), "computed".into()));
@@ -1262,6 +1325,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "endsAtBoxes": to_boxes,
         "endsAtPanels": to_gear,
         "openEnds": open_ends,
+        "boxesSizedForFill": boxes_upsized,
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
         "landingFt": (landing_ft * 10.0).round() / 10.0,

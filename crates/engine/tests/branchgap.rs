@@ -302,3 +302,25 @@ fn a_receptacle_with_no_circuit_is_proposed_on_a_spare_not_drawn_and_priced_apar
     assert_eq!(r["routed_circuits"], json!(1), "{r}");
     assert!(spec_tags(&mut s).iter().all(|t| t["kind"] != json!("circuit") || t["fields"]["circuit"]["value"] == json!("LP1-1")));
 }
+
+#[test]
+fn each_leg_is_sized_by_its_fill_and_each_box_by_what_enters_it() {
+    // LP1-31: two receptacles on 4#6 + 1#6G (a multiwire circuit the plan notes). Each leg carries
+    // 5 conductors of 0.0507 sq in (0.254): more than 3/4" EMT's 40 % (0.213), so 1". The far
+    // box takes 4#6 and a ground and a yoke, 35 cu in (314.16(B): 5 each, the ground one, the
+    // yoke two): more than a 4" square (30.3), a 4-11/16" square (42).
+    let tags = vec![
+        device("R1", "receptacle", "L1", 10.0, 6.0, Some("LP1-31"), Some(18.0)),
+        device("R2", "receptacle", "L1", 22.0, 6.0, Some("LP1-31"), Some(18.0)),
+        circuit_tag("L1", "LP1-31", "4#6 + 1#6G"),
+    ];
+    let mut s = building(tags, vec![row(31, "RECEPTACLES", 20, "6")], None);
+    let r = report(&mut s);
+    assert!(r["legs_fill_sized"].as_u64().is_some_and(|n| n >= 1), "{r}");
+    let c = s.execute("bim.count", &json!({"kind": "conduit", "circuit": "LP1-31", "group_by": "size"})).expect("count");
+    let rows = c["rows"].as_array().cloned().unwrap_or_default();
+    assert!(rows.iter().all(|x| x["size"] != json!("3/4\"") && x["size"] != json!("1/2\"")), "no leg under 1\": {c}");
+    let b = s.execute("bim.count", &json!({"kind": "box", "circuit": "LP1-31", "group_by": "size"})).expect("count");
+    let rows = b["rows"].as_array().cloned().unwrap_or_default();
+    assert!(rows.iter().any(|x| x["size"] == json!("4-11/16\" square")), "{b}");
+}

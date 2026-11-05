@@ -21920,9 +21920,11 @@ mod tests {
         assert!((1100.0 / 12.0 - 0.01..1100.0 / 12.0 + 0.5).contains(&ft), "{lines:#?}");
         assert_eq!(conduit["status"], json!("rule"));
         assert!(conduit["rule"].as_str().unwrap_or_default().contains("estimated route"));
-        // 2#12 + 1#12G (the default) over the conduit plus 1' at each end of 3 pulls.
+        // 2#12 + 1#12G (the default) over the conduit plus the box makeup (rules data: 300.14's
+        // 6" and the field allowance) at each end of 3 pulls.
         let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
-        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0)).abs() < 0.02, "{lines:#?}");
+        let mk = super::super::mepatoms::rules().makeup_ft;
+        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0 * mk)).abs() < 0.02, "{lines:#?}");
         assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
         assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
 
