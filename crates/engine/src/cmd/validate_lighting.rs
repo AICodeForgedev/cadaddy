@@ -83,6 +83,17 @@ fn mark_key(m: &str) -> Option<String> {
     (!m.is_empty() && m.len() <= MAX_MARK).then(|| m.to_ascii_uppercase())
 }
 
+/// The type a luminaire or control counts as (E-LUM-COUNT): its type mark, else its kind. A tag
+/// numbered by its own kind's name (`EXIT_SIGN-3`) names one object, not a type.
+fn type_key(mark: Option<&str>, kind: &str) -> String {
+    let instance = |m: &str| {
+        m.trim()
+            .rsplit_once('-')
+            .is_some_and(|(stem, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && stem.eq_ignore_ascii_case(kind.trim()))
+    };
+    mark.filter(|m| !instance(m)).and_then(mark_key).unwrap_or_else(|| kind.to_string())
+}
+
 /// Do the words hold `a b` in a row (or `ab` as one word)?
 fn pair(w: &[String], a: &str, b: &str) -> bool {
     w.windows(2).any(|x| matches!(x, [p, q] if p == a && q == b)) || w.iter().any(|x| *x == format!("{a}{b}"))
@@ -1334,13 +1345,13 @@ fn counts(inp: &Input, r: &Effective, facts: &[Fact], out: &mut Found) {
         let Some(list) = all_by_level.get(&s.level.to_ascii_lowercase()) else { continue };
         let Some(home) = symbol_home(list, s.at) else { continue };
         let Some(a) = rooms.iter().find(|a| a.id == home.id) else { continue };
-        let key = s.mark.and_then(mark_key).unwrap_or_else(|| res.kind.clone());
+        let key = type_key(s.mark, &res.kind);
         *plan.entry(room_key(a)).or_default().entry(key).or_default() += 1;
     }
     let mut model: HashMap<String, BTreeMap<String, (u32, Vec<String>)>> = HashMap::new();
     for f in facts {
         let Some(rk) = &f.room else { continue };
-        let key = f.it.mark.and_then(mark_key).unwrap_or_else(|| f.it.kind.to_string());
+        let key = type_key(f.it.mark, f.it.kind);
         let e = model.entry(rk.clone()).or_default().entry(key).or_default();
         e.0 += 1;
         if e.1.len() < MAX_LISTED {
@@ -1786,5 +1797,17 @@ mod tests {
         assert_eq!(page_in("p.32 (ordering row)"), Some(32));
         assert_eq!(page_in("Lighting.pdf page 7"), Some(7));
         assert_eq!(file_of("Lighting Package p.32"), "Lighting Package");
+    }
+
+    #[test]
+    fn a_tag_numbered_by_its_own_kind_is_no_type() {
+        // One object's tag (`EXIT_SIGN-3`) counts as its kind; a type mark as itself.
+        assert_eq!(type_key(Some("EXIT_SIGN-3"), "exit_sign"), "exit_sign");
+        assert_eq!(type_key(Some(" exit_sign-12 "), "exit_sign"), "exit_sign");
+        assert_eq!(type_key(Some("X2"), "exit_sign"), "X2");
+        assert_eq!(type_key(Some("A-4"), "light_fixture"), "A-4");
+        assert_eq!(type_key(Some("EXIT_SIGN-X"), "exit_sign"), "EXIT_SIGN-X");
+        assert_eq!(type_key(None, "light_fixture"), "light_fixture");
+        assert_eq!(type_key(Some(""), "light_fixture"), "light_fixture");
     }
 }

@@ -51,6 +51,9 @@ const BASE_SLACK_FT: f64 = 2.0;
 /// How far outside a room's outline a typical view's symbol may land and still be the room's
 /// (a device on its wall), feet.
 pub(crate) const WALL_REACH_FT: f64 = 1.0;
+/// How far a plan mark of an element's kind (a tag on its leader, a keynote marker) may stand
+/// from it and still be its, feet (G-PRESENT's `mark_ft`).
+pub(crate) const MARK_REACH_FT: f64 = 6.0;
 
 /// One symbol a print shows.
 #[derive(Clone, Debug)]
