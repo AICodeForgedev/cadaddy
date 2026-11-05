@@ -6,7 +6,7 @@
 //!   rating when the schedule gives them, its circuit number, the load it names and the row it
 //!   came from.
 //! - **Where it is**: in the panel element the schedule is for. A typical schedule
-//!   (`TYPICAL OF n`) is every room panel of its letter's (a guest room's `G-<room>`): each built
+//!   (`TYPICAL OF n`) is every room panel of its letter's (a room's own `<letter>-<room>`): each built
 //!   panel takes its own set, stamped like the devices.
 //! - **What it connects to**: its panel, the raceway or cable its circuit lands on the panel
 //!   with, and the devices and equipment on the circuit (their `breaker_handle`), so
@@ -228,7 +228,7 @@ fn header_fact<'a>(h: &'a BTreeMap<String, String>, words: &[String]) -> Option<
     h.iter().find(|(k, v)| !v.trim().is_empty() && words.iter().any(|w| has_phrase(k, w))).map(|(k, v)| (k.as_str(), v.as_str()))
 }
 
-/// A device's or tag's circuit numbers on its panel: `G-13,15` → [13, 15]; `LP1-3` → [3];
+/// A device's or tag's circuit numbers on its panel: `U-13,15` → [13, 15]; `LP1-3` → [3];
 /// `7` → [7]; `D-1A` → [1].
 pub(crate) fn circuit_numbers(label: &str, panel: &str) -> Vec<u32> {
     let t = label.trim().to_ascii_uppercase();
@@ -690,7 +690,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             if !p.room.is_empty() {
                 by_room.entry((t.to_ascii_uppercase(), p.room.trim().to_ascii_uppercase())).or_insert(i);
             }
-            // `G-101` names its room too when the build gave it no `ROOM`.
+            // `U-104` names its room too when the build gave it no `ROOM`.
             if let Some(room) = p.tag.to_ascii_uppercase().strip_prefix(&format!("{}-", t.to_ascii_uppercase())) {
                 by_room.entry((t.to_ascii_uppercase(), room.to_string())).or_insert(i);
             }
@@ -1269,11 +1269,11 @@ mod tests {
     #[test]
     fn a_rows_codes_read_with_its_legend_give_its_type() {
         let legend: BTreeMap<String, String> = [
-            ("AF", "COMBINATION TYPE ARC FAULT CIRCUIT INTERRUPTER"),
-            ("GF", "GROUND FAULT INTERRUPTER"),
-            ("GFEP", "GROUND FAULT EQUIPMENT PROTECTION"),
-            ("ST", "SHUNT TRIP"),
-            ("LT", "LOCKING TAB"),
+            ("AF", "COMBINATION ARC-FAULT BREAKER"),
+            ("GF", "PERSONNEL GROUND FAULT PROTECTION"),
+            ("GFEP", "EQUIPMENT GROUND FAULT PROTECTION, 30 MA"),
+            ("ST", "WITH SHUNT TRIP"),
+            ("LT", "HANDLE LOCK-ON DEVICE"),
             ("X", "DUAL FUNCTION AFCI/GFCI"),
         ]
         .into_iter()
@@ -1296,7 +1296,7 @@ mod tests {
         assert_eq!(kind_of(&ckt("3", "RTU-1", "40", 2, &["AFCI"]), &none, "S-1").ty, "AFCI");
         assert_eq!(kind_of(&ckt("3", "CONDENSER (HACR)", "40", 2, &[]), &none, "S-1").ty, "HACR");
         let k = kind_of(&ckt("5", "RCPT", "20", 1, &["AF", "GF"]), &legend, "S-1");
-        assert!(k.source.contains("S-1") && k.source.contains("GF: GROUND FAULT INTERRUPTER"), "{k:?}");
+        assert!(k.source.contains("S-1") && k.source.contains("GF: PERSONNEL GROUND FAULT PROTECTION"), "{k:?}");
     }
 
     #[test]
@@ -1312,7 +1312,7 @@ mod tests {
         assert_eq!(trip("60AT/100AF"), Some(60.0));
         assert_eq!(frame("60AT/100AF"), Some(100.0));
         assert_eq!(trip("OL"), None);
-        assert_eq!(circuit_numbers("G-13,15", "G"), vec![13, 15]);
+        assert_eq!(circuit_numbers("U-13,15", "U"), vec![13, 15]);
         assert_eq!(circuit_numbers("LP1-3", "LP1"), vec![3]);
         assert_eq!(circuit_numbers("LP1-3", ""), vec![3]);
         assert_eq!(circuit_numbers("7", "A"), vec![7]);
@@ -1344,7 +1344,7 @@ mod tests {
         assert_eq!(l.row_holding(41), Some(7));
         assert_eq!(l.highest(), 43);
         // A switchboard's rows 1, 2, 3, each of three poles: by breaker.
-        let rows = sched(vec![ckt("1", "PANEL A", "200", 3, &[]), ckt("2", "PANEL B", "200", 3, &[]), ckt("3", "SPACE", "", 3, &[])]);
+        let rows = sched(vec![ckt("1", "PANEL LA", "200", 3, &[]), ckt("2", "PANEL LB", "200", 3, &[]), ckt("3", "SPACE", "", 3, &[])]);
         let l = layout(&rows, &none);
         assert!(l.by_breaker);
         assert_eq!(l.rows, vec![vec![1], vec![2], vec![3]]);

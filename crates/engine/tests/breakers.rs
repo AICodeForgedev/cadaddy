@@ -68,7 +68,7 @@ fn building() -> Session {
             "panel_schedules": [
                 {"panel": "LP1", "source": "X-2",
                  "header": {"aic rating": "10,000", "circuits": "12", "volts/phase": "208Y/120V, 3PH, 4W"},
-                 "legend": {"GF": "GROUND FAULT CIRCUIT INTERRUPTER", "ST": "SHUNT TRIP", "LT": "LOCKING TAB"},
+                 "legend": {"GF": "GFCI BREAKER (PERSONNEL)", "ST": "REMOTE SHUNT TRIP", "LT": "HANDLE LOCK"},
                  "circuits": [
                      ckt("1", "LIGHTS", "20", 1, &["LT"]),
                      ckt("2", "BATH RCPT", "20", 1, &["GF"]),
@@ -79,7 +79,7 @@ fn building() -> Session {
                      ckt("8", "SIGN", "20", 1, &[])
                  ]},
                 {"panel": "U", "typical_of": 3, "source": "X-2",
-                 "legend": {"AF": "COMBINATION TYPE ARC FAULT CIRCUIT INTERRUPTER", "GF": "GROUND FAULT INTERRUPTER"},
+                 "legend": {"AF": "ARC FAULT (COMBINATION)", "GF": "GROUND-FAULT, CLASS A"},
                  "circuits": [
                      ckt("1", "ROOM RCPT", "20", 1, &["AF"]),
                      ckt("2", "BATH RCPT", "20", 1, &["AF", "GF"]),
@@ -172,9 +172,9 @@ fn each_schedule_row_is_a_breaker_inside_its_panel_with_what_the_row_says() {
     assert_eq!(val(&bath, "load"), "BATH RCPT");
     assert_eq!(val(&bath, "aic"), "10,000", "the panel header's rating: {bath}");
     assert_eq!(bath["type"]["source"]["kind"], "schedule");
-    assert!(bath["type"]["source"]["doc"].as_str().is_some_and(|t| t.contains("GF: GROUND FAULT CIRCUIT INTERRUPTER")), "{bath}");
+    assert!(bath["type"]["source"]["doc"].as_str().is_some_and(|t| t.contains("GF: GFCI BREAKER (PERSONNEL)")), "{bath}");
     assert!(val(&bath, "source_row").as_str().is_some_and(|t| t.starts_with("X-2 panel LP1 row 2")), "{bath}");
-    // A locking tab is no protection; a description's HACR and a legend's shunt trip are types.
+    // A handle lock is no protection; a description's HACR and a legend's shunt trip are types.
     assert_eq!(val(&by_circuit("LP1-1"), "type"), "standard");
     let rtu = by_circuit("LP1-3,5");
     assert_eq!((val(&rtu, "type"), val(&rtu, "poles"), val(&rtu, "size")), (&json!("HACR"), &json!(2), &json!("40A 2P")), "{rtu}");
