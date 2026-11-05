@@ -101,14 +101,14 @@ fn spec() -> Value {
             {"name": "Exterior", "thickness_in": 6},
             {"name": "Partition", "thickness_in": 4.875, "from": "centerline"}
         ],
-        "rooms": [{"name": "Guest Room", "number": "101"}, {"name": "Guest Room", "number": "102"}, {"name": "Corridor", "number": "103"}],
+        "rooms": [{"name": "Guest Room", "number": "901"}, {"name": "Guest Room", "number": "902"}, {"name": "Corridor", "number": "903"}],
         "devices": {"by_type": {
             "DUPLEX": {"ceiling": false, "aff_ft": 1.5, "size_ft": [0.25, 0.1, 0.33]},
             "SW": {"ceiling": false, "aff_ft": 3.0},
             "PTAC": {"ceiling": false, "aff_ft": 1.0}
         }},
         "sheets": [
-            {"number": "X-101", "title": "FLOOR PLAN - LEVEL 1", "discipline": "A", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH]}
+            {"number": "X-901", "title": "FLOOR PLAN - LEVEL 1", "discipline": "A", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH]}
         ]
     })
 }
@@ -165,16 +165,16 @@ fn job(run_size_in: f64) -> Job {
     line(&mut s, [15.0, 0.5], [15.0, 11.5]);
     line(&mut s, [30.0, 0.5], [30.0, 11.5]);
     layer(&mut s, "A-ROOM-TAG");
-    text(&mut s, at([5.0, 6.0]), "101");
-    text(&mut s, at([20.0, 6.0]), "102");
-    text(&mut s, at([60.0, 6.0]), "103");
+    text(&mut s, at([5.0, 6.0]), "901");
+    text(&mut s, at([20.0, 6.0]), "902");
+    text(&mut s, at([60.0, 6.0]), "903");
     let (s, recs) = place(s, "RECEP", "E-POWR", &[[10.0, 0.5], [6.0, 9.5], [27.0, 11.5]], "DUPLEX");
     let (s, sws) = place(s, "SWITCH", "E-POWR", &[[14.5, 6.0]], "SW");
     let (mut s, ptacs) = place(s, "PTACU", "M-EQPM", &[[18.0, 0.5]], "PTAC");
     s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
     for (h, kind) in recs.iter().map(|h| (h, "receptacle")).chain([(&sws[0], "switch"), (&ptacs[0], "ptac")]) {
-        s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "X-101", "kind": kind})).unwrap();
+        s.execute("bim.source", &json!({"handles": [h], "status": "fixed", "source": "X-901", "kind": kind})).unwrap();
     }
     let mut s = built_devices(
         s,
@@ -194,15 +194,15 @@ fn job(run_size_in: f64) -> Job {
         device([18.0, 0.5], "ptac", "PTAC unit")
     ]);
     sp["rfis"] = json!([
-        {"id": "RFI-901", "kind": "conflict", "severity": "high", "level": "L1", "at": rec_at, "sheets": ["X-101"],
+        {"id": "RFI-901", "kind": "conflict", "severity": "high", "level": "L1", "at": rec_at, "sheets": ["X-901"],
          "about": "receptacle by the north wall", "issue": "the plan and the device schedule give two different receptacles here",
          "assumed": "the plan's", "status": "open", "topic": "receptacle type", "elements": [recs[1]]},
-        {"id": "RFI-902", "kind": "ceiling_unspecified", "severity": "low", "level": "L1", "at": at([60.0, 6.0]), "sheets": ["X-101"],
+        {"id": "RFI-902", "kind": "ceiling_unspecified", "severity": "low", "level": "L1", "at": at([60.0, 6.0]), "sheets": ["X-901"],
          "about": "corridor ceiling", "issue": "no ceiling height is given for the corridor", "assumed": "9 ft", "status": "open"}
     ]);
     sp["mep"]["equipment"] = json!([
         {"tag": "XP-1", "kind": "panel", "level": "L1", "min": at([40.0, 1.0]), "max": at([41.5, 1.4]), "bottom_ft": 4.0, "height_ft": 2.0,
-         "title": "PANEL XP-1", "sources": {"status": "proposed", "position": "proposed in room 103"}}
+         "title": "PANEL XP-1", "sources": {"status": "proposed", "position": "proposed in room 903"}}
     ]);
     sp["mep"]["runs"] = json!([
         {"system": "XFEED", "level": "L1", "points": [at([40.0, 2.0]), at([40.0, 10.0]), at([70.0, 10.0])], "size_in": [run_size_in, run_size_in],
@@ -213,14 +213,14 @@ fn job(run_size_in: f64) -> Job {
     agent["guided_job"] = json!({
         "findings": [
             {"id": "F-devices-1", "stage": "devices", "description": "the switch's circuit is printed twice", "why": "two numbers", "severity": 4,
-             "evidence": {"sheet": "X-101", "at": at([14.5, 6.0]), "handles": [sws[0]]}},
+             "evidence": {"sheet": "X-901", "at": at([14.5, 6.0]), "handles": [sws[0]]}},
             {"id": "F-levels-2", "stage": "levels", "description": "2 level readings not used", "why": "order", "severity": 1}
         ],
         "worklist": [
             {"id": "F-devices-1", "kind": "finding", "stage": "devices", "summary": "the switch's circuit is printed twice", "status": "info"},
             {"id": "F-levels-2", "kind": "finding", "stage": "levels", "summary": "2 level readings not used", "status": "info"},
-            {"id": "Q-classify-1", "kind": "question", "stage": "classify", "summary": "which level does X-101 show?", "status": "resolved"},
-            {"id": "Q-rooms-2", "kind": "question", "stage": "rooms", "summary": "is 103 a corridor or a lobby?", "status": "pending"}
+            {"id": "Q-classify-1", "kind": "question", "stage": "classify", "summary": "which level does X-901 show?", "status": "resolved"},
+            {"id": "Q-rooms-2", "kind": "question", "stage": "rooms", "summary": "is 903 a corridor or a lobby?", "status": "pending"}
         ]
     });
     s.doc_mut().unwrap().agent = Some(agent.to_string());
@@ -301,11 +301,11 @@ fn every_source_is_one_list_ranked_by_what_it_can_move_the_estimate() {
     let dollars = num(&host["impact"]["dollars"]);
     assert!(dollars > 0.0 && num(&host["impact"]["labor_hours"]) > 0.0, "{host}");
     assert!((num(&host["range"]["low"]) + dollars / 2.0).abs() < 0.02 && (num(&host["range"]["high"]) - dollars / 2.0).abs() < 0.02, "{host}");
-    assert_eq!(host["open"]["sheet"]["sheet"], "X-101", "{host}");
+    assert_eq!(host["open"]["sheet"]["sheet"], "X-901", "{host}");
     // The receptacle on its wall is no G-HOST item.
     let on = j.on_wall.to_ascii_uppercase();
     assert!(!all.iter().any(|i| i["rule"] == "G-HOST" && handles(i).contains(&on)));
-    // The PTAC room 101's type asks for: priced like the job's PTAC line, all up, nothing down.
+    // The PTAC room 901's type asks for: priced like the job's PTAC line, all up, nothing down.
     let ptac = by(&all, |i| i["rule"] == "G-PRESENT" && i["verdict"] == "missing").expect("G-PRESENT missing");
     assert_eq!(ptac["effect"], "missing");
     assert!(ptac["impact"]["basis"].as_str().unwrap().contains("priced like PTAC unit"), "{ptac}");
@@ -450,7 +450,7 @@ fn an_item_opens_on_its_sheet_and_at_its_elements() {
     let host = by(&all, |i| i["rule"] == "G-HOST" && handles(i).contains(&off)).unwrap();
     let id = host["id"].as_str().unwrap();
     let o = j.s.execute("review.impact.open", &json!({"id": id, "what": "sheet"})).unwrap();
-    assert_eq!(o["sheet"], "X-101");
+    assert_eq!(o["sheet"], "X-901");
     let w: Vec<f64> = o["window"].as_array().unwrap().iter().map(num).collect();
     let p = at([6.0, 9.5]);
     assert!(w[0] < p[0] && p[0] < w[2] && w[1] < p[1] && p[1] < w[3], "{o}");
