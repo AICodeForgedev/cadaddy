@@ -1,7 +1,8 @@
 //! Print crops checked against the model's walls (Q6141) on a made-up print set: an
 //! architectural plan the model is built on, and trade plans of the same floor whose recorded
-//! registrations are off — one shifted 3 ft, one turned 3°, one drawn 1.1 × as large — beside a
-//! ceiling plan registered truly and a sheet whose lines are not the floor at all. The packet
+//! registrations are off — one shifted 3 ft (walls drawn as lines), one turned 3° (as closed
+//! polylines), one drawn 1.1 × as large (as solid fills) — beside a ceiling plan registered truly
+//! and a sheet whose lines are not the floor at all. The packet
 //! re-fits the first three from their wall lines, keeps the true one, marks the last
 //! `misregistered`, and `validate.status` lists the sheets worst first.
 
@@ -93,9 +94,38 @@ fn line(s: &mut Session, a: [f64; 2], b: [f64; 2]) {
 }
 
 /// A plan sheet: the walls' faces as `truth` draws them, a door swing's chord and some lettering.
-fn trade_plan(s: &mut Session, sx: f64, truth: &dyn Fn([f64; 2]) -> [f64; 2]) {
-    for (a, b) in faces() {
-        line(s, on(sx, truth, a), on(sx, truth, b));
+/// How a sheet draws its walls.
+#[derive(Clone, Copy, PartialEq)]
+enum Drawn {
+    /// Each face a line.
+    Lines,
+    /// Each wall a closed polyline round it.
+    Outlines,
+    /// Each wall a solid fill (poche), added by [`fills`].
+    Fills,
+}
+
+/// A wall's outline on the sheet starting at `sx`, as `truth` draws it.
+fn outline(sx: f64, truth: &dyn Fn([f64; 2]) -> [f64; 2], a: [f64; 2], b: [f64; 2]) -> [[f64; 2]; 4] {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l = dx.hypot(dy);
+    let (nx, ny) = (-dy / l * HALF_FT, dx / l * HALF_FT);
+    [[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]].map(|p| on(sx, truth, p))
+}
+
+fn trade_plan(s: &mut Session, sx: f64, truth: &dyn Fn([f64; 2]) -> [f64; 2], drawn: Drawn) {
+    match drawn {
+        Drawn::Lines => {
+            for (a, b) in faces() {
+                line(s, on(sx, truth, a), on(sx, truth, b));
+            }
+        }
+        Drawn::Outlines => {
+            for (a, b) in centrelines() {
+                s.execute("pline", &json!({"vertices": outline(sx, truth, a, b), "closed": true})).unwrap();
+            }
+        }
+        Drawn::Fills => {}
     }
     line(s, on(sx, truth, [14.0, 3.0]), on(sx, truth, [17.0, 6.0]));
     for k in 0..12 {
@@ -149,18 +179,51 @@ fn job() -> Session {
     for (a, b) in faces() {
         line(&mut s, on(A201, &same, a), on(A201, &same, b));
     }
-    trade_plan(&mut s, E201, &shifted);
-    trade_plan(&mut s, M201, &turned);
-    trade_plan(&mut s, P201, &scaled);
-    trade_plan(&mut s, A221, &same);
+    trade_plan(&mut s, E201, &shifted, Drawn::Lines);
+    trade_plan(&mut s, M201, &turned, Drawn::Outlines);
+    trade_plan(&mut s, P201, &scaled, Drawn::Fills);
+    trade_plan(&mut s, A221, &same, Drawn::Lines);
     // A sheet whose lines are not the floor: a coarse grid of long lines.
     for k in 0..12 {
         let v = f64::from(k) * 7.3 - 5.0;
         line(&mut s, [F201 + OX + v * 12.0, OY - 120.0], [F201 + OX + v * 12.0, OY + 700.0]);
     }
+    let mut s = fills(s, P201, &scaled);
     s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
     s
+}
+
+/// The walls of the sheet starting at `sx` as solid fills, the way a PDF's wall poche imports.
+fn fills(s: Session, sx: f64, truth: &dyn Fn([f64; 2]) -> [f64; 2]) -> Session {
+    use cadaddy_engine::doc::{Entity, EntityKind, Hatch, HatchLoop};
+    use cadaddy_engine::geom::{PolyVertex, Vec2};
+    let mut d = (*s.doc().unwrap()).clone();
+    for (a, b) in centrelines() {
+        let vertices =
+            outline(sx, truth, a, b).iter().map(|p| PolyVertex { p: Vec2::new(p[0], p[1]), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect();
+        let hatch = Hatch {
+            pattern: "SOLID".into(),
+            solid: true,
+            loops: vec![HatchLoop { vertices, outer: true, sources: Vec::new(), curves: Vec::new() }],
+            scale: 1.0,
+            angle: 0.0,
+            associative: false,
+            style: 0,
+            elevation: 0.0,
+            gradient: None,
+            origin: Vec2::ZERO,
+            background: None,
+            pattern_lines: Vec::new(),
+        };
+        let h = d.new_handle();
+        let mut e = Entity::new(h, EntityKind::Hatch(Box::new(hatch)));
+        e.common.layer = "G-BKGD".into();
+        d.model.push(e);
+    }
+    let mut out = Session::empty();
+    out.open_drawing(d, "Sample Job", None);
+    out
 }
 
 fn dir(name: &str) -> PathBuf {
