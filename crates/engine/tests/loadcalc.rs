@@ -432,8 +432,16 @@ fn guest_suites_with_cooking_are_dwelling_units_and_take_the_optional_method() {
     // Every load of the units is under the factor: no other step for them.
     assert_eq!(opt["connected_va"], dp["connected_va"]["model"], "{dp}");
     assert!(steps.iter().all(|s| !s["what"].as_str().unwrap().starts_with("general lighting")), "{steps:?}");
-    // The documents use the same method: no finding about it.
-    assert!(find(&v, "E-LOAD-SCHEDULE", "DP", "").iter().all(|f| f["likely_wrong"] != "documents"), "{v:#}");
+    // The documents use the same method: no finding about it; their amps against the model's
+    // say which method the model took.
+    let doc = find(&v, "E-LOAD-SCHEDULE", "DP", "");
+    assert!(doc.iter().all(|f| f["likely_wrong"] != "documents"), "{v:#}");
+    assert!(
+        doc.iter()
+            .any(|f| f["message"].as_str().unwrap().contains("(the optional method, 6 units at 44%)")
+                && f["cite"].as_str().unwrap().contains("220.84")),
+        "{doc:?}"
+    );
     // One unit alone (its own panel): the dwelling rules' standard method.
     let u = v["panels"].as_array().unwrap().iter().find(|p| p["panel"] == "U").unwrap();
     let general = u["demand_steps"].as_array().unwrap().iter().find(|s| s["what"].as_str().unwrap().starts_with("general lighting")).unwrap();
