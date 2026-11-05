@@ -1,0 +1,44 @@
+{
+  "_about": "How each kind of review item moves the estimate (review.impact, Q6197). An item's impact is the price of the takeoff lines it touches (its elements' share of each line, or what the missing quantity costs priced like the lines of its kind); `low` and `high` are the fractions of that price the estimate may move down or up while the item is unresolved. Estimating practice, editable: a project that knows better changes these numbers, never the code.",
+  "effects": {
+    "missing": {"low": 0.0, "high": 1.0, "why": "the documents show work the model doesn't have: when it is real the estimate is short its whole price"},
+    "extra": {"low": -1.0, "high": 0.0, "why": "the model has work the documents don't show: when it is wrong the estimate is over by its price"},
+    "wrong": {"low": -0.5, "high": 0.5, "why": "a size, type, place or connection the documents give otherwise: the right one may cost up to half more or less"},
+    "unsure": {"low": -0.25, "high": 0.25, "why": "nothing says yet (no product data, no schedule row, a check that waits on other work): a quarter either way"},
+    "conflict": {"low": -0.5, "high": 0.5, "why": "two documents disagree: either side's price, up to half apart"},
+    "assumed": {"low": -0.1, "high": 0.1, "why": "a default the model assumed (a height, a mounting): little cost either way"},
+    "proposed": {"low": -0.25, "high": 0.5, "why": "work CADaddy laid out itself: the field route or place is more often longer than shorter"},
+    "gap": {"low": -0.5, "high": 0.5, "why": "an open question to the design team: the answer may add or remove up to half of what it touches"},
+    "finding": {"low": -0.5, "high": 0.5, "why": "something the job could not read or decide: up to half of what it touches either way"}
+  },
+  "verdicts": {
+    "fail": "wrong",
+    "missing": "missing",
+    "extra": "extra",
+    "unsure": "unsure",
+    "conflict": "conflict",
+    "default": "assumed",
+    "proposed": "proposed"
+  },
+  "rules": {
+    "G-COVERAGE": {"fail": "missing", "unsure": "missing"}
+  },
+  "rfi_kinds": {
+    "conflict": "conflict",
+    "*": "gap"
+  },
+  "finding": "finding",
+  "question": "gap",
+  "proposed": "proposed",
+  "actions": {
+    "accept": {"in_range": false, "why": "the model and the estimate stand as they are"},
+    "change": {"in_range": false, "why": "the model or the estimate was changed to settle it"},
+    "rfi_sent": {"in_range": true, "why": "asked of the design team: open in the estimate until it is answered"}
+  },
+  "labor_rate": 75.0,
+  "labor_rate_source": "bim.estimate's default crew rate (dollars per labor hour), used when estimate.settings has no crew_rate",
+  "like_categories": ["devices", "equipment", "fixtures", "plumbing fixtures", "fire alarm", "terminals", "dampers", "boxes"],
+  "run_categories": ["conduit"],
+  "run_item": "EMT conduit",
+  "_run_item": "what a laid-out run is priced as (through the estimate's prices, the price book, the starter book) when the takeoff has no line of its size"
+}

@@ -1929,6 +1929,53 @@ fn print_sheet(d: &Drawing, handle: &str, upf: f64) -> Option<String> {
 
 // ---------------------------------------------------------------- the command
 
+/// What [`screen_session`] screened: the drawing, its spec and model, the scope and the findings.
+pub(crate) struct Screen {
+    pub doc: std::sync::Arc<Drawing>,
+    pub sp: BuildingSpec,
+    pub model: Model,
+    pub key: Value,
+    pub areas: Vec<Area>,
+    pub out: Screened,
+}
+
+/// Screen the active drawing over the scope `p` names (the whole building when it names none),
+/// with the rules `only` (empty: all): what `validate.prescreen` lists, for other callers too
+/// (the review list ranked by impact).
+pub(crate) fn screen_session(s: &mut Session, p: &Value, only: &[String]) -> Result<Screen> {
+    let doc = std::sync::Arc::clone(&s.state()?.doc);
+    let d: &Drawing = &doc;
+    let (sp, _) = current(s, CMD)?;
+    let (model, frame) = model_of(d, &sp);
+    // The scope: as `validate` takes it, inferred from what is given.
+    let (key, areas) = super::validate_run::scope_areas(s, CMD, p, d, &sp, &model, &frame)?;
+    let whole = matches!(key["scope"].as_str(), Some("building" | "level"));
+    let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
+    let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
+    let gear_docs = if super::validate_gear::wanted(&rules, only) { super::validate_gear::read_docs(s, &sp) } else { None };
+    let conduit_takeoff = super::validate_conduit::read_takeoff(s, &rules, only);
+    let value = super::validate_value::read(s, p, &rules, only).map_err(|e| bad(CMD, e))?;
+    let equip_docs = if super::validate_equip::wanted(&rules, only) { super::validate_equip::read_docs(s, &sp) } else { None };
+    let sc = Scope {
+        d,
+        sp: &sp,
+        model: &model,
+        frame: &frame,
+        prints: prints.as_ref(),
+        rules: &rules,
+        areas: &areas,
+        whole_levels: whole,
+        only,
+        gear_docs: gear_docs.as_ref(),
+        conduit: true,
+        conduit_takeoff: conduit_takeoff.as_ref(),
+        value: value.as_ref(),
+        equip_docs: equip_docs.as_ref(),
+    };
+    let out = screen(&sc);
+    Ok(Screen { doc, sp, model, key, areas, out })
+}
+
 fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     let start = web_time::Instant::now();
     let cursor = p.get("cursor").and_then(Value::as_u64).map_or(0, |c| c.min(10_000_000) as usize);
@@ -1958,36 +2005,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = &path {
         super::exchange::guard_output(s, CMD, p, f)?;
     }
-    let doc = std::sync::Arc::clone(&s.state()?.doc);
+    let Screen { doc, sp, model, key, areas, out } = screen_session(s, p, &only)?;
     let d: &Drawing = &doc;
-    let (sp, _) = current(s, CMD)?;
-    let (model, frame) = model_of(d, &sp);
-    // The scope: as `validate` takes it, inferred from what is given.
-    let (key, areas) = super::validate_run::scope_areas(s, CMD, p, d, &sp, &model, &frame)?;
-    let whole = matches!(key["scope"].as_str(), Some("building" | "level"));
-    let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
-    let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
-    let gear_docs = if super::validate_gear::wanted(&rules, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
-    let conduit_takeoff = super::validate_conduit::read_takeoff(s, &rules, &only);
-    let value = super::validate_value::read(s, p, &rules, &only).map_err(|e| bad(CMD, e))?;
-    let equip_docs = if super::validate_equip::wanted(&rules, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
-    let sc = Scope {
-        d,
-        sp: &sp,
-        model: &model,
-        frame: &frame,
-        prints: prints.as_ref(),
-        rules: &rules,
-        areas: &areas,
-        whole_levels: whole,
-        only: &only,
-        gear_docs: gear_docs.as_ref(),
-        conduit: true,
-        conduit_takeoff: conduit_takeoff.as_ref(),
-        value: value.as_ref(),
-        equip_docs: equip_docs.as_ref(),
-    };
-    let out = screen(&sc);
     let wall_list = walls_summary(&model, &areas);
     // Every built element outside its level's footprint (the scope's levels): none may be there
     // unsaid.
