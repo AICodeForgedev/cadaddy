@@ -15,7 +15,11 @@ fn view(twist: f64) -> Drawing {
 fn view_group(text: &str, name: &str, code: i32) -> Option<f64> {
     let tags = cadaddy_dxf::parse(text.as_bytes()).ok()?;
     let mut records = tags.split(|t| t.code == 0);
-    records.find(|r| r.iter().any(|t| t.code == 2 && t.str() == name) && r.iter().any(|t| t.code == 50))?.iter().find(|t| t.code == code).map(|t| t.value.as_f64())
+    records
+        .find(|r| r.iter().any(|t| t.code == 2 && t.str() == name) && r.iter().any(|t| t.code == 50))?
+        .iter()
+        .find(|t| t.code == code)
+        .map(|t| t.value.as_f64())
 }
 
 #[test]

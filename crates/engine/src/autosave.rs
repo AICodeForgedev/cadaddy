@@ -636,10 +636,13 @@ mod native {
             let now = self.start.elapsed().as_secs_f64();
             let dir = savefilepath();
             let jobs = self.plan_with(s, now, savetime().max(1), &dir, true);
-            let uids: Vec<u64> = jobs.iter().filter_map(|j| match j {
-                Job::Write { uid, .. } | Job::Append { uid, .. } => Some(*uid),
-                Job::Delete { .. } => None,
-            }).collect();
+            let uids: Vec<u64> = jobs
+                .iter()
+                .filter_map(|j| match j {
+                    Job::Write { uid, .. } | Job::Append { uid, .. } => Some(*uid),
+                    Job::Delete { .. } => None,
+                })
+                .collect();
             self.perform(jobs);
             self.last_beat = None;
             self.heartbeat(&dir, now);

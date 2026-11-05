@@ -54,7 +54,14 @@ fn recovery_copies(dir: &std::path::Path) -> usize {
 
 #[test]
 fn a_panic_saves_the_work_and_reports_and_repeated_ones_close_safely() {
-    set_io(IoHooks { read: |_, _| Ok(Drawing::new_metric()), write: |_, _| Ok(b"0\nEOF\n".to_vec()), plot: None, read_pdf: None, read_dwf: None, write_dwfx: None });
+    set_io(IoHooks {
+        read: |_, _| Ok(Drawing::new_metric()),
+        write: |_, _| Ok(b"0\nEOF\n".to_vec()),
+        plot: None,
+        read_pdf: None,
+        read_dwf: None,
+        write_dwfx: None,
+    });
     let root = std::env::temp_dir().join(format!("cadaddy-ui-faults-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (auto, reports) = (root.join("autosave"), root.join("crash-reports"));

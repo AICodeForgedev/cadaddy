@@ -21,7 +21,8 @@ pub fn prefs_json() -> String {
     // (battle test 0.7.7c).
     let path = autosave::savefilepath();
     let path = if DEFAULT_DIR.get().is_some_and(|d| *d == path) { String::new() } else { path };
-    json!({ "savetime": autosave::savetime(), "saveFilePath": path, "auditctl": cadaddy_engine::audit::auditctl(), "backup": autosave::isavebak() }).to_string()
+    json!({ "savetime": autosave::savetime(), "saveFilePath": path, "auditctl": cadaddy_engine::audit::auditctl(), "backup": autosave::isavebak() })
+        .to_string()
 }
 
 /// Restore what [`prefs_json`] saved; malformed values are ignored.
@@ -367,7 +368,9 @@ pub fn failure_notice(app: &mut CadApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_width(440.0);
             ui.label(crate::tl!("CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now."));
-            ui.label(RichText::new(crate::tl!("Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.")).strong());
+            ui.label(
+                RichText::new(crate::tl!("Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.")).strong(),
+            );
             ui.add_space(4.0);
             ui.collapsing(crate::tl!("Details"), |ui| {
                 ui.label(RichText::new(&n.message).color(t.text_dim).monospace());
