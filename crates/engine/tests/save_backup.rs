@@ -39,6 +39,9 @@ fn files(dir: &std::path::Path) -> Vec<String> {
     v
 }
 
+/// The tests where another program changes the drawing on disk save with `force`: CADaddy
+/// otherwise refuses to overwrite a file changed since it was opened, and here the user chose to.
+///
 /// ISAVEBAK is process-wide: the tests that save hold this lock, so one turning it off can't
 /// race another's save. Dropping the guard turns it back on, also when a test fails.
 static SAVES: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -95,13 +98,13 @@ fn a_damaged_file_never_replaces_a_good_backup_and_isavebak_0_keeps_none() {
     add_circle(&mut s, 0.0);
     s.execute("saveas", &json!({ "path": p })).unwrap();
     add_circle(&mut s, 5.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(circles(&backup_path(&path)), 1);
 
     // Another program truncates the drawing; the next save keeps the good backup.
     std::fs::write(&path, b"").unwrap();
     add_circle(&mut s, 10.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!((circles(&path), circles(&backup_path(&path))), (3, 1));
 
     // Cut off with a drawing's start kept (half a DXF, a DWG's version tag alone): the backup
@@ -109,17 +112,17 @@ fn a_damaged_file_never_replaces_a_good_backup_and_isavebak_0_keeps_none() {
     let whole = std::fs::read(&path).unwrap();
     std::fs::write(&path, &whole[..whole.len() / 2]).unwrap();
     add_circle(&mut s, 11.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(circles(&backup_path(&path)), 1, "half a DXF");
     std::fs::write(&path, b"AC1032").unwrap();
     add_circle(&mut s, 12.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(circles(&backup_path(&path)), 1, "a DWG's tag alone");
 
     // ISAVEBAK 0: the backup is left as it was.
     s.execute("setvar", &json!({ "name": "ISAVEBAK", "value": 0 })).unwrap();
     add_circle(&mut s, 15.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!((circles(&path), circles(&backup_path(&path))), (6, 1));
     assert_eq!(files(&dir), ["Plan.dxf", "Plan.dxf.bak"]);
     let _ = std::fs::remove_dir_all(&dir);
@@ -225,7 +228,7 @@ fn a_dwg_cut_off_anywhere_keeps_the_good_backup() {
         add_circle(&mut s, 0.0);
         s.execute("saveas", &json!({ "path": p, "version": version })).unwrap();
         add_circle(&mut s, 5.0);
-        s.execute("qsave", &json!({})).unwrap();
+        s.execute("qsave", &json!({ "force": true })).unwrap();
         assert_eq!(circles(&backup_path(&path)), 1, "{version}: the first save is backed up");
         let whole = std::fs::read(&path).unwrap();
         let head = &whole[..whole.len().min(4096)];
@@ -236,7 +239,7 @@ fn a_dwg_cut_off_anywhere_keeps_the_good_backup() {
         // Another program leaves it cut off at 90%: the next save keeps the good backup.
         std::fs::write(&path, &whole[..whole.len() * 9 / 10]).unwrap();
         add_circle(&mut s, 10.0);
-        s.execute("qsave", &json!({})).unwrap();
+        s.execute("qsave", &json!({ "force": true })).unwrap();
         assert_eq!(circles(&backup_path(&path)), 1, "{version}: the cut-off file didn't replace it");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -257,7 +260,7 @@ fn a_file_that_looks_damaged_is_kept_when_there_is_no_backup_yet() {
     let odd = b"AC1032 but not as this header expects it".to_vec();
     std::fs::write(&path, &odd).unwrap();
     add_circle(&mut s, 5.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(std::fs::read(backup_path(&path)).unwrap(), odd);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -275,7 +278,7 @@ fn the_backup_a_save_promises_is_the_one_it_writes() {
     add_circle(&mut s, 0.0);
     s.execute("saveas", &json!({ "path": p })).unwrap();
     add_circle(&mut s, 5.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     let old = std::fs::read(backup_path(&path)).unwrap();
 
     let mut dwg2007 = b"AC1021".to_vec();
@@ -283,14 +286,14 @@ fn the_backup_a_save_promises_is_the_one_it_writes() {
     std::fs::write(&path, &dwg2007).unwrap();
     assert!(save_keeps_current(&path));
     add_circle(&mut s, 10.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(std::fs::read(backup_path(&path)).unwrap(), dwg2007, "the promise was kept");
 
     std::fs::write(backup_path(&path), &old).unwrap();
     std::fs::write(&path, b"AC1032").unwrap();
     assert!(!save_keeps_current(&path));
     add_circle(&mut s, 15.0);
-    s.execute("qsave", &json!({})).unwrap();
+    s.execute("qsave", &json!({ "force": true })).unwrap();
     assert_eq!(std::fs::read(backup_path(&path)).unwrap(), old, "cut off: nothing was promised");
 
     cadaddy_engine::autosave::set_isavebak(false);
