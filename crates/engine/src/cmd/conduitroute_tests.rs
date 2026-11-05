@@ -344,7 +344,10 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "mep": {
-            "systems": [{"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2.5, 0], "bottom_ft": 10}],
+            "systems": [
+                {"name": "E-FEEDER", "layer": "E-FEEDER", "kind": "conduit", "size_in": [2.5, 0], "bottom_ft": 10},
+                {"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": -1.5}
+            ],
             "equipment": [
                 {"tag": "SB1", "kind": "switchboard", "level": "L1", "min": [0, 0], "max": [48, 24], "height_ft": 7, "bottom_ft": 0},
                 {"tag": "PA", "kind": "panel", "level": "L1", "min": [480, 0], "max": [504, 24], "height_ft": 3, "bottom_ft": 4}
@@ -357,13 +360,17 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
     s.execute("model.build", &json!({})).unwrap();
     // The job's feeder step: its route into the spec, built as whole runs (up 3', 38' across, down 3').
     let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
-    let run = |pts: Vec<[f64; 2]>, z: f64, top: Option<f64>| -> MepRun {
-        serde_json::from_value(json!({"system": "E-FEEDER", "level": "L1", "bottoms_ft": vec![z; pts.len().saturating_sub(1).max(1)], "points": pts,
-            "size_in": [2.5, 0.0], "top_ft": top, "source_sheet": "feeder F3 SB1→PA", "height_source": "proposed"}))
+    let on = |system: &str, src: &str, pts: Vec<[f64; 2]>, z: f64, top: Option<f64>| -> MepRun {
+        serde_json::from_value(json!({"system": system, "level": "L1", "bottoms_ft": vec![z; pts.len().saturating_sub(1).max(1)], "points": pts,
+            "size_in": [2.5, 0.0], "top_ft": top, "source_sheet": src, "height_source": "proposed"}))
         .unwrap()
     };
-    let runs =
+    let run = |pts: Vec<[f64; 2]>, z: f64, top: Option<f64>| on("E-FEEDER", "feeder F3 SB1→PA", pts, z, top);
+    let mut runs =
         vec![run(vec![[36.0, 6.0]], 7.0, Some(10.0)), run(vec![[36.0, 6.0], [492.0, 6.0]], 10.0, None), run(vec![[492.0, 6.0]], 7.0, Some(10.0))];
+    // A buried leg of the feeder, and the underground plan's own run on the same buried system.
+    runs.push(on("E-UG", "feeder F3 SB1→PA", vec![[30.0, 2.0], [30.0, -100.0]], -1.5, None));
+    runs.push(on("E-UG", "underground plan", vec![[200.0, -200.0], [400.0, -200.0]], -2.0, None));
     sp.mep.runs.extend(runs.iter().cloned());
     let mut part = sp.clone();
     part.mep.runs = runs;
@@ -376,6 +383,20 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
     assert!(whole(&s) > 0, "the job's whole runs");
     let r = s.execute("conduit.reroute", &json!({})).unwrap();
     assert_eq!(r["routed"], json!(true), "{r}");
+    // Again (the job reroutes once its devices are reseated): the feeder's buried pieces don't
+    // make the underground plan's run pieces; it stays whole, once.
+    s.execute("conduit.reroute", &json!({})).unwrap();
+    let ug = |s: &crate::Session, atom: bool| {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| super::mepatoms::is_atom(e) == atom && super::bimlook::made_tag(e, "system") == Some("E-UG"))
+            .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.starts_with("@200.00,-200.00")))
+            .count()
+    };
+    assert!(ug(&s, false) > 0, "the underground plan's run stays whole");
+    assert_eq!(ug(&s, true), 0, "and is not cut into pieces besides");
     assert_eq!(whole(&s), 0, "the whole runs give way to the pieces");
     let d = s.doc().unwrap();
     let wire: Vec<(String, String, f64)> = d

@@ -3336,12 +3336,19 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
     let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string()]);
+    // A feeder's pieces don't make their system's other runs pieces (the underground plan's
+    // runs on the feeders' buried system stay whole): feeder runs are cut on their own.
+    let feeder_bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
+    let of_feeder =
+        |e: &Entity| super::bimlook::made_tag(e, "mepid").and_then(|id| id.split_once('#')).is_some_and(|(base, _)| feeder_bases.contains(base));
     let old: Vec<Handle> = d
         .model
         .iter()
         .filter(|e| mep_piece(e))
         .inspect(|e| {
-            if let Some(sy) = super::bimlook::made_tag(e, "system") {
+            if let Some(sy) = super::bimlook::made_tag(e, "system")
+                && !of_feeder(e)
+            {
                 systems.insert(sy.to_string());
             }
         })
