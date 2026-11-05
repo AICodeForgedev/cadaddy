@@ -1144,7 +1144,7 @@ pub(crate) fn check(cx: &Ctx, r: &Effective) -> Checked {
             first.map(|x| x.id.clone()),
             "buried_run",
             first.map_or(level.as_str(), |x| x.level.as_str()),
-            first.map(&mid_ft),
+            first.map(mid_ft),
             issue,
             expected,
             found,
