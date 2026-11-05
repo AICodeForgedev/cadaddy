@@ -5886,6 +5886,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
     // the build routes the circuits by (Q6152).
     route_methods_step(s, job);
+    // The documents' low-voltage pathways (Q6203): what the build routes each outlet's by.
+    lv_pathways_step(s, job, &scope_docs);
     // The slab level's drains its plans give no height (Q6148): under its floor to the building
     // drain, built there, not in its ceiling.
     let mut drain_slope = Value::Null;
@@ -14312,6 +14314,53 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob) {
     ));
     if let Ok(d) = s.doc_mut() {
         m.store(d);
+    }
+}
+
+/// The documents' low-voltage pathways (Q6203): every note, legend note and specification
+/// paragraph that names a pathway for the low-voltage outlets (the scope reading's documents,
+/// and the sheets whose title names the low-voltage systems whatever their number's prefix, read
+/// as that trade's), stored for the router.
+fn lv_pathways_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]) {
+    let t0 = web_time::Instant::now();
+    let mut all: Vec<super::scope::Doc> = docs.to_vec();
+    let mut lv_sheets: Vec<String> = Vec::new();
+    let read_pdf = super::file::io().and_then(|h| h.read_pdf);
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for c in classified.iter().take(5_000) {
+        let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let number = text("number");
+        if number.is_empty() || !super::conduitroute::lv::lv_sheet_title(&text("title")) || lv_sheets.len() >= MAX_LEGEND_SHEETS * 2 {
+            continue;
+        }
+        let name = number.split('/').next().unwrap_or("").to_string();
+        // Read already (its discipline's sheets): it speaks for the low-voltage trade.
+        if let Some(d) = all.iter_mut().find(|d| d.name == name) {
+            d.trade = Some("low voltage".into());
+            lv_sheets.push(name);
+            continue;
+        }
+        let Some(read) = read_pdf else { continue };
+        if let Ok(page) = sheet_page(job, c, &mut files, read) {
+            let mut doc = super::scope::sheet_doc(&name, &cadaddy_mepfix::sheet_facts::texts(&page));
+            doc.trade = Some("low voltage".into());
+            all.push(doc);
+            lv_sheets.push(name);
+        }
+    }
+    let lv = super::conduitroute::lv::read(&all);
+    progress_line(&format!(
+        "  low-voltage pathways: {} statement(s) from {} document(s) (low-voltage sheets {}); minimum size {}; firestop by {}; {:.1} s",
+        lv.statements.len(),
+        lv.docs_read,
+        if lv_sheets.is_empty() { "none".to_string() } else { lv_sheets.join(", ") },
+        lv.min_size_in.map_or_else(|| "not said".to_string(), |v| format!("{v} in")),
+        if lv.firestop_by.is_empty() { "not said" } else { lv.firestop_by.as_str() },
+        t0.elapsed().as_secs_f64()
+    ));
+    if let Ok(d) = s.doc_mut() {
+        lv.store(d);
     }
 }
 

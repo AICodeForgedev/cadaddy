@@ -88,6 +88,9 @@ pub(crate) struct Raceway {
     /// The most degrees of bends between pull points.
     pub max_bends_deg: f64,
     pub max_bends_source: String,
+    /// Its connectors take no locknut (they snap into the knockout).
+    pub no_locknut: bool,
+    pub no_locknut_source: String,
 }
 
 impl Raceway {
@@ -162,6 +165,9 @@ pub(crate) struct AtomRules {
     /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
     pub panel_makeup_ft: f64,
     pub panel_makeup_source: String,
+    /// What an empty raceway's open end (a stub into the ceiling space) ends in.
+    pub stub_bushing_item: String,
+    pub stub_bushing_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
     pub bushing_source: String,
@@ -416,6 +422,22 @@ pub(crate) fn raceway_pieces(
     large_conductors: bool,
     rules: &AtomRules,
 ) -> Pieces {
+    raceway_pieces_ending(path, upf, size_in, material, rw, large_conductors, [false, false], rules)
+}
+
+/// [`raceway_pieces`], each end `open` (ending in no box or enclosure: a stub) taking the stub
+/// bushing in place of a connector and locknut.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn raceway_pieces_ending(
+    path: &[Vec3],
+    upf: f64,
+    size_in: f64,
+    material: &str,
+    rw: &Raceway,
+    large_conductors: bool,
+    open: [bool; 2],
+    rules: &AtomRules,
+) -> Pieces {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let pts = clean_path(path, upf);
     let mut out = Pieces::default();
@@ -581,6 +603,20 @@ pub(crate) fn raceway_pieces(
         let (at, dir) =
             if end == 0 { (pts.first().copied(), legs.first().map(|l| l.0 - l.1)) } else { (pts.last().copied(), legs.last().map(|l| l.1 - l.0)) };
         let (Some(at), Some(dir)) = (at, dir) else { continue };
+        if open.get(end).copied().unwrap_or(false) && !rules.stub_bushing_item.is_empty() {
+            let mut bu =
+                Atom::fitting("bushing", rules.stub_bushing_item.clone(), material, &size, at, dir, size_in * 1.2, &rules.stub_bushing_source);
+            bu.connects = vec![p];
+            let bi = out.atoms.len();
+            out.atoms.push(bu);
+            if let Some(a) = out.atoms.get_mut(p) {
+                a.connects.push(bi);
+            }
+            if let Some(x) = out.ends.get_mut(end) {
+                *x = Some(bi);
+            }
+            continue;
+        }
         let mut c = Atom::fitting("connector", rw.connector.clone(), material, &size, at, dir, size_in * 1.3, &rw.stock_source);
         c.connects = vec![p];
         let ci = out.atoms.len();
@@ -590,6 +626,9 @@ pub(crate) fn raceway_pieces(
         }
         if let Some(x) = out.ends.get_mut(end) {
             *x = Some(ci);
+        }
+        if rw.no_locknut {
+            continue;
         }
         let mut nut = Atom::fitting("locknut", rules.locknut_item.clone(), material, &size, at, dir, size_in * 1.6, &rules.locknut_source);
         nut.connects = vec![ci];

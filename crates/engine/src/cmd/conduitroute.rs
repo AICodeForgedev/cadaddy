@@ -1764,7 +1764,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut out = Routed::default();
     let circuit_tags: Vec<(usize, &ElementTag)> =
         sp.tags.iter().enumerate().filter(|(_, t)| t.kind == "circuit" && !t.id.contains(HOME_PART)).take(MAX_CIRCUITS).collect();
-    if circuit_tags.is_empty() {
+    // Nothing to route: no circuits, and no low-voltage outlet for a pathway (Q6203).
+    if circuit_tags.is_empty() && !lv::any_outlet(d) {
         out.report = json!({"circuits": 0, "note": "no circuits in the spec: nothing to route"});
         return out;
     }
@@ -2008,8 +2009,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     let mut no_circuit = 0usize;
     let mut no_tag = 0usize;
     let mut controllers: Vec<usize> = Vec::new();
+    // The low-voltage outlets have no circuit: their pathways are routed below (Q6203).
+    let lv_outlets = lv::outlets(d, &devs);
     for (di, dv) in devs.iter().enumerate() {
         if dv.circuit.is_empty() {
+            if lv_outlets.contains(&di) {
+                continue;
+            }
             if dv.controls.is_empty() {
                 no_circuit += 1;
             } else {
@@ -3221,6 +3227,23 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         })
         .collect();
 
+    // -- The low-voltage outlets' pathways (Q6203), over the same model. --
+    let lv_out = lv::route(&lv::Ctx {
+        d,
+        sp,
+        upf,
+        rl,
+        fields: &fields,
+        empty: &empty,
+        rated: &rated,
+        devs: &devs,
+        tiers_of: &tiers_of,
+        box_ceiling: &box_ceiling,
+        ceiling_at: &ceiling_at,
+        corridors: &corridors,
+        carry: &carry,
+    });
+
     // -- The runs and tags out; the report. --
     let mut by_pair: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for c in &clashes {
@@ -3314,9 +3337,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     if let (Some(o), Value::Object(m)) = (out.report.as_object_mut(), more) {
         o.extend(m);
     }
+    out.report["lv_outlets"] = json!(lv_outlets.len());
+    out.report["lv_pathways"] = lv_out.report;
     out.cable = cable_paths;
     out.runs = runs;
+    out.runs.extend(lv_out.runs);
     out.tags = tags;
+    out.tags.extend(lv_out.tags);
     out
 }
 
@@ -3502,10 +3529,14 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
         r.system == BRANCH_SYSTEM
+            || r.system == lv::LV_SYSTEM
             || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c)))
     };
-    replaced.runs = sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
+    replaced.runs =
+        sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));
+    // An earlier routing's pathway tags give way to this one's.
+    sp.tags.retain(|t| t.kind != lv::TAG_KIND);
     sp.mep.runs.extend(routed.runs.iter().cloned());
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of");
     replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
@@ -3540,6 +3571,18 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
             .cloned(),
     );
     sp.tags = tags;
+    if routed.runs.iter().any(|r| r.system == lv::LV_SYSTEM) && !sp.mep.systems.iter().any(|s| s.name == lv::LV_SYSTEM) {
+        sp.mep.systems.push(MepSystem {
+            name: lv::LV_SYSTEM.into(),
+            layer: lv::LV_SYSTEM.into(),
+            kind: MepKind::Conduit,
+            size_in: [0.75, 0.0],
+            bottom_ft: 9.0,
+            show: true,
+            duct_type: None,
+            color_index: 0,
+        });
+    }
     if !sp.mep.systems.iter().any(|s| s.name == BRANCH_SYSTEM) {
         sp.mep.systems.push(MepSystem {
             name: BRANCH_SYSTEM.into(),
@@ -3560,6 +3603,9 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
 /// runs gone and the estimated ones back. A spec no routing went into is as it is.
 pub(crate) fn unrouted(d: &Drawing, sp: &BuildingSpec) -> BuildingSpec {
     let mut out = sp.clone();
+    // The low-voltage pathways are the routing's own (none read).
+    out.mep.runs.retain(|r| r.system != lv::LV_SYSTEM);
+    out.tags.retain(|t| t.kind != lv::TAG_KIND);
     if !sp.mep.runs.iter().any(|r| r.system == BRANCH_SYSTEM) {
         return out;
     }
@@ -3684,7 +3730,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     let off_of = |level: &str| offsets.get(&level.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
-    let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string()]);
+    let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string()]);
     let old: Vec<Handle> = d
         .model
         .iter()
@@ -3758,7 +3804,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("conduit.route", "Conduit Routing Report", run_report)
             .menu(&["Draw", "BIM", "Conduit Routing Report"])
-            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, conductors_upsized, fill, derated, unrouted}")
+            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
@@ -3777,12 +3823,26 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let max = p.get("max").and_then(Value::as_u64).map_or(200, |v| v.min(20_000) as usize);
     let lists = ["clashes", "conflicts", "penetrations", "bored_holes", "conductors_upsized", "fill", "derated", "unrouted"];
+    // The low-voltage pathways' lists (Q6203), cut to `max`.
+    let lv_lists = ["outlet_list", "typical_rooms", "common_areas", "sleeves", "penetrations", "unrouted", "conflicts"];
+    if let Some(lv) = r.get_mut("lv_pathways") {
+        for k in lv_lists {
+            if let Some(a) = lv.get_mut(k).and_then(Value::as_array_mut) {
+                let n = a.len();
+                a.truncate(max);
+                lv[format!("{k}_total")] = json!(n);
+            }
+        }
+    }
     if let Some(sec) = p.get("section").and_then(Value::as_str) {
         if sec == "box_fill" {
             return Ok(r["box_fill"].clone());
         }
+        if sec == "lv_pathways" {
+            return Ok(r.get("lv_pathways").cloned().unwrap_or_else(|| json!({"outlets": 0, "note": "no routing stored"})));
+        }
         if !lists.contains(&sec) && sec != "methods" {
-            return Err(bad("conduit.route", format!("`section` must be one of {lists:?}, box_fill or methods")));
+            return Err(bad("conduit.route", format!("`section` must be one of {lists:?}, box_fill, methods or lv_pathways")));
         }
         let v = r.get(sec).cloned().unwrap_or(Value::Null);
         return Ok(match v {
@@ -3927,6 +3987,64 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
     for ((level, item, size, member), (n, floors)) in &bh {
         add(&mut lines, [level, "", "", "bored hole", item, size, member], *n, "ea", floors.iter().cloned().collect());
     }
+    // The low-voltage pathways' (Q6203): firestop at the rated walls and floors they cross, the
+    // sleeves, the J-hooks of open cable and the pull string, each where it is ours.
+    let lv = report.as_ref().map(|r| r["lv_pathways"].clone()).unwrap_or(Value::Null);
+    let lv_level = |v: &Value| if groups.iter().any(|x| x == "level") { v["level"].as_str().unwrap_or_default().to_string() } else { String::new() };
+    let mut lv_others: Vec<String> = Vec::new();
+    if lv["firestop"]["ours"].as_bool().unwrap_or(false) {
+        let mut fs: BTreeMap<(String, String, String), (f64, Vec<String>)> = BTreeMap::new();
+        for f in lv["penetrations"].as_array().into_iter().flatten() {
+            let k = (
+                lv_level(f),
+                f["rating"].as_str().unwrap_or_default().to_string(),
+                super::mepatoms::trade_size(f["raceway_in"].as_f64().unwrap_or(0.75)),
+            );
+            let e = fs.entry(k).or_insert((0.0, Vec::new()));
+            e.0 += 1.0;
+            e.1.extend(f["wall"].as_str().map(str::to_string));
+        }
+        for ((level, rating, size), (n, walls)) in &fs {
+            add(&mut lines, [level, "", "", "firestop", &item_fs, size, rating], *n, "ea", walls.clone());
+        }
+    } else if lv["firestop"]["count"].as_u64().unwrap_or(0) > 0 {
+        lv_others.push(format!("{} low-voltage firestop(s): {}", lv["firestop"]["count"], lv["firestop"]["scope"].as_str().unwrap_or_default()));
+    }
+    if lv["raceway_scope"]["ours"].as_bool().unwrap_or(false) {
+        let mut sl: BTreeMap<(String, String, String, String), (f64, Vec<String>)> = BTreeMap::new();
+        for x in lv["sleeves"].as_array().into_iter().flatten() {
+            let k = (
+                lv_level(x),
+                x["item"].as_str().unwrap_or_default().to_string(),
+                x["size"].as_str().unwrap_or_default().to_string(),
+                x["rating"].as_str().unwrap_or_default().to_string(),
+            );
+            let e = sl.entry(k).or_insert((0.0, Vec::new()));
+            e.0 += 1.0;
+            e.1.extend(x["wall"].as_str().map(str::to_string));
+        }
+        for ((level, item, size, rating), (n, walls)) in &sl {
+            add(&mut lines, [level, "", "", "sleeve", item, size, rating], *n, "ea", walls.clone());
+        }
+        let pull = lv["fittings"]["pull_string_ft"].as_f64().unwrap_or(0.0);
+        if pull > 0.0 {
+            add(
+                &mut lines,
+                ["", "", "", "pull string", lv["fittings"]["pull_string_item"].as_str().unwrap_or_default(), "", ""],
+                pull,
+                "ft",
+                Vec::new(),
+            );
+        }
+    }
+    let hooks = lv["jhooks"]["count"].as_f64().unwrap_or(0.0);
+    if hooks > 0.0 {
+        if lv["jhooks"]["ours"].as_bool().unwrap_or(false) {
+            add(&mut lines, ["", "", "", "j-hook", lv["jhooks"]["item"].as_str().unwrap_or_default(), "", ""], hooks, "ea", Vec::new());
+        } else {
+            lv_others.push(format!("{hooks} J-hooks: {}", lv["jhooks"]["scope"].as_str().unwrap_or_default()));
+        }
+    }
     if price {
         match &cost_db {
             Some(db) => {
@@ -4061,9 +4179,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
         "lines": shown, "line_count": lines.len(),
         "totals": {"material": r2(tm), "labor_dollars": r2(tl), "labor_hours": r2(th), "cost": r2(tm + tl)},
         "firestop": firestop.len(), "bored_holes": holes.len(), "unpriced": unpriced, "file": file_out,
-        "group_by": groups,
+        "group_by": groups, "lv_by_others": lv_others,
     }))
 }
+
+#[path = "conduitroute_lv.rs"]
+pub(crate) mod lv;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]

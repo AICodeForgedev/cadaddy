@@ -52,7 +52,7 @@
 
 use cadaddy_doc::projrules::{RuleDomain, RuleValue};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::bspec::current;
 use super::*;
@@ -471,6 +471,15 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let by_atoms = atoms.is_some();
     // What each built device and fixture is as a product (Q6164), else its type's in the catalog.
     let (built_products, _) = s.doc().map(product_index).unwrap_or_default();
+    // The low-voltage outlets whose pathway the model built (Q6203), by their tags: its pieces
+    // are counted from the model, not a stub per outlet.
+    let lv = super::conduitroute::lv::TAG_KIND;
+    let piped: BTreeSet<String> = sp
+        .tags
+        .iter()
+        .filter(|t| t.kind == lv && t.fields.get("built").is_some_and(|f| f.value == "yes"))
+        .filter_map(|t| t.fields.get("devid").map(|f| f.value.clone()).filter(|v| !v.is_empty()))
+        .collect();
     let product_of = |t: &cadaddy_walk3d::tags::ElementTag, mark: Option<&str>| -> Product {
         let mut p = built_products.get(&t.id).cloned().unwrap_or_default();
         let mark = if p.type_mark.is_empty() { mark.map(str::to_string).unwrap_or_default() } else { p.type_mark.clone() };
@@ -497,6 +506,8 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                 format!("{fa_kind} {}", f("type").map(|v| v.0).unwrap_or_default()).trim().to_string()
             };
             others_entry(others, dec, &t.id, &what, &t.level, &ours);
+            let ours: Vec<super::scope::OurItem> =
+                if by_atoms && piped.contains(&t.id) { ours.into_iter().filter(|i| i.item != "conduit").collect() } else { ours };
             rough_in_lines(lines, dec, &ours, by_atoms, &t.id, &t.level, &on);
             continue;
         }
@@ -778,7 +789,69 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     if let Some(ix) = atoms {
         atom_lines(lines, &ix);
     }
+    lv_pathway_lines(s, lines);
     Ok(())
+}
+
+/// The low-voltage pathways' items the model's pieces don't hold (Q6203): the sleeves through
+/// rated walls and the J-hooks of open cable, each where it is ours.
+fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
+    let Some(r) = s.doc().ok().and_then(super::conduitroute::stored_report) else { return };
+    let lv = &r["lv_pathways"];
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_string();
+    if lv["raceway_scope"]["ours"].as_bool().unwrap_or(false) {
+        let mut sleeves: BTreeMap<(String, String), (f64, Vec<String>, String)> = BTreeMap::new();
+        for sl in lv["sleeves"].as_array().into_iter().flatten().take(MAX_LINES) {
+            let e = sleeves.entry((text(&sl["level"]), text(&sl["size"]))).or_insert((0.0, Vec::new(), text(&sl["source"])));
+            e.0 += 1.0;
+            e.1.push(text(&sl["wall"]));
+        }
+        for ((level, size), (n, walls, src)) in sleeves {
+            add(
+                lines,
+                Line {
+                    trade: "electrical",
+                    category: "conduit fittings".into(),
+                    item: lv["sleeves"][0]["item"].as_str().unwrap_or("Sleeve").to_string(),
+                    size,
+                    unit: "each",
+                    net: n,
+                    status: "model",
+                    rule: Some(src.chars().take(400).collect()),
+                    level,
+                    elements: walls,
+                    waste_qty: None,
+                    circuit: String::new(),
+                    product: Product::default(),
+                },
+            );
+        }
+    }
+    let n = lv["jhooks"]["count"].as_f64().unwrap_or(0.0);
+    if n > 0.0 && lv["jhooks"]["ours"].as_bool().unwrap_or(false) {
+        add(
+            lines,
+            Line {
+                trade: "electrical",
+                category: "conduit fittings".into(),
+                item: text(&lv["jhooks"]["item"]),
+                size: String::new(),
+                unit: "each",
+                net: n,
+                status: "rule",
+                rule: Some(format!(
+                    "{} ft apart along the open cable and at each turn: {}",
+                    lv["jhooks"]["spacing_ft"],
+                    text(&lv["jhooks"]["spacing_source"])
+                )),
+                level: String::new(),
+                elements: Vec::new(),
+                waste_qty: None,
+                circuit: String::new(),
+                product: Product::default(),
+            },
+        );
+    }
 }
 
 /// The BOM lines of a model built with its pieces (Q6157): each counted piece of its index by
