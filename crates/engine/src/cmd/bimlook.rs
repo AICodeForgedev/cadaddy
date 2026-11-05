@@ -403,6 +403,46 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
     }
 }
 
+/// What a model element the build didn't make is: a room volume (`rooms.build`) of a room the
+/// model doesn't hold as a room element, or an object read from IFC. `bim_props find` lists them
+/// ([`super::elemprops::elements`]), so `bim.tree` and `bim.element` take them too: one meaning
+/// of "model element" for all three.
+fn classify_other(e: &Entity) -> Option<Class> {
+    let (kind, name, level) = match super::rooms3d::room_of(&e.common) {
+        Some(name) => ("room", name, String::new()),
+        None => {
+            let t = super::ifcref::tag(e)?;
+            (cadaddy_doc::props::kind_of_ifc_class(&t.class), t.name, t.level.unwrap_or_default())
+        }
+    };
+    let (key, category) = match kind {
+        "wall" => ("architecture", "Walls"),
+        "floor" => ("architecture", "Floors"),
+        "ceiling" => ("architecture", "Ceilings"),
+        "roof" => ("architecture", "Roofs"),
+        "room" => ("architecture", "Rooms"),
+        "door" => ("openings", "Doors"),
+        "window" => ("openings", "Windows"),
+        "duct" => ("duct", "Duct"),
+        "pipe" => ("pipe", "Pipe"),
+        "conduit" => ("conduit", "Conduit"),
+        "light_fixture" => ("lights", "Light Fixtures"),
+        "fixture" => ("fixtures", "Plumbing Fixtures"),
+        "device" => ("devices", "Devices"),
+        "equipment" => ("equipment", "Equipment"),
+        _ => ("architecture", "Elements"),
+    };
+    let group = trade(key).map_or("Architecture", |t| t.group);
+    let ty = if name.trim().is_empty() { title(kind) } else { name.trim().to_string() };
+    Some(Class { key, group, category: category.into(), ty, level })
+}
+
+/// The model's elements with what each is: those `bim_props find` lists, so every handle it
+/// returns opens in `bim.element` and `bim.tree` totals the same.
+fn model_elements(d: &Drawing) -> impl Iterator<Item = (&Arc<Entity>, Class)> {
+    super::elemprops::elements(d).filter_map(move |(e, _)| classify(d, e).or_else(|| classify_other(e)).map(|c| (e, c)))
+}
+
 // ─── The drawing the view draws ──────────────────────────────────────────────
 
 /// Whether the drawing holds a built model (any object the build made).
@@ -801,8 +841,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if bool_or(p, "select", false) || bool_or(p, "zoom", false) {
             let d = s.doc()?;
-            let hs: Vec<Handle> =
-                d.model.iter().take(MAX_SCAN).filter(|e| classify(d, e).is_some_and(|c| under(path, &c))).map(|e| e.handle).collect();
+            let hs: Vec<Handle> = model_elements(d).filter(|(_, c)| under(path, c)).map(|(e, _)| e.handle).collect();
             if hs.is_empty() {
                 return Err(bad(CMD, format!("nothing in the model is under {path:?}")));
             }
@@ -837,8 +876,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let look = Look::of(d);
     let mut tree: BTreeMap<String, Groups> = BTreeMap::new();
     let mut total = 0usize;
-    for e in d.model.iter().take(MAX_SCAN) {
-        let Some(c) = classify(d, e) else { continue };
+    for (e, c) in model_elements(d) {
         let ok = |f: Option<&str>, v: &str| f.is_none_or(|f| f.eq_ignore_ascii_case(v));
         if !(ok(fl, &c.level) && ok(fg, c.group) && ok(fc, &c.category) && ok(ft, &c.ty)) {
             continue;
@@ -1070,7 +1108,9 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let d = s.doc()?;
     let e = d.model.get(h).cloned().ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
-    let c = classify(d, &e).ok_or_else(|| bad(CMD, format!("{} is not part of the built model (run model.build / bim.build)", h.hex())))?;
+    let c = classify(d, &e)
+        .or_else(|| model_elements(d).find(|(x, _)| x.handle == h).map(|(_, c)| c))
+        .ok_or_else(|| bad(CMD, format!("{} is not part of the built model (run model.build / bim.build)", h.hex())))?;
     let upf = super::bspec::current(s, CMD).map(|(sp, _)| sp.units_per_foot).unwrap_or(12.0);
     let d = s.doc()?;
     let src = made_source(&e).and_then(|sh| d.model.get(sh).cloned());

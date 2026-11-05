@@ -293,6 +293,19 @@ fn the_starter_book_prices_the_aluminum_ser_alternative_both_ways() {
         })
         .collect();
     assert!(!unpriced.iter().any(|u| u.starts_with("SER cable") || u.starts_with("XHHW aluminum")), "{ser}");
+    // The units' NM branch alternative's cable as the study names it (`NM-B cable`, `12/2 w/G`):
+    // the starter book prices it.
+    let nm = s
+        .execute(
+            "estimate.change",
+            &json!({"lines": [
+                {"item": "NM-B cable", "size": "12/2 w/G", "unit": "ft", "qty": 100.0},
+                {"item": "NM-B cable", "size": "10/2 w/G", "unit": "ft", "qty": 100.0}
+            ]}),
+        )
+        .expect("estimate.change");
+    let lines = nm["lines"].as_array().expect("lines");
+    assert!(lines.len() == 2 && lines.iter().all(|l| l["priced"] == json!(true)), "{nm}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -14151,15 +14151,41 @@ fn equipment_step(
             }
         }
     }
-    if loads.is_empty() {
-        return Ok(());
-    }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     let rule = super::coderules::rules().into_iter().find(|r| r.id == "E-EQUIP-ELEC").unwrap_or_default();
     // Every submittal PDF, in any folder under those given (revision folders: `Rev 1-1`).
     let mut files: Vec<String> = Vec::new();
     for root in &job.submittals {
         all_pdfs(std::path::Path::new(root.trim()), &mut files, 0);
+    }
+    // And the equipment a panel schedule feeds by tag (`GUESTROOM PTAC-1` on 20A/2P, #12) that has
+    // a submittal: its breaker the drawings' protection, its branch wire the conductors.
+    let mut branch_wire: BTreeMap<String, String> = BTreeMap::new();
+    let has_submittal = |tag: &str| {
+        equipsub::stem(tag).is_some_and(|st| {
+            files.iter().any(|f| std::path::Path::new(f).file_name().is_some_and(|n| n.to_string_lossy().to_ascii_uppercase().contains(&st)))
+        })
+    };
+    for p in sp.mep.panel_schedules.iter().take(MAX_EQUIPMENT_LOADS) {
+        for c in &p.circuits {
+            let up = c.description.to_ascii_uppercase();
+            let Some(tag) = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').find(|w| {
+                w.split_once('-').is_some_and(|(a, n)| {
+                    a.len() >= 2 && a.chars().all(|ch| ch.is_ascii_alphabetic()) && !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit())
+                })
+            }) else {
+                continue;
+            };
+            let breaker = c.breaker.trim().trim_end_matches(['A', 'a']).trim();
+            if breaker.parse::<f64>().is_err() || c.poles == 0 || loads.iter().any(|x| x.tag.eq_ignore_ascii_case(tag)) || !has_submittal(tag) {
+                continue;
+            }
+            loads.push(equipsub::OnelineLoad { tag: tag.to_string(), feeder: String::new(), ocpd: format!("{breaker}A/{}P", c.poles) });
+            branch_wire.insert(tag.to_string(), c.wire.trim().trim_start_matches('#').to_string());
+        }
+    }
+    if loads.is_empty() {
+        return Ok(());
     }
     let mut rows: Vec<cadaddy_walk3d::EquipmentElectrical> = Vec::new();
     let mut asked = 0usize;
@@ -14193,7 +14219,8 @@ fn equipment_step(
             if e.status.is_empty() {
                 e.status = equipsub::review_status(&text);
             }
-            let got = equipsub::text_electrical(&text);
+            // A submittal of several models: the tag's own (its item line), else the text's data.
+            let got = equipsub::submittal_for_model(&text, &l.tag).filter(equipsub::has_data).unwrap_or_else(|| equipsub::text_electrical(&text));
             if equipsub::has_data(&got) {
                 equipsub::merge(&mut e, &got);
                 e.source = format!("submittal {name}");
@@ -14221,7 +14248,10 @@ fn equipment_step(
             .find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel))
             .and_then(|p| p.header.get("afc value"))
             .and_then(|v| v.replace([',', 'A', 'a'], "").trim().parse::<f64>().ok());
-        for c in equipsub::check(&e, ft.map(|t| (t.size.as_str(), t.material.as_str())), afc, &rule) {
+        // A branch circuit's wire (copper) where a panel schedule feeds it.
+        let wire = branch_wire.get(&l.tag).filter(|w| !w.is_empty());
+        let conductors = ft.map(|t| (t.size.as_str(), t.material.as_str())).or(wire.map(|w| (w.as_str(), "cu")));
+        for c in equipsub::check(&e, conductors, afc, &rule) {
             conflicts_all.push((l.tag.clone(), c));
         }
         rows.push(e);
@@ -14259,7 +14289,7 @@ fn equipment_step(
         );
     }
     let line = format!(
-        "  equipment connections: {} on the one-line ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
+        "  equipment connections: {} on the one-line and the panel schedules ({}); submittal data for {}; asked {asked}; conflicts {}: {}",
         rows.len(),
         rows.iter().map(|r| format!("{} {} {}", r.tag, r.drawing_ocpd, r.feeder)).collect::<Vec<_>>().join(", "),
         rows.iter().filter(|r| super::equipsub::has_data(r)).count(),
@@ -18415,14 +18445,55 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(status);
     }
-    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
+    let units_note = prints_units(s)?;
+    if let Some(n) = &units_note {
+        s.echo(format!("job: {n}"));
+    }
+    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto, "units_note": units_note})));
 
     // Run the pipeline until it pauses or finishes.
     advance_pipeline(s, &mut job)?;
     save_job(s, &job)?;
 
     let stats = model_stats_from_session(s);
-    Ok(job_status_value(&job, stats.as_ref()))
+    let mut status = job_status_value(&job, stats.as_ref());
+    if let Some(n) = units_note {
+        status["units_note"] = json!(n);
+    }
+    Ok(status)
+}
+
+/// The job's drawing in the prints' units. The sheets are read in inches and every reader's
+/// reach is in sheet inches, so a drawing in other units (a metric one: mm) built a model 25.4
+/// times too small, with no rooms (soak S5-001). An empty drawing takes the prints' units (the
+/// model, rooms and takeoff are in feet and inches either way); one with work in it is refused,
+/// so nothing is built at the wrong size.
+fn prints_units(s: &mut Session) -> Result<Option<String>> {
+    let d = s.doc()?;
+    let per_inch = super::perceive::units_per_inch(d);
+    if (per_inch - 1.0).abs() < 1e-9 {
+        return Ok(None);
+    }
+    let units = match d.header.i64("INSUNITS", 0) {
+        2 => "feet",
+        5 => "centimetres",
+        6 => "metres",
+        _ => "millimetres",
+    };
+    if !d.model.is_empty() {
+        return Err(bad(
+            "job.start",
+            format!(
+                "this drawing is in {units} and has work in it: the job reads the prints in inches and would build the model at the wrong size. Start the job in a new imperial drawing (new_drawing), or in an empty one"
+            ),
+        ));
+    }
+    let h = &mut s.doc_mut()?.header;
+    h.set_i64("INSUNITS", 1);
+    h.set_i64("MEASUREMENT", 0);
+    Ok(Some(format!(
+        "the drawing was in {units} and empty: it now uses inches, the prints' units, so the model, rooms and takeoff come out at full size"
+    )))
 }
 
 /// `job.next` — return the next question, or "done".
