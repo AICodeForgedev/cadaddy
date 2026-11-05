@@ -1706,7 +1706,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(69, i64::from(v.id));
             // The view centre is in display coordinates (the target is the origin), which the
             // twist turns.
-            let twist = if v.twist.is_finite() { v.twist } else { 0.0 };
+            // Within one turn, so a hostile twist (from JSON or MCP) writes a sane angle.
+            let twist = cadaddy_geom::norm_angle(v.twist);
             w.p2(12, v.view_center.rotate(twist));
             w.f(45, v.view_height);
             if twist != 0.0 {
@@ -3204,7 +3205,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         }
         w.f(43, 0.0);
         w.f(44, 0.0);
-        w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
+        // Within one turn, so a hostile twist writes a sane angle.
+        w.f(50, cadaddy_geom::norm_angle(v.twist).to_degrees());
         w.i(71, 0);
         w.i(281, 0);
         // A UCS kept with the view: its origin and axes (a named one also by name, in xdata).
