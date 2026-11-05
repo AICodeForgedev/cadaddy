@@ -159,6 +159,8 @@ pub mod part;
 pub mod parts;
 pub mod pdfplans;
 mod perceive;
+/// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
+pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
