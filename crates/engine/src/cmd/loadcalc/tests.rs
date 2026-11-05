@@ -96,9 +96,9 @@ fn a_load_summary_is_read_as_far_as_the_band_that_parts_it_from_the_schedule_bes
 fn summary_titles_name_their_panel_or_none() {
     let r = rules();
     assert_eq!(read::title_panel("PANELBOARD R2 DEMAND CALCULATION", &r), "R2");
-    assert_eq!(read::title_panel("PANEL 'MDP-1' LOAD SUMMARY", &r), "MDP-1");
+    assert_eq!(read::title_panel("PANEL 'MSB-1' LOAD SUMMARY", &r), "MSB-1");
     assert_eq!(read::title_panel("PANEL LOAD SUMMARY", &r), "");
-    assert_eq!(read::title_panel("COMMERCIAL LOAD SUMMARY", &r), "");
+    assert_eq!(read::title_panel("BUILDING LOAD SUMMARY", &r), "");
     assert_eq!(read::basis("PER NEC 220.87 (MEASURED)"), Some("220.87".into()));
     assert_eq!(read::basis("NEC-220 x 125%"), None);
 }
