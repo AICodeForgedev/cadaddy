@@ -932,7 +932,7 @@ fn feeder_conductors(sp: &BuildingSpec, f: &cadaddy_walk3d::Feeder, path: &mut P
     let wires = feeder_wires(sp, f, path.raceway_ft, upf);
     path.box_size = pull_box_size(path.raceway.split_whitespace().next().unwrap_or_default(), &wires);
     let extra = r.gear_extra() * f64::from(path.gear_ends()) + pos(r.pull_box_loop_ft) * path.boxes.len() as f64;
-    let per = (f.sets / f.conduits.max(1)).max(1).min(12);
+    let per = (f.sets / f.conduits.max(1)).clamp(1, 12);
     path.conductors = conductors_of(&wires, extra);
     for c in &mut path.conductors {
         c.count = c.count.saturating_mul(per);
