@@ -227,6 +227,27 @@ pub struct Snapshot {
     /// Roughly the memory this step holds that the drawing after it doesn't share (set when it is
     /// recorded; 0 until then). Undo keeps the total under [`undoctl::UNDO_BUDGET`].
     pub bytes: usize,
+    /// Model space's look before the step, when the step turned its view or changed its visual
+    /// style: undo puts it back with the drawing (a BIM build leaves the model in a shaded SW iso
+    /// view; undone, the empty drawing was still shown, and plotted, that way: S5-007).
+    pub look: Option<ModelLook>,
+}
+
+/// How model space is looked at: its view direction and twist, visual style and view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelLook {
+    pub dir: cadaddy_geom::Vec3,
+    pub twist: f64,
+    pub style: cadaddy_render::shade::VisualStyle,
+    pub view: Option<View>,
+}
+
+impl ModelLook {
+    /// Whether `other` looks from the same direction in the same style (a pan or zoom alone is not
+    /// a change an undo step puts back).
+    pub fn same_3d(&self, other: &ModelLook) -> bool {
+        self.dir == other.dir && self.twist == other.twist && self.style == other.style
+    }
 }
 
 /// The extents of a space, remembered for the last few drawings: a drawing is never changed in
@@ -336,6 +357,11 @@ pub struct DocState {
     pub wallgen: Option<cmd::wallgen::WallGen>,
     /// The plan the model was last built from and what that build made (`model.revise`).
     pub model_record: Option<cmd::revise3d::ModelRecord>,
+    /// The drawing states the plan has moved past the associative model in: built again before
+    /// the next command that reads the model, or when editing stops ([`cmd::wallgen::Behind`]).
+    pub model_behind: cmd::wallgen::Behind,
+    /// The plan's rooms as last traced, by drawing state (`rooms_found` in `cmd::perceive`).
+    pub(crate) room_trace: cmd::RoomTraceCache,
     /// The last revision that found plan changes (`model.revise`, or the rebuild an associative
     /// model does): every list whole, paged when `model.revise {last: true}` returns it.
     pub last_revision: Option<serde_json::Value>,
@@ -425,6 +451,8 @@ impl DocState {
             disk_id: None,
             wallgen: None,
             model_record: None,
+            model_behind: cmd::wallgen::Behind::default(),
+            room_trace: cmd::RoomTraceCache::default(),
             last_revision: None,
             open_notes: Vec::new(),
             block_edit: None,
@@ -537,6 +565,23 @@ impl DocState {
     /// The projection the current space's display list is built with: [`Self::projection`],
     /// except in a layout, whose sheet is drawn flat (an MSPACE viewport's model space is drawn
     /// through the viewport).
+    /// Model space's look ([`ModelLook`]).
+    pub fn model_look(&self) -> ModelLook {
+        let view = self.views.iter().find(|(s, _)| *s == Space::Model).map(|(_, v)| *v);
+        ModelLook { dir: self.view_dir, twist: self.view_twist, style: self.visual_style, view }
+    }
+    /// Put model space's look back (whichever space is current).
+    pub fn set_model_look(&mut self, l: ModelLook) {
+        self.view_dir = l.dir;
+        self.view_twist = l.twist;
+        self.visual_style = l.style;
+        if let Some(v) = l.view.filter(usable_view) {
+            match self.views.iter_mut().find(|(s, _)| *s == Space::Model) {
+                Some((_, slot)) => *slot = v,
+                None => self.views.push((Space::Model, v)),
+            }
+        }
+    }
     pub fn list_projection(&self) -> Option<cadaddy_geom::view3::Projection> {
         if self.space != Space::Model { None } else { self.projection() }
     }
@@ -2193,6 +2238,9 @@ pub struct Session {
     /// `model.issues`' findings for one revision of one drawing: its pages and kinds are read
     /// from them, not found again (a print set's checks took two minutes a call).
     pub(crate) issues_cache: Option<Box<cmd::verify::IssuesCache>>,
+    /// An associative model is being built again ([`cmd::wallgen::update_model`]): the commands
+    /// the build runs don't start another.
+    pub(crate) model_updating: bool,
 }
 
 /// Give a new drawing its own FINGERPRINTGUID (as AutoCAD does): kept in DWG, DXF and .cdy, it
@@ -2316,6 +2364,7 @@ impl Session {
             plugin_depth: 0,
             one_undo_step: 0,
             issues_cache: None,
+            model_updating: false,
         }
     }
     /// Take the results of background checks that have finished: what a DWG or DXF save didn't
@@ -2336,6 +2385,23 @@ impl Session {
         for l in lines {
             self.echo(l);
         }
+    }
+
+    /// When the plan's edits have left the active drawing's associative model behind and nothing
+    /// has been edited for `idle`, build it again ([`cmd::wallgen::update_model`]). The app's frame
+    /// loop and the MCP server call it while waiting. Returns how long until it is due when a
+    /// model is behind but editing stopped less than `idle` ago (wake up then), else `None`.
+    pub fn update_model_when_idle(&mut self, idle: std::time::Duration) -> Option<std::time::Duration> {
+        let st = self.state().ok()?;
+        if !st.model_behind.holds_doc(&st.doc) {
+            return None;
+        }
+        let since = st.model_behind.since_last_edit();
+        if since < idle {
+            return Some(idle - since);
+        }
+        cmd::wallgen::update_model(self);
+        None
     }
 
     pub fn new_drawing(&mut self, metric: bool) -> usize {
@@ -2522,7 +2588,29 @@ impl Session {
     // ---------------- programmatic execution ----------------
 
     /// Run a command with JSON parameters (no dialogs). Records undo when the drawing changes.
+    ///
+    /// The command itself is guarded below, where its own panic can be told apart. This guard is
+    /// for everything around it: the passes after a command (constraints, associativity, groups)
+    /// are as able to panic as the command, and a panic there restores the drawing the same way.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute_guarded(id, params))) {
+            Ok(r) => r,
+            Err(p) => {
+                let msg = crate::guard::message(&*p);
+                crash_report::record(self, id, &msg);
+                if let Some((doc, sel, uid)) = before
+                    && let Some(st) = self.docs.iter_mut().find(|d| d.uid == uid)
+                {
+                    st.doc = doc;
+                    st.selection = sel;
+                }
+                Err(EngineError::Internal(id.into(), msg))
+            }
+        }
+    }
+
+    fn execute_guarded(&mut self, id: &str, params: &Value) -> Result<Value> {
         self.poll_background();
         // An agent's outermost call: parameters the command doesn't take are refused (before a
         // dry run too), then a dry run or a confirmation ([`agent`]).
@@ -2614,7 +2702,13 @@ impl Session {
         let undoable = find_command(&owner.id).is_some_and(|c| c.undoable);
         if undoable && !Arc::ptr_eq(&owner.before, &st.doc) {
             let label = find_command(&owner.id).map_or("Command", |c| c.label);
-            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&owner.before), selection: owner.selection_before.clone(), bytes: 0 });
+            st.push_undo(Snapshot {
+                label: label.to_string(),
+                doc: Arc::clone(&owner.before),
+                selection: owner.selection_before.clone(),
+                bytes: 0,
+                look: None,
+            });
             st.revision += 1;
         }
         owner.before = Arc::clone(&st.doc);
@@ -2638,9 +2732,9 @@ impl Session {
         let call_label = find_command(&cmd::resolve_alias(id)).map_or("Command", |c| c.label);
         let Some(st) = self.docs.get_mut(idx) else { return };
         if undoable && !Arc::ptr_eq(&before, &doc) {
-            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0 });
+            st.push_undo(Snapshot { label: label.to_string(), doc: Arc::clone(&before), selection: sel_before, bytes: 0, look: None });
         }
-        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0 });
+        st.push_undo(Snapshot { label: call_label.to_string(), doc, selection, bytes: 0, look: None });
         st.revision += 1;
         self.rebase_running(uid);
     }
@@ -2712,7 +2806,12 @@ impl Session {
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
             return Err(EngineError::Disabled(spec.id.into(), why));
         }
+        // A model the plan's edits left behind is built before a command that may read it.
+        if !cmd::wallgen::runs_with_model_behind(spec.id) {
+            cmd::wallgen::update_model(self);
+        }
         let before = self.state().ok().map(|s| (s.doc.clone(), s.selection.clone(), s.uid));
+        let look_before = self.state().ok().map(DocState::model_look);
         let editing = self.state().is_ok_and(|s| s.block_edit.is_some());
         let run = spec.run;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(self, params)));
@@ -2743,6 +2842,8 @@ impl Session {
         // them (redo dropped an associative dimension's links: undofuzz).
         if self.state().is_ok_and(|s| s.block_edit.is_some()) == editing && !moves_through_history(spec.id) {
             self.after_command(before.as_ref().map(|b| &b.0), before.as_ref().map(|b| b.2), spec.undoable && result.is_ok());
+        } else {
+            cmd::wallgen::touch(self);
         }
         let result = match (result, &before) {
             (Ok(v), Some((doc, sel, uid))) if spec.undoable => self.refuse_non_finite(Some(*uid), doc, sel, spec.id).map(|()| v),
@@ -2767,7 +2868,8 @@ impl Session {
         {
             // Inside a LISP routine the routine's single undo step records it.
             if !grouped {
-                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0 });
+                let look = look_before.filter(|l| !l.same_3d(&st.model_look()));
+                st.push_undo(Snapshot { label: spec.label.to_string(), doc, selection: sel, bytes: 0, look });
             }
             st.revision += 1;
         }
@@ -2913,6 +3015,10 @@ impl Session {
         (spec.enabled)(self).map_err(|m| EngineError::Disabled(spec.id.into(), m))?;
         if let Some(why) = cmd::blocks::bedit::refused_in_editor(self, spec.id) {
             return Err(EngineError::Disabled(spec.id.into(), why));
+        }
+        // A model the plan's edits left behind is built before a typed command that may read it.
+        if !nested && !cmd::wallgen::runs_with_model_behind(spec.id) {
+            cmd::wallgen::update_model(self);
         }
         if nested {
             // The outer command stays the one Enter repeats.
@@ -3322,7 +3428,23 @@ impl Session {
         }
     }
 
+    /// End a command: every way out of one comes through here. The passes after a command
+    /// (constraints, associativity, groups) can panic like the command itself; a panic restores
+    /// the drawing as it was before the command, as a panic in its `input` does.
     fn finish(&mut self, run: Running, cancelled: bool) {
+        let (id, before, selection) = (run.id.clone(), run.before.clone(), run.selection_before.clone());
+        if let Err(p) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.finish_guarded(run, cancelled))) {
+            let msg = crate::guard::message(&*p);
+            crash_report::record(self, &id, &msg);
+            if let Ok(st) = self.state_mut() {
+                st.doc = before;
+                st.selection = selection;
+            }
+            self.echo(format!("Internal error in {id}: {msg}"));
+        }
+    }
+
+    fn finish_guarded(&mut self, run: Running, cancelled: bool) {
         self.event("command.ended", serde_json::json!({ "command": run.id, "cancelled": cancelled }));
         let id = run.id.clone();
         let rhai_before = (self.rhai_watching() && !cmd::rhai_cmd::is_rhai(&id))
@@ -3382,7 +3504,7 @@ impl Session {
         if let Ok(st) = self.state_mut()
             && (keep || !Arc::ptr_eq(&run.before, &st.doc))
         {
-            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0 });
+            st.push_undo(Snapshot { label: label.to_string(), doc: run.before, selection: run.selection_before, bytes: 0, look: None });
             st.revision += 1;
         }
     }
@@ -3403,6 +3525,8 @@ impl Session {
     /// started in, so associativity is not applied across a document switch; `ok` is false for a
     /// failed or non-undoable programmatic command, which skips the constraint pass.
     fn after_command(&mut self, before: Option<&Arc<Drawing>>, uid: Option<u64>, ok: bool) {
+        #[cfg(test)]
+        crate::guard::tests::panic_if_armed();
         cmd::groups::after_command(self, before);
         cmd::constraints::after_command(self, before, ok);
         assoc::after_command(self, before, uid);
@@ -3411,6 +3535,8 @@ impl Session {
         cmd::annotate::dimbreak_after_command(self, before);
         fields::after_command(self, before);
         cmd::wallgen::after_command(self, before);
+        // After the live rebuild: the model's count index follows every change to its pieces.
+        cmd::mepatoms::after_command(self, before, uid);
         script_tools::monitor_after(self);
     }
 
@@ -3814,7 +3940,11 @@ impl Session {
     pub fn undo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.undo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
+        let look = snap.look.map(|_| st.model_look());
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
+        if let Some(l) = snap.look {
+            st.set_model_look(l);
+        }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();
@@ -3825,7 +3955,11 @@ impl Session {
     pub fn redo(&mut self) -> Result<Option<String>> {
         let st = self.state_mut()?;
         let Some(snap) = st.redo.pop() else { return Ok(None) };
-        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes };
+        let look = snap.look.map(|_| st.model_look());
+        let cur = Snapshot { label: snap.label.clone(), doc: st.doc.clone(), selection: st.selection.clone(), bytes: snap.bytes, look };
+        if let Some(l) = snap.look {
+            st.set_model_look(l);
+        }
         st.doc = snap.doc;
         st.follow_layout(&cur.doc);
         st.selection = Vec::new();

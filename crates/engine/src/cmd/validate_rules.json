@@ -80,6 +80,46 @@
       }
     },
     {
+      "id": "G-UNDERGROUND",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every below-grade or under-slab callout of the documents (a note, a keynote, a site plan's callout) has its run in the model and on an underground sheet, of the size, count, material and least depth it gives; every stub-up has two dimensions to a slab corner or edge or a grid line; a run CADaddy proposes is reported as proposed with its review item, never as called; a buried run no callout, drawing or proposal accounts for is extra.",
+      "how": [
+        "objects.json `underground` lists the callouts read off the sheets (what each calls for: trade, count, size, material, least depth, what it serves), the underground sheets (the set's own, and the ones CADaddy generated: `underground_sheet` prints) and the buried runs and stub-ups; the prescreen (G-UNDERGROUND) matched each callout to a run. Start from its findings.",
+        "Read each callout on its sheet's crop and the run that answers it on the underground sheet's run schedule: the count, the trade size, the material (PVC Schedule 40 or 80, rigid steel) and the depth to the top of the run; a run shallower than the callout's least depth, or of another size or material, is a 'fail' citing the note.",
+        "A callout with no run in the model, or a run no underground sheet shows, is 'missing'. A dashed run marked PROPOSED is CADaddy's, not the documents': it never answers a callout; report it 'unsure' citing its RFI.",
+        "On the stub-up schedule and the plan, each stub-up has two perpendicular dimensions from a slab edge or corner or a grid line; one or none is a 'fail'."
+      ],
+      "documents": ["plan", "general_notes", "legend", "spec"],
+      "tolerance": {"depth_in": 1, "size_in": 0.1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The site plan's note calls for two 5\" Schedule 40 PVC conduits at least 48\" below grade; the model has both at 48\" and the underground sheet's run schedule lists them.",
+        "fail": "The note calls for 48\" below grade; the run is 24\" deep. The stub-up at the floor box has a dimension from the slab's west edge only."
+      }
+    },
+    {
+      "id": "G-COVERAGE",
+      "trade": "general",
+      "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
+      "check": "Every kind of object the documents define (a legend or schedule row, an abbreviation, a keynote or note naming an object) and the plans mark is in the model, about as many as the plans show; a kind the electrical, fire alarm or low-voltage sheets connect to (power, a circuit, a module, a data drop) is in the model even when its own trade is by others.",
+      "how": [
+        "objects.json `prescreen` G-COVERAGE findings list each kind the documents define with its plan marks by sheet and level and the model's count of it; a kind with marks and no element is ranked first. Start from them.",
+        "On this area's print crops, look for tags or symbols of a kind the model's picture and object list hold none of (a damper tag on a duct, a device symbol the legend names): that is a 'missing' finding naming the kind, citing the print crop (prints/…) and the legend or abbreviation that defines it.",
+        "A kind the electrical or fire alarm sheets power, circuit or give a module to must be in the model whatever trade furnishes it: report it 'missing' citing the electrical sheet's note and the plan that tags it.",
+        "Every answer cites a print page (a prints/ picture with its sheet); a finding that cites none is kept as 'unsure'."
+      ],
+      "documents": ["plan", "enlarged_plan", "legend", "schedule", "general_notes"],
+      "tolerance": {"count_share": 0.1, "count_abs": 1, "dedupe_ft": 3, "repeat_sheets": 2, "repeat_marks": 4},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The mechanical legend defines FSD as a combination fire/smoke damper; the mechanical plans tag five of them, and the model holds five fire/smoke dampers.",
+        "fail": "The plans tag five FSD, the electrical keynote powers them, and the model has no damper at all."
+      }
+    },
+    {
       "id": "G-TYPE",
       "trade": "general",
       "applies_to": {"kinds": ["*"], "categories": [], "marks": []},
@@ -335,9 +375,291 @@
       }
     },
     {
+      "id": "E-GEAR-SPACE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "In front of every piece of electrical gear the working space NEC 110.26 calls for is clear of walls, other equipment and door swings (as deep as its voltage to ground and condition call for, as wide as the gear or 30 in, 6.5 ft or the gear's height high), with that headroom to the ceiling, and its dedicated space (its footprint up to 6 ft over it) free of ducts and pipes.",
+      "how": [
+        "objects.json `gear` lists each piece of gear here with its box, its working space as the build laid it out (`properties` WORKING SPACE, PLACEMENT; `sources.status` proposed when CADaddy placed it because the plans don't locate it) and the prescreen's measured clear depth, front face, doors and ceiling (E-GEAR-SPACE in `prescreen`). Start from those findings.",
+        "On the enlarged electrical room plan, measure from the gear's front to the nearest wall, equipment or door leaf across the space's width; the depth is 3 ft up to 150 V to ground, and 3, 3.5 or 4 ft from 151 to 600 V for conditions 1, 2 and 3 (what faces the gear: nothing live or grounded, a grounded wall, live parts). A depth that holds only for condition 1 is 'unsure' unless the plan shows what faces the gear.",
+        "A door whose leaf sweeps the space when it swings into the room is a 'fail'; one whose swing the plan doesn't show is 'unsure'.",
+        "Over the gear's footprint up to 6 ft above it, no duct or pipe of another system may pass (dedicated space); the ceiling must be at least 6.5 ft or the gear's top."
+      ],
+      "documents": ["enlarged_plan", "plan", "rcp", "schedule", "submittal"],
+      "tolerance": {"depth_in": 1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The 208Y/120 V panel has 6 ft clear in front of it, 30 in wide, under a 9 ft ceiling; no duct passes over it.",
+        "fail": "The room's door swings in across the panel's working space; a sanitary line crosses 4 ft over the switchboard."
+      }
+    },
+    {
+      "id": "E-GEAR-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Each enclosure takes what lands on it, recomputed from the feeder schedule, the one-line and the gear submittal: the raceways through each side fit that side's conduit (knockout) area; the conductors in the wiring gutter fill at most 40 percent of it (NEC 312.8); each lug has the bending space NEC 312.6 gives for its conductors; each feeder's parallel sets, size and metal fit the lugs it lands on.",
+      "how": [
+        "objects.json `gear` gives each piece of gear's feeders (sets, conductors, conduits and trade sizes, entry side, the schedule row and one-line tag each came from), its lugs and the submittal's box and conduit areas. E-GEAR-FILL in `prescreen` packed the raceways on each side and counted the gutter, bending space and lugs; start from those findings.",
+        "Check the counts on the feeder schedule and the one-line pictures: every feeder the panel schedule names (a row feeding another panel) must have its conduits and conductors; a missing one makes the count 'unsure'.",
+        "Check the conduit area and lugs on the gear submittal pages: a side whose raceways need more area than it has is a 'fail'; a parallel set with more sets than the lugs take, or a size outside the lugs' range, is a 'fail'.",
+        "The gutter's width and depth and the bending space at the lugs are rarely in a panelboard submittal: when the submittal doesn't give them they are missing and the finding is 'unsure', never a pass."
+      ],
+      "documents": ["schedule", "riser_diagram", "submittal", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "Four 2 in conduits come in through the top of a 20 in wide panel whose submittal draws a 16 x 4 in conduit area; its main lugs take two 3/0-500 kcmil per phase and the feeder is two sets of 350 kcmil.",
+        "fail": "Fourteen raceways come in through the top: about 150 sq in needed, 60 sq in of conduit area. The feeder is four sets of 500 kcmil on lugs that take two per phase."
+      }
+    },
+    {
+      "id": "E-GEAR-SIZE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["panel", "panelboard", "transformer", "disconnect"], "categories": ["IfcElectricDistributionBoard"], "marks": []},
+      "check": "Each piece of gear's enclosure in the model (height, width, depth) is the gear submittal's.",
+      "how": [
+        "objects.json `gear` gives each piece's box as built (`model_in`) and as the submittal gives it (`submittal`, re-read from the job's gear submittals; `properties.BOX` as the build recorded it). E-GEAR-SIZE in `prescreen` compared them.",
+        "Read the box on the gear submittal pages (the dimension line or the elevation drawing): a side off by more than the tolerance is a 'fail'; no size in any submittal is 'unsure'."
+      ],
+      "documents": ["submittal", "schedule"],
+      "tolerance": {"size_in": 0.5},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {
+        "pass": "The submittal gives 50 x 20 x 5.75 in; the model's panel is 50 in high, 20 in wide and 5.75 in deep.",
+        "fail": "The submittal gives a 90 in high switchboard 36 in deep; the model's box is 90 x 40 x 20 in."
+      }
+    },
+    {
+      "id": "E-CONDUIT-CONTINUITY",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each device on a branch circuit is joined to its panel by that circuit's raceway or cable, end to end, and every drop ends on the device's box.",
+      "how": [
+        "The prescreen (E-CONDUIT-CONTINUITY) followed each circuit's conduit sticks by their stored ends from the device's box to the panel's box: ends within `touch_in` meet, and a box their ends touch joins them. It never reads the router's report. Start from its findings.",
+        "A 'fail' names the gap: a drop that stops short of its box (by how many inches), a device no piece of its circuit reaches, or a raceway that never lands on its panel. Look at the device on the plan crop and in the model; a broken run is a 'fail' until it is rerouted.",
+        "A cable run (NM, MC) is followed by its pieces' links, because a cable's two ends aren't stored."
+      ],
+      "documents": ["plan", "enlarged_plan", "schedule"],
+      "tolerance": {"touch_in": 1},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Receptacle on LP1-3: its drop ends on the box's top and the circuit's raceway runs unbroken to panel LP1.", "fail": "The drop to the receptacle stops 12 in above its box; the receptacle isn't joined to its panel."}
+    },
+    {
+      "id": "E-CONDUIT-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each raceway's conductors fill at most the share of its area NEC Chapter 9 Table 1 allows: 53% for one conductor, 31% for two, 40% for more.",
+      "how": [
+        "The prescreen counted each raceway run's wires (count and size) against its trade size's area (Chapter 9 Tables 4 and 5, rules data). Start from its findings.",
+        "A raceway material or conductor size the tables don't list is 'unsure', never a pass."
+      ],
+      "documents": ["spec", "schedule", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Four #12 THHN and one #12 ground in 3/4\" EMT: 0.067 sq in of 0.213 sq in allowed.", "fail": "Four #4 THHN in 3/4\" EMT: 0.33 sq in, 62% of the raceway."}
+    },
+    {
+      "id": "E-BOX-FILL",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each box holds what enters it (NEC 314.16(B)): each conductor entering counts once at its size's volume, all grounds once at the largest, a device yoke twice the largest conductor on it.",
+      "how": [
+        "The prescreen counted the conductors of every raceway or cable whose end touches the box against the box's recorded volume. Start from its findings.",
+        "A box with no recorded volume, or a conductor size the table doesn't list, is 'unsure'."
+      ],
+      "documents": ["spec", "plan"],
+      "tolerance": {"touch_in": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "A receptacle box of 22.5 cu in takes 4 #12, a ground and the yoke: 15.75 cu in.", "fail": "A 4\" square box of 21 cu in takes 8 #12, a ground and a yoke: 24.75 cu in."}
+    },
+    {
+      "id": "E-DERATE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "In each raceway with more than three current-carrying conductors, the NEC 310.15(C)(1) adjustment is applied: every conductor's adjusted ampacity (90 C column times the factor, never above the 75 C column, 110.14(C), nor the 240.4(D) limit) carries the largest breaker of the circuits in it.",
+      "how": [
+        "The prescreen counted each raceway's current-carrying conductors (every one but the grounds), took the factor for that number from the rules data and the breakers from the panel schedule. Start from its findings.",
+        "A breaker the schedule doesn't give is 'unsure'. Feeder raceways are checked at their gear (E-GEAR-FILL)."
+      ],
+      "documents": ["schedule", "spec", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Four #12 on 20 A breakers: 30 A x 0.8 = 24 A, limited to 20 A by 240.4(D): carries 20 A.", "fail": "Four #8 on 50 A breakers: 55 A x 0.8 = 44 A, under 50 A."}
+    },
+    {
+      "id": "E-VDROP",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each branch circuit's conductor size suits its length: the drawing's length table when it prints one (0-60' = #12), else at most 3% voltage drop (NEC 210.19(A) Informational Note 4) at the schedule's load.",
+      "how": [
+        "The prescreen measured each circuit's length along its raceway from its panel to its farthest device (the sticks' own lengths) and took its smallest conductor. Start from its findings.",
+        "With no load in the schedule the rule's share of the breaker is used; a drop over 3% on that assumed load is 'unsure', not a fail.",
+        "A size the table doesn't cover, an unknown breaker or voltage is 'unsure'."
+      ],
+      "documents": ["legend", "schedule", "spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "130 ft on #8 at 16 A, 120 V: 1.0% drop.", "fail": "The legend's table asks #10 from 60 to 100 ft; the circuit runs 85 ft on #12."}
+    },
+    {
+      "id": "E-METHOD",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "Each run's wiring method (EMT, MC, NM…) is one the specification's wiring-methods table allows for the area it runs in (a guest or dwelling unit, an exposed room, concealed elsewhere), or the project's wiring-method rule, or an approved value-engineering alternative.",
+      "how": [
+        "The prescreen took each run's method from its pieces' type and the area from the rooms its pieces are in, and the allowed methods from the specification's table as the job read it (26 05 19). Start from its findings.",
+        "No table read for an area is 'unsure', never a pass."
+      ],
+      "documents": ["spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "The guest-room branch is MC cable; the table allows MC concealed in units.", "fail": "The corridor homerun is NM cable; the table allows EMT or MC concealed in common areas."}
+    },
+    {
+      "id": "G-CLASH",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "No conduit comes within the clearance (rules data) of a duct, pipe, terminal, structure, equipment, other conduit, or a piece of gear's working space (NEC 110.26(A)); the router's own clash items are carried into the run.",
+      "how": [
+        "The prescreen tested every conduit stick against the other trades' elements, the structure, the equipment and the gear's working space, each grown by its clearance, and against other runs' sticks away from where they meet. The router's clash items come in with source 'build'. Start from those findings.",
+        "Look at the spot on the plan and the section: a clash the build can't avoid needs a reroute or an RFI."
+      ],
+      "documents": ["plan", "section", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The homerun passes 3 in over a supply duct with 1 in clearance asked.", "fail": "The tap runs through a 24 in return duct at 9.5 ft above the floor."}
+    },
+    {
+      "id": "E-TAKEOFF",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["conduit", "cable", "junction_box"], "categories": ["IfcCableCarrierSegment", "IfcJunctionBox"], "marks": []},
+      "check": "The takeoff (the stored count index the BOM reads, and conduit.takeoff's lines) equals a recount of the model's pieces within takeoff_pct (1%): conduit feet by size from the sticks' ends, wire and cable feet, each fitting and box.",
+      "how": [
+        "The prescreen recounted every raceway piece of the levels in scope and compared each kind, item and size with the stored index and conduit.takeoff. Start from its findings.",
+        "A line off by more than the tolerance is a 'fail': the index is stale (bim.count {refresh: true}) or the takeoff misses pieces."
+      ],
+      "documents": ["plan"],
+      "tolerance": {"takeoff_pct": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "3/4\" EMT: 412.6 ft recounted, 412.6 ft in the index and the takeoff.", "fail": "EMT coupling 3/4\": 14 recounted, 15 in the index."}
+    },
+    {
+      "id": "G-VE-TIER",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "An ALLOWED NOW value-engineering option is permitted by both the specification paragraph for every area it covers and the code rule it cites, every condition met; an option the specification contradicts is NEEDS RFI, never allowed now.",
+      "how": [
+        "The prescreen placed the option's cable pieces in their areas, found the specification's wiring-methods paragraph for each (as the job read 26 05 19) and the code rule it cites (rules data: construction types, concealed only, thermal barrier, areas never allowed). Start from its findings.",
+        "A ceiling the documents don't type, a construction type not read or no paragraph for an area is 'unsure', never a pass: read the RCP, finish schedule and code sheet to decide it."
+      ],
+      "documents": ["spec", "plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "Branch circuits concealed in the units in NM: 26 05 19 lists NM for them, NEC 334.10(3) allows it in Type V-A, gypsum ceilings over every piece.", "fail": "SER for the unit feeders tiered allowed now while 26 05 19 lists single conductors in raceway only for feeders."}
+    },
+    {
+      "id": "G-VE-AREA",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "No NM or other cable option runs where its method is never used (rules data): NM never in common, exposed, plenum or below-slab areas.",
+      "how": [
+        "The prescreen placed each of the option's cable pieces by the room it lies in, the design piece it runs beside, its circuit's area, the ceiling over it and its height against the lowest floor. Start from its findings.",
+        "A piece in no room and on no circuit whose area is known is 'unsure'."
+      ],
+      "documents": ["plan", "spec"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The NM option's cable runs only in the guest units.", "fail": "The NM option's homerun runs along the corridor to the panel."}
+    },
+    {
+      "id": "G-VE-COST",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "A value-engineering saving is recomputed from a recount of the model's pieces and the price book within cost_pct (1%), and its man-hours are labor dollars divided by the stated manpower rate.",
+      "how": [
+        "The prescreen recounted the design's pieces each scenario replaces and the scenario's own pieces by kind against the study's lines, priced every line again from the price book (labor in dollars) and compared the saving's material, labor, cost and man-hours. Start from its findings.",
+        "No price book on this machine, or a line it has no price for, is 'unsure'."
+      ],
+      "documents": ["schedule", "spec"],
+      "tolerance": {"cost_pct": 1},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "NM in the units saves $12,400 and 190 man-hours: recomputed $12,396 and 190.7 h at the stated $50/h.", "fail": "The saving's man-hours were taken at another rate than the one stated."}
+    },
+    {
+      "id": "G-VE-RFI",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "Every NEEDS RFI value-engineering option has its method-choice RFI (a review item of kind rfi) giving each of the option's code citations and the design's intent.",
+      "how": [
+        "The prescreen found each NEEDS RFI option's RFI on the RFI list and read its text for the option's citations and its intent line. Start from its findings."
+      ],
+      "documents": ["spec"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {"pass": "The SER RFI quotes 26 05 19, cites NEC 338.10(B)(4)(a), 334.10(3) and 300.21 and states the specifier-default and future-capacity intent.", "fail": "A NEEDS RFI option with no RFI drafted."}
+    },
+    {
+      "id": "G-VE-DESIGN",
+      "trade": "general",
+      "applies_to": {"kinds": ["conduit", "cable"], "categories": ["IfcCableCarrierSegment"], "marks": []},
+      "check": "The as-designed model is unchanged by any value-engineering scenario that isn't approved: the design pieces it replaces are all there and still the design, its own pieces aren't counted and stay on their hidden layer, its circuits keep their designed method; one that became the design was approved by its RFI or chosen (allowed now).",
+      "how": [
+        "The prescreen compared each scenario the drawing keeps with the model: the design pieces it replaces, its own pieces and layer, its circuits' method and its decision. Start from its findings."
+      ],
+      "documents": ["plan"],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {"pass": "The MC scenario's pieces are on their hidden layer; every EMT piece it would replace is still the design.", "fail": "The NM scenario's cable was made the design with its RFI still open."}
+    },
+    {
+      "id": "E-EQUIP-ELEC",
+      "trade": "electrical",
+      "applies_to": {
+        "kinds": [
+          "equipment_connection"
+        ],
+        "categories": [],
+        "marks": []
+      },
+      "check": "Each equipment connection follows its latest approved submittal and the code: protection no larger than the maker's maximum (and of the fuse class it names), conductors at least its minimum circuit amps (else 125% of its full-load or nameplate amps), its conductors within the conduit fill, a disconnect rated and of the type it needs, and its short-circuit current rating at least the available fault current at its source.",
+      "how": [
+        "E-EQUIP-ELEC in `prescreen` recomputed each connection from the job's submittals (read again; the latest approved revision; a scanned one through an agent's answer citing its page) and the code rules data, and compared the model's circuit (its panel schedule row, its disconnect, its source panel's available fault current). Each finding's `measured` has the submittal's values and page, the model's circuit and the recomputed values.",
+        "Read the submittal page it cites (MCA, MOP or max fuse and class, FLA or nameplate amps, SCCR) and the panel schedule row and one-line for the model's breaker, conductors and conduit: a value the documents don't give is 'unsure', never a pass.",
+        "Every `equipment_electrical` RFI the build raised must match a failure here, and every failure must have an RFI: a failure with none is 'missing', an RFI with no failure 'extra' (its `working` shows why)."
+      ],
+      "documents": [
+        "submittal",
+        "schedule",
+        "riser_diagram"
+      ],
+      "tolerance": {},
+      "severity": "high",
+      "prescreen": null,
+      "examples": {
+        "pass": "The pump's submittal gives MCA 22 A and MOP 35 A; its circuit is a 30 A breaker on #10 copper (35 A) in 3/4 in conduit, its fused disconnect 30 A; its SCCR of 5 kA is above the 3 kA at its panel.",
+        "fail": "The unit's submittal allows at most 45 A of protection (p. 5); the model protects it with a 50 A breaker."
+      }
+    },
+    {
       "id": "E-LUM",
       "trade": "electrical",
-      "applies_to": {"kinds": ["light_fixture", "luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "applies_to": {"kinds": ["light_fixture", "luminaire", "wall_luminaire", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
       "check": "Luminaires are at their RCP positions, in the ceiling at that area's ceiling height (wall-mounted ones at the elevation or legend height), of the fixture schedule's type and mounted as the submittal says.",
       "how": [
         "Compare each fixture on the RCP crop with the model picture: same place, same count.",
@@ -370,6 +692,25 @@
       "examples": {
         "pass": "Type A's schedule row and its cut sheet give the same catalog number, 0-10V driver and 3500K; the model's type A carries them.",
         "fail": "The schedule and cut sheet give type B a 0-10V driver; the model's type B says non-dim."
+      }
+    },
+    {
+      "id": "E-LUM-SCHEDULE",
+      "trade": "electrical",
+      "applies_to": {"kinds": ["luminaire", "light_fixture", "exit_sign"], "categories": ["IfcLightFixture"], "marks": []},
+      "check": "Every luminaire carries its type's light fixture schedule row (basis of design, lamp, VA, voltage, installation), every scheduled type's approved lighting submittal is its basis of design (the same maker, brands of one maker being one, and the same series), the schedule's types are on the plans and the plans' types in the schedule, and every lighting RFI of the build about a fixture type is a failure here (and every failure has one).",
+      "how": [
+        "E-LUM-SCHEDULE in `prescreen` read the fixture schedule again from the sheets (its grid, any column order, one or two sides) and the lighting submittals again from the job's folders, never the build's stored copy. Each luminaire's finding (`measured.check` row) gives its type's row, the source of the row (sheet, title, type) and each field compared with where the model's value came from; each type's findings (scheduled, on_plan, submittal, submitted, fields, quantity) give the row and the submittal product with its page, stamp and revision.",
+        "Read the schedule row on the schedule crop and the cut sheet page the submittal finding cites: a field the documents don't give, or a luminaire with no row, is 'unsure', never a pass.",
+        "Every lighting RFI of the build about a fixture type must match a failure here and every type-level failure must have an RFI: a failure with none is 'missing', an RFI with no failure 'extra' (its `working` shows Validate's verdict and why); an RFI about a field Validate doesn't recompute (CCT, lumens, dimming) is 'unsure' with its sides."
+      ],
+      "documents": ["schedule", "submittal", "plan", "rcp"],
+      "tolerance": {},
+      "severity": "medium",
+      "prescreen": null,
+      "examples": {
+        "pass": "Type T1's schedule row says ACME AT-24 LED 38 VA 277 V recessed; the luminaire carries the same, and the approved submittal gives ACME AT24L40-MVOLT (one series, other options).",
+        "fail": "The schedule gives type T2 13 VA at 120 V; the model's T2 says 26 VA at 277 V."
       }
     },
     {
@@ -484,7 +825,7 @@
     {
       "id": "E-CIRCUIT",
       "trade": "electrical",
-      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "disconnect", "junction_box", "equipment_connection", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
+      "applies_to": {"kinds": ["receptacle", "outlet", "floor_box", "switch", "light_fixture", "luminaire", "wall_luminaire", "disconnect", "junction_box", "equipment_connection", "conduit", "cable"], "categories": ["IfcOutlet", "IfcSwitchingDevice", "IfcLightFixture", "IfcJunctionBox", "IfcCableCarrierSegment"], "marks": []},
       "check": "The element's circuit and switch-leg tags are the print's.",
       "how": [
         "Read the circuit number (panel and circuit) and switch leg letter beside each device or on its homerun on the plan crop.",
@@ -598,12 +939,13 @@
     {
       "id": "M-EQUIP",
       "trade": "mechanical",
-      "applies_to": {"kinds": ["ahu", "rtu", "vav", "condensing_unit", "pump", "water_heater"], "categories": ["IfcUnitaryEquipment", "IfcAirTerminalBox", "IfcCondenser", "IfcPump", "IfcBoiler"], "marks": []},
+      "applies_to": {"kinds": ["ahu", "rtu", "vav", "condensing_unit", "pump", "water_heater", "fan_coil_unit"], "categories": ["IfcUnitaryEquipment", "IfcAirTerminalBox", "IfcCondenser", "IfcPump", "IfcBoiler"], "marks": []},
       "check": "Equipment is at the drawn location, of the schedule or submittal size, with its service clearance kept clear.",
       "how": [
         "Find the equipment symbol and tag on the plan crop; compare its place with the model.",
         "Read the size from the schedule or submittal page and compare the model's size.",
-        "Check that nothing in the model stands in the service clearance the submittal shows."
+        "Check that nothing in the model stands in the service clearance the submittal shows.",
+        "A fan coil unit is equipment (this rule), not an exhaust fan: check it where the mechanical plan draws it (ceiling, closet or soffit), with its schedule tag and size, and its access panel clear."
       ],
       "documents": ["plan", "enlarged_plan", "schedule", "submittal"],
       "tolerance": {"plan_in": 12, "size_in": 2},
@@ -669,6 +1011,26 @@
       "examples": {
         "pass": "The guest room's unit sits in the exterior wall under the window where the enlarged plan draws it, tagged as the schedule row.",
         "fail": "The unit is modelled on the corridor wall; the plan draws it in the exterior wall."
+      }
+    },
+    {
+      "id": "M-TSTAT",
+      "trade": "mechanical",
+      "applies_to": {"kinds": ["thermostat"], "categories": [], "marks": []},
+      "check": "Every thermostat the plans show in the area is in the model, on the wall the plan draws it on (at its wall face), at the height the legend, elevation or notes give, for the unit the plans pair it with.",
+      "how": [
+        "Find each thermostat symbol (T, TSTAT) on the mechanical, enlarged or electrical plan inside the area; one with no model element is a 'missing' finding citing the crop, and a model thermostat no symbol stands for is 'extra'.",
+        "The object list gives its host wall and its distance to the wall face (G-HOST in `prescreen`): it must be on the wall the plan draws it on, not in the room's middle or on the far side of the wall.",
+        "Compare its height above the floor with the legend, elevation or general notes (G-HEIGHT in `prescreen` names the document); a default height no document gives is 'unsure', never a pass.",
+        "Check it controls the unit the plans pair it with (its tag, or the unit in the same room)."
+      ],
+      "documents": ["plan", "enlarged_plan", "interior_elevation", "legend", "general_notes", "schedule"],
+      "tolerance": {"plan_in": 6, "height_in": 2},
+      "severity": "medium",
+      "prescreen": "physical",
+      "examples": {
+        "pass": "The thermostat is on the wall by the entry where the enlarged plan draws it, at its wall face, at the legend's 48 in. to its centre.",
+        "fail": "The thermostat stands in the middle of the room, 4 ft from any wall, or sits at the 18 in. receptacle height."
       }
     },
     {

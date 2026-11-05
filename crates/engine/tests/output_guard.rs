@@ -40,7 +40,7 @@ fn saved(d: &Path, name: &str) -> (Session, String) {
 }
 
 /// Every command with the parameter that names its output file and the extension that suits it.
-const COMMANDS: [(&str, &str, &str); 16] = [
+const COMMANDS: [(&str, &str, &str); 20] = [
     ("takeoff", "file", "csv"),
     ("automation.takeoff", "path", "csv"),
     ("validate.prescreen", "path", "json"),
@@ -51,12 +51,16 @@ const COMMANDS: [(&str, &str, &str); 16] = [
     ("bim.bom", "file", "csv"),
     ("bim.takeoff", "file", "csv"),
     ("bim.estimate", "file", "csv"),
+    ("pull.schedule", "file", "csv"),
+    ("pull.cutlist", "file", "csv"),
+    ("pull.release", "file", "csv"),
     ("model.overlay", "path", "png"),
     ("project.rules.export", "path", "json"),
     ("fieldview.export", "path", "json"),
     ("model.clashes.report", "path", "pdf"),
     ("rfi.export", "path", "csv"),
     ("attext", "file", "txt"),
+    ("bim.loadcalc", "csv", "csv"),
 ];
 
 fn params(cmd: &str, key: &str, path: &str) -> Value {

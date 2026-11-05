@@ -191,6 +191,16 @@ fn file_dialogs_off(app: &CadApp) -> bool {
     cadaddy_engine::sysvars::get(&app.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0)
 }
 
+/// A user's QSAVE: a drawing with no file yet picks one, and saving over a file that would lose
+/// content asks first. `None` lets the engine save. JSON calls carry params and never get here;
+/// they report the loss in their result instead.
+fn user_qsave(app: &mut CadApp) -> Option<Result<Value, String>> {
+    if app.session.state().is_ok_and(|s| s.path.is_none()) {
+        return run_ui_command(app, "ui.saveas", &Value::Null);
+    }
+    app.hold_lossy_save().then_some(Ok(Value::Null))
+}
+
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if params.is_null()
         && file_dialogs_off(app)
@@ -403,7 +413,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
-        "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
+        "qsave" if no_path => return user_qsave(app),
         // EXPORTPDF from the menu or typed: ask where to save the PDF (PLOT and PRINT open the Plot
         // dialog, `managers::route`). JSON calls (scripts, control channel, MCP) always carry
         // params, never get here and never open a dialog.

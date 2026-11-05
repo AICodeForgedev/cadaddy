@@ -29,7 +29,13 @@
 //!     its own sheet it overlaps most; each crop is compared with its sheet's PDF page read
 //!     again (the job's file and page, `prints` when the job's folder isn't here) at the same
 //!     rectangle and pixels, the similarity in the manifest, a low one flagged there and in
-//!     `prompt.md`. Only pictures whose files were written are listed.
+//!     `prompt.md`. Only pictures whose files were written are listed. Each crop placed on the
+//!     level's plan has its registration checked against the model's walls (Q6141,
+//!     [`super::validate_register`]): the residual, turn and scale of the sheet's wall lines
+//!     against the model's walls in the area; a crop off by more than the threshold (1 ft, the
+//!     project rule `validate.registration.residual_ft`) is placed again from the wall lines
+//!     when they fit well, else marked `misregistered` with the numbers (manifest
+//!     `registration`, and in `prompt.md`).
 //!   - `model/`: the model over each plan crop (the print in grey, the model by trade colour:
 //!     architecture blue, electrical red, mechanical green, plumbing cyan, fire magenta), a
 //!     clean plan of the model alone, and when the model is built a 3D view of the area and an
@@ -71,6 +77,7 @@ use super::bspec::current;
 use super::validate::{Frame, PROV_APP, model_of, prints_from_job, prints_of};
 use super::validate_kind::{Kinds, Resolved};
 use super::validate_prescreen::{self as ps, UnitOf};
+use super::validate_register as vreg;
 use super::validate_rules::{self as vr, Effective};
 use super::*;
 use crate::{Result, Session};
@@ -95,6 +102,9 @@ const MAX_IMAGES: usize = 200;
 const MAX_ENTITIES: usize = super::validate::MAX_ENTITIES;
 /// Objects drawn in one picture, at most.
 const MAX_CROP_ENTITIES: usize = 400_000;
+/// Generated underground sheets drawn per packet, at most, and their long side (pixels).
+const MAX_UNDERGROUND_SHEETS: usize = 4;
+const MAX_UNDERGROUND_PX: f64 = 6_000.0;
 const MAX_AREAS: usize = 50_000;
 const DEFAULT_AREA_LIMIT: usize = 100;
 const MAX_AREA_LIMIT: usize = 500;
@@ -143,7 +153,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
         CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
-            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered, unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true}], similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
+            .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered|keynote|gear (a gear_riser, panel_schedule or feeder_schedule sheet shown whole for the gear in the area), unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true, registration?: {status: ok|refitted|misregistered|not_checked, residual_ft, rotation_deg, scale, shift_ft, fit_ft, coverage, coverage_before, walls_ft, lines, threshold_ft, why?, read?} (a placed crop's registration against the model's walls: refitted crops are placed again from the sheet's wall lines)}], registration: {about, threshold_ft (1, project rule validate.registration.residual_ft), threshold_from, counts, by_residual: [{file, sheet, view?, status, residual_ft}] (worst first)}, similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
     ]
@@ -650,6 +660,20 @@ impl Place {
             Place::Fit(r) => r.to_sheet(p),
         }
     }
+    /// Placed again: `c` carries a point this placement puts on the sheet to where the sheet
+    /// really has it (a wall-line fit, [`super::validate_register`]).
+    fn corrected(&self, c: &vreg::Sim, reference: &str, matched: usize, fit: f64) -> Option<Place> {
+        let to_project = match self {
+            Place::Same => vreg::Sim::IDENTITY,
+            Place::Fit(r) => vreg::Sim { a: r.a, b: r.b, tx: r.tx, ty: r.ty },
+        };
+        let m = to_project.after(&c.inverse()?);
+        let reference = match self {
+            Place::Fit(r) => r.reference.clone(),
+            Place::Same => reference.to_string(),
+        };
+        Some(Place::Fit(SheetRegistration { reference, method: "walls".into(), a: m.a, b: m.b, tx: m.tx, ty: m.ty, matched, residual: Some(fit) }))
+    }
     /// Sheet units per project unit.
     fn scale(&self) -> f64 {
         match self {
@@ -690,6 +714,8 @@ struct Crop {
     cited: bool,
     /// The whole view on the sheet (its tiles share it).
     whole: [f64; 4],
+    /// A placed crop's registration against the model's walls (Q6141).
+    registration: Option<Value>,
 }
 
 impl Crop {
@@ -725,6 +751,9 @@ impl Crop {
             }
             if self.cited {
                 m.insert("cited".into(), json!(true));
+            }
+            if let Some(r) = &self.registration {
+                m.insert("registration".into(), r.clone());
             }
         }
         o
@@ -1011,7 +1040,10 @@ pub(crate) fn trade_of_kind(kind: &str, rules: &[Effective]) -> &'static str {
     }
     let k = format!("_{}_", kind.to_ascii_lowercase().replace([' ', '-', '.'], "_"));
     let has = |w: &[&str]| w.iter().any(|x| k.contains(&format!("_{x}_")) || k.contains(x));
-    if has(&["wall", "door", "window", "room", "ceiling", "floor", "stair", "column", "roof"]) {
+    if has(&["door_holder"]) {
+        // A fire alarm device on the door, not the door.
+        "electrical"
+    } else if has(&["wall", "door", "window", "room", "ceiling", "floor", "stair", "column", "roof"]) {
         "architecture"
     } else if has(&["sprinkler", "standpipe"]) {
         "fire"
@@ -1758,6 +1790,14 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
+    if counts.get("underground_callouts").and_then(Value::as_u64).unwrap_or(0) > 0
+        || counts.get("underground_sheets").and_then(Value::as_u64).unwrap_or(0) > 0
+    {
+        s.push_str("- `objects.json` `underground`: the documents' callouts for work below grade or under the slab (what each calls for: trade, count, size, material, least depth, what it serves), this level's underground sheets (the set's own, and the ones CADaddy generated: whole, as `underground_sheet` prints, their run and stub-up schedules down the side) and the model's buried runs and stub-ups. G-UNDERGROUND in `prescreen` matched each callout to a run and read each stub-up's dimensions off the schedule; dashed PROPOSED runs are CADaddy's, not the documents'.\n");
+    }
+    if counts.get("gear").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `gear`: the electrical gear here — its box as built and as the gear submittal gives it (re-read), its working space and placement (`sources.status` proposed: CADaddy laid it out, the plans don't locate it), its lugs and enclosure, and every feeder that lands on it with its schedule row and one-line tag. The riser or one-line (`gear_riser`), the panel and feeder schedules (`panel_schedule`, `feeder_schedule`) and the gear submittal pages are among the pictures. E-GEAR-SPACE, E-GEAR-FILL and E-GEAR-SIZE in `prescreen` recomputed the working space, the raceways on each side's conduit area, the gutter, bending space and lugs, and the box from these documents; check on the pictures what they mark unsure (missing gutter or bending dimensions, a door's swing, the condition of what faces the gear).\n");
+    }
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
@@ -1816,6 +1856,8 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         "- Say UNSURE rather than guess: when the image is unreadable, the document is not in the packet, or the print and the notes disagree.\n",
     );
     s.push_str("- Check every rule above for every element it applies to; a pass is a finding too.\n");
+    s.push_str("- Elements with the same verdict on the same evidence may share one finding: `\"handles\": [\"<handle>\", …]` (it counts once per handle). Send each rule and element once: a repeat is merged into the first.\n");
+    s.push_str("- More than 1000 findings: report them in parts (`\"part\": 1`, `\"part\": 2`, …; the last one with `\"final\": true`); the area is done on the final part.\n");
     s
 }
 
@@ -2304,8 +2346,122 @@ fn sheet_views(d: &Drawing, sp: &BuildingSpec) -> Vec<(String, String, [f64; 4])
 // ---------------------------------------------------------------- planning the crops
 
 /// Whether a link shows `level`.
+/// Whether a sheet (or its view) is of `level`: its level tag, else a title naming the level.
+fn names_level(l: &SheetLink, level: &str) -> bool {
+    shows_level(l, level)
+        || (l.level.is_none()
+            && l.levels.is_empty()
+            && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), level))
+}
+
 pub(crate) fn shows_level(l: &SheetLink, level: &str) -> bool {
     l.level.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(level)) || l.levels.iter().any(|x| x.eq_ignore_ascii_case(level))
+}
+
+/// `a`–`b` cut to `r`, if any of it is inside.
+fn clip_seg(a: [f64; 2], b: [f64; 2], r: [f64; 4]) -> Option<vreg::Seg> {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for (p, q) in [(-dx, a[0] - r[0]), (dx, r[2] - a[0]), (-dy, a[1] - r[1]), (dy, r[3] - a[1])] {
+        if p.abs() < 1e-12 {
+            if q < 0.0 {
+                return None;
+            }
+            continue;
+        }
+        let t = q / p;
+        if p < 0.0 {
+            t0 = t0.max(t);
+        } else {
+            t1 = t1.min(t);
+        }
+        if t0 > t1 {
+            return None;
+        }
+    }
+    let at = |t: f64| [a[0] + dx * t, a[1] + dy * t];
+    let out = (at(t0), at(t1));
+    out.0.iter().chain(out.1.iter()).all(|v| v.is_finite()).then_some(out)
+}
+
+/// The model's wall faces round the area (both faces of each wall, its centreline when it has no
+/// thickness), carried onto a sheet as a crop is placed and cut to the crop's rectangle.
+fn wall_faces(model: &Model, frame: &Frame, area: &Area, margin: f64, place: &Place, r: [f64; 4]) -> Vec<vreg::Seg> {
+    let near = grow(area.bbox, margin + vreg::REACH_FT);
+    let to = |q: [f64; 2]| {
+        let p = frame.to_sheet(&area.level, q);
+        place.to_sheet([p.x, p.y])
+    };
+    let mut out = Vec::new();
+    for w in model.walls.iter().filter(|w| w.level.eq_ignore_ascii_case(&area.level) && segment_touches(near, w.a, w.b)).take(MAX_OBJECTS) {
+        let (dx, dy) = (w.b[0] - w.a[0], w.b[1] - w.a[1]);
+        let l = dx.hypot(dy);
+        if !(l.is_finite() && l > 1e-9) {
+            continue;
+        }
+        let half = (w.thickness_in / 24.0).max(0.0);
+        let (nx, ny) = (-dy / l * half, dx / l * half);
+        let sides: &[f64] = if half > 0.0 { &[-1.0, 1.0] } else { &[0.0] };
+        for s in sides {
+            let (Some(a), Some(b)) = (to([w.a[0] + nx * s, w.a[1] + ny * s]), to([w.b[0] + nx * s, w.b[1] + ny * s])) else { continue };
+            if let Some(seg) = clip_seg(a, b, r) {
+                out.push(seg);
+            }
+        }
+        if out.len() >= vreg::MAX_MODEL_LINES {
+            break;
+        }
+    }
+    out
+}
+
+/// The sheet's straight lines in `r` as the page prints them: lines, polyline pieces and the
+/// edges of solid fills (a wall's poche), cut to `r`.
+fn sheet_lines(d: &Drawing, index: &PrintIndex, r: [f64; 4]) -> Vec<vreg::Seg> {
+    let ents = as_printed(d, &index.within(r));
+    let mut out: Vec<vreg::Seg> = Vec::new();
+    let cap = vreg::MAX_PRINT_LINES * 4;
+    let mut add = |out: &mut Vec<vreg::Seg>, a: [f64; 2], b: [f64; 2]| {
+        if out.len() < cap
+            && let Some(s) = clip_seg(a, b, r)
+        {
+            out.push(s);
+        }
+    };
+    let ring =
+        |out: &mut Vec<vreg::Seg>, add: &mut dyn FnMut(&mut Vec<vreg::Seg>, [f64; 2], [f64; 2]), v: &[cadaddy_geom::PolyVertex], closed: bool| {
+            let n = v.len().min(100_000);
+            for i in 0..n {
+                let (Some(p), Some(q)) = (v.get(i), v.get(if i + 1 < n { i + 1 } else { 0 })) else { continue };
+                if (i + 1 >= n && !closed) || p.bulge.abs() > 1e-9 {
+                    continue;
+                }
+                add(out, [p.p.x, p.p.y], [q.p.x, q.p.y]);
+            }
+        };
+    for e in ents {
+        if out.len() >= cap {
+            break;
+        }
+        match &e.kind {
+            EntityKind::Line(l) => add(&mut out, [l.a.x, l.a.y], [l.b.x, l.b.y]),
+            EntityKind::LwPolyline(p) => ring(&mut out, &mut add, &p.vertices, p.closed),
+            EntityKind::Polyline3d(p) => {
+                for w in p.points.windows(2).take(100_000) {
+                    if let [a, b] = w {
+                        add(&mut out, [a.x, a.y], [b.x, b.y]);
+                    }
+                }
+            }
+            EntityKind::Hatch(h) if h.solid => {
+                for lp in h.loops.iter().take(10_000) {
+                    ring(&mut out, &mut add, &lp.vertices, true);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 struct Planned {
@@ -2326,6 +2482,7 @@ fn plan_crops(
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
     keynotes: &[super::validate_keynote::CropAsk],
+    register: &dyn Fn(&Place, [f64; 4]) -> vreg::Registered,
 ) -> Planned {
     let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
@@ -2402,6 +2559,7 @@ fn plan_crops(
                 unregistered: false,
                 cited: false,
                 whole: rect,
+                registration: None,
             });
         }
     };
@@ -2416,12 +2574,7 @@ fn plan_crops(
         .collect();
     // 1. The plans, enlarged plans and RCPs of the area's level (its level tag, or a title naming
     //    the level), placed by their registration; an unplaced one is offered in 1c.
-    let names_level = |l: &SheetLink| {
-        shows_level(l, &area.level)
-            || (l.level.is_none()
-                && l.levels.is_empty()
-                && title_names_level(&format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str())), &area.level))
-    };
+    let names_level = |l: &SheetLink| names_level(l, &area.level);
     let mut pending: Vec<&SheetLink> = Vec::new();
     // Placed, but the placement puts the area outside the view: looked for by the room's tag.
     let mut missed: Vec<&SheetLink> = Vec::new();
@@ -2450,7 +2603,7 @@ fn plan_crops(
             }
         };
         let on_sheet: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| place.to_sheet(*q)).collect();
-        let Some(r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
+        let Some(mut r) = bbox(&on_sheet).filter(|_| on_sheet.len() == 4).and_then(|b| intersect(b, clip)) else {
             misses.push((
                 l.number.clone(),
                 view_label(l),
@@ -2459,11 +2612,39 @@ fn plan_crops(
             missed.push(*l);
             continue;
         };
+        // Its registration against the model's walls (Q6141): a crop placed well off them is
+        // placed again from the sheet's wall lines when they fit, else marked.
+        let mut place = place;
+        let mut reg = register(&place, r);
+        if let Some(c) = reg.correction {
+            let fit = reg.json["fit_ft"].as_f64().unwrap_or(0.0) * frame.upf() * place.scale();
+            let reference = l.registration.as_ref().map_or_else(String::new, |x| x.reference.clone());
+            let refit = place.corrected(&c, &reference, reg.json["lines"].as_u64().unwrap_or(0) as usize, fit).and_then(|p| {
+                let on: Vec<[f64; 2]> = corners(proj_box).iter().filter_map(|q| p.to_sheet(*q)).collect();
+                bbox(&on).filter(|_| on.len() == 4).and_then(|b| intersect(b, clip)).map(|b| (p, b))
+            });
+            match refit {
+                Some((p, b)) => {
+                    place = p;
+                    r = b;
+                }
+                None => {
+                    reg.json["status"] = json!("misregistered");
+                    reg.json["why"] = json!("the wall-line fit puts the area outside this view");
+                    reg.json["read"] =
+                        json!("misregistered: the wall-line fit puts the area outside this view: measure from the walls, not from the overlay");
+                }
+            }
+        }
         let orientation = match &place {
             Place::Fit(reg) if kind == "enlarged_plan" || turn_deg(reg.b.atan2(reg.a)).abs() > 0.05 => Some(orientation_of(reg, by)),
             _ => None,
         };
+        let before = crops.len();
         push(&mut crops, l, kind, trade, r, by, Some(place), None, orientation);
+        for c in crops.iter_mut().skip(before) {
+            c.registration = Some(reg.json.clone());
+        }
     }
     // 1b. The enlarged views of the room's unit type (every trade's: the typical room's
     //     mechanical, plumbing and power plans), turned and mirrored as the room is.
@@ -2722,10 +2903,25 @@ fn plan_crops(
     // 1d. The print round each keynote marker in or by the area, and the keynote lists of the
     //     sheets that mark it.
     for k in keynotes {
+        // A gear sheet the spec has no link for (a schedule or diagram the job imported): its
+        // rectangle, as a link of its own.
+        let own = (!k.kind.starts_with("keynote")).then(|| SheetLink {
+            number: k.sheet.clone(),
+            title: k.shows.clone(),
+            discipline: None,
+            level: None,
+            source: "job".into(),
+            rect: Some(k.rect),
+            levels: Vec::new(),
+            registration: None,
+            view: None,
+        });
         let Some(l) = links
             .iter()
+            .copied()
             .find(|l| l.number.eq_ignore_ascii_case(&k.sheet) && l.view.is_none())
-            .or_else(|| links.iter().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+            .or_else(|| links.iter().copied().find(|l| l.number.eq_ignore_ascii_case(&k.sheet)))
+            .or(own.as_ref())
         else {
             continue;
         };
@@ -2734,7 +2930,8 @@ fn plan_crops(
             continue;
         }
         let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(k.rect), sr)) else { continue };
-        push(&mut crops, l, k.kind, trade, rect, "keynote", None, Some(k.shows.clone()), None);
+        let by = if k.kind.starts_with("keynote") { "keynote" } else { "gear" };
+        push(&mut crops, l, k.kind, trade, rect, by, None, Some(k.shows.clone()), None);
     }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
@@ -3208,6 +3405,12 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         here.cut_sheets.extend(pages);
         here.lighting = true;
     }
+    // The gear submittals, re-read when the area holds gear (E-GEAR-*'s documents).
+    let gear_docs = if super::validate_gear::has_gear(d, &sp, &frame, &area) && super::validate_gear::wanted(&all_rules, &[]) {
+        super::validate_gear::read_docs(s, &sp)
+    } else {
+        None
+    };
     // The deterministic prescreen of the area: what was measured, for the judge to start from.
     let pre = ps::screen(&ps::Scope {
         d,
@@ -3219,6 +3422,12 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         areas: std::slice::from_ref(&area),
         whole_levels: false,
         only: &[],
+        gear_docs: gear_docs.as_ref(),
+        conduit: false,
+        conduit_takeoff: None,
+        value: None,
+        equip_docs: None,
+        fixture_docs: None,
     });
     // Each element's expected height and where the documents give it (G-HEIGHT's reading).
     if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
@@ -3239,7 +3448,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => Vec::new(),
     };
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line, E-GEAR-SPACE each piece of gear's working space (depth by its voltage to ground and condition, width, height, door swings), headroom and dedicated space, E-GEAR-FILL its raceways on each side's conduit area, gutter fill, bending space and lugs against the feeders that land on it (missing gutter or bending dimensions: unsure), E-GEAR-SIZE its built box against the submittal's. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
         "checked": pre.checked,
         "unmeasured": pre.unmeasured,
         // The area's own: an element beside it is measured in its own area's packet.
@@ -3269,6 +3478,38 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         }
         here.objects["unit"] = j;
     }
+    // The gear in the area: its facts, the riser and schedules to show whole, its submittal pages;
+    // its kinds bring in the gear rules.
+    let mut gear_crops: Vec<super::validate_keynote::CropAsk> = Vec::new();
+    let mut gear_pages: Vec<(String, String)> = Vec::new();
+    // The job's imported sheets that are no plan link (schedules, diagrams): number, kind, rectangle.
+    let regions: Vec<(String, String, [f64; 4])> = {
+        let mut seen: BTreeSet<String> = sp.sheets.iter().map(|l| l.number.to_ascii_uppercase()).collect();
+        job.as_ref()
+            .map(|j| j.sheet_regions.as_slice())
+            .unwrap_or_default()
+            .iter()
+            .filter(|r| seen.insert(r.number.to_ascii_uppercase()))
+            .map(|r| (r.number.clone(), r.kind.clone(), r.rect))
+            .collect()
+    };
+    if let Some((gear_json, asks, pages, kinds)) = super::validate_gear::for_packet(
+        d,
+        &sp,
+        &frame,
+        &area,
+        gear_docs.as_ref(),
+        &regions,
+        &super::validate_gear::job_pages(job.as_ref().and_then(|j| j.sheets.as_ref())),
+    ) {
+        let n = gear_json["gear"].as_array().map_or(0, Vec::len);
+        here.objects["gear"] = gear_json;
+        here.objects["counts"]["gear"] = json!(n);
+        here.counts["gear"] = json!(n);
+        here.kinds.extend(kinds);
+        gear_crops = asks;
+        gear_pages = pages;
+    }
     let (mut rules_on, mut rules_off) = rules_for(&here, &all_rules);
     // Only the rules a validate run asked for (`rules`): the others are listed as left out.
     if let Some(only) = &only_rules {
@@ -3297,15 +3538,44 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .map(|l| l.number.to_ascii_uppercase())
         .collect();
-    let (keynotes_json, keynote_crops) = super::validate_keynote::for_packet(&keynotes, &area, margin, &level_plans);
+    let (keynotes_json, mut keynote_crops) = super::validate_keynote::for_packet(&keynotes, &area, margin, &level_plans);
+    keynote_crops.extend(gear_crops);
     let marker_count = keynotes_json["markers"].as_array().map_or(0, Vec::len);
     if marker_count > 0 || keynotes_json["lists"].as_array().is_some_and(|l| !l.is_empty()) {
         here.objects["keynotes"] = keynotes_json;
         here.objects["counts"]["keynote_markers"] = json!(marker_count);
         here.counts["keynote_markers"] = json!(marker_count);
     }
+    // The level's buried work and its underground sheets (G-UNDERGROUND's reading): the
+    // generated sheets go in whole as pictures.
+    let mut ug_layouts: Vec<(String, String)> = Vec::new();
+    if let Some((ug_json, layouts)) = super::validate_underground::for_packet(d, &sp, &frame, &area.level) {
+        let callouts = ug_json["callouts"].as_array().map_or(0, Vec::len);
+        here.objects["underground"] = ug_json;
+        here.objects["counts"]["underground_callouts"] = json!(callouts);
+        here.counts["underground_callouts"] = json!(callouts);
+        here.counts["underground_sheets"] = json!(layouts.len());
+        ug_layouts = layouts;
+    }
+    // Each placed crop's registration against the model's walls (Q6141).
+    let (reg_threshold, reg_rule) = vreg::threshold(&d.project_rules);
+    // The level's sheets' objects, once, for their straight lines.
+    let level_sheets: Vec<[f64; 4]> = sp.sheets.iter().filter(|l| names_level(l, &area.level)).filter_map(|l| l.rect.map(norm_rect)).collect();
+    let line_index = PrintIndex::of(d, &level_sheets);
+    let register = |place: &Place, r: [f64; 4]| -> vreg::Registered {
+        let unit = upf * place.scale();
+        vreg::judge(
+            vreg::fit_walls(
+                &wall_faces(&model, &frame, &area, margin, place, r),
+                &sheet_lines(d, &line_index, grow(r, vreg::REACH_FT * unit)),
+                unit,
+                [(r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0],
+            ),
+            reg_threshold,
+        )
+    };
     let Planned { mut crops, mut left_out } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops);
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &register);
     // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
     // lies in), not by the link that brought it in.
     let views = sheet_views(d, &sp);
@@ -3500,6 +3770,10 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     for page in &here.cut_sheets {
         wanted.entry(page.clone()).or_default().insert("a luminaire type's cut sheet".to_string());
     }
+    // The gear submittal pages of the gear here.
+    for (page, why) in &gear_pages {
+        wanted.entry(page.clone()).or_default().insert(why.clone());
+    }
     let mut search: Vec<String> = job_submittals.clone();
     search.extend(job_prints.clone());
     let mut subs: Vec<(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> = Vec::new();
@@ -3690,6 +3964,25 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
+    // The generated underground sheets of the area's level, whole (no PDF page to compare).
+    for (k, (number, layout)) in ug_layouts.iter().enumerate().take(MAX_UNDERGROUND_SHEETS) {
+        let Some(lay) = d.layouts.iter().find(|l| &l.name == layout) else { continue };
+        let ents: Vec<&Entity> = lay.entities.iter().map(|e| e.as_ref()).take(MAX_CROP_ENTITIES).collect();
+        let b = ents.iter().map(|e| cadaddy_doc::entity_bounds(d, e, 0)).filter(|b| !b.is_empty()).reduce(|a, b| a.union(&b));
+        let Some(b) = b.filter(|b| b.width() > 0.0 && b.height() > 0.0 && b.width().is_finite() && b.height().is_finite()) else { continue };
+        // Paper inches at the packet's dpi, the long side at most MAX_UNDERGROUND_PX.
+        let ppu = dpi.min(MAX_UNDERGROUND_PX / b.width().max(b.height()));
+        let px = [(b.width() * ppu).round().max(1.0) as u32, (b.height() * ppu).round().max(1.0) as u32];
+        let rect = [b.min.x, b.min.y, b.max.x, b.max.y];
+        let file = format!("prints/ug{:02}_{}_underground_sheet.png", k + 1, safe(number));
+        if write_png(&file, png_of(d, &ents, rect, px), &mut left_out)? {
+            prints_out.push(json!({
+                "file": file, "sheet": number, "title": layout, "kind": "underground_sheet", "trade": "electrical", "layout": layout,
+                "sheet_rect": [r4(rect[0]), r4(rect[1]), r4(rect[2]), r4(rect[3])], "px": px, "px_per_unit": r4(ppu), "dpi": r2(ppu),
+                "placed_by": "generated", "generated": true,
+            }));
+        }
+    }
     // Each crop against its sheet's PDF page read again, at the same rectangle and pixels.
     let similarity_json = {
         let refs = job.as_ref().map(|j| page_refs(j, prints_dir.as_deref())).unwrap_or_default();
@@ -3823,6 +4116,8 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     }
+    let registration_json = vreg::summary(&prints_out, reg_threshold, reg_rule.as_deref());
+    prompt.push_str(&vreg::prompt_section(&prints_out));
     left_out.sort();
     left_out.dedup();
     let manifest = json!({
@@ -3838,6 +4133,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "submittals_unlisted": unlisted_json,
         "specs": specs_out,
         "similarity": similarity_json,
+        "registration": registration_json,
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
@@ -3877,6 +4173,13 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_door_holder_is_the_fire_alarm_side_not_the_door() {
+        assert_eq!(trade_of_kind("door_holder", &[]), "electrical");
+        assert_eq!(trade_of_kind("door", &[]), "architecture");
+        assert_eq!(trade_of_kind("duct_smoke_detector", &[]), "mechanical");
+    }
 
     #[test]
     fn rooms_are_told_apart_by_name() {

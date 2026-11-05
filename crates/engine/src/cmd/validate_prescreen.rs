@@ -47,6 +47,35 @@
 //!     it is (tamper-resistant, GFCI judged on its whole circuit, weather-resistant), from the
 //!     code rules data the build applies too ([`super::validate_product`]). `products` counts
 //!     them per kind and per field; a field the model doesn't know is `unsure`.
+//!   - **G-UNDERGROUND**: every callout of the documents for work below grade or under the slab
+//!     ([`super::validate_underground`]) against the model's buried runs and the underground
+//!     sheets (size, count, material, least depth): `pass`, `fail`, `missing` (no run, or none
+//!     an underground sheet shows), `unsure` (a material the model doesn't say); each run
+//!     CADaddy proposes `proposed` (never a pass) with its review item; each buried run nothing
+//!     accounts for `extra`; each stub-up two dimensions from a slab edge or a grid line on its
+//!     sheet's stub-up schedule (`pass`, else `fail`).
+//!   - **E-GEAR-SPACE / E-GEAR-FILL / E-GEAR-SIZE**: each piece of electrical gear's working space,
+//!     headroom and dedicated space, the raceways, gutter, bending space and lugs of what lands on
+//!     it, and its box against the submittal's ([`super::validate_gear`]), recomputed from the
+//!     documents.
+//!   - **E-CONDUIT-CONTINUITY / E-CONDUIT-FILL / E-BOX-FILL / E-DERATE / E-VDROP / E-METHOD /
+//!     G-CLASH / E-TAKEOFF**: the routed branch circuits ([`super::validate_conduit`]), recounted
+//!     from the model's own pieces (sticks, wires, cables, boxes), never from the router's
+//!     report; the router's clash items are carried in (source `build`).
+//!   - **G-VE-TIER / G-VE-AREA / G-VE-COST / G-VE-RFI / G-VE-DESIGN**: the value-engineering
+//!     recommendations ([`super::validate_value`]): each option's tier against the
+//!     specification's paragraph and the code rule it cites, where its cable runs, its savings
+//!     recomputed from the model's pieces and the price book, its RFI, and the as-designed model
+//!     unchanged by any scenario not approved.
+//!   - **E-EQUIP-ELEC**: each equipment connection's protection, conductors, conduit fill,
+//!     disconnect and SCCR against its latest approved submittal (re-read) and the code rules
+//!     data, the revision the model follows, and the build's `equipment_electrical` RFIs matched
+//!     against the verdicts ([`super::validate_equip`]).
+//!   - **E-LUM-SCHEDULE**: the light fixture schedule and the lighting submittals read again
+//!     ([`super::validate_fixtures`]): each luminaire against its type's schedule row (basis of
+//!     design, lamp, VA, voltage, installation), each scheduled type's approved submittal product
+//!     against its basis of design (maker family and series), the types on no plan or no
+//!     schedule, and the build's lighting RFIs about fixture types matched against the verdicts.
 //!
 //! Project-rule sets are never built in: domain `custom`, key
 //! `prescreen.expect.<room type>`, value a list such as
@@ -92,7 +121,7 @@ pub const CMD: &str = "validate.prescreen";
 /// The project-rule key prefix of a room type's expected set.
 pub const EXPECT_PREFIX: &str = "prescreen.expect.";
 /// The rules the prescreen measures.
-pub const RULES: [&str; 14] = [
+pub const RULES: [&str; 34] = [
     "G-HOST",
     "G-HEIGHT",
     super::walllayout::RULE,
@@ -107,6 +136,26 @@ pub const RULES: [&str; 14] = [
     super::validate_keynote::RULE,
     super::validate_product::RULE,
     super::validate_product::CODE,
+    super::validate_underground::RULE,
+    super::validate_gear::SPACE,
+    super::validate_gear::FILL,
+    super::validate_gear::SIZE,
+    super::validate_conduit::CONTINUITY,
+    super::validate_conduit::FILL,
+    super::validate_conduit::BOX_FILL,
+    super::validate_conduit::DERATE,
+    super::validate_conduit::VDROP,
+    super::validate_conduit::METHOD,
+    super::validate_conduit::CLASH,
+    super::validate_conduit::TAKEOFF,
+    super::validate_coverage::RULE,
+    super::validate_value::TIER,
+    super::validate_value::AREA,
+    super::validate_value::COST,
+    super::validate_value::RFI,
+    super::validate_value::DESIGN,
+    super::validate_equip::RULE,
+    super::validate_fixtures::RULE,
 ];
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
@@ -129,7 +178,7 @@ const MAX_WRITTEN: usize = 200_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
-            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known)")
+            .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE|G-UNDERGROUND|E-GEAR-SPACE|E-GEAR-FILL|E-GEAR-SIZE|E-CONDUIT-CONTINUITY|E-CONDUIT-FILL|E-BOX-FILL|E-DERATE|E-VDROP|E-METHOD|G-CLASH|E-TAKEOFF|G-COVERAGE|G-VE-TIER|G-VE-AREA|G-VE-COST|G-VE-RFI|G-VE-DESIGN|E-EQUIP-ELEC|E-LUM-SCHEDULE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, value_engineering?: path (a ve.study answer as JSON, or a job result holding value_engineering; default the job's BIM stage), price_book?: path (the cost DB or private price book, .csv or .json, labor in dollars, that G-VE-COST prices again from; default the study's price book, else the job's cost DB), force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature; G-UNDERGROUND: pass|fail|missing|extra|proposed|unsure; E-GEAR-*: pass|fail|unsure|conflict, the gear's `tag` and `measured.check`; the conduit rules: pass|fail|unsure with `measured.check`; G-COVERAGE: pass|fail|unsure, `kind` the kind's words; G-VE-*: pass|fail|unsure with the `scenario` and its `tier`; E-EQUIP-ELEC: pass|fail|unsure|missing|extra, the connection's `tag` and `measured.check` protection|conductors|conduit_fill|disconnect|sccr|revision with `measured.submittal` (values, cite, page, status, revision), `measured.model` (panel, circuit, disconnect) and `measured.recomputed`; E-LUM-SCHEDULE: pass|fail|unsure|missing|extra with `measured.check` row (a luminaire: `measured.row` its type's row as read, `measured.fields` each field with the model's value and where it came from)|scheduled|on_plan|submittal|submitted|fields|quantity (a type: `tag`, `measured.row`, `measured.submittal` with its page, stamp and revision, `measured.working`), an RFI's `measured.rfi`), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), coverage?: {kinds_defined, by_verdict, zero_in_model, unexplained_groups, kinds: [{kind, name, plan_marks, by_sheet, model, verdict}]} (G-COVERAGE; the whole table, with each kind's sources, levels, typical plans and elements, in the `path` file), fixtures?: {types: [{type, plan, model, row, submittal, verdicts, luminaires}], schedule: {tables, types, pages_read, no_substitutions}, submittals: {files, types}, rfis: {confirmed, disputed, not_recomputed}} (E-LUM-SCHEDULE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known); and each callout of the documents for buried work against the model's runs below the slab and the underground sheets (G-UNDERGROUND: pass, fail for another size, count or material or too shallow, missing when no run or no underground sheet has it, unsure; each run CADaddy proposes `proposed`, never a pass, with its review item; a buried run nothing accounts for `extra`; each stub-up two dimensions from a slab edge or a grid line, else fail); and each piece of electrical gear against NEC 110.26 and its documents, recomputed from the schedules, the one-line and the gear submittals (re-read when the job's are on this machine), never from the build's own gear review: E-GEAR-SPACE its working space (depth by its voltage to ground — unsure where only condition 1 holds or the voltage isn't known — width, height, clear of walls, equipment and door swings; a door whose swing nothing gives is unsure), headroom and dedicated space (no duct or pipe over it to 6 ft above); E-GEAR-FILL the raceways each side takes on its conduit area (drawn in the submittal; else the box less the rule's margins, a pass only with half to spare), the gutter fill (NEC 312.8), the bending space (NEC 312.6) and the lugs against each feeder's parallel sets, size and metal (gutter or bending dimensions the documents don't give: unsure, never a pass), and the feeders its schedule names without a record; E-GEAR-SIZE its built box against the submittal's; the build's conflict review items about gear come in as conflicts (source build); and the routed branch circuits recounted from the model's own pieces, never from the router's report: E-CONDUIT-CONTINUITY each device joined end to end to its panel by its circuit's raceway, every drop ending on its box (within touch_in); E-CONDUIT-FILL each raceway's wires against NEC Chapter 9 (40% over two conductors); E-BOX-FILL each box's entering conductors, grounds and yoke (314.16) against its volume; E-DERATE each raceway's current-carrying conductors and the 310.15(C)(1) factor against the schedule's breakers; E-VDROP each circuit's length along its raceway from its panel to its farthest device against the drawing's length table, else 3%; E-METHOD each run's wiring method against the specification's table for its area; G-CLASH each stick against ducts, pipes, structure, equipment, other conduit and the gear's working space by the rules' clearances, the router's clash items carried in (source build); E-TAKEOFF the stored count index and conduit.takeoff against a recount within takeoff_pct (1%); and, kind by kind, every kind the documents define (legend and schedule rows, abbreviation lists, keynotes, the print inventory's kinds) against the model, independently of the build's counts: its tags, sample symbols and keynote markers on the plans (per sheet and level, a floor plan and an enlarged plan deduped by registration, a typical unit plan once per room of its type) against the model's elements of that kind (G-COVERAGE: fail, ranked first, for marks and zero elements, and for a kind the electrical, fire alarm or low-voltage sheets connect to (power, a circuit, a module, a data drop) with zero elements, even when its trade is by others; fail for a count off by more than count_abs / count_share; unsure for the print inventory's unexplained marks repeated on several plan sheets, a likely missing kind); and the value-engineering recommendations (the job's study, the drawing's scenarios): G-VE-TIER an ALLOWED NOW option permitted by both the specification's paragraph for every area its pieces are in and a code rule it cites (rules data: construction types, concealed, thermal barrier, areas never allowed), all conditions met; one the specification contradicts must be NEEDS RFI; G-VE-AREA no NM or other cable option where its method is never used (rules data: NM never in common, exposed, plenum or below-slab areas), each cable piece placed by its room, the design piece beside it, its circuit's area, its ceiling and its height; G-VE-COST the savings recomputed from a recount of the model's pieces and the price book within cost_pct (1%), man-hours = labor $ ÷ the stated rate; G-VE-RFI each NEEDS RFI option's method-choice RFI with its citations and the design's intent; G-VE-DESIGN the as-designed model unchanged by any scenario not approved (RFI) or chosen (allowed now); and each equipment connection against its latest approved submittal (re-read; a scanned one through an agent's `equip:<TAG>` answer citing its page) and the code rules data, never the build's own checks (E-EQUIP-ELEC: protection no larger than the maker's maximum and of its fuse class, conductors at least its MCA or 125% of its full-load amps, conduit fill, the disconnect's rating and type, its SCCR against its source's available fault current, the revision the model follows; a value nothing gives is unsure; a failure the build raised no `equipment_electrical` RFI for is `missing`, an RFI with no failure `extra`); and the light fixture schedule read again from the sheets by its grid (any column order, one or two sides; the drawing's sheets and the job's pages it doesn't hold) and the lighting submittals read again from the job's folders (the latest revision not sent back), never the build's stored copy (E-LUM-SCHEDULE: each luminaire's basis of design, lamp, VA, voltage and installation against its type's row, a field that differs fails citing the row, a type with no row or a field the model doesn't record unsure; each scheduled type's approved product against its basis of design, the same maker (brands of one maker are one) and series (other options are one product); the schedule's voltage and VA against the submittal's; scheduled types no plan shows, plan types the schedule lacks, submitted types the schedule lacks, the schedule's quantities; a type-level failure the build raised no lighting RFI for is `missing`, a lighting RFI with no failure `extra`, one about a field Validate doesn't recompute `unsure`). Data the model or documents don't give is unsure, never a pass")
             .noundo()
             .files(),
     ]
@@ -710,6 +759,11 @@ pub(crate) struct Screened {
     pub no_room: Vec<Value>,
     /// G-PRODUCT's and G-PRODUCT-CODE's counts per kind and per field.
     pub products: super::validate_product::Tally,
+    /// G-COVERAGE's table: every kind the documents define, its plan marks and model count.
+    pub coverage: Option<Value>,
+    /// E-LUM-SCHEDULE's table: per fixture type its plan and model counts, schedule row,
+    /// submittal product and verdicts; what was read; the build's RFIs confirmed and disputed.
+    pub fixtures: Option<Value>,
 }
 
 /// G-PRESENT's counts: rooms checked and verdicts, per room type and per level, and the rooms
@@ -831,6 +885,20 @@ pub(crate) struct Scope<'a> {
     pub whole_levels: bool,
     /// Only these rules (empty: all three).
     pub only: &'a [String],
+    /// The job's gear submittals, re-read ([`super::validate_gear::read_docs`]).
+    pub gear_docs: Option<&'a super::validate_gear::GearDocs>,
+    /// The routed conduit's rules run ([`super::validate_conduit`]): a whole-model read, so a
+    /// packet's screen of one area leaves them to the run.
+    pub conduit: bool,
+    /// `conduit.takeoff`'s lines for E-TAKEOFF ([`super::validate_conduit::read_takeoff`]).
+    pub conduit_takeoff: Option<&'a Value>,
+    /// The value-engineering study and price book ([`super::validate_value::read`]); its rules
+    /// run with the conduit's (whole-model reads).
+    pub value: Option<&'a super::validate_value::Inputs>,
+    /// The job's equipment submittals, re-read ([`super::validate_equip::read_docs`]).
+    pub equip_docs: Option<&'a super::validate_equip::EquipDocs>,
+    /// The fixture schedule and lighting submittals, re-read ([`super::validate_fixtures::read_docs`]).
+    pub fixture_docs: Option<&'a super::validate_fixtures::FixtureDocs>,
 }
 
 /// Run the three checks over a scope.
@@ -893,6 +961,26 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         (super::validate_tr::RULE, &["pass", "fail", "unsure"][..]),
         (super::walllayout::RULE, &["pass", "fail", "unsure"][..]),
         (super::validate_keynote::RULE, &super::validate_keynote::VERDICTS[..]),
+        (super::validate_underground::RULE, &super::validate_underground::VERDICTS[..]),
+        (super::validate_gear::SPACE, &super::validate_gear::VERDICTS[..]),
+        (super::validate_gear::FILL, &super::validate_gear::VERDICTS[..]),
+        (super::validate_gear::SIZE, &super::validate_gear::VERDICTS[..]),
+        (super::validate_conduit::CONTINUITY, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::FILL, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::BOX_FILL, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::DERATE, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::VDROP, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::METHOD, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::CLASH, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_conduit::TAKEOFF, &super::validate_conduit::VERDICTS[..]),
+        (super::validate_coverage::RULE, &super::validate_coverage::VERDICTS[..]),
+        (super::validate_value::TIER, &super::validate_value::VERDICTS[..]),
+        (super::validate_value::AREA, &super::validate_value::VERDICTS[..]),
+        (super::validate_value::COST, &super::validate_value::VERDICTS[..]),
+        (super::validate_value::RFI, &super::validate_value::VERDICTS[..]),
+        (super::validate_value::DESIGN, &super::validate_value::VERDICTS[..]),
+        (super::validate_equip::RULE, &super::validate_equip::VERDICTS[..]),
+        (super::validate_fixtures::RULE, &super::validate_fixtures::VERDICTS[..]),
     ] {
         if on(id).is_some() {
             checked.insert(id.to_string(), verdicts.iter().map(|v| (v.to_string(), 0)).collect());
@@ -1149,11 +1237,13 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // An element on its room's wall line (just outside the outline) is that room's, as in the
     // packets: the nearest room of its level within a foot, when that room is in scope.
     let lighting_on = super::validate_lighting::RULES.iter().any(|id| on(id).is_some());
-    let level_rooms: Vec<Area> = if (on(super::validate_tr::RULE).is_some() || lighting_on || product_on) && mine.iter().any(|(_, a)| a.is_none()) {
-        super::validate_packet::model_areas(sc.d, sc.frame)
-    } else {
-        Vec::new()
-    };
+    let fixtures_on = on(super::validate_fixtures::RULE).is_some();
+    let level_rooms: Vec<Area> =
+        if (on(super::validate_tr::RULE).is_some() || lighting_on || product_on || fixtures_on) && mine.iter().any(|(_, a)| a.is_none()) {
+            super::validate_packet::model_areas(sc.d, sc.frame)
+        } else {
+            Vec::new()
+        };
     let mut rooms_of: HashMap<String, Vec<&Area>> = HashMap::new();
     for a in &level_rooms {
         rooms_of.entry(a.level.to_ascii_lowercase()).or_default().push(a);
@@ -1239,7 +1329,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     // The lighting rules (E-LUM-*, E-SWITCH-*).
     let mut lighting: Option<super::validate_lighting::Found> = None;
     let mut product: Option<super::validate_product::Found> = None;
-    if lighting_on || product_on {
+    let mut fixtures: Option<super::validate_fixtures::Checked> = None;
+    if lighting_on || product_on || fixtures_on {
         use super::validate_lighting as vl;
         let by_id: HashMap<String, &v::Element> = sc.model.elements.iter().take(MAX_ELEMENTS).map(|e| (e.id.to_ascii_uppercase(), e)).collect();
         let lits: Vec<vl::Lit> = mine
@@ -1268,6 +1359,13 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         if product_on {
             let inp = super::validate_product::Input { d: sc.d, sp: sc.sp, prints: sc.prints, rules: sc.rules, only: sc.only, units: &units };
             product = Some(super::validate_product::screen(&inp, &lits));
+        }
+        // The fixture schedule and the lighting submittals, re-read (E-LUM-SCHEDULE).
+        if let Some(r) = on(super::validate_fixtures::RULE) {
+            let building =
+                sc.whole_levels && super::validate_packet::model_areas(sc.d, sc.frame).iter().all(|a| levels.contains(&a.level.to_ascii_lowercase()));
+            let cx = super::validate_fixtures::Ctx { d: sc.d, sp: sc.sp, prints: sc.prints, docs: sc.fixture_docs, building };
+            fixtures = Some(super::validate_fixtures::check(&cx, r, &lits));
         }
     }
     // G-LAYOUT: each wall device placed relative to its named face (Q6174): its face, its
@@ -1587,6 +1685,148 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmeasured.remove(vk::RULE);
         }
     }
+    // G-UNDERGROUND: the documents' buried work against the model and the underground sheets.
+    if let Some(r) = on(super::validate_underground::RULE) {
+        use super::validate_underground as vu;
+        let cx = super::validate_keynote::Ctx {
+            d: sc.d,
+            sp: sc.sp,
+            model: sc.model,
+            prints: sc.prints,
+            frame: sc.frame,
+            areas: sc.areas,
+            whole_levels: sc.whole_levels,
+        };
+        let got = vu::check(&cx, r);
+        for (rank, verdict, f) in got.findings {
+            tally(vu::RULE, verdict);
+            findings.push((rank, f));
+        }
+        if !got.unmeasured.is_empty() {
+            let notes = unmeasured.entry(vu::RULE.to_string()).or_default();
+            for (why, n) in got.unmeasured {
+                *notes.entry(why).or_default() += n;
+            }
+        }
+    }
+    // The gear: working space, fill and lugs, size, recomputed from the documents.
+    {
+        use super::validate_gear as vg;
+        let (sp_on, fill_on, size_on) = (on(vg::SPACE), on(vg::FILL), on(vg::SIZE));
+        if sp_on.is_some() || fill_on.is_some() || size_on.is_some() {
+            let cx =
+                vg::Ctx { d: sc.d, sp: sc.sp, model: sc.model, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, docs: sc.gear_docs };
+            let got = vg::check(&cx, sp_on, fill_on, size_on);
+            for (rank, rule, verdict, f) in got.findings {
+                tally(rule, verdict);
+                findings.push((rank, f));
+            }
+            for (rule, whys) in got.unmeasured {
+                let into = unmeasured.entry(rule).or_default();
+                for (w, n) in whys {
+                    *into.entry(w).or_default() += n;
+                }
+            }
+        }
+    }
+    // The routed conduit: continuity, fill, box fill, derating, voltage drop, method, clashes and
+    // the takeoff, recounted from the model's pieces.
+    if sc.conduit {
+        use super::validate_conduit as vc;
+        let which = vc::On::of(|id| on(id));
+        let cx = vc::Ctx { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, takeoff: sc.conduit_takeoff };
+        let got = vc::check(&cx, which);
+        for (rank, rule, verdict, f) in got.findings {
+            tally(rule, verdict);
+            findings.push((rank, f));
+        }
+        for (rule, whys) in got.unmeasured {
+            let into = unmeasured.entry(rule).or_default();
+            for (w, n) in whys {
+                *into.entry(w).or_default() += n;
+            }
+        }
+    }
+    // G-COVERAGE: kind by kind, the prints' marks against the model's elements.
+    let mut coverage = None;
+    if let Some(r) = on(super::validate_coverage::RULE) {
+        use super::validate_coverage as vc;
+        let census: Vec<vc::Census> = all
+            .iter()
+            .map(|it| vc::Census {
+                handle: it.handle.clone(),
+                kind: it.kind.clone(),
+                mark: it.mark.clone(),
+                name: it.name.clone(),
+                level: it.level.clone(),
+                source: it.source.clone(),
+            })
+            .collect();
+        let inp = vc::Input { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, census: &census };
+        let got = vc::check(&inp, r);
+        for (rank, verdict, f) in got.findings {
+            tally(vc::RULE, verdict);
+            findings.push((rank, f));
+        }
+        if !got.unmeasured.is_empty() {
+            let notes = unmeasured.entry(vc::RULE.to_string()).or_default();
+            for (why, n) in got.unmeasured {
+                *notes.entry(why).or_default() += n;
+            }
+        }
+        coverage = Some(got.table);
+    }
+    // The value-engineering recommendations: tiers, areas, savings, RFIs, the design unchanged.
+    if sc.conduit {
+        use super::validate_value as vv;
+        let which = vv::On::of(|id| on(id));
+        let cx = vv::Ctx { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, inputs: sc.value };
+        let got = vv::check(&cx, which);
+        for (rank, rule, verdict, f) in got.findings {
+            tally(rule, verdict);
+            findings.push((rank, f));
+        }
+        for (rule, whys) in got.unmeasured {
+            let into = unmeasured.entry(rule).or_default();
+            for (w, n) in whys {
+                *into.entry(w).or_default() += n;
+            }
+        }
+    }
+    // Equipment connections against their submittals and the code (E-EQUIP-ELEC).
+    if let Some(r) = on(super::validate_equip::RULE) {
+        use super::validate_equip as ve;
+        let cx = ve::Ctx { sp: sc.sp, docs: sc.equip_docs, frame: sc.frame, areas: sc.areas, whole: sc.whole_levels };
+        let got = ve::check(&cx, r);
+        for (rank, verdict, f) in got.findings {
+            tally(ve::RULE, verdict);
+            findings.push((rank, f));
+        }
+        if !got.unmeasured.is_empty() {
+            let notes = unmeasured.entry(ve::RULE.to_string()).or_default();
+            for (why, n) in got.unmeasured {
+                *notes.entry(why).or_default() += n;
+            }
+        }
+    }
+    // The fixture schedule's checks (E-LUM-SCHEDULE).
+    let mut fixture_table = None;
+    if let Some(got) = fixtures {
+        use super::validate_fixtures as vf;
+        for (rank, verdict, f) in got.findings {
+            tally(vf::RULE, verdict);
+            findings.push((rank, f));
+        }
+        if !got.unmeasured.is_empty() {
+            let notes = unmeasured.entry(vf::RULE.to_string()).or_default();
+            for (why, n) in got.unmeasured {
+                *notes.entry(why).or_default() += n;
+            }
+        }
+        if !got.table.is_null() {
+            fixture_table = Some(got.table);
+        }
+    }
     let mut products = super::validate_product::Tally::default();
     if let Some(found) = product {
         for (rule, verdicts) in found.checked {
@@ -1643,7 +1883,53 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         unmeasured,
         present,
         products,
+        coverage,
+        fixtures: fixture_table,
     }
+}
+
+/// Fixture types listed in an answer's table, at most (all of them in the `path` file).
+const FIXTURE_ROWS: usize = 60;
+
+/// E-LUM-SCHEDULE's table in brief: the types (at most [`FIXTURE_ROWS`]) without each row's
+/// cells, what was read, the RFIs.
+fn fixtures_brief(t: &Value) -> Value {
+    let types: Vec<Value> = t["types"].as_array().into_iter().flatten().take(FIXTURE_ROWS).cloned().collect();
+    json!({
+        "types": types,
+        "types_total": t["types"].as_array().map_or(0, Vec::len),
+        "schedule": {"tables": t["schedule"]["tables"].as_array().map_or(0, Vec::len), "types": t["schedule"]["types"], "pages_read": t["schedule"]["pages_read"], "no_substitutions": t["schedule"]["no_substitutions"]},
+        "submittals": {"files": t["submittals"]["files"].as_array().map_or(0, Vec::len), "types": t["submittals"]["types"]},
+        "plan_from": t["plan_from"],
+        "rfis": t["rfis"],
+    })
+}
+
+/// Kinds listed in an answer's coverage table, at most (all of them in the `path` file).
+const COVERAGE_ROWS: usize = 40;
+
+/// G-COVERAGE's table in brief: how many kinds by verdict, the first rows (zero-element kinds
+/// first) with their plan marks by sheet and model count.
+fn coverage_brief(t: &Value) -> Value {
+    let kinds = t["kinds"].as_array().map_or(&[][..], Vec::as_slice);
+    let mut by: BTreeMap<String, u64> = BTreeMap::new();
+    for k in kinds {
+        *by.entry(k["verdict"].as_str().unwrap_or("?").to_string()).or_default() += 1;
+    }
+    let zero = kinds.iter().filter(|k| k["verdict"] == "fail" && k["model"] == 0).count();
+    let rows: Vec<Value> = kinds
+        .iter()
+        .filter(|k| k["verdict"] != "not_marked")
+        .take(COVERAGE_ROWS)
+        .map(|k| json!({"kind": k["kind"], "name": k["name"], "plan_marks": k["plan_marks"], "by_sheet": k["by_sheet"], "model": k["model"], "verdict": k["verdict"]}))
+        .collect();
+    json!({
+        "kinds_defined": t["kinds_defined"],
+        "by_verdict": by,
+        "zero_in_model": zero,
+        "unexplained_groups": t["unexplained_groups"].as_array().map_or(0, Vec::len),
+        "kinds": rows,
+    })
 }
 
 /// Elements listed in no area, at most.
@@ -1701,7 +1987,63 @@ fn print_sheet(d: &Drawing, handle: &str, upf: f64) -> Option<String> {
 
 // ---------------------------------------------------------------- the command
 
+/// What [`screen_session`] screened: the drawing, its spec and model, the scope and the findings.
+pub(crate) struct Screen {
+    pub doc: std::sync::Arc<Drawing>,
+    pub sp: BuildingSpec,
+    pub model: Model,
+    pub key: Value,
+    pub areas: Vec<Area>,
+    pub out: Screened,
+}
+
+/// Screen the active drawing over the scope `p` names (the whole building when it names none),
+/// with the rules `only` (empty: all): what `validate.prescreen` lists, for other callers too
+/// (the review list ranked by impact).
+pub(crate) fn screen_session(s: &mut Session, p: &Value, only: &[String]) -> Result<Screen> {
+    let doc = std::sync::Arc::clone(&s.state()?.doc);
+    let d: &Drawing = &doc;
+    let (sp, _) = current(s, CMD)?;
+    let (model, frame) = model_of(d, &sp);
+    // The scope: as `validate` takes it, inferred from what is given.
+    let (key, areas) = super::validate_run::scope_areas(s, CMD, p, d, &sp, &model, &frame)?;
+    let whole = matches!(key["scope"].as_str(), Some("building" | "level"));
+    let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
+    let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
+    let gear_docs = if super::validate_gear::wanted(&rules, only) { super::validate_gear::read_docs(s, &sp) } else { None };
+    let conduit_takeoff = super::validate_conduit::read_takeoff(s, &rules, only);
+    let value = super::validate_value::read(s, p, &rules, only).map_err(|e| bad(CMD, e))?;
+    let equip_docs = if super::validate_equip::wanted(&rules, only) { super::validate_equip::read_docs(s, &sp) } else { None };
+    let fixture_docs = super::validate_fixtures::wanted(&rules, only).then(|| super::validate_fixtures::read_docs(s, d, &sp));
+    let sc = Scope {
+        d,
+        sp: &sp,
+        model: &model,
+        frame: &frame,
+        prints: prints.as_ref(),
+        rules: &rules,
+        areas: &areas,
+        whole_levels: whole,
+        only,
+        gear_docs: gear_docs.as_ref(),
+        conduit: true,
+        conduit_takeoff: conduit_takeoff.as_ref(),
+        value: value.as_ref(),
+        equip_docs: equip_docs.as_ref(),
+        fixture_docs: fixture_docs.as_ref(),
+    };
+    let out = screen(&sc);
+    Ok(Screen { doc, sp, model, key, areas, out })
+}
+
 fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
+    prescreen(s, p, false).map(|(r, _)| r)
+}
+
+/// The prescreen's answer and, with `keep`, every finding it listed (as its `path` file holds
+/// them, at most [`MAX_WRITTEN`]): the accuracy measure (`validate.measure`) reads them whole
+/// without a file between.
+pub(crate) fn prescreen(s: &mut Session, p: &Value, keep: bool) -> Result<(Value, Vec<Value>)> {
     let start = web_time::Instant::now();
     let cursor = p.get("cursor").and_then(Value::as_u64).map_or(0, |c| c.min(10_000_000) as usize);
     let limit = match p.get("limit") {
@@ -1730,18 +2072,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = &path {
         super::exchange::guard_output(s, CMD, p, f)?;
     }
-    let doc = std::sync::Arc::clone(&s.state()?.doc);
+    let Screen { doc, sp, model, key, areas, out } = screen_session(s, p, &only)?;
     let d: &Drawing = &doc;
-    let (sp, _) = current(s, CMD)?;
-    let (model, frame) = model_of(d, &sp);
-    // The scope: as `validate` takes it, inferred from what is given.
-    let (key, areas) = super::validate_run::scope_areas(s, CMD, p, d, &sp, &model, &frame)?;
-    let whole = matches!(key["scope"].as_str(), Some("building" | "level"));
-    let (rules, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
-    let prints: Option<Prints> = prints_of(&sp).cloned().or_else(|| super::validate::prints_from_job(s, &frame));
-    let sc =
-        Scope { d, sp: &sp, model: &model, frame: &frame, prints: prints.as_ref(), rules: &rules, areas: &areas, whole_levels: whole, only: &only };
-    let out = screen(&sc);
     let wall_list = walls_summary(&model, &areas);
     // Every built element outside its level's footprint (the scope's levels): none may be there
     // unsaid.
@@ -1771,7 +2103,7 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(f) = &path {
         let mut of = outside_floors.clone();
         of["elements"] = json!(outside.iter().take(MAX_WRITTEN).collect::<Vec<_>>());
-        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "outside_floors": of, "no_room": out.no_room, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
+        let body = json!({"scope": key, "checked": out.checked, "unmatched": out.unmatched.to_json(), "unmeasured": out.unmeasured, "walls": wall_list, "outside_floors": of, "no_room": out.no_room, "coverage": out.coverage, "fixtures": out.fixtures, "findings": listed.iter().take(MAX_WRITTEN).collect::<Vec<_>>()});
         let text = serde_json::to_string_pretty(&body).map_err(|e| bad(CMD, e.to_string()))?;
         super::exchange::write_file(CMD, f, text.as_bytes())?;
         written = json!(f);
@@ -1795,6 +2127,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         "no_room": {"elements": out.no_room.len(), "first": out.no_room.iter().take(10).collect::<Vec<_>>()},
         "present": out.present.to_json(),
         "products": if out.products.is_empty() { Value::Null } else { out.products.to_json() },
+        "coverage": out.coverage.as_ref().map(coverage_brief),
+        "fixtures": out.fixtures.as_ref().map(fixtures_brief),
         "disabled": out.disabled,
         "ms": start.elapsed().as_millis() as u64,
     });
@@ -1822,7 +2156,8 @@ fn run_prescreen(s: &mut Session, p: &Value) -> Result<Value> {
         r["rooms_without_set"] = json!(out.without_set.len());
         r["no_room"] = json!({"elements": out.no_room.len()});
     }
-    Ok(r)
+    let kept: Vec<Value> = if keep { listed.iter().take(MAX_WRITTEN).map(|f| (*f).clone()).collect() } else { Vec::new() };
+    Ok((r, kept))
 }
 
 /// The walls G-HOST measures against on the scope's levels: the pieces standing on the floor,
@@ -2024,6 +2359,12 @@ mod tests {
             model: &model,
             frame: &frame,
             prints: None,
+            gear_docs: None,
+            conduit: true,
+            conduit_takeoff: None,
+            value: None,
+            equip_docs: None,
+            fixture_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: true,
@@ -2098,6 +2439,12 @@ mod tests {
             model: &model,
             frame: &frame,
             prints: None,
+            gear_docs: None,
+            conduit: true,
+            conduit_takeoff: None,
+            value: None,
+            equip_docs: None,
+            fixture_docs: None,
             rules: &rules,
             areas: &areas,
             whole_levels: false,

@@ -780,7 +780,10 @@ pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_i
 /// The alternative's pieces along the same routes: one cable per circuit (a homerun's circuits
 /// each their own), a feeder's per set, with the cable's supports and connectors; each with its
 /// item's level and circuit.
-pub(crate) fn alt_atoms(sp: &BuildingSpec, items: &[&Item], cable: &str) -> Vec<(Atom, String, String, String)> {
+/// `paths`: each routed leg's path as a cable runs it, by run id, where the routing found one
+/// (through the studs of a room's walls, [`super::super::conduitroute::cable_paths`]); the
+/// raceway's path elsewhere.
+pub(crate) fn alt_atoms(sp: &BuildingSpec, items: &[&Item], cable: &str, paths: &HashMap<String, MepRun>) -> Vec<(Atom, String, String, String)> {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let ar = mepatoms::rules();
     let Some(cr) = ar.cables.get(cable) else { return Vec::new() };
@@ -798,6 +801,7 @@ pub(crate) fn alt_atoms(sp: &BuildingSpec, items: &[&Item], cable: &str) -> Vec<
         };
         for ri in it.runs.iter().take(MAX_RUNS) {
             let Some(r) = sp.mep.runs.get(*ri) else { continue };
+            let r = paths.get(&r.id).filter(|_| !r.id.is_empty()).unwrap_or(r);
             let Some(level) = sp.level(&r.level) else { continue };
             let path = mepatoms::build::run_path(r, level.elevation_ft * upf, upf);
             if path.len() < 2 {
@@ -963,8 +967,32 @@ mod tests {
         assert_eq!(home.members, [("P-1".to_string(), "2#12 + 1#12G".to_string()), ("P-3,5".to_string(), "3#10 + 1#10G".to_string())]);
         assert_eq!(home.area.base, "unit");
         let refs: Vec<&Item> = vec![home];
-        let atoms = alt_atoms(&sp, &refs, "NM");
+        let atoms = alt_atoms(&sp, &refs, "NM", &HashMap::new());
         let types: BTreeSet<String> = atoms.iter().filter(|a| a.0.kind == "cable").map(|a| a.0.ty.clone()).collect();
         assert_eq!(types, BTreeSet::from(["NM 10/3 w/G".to_string(), "NM 12/2 w/G".to_string()]), "one cable per circuit, each its own conductors");
+    }
+
+    #[test]
+    fn a_cable_alternative_is_measured_on_the_cables_own_path_through_the_studs() {
+        // P-1's joint between two wall boxes 10' apart: the raceway goes up to 9' and back down
+        // (10' + 2 x 7'-6"), the cable through the studs 12" over them (10' + 2 x 1').
+        let sp: BuildingSpec = serde_json::from_value(serde_json::json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10}],
+            "tags": [tag("circuit:L1:E-101:P-1", "L1", "P-1", "unit")],
+            "mep": {"runs": [
+                {"system": "E-BRANCH", "level": "L1", "id": "circuit:L1:E-101:P-1#1", "points": [[0, 0], [0, 0], [120, 0], [120, 0]], "size_in": [0.75, 0], "bottoms_ft": [1.5, 9, 1.5]}
+            ]}
+        }))
+        .unwrap();
+        let items = items(&Drawing::new_imperial(), &sp, &CodeFacts::default(), &super::super::rules());
+        let refs: Vec<&Item> = items.iter().collect();
+        let cable_ft = |atoms: &[(Atom, String, String, String)]| atoms.iter().filter(|a| a.0.kind == "cable").map(|a| a.0.length_ft).sum::<f64>();
+        let makeup = 2.0 * mepatoms::rules().makeup_ft;
+        assert!((cable_ft(&alt_atoms(&sp, &refs, "NM", &HashMap::new())) - (25.0 + makeup)).abs() < 1e-6, "the raceway's path");
+        let mut stud = sp.mep.runs.first().cloned().unwrap();
+        stud.bottoms_ft = vec![1.5, 2.5, 1.5];
+        let paths: HashMap<String, MepRun> = [(stud.id.clone(), stud)].into_iter().collect();
+        assert!((cable_ft(&alt_atoms(&sp, &refs, "NM", &paths)) - (12.0 + makeup)).abs() < 1e-6, "its own path");
     }
 }

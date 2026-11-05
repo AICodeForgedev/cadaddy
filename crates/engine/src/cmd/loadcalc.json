@@ -1,0 +1,80 @@
+{
+  "about": "The load calculation's rules as data (bim.loadcalc, Q6194): what each kind of connected load is worth when no document gives its VA, which loads are continuous, the demand factors by occupancy (chosen from the code sheet's occupancy groups), the limits the findings use, and the words schedules and summaries are read with. Cites are NEC numbering 2017-2020; the 2023 edition renumbers 220.42 to 220.45 and 220.44 to 220.47 (same tables). Verify with the authority having jurisdiction.",
+  "unit_loads": [
+    {"kinds": ["receptacle", "gfci_receptacle", "weatherproof_receptacle", "ceiling_receptacle", "usb_receptacle", "floor_receptacle"], "category": "receptacle", "va": 180, "cite": "NEC 220.14(I): 180 VA per single or duplex receptacle on one yoke"},
+    {"kinds": ["quad_receptacle", "fourplex_receptacle"], "category": "receptacle", "va": 360, "cite": "NEC 220.14(I): 180 VA per yoke, a quad is two"},
+    {"kinds": ["luminaire", "wall_luminaire", "exit_sign", "emergency_light", "pendant", "downlight", "strip_light", "track_light", "sign"], "category": "lighting", "cite": "NEC 220.14(D): the luminaire's rated VA (the fixture schedule's)"},
+    {"kinds": ["equipment_connection", "motor", "appliance", "disconnect", "fan", "exhaust_fan", "water_heater", "hand_dryer"], "category": "equipment", "cite": "NEC 220.14(A): the appliance's or equipment's rating (its submittal's)"},
+    {"kinds": ["switch", "dimmer", "occupancy_sensor", "vacancy_sensor", "thermostat", "low_voltage_outlet", "data_outlet", "telephone_outlet", "catv_outlet", "speaker", "keypad", "card_reader", "bda_antenna_box", "bda_riser_box", "smoke_detector", "fire_alarm_device", "horn", "strobe", "pull_station"], "category": "control", "va": 0, "cite": "a control or low-voltage device: no load of its own"}
+  ],
+  "small_appliance": {"words": ["KITCHEN", "COUNTER", "COUNTERTOP", "KITCHENETTE"], "va": 1500, "cite": "NEC 220.52(A): a unit's small-appliance branch circuit (its kitchen counter receptacles) at 1,500 VA, in its general lighting load under the demand factors"},
+  "continuous": {
+    "categories": ["lighting"],
+    "description_words": ["LTG", "LIGHTING", "LIGHTS", "SIGN", "SIGNAGE", "HEAT", "HEATER", "HEATING", "WATER HEATER"],
+    "factor": 1.25,
+    "cite": "NEC 210.19(A)(1), 210.20(A), 215.2(A)(1), 230.42(A): a continuous load (3 h or more: lighting, signs 600.5, fixed electric space heating 424.4(B), storage water heaters 422.13) at 125%"
+  },
+  "circuit_limit_pct": 80,
+  "circuit_limit_cite": "NEC 210.20(A): a continuous load is at most 80% of its breaker's rating (unless the breaker is listed for 100%)",
+  "phase_imbalance_pct": 15,
+  "phase_imbalance_cite": "design practice, no NEC limit: the largest phase's departure from the phases' average, as a share of the average (the NEMA unbalance definition applied to load)",
+  "tolerance_pct": 10,
+  "tolerance_va": 200,
+  "tolerance_cite": "a difference within the larger of these is the same load (rounding, one device's rating)",
+  "receptacle_words": ["RCPT", "RCPTS", "RECEPT", "RECEPTS", "RECEPTACLE", "RECEPTACLES", "OUTLET", "OUTLETS", "GFCI", "GFI"],
+  "lighting_words": ["LTG", "LIGHTING", "LIGHTS", "LUMINAIRES", "EXIT", "EMERG", "SIGN", "SIGNAGE"],
+  "motor_words": ["MOTOR", "FAN", "EF", "PUMP", "AHU", "RTU", "DOAS", "FCU", "PTAC", "CU", "HP", "COMPRESSOR", "ELEVATOR", "ELEV"],
+  "kitchen_words": ["RANGE", "OVEN", "COOKTOP", "MICROWAVE", "DISHWASHER", "FRYER", "GRIDDLE", "KETTLE", "STEAMER", "WARMER", "BOOSTER"],
+  "cooking_words": ["RANGE", "COOKTOP", "OVEN", "COOKING", "STOVE"],
+  "hvac_words": ["PTAC", "VTAC", "AC", "HVAC", "HEAT", "HEATING", "HEATER", "FCU", "AHU", "COOLING", "CONDENSING", "CU"],
+  "spare_words": ["SPARE", "SPACE"],
+  "feeder_words": ["PANELBOARD", "PANEL", "PNL", "SWITCHBOARD", "TRANSFORMER", "XFMR", "MCC"],
+  "unit_words": ["UNITS", "UNIT", "PANELS", "SUITES", "ROOMS"],
+  "summary_titles": ["LOAD SUMMARY", "LOAD CALCULATION", "DEMAND CALCULATION", "SERVICE CALCULATION", "SERVICE LOAD", "LOAD CALC"],
+  "feeder_summary_words": ["FEEDER", "FEEDERS"],
+  "service_size_words": ["SERVICE SIZE", "SERVICE RATING", "SERVICE AMPS"],
+  "occupancies": [
+    {
+      "id": "hotel",
+      "groups": ["R-1"],
+      "name": "hotel or motel guest rooms",
+      "unit_rooms": true,
+      "unit_room_words": ["GUEST", "SUITE", "SLEEPING", "LODGING"],
+      "unit_receptacles_in_lighting": true,
+      "unit_receptacles_cite": "NEC 220.14 (guest rooms and guest suites of hotels and motels): general-use receptacle outlets are part of the general lighting load (the model counts them at 180 VA each, under the general lighting demand factors)",
+      "lighting_steps": [[20000, 0.5], [100000, 0.4], [null, 0.3]],
+      "lighting_cite": "NEC Table 220.42, hotels and motels: first 20,000 VA at 50%, the next to 100,000 VA at 40%, the rest at 30% (not in areas whose lighting is all on at once: dining rooms, ballrooms)",
+      "cooking_units_as": "dwelling",
+      "cooking_cite": "NEC 210.18: guest rooms and guest suites with permanent provisions for cooking are wired as dwelling units, their loads by the dwelling rules"
+    },
+    {
+      "id": "dwelling",
+      "groups": ["R-2", "R-3", "R-4"],
+      "name": "dwelling units",
+      "unit_rooms": true,
+      "unit_room_words": ["UNIT", "APARTMENT", "DWELLING", "BEDROOM"],
+      "unit_receptacles_in_lighting": true,
+      "unit_receptacles_cite": "NEC 220.14(J): a dwelling unit's general-use receptacles are part of its general lighting load (the model counts them at 180 VA each, under the general lighting demand factors)",
+      "lighting_steps": [[3000, 1.0], [120000, 0.35], [null, 0.25]],
+      "lighting_cite": "NEC Table 220.42, dwelling units: first 3,000 VA at 100%, the next to 120,000 VA at 35%, the rest at 25%",
+      "fixed_appliances_min": 4,
+      "fixed_appliances_factor": 0.75,
+      "fixed_appliances_cite": "NEC 220.53: four or more fixed appliances (not ranges, dryers, space heating or air conditioning) at 75%",
+      "optional_units": [[3, 0.45], [6, 0.44], [8, 0.43], [11, 0.42], [12, 0.41], [14, 0.40], [16, 0.39], [18, 0.38], [21, 0.37], [22, 0.36], [24, 0.35], [26, 0.34], [28, 0.33], [31, 0.32], [32, 0.31], [34, 0.30], [37, 0.29], [39, 0.28], [43, 0.27], [46, 0.26], [51, 0.25], [56, 0.24], [62, 0.23]],
+      "optional_cite": "NEC 220.84 and Table 220.84 (optional method, multifamily: three or more units, each with cooking and its own heating or cooling): the demand factor by number of units"
+    },
+    {
+      "id": "commercial",
+      "groups": ["A-1", "A-2", "A-3", "A-4", "A-5", "B", "E", "F-1", "F-2", "M", "S-1", "S-2", "I-1", "I-2", "I-3", "I-4", "U", "H-1", "H-2", "H-3", "H-4", "H-5"],
+      "name": "commercial (all other occupancies)",
+      "lighting_steps": [[null, 1.0]],
+      "lighting_cite": "NEC Table 220.42, all others: 100%"
+    }
+  ],
+  "receptacle_steps": [[10000, 1.0], [null, 0.5]],
+  "receptacle_cite": "NEC 220.44 and Table 220.44 (other than dwelling units): first 10 kVA at 100%, the rest at 50%",
+  "kitchen_units": [[1, 1.0], [2, 1.0], [3, 0.9], [4, 0.8], [5, 0.7], [6, 0.65]],
+  "kitchen_cite": "NEC 220.56 and Table 220.56 (commercial kitchen equipment, other than dwelling units): by number of units, never less than the two largest",
+  "largest_motor_factor": 0.25,
+  "largest_motor_cite": "NEC 430.24, 220.50: 125% of the largest motor's full-load current plus the others"
+}

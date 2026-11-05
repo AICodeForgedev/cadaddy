@@ -627,7 +627,8 @@ fn unmanaged_files(dir: &str, m: &project::ProjectManifest) -> (Vec<String>, usi
             let rel = e.path().strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or(name);
             if rel == "project.json"
                 || managed.contains(&rel)
-                || rel.strip_suffix(".bak").is_some_and(|r| managed.iter().any(|m| m.rsplit_once('.').is_some_and(|(stem, _)| stem == r)))
+                // A managed drawing's backup: `plan.bak` for a DWG, `plan.dxf.bak` for the others.
+                || rel.strip_suffix(".bak").is_some_and(|r| managed.contains(r) || managed.iter().any(|m| m.rsplit_once('.').is_some_and(|(stem, _)| stem == r)))
             {
                 continue;
             }

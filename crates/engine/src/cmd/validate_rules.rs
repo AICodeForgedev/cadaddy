@@ -54,7 +54,23 @@ pub const DOCUMENTS: [&str; 12] = [
     "riser_diagram",
 ];
 /// The tolerances a rule may have (inches unless the name says feet).
-pub const TOLERANCES: [&str; 7] = ["plan_in", "height_in", "route_ft", "size_in", "depth_in", "clear_width_in", "clear_depth_in"];
+pub const TOLERANCES: [&str; 15] = [
+    "plan_in",
+    "height_in",
+    "route_ft",
+    "size_in",
+    "depth_in",
+    "clear_width_in",
+    "clear_depth_in",
+    "touch_in",
+    "takeoff_pct",
+    "count_share",
+    "count_abs",
+    "dedupe_ft",
+    "repeat_sheets",
+    "repeat_marks",
+    "cost_pct",
+];
 pub const SEVERITIES: [&str; 3] = ["high", "medium", "low"];
 /// Largest tolerance a project may set.
 const MAX_TOLERANCE: f64 = 1_000.0;
@@ -342,7 +358,10 @@ pub struct Override {
 
 /// Is `key` (a project rule key) a validation rule override?
 pub fn is_override_key(key: &str) -> bool {
-    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX) && !super::validate_kind::is_kind_key(key) && !super::validate_height::is_height_key(key)
+    key.trim().to_ascii_lowercase().starts_with(KEY_PREFIX)
+        && !super::validate_kind::is_kind_key(key)
+        && !super::validate_height::is_height_key(key)
+        && !super::validate_register::is_register_key(key)
 }
 
 /// Read a project rule as a validation rule override: the rule must exist, the field be one a
@@ -497,7 +516,7 @@ pub fn specs() -> Vec<CommandSpec> {
             )
             .noundo(),
         CommandSpec::new(CMD_SET, "Change a Validation Rule", run_set).params(
-            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
+            "{id: string (a rule id from validate.rules), tolerance?: {name: number} (plan_in, height_in, route_ft, size_in, depth_in, clear_width_in, clear_depth_in, touch_in, takeoff_pct, count_share, count_abs, dedupe_ft, repeat_sheets, repeat_marks, cost_pct), severity?: string (high|medium|low), enabled?: bool, rooms?: [string] (more room names a rule with a code requirement covers, e.g. E-RECEPT-TR), reset?: bool (drop this project's changes to the rule first), reason: string} → {rule, set: [key]}: change a rule for this project (kept in the project rules)",
         ),
     ]
 }
@@ -794,7 +813,7 @@ mod tests {
         assert_eq!(got("through_wall_unit"), set(&["M-PTAC"]));
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
         assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
-        assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN"]));
+        assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN", "E-EQUIP-ELEC"]));
         // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
         // one's drivers and the room's count (Q6145).
         let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT"]);
@@ -813,6 +832,41 @@ mod tests {
                 assert!(rule(id).check.contains(w) || rule(id).how.iter().any(|h| h.contains(w)), "{id}: {w}");
             }
         }
+    }
+
+    /// Kinds Validate round 2 found without a proper rule (Q6140): a wall luminaire gets the
+    /// luminaire and circuit rules, a thermostat its own rule beside host, height and present, a
+    /// fan coil unit the mechanical equipment rule and not the exhaust fan's.
+    #[test]
+    fn leftover_kinds_get_proper_rules() {
+        let rules = builtin().unwrap();
+        let got = |k: &str| -> BTreeSet<&str> { rules.iter().filter(|r| r.applies_to_kind(k)).map(|r| r.id.as_str()).collect() };
+        let lum = got("wall_luminaire");
+        for id in ["E-LUM", "E-CIRCUIT", "E-LUM-TYPE", "E-LUM-CONTROL", "E-LUM-COUNT", "G-HEIGHT", "G-PRESENT"] {
+            assert!(lum.contains(id), "wall_luminaire: {id} in {lum:?}");
+        }
+        assert!(!lum.iter().any(|r| r.starts_with("M-") || r.starts_with("P-")), "{lum:?}");
+        let ts = got("thermostat");
+        for id in ["M-TSTAT", "G-HOST", "G-HEIGHT", "G-PRESENT"] {
+            assert!(ts.contains(id), "thermostat: {id} in {ts:?}");
+        }
+        assert!(!ts.iter().any(|r| r.starts_with("E-")), "a thermostat is no electrical device: {ts:?}");
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(rule("M-TSTAT").trade, "mechanical");
+        for w in ["in the model", "wall", "height"] {
+            assert!(rule("M-TSTAT").check.contains(w), "{w}");
+        }
+        for k in ["fan_coil_unit", "Fan Coil Unit", "fcu"] {
+            let fcu = got(k);
+            assert!(fcu.contains("M-EQUIP") && !fcu.contains("M-EF"), "{k}: {fcu:?}");
+        }
+        // By its category too: a fan coil unit is written as unitary equipment, which M-EF doesn't name.
+        let cat = super::super::validate_kind::category_of_kind("fan_coil_unit");
+        assert_eq!(cat.as_deref(), Some("IfcUnitaryEquipment"));
+        assert!(!rule("M-EF").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        assert!(rule("M-EQUIP").applies_to_element("fan_coil_unit", cat.as_deref(), Some("FCU-1")));
+        // An exhaust fan is still M-EF's.
+        assert!(got("exhaust_fan").contains("M-EF") && !got("exhaust_fan").contains("M-EQUIP"));
     }
 
     #[test]
@@ -866,10 +920,17 @@ mod tests {
         let one = s.execute(CMD_RULES, &json!({"id": "m-ef"})).unwrap();
         assert_eq!(one["total"], 1);
         assert_eq!(one["rules"][0]["id"], "M-EF");
+        // The kind's rules, every page (the answer cap may page them before the limit).
         let fan = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50})).unwrap();
-        let ids: Vec<&str> = fan["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str()).collect();
-        assert!(ids.contains(&"M-EF") && ids.contains(&"G-ROOM"), "{ids:?}");
         assert_eq!(fan["kind_known"], true);
+        let mut ids: Vec<String> = Vec::new();
+        let mut pg = fan;
+        for _ in 0..20 {
+            ids.extend(pg["rules"].as_array().unwrap().iter().filter_map(|r| r["id"].as_str().map(str::to_string)));
+            let Some(c) = pg["next"].as_u64() else { break };
+            pg = s.execute(CMD_RULES, &json!({"kind": "exhaust_fan", "limit": 50, "cursor": c})).unwrap();
+        }
+        assert!(ids.iter().any(|i| i == "M-EF") && ids.iter().any(|i| i == "G-ROOM"), "{ids:?}");
 
         // Paging walks every rule once.
         let mut seen = Vec::new();

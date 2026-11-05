@@ -112,20 +112,191 @@ struct Line {
     /// Waste the takeoff already worked out (concrete: by each element's size), in the line's
     /// unit; `None`: the category's percent.
     waste_qty: Option<f64>,
+    /// What its items are as a product (Q6164); lines of different products never merge.
+    product: Product,
 }
 
 impl Line {
     fn key(&self, by_level: bool, by_circuit: bool) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             self.trade,
             self.category,
             self.item,
             self.size,
             if by_level { self.level.as_str() } else { "" },
-            if by_circuit { self.circuit.as_str() } else { "" }
+            if by_circuit { self.circuit.as_str() } else { "" },
+            self.product.key()
         )
     }
+}
+
+/// What a line's items are as a product (Q6164): their type mark, maker, catalog number, where
+/// those come from (a submittal and page, a specification section, a legend or schedule row), and
+/// how a luminaire or a dimmer dims (`phase`, `0-10V`, `DALI`, `none`). Empty when not known.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Product {
+    pub type_mark: String,
+    pub manufacturer: String,
+    pub catalog: String,
+    pub source: String,
+    pub dimming: String,
+}
+
+impl Product {
+    fn key(&self) -> String {
+        if self.is_empty() {
+            return String::new();
+        }
+        format!("{}|{}|{}|{}", self.type_mark, self.manufacturer, self.catalog, self.dimming)
+    }
+
+    /// The same product (where it was read aside).
+    fn same(&self, o: &Product) -> bool {
+        self.type_mark == o.type_mark && self.manufacturer == o.manufacturer && self.catalog == o.catalog && self.dimming == o.dimming
+    }
+
+    fn is_empty(&self) -> bool {
+        self.type_mark.is_empty() && self.manufacturer.is_empty() && self.catalog.is_empty() && self.dimming.is_empty()
+    }
+
+    /// Its fields onto a BOM line's JSON (those known).
+    fn put(&self, v: &mut Value) {
+        for (k, x) in [
+            ("type_mark", &self.type_mark),
+            ("manufacturer", &self.manufacturer),
+            ("catalog", &self.catalog),
+            ("product_source", &self.source),
+            ("dimming", &self.dimming),
+        ] {
+            if !x.is_empty() {
+                v[k] = json!(x);
+            }
+        }
+    }
+
+    /// The fields this one lacks, from `o` (the source with the catalog or maker it takes).
+    fn fill(&mut self, o: &Product) {
+        let had = !self.catalog.is_empty() || !self.manufacturer.is_empty();
+        for (mine, theirs) in [
+            (&mut self.type_mark, &o.type_mark),
+            (&mut self.manufacturer, &o.manufacturer),
+            (&mut self.catalog, &o.catalog),
+            (&mut self.dimming, &o.dimming),
+        ] {
+            if mine.is_empty() {
+                mine.clone_from(theirs);
+            }
+        }
+        if !had && (!self.catalog.is_empty() || !self.manufacturer.is_empty()) {
+            self.source.clone_from(&o.source);
+        }
+    }
+}
+
+/// A dimming as the takeoff buys by it: a fixture that doesn't dim is `none`.
+fn dimming_word(v: &str) -> String {
+    let v = v.trim();
+    if v.eq_ignore_ascii_case("non-dim") || v.eq_ignore_ascii_case("none") { "none".into() } else { v.chars().take(40).collect() }
+}
+
+/// Where a property's value came from, as a line says it (`submittal: Package p.4`).
+fn source_words(src: &cadaddy_doc::props::Source) -> String {
+    use cadaddy_doc::props::SourceKind as K;
+    let kind = match src.kind {
+        K::Print => "print",
+        K::Legend => "legend",
+        K::Schedule => "schedule",
+        K::Spec => "spec",
+        K::Submittal => "submittal",
+        K::Note => "note",
+        K::Rule => "rule",
+        K::Default => "default",
+        K::User => "user",
+        _ => "computed",
+    };
+    match src.doc.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        // A source that names its kind already (`the legend: …`) says it once.
+        Some(d) if d.to_ascii_lowercase().trim_start_matches("the ").starts_with(kind) => d.chars().take(200).collect(),
+        Some(d) => format!("{kind}: {}", d.chars().take(200).collect::<String>()),
+        None => kind.to_string(),
+    }
+}
+
+/// A built element's product: its type mark, the submittal's (else the specification's one)
+/// maker, its catalog number, how it dims, and where the catalog (else the maker) comes from.
+fn element_product(e: &cadaddy_doc::Entity) -> Product {
+    use cadaddy_doc::props;
+    let store = props::read(&e.common.xdata);
+    let get = |k: &str| store.get(k).filter(|p| p.has_value());
+    let text = |k: &str| get(k).map(|p| p.text().trim().chars().take(200).collect::<String>()).unwrap_or_default();
+    let mut out = Product { type_mark: text("type_mark"), manufacturer: text("manufacturer"), catalog: text("catalog_number"), ..Product::default() };
+    out.dimming = get("dimming").map(|p| dimming_word(&p.text())).unwrap_or_default();
+    out.source = get("catalog_number").or_else(|| get("manufacturer")).map(|p| source_words(&p.source)).unwrap_or_default();
+    // No submittal: the specification section's one maker (`bim.products`' resolved record).
+    if out.manufacturer.is_empty()
+        && let Some(rec) = get("product").and_then(|p| serde_json::from_str::<Value>(&p.text()).ok())
+        && let Some(maker) = rec["resolved"]["maker"].as_str().map(str::trim).filter(|m| !m.is_empty())
+    {
+        out.manufacturer = maker.chars().take(200).collect();
+        let (section, page) = (rec["required"]["section"].as_str().unwrap_or_default(), rec["required"]["page"].as_str().unwrap_or_default());
+        out.source = if section.is_empty() {
+            "spec".into()
+        } else if page.is_empty() {
+            format!("spec: {section}")
+        } else {
+            format!("spec: {section} p.{page}")
+        };
+    }
+    out
+}
+
+/// The categories of the type catalog that are no device, fixture or equipment product (a door
+/// type `A` is not luminaire type `A`).
+const NOT_PRODUCT_TYPES: &[&str] = &["door", "window", "wall", "partition", "room", "ceiling", "floor", "finish", "hardware", "roof", "slab"];
+
+/// A type mark's product in the drawing's type catalog (the submittals' products, a schedule's).
+fn catalog_product(d: &cadaddy_doc::Drawing, mark: &str) -> Option<Product> {
+    use cadaddy_doc::bimspec::keys;
+    let mark = mark.trim();
+    if mark.is_empty() {
+        return None;
+    }
+    let t = d.bim_types.types.iter().filter(|t| t.mark.eq_ignore_ascii_case(mark)).find(|t| {
+        let c = t.category.to_ascii_lowercase();
+        !NOT_PRODUCT_TYPES.iter().any(|w| c.contains(w))
+    })?;
+    let f = |k: &str| t.fields.get(k).map(|f| f.value.trim().chars().take(200).collect::<String>()).unwrap_or_default();
+    let src =
+        t.fields.get(keys::CATALOG_NUMBER).or_else(|| t.fields.get(keys::MANUFACTURER)).map(|f| f.source.trim().to_string()).unwrap_or_default();
+    let dimming = f(keys::DIMMING);
+    Some(Product {
+        type_mark: t.mark.clone(),
+        manufacturer: f(keys::MANUFACTURER),
+        catalog: f(keys::CATALOG_NUMBER),
+        source: if src.is_empty() { "type catalog".into() } else { format!("type catalog: {}", src.chars().take(200).collect::<String>()) },
+        dimming: if dimming.is_empty() { dimming } else { dimming_word(&dimming) },
+    })
+}
+
+/// Each built device's, fixture's and equipment's product, by the spec tag it was built from
+/// (`devid:`), and by the name a build gave it (equipment's tag).
+fn product_index(d: &cadaddy_doc::Drawing) -> (BTreeMap<String, Product>, BTreeMap<String, Product>) {
+    let (mut by_tag, mut by_name) = (BTreeMap::new(), BTreeMap::new());
+    // Built elements only, before the cap (a print set's linework comes first).
+    for e in d.model.iter().filter(|e| super::bimlook::made_tags(e).is_some()).take(MAX_LINES) {
+        if let Some(id) = super::bimlook::made_tag(e, "devid") {
+            by_tag.insert(id.to_string(), element_product(e));
+        } else if let Some(name) = super::bimlook::made_name(e)
+            && super::elemprops::element_kind(e).is_some_and(|k| k == "equipment")
+        {
+            let p = element_product(e);
+            if !p.is_empty() {
+                by_name.insert(name.to_string(), p);
+            }
+        }
+    }
+    (by_tag, by_name)
 }
 
 /// Add `l` into `lines`, merging with an equal line (same trade, category, item, size, level).
@@ -144,6 +315,7 @@ fn add(lines: &mut Vec<Line>, l: Line) {
             && x.trade == l.trade
             && x.status == l.status
             && x.rule == l.rule
+            && x.product.same(&l.product)
     };
     match lines.iter_mut().rev().find(|x| same(x)) {
         Some(x) => merge(x, l),
@@ -224,6 +396,7 @@ fn rough_in_lines(
                 elements: vec![id.to_string()],
                 waste_qty: None,
                 circuit: circuit.to_string(),
+                product: Product::default(),
             },
         );
     }
@@ -296,6 +469,19 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let atoms =
         s.doc().ok().and_then(super::mepatoms::stored).filter(|ix| ix.rows.keys().any(|k| super::mepatoms::PIECES.contains(&k.kind.as_str())));
     let by_atoms = atoms.is_some();
+    // What each built device and fixture is as a product (Q6164), else its type's in the catalog.
+    let (built_products, _) = s.doc().map(product_index).unwrap_or_default();
+    let product_of = |t: &cadaddy_walk3d::tags::ElementTag, mark: Option<&str>| -> Product {
+        let mut p = built_products.get(&t.id).cloned().unwrap_or_default();
+        let mark = if p.type_mark.is_empty() { mark.map(str::to_string).unwrap_or_default() } else { p.type_mark.clone() };
+        if let Some(c) = s.doc().ok().and_then(|d| catalog_product(d, &mark)) {
+            p.fill(&c);
+        }
+        if p.type_mark.is_empty() {
+            p.type_mark = mark.trim().chars().take(40).collect();
+        }
+        p
+    };
     for t in sp.tags.iter().take(MAX_LINES) {
         let f = |k: &str| t.fields.get(k).map(|v| (v.value.clone(), v.source.clone()));
         let firm = |src: &str| if matches!(src, "plan" | "schedule" | "note" | "user" | "legend") { "firm" } else { "rule" };
@@ -318,6 +504,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
             "luminaire" => {
                 let (ty, src) = f("type").unwrap_or_else(|| ("UNTAGGED".into(), "default".into()));
                 let desc = described.get(&ty).cloned().unwrap_or_default();
+                let product = product_of(t, (src != "default").then_some(ty.as_str()));
                 add(
                     lines,
                     Line {
@@ -333,14 +520,21 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         elements: vec![t.id.clone()],
                         waste_qty: None,
                         circuit: String::new(),
+                        product,
                     },
                 );
             }
             "homerun" | "conduit" | "circuit" => {}
             kind => {
                 let (ty, src) = f("device_type").unwrap_or_else(|| (kind.replace('_', " "), "plan".into()));
+                let mut product = product_of(t, f("type").map(|m| m.0).as_deref());
                 let ty = match protocols.get(&t.id) {
-                    Some(p) => dimmer_item(&ty, p),
+                    Some(p) => {
+                        if product.dimming.is_empty() && p.settled() {
+                            product.dimming = dimming_word(&p.protocol);
+                        }
+                        dimmer_item(&ty, p)
+                    }
                     None => ty,
                 };
                 let plumbing = kind == "plumbing_fixture";
@@ -359,6 +553,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         elements: vec![t.id.clone()],
                         waste_qty: None,
                         circuit: on.clone(),
+                        product,
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
@@ -393,6 +588,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 elements: vec![t.id.clone()],
                                 waste_qty: None,
                                 circuit: on.clone(),
+                                product: Product::default(),
                             },
                         );
                     }
@@ -413,6 +609,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             elements: vec![t.id.clone()],
                             waste_qty: None,
                             circuit: on.clone(),
+                            product: Product::default(),
                         },
                     );
                 }
@@ -462,6 +659,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         elements: el.clone(),
                         waste_qty: None,
                         circuit: label.clone(),
+                        product: Product::default(),
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
@@ -489,6 +687,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             elements: el.clone(),
                             waste_qty: None,
                             circuit: label.clone(),
+                            product: Product::default(),
                         },
                     );
                 }
@@ -521,6 +720,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             elements: el,
                             waste_qty: None,
                             circuit: String::new(),
+                            product: Product::default(),
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -539,6 +739,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 elements: vec![id.clone()],
                                 waste_qty: None,
                                 circuit: String::new(),
+                                product: Product::default(),
                             },
                         );
                     }
@@ -568,6 +769,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     elements: vec![t.id.clone()],
                     waste_qty: None,
                     circuit: label_of(t),
+                    product: Product::default(),
                 },
             );
         }
@@ -620,6 +822,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 elements: Vec::new(),
                 waste_qty: None,
                 circuit: k.circuit.clone(),
+                product: Product::default(),
             },
         );
     }
@@ -647,6 +850,7 @@ fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
                 elements: p.handles.into_iter().take(MAX_LINE_ELEMENTS).collect(),
                 circuit: p.circuit,
                 waste_qty: None,
+                product: Product::default(),
             },
         );
     }
@@ -1485,6 +1689,8 @@ fn trade_size(v: f64) -> String {
 /// Mechanical and plumbing from `mep.qty` (conduit is counted above, from the runs).
 fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     let scope = s.doc().map(super::scope::decisions).unwrap_or_default();
+    // A built piece of equipment's product (Q6164), by the tag the build named it with.
+    let (_, equipment_products) = s.doc().map(product_index).unwrap_or_default();
     let sr = super::scope::rules();
     // Raceway and cable systems are taken off above, with their own fittings and supports.
     let raceway: Vec<String> = current(s, "bim.bom")
@@ -1626,6 +1832,110 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
             rough_in_lines(lines, dec, &ours, false, &st(&e, "tag"), &st(&e, "level"), "");
             continue;
         }
+        // Dampers (Q6182): by kind and duct size, whose work their scope says; their power boxes
+        // and fire alarm modules are electrical lines of their own, on their circuit.
+        let kind = st(&e, "kind").to_ascii_lowercase();
+        let prop = |k: &str| e["properties"][k].as_str().unwrap_or_default().to_string();
+        // The documents' other objects (Q6192) and the connections they get: ours on our lines;
+        // another trade's in its trade, or by others with our rough-in when the scope split says.
+        if !prop("DOC_OBJECT").is_empty() && !kind.ends_with("_damper") {
+            let connection = prop("DOC_OBJECT") == "connection";
+            if !connection
+                && let Some(dec) =
+                    sr.class_of(&prop("SCOPE_KIND"), &fa_kind).and_then(|c| scope.iter().find(|d| d.class == c.class)).filter(|d| d.by_others())
+            {
+                let ours = dec.ours_for(&prop("SCOPE_KIND"), &fa_kind);
+                others_entry(others, dec, &st(&e, "tag"), &format!("{} {}", prop("NAME"), st(&e, "tag")), &st(&e, "level"), &ours);
+                rough_in_lines(lines, dec, &ours, false, &st(&e, "tag"), &st(&e, "level"), "");
+                continue;
+            }
+            let ours = connection || prop("SCOPE").starts_with("ours");
+            let trade = match prop("TRADE").as_str() {
+                _ if ours => "electrical",
+                "plumbing" => "plumbing",
+                "mechanical" => "mechanical",
+                _ => "general",
+            };
+            let category = if connection {
+                match kind.as_str() {
+                    "equipment_power_box" => "equipment connections",
+                    "data_outlet" => "low voltage",
+                    _ => "fire alarm",
+                }
+            } else {
+                match prop("TRADE").as_str() {
+                    "fire alarm" => "fire alarm",
+                    "electrical" => "devices",
+                    "low voltage" => "low voltage",
+                    "plumbing" => "plumbing equipment",
+                    "mechanical" => "mechanical equipment",
+                    _ => "specialties",
+                }
+            };
+            let proposed = prop("STATUS") == "proposed";
+            add(
+                lines,
+                Line {
+                    trade,
+                    category: category.into(),
+                    item: if connection { st(&e, "title") } else { prop("NAME") },
+                    size: prop("SIZE"),
+                    unit: "each",
+                    net: 1.0,
+                    status: if connection || proposed { "rule" } else { "firm" },
+                    rule: if connection {
+                        Some(prop("RULE")).filter(|r| !r.is_empty())
+                    } else {
+                        proposed.then(|| "proposed: only a note names it, its place to confirm".to_string())
+                    },
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
+                    circuit: match (prop("PANEL"), prop("CIRCUIT")) {
+                        (p, c) if !p.is_empty() && !c.is_empty() && c != "not named" => format!("{p}-{c}"),
+                        _ => String::new(),
+                    },
+                    ..Line::default()
+                },
+            );
+            continue;
+        }
+        if kind.ends_with("_damper") || matches!(kind.as_str(), "damper_power_box" | "fa_control_module" | "fa_monitor_module") {
+            let damper = kind.ends_with("_damper");
+            let ours = prop("SCOPE").starts_with("ours");
+            add(
+                lines,
+                Line {
+                    trade: if damper && !ours { "mechanical" } else { "electrical" },
+                    category: if damper {
+                        "dampers"
+                    } else if kind == "damper_power_box" {
+                        "damper power"
+                    } else {
+                        "fire alarm"
+                    }
+                    .into(),
+                    item: if damper {
+                        let name = prop("NAME");
+                        if name.is_empty() { kind.replace('_', " ") } else { name }
+                    } else {
+                        st(&e, "title")
+                    },
+                    size: if damper { prop("DUCT_SIZE") } else { prop("SIZE") },
+                    unit: "each",
+                    net: 1.0,
+                    status: if damper { "firm" } else { "rule" },
+                    rule: (!damper).then(|| prop("RULE")).filter(|r| !r.is_empty()),
+                    level: st(&e, "level"),
+                    elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
+                    circuit: match (prop("PANEL"), prop("CIRCUIT")) {
+                        (p, c) if !p.is_empty() && !c.is_empty() => format!("{p}-{c}"),
+                        _ => String::new(),
+                    },
+                    ..Line::default()
+                },
+            );
+            continue;
+        }
         let electrical = matches!(
             st(&e, "kind").to_ascii_lowercase().as_str(),
             "panel" | "panelboard" | "switchboard" | "switchgear" | "transformer" | "disconnect"
@@ -1669,6 +1979,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 status: "firm",
                 level: st(&e, "level"),
                 elements: vec![st(&e, "tag")].into_iter().filter(|t| !t.is_empty()).collect(),
+                product: equipment_products.get(&st(&e, "tag")).cloned().unwrap_or_default(),
                 ..Line::default()
             },
         );
@@ -2016,6 +2327,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
                     elements: vec![e.id.clone()],
                     waste_qty,
                     circuit: String::new(),
+                    product: Product::default(),
                 },
             );
         };
@@ -2098,7 +2410,9 @@ pub(super) fn model_lines(s: &mut Session) -> Result<Vec<Value>> {
     Ok(lines
         .into_iter()
         .map(|l| {
-            json!({"trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit, "net": l.net, "level": l.level, "elements": l.elements})
+            let mut v = json!({"trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit, "net": l.net, "level": l.level, "elements": l.elements});
+            l.product.put(&mut v);
+            v
         })
         .collect())
 }
@@ -2211,6 +2525,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             if !l.circuit.is_empty() {
                 v["circuit"] = json!(l.circuit);
             }
+            l.product.put(&mut v);
             v
         })
         .collect();
@@ -2294,7 +2609,24 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         out["changes"] = changes(prev, out["lines"].as_array().map(Vec::as_slice).unwrap_or_default());
     }
     // CSV / XLSX.
-    let cols = ["trade", "category", "item", "size", "unit", "net", "waste", "total", "status", "rule", "level"];
+    let cols = [
+        "trade",
+        "category",
+        "item",
+        "size",
+        "unit",
+        "net",
+        "waste",
+        "total",
+        "status",
+        "rule",
+        "level",
+        "type_mark",
+        "manufacturer",
+        "catalog",
+        "dimming",
+        "product_source",
+    ];
     let header: Vec<String> = cols.iter().map(|c| p["columns"][*c].as_str().map_or_else(|| (*c).to_string(), str::to_string)).collect();
     let mut rows = vec![header];
     for l in out["lines"].as_array().into_iter().flatten() {
@@ -2437,6 +2769,145 @@ mod tests {
             "{req:?}"
         );
         assert!(r["csv"].as_str().unwrap().lines().count() > 10);
+    }
+
+    /// A built element of the spec tag `devid` with properties (key, value, source kind, where).
+    fn built(s: &mut Session, devid: &str, part: cadaddy_walk3d::Part, props: &[(&str, &str, cadaddy_doc::props::SourceKind, &str)]) {
+        use cadaddy_doc::props::{Prop, Props, Source};
+        let mut tags = super::super::wallgen::tag(part, "1", cadaddy_doc::Handle(0));
+        tags.push(cadaddy_doc::RawTag { code: 1000, value: format!("devid:{devid}") });
+        let mut store = Props::default();
+        for (k, v, kind, doc) in props {
+            store.set(k, Prop::new(*v, Source::from_doc(*kind, doc)));
+        }
+        let xdata = cadaddy_doc::props::write(&tags, &store);
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(0.0, 0.0), cadaddy_geom::Vec2::new(4.0, 0.0), 2.0, 16.0, 20.0);
+        s.doc_mut()
+            .unwrap()
+            .add(
+                &cadaddy_doc::Space::Model,
+                cadaddy_doc::Common { layer: "3D-Devices".into(), xdata: xdata.into(), ..Default::default() },
+                cadaddy_doc::EntityKind::Mesh(m),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn each_line_carries_its_product_and_lines_split_by_it() {
+        use cadaddy_doc::props::SourceKind::{Legend, Print, Spec, Submittal, User};
+        use cadaddy_walk3d::Part::Device;
+        let mut s = Session::new();
+        s.execute("new", &json!({})).unwrap();
+        let tag = |id: &str, kind: &str, fields: Value| json!({"id": id, "kind": kind, "level": "1", "at_ft": [1, 1], "fields": fields});
+        let lum = |id: &str, ty: &str| tag(id, "luminaire", json!({"type": {"value": ty, "source": "plan"}}));
+        let dev = |id: &str, ty: &str, mark: &str| {
+            tag(id, "switch", json!({"device_type": {"value": ty, "source": "legend"}, "type": {"value": mark, "source": "plan"}}))
+        };
+        let tags = json!([
+            lum("L1", "A"),
+            lum("L2", "A"),
+            lum("L3", "A"),
+            lum("L4", "B"),
+            lum("L5", "C"),
+            dev("D1", "switch, dimmer", "XD"),
+            dev("D2", "switch, dimmer", "XD"),
+            dev("D3", "switch, dimmer", "XD"),
+            tag("R1", "receptacle", json!({"device_type": {"value": "duplex receptacle", "source": "legend"}})),
+        ]);
+        s.execute("bspec.set", &json!({"replace": true, "spec": {"levels": [{"name": "1", "elevation_ft": 0, "height_ft": 12}], "tags": tags}}))
+            .unwrap();
+        // Type A: two built from the lighting submittal, one a person changed to another catalog.
+        let sub = |cat: &'static str| {
+            vec![
+                ("type_mark", "A", Submittal, "Package p.4"),
+                ("manufacturer", "Maker One", Submittal, "Package p.4"),
+                ("catalog_number", cat, Submittal, "Package p.4"),
+                ("dimming", "0-10V", Submittal, "Package p.4"),
+            ]
+        };
+        built(&mut s, "L1", Device, &sub("AB12 L48"));
+        built(&mut s, "L2", Device, &sub("AB12 L48"));
+        let mut mine = sub("AB12 L24");
+        mine[2] = ("catalog_number", "AB12 L24", User, "");
+        built(&mut s, "L3", Device, &mine);
+        // Type B: not built, its product in the type catalog (a non-dimming exit sign); a door
+        // type C is no luminaire's.
+        {
+            use cadaddy_doc::bimspec::{BimType, SpecField, keys};
+            let d = s.doc_mut().unwrap();
+            let mut b = BimType::new("B");
+            b.category = "luminaire".into();
+            b.set_field(keys::MANUFACTURER, SpecField::new("Maker Two").with_source("Package p.9"));
+            b.set_field(keys::CATALOG_NUMBER, SpecField::new("XS-1").with_source("Package p.9"));
+            b.set_field(keys::DIMMING, SpecField::new("non-dim").with_source("Package p.9"));
+            let mut c = BimType::new("C");
+            c.category = "door".into();
+            c.set_field(keys::MANUFACTURER, SpecField::new("Door Maker"));
+            d.bim_types.types.extend([b, c]);
+        }
+        // Dimmers: two phase, one 0-10V (their own products'); a receptacle only the spec speaks for.
+        for (id, leg, how) in [("D1", "a", "phase"), ("D2", "b", "phase"), ("D3", "c", "0-10V")] {
+            built(
+                &mut s,
+                id,
+                Device,
+                &[
+                    ("type_mark", "XD", Print, "E-1"),
+                    ("type", "switch, dimmer", Legend, "E-1"),
+                    ("switch_leg", leg, Print, "E-1"),
+                    ("dimming", how, Submittal, "Devices p.2"),
+                ],
+            );
+        }
+        let record = json!({"required": {"section": "26 27 26 WIRING DEVICES", "page": "262726 - 3"}, "approved": {"none": "no submittal for this kind"}, "resolved": {"maker": "Maker Three"}}).to_string();
+        built(&mut s, "R1", Device, &[("product", &record, Spec, "26 27 26 WIRING DEVICES p.262726 - 3")]);
+
+        let r = s.execute("bim.bom", &json!({})).unwrap();
+        let lines: Vec<&Value> = r["lines"].as_array().unwrap().iter().collect();
+        let of = |item: &str| lines.iter().filter(|l| l["item"] == json!(item)).copied().collect::<Vec<_>>();
+        let a = of("Luminaire type A");
+        assert_eq!(a.len(), 2, "two catalogs, two lines: {a:?}");
+        let l48 = a.iter().find(|l| l["catalog"] == json!("AB12 L48")).unwrap();
+        assert_eq!(
+            (l48["net"].clone(), l48["type_mark"].clone(), l48["manufacturer"].clone(), l48["dimming"].clone(), l48["product_source"].clone()),
+            (json!(2.0), json!("A"), json!("Maker One"), json!("0-10V"), json!("submittal: Package p.4"))
+        );
+        let l24 = a.iter().find(|l| l["catalog"] == json!("AB12 L24")).unwrap();
+        assert_eq!((l24["net"].clone(), l24["product_source"].clone()), (json!(1.0), json!("user")));
+        let b = of("Luminaire type B");
+        assert_eq!(
+            (b[0]["catalog"].clone(), b[0]["manufacturer"].clone(), b[0]["dimming"].clone(), b[0]["product_source"].clone()),
+            (json!("XS-1"), json!("Maker Two"), json!("none"), json!("type catalog: Package p.9"))
+        );
+        let c = of("Luminaire type C");
+        assert_eq!((c[0]["type_mark"].clone(), c[0].get("manufacturer")), (json!("C"), None), "a door type is no luminaire's product");
+        // Dimmers by protocol: two lines, each saying how it dims.
+        let phase = of("switch, dimmer, phase");
+        let zero_ten = of("switch, dimmer, 0-10V");
+        assert_eq!((phase[0]["net"].clone(), phase[0]["dimming"].clone()), (json!(2.0), json!("phase")), "{lines:?}");
+        assert_eq!(
+            (zero_ten[0]["net"].clone(), zero_ten[0]["dimming"].clone(), zero_ten[0]["type_mark"].clone()),
+            (json!(1.0), json!("0-10V"), json!("XD"))
+        );
+        // The spec's one maker, from its section and page.
+        let rec = of("duplex receptacle");
+        assert_eq!(
+            (rec[0]["manufacturer"].clone(), rec[0]["product_source"].clone(), rec[0].get("catalog")),
+            (json!("Maker Three"), json!("spec: 26 27 26 WIRING DEVICES p.262726 - 3"), None)
+        );
+        // The CSV carries them.
+        let csv = r["csv"].as_str().unwrap();
+        assert!(csv.lines().next().unwrap().ends_with("type_mark,manufacturer,catalog,dimming,product_source"), "{csv}");
+        assert!(csv.contains("AB12 L48,0-10V,submittal: Package p.4"), "{csv}");
+    }
+
+    #[test]
+    fn a_products_source_says_its_kind_once() {
+        use cadaddy_doc::props::{Source, SourceKind};
+        assert_eq!(source_words(&Source::from_doc(SourceKind::Submittal, "Package p.4")), "submittal: Package p.4");
+        assert_eq!(source_words(&Source::from_doc(SourceKind::Legend, "the legend: wall sensor")), "the legend: wall sensor");
+        assert_eq!(source_words(&Source::user()), "user");
     }
 
     #[test]

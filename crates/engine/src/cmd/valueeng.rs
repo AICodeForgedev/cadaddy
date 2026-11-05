@@ -32,8 +32,15 @@ mod scope;
 mod sketch;
 
 pub(crate) use price::read_cost_db;
+pub(crate) use scenario::Sc as KeptScenario;
 pub(crate) use scenario::{VE_ATOM, approved_circuits, approved_feeders, decide, takeoff_view};
 pub(crate) use scope::feeder_makeup;
+
+/// The scenarios the drawing keeps (their pieces, the design's pieces each replaces, their RFI
+/// and decision): what Validate checks ([`super::validate_value`]).
+pub(crate) fn kept_scenarios(d: &cadaddy_doc::Drawing) -> Vec<KeptScenario> {
+    scenario::state(d).scenarios
+}
 
 const CMD: &str = "ve.study";
 /// The alternatives and the methods' words.
@@ -288,6 +295,11 @@ pub(crate) fn wiring_applications(text: &str, section: &str) -> Vec<Application>
 /// TYPE V-A`): `V-A`. `texts` in reading order; the type is in the label's text or the next few.
 pub(crate) fn construction_type(texts: &[String]) -> Option<String> {
     facts::construction(texts, &rules()).map(|f| f.value)
+}
+
+/// The occupancy groups a code sheet names (`R-1`, `B`), each with the text it was read from.
+pub(crate) fn occupancies(texts: &[String]) -> Vec<(String, String)> {
+    facts::read(texts, &rules()).occupancies.into_iter().map(|f| (f.value, f.source)).collect()
 }
 
 /// A sheet's texts in reading order: down the sheet in rows of its usual text height, then
@@ -650,7 +662,7 @@ pub(crate) fn study(s: &mut Session, inp: &Inputs) -> Result<Value> {
         let (design_lines, atoms, alt_lines) = {
             let d = s.doc()?;
             let dl = scope::design_lines(d, &sp, &taken_ref, &fs_raceway);
-            let atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable);
+            let atoms = scope::alt_atoms(&sp, &taken_ref, &alt.cable, &super::conduitroute::cable_paths(d));
             let al = scope::alt_lines(&sp, &taken_ref, &atoms, &alt.cable, &fs_cable);
             (dl, atoms, al)
         };

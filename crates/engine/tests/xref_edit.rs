@@ -108,8 +108,8 @@ fn an_xref_edited_in_place_writes_its_source_drawing_and_reloads() {
     let back = read(&file);
     assert_eq!(lines(&back), vec![(0.0, 1.0, 10.0, 1.0, "Walls".to_string()), (0.0, 20.0, 10.0, 20.0, "Fence".to_string())]);
     assert!(back.layer("Fence").is_some(), "the host layer the new line uses comes along");
-    // The previous version is kept.
-    let bak = read(&file.with_extension("bak"));
+    // The previous version is kept (as site.dxf.bak).
+    let bak = read(&file.with_extension("dxf.bak"));
     assert_eq!(lines(&bak).len(), 2);
     // The host shows the reloaded xref.
     let d = s.doc().unwrap();

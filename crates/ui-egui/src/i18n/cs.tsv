@@ -3363,8 +3363,48 @@ menu	Modify	Modifikace
 	Conduit Routing Report	Zpráva o trasování elektroinstalačních trubek
 	Reroute Conduit	Přetrasovat elektroinstalační trubky
 	Conduit Takeoff	Výkaz elektroinstalačních trubek
+	Wire Pull Schedule	Plán zatahování vodičů
+	Conduit Cut and Bend List	Seznam řezů a ohybů trubek
+	Material Release List	Seznam uvolnění materiálu
+	Field Paperwork Sheets	Listy montážní dokumentace
 	Scope by Trade	Rozsah prací podle profese
 	Value Engineering Scenario	Scénář hodnotového inženýrství
 	Value Engineering Decision	Rozhodnutí o hodnotovém inženýrství
 	Read Drawn Dimensions	Načíst kreslené kóty
 	Underground Plan Report	Zpráva o plánu podzemních rozvodů
+	Update Model from Plans	Aktualizovat model z výkresů
+	Load Calculation	Výpočet zatížení
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Zpráva o pádu zůstala v tomto počítači: nabízí ji Nápověda > Nahlásit problém.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Záchranná kopie výkresu s neuloženými změnami byla automaticky uložena.
+	Autosave failed	Automatické uložení selhalo
+	Autosave failed: {message}	Automatické uložení selhalo: {message}
+	Backup copies are off, so the current file will be replaced.	Záložní kopie jsou vypnuté, takže aktuální soubor bude nahrazen.
+	Backup copy	Záložní kopie
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy nemohl zapsat záchrannou kopii, takže by se nedávné změny ztratily, kdyby se aplikace teď zastavila.
+	CADaddy has to close	CADaddy se musí zavřít
+	Close CADaddy	Zavřít CADaddy
+	Create backup copy with each save	Při každém uložení vytvořit záložní kopii
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF je zachová. Použijte Uložit jako, aby ve výkresu zůstaly.
+	Details	Podrobnosti
+	Dismiss	Zavřít
+	Drawing Recovery offers them at the next start.	Obnova výkresů je nabídne při příštím spuštění.
+	Internal error	Vnitřní chyba
+	No drawing needed a new recovery copy.	Žádný výkres nepotřeboval novou záchrannou kopii.
+	Part of CADaddy failed, and the app kept running.	Část CADaddy selhala a aplikace běží dál.
+	Part of CADaddy keeps failing, so it can't continue.	Část CADaddy stále selhává, takže nemůže pokračovat.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Záchranné kopie výkresů s neuloženými změnami (počet: {count}) byly automaticky uloženy.
+	Save Anyway	Přesto uložit
+	Save cancelled: {path} was not changed.	Uložení zrušeno: {path} se nezměnil.
+	Save your work and restart CADaddy.	Uložte svou práci a restartujte CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Uložte svou práci. Automatické ukládání to zkusí znovu po intervalu SAVETIME; jeho složka je v Možnostech.
+	Saving {name} will remove content	Uložením {name} se odstraní obsah
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Aktuální soubor nevypadá celý, takže {name} zůstane beze změny a aktuální soubor bude nahrazen.
+	The current file is kept as {name} until the next save.	Aktuální soubor zůstane jako {name} až do příštího uložení.
+	This format can't keep these objects yet: {objects}.	Tento formát zatím nedokáže zachovat tyto objekty: {objects}.
+	{count} more types	další typy: {count}
+	Review by Impact	Kontrola podle dopadu
+	Resolve Review Item by Impact	Vyřešit položku kontroly podle dopadu
+	Open Review Item	Otevřít položku kontroly
+	Review Audit Trail	Auditní záznam kontroly
+	Accuracy Trend	Trend přesnosti
+	Measure Build Accuracy	Změřit přesnost sestavení

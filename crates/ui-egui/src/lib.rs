@@ -64,6 +64,7 @@ pub mod control;
 pub mod credits;
 pub mod dialogs;
 pub mod docking;
+pub mod fault;
 pub mod hatchdlg;
 pub mod hyperlinks;
 pub mod materials;
@@ -139,6 +140,7 @@ pub mod quickview;
 pub mod renderwin;
 pub mod rfipalette;
 pub mod ribbon;
+pub mod save_loss;
 pub mod shortcut_menus;
 pub mod spelldlg;
 pub mod tagspalette;
@@ -524,10 +526,18 @@ pub struct CadApp {
     pub autosave: Option<cadaddy_engine::autosave::Autosaver>,
     /// Drawing Recovery: autosave files a crashed app left behind.
     pub recovery: autosave::Recovery,
+    /// A save waiting for an answer about the content the file can't keep ([`save_loss`]).
+    pub save_loss: Option<save_loss::Pending>,
+    /// The loss the user last agreed to, so saving again doesn't ask again ([`save_loss`]).
+    pub save_loss_accepted: Option<save_loss::Accepted>,
     /// GPU errors and device loss reported by wgpu ([`gpu::GpuFaults`]).
     pub gpu_faults: std::sync::Arc<gpu::GpuFaults>,
     /// The notice shown after one (see [`autosave::gpu_notice`]).
     pub gpu_notice: Option<autosave::GpuNotice>,
+    /// Panics caught around the frame ([`fault`]).
+    pub fault: fault::UiFault,
+    /// The notice shown while autosave fails (see [`autosave::failure_notice`]).
+    pub autosave_notice: Option<autosave::AutosaveNotice>,
     /// The Hatch and Gradient dialog while open or picking ([`hatchdlg`]).
     pub hatch_dlg: Option<hatchdlg::HatchDlgState>,
     /// The last Automation ▸ Takeoff (`automation.takeoff`'s answer), shown in its window ([`takeoffwin`]).
@@ -634,8 +644,12 @@ impl CadApp {
             closing: None,
             autosave: None,
             recovery: autosave::Recovery::default(),
+            save_loss: None,
+            save_loss_accepted: None,
             gpu_faults: std::sync::Arc::default(),
             gpu_notice: None,
+            fault: fault::UiFault::default(),
+            autosave_notice: None,
             hatch_dlg: None,
             takeoff_table: None,
             extract_dlg: None,
@@ -1196,6 +1210,14 @@ impl CadApp {
         if self.session.lisp_busy() {
             ctx.request_repaint();
         }
+        // A 3D model the plan's edits left behind is built once editing stops for a moment (not
+        // while a command or a LISP routine runs); a frame is asked for when it falls due.
+        if self.session.running.is_none()
+            && !self.session.lisp_busy()
+            && let Some(wait) = self.session.update_model_when_idle(cadaddy_engine::cmd::wallgen::IDLE_REBUILD)
+        {
+            ctx.request_repaint_after(wait);
+        }
         // Esc in a LISP routine's dialog is its Cancel, not the end of the routine.
         crate::lispdlg::escape(self, ctx);
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
@@ -1397,8 +1419,10 @@ impl CadApp {
         matchpropdlg::show(self, ui.ctx());
         renderwin::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
+        save_loss::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
+        autosave::failure_notice(self, ui.ctx());
         update::tick(self);
         update::corner(self, ui.ctx());
         if let Some(url) = self.pending_url.take() {

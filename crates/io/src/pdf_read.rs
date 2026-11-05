@@ -879,6 +879,11 @@ fn load_font(doc: &Document, fd: &Dictionary) -> Font {
     {
         parse_cmap(&data, &mut font);
     }
+    // A simple font's codes are one byte each, whatever code space its ToUnicode CMap declares
+    // (some writers declare <0000> <FFFF> and map single bytes): only a composite font's are two.
+    if subtype != b"Type0" {
+        font.two_byte = false;
+    }
     font
 }
 
@@ -4786,6 +4791,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     // All three are text/symbol-oriented post-processing; skip when recover_text is off
     // (downstream geometry analysis that needs every stroke intact).
     let mut ocr_report = OcrReport::default();
+    // The SHX OCR note's place in `notes` and its counts (texts, clusters, glyphs, where the strokes went).
+    let mut ocr_note: Option<(usize, usize, usize, usize, String)> = None;
     // fills whose outlined lettering hidden text confirmed: kept on the SHX source layer (off)
     let mut outline_fills: HashSet<usize> = HashSet::new();
     let (
@@ -4880,19 +4887,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
             }
             if !ocr_texts.is_empty() {
                 stats.insert("SHX text (OCR) recovered".into(), ocr_texts.len());
-                let pct = (report.mean_confidence() * 100.0).round().clamp(0.0, 100.0) as usize;
-                stats.insert("SHX OCR mean confidence %".into(), pct);
                 let strokes_went = if has_hidden_text {
                     format!("their strokes are kept on layer {SHX_SOURCE_LAYER} (off)")
                 } else {
                     format!("no hidden text confirms them, so their strokes stay linework and the texts use style {OCR_TEXT_STYLE}")
                 };
-                notes.push(format!(
-                    "SHX OCR: {} text(s) read from {} glyph cluster(s) ({} matched a character, mean confidence {pct}%); {strokes_went}",
-                    ocr_texts.len(),
-                    report.clusters,
-                    report.glyphs
-                ));
+                // The mean confidence is that of the words the import keeps, known once they are
+                // placed below: the note takes its place now and is written then.
+                ocr_note = Some((notes.len(), ocr_texts.len(), report.clusters, report.glyphs, strokes_went));
                 for rt in &ocr_texts {
                     taken.extend(&rt.stroke_indices);
                 }
@@ -5591,6 +5593,14 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     }
     if recovered_count > 0 {
         stats.insert("SHX recovered texts".into(), recovered_count);
+    }
+    if let Some((at, read, clusters, glyphs, strokes_went)) = ocr_note {
+        let pct = (ocr_report.mean_confidence() * 100.0).round().clamp(0.0, 100.0) as usize;
+        stats.insert("SHX OCR mean confidence %".into(), pct);
+        let note = format!(
+            "SHX OCR: {read} text(s) read from {clusters} glyph cluster(s) ({glyphs} matched a character, mean confidence {pct}%); {strokes_went}"
+        );
+        notes.insert(at.min(notes.len()), note);
     }
 
     // Fix 5: create blocks for repeated symbol clusters

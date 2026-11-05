@@ -159,6 +159,9 @@ pub(crate) struct AtomRules {
     pub insulation_source: String,
     pub makeup_ft: f64,
     pub makeup_source: String,
+    /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
+    pub panel_makeup_ft: f64,
+    pub panel_makeup_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
     pub bushing_source: String,
@@ -1037,6 +1040,50 @@ pub(crate) fn reindex(d: &mut Drawing) -> usize {
     n
 }
 
+/// After a command: a command that changed counted elements without keeping the stored index
+/// (a plain ERASE, COPY, EXPLODE or MOVE of model pieces, the live rebuild) updates it by what
+/// changed, so `bim.count`, the BOM, the takeoff, the estimate and a saved .cdy agree with a
+/// recount. A command that wrote the index itself (a build, `bim.atoms.edit`) is left alone.
+/// The cost follows the change, not the model's size.
+pub(crate) fn after_command(s: &mut Session, before: Option<&std::sync::Arc<Drawing>>, uid: Option<u64>) {
+    let Some(before) = before else { return };
+    let Ok(st) = s.state() else { return };
+    if uid.is_some_and(|u| u != st.uid) || std::sync::Arc::ptr_eq(before, &st.doc) || st.doc.model.unchanged_from(&before.model) {
+        return;
+    }
+    let (Some(old), Some(now)) = (before.embedded.get(INDEX_FILE), st.doc.embedded.get(INDEX_FILE)) else { return };
+    if !std::sync::Arc::ptr_eq(old, now) {
+        return;
+    }
+    let (added, modified, erased) = before.model.changes(&st.doc.model);
+    let was = |h: &Handle| before.model.get(*h).and_then(|e| counted(e));
+    let is = |h: &Handle| st.doc.model.get(*h).and_then(|e| counted(e));
+    let mut out = Vec::new();
+    let mut new = Vec::new();
+    for h in &modified {
+        let (a, b) = (was(h), is(h));
+        if a != b {
+            out.extend(a);
+            new.extend(b);
+        }
+    }
+    out.extend(erased.iter().filter_map(was));
+    new.extend(added.iter().filter_map(is));
+    if out.is_empty() && new.is_empty() {
+        return;
+    }
+    let Some(mut ix) = stored(before) else { return };
+    for (k, m) in &out {
+        ix.remove(k, m);
+    }
+    for (k, m) in new {
+        ix.add(k, &m);
+    }
+    if let Ok(d) = s.doc_mut() {
+        store(d, &ix);
+    }
+}
+
 /// A filter of `bim.count`: each given dimension must match.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Filter {
@@ -1514,7 +1561,7 @@ fn wall_face_of(d: &Drawing, e: &Entity, upf: f64) -> Option<Value> {
     let level = super::bspec::made_level(e).unwrap_or_default();
     let walls = super::propfill::wall_footprints(d);
     let centre = b.center();
-    let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf)?;
+    let f = super::propfill::wall_face(&walls, &level, centre, super::propfill::HOST_SNAP_FT * upf, None)?;
     // Its depth across the face, and its front: the side its room sees.
     let depth = (b.max - b.min).dot(cadaddy_geom::Vec2::new(out.x.abs(), out.y.abs()));
     let front = centre + out * (depth / 2.0);

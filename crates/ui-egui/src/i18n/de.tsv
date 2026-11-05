@@ -3199,8 +3199,48 @@
 	Conduit Routing Report	Bericht Installationsrohr-Führung
 	Reroute Conduit	Installationsrohre neu führen
 	Conduit Takeoff	Installationsrohr-Mengenermittlung
+	Wire Pull Schedule	Kabelzugplan
+	Conduit Cut and Bend List	Schnitt- und Biegeliste für Installationsrohre
+	Material Release List	Materialabrufliste
+	Field Paperwork Sheets	Baustellenunterlagen-Blätter
 	Scope by Trade	Leistungsumfang nach Gewerk
 	Value Engineering Scenario	Value-Engineering-Szenario
 	Value Engineering Decision	Value-Engineering-Entscheidung
 	Read Drawn Dimensions	Gezeichnete Bemaßungen lesen
 	Underground Plan Report	Bericht Erdverlegungsplan
+	Update Model from Plans	Modell aus Plänen aktualisieren
+	Load Calculation	Lastberechnung
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Ein Absturzbericht wurde auf diesem Computer gespeichert: Hilfe > Problem melden bietet ihn an.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Eine Wiederherstellungskopie der Zeichnung mit ungespeicherten Änderungen wurde automatisch gespeichert.
+	Autosave failed	Automatisches Speichern fehlgeschlagen
+	Autosave failed: {message}	Automatisches Speichern fehlgeschlagen: {message}
+	Backup copies are off, so the current file will be replaced.	Sicherungskopien sind ausgeschaltet, daher wird die aktuelle Datei ersetzt.
+	Backup copy	Sicherungskopie
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy konnte keine Wiederherstellungskopie schreiben; würde die App jetzt beendet, gingen die letzten Änderungen verloren.
+	CADaddy has to close	CADaddy muss beendet werden
+	Close CADaddy	CADaddy beenden
+	Create backup copy with each save	Bei jedem Speichern eine Sicherungskopie erstellen
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF behält sie. Mit „Speichern unter“ bleiben sie in der Zeichnung.
+	Details	Details
+	Dismiss	Schließen
+	Drawing Recovery offers them at the next start.	Die Zeichnungswiederherstellung bietet sie beim nächsten Start an.
+	Internal error	Interner Fehler
+	No drawing needed a new recovery copy.	Keine Zeichnung brauchte eine neue Wiederherstellungskopie.
+	Part of CADaddy failed, and the app kept running.	Ein Teil von CADaddy ist fehlgeschlagen; die App läuft weiter.
+	Part of CADaddy keeps failing, so it can't continue.	Ein Teil von CADaddy schlägt immer wieder fehl, daher kann es nicht weitermachen.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Wiederherstellungskopien von {count} Zeichnungen mit ungespeicherten Änderungen wurden automatisch gespeichert.
+	Save Anyway	Trotzdem speichern
+	Save cancelled: {path} was not changed.	Speichern abgebrochen: {path} wurde nicht geändert.
+	Save your work and restart CADaddy.	Speichern Sie Ihre Arbeit und starten Sie CADaddy neu.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Speichern Sie Ihre Arbeit. Das automatische Speichern versucht es nach dem SAVETIME-Intervall erneut; sein Ordner steht in den Optionen.
+	Saving {name} will remove content	Beim Speichern von {name} geht Inhalt verloren
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Die aktuelle Datei scheint unvollständig zu sein; {name} bleibt daher, wie es ist, und die aktuelle Datei wird ersetzt.
+	The current file is kept as {name} until the next save.	Die aktuelle Datei bleibt bis zum nächsten Speichern als {name} erhalten.
+	This format can't keep these objects yet: {objects}.	Dieses Format kann diese Objekte noch nicht behalten: {objects}.
+	{count} more types	{count} weitere Typen
+	Review by Impact	Prüfung nach Auswirkung
+	Resolve Review Item by Impact	Prüfpunkt nach Auswirkung erledigen
+	Open Review Item	Prüfpunkt öffnen
+	Review Audit Trail	Prüfprotokoll
+	Accuracy Trend	Genauigkeitstrend
+	Measure Build Accuracy	Baugenauigkeit messen

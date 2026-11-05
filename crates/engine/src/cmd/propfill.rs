@@ -72,7 +72,7 @@ const SIDE_FT: f64 = 1.0;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(FILL, "Fill Element Properties", run_fill)
-            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
+            .params("{panel_top_in?: inches (a general note's panelboard height to top), panel_top_doc?: where it says so, rooms?: \"built\" (only the build's rooms: a model whose build traced none has none, never the whole drawing traced again; default: the build's, else the plan's traced)} → {filled: {kind: {key: n}}, elements, devices, reseated (devices whose wall was gone, set in the wall there now), mount_heights: {type_mark: {inches, source, doc?}}}: what the readers found goes on the built model's elements (devices, rooms, doors, walls, ducts, pipes, terminals, equipment), each value with its source; a person's values stay")
             .menu(&["Tools", "Building", "Fill Element Properties"]),
     ]
 }
@@ -1189,18 +1189,65 @@ pub(crate) const HOST_NOTE: &str = "the wall whose face it is set in";
 const MAX_LISTED: usize = 10_000;
 
 /// The built walls' plan footprints (their meshes' outlines), with their levels and handles.
-pub(crate) fn wall_footprints(d: &Drawing) -> Vec<(Option<String>, Handle, Vec<Vec2>)> {
+pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
-        .filter_map(|e| {
-            let EntityKind::Mesh(m) = &e.kind else { return None };
-            let h = super::mep::hull(&m.vertices.iter().map(|v| v.xy()).collect::<Vec<_>>());
-            (h.len() >= 3).then(|| (super::bspec::made_level(e), e.handle, h))
+        .filter_map(|e| match &e.kind {
+            EntityKind::Mesh(m) => Some((e, m)),
+            _ => None,
+        })
+        .flat_map(|(e, m)| {
+            let level = super::bspec::made_level(e);
+            mesh_pieces(m).into_iter().filter_map(move |(outline, z)| {
+                let h = super::mep::hull(&outline);
+                (h.len() >= 3).then(|| (level.clone(), e.handle, h, z))
+            })
         })
         .take(MAX_ELEMENTS)
         .collect()
 }
+
+/// A wall mesh's pieces: each flat footprint once (a box's bottom and top are one), from its
+/// lowest face to its highest; a mesh with no flat faces is one piece, its hull. The boxes over an
+/// opening start at its head.
+fn mesh_pieces(m: &cadaddy_doc::Mesh) -> Vec<(Vec<Vec2>, [f64; 2])> {
+    let all = m.vertices.iter().fold([f64::INFINITY, f64::NEG_INFINITY], |z, v| [z[0].min(v.z), z[1].max(v.z)]);
+    let tol = ((all[1] - all[0]).abs() * 1e-6).max(1e-9);
+    let mut at: BTreeMap<Vec<(i64, i64)>, usize> = BTreeMap::new();
+    let mut out: Vec<(Vec<Vec2>, [f64; 2])> = Vec::new();
+    for f in m.faces.iter().take(100_000) {
+        let vs: Vec<cadaddy_geom::Vec3> = f.v.iter().take(64).filter_map(|i| m.vertices.get(*i as usize).copied()).collect();
+        let Some(z) = vs.first().map(|v| v.z) else { continue };
+        if vs.len() < 3 || !vs.iter().all(|v| (v.z - z).abs() <= tol) {
+            continue;
+        }
+        let mut key: Vec<(i64, i64)> = vs.iter().map(|p| ((p.x * 1e4).round() as i64, (p.y * 1e4).round() as i64)).collect();
+        key.sort_unstable();
+        key.dedup();
+        match at.get(&key).and_then(|i| out.get_mut(*i)) {
+            Some((_, zr)) => *zr = [zr[0].min(z), zr[1].max(z)],
+            None => {
+                at.insert(key, out.len());
+                out.push((vs.iter().map(|v| v.xy()).collect(), [z, z]));
+            }
+        }
+    }
+    // Walls whose faces stand on the floor with a cap over them: a cap spans from the floor up.
+    if !out.iter().any(|(_, zr)| (zr[0] - all[0]).abs() <= tol) {
+        for (_, zr) in out.iter_mut().filter(|(_, zr)| (zr[1] - zr[0]).abs() <= tol) {
+            zr[0] = all[0];
+        }
+    }
+    if out.is_empty() && all[0].is_finite() {
+        out.push((m.vertices.iter().map(|v| v.xy()).collect(), all));
+    }
+    out
+}
+
+/// A built wall's piece: its level, handle, plan outline and the heights it spans (drawing units;
+/// a door's head is a piece from the head up).
+pub(crate) type WallPiece = (Option<String>, Handle, Vec<Vec2>, [f64; 2]);
 
 /// A wall face a device goes on: the wall, the point on its face, the face's direction and its
 /// outward normal (toward the room).
@@ -1213,10 +1260,12 @@ pub(crate) struct WallFace {
 
 /// The face of `level`'s nearest wall within `reach` of `p`: one of each footprint's long sides
 /// (not a wall's end), the point on it nearest `p`. A point inside a wall goes to the face it is
-/// nearer.
-pub(crate) fn wall_face(walls: &[(Option<String>, Handle, Vec<Vec2>)], level: &str, p: Vec2, reach: f64) -> Option<WallFace> {
+/// nearer. At height `z` (drawing units), only a wall there (not a door's head over the opening
+/// it stands in: the wall beside the door).
+pub(crate) fn wall_face(walls: &[WallPiece], level: &str, p: Vec2, reach: f64, z: Option<f64>) -> Option<WallFace> {
     let mut best: Option<(f64, WallFace)> = None;
-    for (_, h, poly) in walls.iter().filter(|(l, _, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
+    let at_height = |zr: &[f64; 2]| z.is_none_or(|z| !zr[0].is_finite() || (zr[0] <= z && z <= zr[1]));
+    for (_, h, poly, _) in walls.iter().filter(|(l, _, _, zr)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && at_height(zr)) {
         let n = poly.len();
         let edges: Vec<(Vec2, Vec2)> = (0..n).filter_map(|i| Some((*poly.get(i)?, *poly.get((i + 1) % n)?))).collect();
         let longest = edges.iter().map(|(a, b)| a.dist(*b)).fold(0.0, f64::max);
@@ -1596,11 +1645,14 @@ fn capacity_of(props: &[(String, String)]) -> Option<(String, String)> {
 
 /// Fill the built model's elements from what the readers found; per kind, how many values went
 /// on each key.
-pub(crate) fn fill(s: &mut Session) -> Result<Value> {
+/// `built_only`: the build's rooms alone (after a job's build: its rooms stage already traced the
+/// plans sheet by sheet, so tracing the whole drawing again finds nothing new and, on a set of
+/// many imported plans, takes very long).
+pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     let (mut sp, stored) = super::bspec::current(s, FILL)?;
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // The rooms (the build's, or the plan's), in model coordinates.
-    let rooms3 = super::rooms3d::rooms(s).unwrap_or_default();
+    let rooms3 = if built_only { super::rooms3d::built(s).unwrap_or_default() } else { super::rooms3d::rooms(s).unwrap_or_default() };
     let rooms: Vec<RoomShape> = rooms3
         .iter()
         .filter(|r| r.outline.len() >= 3)
@@ -1654,6 +1706,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
     // Read devices the plans put in no room (a lobby's, a laundry's: not a typical room's), by
     // tag id: the room their element stands in, for the spec's tags too.
     let mut tag_rooms: Vec<(String, String)> = Vec::new();
+    // Each read device's place on its plan (drawing units), by tag id.
+    let plan_at: HashMap<&str, Vec2> =
+        sp.tags.iter().filter(|t| t.id.starts_with("device:")).map(|t| (t.id.as_str(), Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf))).collect();
     // Not into a typical room's unit: its devices are its plans' (stamped and booked by the build),
     // not another trade's or a floor above's that stands over it.
     let unit_rooms: BTreeSet<String> = sp
@@ -1720,7 +1775,7 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     .and_then(|t| t.fields.get("room"))
                     .map(|f| f.value.trim().to_string())
                     .filter(|r| !r.is_empty());
-                match (served, stamped) {
+                match (served, stamped.clone()) {
                     (Some((r, note)), stamped) => {
                         if stamped.is_none()
                             && !unit_rooms.contains(&r.label.trim().to_ascii_uppercase())
@@ -1736,7 +1791,9 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                     (None, None) => {
                         // Not in a room: the corridor, stair or hoistway it stands in (or is on the
                         // wall of, within a foot), from the plans' circulation spaces.
-                        let q = c - shift;
+                        // Where the plans put it (its read tag's place; the built model stacks the
+                        // levels), else its built place less the stacking.
+                        let q = made(e, DEVID).and_then(|id| plan_at.get(id.as_str()).copied()).unwrap_or(c - shift);
                         let reach = ROOM_NEAR_FT * upf;
                         let probes = [[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]];
                         let space = sp.circulation.iter().find(|cs| {
@@ -1801,9 +1858,12 @@ pub(crate) fn fill(s: &mut Session) -> Result<Value> {
                 let panel = store.get("panel").filter(|p| p.has_value()).map(Prop::text);
                 let circuit = store.get("circuit").filter(|p| p.has_value()).map(Prop::text);
                 if let Some(p) = &panel {
-                    // The room's own panel of that letter (a guest room's G) before one elsewhere.
-                    let own = store.get("room").filter(|r| r.has_value()).map(|r| format!("{}-{}", p.trim(), r.text().trim()).to_ascii_uppercase());
-                    let key = own.filter(|k| gear.contains_key(k)).unwrap_or_else(|| p.trim().to_ascii_uppercase());
+                    // The room's own panel of that letter (a guest room's G) before one elsewhere: the
+                    // room it stands in, else the unit it was stamped into (an entry's receptacle on
+                    // the corridor's wall line is the unit's, on the unit's panel).
+                    let rooms = [store.get("room").filter(|r| r.has_value()).map(|r| r.text().trim().to_string()), stamped.clone()];
+                    let own = rooms.iter().flatten().map(|r| format!("{}-{}", p.trim(), r).to_ascii_uppercase()).find(|k| gear.contains_key(k));
+                    let key = own.unwrap_or_else(|| p.trim().to_ascii_uppercase());
                     if let Some(gh) = gear.get(&key) {
                         put(
                             &mut store,
@@ -2145,7 +2205,8 @@ fn run_fill(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Their boxes and the raceways' drops go with them.
     let rerouted = super::conduitroute::follow_reseated(s, reseated);
-    let mut r = fill(s)?;
+    let built_only = super::str_param(p, "rooms").is_some_and(|r| r.eq_ignore_ascii_case("built"));
+    let mut r = fill(s, built_only)?;
     r["reseated"] = json!(reseated);
     match rerouted {
         Some(Ok(v)) => r["rerouted"] = v,
@@ -2209,5 +2270,33 @@ mod tests {
         assert_eq!((z, d), (48.0, super::super::mountlist::Datum::Centre));
         assert!(why.contains("no document"));
         assert_eq!(rules_default("plumbing fixture", "LAVATORY").1, super::super::mountlist::Datum::Top);
+    }
+
+    /// A switch read in a door's opening goes on the wall beside the door, not on the head over
+    /// the opening (a wall piece from 7' up).
+    #[test]
+    fn a_device_in_a_door_opening_goes_on_the_wall_beside_it() {
+        let rect = |x0: f64, x1: f64| vec![Vec2::new(x0, 0.0), Vec2::new(x1, 0.0), Vec2::new(x1, 6.0), Vec2::new(x0, 6.0)];
+        let walls: Vec<WallPiece> =
+            vec![(Some("L1".into()), Handle(1), rect(0.0, 36.0), [84.0, 108.0]), (Some("L1".into()), Handle(2), rect(36.0, 120.0), [0.0, 108.0])];
+        let at = Vec2::new(24.0, 8.0);
+        let head = wall_face(&walls, "L1", at, 36.0, None).map(|f| f.wall);
+        assert_eq!(head, Some(Handle(1)), "with no height: the nearest piece");
+        let beside = wall_face(&walls, "L1", at, 36.0, Some(48.0)).expect("the wall beside the door");
+        assert_eq!(beside.wall, Handle(2));
+        assert!((beside.at.x - 36.0).abs() < 1e-9 && (beside.at.y - 6.0).abs() < 1e-9, "at the jamb: {:?}", beside.at);
+        assert!(wall_face(&walls, "L1", at, 6.0, Some(48.0)).is_none(), "out of reach: stays for review");
+    }
+
+    /// A wall built of boxes: the one beside the door from the floor, the one over the door from
+    /// its head; each is a piece of its own height.
+    #[test]
+    fn a_wall_meshs_pieces_keep_their_heights() {
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(36.0, 3.0), Vec2::new(120.0, 3.0), 6.0, 0.0, 108.0);
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 3.0), Vec2::new(36.0, 3.0), 6.0, 84.0, 108.0);
+        let mut z: Vec<[f64; 2]> = mesh_pieces(&m).into_iter().map(|(_, z)| z).collect();
+        z.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        assert_eq!(z, vec![[0.0, 108.0], [84.0, 108.0]]);
     }
 }

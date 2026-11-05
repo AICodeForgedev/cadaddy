@@ -10,6 +10,7 @@
 use cadaddy_doc::{Drawing, EntityStore, Space};
 use cadaddy_walk3d::{BuildingSpec, Level, Mep, MepKind, MepRun};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 
 use crate::Session;
 
@@ -37,6 +38,8 @@ const CHAR_WIDTH: f64 = 0.6;
 
 /// The longest leader line from a note, in its text's heights.
 const LEADER_MAX_H: f64 = 12.0;
+/// The most pieces a leader is drawn in (a shoulder and a bend: three).
+const LEADER_MAX_PIECES: usize = 3;
 
 /// The invert notes of a sheet: each with points along its text's box (horizontal text: its
 /// width from its characters) and the far end of each leader line that starts at the box
@@ -57,17 +60,18 @@ fn invert_notes(sub: &Drawing) -> Vec<InvertNote> {
     if out.is_empty() {
         return Vec::new();
     }
+    // Every straight piece: lines, and open polylines' segments (a leader drawn with a bend
+    // or a shoulder is one, or pieces of lines joined end to end).
     let lines: Vec<([f64; 2], [f64; 2])> = sub
         .model
         .iter()
         .take(2_000_000)
-        .filter_map(|e| match &e.kind {
-            cadaddy_doc::EntityKind::Line(l) => Some(([l.a.x, l.a.y], [l.b.x, l.b.y])),
-            cadaddy_doc::EntityKind::LwPolyline(p) if p.vertices.len() == 2 && !p.closed => {
-                let (a, b) = (p.vertices.first()?.p, p.vertices.last()?.p);
-                Some(([a.x, a.y], [b.x, b.y]))
+        .flat_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Line(l) => vec![([l.a.x, l.a.y], [l.b.x, l.b.y])],
+            cadaddy_doc::EntityKind::LwPolyline(p) if !p.closed && p.vertices.len() <= LEADER_MAX_PIECES + 1 => {
+                p.vertices.windows(2).filter_map(|w| if let [a, b] = w { Some(([a.p.x, a.p.y], [b.p.x, b.p.y])) } else { None }).collect()
             }
-            _ => None,
+            _ => Vec::new(),
         })
         .filter(|(a, b)| a.iter().chain(b).all(|v| v.is_finite()))
         .collect();
@@ -83,16 +87,34 @@ fn invert_notes(sub: &Drawing) -> Vec<InvertNote> {
             })
         };
         let mut ends: Vec<[f64; 2]> = Vec::new();
+        let dist = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+        let join = 0.25 * h;
         for (a, b) in &lines {
-            let len = (b[0] - a[0]).hypot(b[1] - a[1]);
-            if len <= h || len > LEADER_MAX_H * h {
+            // A leader starts at the note's box and runs off it, piece by piece (each next piece
+            // starting where the last ended), no longer than LEADER_MAX_H heights in all.
+            let (mut far, mut len) = match (near_box(*a), near_box(*b)) {
+                (true, false) => (*b, dist(*a, *b)),
+                (false, true) => (*a, dist(*a, *b)),
+                _ => continue,
+            };
+            let mut used = vec![(*a, *b)];
+            for _ in 0..LEADER_MAX_PIECES {
+                if len > LEADER_MAX_H * h {
+                    break;
+                }
+                let next = lines
+                    .iter()
+                    .find(|(c, d)| !used.contains(&(*c, *d)) && (dist(*c, far) <= join || dist(*d, far) <= join) && !near_box(*c) && !near_box(*d));
+                let Some((c, d)) = next else { break };
+                used.push((*c, *d));
+                let to = if dist(*c, far) <= dist(*d, far) { *d } else { *c };
+                len += dist(far, to);
+                far = to;
+            }
+            if len <= h || len > LEADER_MAX_H * h || near_box(far) {
                 continue;
             }
-            match (near_box(*a), near_box(*b)) {
-                (true, false) => ends.push(*b),
-                (false, true) => ends.push(*a),
-                _ => {}
-            }
+            ends.push(far);
             if ends.len() >= 8 {
                 break;
             }
@@ -190,15 +212,61 @@ pub(crate) struct SheetRead {
     pub terminals: usize,
     pub equipment: usize,
     pub warnings: Vec<String>,
+    /// Pipe sheets: feet by system, then by size (`4"`).
+    pub by_system: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Pipe sheets: runs followed on past their tags' reach (Q6181) and their length.
+    pub followed_runs: usize,
+    pub followed_ft: f64,
 }
 
 impl SheetRead {
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut out = json!({
             "sheet": self.sheet, "level": self.level, "trade": self.trade, "runs": self.runs,
             "length_ft": r1(self.length_ft), "terminals": self.terminals,
             "equipment": self.equipment, "warnings": self.warnings,
-        })
+        });
+        if self.trade == "pipe" {
+            out["by_system"] = json!(
+                self.by_system
+                    .iter()
+                    .map(|(sy, sizes)| (
+                        sy.clone(),
+                        sizes.iter().map(|(z, ft)| (z.clone(), json!(r1(*ft)))).collect::<serde_json::Map<_, _>>().into()
+                    ))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
+            out["followed_runs"] = json!(self.followed_runs);
+            out["followed_ft"] = json!(r1(self.followed_ft));
+        }
+        out
+    }
+}
+
+/// A pipe's size as a plan prints it (`4"`, `1-1/2"`, `0.75"`).
+fn size_label(inches: f64) -> String {
+    let whole = inches.trunc();
+    let frac = inches - whole;
+    let eighths = (frac * 8.0).round();
+    if (frac * 8.0 - eighths).abs() > 1e-6 {
+        return format!("{}\"", r1(inches));
+    }
+    let f = match eighths as u8 {
+        0 => String::new(),
+        8 => return format!("{}\"", whole + 1.0),
+        n => {
+            let (mut a, mut b) = (u32::from(n), 8u32);
+            while a % 2 == 0 && b > 1 {
+                a /= 2;
+                b /= 2;
+            }
+            format!("{a}/{b}")
+        }
+    };
+    match (whole > 0.0, f.is_empty()) {
+        (_, true) => format!("{whole}\""),
+        (true, false) => format!("{whole}-{f}\""),
+        (false, false) => format!("{f}\""),
     }
 }
 
@@ -538,6 +606,16 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
     read.length_ft = mep.runs.iter().map(|r| path_ft(&r.points, upf)).sum();
     read.terminals = mep.terminals.len();
     read.equipment = mep.equipment.len();
+    if trade != MepKind::Duct {
+        for r in &mep.runs {
+            let ft = path_ft(&r.points, upf);
+            *read.by_system.entry(r.system.clone()).or_default().entry(size_label(r.size_in[0])).or_insert(0.0) += ft;
+            if r.size_source.starts_with("followed from") {
+                read.followed_runs += 1;
+                read.followed_ft += ft;
+            }
+        }
+    }
     if read.runs == 0 {
         read.warnings.push(format!(
             "{} ({}): no {} runs read on this {} plan",
@@ -575,6 +653,9 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
                 terminals: cloned.terminals.len(),
                 equipment: cloned.equipment.len(),
                 warnings: Vec::new(),
+                by_system: read.by_system.clone(),
+                followed_runs: read.followed_runs,
+                followed_ft: read.followed_ft,
             });
             let room = MAX_SET_RUNS.saturating_sub(out.mep.runs.len());
             if room == 0 {
@@ -909,6 +990,15 @@ pub(crate) fn load_project_plans(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pipe_sizes_are_labelled_as_plans_print_them() {
+        assert_eq!(super::size_label(4.0), "4\"");
+        assert_eq!(super::size_label(1.5), "1-1/2\"");
+        assert_eq!(super::size_label(0.75), "3/4\"");
+        assert_eq!(super::size_label(2.5), "2-1/2\"");
+        assert_eq!(super::size_label(0.3), "0.3\"");
+    }
+
     use super::*;
     use cadaddy_walk3d::MepSystem;
 
@@ -1120,6 +1210,22 @@ mod tests {
         assert_eq!((v.source_sheet.as_str(), v.level.as_str()), ("P-101", mep.runs[0].level.as_str()));
         // The leadered note marks its leader's end.
         assert!((mep.inverts[2].at[0] - 410.0).abs() < 1e-6 && (mep.inverts[2].at[1] - 60.0).abs() < 1e-6, "{:?}", mep.inverts[2].at);
+        // A leader drawn in pieces (a short shoulder off the note, then the leader proper, as
+        // separate lines; or one polyline with a bend) reaches its drain at its last piece's end.
+        let mut t = Session::new();
+        t.execute("line", &json!({"points": [[0, 0], [600, 0]]})).expect("line");
+        t.execute("text", &json!({"at": [300, 6], "text": "6\" S", "height": 4})).expect("tag");
+        t.execute("text", &json!({"at": [200, 100], "text": "18\" INVERT", "height": 6})).expect("shouldered");
+        t.execute("line", &json!({"points": [[198, 100], [192, 100]]})).expect("shoulder");
+        t.execute("line", &json!({"points": [[192, 100], [160, 50]]})).expect("leader");
+        t.execute("text", &json!({"at": [500, 100], "text": "42\" INVERT", "height": 6})).expect("bent");
+        t.execute("pline", &json!({"vertices": [[498, 100], [492, 100], [470, 50]]})).expect("bent leader");
+        let d2 = t.doc().expect("doc").clone();
+        let (pieces, read) = read_sheet(&d2, &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        let got: Vec<(f64, [f64; 2])> = pieces.inverts.iter().map(|v| (v.depth_ft, v.at)).collect();
+        assert_eq!(got.len(), 2, "{read:?} {got:?}");
+        assert!(got.iter().any(|(d, at)| *d == 1.5 && (at[0] - 160.0).abs() < 1e-6 && (at[1] - 50.0).abs() < 1e-6), "{got:?}");
+        assert!(got.iter().any(|(d, at)| *d == 3.5 && (at[0] - 470.0).abs() < 1e-6 && (at[1] - 50.0).abs() < 1e-6), "{got:?}");
         // Into the spec once; a re-read of the sheet replaces its inverts.
         let mut sp = BuildingSpec { units_per_foot: 12.0, ..BuildingSpec::default() };
         merge_mep(&mut sp, mep.clone(), &["P-101".to_string()]);

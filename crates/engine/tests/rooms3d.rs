@@ -363,3 +363,44 @@ fn a_two_line_names_number_three_lines_down_is_its_rooms() {
         .unwrap_or_default();
     assert_eq!(q["number"], "220", "{r}");
 }
+
+/// A detail callout's sheet number in a room (`A411`) is not the room's number: the room's own
+/// printed number is, and a room with only the callout has none.
+#[test]
+fn a_callouts_sheet_number_is_no_rooms_number() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 120.0], "OFFICE");
+    text(&mut s, [100.0, 100.0], "101");
+    text(&mut s, [150.0, 40.0], "A411");
+    text(&mut s, [340.0, 120.0], "STORAGE");
+    text(&mut s, [340.0, 100.0], "A411");
+    s.execute("bspec.set", &json!({"spec": {"sheets": [{"number": "A411", "discipline": "A"}]}})).unwrap();
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "OFFICE")["number"], "101", "{rooms:?}");
+    assert!(room(rooms, "STORAGE")["number"].is_null(), "{rooms:?}");
+}
+
+/// An equipment room tagged by the unit it houses (`AHU` over its number) is a room; an equipment
+/// tag with its own number (`AHU-1`) names none.
+#[test]
+fn an_equipment_rooms_tag_names_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 120.0], "AHU");
+    text(&mut s, [100.0, 105.0], "152");
+    text(&mut s, [340.0, 120.0], "AHU-1");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert!(!rooms.iter().any(|x| x["name"] == "AHU-1"), "{rooms:?}");
+}

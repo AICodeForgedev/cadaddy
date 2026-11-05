@@ -192,8 +192,11 @@ fn the_building_follows_the_plan_while_associative() {
         .collect();
     assert_eq!(east.len(), 2);
     s.execute("move", &json!({"handles": east, "from": [0, 0], "to": [24, 0]})).unwrap();
+    // The model is behind the plan until it is updated (or a command reads it).
+    assert!((wall_x(&s) - 240.0).abs() < 1e-6, "not rebuilt with every edit: {}", wall_x(&s));
+    s.execute("model.update", &json!({})).unwrap();
     assert!((wall_x(&s) - 264.0).abs() < 1e-6, "rebuilt with the plan: {}", wall_x(&s));
-    // One undo takes back the move and the rebuild together.
+    // One undo takes back the move and the rebuild together (the update made no undo step).
     s.undo().unwrap();
     assert!((wall_x(&s) - 240.0).abs() < 1e-6);
     // Not associative: the plan moves alone.

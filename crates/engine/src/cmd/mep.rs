@@ -906,6 +906,87 @@ fn leaders_and_arrows(ents: &[&Arc<Entity>]) -> (Vec<homerun::Stroke>, Vec<[Vec2
     (strokes, arrows)
 }
 
+/// A followed chain's points, carried on from `from` (the end it was followed from) at its
+/// nearer end: the run is unbroken across the dash's gap or the fitting it was followed over.
+/// An end farther than `reach` from it (the chain was followed by a stretch in its middle) is
+/// left as drawn.
+fn bridged(pts: &[Vec2], from: Option<Vec2>, reach: f64) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = pts.iter().map(|p| [p.x, p.y]).collect();
+    let (Some(first), Some(last), Some(from)) = (pts.first(), pts.last(), from) else { return out };
+    let (d0, d1) = (first.dist(from), last.dist(from));
+    if d0 <= d1 {
+        if d0 > 1e-9 && d0 <= reach {
+            out.insert(0, [from.x, from.y]);
+        }
+    } else if d1 > 1e-9 && d1 <= reach {
+        out.push([from.x, from.y]);
+    }
+    out
+}
+
+/// The chains that continue the tag-read runs (Q6181, [`super::pipefollow`]): (chain, the
+/// run it continues, the point it carries on from). A run is followed from when its chain is the one nearest its tag (the
+/// tag's own line, not something else in its reach); a chain any tag reaches is never taken.
+#[allow(clippy::too_many_arguments)]
+fn follow_tagged(
+    ents: &[&Arc<Entity>],
+    notes: &[(Handle, String, Vec2, f64)],
+    chains: &[(Vec<Vec2>, Vec<Handle>)],
+    run_of: &[Option<usize>],
+    tag_of_run: &[Option<usize>],
+    tags: &[(Vec2, String)],
+    runs: &[MepRun],
+    reach: f64,
+    upf: f64,
+) -> Vec<(usize, usize, Option<Vec2>)> {
+    use super::pipefollow::{Line, Pen, Seed, follow};
+    let by: BTreeMap<Handle, &Arc<Entity>> = ents.iter().map(|e| (e.handle, *e)).collect();
+    let near_tags = |pts: &[Vec2]| -> Vec<String> {
+        tags.iter().filter(|(at, _)| pts.windows(2).any(|w| matches!(w, [a, b] if seg_dist(*at, *a, *b) < reach))).map(|(_, k)| k.clone()).collect()
+    };
+    let lines: Vec<Line> = chains
+        .iter()
+        .enumerate()
+        .map(|(ci, (pts, hs))| Line {
+            pts,
+            pen: hs.first().and_then(|h| by.get(h)).map(|e| Pen::of(e)),
+            run: run_of.get(ci).copied().flatten().is_some(),
+            near_tags: near_tags(pts),
+        })
+        .collect();
+    // Each tag's nearest chain among those it gave a run.
+    let mut nearest: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
+    for (ci, ri) in run_of.iter().enumerate().filter_map(|(ci, r)| r.map(|r| (ci, r))) {
+        let (Some(ti), Some((pts, _))) = (tag_of_run.get(ri).copied().flatten(), chains.get(ci)) else { continue };
+        let Some((at, _)) = tags.get(ti) else { continue };
+        let d = pts.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist(*at, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min);
+        if nearest.get(&ti).is_none_or(|(bd, _)| d < *bd) {
+            nearest.insert(ti, (d, ci));
+        }
+    }
+    let rules = super::pipefollow::rules();
+    let seeds: Vec<Seed> = nearest
+        .iter()
+        .map(|(ti, (_, ci))| (*ti, *ci))
+        .filter(|(_, ci)| {
+            let Some(l) = lines.get(*ci) else { return false };
+            let layer_ok =
+                l.pen.as_ref().is_some_and(|p| !rules.never_layers.iter().any(|w| !w.is_empty() && p.layer.contains(&w.to_ascii_uppercase())));
+            layer_ok && !is_outline(l.pts, upf)
+        })
+        .map(|(ti, chain)| {
+            let kind = tags.get(ti).map(|(_, k)| k.clone()).unwrap_or_default();
+            let size_in = kind.split_whitespace().nth(1).and_then(|z| z.parse::<f64>().ok()).filter(|z| z.is_finite()).unwrap_or(0.0);
+            Seed { chain, kind, size_in }
+        })
+        .collect();
+    follow(ents, &lines, &seeds, notes, upf)
+        .into_iter()
+        .filter_map(|f| seeds.get(f.seed).and_then(|sd| run_of.get(sd.chain).copied().flatten()).map(|ri| (f.line, ri, f.from)))
+        .filter(|(_, ri, _)| runs.get(*ri).is_some())
+        .collect()
+}
+
 /// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
 /// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
 fn read_pipes_from_tags(
@@ -925,7 +1006,6 @@ fn read_pipes_from_tags(
         /// The second system of a tag that names two (`1/2" HW & CW`).
         also: Option<&'static str>,
         size_in: Option<f64>,
-        #[allow(dead_code)]
         text: String,
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
@@ -1108,6 +1188,9 @@ fn read_pipes_from_tags(
         &pipe_tags.iter().map(|t| homerun::Tag { at: t.at, system: t.system, also: t.also }).collect::<Vec<_>>(),
         upf,
     );
+    // Which run each chain became, and which tag gave it (a run of the plan's own system, untagged: none).
+    let mut run_of: Vec<Option<usize>> = vec![None; all_chains.len()];
+    let mut tag_of_run: Vec<Option<usize>> = Vec::new();
     for (ci, ((pts, handles), width)) in all_chains.iter().zip(&widths).enumerate() {
         if pts.len() < 2 {
             continue;
@@ -1146,7 +1229,8 @@ fn read_pipes_from_tags(
         // takes none from the run it comes off).
         let (own, any) = own_tags.get(ci).copied().unwrap_or((None, None));
         let spread_tag = spread.get(ci).copied().flatten();
-        let best_tag = own.or(any.filter(|_| spread_tag.is_none())).and_then(|k| pipe_tags.get(k));
+        let tag_index = own.or(any.filter(|_| spread_tag.is_none()));
+        let best_tag = tag_index.and_then(|k| pipe_tags.get(k));
         // Untagged: the tag of the run it comes off, else the plan's own system (a sanitary
         // plan's piping), else not a pipe.
         let pair = paired.get(ci).copied().flatten();
@@ -1155,6 +1239,8 @@ fn read_pipes_from_tags(
         let best_tag = best_tag.or_else(|| spread_tag.and_then(|k| pipe_tags.get(k)));
         // (Only a plan that draws its pipes to scale says which of its untagged lines are pipes.)
         let Some(sys_code) = pair.map(|(s, _)| s).or(best_tag.map(|t| t.system)).or(untagged.filter(|_| twin)) else { continue };
+        // The tag it was read from, when the run is that tag's system.
+        let tag_index = tag_index.filter(|k| pipe_tags.get(*k).is_some_and(|t| t.system == sys_code));
         systems_seen.insert(sys_code, true);
 
         let (_, _, _, default_size, default_bottom) =
@@ -1222,9 +1308,60 @@ fn read_pipes_from_tags(
             source_sheet: String::new(),
             slope_in_per_ft: 0.0,
         });
+        if let Some(slot) = run_of.get_mut(ci) {
+            *slot = Some(runs.len() - 1);
+        }
+        tag_of_run.push(tag_index);
         if runs.len() >= MAX_RUNS {
             break;
         }
+    }
+
+    // Step 4 (Q6181): the drawn pipe past its tag's reach. Each tag's own line (the tagged
+    // chain nearest it) is followed on along untagged linework of its pen.
+    let followed = follow_tagged(
+        ents,
+        notes,
+        &all_chains,
+        &run_of,
+        &tag_of_run,
+        &pipe_tags.iter().map(|t| (t.at, format!("{} {}", t.system, t.size_in.map_or_else(String::new, |z| z.to_string())))).collect::<Vec<_>>(),
+        &runs,
+        reach,
+        upf,
+    );
+    let fr = super::pipefollow::rules();
+    let bridge = (fr.gap_ft + fr.join_in / 12.0) * upf;
+    for (ci, ri, from) in followed {
+        let (Some((pts, handles)), Some(seed), Some(tag)) =
+            (all_chains.get(ci), runs.get(ri), tag_of_run.get(ri).copied().flatten().and_then(|t| pipe_tags.get(t)))
+        else {
+            continue;
+        };
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
+        let source = format!("followed from {}", tag.text.trim());
+        let bottom = seed.bottoms_ft.first().copied().unwrap_or(0.0);
+        let points = bridged(pts, from, bridge);
+        let bottoms_ft = vec![bottom; points.len().saturating_sub(1).max(1)];
+        runs.push(MepRun {
+            system: seed.system.clone(),
+            level: seed.level.clone(),
+            points,
+            size_in: seed.size_in,
+            bottoms_ft,
+            objects: handles.iter().map(|h| h.hex()).collect(),
+            id: String::new(),
+            encased: false,
+            size_source: source.clone(),
+            height_source: if seed.height_source == "tag" { source } else { seed.height_source.clone() },
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: String::new(),
+            slope_in_per_ft: seed.slope_in_per_ft,
+        });
     }
 
     // Build system entries for the seen codes.
@@ -2256,7 +2393,7 @@ pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&
         // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
         // wall) when its mounting says so, else on the face; turned with the wall.
         let face = if panel(&e.kind) && !e.round {
-            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf)
+            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some((z0 + z1) * 0.5))
         } else {
             None
         };

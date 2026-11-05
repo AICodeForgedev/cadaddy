@@ -16,7 +16,9 @@
 //!   but a pass becomes a review item of kind `validation`, ranked by severity × confidence.
 //! - `validate.status {run?}`: areas done, findings by trade, rule and verdict, the accuracy per
 //!   trade and per rule (pass / (pass + fail + missing + extra)), the judge's false-alarm rate
-//!   from the items a person rejected, and on a planted copy the planted errors caught and missed.
+//!   from the items a person rejected, on a planted copy the planted errors caught and missed,
+//!   and the sheets by their print crops' registration against the model's walls (Q6141),
+//!   misregistered first, then by the largest residual.
 //! - `validate.plant {count, kinds?, seed}`: a copy of the drawing (opened beside it) with known
 //!   errors planted, recorded in the copy only; the same seed plants the same errors.
 //! - `validate.cancel {run?}`: stops handing out a run's areas (the Validate panel's Cancel); what
@@ -55,7 +57,18 @@ const KEY: &str = "validate";
 const PLANT_KEY: &str = "validate_plant";
 const RUNS_KEPT: usize = 10;
 const MAX_RUN_AREAS: usize = 10_000;
-const MAX_FINDINGS: usize = 300;
+/// Findings one `validate.report` call carries, at most: a larger area comes in parts.
+const MAX_PART: usize = 1_000;
+/// Handles one finding may name (the same evidence and verdict for each).
+const MAX_HANDLES: usize = 500;
+/// Per rule, the findings of what the model lacks (`missing`, no handle) an area may hold beyond
+/// its elements × rules.
+const MISSING_SLACK: usize = 100;
+/// Parts of one area's report, at most.
+const MAX_PARTS: u64 = 10_000;
+const WARNINGS_SHOWN: usize = 10;
+/// Sheets `validate.status` lists by their registration, at most.
+const MAX_REGISTRATION_ROWS: usize = 50;
 /// Objects of a packet's `objects.json` read for checking a report, at most (per list).
 const MAX_PACKET_OBJECTS: usize = 5_000;
 const MAX_EVIDENCE: usize = 8;
@@ -78,14 +91,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "{scope?: selection|area|room|level|building (default from what is given: area, else room, else level, else building), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level} (scope area), room?: number or name (scope room; with level: on that level), level?: name (scope level), trades?: [architecture|electrical|mechanical|plumbing|fire|general], rules?: [rule id], out_dir?: folder for the packets, each run in a folder of its own named by its id (default: a folder named after the drawing plus \" validate\", beside it), force?: bool (judge unchanged areas again)} → {run, areas: [{id, status}], areas_total, pending, unchanged, prescreen, out_dir, next: \"validate.next\", loop, waiting?}: starts (or resumes) a Validate run. The judge is the connected agent: it loops validate.next → judges the packet by its rules → validate.report, until done; then validate.status",
         ),
         CommandSpec::new(CMD_NEXT, "Next Validation Packet", run_next).files().params(
-            "{run?: id (the latest), area?: id (this one again)} → {run, area, packet: {dir, manifest, prompt, objects, rules}, rules, images, prompt?, remaining, report: {call: \"validate.report\", params}} | {run, done: true, next: \"validate.status\"}: writes the next area's evidence packet and hands it to the judge; read prompt.md and the pictures, judge every rule for every element, then validate.report",
+            "{run?: id (the latest), area?: id (this one again)} → {run, area, packet: {dir, manifest, prompt, objects, rules}, rules, images, prompt?, remaining, report: {call: \"validate.report\", params}} | {run, done: true, next: \"validate.status\"}: writes the next area's evidence packet and hands it to the judge; read prompt.md and the pictures, judge every rule for every element, then validate.report (a large area in parts: {part: 1}, {part: 2}, … {final: true})",
         ),
         CommandSpec::new(CMD_REPORT, "Report Validation Findings", run_report).params(
-            "{run?: id (the latest), area: id, findings: [{rule: id from the packet's rules, handle?: model handle (none for missing; required for extra), verdict: pass|fail|missing|extra|unsure, issue, expected, found, evidence: [{image: packet file (prints/… for fail, missing, extra), sheet, what}], confidence: 0-1, severity?: high|medium|low}]} → {run, area, stored, by_verdict, review_items, remaining, next}: keeps the judge's findings for the area (replacing an earlier report); a report with a bad finding is refused whole, with every problem said; fail, missing, extra and unsure become review items (kind validation)",
+            "{run?: id (the latest), area: id, part?: n | true (one part of the area's report: added to the parts before it), final?: bool (true: the last part, the area is done; false: more parts follow), findings: [{rule: id from the packet's rules, handle?: model handle (none for missing; required for extra), handles?: [model handle] (several elements the same evidence and verdict cover; counted once per handle), verdict: pass|fail|missing|extra|unsure, issue, expected, found, evidence: [{image: packet file (prints/… for fail, missing, extra), sheet, what}], confidence: 0-1, severity?: high|medium|low}] (at most 1000 per call)} → {run, area, stored (per handle), by_verdict, review_items, area_findings, part, final, pairs: {asked, judged, coverage}, merged?, conflicts?, warnings?, remaining, next}: keeps the judge's findings for the area; without part or final the report is the area's whole report (replacing an earlier one); a large area comes in parts, the area is done on the final one, and an area holds up to its elements × rules findings; a duplicate (the same rule, handle and verdict; for missing, the same rule and issue) is merged into the first with a warning; a report with a bad finding is refused whole, with every problem said; fail, missing, extra and unsure become review items (kind validation)",
         ),
         CommandSpec::new(CMD_STATUS, "Validation Run Status", run_status)
             .params(
-                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged}, findings: {total, by_verdict, by_trade, by_rule}, accuracy: {overall, by_trade, by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra)), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, runs, next}: how far the run is and how the model scores",
+                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged, in_parts}, findings: {total (per handle), by_verdict, by_trade, by_rule}, accuracy: {overall, judged_pairs, unsure_pairs, pairs_asked, coverage, by_trade, by_rule, coverage_by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra) over the element × rule pairs judged, a pair judged twice by its worse verdict; coverage: the pairs the packets asked for that a pass, fail or extra judged), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, registration: {threshold_ft, threshold_from, sheets: [{sheet, view?, status (the worst crop's: misregistered|refitted|ok|not_checked), residual_ft, rotation_deg, scale, worst: {area, file}, crops, areas, ok, refitted, misregistered, not_checked}] (the sheets by their print crops' registration against the model's walls, worst first: misregistered, then the largest residual), more?}, runs, per_run: [{run, scope, areas, findings, accuracy, judged_pairs, pairs_asked, coverage}], totals: {runs, areas_judged, findings, accuracy} (every run of the drawing, an area judged in several runs once, from the latest), next}: how far the run is and how the model scores, and the totals over every run",
             )
             .noundo(),
         CommandSpec::new(CMD_PLANT, "Plant Validation Errors", run_plant)
@@ -152,6 +165,81 @@ struct RunArea {
     /// The rules it gave the judge.
     rules: Vec<String>,
     findings: Vec<Finding>,
+    /// The parts of its report since it was handed out (`validate.report {part}`); the area is
+    /// done on the `final` one.
+    parts: usize,
+    /// Per rule, the element × rule pairs its packet asks the judge for (each of its own elements
+    /// and runs by each of the packet's rules that applies to it) and how many of them a pass,
+    /// fail or extra judged (an `unsure` pair is not judged): counted when a report comes in.
+    pairs: BTreeMap<String, [usize; 2]>,
+    /// Its placed print crops' registration against the model's walls (Q6141).
+    registration: Vec<CropRegistration>,
+}
+
+/// One placed print crop's registration as its packet measured it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct CropRegistration {
+    file: String,
+    sheet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    view: Option<String>,
+    /// `ok`, `refitted`, `misregistered` or `not_checked`.
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    residual_ft: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rotation_deg: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scale: Option<f64>,
+}
+
+/// The registration of the run's print crops by sheet (and view), worst first: misregistered,
+/// then by the largest residual.
+fn registration_by_sheet(run: &Run, threshold_ft: f64, rule: Option<&str>) -> Value {
+    let mut by: BTreeMap<(String, Option<String>), Vec<(&str, &CropRegistration)>> = BTreeMap::new();
+    for a in &run.areas {
+        for c in &a.registration {
+            by.entry((c.sheet.clone(), c.view.clone())).or_default().push((a.id.as_str(), c));
+        }
+    }
+    let mut rows: Vec<((u8, f64), Value)> = by
+        .into_iter()
+        .filter_map(|((sheet, view), crops)| {
+            let (area, worst) = crops.iter().min_by(|x, y| {
+                let (kx, ky) = (vr_rank(x.1), vr_rank(y.1));
+                kx.0.cmp(&ky.0).then(kx.1.total_cmp(&ky.1))
+            })?;
+            let areas: BTreeSet<&str> = crops.iter().map(|c| c.0).collect();
+            let n = |st: &str| crops.iter().filter(|c| c.1.status == st).count();
+            let mut o = json!({
+                "sheet": sheet, "status": worst.status, "residual_ft": worst.residual_ft, "rotation_deg": worst.rotation_deg, "scale": worst.scale,
+                "worst": {"area": area, "file": worst.file},
+                "crops": crops.len(), "areas": areas.len(),
+                "ok": n("ok"), "refitted": n("refitted"), "misregistered": n("misregistered"), "not_checked": n("not_checked"),
+            });
+            if let Some(v) = view {
+                o["view"] = json!(v);
+            }
+            Some((vr_rank(worst), o))
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.0.cmp(&b.0.0).then(a.0.1.total_cmp(&b.0.1)).then(a.1["sheet"].as_str().cmp(&b.1["sheet"].as_str())));
+    let total = rows.len();
+    let mut out = json!({
+        "about": "each sheet's print crops in this run's packets, by their registration against the model's walls (validate.packet `registration`), worst first: misregistered, then the largest residual",
+        "threshold_ft": vp::r2(threshold_ft),
+        "threshold_from": rule.map_or_else(|| "default".to_string(), |k| format!("project rule {k}")),
+        "sheets": rows.into_iter().take(MAX_REGISTRATION_ROWS).map(|r| r.1).collect::<Vec<_>>(),
+    });
+    if total > MAX_REGISTRATION_ROWS {
+        out["more"] = json!(total - MAX_REGISTRATION_ROWS);
+    }
+    out
+}
+
+fn vr_rank(c: &CropRegistration) -> (u8, f64) {
+    super::validate_register::rank(&c.status, c.residual_ft)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -161,6 +249,10 @@ struct Finding {
     rule: String,
     trade: String,
     handle: Option<String>,
+    /// More elements the same evidence and verdict cover, beyond `handle`: a finding counts once
+    /// per handle.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    also: Vec<String>,
     verdict: String,
     issue: String,
     expected: String,
@@ -168,6 +260,18 @@ struct Finding {
     evidence: Vec<Evidence>,
     confidence: f64,
     severity: String,
+}
+
+impl Finding {
+    /// Every handle it names (none for `missing`).
+    fn handles(&self) -> impl Iterator<Item = &str> {
+        self.handle.iter().chain(self.also.iter()).map(String::as_str)
+    }
+
+    /// How many findings it counts as: one per handle, one when it names none.
+    fn weight(&self) -> usize {
+        self.handles().count().max(1)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -585,6 +689,8 @@ fn area_counts(run: &Run) -> Value {
         "issued": n("issued"),
         "pending": n("pending"),
         "unchanged": run.areas.iter().filter(|a| a.unchanged && a.status == "done").count(),
+        // Handed out, with parts of its report in and the final one not yet.
+        "in_parts": run.areas.iter().filter(|a| a.status == "issued" && a.parts > 0).count(),
     })
 }
 
@@ -674,6 +780,11 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
         asked.iter().filter(|r| super::validate_prescreen::RULES.contains(&r.as_str())).cloned().collect()
     };
     if asked.is_empty() || !only.is_empty() {
+        let gear_docs = if super::validate_gear::wanted(&all, &only) { super::validate_gear::read_docs(s, &sp) } else { None };
+        let conduit_takeoff = super::validate_conduit::read_takeoff(s, &all, &only);
+        let value = super::validate_value::read(s, p, &all, &only).map_err(|e| bad(CMD_START, e))?;
+        let equip_docs = if super::validate_equip::wanted(&all, &only) { super::validate_equip::read_docs(s, &sp) } else { None };
+        let fixture_docs = super::validate_fixtures::wanted(&all, &only).then(|| super::validate_fixtures::read_docs(s, d, &sp));
         let measured = super::validate_prescreen::screen(&super::validate_prescreen::Scope {
             d,
             sp: &sp,
@@ -684,6 +795,12 @@ fn run_start(s: &mut Session, p: &Value) -> Result<Value> {
             areas: &areas,
             whole_levels: matches!(scope_name.as_str(), "building" | "level"),
             only: &only,
+            gear_docs: gear_docs.as_ref(),
+            conduit: true,
+            conduit_takeoff: conduit_takeoff.as_ref(),
+            value: value.as_ref(),
+            equip_docs: equip_docs.as_ref(),
+            fixture_docs: fixture_docs.as_ref(),
         });
         pre["measured"] = measured.summary();
     }
@@ -806,6 +923,8 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(area) = run.areas.get(i).cloned() else { return Err(bad(CMD, "the run's area list changed: call validate.next again")) };
     // Handed out before and not reported: said, so the judge knows it is no new area.
     let again = want.is_none() && area.status == "issued";
+    // Parts of its report already in are dropped: it is judged again from the start.
+    let dropped: usize = area.findings.iter().map(Finding::weight).sum();
     let folder = if area.dir.is_empty() { format!("{}/{}", run.id, folder_of(&area.id)) } else { area.dir.clone() };
     let dir = std::path::Path::new(&run.out_dir).join(&folder);
     let mut q = json!({"area": area.id, "out_dir": dir.to_string_lossy(), "force": !area.dir.is_empty()});
@@ -841,6 +960,24 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
             Some((f, c["sheet"].as_str().unwrap_or_default().to_string(), over))
         })
         .collect();
+    let registration: Vec<CropRegistration> = manifest["prints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let r = c.get("registration")?;
+            Some(CropRegistration {
+                file: c["file"].as_str()?.to_string(),
+                sheet: c["sheet"].as_str().unwrap_or_default().to_string(),
+                view: c["view"].as_str().map(str::to_string),
+                status: r["status"].as_str().unwrap_or_default().to_string(),
+                residual_ft: r["residual_ft"].as_f64(),
+                rotation_deg: r["rotation_deg"].as_f64(),
+                scale: r["scale"].as_f64(),
+            })
+        })
+        .take(MAX_PACKET_OBJECTS)
+        .collect();
     let rules: Vec<String> = read_json(&dir.join("rules.json"))
         .map(|r| r["rules"].as_array().into_iter().flatten().filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
         .unwrap_or_default();
@@ -862,9 +999,12 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
         a.dir = folder;
         a.images = images.clone();
         a.prints = prints;
+        a.registration = registration;
         a.rules = rules.clone();
         a.fp = fp;
         a.findings.clear();
+        a.parts = 0;
+        a.pairs.clear();
     }
     save(s, &st)?;
     let full = |f: &str| dir.join(f).to_string_lossy().into_owned();
@@ -886,6 +1026,9 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
             "every pending area is handed out; this one ({}) was handed out before and not reported yet: judge it and validate.report it",
             area.id
         ));
+    }
+    if area.parts > 0 && area.status == "issued" {
+        out["parts_dropped"] = json!({"parts": area.parts, "findings": dropped, "note": "the area is handed out again: report it from part 1"});
     }
     // The prompt itself when it fits; else its file.
     if let Ok(text) = std::fs::read_to_string(dir.join("prompt.md"))
@@ -924,6 +1067,8 @@ struct PacketObject {
     kind: String,
     category: Option<String>,
     mark: Option<String>,
+    /// Listed among the packet's elements or runs (not a wall or an opening).
+    element: bool,
 }
 
 enum Held<'a> {
@@ -947,7 +1092,8 @@ impl PacketObjects {
             for e in o[k].as_array().into_iter().flatten().take(MAX_PACKET_OBJECTS) {
                 let Some(h) = e["handle"].as_str() else { continue };
                 let kind = s(e, "kind").unwrap_or_else(|| if k == "walls" { "wall".into() } else { String::new() });
-                own.insert(h.trim().to_ascii_uppercase(), PacketObject { kind, category: s(e, "category"), mark: s(e, "mark") });
+                let element = matches!(k, "elements" | "runs");
+                own.insert(h.trim().to_ascii_uppercase(), PacketObject { kind, category: s(e, "category"), mark: s(e, "mark"), element });
             }
         }
         let nearby = o["nearby"]
@@ -965,6 +1111,22 @@ impl PacketObjects {
         let h = handle.trim().to_ascii_uppercase();
         self.own.get(&h).map(Held::Own).or_else(|| self.nearby.get(&h).map(|r| Held::Nearby(r.as_deref())))
     }
+
+    /// Does the packet ask the judge for `rule` on this object? An element or run gets every
+    /// rule that applies to it (a rule for every element too); a wall or an opening only a rule
+    /// that names its kind.
+    fn asks(o: &PacketObject, rule: &vr::Rule) -> bool {
+        if rule.names_kinds() { rule.applies_to_element(&o.kind, o.category.as_deref(), o.mark.as_deref()) } else { o.element }
+    }
+
+    /// Per rule of the packet, the element × rule pairs it asks for.
+    fn expected(&self, rules: &[String], all: &[Effective]) -> BTreeMap<String, usize> {
+        rules
+            .iter()
+            .filter_map(|id| all.iter().find(|e| e.rule.id == *id))
+            .map(|e| (e.rule.id.clone(), self.own.values().filter(|o| Self::asks(o, &e.rule)).count()))
+            .collect()
+    }
 }
 
 /// What a rule applies to, in words: its kinds, categories and mark patterns.
@@ -974,6 +1136,79 @@ fn applies_words(r: &vr::Rule) -> String {
     parts.extend(a.categories.iter().cloned());
     parts.extend(a.marks.iter().map(|m| format!("marks {m}")));
     cut(&parts.join(", "), 200)
+}
+
+/// How bad a verdict is, for the one verdict of an element × rule pair judged more than once.
+fn verdict_rank(v: &str) -> u8 {
+    match v {
+        "fail" => 4,
+        "missing" => 3,
+        "extra" => 2,
+        "unsure" => 1,
+        _ => 0,
+    }
+}
+
+/// The element × rule pairs of an area's findings, each with its trade and its worst verdict:
+/// one per handle of a finding, and one per finding that names no element (`missing`).
+fn area_pairs(findings: &[Finding]) -> BTreeMap<(String, String), (String, String)> {
+    let mut out: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
+    for f in findings {
+        let keys: Vec<String> =
+            if f.handle.is_none() && f.also.is_empty() { vec![format!("#{}", f.id)] } else { f.handles().map(str::to_ascii_uppercase).collect() };
+        for k in keys {
+            let e = out.entry((f.rule.clone(), k)).or_insert_with(|| (f.trade.clone(), f.verdict.clone()));
+            if verdict_rank(&f.verdict) > verdict_rank(&e.1) {
+                e.1 = f.verdict.clone();
+            }
+        }
+    }
+    out
+}
+
+/// Per rule, the pairs the packet asks for and how many of them the findings judged (pass, fail
+/// or extra: not unsure).
+fn area_coverage(
+    findings: &[Finding],
+    expected: &BTreeMap<String, usize>,
+    packet: Option<&PacketObjects>,
+    all: &[Effective],
+) -> BTreeMap<String, [usize; 2]> {
+    let mut judged: BTreeMap<String, usize> = BTreeMap::new();
+    for ((rule, key), (_, verdict)) in area_pairs(findings) {
+        if key.starts_with('#') || verdict == "unsure" {
+            continue;
+        }
+        let asked = match (packet.and_then(|p| p.own.get(&key)), all.iter().find(|e| e.rule.id == rule)) {
+            (Some(o), Some(r)) => PacketObjects::asks(o, &r.rule),
+            _ => false,
+        };
+        if asked {
+            *judged.entry(rule).or_default() += 1;
+        }
+    }
+    expected.iter().map(|(r, n)| (r.clone(), [*n, judged.get(r).copied().unwrap_or(0).min(*n)])).collect()
+}
+
+/// A finding read from a report, with its number there.
+struct Read {
+    n: usize,
+    finding: Finding,
+    /// It named elements (some may be merged away as duplicates).
+    named: bool,
+}
+
+/// `part`: the part's number, or `true`.
+fn part_param(cmd: &str, p: &Value) -> Result<Option<u64>> {
+    match p.get("part") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Ok(None),
+        Some(Value::Bool(true)) => Ok(Some(0)),
+        Some(v) => v
+            .as_u64()
+            .filter(|n| (1..=MAX_PARTS).contains(n))
+            .map(Some)
+            .ok_or_else(|| bad(cmd, format!("`part` is the part's number (1 to {MAX_PARTS}) or true"))),
+    }
 }
 
 fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
@@ -993,26 +1228,57 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
     if area.status == "pending" || area.dir.is_empty() {
         return Err(bad(CMD, format!("area {} has no packet yet: call validate.next {{run: \"{}\"}} first", area.id, run.id)));
     }
+    // In parts (`part`, or `final: false`): each part adds to the area's findings and the area
+    // is done on the `final` one. With neither, the report is the area's whole report.
+    let part = part_param(CMD, p)?;
+    let final_given = match p.get("final") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(bad(CMD, "`final` is true (the last part: the area is done) or false (more parts follow)")),
+    };
+    let in_parts = part.is_some() || final_given == Some(false);
+    let last = final_given.unwrap_or(!in_parts);
+    if in_parts && area.status == "done" {
+        return Err(bad(
+            CMD,
+            format!(
+                "area {}'s report is final already: a report without `part` replaces it, or validate.next {{area: \"{}\"}} hands it out again",
+                area.id, area.id
+            ),
+        ));
+    }
     let list = match p.get("findings") {
         Some(Value::Array(a)) => a,
         _ => {
             return Err(bad(
                 CMD,
-                "`findings` is a list: [{rule, handle?, verdict, issue, expected, found, evidence: [{image, sheet, what}], confidence, severity?}]",
+                "`findings` is a list: [{rule, handle? | handles?, verdict, issue, expected, found, evidence: [{image, sheet, what}], confidence, severity?}]",
             ));
         }
     };
+    let earlier: &[Finding] = if in_parts { &area.findings } else { &[] };
     if list.is_empty() && !area.rules.is_empty() {
+        if !last {
+            return Err(bad(CMD, "a part with no findings: send its findings, or {final: true} to close the area"));
+        }
+        if earlier.is_empty() {
+            return Err(bad(
+                CMD,
+                format!(
+                    "`findings` is empty: check every rule of the packet ({}) for every element it applies to; a pass is a finding too",
+                    area.rules.join(", ")
+                ),
+            ));
+        }
+    }
+    if list.len() > MAX_PART {
         return Err(bad(
             CMD,
             format!(
-                "`findings` is empty: check every rule of the packet ({}) for every element it applies to; a pass is a finding too",
-                area.rules.join(", ")
+                "{} findings in one report: at most {MAX_PART} at a time; send the area in parts ({{part: 1}}, {{part: 2}}, … the last with {{final: true}}), or name several handles in one finding when the same evidence and verdict cover them",
+                list.len()
             ),
         ));
-    }
-    if list.len() > MAX_FINDINGS {
-        return Err(bad(CMD, format!("{} findings: at most {MAX_FINDINGS} per area (one per rule and element)", list.len())));
     }
     let d = s.doc()?;
     let (all, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
@@ -1032,7 +1298,9 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or_default();
     let packet: Option<PacketObjects> = objects.as_ref().map(PacketObjects::of);
     let mut problems: Vec<String> = Vec::new();
-    let mut findings: Vec<Finding> = Vec::new();
+    // Answers kept as unsure because they cite no print page (G-COVERAGE).
+    let mut uncited: Vec<String> = Vec::new();
+    let mut read: Vec<Read> = Vec::new();
     for (k, f) in list.iter().enumerate() {
         let n = k + 1;
         let before = problems.len();
@@ -1050,55 +1318,69 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                 if area.rules.is_empty() { "none".into() } else { area.rules.join(", ") }
             ));
         }
-        let verdict = o.get("verdict").and_then(Value::as_str).map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
+        let mut verdict = o.get("verdict").and_then(Value::as_str).map(|x| x.trim().to_ascii_lowercase()).unwrap_or_default();
         if !VERDICTS.contains(&verdict.as_str()) {
             problems.push(format!("finding {n}: `verdict` is {} (got {})", VERDICTS.join(", "), cut(&text_of(o.get("verdict")), 20)));
         }
-        let handle = match o.get("handle") {
-            None | Some(Value::Null) => None,
-            Some(Value::String(h)) if h.trim().is_empty() => None,
-            Some(Value::String(h)) => match Handle::parse_hex(h.trim()).filter(|x| d.model.get(*x).is_some()) {
-                Some(x) => Some(x.hex()),
-                None => {
-                    problems.push(format!("finding {n}: handle `{}` is not an object of the drawing (objects.json lists the area's)", cut(h, 20)));
-                    None
-                }
-            },
-            Some(_) => {
-                problems.push(format!("finding {n}: `handle` is a handle string"));
-                None
-            }
-        };
-        if let (Some(h), Some(po)) = (&handle, &packet)
-            && problems.len() == before
-        {
-            match po.what(h) {
-                Some(Held::Own(obj)) => {
-                    if let Some(r) = all.iter().find(|e| e.rule.id == rule)
-                        && r.rule.names_kinds()
-                        && !r.rule.applies_to_element(&obj.kind, obj.category.as_deref(), obj.mark.as_deref())
-                    {
-                        problems.push(format!(
-                            "finding {n}: rule {rule} does not apply to {h}, a {}{} (it applies to {})",
-                            obj.kind.replace('_', " "),
-                            obj.category.as_deref().map(|c| format!(", {c}")).unwrap_or_default(),
-                            applies_words(&r.rule)
-                        ));
-                    }
-                }
-                Some(Held::Nearby(room)) => problems.push(format!(
-                    "finding {n}: {h} is beside this area, not in it ({}; objects.json `nearby`): judge it in its own area",
-                    room.map(|r| format!("in room {r}")).unwrap_or_else(|| "in no room".into())
-                )),
-                None => problems.push(format!("finding {n}: {h} is not one of this area's objects (objects.json lists them)")),
-            }
+        // `handle`, and `handles` when the same evidence and verdict cover several elements.
+        let mut given: Vec<&Value> = Vec::new();
+        match o.get("handle") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(h)) if h.trim().is_empty() => {}
+            Some(h) => given.push(h),
         }
-        if verdict == "missing" && handle.is_some() {
+        match o.get("handles") {
+            None | Some(Value::Null) => {}
+            Some(Value::Array(a)) if a.len() <= MAX_HANDLES => given.extend(a.iter()),
+            Some(Value::Array(a)) => problems.push(format!("finding {n}: {} handles: at most {MAX_HANDLES} in one finding", a.len())),
+            Some(_) => problems.push(format!("finding {n}: `handles` is a list of handle strings")),
+        }
+        let mut handles: Vec<String> = Vec::new();
+        for h in given {
+            let Some(h) = h.as_str() else {
+                problems.push(format!("finding {n}: `handle` is a handle string"));
+                continue;
+            };
+            let Some(x) = Handle::parse_hex(h.trim()).filter(|x| d.model.get(*x).is_some()) else {
+                problems.push(format!("finding {n}: handle `{}` is not an object of the drawing (objects.json lists the area's)", cut(h, 20)));
+                continue;
+            };
+            let h = x.hex();
+            if handles.contains(&h) {
+                continue;
+            }
+            if let Some(po) = &packet
+                && problems.len() == before
+            {
+                match po.what(&h) {
+                    Some(Held::Own(obj)) => {
+                        if let Some(r) = all.iter().find(|e| e.rule.id == rule)
+                            && r.rule.names_kinds()
+                            && !r.rule.applies_to_element(&obj.kind, obj.category.as_deref(), obj.mark.as_deref())
+                        {
+                            problems.push(format!(
+                                "finding {n}: rule {rule} does not apply to {h}, a {}{} (it applies to {})",
+                                obj.kind.replace('_', " "),
+                                obj.category.as_deref().map(|c| format!(", {c}")).unwrap_or_default(),
+                                applies_words(&r.rule)
+                            ));
+                        }
+                    }
+                    Some(Held::Nearby(room)) => problems.push(format!(
+                        "finding {n}: {h} is beside this area, not in it ({}; objects.json `nearby`): judge it in its own area",
+                        room.map(|r| format!("in room {r}")).unwrap_or_else(|| "in no room".into())
+                    )),
+                    None => problems.push(format!("finding {n}: {h} is not one of this area's objects (objects.json lists them)")),
+                }
+            }
+            handles.push(h);
+        }
+        if verdict == "missing" && !handles.is_empty() {
             problems.push(format!(
                 "finding {n}: a `missing` finding has no handle (the model has nothing there; say what the print shows in `expected`)"
             ));
         }
-        if verdict == "extra" && handle.is_none() && problems.len() == before {
+        if verdict == "extra" && handles.is_empty() && problems.len() == before {
             problems.push(format!("finding {n}: an `extra` finding names the model element (`handle`)"));
         }
         let issue = cut(&text_of(o.get("issue")), TEXT_MAX);
@@ -1118,7 +1400,11 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             }
         };
         let mut evidence: Vec<Evidence> = Vec::new();
+        // G-COVERAGE: an answer that cites no print page is kept, as `unsure` (Q6183).
+        let cites_or_unsure = rule == super::validate_coverage::RULE;
         match o.get("evidence") {
+            None | Some(Value::Null) if cites_or_unsure => {}
+            Some(Value::Array(ev)) if ev.is_empty() && cites_or_unsure => {}
             Some(Value::Array(ev)) if !ev.is_empty() => {
                 for (j, e) in ev.iter().take(MAX_EVIDENCE).enumerate() {
                     let given = e.get("image").and_then(Value::as_str).unwrap_or_default();
@@ -1133,7 +1419,7 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
                         )),
                     }
                 }
-                if is_problem(&verdict) && !evidence.is_empty() && !evidence.iter().any(|e| e.image.starts_with("prints/")) {
+                if is_problem(&verdict) && !cites_or_unsure && !evidence.is_empty() && !evidence.iter().any(|e| e.image.starts_with("prints/")) {
                     problems.push(format!("finding {n}: a {verdict} finding cites at least one print picture (prints/…): what the documents show"));
                 }
             }
@@ -1142,29 +1428,36 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         if problems.len() > before {
             continue;
         }
+        if cites_or_unsure && verdict != "unsure" && !evidence.iter().any(|e| e.image.starts_with("prints/") && !e.sheet.trim().is_empty()) {
+            uncited.push(format!("finding {n} ({rule}, {verdict}) cites no print page (a prints/ picture with its sheet): kept as unsure"));
+            verdict = "unsure".into();
+        }
         let trade = all
             .iter()
             .find(|e| e.rule.id == rule)
             .map(|e| e.rule.trade.clone())
             .filter(|t| t != "general")
-            .or_else(|| handle.as_ref().and_then(|h| trades.get(&h.to_ascii_uppercase()).cloned()))
+            .or_else(|| handles.first().and_then(|h| trades.get(&h.to_ascii_uppercase()).cloned()))
             .unwrap_or_else(|| "general".into());
-        let id = format!("F{}", hash8(&format!("{rule}|{handle:?}|{verdict}|{issue}")));
-        if findings.iter().any(|x| x.id == id) {
-            continue;
-        }
-        findings.push(Finding {
-            id,
-            rule,
-            trade,
-            handle,
-            verdict,
-            issue,
-            expected: cut(&text_of(o.get("expected")), TEXT_MAX),
-            found: cut(&text_of(o.get("found")), TEXT_MAX),
-            evidence,
-            confidence: r3(confidence.unwrap_or(0.0)),
-            severity,
+        let named = !handles.is_empty();
+        let mut hs = handles.into_iter();
+        read.push(Read {
+            n,
+            named,
+            finding: Finding {
+                id: String::new(),
+                rule,
+                trade,
+                handle: hs.next(),
+                also: hs.collect(),
+                verdict,
+                issue,
+                expected: cut(&text_of(o.get("expected")), TEXT_MAX),
+                found: cut(&text_of(o.get("found")), TEXT_MAX),
+                evidence,
+                confidence: r3(confidence.unwrap_or(0.0)),
+                severity,
+            },
         });
     }
     if !problems.is_empty() {
@@ -1175,34 +1468,209 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Err(bad(CMD, msg));
     }
+    let merge = merge_findings(earlier, read);
+    let (kept, added) = (merge.kept, merge.added);
+    // No cap below the area's elements × rules: room for one finding per element and rule
+    // (counted per handle), and for what is missing.
+    let own = packet.as_ref().map_or(0, |po| po.own.len());
+    let cap = own.saturating_add(MISSING_SLACK).saturating_mul(area.rules.len().max(1)).max(MAX_PART);
+    let total: usize = kept.iter().map(Finding::weight).sum();
+    if total > cap {
+        return Err(bad(
+            CMD,
+            format!(
+                "report refused, nothing kept: the area would hold {total} findings (counted per handle), over its {cap} ({own} objects and room for {MISSING_SLACK} missing, by {} rules)",
+                area.rules.len()
+            ),
+        ));
+    }
+    let expected = packet.as_ref().map(|po| po.expected(&area.rules, &all)).unwrap_or_default();
+    let pairs = area_coverage(&kept, &expected, packet.as_ref(), &all);
     let mut by_verdict: BTreeMap<&str, usize> = BTreeMap::new();
-    for f in &findings {
+    for f in &added {
         if let Some(v) = VERDICTS.iter().find(|v| **v == f.verdict) {
-            *by_verdict.entry(v).or_default() += 1;
+            *by_verdict.entry(v).or_default() += f.weight();
         }
     }
-    let items = findings.iter().filter(|f| f.verdict != "pass").count();
-    let stored = findings.len();
+    let items = added.iter().filter(|f| f.verdict != "pass").count();
+    let stored: usize = added.iter().map(Finding::weight).sum();
+    let parts = if in_parts { area.parts.saturating_add(1) } else { 1 };
     let mut left = 0;
     if let Some(r) = run_index(&st, &run.id).and_then(|k| st.runs.get_mut(k)) {
         if let Some(a) = r.areas.get_mut(i) {
-            a.findings = findings;
-            a.status = "done".into();
+            a.findings = kept;
+            a.status = if last { "done".into() } else { "issued".into() };
             a.unchanged = false;
+            a.parts = parts;
+            a.pairs = pairs.clone();
         }
         left = remaining(r);
     }
     save(s, &st)?;
-    s.event("validate.reported", json!({"run": run.id, "area": area.id, "findings": stored, "review_items": items, "remaining": left}));
-    Ok(json!({
+    let (asked, judged) = pairs.values().fold((0usize, 0usize), |(a, j), x| (a + x[0], j + x[1]));
+    s.event(
+        "validate.reported",
+        json!({"run": run.id, "area": area.id, "findings": stored, "review_items": items, "remaining": left, "part": parts, "final": last}),
+    );
+    let mut out = json!({
         "run": run.id,
         "area": area.id,
         "stored": stored,
         "by_verdict": by_verdict,
         "review_items": items,
+        "area_findings": total,
+        "part": parts,
+        "final": last,
+        "pairs": {"asked": asked, "judged": judged, "coverage": ratio(judged, asked)},
         "remaining": left,
-        "next": if left > 0 { CMD_NEXT } else { CMD_STATUS },
-    }))
+        "next": if !last { CMD_REPORT } else if left > 0 { CMD_NEXT } else { CMD_STATUS },
+    });
+    if !last {
+        out["note"] = json!(format!(
+            "part {parts} kept; the area is done on the last part: validate.report {{run: \"{}\", area: \"{}\", part: {}, final: true, findings}}",
+            run.id,
+            area.id,
+            parts + 1
+        ));
+    }
+    if merge.merged > 0 || merge.conflicts > 0 {
+        let mut warnings = merge.warnings;
+        out["merged"] = json!(merge.merged);
+        out["conflicts"] = json!(merge.conflicts);
+        let more = warnings.len().saturating_sub(WARNINGS_SHOWN);
+        warnings.truncate(WARNINGS_SHOWN);
+        if more > 0 {
+            warnings.push(format!("and {more} more"));
+        }
+        out["warnings"] = json!(warnings);
+    }
+    if !uncited.is_empty() {
+        let mut w: Vec<Value> = out["warnings"].as_array().cloned().unwrap_or_default();
+        let more = uncited.len().saturating_sub(WARNINGS_SHOWN);
+        w.extend(uncited.into_iter().take(WARNINGS_SHOWN).map(Value::from));
+        if more > 0 {
+            w.push(json!(format!("and {more} more kept as unsure")));
+        }
+        out["warnings"] = json!(w);
+    }
+    Ok(out)
+}
+
+/// `n / of`, to three places; none when `of` is 0.
+fn ratio(n: usize, of: usize) -> Value {
+    if of == 0 { Value::Null } else { json!(r3(n as f64 / of as f64)) }
+}
+
+/// What merging a report into an area's findings gives.
+struct Merged {
+    /// The area's findings after it.
+    kept: Vec<Finding>,
+    /// The report's own, as kept.
+    added: Vec<Finding>,
+    /// Handles (or findings of what is missing) merged into an earlier finding.
+    merged: usize,
+    /// Element × rule pairs given two verdicts.
+    conflicts: usize,
+    warnings: Vec<String>,
+}
+
+/// Merge a report's findings into the area's earlier ones (an earlier part's). A duplicate (the
+/// same rule, element and verdict; for what is missing, the same rule, verdict and issue) is
+/// merged into the first and said, never dropped unsaid; ids are stable and distinct.
+fn merge_findings(earlier: &[Finding], read: Vec<Read>) -> Merged {
+    let key_of = |f: &Finding, h: Option<&str>| match h {
+        Some(h) => (f.rule.clone(), h.to_ascii_uppercase(), f.verdict.clone()),
+        None => (f.rule.clone(), String::new(), format!("{}|{}", f.verdict, f.issue.to_lowercase())),
+    };
+    let mut kept: Vec<Finding> = earlier.to_vec();
+    // Where each key was first reported: 0 for an earlier part, else the finding's number.
+    let mut seen: BTreeMap<(String, String, String), usize> = BTreeMap::new();
+    let mut verdicts: BTreeMap<(String, String), String> = BTreeMap::new();
+    for f in &kept {
+        if f.handle.is_none() && f.also.is_empty() {
+            seen.insert(key_of(f, None), 0);
+        }
+        for h in f.handles() {
+            seen.insert(key_of(f, Some(h)), 0);
+            verdicts.entry((f.rule.clone(), h.to_ascii_uppercase())).or_insert_with(|| f.verdict.clone());
+        }
+    }
+    let mut ids: BTreeSet<String> = kept.iter().map(|f| f.id.clone()).collect();
+    let mut out = Merged { kept: Vec::new(), added: Vec::new(), merged: 0, conflicts: 0, warnings: Vec::new() };
+    let said = |at: usize| if at == 0 { "in an earlier part".to_string() } else { format!("finding {at}") };
+    for Read { n, mut finding, named } in read {
+        if named {
+            let mut left: Vec<String> = Vec::new();
+            for h in finding.handles().map(str::to_string).collect::<Vec<_>>() {
+                let key = key_of(&finding, Some(&h));
+                if let Some(at) = seen.get(&key) {
+                    out.merged += 1;
+                    out.warnings.push(format!(
+                        "finding {n}: {h} under {} ({}) is {} already: merged into it",
+                        finding.rule,
+                        finding.verdict,
+                        said(*at)
+                    ));
+                    continue;
+                }
+                seen.insert(key, n);
+                let pair = (finding.rule.clone(), h.to_ascii_uppercase());
+                match verdicts.get(&pair) {
+                    Some(v) if *v != finding.verdict => {
+                        out.conflicts += 1;
+                        out.warnings.push(format!(
+                            "finding {n}: {h} under {} is {} here and {v} in another finding: both kept, the pair counts as the worse",
+                            finding.rule, finding.verdict
+                        ));
+                    }
+                    Some(_) => {}
+                    None => {
+                        verdicts.insert(pair, finding.verdict.clone());
+                    }
+                }
+                left.push(h);
+            }
+            if left.is_empty() {
+                continue;
+            }
+            let mut hs = left.into_iter();
+            finding.handle = hs.next();
+            finding.also = hs.collect();
+        } else {
+            let key = key_of(&finding, None);
+            if let Some(at) = seen.get(&key) {
+                out.merged += 1;
+                out.warnings.push(format!(
+                    "finding {n}: the same {} {} with the same issue is {} already: merged into it",
+                    finding.rule,
+                    finding.verdict,
+                    said(*at)
+                ));
+                continue;
+            }
+            seen.insert(key, n);
+        }
+        // Its id: the same finding keeps its id (a person's answer to its review item stays
+        // with it); two findings never share one.
+        let base = if finding.also.is_empty() {
+            format!("F{}", hash8(&format!("{}|{:?}|{}|{}", finding.rule, finding.handle, finding.verdict, finding.issue)))
+        } else {
+            let hs: Vec<&str> = finding.handles().collect();
+            format!("F{}", hash8(&format!("{}|{hs:?}|{}|{}", finding.rule, finding.verdict, finding.issue)))
+        };
+        let mut id = base.clone();
+        let mut k = 2usize;
+        while ids.contains(&id) {
+            id = format!("{base}-{k}");
+            k += 1;
+        }
+        ids.insert(id.clone());
+        finding.id = id;
+        out.added.push(finding);
+    }
+    kept.extend(out.added.iter().cloned());
+    out.kept = kept;
+    out
 }
 
 // ---------------------------------------------------------------- review items
@@ -1246,9 +1714,16 @@ pub(crate) fn judge_items(d: &Drawing) -> Vec<JudgeItem> {
                 out.push(JudgeItem {
                     id: judge_item_id(&run.id, &a.id, &f.id),
                     level: a.level.clone(),
-                    title: cut(&format!("{} {} ({}): {}", f.rule, f.verdict, a.label, f.issue), 120),
+                    title: cut(
+                        &match f.also.len() {
+                            0 => format!("{} {} ({}): {}", f.rule, f.verdict, a.label, f.issue),
+                            n => format!("{} {} ({}, {} elements): {}", f.rule, f.verdict, a.label, n + 1, f.issue),
+                        },
+                        120,
+                    ),
                     detail: json!({
                         "run": run.id, "area": a.id, "rule": f.rule, "trade": f.trade, "verdict": f.verdict, "handle": f.handle,
+                        "handles": f.handles().collect::<Vec<_>>(),
                         "issue": f.issue, "expected": f.expected, "found": f.found, "confidence": f.confidence, "severity": f.severity,
                         "evidence": evidence, "packet": dir.to_string_lossy(),
                         "zoom": {"level": a.level, "handle": f.handle, "box_ft": a.bbox},
@@ -1290,22 +1765,120 @@ struct Tally {
 }
 
 impl Tally {
-    fn add(&mut self, verdict: &str) {
-        match verdict {
-            "pass" => self.pass += 1,
-            "fail" => self.fail += 1,
-            "missing" => self.missing += 1,
-            "extra" => self.extra += 1,
-            _ => self.unsure += 1,
-        }
+    fn add(&mut self, verdict: &str, n: usize) {
+        let into = match verdict {
+            "pass" => &mut self.pass,
+            "fail" => &mut self.fail,
+            "missing" => &mut self.missing,
+            "extra" => &mut self.extra,
+            _ => &mut self.unsure,
+        };
+        *into = into.saturating_add(n);
+    }
+    fn total(&self) -> usize {
+        self.judged() + self.unsure
+    }
+    /// Judged: everything but `unsure`.
+    fn judged(&self) -> usize {
+        self.pass + self.fail + self.missing + self.extra
     }
     fn score(&self) -> Value {
-        let judged = self.pass + self.fail + self.missing + self.extra;
-        if judged == 0 { Value::Null } else { json!(r3(self.pass as f64 / judged as f64)) }
+        ratio(self.pass, self.judged())
     }
-    fn to_json(&self) -> Value {
-        json!({"pass": self.pass, "fail": self.fail, "missing": self.missing, "extra": self.extra, "unsure": self.unsure, "accuracy": self.score()})
+    /// The counts, and the accuracy of the same pairs.
+    fn to_json(&self, accuracy: Value) -> Value {
+        json!({"pass": self.pass, "fail": self.fail, "missing": self.missing, "extra": self.extra, "unsure": self.unsure, "accuracy": accuracy})
     }
+}
+
+/// The scores of a set of judged areas: the findings counted per handle, and the accuracy over
+/// the element × rule pairs they judged (a pair judged twice counts once, by its worse verdict;
+/// an `unsure` pair is not judged), with the coverage of the pairs the packets asked for.
+#[derive(Default)]
+struct Scores {
+    findings: Tally,
+    findings_by_trade: BTreeMap<String, Tally>,
+    findings_by_rule: BTreeMap<String, Tally>,
+    pairs: Tally,
+    pairs_by_trade: BTreeMap<String, Tally>,
+    pairs_by_rule: BTreeMap<String, Tally>,
+    /// Per rule: the pairs the packets asked for, and how many were judged.
+    asked: BTreeMap<String, [usize; 2]>,
+    areas: usize,
+}
+
+impl Scores {
+    fn add(&mut self, a: &RunArea) {
+        self.areas += 1;
+        for f in &a.findings {
+            let w = f.weight();
+            self.findings.add(&f.verdict, w);
+            self.findings_by_trade.entry(f.trade.clone()).or_default().add(&f.verdict, w);
+            self.findings_by_rule.entry(f.rule.clone()).or_default().add(&f.verdict, w);
+        }
+        for ((rule, _), (trade, verdict)) in area_pairs(&a.findings) {
+            self.pairs.add(&verdict, 1);
+            self.pairs_by_trade.entry(trade).or_default().add(&verdict, 1);
+            self.pairs_by_rule.entry(rule).or_default().add(&verdict, 1);
+        }
+        for (r, x) in &a.pairs {
+            let e = self.asked.entry(r.clone()).or_default();
+            e[0] = e[0].saturating_add(x[0]);
+            e[1] = e[1].saturating_add(x[1]);
+        }
+    }
+
+    fn of<'a>(areas: impl IntoIterator<Item = &'a RunArea>) -> Scores {
+        let mut s = Scores::default();
+        for a in areas {
+            s.add(a);
+        }
+        s
+    }
+
+    fn asked_judged(&self) -> (usize, usize) {
+        self.asked.values().fold((0, 0), |(a, j), x| (a + x[0], j + x[1]))
+    }
+
+    fn findings_json(&self) -> Value {
+        let by = |f: &BTreeMap<String, Tally>, p: &BTreeMap<String, Tally>| -> serde_json::Map<String, Value> {
+            f.iter().map(|(k, t)| (k.clone(), t.to_json(p.get(k).map(Tally::score).unwrap_or(Value::Null)))).collect()
+        };
+        json!({
+            "total": self.findings.total(),
+            "by_verdict": self.findings.to_json(self.pairs.score()),
+            "by_trade": by(&self.findings_by_trade, &self.pairs_by_trade),
+            "by_rule": by(&self.findings_by_rule, &self.pairs_by_rule),
+        })
+    }
+
+    fn accuracy_json(&self) -> Value {
+        let (asked, judged) = self.asked_judged();
+        json!({
+            "overall": self.pairs.score(),
+            "judged_pairs": self.pairs.judged(),
+            "unsure_pairs": self.pairs.unsure,
+            "pairs_asked": asked,
+            "coverage": ratio(judged, asked),
+            "by_trade": self.pairs_by_trade.iter().map(|(k, t)| (k.clone(), t.score())).collect::<serde_json::Map<_, _>>(),
+            "by_rule": self.pairs_by_rule.iter().map(|(k, t)| (k.clone(), t.score())).collect::<serde_json::Map<_, _>>(),
+            "coverage_by_rule": self.asked.iter().map(|(k, x)| (k.clone(), ratio(x[1], x[0]))).collect::<serde_json::Map<_, _>>(),
+        })
+    }
+}
+
+/// Every area of the drawing's runs judged (done, or with parts in) once: an area judged in
+/// more than one run counts from the latest of them.
+fn latest_areas(st: &Store) -> Vec<&RunArea> {
+    let mut runs: Vec<&Run> = st.runs.iter().collect();
+    runs.sort_by_key(|r| r.started);
+    let mut by_id: BTreeMap<&str, &RunArea> = BTreeMap::new();
+    for r in runs {
+        for a in r.areas.iter().filter(|a| a.status == "done" || !a.findings.is_empty()) {
+            by_id.insert(a.id.as_str(), a);
+        }
+    }
+    by_id.into_values().collect()
 }
 
 fn planted_report(plant: &Plant, run: &Run, all: &[Effective], reveal: bool) -> Value {
@@ -1333,7 +1906,7 @@ fn planted_report(plant: &Plant, run: &Run, all: &[Effective], reveal: bool) -> 
                                 .find(|r| r.rule.id == f.rule)
                                 .is_some_and(|r| r.rule.trade == "general" || r.rule.applies_to_kind(&e.element))
                     } else {
-                        f.handle.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(&e.handle))
+                        f.handles().any(|h| h.eq_ignore_ascii_case(&e.handle))
                     }
             })
             .map(|(a, f)| json!({"area": a.id, "rule": f.rule, "verdict": f.verdict}))
@@ -1386,15 +1959,10 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     let run = run_param(CMD, &st, p)?;
     let (all, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let answers = super::agentready::decisions(d);
-    let mut overall = Tally::default();
-    let mut by_trade: BTreeMap<String, Tally> = BTreeMap::new();
-    let mut by_rule: BTreeMap<String, Tally> = BTreeMap::new();
+    let scores = Scores::of(&run.areas);
     let (mut accepted, mut rejected, mut open, mut deferred) = (0usize, 0usize, 0usize, 0usize);
     for a in &run.areas {
         for f in &a.findings {
-            overall.add(&f.verdict);
-            by_trade.entry(f.trade.clone()).or_default().add(&f.verdict);
-            by_rule.entry(f.rule.clone()).or_default().add(&f.verdict);
             if f.verdict == "pass" {
                 continue;
             }
@@ -1420,17 +1988,8 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
         "by": run.by,
         "out_dir": run.out_dir,
         "areas": area_counts(run),
-        "findings": {
-            "total": overall.pass + overall.fail + overall.missing + overall.extra + overall.unsure,
-            "by_verdict": overall.to_json(),
-            "by_trade": by_trade.iter().map(|(k, t)| (k.clone(), t.to_json())).collect::<serde_json::Map<_, _>>(),
-            "by_rule": by_rule.iter().map(|(k, t)| (k.clone(), t.to_json())).collect::<serde_json::Map<_, _>>(),
-        },
-        "accuracy": {
-            "overall": overall.score(),
-            "by_trade": by_trade.iter().map(|(k, t)| (k.clone(), t.score())).collect::<serde_json::Map<_, _>>(),
-            "by_rule": by_rule.iter().map(|(k, t)| (k.clone(), t.score())).collect::<serde_json::Map<_, _>>(),
-        },
+        "findings": scores.findings_json(),
+        "accuracy": scores.accuracy_json(),
         "review": {
             "accepted": accepted,
             "rejected": rejected,
@@ -1453,9 +2012,35 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
         out["accuracy"]["products"] = json!({"by_kind": scores("by_kind"), "by_field": scores("by_field")});
         out["products"] = json!({"by_kind": pk.get("by_kind"), "by_field": pk.get("by_field")});
     }
+    // Every run of the drawing: each one's scores, and the totals over all of them.
+    let mut runs: Vec<&Run> = st.runs.iter().collect();
+    runs.sort_by_key(|r| std::cmp::Reverse(r.started));
+    out["per_run"] = json!(
+        runs.iter()
+            .map(|r| {
+                let sc = Scores::of(&r.areas);
+                let (asked, judged) = sc.asked_judged();
+                json!({
+                    "run": r.id, "scope": r.scope, "by": r.by, "areas": area_counts(r), "findings": sc.findings.total(),
+                    "accuracy": sc.pairs.score(), "judged_pairs": sc.pairs.judged(), "pairs_asked": asked, "coverage": ratio(judged, asked),
+                })
+            })
+            .collect::<Vec<_>>()
+    );
+    let every = Scores::of(latest_areas(&st));
+    out["totals"] = json!({
+        "runs": st.runs.len(),
+        "areas_judged": every.areas,
+        "findings": every.findings_json(),
+        "accuracy": every.accuracy_json(),
+        "note": "every run of the drawing; an area judged in more than one run counts once, from the latest",
+    });
     if let Some(plant) = plant_of(d) {
         out["planted"] = planted_report(&plant, run, &all, reveal);
     }
+    // The sheets by their crops' registration against the model's walls.
+    let (thr, rule) = super::validate_register::threshold(&d.project_rules);
+    out["registration"] = registration_by_sheet(run, thr, rule.as_deref());
     if run.cancelled {
         out["cancelled"] = json!(true);
         if left > 0 {
@@ -1472,9 +2057,25 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
         if out.get("products").is_some() {
             out["products"] = json!("over the answer's size: see accuracy.products");
         }
+        out["totals"]["findings"]["by_rule"] = json!("over the answer's size: see totals.accuracy.by_rule");
         if let Some(pl) = out.get_mut("planted").and_then(Value::as_object_mut) {
             pl.insert("errors".into(), json!("too many to list here"));
         }
+        let more = out["registration"]["more"].as_u64().unwrap_or(0) as usize;
+        if let Some(list) = out["registration"].get_mut("sheets").and_then(Value::as_array_mut)
+            && list.len() > 10
+        {
+            let more = list.len() - 10 + more;
+            list.truncate(10);
+            out["registration"]["more"] = json!(more);
+        }
+    }
+    if out.to_string().len() > super::agentready::ANSWER_MAX
+        && let Some(list) = out.get_mut("per_run").and_then(Value::as_array_mut)
+    {
+        let n = list.len();
+        list.truncate(3);
+        list.push(json!(format!("and {} older runs: validate.status {{run}} gives each", n.saturating_sub(3))));
     }
     Ok(out)
 }
