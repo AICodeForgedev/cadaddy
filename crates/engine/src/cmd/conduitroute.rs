@@ -1818,15 +1818,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         if n_obs >= MAX_OBSTACLES {
             break;
         }
-        let keep = match el.trade {
-            // The trades' pieces (studs, sheets, pours, batts) are their hosts' layout, not more
-            // obstacles; the framing over a level comes from its layout below.
-            _ if el.category.starts_with("piece:") => false,
-            "architecture" => false,
-            "electrical" => matches!(el.category.as_str(), "equipment") || (el.category == "conduit" && el.run.is_empty()),
-            _ => !matches!(el.category.as_str(), "room" | "device" | "space" | "zone"),
-        };
-        if !(keep && el.lo.is_finite() && el.hi.is_finite()) {
+        if !(is_obstacle(&el) && el.lo.is_finite() && el.hi.is_finite()) {
             continue;
         }
         n_obs += 1;
@@ -3757,6 +3749,23 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
     }))
+}
+
+/// Whether a model element is in the way of a branch route.
+fn is_obstacle(el: &super::bimwork::El) -> bool {
+    match el.trade {
+        // The trades' pieces (studs, sheets, pours, batts) are their hosts' layout, not more
+        // obstacles; the framing over a level comes from its layout below.
+        _ if el.category.starts_with("piece:") => false,
+        "architecture" => false,
+        // Drawn conduit and the feeders' raceway (pieces of runs this routing doesn't move).
+        "electrical" => {
+            matches!(el.category.as_str(), "equipment")
+                || (el.category == "conduit"
+                    && (el.run.is_empty() || el.system == super::gearbuild::FEEDER_SYSTEM || el.system == super::ugplan::E_UG))
+        }
+        _ => !matches!(el.category.as_str(), "room" | "device" | "space" | "zone"),
+    }
 }
 
 /// The whole-run objects (not pieces) of the spec's feeder runs: on the feeder system, or a run's

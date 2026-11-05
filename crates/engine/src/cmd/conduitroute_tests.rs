@@ -497,3 +497,22 @@ fn the_lengths_are_reported_by_unit_type_common_area_and_level() {
     assert_eq!(r["total"]["circuits"], json!(4.0));
     assert_eq!(r["total"]["conductor_ft"], json!(810.0));
 }
+
+#[test]
+fn a_feeders_raceway_stays_in_the_way_of_the_branch_routes_once_cut_into_pieces() {
+    let el = |category: &str, system: &str, run: &str| super::bimwork::El {
+        handle: Handle(0x10),
+        trade: "electrical",
+        category: category.into(),
+        system: system.into(),
+        level: "L1".into(),
+        lo: Vec3::new(0.0, 0.0, 0.0),
+        hi: Vec3::new(1.0, 1.0, 1.0),
+        run: run.into(),
+        in_wall: false,
+    };
+    assert!(is_obstacle(&el("conduit", "E-COND", "")), "drawn conduit");
+    assert!(is_obstacle(&el("conduit", super::gearbuild::FEEDER_SYSTEM, "@1.00,2.00#0")), "a feeder's sticks");
+    assert!(!is_obstacle(&el("conduit", BRANCH_SYSTEM, "@1.00,2.00#0")), "the branch pieces this routing cuts again");
+    assert!(!is_obstacle(&el("device", "", "")));
+}
