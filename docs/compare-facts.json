@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1240,
-    "count": 1240,
+    "callableAsJson": 1242,
+    "count": 1242,
     "ids": [
       "-attedit",
       "-block",
@@ -1149,6 +1149,7 @@
       "validate",
       "validate.areas",
       "validate.cancel",
+      "validate.measure",
       "validate.next",
       "validate.packet",
       "validate.plant",
@@ -1157,6 +1158,7 @@
       "validate.rules",
       "validate.rules.set",
       "validate.status",
+      "validate.trend",
       "ve.decide",
       "ve.scenario",
       "ve.study",

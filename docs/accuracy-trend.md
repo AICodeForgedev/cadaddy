@@ -39,7 +39,7 @@ A metric that is worse beyond its tolerance is a **REGRESSION** finding. The fin
 - with the merger's batch log (`--merge-log`), the batches that merged between the two builds and
   their branches, as the suspects.
 
-A metric the earlier row had and the newest row lacks also regresses ("not measured now").
+A metric the earlier row had and the newest row lacks also regresses ("not measured now"), unless its rule is `optional`: the job's time and peak memory, which the caller gives.
 `cadaddy-cli accuracy` exits with status **2** when anything regressed.
 
 The table of the last N rows (`--last`, default 10) is printed and written as Markdown (`--table`).

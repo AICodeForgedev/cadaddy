@@ -88,7 +88,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .files(),
         CommandSpec::new(CMD_TREND, "Accuracy Trend", run_trend)
             .params(
-                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `<time> <batch> merged <branch>(…) … -> next <commit>`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, compared?: {from, to}, regressions, findings: [{metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them.",
+                "{path: .jsonl trend file (one row per line; made when missing, only ever appended to), row?: a validate.measure row (appended first), row_file?: .json file holding one, last?: n (rows in the table, 10, at most 200), merge_log?: the merger's batch log (lines `TIME BATCH merged BRANCH(notes) BRANCH -> next COMMIT`), commits?: [text] (the commits between the previous row and the newest, as `git log --oneline` gives them), table?: .md file, svg?: .svg file (a plot of the percentages), force?: bool (replace an existing table or plot)} → {rows, appended, skipped_lines, compared?: {from, to}, regressions, findings: [{metric, previous, current, change, allowed, better, why, issue, from, to, commits, suspects: [{batch, next, branches}]}], table, table_path?, svg_path?}: the newest row against the one before it by the rules data (each metric's better direction and tolerance); a metric worse beyond its tolerance is a REGRESSION naming both values, both commits and the batches merged between them.",
             )
             .noundo()
             .files(),
@@ -108,6 +108,9 @@ pub struct MetricRule {
     pub share: f64,
     #[serde(default)]
     pub why: String,
+    /// A number the caller gives (the job's time and memory): a row without it isn't a step back.
+    #[serde(default)]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -129,7 +132,9 @@ pub struct Rules {
 /// The built-in tolerances (`validate_trend.json`).
 pub fn rules() -> Result<&'static Rules> {
     static R: OnceLock<std::result::Result<Rules, String>> = OnceLock::new();
-    R.get_or_init(|| serde_json::from_str(RULES_JSON).map_err(|e| e.to_string())).as_ref().map_err(|e| bad(CMD_TREND, format!("validate_trend.json: {e}")))
+    R.get_or_init(|| serde_json::from_str(RULES_JSON).map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(|e| bad(CMD_TREND, format!("validate_trend.json: {e}")))
 }
 
 /// `*` in `pattern` stands for any run of characters.
@@ -189,7 +194,8 @@ fn r3(v: f64) -> f64 {
 
 fn put(m: &mut BTreeMap<String, f64>, k: impl Into<String>, v: f64) {
     if v.is_finite() && m.len() < MAX_METRICS {
-        m.insert(k.into(), r3(v));
+        // `+ 0.0`: no negative zero (an empty sum) in a row.
+        m.insert(k.into(), r3(v) + 0.0);
     }
 }
 
@@ -240,7 +246,9 @@ fn checked_of(r: &Value) -> BTreeMap<String, BTreeMap<String, f64>> {
         .map(|o| {
             o.iter()
                 .take(500)
-                .map(|(rule, vs)| (rule.clone(), vs.as_object().map(|v| v.iter().take(50).map(|(k, n)| (k.clone(), num(n))).collect()).unwrap_or_default()))
+                .map(|(rule, vs)| {
+                    (rule.clone(), vs.as_object().map(|v| v.iter().take(50).map(|(k, n)| (k.clone(), num(n))).collect()).unwrap_or_default())
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -293,9 +301,7 @@ fn rooms_param(p: &Value) -> Result<Vec<RoomPick>> {
     let mut out: Vec<RoomPick> = Vec::new();
     for r in list {
         let pick = match r {
-            Value::String(_) | Value::Number(_) => {
-                text_param(&json!({"r": r}), "r").map(|room| RoomPick { room, level: None })
-            }
+            Value::String(_) | Value::Number(_) => text_param(&json!({"r": r}), "r").map(|room| RoomPick { room, level: None }),
             Value::Object(_) => text_param(r, "room").map(|room| RoomPick { room, level: text_param(r, "level") }),
             _ => None,
         }
@@ -650,8 +656,8 @@ pub struct Regression {
 
 /// The newest row against the one before, metric by metric, by the rules: worse beyond the
 /// tolerance (`abs`, or `share` of the earlier value, whichever is larger) is a regression; a
-/// metric the earlier row had and the newest lacks is one too ("not measured now"). Ranked by
-/// how far past the tolerance.
+/// metric the earlier row had and the newest lacks is one too ("not measured now"), unless the
+/// rule says it is `optional` (a number the caller gives). Ranked by how far past the tolerance.
 pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> {
     let mut out = Vec::new();
     let keys: BTreeSet<&String> = previous.metrics.keys().chain(current.metrics.keys()).collect();
@@ -661,7 +667,18 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
         let Some(a) = a else { continue };
         let allowed = rule.abs.max(rule.share * a.abs());
         let Some(b) = b else {
-            out.push(Regression { metric: k.clone(), previous: Some(a), current: None, allowed, better: rule.better.clone(), why: "not measured now".into(), over: 1.0 });
+            if rule.optional {
+                continue;
+            }
+            out.push(Regression {
+                metric: k.clone(),
+                previous: Some(a),
+                current: None,
+                allowed,
+                better: rule.better.clone(),
+                why: "not measured now".into(),
+                over: 1.0,
+            });
             continue;
         };
         let worse = match rule.better.as_str() {
@@ -677,7 +694,15 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
                 _ => "fell",
             };
             let over = if allowed > 0.0 { worse / allowed } else { worse.max(1.0) * 1_000.0 };
-            out.push(Regression { metric: k.clone(), previous: Some(a), current: Some(b), allowed, better: rule.better.clone(), why: why.into(), over });
+            out.push(Regression {
+                metric: k.clone(),
+                previous: Some(a),
+                current: Some(b),
+                allowed,
+                better: rule.better.clone(),
+                why: why.into(),
+                over,
+            });
         }
     }
     out.sort_by(|x, y| y.over.total_cmp(&x.over).then_with(|| x.metric.cmp(&y.metric)));
@@ -687,7 +712,7 @@ pub fn compare(rules: &Rules, previous: &Row, current: &Row) -> Vec<Regression> 
 fn fmt(v: Option<f64>) -> String {
     match v {
         None => "-".into(),
-        Some(x) if x == x.trunc() && x.abs() < 1e15 => format!("{x:.0}"),
+        Some(x) if x == x.trunc() && x.abs() < 1e15 => format!("{:.0}", x + 0.0),
         Some(x) => format!("{}", r3(x)),
     }
 }
@@ -762,7 +787,11 @@ pub fn svg(rules: &Rules, rows: &[Row]) -> String {
             }
         }
         let ly = T + 16.0 * si as f64 + 8.0;
-        out.push_str(&format!("<line x1=\"{}\" y1=\"{ly}\" x2=\"{}\" y2=\"{ly}\" stroke=\"{colour}\" stroke-width=\"2\"/>\n", W - R + 12.0, W - R + 30.0));
+        out.push_str(&format!(
+            "<line x1=\"{}\" y1=\"{ly}\" x2=\"{}\" y2=\"{ly}\" stroke=\"{colour}\" stroke-width=\"2\"/>\n",
+            W - R + 12.0,
+            W - R + 30.0
+        ));
         out.push_str(&format!("<text x=\"{}\" y=\"{}\">{}</text>\n", W - R + 34.0, ly + 4.0, xml(key)));
     }
     out.push_str("</svg>\n");
@@ -791,10 +820,16 @@ fn append_row(path: &str, row: &Value) -> Result<()> {
 
 fn run_trend(s: &mut Session, p: &Value) -> Result<Value> {
     let rules = rules()?;
-    let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(CMD_TREND, "`path` names the trend file (.jsonl)"))?.to_string();
+    let path = str_param(p, "path")
+        .map(str::trim)
+        .filter(|x| !x.is_empty())
+        .ok_or_else(|| bad(CMD_TREND, "`path` names the trend file (.jsonl)"))?
+        .to_string();
     let last = match p.get("last") {
         None | Some(Value::Null) => DEFAULT_LAST,
-        Some(v) => v.as_u64().filter(|n| *n >= 1).map(|n| (n as usize).min(MAX_LAST)).ok_or_else(|| bad(CMD_TREND, "`last` is a whole number from 1"))?,
+        Some(v) => {
+            v.as_u64().filter(|n| *n >= 1).map(|n| (n as usize).min(MAX_LAST)).ok_or_else(|| bad(CMD_TREND, "`last` is a whole number from 1"))?
+        }
     };
     let commits: Vec<String> = match p.get("commits") {
         None | Some(Value::Null) => Vec::new(),
@@ -958,10 +993,12 @@ mod tests {
     #[test]
     fn worse_beyond_the_tolerance_is_a_regression_and_within_it_is_not() {
         let r = rules().unwrap();
-        let a = row("aaaaaaa1", &[("gate_a.host_pass_pct", 94.2), ("gate_a.host_fail_far", 100.0), ("elements.total", 1000.0), ("build.job_s", 1800.0)]);
+        let a =
+            row("aaaaaaa1", &[("gate_a.host_pass_pct", 94.2), ("gate_a.host_fail_far", 100.0), ("elements.total", 1000.0), ("build.job_s", 1800.0)]);
         // 94.2 -> 92.3 (allowed 0.5) and far 100 -> 104 (allowed 5): only the first; elements
         // 1000 -> 1040 within 5%, the job 1800 -> 2000 within 25%.
-        let b = row("bbbbbbb2", &[("gate_a.host_pass_pct", 92.3), ("gate_a.host_fail_far", 104.0), ("elements.total", 1040.0), ("build.job_s", 2000.0)]);
+        let b =
+            row("bbbbbbb2", &[("gate_a.host_pass_pct", 92.3), ("gate_a.host_fail_far", 104.0), ("elements.total", 1040.0), ("build.job_s", 2000.0)]);
         let g = compare(r, &a, &b);
         assert_eq!(g.iter().map(|x| x.metric.as_str()).collect::<Vec<_>>(), ["gate_a.host_pass_pct"], "{g:?}");
         assert_eq!((g[0].previous, g[0].current, g[0].why.as_str()), (Some(94.2), Some(92.3), "fell"));
@@ -969,9 +1006,18 @@ mod tests {
         let c = row("ccccccc3", &[("gate_a.host_pass_pct", 99.0), ("gate_a.host_fail_far", 0.0), ("elements.total", 500.0)]);
         let g = compare(r, &a, &c);
         let names: Vec<&str> = g.iter().map(|x| x.metric.as_str()).collect();
-        assert!(names.contains(&"elements.total") && names.contains(&"build.job_s"), "{names:?}");
+        assert!(names.contains(&"elements.total") && !names.contains(&"build.job_s"), "{names:?}");
         assert!(!names.contains(&"gate_a.host_pass_pct") && !names.contains(&"gate_a.host_fail_far"), "{names:?}");
-        assert_eq!(g.iter().find(|x| x.metric == "build.job_s").map(|x| x.why.as_str()), Some("not measured now"));
+        assert_eq!(g.iter().find(|x| x.metric == "gate_a.host_fail_far").map(|x| x.why.as_str()), None, "{g:?}");
+        // A metric the newest row lacks: "not measured now", unless the caller gives it (the job's
+        // time).
+        let d = row("ddddddd4", &[("gate_a.host_pass_pct", 94.2), ("elements.total", 1000.0)]);
+        let g = compare(r, &a, &d);
+        assert_eq!(
+            g.iter().map(|x| (x.metric.as_str(), x.why.as_str())).collect::<Vec<_>>(),
+            [("gate_a.host_fail_far", "not measured now")],
+            "{g:?}"
+        );
     }
 
     #[test]

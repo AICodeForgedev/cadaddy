@@ -771,8 +771,9 @@ fn accuracy(args: &[String]) -> Result<bool, String> {
     }
     let model = model.ok_or("accuracy: name the built model (MODEL.cdy)")?;
     let config: Value = match value("--config") {
-        Some(f) => serde_json::from_str(&std::fs::read_to_string(&f).map_err(|e| format!("--config {f}: {e}"))?)
-            .map_err(|e| format!("--config {f}: {e}"))?,
+        Some(f) => {
+            serde_json::from_str(&std::fs::read_to_string(&f).map_err(|e| format!("--config {f}: {e}"))?).map_err(|e| format!("--config {f}: {e}"))?
+        }
         None => json!({}),
     };
     if !config.is_object() {

@@ -18,8 +18,8 @@
     {"key": "takeoff.*", "better": "stable", "abs": 1, "share": 0.1, "why": "takeoff totals by trade and system: a move beyond 10% is a change to explain"},
     {"key": "elements.total", "better": "stable", "abs": 10, "share": 0.05, "why": "model elements in all"},
     {"key": "elements.*", "better": "stable", "abs": 3, "share": 0.1, "why": "model elements by kind"},
-    {"key": "build.job_s", "better": "lower", "abs": 120, "share": 0.25, "why": "the job's wall time"},
-    {"key": "build.peak_mb", "better": "lower", "abs": 256, "share": 0.15, "why": "the job's peak memory"}
+    {"key": "build.job_s", "better": "lower", "abs": 120, "share": 0.25, "optional": true, "why": "the job's wall time"},
+    {"key": "build.peak_mb", "better": "lower", "abs": 256, "share": 0.15, "optional": true, "why": "the job's peak memory"}
   ],
   "table": [
     {"key": "elements.total", "title": "elements"},
