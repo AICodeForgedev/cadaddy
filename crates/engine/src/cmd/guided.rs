@@ -10371,7 +10371,7 @@ fn infer_missing_water(
         let needs = super::waterfill::needs(&on, &fixtures, reach_ft, upf, &fill);
         let n_needs = needs.len();
         let mains: Vec<&cadaddy_walk3d::MepRun> = on.iter().copied().filter(|r| super::waterfill::is_main(r)).collect();
-        let inf = super::waterfill::infer(&level, &mains, needs, upf, &fill);
+        let inf = super::waterfill::infer(level, &mains, needs, upf, &fill);
         let mut ft: BTreeMap<String, f64> = BTreeMap::new();
         for r in &inf.runs {
             *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
