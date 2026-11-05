@@ -13580,13 +13580,27 @@ fn doc_objects_step(
     let marks_read = found.len();
     let found = dob::dedupe(found, r.dedupe_ft * upf);
     // What the model already has: a built element there naming the same class (another step's),
-    // by its kind or its type's words, its own or the plan element's it was built from (a
-    // luminaire whose schedule row reads `EXIT SIGN`). (kind, words, level, point, type mark)
+    // by its kind or its type's words, its own or the plan element's it was built from, or its
+    // type's row in the fixture schedule (a luminaire of type `XA`, the schedule's `EXIT SIGN`).
+    // (kind, words, level, point, type mark)
+    let schedule: BTreeMap<String, String> = sp
+        .mep
+        .fixture_schedule
+        .iter()
+        .take(2_000)
+        .filter(|t| !t.tag.trim().is_empty())
+        .map(|t| (t.tag.trim().to_ascii_uppercase(), format!("{} {}", t.description, t.installation)))
+        .collect();
     let existing: Vec<(String, String, String, Vec2, String)> = {
         let d = s.doc()?;
         let text_of = |e: &cadaddy_doc::Entity, k: &str| cadaddy_doc::props::read(&e.common.xdata).get(k).map(|p| p.text()).unwrap_or_default();
         let words_of = |e: &cadaddy_doc::Entity| {
-            ["type", "fixture_description", "description", "legend"].iter().map(|k| text_of(e, k)).filter(|t| !t.trim().is_empty()).collect::<Vec<_>>().join(" ")
+            ["type", "fixture_description", "description", "legend"]
+                .iter()
+                .map(|k| text_of(e, k))
+                .filter(|t| !t.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
         };
         d.model
             .iter()
@@ -13600,6 +13614,21 @@ fn doc_objects_step(
                 if let Some(x) = source {
                     ty = format!("{ty} {}", words_of(x));
                 }
+                // Its type's schedule row.
+                let marks: Vec<String> = [Some(e), source]
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|x| {
+                        let tag = super::bimlook::made_tag(x, "tag").map(str::to_string).unwrap_or_default();
+                        [tag, text_of(x, "type_mark"), text_of(x, "type"), text_of(x, "mark")]
+                    })
+                    .map(|t| t.trim().to_ascii_uppercase())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                let scheduled = marks.iter().find(|m| schedule.contains_key(m.as_str())).cloned();
+                if let Some(row) = scheduled.as_ref().and_then(|m| schedule.get(m)) {
+                    ty = format!("{ty} {row}");
+                }
                 if !r.classes.iter().any(|c| dob::is_class(c, &kind, &ty)) {
                     return None;
                 }
@@ -13608,12 +13637,14 @@ fn doc_objects_step(
                 if b.is_empty() {
                     return None;
                 }
-                let mark = ["type_mark", "type"]
-                    .iter()
-                    .flat_map(|k| std::iter::once(text_of(e, k)).chain(source.map(|x| text_of(x, k))))
-                    .map(|t| t.trim().to_string())
-                    .find(|t| !t.is_empty() && t.len() <= r.legend_code_chars.max(1) + 2 && !t.contains(' '))
-                    .unwrap_or_default();
+                let mark = scheduled.unwrap_or_else(|| {
+                    ["type_mark", "type"]
+                        .iter()
+                        .flat_map(|k| std::iter::once(text_of(e, k)).chain(source.map(|x| text_of(x, k))))
+                        .map(|t| t.trim().to_string())
+                        .find(|t| !t.is_empty() && t.len() <= r.legend_code_chars.max(1) + 2 && !t.contains(' '))
+                        .unwrap_or_default()
+                });
                 Some((kind, ty, level, b.center() - super::bspec::stacked_by(e), mark))
             })
             .take(200_000)

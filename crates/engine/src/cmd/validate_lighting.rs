@@ -87,7 +87,9 @@ fn mark_key(m: &str) -> Option<String> {
 /// numbered by its own kind's name (`EXIT_SIGN-3`) names one object, not a type.
 fn type_key(mark: Option<&str>, kind: &str) -> String {
     let instance = |m: &str| {
-        m.trim().rsplit_once('-').is_some_and(|(stem, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && stem.eq_ignore_ascii_case(kind.trim()))
+        m.trim()
+            .rsplit_once('-')
+            .is_some_and(|(stem, n)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()) && stem.eq_ignore_ascii_case(kind.trim()))
     };
     mark.filter(|m| !instance(m)).and_then(mark_key).unwrap_or_else(|| kind.to_string())
 }

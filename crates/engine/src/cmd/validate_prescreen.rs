@@ -1726,8 +1726,11 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             }
         }
         if proposed_skipped > 0 {
-            *unmeasured.entry(r.rule.id.clone()).or_default().entry("elements a build proposed (only a rule or a note calls for them, no document draws them): not counted".into()).or_default() +=
-                proposed_skipped;
+            *unmeasured
+                .entry(r.rule.id.clone())
+                .or_default()
+                .entry("elements a build proposed (only a rule or a note calls for them, no document draws them): not counted".into())
+                .or_default() += proposed_skipped;
         }
     }
     // G-KEYNOTE: what each keynote marker's note calls for, at the marker.
