@@ -394,6 +394,13 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
     assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
+    // The panel's schedule says so too: what was built, and what was printed.
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
+    let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
+    assert_eq!(c("3")["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c("3")["protection"]["codes"], json!(["AF"]));
+    assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
+    assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
 }
 
 #[test]
