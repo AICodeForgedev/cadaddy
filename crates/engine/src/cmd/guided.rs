@@ -5942,7 +5942,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
         if n > 0 || !missed.is_empty() {
-            progress_line(&format!("  rooms numbered from other trades' plans: {n}; not numbered: {missed:?}"));
+            progress_line(&format!("  rooms numbered from other trades' plans and the plans' stray numbers: {n}; not numbered: {missed:?}"));
         }
         let trade_rooms = name_rooms_from_other_trades(s, job, place)?;
         result["trade_rooms"] = trade_rooms;
@@ -7296,15 +7296,20 @@ fn number_rooms_from_other_trades(
         })
         .collect();
     let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok((0, missed)) };
-    if extras.is_empty() {
-        return Ok((0, missed));
-    }
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     // Each level's plan corner; the stack moved each level's model by the lowest's minus its own.
     let corner = |l: &cadaddy_walk3d::Level| l.region.map(|r| cadaddy_geom::Vec2::new(r[0].min(r[2]), r[1].min(r[3])));
     let lowest = sp.levels.iter().filter(|l| corner(l).is_some()).min_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft)).and_then(corner);
     let mut rooms = super::bspec::room_elements(s.doc()?);
+    // And the architectural plans' own numbers no room took: a number printed by a label the trace
+    // couldn't start from (an elevator's, under its ELEV. on the shaft's wall). Not a callout's
+    // sheet number, nor one a room of the level has.
+    let mut extras = extras;
+    extras.extend(stray_plan_numbers(s.doc()?, job, &rooms));
+    if extras.is_empty() {
+        return Ok((0, missed));
+    }
     let mut numbered = 0;
     for (number, at, level) in extras {
         let Some(m) = place(at, &level) else {
@@ -7471,6 +7476,40 @@ fn name_rooms_from_other_trades(
 /// Whether a room of the level (digits of its name) already has the number: one number per level
 /// (the other piece of a corridor walls cut in two doesn't take it again). A "Room NNN" traced
 /// from the same label doesn't count: it is the room the number goes to, again.
+/// The room numbers printed on each level's architectural plan that no room of the level has:
+/// (number, where, level), each once.
+fn stray_plan_numbers(d: &cadaddy_doc::Drawing, job: &GuidedJob, rooms: &[super::bspec::RoomElement]) -> Vec<(String, [f64; 2], String)> {
+    let sheets: BTreeSet<String> = job.sheet_regions.iter().map(|r| sheet_key(&r.number)).collect();
+    let plans: Vec<([f64; 4], String)> = job
+        .sheet_regions
+        .iter()
+        .filter(|r| r.discipline.eq_ignore_ascii_case("A") && r.kind == "plan" && r.not_built.is_empty() && !r.level.is_empty())
+        .map(|r| (r.plan_rect(), r.level.clone()))
+        .collect();
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut out = Vec::new();
+    if plans.is_empty() {
+        return out;
+    }
+    for e in d.model.iter().take(4_000_000) {
+        let cadaddy_doc::EntityKind::Text(t) = &e.kind else { continue };
+        let v = t.value.trim();
+        if !super::perceive::geometry::room_number(v) || sheets.contains(&v.to_ascii_uppercase()) {
+            continue;
+        }
+        let p = t.insert.xy();
+        let Some((_, level)) = plans.iter().find(|(r, _)| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3]) else { continue };
+        if number_taken(rooms, level, v) || !seen.insert((level.clone(), v.to_ascii_uppercase())) {
+            continue;
+        }
+        out.push((v.to_string(), [p.x, p.y], level.clone()));
+        if out.len() >= MAX_STAMPED {
+            break;
+        }
+    }
+    out
+}
+
 fn number_taken(rooms: &[super::bspec::RoomElement], level: &str, number: &str) -> bool {
     let key = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
     let number = number.trim();
@@ -9305,38 +9344,48 @@ fn book_into_units(
         .filter(|dv| !dv.room.trim().is_empty())
         .map(|dv| (dv.room.clone(), format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet))))
         .collect();
-    for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
-        // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
-        let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
-        // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
-        // not the electrical plan's wall light).
-        let mine = format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet));
-        // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
-        // panel, across the unit's entry wall): not the unit's.
-        let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
-        let fed_here = |room: &str| match (&panel, panels.get(room)) {
-            (Some(p), Some(ps)) if !ps.is_empty() => ps.contains(p),
-            _ => true,
-        };
-        let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
-        let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
-        // Two units' footprints overlap past the wall they share: the one it stands deepest in
-        // (the bath on its side of the wall).
-        if let Some((_, room, _, _)) = footprints
-            .iter()
-            .filter(|(l, room, poly, _)| {
-                here(l) && (plumbing || own.get(room).is_some_and(|t| t.contains(&mine))) && fed_here(room) && cadaddy_geom::point_in_polygon(poly, p)
-            })
-            .max_by(|a, b| {
+    // Devices in one unit's footprint first, then those where two overlap (at the wall they
+    // share): by then each unit holds its own, and a fixture there goes to the one lacking it.
+    for pass in 0..2 {
+        for dv in devices.iter_mut().filter(|dv| dv.room.trim().is_empty()) {
+            // Another system's plan of the unit gives these: its plumbing, its fire alarm devices.
+            let plumbing = dv.kind.starts_with("plumbing") || dv.kind.starts_with("fire alarm");
+            // A tag the unit's plans show, off a sheet of their trade (an `F` on a mechanical plan is
+            // not the electrical plan's wall light).
+            let mine = format!("{}@{}", dv.tag.trim().to_ascii_uppercase(), units_trade(&dv.sheet));
+            // On another panel's circuit than the unit's devices (a corridor's receptacle on a house
+            // panel, across the unit's entry wall): not the unit's.
+            let panel = super::propfill::panel_of(&dv.circuit).map(|p| p.to_ascii_uppercase());
+            let fed_here = |room: &str| match (&panel, panels.get(room)) {
+                (Some(p), Some(ps)) if !ps.is_empty() => ps.contains(p),
+                _ => true,
+            };
+            let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
+            let here = |l: &str| l == dv.level || (!digits(l).is_empty() && digits(l) == digits(&dv.level));
+            // Two units' footprints overlap past the wall they share: the one it stands deepest in
+            // (the bath on its side of the wall).
+            let fits: Vec<&Footprint> = footprints
+                .iter()
+                .filter(|(l, room, poly, _)| {
+                    here(l)
+                        && (plumbing || own.get(room).is_some_and(|t| t.contains(&mine)))
+                        && fed_here(room)
+                        && cadaddy_geom::point_in_polygon(poly, p)
+                })
+                .collect();
+            if pass == 0 && fits.len() != 1 {
+                continue;
+            }
+            if let Some((_, room, _, _)) = fits.into_iter().max_by(|a, b| {
                 // A plumbing fixture: a unit that has none of its tag yet first (two units' water
                 // closets back to back are one each).
                 let lacks = |room: &str| plumbing && !held.contains(&(room.to_string(), mine.clone()));
                 lacks(&a.1).cmp(&lacks(&b.1)).then(edge_distance(&a.2, p).total_cmp(&edge_distance(&b.2, p)))
-            })
-        {
-            held.insert((room.clone(), mine.clone()));
-            dv.room = room.clone();
-            n += 1;
+            }) {
+                held.insert((room.clone(), mine.clone()));
+                dv.room = room.clone();
+                n += 1;
+            }
         }
     }
     n
@@ -20164,6 +20213,7 @@ mod tests {
         ];
         let wc = |x: f64, y: f64, level: &str| super::super::readers::ReadDevice {
             tag: "P-1".into(),
+            kind: "plumbing fixture".into(),
             sheet: "P-2".into(),
             at: [x, y],
             level: level.into(),
@@ -20180,6 +20230,11 @@ mod tests {
             [("202".to_string(), ["P-1@P".to_string()].into()), ("204".to_string(), ["P-1@P".to_string()].into())].into();
         let none = BTreeMap::new();
         assert_eq!(book_into_units(&mut devices, &foot, &own, &none), 3);
+        // Read before the unit's own (only in its footprint): a water closet at the shared wall
+        // still goes to the unit that has none, whatever order the plans list them in.
+        let mut order = vec![wc(138.0, 60.0, "Level 2"), wc(40.0, 30.0, "Level 2")];
+        assert_eq!(book_into_units(&mut order, &foot, &own, &none), 2);
+        assert_eq!(order.iter().map(|d| d.room.as_str()).collect::<Vec<_>>(), vec!["204", "202"]);
         // A smoke detector off the fire alarm plan is the unit's; a corridor's sconce by the door,
         // no tag the unit's plans show, stays out.
         let mut fa = vec![super::super::readers::ReadDevice {
