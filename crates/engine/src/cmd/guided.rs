@@ -18415,14 +18415,55 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         }
         return Ok(status);
     }
-    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto})));
+    let units_note = prints_units(s)?;
+    if let Some(n) = &units_note {
+        s.echo(format!("job: {n}"));
+    }
+    job.audit("job_start", "pipeline", None, None, Some(json!({"pdfs": pdfs, "goal": goal_str, "auto": job.auto, "units_note": units_note})));
 
     // Run the pipeline until it pauses or finishes.
     advance_pipeline(s, &mut job)?;
     save_job(s, &job)?;
 
     let stats = model_stats_from_session(s);
-    Ok(job_status_value(&job, stats.as_ref()))
+    let mut status = job_status_value(&job, stats.as_ref());
+    if let Some(n) = units_note {
+        status["units_note"] = json!(n);
+    }
+    Ok(status)
+}
+
+/// The job's drawing in the prints' units. The sheets are read in inches and every reader's
+/// reach is in sheet inches, so a drawing in other units (a metric one: mm) built a model 25.4
+/// times too small, with no rooms (soak S5-001). An empty drawing takes the prints' units (the
+/// model, rooms and takeoff are in feet and inches either way); one with work in it is refused,
+/// so nothing is built at the wrong size.
+fn prints_units(s: &mut Session) -> Result<Option<String>> {
+    let d = s.doc()?;
+    let per_inch = super::perceive::units_per_inch(d);
+    if (per_inch - 1.0).abs() < 1e-9 {
+        return Ok(None);
+    }
+    let units = match d.header.i64("INSUNITS", 0) {
+        2 => "feet",
+        5 => "centimetres",
+        6 => "metres",
+        _ => "millimetres",
+    };
+    if !d.model.is_empty() {
+        return Err(bad(
+            "job.start",
+            format!(
+                "this drawing is in {units} and has work in it: the job reads the prints in inches and would build the model at the wrong size. Start the job in a new imperial drawing (new_drawing), or in an empty one"
+            ),
+        ));
+    }
+    let h = &mut s.doc_mut()?.header;
+    h.set_i64("INSUNITS", 1);
+    h.set_i64("MEASUREMENT", 0);
+    Ok(Some(format!(
+        "the drawing was in {units} and empty: it now uses inches, the prints' units, so the model, rooms and takeoff come out at full size"
+    )))
 }
 
 /// `job.next` — return the next question, or "done".
