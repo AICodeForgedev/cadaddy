@@ -3714,8 +3714,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             w.s(7, &page.plot_style_table);
             w.i(75, if page.scale_to_fit { 0 } else { 16 });
             w.f(147, scale);
-            w.f(148, 0.0);
-            w.f(149, 0.0);
+            // The paper image origin the file had, else 0,0.
+            let origin = page.image_origin.filter(|o| o.is_finite()).unwrap_or(Vec2::ZERO);
+            w.f(148, origin.x);
+            w.f(149, origin.y);
             w.s(100, "AcDbLayout");
             w.s(1, name);
             w.i(70, flags);
