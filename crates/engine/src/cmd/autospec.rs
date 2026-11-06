@@ -103,73 +103,6 @@ fn room_name(t: &str) -> bool {
     !room_number(t) && room_like_name(t)
 }
 
-/// Words that put a label in a title block, a stamp or the notes, never on a room: the firm and
-/// its address, the review and issue stamps, the sheet's and views' titles.
-const NOT_ROOM_WORDS: &[&str] = &[
-    // A wall type's note ("1 HOUR FIRE RATED PARTITION").
-    "PARTITION",
-    "SCALE",
-    "SHEET",
-    "DRAWN",
-    "CHECKED",
-    "DATE",
-    "REVISION",
-    "REVISIONS",
-    "ISSUE",
-    "ISSUED",
-    "PROJECT",
-    "SEAL",
-    "ARCHITECT",
-    "ARCHITECTS",
-    "ARCHITECTURE",
-    "ENGINEER",
-    "ENGINEERS",
-    "ENGINEERING",
-    "CONSULTANT",
-    "CONSULTANTS",
-    "LLC",
-    "INC",
-    "CORP",
-    "LTD",
-    "PLLC",
-    "AIA",
-    "COPYRIGHT",
-    "PLAN",
-    "PLANS",
-    "NOTES",
-    "KEYNOTES",
-    "LEGEND",
-    "CONSTRUCTION",
-    "PERMIT",
-    "REVIEW",
-    "REVIEWED",
-    "APPROVED",
-    "STREET",
-    "AVENUE",
-    "AVE",
-    "BLVD",
-    "PARKWAY",
-    "HIGHWAY",
-    "SCHEDULE",
-    "DETAIL",
-    "DETAILS",
-    "SECTION",
-    "ELEVATION",
-    "ELEVATIONS",
-    "TYP",
-    "SEE",
-    "PHONE",
-    "FAX",
-    "AFF",
-    "UNO",
-    "NTS",
-    // A dimension string's "equal" mark, a detail's "similar", a stair's arrow, a size callout.
-    "EQ",
-    "SIM",
-    "DN",
-    "SIZE",
-];
-
 /// Whether a label could name a room: not an address, a date, a phone number, a web or mail
 /// address, a "LABEL:" line or a title block's, stamp's or view title's words.
 pub(crate) fn room_label(t: &str) -> bool {
@@ -180,7 +113,7 @@ pub(crate) fn room_label(t: &str) -> bool {
     if t.chars().filter(char::is_ascii_digit).count() >= 5 {
         return false;
     }
-    !up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| NOT_ROOM_WORDS.contains(&w))
+    !up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| cadaddy_mepfix::wordrules::words("rooms.not_room_words").contains(&w))
 }
 
 /// Whether a tag text reads as a room's name: [`room_label`], two letters or more, a few words

@@ -21,6 +21,7 @@
     "fixture_lines": ["CW", "HW"],
     "stack_on": ["below", "above"],
     "stack_basis": "trade practice: floors that stack are piped alike; where a floor's rooms stand on the same rooms of the floor below (above for the lowest), its water mains run as that floor's do, fed by the same risers",
+    "room_stack_basis": "trade practice: rooms that stack (the same type at the same place on the floor below or above) are roughed in alike; a room no plan of its own floor furnishes takes the fixtures and room piping of the room it stands on, never those of another floor's room elsewhere, and never another floor's mains",
     "main_basis": "trade practice: a main is carried on along its line to the branches it serves, at its size",
     "branch_basis": "trade practice: each fixture's or room's branch is teed off the nearest main of its system at right angles (the typical connection of the enlarged details), the fixtures of one room and back-to-back rooms on one wet wall sharing one branch; a fixture branch nothing sizes is 1/2 inch (IPC Table 604.5 minimum fixture supply sizes are 3/8 to 1/2 inch)",
     "branch_size_in": 0.5,

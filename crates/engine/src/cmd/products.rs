@@ -36,8 +36,6 @@ const MAX_SEARCHED: usize = 5_000;
 /// A folder holding more entries than this is no project's folder (a downloads or temporary
 /// folder): the search beside a folder in it goes by the names beside it only.
 const MAX_BESIDE: usize = 60;
-/// The CSI divisions whose sections speak for the model's devices, fixtures and equipment.
-const PRODUCT_DIVISIONS: &[&str] = &["22", "23", "26", "27", "28"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Product Data", run)
@@ -530,9 +528,7 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
                 j += 1;
             }
             let lower = said.to_ascii_lowercase();
-            if let Some(c) =
-                ["white", "ivory", "light almond", "almond", "gray", "grey", "black", "brown", "red", "stainless"].iter().find(|c| lower.contains(*c))
-            {
+            if let Some(c) = cadaddy_mepfix::wordrules::words("devices.color_words").iter().find(|c| lower.contains(*c)) {
                 color = Some(((*c).to_string(), said.split_once(':').map_or(said.as_str(), |(_, r)| r).trim().to_string()));
             }
         }
@@ -614,7 +610,7 @@ pub(crate) fn read_spec_section(text: &str, file: &str) -> Vec<Requirement> {
 /// named like a specification (a project manual, read section by section); any PDF/text file
 /// given by name.
 pub(crate) fn spec_files(paths: &[String], only: &[String]) -> Vec<String> {
-    spec_files_by(paths, only, PRODUCT_DIVISIONS)
+    spec_files_by(paths, only, cadaddy_mepfix::wordrules::words("specs.product_divisions"))
 }
 
 /// The specification section files of `divisions` (`23`, `28`…) among paths and folders.
@@ -789,7 +785,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         // A manual: its sections of the product divisions (or those asked for), each on its own.
         for (sec, body) in parts {
             let num = sec.split(' ').take(3).collect::<Vec<_>>().join(" ");
-            let wanted = if only.is_empty() { PRODUCT_DIVISIONS.iter().any(|d| num.starts_with(d)) } else { only.iter().any(|o| num == o.trim()) };
+            let wanted = if only.is_empty() {
+                cadaddy_mepfix::wordrules::words("specs.product_divisions").iter().any(|d| num.starts_with(d))
+            } else {
+                only.iter().any(|o| num == o.trim())
+            };
             if !wanted || read.len() >= MAX_SPEC_FILES * 4 {
                 continue;
             }

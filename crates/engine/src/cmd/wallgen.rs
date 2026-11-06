@@ -743,10 +743,12 @@ pub(crate) fn circulation_label(text: &str) -> Option<cadaddy_walk3d::Circulatio
     if !(rest.is_empty() || (rest.len() == 1 && rest.iter().all(|m| mark(m)))) {
         return None;
     }
-    match head.trim_end_matches('.') {
-        "CORRIDOR" | "CORR" | "HALL" | "HALLWAY" => Some(Corridor),
-        "STAIR" | "STAIRS" | "STAIRWAY" | "STAIRWELL" => Some(Stair),
-        "ELEV" | "ELEVATOR" => Some(Hoistway),
+    let head = head.trim_end_matches('.');
+    let kind = cadaddy_mepfix::wordrules::groups("rooms.space_kind_words").iter().find(|(_, words)| words.contains(&head)).map(|(kind, _)| *kind)?;
+    match kind {
+        "corridor" => Some(Corridor),
+        "stair" => Some(Stair),
+        "hoistway" => Some(Hoistway),
         _ => None,
     }
 }

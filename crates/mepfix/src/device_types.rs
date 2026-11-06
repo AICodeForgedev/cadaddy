@@ -22,11 +22,6 @@ const ROW_GAP: f64 = 7.0;
 /// A table must list at least this many type tags to count (a lone "SEE LEGEND" note doesn't).
 const MIN_TAG_ROWS: usize = 2;
 
-/// Marks electrical sets use with or without a legend: switches, sensors, fans, boxes,
-/// thermostats, fire-alarm and security devices.
-const KNOWN_MARKS: &[&str] =
-    &["S", "S2", "S3", "S4", "SD", "SK", "SM", "OS", "VS", "PC", "EF", "J", "JB", "T", "TV", "F", "FA", "FS", "HS", "CR", "DS", "EM", "WAP", "PB"];
-
 /// The device types a sheet lists, and where its legends and schedules sit.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Legend {
@@ -82,41 +77,20 @@ pub enum TagVerdict {
 /// fixture/luminaire/device/equipment schedule. Panel, door, room and wall tables don't.
 pub fn is_device_table_heading(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
-    if u.len() > 60 || ["PANEL", "DOOR", "WINDOW", "ROOM", "FINISH", "WALL", "PARTITION", "SEE ", "REFER"].iter().any(|w| u.contains(w)) {
+    if u.len() > 60 || crate::wordrules::words("devices.not_device_heading_words").iter().any(|w| u.contains(w)) {
         return false;
     }
     if u.contains("LEGEND") {
         return true;
     }
-    u.contains("SCHEDULE") && ["FIXTURE", "LUMINAIRE", "LIGHTING", "LIGHT", "DEVICE", "EQUIPMENT", "FAN"].iter().any(|w| u.contains(w))
+    u.contains("SCHEDULE") && crate::wordrules::words("devices.device_heading_words").iter().any(|w| u.contains(w))
 }
-
-/// Words of a heading whose table, a legend or a schedule all the same, lists no device types:
-/// the site, planting, material, code and structural tables (`PLANT LEGEND`, `OCCUPANT LOAD
-/// FACTOR LEGEND`, `COLUMN FOUNDATION SCHEDULE`), whose marks a device's mark can share.
-const NOT_DEVICE_TYPES: &[&str] = &[
-    "PLANT",
-    "EROSION",
-    "MATERIAL",
-    "OCCUPAN",
-    "PAVING",
-    "GRADING",
-    "HATCH",
-    "COLUMN",
-    "FOUNDATION",
-    "FOOTING",
-    "SHEAR",
-    "ANCHOR",
-    "PEDESTAL",
-    "HOLD DOWN",
-    "LINTEL",
-];
 
 /// Whether a heading's table lists device types ([`read_legend`]): a device table
 /// ([`is_device_table_heading`]) that isn't another trade's ([`NOT_DEVICE_TYPES`]).
 pub fn lists_device_types(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
-    is_device_table_heading(&u) && !NOT_DEVICE_TYPES.iter().any(|w| u.contains(w))
+    is_device_table_heading(&u) && !crate::wordrules::words("devices.not_device_table_words").iter().any(|w| u.contains(w))
 }
 
 /// Most designations kept from one set.
@@ -223,7 +197,7 @@ pub fn read_legend(texts: &[TextItem]) -> Legend {
 
 /// Whether `tag` is a mark electrical sets use without listing it.
 pub fn is_known_mark(tag: &str) -> bool {
-    KNOWN_MARKS.contains(&tag.trim())
+    crate::wordrules::words("devices.known_marks").contains(&tag.trim())
 }
 
 /// A sheet number in the forms a tag could print it (`E-1` and `E1`).

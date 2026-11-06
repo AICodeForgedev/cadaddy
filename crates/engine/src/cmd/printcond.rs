@@ -91,10 +91,6 @@ pub(crate) fn mount_height_ft(kind: &str) -> Option<f64> {
     }
 }
 
-/// Words lettered before a dash that are no panel's name (`NOTE-1`, `TYPE-2`).
-const NOT_PANELS: &[&str] =
-    &["PANEL", "NOTE", "NOTES", "SHEET", "TYPE", "LEVEL", "ROOM", "DETAIL", "SEE", "KEY", "PLAN", "AREA", "ZONE", "UNIT", "DWG"];
-
 /// A circuit label's panel and circuit numbers: `D-7`, `LA-1,3,5`, `LP1-12`, `L1/1`. A sheet
 /// number (`E-101`: no panel has circuit 101), a dimension, or a zero-padded number (`S-01`: a
 /// room's tag, circuits are never padded) is not one.
@@ -128,7 +124,7 @@ fn parse_numbers(s: &str, most: usize) -> Option<(String, String)> {
     let ok_panel = (1..=6).contains(&panel.len())
         && panel.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
         && panel.chars().all(|c| c.is_ascii_alphanumeric())
-        && !NOT_PANELS.contains(&panel.as_str());
+        && !cadaddy_mepfix::wordrules::words("tags.not_panel_words").contains(&panel.as_str());
     let nums: Vec<&str> = ckt.split(',').map(str::trim).collect();
     let ok_ckt = !nums.is_empty()
         && nums.len() <= most
@@ -154,7 +150,7 @@ fn conductor_note(s: &str) -> Option<String> {
 /// A panel named by lettering: `PANEL LA`, `PNL 'D'`, `PANELBOARD LP1`.
 pub(crate) fn panel_lettering(s: &str) -> Option<String> {
     let u = s.trim().to_ascii_uppercase();
-    let rest = ["PANELBOARD", "PANEL", "PNLBD", "PNL"].iter().find_map(|p| u.strip_prefix(p))?;
+    let rest = cadaddy_mepfix::wordrules::words("tags.panel_prefix_words").iter().find_map(|p| u.strip_prefix(p))?;
     let name: String = rest.trim().trim_start_matches(':').trim().trim_matches(['\'', '"']).to_string();
     let ok = (1..=6).contains(&name.len())
         && name.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -723,7 +719,7 @@ pub(crate) fn store_circuits(sp: &mut BuildingSpec, circuits: &[ElementTag]) {
 }
 
 /// What marks a circuit as a stamped room's own (its id).
-const ROOM_PART: &str = ":room-";
+pub(crate) const ROOM_PART: &str = ":room-";
 
 /// The circuits of devices a typical room's plan stamped into rooms (`ReadDevice::room`): each
 /// room's own (a guest room has its own panel), per room and circuit an estimated route in the
