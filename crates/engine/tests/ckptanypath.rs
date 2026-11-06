@@ -1,6 +1,7 @@
 //! Q6156: a job's checkpoint goes on from another folder or machine when the prints are the
 //! same by content (names, sizes, contents; not the path or the change times), and other prints
-//! are refused naming the file that differs.
+//! are refused naming the file that differs. Q6264: a checkpoint's stages another build read run
+//! again, so a rebuild from it reads the prints as a whole job of this build does.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -63,17 +64,34 @@ fn copy_folder(from: &Path, to: &Path) {
     }
 }
 
-/// (checkpoint, copy): the sink copies the checkpoint aside when the rooms stage starts, as a
-/// crash there would leave it.
-static COPY_AT_ROOMS: Mutex<Option<(PathBuf, PathBuf)>> = Mutex::new(None);
+/// The tests set the one progress sink: one at a time.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+/// (progress line, checkpoint, copy): the sink copies the checkpoint aside when the stage of the
+/// line starts, as a crash there would leave it.
+static COPY_AT: Mutex<Option<(&'static str, PathBuf, PathBuf)>> = Mutex::new(None);
 
 fn sink(line: &str) {
-    if line.contains(" rooms: Detect rooms")
-        && let Ok(c) = COPY_AT_ROOMS.lock()
-        && let Some((from, to)) = c.as_ref()
+    if let Ok(c) = COPY_AT.lock()
+        && let Some((at, from, to)) = c.as_ref()
+        && line.contains(at)
+        && !to.exists()
     {
-        std::fs::copy(from, to).expect("the checkpoint exists when the rooms stage starts");
+        std::fs::copy(from, to).expect("the checkpoint exists when the stage starts");
     }
+}
+
+/// Run a job as far as it goes with the progress sink copying its checkpoint aside to `cut` when
+/// the stage of `at` starts.
+fn run_cut(pdfs: &Path, checkpoint: &Path, cut: &Path, at: &'static str) -> (Session, Value) {
+    *COPY_AT.lock().unwrap_or_else(|e| e.into_inner()) = Some((at, checkpoint.to_path_buf(), cut.to_path_buf()));
+    cadaddy_engine::cmd::guided::set_progress_sink(Some(sink));
+    let (s, r) = start(pdfs, checkpoint, json!(true));
+    cadaddy_engine::cmd::guided::set_progress_sink(None);
+    *COPY_AT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    let st = r.expect("job.start");
+    assert!(cut.exists(), "the checkpoint was copied when the stage started");
+    (s, st)
 }
 
 fn job_state(s: &Session) -> Value {
@@ -95,6 +113,7 @@ fn start(pdfs: &Path, checkpoint: &Path, resume: Value) -> (Session, cadaddy_eng
 
 #[test]
 fn a_checkpoint_resumes_from_another_folder_when_the_prints_are_the_same() {
+    let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     real_pdf_reader();
     let root = unique("move");
     let (made, moved, changed) = (root.join("made here"), root.join("elsewhere").join("prints"), root.join("changed"));
@@ -103,13 +122,8 @@ fn a_checkpoint_resumes_from_another_folder_when_the_prints_are_the_same() {
     let cut = root.join("job-cut.cdy");
 
     // The first run, its checkpoint copied aside as a crash in the rooms stage leaves it.
-    *COPY_AT_ROOMS.lock().unwrap_or_else(|e| e.into_inner()) = Some((checkpoint.clone(), cut.clone()));
-    cadaddy_engine::cmd::guided::set_progress_sink(Some(sink));
-    let (mut first, r) = start(&made, &checkpoint, json!(true));
-    cadaddy_engine::cmd::guided::set_progress_sink(None);
-    *COPY_AT_ROOMS.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    assert_eq!(r.expect("job.start")["done"], json!(true));
-    assert!(cut.exists());
+    let (mut first, st) = run_cut(&made, &checkpoint, &cut, " rooms: Detect rooms");
+    assert_eq!(st["done"], json!(true), "{st}");
     let rooms = rooms_of(&mut first);
     assert!(rooms > 0);
     let files = job_state(&first)["guided_job"]["prints_files"].as_array().map_or(0, Vec::len);
@@ -159,5 +173,142 @@ fn a_checkpoint_resumes_from_another_folder_when_the_prints_are_the_same() {
     // Anything else for resume is an error, not a guess.
     let (_, r) = start(&changed, &checkpoint, json!("maybe"));
     assert!(r.is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A made-up job folder with a plumbing plan: its sheets one PDF each.
+fn plumbing_folder(dir: &Path) {
+    let mut set = generate_hotel(7, HotelSize::Small).expect("generate hotel");
+    set.truth.sheets.retain(|s| ["G-001", "A-101", "P-101"].contains(&s.number.as_str()));
+    std::fs::create_dir_all(dir).expect("folder");
+    for sh in &set.truth.sheets {
+        std::fs::write(dir.join(&sh.pdf), set.file(&sh.pdf).expect("sheet pdf")).expect("write sheet");
+    }
+}
+
+/// The sanitary runs the job's MEP reading holds.
+fn sanitary_runs(job: &Value) -> usize {
+    job["guided_job"]["mep"]["runs"].as_array().map_or(0, |r| r.iter().filter(|r| r["system"] == "SAN").count())
+}
+
+/// Write the checkpoint at `path` with its job state changed by `edit`.
+fn edit_checkpoint(path: &Path, edit: impl Fn(&mut Value)) {
+    let name = path.display().to_string();
+    let mut d = cadaddy_io::read(&std::fs::read(path).expect("checkpoint"), &name).expect("read checkpoint");
+    let mut agent: Value = serde_json::from_str(d.agent.as_deref().unwrap_or("{}")).expect("job state");
+    edit(&mut agent);
+    d.agent = Some(agent.to_string());
+    std::fs::write(path, cadaddy_io::write(&d, &name).expect("write checkpoint")).expect("save checkpoint");
+}
+
+/// The checkpoint as an older build leaves it: `stages` stamped by another build (all of them
+/// when empty), and its MEP reading without the sanitary runs (a reader that read none).
+fn as_older_build(path: &Path, stages: &'static [&'static str]) {
+    edit_checkpoint(path, |agent| {
+        let job = &mut agent["guided_job"];
+        for st in job["stages"].as_array_mut().into_iter().flatten() {
+            let ran = st["status"] == "done" || st["status"] == "paused";
+            if ran && (stages.is_empty() || st["name"].as_str().is_some_and(|n| stages.contains(&n))) {
+                st["build"] = json!("0.0.1+src.0000000000000000");
+            }
+        }
+        if let Some(runs) = job["mep"]["runs"].as_array_mut() {
+            runs.retain(|r| r["system"] != "SAN");
+        }
+    });
+}
+
+fn audit_events(job: &Value, event: &str) -> usize {
+    job["guided_job"]["audit"].as_array().map_or(0, |a| a.iter().filter(|e| e["event"] == event).count())
+}
+
+fn start_refresh(pdfs: &Path, checkpoint: &Path, refresh: Value) -> (Session, cadaddy_engine::Result<Value>) {
+    let mut s = Session::new();
+    let r = s.execute(
+        "job.start",
+        &json!({"pdfs": pdfs.display().to_string(), "goal": "bim", "auto": true, "checkpoint": checkpoint.display().to_string(), "refresh": refresh}),
+    );
+    (s, r)
+}
+
+#[test]
+fn a_checkpoint_another_build_read_is_read_again() {
+    let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    real_pdf_reader();
+    let root = unique("stale");
+    let prints = root.join("prints");
+    plumbing_folder(&prints);
+    let checkpoint = root.join("job.cdy");
+    let cut = root.join("job-cut.cdy");
+
+    // The whole job, its checkpoint copied aside when the build starts (the pipes read). One
+    // level's plans: the build goes as far as the spec lets it, which is all this needs.
+    let (whole, _) = run_cut(&prints, &checkpoint, &cut, " bim_build: Build");
+    let san = sanitary_runs(&job_state(&whole));
+    assert!(san > 0, "the plumbing plan's sanitary pipe is read");
+
+    // This build's own checkpoint goes on from it: nothing is read again.
+    std::fs::copy(&cut, &checkpoint).expect("restore");
+    let (s, r) = start(&prints, &checkpoint, json!(true));
+    let st = r.expect("resume");
+    assert_eq!(st["resumed"], json!(true), "{st}");
+    assert!(st.get("refreshed").is_none(), "{st}");
+    let job = job_state(&s);
+    assert_eq!(sanitary_runs(&job), san);
+    assert_eq!(audit_events(&job, "stage_rerun") + audit_events(&job, "job_refreshed"), 0);
+
+    // An older build's checkpoint (it read no sanitary pipe): the job reads the prints again as
+    // a whole job of this build does, rather than building from that reading.
+    std::fs::copy(&cut, &checkpoint).expect("restore");
+    as_older_build(&checkpoint, &[]);
+    let (s, r) = start(&prints, &checkpoint, json!(true));
+    let st = r.expect("refreshed");
+    let job = job_state(&s);
+    assert_eq!(sanitary_runs(&job), san, "the sanitary pipe a whole job reads");
+    assert_eq!(st["refreshed"]["started_over"], json!(true), "{st}");
+    assert_eq!(st["refreshed"]["from"], json!("import"), "{st}");
+    assert!(st["resume_note"].as_str().is_some_and(|n| n.contains("another build")), "{st}");
+    assert_eq!(audit_events(&job, "job_refreshed"), 1);
+
+    // Only the pipe reading from another build: it and the stages after it run again; the
+    // stages before are kept.
+    std::fs::copy(&cut, &checkpoint).expect("restore");
+    as_older_build(&checkpoint, &["mep_read"]);
+    let (s, r) = start(&prints, &checkpoint, json!(true));
+    let st = r.expect("refreshed from mep_read");
+    assert_eq!(sanitary_runs(&job_state(&s)), san);
+    assert_eq!(st["resumed"], json!(true), "{st}");
+    assert_eq!(st["refreshed"]["from"], json!("mep_read"), "{st}");
+    assert_eq!(st["refreshed"]["started_over"], json!(false), "{st}");
+    assert_eq!(st["refreshed"]["stages"], json!(["mep_read"]), "{st}");
+    let job = job_state(&s);
+    assert_eq!(sanitary_runs(&job), san);
+    assert_eq!(audit_events(&job, "stage_rerun"), 1);
+
+    // refresh: a stage runs again from it, whoever read it.
+    std::fs::copy(&cut, &checkpoint).expect("restore");
+    let (_, r) = start_refresh(&prints, &checkpoint, json!("mep_read"));
+    let st = r.expect("refresh from a stage");
+    assert_eq!(st["refreshed"]["from"], json!("mep_read"), "{st}");
+
+    // refresh: "none" keeps the older reading, as asked, and says so (a note and a finding).
+    std::fs::copy(&cut, &checkpoint).expect("restore");
+    as_older_build(&checkpoint, &["mep_read"]);
+    let (s, r) = start_refresh(&prints, &checkpoint, json!("none"));
+    let st = r.expect("kept");
+    assert!(st.get("refreshed").is_none(), "{st}");
+    assert!(st["resume_note"].as_str().is_some_and(|n| n.contains("kept from a checkpoint another build read: mep_read")), "{st}");
+    let job = job_state(&s);
+    assert_eq!(sanitary_runs(&job), 0, "kept as asked");
+    let said = job["guided_job"]["findings"].as_array().is_some_and(|f| f.iter().any(|f| f["description"].as_str().is_some_and(|d| d.contains("another build"))));
+    assert!(said, "the kept reading is a finding");
+
+    // Anything else is an error, not a guess.
+    let (_, r) = start_refresh(&prints, &checkpoint, json!("sometimes"));
+    assert!(r.is_err());
+
+    // Each stage that ran records the build that ran it.
+    let stamped = job_state(&whole)["guided_job"]["stages"].as_array().map_or(0, |a| a.iter().filter(|st| st["build"].is_string()).count());
+    assert!(stamped >= 6, "{stamped} stages stamped");
     let _ = std::fs::remove_dir_all(&root);
 }
