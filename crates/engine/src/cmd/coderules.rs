@@ -106,7 +106,7 @@ pub(crate) fn rules() -> Vec<CodeRule> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Code Rules", run)
-        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided}, gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
+        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided, device_each (each a GFCI device: which is first on its circuit isn't known), device_breaker_unknown (a GFCI device: its breaker's type isn't in the schedule)}, gfci_corrected (receptacles the drawings show standard built GFCI, the design type kept), gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
         .menu(&["Tools", "Building", "Apply Code Rules"])]
 }
 
@@ -410,16 +410,27 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                     *tally.entry("load_side").or_default() += 1;
                 }
                 None => {
-                    let note =
-                        format!("{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known");
-                    set("gfci", json!("undecided"), rule_src(&gf, &note), None);
-                    *tally.entry("undecided").or_default() += 1;
+                    // Which is first on the circuit isn't known: the field sets a GFCI receptacle at
+                    // each place that needs one (Q6216; the alternative: the first one GFCI, the
+                    // rest on its load side).
+                    let note = format!(
+                        "{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known, so each is a GFCI device (alternative: the first one GFCI, the rest on its load side)"
+                    );
+                    set("gfci", json!("device"), rule_src(&gf, &note), None);
+                    set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
+                    *tally.entry("device_each").or_default() += 1;
                 }
             },
             (true, None) => {
-                let note = format!("{why}; {circuit}'s breaker type isn't in the panel schedule");
-                set("gfci", json!("undecided"), rule_src(&gf, &note), None);
-                *tally.entry("undecided").or_default() += 1;
+                // The breaker's type isn't in the panel schedule: the usual is a standard breaker,
+                // so the field sets a GFCI receptacle here (Q6216; the alternative, a GFCI breaker,
+                // makes it a standard one).
+                let note = format!(
+                    "{why}; {circuit}'s breaker type isn't in the panel schedule: a GFCI receptacle here (alternative: a GFCI breaker and a standard receptacle)"
+                );
+                set("gfci", json!("device"), rule_src(&gf, &note), None);
+                set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
+                *tally.entry("device_breaker_unknown").or_default() += 1;
             }
             (false, Some(false)) => {
                 set("gfci", json!("none"), breaker_src, Some("not tagged GFCI; its breaker isn't GFCI"));

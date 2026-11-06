@@ -1556,6 +1556,45 @@ fn offset_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], bottom: f64, up
     Some((Vec2::new(p0[0], p0[1]), Vec2::new(p1[0], p1[1])))
 }
 
+/// Run `r` around an obstacle in plan (`bx`: its box with the clearance, sheet units) where its
+/// square segment passes the clash at `at` / `z_ft`: out to the box's nearer side, along it and
+/// back, at the segment's height. The detour's path and how much longer it is (feet), or `None`
+/// when no square segment crosses the box there.
+fn detour_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], upf: f64) -> Option<(Vec<Vec2>, f64)> {
+    let k = offset_at(r, at, z_ft, upf)?;
+    let (a, b) = (r.points.get(k).copied()?, r.points.get(k + 1).copied()?);
+    let design = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+    let along_x = (a[1] - b[1]).abs() < 1e-6 && (a[0] - b[0]).abs() > 1e-6;
+    let along_y = (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() > 1e-6;
+    // The segment's axis (u), the box's span on it, and the side across (v) it goes round by.
+    let (u0, u1, v, lo, hi, side_lo, side_hi) = if along_x {
+        (a[0], b[0], a[1], bx[0], bx[2], bx[1], bx[3])
+    } else if along_y {
+        (a[1], b[1], a[0], bx[1], bx[3], bx[0], bx[2])
+    } else {
+        return None;
+    };
+    let (smin, smax) = (u0.min(u1), u0.max(u1));
+    if !(v > side_lo && v < side_hi) || lo <= smin + 1e-6 || hi >= smax - 1e-6 {
+        return None;
+    }
+    let out = if (v - side_lo) <= (side_hi - v) { side_lo } else { side_hi };
+    let (e0, e1) = if u0 <= u1 { (lo, hi) } else { (hi, lo) };
+    let pt = |u: f64, w: f64| if along_x { [u, w] } else { [w, u] };
+    let pts = [pt(e0, v), pt(e0, out), pt(e1, out), pt(e1, v)];
+    let extra_ft = 2.0 * (out - v).abs() / upf;
+    if r.bottoms_ft.len() < r.points.len().saturating_sub(1) {
+        let last = r.bottoms_ft.last().copied().unwrap_or(design);
+        r.bottoms_ft.resize(r.points.len().saturating_sub(1), last);
+    }
+    let mut new_pts = vec![a];
+    new_pts.extend(pts);
+    new_pts.push(b);
+    r.points.splice(k..=k + 1, new_pts);
+    r.bottoms_ft.splice(k..=k, [design; 5]);
+    Some((pts.iter().map(|p| Vec2::new(p[0], p[1])).collect(), extra_ft))
+}
+
 fn same_level(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
@@ -3958,12 +3997,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let (Some(under), Some(over), Some(l)) = (num(&c["offset_ft"]["under"]), num(&c["offset_ft"]["over"]), sp.level(&level)) else { continue };
         let ceiling = if l.ceiling_ft > 0.0 { l.ceiling_ft } else { rl.route.default_ceiling_ft };
         let top = l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0;
-        let (side, bottom) = if under >= ceiling + rl.route.above_ceiling_in / 12.0 - 1e-6 {
-            ("under", under)
+        // Under, else over: where the ceiling space takes it; else around it in plan at the same
+        // height (the shorter side).
+        let vertical = if under >= ceiling + rl.route.above_ceiling_in / 12.0 - 1e-6 {
+            Some(("under", under))
         } else if over <= top + 1e-6 {
-            ("over", over)
+            Some(("over", over))
         } else {
-            continue;
+            None
         };
         let label = c["a"]["circuit"].as_str().unwrap_or_default().to_string();
         let at = Vec2::new(at.0, at.1);
@@ -3971,21 +4012,30 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let own = runs.iter().position(|r| fits(r) && !label.is_empty() && r.id.contains(&label) && offset_at(r, at, z_ft, upf).is_some());
         let Some(ri) = own.or_else(|| runs.iter().position(|r| fits(r) && offset_at(r, at, z_ft, upf).is_some())) else { continue };
         let Some(r) = runs.get_mut(ri) else { continue };
-        let Some(stretch) = offset_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], bottom, upf) else { continue };
-        let reason = format!(
-            "the {} at {:.2} ft AFF runs through the {} {}: offset {side} it at {:.2} ft AFF, {} in clear",
-            what,
-            z_ft,
-            c["b"]["category"].as_str().unwrap_or_default(),
-            c["b"]["system"].as_str().unwrap_or_default(),
-            bottom,
-            c["clearance_in"]
-        );
-        c["corrected"] = json!({"design_ft": z_ft, "installed_ft": bottom, "side": side, "rule": offset_rule.id, "reason": reason});
+        let obstacle = format!("{} {}", c["b"]["category"].as_str().unwrap_or_default(), c["b"]["system"].as_str().unwrap_or_default());
+        let (path, key, design, installed, reason) = match vertical {
+            Some((side, bottom)) => {
+                let Some(st) = offset_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], bottom, upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle}: offset {side} it at {bottom:.2} ft AFF, {} in clear",
+                    c["clearance_in"]
+                );
+                (vec![st.0, st.1], "bottom_ft", format!("{z_ft:.2}"), format!("{bottom:.2}"), reason)
+            }
+            None => {
+                let Some((pts, extra_ft)) = detour_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle} and the ceiling space takes no offset under or over it: run around it in plan, {extra_ft:.1} ft longer, {} in clear",
+                    c["clearance_in"]
+                );
+                (pts, "route", format!("straight through the {obstacle}"), format!("around the {obstacle} ({extra_ft:.1} ft longer)"), reason)
+            }
+        };
+        c["corrected"] = json!({"key": key, "design": design, "installed": installed, "rule": offset_rule.id, "reason": reason});
         if clash_offsets.len() < MAX_ITEMS {
             clash_offsets.push(json!({
-                "level": level, "circuit": label, "run": r.id, "a": [r2(stretch.0.x), r2(stretch.0.y)], "b": [r2(stretch.1.x), r2(stretch.1.y)],
-                "design_ft": z_ft, "installed_ft": bottom, "reason": reason, "rule": offset_rule.id,
+                "level": level, "circuit": label, "run": r.id, "path": path.iter().map(|p| [r2(p.x), r2(p.y)]).collect::<Vec<_>>(),
+                "key": key, "design": design, "installed": installed, "reason": reason, "rule": offset_rule.id,
             }));
         }
     }
@@ -4305,7 +4355,10 @@ fn mark_offsets(d: &mut Drawing, report: &Value) -> usize {
     let mut todo: Vec<(Handle, super::provenance::Correction)> = Vec::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
-        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("conduit") || ps.get("design:bottom_ft").is_some() {
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("conduit")
+            || ps.get("design:bottom_ft").is_some()
+            || ps.get("design:route").is_some()
+        {
             continue;
         }
         let ends: Vec<Vec2> = ["start", "end"]
@@ -4318,19 +4371,20 @@ fn mark_offsets(d: &mut Drawing, report: &Value) -> usize {
         let level = super::bspec::made_level(e).unwrap_or_default();
         let [p, q] = ends.as_slice() else { continue };
         for o in list {
-            let (Some(a), Some(b)) = (pt(&o["a"]), pt(&o["b"])) else { continue };
-            if !same_level(o["level"].as_str().unwrap_or_default(), &level) || !(near(*p, a, b) && near(*q, a, b)) {
+            let path: Vec<Vec2> = o["path"].as_array().into_iter().flatten().filter_map(pt).collect();
+            let on = |q: Vec2| path.windows(2).any(|w| near(q, w[0], w[1]));
+            if !same_level(o["level"].as_str().unwrap_or_default(), &level) || path.len() < 2 || !(on(*p) && on(*q)) {
                 continue;
             }
-            let f = |k: &str| o[k].as_f64().map(|v| format!("{v:.2}")).unwrap_or_default();
+            let txt = |k: &str| o[k].as_str().unwrap_or_default().to_string();
             todo.push((
                 e.handle,
                 super::provenance::Correction {
-                    key: "bottom_ft".into(),
-                    design: f("design_ft"),
-                    corrected: f("installed_ft"),
-                    reason: o["reason"].as_str().unwrap_or_default().to_string(),
-                    rule: o["rule"].as_str().unwrap_or_default().to_string(),
+                    key: txt("key"),
+                    design: txt("design"),
+                    corrected: txt("installed"),
+                    reason: txt("reason"),
+                    rule: txt("rule"),
                 },
             ));
             break;
