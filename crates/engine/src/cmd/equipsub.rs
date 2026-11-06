@@ -234,12 +234,25 @@ pub(crate) fn extra_circuit_tags(
             if sp.tags.iter().filter(|t| t.fields.get("device_type").is_some_and(|f| f.value == item)).count() >= x.qty as usize {
                 break;
             }
-            let Some((level, room, at)) = super::coderules::spot_in_room(&words, rooms, &levels, &mut used) else {
+            // A spot nothing else stands on (a tag's id is its place).
+            let spot = (0..8).find_map(|_| {
+                let (level, room, at) = super::coderules::spot_in_room(&words, rooms, &levels, &mut used)?;
+                let id = format!("device:{level}:{:.1},{:.1}", at.x / upf, at.y / upf);
+                Some((level, room, at, id))
+            });
+            let spot = spot.filter(|(_, _, _, id)| !sp.tags.iter().any(|t| t.id == *id)).or_else(|| {
+                (0..7).find_map(|_| {
+                    let (level, room, at) = super::coderules::spot_in_room(&words, rooms, &levels, &mut used)?;
+                    let id = format!("device:{level}:{:.1},{:.1}", at.x / upf, at.y / upf);
+                    (!sp.tags.iter().any(|t| t.id == id)).then_some((level, room, at, id))
+                })
+            });
+            let Some((level, room, at, id)) = spot else {
                 no_room.push(item.clone());
                 break;
             };
             let mut t = cadaddy_walk3d::tags::ElementTag {
-                id: format!("device:{level}:{:.1},{:.1}", at.x / upf, at.y / upf),
+                id,
                 kind: "equipment_connection".into(),
                 level: level.clone(),
                 at_ft: [at.x / upf, at.y / upf],
@@ -621,6 +634,16 @@ mod tests {
         assert_eq!(t.fields["design_value"].value, "not on the drawings");
         assert!(t.fields["correction_reason"].value.contains("sheet 5"));
         assert!(extra_circuit_tags(&mut sp, &e, &rooms, "x").0.is_empty(), "not built twice");
+        // A spot another object stands on isn't taken: three circuits, three objects.
+        let mut sp2 = sp.clone();
+        sp2.tags.clear();
+        let first = crate::cmd::coderules::spot_in_room(&["ELEV".to_string()], &rooms, &["Level 1".to_string()], &mut std::collections::BTreeMap::new()).expect("a spot");
+        sp2.tags.push(cadaddy_walk3d::tags::ElementTag { id: format!("device:Level 1:{:.1},{:.1}", first.2.x / 12.0, first.2.y / 12.0), ..Default::default() });
+        let three = from_answer(&serde_json::json!({"source": "s", "extra_circuits": [{"name": "A", "qty": 1}, {"name": "B", "qty": 1}, {"name": "C", "qty": 1}]}));
+        let three = EquipmentElectrical { tag: "ELEV-1".into(), description: "ELEVATOR".into(), ..three };
+        assert_eq!(extra_circuit_tags(&mut sp2, &three, &rooms, "x").0.len(), 3);
+        let ids: std::collections::BTreeSet<&String> = sp2.tags.iter().map(|t| &t.id).collect();
+        assert_eq!(ids.len(), 4, "{ids:?}");
         let (b, n) = extra_circuit_tags(&mut sp.clone(), &EquipmentElectrical { tag: "DOAS-1".into(), ..e.clone() }, &[], "x");
         assert!(b.is_empty() && !n.is_empty());
     }

@@ -102,7 +102,7 @@ fn all_under_gfci(breakers: &[Option<bool>]) -> bool {
 }
 
 /// A spot for something the drawings don't place: in the first room whose name has one of `words`,
-/// on the lowest level with one, along its longest wall (a quarter of the way for the first, on
+/// on the lowest level with one, along its longest wall (an eighth of the way for the first, on
 /// from there for the next, `used` keeping count): its level, the room's name and the point.
 pub(crate) fn spot_in_room(
     words: &[String],
@@ -124,7 +124,7 @@ pub(crate) fn spot_in_room(
     let edges = outline.iter().zip(outline.iter().cycle().skip(1));
     let (a, b) = edges.max_by(|x, y| x.0.dist(*x.1).total_cmp(&y.0.dist(*y.1)))?;
     let nth = used.entry(i).or_insert(0);
-    let t = (*nth as f64 + 1.0) / 4.0;
+    let t = (*nth as f64 + 1.0) / 8.0;
     *nth += 1;
     Some((level, name.clone(), *a + (*b - *a) * t.min(0.9)))
 }
