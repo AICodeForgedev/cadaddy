@@ -31,6 +31,7 @@ mod dimreader;
 mod drywall_views;
 mod duct3d_truth;
 mod elemprops;
+mod emtsize;
 mod exterior;
 mod feederwire;
 mod followups_626;

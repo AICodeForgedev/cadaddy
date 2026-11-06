@@ -497,7 +497,7 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
     let named = |q: &[Vec2], ws: &[&str]| {
         notes.iter().find(|(_, t, at, _)| cadaddy_geom::point_in_polygon(q, *at) && word(t, ws)).map(|(_, t, _, _)| t.clone())
     };
-    let equipment_words = EQUIPMENT_WORDS;
+    let equipment_words = cadaddy_mepfix::wordrules::words("roof.equipment_words");
     // Rooftop equipment and crickets: each note names the smallest outline holding it.
     let mut equipment = Vec::new();
     let mut crickets = Vec::new();
@@ -505,7 +505,7 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
     let mut assumptions = Vec::new();
     for (_, t, at, _) in &notes {
         let cricket = word(t, &["CRICKET"]);
-        if !cricket && !word(t, &equipment_words) {
+        if !cricket && !word(t, equipment_words) {
             continue;
         }
         let Some(i) = (0..all.len())
@@ -672,15 +672,6 @@ fn has_word(t: &str, ws: &[&str]) -> bool {
         .any(|w| ws.iter().any(|x| w == *x || (w.starts_with(x) && w.get(x.len()..).is_some_and(|r| r.chars().all(|c| c.is_ascii_digit())))))
 }
 
-/// Words naming what stands on a roof.
-const EQUIPMENT_WORDS: [&str; 10] = ["RTU", "AHU", "EF", "MAU", "CU", "ACCU", "UNIT", "EQUIP", "EQUIPMENT", "HVAC"];
-
-/// Curbs and openings on a roof that aren't units: their notes give a curb or a height.
-const CURB_WORDS: [&str; 6] = ["HATCH", "OVERRUN", "SKYLIGHT", "CURB", "PENTHOUSE", "SMOKE"];
-
-/// Notes a roof plan writes on its roof (the seeds for finding it; not its title's `ROOF`).
-const ROOF_WORDS: [&str; 5] = ["RD", "DRAIN", "PARAPET", "CRICKET", "SCUPPER"];
-
 /// Roof faces searched for at most (each is a boundary search over the plan's lines).
 const MAX_SEARCHES: usize = 40;
 
@@ -723,7 +714,12 @@ fn read_plan(d: &Drawing, sp: &BuildingSpec, region: &Bounds2, level: &str) -> O
     let inside = |q: &[Vec2], p: Vec2| cadaddy_geom::point_in_polygon(q, p);
     let seeds: Vec<Vec2> = notes
         .iter()
-        .filter(|(_, t, _, _)| pitch(t).is_some() || has_word(t, &ROOF_WORDS) || has_word(t, &EQUIPMENT_WORDS) || has_word(t, &CURB_WORDS))
+        .filter(|(_, t, _, _)| {
+            pitch(t).is_some()
+                || has_word(t, cadaddy_mepfix::wordrules::words("roof.drain_words"))
+                || has_word(t, cadaddy_mepfix::wordrules::words("roof.equipment_words"))
+                || has_word(t, cadaddy_mepfix::wordrules::words("roof.curb_words"))
+        })
         .map(|(_, _, at, _)| *at)
         .take(MAX_ROOF_ITEMS)
         .collect();
@@ -838,8 +834,10 @@ fn read_plan(d: &Drawing, sp: &BuildingSpec, region: &Bounds2, level: &str) -> O
             crickets.push(Cricket { level: level.into(), outline: ring, height_ft: read.unwrap_or(DEFAULT_CRICKET_FT), height_status });
             continue;
         }
-        let unit = words.iter().find(|t| has_word(t, &EQUIPMENT_WORDS));
-        let Some(name_note) = unit.or_else(|| words.iter().find(|t| has_word(t, &CURB_WORDS))) else { continue };
+        let unit = words.iter().find(|t| has_word(t, cadaddy_mepfix::wordrules::words("roof.equipment_words")));
+        let Some(name_note) = unit.or_else(|| words.iter().find(|t| has_word(t, cadaddy_mepfix::wordrules::words("roof.curb_words")))) else {
+            continue;
+        };
         let name: String = if unit.is_some() {
             name_note.split_whitespace().next().unwrap_or("EQUIP").chars().take(40).collect()
         } else {

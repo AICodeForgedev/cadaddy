@@ -122,12 +122,6 @@
       "basis": "trade practice: holes in a member keep the maker's spacing (the hole rule's multiple of the larger hole); where two raceways would cross a member closer than that, the field bores one hole sized for both where the hole rule takes it at that distance from the bearing (NEC 300.4(A)(1) protection kept), else bores them a bay apart"
     },
     {
-      "id": "E-EQUIP-OCPD",
-      "trade": "electrical",
-      "fills": "equipment protected over the maximum its approved submittal (nameplate) allows",
-      "basis": "code: listed equipment is installed per its listing and labeling (NEC 110.3(B)), and an air-conditioning unit's protection is at most its nameplate maximum (NEC 440.22(C)); the field installs the largest standard rating (NEC 240.6(A)) within it, or the fuses the nameplate names in a fused disconnect (the alternative)"
-    },
-    {
       "id": "E-CONDUIT-FILL",
       "trade": "electrical",
       "fills": "a raceway too small for its conductors (fill over NEC Chapter 9 Table 1)",

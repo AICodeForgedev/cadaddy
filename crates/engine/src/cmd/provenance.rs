@@ -368,16 +368,27 @@ pub(crate) fn correct_with(ps: &mut Props, c: &Correction, design_source: Source
     ps.set(&format!("{CORRECTION_PREFIX}{}", c.key), why)
 }
 
-/// The corrections in an element's properties: (key, design, corrected, why).
+/// The corrections in an element's properties: (key, design, corrected, why). Each property's
+/// (`design:<key>` beside it); an element that has none of those may carry one correction of the
+/// element as a whole (`design_value`, `corrected_value`, `correction_reason`, `correction_rule`,
+/// as the code rules and equipment submittals write it), read as the key `value`.
 pub(crate) fn corrections_of(ps: &Props) -> Vec<(String, String, String, String)> {
-    ps.iter()
+    let mut out: Vec<(String, String, String, String)> = ps
+        .iter()
         .filter_map(|(k, p)| {
             let key = k.strip_prefix(DESIGN_PREFIX)?;
             let now = ps.get(key).map(Prop::text).unwrap_or_default();
             let why = ps.get(&format!("{CORRECTION_PREFIX}{key}")).map(Prop::text).unwrap_or_default();
             Some((key.to_string(), p.text(), now, why))
         })
-        .collect()
+        .collect();
+    let text = |k: &str| ps.get(k).filter(|p| p.has_value()).map(Prop::text).unwrap_or_default();
+    let (design, now) = (text("design_value"), text("corrected_value"));
+    if out.is_empty() && !now.is_empty() && design != now {
+        let (rule, reason) = (text("correction_rule"), text("correction_reason"));
+        out.push(("value".into(), design, now, if rule.is_empty() { reason } else { format!("{rule}: {reason}") }));
+    }
+    out
 }
 
 /// Correct a built element's property in the drawing ([`correct`]); the design value's source is
@@ -620,6 +631,30 @@ mod tests {
         // Stamping again changes nothing.
         let again = stamp(&mut d);
         assert_eq!((again.elements, again.had), (4, 4));
+    }
+
+    #[test]
+    fn a_whole_element_correction_reads_as_one_unless_its_properties_carry_their_own() {
+        let mut ps = Props::default();
+        let src = || Source::of(SourceKind::Rule);
+        for (k, v) in
+            [("design_value", "standard"), ("corrected_value", "GFCI"), ("correction_reason", "a bathroom"), ("correction_rule", "NEC 210.8")]
+        {
+            ps.set(k, Prop::new(v, src()));
+        }
+        assert_eq!(corrections_of(&ps), vec![("value".into(), "standard".into(), "GFCI".into(), "NEC 210.8: a bathroom".into())]);
+        // The same decision kept on its property: that one, not twice.
+        let c = Correction {
+            key: "receptacle_type".into(),
+            design: "standard".into(),
+            corrected: "GFCI".into(),
+            reason: "a bathroom".into(),
+            rule: "R-1".into(),
+        };
+        assert!(correct(&mut ps, &c, src()));
+        let got = corrections_of(&ps);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].0, "receptacle_type");
     }
 
     #[test]

@@ -172,6 +172,15 @@ pub(crate) fn kind_of(c: &PanelCircuit, legend: &BTreeMap<String, String>, sheet
     Kind { ty, features: feats, codes: said, source }
 }
 
+/// [`kind_of`], its source saying so where the type is what was built, not what was printed.
+fn kind_with_as_built(c: &PanelCircuit, s: &PanelSchedule, built_as: &BTreeMap<(String, String), String>) -> Kind {
+    let mut k = kind_of(c, &s.legend, &s.source);
+    if let Some(said) = built_as.get(&(s.panel.clone(), c.number.clone())) {
+        k.source = said.clone();
+    }
+    k
+}
+
 /// What a row is: a breaker (with a load), a spare breaker, or a space (no breaker).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Row {
@@ -194,20 +203,27 @@ pub(crate) fn row_of(c: &PanelCircuit) -> Row {
     Row::Breaker
 }
 
-/// A row whose load the build corrected for the field (Q6216, `E-EQUIP-OCPD`): equipment on it
-/// (its tag a word of the row's load, or the load one word its tag's letters start) with an
-/// installed protection over the drawn one's limit. Its drawn trip, the installed one and why.
-fn trip_corrected(sp: &BuildingSpec, panels: [&str; 2], c: &PanelCircuit) -> Option<(Option<f64>, f64, String)> {
+/// A row whose breaker the build corrected (its schedule row keeps the printed one in
+/// `design_breaker`: equipment protected over its submittal's limit, Q6176): its printed trip, the
+/// installed one, the rule and why (the equipment's record on it, when one names the row).
+fn trip_corrected(sp: &BuildingSpec, c: &PanelCircuit) -> Option<(Option<f64>, f64, String, String)> {
+    if c.design_breaker.trim().is_empty() {
+        return None;
+    }
+    let (drawn, installed) = (trip(&c.design_breaker), trip(&c.breaker)?);
+    if drawn.is_some_and(|d| (d - installed).abs() < 1e-9) {
+        return None;
+    }
     let up = c.description.to_ascii_uppercase();
-    let words: Vec<&str> = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).collect();
     let e = sp.mep.equipment_electrical.iter().find(|e| {
-        !e.installed_ocpd.is_empty()
-            && (e.source_panel.trim().is_empty() || panels.iter().any(|p| p.eq_ignore_ascii_case(e.source_panel.trim())))
-            && (words.iter().any(|w| w.eq_ignore_ascii_case(&e.tag))
-                || (words.len() == 1 && super::equipsub::stem(&e.tag).is_some_and(|st| words.first().is_some_and(|w| w.starts_with(&st)))))
-    })?;
-    let (a, _) = super::equipsub::ocpd_of(&e.installed_ocpd)?;
-    Some((trip(&c.breaker), a, e.correction.clone()))
+        !e.correction_reason.is_empty()
+            && (up.contains(&e.tag.to_ascii_uppercase()) || super::equipsub::stem(&e.tag).is_some_and(|st| up.contains(&st)))
+    });
+    let (rule, why) = match e {
+        Some(e) => (e.correction_rule.clone(), e.correction_reason.clone()),
+        None => ("the schedule row".to_string(), format!("printed {}, installed {}", c.design_breaker.trim(), c.breaker.trim())),
+    };
+    Some((drawn, installed, rule, why))
 }
 
 /// A breaker's trip as the schedule prints it: `20`, `20A`, `60AT/100AF`, `3P-20A`.
@@ -661,7 +677,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         d.remove_entity(*h);
     }
     let gone: BTreeSet<Handle> = old.iter().copied().collect();
-    let scheds = schedules(sp);
+    let mut scheds = schedules(sp);
+    // What was built, where the project says so, over what its schedule prints.
+    let mut built_as: BTreeMap<(String, String), String> = BTreeMap::new();
+    for s in scheds.values_mut() {
+        let (panel, sheet) = (s.panel.clone(), s.source.clone());
+        for c in &mut s.circuits {
+            if let Some(b) = super::propfill::as_built_breakers(d, &panel, &c.description) {
+                let printed = if c.protection.is_empty() { "none".to_string() } else { c.protection.join("/") };
+                built_as.insert((panel.clone(), c.number.clone()), format!("{}: as built; {sheet} prints {printed}", b.source));
+                c.protection = b.codes;
+            }
+        }
+    }
     let tags: BTreeSet<String> = scheds.keys().cloned().chain(sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase())).collect();
     let equipment: BTreeSet<String> = sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
     let mut panels = panels_of(d);
@@ -809,7 +837,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 u.breakers += 1;
             }
             let label = format!("{}-{}", panel_type, t.iter().map(u32::to_string).collect::<Vec<_>>().join(","));
-            made.push(Made { panel: pi, row: ri, numbers: t, label, kind: kind_of(c, &s.legend, &s.source), spare: row == Row::Spare });
+            made.push(Made { panel: pi, row: ri, numbers: t, label, kind: kind_with_as_built(c, s, &built_as), spare: row == Row::Spare });
         }
         let highest = taken.iter().max().copied().unwrap_or(0);
         match header_fact(&s.header, &r.total_header_words).and_then(|(k, v)| first_number(v).map(|n| (k, v, n))) {
@@ -860,7 +888,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let tr = trip_corrected(sp, [s.panel.trim(), &p.tag], c).map(|(_, a, _)| a).or_else(|| trip(&c.breaker));
+        let tr = trip(&c.breaker);
         let size = size_text(tr, c.poles);
         let item = format!("{}, panel {}", r.item(&m.kind.ty), s.panel.trim());
         let tt = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
@@ -895,8 +923,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(sched_of)) else { continue };
         let Some(c) = s.circuits.get(m.row) else { continue };
         let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} schedule, circuit {}", s.source, s.panel.trim(), c.number.trim()));
-        let fixed = trip_corrected(sp, [s.panel.trim(), &p.tag], c);
-        let tr = fixed.as_ref().map(|(_, a, _)| *a).or_else(|| trip(&c.breaker));
+        let fixed = trip_corrected(sp, c);
+        let tr = trip(&c.breaker);
         let mut cn: Vec<Handle> = vec![p.handle];
         let mut runs: Vec<Handle> = m.numbers.iter().flat_map(|n| lands.get(&(m.panel, *n)).cloned().unwrap_or_default()).collect();
         runs.sort_unstable();
@@ -987,8 +1015,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             e.common.xdata = x.into();
         });
         // Installed as corrected, the drawn breaker kept as its design.
-        if let Some((drawn, a, why)) = &fixed {
-            let (rule, reason) = why.split_once(": ").unwrap_or(("E-EQUIP-OCPD", why.as_str()));
+        if let Some((drawn, a, rule, reason)) = &fixed {
             for (key, design, installed) in [
                 ("trip_a", drawn.map(|t| format!("{t}")).unwrap_or_default(), format!("{a}")),
                 ("size", size_text(*drawn, c.poles), size_text(Some(*a), c.poles)),

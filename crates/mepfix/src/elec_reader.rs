@@ -146,7 +146,7 @@ pub struct DetectedDevice {
 pub fn is_subscript_or_circuit(t: &str) -> bool {
     let u = t.trim().to_ascii_uppercase();
     let words: Vec<&str> = u.split_whitespace().collect();
-    let sub = |w: &str| matches!(w, "GFCI" | "GFI" | "WR" | "WP" | "USB" | "IG" | "DED" | "TV" | "CH" | "AFCI" | "TR" | "DATA");
+    let sub = |w: &str| crate::wordrules::words("devices.designation_words").contains(&w);
     if !words.is_empty() && words.iter().all(|w| sub(w)) {
         return true;
     }

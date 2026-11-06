@@ -1652,6 +1652,9 @@ pub(crate) struct Routed {
     pub feeders: BTreeSet<String>,
     /// Each leg's path as a cable runs it where that is not the raceway's ([`CABLE_FILE`]).
     pub cable: Vec<MepRun>,
+    /// The raceway's minimum trade size the routing used, and where it came from (the
+    /// specification's, else the rules'): an estimated route left takes it (Q6235).
+    pub minimum: Option<(f64, String)>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -2535,6 +2538,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     };
     let min_in = methods.min_size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rl.methods.minimum_size_in.max(0.5));
     let min_src = if methods.min_size_in.is_some() { methods.min_size_source.clone() } else { rl.methods.minimum_source.clone() };
+    out.minimum = Some((min_in, min_src.clone()));
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     let texts = drawing_texts(d);
@@ -4605,6 +4609,57 @@ pub(crate) struct Replaced {
 /// Where the stored spec's [`Replaced`] is kept (among the drawing's embedded files).
 const BASE_FILE: &str = "route/base.json";
 
+/// A circuit tag id's level, scope (a sheet, or `room-<room>`) and label, a part's `@…` and a
+/// switch loop's `~…` aside: `circuit:Level 1:E-101:LP1-3@P2~sw3` → (`level 1`, `E-101`, `LP1-3`).
+fn circuit_key(id: &str) -> Option<(String, String, String)> {
+    let rest = id.strip_prefix(super::printcond::CIRCUIT_TAG)?;
+    let (head, label) = rest.rsplit_once(':')?;
+    let (level, scope) = head.split_once(':')?;
+    let label = label.split(['@', '~']).next().unwrap_or_default().trim();
+    (!label.is_empty()).then(|| (level.trim().to_ascii_lowercase(), scope.trim().to_string(), label.to_ascii_uppercase()))
+}
+
+/// The estimated routes' circuit tags the routing routed under another tag (Q6235: one route a
+/// run). A circuit read on two sheets (a plan and its enlargement) has a tag on each, and a
+/// typical room's view stamps its circuits as the view's: the routing routes the one circuit
+/// (or each real room's own), so a route estimated for another tag of it on that level is the same
+/// conduit twice. An estimate in a real room (a room of the spec) stays unless that room's own
+/// circuit is routed: another room's circuit of the label is not its.
+pub(crate) fn estimates_routed_elsewhere(sp: &BuildingSpec, routed: &Routed) -> BTreeSet<String> {
+    let room_part = super::printcond::ROOM_PART;
+    let mut done: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut done_in_room: BTreeSet<(String, String, String)> = BTreeSet::new();
+    for t in routed.tags.iter().filter(|t| !t.id.contains(HOME_PART)) {
+        let Some((level, scope, label)) = circuit_key(&t.id) else { continue };
+        if let Some(room) = scope.strip_prefix(&room_part[1..]) {
+            done_in_room.insert((level.clone(), room.to_ascii_uppercase(), label.clone()));
+        }
+        done.insert((level, label));
+    }
+    let real_room = |room: &str| sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(room.trim())));
+    sp.mep
+        .runs
+        .iter()
+        .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM)
+        .filter_map(|r| super::printcond::circuit_of_run(r))
+        .filter(|id| {
+            let Some((level, scope, label)) = circuit_key(id) else { return false };
+            if !done.contains(&(level.clone(), label.clone())) {
+                return false;
+            }
+            match scope.strip_prefix(&room_part[1..]) {
+                Some(room) if real_room(room) => done_in_room.contains(&(level, room.to_ascii_uppercase(), label)),
+                _ => true,
+            }
+        })
+        .map(str::to_string)
+        .take(MAX_RUNS)
+        .collect()
+}
+
+/// How an estimated route left is sized (its `size_source`), so a later routing sizes it again.
+const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routing's minimum: ";
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
 /// runs and the routed tags come in (the drawn conduit stays as it is). What went: the tags and
 /// estimated runs as read (a routing's own earlier output is not among them).
@@ -4616,16 +4671,51 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
     // A split circuit's own tag gives way to its parts'.
     routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
-    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it.
+    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it; nor
+    // does another tag of a circuit routed (Q6235).
+    let elsewhere = estimates_routed_elsewhere(sp, routed);
     let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
         r.system == BRANCH_SYSTEM
             || r.system == lv::LV_SYSTEM
-            || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c)))
+            || (r.system == super::printcond::CIRCUIT_SYSTEM
+                && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c) || elsewhere.contains(c)))
     };
     replaced.runs =
         sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));
+    // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
+    // the routing's minimum, not the reader's default size (Q6235).
+    if let Some((min_in, min_src)) = &routed.minimum {
+        let rl = rules();
+        let of: HashMap<&str, (&str, &str)> = sp
+            .tags
+            .iter()
+            .map(|t| {
+                let f = |k: &str| t.fields.get(k).map(|f| f.value.as_str());
+                (t.id.as_str(), (f("conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS), f("conduit").unwrap_or_default()))
+            })
+            .collect();
+        for r in sp
+            .mep
+            .runs
+            .iter_mut()
+            .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM && (r.size_source == "default" || r.size_source.starts_with(EST_FILL)))
+        {
+            let (mk, named) =
+                super::printcond::circuit_of_run(r).and_then(|c| of.get(c)).copied().unwrap_or((super::printcond::DEFAULT_CONDUCTORS, ""));
+            let method = super::mepatoms::rules().raceway_named(named).map_or_else(|| rl.methods.raceway.clone(), |(k, _)| k.to_string());
+            if let Some((t, area, allowed)) = fill_size(&super::mepatoms::conductor_parts(mk), &method, *min_in, rl) {
+                r.size_in[0] = t;
+                r.size_source = format!(
+                    "{EST_FILL}{mk}: {} sq in of conductors in {} sq in allowed ({}); not under the minimum: {min_src}",
+                    r3(area),
+                    r3(allowed),
+                    rl.fill.source
+                );
+            }
+        }
+    }
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
     // A routed path is the router's, by trade practice: the drawings show its circuit's devices
@@ -4835,8 +4925,9 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
     let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string()]);
-    // A feeder's pieces don't make their system's other runs pieces (the underground plan's
-    // runs on the feeders' buried system stay whole): feeder runs are cut on their own.
+    // A feeder's pieces don't make their system's other runs pieces: feeder runs are cut on
+    // their own. The buried work (the underground plan's runs) is cut with the rest once the
+    // model has pieces: a takeoff counts it like any raceway.
     let feeder_bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
     let of_feeder =
         |e: &Entity| super::bimlook::made_tag(e, "mepid").and_then(|id| id.split_once('#')).is_some_and(|(base, _)| feeder_bases.contains(base));
@@ -4853,9 +4944,12 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         })
         .map(|e| e.handle)
         .collect();
+    if !old.is_empty() {
+        systems.insert(super::ugplan::E_UG.to_string());
+    }
     // The feeders' routed runs are cut into their pieces too (a job routes them after the build,
-    // as whole runs): those whole runs go.
-    let feeder_whole = feeder_whole_runs(d, &sp);
+    // as whole runs), and the buried work: those whole runs go.
+    let feeder_whole = feeder_whole_runs(d, &sp, systems.contains(super::ugplan::E_UG));
     let mut shifted = sp.clone();
     shifted.mep.runs.retain(|r| systems.contains(&r.system) || super::ugplan::is_feeder_run(r));
     // A feeder's entry stubs are cut again only where they were pieces already; a routed feeder
@@ -4930,11 +5024,11 @@ fn is_obstacle(el: &super::bimwork::El) -> bool {
     }
 }
 
-/// The whole-run objects (not pieces) of the spec's feeder runs: on the feeder system, or a run's
-/// own (its id begins with the run's).
-fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
+/// The whole-run objects (not pieces) of the spec's feeder runs (on the feeder system, or a run's
+/// own: its id begins with the run's) and, `buried`, of the buried work's raceway.
+fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec, buried: bool) -> Vec<Handle> {
     let bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
-    if bases.is_empty() {
+    if bases.is_empty() && !buried {
         return Vec::new();
     }
     d.model
@@ -4943,6 +5037,7 @@ fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
         .filter(|e| {
             let Some(sy) = super::bimlook::made_tag(e, "system") else { return false };
             sy == super::gearbuild::FEEDER_SYSTEM
+                || (buried && sy == super::ugplan::E_UG && super::bimlook::made_tag(e, "kind") == Some("conduit"))
                 || super::bimlook::made_tag(e, "mepid").and_then(|id| id.rsplit_once('/')).is_some_and(|(base, _)| bases.contains(base))
         })
         .map(|e| e.handle)
@@ -4955,14 +5050,21 @@ fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// After `moved` devices were set in their walls again (a merge removed the walls they were in):
 /// their boxes, rings and the raceways' drops are pieces built where the devices stood, so the
-/// circuits are routed again and the pieces cut again where the devices are now. Nothing to do
-/// when none moved or the model has no pieces yet (the build makes them where the devices are).
+/// circuits are routed again and the pieces cut again where the devices are now. The same when
+/// buried work was built as whole runs since the last cut (the underground plan's): it is cut
+/// into its pieces with the rest. Nothing to do when neither, or the model has no pieces yet
+/// (the build makes them where the devices are).
 pub(crate) fn follow_reseated(s: &mut Session, moved: usize) -> Option<Result<Value>> {
-    if moved == 0 {
-        return None;
-    }
-    let has_atoms = s.doc().ok()?.model.iter().any(|e| mep_piece(e));
-    has_atoms.then(|| reroute(s))
+    let d = s.doc().ok()?;
+    let whole_buried = || {
+        d.model.iter().any(|e| {
+            !super::mepatoms::is_atom(e)
+                && super::bimlook::made_tag(e, "system") == Some(super::ugplan::E_UG)
+                && super::bimlook::made_tag(e, "kind") == Some("conduit")
+        })
+    };
+    let has_atoms = d.model.iter().any(|e| mep_piece(e));
+    (has_atoms && (moved > 0 || whole_buried())).then(|| reroute(s))
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -5357,7 +5459,6 @@ pub(crate) use gap::panel_end_makeup_ft;
 pub(crate) mod lv;
 #[path = "conduitroute_size.rs"]
 mod size;
-pub(crate) use size::standard_at_most;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]

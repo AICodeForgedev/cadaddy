@@ -90,17 +90,7 @@ pub struct Height {
 /// The kind of device a type mark names (`switch`, `fire alarm device`…; `device` when the mark
 /// says nothing).
 pub(crate) fn kind_of(mark: &str) -> &'static str {
-    match mark.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
-        "DH" | "MH" => "door holder",
-        "J" | "JB" => "junction box",
-        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
-        "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
-        "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
-        "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
-        "T" | "TSTAT" | "TH" => "thermostat",
-        _ => "device",
-    }
+    cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", mark.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
 
 /// The usual mounting height of a kind of device (a default: always marked), inches above the
@@ -191,11 +181,9 @@ fn note_kinds(up: &str) -> Vec<&'static str> {
 /// known kind takes any row.
 fn row_fits(kind: &str, words: &str) -> bool {
     let any = |ws: &[&str]| ws.iter().any(|w| words.contains(w));
-    match kind {
-        "switch" => any(&["SWITCH", "DIMMER"]),
-        "occupancy sensor" => any(&["SENSOR", "OCCUPANCY", "VACANCY"]),
-        "fire alarm device" => any(&["FIRE", "STROBE", "HORN", "SMOKE", "PULL", "DETECTOR", "SPEAKER", "ALARM"]),
-        _ => true,
+    match cadaddy_mepfix::wordrules::groups("devices.legend_row_words").iter().find(|(k, _)| *k == kind) {
+        Some((_, ws)) => any(ws),
+        None => true,
     }
 }
 
@@ -1082,6 +1070,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
         }
+        // Built where the plans are silent or wrong: the design value and the basis beside it.
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            if let Some(v) = field(t, k) {
+                store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, "code rules")));
+            }
+        }
         // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
         if let Some(leg) = field(t, "switch_leg") {
             store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter of the fixtures it controls"));
@@ -1938,7 +1932,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             tally,
                         );
                     }
-                    let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
+                    // (`G-13,15`: a two-pole's first.)
+                    let number = circuit
+                        .as_deref()
+                        .and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
                     let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
                     let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
                     let row =
