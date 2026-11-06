@@ -252,6 +252,8 @@
   "routed_land_ft": 1.0,
   "routed_land_source": "a routed raceway ends in the box it was routed to (the one at its end: its wall's face is a few inches off the device), never another box of its circuit nearby; it drops plumb into it from its route's height (trade practice: square runs, plumb drops in the wall cavity)",
   "panel_reach_ft": 5.0,
+  "routed_touch_in": 6.0,
+  "routed_touch_source": "a routed branch run (conduit.route) ends on the box or panel it serves: its end lands in the box whose entry, or on the panel whose can, is within 6 in of it, whatever circuit the box is on (a homerun group's taps meet in its lead's box), the panel before a box; never back in the box its other end left (company default: the route's own landing, NEC 300.12: a raceway continuous between cabinets, boxes and fittings)",
   "feeder_makeup_ft": 3.0,
   "feeder_makeup_source": "3 ft of each feeder conductor at each gear it lands on: from where its raceway enters, through the gutter's bending space to the lug (company default; NEC 312.6)",
   "feeder_conductors": {

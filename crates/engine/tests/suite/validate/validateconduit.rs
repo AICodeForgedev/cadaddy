@@ -12,12 +12,16 @@ use serde_json::{Value, json};
 const RULES: [&str; 8] = ["E-CONDUIT-CONTINUITY", "E-CONDUIT-FILL", "E-BOX-FILL", "E-DERATE", "E-VDROP", "E-METHOD", "G-CLASH", "E-TAKEOFF"];
 
 fn receptacle(n: usize, x: f64, y: f64, circuit: &str) -> Value {
+    receptacle_at(n, x, y, circuit, 18)
+}
+
+fn receptacle_at(n: usize, x: f64, y: f64, circuit: &str, aff_in: u32) -> Value {
     json!({"id": format!("device:L1:{n}"), "kind": "receptacle", "level": "L1", "at_ft": [x, y], "fields": {
         "type": {"value": "A", "source": "plan"},
         "symbol": {"value": format!("{:X}", 0x1F0 + n), "source": "plan"},
         "sheet": {"value": "E-101", "source": "plan"},
         "circuit": {"value": circuit, "source": "plan"},
-        "mount_height_in": {"value": "18", "source": "note"}
+        "mount_height_in": {"value": aff_in.to_string(), "source": "note"}
     }})
 }
 
@@ -44,6 +48,19 @@ fn rect(s: &mut Session, a: [f64; 2], b: [f64; 2]) {
 
 /// The building, routed; `breaker`: the schedule's breaker for every circuit (none: no schedule).
 fn building(breaker: Option<u32>, extra: impl FnOnce(&mut Session)) -> Session {
+    let devices = vec![
+        receptacle(1, 20.0, 10.0, "LP1-1"),
+        receptacle(2, 30.0, 10.0, "LP1-1"),
+        receptacle(3, 30.0, 25.0, "LP1-1"),
+        receptacle(4, 20.0, -15.0, "LP1-3"),
+        receptacle(5, 26.0, -15.0, "LP1-3"),
+        receptacle(6, 130.0, 10.0, "LP1-5"),
+    ];
+    building_of(devices, breaker, extra)
+}
+
+/// The building with `devices` on LP1's circuits 1, 3 and 5, routed.
+fn building_of(devices: Vec<Value>, breaker: Option<u32>, extra: impl FnOnce(&mut Session)) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     // One room round it all: a 6 in shell, its tag in the middle.
@@ -54,14 +71,7 @@ fn building(breaker: Option<u32>, extra: impl FnOnce(&mut Session)) -> Session {
     s.execute("text", &json!({"at": [800.0, 300.0], "text": "101", "height": 6.0})).expect("tag");
     layer(&mut s, "0");
     extra(&mut s);
-    let mut tags = vec![
-        receptacle(1, 20.0, 10.0, "LP1-1"),
-        receptacle(2, 30.0, 10.0, "LP1-1"),
-        receptacle(3, 30.0, 25.0, "LP1-1"),
-        receptacle(4, 20.0, -15.0, "LP1-3"),
-        receptacle(5, 26.0, -15.0, "LP1-3"),
-        receptacle(6, 130.0, 10.0, "LP1-5"),
-    ];
+    let mut tags = devices;
     tags.extend([circuit("LP1-1"), circuit("LP1-3"), circuit("LP1-5")]);
     let schedules = match breaker {
         Some(a) => json!([{"panel": "LP1", "source": "X-601", "header": {"volts": "120/208V 3PH 4W"}, "circuits": [
@@ -247,6 +257,61 @@ fn a_fourth_current_carrying_conductor_without_derating_fails() {
     assert_eq!(f["measured"]["factor"], json!(0.8), "{f}");
     assert_eq!(f["measured"]["allowed_a"], json!(44.0), "{f}");
     assert_eq!(f["measured"]["breaker_a"], json!(50.0), "{f}");
+}
+
+#[test]
+fn a_homerun_group_beside_its_panel_is_continuous_from_every_box_to_the_panel() {
+    // Q6241: three circuits whose first boxes sit 2 ft apart and 2 ft from their panel, 48 in up
+    // (within reach of the panel's top). They share one homerun: the lead's box takes the other
+    // two circuits' taps and the homerun leaves it for the panel. Each run must end on what it
+    // serves: a tap in the lead's box (another circuit's), never back in its own first box; the
+    // homerun on the panel, never in a box near the panel.
+    let devices = vec![
+        receptacle_at(1, 1.5, 0.0, "LP1-1", 48),
+        receptacle_at(2, 6.0, 0.0, "LP1-1", 48),
+        receptacle_at(3, 1.5, 2.0, "LP1-3", 48),
+        receptacle_at(4, 6.0, 2.0, "LP1-3", 48),
+        receptacle_at(5, 1.5, -2.0, "LP1-5", 48),
+        receptacle_at(6, 6.0, -2.0, "LP1-5", 48),
+    ];
+    let mut s = building_of(devices, Some(20), |_| {});
+    let (_, fs) = screen(&mut s, &["E-CONDUIT-CONTINUITY"]);
+    let v = verdicts(&fs, "E-CONDUIT-CONTINUITY");
+    let bad: Vec<&Value> = of(&fs, "E-CONDUIT-CONTINUITY").into_iter().filter(|f| f["verdict"] != "pass").collect();
+    assert!(bad.is_empty(), "{bad:?}");
+    assert_eq!(v.get("pass"), Some(&6), "{v:?}");
+    // The homerun ends on the panel's top (LP1: x -24..-4 in, y -6..6 in, top 78 in), and each tap
+    // ends in the lead's box (receptacle 1, at 18, 0).
+    let ends = |pred: &dyn Fn(&str) -> bool| -> Vec<[f64; 3]> {
+        pieces(&s, "conduit")
+            .iter()
+            .filter(|(_, p)| pred(&p.get("run").map(|x| x.text()).unwrap_or_default()))
+            .flat_map(|(_, p)| ["start", "end"].map(|k| xyz(&p.get(k).map(|x| x.text()).unwrap_or_default())))
+            .collect()
+    };
+    let home = ends(&|r| r.contains(":home:"));
+    assert!(!home.is_empty(), "a homerun");
+    assert!(
+        home.iter().any(|q| (-25.0..=-3.0).contains(&q[0]) && (-7.0..=7.0).contains(&q[1]) && (q[2] - 78.0).abs() <= 1.0),
+        "the homerun ends on the panel's top: {home:?}"
+    );
+    let taps = ends(&|r| r.contains("#tap"));
+    assert!(!taps.is_empty(), "the taps");
+    // The lead's box: receptacle 1 at (18, 0) in, 48 in up; its top a little over that.
+    for c in ["LP1-3", "LP1-5"] {
+        let mine = ends(&|r| r.contains("#tap") && r.contains(c));
+        assert!(
+            mine.iter().any(|q| q[0].hypot(q[1]) > 0.0 && (q[0] - 18.0).hypot(q[1]) < 3.0 && (48.0..=54.0).contains(&q[2])),
+            "{c}'s tap ends in the lead's box: {mine:?}"
+        );
+        // Never back in its own first box (2 ft away, at the same height).
+        let own_y = if c == "LP1-3" { 24.0 } else { -24.0 };
+        let (in_own, in_lead) = (
+            mine.iter().filter(|q| (q[0] - 18.0).hypot(q[1] - own_y) < 3.0 && (48.0..=54.0).contains(&q[2])).count(),
+            mine.iter().filter(|q| (q[0] - 18.0).hypot(q[1]) < 3.0 && (48.0..=54.0).contains(&q[2])).count(),
+        );
+        assert_eq!((in_own, in_lead), (1, 1), "{c}: one end in its own first box, one in the lead's: {mine:?}");
+    }
 }
 
 #[test]
