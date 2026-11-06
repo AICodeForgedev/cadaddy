@@ -5147,6 +5147,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         job.devices.extend(typical.added.iter().cloned());
     }
     let mut all_devices = job.devices.clone();
+    // Where each plumbing fixture went: onto the fixture the architectural plan draws, or left at
+    // its tag (recorded on the model's fixtures once they are in it).
+    let mut fixture_fits: Vec<super::fixturefit::Fit> = Vec::new();
     if let Some(sch) = &schedule {
         let fixtures = plumbing_fixtures(s.doc()?, job, sch);
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
@@ -5502,6 +5505,26 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 counts = (not_placed, stamped.len());
                 out.extend(stamped);
+                // A plumbing plan's tag is set beside its fixture, clear of it: each fixture goes
+                // onto the fixture the architectural plan draws (Q6240), not its tag balloon.
+                if let Some(sch) = &schedule {
+                    let names: BTreeMap<String, String> = sch.rows.iter().map(|r| (r.tag.trim().to_string(), r.fixture.clone())).collect();
+                    let rules = super::fixturefit::rules();
+                    let rep = super::fixturefit::fit_fixtures(s.doc()?, &arch_plan_spans(job), &names, &mut out, upf_dev, rules);
+                    if !rep.fits.is_empty() {
+                        progress_line(&format!(
+                            "  plumbing fixtures onto the fixtures the architectural plans draw: {} moved {:?} (middle move {:.1} ft, largest {:.1} ft); at their tags, none drawn within {} ft: {} {:?}",
+                            rep.moved.values().sum::<usize>(),
+                            rep.moved,
+                            rep.median_move_ft,
+                            rep.largest_move_ft,
+                            rules.reach_ft,
+                            rep.at_tag.values().sum::<usize>(),
+                            rep.at_tag
+                        ));
+                    }
+                    fixture_fits = rep.fits;
+                }
                 out
             }
             _ => all_devices.clone(),
@@ -5777,6 +5800,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     if n > 0 {
                         s.doc_mut()?.building_spec = Some(sp.to_json());
                         progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
+                    }
+                }
+                // Where each fixture sits and why: on the drawn fixture, its tag kept beside it.
+                if !fixture_fits.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::fixturefit::record(&mut sp, &fixture_fits);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
                     }
                 }
                 // The code's devices the plans don't mark: a guest room's receptacles are
@@ -17368,6 +17400,20 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
     out
 }
 
+/// The handle ranges of the job's architectural plan sheets, `(lo, hi, sheet)`: the sheets of
+/// discipline A whose region is a plan (or that have no region of their own).
+fn arch_plan_spans(job: &GuidedJob) -> Vec<(u64, u64, String)> {
+    job.sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&sp.sheet)).eq_ignore_ascii_case("A"))
+        .filter(|sp| {
+            let regions: Vec<&SheetRegion> = job.sheet_regions.iter().filter(|r| sheet_key(&r.number) == sheet_key(&sp.sheet)).collect();
+            regions.is_empty() || regions.iter().any(|r| matches!(r.kind.as_str(), "plan" | "enlarged_plan"))
+        })
+        .map(|sp| (sp.lo, sp.hi, sp.sheet.clone()))
+        .collect()
+}
+
 /// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
 fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
     if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
@@ -24154,6 +24200,76 @@ mod tests {
         let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
         tags.sort_by(|a, b| a.1.total_cmp(&b.1));
         assert_eq!(tags, [("P-7", 100.0), ("P-1", 500.0)], "{found:?}");
+    }
+
+    #[test]
+    fn a_plumbing_fixture_sits_on_the_fixture_the_architectural_plan_draws_not_at_its_tag() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let rect = |s: &mut crate::Session, x0: f64, y0: f64, x1: f64, y1: f64| {
+            let v =
+                [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].iter().map(|p| cadaddy_geom::PolyVertex::new(cadaddy_geom::Vec2::new(p[0], p[1]))).collect();
+            let pl = cadaddy_doc::LwPolyline { vertices: v, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false };
+            s.doc_mut().unwrap().add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::LwPolyline(pl)).unwrap();
+        };
+        // A-9, the bath as the architectural plan draws it (inches): a tub across the top, a
+        // water closet (its tank against the wall, its bowl), a vanity and its basin with its drain.
+        let a_lo = s.doc().unwrap().handseed;
+        rect(&mut s, 0.0, 66.0, 60.0, 98.0);
+        rect(&mut s, 8.0, 0.0, 28.0, 9.5);
+        rect(&mut s, 10.5, 11.0, 25.5, 29.0);
+        rect(&mut s, 36.0, 0.0, 84.0, 20.0);
+        rect(&mut s, 51.0, 5.0, 69.0, 17.0);
+        s.execute("circle", &json!({"center": [60.0, 11.0], "radius": 0.75})).unwrap();
+        let a_hi = s.doc().unwrap().handseed;
+        // P-9, the plumbing plan over it: its tags set clear of the fixtures, the water
+        // closet's over the tub, the lavatory's in the door swing.
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
+        };
+        t(&mut s, [20.0, 80.0], "WC-7");
+        t(&mut s, [40.0, 45.0], "LV-7");
+        let p_hi = s.doc().unwrap().handseed;
+        let region = |n: &str, discipline: &str| SheetRegion {
+            number: n.into(),
+            level: "1".into(),
+            discipline: discipline.into(),
+            kind: "plan".into(),
+            rect: [-100.0, -100.0, 200.0, 200.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("A-9", "A"), region("P-9", "P")];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-9".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-9".into(), lo: a_hi, hi: p_hi }];
+        let row = |tag: &str, fixture: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+            tag: tag.into(),
+            fixture: fixture.into(),
+            ..Default::default()
+        };
+        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule {
+            rows: vec![row("WC-7", "WATER CLOSET"), row("LV-7", "LAVATORY")],
+            extent: [0.0; 4],
+            ..Default::default()
+        };
+        let mut found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        assert_eq!(found.len(), 2, "{found:?}");
+        let names: BTreeMap<String, String> = schedule.rows.iter().map(|r| (r.tag.clone(), r.fixture.clone())).collect();
+        let rep = super::super::fixturefit::fit_fixtures(
+            s.doc().unwrap(),
+            &arch_plan_spans(&job),
+            &names,
+            &mut found,
+            12.0,
+            super::super::fixturefit::rules(),
+        );
+        let at = |tag: &str| found.iter().find(|f| f.tag == tag).map(|f| f.at).unwrap_or_default();
+        let off = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+        assert!(off(at("WC-7"), [18.0, 14.5]) <= 6.0, "the water closet on its bowl and tank, not in the tub: {:?}", at("WC-7"));
+        assert!(off(at("LV-7"), [60.0, 11.0]) <= 6.0, "the lavatory on its basin, not in the door swing: {:?}", at("LV-7"));
+        assert!(rep.fits.iter().all(|f| f.provenance == "drawn" && f.basis.contains("A-9")), "{rep:?}");
     }
 
     #[test]

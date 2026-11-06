@@ -123,6 +123,7 @@ pub mod drywall;
 pub mod dwgprops;
 pub mod fieldview;
 pub mod finishes;
+pub(crate) mod fixturefit;
 pub mod fourd;
 pub mod framing;
 pub mod furnish;
