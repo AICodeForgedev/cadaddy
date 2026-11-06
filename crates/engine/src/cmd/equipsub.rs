@@ -637,9 +637,16 @@ mod tests {
         // A spot another object stands on isn't taken: three circuits, three objects.
         let mut sp2 = sp.clone();
         sp2.tags.clear();
-        let first = crate::cmd::coderules::spot_in_room(&["ELEV".to_string()], &rooms, &["Level 1".to_string()], &mut std::collections::BTreeMap::new()).expect("a spot");
-        sp2.tags.push(cadaddy_walk3d::tags::ElementTag { id: format!("device:Level 1:{:.1},{:.1}", first.2.x / 12.0, first.2.y / 12.0), ..Default::default() });
-        let three = from_answer(&serde_json::json!({"source": "s", "extra_circuits": [{"name": "A", "qty": 1}, {"name": "B", "qty": 1}, {"name": "C", "qty": 1}]}));
+        let first =
+            crate::cmd::coderules::spot_in_room(&["ELEV".to_string()], &rooms, &["Level 1".to_string()], &mut std::collections::BTreeMap::new())
+                .expect("a spot");
+        sp2.tags.push(cadaddy_walk3d::tags::ElementTag {
+            id: format!("device:Level 1:{:.1},{:.1}", first.2.x / 12.0, first.2.y / 12.0),
+            ..Default::default()
+        });
+        let three = from_answer(
+            &serde_json::json!({"source": "s", "extra_circuits": [{"name": "A", "qty": 1}, {"name": "B", "qty": 1}, {"name": "C", "qty": 1}]}),
+        );
         let three = EquipmentElectrical { tag: "ELEV-1".into(), description: "ELEVATOR".into(), ..three };
         assert_eq!(extra_circuit_tags(&mut sp2, &three, &rooms, "x").0.len(), 3);
         let ids: std::collections::BTreeSet<&String> = sp2.tags.iter().map(|t| &t.id).collect();
