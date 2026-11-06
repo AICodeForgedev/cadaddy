@@ -793,14 +793,14 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
     }
     let schedule_src = |what: &str| Source::from_doc(SourceKind::Schedule, &format!("plumbing fixture schedule {}{what}", docs.sheet));
     let found = fixtures(s.doc()?, &docs.rows);
-    // The levels whose water mains are proposed (copied from another level, not drawn).
+    // The levels whose water mains are proposed (copied from another level, not drawn: `status:derived`).
     let water_proposed_levels: BTreeSet<String> = {
         let d = s.doc()?;
         let water: BTreeSet<String> = r.water_systems.iter().map(|x| x.to_ascii_uppercase()).collect();
         d.model
             .iter()
             .filter(|e| super::bimlook::made_tag(e, "kind") == Some("pipe"))
-            .filter(|e| super::bimlook::made_tag(e, "status").is_some_and(|v| v.eq_ignore_ascii_case(super::mep::PROPOSED)))
+            .filter(|e| super::bimlook::made_tag(e, "status").is_some_and(|v| v.eq_ignore_ascii_case(super::waterfill::DERIVED)))
             .filter(|e| super::bimlook::made_tag(e, "system").is_some_and(|v| water.contains(&v.to_ascii_uppercase())))
             .filter_map(|e| super::bspec::made_level(e))
             .take(MAX_ELEMENTS)
@@ -960,9 +960,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         // Its water: derived where it is on a proposed water line, or its level's water mains are
         // proposed (the level has no water plan of its own: its branches aren't design-issued).
         let proposed_water = water_proposed_levels.contains(&f.level)
-            || ["cold_water", "hot_water"]
-                .iter()
-                .any(|k| st.get(k).and_then(|p| p.note.as_deref()).is_some_and(|n| n.to_ascii_lowercase().contains("proposed")));
+            || ["cold_water", "hot_water"].iter().any(|k| st.get(k).and_then(|p| p.note.as_deref()).is_some_and(on_filled_in_pipe));
         for (k, v, src, note) in &sizes {
             let key = format!("{k}_size");
             let mut p = Prop::new(clean(v), src.clone()).with_unit("in");
@@ -1369,6 +1367,13 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
     }))
 }
 
+/// Whether a fixture's water connection note (`plumbing::connect`'s) names a pipe no plan draws:
+/// `the nearest CW pipe (derived: no plan draws it)`, or `inferred`.
+fn on_filled_in_pipe(note: &str) -> bool {
+    let n = note.to_ascii_lowercase();
+    [super::waterfill::DERIVED, super::waterfill::INFERRED].iter().any(|w| n.contains(&format!("({w}:")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1564,7 +1569,7 @@ mod tests {
         let mut s = Session::new();
         let spec = cadaddy_walk3d::BuildingSpec::from_json("{}").expect("spec");
         s.doc_mut().expect("doc").building_spec = Some(spec.to_json());
-        let proposed = Prop::new("A1", Source::computed()).with_note("the nearest CW pipe (proposed: copied, not drawn)");
+        let proposed = Prop::new("A1", Source::computed()).with_note("the nearest CW pipe (derived: no plan draws it)");
         let wc = fixture_el(&mut s, "WC-1", 0.0, &[("cold_water", proposed)]);
         let lv = fixture_el(&mut s, "LV-1", 40.0, &[]);
         let sk = fixture_el(&mut s, "SK-1", 80.0, &[]);
@@ -1653,12 +1658,12 @@ mod tests {
         super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 40.0), Vec2::new(400.0, 40.0), 1.0, 100.0, 101.0);
         // As the MEP build tags a pipe: its app, `mep`, level, source, then its keys.
         let mut tags = vec![cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() }];
-        for t in ["mep", "Level 2", "0", "system:CW", "kind:pipe", "part:run", "status:proposed"] {
+        for t in ["mep", "Level 2", "0", "system:CW", "kind:pipe", "part:run", "status:derived"] {
             tags.push(cadaddy_doc::RawTag { code: 1000, value: t.into() });
         }
         s.doc_mut()
             .expect("doc")
-            .add(&Space::Model, Common { layer: "P-CW-PROPOSED".into(), xdata: tags.into(), ..Common::default() }, EntityKind::Mesh(m))
+            .add(&Space::Model, Common { layer: "P-CW-DERIVED".into(), xdata: tags.into(), ..Common::default() }, EntityKind::Mesh(m))
             .expect("pipe");
         let up =
             fixture_on(&mut s, "Level 2", "LV-1", 300.0, &[("cold_water", Prop::new("B2", Source::computed()).with_note("the nearest CW pipe"))]);
