@@ -8,12 +8,12 @@ one corner, then walks it at true size.
 ## Calling it
 
 ```
-bim.export.ar {room: "101"}                          one room (the default: the first one built)
-bim.export.ar {rooms: ["101", "102"], trades: ["electrical"]}
+bim.export.ar {room: "12"}                          one room (the default: the first one built)
+bim.export.ar {rooms: ["12", "14"], trades: ["electrical"]}
 bim.export.ar {level: "L2", kinds: ["receptacle", "switch"]}
 bim.export.ar {level: "L2", box: {min: [0, 0], max: [40, 30], z: [0, 12]}}
-bim.export.ar {room: "101", anchor: {grid: "C-4"}}   or {corner: 2}, or {name: "control point", at: [12.5, 3]}
-bim.export.ar {room: "101", context: "off", small: true, formats: ["usdz"], path: "out/room101"}
+bim.export.ar {room: "12", anchor: {grid: "C-4"}}   or {corner: 2}, or {name: "control point", at: [12.5, 3]}
+bim.export.ar {room: "12", context: "off", small: true, formats: ["usdz"], path: "out/room12"}
 ```
 
 - **Scope.** `room`/`rooms` (number, name or handle), `level` (all of it), `box` (building feet on
@@ -91,7 +91,7 @@ abstract `class` prim `/CADaddy_AR/Prototypes` that each element references.
   "scope": {...}, "rules": {...}, "counts": {"nodes", "meshes", "triangles"},
   "dropped": {"small_parts": {...}, "context_off", "filtered", "not_meshes", "over_element_cap", "over_caps": {...}},
   "cut_to_scope": n, "simplified": "nothing"|"context as boxes"|"context left out"|"context left out, the elements furthest from the anchor left out",
-  "points": [{"name": "101 GUEST corner 1", "kind": "room_corner", "level", "plan": [x, y], "position": [x, y, z]}],
+  "points": [{"name": "12 OFFICE corner 1", "kind": "room_corner", "level", "plan": [x, y], "position": [x, y, z]}],
   "elements": [{...the metadata above..., "position": [x, y, z]}] }
 ```
 
