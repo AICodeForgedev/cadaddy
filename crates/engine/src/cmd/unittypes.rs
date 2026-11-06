@@ -620,18 +620,19 @@ fn run_place(s: &mut Session, p: &Value) -> Result<Value> {
 
 // --------------- takeoff from the plan's tags ---------------
 
-/// Words that start a unit type's tag (`DOUBLE Q`, `SINGLE Q`, `ADA KING`, `UNIT B`, `TYPE A1`).
-const UNIT_WORDS: &[&str] = &["SINGLE", "DOUBLE", "KING", "QUEEN", "ADA", "SUITE", "STUDIO", "UNIT", "TYPE", "1BR", "2BR", "3BR", "EFFICIENCY"];
-
 /// A unit type a tag names (normalised: upper case, single spaces), if it names one.
 pub(crate) fn unit_type_of(text: &str) -> Option<String> {
     let t = text.trim().to_ascii_uppercase().split_whitespace().collect::<Vec<_>>().join(" ");
     let first = t.split(' ').next()?;
     let words = t.split(' ').count();
     // Equipment named like a unit (`UNIT HEATER`, `UNIT VENTILATOR`) and notes are no unit type.
-    let equipment =
-        t.split(' ').any(|w| matches!(w, "HEATER" | "HEATERS" | "VENTILATOR" | "VENTILATORS" | "SUBSTATION" | "PRICE" | "PRICES" | "WEIGHT"));
-    (UNIT_WORDS.contains(&first) && words <= 4 && t.len() <= 30 && !equipment && !t.chars().any(|c| matches!(c, '\'' | '"' | ':'))).then_some(t)
+    let equipment = t.split(' ').any(|w| cadaddy_mepfix::wordrules::words("units.not_unit_words").contains(&w));
+    (cadaddy_mepfix::wordrules::words("units.type_words").contains(&first)
+        && words <= 4
+        && t.len() <= 30
+        && !equipment
+        && !t.chars().any(|c| matches!(c, '\'' | '"' | ':')))
+    .then_some(t)
 }
 
 /// Unit tags looked at, at most.

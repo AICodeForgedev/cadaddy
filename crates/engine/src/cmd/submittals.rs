@@ -368,28 +368,6 @@ fn product_mark(e: &Entity) -> Option<String> {
     (!mark.is_empty()).then(|| mark.to_string())
 }
 
-/// The submittals at `paths`: each PDF (or a submittal's text, `.txt`) given, and those in each
-/// folder given (not its subfolders), in name order.
-/// Words of a submittal package's name that say it holds products the model's elements are.
-const PRODUCT_PACKAGE_WORDS: &[&str] = &[
-    "PTAC",
-    "EXHAUST FAN",
-    "AIR DEVICE",
-    "PLUMBING FIXTURE",
-    "TOILET ACCESSOR",
-    "FIRE ALARM",
-    "LIGHTING",
-    "GEAR",
-    "SWITCHGEAR",
-    "WIRING DEVICE",
-    "APPLIANCE",
-    "WATER HEATER",
-    "MIRROR",
-    "DOAS",
-    "UNIT HEATER",
-    "SPLIT SYSTEM",
-];
-
 /// The PDFs in the folders under `dir` (not in it) whose path names a product package
 /// ([`PRODUCT_PACKAGE_WORDS`]), four folders deep at most.
 fn product_packages(dir: &std::path::Path, out: &mut Vec<String>, depth: usize) {
@@ -404,7 +382,10 @@ fn product_packages(dir: &std::path::Path, out: &mut Vec<String>, depth: usize) 
             product_packages(&p, out, depth + 1);
         } else if depth > 0 && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("pdf")) {
             let up = p.to_string_lossy().to_ascii_uppercase();
-            if PRODUCT_PACKAGE_WORDS.iter().any(|w| up.contains(w)) && !up.contains("_NET.PDF") && out.len() < MAX_FILES {
+            if cadaddy_mepfix::wordrules::words("equipment.submittal_package_words").iter().any(|w| up.contains(w))
+                && !up.contains("_NET.PDF")
+                && out.len() < MAX_FILES
+            {
                 out.push(p.to_string_lossy().to_string());
             }
         }

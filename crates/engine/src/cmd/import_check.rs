@@ -318,10 +318,6 @@ pub(crate) fn detect_do_not_scale(d: &Drawing) -> Option<String> {
     None
 }
 
-/// Known discipline prefixes: sheet number prefix → discipline code.
-const DISCIPLINE_PREFIX: &[(&str, &str)] =
-    &[("FP", "FP"), ("FA", "FA"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
-
 /// Detect sheet discipline from sheet number prefix or title keywords.
 fn detect_discipline(d: &Drawing) -> Option<String> {
     // Look for a sheet number on the TITLE/BORDER layer.
@@ -342,7 +338,7 @@ fn detect_discipline(d: &Drawing) -> Option<String> {
         }
         if let Some(next) = trimmed.chars().nth(letters.len())
             && (next == '-' || next == '.' || next.is_ascii_digit())
-            && let Some((_, disc)) = DISCIPLINE_PREFIX.iter().find(|(p, _)| *p == letters.as_str())
+            && let Some((_, disc)) = cadaddy_mepfix::wordrules::pairs("sheets.import_discipline_prefix").iter().find(|(p, _)| *p == letters.as_str())
         {
             return Some(disc.to_string());
         }

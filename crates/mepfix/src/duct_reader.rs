@@ -1016,9 +1016,6 @@ fn pattern_neighbours(boxes: &[(Vec2, Vec2)]) -> Vec<usize> {
     count
 }
 
-/// Equipment marks, which are not air devices' tags.
-const EQUIPMENT_MARKS: &[&str] = &["AHU", "RTU", "VAV", "EF", "FCU", "CU", "HP", "ERV", "MAU", "UH", "CUH", "FPB", "SF", "RF", "WH", "P"];
-
 /// Whether `t` is an air device's tag: a type mark (`CD-1`, `RG2`, `SD-1A`) or an airflow
 /// (`150 CFM`).
 pub(crate) fn is_terminal_tag(t: &str) -> bool {
@@ -1038,7 +1035,7 @@ pub(crate) fn is_terminal_tag(t: &str) -> bool {
         && (1..=2).contains(&digits)
         && tail.len() <= 1
         && tail.chars().all(|c| c.is_ascii_uppercase())
-        && !EQUIPMENT_MARKS.contains(&letters.as_str())
+        && !crate::wordrules::words("equipment.marks").contains(&letters.as_str())
 }
 
 // ---- Equipment detection ---------------------------------------------------

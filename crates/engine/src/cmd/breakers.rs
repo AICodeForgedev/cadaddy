@@ -872,7 +872,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     let mut typed: BTreeMap<(String, String, String, Option<i64>, u32), usize> = BTreeMap::new();
     for (m, h) in made.iter().zip(&handles) {
         let Some(h) = *h else { continue };
-        let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(&sched_of)) else { continue };
+        let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(sched_of)) else { continue };
         let Some(c) = s.circuits.get(m.row) else { continue };
         let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} schedule, circuit {}", s.source, s.panel.trim(), c.number.trim()));
         let tr = trip(&c.breaker);
@@ -1086,7 +1086,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
     // The runs landing on panels count as plan circuits of their schedule.
     let mut landed: BTreeSet<(String, u32)> = BTreeSet::new();
     for (pi, n) in lands.keys() {
-        if let Some((k, _)) = panels.get(*pi).and_then(&sched_of) {
+        if let Some((k, _)) = panels.get(*pi).and_then(sched_of) {
             landed.insert((k.clone(), *n));
         }
     }

@@ -494,30 +494,6 @@ pub fn read_lists_marking(texts: &[TextItem], used: &mut [bool]) -> Vec<Listed> 
 
 // ---------------------------------------------------------------- what an entry is for
 
-/// The items a list names, by the words it uses: (topic, words). A device's own words (its
-/// kind, its type, its mark) name its topics the same way.
-const TOPICS: &[(&str, &[&str])] = &[
-    ("receptacle", &["RECEPTACLE", "OUTLET", "REC", "GFCI", "DUPLEX", "QUAD"]),
-    ("switch", &["SWITCH", "DIMMER", "TOGGLE"]),
-    ("data", &["DATA", "VOICE", "TELEPHONE", "TEL", "LOW VOLTAGE", "TV", "CATV", "LOW_VOLTAGE"]),
-    ("card_reader", &["CARD READER", "CR"]),
-    ("thermostat", &["THERMOSTAT", "TSTAT"]),
-    ("panel", &["PANELBOARD", "PANEL"]),
-    ("emergency_light", &["EMERGENCY LIGHT", "EMERGENCY LIGHTS", "EMERGENCY"]),
-    ("exit", &["EXIT"]),
-    ("pull_station", &["PULL STATION", "PULL"]),
-    ("notification", &["HORN", "STROBE", "SPEAKER", "VISUAL", "SIGNAL"]),
-    ("detector", &["SMOKE", "DETECTOR", "HEAT DETECTOR"]),
-    ("water_closet", &["WATER CLOSET", "TOILET", "WC"]),
-    ("urinal", &["URINAL"]),
-    ("lavatory", &["LAVATORY", "LAV", "VANITY"]),
-    ("sink", &["SINK", "COUNTERTOP", "COUNTER"]),
-    ("drinking_fountain", &["DRINKING FOUNTAIN", "EWC"]),
-    ("shower", &["SHOWER HEAD", "SHOWERHEAD"]),
-    ("extinguisher", &["EXTINGUISHER"]),
-    ("door_holder", &["DOOR HOLD", "HOLD OPEN", "MAGNETIC"]),
-];
-
 /// Words of `text` as `_A_B_` (upper case, singular).
 fn word_line(text: &str) -> String {
     let up = norm(text).to_ascii_uppercase();
@@ -542,7 +518,11 @@ fn word_line(text: &str) -> String {
 /// The topics `text` names.
 pub fn topics(text: &str) -> BTreeSet<&'static str> {
     let w = word_line(text);
-    TOPICS.iter().filter(|(_, ws)| ws.iter().any(|x| w.contains(&format!("_{}_", word_line(x).trim_matches('_'))))).map(|(t, _)| *t).collect()
+    cadaddy_mepfix::wordrules::groups("devices.mount_topics")
+        .iter()
+        .filter(|(_, ws)| ws.iter().any(|x| w.contains(&format!("_{}_", word_line(x).trim_matches('_')))))
+        .map(|(t, _)| *t)
+        .collect()
 }
 
 /// Is a list entry about `subject` for an item of `kind` (the model's kind words), type `name`

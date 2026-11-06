@@ -505,7 +505,7 @@ pub fn read_sheet_index(drawing: &cadaddy_doc::Drawing) -> Vec<String> {
         }
         let prefix = parts[0];
         let suffix = parts[1];
-        let valid_prefix = matches!(prefix, "G" | "A" | "S" | "M" | "P" | "FP" | "E" | "FA" | "T" | "C" | "SL");
+        let valid_prefix = crate::wordrules::words("sheets.valid_prefixes").contains(&prefix);
         let valid_suffix = suffix.len() >= 2 && suffix.chars().next().is_some_and(|c| c.is_ascii_digit());
         valid_prefix && valid_suffix
     };
