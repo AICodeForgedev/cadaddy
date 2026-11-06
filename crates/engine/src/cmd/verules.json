@@ -54,6 +54,45 @@
     "cable_item": "Firestop system, cable through-penetration (UL listed)",
     "source": "IBC 714 / NEC 300.21: each penetration of a fire-rated assembly sealed with a system listed for what passes through it (a raceway's system is not a cable's)"
   },
+  "cable_work_doc": "What a cable method's takeoff needs besides the cable and its supports (the cable, its staples or straps and their spacing are the atom rules' `cables`, mepatoms.json), by cable. `entry`: what each cable entering a box or a panel takes, by what it enters (`steel` or `nonmetallic` box, `gear`); an empty item: nothing bought (the box's own clamps). `boxes`: the design's device boxes of `swap_sizes` that cable work sets the device in the atom rules' cable box instead (`box_for` … `cable`), the devices of one plate group in one box of their gang (`by_gang`: the atom rules' box ids). `guards`: nail plates where the cable passes framing nearer its face than `edge_min_in`. `lv_bracket`: a low-voltage outlet's box and ring in the scenario's rooms become a bracket. `connector_size`: a cable connector's trade size by the cable's largest conductor. `panel_end`: what each connector at a panel takes besides itself.",
+  "cable_work": {
+    "NM": {
+      "entry": {
+        "steel": {"item": "NM cable connector", "size": "3/8\"", "source": "NEC 314.17(B)(1): a cable entering a metal box is secured to it (a listed cable connector)"},
+        "gear": {"item": "NM cable connector", "size": "3/8\"", "source": "NEC 312.5(C): a cable entering a cabinet or panelboard is secured to it (a listed cable connector)"},
+        "nonmetallic": {"item": "", "size": "", "source": "NEC 314.17(C): a nonmetallic box's own cable clamps secure the cable (nothing bought)"}
+      },
+      "boxes": {
+        "swap_sizes": ["4\" square"],
+        "by_gang": {"1": "nm1-18", "2": "nm2-32", "3": "nm3-53", "4": "nm4-68"},
+        "source": "company default: in cable work a device's 4 in square box and its ring become a nonmetallic new-work box of its plate's gang (the devices of one plate group in one box); octagon, fan and equipment boxes stay"
+      },
+      "guards": {
+        "item": "Nail plate (stud guard), 1/16 in steel",
+        "size": "1-1/2 x 3",
+        "edge_min_in": 1.25,
+        "stud_depth_in": 3.5,
+        "hole_in": 0.875,
+        "stud_spacing_in": 16,
+        "per_plate_crossing": 1,
+        "reach_in": 6,
+        "source": "NEC 300.4(A)(1): where a bored hole's edge is nearer than 1-1/4 in to the framing member's edge, a steel plate at least 1/16 in thick protects the cable",
+        "plate_source": "company default: a nail plate at each top or bottom plate a cable is bored through, up or down a wall (cables sharing a hole share it): a hole in a 2x plate is seldom 1-1/4 in from both edges",
+        "stud_source": "company default: holes bored in the middle of 3-1/2 in studs with a 7/8 in bit keep 1-5/16 in to each edge: a plate at a stud only where the rule's depth and bit leave less than 1-1/4 in"
+      },
+      "lv_bracket": {
+        "box_kinds": ["low voltage outlet"],
+        "item": "Low-voltage mounting bracket",
+        "size": "1 gang",
+        "source": "company default: in cable-wired rooms a low-voltage outlet is set in a mounting bracket, no box (Class 2 and communications cables need no enclosure, NEC Articles 725 and 800)"
+      }
+    },
+    "SER": {
+      "connector_size": [["6", "3/4\""], ["4", "1\""], ["3", "1\""], ["2", "1\""], ["1", "1-1/4\""], ["1/0", "1-1/4\""], ["2/0", "1-1/4\""], ["3/0", "1-1/2\""], ["4/0", "1-1/2\""], ["250", "2\""], ["300", "2\""], ["350", "2\""], ["500", "2-1/2\""]],
+      "connector_size_source": "company default (manufacturers' data for 4-conductor aluminum SE cable): a cable connector's trade size by the cable's largest conductor",
+      "panel_end": [{"kind": "locknut", "item": "Locknut", "source": "NEC 312.5(C): the cable connector secured to the enclosure by its locknut inside"}]
+    }
+  },
   "intents": [
     {
       "id": "specifier_default",

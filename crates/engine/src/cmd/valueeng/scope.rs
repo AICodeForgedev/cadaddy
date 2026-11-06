@@ -707,8 +707,9 @@ pub(crate) fn takes(alt: &Alternative, it: &Item) -> std::result::Result<(), Str
     Ok(())
 }
 
-/// The design's pieces as takeoff lines (boxes and rings stay as they are either way: left out)
-/// and its firestops; a feeder's conductors as the model's wire pieces, else from its schedule.
+/// The design's pieces as takeoff lines (a junction box of its runs too: the scenario's takeoff
+/// leaves it out) and its firestops; a feeder's conductors as the model's wire pieces, else from
+/// its schedule. The device boxes a cable's work replaces are [`super::cablework`]'s.
 pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_item: &str) -> Vec<Line> {
     let mut by: BTreeMap<(String, String, String, String), f64> = BTreeMap::new();
     for it in items {
@@ -726,8 +727,9 @@ pub(crate) fn design_lines(d: &Drawing, sp: &BuildingSpec, items: &[&Item], fs_i
             let ps = props::read(&e.common.xdata);
             let g = |k: &str| ps.get(k).map(Prop::text).unwrap_or_default();
             let kind = g(mepatoms::ATOM_KEY);
-            // Boxes and rings stay either way.
-            if matches!(kind.as_str(), "box" | "ring" | "") || (feeder.is_some() && kind == "wire" && !modelled_wire) {
+            // A feeder's conductors come from the model where its raceways carry them, else from
+            // its schedule (a model with entry stubs only carries one set at each gear).
+            if kind.is_empty() || (feeder.is_some() && kind == "wire" && !modelled_wire) {
                 continue;
             }
             conduit |= kind == "conduit";

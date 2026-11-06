@@ -49,12 +49,12 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire, a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|breaker (a panel's, from its schedule row), a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
         CommandSpec::new("bim.chain", "Walk the Feed", run_chain)
-            .params("{handle, limit?: elements (2000)} → {from, path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
+            .params("{handle, limit?: elements (2000)} → {from, breaker?: {handle, type, trip_a, poles, load, panel, source_row} (its circuit's breaker in the panel), path: [{handle, kind, item, size, circuit}], source: {handle, kind, tag}?, upstream: [{handle, tag}] (gear above the panel), length_ft (raceway or cable on the path)}: from a device (or any piece) back to its panel through its box, raceway or cable, then up the feeders")
             .noundo(),
     ]
 }
@@ -88,6 +88,9 @@ pub(crate) struct Raceway {
     /// The most degrees of bends between pull points.
     pub max_bends_deg: f64,
     pub max_bends_source: String,
+    /// Its connectors take no locknut (they snap into the knockout).
+    pub no_locknut: bool,
+    pub no_locknut_source: String,
 }
 
 impl Raceway {
@@ -230,11 +233,20 @@ pub(crate) struct AtomRules {
     pub default_raceway_source: String,
     pub insulation: String,
     pub insulation_source: String,
+    /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
+    /// when the rules give them (their sum), else as given.
     pub makeup_ft: f64,
+    pub makeup_min_in: f64,
+    pub makeup_allowance_in: f64,
     pub makeup_source: String,
-    /// Each conductor's makeup where it ends at a panel (to its breaker), feet.
+    /// Each conductor's makeup where it ends at a panel (to its breaker), feet, when its height
+    /// isn't known; else the share of its height it runs down the can (and a box's makeup).
     pub panel_makeup_ft: f64,
+    pub panel_makeup_height_share: f64,
     pub panel_makeup_source: String,
+    /// What an empty raceway's open end (a stub into the ceiling space) ends in.
+    pub stub_bushing_item: String,
+    pub stub_bushing_source: String,
     pub bushing_min_awg: u32,
     pub bushing_item: String,
     pub bushing_source: String,
@@ -259,7 +271,14 @@ pub(crate) struct AtomRules {
 /// The rules data, read once.
 pub(crate) fn rules() -> &'static AtomRules {
     static R: std::sync::OnceLock<AtomRules> = std::sync::OnceLock::new();
-    R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
+    R.get_or_init(|| {
+        let mut r: AtomRules = serde_json::from_str(RULES).unwrap_or_default();
+        let parts = r.makeup_min_in.max(0.0) + r.makeup_allowance_in.max(0.0);
+        if parts.is_finite() && parts > 0.0 {
+            r.makeup_ft = parts / 12.0;
+        }
+        r
+    })
 }
 
 impl AtomRules {
@@ -343,7 +362,7 @@ pub(crate) struct Atom {
 }
 
 impl Atom {
-    fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
+    pub(crate) fn fitting(kind: &'static str, item: String, ty: &str, size: &str, at: Vec3, dir: Vec3, body_in: f64, source: &str) -> Self {
         Atom { kind, item, ty: ty.into(), size: size.into(), body_in, a: at, b: at + dir, source: source.into(), ..Atom::default() }
     }
 }
@@ -492,6 +511,22 @@ pub(crate) fn raceway_pieces(
     material: &str,
     rw: &Raceway,
     large_conductors: bool,
+    rules: &AtomRules,
+) -> Pieces {
+    raceway_pieces_ending(path, upf, size_in, material, rw, large_conductors, [false, false], rules)
+}
+
+/// [`raceway_pieces`], each end `open` (ending in no box or enclosure: a stub) taking the stub
+/// bushing in place of a connector and locknut.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn raceway_pieces_ending(
+    path: &[Vec3],
+    upf: f64,
+    size_in: f64,
+    material: &str,
+    rw: &Raceway,
+    large_conductors: bool,
+    open: [bool; 2],
     rules: &AtomRules,
 ) -> Pieces {
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
@@ -659,6 +694,20 @@ pub(crate) fn raceway_pieces(
         let (at, dir) =
             if end == 0 { (pts.first().copied(), legs.first().map(|l| l.0 - l.1)) } else { (pts.last().copied(), legs.last().map(|l| l.1 - l.0)) };
         let (Some(at), Some(dir)) = (at, dir) else { continue };
+        if open.get(end).copied().unwrap_or(false) && !rules.stub_bushing_item.is_empty() {
+            let mut bu =
+                Atom::fitting("bushing", rules.stub_bushing_item.clone(), material, &size, at, dir, size_in * 1.2, &rules.stub_bushing_source);
+            bu.connects = vec![p];
+            let bi = out.atoms.len();
+            out.atoms.push(bu);
+            if let Some(a) = out.atoms.get_mut(p) {
+                a.connects.push(bi);
+            }
+            if let Some(x) = out.ends.get_mut(end) {
+                *x = Some(bi);
+            }
+            continue;
+        }
         let mut c = Atom::fitting("connector", rw.connector.clone(), material, &size, at, dir, size_in * 1.3, &rw.stock_source);
         c.connects = vec![p];
         let ci = out.atoms.len();
@@ -668,6 +717,9 @@ pub(crate) fn raceway_pieces(
         }
         if let Some(x) = out.ends.get_mut(end) {
             *x = Some(ci);
+        }
+        if rw.no_locknut {
+            continue;
         }
         let mut nut = Atom::fitting("locknut", rules.locknut_item.clone(), material, &size, at, dir, size_in * 1.6, &rules.locknut_source);
         nut.connects = vec![ci];
@@ -1228,6 +1280,7 @@ fn norm_kind(s: &str) -> String {
         "mud_ring" | "plaster_ring" | "rings" => "ring".into(),
         "wires" | "conductor" | "conductors" => "wire".into(),
         "cables" | "romex" => "cable".into(),
+        "breakers" | "circuit_breaker" | "circuit_breakers" | "cb" => "breaker".into(),
         "outlet" | "receptacles" => "receptacle".into(),
         "light" | "light_fixture" | "luminaires" => "luminaire".into(),
         _ => k,
@@ -1641,8 +1694,25 @@ fn run_chain(s: &mut Session, p: &Value) -> Result<Value> {
             _ => break,
         }
     }
+    // The breaker its circuit leaves the panel on (Q6166): the device's, else a piece's on the way.
+    let breaker = std::iter::once(h)
+        .chain(path.iter().copied())
+        .filter_map(|x| d.model.get(x))
+        .find_map(|e| props::read(&e.common.xdata).get("breaker_handle").and_then(|p| Handle::parse_hex(p.text().trim())))
+        .and_then(|b| d.model.get(b))
+        .map(|e| {
+            let ps = props::read(&e.common.xdata);
+            let mut j = node_json(e);
+            for k in ["type", "trip_a", "poles", "load", "panel", "source_row"] {
+                if let Some(v) = ps.get(k).filter(|v| v.has_value()) {
+                    j[k] = v.value.clone();
+                }
+            }
+            j
+        });
     Ok(json!({
         "from": node_json(&start),
+        "breaker": breaker,
         "path": path.iter().filter_map(|x| d.model.get(*x)).map(|e| node_json(e)).collect::<Vec<_>>(),
         "source": found.and_then(|x| d.model.get(x)).map(|e| node_json(e)),
         "upstream": upstream,
@@ -1920,7 +1990,7 @@ mod tests {
         let c = &p.atoms[0];
         assert_eq!((c.kind, c.ty.as_str(), c.size.as_str(), c.item.as_str()), ("cable", "NM 12/2 w/G", "#12", "NM-B cable"));
         assert!((p.length_ft - 25.0).abs() < 1e-9);
-        assert!((c.length_ft - 27.0).abs() < 1e-9, "25' of run plus 1' makeup at each end: {}", c.length_ft);
+        assert!((c.length_ft - 28.0).abs() < 1e-9, "25' of run plus 1.5' makeup at each end (300.14's 6\" and a 12\" allowance): {}", c.length_ft);
         assert_eq!(c.extra.iter().find(|x| x.0 == "conductors").map(|x| x.1.as_str()), Some("3"));
         // Staples within 12" of each box, at most 4-1/2' apart.
         let st: Vec<f64> = p
@@ -1948,7 +2018,7 @@ mod tests {
         let w = wires(&line(30.0), 12.0, "2#12 + 1#12G", &[3], "120/208", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["red", "white", "green"], "circuit 3 is phase B");
-        assert!(w.iter().all(|a| (a.length_ft - 32.0).abs() < 1e-9));
+        assert!(w.iter().all(|a| (a.length_ft - 33.0).abs() < 1e-9), "30' and 1.5' at each end");
         let w = wires(&line(10.0), 12.0, "3#10 + 1#10G", &[1, 3, 5], "277/480", r);
         let colors: Vec<&str> = w.iter().map(|a| a.extra.iter().find(|x| x.0 == "color").map_or("", |x| x.1.as_str())).collect();
         assert_eq!(colors, vec!["brown", "orange", "yellow", "green"]);

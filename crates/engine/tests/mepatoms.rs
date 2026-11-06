@@ -113,8 +113,9 @@ fn a_25_ft_nm_12_2_from_a_panel_to_a_receptacle_box() {
     let mut s = building(Some("NM cable"));
     let cable = count(&mut s, json!({"kind": "cable", "circuit": "LP1-3"}));
     assert_eq!(cable["count"], json!(1), "{cable}");
-    // 25' of run plus 1' makeup at the box and 3' at the panel (to its breaker).
-    assert_eq!(cable["length_ft"], json!(29.0), "{cable}");
+    // 25' of run plus 1.5' makeup at the box (300.14's 6" and the 12" allowance) and 3.5' at
+    // the panel (half its 4' can down to the breaker, and a box's makeup).
+    assert_eq!(cable["length_ft"], json!(30.0), "{cable}");
     assert_eq!(cable["estimated"], json!(1));
     assert_eq!(count(&mut s, json!({"kind": "cable", "type": "NM 12/2"}))["count"], json!(1));
     // Its box: a 1 gang nonmetallic box (on cable), of 18 cu in.
@@ -134,7 +135,7 @@ fn a_25_ft_nm_12_2_from_a_panel_to_a_receptacle_box() {
     assert!(kinds.contains(&"box") && kinds.contains(&"cable"), "{chain}");
     assert_eq!(chain["source"]["tag"], json!("LP1"), "{chain}");
     assert_eq!(chain["upstream"][0]["tag"], json!("MDP"), "the feeder from MDP to LP1: {chain}");
-    assert_eq!(chain["length_ft"], json!(29.0));
+    assert_eq!(chain["length_ft"], json!(30.0));
     // Staples within 12" of each box and every 4-1/2' at most: 1, 24 and five between.
     assert_eq!(count(&mut s, json!({"kind": "strap", "type": "NM"}))["count"], json!(7));
 }

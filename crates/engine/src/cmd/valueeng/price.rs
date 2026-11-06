@@ -208,6 +208,15 @@ impl Manpower {
     }
 }
 
+/// Two sets of takeoff lines as one: the same kind, item, size and unit summed.
+pub(crate) fn merge(lines: Vec<Line>, more: &[Line]) -> Vec<Line> {
+    let mut by: std::collections::BTreeMap<(String, String, String, String), f64> = std::collections::BTreeMap::new();
+    for l in lines.into_iter().chain(more.iter().cloned()) {
+        *by.entry((l.kind, l.item, l.size, l.unit)).or_default() += l.qty;
+    }
+    by.into_iter().map(|((kind, item, size, unit), qty)| Line { kind, item, size, unit, qty: (qty * 100.0).round() / 100.0 }).collect()
+}
+
 fn r2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }

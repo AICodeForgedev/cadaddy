@@ -12,3 +12,9 @@
 
 # local build/test logs
 /*.log
+
+# iOS app (apps/ios): Xcode per-user state and build output
+xcuserdata/
+*.xcuserstate
+apps/ios/**/build/
+apps/ios/**/DerivedData/

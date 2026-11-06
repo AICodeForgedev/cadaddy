@@ -126,7 +126,7 @@ pub(crate) fn rules() -> &'static Rules {
 }
 
 impl Rules {
-    fn label(&self, party: &str) -> String {
+    pub(crate) fn label(&self, party: &str) -> String {
         self.parties.get(party).map_or_else(|| party.to_string(), |p| p.label.clone())
     }
 
