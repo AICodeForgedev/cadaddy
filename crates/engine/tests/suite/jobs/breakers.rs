@@ -158,6 +158,22 @@ fn val<'a>(p: &'a Value, k: &str) -> &'a Value {
     &p[k]["value"]
 }
 
+/// The project says what is in the panel: its breakers take that type, the print in their source.
+#[test]
+fn a_panels_breakers_as_built_outrank_its_printed_schedule() {
+    let mut s = building();
+    s.execute(
+        "project.rules.set",
+        &json!({"domain": "custom", "key": "breaker_protection.LP1", "value": "AF/GF", "tier": "field_verified", "source": "field report", "reason": "seen in the panel"}),
+    )
+    .unwrap();
+    s.execute("bim.breakers", &json!({})).unwrap();
+    let all = breakers_of(&mut s, "LP1");
+    let room = all.iter().find(|b| val(b, "load") == "SIGN").unwrap_or_else(|| panic!("{all:#?}"));
+    assert_eq!(val(room, "type"), "dual-function", "{room:#}");
+    assert!(room["type"]["source"]["doc"].as_str().is_some_and(|d| d.contains("as built") && d.contains("prints none")), "{room:#}");
+}
+
 #[test]
 fn each_schedule_row_is_a_breaker_inside_its_panel_with_what_the_row_says() {
     let mut s = building();
