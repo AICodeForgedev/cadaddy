@@ -1260,8 +1260,8 @@ impl RouteCtx<'_> {
 
     /// The feed on through `a`'s feed-through lugs to `b`, the next of its chain: straight through
     /// the floor when `b` stands over or under it (out of `a`'s top into `b`'s bottom, or the
-    /// other way), a short leg in `b`'s wall when it's a little off; over the ceiling when on one
-    /// level.
+    /// other way); a little off, through the floor into the lower level's ceiling space, square
+    /// across over its ceiling and plumb into `b`; over the ceiling when on one level.
     fn feed_through(&self, a: &Gear, b: &Gear, size: f64, src: &str, runs: &mut Vec<cadaddy_walk3d::MepRun>) -> Result<(), String> {
         if a.level.eq_ignore_ascii_case(&b.level) {
             return self.gear_to_gear(a, b, (false, false), (Self::mid(a), Self::mid(b)), size, src, runs);
@@ -1271,11 +1271,31 @@ impl RouteCtx<'_> {
         let za = if up { a.bottom_ft + a.height_ft } else { a.bottom_ft };
         let zb = if up { b.bottom_ft } else { b.bottom_ft + b.height_ft };
         let pa = Self::mid(a);
-        self.riser(&a.level, src, pa, za.min(rise + zb), za.max(rise + zb), size, runs);
         let pa_there = pa - self.corner(&a.level) + self.corner(&b.level);
         let pb = Self::mid(b);
-        if (pa_there - pb).len() > 0.5 * self.upf {
-            runs.push(self.run(&b.level, src, vec![[pa_there.x, pa_there.y], [pb.x, pb.y]], size, zb, None));
+        if (pa_there - pb).len() <= 0.5 * self.upf {
+            self.riser(&a.level, src, pa, za.min(rise + zb), za.max(rise + zb), size, runs);
+            return Ok(());
+        }
+        // Off the stack: through the floor into the ceiling space between them (the lower
+        // level's), square across over its ceiling, and plumb into `b`; never a leg across the
+        // room at the gear's height.
+        let square = |p: Vec2, q: Vec2| {
+            let mut pts = vec![[p.x, p.y], [q.x, p.y], [q.x, q.y]];
+            pts.dedup_by(|u, v| (u[0] - v[0]).abs() < 1e-6 && (u[1] - v[1]).abs() < 1e-6);
+            pts
+        };
+        if up {
+            let h = self.ceiling(&a.level) + FEEDER_OVER_CEILING_FT;
+            let pb_here = pb - self.corner(&b.level) + self.corner(&a.level);
+            self.riser(&a.level, src, pa, za.min(h), za.max(h), size, runs);
+            runs.push(self.run(&a.level, src, square(pa, pb_here), size, h, None));
+            self.riser(&a.level, src, pb_here, h.min(rise + zb), h.max(rise + zb), size, runs);
+        } else {
+            let h = self.ceiling(&b.level) + FEEDER_OVER_CEILING_FT;
+            self.riser(&a.level, src, pa, (rise + h).min(za), (rise + h).max(za), size, runs);
+            runs.push(self.run(&b.level, src, square(pa_there, pb), size, h, None));
+            self.riser(&b.level, src, pb, zb.min(h), zb.max(h), size, runs);
         }
         Ok(())
     }
@@ -1680,6 +1700,62 @@ mod feeder_route_tests {
         assert_eq!(tally(&[left.clone(), left.clone(), left.clone()].concat()), vec!["123 DP1→G: no placed copy of it left to feed ×3".to_string()]);
         sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule { panel: "G".into(), typical_of: Some(124), ..Default::default() });
         assert_eq!(typical_placed(&sp), vec![("G".to_string(), 4, 124)]);
+    }
+
+    #[test]
+    fn a_copy_off_its_stack_is_fed_square_over_the_ceiling_never_across_the_room_at_the_gears_height() {
+        let mut sp = cadaddy_walk3d::BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        for (n, e, r) in [("Level 1", 0.0, [0.0, 0.0, 1200.0, 1200.0]), ("Level 2", 10.0, [5000.0, 0.0, 6200.0, 1200.0])] {
+            sp.levels.push(
+                serde_json::from_value(serde_json::json!({"name": n, "elevation_ft": e, "height_ft": 10.0, "ceiling_ft": 9.0, "region": r}))
+                    .expect("level"),
+            );
+        }
+        // G-201 stands 2' east and 2'-6" north of G-101 on plan: off its stack in both directions.
+        sp.mep.equipment = vec![
+            gear("DP1", "Level 1", [100.0, 100.0], 2.0, 4.0),
+            gear("G-101", "Level 1", [300.0, 600.0], 4.0, 3.0),
+            gear("G-201", "Level 2", [5324.0, 630.0], 4.0, 3.0),
+        ];
+        sp.mep.panel_schedules = vec![cadaddy_walk3d::PanelSchedule {
+            panel: "DP1".into(),
+            circuits: vec![cadaddy_walk3d::PanelCircuit { number: "1".into(), description: "PANELBOARD G (2 UNITS)".into(), ..Default::default() }],
+            ..Default::default()
+        }];
+        sp.mep.feeders = vec![cadaddy_walk3d::Feeder {
+            tag: "123".into(),
+            from: "DP1".into(),
+            to: "G".into(),
+            conduits: 1,
+            conduit_in: 2.0,
+            entry: "top".into(),
+            ..Default::default()
+        }];
+        let (runs, _) = feeder_runs(&sp);
+        let through: Vec<_> = runs.iter().filter(|r| r.source_sheet.contains("G-101→G-201")).collect();
+        assert!(!through.is_empty(), "{runs:#?}");
+        // Every level piece square on plan.
+        for r in &runs {
+            for w in r.points.windows(2) {
+                let (dx, dy) = ((w[1][0] - w[0][0]).abs(), (w[1][1] - w[0][1]).abs());
+                assert!(dx < 1e-6 || dy < 1e-6, "a diagonal: {r:#?}");
+            }
+        }
+        // Out of G-101's top (7') up into Level 1's ceiling space (its feeders' route height, as
+        // DP1's leg runs), square across to under G-201, and up through the floor into its
+        // bottom (10' + 4'); no leg on Level 2 at the gear's height.
+        let h = runs
+            .iter()
+            .find(|r| r.top_ft.is_none() && r.points.first() != Some(&[300.0, 600.0]))
+            .and_then(|r| r.bottoms_ft.first().copied())
+            .expect("route height");
+        assert!(h > 7.0 && h < 10.0, "{h}");
+        let level: Vec<_> = through.iter().filter(|r| r.top_ft.is_none() && r.points.first() == Some(&[300.0, 600.0])).collect();
+        assert_eq!(level.len(), 1, "{level:#?}");
+        assert_eq!((level[0].level.as_str(), level[0].points.len()), ("Level 1", 3), "one L: {level:#?}");
+        assert!(level[0].bottoms_ft.iter().all(|b| (b - h).abs() < 1e-9), "{level:#?}");
+        assert!(through.iter().any(|r| r.top_ft == Some(h) && r.bottoms_ft == vec![7.0]), "{through:#?}");
+        assert!(through.iter().any(|r| r.top_ft == Some(14.0) && r.bottoms_ft == vec![h] && r.points == vec![[324.0, 630.0]]), "{through:#?}");
     }
 
     #[test]

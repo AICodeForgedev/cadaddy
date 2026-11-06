@@ -233,11 +233,13 @@ pub(crate) fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
     for (i, w) in r.points.windows(2).enumerate().take(super::MAX_PIECES) {
         if let [a, b] = w {
             let zi = z(i);
-            let pa = Vec3::new(a[0], a[1], zi);
-            if out.last().is_none_or(|q| super::dist(*q, pa) > 1e-9) {
-                out.push(pa);
+            // A zero-length segment (a riser between the heights around it) adds no point of
+            // its own: the path's end is the box's top, not that point twice.
+            for q in [Vec3::new(a[0], a[1], zi), Vec3::new(b[0], b[1], zi)] {
+                if out.last().is_none_or(|l| super::dist(*l, q) > 1e-9) {
+                    out.push(q);
+                }
             }
-            out.push(Vec3::new(b[0], b[1], zi));
         }
     }
     out.retain(|p| p.is_finite());
@@ -1164,6 +1166,27 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(bi, _, _, _)| bi)
     };
+    // The box a routed run's end at `p` was routed to: on its level, the nearest in plan within
+    // the rules' landing distance (a box of its own circuit wins a tie within an inch), never
+    // `other` (the box its other end is in).
+    let land_reach = rl.routed_land_ft.max(0.0) * upf;
+    let box_at = |boxes: &[DevBox], level: &str, circuit: &str, p: Vec3, other: Option<usize>| -> Option<usize> {
+        let pp = Vec2::new(p.x, p.y);
+        boxes
+            .iter()
+            .enumerate()
+            .filter(|(bi, b)| Some(*bi) != other && b.level.eq_ignore_ascii_case(level))
+            .map(|(bi, b)| {
+                (
+                    bi,
+                    Vec2::new(b.entry.x, b.entry.y).dist(pp) + if on_circuit(&b.circuit, circuit) { 0.0 } else { upf / 12.0 },
+                    (b.entry.z - p.z).abs(),
+                )
+            })
+            .filter(|(_, dp, dz)| *dp <= land_reach + upf / 12.0 && *dz <= 3.0 * upf)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(bi, _, _)| bi)
+    };
     for (key, (m, ps)) in &paths {
         // A run passing a box of its own circuit ends in it (and the next leaves it).
         // A run passing a box of its own circuit ends in it (and the next leaves it): one at its
@@ -1232,6 +1255,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // What each free end lands in: a device's box (an estimated route moves onto it), a
             // panel, else nothing (an open end).
             let mut lands: [Option<Land>; 2] = [None, None];
+            // The box each end landed in: the other end never lands in the same one (that
+            // would close the run on itself with a chord back to its start).
+            let mut landed: [Option<usize>; 2] = [None, None];
             for (end, land) in lands.iter_mut().enumerate() {
                 let n = c.ends.get(end).copied().unwrap_or(usize::MAX);
                 if let Some(&j) = junction_at.get(&n) {
@@ -1256,10 +1282,20 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         .min_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
                         .map(|(bi, _, _)| bi)
                 };
-                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box) } else { own_outlet() };
-                let near_box = near.filter(|_| m.feeder.is_none()).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
+                let other = landed.get(1 - end).copied().flatten();
+                let near = if !m.devices.is_empty() {
+                    own_outlet()
+                } else if m.routed && !m.estimated {
+                    box_at(&boxes, &key.level, &m.circuit, p, other)
+                } else {
+                    box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box)
+                };
+                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
+                    if let Some(l) = landed.get_mut(end) {
+                        *l = Some(bi);
+                    }
                     let gap = (entry.z - p.z).abs();
                     if gap > 3.0 * upf {
                         // Not moved: the route gives no drop to it; the gap is said for review.
@@ -1937,27 +1973,37 @@ fn chain_made(sp: &BuildingSpec, runs: &[usize]) -> (Made, String) {
         .unwrap_or((Made::Drawn, String::new()))
 }
 
-/// Move a run's end onto a box's entry: a short jog at the run's height, then into the box.
+/// Move a run's end onto a box's entry as the field runs it: the drop the route ends in (the
+/// points straight over or under its end) is taken back to where the run arrives at its height,
+/// the run goes on square at that height (along the way it arrived, then across) to over or
+/// under the entry, and plumb into it. A run arriving level at the box's own height (no drop)
+/// jogs square at that height. Never a chord across the room at the box's height.
 fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     if end == 0 {
         pts.reverse();
     }
     let tiny = upf / 192.0;
-    let n = pts.len();
-    if let (Some(&last), Some(&prev)) = (pts.get(n.wrapping_sub(1)), pts.get(n.wrapping_sub(2))) {
-        let vertical = Vec2::new(last.x - prev.x, last.y - prev.y).len() <= tiny;
-        let plan_off = Vec2::new(entry.x - last.x, entry.y - last.y).len();
-        if vertical {
-            pts.pop();
-            if plan_off > tiny {
-                pts.push(Vec3::new(entry.x, entry.y, prev.z));
+    let plan = |p: Vec3| Vec2::new(p.x, p.y);
+    if let Some(&last) = pts.last() {
+        // The drop at the end: the trailing points over or under the last.
+        let mut k = pts.len() - 1;
+        while k > 0 && pts.get(k - 1).is_some_and(|q| plan(*q).dist(plan(last)) <= tiny) {
+            k -= 1;
+        }
+        pts.truncate(k + 1);
+        if let Some(&top) = pts.last() {
+            let (p, q) = (plan(top), plan(entry));
+            let came = k.checked_sub(1).and_then(|j| pts.get(j)).map(|a| p - plan(*a));
+            if p.dist(q) > tiny {
+                if (q.x - p.x).abs() > tiny && (q.y - p.y).abs() > tiny {
+                    // Along the way it arrived first, then across.
+                    let along_x = came.is_none_or(|d| d.x.abs() >= d.y.abs());
+                    let corner = if along_x { Vec2::new(q.x, p.y) } else { Vec2::new(p.x, q.y) };
+                    pts.push(Vec3::new(corner.x, corner.y, top.z));
+                }
+                pts.push(Vec3::new(q.x, q.y, top.z));
             }
-            pts.push(entry);
-        } else {
-            if plan_off > tiny {
-                pts.push(Vec3::new(entry.x, entry.y, last.z));
-            }
-            if (entry.z - last.z).abs() > tiny {
+            if (entry.z - top.z).abs() > tiny || p.dist(q) > tiny {
                 pts.push(entry);
             }
         }

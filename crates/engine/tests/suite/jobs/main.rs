@@ -58,6 +58,7 @@ mod perceive;
 mod planview;
 mod progress_hotel;
 mod propuse;
+mod racewaygeom;
 mod readerwire;
 mod rooms3d;
 mod roomsmodel;
