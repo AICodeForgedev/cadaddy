@@ -1868,6 +1868,10 @@ pub struct EquipmentElectrical {
     pub source: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// Other circuits its submittal calls for (an elevator's cab lights and fan, controller
+    /// light): built as objects where the drawings have none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extra_circuits: Vec<ExtraCircuit>,
     /// Built instead of the drawings' where its submittal differs (`drawing_ocpd` and the feeder
     /// stay beside it): its protection, conductors and conduit, why, and the rule.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -1885,6 +1889,17 @@ pub struct EquipmentElectrical {
     pub change_material: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub change_labor_hours: Option<f64>,
+}
+
+/// A circuit an equipment's submittal calls for besides its feeder.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExtraCircuit {
+    /// What it feeds (`CAB LIGHTS AND FAN`).
+    pub name: String,
+    pub volts: Option<f64>,
+    pub amps: Option<f64>,
+    pub qty: u32,
 }
 
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest

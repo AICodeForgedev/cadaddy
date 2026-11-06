@@ -15517,6 +15517,36 @@ fn equipment_step(
             false,
         );
     }
+    // The other circuits its submittal calls for: built as objects.
+    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
+    let (mut built_extra, mut no_room_extra) = (Vec::new(), Vec::new());
+    for e in rows.iter().filter(|e| !e.extra_circuits.is_empty()) {
+        let (b, n) = equipsub::extra_circuit_tags(&mut sp, e, &rooms, &rule.cite);
+        built_extra.extend(b);
+        no_room_extra.extend(n);
+    }
+    if !built_extra.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Circuits equipment submittals call for, built as objects",
+            &format!("The drawings have no circuit for these: {}", built_extra.join("; ")),
+            2,
+            vec!["Each needs a breaker and a circuit: the design value and the basis are on the object".into()],
+            None,
+            false,
+        );
+    }
+    if !no_room_extra.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Circuits equipment submittals call for, with no room found",
+            &no_room_extra.join("; "),
+            3,
+            vec!["Say which room each is in".into()],
+            None,
+            false,
+        );
+    }
     // What can't be built (a fault current study): an RFI (once) and a finding.
     let mut rfis = Vec::new();
     for (tag, c) in
@@ -15561,6 +15591,9 @@ fn equipment_step(
     );
     sp.mep.equipment_electrical = rows;
     s.doc_mut()?.building_spec = Some(sp.to_json());
+    if !built_extra.is_empty() {
+        super::propfill::rebuild_devices(s, "bim_build")?;
+    }
     report_progress(s, json!({"step": "equipment connections"}), &line);
     s.echo(line);
     result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "rfis": rfis, "asked": asked});

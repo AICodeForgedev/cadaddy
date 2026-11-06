@@ -88,6 +88,34 @@ pub(crate) struct Place {
     pub rooms: Vec<String>,
 }
 
+/// A spot for something the drawings don't place: in the first room whose name has one of `words`,
+/// on the lowest level with one, along its longest wall (a quarter of the way for the first, on
+/// from there for the next, `used` keeping count): its level, the room's name and the point.
+pub(crate) fn spot_in_room(
+    words: &[String],
+    rooms: &[(String, String, Vec<cadaddy_geom::Vec2>)],
+    levels: &[String],
+    used: &mut BTreeMap<usize, usize>,
+) -> Option<(String, String, cadaddy_geom::Vec2)> {
+    let same_level = |a: &str, b: &str| {
+        let (a, b) = (a.trim().to_ascii_uppercase(), b.trim().to_ascii_uppercase());
+        a == b || a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
+    };
+    let names_it = |name: &str| {
+        let up = name.to_ascii_uppercase();
+        up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| words.iter().any(|r| r == w))
+    };
+    let (i, level) =
+        levels.iter().find_map(|l| rooms.iter().position(|(n, rl, o)| same_level(rl, l) && o.len() >= 3 && names_it(n)).map(|i| (i, l.clone())))?;
+    let (name, _, outline) = rooms.get(i)?;
+    let edges = outline.iter().zip(outline.iter().cycle().skip(1));
+    let (a, b) = edges.max_by(|x, y| x.0.dist(*x.1).total_cmp(&y.0.dist(*y.1)))?;
+    let nth = used.entry(i).or_insert(0);
+    let t = (*nth as f64 + 1.0) / 4.0;
+    *nth += 1;
+    Some((level, name.clone(), *a + (*b - *a) * t.min(0.9)))
+}
+
 /// The receptacle circuits a panel schedule calls for in a place the code names (`RCPT - ELEVATOR
 /// CAB`) with no receptacle on any plan: the schedule says it is there, the plans are silent, so
 /// it is built in a room of that place, on its longest wall, from the schedule and the code, its
@@ -99,10 +127,6 @@ pub(crate) fn silent_place_receptacles(
 ) -> (Vec<String>, Vec<String>) {
     let Some(gf) = rules().into_iter().find(|r| r.sets == "gfci") else { return (Vec::new(), Vec::new()) };
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let same_level = |a: &str, b: &str| {
-        let (a, b) = (a.trim().to_ascii_uppercase(), b.trim().to_ascii_uppercase());
-        a == b || a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
-    };
     let on_plans: BTreeSet<String> = sp
         .tags
         .iter()
@@ -123,26 +147,10 @@ pub(crate) fn silent_place_receptacles(
             if place.rooms.is_empty() || on_plans.contains(&circuit.to_ascii_uppercase()) {
                 continue;
             }
-            // A room of the place, on the lowest level that has one.
-            let names_it = |name: &str| {
-                let up = name.to_ascii_uppercase();
-                up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| place.rooms.iter().any(|r| r == w))
-            };
-            let found = levels
-                .iter()
-                .find_map(|l| rooms.iter().position(|(n, rl, o)| same_level(rl, l) && o.len() >= 3 && names_it(n)).map(|i| (i, l.clone())));
-            let Some((i, level)) = found else {
+            let Some((level, name, at)) = spot_in_room(&place.rooms, rooms, &levels, &mut used) else {
                 no_room.push(format!("{circuit} {}", c.description.trim()));
                 continue;
             };
-            let Some((name, _, outline)) = rooms.get(i) else { continue };
-            // Along its longest wall, a third of the way for the first, on from there for the next.
-            let edges = outline.iter().zip(outline.iter().cycle().skip(1));
-            let Some((a, b)) = edges.max_by(|x, y| x.0.dist(*x.1).total_cmp(&y.0.dist(*y.1))) else { continue };
-            let nth = used.entry(i).or_insert(0);
-            let t = f64::from(*nth as u32 + 1) / 4.0;
-            *nth += 1;
-            let at = *a + (*b - *a) * t.min(0.9);
             let breaker_gf = c.protection.iter().any(|code| gf.tags.iter().any(|t| t.eq_ignore_ascii_case(code)));
             let (mark, item) = if breaker_gf { ("REC", "duplex receptacle") } else { ("GFCI", "GFCI receptacle") };
             let source = if p.source.trim().is_empty() { "panel schedule".to_string() } else { p.source.trim().to_string() };
