@@ -1576,6 +1576,9 @@ pub(crate) struct Routed {
     pub feeders: BTreeSet<String>,
     /// Each leg's path as a cable runs it where that is not the raceway's ([`CABLE_FILE`]).
     pub cable: Vec<MepRun>,
+    /// The raceway's minimum trade size the routing used, and where it came from (the
+    /// specification's, else the rules'): an estimated route left takes it (Q6235).
+    pub minimum: Option<(f64, String)>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -2399,6 +2402,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     };
     let min_in = methods.min_size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rl.methods.minimum_size_in.max(0.5));
     let min_src = if methods.min_size_in.is_some() { methods.min_size_source.clone() } else { rl.methods.minimum_source.clone() };
+    out.minimum = Some((min_in, min_src.clone()));
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     let texts = drawing_texts(d);
@@ -4196,6 +4200,9 @@ pub(crate) fn estimates_routed_elsewhere(sp: &BuildingSpec, routed: &Routed) -> 
         .collect()
 }
 
+/// How an estimated route left is sized (its `size_source`), so a later routing sizes it again.
+const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routing's minimum: ";
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
 /// runs and the routed tags come in (the drawn conduit stays as it is). What went: the tags and
 /// estimated runs as read (a routing's own earlier output is not among them).
@@ -4220,6 +4227,38 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     replaced.runs =
         sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));
+    // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
+    // the routing's minimum, not the reader's default size (Q6235).
+    if let Some((min_in, min_src)) = &routed.minimum {
+        let rl = rules();
+        let of: HashMap<&str, (&str, &str)> = sp
+            .tags
+            .iter()
+            .map(|t| {
+                let f = |k: &str| t.fields.get(k).map(|f| f.value.as_str());
+                (t.id.as_str(), (f("conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS), f("conduit").unwrap_or_default()))
+            })
+            .collect();
+        for r in sp
+            .mep
+            .runs
+            .iter_mut()
+            .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM && (r.size_source == "default" || r.size_source.starts_with(EST_FILL)))
+        {
+            let (mk, named) =
+                super::printcond::circuit_of_run(r).and_then(|c| of.get(c)).copied().unwrap_or((super::printcond::DEFAULT_CONDUCTORS, ""));
+            let method = super::mepatoms::rules().raceway_named(named).map_or_else(|| rl.methods.raceway.clone(), |(k, _)| k.to_string());
+            if let Some((t, area, allowed)) = fill_size(&super::mepatoms::conductor_parts(mk), &method, *min_in, rl) {
+                r.size_in[0] = t;
+                r.size_source = format!(
+                    "{EST_FILL}{mk}: {} sq in of conductors in {} sq in allowed ({}); not under the minimum: {min_src}",
+                    r3(area),
+                    r3(allowed),
+                    rl.fill.source
+                );
+            }
+        }
+    }
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
     sp.mep.runs.extend(routed.runs.iter().cloned());

@@ -588,6 +588,7 @@ fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() 
         report: Value::Null,
         feeders: BTreeSet::new(),
         cable: Vec::new(),
+        minimum: None,
     };
     let gone = estimates_routed_elsewhere(&sp, &routed);
     assert_eq!(gone.iter().map(String::as_str).collect::<Vec<_>>(), ["circuit:L1:E-601:LP1-7", "circuit:L1:room-SUITE TYPE 2:G-3"], "{gone:?}");

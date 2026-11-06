@@ -168,8 +168,19 @@ fn a_circuit_tagged_on_two_sheets_has_one_route() {
     let circuits: Vec<String> =
         left["rows"].as_array().map(|a| a.iter().filter_map(|x| x["circuit"].as_str().map(String::from)).collect()).unwrap_or_default();
     assert_eq!(circuits, ["LP1-9"], "{left}");
-    // Rerouting keeps it so.
+    // The one left is the raceway its conductors fill at the routing's minimum (the rules'
+    // 3/4" here), not the reader's default.
+    let size = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "size"}));
+    assert_eq!(size["rows"].as_array().map(|a| a.iter().map(|x| x["size"].clone()).collect::<Vec<_>>()), Some(vec![json!("3/4\"")]), "{size}");
+    // A specification's 1/2" minimum, rerouted: the circuit still has one route, and the estimate
+    // left takes the 1/2" its 2#12 + 1#12G fill.
+    let methods = json!({"min_size_in": 0.5, "min_size_source": "spec 26 05 33: minimum raceway size 1/2 in"});
+    if let Ok(d) = s.doc_mut() {
+        d.embedded.insert("route/methods.json".into(), std::sync::Arc::new(serde_json::to_vec(&methods).unwrap_or_default()));
+    }
     s.execute("conduit.reroute", &json!({})).expect("reroute");
     let again = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "circuit"}));
-    assert_eq!(again["rows"], left["rows"], "{again}");
+    assert_eq!(again["rows"].as_array().map(|a| a.iter().map(|x| x["circuit"].clone()).collect::<Vec<_>>()), Some(vec![json!("LP1-9")]), "{again}");
+    let size = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "size"}));
+    assert_eq!(size["rows"].as_array().map(|a| a.iter().map(|x| x["size"].clone()).collect::<Vec<_>>()), Some(vec![json!("1/2\"")]), "{size}");
 }
