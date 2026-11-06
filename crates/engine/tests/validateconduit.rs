@@ -169,6 +169,23 @@ fn the_conduit_rules_are_built_in_and_run_by_the_prescreen() {
 }
 
 #[test]
+fn a_three_pole_loads_current_is_its_va_over_root_three_times_its_line_voltage() {
+    // Q6234: LP1-5 as a three-pole 6,000 VA load on 120/208 V draws 16.7 A (6000 / (1.732 x
+    // 208)), not the 28.8 A it would be over 208 V alone.
+    let mut s = building(Some(20), |_| {});
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    spec["mep"]["panel_schedules"][0]["circuits"][2]["poles"] = json!(3);
+    spec["mep"]["panel_schedules"][0]["circuits"][2]["load_va"] = json!(6000.0);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+    let (_, fs) = screen(&mut s, &["E-VDROP"]);
+    let far = of(&fs, "E-VDROP").into_iter().find(|f| f["measured"]["circuit"] == "LP1-5").cloned().unwrap_or_default();
+    assert_eq!(far["measured"]["volts"], json!(208.0), "{far}");
+    assert!(far["measured"]["amps"].as_f64().is_some_and(|a| (a - 16.65).abs() < 0.05), "{far}");
+}
+
+#[test]
 fn data_the_documents_dont_give_is_unsure_never_a_pass() {
     // No panel schedule (no breakers, no loads) and no wiring-methods table.
     let mut s = building(None, |_| {});
