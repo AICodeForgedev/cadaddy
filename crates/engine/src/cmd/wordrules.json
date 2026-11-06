@@ -1381,6 +1381,30 @@
     }
    ]
   },
+  "finishes.floor_patterns": {
+   "source": "trade practice: the patterned layouts a floor code names (moved from finishes.rs `pattern_of`)",
+   "words": [
+    "HERRINGBONE",
+    "CHEVRON",
+    "DIAGONAL",
+    "BASKETWEAVE",
+    "PATTERN"
+   ]
+  },
+  "finishes.paint_sheens": {
+   "source": "trade practice: the paint sheens a finish legend names; the first the description contains is taken (SEMIGLOSS reads as SEMI-GLOSS) (moved from finishes.rs `parse_sheen`)",
+   "words": [
+    "SEMI-GLOSS",
+    "SEMIGLOSS",
+    "HIGH GLOSS",
+    "GLOSS",
+    "EGGSHELL",
+    "SATIN",
+    "LOW SHEEN",
+    "FLAT",
+    "MATTE"
+   ]
+  },
   "fixtures.emergency_words": {
    "source": "trade practice: a fixture type whose description or lamp has one of these is emergency or exit lighting; the first found is the reason given (moved from lighting.rs)",
    "words": [
@@ -2169,6 +2193,76 @@
      "words": [
       "ELEV",
       "ELEVATOR"
+     ]
+    }
+   ]
+  },
+  "rooms.specialty_rooms": {
+   "source": "trade practice: the room names whose specialties (bath accessories, wardrobe rod, toilet accessories, corner guards, extinguisher cabinet) the company standard places until the documents show them, per room use (value); the rule text and items stay in finishes.rs (moved from finishes.rs `room_rules`)",
+   "groups": [
+    {
+     "value": "guest_bath",
+     "words": [
+      "GUEST BATH",
+      "GUEST BATHROOM",
+      "UNIT BATH"
+     ]
+    },
+    {
+     "value": "guest_room",
+     "words": [
+      "GUEST ROOM",
+      "GUESTROOM",
+      "KING",
+      "QUEEN",
+      "DOUBLE QUEEN"
+     ]
+    },
+    {
+     "value": "womens_restroom",
+     "words": [
+      "WOMEN",
+      "WOMENS",
+      "LADIES"
+     ]
+    },
+    {
+     "value": "mens_restroom",
+     "words": [
+      "MEN",
+      "MENS"
+     ]
+    },
+    {
+     "value": "restroom",
+     "words": [
+      "RESTROOM",
+      "TOILET",
+      "UNISEX",
+      "ALL GENDER"
+     ]
+    },
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR",
+      "HALL",
+      "HALLWAY"
+     ]
+    },
+    {
+     "value": "mechanical_room",
+     "words": [
+      "MECH",
+      "MECHANICAL"
+     ]
+    },
+    {
+     "value": "high_traffic_room",
+     "words": [
+      "BREAK ROOM",
+      "WORK ROOM",
+      "COPY"
      ]
     }
    ]
@@ -3167,6 +3261,59 @@
     "TYPICAL",
     "TYP.",
     "ROOM"
+   ]
+  },
+  "walls.room_side_words": {
+   "source": "trade practice: the room names either side of an untagged wall that pick its type, per wall use (value: corridor, wet, acoustic) (moved from wall_reader.rs)",
+   "groups": [
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR"
+     ]
+    },
+    {
+     "value": "wet",
+     "words": [
+      "MEN",
+      "WOMEN",
+      "TOILET",
+      "RESTROOM"
+     ]
+    },
+    {
+     "value": "acoustic",
+     "words": [
+      "CONFERENCE",
+      "TRAINING"
+     ]
+    }
+   ]
+  },
+  "walls.type_name_words": {
+   "source": "trade practice: the words of the wall type's name each wall use (value) takes: the corridor type, the plumbing wall, the acoustic one (moved from wall_reader.rs)",
+   "groups": [
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR"
+     ]
+    },
+    {
+     "value": "wet",
+     "words": [
+      "PLUMBING",
+      "CHASE",
+      "WET"
+     ]
+    },
+    {
+     "value": "acoustic",
+     "words": [
+      "ACOUSTIC",
+      "SOUND"
+     ]
+    }
    ]
   }
  }

@@ -269,11 +269,19 @@ const READING: &[&str] = &[
     "crates/mepfix/src/framing.rs",
     "crates/mepfix/src/asbuilt.rs",
     "crates/mepfix/src/tagid.rs",
+    "crates/mepfix/src/finishes.rs",
+    "crates/mepfix/src/wall_reader.rs",
 ];
 
 /// Word lists that stay in the reading code, each with its reason: (file, signature, reason).
 /// A list's signature is `const NAME`, or its first two words.
 const ALLOWED: &[(&str, &str, &str)] = &[
+    ("crates/mepfix/src/finishes.rs", "[flooring painting]", "our trade sections of the finish takeoff (flooring, painting...): our own names"),
+    (
+        "crates/mepfix/src/wall_reader.rs",
+        "const NOT_LEADERS",
+        "CAD layer-name parts (NCS codes such as IDEN, DIMS, POWR, A-WALL): drafting convention of layer naming",
+    ),
     (
         "crates/engine/src/cmd/guided.rs",
         "[ WALL ELEVATION]",
