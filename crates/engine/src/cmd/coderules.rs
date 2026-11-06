@@ -348,7 +348,9 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
     // A receptacle with no circuit printed, in a room whose other receptacles are all under GFCI
     // breakers: the same. (Not a guess at its circuit: any of them would protect it.)
     let mut in_room: BTreeMap<String, Vec<Option<bool>>> = BTreeMap::new();
-    for r in recs.iter().filter(|r| !r.room.trim().is_empty()) {
+    // (A two-pole's breaker says nothing of the room's 120 V receptacles: a PTAC's.)
+    let two_pole = |r: &Rec| r.circuit.as_ref().is_some_and(|c| c.1.contains(','));
+    for r in recs.iter().filter(|r| !r.room.trim().is_empty() && !two_pole(r)) {
         in_room.entry(r.room.trim().to_ascii_uppercase()).or_default().push(r.gfci_breaker);
     }
     let src_of: BTreeMap<String, Source> = recs

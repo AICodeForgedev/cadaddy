@@ -547,6 +547,9 @@ pub(crate) fn merge(into: &mut EquipmentElectrical, from: &EquipmentElectrical) 
     if into.source.is_empty() {
         into.source.clone_from(&from.source);
     }
+    if into.extra_circuits.is_empty() {
+        into.extra_circuits.clone_from(&from.extra_circuits);
+    }
 }
 
 #[cfg(test)]
@@ -603,7 +606,11 @@ mod tests {
                 {"name": "HOISTWAY LIGHTING", "volts": 120, "amps": 15, "qty": 0}
             ]
         }));
-        let e = EquipmentElectrical { tag: "ELEV-1".into(), description: "ELEVATOR".into(), ..e };
+        // Merged into its record, they come along.
+        let mut merged = EquipmentElectrical { tag: "ELEV-1".into(), description: "ELEVATOR".into(), ..Default::default() };
+        merge(&mut merged, &e);
+        assert_eq!(merged.extra_circuits.len(), 2);
+        let e = merged;
         let rooms = vec![("ELEV.".to_string(), "1".to_string(), vec![v(0.0, 0.0), v(120.0, 0.0), v(120.0, 60.0), v(0.0, 60.0)])];
         let (built, none) = extra_circuit_tags(&mut sp, &e, &rooms, "NEC 110.3(B)");
         assert_eq!(built.len(), 1, "{built:?}");

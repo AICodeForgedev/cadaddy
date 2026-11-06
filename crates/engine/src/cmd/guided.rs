@@ -15552,8 +15552,20 @@ fn equipment_step(
             false,
         );
     }
-    // The other circuits its submittal calls for: built as objects.
-    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
+    // The other circuits its submittal calls for: built as objects. (In the rooms, and the
+    // hoistways, stairs and corridors traced apart from them.)
+    let mut rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
+    for c in &sp.circulation {
+        for [a, b] in c.rects.iter().take(1) {
+            let o = vec![
+                cadaddy_geom::Vec2::new(a[0], a[1]),
+                cadaddy_geom::Vec2::new(b[0], a[1]),
+                cadaddy_geom::Vec2::new(b[0], b[1]),
+                cadaddy_geom::Vec2::new(a[0], b[1]),
+            ];
+            rooms.push((c.name.clone(), c.level.clone(), o));
+        }
+    }
     // A receptacle a panel schedule calls for in a code place, no plan draws: built.
     let (built_silent, no_room_silent) = super::coderules::silent_place_receptacles(&mut sp, &rooms);
     if !built_silent.is_empty() {
