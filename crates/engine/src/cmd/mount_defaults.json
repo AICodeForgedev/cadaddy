@@ -10,7 +10,11 @@
     {"kind": "occupancy sensor", "inches": 108, "to": "centre", "why": "the usual height of a wall occupancy sensor, no document gives one"},
     {"kind": "plumbing fixture", "words": ["CLEANOUT", "CLEAN OUT", "WCO"], "inches": 18, "to": "centre", "why": "the usual height of a wall cleanout, no document gives one"},
     {"kind": "plumbing fixture", "words": ["LAVATORY", "SINK", "BASIN"], "inches": 34, "to": "top", "why": "the usual rim height of a lavatory or sink (34\"), no document gives one"},
-    {"kind": "plumbing fixture", "words": ["EYEWASH", "FAUCET", "HOSE"], "inches": 36, "to": "centre", "why": "the usual height of a wall faucet or eyewash, no document gives one"},
+    {"kind": "plumbing fixture", "words": ["WASHING MACHINE", "WASHER", "LAUNDRY BOX"], "inches": 42, "to": "centre", "why": "trade practice: a washer outlet box sits above the washer, its standpipe 18 to 42 inches over its trap (IPC 802.4.3): 42\" to its middle, no document gives one"},
+    {"kind": "plumbing fixture", "words": ["HOSE", "HYDRANT"], "inches": 24, "to": "centre", "why": "trade practice: a hose bibb or wall hydrant 18 to 24 inches over the floor or grade (24\"), no document gives one"},
+    {"kind": "plumbing fixture", "words": ["EYEWASH", "FAUCET"], "inches": 36, "to": "centre", "why": "the usual height of a wall faucet or eyewash, no document gives one"},
+    {"kind": "plumbing fixture", "words": ["EXPANSION TANK"], "inches": 72, "to": "centre", "why": "trade practice: an expansion tank hangs on the water heater's cold supply above the heater (72\" to its middle), no document gives one"},
+    {"kind": "plumbing fixture", "words": ["MIXING VALVE", "WATER VALVE", "SHUT OFF", "SHUTOFF", "BALANCING VALVE"], "inches": 60, "to": "centre", "why": "trade practice: a valve on the water heater or supply piping is set where it can be reached and serviced (60\" to its middle), no document gives one"},
     {"kind": "plumbing fixture", "inches": 18, "to": "centre", "why": "the usual height of a wall plumbing connection, no document gives one"},
     {"kind": "device", "inches": 18, "to": "centre", "why": "the usual height of a receptacle or device (18\" to its middle), no document gives one"}
   ]

@@ -4840,11 +4840,14 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
                 let pipes: BTreeSet<String> =
                     sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
-                let (twice, twice_ft) = super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
-                    u8::from(!enlarged.contains(&sheet_key(sheet)))
-                });
-                if twice > 0 {
-                    progress_line(&format!("  pipe runs drawn twice, one kept: {twice} dropped ({twice_ft:.0} ft)"));
+                let (twice, twice_cut, twice_ft) =
+                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
+                        u8::from(!enlarged.contains(&sheet_key(sheet)))
+                    });
+                if twice + twice_cut > 0 {
+                    progress_line(&format!(
+                        "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
+                    ));
                 }
                 // A level whose plans draw its drainage but no water: the plumbers piped it all
                 // the same. Over the area where its rooms stack on the floor it is piped like

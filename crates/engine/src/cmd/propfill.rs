@@ -2281,6 +2281,20 @@ mod tests {
         assert_eq!((z, d), (48.0, super::super::mountlist::Datum::Centre));
         assert!(why.contains("no document"));
         assert_eq!(rules_default("plumbing fixture", "LAVATORY").1, super::super::mountlist::Datum::Top);
+        // The wall connections no document sets a height for, at the trade's heights, each with its basis.
+        for (words, inches) in [
+            ("washing machine box P-91", 42.0),
+            ("hose bibb P-92", 24.0),
+            ("expansion tank ET-9", 72.0),
+            ("thermostatic mixing valve TMV", 60.0),
+            ("water valve WV", 60.0),
+            ("cleanout WCO", 18.0),
+            ("trap primer TP-9", 18.0),
+        ] {
+            let (z, _, why) = rules_default("plumbing fixture", words);
+            assert_eq!(z, inches, "{words}");
+            assert!(why.contains("no document gives one"), "{words}: {why}");
+        }
     }
 
     /// A switch read in a door's opening goes on the wall beside the door, not on the head over
