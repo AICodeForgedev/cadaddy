@@ -2132,6 +2132,15 @@ pub struct MepRun {
     /// The sheet this run was read from (e.g. `"M-201"`, `"M-301"`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_sheet: String,
+    /// A drainage run's fall (inches per foot, toward its outlet), as the code or the drawings
+    /// set it; 0: level (pressure piping, ducts, conduit). Its bottoms are its invert at its
+    /// upstream end.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub slope_in_per_ft: f64,
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
 }
 
 fn is_false(v: &bool) -> bool {

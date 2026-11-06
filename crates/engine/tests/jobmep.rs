@@ -98,12 +98,23 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
     // The model's quantities are what the plans read, put onto the architecture: a run that can't
     // be placed isn't drawn, and says so.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
-    let not_placed = job["guided_job"]["findings"].to_string().contains("MEP items not placed");
-    for (model, read) in
-        [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (q["totals"]["pipe_length_ft"].as_f64().expect("pipe"), pipe_ft)]
-    {
+    let findings = job["guided_job"]["findings"].to_string();
+    let not_placed = findings.contains("MEP items not placed");
+    // Pipe drawn twice is taken out once, and said, with its feet.
+    let twice_ft = job["guided_job"]["findings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|f| f["description"] == "Pipe drawn twice, one kept")
+        .filter_map(|f| f["why"].as_str()?.split(" ft taken out").next()?.rsplit(' ').next()?.parse::<f64>().ok())
+        .sum::<f64>();
+    // Pipe no plan draws (a fixture's waste, vent or water filled in) is counted apart, and said.
+    let filled = q["totals"]["pipe_length_ft_filled_in"].as_f64().expect("filled in");
+    assert!(filled == 0.0 || job["guided_job"]["findings"].to_string().contains("inferred for"), "{}", q["totals"]);
+    let drawn_pipe = q["totals"]["pipe_length_ft"].as_f64().expect("pipe") - filled;
+    for (model, read) in [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (drawn_pipe, pipe_ft)] {
         assert!(model <= read + 1.0 && model >= 0.95 * read, "{} read {duct_ft} {pipe_ft}", q["totals"]);
-        assert!(model >= read - 1.0 || not_placed, "runs left out without a finding: {} read {read}", q["totals"]);
+        assert!(model >= read - 1.0 - twice_ft || not_placed, "runs left out without a finding: {} read {read} {findings}", q["totals"]);
     }
     // Each run from its own sheet: duct runs from M plans, pipe runs from P plans.
     let sp = spec(&mut s);
