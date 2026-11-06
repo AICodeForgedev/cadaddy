@@ -2612,6 +2612,8 @@ impl Session {
 
     fn execute_guarded(&mut self, id: &str, params: &Value) -> Result<Value> {
         self.poll_background();
+        // The active drawing's own words in the readers' word lists (`words:` project rules).
+        cmd::wordrules::sync(self);
         // An agent's outermost call: parameters the command doesn't take are refused (before a
         // dry run too), then a dry run or a confirmation ([`agent`]).
         if self.journal.is_outer()

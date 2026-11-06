@@ -622,18 +622,7 @@ pub fn kind_from_title(title: &str) -> Option<&'static str> {
 /// What a tag names, from its prefix (`AHU-1` → `ahu`).
 pub fn kind_from_tag(tag: &str) -> Option<&'static str> {
     let prefix: String = tag.trim().to_ascii_uppercase().chars().take_while(|c| c.is_ascii_alphabetic()).collect();
-    Some(match prefix.as_str() {
-        "AHU" => "ahu",
-        "RTU" => "rtu",
-        "VAV" | "FPB" | "VVT" | "FPVAV" => "vav",
-        "EF" => "exhaust_fan",
-        "SF" | "RF" | "F" | "TF" | "IF" | "CF" => "fan",
-        "P" | "CP" | "HWP" | "CHWP" | "CWP" | "RP" => "pump",
-        "WH" | "EWH" | "GWH" | "DWH" => "water_heater",
-        "CU" | "ACCU" => "condensing_unit",
-        "GM" => "gas_meter",
-        _ => return None,
-    })
+    crate::wordrules::pair_value("equipment.kind_by_tag_prefix", prefix.as_str())
 }
 
 /// Feet from a printed length: `12'-0"`, `8'-7 1/2"`, `2'`, `30"`, or a bare number in `unit`
@@ -869,31 +858,6 @@ pub fn read_equipment(sheets: &[SheetIn], levels: &[Level]) -> EquipmentRead {
         .collect();
     EquipmentRead { tables, scheduled: sched, placed, unplaced, notes, runs: graphs }
 }
-
-/// Printed pipe system letters → our codes.
-const PIPE_ABBR: &[(&str, &str)] = &[
-    ("CW", "CW"),
-    ("DCW", "CW"),
-    ("HW", "HW"),
-    ("DHW", "HW"),
-    ("HWR", "HWR"),
-    ("HWC", "HWR"),
-    ("HRW", "HWR"),
-    ("DHWR", "HWR"),
-    ("SAN", "SAN"),
-    ("SS", "SAN"),
-    ("W", "SAN"),
-    ("V", "V"),
-    ("G", "G"),
-    ("GAS", "G"),
-    ("NG", "G"),
-    ("FP", "FP"),
-    ("SP", "FP"),
-    ("F", "FP"),
-    ("CHW", "CHW"),
-    ("CHWR", "CHWR"),
-    ("ST", "ST"),
-];
 
 fn elevation(levels: &[Level], code: &str) -> f64 {
     levels.iter().find(|l| l.code == code).map_or(0.0, |l| l.elevation_ft)
@@ -1301,13 +1265,7 @@ pub fn run_graph(d: &Drawing, sh: &Sheet) -> RunGraph {
             for t in &txt {
                 let prefix: String = t.value.to_ascii_uppercase().chars().take_while(|c| c.is_ascii_alphabetic()).collect();
                 let has_num = t.value.chars().any(|c| c.is_ascii_digit());
-                let code = match prefix.as_str() {
-                    "CD" | "SD" | "LD" | "SR" => "SA",
-                    "RG" | "RR" => "RA",
-                    "EG" | "ER" => "EA",
-                    "L" | "OAL" | "IL" => "OA",
-                    _ => continue,
-                };
+                let Some(code) = crate::wordrules::pair_value("equipment.air_device_system", prefix.as_str()) else { continue };
                 if has_num && t.value.len() <= 6 && t.value.contains('-') {
                     g.marks.push(Mark { at: bf(t.at), system: code.to_string(), kind: "duct".into(), reach: 2.5, in_line: false, rot: None });
                 }
@@ -1339,12 +1297,13 @@ pub fn run_graph(d: &Drawing, sh: &Sheet) -> RunGraph {
             for t in &txt {
                 let up = t.value.to_ascii_uppercase();
                 let h = t.h / 12.0;
-                if let Some((_, code)) = PIPE_ABBR.iter().find(|(a, _)| a.eq_ignore_ascii_case(up.trim())) {
+                if let Some((_, code)) = crate::wordrules::pairs("pipes.system_letters").iter().find(|(a, _)| a.eq_ignore_ascii_case(up.trim())) {
                     // Letters in a break of the line.
                     g.marks.push(Mark { at: bf(t.at), system: code.to_string(), kind: "pipe".into(), reach: h * 0.75, in_line: true, rot: None });
                 } else if up.contains('"')
-                    && let Some(code) =
-                        up.split_whitespace().nth(1).and_then(|w| PIPE_ABBR.iter().find(|(a, _)| a.eq_ignore_ascii_case(w)).map(|(_, c)| *c))
+                    && let Some(code) = up.split_whitespace().nth(1).and_then(|w| {
+                        crate::wordrules::pairs("pipes.system_letters").iter().find(|(a, _)| a.eq_ignore_ascii_case(w)).map(|(_, c)| *c)
+                    })
                 {
                     // A size tag beside the run (`1" CW`).
                     let rot = t.rot - sh.model_from_building.rotation_deg.to_radians();

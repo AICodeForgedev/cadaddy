@@ -30,17 +30,13 @@ fn no_project(what: &str, mut out: Value) -> Value {
     out
 }
 
-/// Sheet-number letters that name a discipline. A sheet found only by its largest
-/// sheet-number lettering counts when it is one of these: equipment marks look like sheet
-/// numbers too (`RTU-1`, `EF-2`).
-const DISCIPLINES: &[&str] = &["G", "C", "L", "A", "I", "ID", "S", "M", "P", "FP", "E", "FA", "T", "LV", "Q"];
-
 /// The current drawing is one sheet whose title block names another discipline than `want`
 /// (`M` for ducts, `P` for pipes): what to answer instead of reading another trade's lines.
 fn other_trade_sheet(s: &Session, want: &str, what: &str) -> Option<String> {
     let d = s.doc().ok()?;
     let id = cadaddy_mepfix::sheet_facts::identify_sheet(&cadaddy_mepfix::sheet_facts::texts(d))?;
-    let known = id.source == "title_block" || DISCIPLINES.iter().any(|k| k.eq_ignore_ascii_case(&id.discipline));
+    let known = id.source == "title_block"
+        || cadaddy_mepfix::wordrules::words("sheets.discipline_letters").iter().any(|k| k.eq_ignore_ascii_case(&id.discipline));
     (known && !id.discipline.is_empty() && !id.discipline.eq_ignore_ascii_case(want))
         .then(|| format!("this drawing is sheet {} ({} discipline): {what} is read on {want} plan sheets only", id.number, id.discipline))
 }
@@ -208,6 +204,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 ifc_class: String::new(),
                 equipment: f("equipment"),
                 near: String::new(),
+                derived: String::new(),
             }
         })
         .collect();
@@ -1113,17 +1110,7 @@ pub(crate) fn receptacle_item(tag: &str) -> String {
 
 /// What a device mark usually is on an electrical plan (else `device`).
 pub(crate) fn device_kind(tag: &str) -> &'static str {
-    match tag.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
-        "DH" | "MH" => "door holder",
-        "J" | "JB" => "junction box",
-        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
-        "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
-        "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
-        "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
-        "T" | "TSTAT" | "TH" => "thermostat",
-        _ => "device",
-    }
+    cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
 
 /// Devices listed at most per call, and read at most.
@@ -1411,6 +1398,10 @@ pub struct ReadDevice {
     /// shows it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub near: String,
+    /// Not read off its own floor's plans: copied from the room it stacks with on another floor.
+    /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub derived: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1580,6 +1571,12 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // that room's, traced as a room or not).
         if !dv.room.is_empty() {
             e.set("room", dv.room.clone(), "rule");
+        }
+        // Copied from the room it stacks with on another floor: said so, with the basis, so it
+        // never passes for one its own floor's plans show.
+        if !dv.derived.is_empty() {
+            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("basis", dv.derived.clone(), "rule");
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

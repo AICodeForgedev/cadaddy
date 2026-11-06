@@ -599,31 +599,7 @@ pub fn description_for(kind: &str) -> &'static str {
 /// The kind a schedule description names: the first of these words it contains.
 pub fn kind_from_description(desc: &str) -> &'static str {
     let d = desc.to_ascii_uppercase();
-    const WORDS: [(&str, &str); 22] = [
-        ("MOP SINK", "mop_sink"),
-        ("SERVICE SINK", "mop_sink"),
-        ("WATER CLOSET", "water_closet"),
-        ("URINAL", "urinal"),
-        ("SHOWER", "shower"),
-        ("BATHTUB", "bathtub"),
-        ("WATER HEATER", "water_heater"),
-        ("FLOOR DRAIN", "floor_drain"),
-        ("BASE CABINET", "base_cabinet"),
-        ("UPPER CABINET", "upper_cabinet"),
-        ("WALL CABINET", "upper_cabinet"),
-        ("COUNTER", "counter"),
-        ("VANITY", "vanity"),
-        ("BACKSPLASH", "backsplash"),
-        ("WARDROBE", "wardrobe"),
-        ("REFRIGERATOR", "appliance"),
-        ("DISHWASHER", "appliance"),
-        ("MICROWAVE", "appliance"),
-        ("APPLIANCE", "appliance"),
-        ("CREDENZA", "base_cabinet"),
-        ("LAVATORY", "lavatory"),
-        ("SINK", "sink"),
-    ];
-    WORDS.iter().find(|(w, _)| d.contains(w)).map_or("", |(_, k)| k)
+    crate::wordrules::pairs("fixtures.kind_by_description").iter().find(|(w, _)| d.contains(w)).map_or("", |(_, k)| k)
 }
 
 /// `24" x 24"`, `VARIES x 24"` → (width, depth) in inches.

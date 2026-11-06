@@ -52,9 +52,6 @@ const MAX_SEG_CELLS: usize = 4_000_000;
 const MAX_REF_TEXTS: usize = 50_000;
 /// Most callouts in a set's answer.
 const MAX_SET_CALLOUTS: usize = 20_000;
-/// View-title words that never name a plan.
-const NOT_PLAN_WORDS: [&str; 11] =
-    ["SCHEDULE", "DIAGRAM", "RISER", "SECTION", "ELEVATION", "NOTES", "LEGEND", "DETAIL", "ONE-LINE", "ONE LINE", "KEY PLAN"];
 
 /// A sheet of the set as its index lists it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -357,17 +354,7 @@ fn leading_detail(s: &str) -> Option<(String, String)> {
 /// The discipline letter a discipline word names.
 fn discipline_word(w: &str) -> Option<&'static str> {
     let w = w.trim_matches(|c: char| !c.is_ascii_alphabetic());
-    Some(match w {
-        "ARCHITECTURAL" | "ARCH" => "A",
-        "STRUCTURAL" | "STRUCT" => "S",
-        "MECHANICAL" | "MECH" | "HVAC" => "M",
-        "ELECTRICAL" | "ELEC" => "E",
-        "PLUMBING" | "PLBG" => "P",
-        "CIVIL" => "C",
-        "LANDSCAPE" => "L",
-        "FIRE" => "FP",
-        _ => return None,
-    })
+    crate::wordrules::pair_value("sheets.discipline_words", w)
 }
 
 /// The written references in one line of lettering: `(kind, detail, target)`.
@@ -1378,7 +1365,7 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
     }
     let mut enl_views: Vec<EnlView> = Vec::new();
     // Titles that never name a plan, even on an enlarged-plan sheet.
-    let not_plan = |t: &str| NOT_PLAN_WORDS.iter().any(|w| t.contains(w));
+    let not_plan = |t: &str| crate::wordrules::words("sheets.not_plan_view_words").iter().any(|w| t.contains(w));
     for p in pages {
         let before = enl_views.len();
         let enlarged_sheet = p.sheet.sheet_type == "enlarged_plan"

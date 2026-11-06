@@ -40,7 +40,7 @@ pub(crate) const INDEX_FILE: &str = "atoms/index.json";
 /// The property that marks an atom (its kind).
 pub(crate) const ATOM_KEY: &str = "atom";
 /// Most elements looked at, index rows kept, nodes walked (hostile drawings).
-const MAX_ELEMENTS: usize = 2_000_000;
+pub(crate) const MAX_ELEMENTS: usize = 2_000_000;
 const MAX_ROWS: usize = 500_000;
 const MAX_WALK: usize = 200_000;
 /// Most pieces one run is cut into.
@@ -124,6 +124,35 @@ pub(crate) struct BoxRule {
     pub dims_in: [f64; 3],
     pub cubic_in: f64,
     pub material: String,
+    /// How many devices side by side it holds (0: one).
+    pub gangs: usize,
+    pub source: String,
+}
+
+impl BoxRule {
+    /// How many devices side by side it holds.
+    pub(crate) fn holds(&self) -> usize {
+        self.gangs.max(1)
+    }
+}
+
+/// How devices side by side in one wall share a box (`gang`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct GangRule {
+    /// The box kinds that gang, each with its family: devices gang only within one.
+    pub families: BTreeMap<String, String>,
+    /// Farthest apart along the wall, inches (centre to centre of neighbours).
+    pub reach_in: f64,
+    /// Most their mounting heights differ, inches.
+    pub height_in: f64,
+    /// Most they stand off one another across the wall's face, inches.
+    pub face_in: f64,
+    /// Most devices in one box.
+    pub max: usize,
+    /// The box (a `boxes` key) for 1, 2, 3… gangs, on raceway and on cable.
+    pub raceway: Vec<String>,
+    pub cable: Vec<String>,
     pub source: String,
 }
 
@@ -131,9 +160,14 @@ pub(crate) struct BoxRule {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct BoxChoice {
+    /// The box (a `boxes` key) on raceway and on cable; empty: no box of ours.
     pub raceway: String,
     pub cable: String,
     pub ring: bool,
+    /// Its ring when not the rules' `ring` (`4" round` at a luminaire).
+    pub ring_size: String,
+    /// Why, where it is not the rules' `box_source` (no box).
+    pub source: String,
 }
 
 /// A plaster ring as stock.
@@ -228,9 +262,23 @@ pub(crate) struct AtomRules {
     pub boxes: BTreeMap<String, BoxRule>,
     pub box_for: BTreeMap<String, BoxChoice>,
     pub box_source: String,
+    pub no_circuit_source: String,
+    pub gang: GangRule,
     pub ring: RingRule,
     pub default_raceway: String,
     pub default_raceway_source: String,
+    /// The raceway below the slab or in the earth where the documents name no underground method.
+    pub underground_raceway: String,
+    pub underground_raceway_source: String,
+    /// Whether a buried raceway takes straps below the floor.
+    pub underground_strapped: bool,
+    pub underground_strap_source: String,
+    /// What a callout's steel elbows and risers are (a raceway of `raceways`).
+    pub steel_elbow_raceway: String,
+    pub steel_elbow_source: String,
+    /// The fitting where a buried raceway comes up and runs on in another (`{from}`, `{to}`).
+    pub transition_item: String,
+    pub transition_source: String,
     pub insulation: String,
     pub insulation_source: String,
     /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
@@ -294,15 +342,49 @@ impl AtomRules {
     }
     /// A device kind's box and whether it takes a ring, on raceway or cable.
     pub(crate) fn box_for(&self, kind: &str, on_cable: bool) -> Option<(&BoxRule, bool)> {
+        let choice = self.box_choice(kind)?;
+        let id = if on_cable { &choice.cable } else { &choice.raceway };
+        self.boxes.get(id).map(|b| (b, choice.ring))
+    }
+    /// A device kind's box choice (its box may be none: equipment fed in its own compartment).
+    pub(crate) fn box_choice(&self, kind: &str) -> Option<&BoxChoice> {
         let k = kind.replace('_', " ").to_ascii_lowercase();
-        let choice = self.box_for.get(&k).or_else(|| {
+        self.box_for.get(&k).or_else(|| {
             let plumbing = k.contains("plumbing") || k.contains("sprinkler");
             let fallback =
                 if !plumbing && (k.contains("luminaire") || k.contains("light") || k.contains("fixture")) { "luminaire" } else { return None };
             self.box_for.get(fallback)
-        })?;
-        let id = if on_cable { &choice.cable } else { &choice.raceway };
-        self.boxes.get(id).map(|b| (b, choice.ring))
+        })
+    }
+    /// The box for `n` devices ganged, on raceway or cable (none: they don't gang that many).
+    pub(crate) fn gang_box(&self, n: usize, on_cable: bool) -> Option<&BoxRule> {
+        let list = if on_cable { &self.gang.cable } else { &self.gang.raceway };
+        let id = list.get(n.checked_sub(1)?)?;
+        self.boxes.get(id).filter(|b| b.holds() >= n)
+    }
+    /// A bigger steel box than `br` for `gangs` devices whose conductors need `need` cu in
+    /// (NEC 314.16): the smallest that holds it, else the largest there is. One or two gangs
+    /// take a bigger square box; three or more a deeper box of as many gangs.
+    pub(crate) fn bigger_box(&self, br: &BoxRule, need: f64, gangs: usize) -> Option<&BoxRule> {
+        let mut bigger: Vec<&BoxRule> = self
+            .boxes
+            .iter()
+            .filter(|(k, b)| {
+                let fits = if gangs <= 2 {
+                    b.holds() >= gangs && (k.starts_with("sq") || k.starts_with("oct"))
+                } else {
+                    b.holds() == gangs && k.starts_with("gang")
+                };
+                b.material == "steel" && b.cubic_in > br.cubic_in + 1e-9 && fits && !b.item.contains("fan")
+            })
+            .map(|(_, b)| b)
+            .collect();
+        bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
+        bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied())
+    }
+    /// The family a box kind gangs in (none: it doesn't gang).
+    pub(crate) fn gang_family(&self, box_kind: &str) -> Option<&str> {
+        self.gang.families.get(box_kind).map(String::as_str)
     }
     /// A conductor's colour on a system (`120/208`), for a phase `A`/`B`/`C`, `N` or `G`.
     pub(crate) fn color(&self, voltage: &str, phase: &str) -> Option<&str> {
@@ -376,6 +458,34 @@ pub(crate) struct Pieces {
     /// The degrees it turns between its ends (NEC 358.26 and its kin: 360 at most between pull
     /// points).
     pub bend_deg: f64,
+}
+
+impl Pieces {
+    /// Keep only the pieces `keep` says; what each kept one connects to and the ends follow.
+    pub(crate) fn retain(&mut self, keep: impl Fn(usize, &Atom) -> bool) {
+        let mut to: Vec<Option<usize>> = Vec::with_capacity(self.atoms.len());
+        let mut n = 0usize;
+        for (i, a) in self.atoms.iter().enumerate() {
+            if keep(i, a) {
+                to.push(Some(n));
+                n += 1;
+            } else {
+                to.push(None);
+            }
+        }
+        let map = |i: usize| to.get(i).copied().flatten();
+        let atoms = std::mem::take(&mut self.atoms);
+        self.atoms = atoms
+            .into_iter()
+            .zip(&to)
+            .filter(|(_, t)| t.is_some())
+            .map(|(mut a, _)| {
+                a.connects = a.connects.iter().filter_map(|&c| map(c)).collect();
+                a
+            })
+            .collect();
+        self.ends = self.ends.map(|e| e.and_then(map));
+    }
 }
 
 /// A trade size as printed: `3/4"`, `1"`, `1-1/4"`.
@@ -758,6 +868,66 @@ pub(crate) fn raceway_pieces_ending(
         }
     }
     out
+}
+
+/// A buried raceway's pieces as the field installs them (`rules`' underground entries):
+/// - no straps below the floor `floor_z` (sheet units) unless the rules strap it;
+/// - `steel` (its callout asks for steel elbows and risers): its elbows and the sticks rising
+///   through the floor are the steel raceway's;
+/// - each end in `open` (landing in no box or gear) above the floor comes up and runs on in the
+///   raceway `above`: a transition adapter there, not a connector and locknut.
+///
+/// Returns the transitions made.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bury(p: &mut Pieces, floor_z: f64, tol: f64, steel: bool, open: [bool; 2], above: &str, material: &str, rules: &AtomRules) -> usize {
+    let mut drop: BTreeSet<usize> = BTreeSet::new();
+    if !rules.underground_strapped {
+        for (i, a) in p.atoms.iter().enumerate() {
+            if a.kind == "strap" && a.a.z < floor_z - tol {
+                drop.insert(i);
+            }
+        }
+    }
+    if let Some((sname, st)) = rules.raceways.get_key_value(rules.steel_elbow_raceway.as_str()).filter(|_| steel) {
+        for a in &mut p.atoms {
+            let vertical = a.path.is_empty() && (a.a.x - a.b.x).hypot(a.a.y - a.b.y) <= tol && (a.a.z - a.b.z).abs() > tol;
+            let item = match a.kind {
+                "elbow" => st.elbow.replace("{angle}", &angle_text(a.angle_deg)),
+                "conduit" if vertical => st.stick.clone(),
+                _ => continue,
+            };
+            a.item = item;
+            a.ty = sname.clone();
+            a.source = rules.steel_elbow_source.clone();
+        }
+    }
+    let mut made = 0usize;
+    for (end, is_open) in open.iter().enumerate() {
+        let Some(ci) = p.ends.get(end).copied().flatten() else { continue };
+        let Some(c) = p.atoms.get(ci) else { continue };
+        if !*is_open || c.kind != "connector" || c.a.z <= floor_z + tol {
+            continue;
+        }
+        // Its locknut and bushing go with the connector.
+        for (j, x) in p.atoms.iter().enumerate() {
+            if matches!(x.kind, "locknut" | "bushing") && x.connects == [ci] {
+                drop.insert(j);
+            }
+        }
+        if let Some(c) = p.atoms.get_mut(ci) {
+            c.kind = "coupling";
+            c.item = rules.transition_item.replace("{from}", material).replace("{to}", above);
+            c.ty = material.into();
+            c.source = rules.transition_source.clone();
+            c.extra.push(("transition", format!("{material} to {above}"), rules.transition_source.clone()));
+            c.connects.retain(|j| !drop.contains(j));
+            made += 1;
+        }
+    }
+    if !drop.is_empty() {
+        p.retain(|i, _| !drop.contains(&i));
+    }
+    made
 }
 
 /// A branch circuit's conductors (`2#12 + 1#12G`, `3#10, 1#10G`): count, size, ground.
@@ -2040,9 +2210,79 @@ mod tests {
         assert_eq!((b.item.as_str(), ring), ("Box, 4\" square", true));
         let (b, _) = r.box_for("receptacle", true).unwrap();
         assert!(b.item.contains("nonmetallic"));
-        assert_eq!(r.box_for("luminaire", false).map(|b| b.0.item.as_str()), Some("Box, 4\" octagon"));
+        // The box follows the wiring method: a 4" square with a round ring at a luminaire on
+        // raceway, an octagon on cable; equipment is fed in its own compartment.
+        assert_eq!(r.box_for("luminaire", false).map(|b| (b.0.item.as_str(), b.1)), Some(("Box, 4\" square", true)));
+        assert_eq!(r.box_choice("luminaire").map(|c| c.ring_size.as_str()), Some("4\" round"));
+        assert_eq!(r.box_for("luminaire", true).map(|b| b.0.item.as_str()), Some("Box, 4\" octagon"));
+        assert!(r.box_for("equipment connection", false).is_none() && r.box_choice("equipment connection").is_some_and(|c| !c.source.is_empty()));
+        assert!(r.box_for("junction box", false).is_some() && r.box_choice("disconnect").is_none());
         assert!(r.box_for("plumbing fixture", false).is_none());
         assert!(has_word("3/4\" EMT", "EMT") && !has_word("EMC", "MC") && has_word("MC CABLE", "MC"));
+    }
+
+    #[test]
+    fn devices_side_by_side_on_one_face_gang_and_others_do_not() {
+        use super::build::{GangSpot, gang_groups};
+        use cadaddy_geom::Vec2;
+        let n = Vec2::new(0.0, 1.0);
+        let spot = |family: &str, x: f64, y: f64, z: f64, normal: Vec2| GangSpot {
+            level: "L1".into(),
+            family: family.into(),
+            normal,
+            at: Vec2::new(x, y),
+            z,
+        };
+        let spots = vec![
+            // Three switches 18" apart at one height: one group.
+            spot("switch", 60.0, 10.0, 48.0, n),
+            spot("switch", 78.0, 10.0, 48.0, n),
+            spot("switch", 96.0, 10.0, 48.0, n),
+            // A receptacle under them: another height, another family.
+            spot("receptacle", 60.0, 10.0, 18.0, n),
+            // Two receptacles back to back (opposite faces): no gang.
+            spot("receptacle", 200.0, 10.0, 18.0, n),
+            spot("receptacle", 200.0, 4.0, 18.0, Vec2::new(0.0, -1.0)),
+            // A receptacle 3 ft from the next: no gang.
+            spot("receptacle", 300.0, 10.0, 18.0, n),
+            spot("receptacle", 336.0, 10.0, 18.0, n),
+            // A data outlet beside a receptacle: low voltage never shares a power box.
+            spot("low voltage", 318.0, 10.0, 18.0, n),
+            // Hostile: not a number.
+            spot("switch", f64::NAN, 10.0, 48.0, n),
+        ];
+        let sorted = |g: Vec<Vec<usize>>| -> Vec<Vec<usize>> {
+            g.into_iter()
+                .map(|mut x| {
+                    x.sort_unstable();
+                    x
+                })
+                .collect()
+        };
+        let g = sorted(gang_groups(&spots, 24.0, 6.0, 6.0, 4));
+        assert_eq!(g, vec![vec![0, 1, 2]], "{g:?}");
+        // Most 2 a box: the row of three is a 2 gang (in order along the wall) and a lone one.
+        let two = gang_groups(&spots, 24.0, 6.0, 6.0, 2);
+        assert_eq!(two.len(), 1, "{two:?}");
+        assert!(two.first().is_some_and(|g| g.len() == 2 && g.contains(&1)), "two neighbours, the middle one in: {two:?}");
+        assert!(gang_groups(&spots, 24.0, 6.0, 6.0, 1).is_empty());
+        assert!(gang_groups(&spots, f64::NAN, 6.0, 6.0, 4).is_empty());
+        // The rules: 2 gangs in a 4" square, 3 in a gang box, none past 4.
+        let r = rules();
+        assert_eq!(r.gang_box(2, false).map(|b| b.item.as_str()), Some("Box, 4\" square"));
+        assert_eq!(r.gang_box(3, false).map(|b| b.item.as_str()), Some("Device box, 3 gang"));
+        assert_eq!(r.gang_box(2, true).map(|b| b.size.as_str()), Some("2 gang"));
+        assert!(r.gang_box(5, false).is_none() && r.gang_box(0, false).is_none());
+        assert_eq!(r.gang_family("data outlet"), Some("low voltage"));
+        // Too full: two gangs move up to a 4-11/16" square, never into a 3 gang box; three
+        // gangs into a deeper 3 gang box.
+        let (two, three) = (r.gang_box(2, false).unwrap(), r.gang_box(3, false).unwrap());
+        assert_eq!(r.bigger_box(two, 35.0, 2).map(|b| b.item.as_str()), Some("Box, 4-11/16\" square"));
+        assert_eq!(r.bigger_box(three, 45.0, 3).map(|b| (b.item.as_str(), b.holds())), Some(("Device box, 3 gang", 3)));
+        assert!(r.bigger_box(three, 45.0, 3).is_some_and(|b| b.cubic_in >= 45.0));
+        // More than the deepest holds: the deepest, for review.
+        assert_eq!(r.bigger_box(three, 500.0, 3).map(|b| b.cubic_in), Some(54.0));
+        assert!(r.gang_family("luminaire").is_none());
     }
 
     #[test]

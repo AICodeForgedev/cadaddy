@@ -543,6 +543,80 @@ pub(crate) struct Planned {
     pub feeders: Vec<cadaddy_walk3d::Feeder>,
     /// Gear not laid out, and why.
     pub unplaced: Vec<(String, String)>,
+    /// The working spaces in front of what was laid out (NEC 110.26), drawn so clashes show.
+    pub zones: Vec<Zone>,
+}
+
+/// A piece of gear's working space: its plan box and its height.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Zone {
+    pub tag: String,
+    pub level: String,
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    pub height_ft: f64,
+}
+
+/// The tag of the wireway built over a piece of gear.
+pub(crate) fn wireway_tag(gear: &str) -> String {
+    format!("{}-WIREWAY", gear.trim())
+}
+
+/// A wireway above `g` for raceways its plate can't take (`need_sq_in` of plate): the smallest
+/// depth (square) with a length up to the rule's most, at least the gear's width, marked proposed
+/// with the design value and rule beside it. None: no size in the rule holds it.
+pub(crate) fn wireway_for(
+    g: &cadaddy_walk3d::MepEquipment,
+    need_sq_in: f64,
+    usable_now: f64,
+    upf: f64,
+    rule: &super::coderules::CodeRule,
+) -> Option<cadaddy_walk3d::MepEquipment> {
+    if !need_sq_in.is_finite() || need_sq_in <= 0.0 || !upf.is_finite() || upf <= 0.0 {
+        return None;
+    }
+    let step = rule.wireway_length_step_in.filter(|v| *v > 0.0).unwrap_or(12.0);
+    let most = rule.wireway_max_length_in.filter(|v| *v > 0.0).unwrap_or(72.0);
+    let usable = rule.wireway_usable.filter(|v| *v > 0.0 && *v <= 1.0).unwrap_or(0.85);
+    let inch = upf / 12.0;
+    let (dx, dy) = (g.max[0] - g.min[0], g.max[1] - g.min[1]);
+    let wide = dx.max(dy) / inch;
+    let (depth, length) = rule.wireway_depths_in.iter().filter(|d| **d > 0.0).find_map(|d| {
+        let l = ((need_sq_in / (usable * d)).max(wide) / step).ceil() * step;
+        (l <= most).then_some((*d, l))
+    })?;
+    // Centred over the gear, along its width.
+    let c = [(g.min[0] + g.max[0]) / 2.0, (g.min[1] + g.max[1]) / 2.0];
+    let half = if dx >= dy { [length * inch / 2.0, depth * inch / 2.0] } else { [depth * inch / 2.0, length * inch / 2.0] };
+    let size = format!("{length:.0} x {depth:.0} x {depth:.0} in");
+    let item = format!("wireway {size}");
+    let mut properties = std::collections::BTreeMap::new();
+    properties.insert("SIZE".to_string(), size);
+    properties.insert("ABOVE".to_string(), g.tag.clone());
+    properties.insert("DESIGN_VALUE".to_string(), format!("every raceway lands on {}'s top: {usable_now:.0} sq in usable", g.tag));
+    properties.insert("CORRECTED_VALUE".to_string(), item.clone());
+    properties.insert(
+        "CORRECTION_REASON".to_string(),
+        format!("about {need_sq_in:.0} sq in of plate needed against {usable_now:.0} sq in usable on {}", g.tag),
+    );
+    properties.insert("CORRECTION_RULE".to_string(), rule.wireway_cite.clone());
+    let mut sources = std::collections::BTreeMap::new();
+    sources.insert("status".to_string(), "proposed".to_string());
+    sources.insert("position".to_string(), format!("proposed above {}", g.tag));
+    Some(cadaddy_walk3d::MepEquipment {
+        tag: wireway_tag(&g.tag),
+        kind: "wireway".into(),
+        level: g.level.clone(),
+        min: [c[0] - half[0], c[1] - half[1]],
+        max: [c[0] + half[0], c[1] + half[1]],
+        bottom_ft: g.bottom_ft + g.height_ft,
+        height_ft: depth / 12.0,
+        title: format!("WIREWAY ABOVE {}", g.tag),
+        properties,
+        sources,
+        confidence: 0.5,
+        ..cadaddy_walk3d::MepEquipment::default()
+    })
 }
 
 /// Volts to ground of a system as a schedule prints it: `208Y/120V` → 120, `480Y/277` → 277,
@@ -733,6 +807,13 @@ pub(crate) fn plan(
                     ..Termination::default()
                 });
             }
+            out.zones.push(Zone {
+                tag: tag.clone(),
+                level: level.clone(),
+                min: at.space_min,
+                max: at.space_max,
+                height_ft: rule.height_in.unwrap_or(78.0) / 12.0,
+            });
             out.equipment.push(MepEquipment {
                 tag: tag.clone(),
                 kind: if g.kind.is_empty() { "panel".into() } else { g.kind.clone() },
@@ -948,6 +1029,32 @@ mod tests {
         );
         assert!(e.properties.get("BOTTOM CONDUIT AREA").is_some_and(|a| a.starts_with("none")));
         assert!(e.properties.get("INCOMING LOCATION").is_some_and(|a| a.starts_with("top")));
+    }
+
+    /// Raceways a can's plate can't take: a wireway over it, its basis on it; none too big to size.
+    #[test]
+    fn a_can_too_small_for_its_raceways_gets_a_wireway_built_over_it() {
+        let rule = crate::cmd::coderules::rules().into_iter().find(|r| r.sets == "working_space").unwrap_or_default();
+        let g = cadaddy_walk3d::MepEquipment {
+            tag: "DP9".into(),
+            level: "L1".into(),
+            min: [100.0, 200.0],
+            max: [105.75, 220.0],
+            bottom_ft: 2.0,
+            height_ft: 4.0,
+            ..Default::default()
+        };
+        let w = wireway_for(&g, 231.0, 68.0, 12.0, &rule).expect("a wireway");
+        assert_eq!(w.tag, "DP9-WIREWAY");
+        assert_eq!(w.kind, "wireway");
+        assert!((w.bottom_ft - 6.0).abs() < 1e-9, "on top of the can");
+        // 6 in deep: 231 / (0.85 x 6) = 45.3 in, so 48 in, along the can's long side.
+        assert_eq!(w.properties["SIZE"], "48 x 6 x 6 in");
+        assert!((w.max[1] - w.min[1] - 48.0).abs() < 1e-9 && (w.max[0] - w.min[0] - 6.0).abs() < 1e-9, "{w:?}");
+        assert!(w.properties["DESIGN_VALUE"].contains("68 sq in"));
+        assert!(w.properties["CORRECTION_RULE"].contains("376"));
+        assert_eq!(w.sources["status"], "proposed");
+        assert!(wireway_for(&g, 1e6, 68.0, 12.0, &rule).is_none());
     }
 
     #[test]

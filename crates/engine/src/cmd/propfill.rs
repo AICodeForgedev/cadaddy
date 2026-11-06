@@ -90,17 +90,7 @@ pub struct Height {
 /// The kind of device a type mark names (`switch`, `fire alarm device`…; `device` when the mark
 /// says nothing).
 pub(crate) fn kind_of(mark: &str) -> &'static str {
-    match mark.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
-        "DH" | "MH" => "door holder",
-        "J" | "JB" => "junction box",
-        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
-        "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
-        "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
-        "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
-        "T" | "TSTAT" | "TH" => "thermostat",
-        _ => "device",
-    }
+    cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", mark.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
 
 /// The usual mounting height of a kind of device (a default: always marked), inches above the
@@ -191,11 +181,9 @@ fn note_kinds(up: &str) -> Vec<&'static str> {
 /// known kind takes any row.
 fn row_fits(kind: &str, words: &str) -> bool {
     let any = |ws: &[&str]| ws.iter().any(|w| words.contains(w));
-    match kind {
-        "switch" => any(&["SWITCH", "DIMMER"]),
-        "occupancy sensor" => any(&["SENSOR", "OCCUPANCY", "VACANCY"]),
-        "fire alarm device" => any(&["FIRE", "STROBE", "HORN", "SMOKE", "PULL", "DETECTOR", "SPEAKER", "ALARM"]),
-        _ => true,
+    match cadaddy_mepfix::wordrules::groups("devices.legend_row_words").iter().find(|(k, _)| *k == kind) {
+        Some((_, ws)) => any(ws),
+        None => true,
     }
 }
 
@@ -1082,6 +1070,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
         }
+        // Built where the plans are silent or wrong: the design value and the basis beside it.
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            if let Some(v) = field(t, k) {
+                store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, "code rules")));
+            }
+        }
         // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
         if let Some(leg) = field(t, "switch_leg") {
             store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter of the fixtures it controls"));
@@ -1140,6 +1134,15 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         store.set("offset", Prop::new(round2(height.inches / 12.0), hp.source.clone()).with_unit("ft"));
         if !sheet.is_empty() {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));
+        }
+        // Copied from the room it stacks with on another floor (no plan of its own floor shows
+        // it): said so, with the basis, so it never passes for drawn.
+        if let Some(status) = field(t, "status").filter(|v| !v.trim().is_empty()) {
+            let basis = field(t, "basis").unwrap_or_default();
+            store.set("status", Prop::new(status, Source::from_doc(SourceKind::Rule, &basis)));
+            if !basis.is_empty() {
+                store.set("basis", Prop::new(basis.clone(), Source::from_doc(SourceKind::Rule, &basis)));
+            }
         }
         let mut loc = location_prop(x, y, zc, upf);
         if registered {
@@ -1683,6 +1686,38 @@ pub(crate) fn ring_depths(d: &Drawing) -> HashMap<String, f64> {
         .collect()
 }
 
+/// The devices that share a box with others (`mepatoms` rules `gang`), by tag: the gangs of
+/// its box for the first of them (it carries the box's one plate), 0 for the rest.
+pub(crate) fn gang_plates(d: &Drawing) -> HashMap<String, usize> {
+    let mut out = HashMap::new();
+    // The pieces come last in a big model: as far as the atoms' own cap.
+    for e in d.model.iter().take(super::mepatoms::MAX_ELEMENTS) {
+        if !super::mepatoms::is_atom(e) {
+            continue;
+        }
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
+            continue;
+        }
+        let Some(list) = ps.get("devices").map(Prop::text) else { continue };
+        let ids: Vec<String> = list
+            .split(',')
+            .take(16)
+            .filter_map(|h| Handle::parse_hex(h.trim()))
+            .filter_map(|h| d.model.get(h))
+            .filter_map(|e| made(e, DEVID))
+            .collect();
+        if ids.len() < 2 {
+            continue;
+        }
+        let n = ids.len();
+        for (i, id) in ids.into_iter().enumerate() {
+            out.insert(id, if i == 0 { n } else { 0 });
+        }
+    }
+    out
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }
@@ -1938,7 +1973,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             tally,
                         );
                     }
-                    let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
+                    // (`G-13,15`: a two-pole's first.)
+                    let number = circuit
+                        .as_deref()
+                        .and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
                     let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
                     let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
                     let row =

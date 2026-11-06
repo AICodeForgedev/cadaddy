@@ -80,6 +80,7 @@ pub mod unit_reader;
 pub mod units;
 pub mod wall_reader;
 pub mod walls;
+pub mod wordrules;
 
 use cadaddy_doc::Space;
 use cadaddy_geom::{Bounds2, Vec2};

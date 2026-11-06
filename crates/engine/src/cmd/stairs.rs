@@ -264,7 +264,7 @@ fn detect_with(s: &Session, sp: &BuildingSpec, pick: Option<&dyn Fn(Vec2) -> boo
     let all = plan_objects(d);
     let stair_layer = |l: &str| {
         let up = l.to_ascii_uppercase();
-        up.contains("STAIR") || up.contains("STRS") || up.contains("RAMP")
+        cadaddy_mepfix::wordrules::words("layers.stair_words").iter().any(|w| up.contains(w))
     };
     let has_roles = sp.layers.iter().any(|r| r.role == Role::Stair);
     let ents: Vec<&Arc<Entity>> = all

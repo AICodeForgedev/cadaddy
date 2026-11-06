@@ -164,15 +164,6 @@ fn any_word(ws: &[String], list: &[&str]) -> bool {
     ws.iter().any(|w| list.contains(&w.as_str()))
 }
 
-const CONTOUR_LAYER: &[&str] = &["TOPO", "GRAD", "GRADE", "GRADING", "CONT", "CNTR", "CONTOUR", "CONTOURS", "EG", "FG"];
-const EXISTING_WORDS: &[&str] = &["EX", "EXST", "EXIST", "EXISTING", "EG", "ORIG", "OG"];
-const UTILITY_LAYER: &[&str] =
-    &["UNDR", "UTIL", "UTILITY", "UG", "STRM", "STORM", "SSWR", "SANI", "SAN", "SEWR", "SEWER", "WATR", "WATER", "WTR", "SD", "SS", "PIPE"];
-const STRUCTURE_LAYER: &[&str] = &["STRC", "STRUC", "STRUCT", "STRUCTURE", "STRUCTURES", "MH", "MANH", "INLET", "INLETS", "CB"];
-const FENCE_LAYER: &[&str] = &["FNCE", "FENC", "FENCE", "FENCING"];
-/// The sheet's frame and title block: never site work.
-const FRAME_LAYER: &[&str] = &["BORDER", "BRDR", "TTLB", "TITLE", "TBLK", "TBLOCK", "FRAME", "VPORT", "VIEWPORT", "DEFPOINTS"];
-
 /// Drawing units per foot (INSUNITS; unitless follows MEASUREMENT, else inches).
 pub fn units_per_foot(d: &Drawing) -> f64 {
     match d.header.i64("INSUNITS", 0) {
@@ -307,10 +298,8 @@ fn pipe_size(s: &str) -> Option<f64> {
     None
 }
 
-const MATERIALS: &[&str] = &["PVC", "RCP", "DIP", "DI", "HDPE", "CPVC", "CU", "COPPER", "PE", "CMP", "VCP", "ABS", "STEEL", "CI", "SDR35", "C900"];
-
 fn pipe_material(s: &str) -> Option<String> {
-    words(s).into_iter().find(|w| MATERIALS.contains(&w.as_str()))
+    words(s).into_iter().find(|w| cadaddy_mepfix::wordrules::words("site.pipe_materials").contains(&w.as_str()))
 }
 
 /// `6' DEEP`, `DEPTH 6'`.
@@ -324,15 +313,7 @@ fn depth_of(s: &str) -> Option<f64> {
 
 fn system_of(ws: &[String]) -> Option<&'static str> {
     for w in ws {
-        let s = match w.as_str() {
-            "STORM" | "SD" | "STM" | "STMH" | "SDMH" | "DRAIN" | "DRAINAGE" => "storm",
-            "SEWER" | "SANITARY" | "SAN" | "SS" | "SSWR" | "SSMH" | "SMH" | "SSCO" => "sanitary",
-            "WATER" | "WTR" | "DW" | "DOMESTIC" | "WM" | "BFP" | "RPZ" | "VB" | "WV" => "water",
-            "GAS" | "GV" => "gas",
-            "ELECTRIC" | "ELEC" | "UGE" | "JB" | "PB" => "electric",
-            "TELECOM" | "COMM" | "TEL" | "FO" | "HH" => "telecom",
-            _ => continue,
-        };
+        let Some(s) = cadaddy_mepfix::wordrules::pair_value("site.utility_system_words", w.as_str()) else { continue };
         return Some(s);
     }
     None
@@ -349,7 +330,7 @@ fn collect(d: &Drawing, sheet: &str) -> (Vec<Prim>, Vec<Txt>) {
     let mut texts = Vec::new();
     for e in d.model.iter().take(MAX_OBJECTS) {
         let layer_name = e.common.layer.to_ascii_uppercase();
-        if any_word(&words(&layer_name), FRAME_LAYER) {
+        if any_word(&words(&layer_name), cadaddy_mepfix::wordrules::words("site.frame_layer_words")) {
             continue;
         }
         let lt = e.common.linetype.to_ascii_uppercase();
@@ -437,16 +418,20 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
         .fold([f64::INFINITY, f64::NEG_INFINITY], |acc, v| [acc[0].min(v.x.min(v.y)), acc[1].max(v.x.max(v.y))]);
     let span = if ext[1] > ext[0] { ext[1] - ext[0] } else { 1.0 };
     let eps = span * 1e-6;
-    let utility = |p: &Prim| any_word(&p.layer, UTILITY_LAYER);
-    let structure = |p: &Prim| any_word(&p.layer, STRUCTURE_LAYER);
-    let contour_layer = |p: &Prim| any_word(&p.layer, CONTOUR_LAYER);
+    let utility = |p: &Prim| any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.utility_layer_words"));
+    let structure = |p: &Prim| any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.structure_layer_words"));
+    let contour_layer = |p: &Prim| any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.contour_layer_words"));
 
     // Contours.
     let paths: Vec<(Vec<String>, Vec<Vec2>, bool)> = prims
         .iter()
         .filter(|p| contour_layer(p) && !utility(p) && !structure(p))
         .filter_map(|p| {
-            if let Shape::Path(v) = &p.shape { Some((vec![p.id.clone()], v.clone(), p.dashed || any_word(&p.layer, EXISTING_WORDS))) } else { None }
+            if let Shape::Path(v) = &p.shape {
+                Some((vec![p.id.clone()], v.clone(), p.dashed || any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.existing_words"))))
+            } else {
+                None
+            }
         })
         .collect();
     for existing in [true, false] {
@@ -454,7 +439,7 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
         let chains = chain(set, eps);
         // Each elevation label belongs to the contour it sits on.
         let mut labels: Vec<Vec<f64>> = vec![Vec::new(); chains.len()];
-        for t in texts.iter().filter(|t| any_word(&words(&t.layer_name), CONTOUR_LAYER)) {
+        for t in texts.iter().filter(|t| any_word(&words(&t.layer_name), cadaddy_mepfix::wordrules::words("site.contour_layer_words"))) {
             let Some(v) = plain_number(&t.text) else { continue };
             let tol = (t.h * 1.5).max(eps);
             let best = chains
@@ -524,7 +509,7 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
                 seg_dist(m, *a, *b) < l * 0.25 && (0.5..0.87).contains(&cos)
             })
             .count();
-        if marks >= 4 || (marks >= 2 && any_word(&p.layer, FENCE_LAYER)) {
+        if marks >= 4 || (marks >= 2 && any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.fence_layer_words"))) {
             fence_lines.push((*a, *b));
             let tag = texts
                 .iter()
@@ -586,27 +571,7 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
         let near: Vec<&Txt> = texts.iter().filter(|t| if thin { path_dist(t.at, pts, true) < t.h * 2.0 } else { inside(t.at, pts) }).collect();
         let keyword = |t: &Txt| {
             let ws = words(&t.text);
-            any_word(
-                &ws,
-                &[
-                    "ASPHALT",
-                    "ASPH",
-                    "AC",
-                    "HMA",
-                    "BITUMINOUS",
-                    "CONCRETE",
-                    "CONC",
-                    "PCC",
-                    "WALK",
-                    "SIDEWALK",
-                    "WALKWAY",
-                    "CURB",
-                    "GUTTER",
-                    "PAD",
-                    "PAVING",
-                    "PAVEMENT",
-                ],
-            )
+            any_word(&ws, cadaddy_mepfix::wordrules::words("site.paving_words"))
         };
         let label = near
             .iter()
@@ -617,9 +582,9 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
             .unwrap_or_default();
         let ws = words(&label);
         let hatched = !thin && hatched_outline(p, pts);
-        let material = if any_word(&ws, &["ASPHALT", "ASPH", "AC", "HMA", "BITUMINOUS"]) {
+        let material = if any_word(&ws, cadaddy_mepfix::wordrules::words("site.asphalt_words")) {
             "asphalt"
-        } else if any_word(&ws, &["CONCRETE", "CONC", "PCC", "WALK", "SIDEWALK", "WALKWAY"]) {
+        } else if any_word(&ws, cadaddy_mepfix::wordrules::words("site.concrete_words")) {
             "concrete"
         } else {
             "unknown"
@@ -697,7 +662,10 @@ pub fn read_sheet(d: &Drawing, sheet: &str, units_per_ft: f64) -> CivilRead {
 }
 
 fn read_structures(prims: &[Prim], texts: &[Txt], sheet: &str, k: f64, eps: f64, r: &mut CivilRead) {
-    let on = |p: &Prim| any_word(&p.layer, STRUCTURE_LAYER) || any_word(&p.layer, UTILITY_LAYER);
+    let on = |p: &Prim| {
+        any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.structure_layer_words"))
+            || any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.utility_layer_words"))
+    };
     let segs: Vec<(&Prim, Vec2, Vec2)> = prims
         .iter()
         .filter(|p| on(p))
@@ -714,8 +682,10 @@ fn read_structures(prims: &[Prim], texts: &[Txt], sheet: &str, k: f64, eps: f64,
         shape: &'static str,
     }
     let mut syms: Vec<Sym> = Vec::new();
-    for p in prims.iter().filter(|p| any_word(&p.layer, STRUCTURE_LAYER) || (any_word(&p.layer, UTILITY_LAYER) && !matches!(p.shape, Shape::Path(_))))
-    {
+    for p in prims.iter().filter(|p| {
+        any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.structure_layer_words"))
+            || (any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.utility_layer_words")) && !matches!(p.shape, Shape::Path(_)))
+    }) {
         match &p.shape {
             Shape::Circle(c, rad) => {
                 // A cross: two perpendicular lines through the centre, about a diameter long.
@@ -839,13 +809,17 @@ fn read_structures(prims: &[Prim], texts: &[Txt], sheet: &str, k: f64, eps: f64,
 fn read_runs(prims: &[Prim], texts: &[Txt], sheet: &str, k: f64, eps: f64, r: &mut CivilRead) {
     let paths: Vec<(&Prim, Vec<Vec2>)> = prims
         .iter()
-        .filter(|p| any_word(&p.layer, UTILITY_LAYER) && !any_word(&p.layer, STRUCTURE_LAYER))
+        .filter(|p| {
+            any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.utility_layer_words"))
+                && !any_word(&p.layer, cadaddy_mepfix::wordrules::words("site.structure_layer_words"))
+        })
         .filter_map(|p| if let Shape::Path(v) = &p.shape { Some((p, v.clone())) } else { None })
         .collect();
     if paths.is_empty() {
         return;
     }
-    let layer_texts: Vec<&Txt> = texts.iter().filter(|t| any_word(&words(&t.layer_name), UTILITY_LAYER)).collect();
+    let layer_texts: Vec<&Txt> =
+        texts.iter().filter(|t| any_word(&words(&t.layer_name), cadaddy_mepfix::wordrules::words("site.utility_layer_words"))).collect();
     let mut hs: Vec<f64> = layer_texts.iter().map(|t| t.h).filter(|h| *h > 0.0).collect();
     hs.sort_by(f64::total_cmp);
     let longest = paths.iter().map(|(_, v)| path_len(v)).fold(0.0, f64::max);
