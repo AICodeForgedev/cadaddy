@@ -300,7 +300,9 @@ fn a_checkpoint_another_build_read_is_read_again() {
     assert!(st["resume_note"].as_str().is_some_and(|n| n.contains("kept from a checkpoint another build read: mep_read")), "{st}");
     let job = job_state(&s);
     assert_eq!(sanitary_runs(&job), 0, "kept as asked");
-    let said = job["guided_job"]["findings"].as_array().is_some_and(|f| f.iter().any(|f| f["description"].as_str().is_some_and(|d| d.contains("another build"))));
+    let said = job["guided_job"]["findings"]
+        .as_array()
+        .is_some_and(|f| f.iter().any(|f| f["description"].as_str().is_some_and(|d| d.contains("another build"))));
     assert!(said, "the kept reading is a finding");
 
     // Anything else is an error, not a guess.
