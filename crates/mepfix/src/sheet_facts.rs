@@ -102,10 +102,6 @@ pub struct SheetFacts {
     pub views: Vec<ViewTitle>,
 }
 
-/// Words that are short and capitalised but are notes, not type tags.
-const NOT_TAGS: &[&str] =
-    &["TYP", "EQ", "AFF", "UP", "DN", "NIC", "RR", "GFI", "GFCI", "AND", "OR", "TO", "AT", "ON", "IN", "OF", "THE", "FOR", "NO", "W", "X", "BY"];
-
 /// The model-space text of a drawing, one item per line of text.
 pub fn texts(d: &Drawing) -> Vec<TextItem> {
     let mut out = Vec::new();
@@ -420,7 +416,10 @@ pub fn is_type_tag(t: &str) -> bool {
     let t = t.trim();
     let letters = t.chars().take_while(char::is_ascii_uppercase).count();
     let digits = t.len().saturating_sub(letters);
-    (1..=3).contains(&letters) && digits <= 2 && t.chars().skip(letters).all(|c| c.is_ascii_digit()) && !NOT_TAGS.contains(&t)
+    (1..=3).contains(&letters)
+        && digits <= 2
+        && t.chars().skip(letters).all(|c| c.is_ascii_digit())
+        && !crate::wordrules::words("tags.note_words").contains(&t)
 }
 
 /// Type tags and circuit labels inside a region `[x0, y0, x1, y1]`.
@@ -589,29 +588,12 @@ pub fn is_reference_sheet(title: &str) -> bool {
 /// number's discipline (`C`, `L`, `CS`, `LS`, `V`) or the title's words.
 pub fn is_site_sheet(discipline: &str, title: &str) -> bool {
     let d = discipline.trim().to_ascii_uppercase();
-    if matches!(d.as_str(), "C" | "CS" | "CG" | "CU" | "L" | "LS" | "LP" | "LI" | "V" | "SV") {
+    if crate::wordrules::words("sheets.site_disciplines").contains(&d.as_str()) {
         return true;
     }
     let up = title.to_ascii_uppercase();
     let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    const SITE_WORDS: &[&str] = &[
-        "SITE",
-        "CIVIL",
-        "GRADING",
-        "EARTHWORK",
-        "PAVING",
-        "LANDSCAPE",
-        "LANDSCAPING",
-        "PLANTING",
-        "IRRIGATION",
-        "HARDSCAPE",
-        "EROSION",
-        "SURVEY",
-        "TOPOGRAPHIC",
-        "STORMWATER",
-        "SWPPP",
-    ];
-    words.iter().any(|w| SITE_WORDS.contains(w))
+    words.iter().any(|w| crate::wordrules::words("sheets.site_title_words").contains(w))
 }
 
 /// The sheet and its views.

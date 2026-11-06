@@ -296,7 +296,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
         if p.size_in.is_none()
             && next
                 .iter()
-                .any(|n| ["CONDUIT", "PVC", "SCH", "RGS", "RMC", "PIPE", "EMT", "CONT"].iter().any(|k| n.trim_start_matches('(').starts_with(k)))
+                .any(|n| cadaddy_mepfix::wordrules::words("conduit.size_follow_words").iter().any(|k| n.trim_start_matches('(').starts_with(k)))
         {
             p.size_in = Some(v);
             if p.count.is_none() {
@@ -318,7 +318,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
     } else {
         String::new()
     };
-    p.steel_ells = ["STEEL ELL", "STEEL ELBOW", "RGS ELBOW", "RGS ELL", "RIGID ELBOW"].iter().any(|k| up.contains(k));
+    p.steel_ells = cadaddy_mepfix::wordrules::words("conduit.steel_elbow_words").iter().any(|k| up.contains(k));
     // `… TO DATA ROOM …`: the word(s) between TO and ROOM.
     if let Some(i) = words.iter().position(|w| w.trim_end_matches([',', '.']) == "ROOM").filter(|i| *i > 0) {
         let to = words.iter().take(i).rposition(|w| *w == "TO");
@@ -365,11 +365,7 @@ pub(crate) fn sheet_trade(sheet: &str) -> Option<&'static str> {
     if !t.get(disc.len()..).unwrap_or_default().trim_start_matches(['-', '.', ' ']).starts_with(|c: char| c.is_ascii_digit()) {
         return None;
     }
-    match disc.to_ascii_uppercase().as_str() {
-        "E" | "ES" | "ED" | "EP" | "EL" | "T" | "TN" => Some("E"),
-        "P" | "PL" => Some("P"),
-        _ => None,
-    }
+    cadaddy_mepfix::wordrules::pair_value("sheets.underground_trade_prefix", disc.to_ascii_uppercase().as_str())
 }
 
 /// The trade of a callout: its kind's, else its words', else its sheet's.
@@ -959,12 +955,9 @@ pub(crate) fn unplaced_rfis(sp: &BuildingSpec, called: &[Callout], fates: &[Fate
     out
 }
 
-/// The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to.
-const DRAINS: [&str; 6] = ["SAN", "W", "ST", "SS", "SD", "RD"];
-
 /// Whether a run's system is a drainage service (sanitary, waste, storm).
 pub(crate) fn is_drainage(system: &str) -> bool {
-    DRAINS.iter().any(|d| d.eq_ignore_ascii_case(system.trim()))
+    cadaddy_mepfix::wordrules::words("pipes.drain_systems").iter().any(|d| d.eq_ignore_ascii_case(system.trim()))
 }
 
 /// How a slab drain's height source starts: a run [`slab_drains`] put under the floor.
@@ -991,7 +984,7 @@ pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
         }
         let sys = run.system.to_ascii_uppercase();
         let untagged = matches!(run.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route");
-        if !DRAINS.contains(&sys.as_str())
+        if !cadaddy_mepfix::wordrules::words("pipes.drain_systems").contains(&sys.as_str())
             || !run.level.eq_ignore_ascii_case(&slab)
             || !untagged
             || run.top_ft.is_some()
@@ -1493,7 +1486,7 @@ pub(crate) fn stack_bases(sp: &BuildingSpec, vent_below: bool) -> Vec<MepRun> {
             break;
         }
         let sys = run.system.to_ascii_uppercase();
-        let drainage = DRAINS.contains(&sys.as_str()) || (vent_below && sys == "V");
+        let drainage = cadaddy_mepfix::wordrules::words("pipes.drain_systems").contains(&sys.as_str()) || (vent_below && sys == "V");
         if !drainage || !run.level.eq_ignore_ascii_case(&slab) || ug_system(&run.system) {
             continue;
         }
@@ -1850,7 +1843,7 @@ pub(crate) fn below_method(d: &cadaddy_doc::Drawing) -> Option<String> {
 /// ground (its first), as the job read it.
 pub(crate) fn below_app(d: &cadaddy_doc::Drawing) -> Option<super::conduitroute::MethodApp> {
     let m = super::conduitroute::Methods::stored(d);
-    let words = ["UNDERGROUND", "BELOW SLAB", "UNDER SLAB", "BELOW GRADE", "IN SLAB", "BELOW GROUND"];
+    let words = cadaddy_mepfix::wordrules::words("conduit.below_slab_words");
     m.applications.into_iter().find(|a| words.iter().any(|w| a.application.to_ascii_uppercase().contains(w)))
 }
 

@@ -126,6 +126,10 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     if super::validate_register::is_register_key(key) {
         super::validate_register::check_register_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
     }
+    // Words a job adds to a reader's word list (words:<list>) must name a list and read.
+    if super::wordrules::is_words_key(key) {
+        super::wordrules::check_words_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
+    }
     // A room type's expected set (prescreen.expect.<room type>) must read.
     if super::validate_prescreen::is_expect_key(key) {
         super::validate_prescreen::check_expect_rule(domain, key, value_str).map_err(|e| bad(CMD_SET, e))?;
@@ -139,8 +143,12 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 
     let d = s.doc_mut()?;
     let preview = d.project_rules.set(domain, key, rule_value, reason);
+    let words = super::wordrules::is_words_key(key).then(|| {
+        super::wordrules::sync(s);
+        super::wordrules::report_json()
+    });
 
-    Ok(json!({
+    let mut out = json!({
         "preview": preview_to_json(&preview),
         "affectedElements": affected_count,
         "affectedIds": affected_ids,
@@ -154,7 +162,11 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
                 domain.as_str(), key,
                 preview.new_value, preview.new_tier.label())
         },
-    }))
+    });
+    if let (Some(w), Some(o)) = (words, out.as_object_mut()) {
+        o.insert("wordLists".into(), w);
+    }
+    Ok(out)
 }
 
 // ── project.rules.remove ───────────────────────────────────────────────────

@@ -1305,23 +1305,11 @@ fn check_missing_trade_plans(sheets: &[Value], job: &mut GuidedJob) {
 /// Infer discipline from title text (MUST 2 fallback).
 pub fn infer_discipline_from_title(title: &str) -> Option<&'static str> {
     let upper = title.to_uppercase();
-    // Check for discipline keywords in title or keynote headers.
-    let patterns: &[(&[&str], &str)] = &[
-        (&["ELECTRICAL", "ELEC PLAN", "ELEC. PLAN", "ELECTRICAL KEYNOTES", "POWER PLAN", "LIGHTING PLAN"], "E"),
-        (&["MECHANICAL", "MECH PLAN", "MECH. PLAN", "HVAC", "MECHANICAL KEYNOTES"], "M"),
-        (&["PLUMBING", "PLUMB PLAN", "PLUMB. PLAN", "PLUMBING KEYNOTES"], "P"),
-        (&["ARCHITECTURAL", "ARCH PLAN", "FLOOR PLAN", "REFLECTED CEILING"], "A"),
-        (&["STRUCTURAL", "STRUCT PLAN", "FOUNDATION"], "S"),
-        (&["FIRE PROTECTION", "FIRE ALARM", "SPRINKLER"], "FP"),
-        (&["CIVIL", "SITE PLAN", "GRADING", "PAVING"], "G"),
-        (&["TELECOM", "TECHNOLOGY", "LOW VOLTAGE"], "T"),
-    ];
-    for (keywords, disc) in patterns {
-        if keywords.iter().any(|kw| upper.contains(kw)) {
-            return Some(disc);
-        }
-    }
-    None
+    // Discipline keywords in the title or keynote headers (rule data `sheets.title_discipline`).
+    cadaddy_mepfix::wordrules::groups("sheets.title_discipline")
+        .iter()
+        .find(|(_, keywords)| keywords.iter().any(|kw| upper.contains(kw)))
+        .map(|(disc, _)| *disc)
 }
 
 /// Run the levels stage: detect levels, scales, elevations (MUST 1, 3).
@@ -2331,9 +2319,6 @@ struct DeviceCensus {
     fates: Vec<(u64, super::inventory::MarkFate)>,
 }
 
-/// The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection
-/// and alarm, technology).
-const DEVICE_DISCIPLINES: &[&str] = &["E", "M", "P", "FP", "FA", "F", "T", "LV", "EL", "ME", "MEP"];
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
 const MIN_REPEATED_TAG: usize = 3;
 /// Most crops drawn for unlisted tags.
@@ -2528,7 +2513,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         let number = sheet.split('/').next().unwrap_or(sheet);
         job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(number)).is_none_or(|r| {
             let d = r.discipline.trim().to_ascii_uppercase();
-            d.is_empty() || DEVICE_DISCIPLINES.contains(&d.as_str())
+            d.is_empty() || cadaddy_mepfix::wordrules::words("sheets.device_disciplines").contains(&d.as_str())
         })
     };
     for (g, syms) in symbols.iter().enumerate() {
@@ -2997,7 +2982,7 @@ fn job_link_pages(
 fn room_view(title: &str, types: &BTreeSet<BTreeSet<String>>, vocabulary: &BTreeSet<String>) -> bool {
     let up = title.to_ascii_uppercase();
     let words = type_words(title, Some(vocabulary));
-    (!words.is_empty() && types.contains(&words)) || ["UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
+    (!words.is_empty() && types.contains(&words)) || cadaddy_mepfix::wordrules::words("units.typical_view_words").iter().any(|w| up.contains(w))
 }
 
 /// An enlarged view the sheet map registered on its overall plan (by its grids, tags, boundary
@@ -3242,19 +3227,13 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
     })
 }
 
-/// Run the rooms stage: detect rooms from labels (MUST 1, 4).
-/// Uses the same readers (rooms.list) that work directly on the job's sheets.
-/// Finish and material codes of the finish legend (gypsum board, carpet, vinyl and ceramic tile,
-/// acoustic tile, paint, rubber base, wood, epoxy, sealed concrete): a tag of one is no room.
-const FINISH_CODES: [&str; 14] = ["GYP", "GWB", "CPT", "VCT", "LVT", "LVP", "ACT", "PT", "RB", "WD", "CT", "QT", "EPX", "SC"];
-
 /// A finish or material tag (GYP 01, CPT-1, VCT 2, ACT-1) traced in its room: a room read with a
 /// finish code for a name and a short number, or none.
 fn finish_tag(r: &Value) -> bool {
     let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
     let first = name.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
     let short_number = r.get("number").and_then(Value::as_str).is_none_or(|n| n.trim().len() <= 2);
-    short_number && FINISH_CODES.contains(&first)
+    short_number && cadaddy_mepfix::wordrules::words("rooms.finish_codes").contains(&first)
 }
 
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -3449,7 +3428,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     if let Some(rooms) = rooms {
         // Check for equipment labels.
-        let equipment_patterns = ["PNLBD", "PANEL", "XFMR", "TRANS", "MCC", "SWG", "ATS", "GEN", "MDP", "CDP"];
+        let equipment_patterns = cadaddy_mepfix::wordrules::words("rooms.equipment_label_words");
         for room in rooms.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let name = room.get("name").and_then(Value::as_str).unwrap_or("?");
             let number = room.get("number").and_then(Value::as_str).unwrap_or("");
@@ -3596,10 +3575,8 @@ const MAX_KEYS: u32 = 10_000;
 fn stated_keys(text: &str) -> Option<u32> {
     let up = text.to_ascii_uppercase();
     let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    let about_building = words.iter().any(|w| ["HOTEL", "MOTEL", "INN", "RESORT", "LODGING", "SCOPE", "PROJECT", "BUILDING"].contains(w))
-        && !words
-            .iter()
-            .any(|w| ["PER", "LOCK", "LOCKS", "CYLINDER", "PANEL", "PANELS", "PANELBOARD", "PANELBOARDS", "CABINET", "DOOR", "DOORS"].contains(w));
+    let about_building = words.iter().any(|w| cadaddy_mepfix::wordrules::words("keys.building_words").contains(w))
+        && !words.iter().any(|w| cadaddy_mepfix::wordrules::words("keys.not_building_words").contains(w));
     let at = |i: usize| words.get(i).copied();
     for (i, w) in words.iter().enumerate() {
         let Some(n) = w.parse::<u32>().ok().filter(|n| (2..=MAX_KEYS).contains(n)) else { continue };
@@ -3854,10 +3831,13 @@ const MAX_LONE_MARKS: usize = 2_000;
 /// A receptacle's designations among the texts printed by it, in a fixed order: `GFCI` (or
 /// `GFI`), `WP` weatherproof, `WR` weather-resistant, `TR` tamper-resistant, `USB`.
 fn receptacle_designations(texts: &[&str]) -> Vec<&'static str> {
-    const DESIGNATIONS: &[(&str, &[&str])] = &[("GFCI", &["GFCI", "GFI"]), ("WP", &["WP"]), ("WR", &["WR"]), ("TR", &["TR"]), ("USB", &["USB"])];
     let words: BTreeSet<String> =
         texts.iter().flat_map(|t| t.split(|c: char| !c.is_ascii_alphanumeric())).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
-    DESIGNATIONS.iter().filter(|(_, said)| said.iter().any(|w| words.contains(*w))).map(|(d, _)| *d).collect()
+    cadaddy_mepfix::wordrules::groups("devices.receptacle_designations")
+        .iter()
+        .filter(|(_, said)| said.iter().any(|w| words.contains(*w)))
+        .map(|(d, _)| *d)
+        .collect()
 }
 
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
@@ -7823,12 +7803,8 @@ fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<Str
     upper
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
-        .map(|w| match w {
-            "QUEEN" => "Q".to_string(),
-            "ACC" | "ACCESSIBLE" => "ADA".to_string(),
-            w => w.to_string(),
-        })
-        .filter(|w| w != "SINGLE")
+        .map(|w| cadaddy_mepfix::wordrules::pair_value("units.type_word_aliases", w).unwrap_or(w).to_string())
+        .filter(|w| !cadaddy_mepfix::wordrules::words("units.dropped_type_words").contains(&w.as_str()))
         .filter(|w| vocabulary.is_none_or(|v| v.contains(w)))
         .collect()
 }
@@ -9246,7 +9222,10 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             .min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)))
             .map(|(v, _)| v.clone())
     };
-    for (v, at) in labels.iter().filter(|(v, _)| v.trim().eq_ignore_ascii_case("PTAC")) {
+    // The room unit's printed tag (rule data `equipment.room_unit_tags`: PTAC for kind ptac).
+    let unit_tag =
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == "ptac").map(|(t, _)| *t).unwrap_or_default();
+    for (v, at) in labels.iter().filter(|(v, _)| !unit_tag.is_empty() && v.trim().eq_ignore_ascii_case(unit_tag)) {
         let body = shapes
             .iter()
             .filter(|(lo, hi, _)| {
@@ -9257,9 +9236,9 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             })
             .min_by(|a, b| dist(mid(a.0, a.1), *at).total_cmp(&dist(mid(b.0, b.1), *at)));
         let Some((lo, hi, _)) = body else { continue };
-        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("PTAC-{n}"));
+        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("{unit_tag}-{n}"));
         if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
-            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: "tag PTAC".into() });
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: format!("tag {unit_tag}") });
         }
     }
     let squarish = |lo: [f64; 2], hi: [f64; 2]| {
@@ -9358,7 +9337,7 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             .into_iter()
             .filter_map(|v| {
                 let up = v.title.to_ascii_uppercase();
-                let mech = mech_sheet || up.contains("MECH") || up.contains("HVAC");
+                let mech = mech_sheet || cadaddy_mepfix::wordrules::words("sheets.mechanical_title_words").iter().any(|w| up.contains(w));
                 let words = type_words(&v.title, Some(&vocabulary));
                 (mech && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
             })
@@ -9513,13 +9492,10 @@ fn drop_equipment_marks(devices: &mut Vec<super::readers::ReadDevice>) -> usize 
 /// The mechanical equipment kind a device's tag names (`EF`, `PTAC`), if it names one.
 fn equipment_tag_kind(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_uppercase();
-    if tag == "EF" || tag.starts_with("EF-") {
-        Some("exhaust_fan")
-    } else if tag == "PTAC" || tag.starts_with("PTAC-") {
-        Some("ptac")
-    } else {
-        None
-    }
+    cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+        .iter()
+        .find(|(t, _)| tag == *t || tag.strip_prefix(t).is_some_and(|r| r.starts_with('-')))
+        .map(|(_, kind)| *kind)
 }
 
 /// Each stamped device whose tag names mechanical equipment (`EF`, `PTAC`) moved to that
@@ -9570,20 +9546,12 @@ fn scheduled_connections(
     // The typical panel (one schedule for many rooms) when there is one.
     let typical: Vec<&cadaddy_walk3d::PanelSchedule> = schedules.iter().filter(|p| p.typical_of.is_some()).collect();
     let [panel] = typical.as_slice() else { return Vec::new() };
-    let words = |kind: &str| -> &'static [&'static str] {
-        match kind {
-            "ptac" => &["PTAC"],
-            "exhaust_fan" => &["EXHAUST FAN", "BATH FAN"],
-            _ => &[],
-        }
-    };
+    let words = |kind: &str| -> &'static [&'static str] { cadaddy_mepfix::wordrules::group("equipment.typical_load_words", kind) };
     let mut out = Vec::new();
     for e in equipment.iter().take(MAX_STAMPED) {
         let Some(room) = e.properties.get("room").filter(|r| !r.is_empty()) else { continue };
-        let tag = match e.kind.as_str() {
-            "ptac" => "PTAC",
-            "exhaust_fan" => "EF",
-            _ => continue,
+        let Some(tag) = cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == e.kind).map(|(t, _)| *t) else {
+            continue;
         };
         // Connected already: a connection of its kind in its room.
         if devices.iter().chain(&out).any(|dv| dv.room == *room && dv.tag.to_ascii_uppercase().starts_with(tag)) {
@@ -9736,7 +9704,9 @@ fn units_trade(sheet: &str) -> String {
 fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
     let connection = |dv: &super::readers::ReadDevice| {
         let t = dv.tag.trim().to_ascii_uppercase();
-        t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-")
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+            .iter()
+            .any(|(tag, _)| t == *tag || t.strip_prefix(tag).is_some_and(|r| r.starts_with('-')))
     };
     let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
     // Where each kept one is: another plan's tag put at the same equipment (in no room) is it.
@@ -10022,21 +9992,7 @@ const HALF_BOX_IN: f64 = 2.25;
 /// The kind a typical-height item names (`TOGGLE SWITCH`, `RECEPTACLES`, `VOICE/DATA OUTLETS`).
 fn typical_kind(words: &str) -> Option<&'static str> {
     let up = words.to_ascii_uppercase();
-    if up.contains("PANEL") {
-        Some("panel")
-    } else if up.contains("EMERGENCY") {
-        Some("emergency light")
-    } else if up.contains("SWITCH") {
-        Some("switch")
-    } else if up.contains("RECEPT") {
-        Some("receptacle")
-    } else if ["VOICE", "DATA", "TELEPHONE", "TEL/", "TV", "CATV"].iter().any(|w| up.contains(w)) {
-        Some("low_voltage_outlet")
-    } else if up.contains("THERMOSTAT") {
-        Some("thermostat")
-    } else {
-        None
-    }
+    cadaddy_mepfix::wordrules::first_rule("devices.typical_height_kind", |w| up.contains(w)).map(|r| r.value)
 }
 
 /// One typical-height item (`TOGGLE SWITCH 4'-0" AFF TO TOP`): its kind and centre height.
@@ -10374,7 +10330,6 @@ fn levels_without_water(
     floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
     roof: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
-    const WATER: [&str; 3] = ["CW", "HW", "HWR"];
     let mut order: Vec<&str> = Vec::new();
     let mut water: BTreeSet<&str> = BTreeSet::new();
     for r in runs {
@@ -10382,7 +10337,7 @@ fn levels_without_water(
         if drained && !order.contains(&r.level.as_str()) {
             order.push(&r.level);
         }
-        if WATER.contains(&r.system.as_str()) && floor_plan(r) {
+        if cadaddy_mepfix::wordrules::words("pipes.water_systems").contains(&r.system.as_str()) && floor_plan(r) {
             water.insert(&r.level);
         }
     }
@@ -10810,7 +10765,7 @@ fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec
             // FLOOR - SANITARY): every guest room type's, on that floor.
             let up = v.title.to_ascii_uppercase();
             let enlarged = up.contains("ENLARGED") || up.contains("PLAN");
-            if !types.contains(&words) && enlarged && (up.contains("GUESTROOM") || up.contains("GUEST ROOM")) {
+            if !types.contains(&words) && enlarged && cadaddy_mepfix::wordrules::words("units.unit_plan_title_words").iter().any(|w| up.contains(w)) {
                 let Some(region) = v.region.or_else(|| title_cell(v.at, &titles, sh.rect)) else {
                     progress_line(&format!("  unit types: {} {:?} at {:?}: no part of the sheet found for it", sh.number, v.title, v.at));
                     continue;
@@ -10940,20 +10895,9 @@ const TITLE_BLOCK_SHARE: f64 = 0.12;
 /// The views of one unit type kept at most.
 const MAX_UNIT_VIEWS: usize = 40;
 
-/// Marks that tag mechanical equipment (`HP` over its number: heat pump 3). A device so marked is
-/// that equipment's electrical connection.
-const EQUIPMENT_TAGS: &[&str] =
-    &["HP", "AHU", "RTU", "CU", "ACU", "ERV", "HRV", "MAU", "MUA", "UH", "EUH", "CUH", "EWH", "VAV", "VRF", "KEF", "TEF", "GEF"];
-
 /// The words a table's heading names a trade by (`PLUMBING` for the plumbing sheets).
 fn trade_names(trade: &str) -> &'static [&'static str] {
-    match trade {
-        "P" => &["PLUMBING"],
-        "M" => &["MECHANICAL", "HVAC"],
-        "FP" | "F" => &["FIRE PROTECTION", "SPRINKLER"],
-        "L" | "T" => &["LOW VOLTAGE", "TECHNOLOGY", "TELECOM", "SECURITY"],
-        _ => &[],
-    }
+    cadaddy_mepfix::wordrules::group("sheets.trade_heading_words", trade)
 }
 
 /// How far round a mark its sheet's text is quoted for a question about it, in text heights.
@@ -10985,11 +10929,11 @@ fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Op
     let desc = row.description.to_ascii_uppercase();
     let fixtures = !plumbing
         && !table.contains("PLUMBING")
-        && ["LUMINAIRE", "LIGHT FIXTURE", "LIGHTING FIXTURE", "LIGHTING SCHEDULE", "FIXTURE SCHEDULE"].iter().any(|w| table.contains(w));
-    if fixtures || ["LUMINAIRE", "DOWNLIGHT", "TROFFER", "SCONCE", "PENDANT", "LIGHT FIXTURE", "LED FIXTURE"].iter().any(|w| desc.contains(w)) {
+        && cadaddy_mepfix::wordrules::words("schedules.luminaire_table_words").iter().any(|w| table.contains(w));
+    if fixtures || cadaddy_mepfix::wordrules::words("fixtures.luminaire_words").iter().any(|w| desc.contains(w)) {
         return Some(("luminaire", "IfcLightFixture"));
     }
-    if ["EQUIPMENT", "FAN", "PUMP", "HEATER", "UNIT SCHEDULE"].iter().any(|w| table.contains(w)) {
+    if cadaddy_mepfix::wordrules::words("schedules.equipment_table_words").iter().any(|w| table.contains(w)) {
         return Some(("equipment connection", ""));
     }
     None
@@ -11002,7 +10946,7 @@ fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Op
 fn equipment_of(tag: &str, texts: &[cadaddy_mepfix::sheet_facts::TextItem], tag_at: Option<(cadaddy_geom::Vec2, f64)>) -> Option<String> {
     let t = tag.trim().to_ascii_uppercase();
     let letters: String = t.chars().take_while(char::is_ascii_alphabetic).collect();
-    if !EQUIPMENT_TAGS.contains(&letters.as_str()) {
+    if !cadaddy_mepfix::wordrules::words("equipment.tags").contains(&letters.as_str()) {
         return None;
     }
     let digits: String = t.chars().skip(letters.len()).collect();
@@ -11199,27 +11143,7 @@ fn kinds_from_pages(job: &GuidedJob, devices: &mut [super::readers::ReadDevice])
 /// Whether a panel schedule's load is a piece of equipment (its connection is the device).
 fn equipment_load(description: &str) -> bool {
     let u = description.to_ascii_uppercase();
-    [
-        "HEAT PUMP",
-        "HP-",
-        "AHU",
-        "RTU",
-        "CONDENS",
-        "WATER HEATER",
-        "PUMP",
-        "FAN",
-        "UNIT",
-        "MOTOR",
-        "SIGN",
-        "GATE",
-        "OPERATOR",
-        "COMPRESSOR",
-        "HEATER",
-        "ELEVATOR",
-        "DOOR",
-    ]
-    .iter()
-    .any(|w| u.contains(w))
+    cadaddy_mepfix::wordrules::words("equipment.load_words").iter().any(|w| u.contains(w))
 }
 
 /// What each mark that needed resolving resolved to and from where (`HP: equipment connection
@@ -11250,67 +11174,10 @@ const NEAR_TEXT_DEFAULT_H: f64 = 6.0;
 pub(crate) fn legend_kind(description: &str) -> Option<(&'static str, &'static str)> {
     let u = description.to_ascii_uppercase();
     let has = |w: &str| u.contains(w);
-    if ["INSTALL DEVICE AT", "DESIGNATION", "MOUNT 6", "LOWER CASE", "INDICATES", "LIGHTING FIXTURE", "CIRCUITING"].iter().any(|w| has(w)) {
+    if cadaddy_mepfix::wordrules::words("devices.legend_not_device_words").iter().any(|w| has(w)) {
         return None;
     }
-    Some(if has("GFCI") || has("GROUND FAULT") || has("GFI ") {
-        ("gfci_receptacle", "IfcOutlet")
-    } else if has("CEILING MOUNTED") && has("RECEPTACLE") {
-        ("ceiling_receptacle", "IfcOutlet")
-    } else if has("QUAD") && has("RECEPTACLE") {
-        ("quad_receptacle", "IfcOutlet")
-    } else if has("RECEPTACLE") {
-        ("receptacle", "IfcOutlet")
-    } else if has("FLOOR BOX") {
-        ("floor_box", "IfcOutlet")
-    } else if has("3-WAY") || has("THREE WAY") {
-        ("3way_switch", "IfcSwitchingDevice")
-    } else if has("OCCUPANCY") || has("VACANCY") {
-        ("occupancy_sensor", "IfcSensor")
-    } else if has("SWITCH") && !has("DISCONNECT") {
-        ("switch", "IfcSwitchingDevice")
-    } else if has("DISCONNECT") {
-        ("disconnect", "IfcSwitchingDevice")
-    } else if has("SMOKE") {
-        ("smoke_detector", "IfcSensor")
-    } else if has("HEAT SENSOR") || has("HEAT DETECTOR") {
-        ("heat_detector", "IfcSensor")
-    } else if has("PULL STATION") {
-        ("pull_station", "IfcAlarm")
-    } else if has("HORN") || has("STROBE") {
-        ("fire_alarm_notification", "IfcAlarm")
-    } else if has("TELEVISION") || has("TV OUTLET") || has("CATV") {
-        ("tv_outlet", "IfcOutlet")
-    } else if has("DATA") || has("TELEPHONE") {
-        ("data_outlet", "IfcOutlet")
-    } else if has("AUDIO") {
-        ("av_outlet", "IfcOutlet")
-    } else if has("WIRELESS ACCESS") {
-        ("wireless_access_point", "IfcCommunicationsAppliance")
-    } else if has("CAMERA") {
-        ("camera", "IfcCommunicationsAppliance")
-    } else if has("SPEAKER") {
-        ("speaker", "IfcAudioVisualAppliance")
-    } else if has("THERMOSTAT") {
-        ("thermostat", "IfcUnitaryControlElement")
-    } else if has("EXHAUST FAN") {
-        ("exhaust_fan", "IfcFan")
-    } else if has("JUNCTION BOX") {
-        ("junction_box", "IfcJunctionBox")
-    } else if has("PANELBOARD") || has("PANEL BOARD") {
-        ("panel", "IfcElectricDistributionBoard")
-    } else if has("EXIT SIGN") {
-        ("exit_sign", "IfcLightFixture")
-    } else if has("DAMPER") {
-        ("motorized_damper", "IfcDamper")
-    } else if has("DOOR HOLD") {
-        ("door_holder", "IfcElectricAppliance")
-    } else if ["CARD READER", "INTERCOM", "BELL", "PUSH BUTTON", "VOLUME CONTROL", "DOOR CONTACT", "DOOR POWER", "POWER PACK"].iter().any(|w| has(w))
-    {
-        ("low_voltage_device", "IfcCommunicationsAppliance")
-    } else {
-        return None;
-    })
+    cadaddy_mepfix::wordrules::first_rule("devices.legend_kind", has).map(|r| (r.value, r.also))
 }
 
 /// A symbol block's shape, whatever its size and name (a PDF import names the repeated drawings
@@ -11397,9 +11264,6 @@ fn legend_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadad
     pages
 }
 
-/// The gear words a submittal's file name carries when it is a gear submittal.
-const GEAR_SUBMITTAL_WORDS: [&str; 4] = ["GEAR", "SWITCHGEAR", "PANELBOARD", "SWITCHBOARD"];
-
 /// The electrical gear from the documents ([`super::gearbuild`]): feeder types (the feeder
 /// schedule), each panel's incoming type (the one-line), the gear's box and lugs (the gear
 /// submittals); the gear laid out in its rooms (proposed), built, and checked by `gear.review`.
@@ -11430,7 +11294,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     for f in super::submittals::pdf_files(&job.submittals).into_iter().take(MAX_GEAR_SUBMITTALS) {
         let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
         let up = name.to_ascii_uppercase();
-        if !GEAR_SUBMITTAL_WORDS.iter().any(|w| up.contains(w)) {
+        if !cadaddy_mepfix::wordrules::words("equipment.gear_submittal_words").iter().any(|w| up.contains(w)) {
             continue;
         }
         let Ok(text) =
@@ -11674,7 +11538,7 @@ fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)]) -> (Vec<cadaddy_wa
             continue;
         }
         let segs = super::gridtable::segments(d);
-        for title in ["LIGHT FIXTURE SCHEDULE", "LIGHTING FIXTURE SCHEDULE", "LUMINAIRE SCHEDULE"] {
+        for title in cadaddy_mepfix::wordrules::words("schedules.luminaire_titles") {
             for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
                 let (rows, ns) = super::lightsched::fixture_types(&tb);
                 no_subs |= ns;
@@ -11763,7 +11627,8 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         let m = mark.trim().to_ascii_uppercase();
         // A type is a short tag (`A`, `Q2`, `QX`); a word the reader took for one (a column's
         // heading, `QTY`) isn't.
-        let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic())) || NOT_TYPE_TAGS.contains(&m.as_str());
+        let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic()))
+            || cadaddy_mepfix::wordrules::words("tags.not_type_tags").contains(&m.as_str());
         if m.is_empty() || m.len() > 6 || m.contains(' ') || word {
             continue;
         }
@@ -12227,9 +12092,6 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     Ok(())
 }
 
-/// Words a submittal's form prints where a type tag goes that are no type.
-const NOT_TYPE_TAGS: [&str; 10] = ["QTY", "TYP", "REF", "NO", "EA", "PCS", "ITEM", "NOTE", "N/A", "TBD"];
-
 /// A luminaire's type from its mark (`luminaire QX` → `QX`), a control's mark as printed.
 fn lt_type(mark: String) -> String {
     super::lightsched::type_of(&mark)
@@ -12690,7 +12552,7 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     // A level's lanes for a space a note names (`CORRIDOR`): its corridors (all of them for a
     // corridor or hall; else those whose label names it).
     let lanes = |level: &str, via: &str| -> Vec<[[f64; 2]; 2]> {
-        let any = ["CORRIDOR", "HALL", "CORR"].iter().any(|w| via.contains(w));
+        let any = cadaddy_mepfix::wordrules::words("rooms.corridor_words").iter().any(|w| via.contains(w));
         sp.circulation
             .iter()
             .filter(|c| c.level.eq_ignore_ascii_case(level) && matches!(c.kind, cadaddy_walk3d::CirculationKind::Corridor))
@@ -17436,16 +17298,12 @@ const MAX_LEGEND_TEXTS: usize = 5_000;
 /// Most electrical sheets read again for a legend the job's drawing doesn't hold.
 const MAX_LEGEND_SHEETS: usize = 6;
 
-/// The disciplines whose sheets that aren't plans may list mounting heights in their notes: the
-/// general (accessibility) sheets, the architecture's, the trades'.
-const MOUNT_NOTE_DISCIPLINES: [&str; 6] = ["G", "A", "E", "FA", "P", "M"];
-
 /// The mounting heights the notes of the set's sheets that aren't plans list (`9. WIRING
 /// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an accessibility sheet's `WATER
 /// CLOSETS (TO TOP OF SEAT): STANDARD = …`), each with its sheet.
 fn mount_notes(job: &GuidedJob) -> Vec<cadaddy_walk3d::MountNote> {
     let mut out: Vec<cadaddy_walk3d::MountNote> = Vec::new();
-    for disc in MOUNT_NOTE_DISCIPLINES {
+    for disc in cadaddy_mepfix::wordrules::words("sheets.mount_note_disciplines") {
         for (number, d) in non_plan_pages(job, disc) {
             let texts = cadaddy_mepfix::sheet_facts::texts(&d);
             for l in super::mountlist::read_lists(&texts) {
@@ -17770,8 +17628,7 @@ fn sheet_of_handle<'a>(spans: &[(&'a str, u64, u64)], h: u64) -> &'a str {
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
 /// guest room (QUEEN, KING, SUITE…) or a dwelling unit.
 fn sleeping_room(words: &BTreeSet<String>) -> bool {
-    const SLEEPING: &[&str] = &["Q", "KING", "K", "SUITE", "STUDIO", "GUEST", "BEDROOM", "BED", "UNIT", "APT", "APARTMENT", "DWELLING"];
-    words.iter().any(|w| SLEEPING.contains(&w.as_str()))
+    words.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.sleeping").contains(&w.as_str()))
 }
 
 /// A stamped room's name for its own circuits: its number, else its name and place in the list.
@@ -17796,19 +17653,18 @@ fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
         return Some(i);
     }
     // The name: the title's words but the view's own (ENLARGED, PLAN, the trade, the floor).
-    const VIEW_WORDS: &[&str] =
-        &["ENLARGED", "PLAN", "PLANS", "ELECTRICAL", "MECHANICAL", "PLUMBING", "LIGHTING", "POWER", "FLOOR", "LEVEL", "ROOM", "SCALE"];
     let ordinal =
         |w: &str| w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e));
     // An equipment room by any of its names (the trades' plans call it MEP, the architect MECH).
     let same = |w: &str| -> String {
-        match w {
-            "MEP" | "MECH" | "MECHANICAL" | "ELEC" | "EQUIPMENT" => "MEP".to_string(),
-            w => w.to_string(),
-        }
+        if cadaddy_mepfix::wordrules::words("rooms.equipment_room_names").contains(&w) { "MEP".to_string() } else { w.to_string() }
     };
-    let name: Vec<String> =
-        tokens.iter().copied().filter(|w| !VIEW_WORDS.contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit())).map(same).collect();
+    let name: Vec<String> = tokens
+        .iter()
+        .copied()
+        .filter(|w| !cadaddy_mepfix::wordrules::words("sheets.view_title_words").contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit()))
+        .map(same)
+        .collect();
     if name.is_empty() {
         return None;
     }
@@ -19017,8 +18873,8 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         // background shows the walls), the one with the most levels.
         // Q6037: exclude disciplines that don't carry building walls/doors (life safety,
         // fire protection, fire alarm, general/civil, structural, telecom).
-        const NON_BUILDING: &[&str] = &["SL", "FP", "FA", "G", "C", "S", "T"];
-        let building_plan = |r: &&SheetRegion| floor_plan(r) && !NON_BUILDING.contains(&r.discipline.as_str());
+        let building_plan =
+            |r: &&SheetRegion| floor_plan(r) && !cadaddy_mepfix::wordrules::words("sheets.non_building_disciplines").contains(&r.discipline.as_str());
         let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
         for r in job.sheet_regions.iter().filter(|r| building_plan(r)) {
             by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
@@ -19368,47 +19224,10 @@ fn is_room_like_name(name: &str) -> bool {
     }
     // Reject names that are clearly not rooms: building materials, notes, single words that are
     // structural/finish labels, or very short fragments.
-    const NOT_ROOMS: &[&str] = &[
-        "WALL",
-        "ROOF",
-        "ROOFING",
-        "CEILING",
-        "FLOOR",
-        "SLAB",
-        "HEIGHT",
-        "APPLICABLE",
-        "TYP",
-        "TYPICAL",
-        "NIC",
-        "N.I.C",
-        "EXIST",
-        "EXISTING",
-        "SIM",
-        "SIMILAR",
-        "ABV",
-        "ABOVE",
-        "BLW",
-        "BELOW",
-        "TPO",
-        "EPDM",
-        "CMU",
-        "GYP",
-        "ACT",
-        "VCT",
-        "CPT",
-        "CONC",
-        "CLG",
-        "FLR",
-        "DEMO",
-        "NEW",
-        "FINISH",
-        "PAINT",
-        "BASE",
-    ];
-    for bad_name in NOT_ROOMS {
+    for bad_name in cadaddy_mepfix::wordrules::words("rooms.not_rooms") {
         // Exact match or the entire name is one of these words (possibly with punctuation).
         let cleaned: String = upper.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect();
-        if cleaned.split_whitespace().all(|w| NOT_ROOMS.contains(&w)) {
+        if cleaned.split_whitespace().all(|w| cadaddy_mepfix::wordrules::words("rooms.not_rooms").contains(&w)) {
             return false;
         }
         if cleaned == *bad_name {
@@ -20331,6 +20150,23 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
                 rule.auto_applied = rule.auto_applied.saturating_add(1);
             }
         }
+        // Words the job adds to a reader's word list (`words:rooms.sleeping`).
+        if super::wordrules::is_words_key(&rule.key) {
+            let set = s.execute(
+                "project.rules.set",
+                &json!({
+                    "domain": "custom",
+                    "key": &rule.key,
+                    "value": &rule.value,
+                    "source": "guided_job",
+                    "tier": "project_rule",
+                    "reason": "word list rule from the guided job",
+                }),
+            );
+            if set.is_ok() {
+                rule.auto_applied = rule.auto_applied.saturating_add(1);
+            }
+        }
         // Apply scale overrides.
         if rule.key.starts_with("scale:") {
             let _ = s.execute(
@@ -21093,7 +20929,7 @@ fn cmd_rules(s: &mut Session, _p: &Value) -> Result<Value> {
             })
         })
         .collect();
-    Ok(json!({"rules": rules, "count": rules.len()}))
+    Ok(json!({"rules": rules, "count": rules.len(), "word_lists": super::wordrules::report_json()}))
 }
 
 /// Q6021 MUST 3: warnings the report raises when the job is done but something is off.
@@ -21712,7 +21548,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{stage?: name} → {stage, description, status, questions_total, questions_answered, result} or {stages}")
             .noundo(),
         CommandSpec::new("job.rules", "Job Learned Rules", cmd_rules)
-            .params("{} → {rules: [{key, value, from_question, stage, auto_applied}], count}")
+            .params("{} → {rules: [{key, value, from_question, stage, auto_applied}], count, word_lists: {file, lists, added: {list: [word]}, unknown: [list], problems, missing: [list]}} (word_lists: the readers' word lists (wordrules.json) with the words this job adds through `words:<list>` project rules)")
             .noundo(),
         CommandSpec::new("job.report", "Job Report", cmd_report)
             .params("{} → {job_id, goal, done, progress, stages, totals, rules_learned, audit_entries, inventory: the print inventory's coverage once the BIM build took it — {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet, sheets_not_read} (bim.inventory lists the marks)}")

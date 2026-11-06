@@ -30,17 +30,13 @@ fn no_project(what: &str, mut out: Value) -> Value {
     out
 }
 
-/// Sheet-number letters that name a discipline. A sheet found only by its largest
-/// sheet-number lettering counts when it is one of these: equipment marks look like sheet
-/// numbers too (`RTU-1`, `EF-2`).
-const DISCIPLINES: &[&str] = &["G", "C", "L", "A", "I", "ID", "S", "M", "P", "FP", "E", "FA", "T", "LV", "Q"];
-
 /// The current drawing is one sheet whose title block names another discipline than `want`
 /// (`M` for ducts, `P` for pipes): what to answer instead of reading another trade's lines.
 fn other_trade_sheet(s: &Session, want: &str, what: &str) -> Option<String> {
     let d = s.doc().ok()?;
     let id = cadaddy_mepfix::sheet_facts::identify_sheet(&cadaddy_mepfix::sheet_facts::texts(d))?;
-    let known = id.source == "title_block" || DISCIPLINES.iter().any(|k| k.eq_ignore_ascii_case(&id.discipline));
+    let known = id.source == "title_block"
+        || cadaddy_mepfix::wordrules::words("sheets.discipline_letters").iter().any(|k| k.eq_ignore_ascii_case(&id.discipline));
     (known && !id.discipline.is_empty() && !id.discipline.eq_ignore_ascii_case(want))
         .then(|| format!("this drawing is sheet {} ({} discipline): {what} is read on {want} plan sheets only", id.number, id.discipline))
 }
@@ -1113,17 +1109,7 @@ pub(crate) fn receptacle_item(tag: &str) -> String {
 
 /// What a device mark usually is on an electrical plan (else `device`).
 pub(crate) fn device_kind(tag: &str) -> &'static str {
-    match tag.trim().to_ascii_uppercase().as_str() {
-        "OS" | "OS1" | "OS2" | "OC" | "VS" | "PS" => "occupancy sensor",
-        "DH" | "MH" => "door holder",
-        "J" | "JB" => "junction box",
-        "S" | "S2" | "S3" | "S4" | "SD" | "DS" | "LV" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => "switch",
-        "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
-        "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
-        "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
-        "T" | "TSTAT" | "TH" => "thermostat",
-        _ => "device",
-    }
+    cadaddy_mepfix::wordrules::pair_value("devices.kind_by_mark", tag.trim().to_ascii_uppercase().as_str()).unwrap_or("device")
 }
 
 /// Devices listed at most per call, and read at most.

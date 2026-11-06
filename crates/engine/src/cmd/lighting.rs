@@ -209,24 +209,8 @@ pub(crate) fn mounting_of(text: &str) -> Option<&'static str> {
 
 /// The finish a line names (its colour or plating).
 pub(crate) fn finish_of(text: &str) -> Option<&'static str> {
-    const FINISHES: [(&str, &str); 14] = [
-        ("DARK BRONZE", "dark bronze"),
-        ("OIL RUBBED BRONZE", "oil rubbed bronze"),
-        ("BRONZE", "bronze"),
-        ("BRUSHED NICKEL", "brushed nickel"),
-        ("SATIN NICKEL", "satin nickel"),
-        ("NICKEL", "nickel"),
-        ("CHROME", "chrome"),
-        ("BRASS", "brass"),
-        ("MATTE BLACK", "black"),
-        ("BLACK", "black"),
-        ("WHITE", "white"),
-        ("SILVER", "silver"),
-        ("GRAPHITE", "graphite"),
-        ("ALUMINUM", "aluminum"),
-    ];
     let up = text.to_ascii_uppercase();
-    FINISHES.iter().find(|(w, _)| up.contains(w)).map(|(_, f)| *f)
+    cadaddy_mepfix::wordrules::pairs("fixtures.finish_words").iter().find(|(w, _)| up.contains(w)).map(|(_, f)| *f)
 }
 
 /// A value that says the document leaves it to another (`REFER TO CIVIL PHOTOMETRIC PLAN`,
@@ -486,7 +470,7 @@ pub(crate) fn resolve(docs: &[&Sayings]) -> (Sayings, Vec<FieldConflict>) {
 pub(crate) fn interior(row: &FixtureType) -> bool {
     let up = row.description.to_ascii_uppercase();
     let unit = up.contains("EMERGENCY") && !backup(&up);
-    !unit && !["EXTERIOR", "SITE", "WALL PACK", "EXIT", "PARKING", "POLE"].iter().any(|w| up.contains(w))
+    !unit && !cadaddy_mepfix::wordrules::words("fixtures.exterior_words").iter().any(|w| up.contains(w))
 }
 
 /// Whether a description is a luminaire with an emergency battery in it (`PROVIDE WITH EMERGENCY
@@ -499,7 +483,7 @@ fn backup(up: &str) -> bool {
 /// notes): it stays on (unswitched, ahead of switching) by design.
 pub(crate) fn emergency_type(row: &FixtureType) -> Option<Emergency> {
     let up = format!("{} {}", row.description, row.lamp).to_ascii_uppercase();
-    let words = ["EXIT", "EMERGENCY", "BATTERY", "EGRESS", "NIGHT LIGHT", "NIGHTLIGHT"];
+    let words = cadaddy_mepfix::wordrules::words("fixtures.emergency_words");
     let w = words.iter().find(|w| up.contains(*w))?;
     let why = format!("{} type {}: {}", row.source, row.tag, row.description.trim());
     // A luminaire with a battery in it is switched like the others; an exit sign, an emergency

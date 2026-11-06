@@ -24,8 +24,6 @@ const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
 /// A habitable room's least floor area, square feet (IBC 1208.3, IRC R304.1: 70 sf): a smaller
 /// loop round a bedroom's or a unit's name is the furniture the name is printed on.
 const HABITABLE_MIN_SF: f64 = 70.0;
-/// Words of a room to sleep or live in (a unit type, a bedroom), for [`HABITABLE_MIN_SF`].
-const HABITABLE_WORDS: &[&str] = &["Q", "K", "QUEEN", "KING", "SUITE", "STUDIO", "UNIT", "BEDROOM", "BED", "LIVING", "APT", "APARTMENT", "DWELLING"];
 /// How far from its name a room's number tag may be when it isn't inside the traced outline,
 /// in the name's text heights (a tag's two or three lines, the number printed on furniture).
 const NUMBER_REACH_HEIGHTS: f64 = 6.0;
@@ -681,128 +679,6 @@ pub(crate) fn room_number(t: &str) -> bool {
     (2..=4).contains(&digits) && letters <= 2 && t.len() <= 6 && t.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
-/// Words of a room's tag: unit types and the rooms a plan names.
-const ROOM_WORDS: &[&str] = &[
-    "SINGLE",
-    "DOUBLE",
-    "QUEEN",
-    "KING",
-    "ADA",
-    "SUITE",
-    "UNIT",
-    "STUDIO",
-    "GUEST",
-    "BEDROOM",
-    "BED",
-    "LIVING",
-    "CORRIDOR",
-    "CORR",
-    "HALL",
-    "HALLWAY",
-    "STAIR",
-    "STAIRS",
-    "LOBBY",
-    "ELEV",
-    "ELEVATOR",
-    "MECH",
-    "MECHANICAL",
-    "ELEC",
-    "ELECTRICAL",
-    "STORAGE",
-    "STOR",
-    "LAUNDRY",
-    "LINEN",
-    "OFFICE",
-    "TOILET",
-    "RESTROOM",
-    "WOMEN",
-    "MEN",
-    "BATH",
-    "BATHROOM",
-    "KITCHEN",
-    "BREAK",
-    "VESTIBULE",
-    "VEST",
-    "CLOSET",
-    "CLO",
-    "JANITOR",
-    "JAN",
-    "FITNESS",
-    "POOL",
-    "LOUNGE",
-    "DINING",
-    "MEETING",
-    "CONFERENCE",
-    "CONF",
-    "ROOM",
-    "UTILITY",
-    "IDF",
-    "MDF",
-    "TRASH",
-    "VENDING",
-    "ICE",
-    "PANTRY",
-    "RECEPTION",
-    "MAINTENANCE",
-    "ENTRY",
-    "WORK",
-    "SHAFT",
-    "CHASE",
-    "SPRINKLER",
-    "RISER",
-    "MARKET",
-    "DESK",
-    "LIBRARY",
-    "CLASSROOM",
-    // Back of house; the trades' name for an equipment room.
-    "BOH",
-    "MEP",
-];
-
-/// Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`).
-const EQUIPMENT_WORDS: &[&str] = &[
-    "PNLBD",
-    "PNL",
-    "PANEL",
-    "PANELBOARD",
-    "XFMR",
-    "TRANSFORMER",
-    "DISC",
-    "DISCONNECT",
-    "MCC",
-    "SWBD",
-    "SWITCHBOARD",
-    "RTU",
-    "AHU",
-    "FCU",
-    "VFD",
-    "ATS",
-    "GEN",
-    "GENERATOR",
-    "JBOX",
-    "J-BOX",
-    "CKT",
-    "CIRCUIT",
-    "HOMERUN",
-    "CONDUIT",
-    "TYP",
-    "NIC",
-    "SEE",
-    "NOTE",
-    "NOTES",
-    "DETAIL",
-    "SHEET",
-    "MOUNT",
-    "MTD",
-    "AFF",
-    "EXISTING",
-    "RELOCATE",
-    "PTAC",
-    "EWC",
-    "WH",
-    "EF",
-];
-
 fn tag_words(t: &str) -> Vec<String> {
     t.to_ascii_uppercase().split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).filter(|w| !w.is_empty()).map(str::to_string).collect()
 }
@@ -815,10 +691,12 @@ pub(crate) fn equipment_tag(t: &str) -> bool {
     let words = tag_words(t);
     let quoted = t.contains('\'') && t.chars().filter(|c| *c == '\'').count() >= 2;
     let length = t.chars().any(|c| c.is_ascii_digit()) && (t.contains('"') || t.contains("'-") || t.contains("' -"));
-    let device_mark = words.len() == 1 && cadaddy_mepfix::sheet_facts::is_type_tag(t) && !ROOM_WORDS.contains(&t.to_ascii_uppercase().as_str());
+    let device_mark = words.len() == 1
+        && cadaddy_mepfix::sheet_facts::is_type_tag(t)
+        && !cadaddy_mepfix::wordrules::words("rooms.names").contains(&t.to_ascii_uppercase().as_str());
     let circuit =
         words.len() == 1 && t.rsplit_once('-').is_some_and(|(h, n)| !h.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
-    quoted || length || device_mark || circuit || words.iter().any(|w| EQUIPMENT_WORDS.contains(&w.as_str()))
+    quoted || length || device_mark || circuit || words.iter().any(|w| cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str()))
 }
 
 /// Whether a text is a note rather than a room's name: a finish code (`CPT-1`), a ceiling, level
@@ -885,7 +763,7 @@ pub(crate) fn lift_qualifiers(items: &mut [(cadaddy_doc::Handle, String, Vec2, f
 pub(crate) fn room_name_score(t: &str) -> u8 {
     if equipment_tag(t) || note_like(t) || room_number(t) || t.chars().filter(|c| c.is_alphabetic()).count() < 2 {
         0
-    } else if tag_words(t).iter().any(|w| ROOM_WORDS.contains(&w.as_str())) {
+    } else if tag_words(t).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.names").contains(&w.as_str())) {
         3
     } else {
         1
@@ -1100,7 +978,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         for a in i.attribs.iter().filter(|a| a.tag.eq_ignore_ascii_case("TAG")) {
             let v = a.text.value.trim();
             let (at, h) = (a.text.justify_point(), a.text.height);
-            let word = EQUIPMENT_WORDS.contains(&v.to_ascii_uppercase().as_str()) || room_name_score(v) >= 3;
+            let word = cadaddy_mepfix::wordrules::words("equipment.names").contains(&v.to_ascii_uppercase().as_str()) || room_name_score(v) >= 3;
             let printed = all.iter().any(|(_, t, q, _, _)| t.trim().eq_ignore_ascii_case(v) && q.dist(at) <= 0.5 * h.max(1e-9));
             if !v.is_empty() && v.chars().count() <= 40 && h.is_finite() && h > 0.0 && word && !room_number(v) && !printed {
                 symbol_names.push((e.handle, v.to_string(), at, h, false));
@@ -1138,7 +1016,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     // `AHU-1`.)
     let numbered_below = |t: &str, at: Vec2, h: f64| {
         let w = t.trim().to_ascii_uppercase();
-        EQUIPMENT_WORDS.contains(&w.as_str())
+        cadaddy_mepfix::wordrules::words("equipment.names").contains(&w.as_str())
             && all.iter().any(|(_, n, q, nh, _)| {
                 room_number(n) && (*nh - h).abs() <= 0.3 * h && at.y - q.y >= 0.5 * h && at.y - q.y <= 3.0 * h && (q.x - at.x).abs() <= 3.0 * h
             })
@@ -1309,7 +1187,11 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         // A room to live in is at least a habitable room's size; any room at least the least
         // room's. A smaller loop round the name is what it is printed on (a bed, a tag's box):
         // the room is the loop round that.
-        let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
+        let least = if tag_words(&name).iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.habitable").contains(&w.as_str())) {
+            habitable_area
+        } else {
+            min_area
+        };
         let (poly, area, probed) = match holds.or(first) {
             Some((poly, area)) if area >= least => (poly, area, false),
             _ if note => continue,

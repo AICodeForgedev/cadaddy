@@ -344,26 +344,6 @@ pub fn day(text: &str) -> Option<i64> {
 
 // ---------------- equipment and pads ----------------
 
-/// Equipment always set on the floor or grade (unless its mounting says otherwise).
-const FLOOR_KINDS: [&str; 10] =
-    ["switchboard", "switchgear", "transformer", "generator", "ups", "mdp", "chiller", "boiler", "unit_substation", "battery"];
-/// Equipment set on the floor or grade only when its mounting or elevation says so.
-const MAYBE_KINDS: [&str; 13] = [
-    "panel",
-    "panelboard",
-    "ats",
-    "transfer_switch",
-    "rtu",
-    "condensing_unit",
-    "ahu",
-    "water_heater",
-    "pump",
-    "tank",
-    "air_compressor",
-    "disconnect",
-    "fire_pump",
-];
-
 fn mounting(e: &MepEquipment) -> String {
     e.properties
         .iter()
@@ -376,15 +356,15 @@ fn mounting(e: &MepEquipment) -> String {
 pub fn needs_pad(e: &MepEquipment) -> Option<&'static str> {
     let kind = e.kind.trim().to_ascii_lowercase().replace([' ', '-'], "_");
     let m = mounting(e);
-    let off_floor = ["wall", "surface", "recess", "flush", "pole", "ceiling", "roof", "curb", "suspend", "hung", "rack", "stand"];
+    let off_floor = cadaddy_mepfix::wordrules::words("equipment.off_floor_mounting_words");
     if off_floor.iter().any(|w| m.contains(w)) || e.level.to_ascii_lowercase().contains("roof") {
         return None;
     }
-    let on_floor = ["floor", "pad", "grade", "free", "slab"].iter().any(|w| m.contains(w));
-    if FLOOR_KINDS.contains(&kind.as_str()) {
+    let on_floor = cadaddy_mepfix::wordrules::words("equipment.floor_mounting_words").iter().any(|w| m.contains(w));
+    if cadaddy_mepfix::wordrules::words("equipment.pad_kinds").contains(&kind.as_str()) {
         return Some(if on_floor { "floor-mounted (mounting)" } else { "floor-standing equipment" });
     }
-    if MAYBE_KINDS.contains(&kind.as_str()) {
+    if cadaddy_mepfix::wordrules::words("equipment.maybe_pad_kinds").contains(&kind.as_str()) {
         if on_floor {
             return Some("floor-mounted (mounting)");
         }

@@ -97,6 +97,7 @@ pub mod submittals;
 pub mod tags;
 mod vpsync;
 pub mod wholejob;
+pub mod wordrules;
 mod xplode;
 /// The layers a layer filter shows (the Layer Properties Manager's filter tree).
 pub use layer::filters::layers_of as layer_filter_layers;

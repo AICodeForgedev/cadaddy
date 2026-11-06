@@ -1016,9 +1016,6 @@ fn pattern_neighbours(boxes: &[(Vec2, Vec2)]) -> Vec<usize> {
     count
 }
 
-/// Equipment marks, which are not air devices' tags.
-const EQUIPMENT_MARKS: &[&str] = &["AHU", "RTU", "VAV", "EF", "FCU", "CU", "HP", "ERV", "MAU", "UH", "CUH", "FPB", "SF", "RF", "WH", "P"];
-
 /// Whether `t` is an air device's tag: a type mark (`CD-1`, `RG2`, `SD-1A`) or an airflow
 /// (`150 CFM`).
 pub(crate) fn is_terminal_tag(t: &str) -> bool {
@@ -1038,7 +1035,7 @@ pub(crate) fn is_terminal_tag(t: &str) -> bool {
         && (1..=2).contains(&digits)
         && tail.len() <= 1
         && tail.chars().all(|c| c.is_ascii_uppercase())
-        && !EQUIPMENT_MARKS.contains(&letters.as_str())
+        && !crate::wordrules::words("equipment.marks").contains(&letters.as_str())
 }
 
 // ---- Equipment detection ---------------------------------------------------
@@ -1073,22 +1070,13 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         let (tag_text, kind) = match tag {
             Some((t, _, _, _)) => {
                 let up = t.to_ascii_uppercase();
-                let k = if up.contains("AHU") {
-                    "ahu"
-                } else if up.contains("RTU") {
-                    "rtu"
-                } else if up.contains("PTAC") {
-                    "ptac"
-                } else if up.contains("VAV") || up.contains("VB") {
-                    "vav"
-                } else if up.contains("FCU") || up.contains("FAN COIL") {
-                    "fan_coil_unit"
-                } else if is_equip_word(&up, "EF") || up.contains("EXHAUST FAN") {
-                    "exhaust_fan"
-                } else if is_equip_word(&up, "WH") || up.contains("WATER HEATER") {
-                    "water_heater"
-                } else if up.contains("ERV") || up.contains("HRV") || up.contains("MAU") {
-                    "ventilation_unit"
+                // A `word:` entry is a whole word of the tag, any other a part of it.
+                let has = |w: &str| match w.strip_prefix("word:") {
+                    Some(word) => is_equip_word(&up, word),
+                    None => up.contains(w),
+                };
+                let k = if let Some(r) = crate::wordrules::first_rule("equipment.tag_kind", has) {
+                    r.value
                 } else if all_layers {
                     // In all_layers mode, skip rectangles without recognisable equipment tags
                     continue;
@@ -1109,23 +1097,7 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         let equip_re = |t: &str| -> Option<(&str, String)> {
             let up = t.to_ascii_uppercase();
             let tag = t.trim().to_string();
-            if up.starts_with("AHU") || up.starts_with("AH-") {
-                Some(("ahu", tag))
-            } else if up.starts_with("RTU") || up.starts_with("RT-") {
-                Some(("rtu", tag))
-            } else if up.starts_with("PTAC") {
-                Some(("ptac", tag))
-            } else if up.starts_with("VAV") {
-                Some(("vav", tag))
-            } else if up.starts_with("FCU") || up.starts_with("FC-") {
-                Some(("fan_coil_unit", tag))
-            } else if up.starts_with("EF-") || up.starts_with("EF ") {
-                Some(("exhaust_fan", tag))
-            } else if up.starts_with("ERV") || up.starts_with("HRV") || up.starts_with("MAU") {
-                Some(("ventilation_unit", tag))
-            } else {
-                None
-            }
+            crate::wordrules::first_rule("equipment.tag_prefix_kind", |w| up.starts_with(w)).map(|r| (r.value, tag))
         };
         for (text, at, _, height) in &texts {
             if let Some((kind, tag)) = equip_re(text) {
