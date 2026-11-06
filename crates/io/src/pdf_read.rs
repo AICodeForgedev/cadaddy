@@ -2719,6 +2719,7 @@ fn recover_outlined_lettering(
                         unconfirmed: false,
                         confidence: None,
                         review: false,
+                        strokes_stay: false,
                         rotation: h.rotation,
                     });
                 }
