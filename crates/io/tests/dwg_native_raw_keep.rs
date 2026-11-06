@@ -29,10 +29,15 @@ fn text(v: cadaddy_dwgcodec::Version, s: &str) -> Text {
 /// What the raw-kept entities should be: (handle, DXF name, the object's data as stored).
 type Want = Vec<(u64, String, Vec<u8>)>;
 
-/// A DWG of `id` whose model space holds two LINEs and, in place of two others, a custom class's
-/// entity, a REGION, a MESH and a LIGHT objects (made here from the entity data every entity
-/// starts with and bytes of their own).
+/// A DWG of `id` whose model space holds, in place of four LINEs, a custom class's entity, a
+/// REGION, a MESH and a LIGHT objects (made here from the entity data every entity starts with
+/// and bytes of their own).
 fn synthetic(id: &str) -> (Vec<u8>, Want) {
+    synthetic_with(id, "ACME_GADGET")
+}
+
+/// [`synthetic`] with the custom class's entity of class `custom` (its DXF name).
+fn synthetic_with(id: &str, custom: &str) -> (Vec<u8>, Want) {
     let (bytes, _) = cadaddy_io::dwg_write::write(&base(), id).unwrap();
     let mut dwg = cadaddy_dwgcodec::read(&bytes).unwrap();
     let v = dwg.version;
@@ -51,7 +56,7 @@ fn synthetic(id: &str) -> (Vec<u8>, Want) {
         maintenance: 0,
         unknown: [0, 0],
     };
-    classes.classes.push(class(number, "ACME_GADGET", "AcmeGadget"));
+    classes.classes.push(class(number, custom, "AcmeGadget"));
     classes.classes.push(class(number + 1, "MESH", "AcDbSubDMesh"));
     classes.classes.push(class(number + 2, "LIGHT", "AcDbLight"));
     let classes = Classes::new(v, classes.classes);
@@ -60,7 +65,7 @@ fn synthetic(id: &str) -> (Vec<u8>, Want) {
     let names = Names::read(&dwg, &classes);
     let lines: Vec<u64> = dwg.objects.iter().filter(|o| o.type_code == 19).map(|o| o.handle).collect();
     assert!(lines.len() >= 4, "{id}: {lines:?}");
-    let types = [(number as u16, "ACME_GADGET"), (37, "REGION"), (number as u16 + 1, "MESH"), (number as u16 + 2, "LIGHT")];
+    let types = [(number as u16, custom), (37, "REGION"), (number as u16 + 1, "MESH"), (number as u16 + 2, "LIGHT")];
     let mut want = Want::new();
     for (k, (type_code, name)) in types.into_iter().enumerate() {
         let handle = lines[k];
@@ -151,6 +156,24 @@ fn undecoded_entities_are_kept_and_written_back_in_every_version() {
         let mut listed2 = report2.kept.clone();
         listed2.sort();
         assert_eq!(listed2, expect, "{id}: listed again");
+    }
+}
+
+/// A proxy entity the codec kept as stored is not a DXF proxy (no class number in group 91 to
+/// renumber, which the DXF path drops a proxy without): it goes through the writer with the rest,
+/// and the entities after it keep their handles, in every version.
+#[test]
+fn a_kept_proxy_entity_is_written_back_in_every_version() {
+    for id in VERSIONS {
+        let (bytes, mut want) = synthetic_with(id, "ACAD_PROXY_ENTITY");
+        want.sort();
+        let (d, report) = cadaddy_io::dwg_read::read(&bytes).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(report.failed.is_empty(), "{id}: {:?}", report.failed);
+        assert_eq!(kept(&d), want, "{id}: read");
+        let (out, _) = cadaddy_io::dwg_write::write(&d, id).unwrap_or_else(|e| panic!("{id}: {e}"));
+        let (back, report2) = cadaddy_io::dwg_read::read(&out).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert!(report2.failed.is_empty(), "{id}: {:?}", report2.failed);
+        assert_eq!(kept(&back), want, "{id}: kept through the writer");
     }
 }
 

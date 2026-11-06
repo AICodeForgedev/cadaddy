@@ -246,14 +246,36 @@ and the active paper space are the header's BLOCK_RECORD_MODEL_SPACE and BLOCK_R
 any other block — another layout's paper space among them — becomes the entity's owner (330).
 The entity mode alone marks every paper space entity as the active layout's.
 
-Not decoded yet (kept from the bridge): MLEADERSTYLE, TABLESTYLE, TABLECONTENT, FIELD and
-FIELDLIST, MATERIAL, VISUALSTYLE, SUN, dynamic-block data, SORTENTSTABLE, SPATIAL_FILTER,
-proxies and custom classes.
+Also decoded (Q5125): SPATIAL_FILTER (the clip boundary of an XCLIP: polygon, plane normal and
+origin, display and front/back clip with their distances, both 4x3 transforms) and the underlay
+definitions PDFDEFINITION, DWFDEFINITION and DGNDEFINITION (file path, page/sheet name), each
+equal to acadrust's DXF group by group in every version.
 
-Tested: `dwgcodec/tests/records.rs` (records = acadrust's DXF, group by group, five versions;
-mutated data never panics) and `io/tests/dwg_native_objects.rs` (the drawing read with native
-tables and objects equals the bridge's: layers, linetypes, text and dimension styles, layer
-states, layouts with their viewports, groups, views, UCSs, multiline styles).
+Stashed, not decoded (the Q5004 decision stands): TABLESTYLE, MATERIAL, VISUALSTYLE and FIELD.
+
+**Nothing is dropped without a word (Q5125).** `records::decode_all_keeping` (what `dwg_read::read`
+uses) keeps every object it doesn't decode — a custom class, a proxy (ACAD_PROXY_OBJECT), dynamic
+block data, SUN, FIELDLIST, a fixed type without a decoder (LONG_TRANSACTION, VBA_PROJECT…) — or
+can't decode (damaged data of a decoded class) as a raw record: its handle, extension dictionary,
+owner and extended data where the common data can be read, then `100 AcDbCadaddyRawDwg`, the
+object type (70), the DWG version (1), the data's length (90) and its bytes (310), as entities are
+kept. It names them in `ReadReport::kept_objects` (handle and class name, with why when damaged)
+and in the drawing's read notes. `dxf_raw` keeps them in `Drawing::foreign` like any other
+program's object; `dwg_write` writes one of a fixed type back as the object it was (same version,
+from R2004), any other through CADADDY_KEEP with its bytes. A damaged object of a table type
+(LAYER…) is still a failure, listed in `failed`; controls and entities are decoded elsewhere.
+An object the keep path can't reach (not under an entry of the named object dictionary, an
+extension dictionary or a kept owner) is reported, but, as for any other foreign object, not
+carried into the drawing.
+
+Tested: `dwgcodec/tests/records.rs` (records = acadrust's DXF, group by group, six versions, with a
+minimum number of records checked per type so that a type that stopped being decoded fails;
+clip boundary and underlay values asserted; mutated data never panics),
+`io/tests/dwg_native_objects.rs` (the drawing read with native tables and objects equals the
+bridge's: layers, linetypes, text and dimension styles, layer states, layouts with their
+viewports, groups, views, UCSs, multiline styles; and `NativeReport::records` asserts how many of
+each type came from the codec) and `io/tests/dwg_native_raw_keep_objects.rs` (undecoded objects
+reported, kept and written back).
 
 Facts found by observation:
 

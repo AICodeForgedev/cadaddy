@@ -96,7 +96,27 @@ fn tables_and_objects_read_natively_make_the_same_drawing() {
         let bridge = cadaddy_io::read(&bytes, "made-up.dwg").unwrap();
         let (native, rep) = cadaddy_io::dwg_native::read_with_native_entities(&bytes).unwrap();
         assert!(rep.failed.is_empty(), "{v}: {:?}", rep.failed);
-        eprintln!("{v}: {} records from the codec", rep.replaced);
+        eprintln!("{v}: {} records from the codec: {:?}", rep.replaced, rep.records);
+        // A record type the codec stopped decoding keeps the bridge's record in its place and the
+        // drawings still match, so the match alone proves nothing for it: each type the drawing
+        // holds must have come from the codec at least this many times.
+        for (name, least) in [
+            ("LAYER", 4),
+            ("LTYPE", 2),
+            ("STYLE", 1),
+            ("DIMSTYLE", 1),
+            ("UCS", 1),
+            ("APPID", 1),
+            ("VPORT", 1),
+            ("BLOCK_RECORD", 3),
+            ("DICTIONARY", 3),
+            ("LAYOUT", 2),
+            ("GROUP", 1),
+            ("XRECORD", 2),
+        ] {
+            let n = rep.records.get(name).copied().unwrap_or(0);
+            assert!(n >= least, "{v}: {name} came from the codec {n} times, at least {least} expected ({:?})", rep.records);
+        }
         // The whole drawing: tables, layer states, layouts (with their entities), groups, views.
         let mut a = parts(&bridge);
         let mut b = parts(&native);
