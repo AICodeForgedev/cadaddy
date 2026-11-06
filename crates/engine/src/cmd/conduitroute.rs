@@ -57,6 +57,12 @@ pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
 /// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
 const HOME_PART: &str = ":home:";
+/// A circuit tag's design conductors where the routing upsized them for voltage drop, and why
+/// (Q6216: the correction keeps the design value beside the installed one).
+pub(crate) const DESIGN_CONDUCTORS: &str = "design:conductors";
+pub(crate) const CORRECTION_CONDUCTORS: &str = "correction:conductors";
+/// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
+pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
 const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
@@ -190,6 +196,8 @@ pub(crate) struct BoxFill {
     pub yoke: f64,
     pub grounds: f64,
     pub bigger: Vec<(String, String, f64)>,
+    /// Where the next box (and past the largest, the extension ring) comes from.
+    pub bigger_source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1501,6 +1509,107 @@ fn face_of(ps: &props::Props) -> Option<Vec2> {
     })
 }
 
+/// The segment of run `r` through the clash at `at` (plan) and `z_ft` (feet above its floor):
+/// its index, when one passes within a foot of it at about that height.
+fn offset_at(r: &MepRun, at: Vec2, z_ft: f64, upf: f64) -> Option<usize> {
+    r.points.windows(2).enumerate().find_map(|(k, w)| {
+        let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+        let bottom = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+        let ab = b - a;
+        let l2 = ab.dot(ab);
+        let t = if l2 > 1e-12 { ((at - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        ((a + ab * t).dist(at) <= upf && (bottom - z_ft).abs() <= 1.0).then_some(k)
+    })
+}
+
+/// Offset run `r` across an obstacle (`bx`: its plan box with the clearance, sheet units) where its
+/// segment passes the clash at `at` / `z_ft`: the stretch inside the box at `bottom` (feet above
+/// the floor), the rest as it was; a change of height is an offset at each side. The stretch's
+/// ends, or `None` when no segment crosses the box there.
+fn offset_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], bottom: f64, upf: f64) -> Option<(Vec2, Vec2)> {
+    let k = offset_at(r, at, z_ft, upf)?;
+    let (a, b) = (r.points.get(k).copied()?, r.points.get(k + 1).copied()?);
+    let design = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+    // Where the segment is inside the box (slabs).
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, d, lo, hi) in [(a[0], b[0] - a[0], bx[0], bx[2]), (a[1], b[1] - a[1], bx[1], bx[3])] {
+        if d.abs() < 1e-12 {
+            if p < lo || p > hi {
+                return None;
+            }
+        } else {
+            let (u, v) = ((lo - p) / d, (hi - p) / d);
+            t0 = t0.max(u.min(v));
+            t1 = t1.min(u.max(v));
+        }
+    }
+    if !(t0.is_finite() && t1.is_finite()) || t1 - t0 <= 1e-6 {
+        return None;
+    }
+    let at_t = |t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    let (p0, p1) = (at_t(t0), at_t(t1));
+    // The pieces of the segment: before the box, in it (offset), after it.
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(4);
+    let mut bots: Vec<f64> = Vec::with_capacity(3);
+    pts.push(a);
+    if t0 > 1e-6 {
+        pts.push(p0);
+        bots.push(design);
+    }
+    bots.push(bottom);
+    if t1 < 1.0 - 1e-6 {
+        pts.push(p1);
+        bots.push(design);
+    }
+    pts.push(b);
+    if r.bottoms_ft.len() < r.points.len().saturating_sub(1) {
+        let last = r.bottoms_ft.last().copied().unwrap_or(design);
+        r.bottoms_ft.resize(r.points.len().saturating_sub(1), last);
+    }
+    r.points.splice(k..=k + 1, pts);
+    r.bottoms_ft.splice(k..=k, bots);
+    Some((Vec2::new(p0[0], p0[1]), Vec2::new(p1[0], p1[1])))
+}
+
+/// Run `r` around an obstacle in plan (`bx`: its box with the clearance, sheet units) where its
+/// square segment passes the clash at `at` / `z_ft`: out to the box's nearer side, along it and
+/// back, at the segment's height. The detour's path and how much longer it is (feet), or `None`
+/// when no square segment crosses the box there.
+fn detour_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], upf: f64) -> Option<(Vec<Vec2>, f64)> {
+    let k = offset_at(r, at, z_ft, upf)?;
+    let (a, b) = (r.points.get(k).copied()?, r.points.get(k + 1).copied()?);
+    let design = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+    let along_x = (a[1] - b[1]).abs() < 1e-6 && (a[0] - b[0]).abs() > 1e-6;
+    let along_y = (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() > 1e-6;
+    // The segment's axis (u), the box's span on it, and the side across (v) it goes round by.
+    let (u0, u1, v, lo, hi, side_lo, side_hi) = if along_x {
+        (a[0], b[0], a[1], bx[0], bx[2], bx[1], bx[3])
+    } else if along_y {
+        (a[1], b[1], a[0], bx[1], bx[3], bx[0], bx[2])
+    } else {
+        return None;
+    };
+    let (smin, smax) = (u0.min(u1), u0.max(u1));
+    if !(v > side_lo && v < side_hi) || lo <= smin + 1e-6 || hi >= smax - 1e-6 {
+        return None;
+    }
+    let out = if (v - side_lo) <= (side_hi - v) { side_lo } else { side_hi };
+    let (e0, e1) = if u0 <= u1 { (lo, hi) } else { (hi, lo) };
+    let pt = |u: f64, w: f64| if along_x { [u, w] } else { [w, u] };
+    let pts = [pt(e0, v), pt(e0, out), pt(e1, out), pt(e1, v)];
+    let extra_ft = 2.0 * (out - v).abs() / upf;
+    if r.bottoms_ft.len() < r.points.len().saturating_sub(1) {
+        let last = r.bottoms_ft.last().copied().unwrap_or(design);
+        r.bottoms_ft.resize(r.points.len().saturating_sub(1), last);
+    }
+    let mut new_pts = vec![a];
+    new_pts.extend(pts);
+    new_pts.push(b);
+    r.points.splice(k..=k + 1, new_pts);
+    r.bottoms_ft.splice(k..=k, [design; 5]);
+    Some((pts.iter().map(|p| Vec2::new(p[0], p[1])).collect(), extra_ft))
+}
+
 fn same_level(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
@@ -2194,6 +2303,66 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
     no_tag = no_tag.saturating_sub(resolved_devices);
+    // -- A power device the documents put on no circuit (Q6216, trade practice `E-UNCIRCUITED`):
+    // the field puts it on a spare of the nearest panel of its level (the schedule's spares, then
+    // its spaces, else a new breaker), a room's such devices sharing one circuit; routed like the
+    // rest, its pieces inferred with the rule's basis, never drawn. --
+    let mut inferred_rows: Vec<Value> = Vec::new();
+    let mut inferred_devs: BTreeSet<usize> = BTreeSet::new();
+    {
+        let rule = super::provenance::rule("E-UNCIRCUITED");
+        let reach = rule.reach_ft.max(0.0) * upf;
+        // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
+        let sched_of = |t: &str| {
+            let (a, b) = gap::spare_circuits(sp, t);
+            if a.is_empty() && b.is_empty() { t.split_once('-').map(|(p, _)| gap::spare_circuits(sp, p)).unwrap_or((a, b)) } else { (a, b) }
+        };
+        let mut groups: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+        for di in &uncircuited {
+            let Some(dv) = devs.get(*di) else { continue };
+            if !gap::is_power_device(&dv.kind) {
+                continue;
+            }
+            let near = gear
+                .iter()
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .map(|g| (manhattan(gear_ctr(g), dv.at), g))
+                .filter(|(dd, _)| *dd <= reach)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, g)) = near {
+                groups.entry((dv.level.clone(), g.tag.clone(), dv.room.trim().to_string())).or_default().push(*di);
+            }
+        }
+        let mut next: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        for ((level, panel, room), ds) in groups.into_iter().take(MAX_CIRCUITS) {
+            let e = next.entry(panel.clone()).or_insert_with(|| {
+                let (a, b) = sched_of(&panel);
+                (a.into_iter().chain(b).collect(), 0)
+            });
+            let (number, breaker) = match e.0.get(e.1) {
+                Some(n) => (n.clone(), format!("spare {n}")),
+                None => (format!("X{}", e.1.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
+            };
+            e.1 += 1;
+            let label = format!("{panel}-{number}");
+            let at = ds.first().and_then(|i| devs.get(*i)).map_or(Vec2::new(0.0, 0.0), |d| d.at);
+            let kinds: BTreeMap<&str, usize> = ds.iter().filter_map(|i| devs.get(*i)).fold(BTreeMap::new(), |mut m, d| {
+                *m.entry(d.kind.as_str()).or_default() += 1;
+                m
+            });
+            let basis = rule.basis_for(&format!("{} on {level}: panel {panel}, {breaker}", if room.is_empty() { "no room" } else { room.as_str() }));
+            let r = gap::Resolved { by: "rule", source: basis.clone(), conductors: None, other_tag: None };
+            let mut t = gap::resolved_tag(&label, &level, None, [at.x / upf, at.y / upf], &r, ds.len());
+            t.set("panel", panel.clone(), "rule");
+            t.set(INFERRED_CIRCUIT, basis.clone(), "rule");
+            if inferred_rows.len() < MAX_ITEMS {
+                inferred_rows.push(json!({"level": level, "room": room, "panel": panel, "breaker": breaker, "circuit": label, "devices": ds.len(), "kinds": kinds, "basis": basis, "made": "inferred"}));
+            }
+            inferred_devs.extend(ds.iter().copied());
+            circs.push(Circ { tag: base_n + extra_tags.len(), label, panel, level, devs: ds, gear: None, part: String::new() });
+            extra_tags.push(t);
+        }
+    }
     let tag_at = |i: usize| -> Option<&ElementTag> { if i < base_n { sp.tags.get(i) } else { extra_tags.get(i - base_n) } };
     // -- A switch or sensor the prints give no circuit to is on the circuit of what it controls
     // (its switch leg): with the circuit most of its luminaires are on, the nearest of them
@@ -2522,6 +2691,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "level": level,
             "at": [r2(b.at.x), r2(b.at.y), r2((b.z - floor) / upf)],
             "clearance_in": if o.category == FRAMING { 0.0 } else { need },
+            // Where the obstacle stands (plan, sheet units, the clearance and the raceway's half
+            // around it) and the heights an offset clears it at: what the field's offset takes.
+            "obstacle_box": [r2(o.lo.x - (need + size_in / 2.0) / 12.0 * upf), r2(o.lo.y - (need + size_in / 2.0) / 12.0 * upf), r2(o.hi.x + (need + size_in / 2.0) / 12.0 * upf), r2(o.hi.y + (need + size_in / 2.0) / 12.0 * upf)],
+            "offset_ft": {"under": r2(under), "over": r2(over)},
             "fix": if o.category == FRAMING {
                 if matches!(what, "drop" | "vertical conduit" | "riser") {
                     format!(
@@ -3112,6 +3285,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                         );
                     }
                     if let Some(t) = tags.get_mut(*i) {
+                        // Corrected for the field (Q6216): the design conductors kept beside them.
+                        if !t.fields.contains_key(DESIGN_CONDUCTORS) {
+                            let src = t.fields.get("conductors").map_or_else(|| "plan".to_string(), |f| f.source.clone());
+                            t.set(DESIGN_CONDUCTORS, mk.clone(), &src);
+                        }
+                        t.set(CORRECTION_CONDUCTORS, format!("E-VOLTAGE-DROP: {why}"), "rule");
                         t.set("conductors", now, "computed");
                         t.set("conductor_size", why.clone(), "legend");
                     }
@@ -3693,7 +3872,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut next_spare: HashMap<String, (Vec<String>, usize)> = HashMap::new();
         for di in &uncircuited {
             let Some(dv) = devs.get(*di) else { continue };
-            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS {
+            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS || inferred_devs.contains(di) {
                 continue;
             }
             let near_gear = gear
@@ -3779,41 +3958,31 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
 
     // -- The holes through the framing: each member's holes apart by the rule (edge to edge, in
     // the web's plane); the closer ones are review items. --
-    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
-    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
-        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
-    }
-    let mut too_close = 0usize;
-    for ids in per_member.values_mut() {
-        ids.sort_by(|a, b| {
-            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
-            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for w in ids.windows(2) {
-            let (Some(p), Some(q)) = (w.first().and_then(|i| bored.get(*i)), w.get(1).and_then(|i| bored.get(*i))) else { continue };
-            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
-            let need_in = rl.framing.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
-            if apart_in + 1e-6 >= need_in {
-                continue;
-            }
-            too_close += 1;
-            if clashes.len() < MAX_ITEMS {
-                let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
-                clashes.push(json!({
-                    "kind": "clash",
-                    "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
-                    "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
-                    "pair": "electrical × framing",
-                    "level": p.level,
-                    "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
-                    "clearance_in": r2(need_in),
-                    "fix": format!(
-                        "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
-                        p.member, apart_in.max(0.0), need_in, rl.framing.apart_x
-                    ),
-                }));
-            }
+    let pairs = close_holes(&mut bored, &rl.framing, upf);
+    let too_close = pairs.len();
+    for c in pairs {
+        let (p, q) = (&c.p, &c.q);
+        if clashes.len() >= MAX_ITEMS {
+            break;
         }
+        let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let mut item = json!({
+            "kind": "clash",
+            "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
+            "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
+            "pair": "electrical × framing",
+            "level": p.level,
+            "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
+            "clearance_in": r2(c.need_in),
+            "fix": format!(
+                "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
+                p.member, c.apart_in.max(0.0), c.need_in, rl.framing.apart_x
+            ),
+        });
+        if let Some(k) = c.corrected {
+            item["corrected"] = k;
+        }
+        clashes.push(item);
     }
     let mut holes_by_level: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for h in &bored {
@@ -3844,6 +4013,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 "hole_in": r3(h.dia_in), "raceway_in": h.raceway_in, "end_ft": r2(h.end_ft),
                 "at": [r2(h.at.x), r2(h.at.y), r2((h.z - floor) / upf)],
                 "item": if h.dia_in > 0.0 { rl.framing.bored_item.clone() } else { rl.framing.truss_item.clone() },
+                "design": if h.design.is_empty() { Value::Null } else { json!(h.design) },
             })
         })
         .collect();
@@ -3932,6 +4102,69 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         rows.push((c.level.clone(), room, *l, cable_sizes.get(&ci).cloned().unwrap_or_default()));
     }
     let lengths = lengths_report(sp, &rows);
+    // -- A clash the routing could not route around (Q6216, `E-CLASH-OFFSET`): the field offsets
+    // the raceway under the other trade's duct, pipe or raceway (over it where under would drop
+    // into the ceiling), the clearance kept; the run takes the offset across the obstacle and the
+    // clash keeps the design height beside the installed one. One the space can't take stays. --
+    let offset_rule = super::provenance::rule("E-CLASH-OFFSET");
+    let mut clash_offsets: Vec<Value> = Vec::new();
+    for c in clashes.iter_mut().take(MAX_ITEMS) {
+        let what = c["a"]["what"].as_str().unwrap_or_default().to_string();
+        if matches!(what.as_str(), "drop" | "vertical conduit" | "riser" | "gear dedicated space") || c["b"]["category"] == json!(FRAMING) {
+            continue;
+        }
+        let level = c["level"].as_str().unwrap_or_default().to_string();
+        let num = |v: &Value| v.as_f64().filter(|x| x.is_finite());
+        let (Some(bx), Some(at), Some(z_ft)) =
+            ((0..4).map(|i| num(&c["obstacle_box"][i])).collect::<Option<Vec<f64>>>(), num(&c["at"][0]).zip(num(&c["at"][1])), num(&c["at"][2]))
+        else {
+            continue;
+        };
+        let (Some(under), Some(over), Some(l)) = (num(&c["offset_ft"]["under"]), num(&c["offset_ft"]["over"]), sp.level(&level)) else { continue };
+        let ceiling = if l.ceiling_ft > 0.0 { l.ceiling_ft } else { rl.route.default_ceiling_ft };
+        let top = l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0;
+        // Under, else over: where the ceiling space takes it; else around it in plan at the same
+        // height (the shorter side).
+        let vertical = if under >= ceiling + rl.route.above_ceiling_in / 12.0 - 1e-6 {
+            Some(("under", under))
+        } else if over <= top + 1e-6 {
+            Some(("over", over))
+        } else {
+            None
+        };
+        let label = c["a"]["circuit"].as_str().unwrap_or_default().to_string();
+        let at = Vec2::new(at.0, at.1);
+        let fits = |r: &MepRun| same_level(&r.level, &level) && r.top_ft.is_none() && r.system == BRANCH_SYSTEM;
+        let own = runs.iter().position(|r| fits(r) && !label.is_empty() && r.id.contains(&label) && offset_at(r, at, z_ft, upf).is_some());
+        let Some(ri) = own.or_else(|| runs.iter().position(|r| fits(r) && offset_at(r, at, z_ft, upf).is_some())) else { continue };
+        let Some(r) = runs.get_mut(ri) else { continue };
+        let obstacle = format!("{} {}", c["b"]["category"].as_str().unwrap_or_default(), c["b"]["system"].as_str().unwrap_or_default());
+        let (path, key, design, installed, reason) = match vertical {
+            Some((side, bottom)) => {
+                let Some(st) = offset_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], bottom, upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle}: offset {side} it at {bottom:.2} ft AFF, {} in clear",
+                    c["clearance_in"]
+                );
+                (vec![st.0, st.1], "bottom_ft", format!("{z_ft:.2}"), format!("{bottom:.2}"), reason)
+            }
+            None => {
+                let Some((pts, extra_ft)) = detour_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle} and the ceiling space takes no offset under or over it: run around it in plan, {extra_ft:.1} ft longer, {} in clear",
+                    c["clearance_in"]
+                );
+                (pts, "route", format!("straight through the {obstacle}"), format!("around the {obstacle} ({extra_ft:.1} ft longer)"), reason)
+            }
+        };
+        c["corrected"] = json!({"key": key, "design": design, "installed": installed, "rule": offset_rule.id, "reason": reason});
+        if clash_offsets.len() < MAX_ITEMS {
+            clash_offsets.push(json!({
+                "level": level, "circuit": label, "run": r.id, "path": path.iter().map(|p| [r2(p.x), r2(p.y)]).collect::<Vec<_>>(),
+                "key": key, "design": design, "installed": installed, "reason": reason, "rule": offset_rule.id,
+            }));
+        }
+    }
     let conductor_sizing = json!({
         "upsized_by_reason": sizing.iter().map(|(k, v)| ((*k).to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
         "rule": "a branch circuit's conductors are the smallest its breaker allows unless the documents give a size or a voltage-drop or derating calculation needs more",
@@ -3979,7 +4212,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "fed_as_feeders": fed_as_feeders,
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
-    });
+    }); // What the build filled in and corrected for the field (Q6216).
+    out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
+    out.report["clashes_corrected"] = json!(clash_offsets.len());
+    out.report["clash_offsets"] = json!(clash_offsets);
     if let Some(o) = out.report.as_object_mut() {
         o.insert("conductor_sizing".into(), conductor_sizing);
     }
@@ -4069,6 +4305,74 @@ struct Bored {
     dia_in: f64,
     raceway_in: f64,
     end_ft: f64,
+    /// A hole bored for two raceways (Q6216): the design's two holes it stands for.
+    design: String,
+}
+
+/// Two holes of one member closer than the hole rule allows (edge to edge, in the web's plane).
+#[derive(Clone, Debug)]
+struct ClosePair {
+    p: Bored,
+    q: Bored,
+    apart_in: f64,
+    need_in: f64,
+    /// The field's correction (Q6216, `E-BORE-SHARE`), when it settles them.
+    corrected: Option<Value>,
+}
+
+/// Each member's holes apart by the hole rule; each pair closer is listed. Where the hole rule
+/// takes one hole sized for both raceways at both holes' distance from the bearing, the field
+/// bores that one instead (`E-BORE-SHARE`): the first hole is bored for both, its design (the two
+/// holes) kept, and the second is gone. A hole shares once.
+fn close_holes(bored: &mut Vec<Bored>, fr: &FramingRules, upf: f64) -> Vec<ClosePair> {
+    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
+    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
+        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
+    }
+    let rule = super::provenance::rule("E-BORE-SHARE");
+    let mut out = Vec::new();
+    let mut shared: Vec<(usize, usize, f64, String)> = Vec::new();
+    let mut in_shared: BTreeSet<usize> = BTreeSet::new();
+    for ids in per_member.values_mut() {
+        ids.sort_by(|a, b| {
+            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
+            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for w in ids.windows(2) {
+            let [pi, qi] = w else { continue };
+            let (Some(p), Some(q)) = (bored.get(*pi), bored.get(*qi)) else { continue };
+            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
+            let need_in = fr.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
+            if apart_in + 1e-6 >= need_in {
+                continue;
+            }
+            let one_in = p.raceway_in + q.raceway_in + fr.hole_over_in.max(0.0);
+            let share = !in_shared.contains(pi) && !in_shared.contains(qi) && fr.min_end(one_in).is_some_and(|m| m <= p.end_ft.min(q.end_ft) + 1e-9);
+            let corrected = share.then(|| {
+                let design = format!("two holes ({:.3} in, {:.3} in) {:.1} in apart edge to edge", p.dia_in, q.dia_in, apart_in.max(0.0));
+                let installed = format!("one {one_in:.3} in hole for both raceways");
+                let reason = format!(
+                    "the hole rule asks {need_in:.1} in between holes ({}× the larger); one hole sized for both raceways is bored instead",
+                    fr.apart_x
+                );
+                shared.push((*pi, *qi, one_in, design.clone()));
+                in_shared.extend([*pi, *qi]);
+                json!({"key": "bored_holes", "design": design, "installed": installed, "rule": rule.id, "reason": reason})
+            });
+            out.push(ClosePair { p: p.clone(), q: q.clone(), apart_in, need_in, corrected });
+        }
+    }
+    for (pi, qi, one_in, design) in &shared {
+        if let Some(h) = bored.get_mut(*pi) {
+            h.dia_in = *one_in;
+            h.design = design.clone();
+        }
+        if let Some(h) = bored.get_mut(*qi) {
+            h.dia_in = -1.0;
+        }
+    }
+    bored.retain(|h| h.dia_in >= 0.0);
+    out
 }
 
 /// The holes a seated leg bores through the framing over its level, into `out`; the pieces the
@@ -4102,6 +4406,7 @@ fn bore(out: &mut Vec<Bored>, field: &Field, leg: &Leg, circuit: &str, level: &s
                         along: h.along,
                         dia_in: h.dia_in,
                         raceway_in: size_in,
+                        design: String::new(),
                         end_ft: h.end_ft,
                     });
                 }
@@ -4148,10 +4453,10 @@ fn r3(v: f64) -> f64 {
 
 /// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
 /// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
-pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
+pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
-    let mut boxes: HashMap<String, (String, f64)> = HashMap::new();
+    let mut boxes: HashMap<String, (String, f64, Handle)> = HashMap::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
@@ -4160,11 +4465,20 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
         let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
             continue;
         };
-        boxes.insert(of.to_ascii_uppercase(), (ps.get("size").map(Prop::text).unwrap_or_default(), cu));
+        // A box corrected before is checked as designed (its design volume), so a second check
+        // finds and corrects it the same way.
+        let (size, cu) = match (ps.get("design:size"), ps.get("design:cubic_in").and_then(|p| p.text().parse::<f64>().ok())) {
+            (Some(s), Some(c)) => (s.text(), c),
+            _ => (ps.get("size").map(Prop::text).unwrap_or_default(), cu),
+        };
+        boxes.insert(of.to_ascii_uppercase(), (size, cu, e.handle));
     }
     let (mut checked, mut over) = (0usize, Vec::new());
+    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, the next box that holds
+    // what enters it, and why.
+    let mut fixes: Vec<(Handle, String, String, f64, f64, f64)> = Vec::new();
     for p in &pending {
-        let Some((size, cu)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
+        let Some((size, cu, bh)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
         checked += 1;
         let conds: Vec<(u32, String)> = p["conductors"]
             .as_array()
@@ -4173,19 +4487,115 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
             .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
             .collect();
         let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
-        if need > cu + 1e-9 && over.len() < MAX_ITEMS {
+        if need > *cu + 1e-9 && over.len() < MAX_ITEMS {
             let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, _)| to.clone());
+                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v));
+            if let Some((to, v)) = &bigger {
+                fixes.push((*bh, size.clone(), to.clone(), *cu, *v, need));
+            }
             over.push(json!({
                 "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
                 "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
                 "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.unwrap_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".into()),
+                "fix": bigger.as_ref().map_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".to_string(), |b| b.0.clone()),
+                "corrected": bigger.is_some(),
                 "source": rl.box_fill.source,
             }));
         }
     }
-    report["box_fill"] = json!({"checked": checked, "over": over});
+    // Each one the next box holds: built with it, the design box kept beside it.
+    let rule = super::provenance::rule("E-BOX-FILL");
+    let mut corrected = 0usize;
+    for (h, from, to, cu, v, need) in &fixes {
+        let mut why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
+        if to.contains("ring") && !rl.box_fill.bigger_source.is_empty() {
+            why = format!("{why}: {}", rl.box_fill.bigger_source);
+        }
+        let size = super::provenance::Correction {
+            key: "size".into(),
+            design: from.clone(),
+            corrected: to.clone(),
+            reason: why.clone(),
+            rule: rule.id.clone(),
+        };
+        let vol = super::provenance::Correction {
+            key: "cubic_in".into(),
+            design: format!("{cu}"),
+            corrected: format!("{v}"),
+            reason: why,
+            rule: rule.id.clone(),
+        };
+        let a = super::provenance::correct_element(d, *h, &size);
+        let b = super::provenance::correct_element(d, *h, &vol);
+        corrected += usize::from(a || b);
+    }
+    // The raceway pieces the clash offsets moved (Q6216): each keeps its design height.
+    let marked = mark_offsets(d, report);
+    if corrected > 0 || marked > 0 {
+        super::mepatoms::reindex(d);
+    }
+    report["box_fill"] = json!({"checked": checked, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
+    report["clash_pieces_corrected"] = json!(marked);
+}
+
+/// The conduit pieces in each clash offset's stretch (the routing's `clash_offsets`): their bottom
+/// corrected to the offset's, the design height beside it. How many.
+fn mark_offsets(d: &mut Drawing, report: &Value) -> usize {
+    let Some(list) = report["clash_offsets"].as_array().filter(|l| !l.is_empty()) else { return 0 };
+    let upf = d
+        .building_spec
+        .as_deref()
+        .and_then(|t| BuildingSpec::from_json(t).ok())
+        .map(|sp| sp.units_per_foot)
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(12.0);
+    let tol = 0.5 * upf;
+    let pt = |v: &Value| Some(Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?));
+    let near = |p: Vec2, a: Vec2, b: Vec2| {
+        let ab = b - a;
+        let l2 = ab.dot(ab);
+        let t = if l2 > 1e-12 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (a + ab * t).dist(p) <= tol
+    };
+    let mut todo: Vec<(Handle, super::provenance::Correction)> = Vec::new();
+    for e in d.model.iter().filter(|e| mep_piece(e)) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("conduit")
+            || ps.get("design:bottom_ft").is_some()
+            || ps.get("design:route").is_some()
+        {
+            continue;
+        }
+        let ends: Vec<Vec2> = ["start", "end"]
+            .iter()
+            .filter_map(|k| {
+                let v: Vec<f64> = ps.get(k)?.text().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                Some(Vec2::new(*v.first()?, *v.get(1)?))
+            })
+            .collect();
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let [p, q] = ends.as_slice() else { continue };
+        for o in list {
+            let path: Vec<Vec2> = o["path"].as_array().into_iter().flatten().filter_map(pt).collect();
+            let on = |q: Vec2| path.windows(2).any(|w| near(q, w[0], w[1]));
+            if !same_level(o["level"].as_str().unwrap_or_default(), &level) || path.len() < 2 || !(on(*p) && on(*q)) {
+                continue;
+            }
+            let txt = |k: &str| o[k].as_str().unwrap_or_default().to_string();
+            todo.push((
+                e.handle,
+                super::provenance::Correction {
+                    key: txt("key"),
+                    design: txt("design"),
+                    corrected: txt("installed"),
+                    reason: txt("reason"),
+                    rule: txt("rule"),
+                },
+            ));
+            break;
+        }
+    }
+    todo.into_iter().filter(|(h, c)| super::provenance::correct_element(d, *h, c)).count()
 }
 
 /// What a routing took out of the spec it went into: the circuits' tags as read (the routed ones
@@ -4308,7 +4718,19 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     }
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
-    sp.mep.runs.extend(routed.runs.iter().cloned());
+    // A routed path is the router's, by trade practice: the drawings show its circuit's devices
+    // and a homerun arrow, not the path (Q6216: inferred, with its basis).
+    let inferred_circuits: HashMap<&str, &str> =
+        routed.tags.iter().filter_map(|t| Some((t.id.as_str(), t.fields.get(INFERRED_CIRCUIT).map(|f| f.value.as_str())?))).collect();
+    sp.mep.runs.extend(routed.runs.iter().cloned().map(|mut r| {
+        if let Some(basis) = super::printcond::circuit_of_run(&r).and_then(|c| inferred_circuits.get(c)) {
+            super::provenance::set_run(&mut r, cadaddy_walk3d::Made::Inferred, *basis);
+        } else if r.made.is_drawn() {
+            let (made, basis) = super::provenance::of_run(&r);
+            super::provenance::set_run(&mut r, made, basis);
+        }
+        r
+    }));
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of") || t.fields.contains_key(gap::RESOLVED);
     replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
     // Each circuit's routed tag (or its parts) where its tag was read, so the spec keeps its order
@@ -5033,7 +5455,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[path = "conduitroute_gap.rs"]
-mod gap;
+pub(crate) mod gap;
 pub(crate) use gap::panel_end_makeup_ft;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;

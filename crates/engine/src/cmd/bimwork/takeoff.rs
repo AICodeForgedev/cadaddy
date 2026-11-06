@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new(CMD, "Model Takeoff", run)
             .alias(&["takeoffmodel"])
-            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status}], totals: {count, length_ft, area_sf, volume_cy}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), group_by?: level|trade|system|type|circuit (default level; circuit: each level's lines per branch circuit) | [property key] (by the elements' properties, e.g. [\"level\", \"circuit\"]), filter?: {trade?, level?, category?, circuit?, text?} | text | {kind?, where?, key: value…} (by the elements' properties: e.g. {kind: \"device\", type: \"duplex\"}), compare_to?: {lines} (else the last takeoff), keep?: bool (keep this takeoff as the last; default true), file?: .csv|.xlsx} → {lines: [{key, level, circuit?, trade, system, category, item, size, unit, qty, count?, length_ft?, area_sf?, volume_cy?, weight_lb?, elements, element_count, status, made: drawn|derived|inferred}], totals: {count, length_ft, area_sf, volume_cy, by_made: {drawn, derived, inferred} (each the same totals)}, levels, changes?: {added, removed, changed}, revision, csv, path?}")
             .noundo(),
         CommandSpec::new(CMD_SHOW, "Show Takeoff Line", run_show)
             .params("{line: key or index (of the last takeoff) | elements: [handle]} → {key?, selected, handles, min, max, viewpoint} — selects the elements (marked in 3D) and points the 3D camera at them")
@@ -218,7 +218,11 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
             l["size"].as_str().unwrap_or_default().to_string(),
         );
         let circuit = if group_by == "circuit" { l["circuit"].as_str().unwrap_or_default() } else { "" };
-        let mut line = json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit});
+        // What the line's items are by the documents (Q6216): drawn, derived or inferred; lines
+        // of two kinds stay two.
+        let made = l["made"].as_str().filter(|m| !m.is_empty()).unwrap_or("drawn").to_string();
+        let mut line =
+            json!({"level": level, "trade": trade, "system": system, "category": category, "item": item, "size": size, "unit": unit, "made": made});
         if !circuit.is_empty() {
             line["circuit"] = json!(circuit);
         }
@@ -236,12 +240,13 @@ pub(super) fn lines(s: &mut Session, group_by: &str, filter: &Value) -> Result<V
         if !passes(filter, &line) {
             continue;
         }
+        let filled = if made == "drawn" { String::new() } else { format!("|{made}") };
         let key = match group_by {
-            "trade" => format!("{trade}|{category}|{item}|{size}|{unit}{product}"),
-            "system" => format!("{system}|{item}|{size}|{unit}{product}"),
-            "type" => format!("{item}|{size}|{unit}{product}"),
-            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}{product}"),
-            _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}{product}"),
+            "trade" => format!("{trade}|{category}|{item}|{size}|{unit}{product}{filled}"),
+            "system" => format!("{system}|{item}|{size}|{unit}{product}{filled}"),
+            "type" => format!("{item}|{size}|{unit}{product}{filled}"),
+            "circuit" => format!("{level}|{circuit}|{trade}|{category}|{item}|{size}|{unit}{product}{filled}"),
+            _ => format!("{level}|{trade}|{category}|{item}|{size}|{unit}{product}{filled}"),
         };
         let qty = l["net"].as_f64().filter(|v| v.is_finite()).unwrap_or(0.0);
         let entry = grouped.entry(key.clone()).or_insert_with(|| {
@@ -378,6 +383,18 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     for m in ["count", "length_ft", "area_sf", "volume_cy"] {
         totals[m] = json!(r3(lines.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
     }
+    // Every total split by what the work is by the documents (Q6216): inferred work is in the
+    // job's totals, and shown apart from the drawn.
+    let mut by_made = serde_json::Map::new();
+    for made in ["drawn", "derived", "inferred"] {
+        let of: Vec<&Value> = lines.iter().filter(|l| l["made"].as_str().unwrap_or("drawn") == made).collect();
+        let mut t = json!({"lines": of.len()});
+        for m in ["count", "length_ft", "area_sf", "volume_cy"] {
+            t[m] = json!(r3(of.iter().filter_map(|l| l[m].as_f64()).sum::<f64>()));
+        }
+        by_made.insert(made.to_string(), t);
+    }
+    totals["by_made"] = Value::Object(by_made);
     let levels: BTreeSet<String> =
         lines.iter().flat_map(|l| l["levels"].as_array().cloned().unwrap_or_default()).filter_map(|v| v.as_str().map(str::to_string)).collect();
     let now = qty_map(&lines);

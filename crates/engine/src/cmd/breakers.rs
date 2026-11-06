@@ -203,6 +203,29 @@ pub(crate) fn row_of(c: &PanelCircuit) -> Row {
     Row::Breaker
 }
 
+/// A row whose breaker the build corrected (its schedule row keeps the printed one in
+/// `design_breaker`: equipment protected over its submittal's limit, Q6176): its printed trip, the
+/// installed one, the rule and why (the equipment's record on it, when one names the row).
+fn trip_corrected(sp: &BuildingSpec, c: &PanelCircuit) -> Option<(Option<f64>, f64, String, String)> {
+    if c.design_breaker.trim().is_empty() {
+        return None;
+    }
+    let (drawn, installed) = (trip(&c.design_breaker), trip(&c.breaker)?);
+    if drawn.is_some_and(|d| (d - installed).abs() < 1e-9) {
+        return None;
+    }
+    let up = c.description.to_ascii_uppercase();
+    let e = sp.mep.equipment_electrical.iter().find(|e| {
+        !e.correction_reason.is_empty()
+            && (up.contains(&e.tag.to_ascii_uppercase()) || super::equipsub::stem(&e.tag).is_some_and(|st| up.contains(&st)))
+    });
+    let (rule, why) = match e {
+        Some(e) => (e.correction_rule.clone(), e.correction_reason.clone()),
+        None => ("the schedule row".to_string(), format!("printed {}, installed {}", c.design_breaker.trim(), c.breaker.trim())),
+    };
+    Some((drawn, installed, rule, why))
+}
+
 /// A breaker's trip as the schedule prints it: `20`, `20A`, `60AT/100AF`, `3P-20A`.
 pub(crate) fn trip(t: &str) -> Option<f64> {
     let u = t.trim().to_ascii_uppercase();
@@ -629,6 +652,10 @@ pub(crate) struct Report {
     pub mismatches_total: usize,
     pub schedules_without_panel: Vec<String>,
     pub typical: Vec<Typical>,
+    /// Breakers installed other than the schedule draws them (Q6216: equipment protection over
+    /// its submittal's limit), the drawn one kept as each one's design.
+    #[serde(default)]
+    pub corrected: usize,
 }
 
 pub(crate) fn stored(d: &Drawing) -> Option<Report> {
@@ -896,6 +923,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(sched_of)) else { continue };
         let Some(c) = s.circuits.get(m.row) else { continue };
         let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} schedule, circuit {}", s.source, s.panel.trim(), c.number.trim()));
+        let fixed = trip_corrected(sp, c);
         let tr = trip(&c.breaker);
         let mut cn: Vec<Handle> = vec![p.handle];
         let mut runs: Vec<Handle> = m.numbers.iter().flat_map(|n| lands.get(&(m.panel, *n)).cloned().unwrap_or_default()).collect();
@@ -986,6 +1014,23 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             let x = props::write(&e.common.xdata, &ps);
             e.common.xdata = x.into();
         });
+        // Installed as corrected, the drawn breaker kept as its design.
+        if let Some((drawn, a, rule, reason)) = &fixed {
+            for (key, design, installed) in [
+                ("trip_a", drawn.map(|t| format!("{t}")).unwrap_or_default(), format!("{a}")),
+                ("size", size_text(*drawn, c.poles), size_text(Some(*a), c.poles)),
+            ] {
+                let fix = super::provenance::Correction {
+                    key: key.into(),
+                    design,
+                    corrected: installed,
+                    reason: reason.to_string(),
+                    rule: rule.to_string(),
+                };
+                super::provenance::correct_element(d, h, &fix);
+            }
+            report.corrected += 1;
+        }
         panel_breakers.entry(m.panel).or_default().push(h);
         *typed
             .entry((s.panel.trim().to_string(), p.level.clone(), m.kind.ty.clone(), tr.map(|a| (a * 10.0).round() as i64), c.poles.clamp(1, 3)))

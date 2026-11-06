@@ -23,6 +23,7 @@ mod breakers;
 mod casework_read;
 mod ceil_assemblies;
 mod ceilings;
+mod completebuilding;
 mod concrete;
 mod conduitjob;
 mod conduitroute;

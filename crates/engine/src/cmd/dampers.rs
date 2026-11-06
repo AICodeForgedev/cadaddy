@@ -369,6 +369,9 @@ pub(crate) fn tags(
     out
 }
 
+/// How the id of a branch-conduit run the damper step lays starts (`damper:<panel>-<circuit>:…`).
+pub(crate) const RUN_PREFIX: &str = "damper:";
+
 /// A duct run on a level's plan (the spec's run, plan units).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Duct {

@@ -88,8 +88,9 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
     }
     let (duct_ft, pipe_ft) = (read["duct_ft"].as_f64().expect("duct_ft"), read["pipe_ft"].as_f64().expect("pipe_ft"));
     assert!(duct_ft > 50.0 && pipe_ft > 100.0, "{read}");
-    // The model's quantities are what the plans read, put onto the architecture: a run that can't
-    // be placed isn't drawn, and says so.
+    // The model's drawn quantities are what the plans read, put onto the architecture: a run that
+    // can't be placed isn't drawn, and says so. (Work the build fills in where no plan connects a
+    // fixture or a terminal is counted apart, Q6216.)
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     let findings = job["guided_job"]["findings"].to_string();
     let not_placed = findings.contains("MEP items not placed");
@@ -103,9 +104,11 @@ fn the_job_reads_ducts_on_mechanical_plans_and_pipes_on_plumbing_plans() {
         .sum::<f64>();
     // Pipe no plan draws (a fixture's waste, vent or water filled in) is counted apart, and said.
     let filled = q["totals"]["pipe_length_ft_filled_in"].as_f64().expect("filled in");
-    assert!(filled == 0.0 || job["guided_job"]["findings"].to_string().contains("inferred for"), "{}", q["totals"]);
-    let drawn_pipe = q["totals"]["pipe_length_ft"].as_f64().expect("pipe") - filled;
-    for (model, read) in [(q["totals"]["duct_length_ft"].as_f64().expect("duct"), duct_ft), (drawn_pipe, pipe_ft)] {
+    assert!(filled == 0.0 || findings.contains("inferred for"), "{}", q["totals"]);
+    let drawn = &q["totals"]["by_made"]["drawn"];
+    let drawn_pipe = drawn["pipe_length_ft"].as_f64().expect("pipe");
+    assert!((drawn_pipe - (q["totals"]["pipe_length_ft"].as_f64().expect("pipe") - filled)).abs() < 0.1, "{}", q["totals"]);
+    for (model, read) in [(drawn["duct_length_ft"].as_f64().expect("duct"), duct_ft), (drawn_pipe, pipe_ft)] {
         assert!(model <= read + 1.0 && model >= 0.95 * read, "{} read {duct_ft} {pipe_ft}", q["totals"]);
         assert!(model >= read - 1.0 - twice_ft || not_placed, "runs left out without a finding: {} read {read} {findings}", q["totals"]);
     }

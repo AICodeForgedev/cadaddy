@@ -125,8 +125,10 @@ fn a_filled_in_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
     let p = fixture_props(&mut drawn);
     assert!(p["cold_water"]["value"].as_str().is_some(), "connected to the drawn main: {p:#}");
     assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("no plan draws it"), "{p:#}");
-    let no_status = drawn.doc().expect("doc").model.iter().all(|e| !e.common.xdata.iter().any(|t| t.value.starts_with("status:")));
-    assert!(no_status, "drawn work carries no filled-in status");
+    // Drawn work says it is drawn (Q6216: every built element carries its provenance), never filled in.
+    let filled =
+        drawn.doc().expect("doc").model.iter().any(|e| e.common.xdata.iter().any(|t| t.value == "status:derived" || t.value == "status:inferred"));
+    assert!(!filled, "drawn work carries no filled-in status");
 
     // Derived or inferred: its own layer (and nothing on the drawn one), its status and basis, its
     // own row, the same feet. Never reported as drawn.
@@ -208,4 +210,46 @@ fn a_fixture_type_with_no_documented_height_is_listed_by_type() {
     assert_eq!(by["WB-7 WASHING MACHINE BOX"], json!(1), "{by}");
     // The water closet stands on the floor: no default.
     assert!(by.as_object().is_some_and(|o| o.len() == 1), "{by}");
+}
+
+#[test]
+fn a_fixture_upstairs_drains_to_the_stack_that_rises_through_its_floor() {
+    // Q6216: a stack is one riser from the lowest storey it serves; a water closet on the storey
+    // above, 2 ft from where the stack passes on that storey's plan (its plan 100 ft to the right
+    // of the first's), drains and vents to it. Its water is drawn on its floor.
+    let mut s = Session::empty();
+    s.open_drawing(room(), "Plumbing Room", None);
+    let wc = json!({
+        "id": "device:L2:110.0,5.0:WC-9", "kind": "plumbing_fixture", "level": "L2", "at_ft": [110.0, 5.0],
+        "fields": {
+            "type": {"value": "WC-9", "source": "plan"},
+            "fixture": {"value": "WATER CLOSET", "source": "schedule"},
+            "device_type": {"value": "WATER CLOSET", "source": "schedule"},
+            "sheet": {"value": "P-102", "source": "plan"},
+            "symbol": {"value": "2F8", "source": "plan"},
+        },
+    });
+    let stack = json!({"system": "SAN", "level": "L1", "points": [[96.0, 48.0]], "size_in": [4.0, 0], "bottoms_ft": [0.0], "top_ft": 18.0,
+        "height_source": "stack from L1 through L2", "size_source": "tag"});
+    let mut cw = run("CW", json!([[1260.0, 84.0], [1500.0, 84.0]]), "default");
+    cw["level"] = json!("L2");
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [
+            {"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]},
+            {"name": "L2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "base": [1200, 0]}
+        ],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [wc],
+        "mep": {"systems": [pipe("SAN"), pipe("V"), pipe("CW")], "runs": [stack, cw]},
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let r = s.execute("model.build", &json!({})).expect("build");
+    let p = fixture_props(&mut s);
+    assert!(p.get("unconnected").is_none(), "connected to the stack on its floor: {p}\n{}", r["plumbing"]);
+    for line in ["waste", "vent", "cold_water"] {
+        assert!(p[line]["value"].as_str().is_some_and(|h| !h.is_empty()), "{line}: {p}");
+    }
+    assert_eq!(p["waste"]["value"], p["vent"]["value"], "its vent is the stack's (a stack vent): {p}");
 }
