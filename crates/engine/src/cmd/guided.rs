@@ -25392,6 +25392,42 @@ mod tests {
         assert!(!copies.iter().any(|r| r.points[0][0] >= 40_000.0 && r.points[0][0] < 40_300.0), "{got:?}");
     }
 
+    /// A fixture copied from the room it stacks with is a derived element with its basis; one
+    /// its own floor's plan shows has neither.
+    #[test]
+    fn a_fixture_derived_from_the_room_below_is_marked_so_on_its_element() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let dv = |x: f64, derived: &str| super::super::readers::ReadDevice {
+            tag: "WC-1".into(),
+            at: [x, 120.0],
+            sheet: "P-201/1".into(),
+            level: "Level 2".into(),
+            kind: "plumbing fixture".into(),
+            handle: format!("{:X}", 0x100 + x as u64),
+            derived: derived.into(),
+            ..Default::default()
+        };
+        let devices = [dv(120.0, "derived from 1: room 171 there is of its type at the same place; trade practice"), dv(600.0, "")];
+        super::super::readers::place_devices(&mut s, &devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        super::super::propfill::fill(&mut s, false).unwrap_or_else(|e| panic!("{e}"));
+        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
+        let els = got["elements"].as_array().cloned().unwrap_or_default();
+        assert_eq!(els.len(), 2, "{got:#}");
+        let derived: Vec<&Value> = els.iter().filter(|e| e["props"]["status"]["value"] == "derived").collect();
+        assert_eq!(derived.len(), 1, "{got:#}");
+        let basis = derived[0]["props"]["basis"]["value"].as_str().unwrap_or_default();
+        assert!(basis.starts_with("derived from 1: room 171"), "{basis}");
+        assert_eq!(derived[0]["props"]["status"]["source"]["kind"], "rule", "{:#}", derived[0]);
+        assert!(els.iter().any(|e| e["props"].get("status").is_none()), "the drawn one says nothing: {got:#}");
+    }
+
     #[test]
     fn a_note_limiting_a_typical_rooms_device_to_one_floor_keeps_it_off_the_others() {
         assert_eq!(floor_only("DISHWASHER (FIRST FLOOR ONLY)").as_deref(), Some("1"));

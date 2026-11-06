@@ -1141,6 +1141,15 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         if !sheet.is_empty() {
             store.set("sheet", Prop::new(sheet.clone(), Source::print(&sheet, at)));
         }
+        // Copied from the room it stacks with on another floor (no plan of its own floor shows
+        // it): said so, with the basis, so it never passes for drawn.
+        if let Some(status) = field(t, "status").filter(|v| !v.trim().is_empty()) {
+            let basis = field(t, "basis").unwrap_or_default();
+            store.set("status", Prop::new(status, Source::from_doc(SourceKind::Rule, &basis)));
+            if !basis.is_empty() {
+                store.set("basis", Prop::new(basis.clone(), Source::from_doc(SourceKind::Rule, &basis)));
+            }
+        }
         let mut loc = location_prop(x, y, zc, upf);
         if registered {
             loc.note = Some("model coordinates: read on its sheet, moved onto its level's architectural plan by the sheet frame (same sheet size), at the level's elevation plus the offset".into());
