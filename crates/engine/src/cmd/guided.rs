@@ -24373,7 +24373,7 @@ mod tests {
             let pl = cadaddy_doc::LwPolyline { vertices: v, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false };
             s.doc_mut().unwrap().add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::LwPolyline(pl)).unwrap();
         };
-        // A-101, the bath as the architectural plan draws it (inches): a tub across the top, a
+        // A-9, the bath as the architectural plan draws it (inches): a tub across the top, a
         // water closet (its tank against the wall, its bowl), a vanity and its basin with its drain.
         let a_lo = s.doc().unwrap().handseed;
         rect(&mut s, 0.0, 66.0, 60.0, 98.0);
@@ -24383,13 +24383,13 @@ mod tests {
         rect(&mut s, 51.0, 5.0, 69.0, 17.0);
         s.execute("circle", &json!({"center": [60.0, 11.0], "radius": 0.75})).unwrap();
         let a_hi = s.doc().unwrap().handseed;
-        // P-101, the plumbing plan over it: its tags set clear of the fixtures, the water
+        // P-9, the plumbing plan over it: its tags set clear of the fixtures, the water
         // closet's over the tub, the lavatory's in the door swing.
         let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
             s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
         };
-        t(&mut s, [20.0, 80.0], "P-1");
-        t(&mut s, [40.0, 45.0], "P-2");
+        t(&mut s, [20.0, 80.0], "WC-7");
+        t(&mut s, [40.0, 45.0], "LV-7");
         let p_hi = s.doc().unwrap().handseed;
         let region = |n: &str, discipline: &str| SheetRegion {
             number: n.into(),
@@ -24403,15 +24403,15 @@ mod tests {
             levels: Vec::new(),
             view: None,
         };
-        job.sheet_regions = vec![region("A-101", "A"), region("P-101", "P")];
-        job.sheet_spans = vec![SheetSpan { sheet: "A-101".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-101".into(), lo: a_hi, hi: p_hi }];
+        job.sheet_regions = vec![region("A-9", "A"), region("P-9", "P")];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-9".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-9".into(), lo: a_hi, hi: p_hi }];
         let row = |tag: &str, fixture: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture {
             tag: tag.into(),
             fixture: fixture.into(),
             ..Default::default()
         };
         let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule {
-            rows: vec![row("P-1", "WATER CLOSET"), row("P-2", "LAVATORY")],
+            rows: vec![row("WC-7", "WATER CLOSET"), row("LV-7", "LAVATORY")],
             extent: [0.0; 4],
             ..Default::default()
         };
@@ -24428,9 +24428,9 @@ mod tests {
         );
         let at = |tag: &str| found.iter().find(|f| f.tag == tag).map(|f| f.at).unwrap_or_default();
         let off = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
-        assert!(off(at("P-1"), [18.0, 14.5]) <= 6.0, "the water closet on its bowl and tank, not in the tub: {:?}", at("P-1"));
-        assert!(off(at("P-2"), [60.0, 11.0]) <= 6.0, "the lavatory on its basin, not in the door swing: {:?}", at("P-2"));
-        assert!(rep.fits.iter().all(|f| f.provenance == "drawn" && f.basis.contains("A-101")), "{rep:?}");
+        assert!(off(at("WC-7"), [18.0, 14.5]) <= 6.0, "the water closet on its bowl and tank, not in the tub: {:?}", at("WC-7"));
+        assert!(off(at("LV-7"), [60.0, 11.0]) <= 6.0, "the lavatory on its basin, not in the door swing: {:?}", at("LV-7"));
+        assert!(rep.fits.iter().all(|f| f.provenance == "drawn" && f.basis.contains("A-9")), "{rep:?}");
     }
 
     #[test]

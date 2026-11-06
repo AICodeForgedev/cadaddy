@@ -1,6 +1,6 @@
 //! Plumbing fixtures onto the fixtures the architectural plans draw (Q6240).
 //!
-//! A plumbing plan tags a fixture with a balloon set beside it (`P-1` in its hexagon), clear of
+//! A plumbing plan tags a fixture with a balloon set beside it (its tag in a hexagon), clear of
 //! the fixture's own linework: a foot or several off, often over the tub next to the water closet
 //! or in a door swing. The tag names the fixture; it doesn't place it. The architectural plan the
 //! plumbing plan is registered onto draws the fixture itself: a water closet's bowl and tank, a
