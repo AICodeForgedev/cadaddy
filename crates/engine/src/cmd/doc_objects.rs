@@ -322,9 +322,6 @@ pub(crate) fn legend_rows(texts: &[TextItem], sheet: &str) -> Vec<LegendEntry> {
     out
 }
 
-/// The headings of a schedule's column of marks.
-const MARK_HEADINGS: &[&str] = &["MARK", "TAG", "UNIT TAG", "UNIT MARK", "EQUIPMENT TAG", "EQUIPMENT MARK"];
-
 /// The most marks read from the schedules of one sheet.
 const MAX_SCHEDULE_MARKS: usize = 4_000;
 
@@ -347,7 +344,9 @@ pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
         .collect();
     let mut out = BTreeMap::new();
     let middle = |t: &TextItem| t.at.x + 0.3 * t.height * t.value.trim().chars().count() as f64;
-    for head in flat.iter().filter(|t| MARK_HEADINGS.iter().any(|m| t.value.trim().eq_ignore_ascii_case(m))) {
+    // (a column's headings: rules data, `schedules.mark_headings`)
+    let headings = cadaddy_mepfix::wordrules::words("schedules.mark_headings");
+    for head in flat.iter().filter(|t| headings.iter().any(|m| t.value.trim().eq_ignore_ascii_case(m))) {
         let h = head.height;
         let title = flat
             .iter()

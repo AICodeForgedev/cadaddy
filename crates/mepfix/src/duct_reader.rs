@@ -1193,17 +1193,14 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
 /// The tallest a unit's tag is, in the sheet's usual lettering heights.
 const TAG_HEIGHT_MAX: f64 = 4.0;
 
-/// Marks of the controls and sensors a unit's tag labels when printed beside them (rules of
-/// mechanical drafting: a thermostat `T`, a humidistat `H`, a sensor, a switch).
-const CONTROL_MARKS: &[&str] = &["T", "TS", "TSTAT", "T-STAT", "THERMOSTAT", "H", "HS", "HUMIDISTAT", "S", "SS", "SENSOR", "CO2", "TH"];
-
 /// Whether the text `i` (a unit's tag) names the unit a control is for: a control's mark after
 /// the tag in the same text (`FCU-7 T`), or a text that is only a control's mark on its line,
 /// just before or after it, or right over or under it.
 fn labels_a_control(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
     let Some((t, at, _, h)) = texts.get(i) else { return false };
     let h = h.max(1e-6);
-    let control = |w: &str| CONTROL_MARKS.iter().any(|m| m.eq_ignore_ascii_case(w.trim()));
+    // (the controls' marks: rules data, `equipment.control_marks`)
+    let control = |w: &str| crate::wordrules::words("equipment.control_marks").iter().any(|m| m.eq_ignore_ascii_case(w.trim()));
     if t.split_whitespace().skip(1).any(control) {
         return true;
     }
