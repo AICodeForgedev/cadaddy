@@ -3392,7 +3392,7 @@
    ]
   },
   "units.type_words": {
-   "source": "Words that start a unit type's tag (`DOUBLE Q`, `SINGLE Q`, `ADA KING`, `UNIT B`, `TYPE A1`). (trade practice: the words of a typical unit's type; moved from unittypes.rs `UNIT_WORDS`)",
+   "source": "Words that start a unit type's tag (`ADA KING`, `UNIT B`, `TYPE A1`). (trade practice: the words of a typical unit's type; moved from unittypes.rs `UNIT_WORDS`)",
    "words": [
     "SINGLE",
     "DOUBLE",

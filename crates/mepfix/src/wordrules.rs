@@ -533,7 +533,7 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"{"lists": {
-        "rooms.sleep": {"source": "test", "words": ["KING", "QUEEN"]},
+        "rooms.sleep": {"source": "test", "words": ["BUNK", "LOFT"]},
         "sheets.prefix": {"source": "test", "pairs": [["FP", "FP"], ["E", "E"]]},
         "sheets.title": {"source": "test", "groups": [{"value": "E", "words": ["ELECTRICAL"]}]},
         "devices.legend": {"source": "test", "rules": [
@@ -561,7 +561,7 @@ mod tests {
     fn a_list_reads_in_order_with_its_shape() {
         let t = Table::parse(SAMPLE);
         assert!(t.problems().is_empty(), "{:?}", t.problems());
-        assert_eq!(t.words("rooms.sleep"), Some(&["KING", "QUEEN"][..]));
+        assert_eq!(t.words("rooms.sleep"), Some(&["BUNK", "LOFT"][..]));
         assert_eq!(t.pairs("sheets.prefix").map(<[Pair]>::len), Some(2));
         assert_eq!(t.shape("sheets.title"), Some(Shape::Groups));
         assert_eq!(t.shape("nope"), None);
@@ -571,12 +571,12 @@ mod tests {
     #[test]
     fn a_job_adds_words_after_the_shipped_ones_once() {
         let t = Table::parse(SAMPLE).with_additions(&adds(&[
-            ("rooms.sleep", r#"["DORM", "KING"]"#),
+            ("rooms.sleep", r#"["DORM", "BUNK"]"#),
             ("rooms.sleep", "BUNK ROOM; DORM"),
             ("sheets.prefix", "X=E"),
             ("sheets.title", "E=POWER; T=TELECOM"),
         ]));
-        assert_eq!(t.words("rooms.sleep"), Some(&["KING", "QUEEN", "DORM", "BUNK ROOM"][..]));
+        assert_eq!(t.words("rooms.sleep"), Some(&["BUNK", "LOFT", "DORM", "BUNK ROOM"][..]));
         assert_eq!(t.pairs("sheets.prefix").and_then(|p| p.last()).copied(), Some(("X", "E")));
         let g = t.groups("sheets.title").unwrap_or_default();
         assert_eq!(g.first().map(|(_, w)| w.to_vec()), Some(vec!["ELECTRICAL", "POWER"]));
