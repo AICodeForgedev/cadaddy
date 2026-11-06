@@ -601,6 +601,8 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             top_ft: None,
             source_sheet: run.source_sheet.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| sheet.to_string()),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         });
     }
     mep.systems = sys_map.into_values().collect();

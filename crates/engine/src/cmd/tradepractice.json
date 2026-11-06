@@ -1,0 +1,99 @@
+{
+  "about": "Trade practice the build follows where the documents are silent or wrong (Q6216): how each trade runs or places what the drawings leave out, and what the field installs where a drawn value can't be built. Order of authority: the documents, then the code (coderules.json and each trade's rules data, cited here where a rule uses a code number), then this file. Each rule: its id, the trade, what it fills in or corrects, its numbers, and its basis: the reason every object it lays in or value it corrects carries, so nothing it makes passes for drawn.",
+  "rules": [
+    {
+      "id": "P-BRANCH-WATER",
+      "trade": "plumbing",
+      "fills": "a fixture's cold or hot water branch, or a room's branches, no plan joins to a main (numbers: plumbing.json fill_in)",
+      "basis": "trade practice: each fixture's or room's water branch is teed off the nearest main of its system at right angles, the fixtures of one room and back-to-back rooms on one wet wall sharing one branch; a fixture branch nothing sizes is 1/2 inch (IPC Table 604.5)",
+      "systems": ["CW", "HW"]
+    },
+    {
+      "id": "P-BRANCH-WASTE",
+      "trade": "plumbing",
+      "fills": "a fixture's waste arm no plan joins to a drain line of its floor",
+      "basis": "trade practice: a fixture's waste arm runs from its trap to the nearest drain line of its floor at right angles and falls to it at the code's slope (IPC 704.1); it is the fixture's trap size (IPC Table 709.1: water closet 3 in., shower and urinal 2 in., clothes washer 2 in., tub, sink and laundry tray 1-1/2 in., lavatory 1-1/4 in.)",
+      "systems": ["SAN"],
+      "reach_ft": 60.0,
+      "connect_reach_ft": 15.0,
+      "sizes": [
+        {"words": ["WATER CLOSET", "TOILET", "WC"], "size_in": 3.0},
+        {"words": ["URINAL", "SHOWER", "FLOOR DRAIN", "FD", "MOP", "SERVICE BASIN", "SERVICE SINK", "WASHING MACHINE", "CLOTHES WASHER"], "size_in": 2.0},
+        {"words": ["TUB", "BATH", "SINK", "LAUNDRY"], "size_in": 1.5},
+        {"words": ["LAVATORY", "LAV", "DRINKING FOUNTAIN", "EWC"], "size_in": 1.25}
+      ],
+      "default_size_in": 2.0
+    },
+    {
+      "id": "P-BRANCH-VENT",
+      "trade": "plumbing",
+      "fills": "a fixture's vent no plan joins to a vent line or stack of its floor",
+      "basis": "trade practice: each fixture's trap is vented by a vent taken up its wet wall and over to the nearest vent line of its floor (IPC 901.2, 906.1 trap-to-vent distance); a vent is at least half its drain's size and not under 1-1/4 in. (IPC 916.2)",
+      "systems": ["V"],
+      "reach_ft": 60.0,
+      "connect_reach_ft": 15.0,
+      "sizes": [
+        {"words": ["WATER CLOSET", "TOILET", "WC"], "size_in": 1.5},
+        {"words": ["URINAL", "SHOWER", "FLOOR DRAIN", "FD", "MOP", "SERVICE BASIN", "SERVICE SINK"], "size_in": 1.25}
+      ],
+      "default_size_in": 1.25
+    },
+    {
+      "id": "E-ROUTE",
+      "trade": "electrical",
+      "fills": "a branch circuit's raceway or cable path: the drawings show its devices and a homerun arrow, not the path",
+      "basis": "trade practice: a circuit's devices are joined device to device in a square tree above the ceiling, the homerun takes the corridor to its panel's top entry (rules: conduitroute.json; fill and box fill per NEC Ch. 9 and 314.16)"
+    },
+    {
+      "id": "E-ESTIMATED",
+      "trade": "electrical",
+      "fills": "a circuit's route estimated from its homerun tag where the model could not route it",
+      "basis": "trade practice: a homerun the drawings mark by an arrow only is run along the plan's axes to its panel, a placeholder until it is routed"
+    },
+    {
+      "id": "E-UNCIRCUITED",
+      "trade": "electrical",
+      "fills": "a power device no document puts on a circuit",
+      "basis": "trade practice: a device the documents leave off every circuit goes on a spare circuit of the nearest panel of its level, its homerun along the plan's axes in the ceiling space to the panel (NEC 210.11: every outlet is on a branch circuit)",
+      "reach_ft": 400.0,
+      "default_size_in": 0.75
+    },
+    {
+      "id": "M-BRANCH-DUCT",
+      "trade": "mechanical",
+      "fills": "an air terminal no duct of its system reaches",
+      "basis": "trade practice: each diffuser, register or grille is taken off the nearest duct of its system by a round branch at right angles at the duct's height, then down to the terminal at its neck size",
+      "reach_ft": 60.0,
+      "connect_reach_ft": 10.0,
+      "sizes": [
+        {"words": ["LINEAR", "SLOT"], "size_in": 8.0},
+        {"words": ["RETURN", "EXHAUST", "TRANSFER"], "size_in": 10.0}
+      ],
+      "default_size_in": 8.0
+    },
+    {
+      "id": "A-GRID-COLUMN",
+      "trade": "structure",
+      "fills": "a column the grid crossing implies where the plans draw none",
+      "basis": "trade practice: a structural grid crossing carries a column where the structural plans show the grid but no column outline"
+    },
+    {
+      "id": "E-BOX-FILL",
+      "trade": "electrical",
+      "fills": "a device or junction box too small for what enters it (box fill)",
+      "basis": "code: a box's volume holds its conductors, devices, clamps and grounds by NEC 314.16(B); the field installs the next larger box of NEC Table 314.16(A), or adds an extension ring"
+    },
+    {
+      "id": "E-CONDUIT-FILL",
+      "trade": "electrical",
+      "fills": "a raceway too small for its conductors (fill over NEC Chapter 9 Table 1)",
+      "basis": "code: conductors fill at most 40 percent of a raceway of three or more (NEC Chapter 9 Table 1); the field pulls them in the next trade size that holds them (NEC Chapter 9 Tables 4 and 5)"
+    },
+    {
+      "id": "E-VOLTAGE-DROP",
+      "trade": "electrical",
+      "fills": "branch conductors too small for their length (voltage drop over 3 percent)",
+      "basis": "code and practice: branch circuit conductors are sized for at most 3 percent voltage drop (NEC 210.19(A) Informational Note 4), the drawings' length table first; the field pulls the next conductor size"
+    }
+  ]
+}

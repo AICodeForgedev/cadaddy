@@ -1033,6 +1033,8 @@ mod tests {
             top_ft: None,
             source_sheet: sheet.into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         }
     }
 

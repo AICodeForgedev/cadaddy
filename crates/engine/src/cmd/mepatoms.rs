@@ -49,7 +49,7 @@ const MAX_PIECES: usize = 20_000;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.count", "Count Model Pieces", run_count)
-            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|breaker (a panel's, from its schedule row), a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, group_by?: kind|item|size|type|level|room|circuit|system|trade, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
+            .params("{kind?: conduit|coupling|connector|elbow|bend|offset|strap|locknut|bushing|box|ring|cable|wire|breaker (a panel's, from its schedule row), a building piece (pour, rebar, mesh, tendon, anchor, chair, vapor_barrier, stud, track, plate, header, blocking, backing, sheathing, furring, joist, rim, truss, cmu, sheet, corner_bead, tape, compound, screws, batt, board, firestop, paint, flooring, base, tile, grid_main, grid_tee, wall_angle, frame, hardware_set, accessory, casework), a door or window, or a device kind (receptacle, switch, luminaire and the like), trade?: concrete|framing|drywall|insulation|firestopping|finishes|openings|specialties|masonry, item?: part of what it is bought as, size?: trade or conductor size (1\", #12, 4\" square, 5/8\", 3 5/8\"), type?: part of the type (EMT, NM 12/2, THHN, Type X), level?, room?, circuit?: panel and circuit (LP1-3), system?, made?: drawn|derived|inferred, group_by?: kind|item|size|type|level|room|circuit|system|trade|made, verify?: bool (recount every element and compare), refresh?: bool (rebuild the stored index from the elements)} → {count, length_ft, estimated (how many of them are on an estimated route), by_made: {drawn, derived, inferred} (each a total: what the documents draw, what was derived from a matching source, what a rule inferred), area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces? (when an element stands for several: a box of screws, a run of chairs), rows?: [{value of the group_by dimension, count, length_ft, estimated, area_sf?, volume_cf?, volume_cy?, weight_lb?, pieces?}], from: index|recount, index_rows, ms, verify?: {count, length_ft, matches, recount_ms}}: counts of the built model's pieces from its stored index, no recompute")
             .noundo(),
         CommandSpec::new("bim.atoms.edit", "Edit Model Piece", run_edit)
             .params("{handle, length_ft?: feet (a conduit stick, a cable, a wire: its new length), size?: text (trade size, conductor size), type?: text (material, cable type)} → {handle, kind, before: {size, type, length_ft}, after: {size, type, length_ft}, index: {rows, count}}: change one piece of a run; its 3D body and the model's count index follow"),
@@ -989,6 +989,10 @@ pub(crate) struct Key {
     /// for the electrical pieces and devices.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub trade: String,
+    /// What it is by the documents (Q6216): empty for drawn, `derived` or `inferred` (every
+    /// total splits by it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub made: String,
 }
 
 /// What one counted element measures: its length, area, volume, weight and pieces (a bag of
@@ -1137,6 +1141,10 @@ impl Index {
                     "room" => &k.room,
                     "circuit" => &k.circuit,
                     "trade" => &k.trade,
+                    "made" => {
+                        groups.entry(made_name(&k.made).to_string()).or_default().merge(t);
+                        continue;
+                    }
                     _ => &k.system,
                 };
                 groups.entry(v.clone()).or_default().merge(t);
@@ -1144,6 +1152,16 @@ impl Index {
         }
         (total, groups)
     }
+}
+
+/// A key's provenance by name: `drawn` for the empty one.
+fn made_name(made: &str) -> &str {
+    if made.trim().is_empty() { "drawn" } else { made }
+}
+
+/// The key's provenance as an index keeps it: empty for drawn.
+fn made_key(e: &Entity) -> String {
+    super::provenance::of_element(e).map(|(m, _)| m).filter(|m| !m.is_drawn()).map_or_else(String::new, |m| m.as_str().to_string())
 }
 
 /// The kinds of piece that make up a run (not devices).
@@ -1258,6 +1276,8 @@ pub(crate) struct Filter {
     pub system: Option<String>,
     pub trade: Option<String>,
     pub item: Option<String>,
+    /// `drawn`, `derived` or `inferred` (Q6216).
+    pub made: Option<String>,
 }
 
 /// Size text compared without quotes, spaces or `in`: `1"` = `1` = `1 in`.
@@ -1302,6 +1322,7 @@ impl Filter {
             system: g("system"),
             trade: g("trade"),
             item: g("item"),
+            made: g("made"),
         }
     }
     pub(crate) fn matches(&self, k: &Key) -> bool {
@@ -1320,12 +1341,19 @@ impl Filter {
             && eq(&self.room, &k.room)
             && eq(&self.circuit, &k.circuit)
             && eq(&self.system, &k.system)
+            && self.made.as_deref().is_none_or(|w| w.trim().eq_ignore_ascii_case(made_name(&k.made)))
     }
 }
 
 /// What an element is counted as in the index: an atom by its kind, a device by its own kind;
 /// with its length (feet) and whether it is on an estimated route. Nothing for other elements.
 pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
+    let (mut k, m) = counted_as(e)?;
+    k.made = made_key(e);
+    Some((k, m))
+}
+
+fn counted_as(e: &Entity) -> Option<(Key, Measure)> {
     let part = super::wallgen::made_as(e)?;
     let level = super::bspec::made_level(e).unwrap_or_default();
     let ps = props::read(&e.common.xdata);
@@ -1351,6 +1379,7 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
                 circuit: text("circuit"),
                 system: text("system"),
                 trade: text("trade"),
+                made: String::new(),
             },
             m,
         ));
@@ -1368,6 +1397,7 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
                 circuit: text("circuit"),
                 system: String::new(),
                 trade: String::new(),
+                made: String::new(),
             },
             Measure::length(0.0, false),
         ));
@@ -1385,6 +1415,7 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
                 circuit: String::new(),
                 system: String::new(),
                 trade: "specialties".into(),
+                made: String::new(),
             },
             Measure::length(0.0, false),
         ));
@@ -1402,6 +1433,7 @@ pub(crate) fn counted(e: &Entity) -> Option<(Key, Measure)> {
                 circuit: String::new(),
                 system: String::new(),
                 trade: "openings".into(),
+                made: String::new(),
             },
             Measure { area_sf: num("area_sf").unwrap_or(0.0), ..Measure::length(0.0, false) },
         ));
@@ -1436,9 +1468,14 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     let started = web_time::Instant::now();
     let group_by = p.get("group_by").and_then(Value::as_str).map(str::to_ascii_lowercase);
     if let Some(g) = group_by.as_deref()
-        && !matches!(g, "kind" | "item" | "size" | "type" | "level" | "room" | "circuit" | "system" | "trade")
+        && !matches!(g, "kind" | "item" | "size" | "type" | "level" | "room" | "circuit" | "system" | "trade" | "made")
     {
-        return Err(bad(CMD, format!("`group_by` must be kind, item, size, type, level, room, circuit, system or trade, not `{g}`")));
+        return Err(bad(CMD, format!("`group_by` must be kind, item, size, type, level, room, circuit, system, trade or made, not `{g}`")));
+    }
+    if let Some(m) = str_param(p, "made")
+        && cadaddy_walk3d::Made::parse(m).is_none()
+    {
+        return Err(bad(CMD, "`made` is drawn, derived or inferred"));
     }
     let f = Filter::from_params(p);
     if bool_or(p, "refresh", false) {
@@ -1455,6 +1492,9 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     let (total, groups) = ix.query(&f, group_by.as_deref());
     let ms = started.elapsed().as_secs_f64() * 1000.0;
     let mut out = tally_json(&total);
+    // Every total split by what it is by the documents (Q6216): drawn, derived, inferred.
+    let (_, by_made) = ix.query(&f, Some("made"));
+    out["by_made"] = cadaddy_walk3d::Made::ALL.iter().map(|m| (m.as_str().to_string(), tally_json(&by_made.get(m.as_str()).copied().unwrap_or_default()))).collect::<serde_json::Map<_, _>>().into();
     out["from"] = json!(from);
     out["index_rows"] = json!(ix.rows.len());
     out["ms"] = json!((ms * 1000.0).round() / 1000.0);
@@ -2043,6 +2083,27 @@ mod tests {
         assert_eq!(r.box_for("luminaire", false).map(|b| b.0.item.as_str()), Some("Box, 4\" octagon"));
         assert!(r.box_for("plumbing fixture", false).is_none());
         assert!(has_word("3/4\" EMT", "EMT") && !has_word("EMC", "MC") && has_word("MC CABLE", "MC"));
+    }
+
+    #[test]
+    fn every_total_splits_by_what_it_is_by_the_documents() {
+        let k = |made: &str| Key { kind: "conduit".into(), size: "3/4\"".into(), level: "L1".into(), made: made.into(), ..Key::default() };
+        let mut ix = Index::default();
+        ix.add(k(""), &Measure::length(10.0, false));
+        ix.add(k("inferred"), &Measure::length(4.0, false));
+        ix.add(k("inferred"), &Measure::length(6.0, false));
+        ix.add(k("derived"), &Measure::length(2.0, false));
+        let (all, by) = ix.query(&Filter::default(), Some("made"));
+        assert_eq!((all.count, all.length_ft), (4, 22.0));
+        let g = |m: &str| by.get(m).map(|t| (t.count, t.length_ft));
+        assert_eq!((g("drawn"), g("derived"), g("inferred")), (Some((1, 10.0)), Some((1, 2.0)), Some((2, 10.0))));
+        let only = Filter { made: Some("inferred".into()), ..Filter::default() };
+        assert_eq!(ix.query(&only, None).0.length_ft, 10.0);
+        let drawn = Filter { made: Some("drawn".into()), ..Filter::default() };
+        assert_eq!(ix.query(&drawn, None).0.count, 1, "an index row with no provenance is drawn");
+        // Kept and read back with the index.
+        let back = Index::from_bytes(&ix.to_bytes()).unwrap_or_else(|| panic!("read back"));
+        assert_eq!(back.query(&only, None).0.count, 2);
     }
 
     #[test]

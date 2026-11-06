@@ -2443,3 +2443,5 @@
 	Validate Model Against Prints (Agent)	図面に対してモデルを検証（エージェント）
 	Validate: waiting for an agent	検証: エージェント待ち
 	Validation Run Status	検証の実行状況
+	Model Provenance	モデルの出所
+	Filled-in Work Apart	補完した工事を区別

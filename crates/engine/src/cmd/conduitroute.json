@@ -152,7 +152,7 @@
       "kinds": ["receptacle", "duplex receptacle", "gfci receptacle", "quad receptacle", "device", "junction box", "equipment connection", "disconnect"],
       "spare_words": ["SPARE"],
       "space_words": ["SPACE"],
-      "source": "a power device the prints give no circuit: proposed on the nearest panel of its level with a spare breaker (else a new one), not drawn, priced apart from the takeoff, with a review item and an RFI (the documents don't say; nothing is guessed silently)"
+      "source": "a power device the prints give no circuit is put on a spare circuit of the nearest panel of its level and routed, marked inferred (tradepractice.json E-UNCIRCUITED); one with no panel of its level within that rule's reach is proposed on the nearest panel with a spare breaker (else a new one), not built, priced apart, with a review item"
     }
   }
 }

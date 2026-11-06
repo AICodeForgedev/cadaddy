@@ -9,14 +9,14 @@
 //!   nearest main or riser of their system the way a plumber runs them: the main carried on along
 //!   its line, the branch teed off it at right angles.
 //!
-//! Nothing filled in passes for drawn: each run says what it is (`height_source` [`DERIVED`] or
-//! [`INFERRED`]) and its basis (`size_source`: the source floor or the rule), and the build puts
-//! it on its own layer and takeoff row. The numbers and the bases are rules data (`plumbing.json`
+//! Nothing filled in passes for drawn: each run carries the model's provenance mark
+//! ([`super::provenance`]: [`MepRun::made`] derived or inferred, and its basis: the source floor or
+//! the rule), and the build puts it on its own layer and takeoff row. The numbers and the bases are rules data (`plumbing.json`
 //! `fill_in`), never a job's.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use cadaddy_walk3d::MepRun;
+use cadaddy_walk3d::{Made, MepRun};
 use serde::Deserialize;
 
 /// A run copied from another floor's drawn plan where this floor's rooms stack on it.
@@ -26,17 +26,11 @@ pub(crate) const INFERRED: &str = "inferred";
 /// A run a plan draws.
 pub(crate) const DRAWN: &str = "drawn";
 
-/// What a run is by its marks: [`DRAWN`], [`DERIVED`] or [`INFERRED`]: the first word of its
-/// `height_source` (a later step may add to it: `derived (capped under the floor above)`).
+/// What a run is by its marks: [`DRAWN`], [`DERIVED`] or [`INFERRED`] (the model's one
+/// provenance, [`super::provenance::of_run`]; a run an earlier build filled in says so in the first
+/// word of its `height_source`: `derived (capped under the floor above)`).
 pub(crate) fn provenance(r: &MepRun) -> &'static str {
-    let first = r.height_source.trim().split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
-    if first.eq_ignore_ascii_case(DERIVED) {
-        DERIVED
-    } else if first.eq_ignore_ascii_case(INFERRED) {
-        INFERRED
-    } else {
-        DRAWN
-    }
+    super::provenance::made_of_run(r).as_str()
 }
 
 /// The fill-in rules (`plumbing.json` `fill_in`).
@@ -141,7 +135,7 @@ fn inside(poly: &[[f64; 2]], p: [f64; 2]) -> bool {
 }
 
 /// The distance from `p` to the segment `a`-`b`, the nearest point on it and where (0 at `a`, 1 at `b`).
-fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2], f64) {
+pub(crate) fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2], f64) {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l = dx * dx + dy * dy;
     let u = if l <= 1e-18 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l).clamp(0.0, 1.0) };
@@ -329,6 +323,7 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
             c.edited_by.clear();
             c.height_source = DERIVED.into();
             c.size_source.clone_from(&basis);
+            super::provenance::set_run(&mut c, Made::Derived, basis.clone());
             out.runs.push(c);
         }
     }
@@ -537,6 +532,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
                 c.edited_by.clear();
                 c.slope_in_per_ft = 0.0;
                 c.height_source = INFERRED.into();
+                super::provenance::set_run(&mut c, Made::Inferred, basis.clone());
                 c.size_source = basis;
                 c
             };
@@ -599,6 +595,8 @@ mod tests {
             top_ft: None,
             source_sheet: "P-91".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         }
     }
 

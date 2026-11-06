@@ -57,6 +57,12 @@ pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
 /// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
 const HOME_PART: &str = ":home:";
+/// A circuit tag's design conductors where the routing upsized them for voltage drop, and why
+/// (Q6216: the correction keeps the design value beside the installed one).
+pub(crate) const DESIGN_CONDUCTORS: &str = "design:conductors";
+pub(crate) const CORRECTION_CONDUCTORS: &str = "correction:conductors";
+/// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
+pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
 const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
@@ -2178,6 +2184,66 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
     no_tag = no_tag.saturating_sub(resolved_devices);
+    // -- A power device the documents put on no circuit (Q6216, trade practice `E-UNCIRCUITED`):
+    // the field puts it on a spare of the nearest panel of its level (the schedule's spares, then
+    // its spaces, else a new breaker), a room's such devices sharing one circuit; routed like the
+    // rest, its pieces inferred with the rule's basis, never drawn. --
+    let mut inferred_rows: Vec<Value> = Vec::new();
+    let mut inferred_devs: BTreeSet<usize> = BTreeSet::new();
+    {
+        let rule = super::provenance::rule("E-UNCIRCUITED");
+        let reach = rule.reach_ft.max(0.0) * upf;
+        // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
+        let sched_of = |t: &str| {
+            let (a, b) = gap::spare_circuits(sp, t);
+            if a.is_empty() && b.is_empty() { t.split_once('-').map(|(p, _)| gap::spare_circuits(sp, p)).unwrap_or((a, b)) } else { (a, b) }
+        };
+        let mut groups: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+        for di in &uncircuited {
+            let Some(dv) = devs.get(*di) else { continue };
+            if !gap::is_power_device(&dv.kind) {
+                continue;
+            }
+            let near = gear
+                .iter()
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .map(|g| (manhattan(gear_ctr(g), dv.at), g))
+                .filter(|(dd, _)| *dd <= reach)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, g)) = near {
+                groups.entry((dv.level.clone(), g.tag.clone(), dv.room.trim().to_string())).or_default().push(*di);
+            }
+        }
+        let mut next: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        for ((level, panel, room), ds) in groups.into_iter().take(MAX_CIRCUITS) {
+            let e = next.entry(panel.clone()).or_insert_with(|| {
+                let (a, b) = sched_of(&panel);
+                (a.into_iter().chain(b).collect(), 0)
+            });
+            let (number, breaker) = match e.0.get(e.1) {
+                Some(n) => (n.clone(), format!("spare {n}")),
+                None => (format!("X{}", e.1.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
+            };
+            e.1 += 1;
+            let label = format!("{panel}-{number}");
+            let at = ds.first().and_then(|i| devs.get(*i)).map_or(Vec2::new(0.0, 0.0), |d| d.at);
+            let kinds: BTreeMap<&str, usize> = ds.iter().filter_map(|i| devs.get(*i)).fold(BTreeMap::new(), |mut m, d| {
+                *m.entry(d.kind.as_str()).or_default() += 1;
+                m
+            });
+            let basis = rule.basis_for(&format!("{} on {level}: panel {panel}, {breaker}", if room.is_empty() { "no room" } else { room.as_str() }));
+            let r = gap::Resolved { by: "rule", source: basis.clone(), conductors: None, other_tag: None };
+            let mut t = gap::resolved_tag(&label, &level, None, [at.x / upf, at.y / upf], &r, ds.len());
+            t.set("panel", panel.clone(), "rule");
+            t.set(INFERRED_CIRCUIT, basis.clone(), "rule");
+            if inferred_rows.len() < MAX_ITEMS {
+                inferred_rows.push(json!({"level": level, "room": room, "panel": panel, "breaker": breaker, "circuit": label, "devices": ds.len(), "kinds": kinds, "basis": basis, "made": "inferred"}));
+            }
+            inferred_devs.extend(ds.iter().copied());
+            circs.push(Circ { tag: base_n + extra_tags.len(), label, panel, level, devs: ds, gear: None, part: String::new() });
+            extra_tags.push(t);
+        }
+    }
     let tag_at = |i: usize| -> Option<&ElementTag> { if i < base_n { sp.tags.get(i) } else { extra_tags.get(i - base_n) } };
     // -- A switch or sensor the prints give no circuit to is on the circuit of what it controls
     // (its switch leg): with the circuit most of its luminaires are on, the nearest of them
@@ -3008,6 +3074,12 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                         upsized.push(json!({"circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": now, "why": why}));
                     }
                     if let Some(t) = tags.get_mut(*i) {
+                        // Corrected for the field (Q6216): the design conductors kept beside them.
+                        if !t.fields.contains_key(DESIGN_CONDUCTORS) {
+                            let src = t.fields.get("conductors").map_or_else(|| "plan".to_string(), |f| f.source.clone());
+                            t.set(DESIGN_CONDUCTORS, mk.clone(), &src);
+                        }
+                        t.set(CORRECTION_CONDUCTORS, format!("E-VOLTAGE-DROP: {why}"), "rule");
                         t.set("conductors", now, "computed");
                         t.set("conductor_size", why.clone(), if why.starts_with("legend") { "legend" } else { "rule" });
                     }
@@ -3560,7 +3632,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut next_spare: HashMap<String, (Vec<String>, usize)> = HashMap::new();
         for di in &uncircuited {
             let Some(dv) = devs.get(*di) else { continue };
-            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS {
+            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS || inferred_devs.contains(di) {
                 continue;
             }
             let near_gear = gear
@@ -3863,6 +3935,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "switch_loop_source": gap::rules().switch_loop.source,
         "shared_raceway": shared_report,
         "proposed_circuits": {"total": proposed.len(), "by_level_kind": proposed_by, "items": proposed, "source": gap::rules().proposed.source},
+        "inferred_circuits": {"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows},
         "circuit_lengths": circuit_rows,
     });
     if let (Some(o), Value::Object(m)) = (out.report.as_object_mut(), gap_more) {
@@ -4007,10 +4080,10 @@ fn r3(v: f64) -> f64 {
 
 /// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
 /// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
-pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
+pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
-    let mut boxes: HashMap<String, (String, f64)> = HashMap::new();
+    let mut boxes: HashMap<String, (String, f64, Handle)> = HashMap::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
@@ -4019,11 +4092,20 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
         let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
             continue;
         };
-        boxes.insert(of.to_ascii_uppercase(), (ps.get("size").map(Prop::text).unwrap_or_default(), cu));
+        // A box corrected before is checked as designed (its design volume), so a second check
+        // finds and corrects it the same way.
+        let (size, cu) = match (ps.get("design:size"), ps.get("design:cubic_in").and_then(|p| p.text().parse::<f64>().ok())) {
+            (Some(s), Some(c)) => (s.text(), c),
+            _ => (ps.get("size").map(Prop::text).unwrap_or_default(), cu),
+        };
+        boxes.insert(of.to_ascii_uppercase(), (size, cu, e.handle));
     }
     let (mut checked, mut over) = (0usize, Vec::new());
+    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, the next box that holds
+    // what enters it, and why.
+    let mut fixes: Vec<(Handle, String, String, f64, f64, f64)> = Vec::new();
     for p in &pending {
-        let Some((size, cu)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
+        let Some((size, cu, bh)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
         checked += 1;
         let conds: Vec<(u32, String)> = p["conductors"]
             .as_array()
@@ -4032,19 +4114,36 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
             .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
             .collect();
         let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
-        if need > cu + 1e-9 && over.len() < MAX_ITEMS {
-            let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, _)| to.clone());
+        if need > *cu + 1e-9 && over.len() < MAX_ITEMS {
+            let bigger = rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v));
+            if let Some((to, v)) = &bigger {
+                fixes.push((*bh, size.clone(), to.clone(), *cu, *v, need));
+            }
             over.push(json!({
                 "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
                 "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
                 "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.unwrap_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".into()),
+                "fix": bigger.as_ref().map_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".to_string(), |b| b.0.clone()),
+                "corrected": bigger.is_some(),
                 "source": rl.box_fill.source,
             }));
         }
     }
-    report["box_fill"] = json!({"checked": checked, "over": over});
+    // Each one the next box holds: built with it, the design box kept beside it.
+    let rule = super::provenance::rule("E-BOX-FILL");
+    let mut corrected = 0usize;
+    for (h, from, to, cu, v, need) in &fixes {
+        let why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
+        let size = super::provenance::Correction { key: "size".into(), design: from.clone(), corrected: to.clone(), reason: why.clone(), rule: rule.id.clone() };
+        let vol = super::provenance::Correction { key: "cubic_in".into(), design: format!("{cu}"), corrected: format!("{v}"), reason: why, rule: rule.id.clone() };
+        let a = super::provenance::correct_element(d, *h, &size);
+        let b = super::provenance::correct_element(d, *h, &vol);
+        corrected += usize::from(a || b);
+    }
+    if corrected > 0 {
+        super::mepatoms::reindex(d);
+    }
+    report["box_fill"] = json!({"checked": checked, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
 }
 
 /// What a routing took out of the spec it went into: the circuits' tags as read (the routed ones
@@ -4081,7 +4180,19 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     sp.mep.runs.retain(|r| !gone(r));
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
-    sp.mep.runs.extend(routed.runs.iter().cloned());
+    // A routed path is the router's, by trade practice: the drawings show its circuit's devices
+    // and a homerun arrow, not the path (Q6216: inferred, with its basis).
+    let inferred_circuits: HashMap<&str, &str> =
+        routed.tags.iter().filter_map(|t| Some((t.id.as_str(), t.fields.get(INFERRED_CIRCUIT).map(|f| f.value.as_str())?))).collect();
+    sp.mep.runs.extend(routed.runs.iter().cloned().map(|mut r| {
+        if let Some(basis) = super::printcond::circuit_of_run(&r).and_then(|c| inferred_circuits.get(c)) {
+            super::provenance::set_run(&mut r, cadaddy_walk3d::Made::Inferred, *basis);
+        } else if r.made.is_drawn() {
+            let (made, basis) = super::provenance::of_run(&r);
+            super::provenance::set_run(&mut r, made, basis);
+        }
+        r
+    }));
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of") || t.fields.contains_key(gap::RESOLVED);
     replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
     // Each circuit's routed tag (or its parts) where its tag was read, so the spec keeps its order
@@ -4792,7 +4903,7 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[path = "conduitroute_gap.rs"]
-mod gap;
+pub(crate) mod gap;
 pub(crate) use gap::panel_end_makeup_ft;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;

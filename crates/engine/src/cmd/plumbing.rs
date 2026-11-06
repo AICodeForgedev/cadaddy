@@ -45,6 +45,11 @@ struct Need {
 
 const RULES: &str = include_str!("plumbing.json");
 
+/// The drainage systems of the rules data (`SAN`, `ST`): a vent's stack vent is a riser of one.
+pub(crate) fn drainage_systems() -> Vec<String> {
+    rules().drainage_systems
+}
+
 fn rules() -> Rules {
     serde_json::from_str(RULES).unwrap_or_default()
 }
@@ -254,11 +259,7 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let w = b.max - b.min;
                 w.x.max(w.y) <= 1.5 * upf
             };
-            let provenance = match super::bimlook::made_tag(e, "status") {
-                Some(v) if v.eq_ignore_ascii_case(super::waterfill::DERIVED) => super::waterfill::DERIVED,
-                Some(v) if v.eq_ignore_ascii_case(super::waterfill::INFERRED) => super::waterfill::INFERRED,
-                _ => super::waterfill::DRAWN,
-            };
+            let provenance = super::provenance::of_element(e).map_or(super::waterfill::DRAWN, |(m, _)| m.as_str());
             pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, provenance });
             continue;
         }

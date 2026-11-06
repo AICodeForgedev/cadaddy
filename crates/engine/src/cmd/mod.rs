@@ -227,6 +227,8 @@ pub mod walkpub;
 pub mod wallgen;
 pub mod walllayout;
 pub(crate) mod walltypes;
+pub(crate) mod fillin;
+pub(crate) mod provenance;
 pub(crate) mod waterfill;
 pub use props::MatchProps;
 pub(crate) use props::{current_color_value, set_current_color_value};
@@ -845,6 +847,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(mepatoms::specs());
+        v.extend(provenance::specs());
         v.extend(conduitroute::specs());
         v.extend(pulllist::specs());
         v.extend(tradeatoms::specs());

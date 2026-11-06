@@ -109,13 +109,13 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
 
 // ─── Model Tree tab ───────────────────────────────────────────────────────────
 
-/// The BIM view's switches: on, the shell ghosted, the sheet's own lines in 3D.
+/// The BIM view's switches: on, the shell ghosted, the sheet's own lines in 3D, filled-in work apart.
 fn look_row(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
     if st.look.is_none() {
         st.look = app.session.execute("bim.look", &json!({})).ok();
     }
     let get = |k: &str| st.look.as_ref().and_then(|v| v.get(k)).and_then(Value::as_bool).unwrap_or(false);
-    let (mut on, mut ghost, mut sheet) = (get("on"), get("ghost"), get("sheet"));
+    let (mut on, mut ghost, mut sheet, mut apart) = (get("on"), get("ghost"), get("sheet"), get("apart"));
     let mut set: Option<Value> = None;
     ui.horizontal_wrapped(|ui| {
         if ui.checkbox(&mut on, crate::i18n::t("BIM View")).changed() {
@@ -126,6 +126,10 @@ fn look_row(app: &mut CadApp, ui: &mut egui::Ui, st: &mut State) {
         }
         if ui.add_enabled(on, egui::Checkbox::new(&mut sheet, crate::i18n::t("Sheet Lines in 3D"))).changed() {
             set = Some(json!({ "sheet": sheet }));
+        }
+        // Derived and inferred work in their own colours, apart from what the documents draw.
+        if ui.add_enabled(on, egui::Checkbox::new(&mut apart, crate::i18n::t("Filled-in Work Apart"))).changed() {
+            set = Some(json!({ "apart": apart }));
         }
     });
     if let Some(p) = set {

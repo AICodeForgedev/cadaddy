@@ -2558,6 +2558,8 @@ fn apply_action(s: &mut Session, st: &mut RuleModelState, action: &str, target: 
                     top_ft: None,
                     source_sheet: String::new(),
                     slope_in_per_ft: 0.0,
+                    made: Default::default(),
+                    basis: String::new(),
                 };
                 let id = run.id.clone();
                 sp.mep.runs.push(run);

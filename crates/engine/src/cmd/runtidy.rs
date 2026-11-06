@@ -410,6 +410,8 @@ mod tests {
             top_ft: None,
             source_sheet: "M-101".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         }
     }
 

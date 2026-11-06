@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Common, Drawing, EntityKind, Handle, Mesh, MeshFace, RawTag, Space};
 use cadaddy_geom::{Bounds2, Vec2, Vec3};
-use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun};
+use cadaddy_walk3d::{BuildingSpec, Made, MepKind, MepRun};
 use serde_json::{Value, json};
 
 use super::super::propfill::WithNote;
@@ -696,6 +696,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // controls (the router joins it to that circuit: its switch leg lands in it).
     let circuit_of: HashMap<Handle, String> =
         devices.iter().filter_map(|(h, _, ps, ..)| Some((*h, ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty())?))).collect();
+    // Each device's provenance: its box's (Q6216).
+    let device_made: HashMap<Handle, (Made, String)> =
+        devices.iter().filter_map(|(h, ..)| Some((*h, d.entity(*h).and_then(|e| super::super::provenance::of_element(e))?))).collect();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
@@ -836,6 +839,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             source: *h,
             body: Some((centre, along, bw, across, bh)),
             src: rule_source(&format!("{} — {}", rl.box_source, br.source)),
+            made: device_made.get(h).map_or(Made::Drawn, |m| m.0),
+            basis: device_made.get(h).map(|m| m.1.clone()).unwrap_or_default(),
         };
         let mut a = Atom { kind: "box", item: br.item.clone(), ty: br.size.clone(), size: br.size.clone(), a: centre, b: centre, ..Atom::default() };
         a.extra.push(("cubic_in", format!("{}", br.cubic_in), br.source.clone()));
@@ -950,6 +955,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         source: Handle(0),
                         body: Some((at, Vec2::new(1.0, 0.0), bw, bh, bd)),
                         src: rule_source(&br.source),
+                        made: chain_made(sp, &c.runs).0,
+                        basis: chain_made(sp, &c.runs).1,
                     };
                     junction_at.insert(n, atoms.len());
                     atoms.push((a, ctx));
@@ -1059,6 +1066,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 source,
                 body: None,
                 src: m.source.clone(),
+                made: chain_made(sp, &c.runs).0,
+                basis: chain_made(sp, &c.runs).1,
             };
             // Its conductors' makeup at a panel it ends in: to the breaker, not a box's.
             let at_panel: Vec<Option<f64>> = lands
@@ -1272,6 +1281,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     rl.default_raceway_source
                 ),
             ),
+            // The feeder is the schedule's; its way into the gear's entry plate is laid by rule.
+            made: Made::Inferred,
+            basis: super::super::provenance::rule("E-ROUTE").basis_for(&format!("feeder {} into {}", f.tag, st.gear)),
         };
         for mut a in pieces.atoms {
             for x in &mut a.connects {
@@ -1324,7 +1336,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
+        let mut xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
+        // Its provenance (Q6216): its run's or its device's; a piece on an estimated route is inferred.
+        let (made, basis) = if ctx.estimated && ctx.made.is_drawn() {
+            (Made::Inferred, super::super::provenance::rule("E-ESTIMATED").basis_for(""))
+        } else {
+            (ctx.made, ctx.basis.clone())
+        };
+        xdata.extend(super::super::provenance::tags(made, &basis));
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
             Ok(h) => {
                 *by_kind.entry(a.kind).or_default() += 1;
@@ -1583,6 +1602,19 @@ struct AtomCtx {
     body: Option<(Vec3, Vec2, f64, f64, f64)>,
     /// Where what it is came from.
     src: Source,
+    /// What it is by the documents (its run's, its device's), and why (Q6216).
+    made: Made,
+    basis: String,
+}
+
+/// What the pieces of runs `runs` are by the documents: the least documented of them (inferred,
+/// then derived, then drawn) and its basis.
+fn chain_made(sp: &BuildingSpec, runs: &[usize]) -> (Made, String) {
+    runs.iter()
+        .filter_map(|i| sp.mep.runs.get(*i))
+        .map(super::super::provenance::of_run)
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .unwrap_or((Made::Drawn, String::new()))
 }
 
 /// Move a run's end onto a box's entry: a short jog at the run's height, then into the box.

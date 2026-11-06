@@ -1408,3 +1408,5 @@ menu	View	Προβολή
 	Validate Model Against Prints (Agent)	Επικύρωση μοντέλου έναντι σχεδίων (πράκτορας)
 	Validate: waiting for an agent	Επικύρωση: αναμονή για πράκτορα
 	Validation Run Status	Κατάσταση επικύρωσης
+	Model Provenance	Προέλευση στοιχείων μοντέλου
+	Filled-in Work Apart	Συμπληρωμένες εργασίες χωριστά

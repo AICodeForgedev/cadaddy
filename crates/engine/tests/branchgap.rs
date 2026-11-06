@@ -282,7 +282,10 @@ fn an_nm_circuit_through_three_boxes_is_its_own_cable_from_the_panel_exactly() {
 }
 
 #[test]
-fn a_receptacle_with_no_circuit_is_proposed_on_a_spare_not_drawn_and_priced_apart() {
+fn a_receptacle_with_no_circuit_is_put_on_a_spare_routed_and_marked_inferred() {
+    // Q6216: the field puts a power device the documents leave off every circuit on a spare of
+    // the nearest panel and runs its homerun; CADaddy builds that, every piece marked inferred
+    // with the rule as its basis, counted apart from the drawn. No RFI by default.
     let tags = vec![
         device("R1", "receptacle", "L1", 20.0, 10.0, Some("LP1-1"), Some(18.0)),
         device("R9", "receptacle", "L1", 25.0, -8.0, None, Some(18.0)),
@@ -291,16 +294,39 @@ fn a_receptacle_with_no_circuit_is_proposed_on_a_spare_not_drawn_and_priced_apar
     ];
     let mut s = building(tags, vec![row(1, "RECEPTACLES", 20, "12"), row(3, "SPARE", 20, ""), row(5, "SPACE", 0, "")], None);
     let r = report(&mut s);
-    let p = &r["proposed_circuits"];
-    assert_eq!(p["total"], json!(1), "the receptacle only (a smoke detector is not a branch power device): {p}");
-    let it = &p["items"][0];
-    assert_eq!((it["panel"].as_str(), it["breaker"].as_str(), it["drawn"].as_bool()), (Some("LP1"), Some("spare 3"), Some(false)), "{it}");
-    assert!(it["estimated_ft"].as_f64().is_some_and(|f| f > 30.0), "{it}");
-    assert!(it["review"].as_str().is_some_and(|t| t.contains("no circuit")) && it["rfi"].as_str().is_some_and(|t| t.starts_with("Confirm")), "{it}");
-    assert_eq!(p["by_level_kind"]["L1"]["receptacle"], json!(1));
-    // Not drawn: only LP1-1 is routed, and no circuit tag stands for the proposal.
-    assert_eq!(r["routed_circuits"], json!(1), "{r}");
-    assert!(spec_tags(&mut s).iter().all(|t| t["kind"] != json!("circuit") || t["fields"]["circuit"]["value"] == json!("LP1-1")));
+    let i = &r["inferred_circuits"];
+    assert_eq!((i["total"].as_u64(), i["devices"].as_u64()), (Some(1), Some(1)), "the receptacle only (a smoke detector is not a branch power device): {i}");
+    let it = &i["items"][0];
+    assert_eq!((it["panel"].as_str(), it["breaker"].as_str(), it["circuit"].as_str()), (Some("LP1"), Some("spare 3"), Some("LP1-3")), "{it}");
+    assert_eq!(it["made"], json!("inferred"));
+    assert!(it["basis"].as_str().is_some_and(|b| b.starts_with("E-UNCIRCUITED")), "{it}");
+    // Nothing is left only proposed; both circuits are routed.
+    assert_eq!(r["proposed_circuits"]["total"], json!(0), "{r}");
+    assert_eq!(r["routed_circuits"], json!(2), "{r}");
+    // Its pieces are in the counts as inferred work, none as drawn.
+    let inf = s.execute("bim.count", &json!({"circuit": "LP1-3", "made": "inferred"})).expect("count");
+    assert!(inf["count"].as_u64().is_some_and(|n| n > 0), "{inf}");
+    // Drawn on it: only what the documents give (the schedule's spare breaker, the receptacle);
+    // every raceway or cable piece is inferred.
+    let drawn = s.execute("bim.count", &json!({"circuit": "LP1-3", "made": "drawn", "group_by": "kind"})).expect("count");
+    let kinds: Vec<String> = drawn["rows"].as_array().into_iter().flatten().filter_map(|x| x["kind"].as_str().map(str::to_string)).collect();
+    assert!(kinds.iter().all(|k| k == "breaker" || k == "receptacle"), "{drawn}");
+    let pieces = s.execute("bim.count", &json!({"circuit": "LP1-3", "group_by": "made"})).expect("count");
+    assert!(pieces["by_made"]["inferred"]["length_ft"].as_f64().is_some_and(|f| f > 10.0), "its homerun's feet are inferred: {pieces}");
+    assert_eq!(pieces["by_made"]["drawn"]["length_ft"], json!(0.0), "{pieces}");
+    // The pieces say why: the rule.
+    let d = s.doc().expect("doc");
+    let mut n = 0;
+    for e in d.model.iter() {
+        let ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+        let atom = ps.get("atom").map(|p| p.text()).unwrap_or_default();
+        if ps.get("circuit").map(|p| p.text()).as_deref() == Some("LP1-3") && !atom.is_empty() && atom != "breaker" {
+            n += 1;
+            assert!(e.common.xdata.iter().any(|t| t.value == "status:inferred"), "inferred");
+            assert!(e.common.xdata.iter().any(|t| t.value.starts_with("basis:E-UNCIRCUITED")), "its basis");
+        }
+    }
+    assert!(n > 0);
 }
 
 #[test]

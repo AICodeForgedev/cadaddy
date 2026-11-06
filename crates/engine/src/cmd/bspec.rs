@@ -2241,6 +2241,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     r["deviceBuild"] = devices.to_json();
     r["qtyTables"] = json!(qty_tables);
     r["removed"] = json!(removed);
+    // Every built element says what it is by the documents (Q6216): drawn, derived or inferred,
+    // with its basis.
+    r["provenance"] = super::provenance::stamp(d).to_json();
+    mark("provenance");
     // One building: the levels' 3D moved off their plans onto the lowest level's.
     if sp.stack {
         r["stacked"] = json!(stack_levels(d, &sp));

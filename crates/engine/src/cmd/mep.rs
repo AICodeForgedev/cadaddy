@@ -637,6 +637,8 @@ pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, unta
                 top_ft: None,
                 source_sheet: String::new(),
                 slope_in_per_ft: 0.0,
+                made: Default::default(),
+                basis: String::new(),
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -1307,6 +1309,8 @@ fn read_pipes_from_tags(
             top_ft: None,
             source_sheet: String::new(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         });
         if let Some(slot) = run_of.get_mut(ci) {
             *slot = Some(runs.len() - 1);
@@ -1361,6 +1365,8 @@ fn read_pipes_from_tags(
             top_ft: None,
             source_sheet: String::new(),
             slope_in_per_ft: seed.slope_in_per_ft,
+            made: Default::default(),
+            basis: String::new(),
         });
     }
 
@@ -2697,21 +2703,20 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.push(t(1000, format!("mepid:{}", id.chars().take(200).collect::<String>())));
         x
     };
-    // A pipe no plan draws (derived from another floor's, or inferred from a rule) apart from
-    // the drawn: its own layer, a `status` tag and its basis.
+    // Every run's provenance on its pieces (Q6216): `status` and, when no plan draws it, its
+    // basis. A pipe or duct no plan draws (derived from another floor's, or inferred from a rule)
+    // is also on a layer of its own, apart from the drawn.
     let filled = |r: &MepRun, sy: &MepSystem| {
-        let p = super::waterfill::provenance(r);
-        (sy.kind == MepKind::Pipe && p != super::waterfill::DRAWN).then_some(p)
+        let p = super::provenance::made_of_run(r);
+        (matches!(sy.kind, MepKind::Pipe | MepKind::Duct) && !p.is_drawn()).then_some(p.as_str())
     };
     let layer_of = |r: &MepRun, sy: &MepSystem, level: &str| match filled(r, sy) {
         Some(p) => mep_layer_name(&format!("{}-{}", sy.name, p.to_ascii_uppercase()), level),
         None => mep_layer_name(&sy.name, level),
     };
-    let mark = |r: &MepRun, sy: &MepSystem, mut x: Vec<RawTag>| {
-        if let Some(p) = filled(r, sy) {
-            x.push(t(1000, format!("status:{p}")));
-            x.push(t(1000, format!("basis:{}", r.size_source.chars().take(240).collect::<String>())));
-        }
+    let mark = |r: &MepRun, _sy: &MepSystem, mut x: Vec<RawTag>| {
+        let (made, basis) = super::provenance::of_run(r);
+        x.extend(super::provenance::tags(made, &basis));
         x
     };
     for (i, s) in shown.iter().enumerate() {

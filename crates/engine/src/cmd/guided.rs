@@ -317,6 +317,11 @@ pub struct JobFinding {
     /// Whether this blocks the pipeline from advancing past this stage.
     #[serde(default)]
     pub blocking: bool,
+    /// A conflict the build checked (documents against each other, the code or physical
+    /// reality): how many it found and how many of them it built corrected for the field, each
+    /// keeping its design value beside the installed one (Q6216). `None`: not a conflict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corrected: Option<[usize; 2]>,
 }
 
 /// A work item on the job worklist: a question, finding, or action with undo support.
@@ -910,6 +915,7 @@ impl GuidedJob {
             actions: actions.clone(),
             evidence: evidence.clone(),
             blocking,
+            corrected: None,
         });
         if self.worklist.len() < MAX_WORKLIST {
             self.worklist.push(WorkItem {
@@ -924,6 +930,26 @@ impl GuidedJob {
                 undo_delta: None,
             });
         }
+    }
+
+    /// A conflict finding (Q6216): `found` conflicts, `corrected` of them built as the field
+    /// installs them with the design value kept. Info (severity 1) once every one is corrected;
+    /// `severity` while some are left.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_conflict(&mut self, stage: StageName, description: &str, why: &str, severity: u8, actions: Vec<String>, found: usize, corrected: usize) {
+        let corrected = corrected.min(found);
+        self.add_finding(stage, description, why, if corrected >= found { 1 } else { severity }, actions, None, false);
+        if let Some(f) = self.findings.last_mut() {
+            f.corrected = Some([found, corrected]);
+        }
+    }
+
+    /// The conflict findings: how many, the conflicts in them and how many were corrected.
+    pub fn conflicts(&self) -> Value {
+        let c: Vec<[usize; 2]> = self.findings.iter().filter_map(|f| f.corrected).collect();
+        let found: usize = c.iter().map(|x| x[0]).sum();
+        let fixed: usize = c.iter().map(|x| x[1]).sum();
+        json!({"findings": c.len(), "conflicts": found, "corrected": fixed, "left": found - fixed.min(found), "findings_fully_corrected": c.iter().filter(|x| x[1] >= x[0]).count()})
     }
 
     /// Add a worklist item for a question.
@@ -5646,6 +5672,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 s.doc_mut()?.building_spec = Some(sp.to_json());
             }
         }
+        // The rest of the fill-in pass (Q6216): each fixture's waste and vent no drain or vent
+        // line of its floor reaches, each air terminal no duct of its system reaches.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref());
+            if filled.get("runs").and_then(Value::as_u64).unwrap_or(0) > 0 {
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+            progress_line(&format!("  filled in where no plan connects it: {filled}"));
+        }
         // The drainage as it is installed: falling at its code slope, the lowest floor's under
         // its slab; each stack one riser through the floors it serves.
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
@@ -6628,6 +6663,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The counts are the model's as the stage ends (B4-022: tag identity merges a wall or door
     // read off several sheets into one after the build; the summary kept the build's 2,977
     // walls of 2,848).
+    // Every element the stage made after the build (documented objects, gear, breakers…) says
+    // what it is by the documents too, and what is connected per trade (Q6216).
+    let t = web_time::Instant::now();
+    let stamped = super::provenance::stamp(s.doc_mut()?);
+    result["provenance"] = stamped.to_json();
+    let sp_now = super::bspec::current(s, "bim_build").ok().map(|x| x.0);
+    let connected = super::fillin::connections(s.doc()?, sp_now.as_ref());
+    progress_line(&format!("  provenance: {}; connected: {connected}", result["provenance"]));
+    result["connections"] = connected;
+    result["conflicts"] = job.conflicts();
+    bim_step(s, job, "provenance", t);
     super::bspec::recount_built(s.doc()?, &mut result);
     progress_line(&format!("  the model as built: {} walls, {} doors, {} windows", result["walls"], result["doors"], result["windows"]));
     Ok(result)
@@ -10498,6 +10544,127 @@ fn infer_missing_water(
         sp.mep.runs.extend(inf.runs);
     }
     Value::Object(out)
+}
+
+/// The fill-in pass's waste, vent and duct (Q6216, [`super::fillin`]): on each floor with
+/// plumbing fixtures, each fixture's waste and vent line no drain or vent of its floor reaches
+/// (a vent: nor its waste stack), and each air terminal no duct of its system reaches, laid in
+/// by the trade practice rules (`P-BRANCH-WASTE`, `P-BRANCH-VENT`, `M-BRANCH-DUCT`) off the
+/// nearest run of the system, marked inferred with the rule's basis. A finding per trade: what
+/// was laid, on what basis, and what no run of its system reaches (still unconnected).
+fn fill_in_rest(
+    job: &mut GuidedJob,
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    devices: &[super::readers::ReadDevice],
+    schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+) -> Value {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let drains = super::plumbing::drainage_systems();
+    let rules = [super::provenance::rule("P-BRANCH-WASTE"), super::provenance::rule("P-BRANCH-VENT")];
+    // Each floor with fixtures, by its storey, named as its runs name it (else its level's name).
+    let mut floors: BTreeMap<String, (String, Vec<super::fillin::FixtureAt>)> = BTreeMap::new();
+    for d in devices.iter().filter(|d| d.kind == "plumbing fixture").take(100_000) {
+        let key = storey_key(&d.level);
+        let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
+        let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
+        let (lines, _) = super::plumbing::fixture_lines(&words);
+        let name = || {
+            sp.mep
+                .runs
+                .iter()
+                .map(|r| &r.level)
+                .chain(sp.levels.iter().map(|l| &l.name))
+                .find(|n| storey_key(n) == key)
+                .map_or_else(|| d.level.clone(), Clone::clone)
+        };
+        let at = super::fillin::FixtureAt { at: d.at, what: d.tag.clone(), words, lines };
+        match floors.get_mut(&key) {
+            Some(f) => f.1.push(at),
+            None => {
+                let n = name();
+                floors.insert(key, (n, vec![at]));
+            }
+        }
+    }
+    let mut laid: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+    let mut by_system: BTreeMap<String, (usize, usize, f64)> = BTreeMap::new();
+    let mut unserved: Vec<String> = Vec::new();
+    let mut per_floor = serde_json::Map::new();
+    for (key, (level, fixtures)) in &floors {
+        let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
+        let mut here = serde_json::Map::new();
+        for rule in &rules {
+            let vents = if rule.systems.iter().any(|s| drains.contains(s)) { Vec::new() } else { drains.clone() };
+            for (sys, f) in super::fillin::fixture_lines(level, &on, fixtures, rule, &vents, upf) {
+                let ft = f.feet(upf);
+                let e = by_system.entry(sys.clone()).or_default();
+                e.0 += f.needs;
+                e.1 += f.served;
+                e.2 += ft;
+                unserved.extend(f.unserved.iter().take(20).map(|u| format!("{level}: {u}")));
+                here.insert(sys, json!({"needs": f.needs, "served": f.served, "runs": f.runs.len(), "ft": (ft * 10.0).round() / 10.0, "unserved": f.unserved}));
+                laid.extend(f.runs);
+            }
+        }
+        if !here.is_empty() {
+            per_floor.insert(level.clone(), Value::Object(here));
+        }
+    }
+    let n_plumbing = laid.len();
+    if !by_system.is_empty() {
+        let lines: Vec<String> = by_system.iter().map(|(k, (n, s, ft))| format!("{k} {s} of {n} ({ft:.0} ft)")).collect();
+        let bases: Vec<String> = rules.iter().map(|r| r.basis_for("")).collect();
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Waste and vent inferred where no plan joins a fixture: {}", lines.join(", ")),
+            &format!(
+                "Each fixture's line no drain or vent of its floor reaches is run from the nearest one, marked inferred and never reported as drawn. Basis: {}.{}",
+                bases.join("; "),
+                if unserved.is_empty() {
+                    String::new()
+                } else {
+                    format!(" No run of the system within the rule's reach, still unconnected: {}", unserved.iter().take(20).cloned().collect::<Vec<_>>().join("; "))
+                }
+            ),
+            if unserved.is_empty() { 1 } else { 2 },
+            vec!["Check the inferred arms against the enlarged plans' typical connection".into()],
+            None,
+            false,
+        );
+    }
+    // The air terminals.
+    let duct_rule = super::provenance::rule("M-BRANCH-DUCT");
+    let ducts = super::fillin::terminal_ducts(sp, &duct_rule, &|a, b| storey_key(a) == storey_key(b));
+    let (mut t_needs, mut t_served, mut t_ft) = (0usize, 0usize, 0.0);
+    let mut t_left: Vec<String> = Vec::new();
+    for ((level, sys), f) in ducts {
+        t_needs += f.needs;
+        t_served += f.served;
+        t_ft += f.feet(upf);
+        t_left.extend(f.unserved.iter().take(20).map(|u| format!("{level} {sys}: {u}")));
+        laid.extend(f.runs);
+    }
+    if t_needs > 0 {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Branch ducts inferred to {t_served} of {t_needs} air terminals no duct reaches ({t_ft:.0} ft)"),
+            &format!(
+                "Each is taken off the nearest duct of its system, marked inferred. Basis: {}.{}",
+                duct_rule.basis_for(""),
+                if t_left.is_empty() { String::new() } else { format!(" No duct of the system within reach: {}", t_left.join("; ")) }
+            ),
+            if t_left.is_empty() { 1 } else { 2 },
+            vec!["Check the inferred branches against the mechanical plans".into()],
+            None,
+            false,
+        );
+    }
+    let n = laid.len();
+    sp.mep.runs.extend(laid);
+    json!({
+        "runs": n, "plumbing_runs": n_plumbing, "plumbing": by_system.iter().map(|(k, (n, s, ft))| (k.clone(), json!({"needs": n, "served": s, "ft": (ft * 10.0).round() / 10.0}))).collect::<serde_json::Map<_, _>>(),
+        "by_floor": per_floor, "terminals": {"needs": t_needs, "served": t_served, "ft": (t_ft * 10.0).round() / 10.0, "left": t_left.len()},
+    })
 }
 
 /// The pipes of the guest rooms the plumbing plans show (an enlarged plan draws one or two rooms
@@ -14915,13 +15082,13 @@ fn doc_objects_step(
     if !proposed.is_empty() {
         job.add_finding(
             StageName::BimBuild,
-            &format!("{} object(s) only a note names, proposed where no plan draws them", proposed.len()),
+            &format!("{} object(s) only a note names, built where the note puts them (inferred: no plan draws them)", proposed.len()),
             &format!(
-                "each is in the model as proposed, its location to confirm: {}",
+                "each is in the model and the counts, marked inferred with the note as its basis, never reported as drawn: {}",
                 proposed.iter().take(12).cloned().collect::<Vec<_>>().join("; ")
             ),
-            2,
-            vec!["Locate each on the plans (or ask where it goes) and move it there".into()],
+            1,
+            vec!["Check each place against the plans; move one the plans put elsewhere".into()],
             None,
             false,
         );
@@ -14929,13 +15096,13 @@ fn doc_objects_step(
     if !rule_only.is_empty() {
         job.add_finding(
             StageName::BimBuild,
-            &format!("{} connection(s) only a rule calls for, proposed: not drawn on any sheet and left out of the counts", rule_only.len()),
+            &format!("{} connection(s) only a rule calls for, built and counted as inferred work", rule_only.len()),
             &format!(
-                "no plan, riser or note shows them; the rules data implies one for each object: {}",
+                "no plan, riser or note shows them; the field installs one for each object as the rules data says, so each is in the model marked inferred with the rule as its basis: {}",
                 rule_only.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
             ),
-            2,
-            vec!["Confirm them on the fire alarm or electrical drawings (or with the engineer), then mark them drawn".into()],
+            1,
+            vec!["Check them against the fire alarm or electrical drawings where those show one".into()],
             None,
             false,
         );
@@ -15366,14 +15533,22 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     }
     let over = r["box_fill"]["over"].as_array().map_or(0, Vec::len);
     if over > 0 {
-        job.add_finding(
+        // Corrected for the field (Q6216): each box the next box holds is built with it, its design
+        // box kept beside it; only one no box of the rules holds stays open.
+        let fixed = r["box_fill"]["corrected"].as_u64().unwrap_or(0) as usize;
+        let left = over.saturating_sub(fixed);
+        job.add_conflict(
             StageName::BimBuild,
-            &format!("{over} device box(es) over their NEC 314.16 fill with the routed conductors"),
-            "each lists the conductors, the volume needed and a bigger box (conduit.route {section: \"box_fill\"})",
+            &format!("{over} device box(es) over their NEC 314.16 fill with the routed conductors: {fixed} built with the next larger box, {left} left"),
+            &format!(
+                "each corrected box keeps its design box beside the installed one (bim.provenance {{corrections: true}}); {}{}",
+                r["box_fill"]["rule"].as_str().unwrap_or_default(),
+                if left > 0 { "; the rest need a deeper box, an extension ring or a junction box above (conduit.route {section: \"box_fill\"})" } else { "" }
+            ),
             2,
-            vec!["Use the bigger box or an extension ring, or move a raceway to a junction box".into()],
-            None,
-            false,
+            vec!["Check the larger boxes; move a raceway to a junction box where one is preferred".into()],
+            over,
+            fixed,
         );
     }
     // The takeoff beside the job's own drawing.
@@ -23194,6 +23369,8 @@ mod tests {
             top_ft: None,
             source_sheet: "M-1".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -24587,6 +24764,8 @@ mod tests {
             top_ft: None,
             source_sheet: sheet.into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -24662,6 +24841,8 @@ mod tests {
             top_ft: None,
             source_sheet: "P-9".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         };
         let runs = vec![
             run("SAN", "Level 1"),
@@ -24760,6 +24941,8 @@ mod tests {
             top_ft: None,
             source_sheet: "P-9".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         };
         let runs = vec![
             // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.

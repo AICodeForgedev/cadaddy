@@ -523,3 +523,38 @@ fn a_feeders_raceway_stays_in_the_way_of_the_branch_routes_once_cut_into_pieces(
     assert!(!is_obstacle(&el("conduit", BRANCH_SYSTEM, "@1.00,2.00#0")), "the branch pieces this routing cuts again");
     assert!(!is_obstacle(&el("device", "", "")));
 }
+
+#[test]
+fn an_overfilled_box_is_built_with_the_next_box_and_keeps_its_design_box() {
+    // A 4" square (30.3 cu in) a device's twelve #12 enter, with its ground and a yoke: 33.75 cu
+    // in (314.16(B)). The field sets a 4-11/16" square (42 cu in); the design box stays beside it.
+    let mut d = Drawing::default();
+    let mut ps = props::Props::default();
+    let rule = || props::Source::from_doc(props::SourceKind::Rule, "box rule (made-up)");
+    ps.set(crate::cmd::mepatoms::ATOM_KEY, Prop::new("box", props::Source::computed()));
+    ps.set("box_of", Prop::new("1A2", props::Source::computed()));
+    ps.set("size", Prop::new("4\" square, 2-1/8\" deep", rule()));
+    ps.set("cubic_in", Prop::new("30.3", rule()));
+    let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x1A2), BRANCH_SYSTEM, "box", "4\" square, 2-1/8\" deep", "box", "x/box0");
+    let xdata = props::write(&tags, &ps);
+    let h = d
+        .add(&cadaddy_doc::Space::Model, cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() }, EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let pending = json!({"box_fill": {"pending": [{"device": "1A2", "kind": "receptacle", "level": "L1", "circuit": "LP9-1", "yoke": true, "conductors": [[12, "12"]]}]}});
+    for _ in 0..2 {
+        let mut report = pending.clone();
+        check_box_fill(&mut d, &mut report);
+        let bf = &report["box_fill"];
+        assert_eq!((bf["checked"].as_u64(), bf["corrected"].as_u64()), (Some(1), Some(1)), "{bf}");
+        assert_eq!(bf["over"][0]["corrected"], json!(true), "{bf}");
+        let e = d.model.get(h).unwrap_or_else(|| panic!("the box"));
+        let got = props::read(&e.common.xdata);
+        let t = |k: &str| got.get(k).map(Prop::text).unwrap_or_default();
+        assert_eq!(t("size"), "4-11/16\" square, 2-1/8\" deep", "installed");
+        assert_eq!(t("cubic_in"), "42");
+        // The design value kept, never overwritten by a second check.
+        assert_eq!(t("design:size"), "4\" square, 2-1/8\" deep");
+        assert_eq!(t("design:cubic_in"), "30.3");
+        assert!(t("correction:size").starts_with("E-BOX-FILL"), "{}", t("correction:size"));
+    }
+}

@@ -2094,6 +2094,40 @@ fn is_zero_i16(v: &i16) -> bool {
     *v == 0
 }
 
+/// What an object of the model is by the documents (its provenance): drawn by them, derived
+/// (copied from a named source that matches: another floor's plan, a typical room's), or
+/// inferred (laid in from a rule of the code or of trade practice where nothing draws it). The
+/// one mark every object carries, with its basis beside it when it is not drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Made {
+    #[default]
+    Drawn,
+    Derived,
+    Inferred,
+}
+
+impl Made {
+    pub const ALL: [Made; 3] = [Made::Drawn, Made::Derived, Made::Inferred];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Made::Drawn => "drawn",
+            Made::Derived => "derived",
+            Made::Inferred => "inferred",
+        }
+    }
+
+    /// By its name (any case); `None` for anything else.
+    pub fn parse(s: &str) -> Option<Made> {
+        Made::ALL.into_iter().find(|m| m.as_str().eq_ignore_ascii_case(s.trim()))
+    }
+
+    pub fn is_drawn(&self) -> bool {
+        *self == Made::Drawn
+    }
+}
+
 /// A run: its plan path (sheet units), its size, and the bottom height of each segment (a change
 /// between two is a drop at their corner).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -2137,6 +2171,13 @@ pub struct MepRun {
     /// upstream end.
     #[serde(default, skip_serializing_if = "is_zero_f64")]
     pub slope_in_per_ft: f64,
+    /// What it is by the documents: drawn, derived or inferred ([`Made`]).
+    #[serde(default, skip_serializing_if = "Made::is_drawn")]
+    pub made: Made,
+    /// Why a run no plan draws is in the model: the source it was derived from, or the rule it
+    /// was inferred by. Empty for a drawn run.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub basis: String,
 }
 
 fn is_zero_f64(v: &f64) -> bool {
