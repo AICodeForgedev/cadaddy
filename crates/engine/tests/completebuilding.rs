@@ -62,8 +62,16 @@ fn built(filled: bool) -> Session {
         run("CW", json!([[60.0, 84.0], [480.0, 84.0]]), None),
     ];
     if filled {
-        runs.push(run("HW", json!([[60.0, 96.0], [300.0, 96.0]]), Some(("inferred", "P-BRANCH-WATER: trade practice: a branch teed off the main (made-up)"))));
-        runs.push(run("SA", json!([[24.0, 200.0], [400.0, 200.0]]), Some(("derived", "derived from L2's drawn duct where the rooms stack (made-up)"))));
+        runs.push(run(
+            "HW",
+            json!([[60.0, 96.0], [300.0, 96.0]]),
+            Some(("inferred", "P-BRANCH-WATER: trade practice: a branch teed off the main (made-up)")),
+        ));
+        runs.push(run(
+            "SA",
+            json!([[24.0, 200.0], [400.0, 200.0]]),
+            Some(("derived", "derived from L2's drawn duct where the rooms stack (made-up)")),
+        ));
     }
     let spec = json!({
         "version": 1, "units_per_foot": 12,

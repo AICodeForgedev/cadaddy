@@ -72,10 +72,22 @@
       "default_size_in": 8.0
     },
     {
+      "id": "M-FIRE-DAMPER",
+      "trade": "mechanical",
+      "fills": "a duct through a rated wall where the documents tag no damper",
+      "basis": "code: a duct penetrating a fire-resistance-rated assembly takes a fire damper (IMC 607.5); the field installs one at the wall in the duct's size; alternative: an exception of IMC 607.5 (a fire partition in a sprinklered building, a listed through-penetration) that the engineer may confirm instead"
+    },
+    {
       "id": "A-GRID-COLUMN",
       "trade": "structure",
       "fills": "a column the grid crossing implies where the plans draw none",
       "basis": "trade practice: a structural grid crossing carries a column where the structural plans show the grid but no column outline"
+    },
+    {
+      "id": "E-CLASH-OFFSET",
+      "trade": "electrical",
+      "fills": "a raceway that meets another trade's duct or pipe, or another raceway, at its height where no tier of the ceiling space clears it",
+      "basis": "trade practice: the electrician offsets the raceway under the obstacle (over it where under would drop into the ceiling) with the clearance the routing keeps, a field offset at each side (rules: conduitroute.json clearances)"
     },
     {
       "id": "E-BOX-FILL",

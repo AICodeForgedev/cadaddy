@@ -191,6 +191,12 @@ pub(crate) fn of_element(e: &Entity) -> Option<(Made, String)> {
             return Some((Made::Inferred, if b.is_empty() { rule("A-GRID-COLUMN").basis_for("") } else { b }));
         }
     }
+    // An element a step built from a rule or a matching source says so in its properties
+    // (`prop:STATUS=inferred`, `prop:BASIS=…`).
+    if let Some(m) = super::bimlook::made_prop(e, "STATUS").and_then(Made::parse) {
+        let b = super::bimlook::made_prop(e, "BASIS").unwrap_or_default().to_string();
+        return Some((m, if m.is_drawn() { String::new() } else { b }));
+    }
     if super::bimlook::made_proposed(e) {
         let b = ["NOT_DRAWN", "BASIS", "RULE", "WHY"]
             .iter()
@@ -504,18 +510,21 @@ mod tests {
         let inf = built(&mut d, &["status:inferred", "basis:P-X: a rule"]);
         let col = built(&mut d, &["status:rule"]);
         let prop = built(&mut d, &["prop:STATUS=proposed", "prop:NOT_DRAWN=no document draws it: rules data"]);
+        let by_prop = built(&mut d, &["prop:STATUS=inferred", "prop:BASIS=M-X: a code rule"]);
         let get = |h: Handle| d.entity(h).and_then(|e| of_element(e)).unwrap_or_else(|| panic!("built"));
         assert_eq!(get(drawn), (Made::Drawn, String::new()));
         assert_eq!(get(inf), (Made::Inferred, "P-X: a rule".to_string()));
         assert_eq!(get(col).0, Made::Inferred);
         assert!(!get(col).1.is_empty(), "a rule column says why");
         assert_eq!(get(prop), (Made::Inferred, "no document draws it: rules data".to_string()));
+        assert_eq!(get(by_prop), (Made::Inferred, "M-X: a code rule".to_string()));
     }
 
     #[test]
     fn a_runs_older_marks_and_its_own_are_one_provenance() {
-        let mut r: MepRun = serde_json::from_value(json!({"system": "CW", "level": "1", "points": [[0, 0], [10, 0]], "size_in": [1, 0], "bottoms_ft": [9]}))
-            .unwrap_or_else(|e| panic!("{e}"));
+        let mut r: MepRun =
+            serde_json::from_value(json!({"system": "CW", "level": "1", "points": [[0, 0], [10, 0]], "size_in": [1, 0], "bottoms_ft": [9]}))
+                .unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(of_run(&r).0, Made::Drawn);
         r.height_source = "derived (capped under the floor above)".into();
         r.size_source = "derived from Level 1".into();
@@ -538,7 +547,11 @@ mod tests {
         built(&mut d, &["prop:STATUS=proposed"]);
         built(&mut d, &["status:derived", "basis:copied from Level 1"]);
         // A drawing's own line (not built) is no element.
-        let _ = d.add(&Space::Model, Common::default(), EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_geom::Vec3::new(1.0, 0.0, 0.0) }));
+        let _ = d.add(
+            &Space::Model,
+            Common::default(),
+            EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), b: cadaddy_geom::Vec3::new(1.0, 0.0, 0.0) }),
+        );
         let st = stamp(&mut d);
         assert_eq!(st.elements, 4);
         let s = summary(&d, None, None, None, 10, false);

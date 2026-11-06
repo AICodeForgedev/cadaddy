@@ -1494,7 +1494,11 @@ fn run_count(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = tally_json(&total);
     // Every total split by what it is by the documents (Q6216): drawn, derived, inferred.
     let (_, by_made) = ix.query(&f, Some("made"));
-    out["by_made"] = cadaddy_walk3d::Made::ALL.iter().map(|m| (m.as_str().to_string(), tally_json(&by_made.get(m.as_str()).copied().unwrap_or_default()))).collect::<serde_json::Map<_, _>>().into();
+    out["by_made"] = cadaddy_walk3d::Made::ALL
+        .iter()
+        .map(|m| (m.as_str().to_string(), tally_json(&by_made.get(m.as_str()).copied().unwrap_or_default())))
+        .collect::<serde_json::Map<_, _>>()
+        .into();
     out["from"] = json!(from);
     out["index_rows"] = json!(ix.rows.len());
     out["ms"] = json!((ms * 1000.0).round() / 1000.0);

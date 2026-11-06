@@ -936,7 +936,16 @@ impl GuidedJob {
     /// installs them with the design value kept. Info (severity 1) once every one is corrected;
     /// `severity` while some are left.
     #[allow(clippy::too_many_arguments)]
-    pub fn add_conflict(&mut self, stage: StageName, description: &str, why: &str, severity: u8, actions: Vec<String>, found: usize, corrected: usize) {
+    pub fn add_conflict(
+        &mut self,
+        stage: StageName,
+        description: &str,
+        why: &str,
+        severity: u8,
+        actions: Vec<String>,
+        found: usize,
+        corrected: usize,
+    ) {
         let corrected = corrected.min(found);
         self.add_finding(stage, description, why, if corrected >= found { 1 } else { severity }, actions, None, false);
         if let Some(f) = self.findings.last_mut() {
@@ -6384,18 +6393,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         c.pointer("/totals/labor_hours").and_then(Value::as_f64).unwrap_or(0.0)
                     )
                 });
-                job.add_finding(
+                // Corrected for the field (Q6216): each circuit whose first receptacle the model
+                // holds gets it as a GFCI device, the drawings' standard type kept beside it.
+                let fixed =
+                    v.get("gfci_circuits").and_then(Value::as_array).map_or(0, |a| a.iter().filter(|c| c["corrected"] == json!(true)).count());
+                job.add_conflict(
                     StageName::BimBuild,
                     &format!(
-                        "{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {}{cost}",
+                        "{} receptacle circuits in places needing GFCI have breakers that aren't GFCI: {fixed} built with a GFCI receptacle first: {}{cost}",
                         places.len(),
                         places.join("; ")
                     ),
-                    "a receptacle in an elevator pit, car or hoistway, on a roof, outdoors, in a garage, bathroom or laundry needs GFCI (NEC 620.6, 210.8); the breaker isn't, so the first receptacle on the circuit is a GFCI device",
+                    "a receptacle in an elevator pit, car or hoistway, on a roof, outdoors, in a garage, bathroom or laundry needs GFCI (NEC 620.6, 210.8); the breaker isn't, so the first receptacle on the circuit is a GFCI device (its drawn type kept as the design value); a circuit with no receptacle in the model stays open",
                     3,
-                    vec!["Build (and buy) a GFCI receptacle first on each, or confirm the breaker is GFCI".into()],
-                    None,
-                    false,
+                    vec!["Check the GFCI receptacles, or confirm the breaker is GFCI".into()],
+                    places.len(),
+                    fixed,
                 );
             }
             let undecided = v.pointer("/gfci/undecided").and_then(Value::as_u64).unwrap_or(0);
@@ -10602,7 +10615,10 @@ fn fill_in_rest(
                 e.1 += f.served;
                 e.2 += ft;
                 unserved.extend(f.unserved.iter().take(20).map(|u| format!("{level}: {u}")));
-                here.insert(sys, json!({"needs": f.needs, "served": f.served, "runs": f.runs.len(), "ft": (ft * 10.0).round() / 10.0, "unserved": f.unserved}));
+                here.insert(
+                    sys,
+                    json!({"needs": f.needs, "served": f.served, "runs": f.runs.len(), "ft": (ft * 10.0).round() / 10.0, "unserved": f.unserved}),
+                );
                 laid.extend(f.runs);
             }
         }
@@ -14036,6 +14052,50 @@ fn dampers_step(
         .flat_map(|c| book.check_mechanical(std::slice::from_ref(c)).into_iter().filter(|f| f.rule_id.contains("fire_damper")).map(move |f| (c, f)))
         .map(|(c, f)| json!({"duct": c.id, "level": c.level, "wall": c.location, "rule": f.rule_id, "cite": f.cite}))
         .collect();
+    // Each crossing the code wants a damper at and the documents tag none: the field installs
+    // one (Q6216, `M-FIRE-DAMPER`), built inferred at the crossing in the duct with its basis,
+    // the exception left as the alternative.
+    let fd_rule = super::provenance::rule("M-FIRE-DAMPER");
+    let mut dampers_inferred = 0usize;
+    for (k, c) in open.iter().enumerate().take(10_000) {
+        let (Some(d), Some(w)) = (ducts.get(c.duct), walls.get(c.wall)) else { continue };
+        let bottom = d.bottoms_ft.get(c.segment).or(d.bottoms_ft.last()).copied().filter(|v| v.is_finite()).unwrap_or(9.0);
+        let (wd, ht) = (d.size_in[0].max(4.0), if d.size_in[1] > 0.0 { d.size_in[1] } else { d.size_in[0] }.max(4.0));
+        let half = (wd / 2.0 + 1.0) / 12.0 * upf;
+        let tag = format!("FD-R{}", k + 1);
+        let mut props: BTreeMap<String, String> = BTreeMap::new();
+        props.insert("STATUS".into(), "inferred".into());
+        props.insert(
+            "BASIS".into(),
+            fd_rule.basis_for(&format!(
+                "{} {} duct through a {} wall ({})",
+                d.system,
+                size_label(d.size_in),
+                w.rating.clone().unwrap_or_default(),
+                w.wall_type
+            )),
+        );
+        props.insert("DESIGN".into(), "no damper tagged at this rated wall".into());
+        let mut sources = BTreeMap::new();
+        sources.insert("position".to_string(), "at the duct's crossing of the rated wall (the code's check)".to_string());
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: tag.clone(),
+            kind: "fire_damper".into(),
+            level: d.level.clone(),
+            min: [c.at.x - half, c.at.y - half],
+            max: [c.at.x + half, c.at.y + half],
+            bottom_ft: bottom,
+            height_ft: (ht / 12.0).max(0.1),
+            systems: vec![d.system.clone()],
+            title: format!("Fire damper (inferred: {})", fd_rule.id),
+            properties: props,
+            sources,
+            confidence: 0.4,
+            ..Default::default()
+        });
+        new_equipment.insert(tag.to_ascii_uppercase());
+        dampers_inferred += 1;
+    }
     // The model's new elements.
     let n_runs = runs.len();
     let made = build_new_mep(s, sp.clone(), runs, &new_equipment)?;
@@ -14065,18 +14125,21 @@ fn dampers_step(
             .filter(|k| k["kind"].as_str().and_then(dampers::kind_rule).is_some_and(|x| x.rated))
             .map(|k| format!("{} keynote {}", k["sheet"].as_str().unwrap_or_default(), k["number"].as_str().unwrap_or_default()))
             .collect();
-        job.add_finding(
+        job.add_conflict(
             StageName::BimBuild,
-            &format!("{} duct crossing(s) of rated walls with no damper tagged (IMC 607.5)", code_findings.len()),
+            &format!(
+                "{} duct crossing(s) of rated walls with no damper tagged (IMC 607.5): {dampers_inferred} fire dampers built at them, inferred",
+                code_findings.len()
+            ),
             &format!(
                 "fire/smoke damper required at rated assembly unless an exception applies (IMC 607.5.x, e.g. a fire partition in a sprinklered building){}: {}",
                 if typical.is_empty() { String::new() } else { format!("; keynotes calling for rated dampers that may cover some (typical room plans, not placed per room): {}", typical.join(", ")) },
                 what.join("; ")
             ),
             3,
-            vec!["Check each crossing on the mechanical plans: a damper there, a rated wall that isn't, or a question for the engineer".into()],
-            None,
-            false,
+            vec!["Check each crossing on the mechanical plans: a damper there, a rated wall that isn't, or an exception that applies (then remove the inferred damper)".into()],
+            code_findings.len(),
+            dampers_inferred,
         );
     }
     if !wall_model.is_empty() {
@@ -15478,14 +15541,35 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     );
     progress_line(&line);
     if n("clashes") > 0 {
-        job.add_finding(
+        // Corrected for the field (Q6216): each the ceiling space can take is offset under (else
+        // over) the obstacle, the design height kept beside the installed one.
+        let fixed = r["clashes_corrected"].as_u64().unwrap_or(0) as usize;
+        job.add_conflict(
             StageName::BimBuild,
-            &format!("{} conduit clash(es) the router could not route around: {}", n("clashes"), pairs.join("; ")),
-            "each is a review item of kind clash with both objects, the spot, the clearance needed and a fix (conduit.route {section: \"clashes\"})",
+            &format!(
+                "{} conduit clash(es) the router could not route around: {fixed} built with a field offset, {} left: {}",
+                n("clashes"),
+                n("clashes").saturating_sub(fixed),
+                pairs.join("; ")
+            ),
+            "each offset keeps the routed height as its design value beside the installed one (bim.provenance {corrections: true}); each left is a review item of kind clash with both objects, the spot, the clearance needed and a fix (conduit.route {section: \"clashes\"})",
             2,
-            vec!["Coordinate each clash with the other trade, or accept the suggested offset".into()],
-            None,
-            false,
+            vec!["Coordinate each clash left with the other trade (a sleeve, a move)".into()],
+            n("clashes"),
+            fixed,
+        );
+    }
+    // Conductors the routing upsized for voltage drop: corrected, the design conductors kept on
+    // each circuit's tag (Q6216).
+    if n("conductors_upsized") > 0 {
+        job.add_conflict(
+            StageName::BimBuild,
+            &format!("{} circuit(s) too long for their conductors: built with the next size, the design conductors kept", n("conductors_upsized")),
+            "each circuit keeps its design conductors beside the installed ones (conduit.route {section: \"conductors_upsized\"}): the documents' length table or 3% voltage drop",
+            2,
+            vec!["Check the upsized conductors against the circuits' loads".into()],
+            n("conductors_upsized"),
+            n("conductors_upsized"),
         );
     }
     if n("conflicts") > 0 {
@@ -15539,11 +15623,17 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         let left = over.saturating_sub(fixed);
         job.add_conflict(
             StageName::BimBuild,
-            &format!("{over} device box(es) over their NEC 314.16 fill with the routed conductors: {fixed} built with the next larger box, {left} left"),
+            &format!(
+                "{over} device box(es) over their NEC 314.16 fill with the routed conductors: {fixed} built with the next larger box, {left} left"
+            ),
             &format!(
                 "each corrected box keeps its design box beside the installed one (bim.provenance {{corrections: true}}); {}{}",
                 r["box_fill"]["rule"].as_str().unwrap_or_default(),
-                if left > 0 { "; the rest need a deeper box, an extension ring or a junction box above (conduit.route {section: \"box_fill\"})" } else { "" }
+                if left > 0 {
+                    "; the rest need a deeper box, an extension ring or a junction box above (conduit.route {section: \"box_fill\"})"
+                } else {
+                    ""
+                }
             ),
             2,
             vec!["Check the larger boxes; move a raceway to a junction box where one is preferred".into()],

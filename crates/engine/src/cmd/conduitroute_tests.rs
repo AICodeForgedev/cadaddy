@@ -538,7 +538,11 @@ fn an_overfilled_box_is_built_with_the_next_box_and_keeps_its_design_box() {
     let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x1A2), BRANCH_SYSTEM, "box", "4\" square, 2-1/8\" deep", "box", "x/box0");
     let xdata = props::write(&tags, &ps);
     let h = d
-        .add(&cadaddy_doc::Space::Model, cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() }, EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()))
+        .add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() },
+            EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()),
+        )
         .unwrap_or_else(|e| panic!("{e}"));
     let pending = json!({"box_fill": {"pending": [{"device": "1A2", "kind": "receptacle", "level": "L1", "circuit": "LP9-1", "yoke": true, "conductors": [[12, "12"]]}]}});
     for _ in 0..2 {

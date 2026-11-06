@@ -295,7 +295,11 @@ fn a_receptacle_with_no_circuit_is_put_on_a_spare_routed_and_marked_inferred() {
     let mut s = building(tags, vec![row(1, "RECEPTACLES", 20, "12"), row(3, "SPARE", 20, ""), row(5, "SPACE", 0, "")], None);
     let r = report(&mut s);
     let i = &r["inferred_circuits"];
-    assert_eq!((i["total"].as_u64(), i["devices"].as_u64()), (Some(1), Some(1)), "the receptacle only (a smoke detector is not a branch power device): {i}");
+    assert_eq!(
+        (i["total"].as_u64(), i["devices"].as_u64()),
+        (Some(1), Some(1)),
+        "the receptacle only (a smoke detector is not a branch power device): {i}"
+    );
     let it = &i["items"][0];
     assert_eq!((it["panel"].as_str(), it["breaker"].as_str(), it["circuit"].as_str()), (Some("LP1"), Some("spare 3"), Some("LP1-3")), "{it}");
     assert_eq!(it["made"], json!("inferred"));

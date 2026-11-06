@@ -294,6 +294,8 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         }
     }
     let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut corrected_circuits: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut gfci_corrected = 0usize;
     let mut tr_count = 0usize;
     let (mut stated, mut not_stated) = (0usize, 0usize);
     let rule_src = |r: &CodeRule, why: &str| Source::from_doc(SourceKind::Rule, &format!("{} {}: {why}", r.cite, r.id));
@@ -425,9 +427,29 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             }
             (false, None) => {}
         }
+        // A receptacle the documents draw standard that the code makes its circuit's GFCI: the
+        // field installs the GFCI, the drawings' type kept beside it (Q6216).
+        if !r.tagged && store.get("receptacle_type").is_some_and(|p| p.text() == "GFCI" && p.source.kind == SourceKind::Rule) {
+            let c = super::provenance::Correction {
+                key: "receptacle_type".into(),
+                design: "standard".into(),
+                corrected: "GFCI".into(),
+                reason: why.clone(),
+                rule: format!("{} {}", gf.id, gf.cite),
+            };
+            if super::provenance::correct(&mut store, &c, Source::from_doc(SourceKind::Print, "the drawings' receptacle, not tagged GFCI")) {
+                corrected_circuits.insert((text(&r.store, "panel").to_ascii_uppercase(), text(&r.store, "circuit")));
+                gfci_corrected += 1;
+            }
+        }
         if store != before {
             changes.push((r.handle, store));
         }
+    }
+    // The schedules' GFCI places: corrected where the circuit's first receptacle was built GFCI.
+    for g in &mut gfci_circuits {
+        let key = (g["panel"].as_str().unwrap_or_default().to_ascii_uppercase(), g["circuit"].as_str().unwrap_or_default().to_string());
+        g["corrected"] = json!(corrected_circuits.contains(&key));
     }
     let d = s.doc_mut()?;
     let mut changed = 0usize;
@@ -447,6 +469,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         "tr_documented": {"stated": stated, "not_stated": not_stated},
         "gfci": tally,
         "gfci_circuits": gfci_circuits,
+        "gfci_corrected": gfci_corrected,
         "rules": all.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
     }))
 }

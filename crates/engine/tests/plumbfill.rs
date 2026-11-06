@@ -126,7 +126,8 @@ fn a_filled_in_main_is_built_apart_counted_apart_and_named_on_its_fixtures() {
     assert!(p["cold_water"]["value"].as_str().is_some(), "connected to the drawn main: {p:#}");
     assert!(!p["cold_water"]["note"].as_str().unwrap_or("").contains("no plan draws it"), "{p:#}");
     // Drawn work says it is drawn (Q6216: every built element carries its provenance), never filled in.
-    let filled = drawn.doc().expect("doc").model.iter().any(|e| e.common.xdata.iter().any(|t| t.value == "status:derived" || t.value == "status:inferred"));
+    let filled =
+        drawn.doc().expect("doc").model.iter().any(|e| e.common.xdata.iter().any(|t| t.value == "status:derived" || t.value == "status:inferred"));
     assert!(!filled, "drawn work carries no filled-in status");
 
     // Derived or inferred: its own layer (and nothing on the drawn one), its status and basis, its

@@ -104,7 +104,13 @@ pub(crate) fn fixture_lines(
             .take(MAX_ITEMS)
             .filter(|f| f.lines.iter().any(|l| l == sys))
             .filter(|f| !reached(floor_runs, sys, stack_vents, f.at, reach))
-            .map(|f| Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in: rule.size_for(&f.words), segs: Vec::new() })
+            .map(|f| Need {
+                system: sys.clone(),
+                pts: vec![f.at],
+                what: format!("fixture {}", f.what),
+                size_in: rule.size_for(&f.words),
+                segs: Vec::new(),
+            })
             .collect();
         if needs.is_empty() {
             continue;
@@ -192,7 +198,8 @@ impl Tally {
 /// Whether a device kind takes power: a power device of the routing's rules, a luminaire or sign.
 fn takes_power(kind: &str) -> bool {
     let k = kind.to_ascii_lowercase().replace('_', " ");
-    super::conduitroute::gap::is_power_device(&k) || ["luminaire", "light", "fixture", "exit", "fan"].iter().any(|w| k.contains(w)) && !k.contains("plumbing")
+    super::conduitroute::gap::is_power_device(&k)
+        || ["luminaire", "light", "fixture", "exit", "fan"].iter().any(|w| k.contains(w)) && !k.contains("plumbing")
 }
 
 /// What is connected, per trade (Q6216): each plumbing fixture to every line it takes (as the
@@ -254,10 +261,14 @@ pub(crate) fn connections(d: &Drawing, sp: Option<&BuildingSpec>) -> Value {
         let reach = rule.connect_reach_ft.max(0.0) * upf;
         let ducts = duct_systems(sp);
         for t in sp.mep.terminals.iter().take(MAX_ITEMS).filter(|t| air_terminal(&t.terminal_kind)) {
-            let floor: Vec<&MepRun> = sp.mep.runs.iter().filter(|r| ducts.contains(&r.system.as_str()) && r.level.eq_ignore_ascii_case(&t.level)).collect();
+            let floor: Vec<&MepRun> =
+                sp.mep.runs.iter().filter(|r| ducts.contains(&r.system.as_str()) && r.level.eq_ignore_ascii_case(&t.level)).collect();
             let own = reached(&floor, &t.system, &[], t.at, reach);
             filled_terminals += usize::from(
-                own && floor.iter().filter(|r| r.system == t.system && !super::provenance::made_of_run(r).is_drawn()).any(|r| reached(&[*r], &t.system, &[], t.at, reach)),
+                own && floor
+                    .iter()
+                    .filter(|r| r.system == t.system && !super::provenance::made_of_run(r).is_drawn())
+                    .any(|r| reached(&[*r], &t.system, &[], t.at, reach)),
             );
             terminals.add(own, &t.level, || format!("{} {} {}", t.terminal_kind, t.system, t.level));
         }
@@ -339,16 +350,21 @@ mod tests {
     fn an_air_terminal_no_duct_reaches_gets_a_branch_duct_at_its_neck_size() {
         let mut sp = BuildingSpec::default();
         sp.units_per_foot = 12.0;
-        sp.mep.systems = vec![serde_json::from_value(json!({"name": "SA", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 10], "bottom_ft": 9.0}))
-            .unwrap_or_else(|e| panic!("{e}"))];
+        sp.mep.systems = vec![
+            serde_json::from_value(json!({"name": "SA", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 10], "bottom_ft": 9.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        ];
         let mut duct = run("SA", &[[0.0, 0.0], [80.0, 0.0]]);
         duct.size_in = [14.0, 10.0];
         sp.mep.runs = vec![duct];
         let t = |x: f64, y: f64, neck: f64, kind: &str| -> cadaddy_walk3d::MepTerminal {
-            serde_json::from_value(json!({"system": "SA", "level": "2", "at": [x * 12.0, y * 12.0], "size_in": [neck, 0], "bottom_ft": 9.0, "terminal_kind": kind}))
-                .unwrap_or_else(|e| panic!("{e}"))
+            serde_json::from_value(
+                json!({"system": "SA", "level": "2", "at": [x * 12.0, y * 12.0], "size_in": [neck, 0], "bottom_ft": 9.0, "terminal_kind": kind}),
+            )
+            .unwrap_or_else(|e| panic!("{e}"))
         };
-        sp.mep.terminals = vec![t(10.0, 4.0, 10.0, "supply_diffuser"), t(40.0, 25.0, 0.0, "supply_diffuser"), t(30.0, 30.0, 0.0, "sprinkler_pendent")];
+        sp.mep.terminals =
+            vec![t(10.0, 4.0, 10.0, "supply_diffuser"), t(40.0, 25.0, 0.0, "supply_diffuser"), t(30.0, 30.0, 0.0, "sprinkler_pendent")];
         let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
         let rule = super::super::provenance::rule("M-BRANCH-DUCT");
         let got = terminal_ducts(&sp, &rule, &same);
