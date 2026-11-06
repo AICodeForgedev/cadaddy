@@ -395,6 +395,15 @@ fn breakers_as_built_outrank_the_printed_schedule() {
     s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
     s.execute("bim.coderules", &json!({})).unwrap();
     assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
+    // The print's GFCI tag and what is built instead, side by side.
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "type_mark", "value": "GFCI"})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    let hs = find(&mut s, "device", json!({"type_mark": "GFCI"}));
+    let a = get(&mut s, &hs[0]);
+    assert_eq!(a["design_value"]["value"], "GFCI", "{a:#}");
+    assert_eq!(a["corrected_value"]["value"], "standard");
+    assert!(a["correction_reason"]["value"].as_str().is_some_and(|r| r.contains("double protection")), "{a:#}");
+    assert_eq!(a["correction_rule"]["value"], "NEC 210.8");
     // The panel's schedule says so too: what was built, and what was printed.
     let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
     let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
@@ -445,6 +454,8 @@ fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
     assert_eq!(a["receptacle_type"]["value"], "standard");
     assert_eq!(a["receptacle_type"]["source"]["kind"], "rule");
+    // (The print doesn't tag it GFCI, so nothing was corrected.)
+    assert!(a["corrected_value"].is_null(), "{a:#}");
     assert!(a["tamper_resistant"].is_null(), "{a:#}");
     assert_eq!(a["tr_documented"]["value"], "not stated in the documents");
     // As a guest room (a typical unit fitted into it), every receptacle is TR.

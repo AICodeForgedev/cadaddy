@@ -53,18 +53,18 @@
       "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)), or in a place below (its circuit's description or its room's name has all of a place's words); it is decided by its circuit like a tagged one.",
       "receptacle_words": ["RCPT", "RCPTS", "RECEPT", "RECEPTS", "RECEPTACLE", "RECEPTACLES", "OUTLET", "OUTLETS", "GFCI", "GFI"],
       "places": [
-        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)"},
-        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)"},
-        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)"},
-        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)"},
-        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
         {"all": ["ROOF"], "cite": "NEC 210.8(B) (rooftop)"},
         {"all": ["EXTERIOR"], "cite": "NEC 210.8 (outdoors)"},
         {"all": ["OUTDOOR"], "cite": "NEC 210.8 (outdoors)"},
-        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)"},
-        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)"},
-        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)"},
-        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)"}
+        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)", "rooms": ["GARAGE"]},
+        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)", "rooms": ["BATH","BATHROOM","TOILET","RR","RESTROOM"]},
+        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)", "rooms": ["RR","RESTROOM","TOILET"]},
+        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)", "rooms": ["LAUNDRY"]}
       ]
     },
     {

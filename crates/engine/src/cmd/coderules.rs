@@ -82,6 +82,96 @@ pub(crate) struct CodeRule {
 pub(crate) struct Place {
     pub all: Vec<String>,
     pub cite: String,
+    /// Words a room's name has when it is such a place: where a circuit nothing is drawn on is
+    /// built.
+    #[serde(default)]
+    pub rooms: Vec<String>,
+}
+
+/// The receptacle circuits a panel schedule calls for in a place the code names (`RCPT - ELEVATOR
+/// CAB`) with no receptacle on any plan: the schedule says it is there, the plans are silent, so
+/// it is built in a room of that place, on its longest wall, from the schedule and the code, its
+/// basis stored on it (GFCI unless its breaker is). `rooms`: name, level, outline (model units).
+/// What was built, a line each, and the circuits with no room to put them in.
+pub(crate) fn silent_place_receptacles(
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    rooms: &[(String, String, Vec<cadaddy_geom::Vec2>)],
+) -> (Vec<String>, Vec<String>) {
+    let Some(gf) = rules().into_iter().find(|r| r.sets == "gfci") else { return (Vec::new(), Vec::new()) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let same_level = |a: &str, b: &str| {
+        let (a, b) = (a.trim().to_ascii_uppercase(), b.trim().to_ascii_uppercase());
+        a == b || a.ends_with(&format!(" {b}")) || b.ends_with(&format!(" {a}"))
+    };
+    let on_plans: BTreeSet<String> = sp
+        .tags
+        .iter()
+        .filter(|t| t.kind == "receptacle")
+        .filter_map(|t| t.fields.get("circuit"))
+        .map(|f| f.value.split(',').next().unwrap_or_default().trim().to_ascii_uppercase())
+        .collect();
+    let levels: Vec<String> = sp.levels.iter().map(|l| l.name.clone()).collect();
+    let (mut built, mut no_room) = (Vec::new(), Vec::new());
+    let mut new_tags = Vec::new();
+    let mut used: BTreeMap<usize, usize> = BTreeMap::new();
+    for p in &sp.mep.panel_schedules {
+        for c in &p.circuits {
+            let up = c.description.to_ascii_uppercase();
+            let receptacles = up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| gf.receptacle_words.iter().any(|r| r == w));
+            let Some(place) = place_of(&gf.places, &c.description).filter(|_| receptacles) else { continue };
+            let circuit = format!("{}-{}", p.panel.trim(), c.number.trim());
+            if place.rooms.is_empty() || on_plans.contains(&circuit.to_ascii_uppercase()) {
+                continue;
+            }
+            // A room of the place, on the lowest level that has one.
+            let names_it = |name: &str| {
+                let up = name.to_ascii_uppercase();
+                up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| place.rooms.iter().any(|r| r == w))
+            };
+            let found = levels
+                .iter()
+                .find_map(|l| rooms.iter().position(|(n, rl, o)| same_level(rl, l) && o.len() >= 3 && names_it(n)).map(|i| (i, l.clone())));
+            let Some((i, level)) = found else {
+                no_room.push(format!("{circuit} {}", c.description.trim()));
+                continue;
+            };
+            let Some((name, _, outline)) = rooms.get(i) else { continue };
+            // Along its longest wall, a third of the way for the first, on from there for the next.
+            let edges = outline.iter().zip(outline.iter().cycle().skip(1));
+            let Some((a, b)) = edges.max_by(|x, y| x.0.dist(*x.1).total_cmp(&y.0.dist(*y.1))) else { continue };
+            let nth = used.entry(i).or_insert(0);
+            let t = f64::from(*nth as u32 + 1) / 4.0;
+            *nth += 1;
+            let at = *a + (*b - *a) * t.min(0.9);
+            let breaker_gf = c.protection.iter().any(|code| gf.tags.iter().any(|t| t.eq_ignore_ascii_case(code)));
+            let (mark, item) = if breaker_gf { ("REC", "duplex receptacle") } else { ("GFCI", "GFCI receptacle") };
+            let source = if p.source.trim().is_empty() { "panel schedule".to_string() } else { p.source.trim().to_string() };
+            let mut tag = cadaddy_walk3d::tags::ElementTag {
+                id: format!("device:{level}:{:.1},{:.1}", at.x / upf, at.y / upf),
+                kind: "receptacle".into(),
+                level: level.clone(),
+                at_ft: [at.x / upf, at.y / upf],
+                ..Default::default()
+            };
+            tag.set("type", mark, "rule");
+            tag.set("device_type", item, "rule");
+            tag.set("circuit", circuit.clone(), "schedule");
+            tag.set("sheet", source.clone(), "schedule");
+            tag.set("symbol", "0", "rule");
+            tag.set("design_value", "no receptacle drawn", "plan");
+            tag.set("corrected_value", item, "rule");
+            tag.set(
+                "correction_reason",
+                format!("{source} panel {} circuit {} calls for {} but no plan draws it", p.panel.trim(), c.number.trim(), c.description.trim()),
+                "rule",
+            );
+            tag.set("correction_rule", place.cite.clone(), "rule");
+            built.push(format!("{circuit} {}: {item} in {name} on {level} ({})", c.description.trim(), place.cite));
+            new_tags.push(tag);
+        }
+    }
+    sp.tags.extend(new_tags);
+    (built, no_room)
 }
 
 /// The place a name is in (`RCPT - ELEVATOR PIT` → elevator pit), if any.
@@ -285,7 +375,12 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             let receptacles = up.split(|ch: char| !ch.is_ascii_alphanumeric()).any(|w| gf.receptacle_words.iter().any(|r| r == w));
             let Some(pl) = place_of(&gf.places, &c.description).filter(|_| receptacles) else { continue };
             let breaker_gf = c.protection.iter().any(|code| gf.tags.iter().any(|t| t.eq_ignore_ascii_case(code)));
-            if !breaker_gf {
+            // One the model has decides for itself below; this is what it has none of.
+            let built = recs.iter().any(|r| {
+                text(&r.store, "panel").eq_ignore_ascii_case(p.panel.trim())
+                    && text(&r.store, "circuit").rsplit(['-', '/', '.']).next().is_some_and(|n| n.trim() == c.number.trim())
+            });
+            if !breaker_gf && !built {
                 gfci_circuits.push(json!({
                     "panel": p.panel, "circuit": c.number, "description": c.description, "rule": pl.cite,
                     "needs": "a GFCI receptacle (the first on the circuit): its breaker isn't GFCI",
@@ -294,6 +389,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         }
     }
     let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut corrections = 0usize;
     let mut tr_count = 0usize;
     let (mut stated, mut not_stated) = (0usize, 0usize);
     let rule_src = |r: &CodeRule, why: &str| Source::from_doc(SourceKind::Rule, &format!("{} {}: {why}", r.cite, r.id));
@@ -338,7 +434,8 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         let mut store = r.store.clone();
         let before = store.clone();
         let mut set = |key: &str, value: Value, source: Source, note: Option<&str>| {
-            let keep = store.get(key).is_some_and(|old| old.source.kind == SourceKind::User);
+            // A person's edit stays; the rule run again from the same word (breakers as built) doesn't.
+            let keep = store.get(key).is_some_and(|old| old.source.kind == SourceKind::User && old.source != source);
             if !keep {
                 let p = Prop::new(value, source);
                 store.set(key, if let Some(n) = note { p.with_note(n) } else { p });
@@ -425,6 +522,23 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             }
             (false, None) => {}
         }
+        // What the drawing says, and what is built instead of it: side by side, never silently.
+        let decided = store.get("receptacle_type").filter(|p| p.has_value()).map(Prop::text).unwrap_or_default();
+        let printed = if r.tagged { "GFCI" } else { "standard" };
+        if !decided.is_empty() && !decided.eq_ignore_ascii_case(printed) {
+            let why = store.get("receptacle_type").map(|p| p.source.clone()).unwrap_or_else(Source::computed);
+            let reason = store.get("gfci").and_then(|p| p.note.clone()).or_else(|| why.doc.clone()).unwrap_or_default();
+            let mut put = |k: &str, v: String| {
+                if store.get(k).is_none_or(|old| old.source.kind != SourceKind::User) {
+                    store.set(k, Prop::new(json!(v), why.clone()));
+                }
+            };
+            put("design_value", printed.to_string());
+            put("corrected_value", decided);
+            put("correction_reason", reason);
+            put("correction_rule", gf.cite.clone());
+            corrections += 1;
+        }
         if store != before {
             changes.push((r.handle, store));
         }
@@ -446,6 +560,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         "tamper_resistant": tr_count,
         "tr_documented": {"stated": stated, "not_stated": not_stated},
         "gfci": tally,
+        "corrections": corrections,
         "gfci_circuits": gfci_circuits,
         "rules": all.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
     }))
@@ -506,6 +621,49 @@ fn tags_follow_decisions(s: &mut Session) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A schedule's receptacle circuit in a code place that no plan draws is built in such a room,
+    /// its basis on it; one the plans have, or with no such room, isn't.
+    #[test]
+    fn a_receptacle_a_schedule_calls_for_and_no_plan_draws_is_built() {
+        let v = |x: f64, y: f64| cadaddy_geom::Vec2::new(x, y);
+        let mut sp = cadaddy_walk3d::BuildingSpec::from_json(
+            r#"{"version": 1, "units_per_foot": 12, "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}]}"#,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let ckt = |n: &str, d: &str, codes: &[&str]| cadaddy_walk3d::PanelCircuit {
+            number: n.into(),
+            description: d.into(),
+            protection: codes.iter().map(|c| (*c).to_string()).collect(),
+            ..Default::default()
+        };
+        sp.mep.panel_schedules.push(cadaddy_walk3d::PanelSchedule {
+            panel: "E".into(),
+            source: "E-2".into(),
+            circuits: vec![
+                ckt("7", "RCPT - ELEVATOR CAB", &[]),
+                ckt("9", "RCPT - ELEVATOR SHAFT", &["GF"]),
+                ckt("11", "RCPT - PUBLIC RESTROOM", &[]),
+                ckt("13", "RCPT - ROOF", &[]),
+                ckt("15", "LTG - ELEVATOR PIT", &[]),
+            ],
+            ..Default::default()
+        });
+        let rooms = vec![("ELEV.".to_string(), "1".to_string(), vec![v(0.0, 0.0), v(120.0, 0.0), v(120.0, 60.0), v(0.0, 60.0)])];
+        let (built, no_room) = silent_place_receptacles(&mut sp, &rooms);
+        assert_eq!(built.len(), 2, "{built:?}");
+        assert_eq!(no_room, ["E-11 RCPT - PUBLIC RESTROOM"]);
+        let t = |c: &str| sp.tags.iter().find(|t| t.fields.get("circuit").is_some_and(|f| f.value == c)).expect("built");
+        assert_eq!(t("E-7").fields["device_type"].value, "GFCI receptacle");
+        assert_eq!(t("E-7").fields["design_value"].value, "no receptacle drawn");
+        assert!(t("E-7").fields["correction_rule"].value.contains("620.6"));
+        // Under a GFCI breaker it is a standard one; two in a room don't share a spot.
+        assert_eq!(t("E-9").fields["device_type"].value, "duplex receptacle");
+        assert_ne!(t("E-7").id, t("E-9").id);
+        // The plans have it now: built once.
+        let (again, _) = silent_place_receptacles(&mut sp, &rooms);
+        assert!(again.is_empty(), "{again:?}");
+    }
 
     #[test]
     fn a_receptacles_item_follows_its_decisions() {
