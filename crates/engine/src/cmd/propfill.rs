@@ -1683,6 +1683,28 @@ pub(crate) fn ring_depths(d: &Drawing) -> HashMap<String, f64> {
         .collect()
 }
 
+/// The devices that share a box with others (`mepatoms` rules `gang`), by tag: the gangs of
+/// its box for the first of them (it carries the box's one plate), 0 for the rest.
+pub(crate) fn gang_plates(d: &Drawing) -> HashMap<String, usize> {
+    let devid: HashMap<Handle, String> = d.model.iter().take(MAX_ELEMENTS).filter_map(|e| Some((e.handle, made(e, DEVID)?))).collect();
+    let mut out = HashMap::new();
+    for e in d.model.iter().take(MAX_ELEMENTS) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
+            continue;
+        }
+        let Some(list) = ps.get("devices").map(Prop::text) else { continue };
+        let ids: Vec<&String> = list.split(',').take(16).filter_map(|h| Handle::parse_hex(h.trim())).filter_map(|h| devid.get(&h)).collect();
+        if ids.len() < 2 {
+            continue;
+        }
+        for (i, id) in ids.iter().enumerate() {
+            out.insert((*id).clone(), if i == 0 { ids.len() } else { 0 });
+        }
+    }
+    out
+}
+
 fn made(e: &Entity, key: &str) -> Option<String> {
     super::bimlook::made_tag(e, key).map(str::to_string).filter(|v| !v.trim().is_empty())
 }

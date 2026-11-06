@@ -33,6 +33,14 @@ struct DevBox {
     atom: usize,
 }
 
+/// Equipment fed in its own wiring compartment (no box of ours): where its runs end in it.
+struct DirectDev {
+    device: Handle,
+    level: String,
+    circuit: String,
+    at: Vec3,
+}
+
 /// A gear element (a panel) a home run can end at.
 struct Gear {
     handle: Handle,
@@ -101,6 +109,102 @@ fn on_circuit(boxc: &str, circuit: &str) -> bool {
         (Some((pb, nb)), Some((pc, nc))) => pb == pc && nb.iter().all(|n| nc.contains(n)),
         _ => false,
     }
+}
+
+/// A wall device that may share a box with its neighbours (rules `gang`): its level, its
+/// family, its wall face's direction, its plan centre and its height (sheet units).
+pub(crate) struct GangSpot {
+    pub level: String,
+    pub family: String,
+    pub normal: Vec2,
+    pub at: Vec2,
+    pub z: f64,
+}
+
+/// Most neighbour pairs looked at when ganging (hostile specs).
+const MAX_GANG_PAIRS: usize = 4_000_000;
+
+/// The union-find root of `i` (path halving, bounded).
+fn gang_root(parent: &mut [usize], mut i: usize) -> usize {
+    for _ in 0..64 {
+        let Some(&p) = parent.get(i) else { break };
+        if p == i {
+            break;
+        }
+        let gp = parent.get(p).copied().unwrap_or(p);
+        if let Some(x) = parent.get_mut(i) {
+            *x = gp;
+        }
+        i = gp;
+    }
+    i
+}
+
+/// The devices that share a box: groups (indices into `spots`) of two or more of one family on
+/// one level and one wall face, each within `reach` along the wall of a neighbour, `height` of
+/// its mounting height and `face` across the face; a group longer than `max` is cut into boxes
+/// of `max` in order along the wall.
+pub(crate) fn gang_groups(spots: &[GangSpot], reach: f64, height: f64, face: f64, max: usize) -> Vec<Vec<usize>> {
+    if max < 2 || !(reach.is_finite() && reach > 0.0) {
+        return Vec::new();
+    }
+    let mut parent: Vec<usize> = (0..spots.len()).collect();
+    let mut buckets: BTreeMap<(String, &str), Vec<usize>> = BTreeMap::new();
+    for (i, sp) in spots.iter().enumerate() {
+        if sp.at.x.is_finite() && sp.at.y.is_finite() && sp.z.is_finite() && sp.normal.len() > 1e-9 {
+            buckets.entry((sp.level.to_ascii_lowercase(), sp.family.as_str())).or_default().push(i);
+        }
+    }
+    let x_of = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.x);
+    let mut pairs = 0usize;
+    for list in buckets.values_mut() {
+        list.sort_by(|a, b| x_of(a).total_cmp(&x_of(b)));
+        for (k, &i) in list.iter().enumerate() {
+            let Some(a) = spots.get(i) else { continue };
+            for &j in list.iter().skip(k + 1) {
+                let Some(b) = spots.get(j) else { continue };
+                if b.at.x - a.at.x > reach || pairs >= MAX_GANG_PAIRS {
+                    break;
+                }
+                pairs += 1;
+                let (na, nb) = (a.normal * (1.0 / a.normal.len()), b.normal * (1.0 / b.normal.len()));
+                let d = b.at - a.at;
+                if na.dot(nb) > 0.9 && (b.z - a.z).abs() <= height && d.dot(na.perp()).abs() <= reach && d.dot(na).abs() <= face {
+                    let (ra, rb) = (gang_root(&mut parent, i), gang_root(&mut parent, j));
+                    if ra != rb
+                        && let Some(x) = parent.get_mut(ra.max(rb))
+                    {
+                        *x = ra.min(rb);
+                    }
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        let r = gang_root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    let mut out = Vec::new();
+    for (_, mut g) in groups.into_iter().filter(|(_, g)| g.len() >= 2) {
+        let along = g.first().and_then(|i| spots.get(*i)).map_or(Vec2::new(1.0, 0.0), |s| (s.normal * (1.0 / s.normal.len())).perp());
+        let at = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.dot(along));
+        g.sort_by(|a, b| at(a).total_cmp(&at(b)));
+        out.extend(g.chunks(max).filter(|c| c.len() >= 2).map(<[usize]>::to_vec));
+    }
+    out
+}
+
+/// A wall device's face direction (`face_normal`, older models' `host_face`), unit length.
+fn face_of(ps: &Props) -> Option<Vec2> {
+    ["face_normal", "host_face"].iter().find_map(|k| {
+        let t = ps.get(k).map(Prop::text)?;
+        let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(Vec2::new(x, y) * (1.0 / x.hypot(y))),
+            _ => None,
+        }
+    })
 }
 
 /// The 3D path of a run: its plan points at their segments' heights (a change of height is a
@@ -381,7 +485,12 @@ pub(crate) fn box_kind(kind: &str, layer: &str) -> Option<&'static str> {
         "thermostat"
     } else if k.contains("data") || k.contains("voltage") || k.contains("tel") || k.contains("tv") || k.contains("catv") {
         "low voltage outlet"
-    } else if k.contains("connection") || k.contains("junction") || k.contains("disconnect") {
+    } else if k.contains("junction") {
+        "junction box"
+    } else if k.contains("disconnect") {
+        // A disconnect is its own enclosure: no outlet box.
+        "disconnect"
+    } else if k.contains("connection") {
         "equipment connection"
     } else if k == "device" {
         "device"
@@ -696,6 +805,42 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // controls (the router joins it to that circuit: its switch leg lands in it).
     let circuit_of: HashMap<Handle, String> =
         devices.iter().filter_map(|(h, _, ps, ..)| Some((*h, ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty())?))).collect();
+    // Devices side by side in one wall share a box (rules `gang`): by device, its group.
+    let ceiling_of = |level: &str| sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
+    let mut spot_devs: Vec<Handle> = Vec::new();
+    let mut spots: Vec<GangSpot> = Vec::new();
+    for (h, level, ps, layer, plan, z0, z1) in &devices {
+        let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
+        let Some(family) = box_kind(&kind, layer).and_then(|bk| rl.gang_family(bk)) else { continue };
+        let theirs_no_box =
+            sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).is_some_and(|x| {
+                let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
+                !x.ours_for(&kind, &fa).iter().any(|i| i.item == "box")
+            });
+        let at_ceiling = ceiling_of(level).is_some_and(|c| *z1 >= c - upf);
+        let wall = face_of(ps).filter(|_| !theirs_no_box && !at_ceiling && ps.get("misplaced").is_none() && !brackets.contains_key(h));
+        let Some(normal) = wall else { continue };
+        spot_devs.push(*h);
+        spots.push(GangSpot { level: level.clone(), family: family.to_string(), normal, at: plan.center(), z: (z0 + z1) / 2.0 });
+    }
+    let inch = upf / 12.0;
+    let mut gang_of: HashMap<Handle, usize> = HashMap::new();
+    let mut gangs: Vec<Vec<Handle>> = Vec::new();
+    for g in gang_groups(&spots, rl.gang.reach_in * inch, rl.gang.height_in * inch, rl.gang.face_in * inch, rl.gang.max) {
+        let hs: Vec<Handle> = g.iter().filter_map(|i| spot_devs.get(*i).copied()).collect();
+        for h in &hs {
+            gang_of.insert(*h, gangs.len());
+        }
+        gangs.push(hs);
+    }
+    // Each ganged group's box once made: its atom and the point its runs enter it.
+    let mut gang_box: HashMap<usize, (usize, Vec3)> = HashMap::new();
+    let centre_of: HashMap<Handle, (Vec2, f64)> = devices.iter().map(|(h, _, _, _, plan, z0, z1)| (*h, (plan.center(), (z0 + z1) / 2.0))).collect();
+    // The boxes made, by why (the device's kind, ganged or alone), and the devices in a shared one.
+    let mut box_reasons: BTreeMap<String, usize> = BTreeMap::new();
+    let mut no_box: BTreeMap<String, usize> = BTreeMap::new();
+    let mut direct: Vec<DirectDev> = Vec::new();
+    let mut ganged_devices = 0usize;
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(bk) = box_kind(&kind, layer) else { continue };
@@ -724,12 +869,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             row.2.insert(why_box(dec));
             if !dec.takes_box {
+                *no_box.entry("luminaire: its type carries its own junction box".into()).or_default() += 1;
                 continue;
             }
         }
         // A device of no known kind at the ceiling takes a ceiling box.
-        let ceiling = sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
-        let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling.is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
+        let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling_of(level).is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
         let circuit = ps
             .get("circuit")
             .map(Prop::text)
@@ -737,10 +882,41 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .or_else(|| super::super::conduitroute::controlled_circuit(&super::super::conduitroute::controls_of(ps), &circuit_of))
             .unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
-        let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
+        // A device of no known kind that no circuit feeds isn't known to be wired: no box.
+        if bk == "device" && circuit.trim().is_empty() {
+            *no_box.entry("device of no known kind on no circuit (a review question)".into()).or_default() += 1;
+            continue;
+        }
+        let Some((br, ring)) = rl.box_for(bk, on_cable) else {
+            // Equipment fed in its own wiring compartment: its runs end in it, no box of ours.
+            if rl.box_choice(bk).is_some() {
+                let c = plan.center();
+                direct.push(DirectDev { device: *h, level: level.clone(), circuit: circuit.clone(), at: Vec3::new(c.x, c.y, *z1) });
+                *no_box.entry(format!("{bk}: fed in its own wiring compartment")).or_default() += 1;
+            } else {
+                *no_box.entry(format!("{bk}: its own enclosure")).or_default() += 1;
+            }
+            continue;
+        };
+        let ring_size = rl.box_choice(bk).map(|c| c.ring_size.trim().to_string()).filter(|r| !r.is_empty());
+        // A device ganged with its neighbours: in their one box, once it is made.
+        let gang = gang_of.get(h).copied();
+        let members: &[Handle] = gang.and_then(|g| gangs.get(g)).map_or(&[], Vec::as_slice);
+        if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
+            external.push((bi, *h));
+            boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi });
+            ganged_devices += 1;
+            continue;
+        }
+        let n_gang = members.len().max(1);
+        let br = if n_gang > 1 { rl.gang_box(n_gang, on_cable).unwrap_or(br) } else { br };
         // A box that holds what the routing brings into it (NEC 314.16, Q6206): the smallest
         // steel box of the trade's table that does, else the largest with a review item.
-        let need = box_need.get(h).copied().unwrap_or(0.0);
+        let need = if n_gang > 1 {
+            members.iter().map(|m| box_need.get(m).copied().unwrap_or(0.0)).sum::<f64>()
+        } else {
+            box_need.get(h).copied().unwrap_or(0.0)
+        };
         let mut fill_note: Option<(&'static str, String, String)> = None;
         let br = if need > br.cubic_in + 1e-9 && br.material == "steel" {
             let mut bigger: Vec<&super::BoxRule> = rl
@@ -749,7 +925,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 .filter(|(k, b)| {
                     b.material == "steel"
                         && b.cubic_in > br.cubic_in + 1e-9
-                        && (k.starts_with("sq") || k.starts_with("oct"))
+                        && b.holds() >= n_gang
+                        && (k.starts_with("sq") || k.starts_with("oct") || n_gang > 1 && k.starts_with("gang"))
                         && !b.item.contains("fan")
                 })
                 .map(|(_, b)| b)
@@ -787,21 +964,22 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             dims_in: [2.25, 3.75, 0.5],
             cubic_in: 0.0,
             material: "steel".into(),
+            gangs: 1,
             source: src.clone(),
         });
         let (br, ring) = match &lv_bracket {
             Some(b) => (b, false),
             None => (br, ring),
         };
-        let c = plan.center();
-        let out = ["face_normal", "host_face"].iter().find_map(|k| {
-            let t = ps.get(k).map(Prop::text)?;
-            let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-            match v[..] {
-                [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(Vec2::new(x, y) * (1.0 / x.hypot(y))),
-                _ => None,
-            }
-        });
+        // A ganged box stands at the middle of its devices.
+        let (c, zmid) = if n_gang > 1 {
+            let pts: Vec<(Vec2, f64)> = members.iter().filter_map(|m| centre_of.get(m).copied()).collect();
+            let k = pts.len().max(1) as f64;
+            (pts.iter().fold(Vec2::new(0.0, 0.0), |a, (p, _)| a + *p) * (1.0 / k), pts.iter().map(|(_, z)| *z).sum::<f64>() / k)
+        } else {
+            (plan.center(), (z0 + z1) / 2.0)
+        };
+        let out = face_of(ps);
         let [bw, bh, bd] = br.dims_in.map(|v| v.max(0.5) / 12.0 * upf);
         let floor = sp.level(level).map_or(0.0, |l| l.elevation_ft * upf);
         let (centre, entry, along, across) = match (bk, out) {
@@ -818,14 +996,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .filter(|f| f.out.dot(o) > 0.5)
                     .map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
                 let mid = face - o * (bd / 2.0);
-                let zc = (z0 + z1) / 2.0;
-                (Vec3::new(mid.x, mid.y, zc), Vec3::new(mid.x, mid.y, zc + bh / 2.0), o.perp(), bd)
+                (Vec3::new(mid.x, mid.y, zmid), Vec3::new(mid.x, mid.y, zmid + bh / 2.0), o.perp(), bd)
             }
-            _ => {
-                let zc = (z0 + z1) / 2.0;
-                (Vec3::new(c.x, c.y, zc), Vec3::new(c.x, c.y, zc + bh / 2.0), Vec2::new(1.0, 0.0), bd)
-            }
+            _ => (Vec3::new(c.x, c.y, zmid), Vec3::new(c.x, c.y, zmid + bh / 2.0), Vec2::new(1.0, 0.0), bd),
         };
+        let gang_words = if n_gang > 1 { format!(" — {}", rl.gang.source) } else { String::new() };
         let ctx = AtomCtx {
             level: level.clone(),
             system: String::new(),
@@ -835,7 +1010,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             estimated: false,
             source: *h,
             body: Some((centre, along, bw, across, bh)),
-            src: rule_source(&format!("{} — {}", rl.box_source, br.source)),
+            src: rule_source(&format!("{} — {}{gang_words}", rl.box_source, br.source)),
         };
         let mut a = Atom { kind: "box", item: br.item.clone(), ty: br.size.clone(), size: br.size.clone(), a: centre, b: centre, ..Atom::default() };
         a.extra.push(("cubic_in", format!("{}", br.cubic_in), br.source.clone()));
@@ -848,23 +1023,45 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if let Some(dec) = &lum_box {
             a.extra.push(("box_needed", why_box(dec), dec.source.clone()));
         }
+        if n_gang > 1 {
+            a.extra.push(("gang", n_gang.to_string(), rl.gang.source.clone()));
+            a.extra.push(("devices", members.iter().map(|m| m.hex()).collect::<Vec<_>>().join(","), "computed".into()));
+        }
         let bi = atoms.len();
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
+        if let Some(g) = gang {
+            gang_box.insert(g, (bi, entry));
+            ganged_devices += 1;
+        }
+        let why = if lv_bracket.is_some() {
+            "low voltage bracket".to_string()
+        } else if n_gang > 1 {
+            format!("{bk}, {n_gang} gang")
+        } else {
+            bk.to_string()
+        };
+        *box_reasons.entry(why).or_default() += 1;
+        // A wall box's ring on its face; a ceiling box's (a luminaire's) under it.
+        let ceiling_box = matches!(bk, "luminaire" | "fan");
+        let ring_face = if ceiling_box { Some(Vec3::new(0.0, 0.0, -1.0)) } else { out.map(|o| Vec3::new(o.x, o.y, 0.0)) };
         if ring
             && !on_cable
-            && let Some(o) = out
+            && let Some(dir) = ring_face
         {
             let depth = ps.get("mud_ring").map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0 && *v < 6.0);
             let (depth, src) = depth.map_or((rl.ring.depth_in, rl.ring.source.clone()), |v| {
                 (v, "the box's wall type: the board on its face (partition legend)".to_string())
             });
-            let face = Vec3::new(centre.x, centre.y, centre.z) + Vec3::new(o.x, o.y, 0.0) * (bd / 2.0 + depth / 24.0 * upf);
+            let src = if ceiling_box { format!("{src} — {}", rl.box_source) } else { src };
+            let reach_out = if ceiling_box { bh / 2.0 } else { bd / 2.0 };
+            let face = Vec3::new(centre.x, centre.y, centre.z) + dir * (reach_out + depth / 24.0 * upf);
+            let ring_size = if n_gang > 1 { format!("{n_gang} gang") } else { ring_size.clone().unwrap_or_else(|| rl.ring.size.clone()) };
             let mut rg = Atom {
                 kind: "ring",
                 item: rl.ring.item.clone(),
-                ty: rl.ring.size.clone(),
-                size: format!("{}, {} deep", rl.ring.size, super::super::walltypes::frac(depth)),
+                ty: ring_size.clone(),
+                size: format!("{ring_size}, {} deep", super::super::walltypes::frac(depth)),
                 a: face,
                 b: face,
                 connects: vec![bi],
@@ -872,7 +1069,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             };
             rg.extra.push(("depth_in", format!("{depth}"), src.clone()));
             let mut rctx = ctx.clone();
-            rctx.body = Some((face, o.perp(), bw * 0.9, depth / 12.0 * upf, bh * 0.9));
+            rctx.body = Some(if ceiling_box {
+                (face, Vec2::new(1.0, 0.0), bw * 0.9, bw * 0.9, depth / 12.0 * upf)
+            } else {
+                (face, Vec2::new(dir.x, dir.y).perp(), bw * 0.9, depth / 12.0 * upf, bh * 0.9)
+            });
             rctx.src = rule_source(&src);
             let ri = atoms.len();
             atoms.push((rg, rctx));
@@ -890,6 +1091,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    let mut to_equipment = 0usize;
     let (mut feeder_chains, mut feeder_wire_ft) = (0usize, 0.0_f64);
     // Run ends that land in nothing: where two or more meet (a homerun joining a raceway shared
     // with others, Q6206) they meet in a junction box.
@@ -1005,6 +1207,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         landing_ft += super::path_ft(&c.pts, upf) - before;
                     }
                     *land = Some(Land::Atom(atom));
+                    continue;
+                }
+                // Equipment of its own circuit fed in its own wiring compartment: the run ends in it.
+                let equipment = direct
+                    .iter()
+                    .filter(|_| m.feeder.is_none() && m.devices.is_empty() && !m.circuit.is_empty())
+                    .filter(|x| x.level.eq_ignore_ascii_case(&key.level) && on_circuit(&x.circuit, &m.circuit))
+                    .map(|x| (x.device, Vec2::new(x.at.x, x.at.y).dist(pp)))
+                    .filter(|(_, dp)| *dp <= reach)
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((dv, _)) = equipment {
+                    *land = Some(Land::Device(dv));
                     continue;
                 }
                 // A low-voltage pathway ends only in a telecom room's gear (its rack), never a panel.
@@ -1168,6 +1382,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     Some(Land::Gear(g)) => {
                         external.push((e, *g));
                         to_gear += 1;
+                    }
+                    Some(Land::Device(dv)) => {
+                        external.push((e, *dv));
+                        to_equipment += 1;
                     }
                     None => {
                         open_ends += 1;
@@ -1492,8 +1710,21 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
     let rows = super::reindex(d);
     let total: usize = by_kind.values().sum();
+    for (why, n) in &no_box {
+        let src = if why.starts_with("device of no known kind") {
+            rl.no_circuit_source.clone()
+        } else {
+            why.split_once(':').and_then(|(bk, _)| rl.box_choice(bk)).map(|c| c.source.clone()).unwrap_or_default()
+        };
+        if !src.is_empty() && notes.len() < 200 {
+            notes.push(format!("{n} without a box ({why}): {src}"));
+        }
+    }
     if open_ends > 0 {
         notes.push(format!("{open_ends} run end(s) land in no box or panel (an open end): see bim.chain"));
+    }
+    if junctions > 0 {
+        box_reasons.insert("junction (three or more runs meet)".into(), junctions);
     }
     json!({
         "atoms": total,
@@ -1501,9 +1732,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomChains": chains_n,
         "junctionBoxes": junctions,
         "deviceBoxes": boxes.len(),
+        "boxesMade": box_reasons.values().sum::<usize>(),
+        "boxesByReason": box_reasons,
+        "gangedDevices": ganged_devices,
+        "gangBoxes": gang_box.len(),
         "devicesFed": fed_devices,
         "endsAtBoxes": to_boxes,
         "endsAtPanels": to_gear,
+        "endsAtEquipment": to_equipment,
+        "noBox": no_box,
         "openEnds": open_ends,
         "boxesSizedForFill": boxes_upsized,
         "endsWithNoDrop": entry_gaps,
@@ -1550,7 +1787,9 @@ pub(crate) fn sync_rings(d: &mut Drawing) -> usize {
         let rl = rules();
         let mut ps2 = ps.clone();
         ps2.set("depth_in", Prop::new(format!("{depth}"), ring.source.clone()).with_unit("in"));
-        ps2.set("size", Prop::new(format!("{}, {} deep", rl.ring.size, super::super::walltypes::frac(depth)), ring.source.clone()));
+        // Its gangs as made (`2 gang`), else the rules' ring.
+        let gangs = ps.get("type").map(Prop::text).filter(|t| t.ends_with("gang")).unwrap_or_else(|| rl.ring.size.clone());
+        ps2.set("size", Prop::new(format!("{gangs}, {} deep", super::super::walltypes::frac(depth)), ring.source.clone()));
         changes.push((e.handle, ps2));
     }
     let n = changes.len();
@@ -1566,6 +1805,8 @@ enum Land {
     Atom(usize),
     /// A gear element.
     Gear(Handle),
+    /// Equipment fed in its own wiring compartment.
+    Device(Handle),
 }
 
 /// Where an atom is in the model and what it is part of.
@@ -1677,10 +1918,19 @@ pub(crate) fn sync_luminaire_boxes(d: &mut Drawing) -> (usize, usize) {
     if gone.is_empty() {
         return (0, missing);
     }
+    // The ring on a box that goes goes with it.
+    let rings: BTreeSet<Handle> = d
+        .model
+        .iter()
+        .take(super::MAX_ELEMENTS)
+        .filter(|e| props::read(&e.common.xdata).get(super::ATOM_KEY).map(Prop::text).as_deref() == Some("ring"))
+        .filter(|e| super::connects_of(e).iter().any(|h| gone.contains_key(h)))
+        .map(|e| e.handle)
+        .collect();
     // Whatever names a box that goes names its luminaire instead; the luminaire loses its box.
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     for e in d.model.iter().take(super::MAX_ELEMENTS) {
-        if gone.contains_key(&e.handle) {
+        if gone.contains_key(&e.handle) || rings.contains(&e.handle) {
             continue;
         }
         let ps = props::read(&e.common.xdata);
@@ -1709,7 +1959,7 @@ pub(crate) fn sync_luminaire_boxes(d: &mut Drawing) -> (usize, usize) {
         let _ = d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &ps).into());
     }
     let n = gone.len();
-    for b in gone.into_keys() {
+    for b in gone.into_keys().chain(rings) {
         d.remove_entity(b);
     }
     super::reindex(d);

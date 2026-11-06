@@ -23021,7 +23021,9 @@ mod tests {
         let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
         let mk = super::super::mepatoms::rules().makeup_ft;
         assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0 * mk)).abs() < 0.02, "{lines:#?}");
-        assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
+        // On EMT the box is the trade's 4" square with a round ring (fix-box-count-high).
+        assert_eq!(get("Box, 4\" square")["net"], json!(3.0), "one box per fixture on the circuit: {lines:#?}");
+        assert!(get("Box, 4\" octagon").is_null(), "{lines:#?}");
         assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
 
         // The takeoff stage: by level and circuit.

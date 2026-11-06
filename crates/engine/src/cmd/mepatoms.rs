@@ -124,6 +124,35 @@ pub(crate) struct BoxRule {
     pub dims_in: [f64; 3],
     pub cubic_in: f64,
     pub material: String,
+    /// How many devices side by side it holds (0: one).
+    pub gangs: usize,
+    pub source: String,
+}
+
+impl BoxRule {
+    /// How many devices side by side it holds.
+    pub(crate) fn holds(&self) -> usize {
+        self.gangs.max(1)
+    }
+}
+
+/// How devices side by side in one wall share a box (`gang`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct GangRule {
+    /// The box kinds that gang, each with its family: devices gang only within one.
+    pub families: BTreeMap<String, String>,
+    /// Farthest apart along the wall, inches (centre to centre of neighbours).
+    pub reach_in: f64,
+    /// Most their mounting heights differ, inches.
+    pub height_in: f64,
+    /// Most they stand off one another across the wall's face, inches.
+    pub face_in: f64,
+    /// Most devices in one box.
+    pub max: usize,
+    /// The box (a `boxes` key) for 1, 2, 3… gangs, on raceway and on cable.
+    pub raceway: Vec<String>,
+    pub cable: Vec<String>,
     pub source: String,
 }
 
@@ -131,9 +160,14 @@ pub(crate) struct BoxRule {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct BoxChoice {
+    /// The box (a `boxes` key) on raceway and on cable; empty: no box of ours.
     pub raceway: String,
     pub cable: String,
     pub ring: bool,
+    /// Its ring when not the rules' `ring` (`4" round` at a luminaire).
+    pub ring_size: String,
+    /// Why, where it is not the rules' `box_source` (no box).
+    pub source: String,
 }
 
 /// A plaster ring as stock.
@@ -228,6 +262,8 @@ pub(crate) struct AtomRules {
     pub boxes: BTreeMap<String, BoxRule>,
     pub box_for: BTreeMap<String, BoxChoice>,
     pub box_source: String,
+    pub no_circuit_source: String,
+    pub gang: GangRule,
     pub ring: RingRule,
     pub default_raceway: String,
     pub default_raceway_source: String,
@@ -294,15 +330,29 @@ impl AtomRules {
     }
     /// A device kind's box and whether it takes a ring, on raceway or cable.
     pub(crate) fn box_for(&self, kind: &str, on_cable: bool) -> Option<(&BoxRule, bool)> {
+        let choice = self.box_choice(kind)?;
+        let id = if on_cable { &choice.cable } else { &choice.raceway };
+        self.boxes.get(id).map(|b| (b, choice.ring))
+    }
+    /// A device kind's box choice (its box may be none: equipment fed in its own compartment).
+    pub(crate) fn box_choice(&self, kind: &str) -> Option<&BoxChoice> {
         let k = kind.replace('_', " ").to_ascii_lowercase();
-        let choice = self.box_for.get(&k).or_else(|| {
+        self.box_for.get(&k).or_else(|| {
             let plumbing = k.contains("plumbing") || k.contains("sprinkler");
             let fallback =
                 if !plumbing && (k.contains("luminaire") || k.contains("light") || k.contains("fixture")) { "luminaire" } else { return None };
             self.box_for.get(fallback)
-        })?;
-        let id = if on_cable { &choice.cable } else { &choice.raceway };
-        self.boxes.get(id).map(|b| (b, choice.ring))
+        })
+    }
+    /// The box for `n` devices ganged, on raceway or cable (none: they don't gang that many).
+    pub(crate) fn gang_box(&self, n: usize, on_cable: bool) -> Option<&BoxRule> {
+        let list = if on_cable { &self.gang.cable } else { &self.gang.raceway };
+        let id = list.get(n.checked_sub(1)?)?;
+        self.boxes.get(id).filter(|b| b.holds() >= n)
+    }
+    /// The family a box kind gangs in (none: it doesn't gang).
+    pub(crate) fn gang_family(&self, box_kind: &str) -> Option<&str> {
+        self.gang.families.get(box_kind).map(String::as_str)
     }
     /// A conductor's colour on a system (`120/208`), for a phase `A`/`B`/`C`, `N` or `G`.
     pub(crate) fn color(&self, voltage: &str, phase: &str) -> Option<&str> {
@@ -2040,9 +2090,61 @@ mod tests {
         assert_eq!((b.item.as_str(), ring), ("Box, 4\" square", true));
         let (b, _) = r.box_for("receptacle", true).unwrap();
         assert!(b.item.contains("nonmetallic"));
-        assert_eq!(r.box_for("luminaire", false).map(|b| b.0.item.as_str()), Some("Box, 4\" octagon"));
+        // The box follows the wiring method: a 4" square with a round ring at a luminaire on
+        // raceway, an octagon on cable; equipment is fed in its own compartment.
+        assert_eq!(r.box_for("luminaire", false).map(|b| (b.0.item.as_str(), b.1)), Some(("Box, 4\" square", true)));
+        assert_eq!(r.box_choice("luminaire").map(|c| c.ring_size.as_str()), Some("4\" round"));
+        assert_eq!(r.box_for("luminaire", true).map(|b| b.0.item.as_str()), Some("Box, 4\" octagon"));
+        assert!(r.box_for("equipment connection", false).is_none() && r.box_choice("equipment connection").is_some_and(|c| !c.source.is_empty()));
+        assert!(r.box_for("junction box", false).is_some() && r.box_choice("disconnect").is_none());
         assert!(r.box_for("plumbing fixture", false).is_none());
         assert!(has_word("3/4\" EMT", "EMT") && !has_word("EMC", "MC") && has_word("MC CABLE", "MC"));
+    }
+
+    #[test]
+    fn devices_side_by_side_on_one_face_gang_and_others_do_not() {
+        use super::build::{GangSpot, gang_groups};
+        use cadaddy_geom::Vec2;
+        let n = Vec2::new(0.0, 1.0);
+        let spot = |family: &str, x: f64, y: f64, z: f64, normal: Vec2| GangSpot {
+            level: "L1".into(),
+            family: family.into(),
+            normal,
+            at: Vec2::new(x, y),
+            z,
+        };
+        let spots = vec![
+            // Three switches 18" apart at one height: one group.
+            spot("switch", 60.0, 10.0, 48.0, n),
+            spot("switch", 78.0, 10.0, 48.0, n),
+            spot("switch", 96.0, 10.0, 48.0, n),
+            // A receptacle under them: another height, another family.
+            spot("receptacle", 60.0, 10.0, 18.0, n),
+            // Two receptacles back to back (opposite faces): no gang.
+            spot("receptacle", 200.0, 10.0, 18.0, n),
+            spot("receptacle", 200.0, 4.0, 18.0, Vec2::new(0.0, -1.0)),
+            // A receptacle 3 ft from the next: no gang.
+            spot("receptacle", 300.0, 10.0, 18.0, n),
+            spot("receptacle", 336.0, 10.0, 18.0, n),
+            // A data outlet beside a receptacle: low voltage never shares a power box.
+            spot("low voltage", 318.0, 10.0, 18.0, n),
+            // Hostile: not a number.
+            spot("switch", f64::NAN, 10.0, 48.0, n),
+        ];
+        let g = gang_groups(&spots, 24.0, 6.0, 6.0, 4);
+        assert_eq!(g, vec![vec![0, 1, 2]], "{g:?}");
+        // Most 2 a box: the row of three is a 2 gang and a lone one.
+        assert_eq!(gang_groups(&spots, 24.0, 6.0, 6.0, 2), vec![vec![0, 1]]);
+        assert!(gang_groups(&spots, 24.0, 6.0, 6.0, 1).is_empty());
+        assert!(gang_groups(&spots, f64::NAN, 6.0, 6.0, 4).is_empty());
+        // The rules: 2 gangs in a 4" square, 3 in a gang box, none past 4.
+        let r = rules();
+        assert_eq!(r.gang_box(2, false).map(|b| b.item.as_str()), Some("Box, 4\" square"));
+        assert_eq!(r.gang_box(3, false).map(|b| b.item.as_str()), Some("Device box, 3 gang"));
+        assert_eq!(r.gang_box(2, true).map(|b| b.size.as_str()), Some("2 gang"));
+        assert!(r.gang_box(5, false).is_none() && r.gang_box(0, false).is_none());
+        assert_eq!(r.gang_family("data outlet"), Some("low voltage"));
+        assert!(r.gang_family("luminaire").is_none());
     }
 
     #[test]
