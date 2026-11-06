@@ -196,6 +196,8 @@ pub(crate) struct BoxFill {
     pub yoke: f64,
     pub grounds: f64,
     pub bigger: Vec<(String, String, f64)>,
+    /// Where the next box (and past the largest, the extension ring) comes from.
+    pub bigger_source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -3952,41 +3954,31 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
 
     // -- The holes through the framing: each member's holes apart by the rule (edge to edge, in
     // the web's plane); the closer ones are review items. --
-    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
-    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
-        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
-    }
-    let mut too_close = 0usize;
-    for ids in per_member.values_mut() {
-        ids.sort_by(|a, b| {
-            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
-            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for w in ids.windows(2) {
-            let (Some(p), Some(q)) = (w.first().and_then(|i| bored.get(*i)), w.get(1).and_then(|i| bored.get(*i))) else { continue };
-            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
-            let need_in = rl.framing.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
-            if apart_in + 1e-6 >= need_in {
-                continue;
-            }
-            too_close += 1;
-            if clashes.len() < MAX_ITEMS {
-                let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
-                clashes.push(json!({
-                    "kind": "clash",
-                    "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
-                    "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
-                    "pair": "electrical × framing",
-                    "level": p.level,
-                    "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
-                    "clearance_in": r2(need_in),
-                    "fix": format!(
-                        "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
-                        p.member, apart_in.max(0.0), need_in, rl.framing.apart_x
-                    ),
-                }));
-            }
+    let pairs = close_holes(&mut bored, &rl.framing, upf);
+    let too_close = pairs.len();
+    for c in pairs {
+        let (p, q) = (&c.p, &c.q);
+        if clashes.len() >= MAX_ITEMS {
+            break;
         }
+        let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let mut item = json!({
+            "kind": "clash",
+            "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
+            "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
+            "pair": "electrical × framing",
+            "level": p.level,
+            "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
+            "clearance_in": r2(c.need_in),
+            "fix": format!(
+                "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
+                p.member, c.apart_in.max(0.0), c.need_in, rl.framing.apart_x
+            ),
+        });
+        if let Some(k) = c.corrected {
+            item["corrected"] = k;
+        }
+        clashes.push(item);
     }
     let mut holes_by_level: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for h in &bored {
@@ -4017,6 +4009,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 "hole_in": r3(h.dia_in), "raceway_in": h.raceway_in, "end_ft": r2(h.end_ft),
                 "at": [r2(h.at.x), r2(h.at.y), r2((h.z - floor) / upf)],
                 "item": if h.dia_in > 0.0 { rl.framing.bored_item.clone() } else { rl.framing.truss_item.clone() },
+                "design": if h.design.is_empty() { Value::Null } else { json!(h.design) },
             })
         })
         .collect();
@@ -4308,6 +4301,74 @@ struct Bored {
     dia_in: f64,
     raceway_in: f64,
     end_ft: f64,
+    /// A hole bored for two raceways (Q6216): the design's two holes it stands for.
+    design: String,
+}
+
+/// Two holes of one member closer than the hole rule allows (edge to edge, in the web's plane).
+#[derive(Clone, Debug)]
+struct ClosePair {
+    p: Bored,
+    q: Bored,
+    apart_in: f64,
+    need_in: f64,
+    /// The field's correction (Q6216, `E-BORE-SHARE`), when it settles them.
+    corrected: Option<Value>,
+}
+
+/// Each member's holes apart by the hole rule; each pair closer is listed. Where the hole rule
+/// takes one hole sized for both raceways at both holes' distance from the bearing, the field
+/// bores that one instead (`E-BORE-SHARE`): the first hole is bored for both, its design (the two
+/// holes) kept, and the second is gone. A hole shares once.
+fn close_holes(bored: &mut Vec<Bored>, fr: &FramingRules, upf: f64) -> Vec<ClosePair> {
+    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
+    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
+        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
+    }
+    let rule = super::provenance::rule("E-BORE-SHARE");
+    let mut out = Vec::new();
+    let mut shared: Vec<(usize, usize, f64, String)> = Vec::new();
+    let mut in_shared: BTreeSet<usize> = BTreeSet::new();
+    for ids in per_member.values_mut() {
+        ids.sort_by(|a, b| {
+            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
+            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for w in ids.windows(2) {
+            let [pi, qi] = w else { continue };
+            let (Some(p), Some(q)) = (bored.get(*pi), bored.get(*qi)) else { continue };
+            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
+            let need_in = fr.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
+            if apart_in + 1e-6 >= need_in {
+                continue;
+            }
+            let one_in = p.raceway_in + q.raceway_in + fr.hole_over_in.max(0.0);
+            let share = !in_shared.contains(pi) && !in_shared.contains(qi) && fr.min_end(one_in).is_some_and(|m| m <= p.end_ft.min(q.end_ft) + 1e-9);
+            let corrected = share.then(|| {
+                let design = format!("two holes ({:.3} in, {:.3} in) {:.1} in apart edge to edge", p.dia_in, q.dia_in, apart_in.max(0.0));
+                let installed = format!("one {one_in:.3} in hole for both raceways");
+                let reason = format!(
+                    "the hole rule asks {need_in:.1} in between holes ({}× the larger); one hole sized for both raceways is bored instead",
+                    fr.apart_x
+                );
+                shared.push((*pi, *qi, one_in, design.clone()));
+                in_shared.extend([*pi, *qi]);
+                json!({"key": "bored_holes", "design": design, "installed": installed, "rule": rule.id, "reason": reason})
+            });
+            out.push(ClosePair { p: p.clone(), q: q.clone(), apart_in, need_in, corrected });
+        }
+    }
+    for (pi, qi, one_in, design) in &shared {
+        if let Some(h) = bored.get_mut(*pi) {
+            h.dia_in = *one_in;
+            h.design = design.clone();
+        }
+        if let Some(h) = bored.get_mut(*qi) {
+            h.dia_in = -1.0;
+        }
+    }
+    bored.retain(|h| h.dia_in >= 0.0);
+    out
 }
 
 /// The holes a seated leg bores through the framing over its level, into `out`; the pieces the
@@ -4341,6 +4402,7 @@ fn bore(out: &mut Vec<Bored>, field: &Field, leg: &Leg, circuit: &str, level: &s
                         along: h.along,
                         dia_in: h.dia_in,
                         raceway_in: size_in,
+                        design: String::new(),
                         end_ft: h.end_ft,
                     });
                 }
@@ -4441,7 +4503,10 @@ pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rule = super::provenance::rule("E-BOX-FILL");
     let mut corrected = 0usize;
     for (h, from, to, cu, v, need) in &fixes {
-        let why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
+        let mut why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
+        if to.contains("ring") && !rl.box_fill.bigger_source.is_empty() {
+            why = format!("{why}: {}", rl.box_fill.bigger_source);
+        }
         let size = super::provenance::Correction {
             key: "size".into(),
             design: from.clone(),
@@ -5292,6 +5357,7 @@ pub(crate) use gap::panel_end_makeup_ft;
 pub(crate) mod lv;
 #[path = "conduitroute_size.rs"]
 mod size;
+pub(crate) use size::standard_at_most;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]

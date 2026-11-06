@@ -564,6 +564,40 @@ fn an_overfilled_box_is_built_with_the_next_box_and_keeps_its_design_box() {
 }
 
 #[test]
+fn a_box_past_the_largest_gets_an_extension_ring_and_keeps_its_design_box() {
+    // A 4-11/16" square (42 cu in, the largest box of the rules) twenty #12 enter, with its
+    // ground and a yoke: 51.75 cu in. The field adds an extension ring, whose marked volume
+    // 314.16(A) adds; the design box stays beside it with the reason.
+    let mut d = Drawing::default();
+    let mut ps = props::Props::default();
+    let rule = || props::Source::from_doc(props::SourceKind::Rule, "box rule (made-up)");
+    ps.set(crate::cmd::mepatoms::ATOM_KEY, Prop::new("box", props::Source::computed()));
+    ps.set("box_of", Prop::new("1B3", props::Source::computed()));
+    ps.set("size", Prop::new("4-11/16\" square, 2-1/8\" deep", rule()));
+    ps.set("cubic_in", Prop::new("42", rule()));
+    let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x1B3), BRANCH_SYSTEM, "box", "4-11/16\" square, 2-1/8\" deep", "box", "x/box1");
+    let xdata = props::write(&tags, &ps);
+    let h = d
+        .add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() },
+            EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut report = json!({"box_fill": {"pending": [{"device": "1B3", "kind": "receptacle", "level": "L1", "circuit": "LP9-2", "yoke": true, "conductors": [[20, "12"]]}]}});
+    check_box_fill(&mut d, &mut report);
+    assert_eq!(report["box_fill"]["corrected"].as_u64(), Some(1), "{}", report["box_fill"]);
+    let e = d.model.get(h).unwrap_or_else(|| panic!("the box"));
+    let got = props::read(&e.common.xdata);
+    let t = |k: &str| got.get(k).map(Prop::text).unwrap_or_default();
+    assert!(t("size").contains("extension ring"), "{}", t("size"));
+    assert_eq!(t("cubic_in"), "63");
+    assert_eq!(t("design:size"), "4-11/16\" square, 2-1/8\" deep");
+    assert_eq!(t("design:cubic_in"), "42");
+    assert!(t("correction:size").contains("314.16(A)"), "the ring's basis: {}", t("correction:size"));
+}
+
+#[test]
 fn a_raceway_through_an_obstacle_is_offset_under_it_across_its_box_only() {
     let mut r: MepRun = serde_json::from_value(json!({
         "system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [240.0, 0.0], [240.0, 120.0]],
@@ -602,4 +636,46 @@ fn a_raceway_the_ceiling_space_cant_offset_runs_around_the_obstacle_in_plan() {
     )
     .unwrap_or_else(|e| panic!("{e}"));
     assert!(detour_run(&mut d, Vec2::new(50.0, 50.0), 9.5, [40.0, 40.0, 60.0, 60.0], UPF).is_none());
+}
+
+fn hole(member: usize, along_in: f64, raceway_in: f64, end_ft: f64) -> Bored {
+    Bored {
+        level: "L1".into(),
+        circuit: format!("LP9-{member}"),
+        obstacle: member,
+        member: "I-joist".into(),
+        host: Handle(0x90 + member as u64),
+        at: Vec2::new(along_in, 0.0),
+        z: 120.0,
+        along: along_in,
+        dia_in: raceway_in + 0.375,
+        raceway_in,
+        end_ft,
+        design: String::new(),
+    }
+}
+
+#[test]
+fn two_holes_too_close_share_one_hole_where_the_hole_rule_takes_it() {
+    let fr = &rules().framing;
+    // Two 3/4" raceways 1" apart in one joist, 4 ft from its bearing: one 1-7/8" hole for both
+    // (the rule takes it 1 ft from the bearing), the design's two holes kept beside it.
+    let mut bored = vec![hole(1, 24.0, 0.75, 4.0), hole(1, 26.0, 0.75, 4.0), hole(2, 24.0, 0.75, 4.0)];
+    let pairs = close_holes(&mut bored, fr, UPF);
+    assert_eq!(pairs.len(), 1, "only the pair in one member");
+    let c = pairs[0].corrected.as_ref().unwrap_or_else(|| panic!("shared: {:?}", pairs[0]));
+    assert_eq!(c["rule"], json!("E-BORE-SHARE"));
+    assert!(c["design"].as_str().unwrap_or_default().starts_with("two holes"), "{c}");
+    assert_eq!(bored.len(), 2, "the second hole is gone");
+    assert!((bored[0].dia_in - 1.875).abs() < 1e-9, "{:?}", bored[0]);
+    assert!(bored[0].design.starts_with("two holes"), "the design kept");
+    assert!((bored[1].dia_in - 1.125).abs() < 1e-9, "the other member's hole stays");
+    // Two 2" raceways close to the bearing: the 4-3/8" hole they'd share must stand 4 ft off it;
+    // they stay a clash item, both holes as designed.
+    let mut near = vec![hole(3, 24.0, 2.0, 1.5), hole(3, 27.0, 2.0, 1.5)];
+    let pairs = close_holes(&mut near, fr, UPF);
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs[0].corrected.is_none());
+    assert_eq!(near.len(), 2);
+    assert!(near.iter().all(|h| h.design.is_empty() && (h.dia_in - 2.375).abs() < 1e-9));
 }

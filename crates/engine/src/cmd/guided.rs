@@ -10454,6 +10454,11 @@ fn storey_key(l: &str) -> String {
     if d.is_empty() { l.trim().to_ascii_uppercase() } else { d }
 }
 
+/// Whether two level names are one storey ([`storey_key`]).
+pub(crate) fn same_storey(a: &str, b: &str) -> bool {
+    storey_key(a) == storey_key(b)
+}
+
 /// The rooms of a storey for [`super::waterfill`]: each one's type words and outline.
 fn area_rooms(rooms: &[JobRoom], storey: &str) -> Vec<super::waterfill::AreaRoom> {
     rooms
@@ -10636,11 +10641,13 @@ fn fill_in_rest(
     let drains = super::plumbing::drainage_systems();
     let rules = [super::provenance::rule("P-BRANCH-WASTE"), super::provenance::rule("P-BRANCH-VENT")];
     // Each floor with fixtures, by its storey, named as its runs name it (else its level's name).
+    // The fixtures are the ones the model builds: the spec's fixture tags (the read ones and the
+    // copies set into the rooms of their type), and a read one no tag stands for.
     let mut floors: BTreeMap<String, (String, Vec<super::fillin::FixtureAt>)> = BTreeMap::new();
-    for d in devices.iter().filter(|d| d.kind == "plumbing fixture").take(100_000) {
-        let key = storey_key(&d.level);
-        let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
-        let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
+    for (level, tag, at) in super::fillin::built_fixtures(sp, devices).into_iter().take(100_000) {
+        let key = storey_key(&level);
+        let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(tag.trim())));
+        let words = row.map_or_else(|| tag.clone(), |r| format!("{tag} {} {}", r.fixture, r.description));
         let (lines, _) = super::plumbing::fixture_lines(&words);
         let name = || {
             sp.mep
@@ -10649,9 +10656,9 @@ fn fill_in_rest(
                 .map(|r| &r.level)
                 .chain(sp.levels.iter().map(|l| &l.name))
                 .find(|n| storey_key(n) == key)
-                .map_or_else(|| d.level.clone(), Clone::clone)
+                .map_or_else(|| level.clone(), Clone::clone)
         };
-        let at = super::fillin::FixtureAt { at: d.at, what: d.tag.clone(), words, lines };
+        let at = super::fillin::FixtureAt { at, what: tag.clone(), words, lines };
         match floors.get_mut(&key) {
             Some(f) => f.1.push(at),
             None => {
@@ -16590,13 +16597,40 @@ fn equipment_step(
         let wire = branch_wire.get(&l.tag).filter(|w| !w.is_empty());
         let conductors = ft.map(|t| (t.size.as_str(), t.material.as_str())).or(wire.map(|w| (w.as_str(), "cu")));
         for c in equipsub::check(&e, conductors, afc, &rule) {
+            // Protection over what the approved submittal allows (Q6216, `E-EQUIP-OCPD`): the
+            // field installs the largest standard breaker within it, the drawings' kept.
+            if c.check == "protection"
+                && let (Some((_, poles)), Some(max)) = (equipsub::ocpd_of(&e.drawing_ocpd), e.max_ocpd_a)
+                && let Some(a) = super::conduitroute::standard_at_most(max)
+            {
+                let fix = super::provenance::rule("E-EQUIP-OCPD");
+                e.installed_ocpd = format!("{a:.0}A/{poles}P");
+                e.correction = fix.basis_for(&format!("drawn {}, the submittal allows at most {max:.0} A ({})", e.drawing_ocpd, e.source));
+            }
             conflicts_all.push((l.tag.clone(), c));
         }
         rows.push(e);
     }
-    // Each failure an RFI (once) and a finding.
+    // Each failure a finding; one the build corrects says so, the rest an RFI (once).
     let mut rfis = Vec::new();
+    let mut corrected = 0usize;
     for (tag, c) in &conflicts_all {
+        if let Some(e) = rows.iter().find(|e| e.tag == *tag && c.check == "protection" && !e.installed_ocpd.is_empty()) {
+            corrected += 1;
+            job.add_finding(
+                StageName::BimBuild,
+                &format!(
+                    "Equipment {tag} (protection): {}; corrected: {} installed, {} kept as the design",
+                    c.message, e.installed_ocpd, e.drawing_ocpd
+                ),
+                &format!("its approved submittal differs from the drawings; {}", e.correction),
+                1,
+                vec![c.fix.clone()],
+                None,
+                false,
+            );
+            continue;
+        }
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
             h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
@@ -16638,7 +16672,7 @@ fn equipment_step(
     s.doc_mut()?.building_spec = Some(sp.to_json());
     report_progress(s, json!({"step": "equipment connections"}), &line);
     s.echo(line);
-    result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "rfis": rfis, "asked": asked});
+    result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "corrected": corrected, "rfis": rfis, "asked": asked});
     Ok(())
 }
 

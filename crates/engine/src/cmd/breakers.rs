@@ -194,6 +194,22 @@ pub(crate) fn row_of(c: &PanelCircuit) -> Row {
     Row::Breaker
 }
 
+/// A row whose load the build corrected for the field (Q6216, `E-EQUIP-OCPD`): equipment on it
+/// (its tag a word of the row's load, or the load one word its tag's letters start) with an
+/// installed protection over the drawn one's limit. Its drawn trip, the installed one and why.
+fn trip_corrected(sp: &BuildingSpec, panels: [&str; 2], c: &PanelCircuit) -> Option<(Option<f64>, f64, String)> {
+    let up = c.description.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-').filter(|w| !w.is_empty()).collect();
+    let e = sp.mep.equipment_electrical.iter().find(|e| {
+        !e.installed_ocpd.is_empty()
+            && (e.source_panel.trim().is_empty() || panels.iter().any(|p| p.eq_ignore_ascii_case(e.source_panel.trim())))
+            && (words.iter().any(|w| w.eq_ignore_ascii_case(&e.tag))
+                || (words.len() == 1 && super::equipsub::stem(&e.tag).is_some_and(|st| words.first().is_some_and(|w| w.starts_with(&st)))))
+    })?;
+    let (a, _) = super::equipsub::ocpd_of(&e.installed_ocpd)?;
+    Some((trip(&c.breaker), a, e.correction.clone()))
+}
+
 /// A breaker's trip as the schedule prints it: `20`, `20A`, `60AT/100AF`, `3P-20A`.
 pub(crate) fn trip(t: &str) -> Option<f64> {
     let u = t.trim().to_ascii_uppercase();
@@ -620,6 +636,10 @@ pub(crate) struct Report {
     pub mismatches_total: usize,
     pub schedules_without_panel: Vec<String>,
     pub typical: Vec<Typical>,
+    /// Breakers installed other than the schedule draws them (Q6216: equipment protection over
+    /// its submittal's limit), the drawn one kept as each one's design.
+    #[serde(default)]
+    pub corrected: usize,
 }
 
 pub(crate) fn stored(d: &Drawing) -> Option<Report> {
@@ -840,7 +860,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let tr = trip(&c.breaker);
+        let tr = trip_corrected(sp, [s.panel.trim(), &p.tag], c).map(|(_, a, _)| a).or_else(|| trip(&c.breaker));
         let size = size_text(tr, c.poles);
         let item = format!("{}, panel {}", r.item(&m.kind.ty), s.panel.trim());
         let tt = |code: i32, v: String| RawTag { code, value: v.chars().take(250).collect() };
@@ -875,7 +895,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         let (Some(p), Some((_, s))) = (panels.get(m.panel), panels.get(m.panel).and_then(sched_of)) else { continue };
         let Some(c) = s.circuits.get(m.row) else { continue };
         let row_src = Source::from_doc(SourceKind::Schedule, &format!("{} panel {} schedule, circuit {}", s.source, s.panel.trim(), c.number.trim()));
-        let tr = trip(&c.breaker);
+        let fixed = trip_corrected(sp, [s.panel.trim(), &p.tag], c);
+        let tr = fixed.as_ref().map(|(_, a, _)| *a).or_else(|| trip(&c.breaker));
         let mut cn: Vec<Handle> = vec![p.handle];
         let mut runs: Vec<Handle> = m.numbers.iter().flat_map(|n| lands.get(&(m.panel, *n)).cloned().unwrap_or_default()).collect();
         runs.sort_unstable();
@@ -965,6 +986,24 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
             let x = props::write(&e.common.xdata, &ps);
             e.common.xdata = x.into();
         });
+        // Installed as corrected, the drawn breaker kept as its design.
+        if let Some((drawn, a, why)) = &fixed {
+            let (rule, reason) = why.split_once(": ").unwrap_or(("E-EQUIP-OCPD", why.as_str()));
+            for (key, design, installed) in [
+                ("trip_a", drawn.map(|t| format!("{t}")).unwrap_or_default(), format!("{a}")),
+                ("size", size_text(*drawn, c.poles), size_text(Some(*a), c.poles)),
+            ] {
+                let fix = super::provenance::Correction {
+                    key: key.into(),
+                    design,
+                    corrected: installed,
+                    reason: reason.to_string(),
+                    rule: rule.to_string(),
+                };
+                super::provenance::correct_element(d, h, &fix);
+            }
+            report.corrected += 1;
+        }
         panel_breakers.entry(m.panel).or_default().push(h);
         *typed
             .entry((s.panel.trim().to_string(), p.level.clone(), m.kind.ty.clone(), tr.map(|a| (a * 10.0).round() as i64), c.poles.clamp(1, 3)))

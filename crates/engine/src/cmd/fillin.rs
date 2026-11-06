@@ -128,6 +128,34 @@ pub(crate) fn fixture_lines(
     out
 }
 
+/// The plumbing fixtures the model builds, each its level, its mark and its plan point (drawing
+/// units): the spec's fixture tags (the read ones and any set by a rule, such as the copies laid
+/// into the rooms of their type), then each read fixture (`read`) no tag of its level stands
+/// within a foot of. A mark-less tag goes by its fixture name.
+pub(crate) fn built_fixtures(sp: &BuildingSpec, read: &[super::readers::ReadDevice]) -> Vec<(String, String, [f64; 2])> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.trim().to_string()).filter(|v| !v.is_empty());
+    let mut out: Vec<(String, String, [f64; 2])> = sp
+        .tags
+        .iter()
+        .filter(|t| t.kind.replace('_', " ").eq_ignore_ascii_case("plumbing fixture") && t.at_ft.iter().all(|v| v.is_finite()))
+        .take(MAX_ITEMS * 5)
+        .map(|t| {
+            let mark = field(t, "type").or_else(|| field(t, "fixture")).or_else(|| field(t, "device_type")).unwrap_or_default();
+            (t.level.clone(), mark, [t.at_ft[0] * upf, t.at_ft[1] * upf])
+        })
+        .collect();
+    let n_tags = out.len();
+    for d in read.iter().filter(|d| d.kind == "plumbing fixture").take(MAX_ITEMS * 5) {
+        let standing =
+            out.iter().take(n_tags).any(|(l, _, p)| super::guided::same_storey(l, &d.level) && (p[0] - d.at[0]).hypot(p[1] - d.at[1]) <= upf);
+        if !standing {
+            out.push((d.level.clone(), d.tag.clone(), d.at));
+        }
+    }
+    out
+}
+
 /// Whether a terminal is an air terminal (a sprinkler head is fire protection's).
 fn air_terminal(kind: &str) -> bool {
     !kind.to_ascii_lowercase().contains("sprinkler")
@@ -278,10 +306,10 @@ pub(crate) fn connections(d: &Drawing, sp: Option<&BuildingSpec>) -> Value {
         let ducts = duct_systems(sp);
         for t in sp.mep.terminals.iter().take(MAX_ITEMS).filter(|t| air_terminal(&t.terminal_kind)) {
             let floor: Vec<&MepRun> =
-                sp.mep.runs.iter().filter(|r| ducts.contains(&r.system.as_str()) && r.level.eq_ignore_ascii_case(&t.level)).collect();
-            // A return grille no return duct of its floor comes near returns through the
-            // ceiling plenum (`M-RETURN-PLENUM`).
-            let plenum = !reached(&floor, &t.system, &[], t.at, rule.reach_ft.max(0.0) * upf) && returns_air(sp, &t.terminal_kind, &t.system);
+                sp.mep.runs.iter().filter(|r| ducts.contains(&r.system.as_str()) && super::guided::same_storey(&r.level, &t.level)).collect();
+            // A return grille no return duct of its floor reaches returns through the ceiling
+            // plenum (`M-RETURN-PLENUM`), as the fill-in leaves it ([`terminal_ducts`]).
+            let plenum = !reached(&floor, &t.system, &[], t.at, reach) && returns_air(sp, &t.terminal_kind, &t.system);
             by_plenum += usize::from(plenum);
             let own = plenum || reached(&floor, &t.system, &[], t.at, reach);
             filled_terminals += usize::from(
@@ -365,6 +393,35 @@ mod tests {
         let vv = got.get("V").unwrap_or_else(|| panic!("a need"));
         assert_eq!((vv.needs, vv.served, vv.runs.len()), (1, 0, 0));
         assert_eq!(vv.unserved.len(), 1);
+    }
+
+    #[test]
+    fn the_fixtures_filled_are_the_ones_the_model_builds_copies_included() {
+        // Two read fixtures; the spec holds one of them and two copies a rule set into rooms of
+        // their type (one mark-less, named by its fixture). A read one no tag stands for is kept.
+        let tag = |id: &str, level: &str, at: [f64; 2], fields: Value| -> cadaddy_walk3d::tags::ElementTag {
+            serde_json::from_value(json!({"id": id, "kind": "plumbing_fixture", "level": level, "at_ft": at, "fields": fields}))
+                .unwrap_or_else(|e| panic!("{e}"))
+        };
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
+        sp.tags = vec![
+            tag("device:3:a", "Level 3", [10.0, 10.0], json!({"type": {"value": "P-91", "source": "plan"}})),
+            tag("device:3:copy1", "Level 3", [40.0, 10.0], json!({"type": {"value": "P-91", "source": "rule"}})),
+            tag("device:3:copy2", "Level 3", [70.0, 10.0], json!({"fixture": {"value": "WATER CLOSET", "source": "rule"}})),
+        ];
+        let read = |tag: &str, level: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            level: level.into(),
+            kind: "plumbing fixture".into(),
+            ..Default::default()
+        };
+        // The first stands where its tag is (the tag says "Level 3", the reading "3"); the second
+        // has no tag.
+        let got = built_fixtures(&sp, &[read("P-91", "3", [120.0, 126.0]), read("P-92", "3", [1200.0, 120.0])]);
+        let marks: Vec<&str> = got.iter().map(|(_, m, _)| m.as_str()).collect();
+        assert_eq!(marks, ["P-91", "P-91", "WATER CLOSET", "P-92"], "{got:?}");
+        assert_eq!(got.get(1).map(|f| f.2), Some([480.0, 120.0]), "a copy at its own point");
     }
 
     #[test]

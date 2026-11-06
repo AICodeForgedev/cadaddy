@@ -195,6 +195,12 @@ pub(crate) fn moment_ft(n: usize, root: usize, edges: &[(usize, usize, f64)], sh
     most
 }
 
+/// The NEC 240.6(A) standard rating at or under `a` (none: under the table): the largest
+/// breaker a limit of `a` amps takes.
+pub(crate) fn standard_at_most(a: f64) -> Option<f64> {
+    super::rules().derate.standard_ratings.iter().copied().filter(|r| *r <= a + 1e-9).reduce(f64::max)
+}
+
 /// The NEC 240.6(A) standard rating at or over `a` (none: over the table).
 fn standard_at_least(a: f64, rl: &RouteRules) -> Option<f64> {
     rl.derate.standard_ratings.iter().copied().find(|r| *r + 1e-9 >= a)

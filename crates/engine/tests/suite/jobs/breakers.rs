@@ -357,3 +357,31 @@ fn a_rebuild_replaces_the_breakers_and_keeps_the_count_index_true() {
         );
     }
 }
+
+#[test]
+fn equipment_protected_over_its_submittals_limit_gets_the_largest_breaker_within_it_the_drawn_one_kept() {
+    // Q6216: the drawings give the unit 40 A; its approved submittal allows at most 35 A. The job
+    // records the field's correction on the equipment; the breaker is built at 35 A, its design
+    // 40 A beside it with the rule, and the BOM counts what is installed.
+    let mut s = building();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment_electrical"] = json!([{
+        "tag": "RTU-1", "source_panel": "LP1", "drawing_ocpd": "40A/2P", "max_ocpd_a": 35.0, "source": "submittal Unit Data.pdf",
+        "installed_ocpd": "35A/2P", "correction": "E-EQUIP-OCPD: code: listed equipment per its labeling (drawn 40A/2P, the submittal allows at most 35 A)"
+    }]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({"route": false})).expect("build");
+    let lp1 = breakers_of(&mut s, "LP1");
+    let rtu = lp1.iter().find(|b| val(b, "circuit") == "LP1-3,5").cloned().unwrap_or(Value::Null);
+    assert_eq!((val(&rtu, "trip_a"), val(&rtu, "size")), (&json!("35"), &json!("35A 2P")), "installed: {rtu}");
+    assert_eq!((val(&rtu, "design:trip_a"), val(&rtu, "design:size")), (&json!("40"), &json!("40A 2P")), "design kept: {rtu}");
+    assert!(val(&rtu, "correction:trip_a").as_str().is_some_and(|t| t.starts_with("E-EQUIP-OCPD")), "{rtu}");
+    // The other rows as drawn.
+    let lights = lp1.iter().find(|b| val(b, "circuit") == "LP1-1").cloned().unwrap_or(Value::Null);
+    assert_eq!(val(&lights, "trip_a"), 20.0);
+    assert!(lights.get("design:trip_a").is_none(), "{lights}");
+    // A second build finds and corrects it the same way: the design is never overwritten.
+    s.execute("model.build", &json!({"route": false})).expect("build");
+    let rtu = breakers_of(&mut s, "LP1").into_iter().find(|b| val(b, "circuit") == "LP1-3,5").unwrap_or(Value::Null);
+    assert_eq!((val(&rtu, "trip_a"), val(&rtu, "design:trip_a")), (&json!("35"), &json!("40")), "{rtu}");
+}

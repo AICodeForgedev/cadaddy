@@ -1865,6 +1865,13 @@ pub struct EquipmentElectrical {
     pub source: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub status: String,
+    /// The protection the field installs where the drawings' exceeds what the submittal allows
+    /// (`80A/3P`), the drawings' kept in `drawing_ocpd`; empty: as drawn.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub installed_ocpd: String,
+    /// Why, by which rule (`E-EQUIP-OCPD: …`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub correction: String,
 }
 
 /// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
