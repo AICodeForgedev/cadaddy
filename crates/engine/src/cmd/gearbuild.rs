@@ -583,6 +583,10 @@ pub(crate) fn take_submitted_size(e: &mut cadaddy_walk3d::MepEquipment, g: &Subm
     e.height_ft = h / 12.0;
     e.bottom_ft = bottom;
     e.properties.insert("BOX".into(), format!("{h} H x {w} W x {dp} D in"));
+    // What the takeoff reads; the size it replaces stays beside it.
+    if let Some(was) = e.properties.insert("SIZE".into(), format!("{w}\" W x {dp}\" D x {h}\" H")) {
+        e.properties.insert("SIZE_WAS".into(), was);
+    }
     e.sources.insert("size".into(), g.source.clone());
     if e.enclosure.is_none() {
         let (top_entry_in, bottom_entry_in) = entry_plates(g, rule);
@@ -1165,6 +1169,7 @@ mod tests {
             max: [100.0 + 5.0, 200.0 + 24.0],
             bottom_ft: 2.5,
             height_ft: 4.0,
+            properties: [("SIZE".to_string(), "20\" W x 6\" D x 48\" H".to_string())].into(),
             ..Default::default()
         };
         assert!(take_submitted_size(&mut e, &g, &rule, 12.0));
@@ -1173,6 +1178,8 @@ mod tests {
         assert!(((e.min[1] + e.max[1]) / 2.0 - 212.0).abs() < 1e-9);
         assert!((e.height_ft - 74.0 / 12.0).abs() < 1e-9);
         assert_eq!(e.properties.get("BOX").map(String::as_str), Some("74 H x 20 W x 5.75 D in"));
+        assert_eq!(e.properties.get("SIZE").map(String::as_str), Some("20\" W x 5.75\" D x 74\" H"));
+        assert_eq!(e.properties.get("SIZE_WAS").map(String::as_str), Some("20\" W x 6\" D x 48\" H"));
         assert_eq!(e.sources.get("size").map(String::as_str), Some("gear submittal p.3"));
         assert!(e.enclosure.is_some());
         assert!(!take_submitted_size(&mut e, &g, &rule, 12.0), "already its size");
