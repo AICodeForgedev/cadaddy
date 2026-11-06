@@ -10722,17 +10722,37 @@ fn infer_missing_water(
         // drainage, which its plans draw) from any of its pipes.
         let mains: Vec<&cadaddy_walk3d::MepRun> =
             on.iter().copied().filter(|r| !*planless || !fill.water.contains(&r.system) || super::waterfill::is_main(r)).collect();
-        let inf = super::waterfill::infer(level, &mains, &on, needs, upf, &fill);
+        // The floor's electrical gear: its dedicated space (NEC 110.26(E)(1)), from the floor to
+        // 6 ft over it or the floor's height, kept clear of the pipe filled in.
+        let storey_ft = sp.level(level).map(|l| l.height_ft).filter(|h| h.is_finite() && *h > 0.0);
+        let keep: Vec<super::waterfill::KeepOut> = sp
+            .mep
+            .equipment
+            .iter()
+            .filter(|e| storey_key(&e.level) == *key && super::validate_gear::is_gear(e))
+            .filter(|e| e.min.iter().chain(&e.max).all(|v| v.is_finite()) && e.bottom_ft.is_finite() && e.height_ft.is_finite())
+            .map(|e| {
+                let top = e.bottom_ft + e.height_ft + 6.0;
+                super::waterfill::KeepOut {
+                    min: [e.min[0].min(e.max[0]), e.min[1].min(e.max[1])],
+                    max: [e.min[0].max(e.max[0]), e.min[1].max(e.max[1])],
+                    top_ft: storey_ft.map_or(top, |h| h.min(top)),
+                    what: e.tag.clone(),
+                }
+            })
+            .collect();
+        let inf = super::waterfill::infer_clear(level, &mains, &on, needs, upf, &fill, &keep);
         let mut ft: BTreeMap<String, f64> = BTreeMap::new();
         for r in &inf.runs {
             *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
         }
         let ft_s: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
         progress_line(&format!(
-            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
+            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}; {} offset clear of gear's dedicated space); left: {:?}",
             inf.served,
             inf.runs.len(),
             ft_s.join(", "),
+            inf.cleared,
             inf.unserved
         ));
         let where_ = if *planless {
