@@ -31,7 +31,7 @@ limits the bridge has (no multileaders or MESH before 2010, …) and the same vi
 (DWG doesn't store the number), **without** the bridge's DIMFXL loss and its 2000 multileader and
 table style losses.
 
-### Synthetic corpus (`crates/engine/tests/corpus_roundtrip.rs`, `cargo xtask corpus synthetic`)
+### Synthetic corpus (`crates/engine/tests/suite/draw/corpus_roundtrip.rs`, `cargo xtask corpus synthetic`)
 
 The `dwg-native` format has the bridge's difference kinds, no others (dimension text positions,
 hatch pattern lines, viewport numbers, header variables filled in).

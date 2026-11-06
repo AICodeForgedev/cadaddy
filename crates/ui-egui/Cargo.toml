@@ -42,3 +42,14 @@ naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+# The test programs under tests/suite/: each folds many test files into one binary (one link
+# of the crate instead of one per file). A test file that needs a process of its own stays a
+# top-level file in tests/ (see CLAUDE.md, "Where a test goes").
+[[test]]
+name = "suite_e2e"
+path = "tests/suite/e2e/main.rs"
+
+[[test]]
+name = "suite_panels"
+path = "tests/suite/panels/main.rs"

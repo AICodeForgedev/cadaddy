@@ -68,3 +68,54 @@ image = { workspace = true, features = ["bmp", "tiff"] }
 rayon = { workspace = true }
 # Sandboxed WASM plug-in runtime: a pure-Rust interpreter with fuel metering (MIT OR Apache-2.0).
 wasmi = "0.41"
+
+# The test programs under tests/suite/: each folds many test files into one binary (one link
+# of the crate instead of one per file). A test file that needs a process of its own stays a
+# top-level file in tests/ (see CLAUDE.md, "Where a test goes").
+[[test]]
+name = "suite_annotate"
+path = "tests/suite/annotate/main.rs"
+
+[[test]]
+name = "suite_draw"
+path = "tests/suite/draw/main.rs"
+
+[[test]]
+name = "suite_estimate"
+path = "tests/suite/estimate/main.rs"
+
+[[test]]
+name = "suite_files"
+path = "tests/suite/files/main.rs"
+
+[[test]]
+name = "suite_files_pdf"
+path = "tests/suite/files_pdf/main.rs"
+
+[[test]]
+name = "suite_files_plot"
+path = "tests/suite/files_plot/main.rs"
+
+[[test]]
+name = "suite_files_plotpdf"
+path = "tests/suite/files_plotpdf/main.rs"
+
+[[test]]
+name = "suite_files_saveas"
+path = "tests/suite/files_saveas/main.rs"
+
+[[test]]
+name = "suite_jobs"
+path = "tests/suite/jobs/main.rs"
+
+[[test]]
+name = "suite_model3d"
+path = "tests/suite/model3d/main.rs"
+
+[[test]]
+name = "suite_script"
+path = "tests/suite/script/main.rs"
+
+[[test]]
+name = "suite_validate"
+path = "tests/suite/validate/main.rs"

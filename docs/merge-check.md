@@ -46,7 +46,9 @@ cargo merge-check <base> HEAD --dry-run                 # what changed, which pa
      old verdict; the tests are listed so they can be fixed to run alone.
    - **Serialized test files.** An integration test file that serializes its tests with a
      `static ...: Mutex<()>` runs one test at a time (a nextest test group per binary), as it did
-     inside one `cargo test` process.
+     inside one `cargo test` process. In a suite program (`tests/suite/<program>/main.rs`, one
+     module per former test file) only the modules that take turns (a lock of their own, or the
+     suite helper's `serial()`) form the group: `binary_id(=<pkg>::suite_jobs) & test(/^(a|b)::/)`.
 5. **Failure output** is the tools' own: clippy's diagnostics; nextest prints each failing test's
    output and panic as it fails and again at the end. merge-check then lists the failing tests
    with the plain `cargo test ... -- --exact <name>` command that re-runs each one, and exits
@@ -77,7 +79,7 @@ between batches: third-party crates and untouched workspace crates are not rebui
   deleted after a batch (the cap keeps it bounded; cargo overwrites a crate's outputs in place when
   its sources change, so the size grows only when dependency versions or the toolchain change).
 - **Exactly one warm cache.** A warm cache for a batch that touches the engine is about 110 GB
-  with debug info off (~700 test binaries plus optimized dependencies), so the default
+  with debug info off (~700 test binaries plus optimized dependencies, before the test files were folded into suite programs; testfold measured the engine's build folder at a quarter of its old size), so the default
   `--cap-gb 120` holds one. The merge server keeps this one cache beside the builders' shared
   target directory, never a second one.
 - `CARGO_BUILD_JOBS` as the server's memory allows; `nice -n 15`.
@@ -93,3 +95,5 @@ between batches: third-party crates and untouched workspace crates are not rebui
 
 - 0.7.10: first version (affected-package closure, nextest with an after stage for slow tests,
   warm cache with mtime restore and size cap).
+- 0.7.10 (testfold): a suite program's serialized modules (a lock of their own or the helper's
+  `serial()`) run one at a time, not the whole program.
