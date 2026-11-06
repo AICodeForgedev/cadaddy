@@ -183,6 +183,8 @@ struct Job {
     unknown: String,
     /// 104: a receptacle that isn't weather-resistant.
     patio: String,
+    /// 102: the lavatory (no product data).
+    lav: String,
 }
 
 fn job() -> Job {
@@ -287,6 +289,7 @@ fn job() -> Job {
         fed: h[11].clone(),
         unknown: h[12].clone(),
         patio: h[13].clone(),
+        lav: h[5].clone(),
     }
 }
 
@@ -391,6 +394,22 @@ fn products_are_checked_field_by_field_against_the_submittal_and_the_spec() {
     assert!(lum["expected"].as_str().unwrap().contains("LX-100"), "{lum}");
     assert_eq!(of(&fs, &j.lum, "G-PRODUCT", "maker")["verdict"], "unsure", "no maker in the model: unsure, not a pass");
     assert!(r["checked"]["G-PRODUCT"]["fail"].as_u64().unwrap() >= 4, "{}", r["checked"]);
+}
+
+#[test]
+fn a_fixture_no_document_gives_a_product_stays_unsure_with_the_reason() {
+    let j = job();
+    // The build's reason (plumbing products, Q6205): its tag is on no schedule row or submittal.
+    let why = "its tag LAV is on no plumbing fixture schedule row, no plumbing submittal lists it";
+    let mut s = set_props(j.s, &[(&j.lav, "product_gap", json!(why))]);
+    let (r, fs) = screen(&mut s);
+    let lav = of(&fs, &j.lav, "G-PRODUCT", "record");
+    assert_eq!(lav["verdict"], "unsure", "{lav}");
+    assert!(lav["issue"].as_str().unwrap().contains(why), "the finding names the reason: {lav}");
+    let key = format!("lavatory: no product data ({why})");
+    assert!(r["unmeasured"]["G-PRODUCT"][key.as_str()].as_u64().unwrap_or(0) >= 1, "{}", r["unmeasured"]);
+    // One the build gives no reason for keeps the plain count.
+    assert!(r["unmeasured"]["G-PRODUCT"]["receptacle: no product data"].as_u64().unwrap_or(0) >= 1, "{}", r["unmeasured"]);
 }
 
 #[test]
