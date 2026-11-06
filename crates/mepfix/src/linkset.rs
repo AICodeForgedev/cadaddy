@@ -247,6 +247,22 @@ pub fn e1_symbol_bubble() -> Drawing {
     s.d
 }
 
+/// E-1 with lettering by round shapes that are no callouts: a round table drawn in the plan with
+/// a keynote number and a receptacle's circuit lettered small inside its outline, and a
+/// receptacle's `GFCI` printed right over its circuit label (a word over what reads like a sheet
+/// number), each beside its receptacle.
+pub fn e1_with_lookalikes() -> Drawing {
+    let mut s = Sheet { d: e1() };
+    s.circle([24.0, 10.0], 1.0);
+    s.text_mid("27", [23.8, 10.3], 0.1);
+    s.device("A-3", [23.4, 9.5]);
+    s.text_mid("A-3", [24.0, 9.6], 0.1);
+    s.device("A-5", [26.5, 12.0]);
+    s.text_mid("GFCI", [27.1, 12.2], 0.1);
+    s.text_mid("A-5", [27.1, 12.0], 0.1);
+    s.d
+}
+
 /// E-2: the east half, 14 units to the left of where E-1 would draw it.
 fn e2() -> Drawing {
     let mut s = Sheet::new();

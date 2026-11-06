@@ -2597,13 +2597,17 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // A symbol the import tagged with the circuit label beside it may still have its type
         // mark printed by it (`H` over a downlight whose `G-1,a` the import took): the nearest
         // device mark within reach that no other symbol is nearer.
-        let type_mark_by = |at: cadaddy_geom::Vec2, h: cadaddy_doc::Handle, height: f64| -> Option<String> {
+        let type_mark_by = |at: cadaddy_geom::Vec2, h: cadaddy_doc::Handle, label_h: Option<f64>| -> Option<String> {
+            let height = label_h.unwrap_or(DEFAULT_MARK_HEIGHT);
             texts
                 .get(g)
                 .into_iter()
                 .flatten()
                 .filter(|t| {
-                    t.at.dist(at) <= TYPE_MARK_REACH_H * height.max(t.height) && !circuit_text(&t.value, &sheet_numbers) && !is_circuit_tag(&t.value)
+                    label_h.is_none_or(|lh| t.height >= TYPE_MARK_MIN_H * lh && t.height <= TYPE_MARK_MAX_H * lh)
+                        && t.at.dist(at) <= TYPE_MARK_REACH_H * height.max(t.height)
+                        && !circuit_text(&t.value, &sheet_numbers)
+                        && !is_circuit_tag(&t.value)
                 })
                 .filter_map(|t| match device_types::tag_verdict(&t.value, &c.legend_types, learned, &sheet_numbers) {
                     TagVerdict::Device(m) => Some((t, m)),
@@ -2628,7 +2632,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
             // luminaire's mark only, one the lighting submittals list: a note by a receptacle,
             // `HOR`, is no type.)
             let marked = if electrical(&sheet) && kind.is_empty() && is_circuit_tag(tag) && !legend.covers(*at) && !refused.contains(tag.as_str()) {
-                type_mark_by(*at, *h, tag_at.map_or(DEFAULT_MARK_HEIGHT, |(_, ht)| ht))
+                type_mark_by(*at, *h, tag_at.map(|(_, ht)| ht).filter(|ht| ht.is_finite() && *ht > 0.0))
                     .filter(|m| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.eq_ignore_ascii_case(m)))
             } else {
                 None
@@ -3866,6 +3870,11 @@ const RECEPTACLE_NOTE_H: f64 = 4.0;
 /// How far a symbol's type mark is printed from it, in the mark's text heights (over or beside
 /// it, its circuit label on the other side).
 const TYPE_MARK_REACH_H: f64 = 3.0;
+/// A type mark is lettered about as high as the symbol's circuit label: from this share to this
+/// many times its height (taller is strokes the lettering reader took for a letter, a chair's
+/// outline read as `C`).
+const TYPE_MARK_MIN_H: f64 = 0.6;
+const TYPE_MARK_MAX_H: f64 = 2.0;
 /// A tag's text height where the import didn't keep it (drawing units).
 const DEFAULT_MARK_HEIGHT: f64 = 6.0;
 /// A lone luminaire mark's circuit label is within this of it, in its text heights; a device read
@@ -23409,6 +23418,57 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// Every receptacle drawn on a plan is read, whatever lettering lies near it (Q6246): one in a
+    /// round table's outline that holds a keynote number and its circuit lettered small (no
+    /// callout bubble to sheet G-3: a bubble's lettering fills it), and one beside a letter the lettering reader
+    /// made of furniture strokes (`H` five times its label's height: no type mark).
+    #[test]
+    fn receptacles_by_a_round_table_or_a_giant_letter_are_read() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
+        // General sheets numbered like panel G's circuits: `G-3` in a round reads as a callout to
+        // one of them.
+        job.index = Some(json!({"sheets": [
+            {"number": "E-1", "title": "FIRST FLOOR POWER PLAN", "discipline": "E", "type": "plan", "level": "1"},
+            {"number": "G-1", "title": "COVER SHEET", "discipline": "G", "type": "general", "level": ""},
+            {"number": "G-3", "title": "CODE PLAN", "discipline": "G", "type": "general", "level": ""}
+        ]}));
+        job.sheets_loaded = true;
+        job.luminaire_types = vec!["H".into()];
+        // Lettering 2 high. The table: a round 40 across at (200, 500), keynote `27` and circuit
+        // `G-3` lettered inside it, its receptacle at (185, 490). The giant `H` (10 high) 12 off
+        // the receptacle at (600, 500). A real downlight `H` (2 high) over its `G-1` at (900, 500).
+        let texts: Vec<(&str, f64, f64, f64)> =
+            vec![("27", 195.0, 506.0, 2.0), ("G-3", 194.0, 492.0, 2.0), ("H", 608.0, 506.0, 10.0), ("H", 899.0, 504.0, 2.0)];
+        let syms: Vec<(&str, f64, f64)> = vec![("G-3", 185.0, 490.0), ("G-9", 600.0, 500.0), ("G-1", 900.0, 500.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        if let Ok(d) = s.doc_mut() {
+            let common = Common { layer: "PDF".into(), ..Common::default() };
+            d.add(&Space::Model, common, EntityKind::Circle(Circle { center: Vec3::new(200.0, 500.0, 0.0), radius: 20.0 })).ok();
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        got.sort();
+        let want: Vec<(String, String)> = [("H", "G-1"), ("REC", "G-3"), ("REC", "G-9")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+        assert_eq!(got, want, "{r:#}");
     }
 
     /// A lone fixture mark is printed as the schedule prints its type, in its label's lettering: a

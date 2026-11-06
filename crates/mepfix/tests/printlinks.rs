@@ -52,6 +52,22 @@ fn every_callout_resolves_but_the_broken_one() {
     assert_eq!(l.sheets.len(), 6);
 }
 
+/// A round table holding a keynote number and a circuit lettered small, and `GFCI` over a
+/// circuit label, are no bubbles: E-1 reads the same callouts with them as without.
+#[test]
+fn lettering_in_a_round_table_or_a_word_over_a_circuit_is_no_bubble() {
+    let bubbles = |d: &cadaddy_doc::Drawing| -> Vec<(String, String, String)> {
+        let mut v: Vec<(String, String, String)> =
+            printlinks::read_page(d, "E-1").callouts.iter().map(|c| (c.kind.clone(), c.detail.clone(), c.target_sheet.clone())).collect();
+        v.sort();
+        v
+    };
+    let plain = bubbles(&linkset::drawings().into_iter().find(|(n, _)| *n == "E-1").map(|(_, d)| d).unwrap_or_default());
+    let with = bubbles(&linkset::e1_with_lookalikes());
+    assert_eq!(with, plain);
+    assert!(plain.iter().any(|(_, d, t)| d == "2" && t == "E-4"), "{plain:?}");
+}
+
 #[test]
 fn the_enlarged_plan_registers_into_its_boundary_and_its_devices_count_once() {
     let l = links();

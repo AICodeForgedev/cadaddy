@@ -48,6 +48,10 @@ const MAX_BOXES: usize = 5_000;
 const MAX_PIECES: usize = 400_000;
 /// Most cells the straight pieces are filed under per page (past it, by their ends only).
 const MAX_SEG_CELLS: usize = 4_000_000;
+/// A bubble's lettering fills it: lettering lower than this share of the round's radius is
+/// lettering beside or over some other round shape (a table, a rug, a receptacle's circle with
+/// its circuit printed across it), not a callout's numbers.
+const MIN_BUBBLE_LETTERING_R: f64 = 0.2;
 /// Most texts read for references per page.
 const MAX_REF_TEXTS: usize = 50_000;
 /// Most callouts in a set's answer.
@@ -815,7 +819,14 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let kind = if boundary.is_some() || enlarged_word { "enlarged_plan" } else { shape_kind };
         (kind, shape_kind, boundary, divider, enlarged_word)
     };
-    let detail_like = |v: &str| !v.is_empty() && v.len() <= 4 && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.');
+    // A detail or view number: `3`, `12`, `A`, `A1`, `3.1`; a word (`GFCI` over a receptacle's
+    // circuit) is no number.
+    let detail_like = |v: &str| {
+        !v.is_empty()
+            && v.len() <= 4
+            && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.')
+            && (v.chars().any(|ch| ch.is_ascii_digit()) || v.chars().count() == 1)
+    };
     // A bubble naming its own sheet beside a view title numbers that view.
     let level_titles = sheet_reader::plan_views(d);
     let view_mark = |target: &str, c: [f64; 2], r: f64| {
@@ -832,7 +843,9 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let inner: Vec<usize> = near_texts(c, r)
             .into_iter()
-            .filter(|&i| texts.get(i).is_some_and(|t| dist(text_middle(t), c) <= 0.98 * r && t.height < 1.4 * r))
+            .filter(|&i| {
+                texts.get(i).is_some_and(|t| dist(text_middle(t), c) <= 0.98 * r && t.height < 1.4 * r && t.height >= MIN_BUBBLE_LETTERING_R * r)
+            })
             .collect();
         if inner.is_empty() || inner.len() > 12 {
             continue;
