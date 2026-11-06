@@ -23,7 +23,7 @@ lists the changes. `REJECTED` holds the program's message.
 
 Rebuild: `scripts/dwg-interop.sh <empty folder>` (needs the programs; see the script's header), then
 replace the matrix below with the folder's `matrix.md`. The harness is
-`crates/engine/tests/dwginterop.rs`; the fixes it found are pinned in `crates/io/tests/dwg_interop.rs`.
+`crates/engine/tests/suite/files_plotpdf/dwginterop.rs`; the fixes it found are pinned in `crates/io/tests/suite/dwg/dwg_interop.rs`.
 
 ## Summary
 
@@ -42,7 +42,7 @@ replace the matrix below with the folder's `matrix.md`. The harness is
   (70 = 68) instead of a shape file (70 = 1). The bridge's identical record read as 1. The native
   codec wrote the record's two flag bits in the order vertical, shape file. The converter and the
   bridge use shape file, then vertical. Both the writer and CADaddy's reader now use that order.
-  Test: `style_records_store_the_shape_file_bit_before_vertical` (`crates/io/tests/dwg_interop.rs`)
+  Test: `style_records_store_the_shape_file_bit_before_vertical` (`crates/io/tests/suite/dwg/dwg_interop.rs`)
   pins the two raw bits of a shape-file record, a vertical style and Standard in every version.
 
 ## Known losses (not CADaddy's writer, or not fixed here)

@@ -69,4 +69,4 @@ through its entry plates, in rows across the gear: a crowded plate is visible at
 `cadaddy-mepfix`'s generator prints made-up equipment, lug and feeder schedules on the E-sheets
 with an answer key (`Truth::gear_problems`: the problems planted); `gear_reader` reads them back
 and places the gear at its tags; `link_fixtures` puts the light fixture schedule's columns on every
-fixture of its type. Tests: `crates/engine/tests/gear.rs`, `crates/mepfix/tests/elecequip.rs`.
+fixture of its type. Tests: `crates/engine/tests/suite/jobs/gear.rs`, `crates/mepfix/tests/elecequip.rs`.

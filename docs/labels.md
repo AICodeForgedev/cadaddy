@@ -51,5 +51,5 @@ The label printer (a tool), tape cartridges for the device labels (from the labe
 2" × 4" label stock, a typed directory card per panel, and an arc flash label per labeled item
 (with the number still waiting for study data).
 
-Tests: `crates/engine/tests/labels.rs`, and `crates/mepfix/tests/elecequip.rs` (a made-up set's
+Tests: `crates/engine/tests/suite/files/labels.rs`, and `crates/mepfix/tests/elecequip.rs` (a made-up set's
 directories against its panel schedules).

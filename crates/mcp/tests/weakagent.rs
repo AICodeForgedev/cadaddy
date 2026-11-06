@@ -434,7 +434,7 @@ fn real_model_run() {
 // ---- MUST 3: the weak-agent test reports validation failures ----
 
 #[test]
-#[ignore = "needs file format support (saveas); covered by crates/engine/tests/agentready.rs"]
+#[ignore = "needs file format support (saveas); covered by crates/engine/tests/suite/files/agentready.rs"]
 fn validation_failures_appear_in_the_briefing_and_review_queue() {
     let dir = std::env::temp_dir().join(format!("cadaddy-weakagent-val-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
