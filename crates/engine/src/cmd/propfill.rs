@@ -1933,7 +1933,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             tally,
                         );
                     }
-                    let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
+                    // (`G-13,15`: a two-pole's first.)
+                    let number = circuit
+                        .as_deref()
+                        .and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
                     let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
                     let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
                     let row =

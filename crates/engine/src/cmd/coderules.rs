@@ -95,6 +95,12 @@ pub(crate) struct Place {
     pub rooms: Vec<String>,
 }
 
+/// Whether what a room's receptacles' breakers are known to be says all are GFCI: one at least
+/// known, none known not to be.
+fn all_under_gfci(breakers: &[Option<bool>]) -> bool {
+    breakers.iter().any(|b| *b == Some(true)) && !breakers.iter().any(|b| *b == Some(false))
+}
+
 /// A spot for something the drawings don't place: in the first room whose name has one of `words`,
 /// on the lowest level with one, along its longest wall (a quarter of the way for the first, on
 /// from there for the next, `used` keeping count): its level, the room's name and the point.
@@ -338,6 +344,24 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             circuit: (!circuit.is_empty()).then_some((key, circuit)),
             room,
         });
+    }
+    // A receptacle with no circuit printed, in a room whose other receptacles are all under GFCI
+    // breakers: the same. (Not a guess at its circuit: any of them would protect it.)
+    let mut in_room: BTreeMap<String, Vec<Option<bool>>> = BTreeMap::new();
+    for r in recs.iter().filter(|r| !r.room.trim().is_empty()) {
+        in_room.entry(r.room.trim().to_ascii_uppercase()).or_default().push(r.gfci_breaker);
+    }
+    let src_of: BTreeMap<String, Source> = recs
+        .iter()
+        .filter(|r| r.gfci_breaker == Some(true))
+        .filter_map(|r| r.breaker_src.clone().map(|s| (r.room.trim().to_ascii_uppercase(), s)))
+        .collect();
+    for r in recs.iter_mut().filter(|r| r.gfci_breaker.is_none() && r.circuit.is_none()) {
+        let room = r.room.trim().to_ascii_uppercase();
+        if in_room.get(&room).is_some_and(|others| all_under_gfci(others)) {
+            r.gfci_breaker = Some(true);
+            r.breaker_src = src_of.get(&room).cloned();
+        }
     }
     // Where the location needs GFCI though the print doesn't tag it: within reach of a sink on its
     // level (a fixture's location is its middle: half a sink's width is added).
@@ -678,6 +702,13 @@ mod tests {
         // The plans have it now: built once.
         let (again, _) = silent_place_receptacles(&mut sp, &rooms);
         assert!(again.is_empty(), "{again:?}");
+    }
+
+    #[test]
+    fn a_room_all_under_gfci_breakers_protects_the_one_with_no_circuit_printed() {
+        assert!(all_under_gfci(&[Some(true), Some(true), None]));
+        assert!(!all_under_gfci(&[Some(true), Some(false), None]), "one on a plain breaker");
+        assert!(!all_under_gfci(&[None, None]), "nothing known");
     }
 
     #[test]

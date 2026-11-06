@@ -5695,35 +5695,6 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         );
                     }
                 }
-                // A receptacle a panel schedule calls for in a code place, no plan draws: built.
-                if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
-                    let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
-                    let (built, no_room) = super::coderules::silent_place_receptacles(&mut sp, &rooms);
-                    if !built.is_empty() {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
-                        progress_line(&format!("  receptacles the schedules call for and no plan draws, built: {}", built.join("; ")));
-                        job.add_finding(
-                            StageName::BimBuild,
-                            "Receptacles built from the panel schedules",
-                            &format!("No plan draws these; the schedule calls for them and the code's place sets their type. Placed on a wall of the room, to be set in the field: {}", built.join("; ")),
-                            2,
-                            vec!["Check the spot; the design value and the rule are on each object".into()],
-                            None,
-                            false,
-                        );
-                    }
-                    if !no_room.is_empty() {
-                        job.add_finding(
-                            StageName::BimBuild,
-                            "Receptacle circuits with nothing drawn and no room found to build them in",
-                            &no_room.join("; "),
-                            3,
-                            vec!["Say which room each is in".into()],
-                            None,
-                            false,
-                        );
-                    }
-                }
                 // A receptacle by a sink is a GFCI device (non-feed-through GFCIs).
                 if schedule.is_some()
                     && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
@@ -15583,6 +15554,36 @@ fn equipment_step(
     }
     // The other circuits its submittal calls for: built as objects.
     let rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
+    // A receptacle a panel schedule calls for in a code place, no plan draws: built.
+    let (built_silent, no_room_silent) = super::coderules::silent_place_receptacles(&mut sp, &rooms);
+    if !built_silent.is_empty() {
+        let line = format!("  receptacles the schedules call for and no plan draws, built: {}", built_silent.join("; "));
+        report_progress(s, json!({"step": "code places"}), &line);
+        s.echo(line);
+        job.add_finding(
+            StageName::BimBuild,
+            "Receptacles built from the panel schedules",
+            &format!(
+                "No plan draws these; the schedule calls for them and the code's place sets their type. Placed on a wall of the room, to be set in the field: {}",
+                built_silent.join("; ")
+            ),
+            2,
+            vec!["Check the spot; the design value and the rule are on each object".into()],
+            None,
+            false,
+        );
+    }
+    if !no_room_silent.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Receptacle circuits with nothing drawn and no room found to build them in",
+            &no_room_silent.join("; "),
+            3,
+            vec!["Say which room each is in".into()],
+            None,
+            false,
+        );
+    }
     let (mut built_extra, mut no_room_extra) = (Vec::new(), Vec::new());
     for e in rows.iter().filter(|e| !e.extra_circuits.is_empty()) {
         let (b, n) = equipsub::extra_circuit_tags(&mut sp, e, &rooms, &rule.cite);
@@ -15655,7 +15656,7 @@ fn equipment_step(
     );
     sp.mep.equipment_electrical = rows;
     s.doc_mut()?.building_spec = Some(sp.to_json());
-    if !built_extra.is_empty() {
+    if !built_extra.is_empty() || !built_silent.is_empty() {
         super::propfill::rebuild_devices(s, "bim_build")?;
     }
     report_progress(s, json!({"step": "equipment connections"}), &line);
