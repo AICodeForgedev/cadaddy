@@ -1,0 +1,53 @@
+{
+  "drainage_systems": ["SAN", "ST"],
+  "drainage_slope": [
+    {"max_size_in": 2.5, "in_per_ft": 0.25, "source": "IPC 704.1: horizontal drainage 2-1/2 inches or less, 1/4 inch per foot"},
+    {"max_size_in": 6.0, "in_per_ft": 0.125, "source": "IPC 704.1: horizontal drainage 3 to 6 inches, 1/8 inch per foot"},
+    {"max_size_in": 1000.0, "in_per_ft": 0.0625, "source": "IPC 704.1: horizontal drainage 8 inches or larger, 1/16 inch per foot"}
+  ],
+  "below_slab_invert_in": 18.0,
+  "below_slab_why": "company default: the invert of drainage under a slab on grade where the plans print none",
+  "stack_join_ft": 2.0,
+  "connect_reach_ft": 15.0,
+  "needs": [
+    {"words": ["WATER CLOSET", "TOILET", "URINAL"], "systems": ["SAN", "V", "CW"]},
+    {"words": ["LAVATORY", "SINK", "TUB", "SHOWER", "WASHING MACHINE", "LAUNDRY", "MOP", "SERVICE BASIN"], "systems": ["SAN", "V", "CW", "HW"]},
+    {"words": ["FLOOR DRAIN", "CLEANOUT", "CLEAN OUT", "INTERCEPTOR", "SUMP"], "systems": ["SAN"]},
+    {"words": ["HOSE", "EYEWASH", "MIXING VALVE", "WATER VALVE", "BOOSTER", "EXPANSION TANK"], "systems": ["CW"]}
+  ],
+  "system_names": {"SAN": "waste", "V": "vent", "CW": "cold_water", "HW": "hot_water"},
+  "fill_in": {
+    "water": ["CW", "HW", "HWR"],
+    "fixture_lines": ["CW", "HW"],
+    "stack_on": ["below", "above"],
+    "stack_basis": "trade practice: floors that stack are piped alike; where a floor's rooms stand on the same rooms of the floor below (above for the lowest), its water mains run as that floor's do, fed by the same risers",
+    "main_basis": "trade practice: a main is carried on along its line to the branches it serves, at its size",
+    "branch_basis": "trade practice: each fixture's or room's branch is teed off the nearest main of its system at right angles (the typical connection of the enlarged details), the fixtures of one room and back-to-back rooms on one wet wall sharing one branch; a fixture branch nothing sizes is 1/2 inch (IPC Table 604.5 minimum fixture supply sizes are 3/8 to 1/2 inch)",
+    "branch_size_in": 0.5,
+    "drainage": ["SAN", "V"],
+    "drain_basis": "code and trade practice: a fixture whose waste or vent no plan draws within reach is drained and vented the way a plumber runs it, its branch teed off the nearest pipe of that system at right angles at the code's fixture drain or vent size, the drain falling at the slope IPC 704.1 sets for its size",
+    "vent": "V",
+    "vent_stacks": ["SAN"],
+    "vent_stack_basis": "IPC chapter 9: a fixture beside a waste stack is vented by the stack carried up as the stack vent",
+    "sizes": [
+      {"system": "SAN", "words": ["WATER CLOSET", "TOILET"], "size_in": 3.0, "source": "IPC chapter 7: no water closet drains to a pipe under 3 inch"},
+      {"system": "SAN", "words": ["URINAL", "SERVICE", "MOP"], "size_in": 2.0, "source": "IPC Table 709.1: urinal and service sink trap sizes"},
+      {"system": "SAN", "words": ["LAVATORY"], "size_in": 1.25, "source": "IPC Table 709.1: lavatory trap size 1-1/4 inch"},
+      {"system": "SAN", "words": ["TUB"], "size_in": 1.5, "source": "IPC Table 709.1: bathtub (with or without a shower) trap size 1-1/2 inch"},
+      {"system": "SAN", "words": ["SHOWER", "FLOOR DRAIN", "WASHING MACHINE", "LAUNDRY"], "size_in": 2.0, "source": "IPC Table 709.1: shower, floor drain and clothes washer standpipe trap sizes 2 inch"},
+      {"system": "SAN", "words": ["SINK"], "size_in": 1.5, "source": "IPC Table 709.1: sink trap size 1-1/2 inch"},
+      {"system": "SAN", "words": ["CLEANOUT", "CLEAN OUT"], "size_in": 3.0, "source": "trade practice: a cleanout is the size of the branch drain it opens (3 inch)"},
+      {"system": "SAN", "words": [], "size_in": 2.0, "source": "trade practice: a fixture drain no rule sizes is 2 inch"},
+      {"system": "V", "words": ["WATER CLOSET", "TOILET"], "size_in": 1.5, "source": "IPC chapter 9: an individual vent not less than half the drain it serves (3 inch)"},
+      {"system": "V", "words": [], "size_in": 1.25, "source": "IPC chapter 9: an individual vent not less than 1-1/4 inch"}
+    ],
+    "along_ft": 0.5,
+    "along_deg": 15.0,
+    "reach_ft": 150.0,
+    "share_ft": 8.0,
+    "joint_ft": 1.0,
+    "room_margin_ft": 1.0,
+    "sample_ft": 1.0,
+    "min_piece_ft": 2.0
+  }
+}

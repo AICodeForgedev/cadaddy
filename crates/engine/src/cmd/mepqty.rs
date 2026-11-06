@@ -455,7 +455,13 @@ fn takeoff(sp: &BuildingSpec, st: &Settings, types: &cadaddy_doc::bimspec::BimTy
         let cs = corners(&pts, &bottoms);
         let rise_ft: f64 = cs.iter().map(|c| if let Corner::Drop(d) = c { *d } else { 0.0 }).sum();
         let length = plan_ft.iter().sum::<f64>() + rise_ft;
-        let (lk, sk) = (st.key_level(&r.level), st.key_system(&r.system));
+        let (lk, mut sk) = (st.key_level(&r.level), st.key_system(&r.system));
+        // Pipe no plan draws (derived from another floor's, or inferred from a rule) is counted
+        // apart from the drawn.
+        let p = super::waterfill::provenance(r);
+        if sy.kind == MepKind::Pipe && p != super::waterfill::DRAWN {
+            sk = format!("{sk} ({p})");
+        }
         let size = size_label(sy.kind, r.size_in);
         counted.push((id, r, sy));
 
@@ -588,6 +594,16 @@ impl Takeoff {
                 "duct_area_sqft": r2(self.ducts.values().map(|r| r.area_sqft).sum()),
                 "duct_weight_lb": r2(self.ducts.values().map(|r| r.weight_lb).sum()),
                 "pipe_length_ft": sum_len("pipe"),
+                // Of it, the pipe no plan draws (derived from another floor's, or inferred).
+                "pipe_length_ft_filled_in": r2(self
+                    .pipes
+                    .iter()
+                    .filter(|((_, sk, x, _), _)| {
+                        *x == "pipe"
+                            && [super::waterfill::DERIVED, super::waterfill::INFERRED].iter().any(|p| sk.ends_with(&format!(" ({p})")))
+                    })
+                    .map(|(_, r)| r.length_ft)
+                    .sum()),
                 "conduit_length_ft": sum_len("conduit"),
                 "fittings": self.fittings.values().sum::<usize>(),
                 "terminals": self.terminals.values().sum::<usize>(),

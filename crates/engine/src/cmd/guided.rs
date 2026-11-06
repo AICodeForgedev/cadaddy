@@ -4522,6 +4522,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     let draft_params = if levels.is_empty() { json!({"store": true}) } else { json!({"store": true, "levels": levels, "stack": true}) };
     // The circuits whose estimated routes were all in typical-room views (their tags not stored).
     let mut room_view_circuits: BTreeSet<String> = BTreeSet::new();
+    // The levels whose plans draw their drainage but no water (found before other floors' room
+    // pipes are laid into their rooms): the fixtures' water is inferred there.
+    let mut no_water_levels: Vec<String> = Vec::new();
     // The trades' documents read before (a resumed job): the draft starts the spec again.
     let prev_trades = super::bspec::current(s, "bim_build").ok().map(|(sp, _)| sp).filter(super::tradeatoms::has_facts).map(|sp| sp.trades);
     let draft_result = s.execute("bspec.draft", &draft_params);
@@ -4831,6 +4834,113 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     dropped.1,
                     dropped.2
                 ));
+                // A pipe both an enlarged plan and the floor's plan draw (or two views of one
+                // floor, or one sheet's line read twice) is one pipe: the enlarged plan's stays.
+                let enlarged: BTreeSet<String> =
+                    job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
+                let pipes: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
+                let (twice, twice_cut, twice_ft) =
+                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
+                        u8::from(!enlarged.contains(&sheet_key(sheet)))
+                    });
+                if twice + twice_cut > 0 {
+                    progress_line(&format!(
+                        "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
+                    ));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Pipe drawn twice, one kept",
+                        &format!(
+                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                        ),
+                        1,
+                        vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
+                        None,
+                        false,
+                    );
+                }
+                // A level whose plans draw its drainage but no water: the plumbers piped it all
+                // the same. Over the area where its rooms stack on the floor it is piped like
+                // (rules data: the one below, else above), that floor's drawn mains are copied,
+                // marked derived; the rest is inferred from its fixtures and its rooms' branches
+                // once the fixtures are read. Never passed off as drawn.
+                let floor_plan = |r: &cadaddy_walk3d::MepRun| {
+                    !enlarged.contains(&sheet_key(&r.source_sheet)) && super::waterfill::provenance(r) == super::waterfill::DRAWN
+                };
+                let roof = |l: &str| super::wallgen::roof_level(&sp.levels, l);
+                let missing_water = levels_without_water(&sp.mep.runs, &floor_plan, &roof);
+                let layout_rooms = if missing_water.is_empty() { Vec::new() } else { job_rooms(job) };
+                let fill = super::waterfill::rules();
+                no_water_levels.clone_from(&missing_water);
+                for level in missing_water {
+                    progress_line(&format!("  {level}: drainage drawn, no domestic water drawn"));
+                    let sources = water_sources(&sp, &layout_rooms, &level, &floor_plan, &fill);
+                    let mine = area_rooms(&layout_rooms, &storey_key(&level));
+                    let what = match super::waterfill::derive(&mine, &level, &sources, upf_runs, &fill) {
+                        Some(d) => {
+                            let mut ft: BTreeMap<&str, f64> = BTreeMap::new();
+                            for r in &d.runs {
+                                *ft.entry(r.system.as_str()).or_default() +=
+                                    r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf_runs;
+                            }
+                            let ft: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
+                            let line = format!(
+                                "{} of its {} rooms stand on a room of their type on {}: its drawn water mains are copied over that area only, marked derived ({} runs: {})",
+                                d.stacked,
+                                d.rooms,
+                                d.from,
+                                d.runs.len(),
+                                if ft.is_empty() { "none there".to_string() } else { ft.join(", ") }
+                            );
+                            progress_line(&format!("  {level}: {line}; rooms that don't stack: {:?}", d.unstacked));
+                            sp.mep.runs.extend(d.runs);
+                            format!(
+                                "{line}. Where the rooms don't stack ({}), the water is inferred from the level's own fixtures and its rooms' branches (see the inferred-water item). Basis: {}",
+                                if d.unstacked.is_empty() { "none".to_string() } else { d.unstacked.join(", ") },
+                                fill.stack_basis
+                            )
+                        }
+                        None => {
+                            progress_line(&format!("  {level}: no floor with drawn water and like rooms to derive it from"));
+                            "no floor with drawn water has rooms that lay over its own: its water is inferred from its fixtures and its rooms' branches (see the inferred-water item)".to_string()
+                        }
+                    };
+                    job.add_finding(
+                        StageName::BimBuild,
+                        &format!("No water plan for {level}: derived where its rooms stack"),
+                        &format!(
+                            "The plumbing plans draw {level}'s sanitary and vent piping but no domestic water piping. {what}. None of it is reported as drawn; the engineer may confirm it (optional)"
+                        ),
+                        1,
+                        vec!["Check the derived mains against the riser diagram and enlarged details".into()],
+                        None,
+                        false,
+                    );
+                }
+                // The guest rooms the plumbing plans don't draw take the pipes of a room of their
+                // type that they do, as its fixtures do.
+                // (Drawn pipes only: a floor's derived mains are no room's to copy.)
+                let (room_pipes, room_pipe_report) = copy_room_pipes(s.doc()?, job, &sp.mep.runs, &|r| {
+                    pipes.contains(&r.system) && super::waterfill::provenance(r) == super::waterfill::DRAWN
+                });
+                if !room_pipes.is_empty() {
+                    let ft = room_pipes
+                        .iter()
+                        .map(|r| r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>())
+                        .sum::<f64>();
+                    progress_line(&format!(
+                        "  pipes laid into the rooms of their type: {} ({:.0} ft; {room_pipe_report:?})",
+                        room_pipes.len(),
+                        ft / upf_runs
+                    ));
+                    sp.mep.runs.extend(room_pipes);
+                }
+                // A derived main where a room's own drawn pipe now runs along it is that pipe.
+                let cut = super::waterfill::clip_derived(&mut sp.mep.runs, upf_runs, &fill);
+                if cut > 0.0 {
+                    progress_line(&format!("  derived water along drawn pipe of its system, taken out: {cut:.0} ft"));
+                }
                 // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
                 // one is a clash.
                 let through = runs_through_hoistways(&sp.mep.runs, &circulation, upf_runs);
@@ -5547,6 +5657,22 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
             progress_line(&format!("  waste and vent stacks as risers: {n} ({by:?})"));
         }
+        // A floor with no water plan: the water its derived mains don't reach, inferred from its
+        // fixtures and its rooms' branches.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
+            if inferred.as_object().is_some_and(|o| !o.is_empty()) {
+                s.doc_mut()?.building_spec = Some(sp.to_json());
+            }
+        }
+        // The drainage as it is installed: falling at its code slope, the lowest floor's under
+        // its slab; each stack one riser through the floors it serves.
+        if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
+            let drains = super::plumbing::drainage(&mut sp);
+            let stacks = super::plumbing::continuous_risers(&mut sp);
+            s.doc_mut()?.building_spec = Some(sp.to_json());
+            progress_line(&format!("  drainage: {drains}; stacks through the floors: {stacks}"));
+        }
         // Each unit type: what its views show by kind against what each of its rooms holds.
         let unit_table = unit_type_table(job, &typical, &devices, &merged);
         if !unit_table.is_empty() {
@@ -5947,6 +6073,24 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["misplaced"]
         );
         progress_line(&line);
+        // A plumbing fixture type whose rough-in height no schedule, detail or note gives: one
+        // review item a type, not a silent default.
+        if let Some(types) = db.get("fixture_defaults_by_type").and_then(Value::as_object) {
+            for (ty, n) in types {
+                let n = n.as_u64().unwrap_or(0);
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("No rough-in height for plumbing fixture {ty}"),
+                    &format!(
+                        "No fixture schedule, detail or note gives the mounting height of {ty} ({n} in the model): they stand at the rules data's usual height, marked a default"
+                    ),
+                    2,
+                    vec!["Find the height in the fixture's detail or cut sheet, or ask the engineer (RFI)".into(), "Set the type's height".into()],
+                    None,
+                    false,
+                );
+            }
+        }
     }
     if let Some(place) = placer.as_deref() {
         let (n, missed) = number_rooms_from_other_trades(s, job, place)?;
@@ -6131,6 +6275,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 );
             }
             result["props"] = v;
+            // The plumbing fixtures, now their kinds are filled: each connected to its lines.
+            if let Ok((sp, _)) = super::bspec::current(s, "bim_build") {
+                let c = super::plumbing::connect(s.doc_mut()?, &sp);
+                progress_line(&format!("  plumbing fixtures connected to their lines: {c}"));
+                result["plumbing"] = c;
+            }
         }
         Err(e) => job.add_finding(
             StageName::BimBuild,
@@ -9963,6 +10113,48 @@ const CONNECT_REACH_FT: f64 = 15.0;
 /// A PTAC's connection height when the plans print none (inches).
 const PTAC_CONNECTION_IN: f64 = 12.0;
 
+/// The typical views of each room type, with their linework (at most four a type): the views
+/// whose title names the type (an enlarged plan's view of one), not its wall elevations.
+type TypicalViews = BTreeMap<BTreeSet<String>, Vec<([f64; 4], Vec<cadaddy_geom::Vec2>)>>;
+
+/// [`TypicalViews`] of the job's sheets, for `types` (words of `vocabulary`); `upf` the drawing's
+/// units a foot.
+fn typical_views(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    types: &BTreeSet<BTreeSet<String>>,
+    vocabulary: &BTreeSet<String>,
+    upf: f64,
+) -> TypicalViews {
+    let mut views: TypicalViews = BTreeMap::new();
+    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let titled: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let words = type_words(&v.title, Some(vocabulary));
+                (types.contains(&words) && !v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
+            })
+            .collect();
+        if titled.is_empty() {
+            continue;
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        for (region, words) in titled {
+            let list = views.entry(words).or_default();
+            if list.len() >= 4 {
+                continue;
+            }
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
+            list.push((region, super::grids::line_samples(&ents, upf)));
+        }
+    }
+    views
+}
+
 /// The plumbing fixtures of the guest rooms the plumbing plans show (the enlarged sanitary
 /// views draw one pair of rooms a floor, P-1 water closet, P-2 lavatory...): each room of the
 /// same type with none gets the fixture set of the room of its type that has the most, laid in
@@ -10007,33 +10199,7 @@ fn copy_room_fixtures(
                 .collect()
         })
         .collect();
-    // The typical views of each type, with their linework.
-    let mut views: BTreeMap<BTreeSet<String>, Vec<([f64; 4], Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
-    let inside = |r: &[f64; 4], c: cadaddy_geom::Vec2| c.x >= r[0] && c.x <= r[2] && c.y >= r[1] && c.y <= r[3];
-    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
-        let sub = super::printmep::sheet_drawing(d, sh);
-        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
-        let titled: Vec<([f64; 4], BTreeSet<String>)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
-            .into_iter()
-            .filter_map(|v| {
-                let words = type_words(&v.title, Some(&vocabulary));
-                (types.contains(&words) && !v.title.to_ascii_uppercase().contains(" WALL")).then_some((v.region?, words))
-            })
-            .collect();
-        if titled.is_empty() {
-            continue;
-        }
-        let objects = super::bspec::plan_objects(&sub);
-        for (region, words) in titled {
-            let list = views.entry(words).or_default();
-            if list.len() >= 4 {
-                continue;
-            }
-            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
-                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&region, c))).copied().collect();
-            list.push((region, super::grids::line_samples(&ents, upf)));
-        }
-    }
+    let views = typical_views(d, job, &types, &vocabulary, upf);
     let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
     let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
     let fit = |vi: &([f64; 4], Vec<cadaddy_geom::Vec2>), ri: usize| {
@@ -10092,6 +10258,463 @@ fn copy_room_fixtures(
         let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
         let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
         report.insert(format!("{label}: set {tags:?} from {sources} rooms the plans tag"), took);
+    }
+    (out, report)
+}
+
+/// The pieces of a polyline inside a region (`inside`) that hold one of its ends, cut where it
+/// leaves: the part of a branch that ends in a room, not a main passing by (both ends outside).
+/// Each with the index of its first segment in `points`; all of it when it never leaves.
+fn end_pieces(points: &[[f64; 2]], inside: &dyn Fn(&[f64; 2]) -> bool) -> Vec<(usize, Vec<[f64; 2]>)> {
+    if points.len() < 2 {
+        return Vec::new();
+    }
+    // The last point of `a`→`b` still inside (`a` inside, `b` not).
+    let cut = |a: [f64; 2], b: [f64; 2]| {
+        let (mut lo, mut hi) = (0.0, 1.0);
+        for _ in 0..12 {
+            let m = (lo + hi) / 2.0;
+            if inside(&[a[0] + (b[0] - a[0]) * m, a[1] + (b[1] - a[1]) * m]) {
+                lo = m;
+            } else {
+                hi = m;
+            }
+        }
+        [a[0] + (b[0] - a[0]) * lo, a[1] + (b[1] - a[1]) * lo]
+    };
+    // From the start: the points inside, then the cut where it leaves.
+    let from = |pts: &[[f64; 2]]| -> Option<Vec<[f64; 2]>> {
+        let first = *pts.first()?;
+        if !inside(&first) {
+            return None;
+        }
+        let mut out = vec![first];
+        for w in pts.windows(2) {
+            let [a, b] = w else { continue };
+            if inside(b) {
+                out.push(*b);
+            } else {
+                out.push(cut(*a, *b));
+                break;
+            }
+        }
+        Some(out)
+    };
+    let mut out = Vec::new();
+    if let Some(head) = from(points) {
+        if head.len() == points.len() && points.last().is_some_and(inside) {
+            return vec![(0, points.to_vec())];
+        }
+        out.push((0, head));
+    }
+    let back: Vec<[f64; 2]> = points.iter().rev().copied().collect();
+    if let Some(mut tail) = from(&back) {
+        tail.reverse();
+        out.push((points.len() - tail.len(), tail));
+    }
+    out
+}
+
+/// A pipe within this of its room's box (feet) is the room's: in its walls.
+const ROOM_PIPE_MARGIN_FT: f64 = 1.5;
+/// A room already has a system's pipe when this much of it (feet) lies inside the room, a foot in
+/// from its walls (not a neighbour's pipe in the wall they share).
+const ROOM_HAS_PIPE_FT: f64 = 3.0;
+/// A copy lying along pipe of its system already there over this share of its length is that
+/// pipe, not a second one.
+const ROOM_PIPE_DRAWN_SHARE: f64 = 0.6;
+/// Two rooms are the same size when each side is within this share of the other's.
+const ROOM_SIZE_SHARE: f64 = 0.2;
+
+/// The levels whose plans draw drainage (sanitary, or the vents of a waste and vent plan: fixtures
+/// drained there) but no domestic water (cold, hot, hot-water return), in order of first
+/// appearance. A roof's vents and storm drains alone need no water (`roof`: whether a level is
+/// the roof). `floor_plan`: whether a run was read from a floor's plan; a typical room's enlarged
+/// plan draws that room's branches, not the floor's water (its mains).
+fn levels_without_water(
+    runs: &[cadaddy_walk3d::MepRun],
+    floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
+    roof: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
+    const WATER: [&str; 3] = ["CW", "HW", "HWR"];
+    let mut order: Vec<&str> = Vec::new();
+    let mut water: BTreeSet<&str> = BTreeSet::new();
+    for r in runs {
+        let drained = r.system == "SAN" || (r.system == "V" && !roof(&r.level));
+        if drained && !order.contains(&r.level.as_str()) {
+            order.push(&r.level);
+        }
+        if WATER.contains(&r.system.as_str()) && floor_plan(r) {
+            water.insert(&r.level);
+        }
+    }
+    order.into_iter().filter(|l| !water.contains(l)).map(str::to_string).collect()
+}
+
+/// A level's storey: the digits of its name (`Level 2`, `2`, `L2` are one storey), else its name.
+fn storey_key(l: &str) -> String {
+    let d: String = l.chars().filter(char::is_ascii_digit).collect();
+    if d.is_empty() { l.trim().to_ascii_uppercase() } else { d }
+}
+
+/// The rooms of a storey for [`super::waterfill`]: each one's type words and outline.
+fn area_rooms(rooms: &[JobRoom], storey: &str) -> Vec<super::waterfill::AreaRoom> {
+    rooms
+        .iter()
+        .filter(|(_, l, ..)| storey_key(l) == storey)
+        .map(|(name, _, o, number)| super::waterfill::AreaRoom {
+            words: type_words(name, None),
+            outline: o.iter().map(|p| [p.x, p.y]).collect(),
+            label: if number.is_empty() { name.clone() } else { format!("{name} {number}") },
+        })
+        .collect()
+}
+
+/// The floors a level with no water plan may be piped like, in the rules data's order (`below`:
+/// the storeys under it, nearest first; `above`: over it): each with drawn floor-plan water
+/// (`floor_plan`), its rooms and those runs.
+fn water_sources(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    rooms: &[JobRoom],
+    level: &str,
+    floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
+    fill: &super::waterfill::FillRules,
+) -> Vec<super::waterfill::Source> {
+    // Each storey's height: its level's elevation, else the number in its name.
+    let height = |key: &str| {
+        sp.levels
+            .iter()
+            .filter(|l| l.elevation_ft.is_finite() && storey_key(&l.name) == key)
+            .map(|l| l.elevation_ft)
+            .next()
+            .or_else(|| key.parse::<f64>().ok())
+    };
+    let here = storey_key(level);
+    let Some(h) = height(&here) else { return Vec::new() };
+    let mut with: BTreeMap<String, (String, Vec<cadaddy_walk3d::MepRun>)> = BTreeMap::new();
+    for r in sp.mep.runs.iter().filter(|r| fill.water.contains(&r.system) && floor_plan(r)) {
+        let k = storey_key(&r.level);
+        if k != here {
+            with.entry(k).or_insert_with(|| (r.level.clone(), Vec::new())).1.push(r.clone());
+        }
+    }
+    let mut out = Vec::new();
+    for side in &fill.stack_on {
+        let mut v: Vec<(f64, &String)> = with
+            .keys()
+            .filter_map(|k| Some((height(k)? - h, k)))
+            .filter(|(d, _)| if side == "below" { *d < 0.0 } else { side == "above" && *d > 0.0 })
+            .collect();
+        v.sort_by(|a, b| a.0.abs().total_cmp(&b.0.abs()));
+        for (_, k) in v {
+            if let Some((name, runs)) = with.get(k) {
+                out.push(super::waterfill::Source { level: name.clone(), rooms: area_rooms(rooms, k), runs: runs.clone() });
+            }
+        }
+    }
+    out
+}
+
+/// The water, waste and vent the drawings leave out, inferred ([`super::waterfill::infer`]) once
+/// the derived mains and the rooms' pipes are in: on every floor, each fixture (the plumbing
+/// plans' fixtures, its lines by its schedule row) with no pipe of a line it takes in reach, run
+/// from the nearest pipe of that system there (a drainage branch at the code's fixture drain or
+/// vent size); on the floors with no water plan (`levels`, as the derive
+/// step found them, before other floors' room pipes were laid into their rooms) also each room's
+/// branches joined to no main, all of it from their mains and risers only. Each floor's result is
+/// a finding (what was inferred, on what basis, what is still unconnected). The counts by floor.
+fn infer_missing_water(
+    job: &mut GuidedJob,
+    sp: &mut cadaddy_walk3d::BuildingSpec,
+    levels: &[String],
+    devices: &[super::readers::ReadDevice],
+    schedule: Option<&cadaddy_mepfix::fixture_schedule::FixtureSchedule>,
+) -> Value {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let fill = super::waterfill::rules();
+    let (_, reach_ft) = super::plumbing::fixture_lines("");
+    // Each floor with fixtures, by its storey, named as its runs name it where it has no water
+    // plan, else as the building's levels do (else its runs, else its fixtures).
+    let mut floors: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    for d in devices.iter().filter(|d| d.kind == "plumbing fixture") {
+        let key = storey_key(&d.level);
+        if floors.contains_key(&key) {
+            continue;
+        }
+        let name = sp
+            .levels
+            .iter()
+            .map(|l| &l.name)
+            .chain(sp.mep.runs.iter().map(|r| &r.level))
+            .find(|n| storey_key(n) == key)
+            .map_or_else(|| d.level.clone(), Clone::clone);
+        floors.insert(key, (name, false));
+    }
+    for l in levels {
+        floors.insert(storey_key(l), (l.clone(), true));
+    }
+    let mut out = serde_json::Map::new();
+    for (key, (level, planless)) in &floors {
+        let fixtures: Vec<super::waterfill::Fixture> = devices
+            .iter()
+            .filter(|d| d.kind == "plumbing fixture" && storey_key(&d.level) == *key)
+            .map(|d| {
+                let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
+                let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
+                let (lines, _) = super::plumbing::fixture_lines(&words);
+                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words }
+            })
+            .collect();
+        let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
+        let needs = super::waterfill::needs(&on, &fixtures, reach_ft, upf, &fill, *planless);
+        let n_needs = needs.len();
+        if n_needs == 0 {
+            continue;
+        }
+        // A floor with no water plan: its water from its mains and risers; else (and its
+        // drainage, which its plans draw) from any of its pipes.
+        let mains: Vec<&cadaddy_walk3d::MepRun> =
+            on.iter().copied().filter(|r| !*planless || !fill.water.contains(&r.system) || super::waterfill::is_main(r)).collect();
+        let inf = super::waterfill::infer(level, &mains, &on, needs, upf, &fill);
+        let mut ft: BTreeMap<String, f64> = BTreeMap::new();
+        for r in &inf.runs {
+            *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
+        }
+        let ft_s: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
+        progress_line(&format!(
+            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
+            inf.served,
+            inf.runs.len(),
+            ft_s.join(", "),
+            inf.unserved
+        ));
+        let where_ = if *planless {
+            format!("No plan draws {level}'s water where its rooms don't stack on another floor's")
+        } else {
+            format!("{level}'s plans draw no pipe within {reach_ft:.0} ft of these fixtures' lines")
+        };
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Water, waste and vent inferred for {level}"),
+            &format!(
+                "{where_}: {} fixture or room branch lines are run from the nearest pipe of their system ({}), marked inferred, never reported as drawn. Basis: {}; {}; {}.{}",
+                inf.served,
+                if ft_s.is_empty() { "nothing laid".to_string() } else { ft_s.join(", ") },
+                fill.main_basis,
+                fill.branch_basis,
+                fill.drain_basis,
+                if inf.unserved.is_empty() {
+                    String::new()
+                } else {
+                    format!(" No pipe of their system within {:.0} ft, still unconnected: {}", fill.reach_ft, inf.unserved.join("; "))
+                }
+            ),
+            if inf.unserved.is_empty() { 1 } else { 2 },
+            vec!["Check the inferred branches against the enlarged details' typical connection".into()],
+            None,
+            false,
+        );
+        out.insert(
+            level.clone(),
+            json!({"needs": n_needs, "served": inf.served, "runs": inf.runs.len(), "ft": ft, "unserved": inf.unserved, "no_water_plan": planless}),
+        );
+        sp.mep.runs.extend(inf.runs);
+    }
+    Value::Object(out)
+}
+
+/// The pipes of the guest rooms the plumbing plans show (an enlarged plan draws one or two rooms
+/// a floor with their waste, vent and water lines): each room of the same type and size that
+/// holds no pipe of a system gets that system's pipes of the room of its type that has the most,
+/// laid in as its fixtures are ([`copy_room_fixtures`]: turned and mirrored as each room is). A
+/// type is a typical room's when it repeats on a floor (not a corridor, one a floor). Only the
+/// room's part of a pipe is copied (walls included, [`end_pieces`]): where a branch goes on to the
+/// main outside, that is the floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
+/// The copies, and per type what was copied and into how many rooms.
+fn copy_room_pipes(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    runs: &[cadaddy_walk3d::MepRun],
+    pipe: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
+) -> (Vec<cadaddy_walk3d::MepRun>, BTreeMap<String, usize>) {
+    let mut out: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+    let mut report: BTreeMap<String, usize> = BTreeMap::new();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let pipes: Vec<&cadaddy_walk3d::MepRun> = runs.iter().filter(|r| pipe(r) && r.top_ft.is_none() && r.points.len() >= 2).collect();
+    if types.is_empty() || pipes.is_empty() {
+        return (out, report);
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let digits = |l: &str| l.chars().filter(char::is_ascii_digit).collect::<String>();
+    // The runs' own name of each storey (a room's level may be written another way).
+    let mut storey_names: BTreeMap<String, String> = BTreeMap::new();
+    for r in &pipes {
+        storey_names.entry(digits(&r.level)).or_insert_with(|| r.level.clone());
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let grown = |b: &[f64; 4], m: f64| [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
+    let within = |b: &[f64; 4], p: &[f64; 2]| p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3];
+    let length = |r: &cadaddy_walk3d::MepRun| r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>();
+    // How much of a system's pipe (drawing units) lies inside `b`, sampled every half foot.
+    let inside_len = |list: &[&cadaddy_walk3d::MepRun], storey: &str, system: &str, b: &[f64; 4]| {
+        let mut l = 0.0;
+        for r in list.iter().filter(|r| r.system == system && digits(&r.level) == storey) {
+            for w in r.points.windows(2) {
+                let [a, c] = w else { continue };
+                let seg = (c[0] - a[0]).hypot(c[1] - a[1]);
+                let n = ((seg / (0.5 * upf)).ceil() as usize).clamp(1, 2_000);
+                for k in 0..n {
+                    let t = (k as f64 + 0.5) / n as f64;
+                    if within(b, &[a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t]) {
+                        l += seg / n as f64;
+                    }
+                }
+            }
+        }
+        l
+    };
+    // Each typed room's own pipes: wholly in its outline or its walls (not its box: a corridor's
+    // box holds the floor's mains).
+    let near_outline = |o: &[cadaddy_geom::Vec2], p: &[f64; 2]| {
+        let q = cadaddy_geom::Vec2::new(p[0], p[1]);
+        cadaddy_geom::point_in_polygon(o, q)
+            || o.iter().zip(o.iter().cycle().skip(1)).any(|(a, b)| super::runtidy::seg_dist(q, *a, *b) <= ROOM_PIPE_MARGIN_FT * upf)
+    };
+    // A branch that ends in the room and goes on out to its main: the room's part of it.
+    let in_room: Vec<Vec<cadaddy_walk3d::MepRun>> = rooms
+        .iter()
+        .zip(&room_boxes)
+        .map(|((_, level, outline, _), b)| {
+            let g = grown(b, ROOM_PIPE_MARGIN_FT * upf);
+            let inside = |p: &[f64; 2]| within(&g, p) && near_outline(outline, p);
+            let mut mine = Vec::new();
+            for r in pipes.iter().filter(|r| digits(&r.level) == digits(level)) {
+                for (first, points) in end_pieces(&r.points, &inside) {
+                    let mut part = (*r).clone();
+                    if points.len() != r.points.len() {
+                        part.bottoms_ft =
+                            (first..first + points.len() - 1).map(|i| r.bottoms_ft.get(i).or(r.bottoms_ft.last()).copied().unwrap_or(0.0)).collect();
+                    }
+                    part.points = points;
+                    if length(&part) >= upf {
+                        mine.push(part);
+                    }
+                }
+            }
+            mine
+        })
+        .collect();
+    // A typical room's layout goes only into a room of its size (either way round).
+    let same_size = |a: &[f64; 4], b: &[f64; 4]| {
+        let (wa, ha, wb, hb) = (a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]);
+        let close = |x: f64, y: f64| (x - y).abs() <= ROOM_SIZE_SHARE * x.max(y);
+        (close(wa, wb) && close(ha, hb)) || (close(wa, hb) && close(ha, wb))
+    };
+    if in_room.iter().all(Vec::is_empty) {
+        return (out, report);
+    }
+    let views = typical_views(d, job, &types, &vocabulary, upf);
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * upf, upf);
+    let fit = |vi: &([f64; 4], Vec<cadaddy_geom::Vec2>), ri: usize| {
+        let b = room_boxes.get(ri)?;
+        rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
+    };
+    // What is on the plans, and each copy as it goes in: no pipe laid twice.
+    let mut grid = super::runtidy::PipeGrid::new(upf);
+    for r in &pipes {
+        grid.add(&digits(&r.level), r);
+    }
+    for words in &types {
+        let Some(vs) = views.get(words) else { continue };
+        let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
+        // A typical room repeats on a floor; a space one of a floor (its corridor) runs the floor's
+        // own pipes.
+        let mut per_storey: BTreeMap<String, usize> = BTreeMap::new();
+        for i in &of_type {
+            if let Some((_, level, _, _)) = rooms.get(*i) {
+                *per_storey.entry(digits(level)).or_default() += 1;
+            }
+        }
+        if per_storey.values().all(|n| *n < 2) {
+            continue;
+        }
+        // The type's pipes, system by system from the room with the most of it, each taken back
+        // into the view (by its index in `vs`) that goes into its room: the type's rooms of one
+        // hand fit one of its views, of the other hand another.
+        let mut by_len: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
+        by_len.sort_by(|a, b| {
+            let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(&length).sum::<f64>());
+            l(b).total_cmp(&l(a))
+        });
+        let mut set: Vec<(usize, [f64; 4], cadaddy_walk3d::MepRun)> = Vec::new();
+        let mut systems: BTreeSet<String> = BTreeSet::new();
+        let mut sources: Vec<String> = Vec::new();
+        for src in by_len {
+            let mine: Vec<&cadaddy_walk3d::MepRun> = in_room.get(src).into_iter().flatten().filter(|r| !systems.contains(&r.system)).collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let Some((vi, fit_src)) = vs.iter().enumerate().find_map(|(i, v)| fit(v, src).map(|f| (i, f))) else { continue };
+            let Some(src_box) = room_boxes.get(src).copied() else { continue };
+            for r in mine {
+                let Some(points) = r.points.iter().map(|p| view_point(*p, fit_src)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
+                let mut copy = r.clone();
+                copy.points = points;
+                set.push((vi, src_box, copy));
+            }
+            systems.extend(set.iter().map(|(_, _, r)| r.system.clone()));
+            if let Some((_, _, _, number)) = rooms.get(src) {
+                sources.push(number.clone());
+            }
+        }
+        if set.is_empty() {
+            continue;
+        }
+        // Each room of the type: the systems it holds none of.
+        let mut took = 0usize;
+        for ri in of_type.iter().copied() {
+            let Some((_, level, _, _)) = rooms.get(ri) else { continue };
+            let b = room_boxes.get(ri).copied().unwrap_or_default();
+            let storey = digits(level);
+            let core = grown(&b, -upf);
+            let mut fits: BTreeMap<usize, Option<RoomFit>> = BTreeMap::new();
+            let mut added = false;
+            for system in &systems {
+                let placed: Vec<&cadaddy_walk3d::MepRun> = pipes.iter().copied().chain(out.iter()).collect();
+                if inside_len(&placed, &storey, system, &core) >= ROOM_HAS_PIPE_FT * upf {
+                    continue;
+                }
+                for (vi, _, r) in set.iter().filter(|(_, src_box, r)| r.system == *system && same_size(src_box, &b)) {
+                    let Some(v) = vs.get(*vi) else { continue };
+                    let Some(fit_t) = *fits.entry(*vi).or_insert_with(|| fit(v, ri)) else { continue };
+                    let Some(points) = r.points.iter().map(|p| place_in_room(*p, v.0, b, fit_t)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
+                    let mut copy = r.clone();
+                    copy.points = points;
+                    if grid.covered(&storey, &copy) >= ROOM_PIPE_DRAWN_SHARE {
+                        continue;
+                    }
+                    copy.level = storey_names.get(&storey).cloned().unwrap_or_else(|| level.clone());
+                    copy.id = String::new();
+                    copy.objects = Vec::new();
+                    grid.add(&storey, &copy);
+                    out.push(copy);
+                    added = true;
+                }
+            }
+            took += usize::from(added);
+            if out.len() >= MAX_STAMPED {
+                break;
+            }
+        }
+        let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
+        report.insert(format!("{label}: {} pipes of {systems:?} from rooms {sources:?}", set.len()), took);
     }
     (out, report)
 }
@@ -20634,6 +21257,7 @@ fn placement_summary(job: &GuidedJob) -> Value {
         "devices": {
             "heights_from": db.get("heights_from").cloned().unwrap_or(Value::Null),
             "defaults_by_kind": db.get("defaults_by_kind").cloned().unwrap_or(Value::Null),
+            "fixture_defaults_by_type": db.get("fixture_defaults_by_type").cloned().unwrap_or(Value::Null),
             "in_wall": db.get("in_wall").cloned().unwrap_or(Value::Null),
             "no_wall": db.get("no_wall").cloned().unwrap_or(Value::Null),
             "no_wall_first": db.get("no_wall_first").cloned().unwrap_or(Value::Null),
@@ -22592,6 +23216,7 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: "M-1".into(),
+            slope_in_per_ft: 0.0,
         };
         let mut runs = vec![
             run("SA", [[0.0, 0.0], [100.0, 0.0]], [12.0, 10.0], "tag"),
@@ -23984,6 +24609,7 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: sheet.into(),
+            slope_in_per_ft: 0.0,
         };
         // The sanitary line along the plan's long side; a vent line outside every view.
         let lost = vec![
@@ -23999,6 +24625,220 @@ mod tests {
         assert_eq!((r.level.as_str(), r.system.as_str(), r.id.as_str()), ("Level 2", "SAN", ""));
         assert!(r.points.iter().all(|p| p[0] >= 10_000.0 && p[0] <= 10_144.0 && p[1] >= 0.0 && p[1] <= 288.0), "{:?}", r.points);
         assert!((r.points[1][1] - r.points[0][1]).abs() > 100.0, "it runs along the room: {:?}", r.points);
+    }
+
+    /// The pipes an enlarged plan draws in one room of a type go into the other rooms of the type
+    /// that hold none of that system, laid in as the room's linework lies: a room with its own
+    /// line of a system keeps it alone, a pipe going on out of the room goes in up to its wall, a
+    /// main passing by isn't the room's, the room the plan draws gets no second copy, and a room of
+    /// the name but another size gets none.
+    #[test]
+    fn a_level_with_no_water_plan_is_piped_like_the_storey_below_first_then_above() {
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [
+                {"name": "Level 1", "elevation_ft": 0, "height_ft": 10},
+                {"name": "Level 2", "elevation_ft": 10, "height_ft": 10},
+                {"name": "Level 3", "elevation_ft": 20, "height_ft": 10},
+                {"name": "Level 4", "elevation_ft": 30, "height_ft": 10},
+                {"name": "Level 5", "elevation_ft": 40, "height_ft": 10},
+            ],
+            "mep": {"runs": [
+                {"system": "CW", "level": "Level 1", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                {"system": "HW", "level": "3", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                {"system": "CW", "level": "Level 5", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9]},
+                // Read from a typical room's enlarged plan: no floor's water.
+                {"system": "CW", "level": "Level 2", "points": [[0, 0], [10, 0]], "size_in": [2, 0], "bottoms_ft": [9], "source_sheet": "P-99"},
+                {"system": "SAN", "level": "Level 4", "points": [[0, 0], [10, 0]], "size_in": [4, 0], "bottoms_ft": [9]},
+            ]},
+        }))
+        .expect("spec");
+        let fill = super::super::waterfill::rules();
+        let plan = |r: &cadaddy_walk3d::MepRun| r.source_sheet != "P-99";
+        let names = |v: Vec<super::super::waterfill::Source>| v.into_iter().map(|s| s.level).collect::<Vec<_>>();
+        // Level 4: Level 3 under it (its runs name it "3"), then Level 1; then Level 5 over it.
+        assert_eq!(names(water_sources(&sp, &[], "Level 4", &plan, &fill)), ["3", "Level 1", "Level 5"]);
+        // Level 2: its own enlarged-plan water is no source; Level 1, then 3 and 5.
+        assert_eq!(names(water_sources(&sp, &[], "Level 2", &plan, &fill)), ["Level 1", "3", "Level 5"]);
+        // The lowest: only those over it.
+        assert_eq!(names(water_sources(&sp, &[], "Level 1", &plan, &fill)), ["3", "Level 5"]);
+        assert!(water_sources(&sp, &[], "Mezzanine", &plan, &fill).is_empty(), "no height known: no order");
+        assert_eq!(storey_key("Level 12"), "12");
+        assert_eq!(storey_key(" roof "), "ROOF");
+    }
+
+    #[test]
+    fn a_level_with_sanitary_but_no_water_drawn_is_named() {
+        let run = |system: &str, level: &str| cadaddy_walk3d::MepRun {
+            system: system.into(),
+            level: level.into(),
+            points: vec![[0.0, 0.0], [10.0, 0.0]],
+            size_in: [2.0, 0.0],
+            bottoms_ft: vec![0.0],
+            objects: Vec::new(),
+            id: String::new(),
+            encased: false,
+            size_source: "tag".into(),
+            height_source: "default".into(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: "P-9".into(),
+            slope_in_per_ft: 0.0,
+        };
+        let runs = vec![
+            run("SAN", "Level 1"),
+            run("CW", "Level 1"),
+            run("SAN", "Level 2"),
+            run("V", "Level 2"),
+            run("HW", "Level 3"),
+            run("SAN", "Level 3"),
+            run("SAN", "Level 4"),
+            // A waste and vent plan read only for its vents: drained there all the same.
+            run("V", "Level 5"),
+            run("V", "Roof"),
+            run("ST", "Roof"),
+        ];
+        let any = |_: &cadaddy_walk3d::MepRun| true;
+        let roof = |l: &str| l == "Roof";
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(levels_without_water(&runs, &any, &roof), names(&["Level 2", "Level 4", "Level 5"]));
+        assert!(levels_without_water(&[], &any, &roof).is_empty());
+        // All of it read from a typical room's enlarged plan (P-9 here): no floor's water plan.
+        let floor_plan = |r: &cadaddy_walk3d::MepRun| r.source_sheet != "P-9";
+        assert_eq!(levels_without_water(&runs, &floor_plan, &roof), names(&["Level 1", "Level 2", "Level 3", "Level 4", "Level 5"]));
+    }
+
+    #[test]
+    fn a_typical_rooms_drawn_pipes_go_into_the_rooms_of_its_type() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // A 144 x 288 room's linework at (x, y): its walls, five lines across and a short one in
+        // one corner (so a turn or a mirror can't fit as well).
+        let room_lines = |s: &mut crate::Session, x: f64, y: f64| {
+            for (a, b) in [([0.0, 0.0], [144.0, 0.0]), ([144.0, 0.0], [144.0, 288.0]), ([144.0, 288.0], [0.0, 288.0]), ([0.0, 288.0], [0.0, 0.0])] {
+                line(s, [x + a[0], y + a[1]], [x + b[0], y + b[1]]);
+            }
+            for k in 1..6 {
+                line(s, [x, y + 48.0 * f64::from(k)], [x + 144.0, y + 48.0 * f64::from(k)]);
+            }
+            line(s, [x, y + 24.0], [x + 60.0, y + 24.0]);
+        };
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [4234.0 + a[0], a[1]], [4234.0 + b[0], b[1]]);
+        }
+        room_lines(&mut s, 4534.0, 200.0);
+        s.execute("text", &json!({"at": [4534.0, 181.0], "text": "ENLARGED TWIN SUITE", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [4534.0, 172.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        room_lines(&mut s, 4834.0, 200.0);
+        s.execute("text", &json!({"at": [4834.0, 181.0], "text": "ENLARGED HALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [4834.0, 172.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-9".into(),
+            level: "T".into(),
+            discipline: "P".into(),
+            kind: "enlarged_plan".into(),
+            rect: [4234.0, 0.0, 6234.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-9".into(), lo, hi }];
+        // Three rooms of the type on the floor's plan (their level written "3").
+        for x in [10_000.0, 10_200.0, 10_400.0, 10_600.0, 10_744.0, 11_000.0] {
+            room_lines(&mut s, x, 0.0);
+        }
+        let room = |n: &str, x: f64| json!({"name": "TWIN SUITE", "number": n, "level": "3", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            // A fourth of the name twice as wide (a corridor's or a suite's layout): not the type's.
+            let wide =
+                json!({"name": "TWIN SUITE", "number": "304", "level": "3", "outline": [[10_600, 0], [10_888, 0], [10_888, 288], [10_600, 288]]});
+            // A hall, one on each floor, the same on both: none of the type's pipes go from one
+            // to the other.
+            let hall = |n: &str, level: &str| json!({"name": "HALL", "number": n, "level": level, "outline": [[11_000, 0], [11_144, 0], [11_144, 288], [11_000, 288]]});
+            st.result =
+                Some(json!({"rooms": [room("301", 10_000.0), room("302", 10_200.0), room("303", 10_400.0), wide, hall("H3", "3"), hall("H4", "4")]}));
+        }
+        let run = |system: &str, points: Vec<[f64; 2]>| cadaddy_walk3d::MepRun {
+            system: system.into(),
+            level: "Level 3".into(),
+            points,
+            size_in: [2.0, 0.0],
+            bottoms_ft: vec![0.0],
+            objects: vec!["1A".into()],
+            id: "R7".into(),
+            encased: false,
+            size_source: "tag".into(),
+            height_source: "default".into(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: "P-9".into(),
+            slope_in_per_ft: 0.0,
+        };
+        let runs = vec![
+            // Room 301 as the enlarged plan draws it: waste, vent, and a water line on out to the main.
+            run("SAN", vec![[10_020.0, 20.0], [10_020.0, 260.0]]),
+            run("V", vec![[10_030.0, 100.0], [10_060.0, 100.0]]),
+            run("CW", vec![[10_100.0, 50.0], [10_100.0, 400.0]]),
+            // The main along the rooms' walls, its ends outside them all: none of it is a room's.
+            run("HW", vec![[9_900.0, -10.0], [11_400.0, -10.0]]),
+            // Room 302's own waste line.
+            run("SAN", vec![[10_220.0, 30.0], [10_220.0, 200.0]]),
+            // Not a pipe.
+            run("SA", vec![[10_430.0, 30.0], [10_430.0, 200.0]]),
+            // The third floor's hall's water line.
+            run("CW", vec![[11_020.0, 20.0], [11_020.0, 260.0]]),
+        ];
+        let (copies, report) = copy_room_pipes(s.doc().unwrap(), &job, &runs, &|r| r.system != "SA");
+        let got: Vec<(String, f64)> = copies.iter().map(|r| (r.system.clone(), (r.points[0][0] / 200.0).floor() * 200.0)).collect();
+        assert_eq!(got.len(), 5, "{got:?} {report:?}");
+        for want in [("V", 10_200.0), ("CW", 10_200.0), ("SAN", 10_400.0), ("V", 10_400.0), ("CW", 10_400.0)] {
+            assert!(got.contains(&(want.0.into(), want.1)), "{want:?} {got:?}");
+        }
+        // The water line's part in the room, cut at its wall (and the margin round it).
+        let cw = copies.iter().find(|r| r.system == "CW" && r.points[0][0] > 10_400.0).unwrap();
+        let top = cw.points.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+        assert!(top > 288.0 && top <= 288.0 + 18.0 + 7.0, "{:?}", cw.points);
+        assert_eq!(cw.bottoms_ft.len(), cw.points.len() - 1);
+        assert_eq!(report.values().copied().collect::<Vec<_>>(), vec![2], "{report:?}");
+        let san = copies.iter().find(|r| r.system == "SAN").unwrap();
+        assert_eq!((san.level.as_str(), san.id.as_str(), san.source_sheet.as_str()), ("Level 3", "", "P-9"));
+        for (p, q) in san.points.iter().zip([[10_420.0, 20.0], [10_420.0, 260.0]]) {
+            assert!((p[0] - q[0]).abs() < 7.0 && (p[1] - q[1]).abs() < 7.0, "{:?}", san.points);
+        }
+    }
+
+    #[test]
+    fn a_branchs_part_in_a_room_is_cut_where_it_leaves() {
+        let inside = |p: &[f64; 2]| p[0] >= 0.0 && p[0] <= 100.0 && p[1] >= 0.0 && p[1] <= 100.0;
+        // Whole: one piece, as it is.
+        let all = [[10.0, 10.0], [90.0, 10.0], [90.0, 90.0]];
+        assert_eq!(end_pieces(&all, &inside), vec![(0, all.to_vec())]);
+        // Out at its far end: up to the edge.
+        let out = end_pieces(&[[10.0, 10.0], [50.0, 10.0], [150.0, 10.0]], &inside);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0, 0);
+        assert_eq!(out[0].1.len(), 3);
+        assert!((out[0].1[2][0] - 100.0).abs() < 0.1, "{out:?}");
+        // In from outside at its start: the piece from the edge, its first segment the second.
+        let back = end_pieces(&[[-50.0, 50.0], [-10.0, 50.0], [60.0, 50.0], [60.0, 80.0]], &inside);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].0, 1);
+        assert!(back[0].1[0][0].abs() < 0.1 && back[0].1.len() == 3, "{back:?}");
+        // Passing by (both ends outside), a point, nothing at all, NaN: nothing.
+        assert!(end_pieces(&[[-50.0, 50.0], [150.0, 50.0]], &inside).is_empty());
+        assert!(end_pieces(&[[50.0, 50.0]], &inside).is_empty());
+        assert!(end_pieces(&[], &inside).is_empty());
+        assert!(end_pieces(&[[f64::NAN, 50.0], [150.0, 50.0]], &inside).is_empty());
     }
 
     #[test]
