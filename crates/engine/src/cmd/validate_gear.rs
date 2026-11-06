@@ -1316,6 +1316,59 @@ fn fill_checks(
             continue;
         };
         let (fits, need, have) = pack(pitches, plate);
+        // Raceways the can's top can't take may land on a wireway built over it: judged on its own
+        // box, from the model, the can's shortfall kept beside it.
+        let wireway = (!fits && *side == "top")
+            .then(|| {
+                let want = super::gearbuild::wireway_tag(tag);
+                cx.sp.mep.equipment.iter().find(|e| e.kind == "wireway" && e.tag.trim().eq_ignore_ascii_case(&want))
+            })
+            .flatten();
+        if let Some(w) = wireway {
+            let inch = if cx.sp.units_per_foot.is_finite() && cx.sp.units_per_foot > 0.0 { cx.sp.units_per_foot / 12.0 } else { 1.0 };
+            let long_in = (w.max[0] - w.min[0]).abs().max((w.max[1] - w.min[1]).abs()) / inch;
+            let deep_in = w.height_ft * 12.0;
+            let usable = code.wireway_usable.filter(|v| *v > 0.0 && *v <= 1.0).unwrap_or(0.85);
+            let holds = long_in * deep_in * usable;
+            let proposed = w.sources.get("status").is_some_and(|t| t == "proposed");
+            let v = if holds + 1e-6 >= need { "pass" } else { "fail" };
+            let issue = if v == "pass" {
+                format!(
+                    "{} raceways land on the {}wireway over {tag}: about {} sq in needed, {} sq in usable ({tag}'s own top has {})",
+                    pitches.len(),
+                    if proposed { "proposed " } else { "" },
+                    need.round(),
+                    holds.round(),
+                    have.round()
+                )
+            } else {
+                format!(
+                    "the wireway over {tag} is too small for {} raceways: about {} sq in needed, {} sq in usable",
+                    pitches.len(),
+                    need.round(),
+                    holds.round()
+                )
+            };
+            emit(
+                &check,
+                v,
+                issue,
+                format!(
+                    "{} raceways (each its outside diameter and {} in round it) landed on the wireway over the {side}",
+                    pitches.len(),
+                    tables.spacing_in
+                ),
+                format!(
+                    "{} x {} in wireway, {} sq in usable; {tag}'s top {} sq in ({plate_from})",
+                    r2(long_in),
+                    r2(deep_in),
+                    holds.round(),
+                    have.round()
+                ),
+                json!({"raceways": pitches.len(), "need_sq_in": r2(need), "plate_in": [r2(plate[0]), r2(plate[1])], "plate_sq_in": r2(have), "plate_from": plate_from, "wireway": w.tag, "wireway_in": [r2(long_in), r2(deep_in)], "wireway_sq_in": r2(holds), "wireway_proposed": proposed, "feeders": feeders}),
+            );
+            continue;
+        }
         let derived = plate_from.starts_with("derived");
         let v = if !fits {
             "fail"

@@ -107,6 +107,10 @@ fn spec() -> Value {
 }
 
 fn job() -> Session {
+    job_on(spec())
+}
+
+fn job_on(spec: Value) -> Session {
     let mut s = Session::new();
     layer(&mut s, "A-WALL");
     // The shell (inside 6..294 x 6..180) and the partition at x 150..156.
@@ -126,7 +130,7 @@ fn job() -> Session {
     layer(&mut s, "E-ANNO-TEXT");
     text(&mut s, [420.0, 480.0], "ONE-LINE DIAGRAM", 8.0);
     text(&mut s, [820.0, 480.0], "PANEL SCHEDULE DPA", 8.0);
-    let r = s.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
+    let r = s.execute("bspec.set", &json!({"spec": spec, "replace": true})).unwrap();
     assert!(r["errors"].as_array().is_none_or(|e| e.is_empty()), "{r}");
     s.execute("model.build", &json!({})).unwrap();
     s
@@ -219,6 +223,34 @@ fn too_many_conduits_an_overfull_gutter_and_a_lug_too_small_fail() {
     assert_eq!(finding(&fs, "E-GEAR-FILL", "LPB", "bending F2")["verdict"], "unsure");
     // The build's own conflict about DPA's feeder comes in as a conflict.
     assert!(fs.iter().any(|f| f["rule"] == "E-GEAR-FILL" && f["verdict"] == "conflict" && f["source"] == "build"), "{}", Value::Array(fs.clone()));
+}
+
+#[test]
+fn a_wireway_built_over_a_can_takes_the_raceways_its_top_cant() {
+    let with_wireway = |long_in: f64, deep_in: f64| {
+        let mut sp = spec();
+        sp["mep"]["equipment"].as_array_mut().unwrap().push(json!({
+            "tag": "DPA-WIREWAY", "kind": "wireway", "level": "L1",
+            "min": [30.0 - long_in / 2.0, 9.0 - deep_in / 2.0], "max": [30.0 + long_in / 2.0, 9.0 + deep_in / 2.0],
+            "bottom_ft": 6.2, "height_ft": deep_in / 12.0, "confidence": 0.5,
+            "sources": {"status": "proposed"}, "properties": {"ABOVE": "DPA"}
+        }));
+        job_on(sp)
+    };
+    // Six 2" conduits don't pack on the can's 16 x 4 top (the test above); 48 x 6 holds them.
+    let mut s = with_wireway(48.0, 6.0);
+    let (_, fs) = screen(&mut s, &["E-GEAR-FILL"]);
+    let top = finding(&fs, "E-GEAR-FILL", "DPA", "raceways top");
+    assert_eq!(top["verdict"], "pass", "{top}");
+    assert_eq!(top["measured"]["wireway"], "DPA-WIREWAY", "{top}");
+    assert_eq!(top["measured"]["wireway_proposed"], json!(true), "{top}");
+    assert_eq!(top["measured"]["plate_sq_in"], json!(64.0), "the can's top stays beside it: {top}");
+    // A wireway too small for them is no fix.
+    let mut s = with_wireway(12.0, 2.0);
+    let (_, fs) = screen(&mut s, &["E-GEAR-FILL"]);
+    let top = finding(&fs, "E-GEAR-FILL", "DPA", "raceways top");
+    assert_eq!(top["verdict"], "fail", "{top}");
+    assert!(top["issue"].as_str().unwrap().contains("too small"), "{top}");
 }
 
 #[test]
