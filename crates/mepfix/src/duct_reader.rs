@@ -790,14 +790,14 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
 /// Detect terminals (diffusers, grilles) from DEVICE layer (or any layer in all_layers mode).
 fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
-    // A print that draws its work over a screened background: the background's boxes, lines
-    // and words (the architecture's furniture, casework, room names) are no air devices.
+    // A print that draws its work over a screened background: the background's lines and words
+    // (the architecture's furniture and casework, room names) make no air device. A box is one
+    // by the bars the trade's pen draws in it (a wall grille's frame may be the wall's, screened).
     let bg = all_layers && screened_background(d);
-    let pen = |e: &cadaddy_doc::Entity| !(bg && crate::sheet_reader::screened(d, e));
     let device_rects = if all_layers && pdf_filter {
-        rectangles_filtered(d, &|e| pen(e) && is_pdf_mep_line(&e.common.layer))
+        rectangles_filtered(d, &|e| is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
-        rectangles_filtered(d, &|e| pen(e) && !is_content_exclude(&e.common.layer))
+        rectangles_filtered(d, &|e| !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "DEVICE")
     };
@@ -815,14 +815,14 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     // A PDF import folds a symbol drawn many times into a block (`PDF-SYM-n`): its box and
     // lines count as drawn where each insert puts them, with its tag beside it. A CAD sheet's
     // device blocks on the DEVICE layer are symbols by their layer.
-    let pick = |e: &cadaddy_doc::Entity, block: &str| pen(e) && (all_layers || is_pdf_symbol(block) || e.common.layer.eq_ignore_ascii_case("DEVICE"));
+    let pick = |e: &cadaddy_doc::Entity, block: &str| all_layers || is_pdf_symbol(block) || e.common.layer.eq_ignore_ascii_case("DEVICE");
     let (sym_rects, sym_lines) = insert_geometry(d, &pick);
     device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block)| (lo, hi, all_layers || is_pdf_symbol(&block))));
     if all_layers {
         // Boxes a PDF path draws back to its start without closing it.
         for e in d.model.iter() {
             let EntityKind::LwPolyline(p) = &e.kind else { continue };
-            let wanted = pen(e) && if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
+            let wanted = if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
             if !wanted || (p.closed && p.vertices.len() == 4) || device_rects.len() >= MAX_INSERTS * 2 {
                 continue;
             }
@@ -832,7 +832,7 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             }
         }
     }
-    device_lines.extend(sym_lines.iter());
+    device_lines.extend(sym_lines.iter().filter(pen_line));
 
     let mut candidates: Vec<(Vec2, Vec2, &str, bool)> = Vec::new();
     for (min, max, needs_tag) in &device_rects {
@@ -1087,13 +1087,13 @@ pub(crate) fn is_terminal_tag(t: &str) -> bool {
 /// Detect equipment boxes (AHU, VAV, RTU, PTAC, EF) from EQUIP layer or any layer.
 fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedEquipment> {
     let mut equipment = Vec::new();
-    // The screened background's boxes and words are the architecture's (as for air devices).
+    // The screened background's words are the architecture's (room names): no unit's tag. Its
+    // boxes may be units the trade tags (an exhaust fan the architecture draws).
     let bg = all_layers && screened_background(d);
-    let pen = |e: &cadaddy_doc::Entity| !(bg && crate::sheet_reader::screened(d, e));
     let equip_rects = if all_layers && pdf_filter {
-        rectangles_filtered(d, &|e| pen(e) && is_pdf_mep_line(&e.common.layer))
+        rectangles_filtered(d, &|e| is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
-        rectangles_filtered(d, &|e| pen(e) && !is_content_exclude(&e.common.layer))
+        rectangles_filtered(d, &|e| !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "EQUIP")
     };
@@ -2136,10 +2136,14 @@ mod tests {
         }
         /// A box `half` wide each way with bars across it (a grille's, a dresser's drawers).
         fn barred_box(&mut self, grey: bool, c: [f64; 2], half: f64) {
+            self.framed_bars(grey, grey, c, half);
+        }
+        /// [`Self::barred_box`] with its frame and its bars in pens of their own.
+        fn framed_bars(&mut self, grey_frame: bool, grey: bool, c: [f64; 2], half: f64) {
             let corners = [[c[0] - half, c[1] - half], [c[0] + half, c[1] - half], [c[0] + half, c[1] + half], [c[0] - half, c[1] + half]];
             let vertices = corners.iter().map(|p| cadaddy_geom::PolyVertex::new(Vec2::new(p[0], p[1]))).collect();
             let kind = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
-            self.d.add(&cadaddy_doc::Space::Model, Self::common(grey, "PDF-GEOMETRY"), kind).expect("box");
+            self.d.add(&cadaddy_doc::Space::Model, Self::common(grey_frame, "PDF-GEOMETRY"), kind).expect("box");
             for k in [-0.5, 0.0, 0.5] {
                 self.line(grey, [c[0] - half, c[1] + k * half], [c[0] + half, c[1] + k * half]);
             }
@@ -2202,8 +2206,12 @@ mod tests {
         });
         let on_hidden = cadaddy_doc::Common { layer: cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER.into(), ..Default::default() };
         p.d.add(&cadaddy_doc::Space::Model, on_hidden, tag).expect("hidden tag");
+        // A wall grille whose frame is the wall's (screened), its bars the trade's, tagged.
+        p.framed_bars(true, false, [2500.0, 500.0], 12.0);
+        p.text(false, "TEXT", "RG-7", [2520.0, 515.0], 9.0);
         let got: Vec<(String, [f64; 2])> = detect_terminals(&p.d, true, false).iter().map(|t| (t.kind.clone(), [t.at.x, t.at.y])).collect();
-        assert_eq!(got, [("return_grille".to_string(), [1500.0, 500.0]), ("return_grille".to_string(), [2000.0, 500.0])]);
+        let grille = |x: f64| ("return_grille".to_string(), [x, 500.0]);
+        assert_eq!(got, [grille(1500.0), grille(2000.0), grille(2500.0)]);
         // A print drawn all in one pen (no background to leave out) reads its boxes as before.
         let mut one = Print::new();
         one.barred_box(true, [500.0, 500.0], 14.0);
