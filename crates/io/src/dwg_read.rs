@@ -187,6 +187,10 @@ pub struct ReadReport {
     /// proxies) or couldn't decode (damaged data), kept raw in the drawing as they were stored
     /// (`dwg_keep` writes them back unchanged): handle and DXF name, with why when the data was damaged.
     pub kept: Vec<(u64, String)>,
+    /// Objects (not entities) the codec doesn't decode (proxies, custom classes, dynamic block data,
+    /// SUN, FIELDLIST, a type not read yet) or couldn't decode (damaged data), kept raw as they
+    /// were stored: handle and DXF class name, with why when the data was damaged.
+    pub kept_objects: Vec<(u64, String)>,
 }
 
 /// Reads a DWG file with the codec alone.
@@ -196,7 +200,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     let hv = dwg.header_vars().map_err(fmt)?;
     let classes = dwg.classes().map_err(fmt)?;
     let (ents, mut failed) = cadaddy_dwgcodec::entities::decode_all_keeping(&dwg).map_err(fmt)?;
-    let (recs, rec_failed) = cadaddy_dwgcodec::entities::records::decode_all(&dwg).map_err(fmt)?;
+    let (recs, rec_failed, kept_objects) = cadaddy_dwgcodec::entities::records::decode_all_keeping(&dwg).map_err(fmt)?;
     failed.extend(rec_failed);
     let lists = cadaddy_dwgcodec::entities::block_lists(&dwg, &ents).map_err(fmt)?;
     let names = cadaddy_dwgcodec::entities::Names::read(&dwg, &classes);
@@ -412,6 +416,9 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
     if !kept.is_empty() {
         d.read_notes.push(format!("DWG: {} entities kept as-is, not editable ({})", kept.len(), kinds_of(&kept)));
     }
+    if !kept_objects.is_empty() {
+        d.read_notes.push(format!("DWG: {} objects kept as-is, not editable ({})", kept_objects.len(), kinds_of(&kept_objects)));
+    }
     if !failed.is_empty() {
         d.read_notes.push(format!(
             "DWG: {} records couldn't be read and were left out ({}); saving over the original file would lose them",
@@ -419,7 +426,7 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport)> {
             kinds_of(&failed)
         ));
     }
-    Ok((d, ReadReport { failed, kept }))
+    Ok((d, ReadReport { failed, kept, kept_objects }))
 }
 
 /// The ACDSDATA section of `records` (handle and ASM data): the schema of the ACIS data and a

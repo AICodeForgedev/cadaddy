@@ -51,10 +51,12 @@ struct PlanView: View {
     }
 
     func fitTransform(size: CGSize) -> Fit {
-        let lo = session.model?.boundsMin ?? SIMD3(-1, 0, -1)
-        let hi = session.model?.boundsMax ?? SIMD3(1, 0, 1)
+        // The anchor (origin) and, after an update moved it, the old anchor are always in the frame.
+        var lo = simd_min(session.model?.boundsMin ?? SIMD3(-1, 0, -1), .zero)
+        var hi = simd_max(session.model?.boundsMax ?? SIMD3(1, 0, 1), .zero)
+        if let old = session.previousAnchorPosition { lo = simd_min(lo, old); hi = simd_max(hi, old) }
         let w = CGFloat(max(hi.x - lo.x, 0.5)), d = CGFloat(max(hi.z - lo.z, 0.5))
-        let base = min((size.width - 48) / w, (size.height - 48) / d)
+        let base = min((size.width - 140) / w, (size.height - 64) / d) // room for the anchor labels
         let s = max(base, 1) * zoom * pinch
         let cx = CGFloat(lo.x + hi.x) / 2, cz = CGFloat(lo.z + hi.z) / 2
         return Fit(scale: s, origin: CGPoint(x: size.width / 2 - cx * s + pan.width + dragPan.width,
@@ -120,6 +122,15 @@ struct PlanView: View {
         cross.move(to: CGPoint(x: a.x, y: a.y - 10)); cross.addLine(to: CGPoint(x: a.x, y: a.y + 10))
         ctx.stroke(cross, with: .color(.red), lineWidth: 2)
         ctx.draw(Text("anchor").font(.caption2).foregroundColor(.red), at: CGPoint(x: a.x + 24, y: a.y + 10))
+        // After an update moved the anchor: the one the room was last aligned to, in grey.
+        if let old = session.previousAnchorPosition {
+            let o = fit.toScreen(old)
+            var c = Path()
+            c.move(to: CGPoint(x: o.x - 10, y: o.y)); c.addLine(to: CGPoint(x: o.x + 10, y: o.y))
+            c.move(to: CGPoint(x: o.x, y: o.y - 10)); c.addLine(to: CGPoint(x: o.x, y: o.y + 10))
+            ctx.stroke(c, with: .color(.gray), lineWidth: 2)
+            ctx.draw(Text("old anchor").font(.caption2).foregroundColor(.gray), at: CGPoint(x: o.x + 30, y: o.y + 10))
+        }
         for (i, pk) in picked.enumerated() {
             let p = fit.toScreen(pk.position)
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 8, y: p.y - 8, width: 16, height: 16)), with: .color(.orange))

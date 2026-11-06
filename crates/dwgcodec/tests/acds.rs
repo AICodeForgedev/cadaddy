@@ -1,7 +1,7 @@
 //! The data storage section (ACIS data of solids, from AutoCAD 2013 on) against a file of another
 //! writer (acadrust, a black box): what it writes decodes here to the handles and bytes it was
 //! given, and what is written here is the same bytes (reading our section back by that writer is
-//! `crates/io/tests/dwg_acds.rs`).
+//! `crates/io/tests/suite/dwg/dwg_acds.rs`).
 mod common;
 
 use std::io::Cursor;

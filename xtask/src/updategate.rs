@@ -929,7 +929,7 @@ mod tests {
         // that scripted=false AND showing=true. If the old 0.7.8 code were still present
         // (has_control_channel returning true for the agent port), that step would FAIL.
         //
-        // The actual UI test for this is in crates/ui-egui/tests/update_agent_port.rs:
+        // The actual UI test for this is in crates/ui-egui/tests/suite/panels/update_agent_port.rs:
         // `the_default_agent_port_still_gets_updates` and `a_window_started_with_control_stays_quiet`.
         let agent_port = AGENT_PORT;
         assert_eq!(agent_port, 47_820, "the gate connects on the agent port, not a scripted port");

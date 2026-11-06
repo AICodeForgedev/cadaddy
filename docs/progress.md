@@ -91,4 +91,4 @@ replaced by an empty one.
 - Timecards without a floor count toward their phase (and its rates) but not toward a floor.
 
 Tests: `crates/mepfix/tests/progress_hotel.rs` (the synthetic hotel, every number against a hand
-calculation), `crates/engine/tests/progress.rs`.
+calculation), `crates/engine/tests/suite/script/progress.rs`.
