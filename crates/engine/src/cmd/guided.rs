@@ -11847,6 +11847,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     // Each luminaire: its fields from the documents in order, with their sources.
     let d = s.doc()?;
     let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let doc_order = super::provenance::rule("G-DOC-ORDER");
     let mut on_plans: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut field_conflicts: BTreeMap<String, Vec<lt::FieldConflict>> = BTreeMap::new();
     let mut lums: Vec<Dev> = Vec::new();
@@ -11936,6 +11937,27 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             if !keep && !same {
                 store.set(k, Prop::new(said.value.clone(), Source::from_doc(said.kind, &said.doc)));
             }
+        }
+        // Where the documents disagree on a field, the field installs the approved submittal's
+        // value (the first document): the drawings' schedule value is kept beside it as the
+        // design value (Q6216, `G-DOC-ORDER`).
+        for fc in &fcs {
+            let (Some(installed), Some(design)) =
+                (chosen.get(fc.field), fc.sides.iter().find(|x| x.kind == SourceKind::Schedule).or(fc.sides.get(1)))
+            else {
+                continue;
+            };
+            if store.get(fc.field).is_some_and(|old| old.source.kind == SourceKind::User) || design.value == installed.value {
+                continue;
+            }
+            let c = super::provenance::Correction {
+                key: fc.field.to_string(),
+                design: design.value.clone(),
+                corrected: installed.value.clone(),
+                reason: format!("{} says {}, {} says {}", installed.doc, installed.value, design.doc, design.value),
+                rule: doc_order.id.clone(),
+            };
+            let _ = super::provenance::correct(&mut store, &c, Source::from_doc(design.kind, &design.doc));
         }
         let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
         for (k, v) in [
@@ -12128,20 +12150,27 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             rfis += 1;
         }
     }
-    // One job finding per kind of conflict.
+    // One job finding per kind of conflict; a field the documents disagree on is built with the
+    // approved submittal's value, the schedule's kept beside it (corrected for the field).
+    let field_topics: BTreeSet<&str> = lt::FIELDS.iter().map(|(_, l)| *l).collect();
     for (topic, n) in &per_topic {
         let mine: Vec<&Conflict> = conflicts.iter().filter(|c| &c.topic == topic).collect();
         let shown: Vec<String> = mine.iter().take(6).map(|c| c.issue.clone()).collect();
         let more = if mine.len() > shown.len() { format!(" (and {} more)", mine.len() - shown.len()) } else { String::new() };
         let fix = mine.first().map(|c| c.fix.clone()).unwrap_or_default();
-        job.add_finding(
+        let fixed = if field_topics.contains(topic.as_str()) { *n } else { 0 };
+        job.add_conflict(
             StageName::BimBuild,
             &format!("Lighting conflicts, {topic}: {n}: {}{more}", shown.join("; ")),
-            "the lighting documents disagree",
+            if fixed > 0 {
+                "the lighting documents disagree: each luminaire is built with the approved submittal's value, the schedule's kept beside it as the design value (tradepractice.json G-DOC-ORDER)"
+            } else {
+                "the lighting documents disagree"
+            },
             1,
             vec![fix],
-            None,
-            false,
+            *n,
+            fixed,
         );
     }
     s.doc_mut()?.building_spec = Some(sp.to_json());
@@ -15573,14 +15602,20 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         );
     }
     if n("conflicts") > 0 {
-        job.add_finding(
+        // Corrected for the field (Q6216, `E-ENTRY-PULLBOX`): a panel whose entry window can't
+        // take its raceways gets a pull box over (under) it that they land in, inferred.
+        let fixed = entry_pull_boxes(s, &r);
+        job.add_conflict(
             StageName::BimBuild,
-            &format!("{} panel entry conflict(s): the raceways don't fit the allowed entry window", n("conflicts")),
-            "the router never squeezes raceways outside a gear's allowed conduit area (conduit.route {section: \"conflicts\"})",
+            &format!(
+                "{} panel entry conflict(s): the raceways don't fit the allowed entry window: {fixed} land in a pull box built at their panel",
+                n("conflicts")
+            ),
+            "the router never squeezes raceways outside a gear's allowed conduit area (conduit.route {section: \"conflicts\"}); the field sets a pull box on the panel that the raceways land in, sized for them (tradepractice.json E-ENTRY-PULLBOX), built inferred; a panel with no entry data stays a question",
             2,
-            vec!["Add a gutter, wireway or pull box, a larger can, or split the entry".into()],
-            None,
-            false,
+            vec!["Check each pull box against the panel's submittal; a gutter or a larger can is the alternative".into()],
+            n("conflicts"),
+            fixed,
         );
     }
     let unknown: Vec<String> = r["entry_unknown"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
@@ -15660,6 +15695,75 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
         "circuits": r["routed_circuits"], "homeruns": r["homeruns"], "routed_ft": r["routed_ft"],
         "clashes": n("clashes"), "conflicts": n("conflicts"), "penetrations": n("penetrations"), "unrouted": n("unrouted"),
     });
+}
+
+/// The pull boxes the field sets on panels whose entry window can't take their raceways (the
+/// routing's entry `conflicts` with a raceway count): one per panel and side, as wide as the panel
+/// or the raceways need (`E-ENTRY-PULLBOX`: NEC 314.28(A)(2) for an angle pull, six times the
+/// largest raceway plus the others), built inferred over (under) the panel. The conflicts they
+/// settle.
+fn entry_pull_boxes(s: &mut Session, report: &Value) -> usize {
+    let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return 0 };
+    let rule = super::provenance::rule("E-ENTRY-PULLBOX");
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    // By panel, level and side: the raceways that don't fit and the most the window holds.
+    let mut by: BTreeMap<(String, String, String), (usize, usize, usize)> = BTreeMap::new();
+    for c in report["conflicts"].as_array().into_iter().flatten().take(10_000) {
+        let (Some(gear), Some(level)) = (c["gear"].as_str(), c["level"].as_str()) else { continue };
+        let Some(raceways) = c["raceways"].as_u64() else { continue };
+        let e = by.entry((gear.to_string(), level.to_string(), c["side"].as_str().unwrap_or("top").to_string())).or_default();
+        e.0 += 1;
+        e.1 = e.1.max(raceways as usize);
+        e.2 = e.2.max(c["holds"].as_u64().unwrap_or(0) as usize);
+    }
+    let mut new_equipment: BTreeSet<String> = BTreeSet::new();
+    let mut settled = 0usize;
+    for ((gear, level, side), (n, raceways, holds)) in by {
+        let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&gear) && same_level_name(&e.level, &level)).cloned() else {
+            continue;
+        };
+        let largest = rule.default_size_in.max(0.5);
+        let need_in = 6.0 * largest + (raceways.saturating_sub(1) as f64) * largest;
+        let gear_w_in = ((g.max[0] - g.min[0]).abs().max((g.max[1] - g.min[1]).abs())) / upf * 12.0;
+        let w = gear_w_in.max(need_in);
+        let (cx, cy) = ((g.min[0] + g.max[0]) / 2.0, (g.min[1] + g.max[1]) / 2.0);
+        // As wide as it needs along the panel's long side, 6" deep (else the panel's depth).
+        let along_x = (g.max[0] - g.min[0]).abs() >= (g.max[1] - g.min[1]).abs();
+        let depth = (if along_x { g.max[1] - g.min[1] } else { g.max[0] - g.min[0] }).abs().max(0.5 * upf);
+        let (hw, hd) = if along_x { (w / 24.0 * upf, depth / 2.0) } else { (depth / 2.0, w / 24.0 * upf) };
+        let height_ft = rule.reach_ft.max(1.0);
+        let bottom = if side == "bottom" { (g.bottom_ft - height_ft).max(0.0) } else { g.bottom_ft + g.height_ft };
+        let tag = format!("{gear}-PB");
+        let mut props: BTreeMap<String, String> = BTreeMap::new();
+        props.insert("STATUS".into(), "inferred".into());
+        props.insert("BASIS".into(), rule.basis_for(&format!("{raceways} raceways into {gear}'s {side}, whose window holds {holds}")));
+        props.insert("FEEDS".into(), gear.clone());
+        props.insert("SIZE".into(), format!("{w:.0}\" x {:.0}\" x 6\"", height_ft * 12.0));
+        props.insert("DESIGN".into(), format!("{raceways} raceways straight into the panel's {side} window ({holds} fit)"));
+        let mut sources = BTreeMap::new();
+        sources.insert("position".to_string(), format!("on {gear}'s {side} (trade practice)"));
+        sp.mep.equipment.push(cadaddy_walk3d::MepEquipment {
+            tag: tag.clone(),
+            kind: "pull_box".into(),
+            level: g.level.clone(),
+            min: [cx - hw, cy - hd],
+            max: [cx + hw, cy + hd],
+            bottom_ft: bottom,
+            height_ft,
+            systems: vec!["E-BRANCH".into()],
+            title: format!("Pull box (inferred: {})", rule.id),
+            properties: props,
+            sources,
+            confidence: 0.5,
+            ..Default::default()
+        });
+        new_equipment.insert(tag.to_ascii_uppercase());
+        settled += n;
+    }
+    if new_equipment.is_empty() || build_new_mep(s, sp, Vec::new(), &new_equipment).is_err() {
+        return 0;
+    }
+    settled
 }
 
 /// The sheet numbers of the generated underground plans, by trade.

@@ -90,6 +90,20 @@
       "basis": "trade practice: the electrician offsets the raceway under the obstacle (over it where under would drop into the ceiling) with the clearance the routing keeps, a field offset at each side (rules: conduitroute.json clearances)"
     },
     {
+      "id": "E-ENTRY-PULLBOX",
+      "trade": "electrical",
+      "fills": "a panel whose allowed entry window can't take the raceways routed to it",
+      "basis": "trade practice: where a panel's top (or bottom) can't take its raceways, the electrician sets a pull box or wireway on it that they land in; an angle pull box is at least six times the largest raceway plus the others in the row (NEC 314.28(A)(2)); alternative: an extension gutter or a larger can",
+      "reach_ft": 1.0,
+      "default_size_in": 1.0
+    },
+    {
+      "id": "G-DOC-ORDER",
+      "trade": "general",
+      "fills": "a product field the documents disagree on (the submittal against the schedule or the specification)",
+      "basis": "trade practice: the field installs what the approved submittal names; where it differs from the drawings' schedule or the specification, the schedule's value is kept beside it as the design value and the difference stays listed for the engineer"
+    },
+    {
       "id": "E-BOX-FILL",
       "trade": "electrical",
       "fills": "a device or junction box too small for what enters it (box fill)",
