@@ -126,6 +126,8 @@ pub(crate) struct BoxRule {
     pub material: String,
     /// How many devices side by side it holds (0: one).
     pub gangs: usize,
+    /// The largest raceway (trade size, inches) its knockouts take (0: not limited, a cable box).
+    pub max_raceway_in: f64,
     pub source: String,
 }
 
@@ -262,6 +264,8 @@ pub(crate) struct AtomRules {
     pub boxes: BTreeMap<String, BoxRule>,
     pub box_for: BTreeMap<String, BoxChoice>,
     pub box_source: String,
+    /// Why a box takes only so large a raceway (Q6243).
+    pub box_raceway_source: String,
     pub no_circuit_source: String,
     pub gang: GangRule,
     pub ring: RingRule,
@@ -381,6 +385,28 @@ impl AtomRules {
             .collect();
         bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
         bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied())
+    }
+    /// The smallest steel box like `br` (as many gangs, as much room) whose knockouts take a
+    /// `size_in` raceway (Q6243); none where `br` takes it or no box in the table does.
+    pub(crate) fn box_for_raceway(&self, br: &BoxRule, size_in: f64) -> Option<&BoxRule> {
+        let takes = |b: &BoxRule| b.max_raceway_in <= 0.0 || b.max_raceway_in + 1e-9 >= size_in;
+        if !size_in.is_finite() || takes(br) || br.material != "steel" {
+            return None;
+        }
+        let mut fit: Vec<&BoxRule> = self
+            .boxes
+            .values()
+            .filter(|b| {
+                b.material == "steel"
+                    && b.max_raceway_in > 0.0
+                    && takes(b)
+                    && b.holds() >= br.holds()
+                    && b.cubic_in + 1e-9 >= br.cubic_in
+                    && !b.item.contains("fan")
+            })
+            .collect();
+        fit.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
+        fit.first().copied()
     }
     /// The family a box kind gangs in (none: it doesn't gang).
     pub(crate) fn gang_family(&self, box_kind: &str) -> Option<&str> {
@@ -2218,6 +2244,14 @@ mod tests {
         assert!(r.box_for("equipment connection", false).is_none() && r.box_choice("equipment connection").is_some_and(|c| !c.source.is_empty()));
         assert!(r.box_for("junction box", false).is_some() && r.box_choice("disconnect").is_none());
         assert!(r.box_for("plumbing fixture", false).is_none());
+        // Q6243: a box takes the raceway its knockouts do; a larger one goes in a larger box.
+        let sq = r.boxes.get("sq4-2.125").unwrap();
+        assert!(r.box_for_raceway(sq, 1.0).is_none());
+        assert_eq!(r.box_for_raceway(sq, 1.25).map(|b| b.size.as_str()), Some("4-11/16\" square"));
+        assert!(r.box_for_raceway(sq, 2.0).is_none(), "no box of the table takes 2\"");
+        let oct = r.boxes.get("oct4-2.125").unwrap();
+        assert_eq!(r.box_for_raceway(oct, 1.0).map(|b| b.size.as_str()), Some("4\" square"));
+        assert!(r.box_for_raceway(r.boxes.get("nm1-18").unwrap(), 1.0).is_none(), "a cable box takes its cable by clamp");
         assert!(has_word("3/4\" EMT", "EMT") && !has_word("EMC", "MC") && has_word("MC CABLE", "MC"));
     }
 

@@ -33,6 +33,14 @@ struct DevBox {
     atom: usize,
 }
 
+/// A device's pigtail (Q6243): its size and count, the circuit conductor it is spliced to, why.
+struct Pigtail {
+    size: String,
+    landing: String,
+    count: u32,
+    why: String,
+}
+
 /// Equipment fed in its own wiring compartment (no box of ours): where its runs end in it.
 struct DirectDev {
     device: Handle,
@@ -805,7 +813,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some((h, super::super::conduitroute::box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl)))
         })
         .collect();
+    // The devices whose circuit conductors are larger than their terminals take: the pigtail
+    // the routing gave each (Q6243).
+    let pigtails: HashMap<Handle, Pigtail> = super::super::conduitroute::stored_report(d)
+        .and_then(|r| r["box_fill"]["pending"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_DEVICES)
+        .filter_map(|p| {
+            let h = Handle(u64::from_str_radix(p["device"].as_str()?, 16).ok()?);
+            let pg = p.get("pigtail")?;
+            let text = |k: &str| pg[k].as_str().map(str::to_string);
+            let count = pg["count"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1);
+            Some((h, Pigtail { size: text("size")?, landing: text("landing")?, count, why: text("why").unwrap_or_default() }))
+        })
+        .collect();
     let mut boxes_upsized = 0usize;
+    // Each box atom's stock (its knockouts), and the largest raceway landing in it (Q6243).
+    let mut box_rule_at: HashMap<usize, BoxRule> = HashMap::new();
+    let mut box_raceway: HashMap<usize, f64> = HashMap::new();
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -1006,6 +1032,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             cubic_in: 0.0,
             material: "steel".into(),
             gangs: 1,
+            // A bracket (a mud ring): no knockouts, the raceway ends at it.
+            max_raceway_in: 0.0,
             source: src.clone(),
         });
         let (br, ring) = match &lv_bracket {
@@ -1069,6 +1097,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             a.extra.push(("devices", members.iter().map(|m| m.hex()).collect::<Vec<_>>().join(","), "computed".into()));
         }
         let bi = atoms.len();
+        box_rule_at.insert(bi, br.clone());
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
         if let Some(g) = gang {
@@ -1123,6 +1152,69 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
         }
         boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi });
+    }
+
+    // -- A pigtail where a circuit's conductor is larger than its device's terminals take
+    // (Q6243): spliced in the device's box, its design size kept beside the one it lands. --
+    let terms = &super::super::conduitroute::rules().terminals;
+    let mut pigtailed = 0usize;
+    for bx in &boxes {
+        let Some(pg) = pigtails.get(&bx.device) else { continue };
+        let Some((at, mut ctx)) = atoms.get(bx.atom).map(|(a, c)| (a.a, c.clone())) else { continue };
+        pigtailed += 1;
+        if let Some(b) = atoms.get_mut(bx.atom) {
+            let rule = terms.source.clone();
+            b.0.extra.push(("design_value", format!("#{} on the device's terminals", pg.landing), "computed: the circuit's conductors".into()));
+            b.0.extra.push((
+                "corrected_value",
+                format!("{} #{} pigtail(s) to the device, spliced to the #{} in its box", pg.count, pg.size, pg.landing),
+                rule.clone(),
+            ));
+            b.0.extra.push(("correction_reason", pg.why.clone(), rule.clone()));
+            b.0.extra.push(("correction_rule", rule.clone(), rule));
+        }
+        ctx.body = None;
+        ctx.src = rule_source(&terms.source);
+        let ft = terms.pigtail_in.clamp(6.0, 36.0) / 12.0;
+        let up = Vec3::new(0.0, 0.0, ft * upf);
+        // Each conductor the device lands, and its ground.
+        for (i, ground) in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]).enumerate() {
+            let (item, ty) = if ground {
+                ("Copper ground, green".to_string(), "bare or green".to_string())
+            } else {
+                ("THHN copper".to_string(), rl.insulation.clone())
+            };
+            let mut w = Atom {
+                kind: "wire",
+                item,
+                ty,
+                size: super::wire_size(&pg.size),
+                body_in: 0.1,
+                length_ft: ft,
+                a: at,
+                b: at + up,
+                connects: vec![bx.atom],
+                ..Atom::default()
+            };
+            w.path = vec![w.a, w.b];
+            w.extra.push(("conductor", if ground { "ground pigtail".into() } else { "pigtail".into() }, "computed".into()));
+            w.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
+            w.source = terms.source.clone();
+            atoms.push((w, ctx.clone()));
+            let mut c = Atom::fitting(
+                "connector",
+                terms.connector.clone(),
+                "",
+                &format!("#{} to {}", pg.landing, super::wire_size(&pg.size)),
+                at,
+                Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
+                0.4,
+                &terms.source,
+            );
+            c.connects = vec![bx.atom];
+            c.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
+            atoms.push((c, ctx.clone()));
+        }
     }
 
     // -- Each group's runs stitched end to end, then cut into their pieces. --
@@ -1210,6 +1302,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         src: rule_source(&br.source),
                     };
                     junction_at.insert(n, atoms.len());
+                    box_rule_at.insert(atoms.len(), br.clone());
                     atoms.push((a, ctx));
                     junctions += 1;
                 }
@@ -1447,6 +1540,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let Some(e) = pieces.ends.get(end).copied().flatten().map(|e| e + base) else { continue };
                 match land {
                     Some(Land::Atom(j)) => {
+                        if !m.cable && size_in.is_finite() {
+                            let at = box_raceway.entry(*j).or_insert(0.0);
+                            *at = at.max(size_in);
+                        }
                         if let Some(a) = atoms.get_mut(e) {
                             a.0.connects.push(*j);
                         }
@@ -1593,6 +1690,42 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             external.push((e + base, g.handle));
         }
         feeder_stubs += 1;
+    }
+
+    // -- A box takes the raceways that land in it (Q6243): where its knockouts don't take the
+    // largest, a box whose do, the design's box kept beside it. --
+    let mut boxes_for_raceway = 0usize;
+    let mut raceway_reviews = 0usize;
+    let inch = super::super::walltypes::frac;
+    for (j, size_in) in &box_raceway {
+        let (Some(br), Some(b)) = (box_rule_at.get(j), atoms.get_mut(*j)) else { continue };
+        if br.max_raceway_in <= 0.0 || *size_in <= br.max_raceway_in + 1e-9 {
+            continue;
+        }
+        let why = format!("a {} raceway lands in it; a {} takes {} at most", inch(*size_in), br.size, inch(br.max_raceway_in));
+        // A correction already on it (a pigtail): this one beside it.
+        let mut put = |k: &'static str, v: String, src: &str| match b.0.extra.iter_mut().find(|x| x.0 == k) {
+            Some(x) => x.1 = format!("{}; {v}", x.1),
+            None => b.0.extra.push((k, v, src.to_string())),
+        };
+        match rl.box_for_raceway(br, *size_in) {
+            Some(nb) => {
+                boxes_for_raceway += 1;
+                put("design_value", br.item.clone(), "computed: the trade's box for the device");
+                put("corrected_value", nb.item.clone(), &rl.box_raceway_source);
+                put("correction_reason", why, &rl.box_raceway_source);
+                put("correction_rule", rl.box_raceway_source.clone(), &rl.box_raceway_source);
+                b.0.item = nb.item.clone();
+                b.0.ty = nb.size.clone();
+                b.0.size = nb.size.clone();
+                b.0.extra.push(("cubic_in", format!("{}", nb.cubic_in), nb.source.clone()));
+                b.0.extra.push(("depth_in", format!("{}", nb.depth_in), nb.source.clone()));
+            }
+            None => {
+                raceway_reviews += 1;
+                put("review", format!("{why}, and no box of the table does: a pull box (NEC 314.28)"), &rl.box_raceway_source);
+            }
+        }
     }
 
     // -- Into the model: each atom an element; then what it connects to, by handle. --
@@ -1821,6 +1954,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "noBox": no_box,
         "openEnds": open_ends,
         "boxesSizedForFill": boxes_upsized,
+        "devicesPigtailed": pigtailed,
+        "boxesSizedForRaceway": boxes_for_raceway,
+        "boxesRacewayReview": raceway_reviews,
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
         "buriedTransitions": transitions,
