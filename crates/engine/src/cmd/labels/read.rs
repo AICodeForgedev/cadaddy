@@ -81,6 +81,7 @@ fn row(cols: &[Option<Col>], cells: &[String], source: &str) -> Option<PanelCirc
     let poles = get(Col::Poles).trim_end_matches(['P', 'p']).trim().parse::<u32>().ok().filter(|p| (1..=3).contains(p)).unwrap_or(1);
     let dash = |v: String| if v == "-" { String::new() } else { v };
     Some(PanelCircuit {
+        design_breaker: String::new(),
         number: first.to_string(),
         description: dash(get(Col::Description)),
         room: dash(get(Col::Room)),

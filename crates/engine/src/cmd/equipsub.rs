@@ -204,6 +204,49 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
     out
 }
 
+/// What is built instead of the drawings' where the submittal differs, from the same data the
+/// checks use: its protection (the most the submittal allows), its conductors (the smallest with
+/// the ampacity it needs) and their conduit by fill. Nothing to correct: empty. An equipment's
+/// short-circuit rating is no one thing to build: a study stays a question.
+pub(crate) fn correct(e: &mut EquipmentElectrical, feeder: Option<(&str, &str)>, rule: &super::coderules::CodeRule) {
+    let mut why = Vec::new();
+    if let (Some((amps, poles)), Some(max)) = (ocpd_of(&e.drawing_ocpd), e.max_ocpd_a)
+        && amps > max + 1e-9
+        && max > 0.0
+    {
+        let class = if e.fuse_class.is_empty() { String::new() } else { format!(" Class {} fuses", e.fuse_class) };
+        e.corrected_ocpd = format!("{max:.0}A/{poles}P{class}");
+        why.push(format!("drawings {}, its submittal allows at most {max:.0} A", e.drawing_ocpd));
+    }
+    let need = e.mca.or_else(|| e.fla.or(e.nameplate_a).map(|a| a * rule.conductor_factor.unwrap_or(1.25)));
+    if let (Some(need), Some((size, material))) = (need, feeder)
+        && let Some(table) = rule.ampacity_75c.get(material)
+    {
+        let have = table.get(size.trim_start_matches('#').trim_end_matches(" kcmil")).copied();
+        if have.is_some_and(|h| h + 1e-9 < need)
+            && let Some((bigger, a)) = table.iter().filter(|(_, a)| **a + 1e-9 >= need).min_by(|x, y| x.1.total_cmp(y.1))
+        {
+            let phases = e.phase.unwrap_or(3).clamp(1, 3);
+            let hots = if phases == 1 { 2 } else { phases };
+            e.corrected_conductors = format!("{hots} #{bigger} {material}");
+            why.push(format!(
+                "feeder's #{} {material} is under the {need:.0} A it needs; #{bigger} carries {a:.0} A (75 C)",
+                size.trim_start_matches('#')
+            ));
+            // Its conduit for those conductors and a ground (of the same size at most).
+            let rl = super::conduitroute::rules();
+            let parts = [(hots, bigger.clone(), true), (1, bigger.clone(), false)];
+            if let Some((trade, _, _)) = super::conduitroute::fill_size(&parts, "EMT", 0.0, rl) {
+                e.corrected_conduit = format!("{}\" EMT", super::mepatoms::trade_size(trade));
+            }
+        }
+    }
+    if !why.is_empty() {
+        e.correction_reason = format!("{}: {} ({})", e.tag, why.join("; "), e.source);
+        e.correction_rule = rule.cite.clone();
+    }
+}
+
 /// The load's word to find its submittal and schedule row by: its label's letters (`ELEV-1` →
 /// `ELEV`), at least three.
 pub(crate) fn stem(tag: &str) -> Option<String> {
@@ -438,6 +481,41 @@ pub(crate) fn merge(into: &mut EquipmentElectrical, from: &EquipmentElectrical) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where its submittal differs, what is built stands beside what the drawings say.
+    #[test]
+    fn a_connection_its_submittal_differs_from_is_corrected_not_just_reported() {
+        let rule = super::super::coderules::rules().into_iter().find(|r| r.sets == "equipment_electrical").unwrap_or_default();
+        let mut e = EquipmentElectrical {
+            tag: "RTU-1".into(),
+            drawing_ocpd: "90A/3P".into(),
+            mca: Some(74.6),
+            max_ocpd_a: Some(80.0),
+            phase: Some(3),
+            source: "submittal p.2".into(),
+            ..Default::default()
+        };
+        correct(&mut e, Some(("8", "cu")), &rule);
+        assert_eq!(e.corrected_ocpd, "80A/3P");
+        assert_eq!(e.corrected_conductors, "3 #4 cu", "{e:?}");
+        assert!(e.corrected_conduit.ends_with("EMT"), "{e:?}");
+        assert!(e.correction_reason.contains("drawings 90A/3P") && e.correction_rule.contains("NEC"), "{e:?}");
+        assert_eq!(e.drawing_ocpd, "90A/3P");
+        // Fuses it names; nothing to correct, nothing said.
+        let mut f = EquipmentElectrical {
+            tag: "ELEV-1".into(),
+            drawing_ocpd: "70A/3P".into(),
+            max_ocpd_a: Some(60.0),
+            fuse_class: "RK1".into(),
+            ..Default::default()
+        };
+        correct(&mut f, None, &rule);
+        assert_eq!(f.corrected_ocpd, "60A/3P Class RK1 fuses");
+        let mut g =
+            EquipmentElectrical { tag: "P-1".into(), drawing_ocpd: "20A/2P".into(), max_ocpd_a: Some(20.0), mca: Some(19.9), ..Default::default() };
+        correct(&mut g, Some(("12", "cu")), &rule);
+        assert!(g.correction_reason.is_empty() && g.corrected_ocpd.is_empty(), "{g:?}");
+    }
 
     /// A PTAC submittal of several models: the tag's model (its item line), its column (230/208 V,
     /// 1 phase, a 3.5 kW heater) and the cord for that heater at 208 V (20 A branch, MCA 19.9).

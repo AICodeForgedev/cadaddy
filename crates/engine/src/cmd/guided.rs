@@ -15433,7 +15433,14 @@ fn equipment_step(
         }
         if !equipsub::has_data(&e) {
             let key = format!("equip:{}", l.tag.to_ascii_uppercase());
-            match job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()) {
+            // An agent's reading in this job, else the project's: `custom/equipment_electrical.<TAG>`.
+            let told = job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()).or_else(|| {
+                let name = format!("equipment_electrical.{}", l.tag);
+                let rules = s.doc().ok()?.project_rules.list_domain(cadaddy_doc::projrules::RuleDomain::Custom);
+                let r = rules.iter().find(|r| r.key.eq_ignore_ascii_case(&name))?;
+                serde_json::from_str::<Value>(&r.active.value).ok()
+            });
+            match told {
                 Some(a) => equipsub::merge(&mut e, &equipsub::from_answer(&a)),
                 None if !scanned.is_empty() => {
                     equipment_question(job, &l.tag, &e, &scanned);
@@ -15457,11 +15464,64 @@ fn equipment_step(
         for c in equipsub::check(&e, conductors, afc, &rule) {
             conflicts_all.push((l.tag.clone(), c));
         }
+        // An approved submittal's values are what is built; not one sent back: the drawings' stay.
+        let sent_back = e.status.to_ascii_lowercase().contains("resubmit") || e.status.to_ascii_lowercase().contains("rejected");
+        if !sent_back {
+            equipsub::correct(&mut e, conductors, &rule);
+        }
         rows.push(e);
     }
-    // Each failure an RFI (once) and a finding.
+    // What is corrected goes on its schedule row (the print beside it), priced.
+    for e in rows.iter_mut().filter(|e| !e.correction_reason.is_empty()) {
+        // (A protection corrected: the conductors alone change no row's breaker.)
+        let new = e.max_ocpd_a.filter(|_| !e.corrected_ocpd.is_empty());
+        let (Some((amps, poles)), Some(new)) = (equipsub::ocpd_of(&e.drawing_ocpd), new) else { continue };
+        let word = equipsub::stem(&e.tag).unwrap_or_else(|| e.tag.to_ascii_uppercase());
+        let row = sp.mep.panel_schedules.iter_mut().find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel)).and_then(|p| {
+            p.circuits.iter_mut().find(|c| {
+                let d = c.description.to_ascii_uppercase();
+                d.contains(&e.tag.to_ascii_uppercase()) || d.contains(&word)
+            })
+        });
+        if let Some(c) = row {
+            c.design_breaker = c.breaker.clone();
+            c.breaker = format!("{new:.0}");
+        }
+        let change = s.execute(
+            "estimate.change",
+            &json!({"lines": [
+                {"item": "Circuit breaker", "size": format!("{new:.0}A {poles}P"), "qty": 1},
+                {"item": "Circuit breaker", "size": format!("{amps:.0}A {poles}P"), "qty": -1},
+            ], "why": e.correction_reason}),
+        );
+        if let Some(c) = change.ok().filter(|c| c.get("unpriced").and_then(Value::as_u64) == Some(0)) {
+            e.change_material = c.pointer("/totals/material").and_then(Value::as_f64);
+            e.change_labor_hours = c.pointer("/totals/labor_hours").and_then(Value::as_f64);
+        }
+    }
+    for e in rows.iter().filter(|e| !e.correction_reason.is_empty()) {
+        let parts: Vec<&str> = [e.corrected_ocpd.as_str(), e.corrected_conductors.as_str(), e.corrected_conduit.as_str()]
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect();
+        let cost = e
+            .change_material
+            .map_or_else(|| " (change unpriced)".to_string(), |m| format!(" (change ${m:.2}, {:.2} h)", e.change_labor_hours.unwrap_or(0.0)));
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Equipment {} built to its submittal: {}{cost}", e.tag, parts.join(", ")),
+            &format!("{} [{}]", e.correction_reason, e.correction_rule),
+            2,
+            vec!["The drawings' values stay beside it on the schedule row and the record".into()],
+            None,
+            false,
+        );
+    }
+    // What can't be built (a fault current study): an RFI (once) and a finding.
     let mut rfis = Vec::new();
-    for (tag, c) in &conflicts_all {
+    for (tag, c) in
+        conflicts_all.iter().filter(|(tag, c)| c.check == "sccr" || !rows.iter().any(|e| e.tag == *tag && !e.correction_reason.is_empty()))
+    {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
             h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);

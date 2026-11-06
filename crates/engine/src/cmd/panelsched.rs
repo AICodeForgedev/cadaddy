@@ -456,6 +456,7 @@ pub(crate) fn read(texts: &[TextItem], sheet: &str) -> Vec<PanelSchedule> {
                 }
                 let loads: Vec<f64> = mine.iter().filter_map(|k| rows.get(*k)).filter_map(load).collect();
                 circuits.push(PanelCircuit {
+                    design_breaker: String::new(),
                     number: n.to_string(),
                     description: c.description.join(" "),
                     room: String::new(),
