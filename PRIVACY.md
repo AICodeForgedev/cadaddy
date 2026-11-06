@@ -2,7 +2,7 @@
 
 CADaddy has no telemetry, no analytics and no account. Your drawings stay on your computer unless you
 send them somewhere yourself. This page lists everything CADaddy does over the network; a test
-(`crates/ui-egui/tests/no_network.rs`) fails if the code makes any other network call.
+(`crates/ui-egui/tests/suite/panels/no_network.rs`) fails if the code makes any other network call.
 
 ## What goes over the network
 

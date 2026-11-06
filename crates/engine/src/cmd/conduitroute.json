@@ -53,7 +53,8 @@
     "amp_75c": {"14": 20, "12": 25, "10": 35, "8": 50, "6": 65, "4": 85, "3": 100, "2": 115, "1": 130, "1/0": 150, "2/0": 175, "3/0": 200, "4/0": 230},
     "amp_90c": {"14": 25, "12": 30, "10": 40, "8": 55, "6": 75, "4": 95, "3": 115, "2": 130, "1": 145, "1/0": 170, "2/0": 195, "3/0": 225, "4/0": 260},
     "small_conductor_max_a": {"14": 15, "12": 20, "10": 30},
-    "small_conductor_source": "NEC 240.4(D): #14 15 A, #12 20 A, #10 30 A"
+    "small_conductor_source": "NEC 240.4(D): #14 15 A, #12 20 A, #10 30 A",
+    "standard_ratings": [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 600, 700, 800]
   },
   "box_fill": {
     "source": "NEC 314.16(B): each conductor entering 1 volume, all grounds 1, each device yoke 2 (the largest conductor's), Table 314.16(B) volumes",
@@ -68,9 +69,15 @@
     "load_pct": 80,
     "breaker_a": 20,
     "voltage": 120,
+    "voltage_ll": 208,
+    "voltage_source": "company default 120 V line to neutral, 208 V line to line (a 208Y/120 V system)",
     "cmil": {"14": 4110, "12": 6530, "10": 10380, "8": 16510, "6": 26240, "4": 41740, "3": 52620, "2": 66360, "1": 83690, "1/0": 105600, "2/0": 133100},
     "sizes": ["14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0"],
-    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil, K = 12.9 copper, I = 80% of the breaker"
+    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil single-phase, 1.732 K I L / cmil three-phase, K = 12.9 copper; I = the panel schedule's load at the circuit's voltage, else 80% of the breaker",
+    "moment_source": "load moment: the homerun carries the whole current, each stretch past it the share of the devices beyond it (equal shares, switches none)",
+    "homerun_first": true,
+    "homerun_steps": 2,
+    "homerun_first_source": "trade practice: the homerun is upsized first (a homerun up to two sizes larger, the circuit's own size past its first box) when that alone holds the drop; else the legs go up too"
   },
   "methods": {
     "raceway": "EMT",

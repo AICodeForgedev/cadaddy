@@ -465,9 +465,9 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
     let class_order: Vec<String> =
         classes.iter().filter(|(k, _, _)| k == "CLASS").take(MAX_OBJECTS).map(|(_, _, t)| up(&val(t, 1).unwrap_or_default())).collect();
     let mut proxies = false;
-    let proxy_tags = f.objects.iter().filter(|o| is_proxy(&o.kind)).map(|o| &o.tags);
+    let proxy_tags = f.objects.iter().filter(|o| dxf_proxy(&o.kind, o.tags.iter().map(|r| (r.code, r.value.as_str())))).map(|o| &o.tags);
     let proxy_tags = proxy_tags.chain(all_entities(d).filter_map(|e| match &e.kind {
-        EntityKind::Unknown(u) if is_proxy(&u.dxf_type) => Some(&u.tags),
+        EntityKind::Unknown(u) if dxf_proxy(&u.dxf_type, u.tags.iter().map(|r| (r.code, r.value.as_str()))) => Some(&u.tags),
         _ => None,
     }));
     for tags in proxy_tags {
@@ -520,6 +520,14 @@ pub(crate) fn read(secs: &[Section], d: &mut Drawing) {
 /// objects and entities, whose class is named by number in group 91.
 fn is_proxy(kind: &str) -> bool {
     matches!(up(kind).as_str(), "ACAD_PROXY_OBJECT" | "ACAD_PROXY_ENTITY")
+}
+
+/// Whether a record is a proxy as a DXF holds one (its class numbered by group 91), not one the
+/// native DWG reader kept as it was stored ([`cadaddy_dwgcodec::entities::RAW_SUBCLASS`]): that
+/// one's class is its DWG type code and its data the stored bytes, so it has no group 91 to
+/// renumber and is written back as it is.
+fn dxf_proxy<S: AsRef<str>>(kind: &str, groups: impl IntoIterator<Item = (i32, S)>) -> bool {
+    is_proxy(kind) && !groups.into_iter().any(|(code, v)| code == 100 && v.as_ref().trim() == cadaddy_dwgcodec::entities::RAW_SUBCLASS)
 }
 
 /// Where a proxy's class number is: its first group 91 outside the `102 {NAME` … `102 }` groups
@@ -852,7 +860,7 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
     let mut planned = plan_unknown(d, &recs, tags, &roles);
     for list in planned.values_mut() {
         list.retain_mut(|(_, t)| {
-            if !t.first().is_some_and(|z| is_proxy(&z.str())) {
+            if !t.first().is_some_and(|z| dxf_proxy(&z.str(), t.iter().map(|x| (x.code, x.str())))) {
                 return true;
             }
             let Some(n) = renumber(class_number(t.iter().map(|x| (x.code, x.str())))) else { return false };
@@ -896,7 +904,8 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
         .filter_map(|o| Some((o.handle.hex(), head(&o.tags.iter().take_while(|t| t.code < 1000).map(tag).collect::<Vec<_>>()).owner?)))
         .collect();
     let mut alive_memo: HashMap<String, bool> = HashMap::new();
-    for o in f.objects.iter().filter(|o| is_proxy(&o.kind) && renumber(class_number(o.tags.iter().map(|r| (r.code, r.value.as_str())))).is_none()) {
+    let proxy = |o: &ForeignObject| dxf_proxy(&o.kind, o.tags.iter().map(|r| (r.code, r.value.as_str())));
+    for o in f.objects.iter().filter(|o| proxy(o) && renumber(class_number(o.tags.iter().map(|r| (r.code, r.value.as_str())))).is_none()) {
         alive_memo.insert(o.handle.hex(), false);
     }
     for o in &f.objects {
@@ -951,7 +960,7 @@ pub(crate) fn finish(tags: &mut Vec<Tag>, d: &Drawing) {
         }
         if r.kind == "ENDSEC" && r.sec == "OBJECTS" {
             for o in f.objects.iter().filter(|o| map.alive.contains_key(&o.handle.hex())) {
-                let number = is_proxy(&o.kind).then(|| renumber(class_number(o.tags.iter().map(|r| (r.code, r.value.as_str()))))).flatten();
+                let number = proxy(o).then(|| renumber(class_number(o.tags.iter().map(|r| (r.code, r.value.as_str()))))).flatten();
                 match number {
                     Some(n) => {
                         let mut tags: Vec<Tag> = o.tags.iter().map(tag).collect();
