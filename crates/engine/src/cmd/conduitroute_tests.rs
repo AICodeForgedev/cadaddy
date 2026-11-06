@@ -582,3 +582,22 @@ fn a_raceway_through_an_obstacle_is_offset_under_it_across_its_box_only() {
     assert!(offset_run(&mut r, Vec2::new(240.0, 60.0), 7.0, [230.0, 50.0, 250.0, 70.0], 6.0, UPF).is_none(), "another height");
     assert_eq!(r, before);
 }
+
+#[test]
+fn a_raceway_the_ceiling_space_cant_offset_runs_around_the_obstacle_in_plan() {
+    let mut r: MepRun = serde_json::from_value(json!({
+        "system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [240.0, 0.0]],
+        "size_in": [0.75, 0.0], "bottoms_ft": [9.5], "height_source": ROUTED,
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A duct 40" across the run, its box reaching 6" one side and 30" the other: round the near side.
+    let (path, extra) = detour_run(&mut r, Vec2::new(120.0, 0.0), 9.5, [100.0, -6.0, 140.0, 30.0], UPF).unwrap_or_else(|| panic!("a detour"));
+    assert_eq!(r.points, vec![[0.0, 0.0], [100.0, 0.0], [100.0, -6.0], [140.0, -6.0], [140.0, 0.0], [240.0, 0.0]]);
+    assert_eq!(r.bottoms_ft, vec![9.5; 5], "at the same height");
+    assert_eq!(path.len(), 4);
+    assert!((extra - 1.0).abs() < 1e-9, "6\" out and back: {extra}");
+    // A box past the segment's end, or a diagonal piece: no detour.
+    let mut d: MepRun = serde_json::from_value(json!({"system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [100.0, 100.0]], "size_in": [0.75, 0.0], "bottoms_ft": [9.5]}))
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(detour_run(&mut d, Vec2::new(50.0, 50.0), 9.5, [40.0, 40.0, 60.0, 60.0], UPF).is_none());
+}
