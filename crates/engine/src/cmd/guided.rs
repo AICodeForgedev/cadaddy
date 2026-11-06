@@ -6175,6 +6175,20 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // a guest room's is the tamper-resistant one; tamper-resistant in guest rooms, GFCI by circuit), the
     // decisions the documents can't make left `undecided` and asked.
     let t = web_time::Instant::now();
+    if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
+        let differ = super::propfill::as_built_differences(s.doc()?, &sp.mep.panel_schedules);
+        if !differ.is_empty() {
+            job.add_finding(
+                StageName::BimBuild,
+                "Breakers as built differ from the panel schedule",
+                &differ.join("; "),
+                3,
+                vec!["Keep the as-built breakers on the record: the schedule and any submittal behind it no longer say what is in the panel".into()],
+                None,
+                false,
+            );
+        }
+    }
     match s.execute("bim.coderules", &json!({})) {
         Ok(v) => {
             let line = format!(
