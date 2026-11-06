@@ -11571,9 +11571,21 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             }
         }
     }
+    // A panel its lettering put in a crossing wall stands clear of it.
+    let mut slid: BTreeSet<String> = BTreeSet::new();
+    {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let (walls, wall_types) = (sp.walls.clone(), sp.wall_types.clone());
+        for e in sp.mep.equipment.iter_mut() {
+            if super::gearbuild::clear_of_crossing_walls(e, &walls, &wall_types, upf) {
+                slid.insert(e.tag.to_ascii_uppercase());
+            }
+        }
+    }
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
     let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
     new_tags.extend(resized.iter().cloned());
+    new_tags.extend(slid.iter().cloned());
     let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
@@ -11590,7 +11602,12 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         .model
         .iter()
         .filter(|e| super::bimlook::made_tag(e, "kind") == Some("equipment"))
-        .filter(|e| super::bimlook::made_tag(e, "tag").is_some_and(|t| resized.contains(&t.trim().to_ascii_uppercase())))
+        .filter(|e| {
+            super::bimlook::made_tag(e, "tag").is_some_and(|t| {
+                let t = t.trim().to_ascii_uppercase();
+                resized.contains(&t) || slid.contains(&t)
+            })
+        })
         .map(|e| e.handle)
         .collect();
     for h in &stale {
@@ -11628,6 +11645,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     s.echo(line);
     if !resized.is_empty() {
         s.echo(format!("  gear the plans locate, its box from its submittal: {}", resized.iter().cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if !slid.is_empty() {
+        s.echo(format!("  panels slid clear of a crossing wall: {} ({})", slid.len(), slid.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
     }
     if !planned.room_issues.is_empty() {
         job.add_finding(
