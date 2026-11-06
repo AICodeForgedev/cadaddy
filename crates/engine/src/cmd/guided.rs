@@ -7803,12 +7803,8 @@ fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<Str
     upper
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
-        .map(|w| match w {
-            "QUEEN" => "Q".to_string(),
-            "ACC" | "ACCESSIBLE" => "ADA".to_string(),
-            w => w.to_string(),
-        })
-        .filter(|w| w != "SINGLE")
+        .map(|w| cadaddy_mepfix::wordrules::pair_value("units.type_word_aliases", w).unwrap_or(w).to_string())
+        .filter(|w| !cadaddy_mepfix::wordrules::words("units.dropped_type_words").contains(&w.as_str()))
         .filter(|w| vocabulary.is_none_or(|v| v.contains(w)))
         .collect()
 }
@@ -9226,7 +9222,10 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             .min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)))
             .map(|(v, _)| v.clone())
     };
-    for (v, at) in labels.iter().filter(|(v, _)| v.trim().eq_ignore_ascii_case("PTAC")) {
+    // The room unit's printed tag (rule data `equipment.room_unit_tags`: PTAC for kind ptac).
+    let unit_tag =
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == "ptac").map(|(t, _)| *t).unwrap_or_default();
+    for (v, at) in labels.iter().filter(|(v, _)| !unit_tag.is_empty() && v.trim().eq_ignore_ascii_case(unit_tag)) {
         let body = shapes
             .iter()
             .filter(|(lo, hi, _)| {
@@ -9237,9 +9236,9 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             })
             .min_by(|a, b| dist(mid(a.0, a.1), *at).total_cmp(&dist(mid(b.0, b.1), *at)));
         let Some((lo, hi, _)) = body else { continue };
-        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("PTAC-{n}"));
+        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("{unit_tag}-{n}"));
         if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
-            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: "tag PTAC".into() });
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: format!("tag {unit_tag}") });
         }
     }
     let squarish = |lo: [f64; 2], hi: [f64; 2]| {
@@ -9338,7 +9337,7 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             .into_iter()
             .filter_map(|v| {
                 let up = v.title.to_ascii_uppercase();
-                let mech = mech_sheet || up.contains("MECH") || up.contains("HVAC");
+                let mech = mech_sheet || cadaddy_mepfix::wordrules::words("sheets.mechanical_title_words").iter().any(|w| up.contains(w));
                 let words = type_words(&v.title, Some(&vocabulary));
                 (mech && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
             })
@@ -9493,13 +9492,10 @@ fn drop_equipment_marks(devices: &mut Vec<super::readers::ReadDevice>) -> usize 
 /// The mechanical equipment kind a device's tag names (`EF`, `PTAC`), if it names one.
 fn equipment_tag_kind(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_uppercase();
-    if tag == "EF" || tag.starts_with("EF-") {
-        Some("exhaust_fan")
-    } else if tag == "PTAC" || tag.starts_with("PTAC-") {
-        Some("ptac")
-    } else {
-        None
-    }
+    cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+        .iter()
+        .find(|(t, _)| tag == *t || tag.strip_prefix(t).is_some_and(|r| r.starts_with('-')))
+        .map(|(_, kind)| *kind)
 }
 
 /// Each stamped device whose tag names mechanical equipment (`EF`, `PTAC`) moved to that
@@ -9554,10 +9550,8 @@ fn scheduled_connections(
     let mut out = Vec::new();
     for e in equipment.iter().take(MAX_STAMPED) {
         let Some(room) = e.properties.get("room").filter(|r| !r.is_empty()) else { continue };
-        let tag = match e.kind.as_str() {
-            "ptac" => "PTAC",
-            "exhaust_fan" => "EF",
-            _ => continue,
+        let Some(tag) = cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == e.kind).map(|(t, _)| *t) else {
+            continue;
         };
         // Connected already: a connection of its kind in its room.
         if devices.iter().chain(&out).any(|dv| dv.room == *room && dv.tag.to_ascii_uppercase().starts_with(tag)) {
@@ -9710,7 +9704,9 @@ fn units_trade(sheet: &str) -> String {
 fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
     let connection = |dv: &super::readers::ReadDevice| {
         let t = dv.tag.trim().to_ascii_uppercase();
-        t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-")
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+            .iter()
+            .any(|(tag, _)| t == *tag || t.strip_prefix(tag).is_some_and(|r| r.starts_with('-')))
     };
     let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
     // Where each kept one is: another plan's tag put at the same equipment (in no room) is it.
@@ -10769,7 +10765,7 @@ fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec
             // FLOOR - SANITARY): every guest room type's, on that floor.
             let up = v.title.to_ascii_uppercase();
             let enlarged = up.contains("ENLARGED") || up.contains("PLAN");
-            if !types.contains(&words) && enlarged && (up.contains("GUESTROOM") || up.contains("GUEST ROOM")) {
+            if !types.contains(&words) && enlarged && cadaddy_mepfix::wordrules::words("units.unit_plan_title_words").iter().any(|w| up.contains(w)) {
                 let Some(region) = v.region.or_else(|| title_cell(v.at, &titles, sh.rect)) else {
                     progress_line(&format!("  unit types: {} {:?} at {:?}: no part of the sheet found for it", sh.number, v.title, v.at));
                     continue;

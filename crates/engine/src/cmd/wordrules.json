@@ -1319,6 +1319,19 @@
     "battery"
    ]
   },
+  "equipment.room_unit_tags": {
+   "source": "trade practice: the printed tags of a room's own equipment (a tag alone or with -n) and its kind: EF an exhaust fan, PTAC a packaged terminal unit; a typical panel's load and a device so tagged are its connection (moved from guided.rs)",
+   "pairs": [
+    [
+     "EF",
+     "exhaust_fan"
+    ],
+    [
+     "PTAC",
+     "ptac"
+    ]
+   ]
+  },
   "equipment.submittal_package_words": {
    "source": "The submittals at `paths`: each PDF (or a submittal's text, `.txt`) given, and those in each folder given (not its subfolders), in name order. Words of a submittal package's name that say it holds products the model's elements are. (trade practice: the words a product submittal's package name carries; moved from submittals.rs `PRODUCT_PACKAGE_WORDS`)",
    "words": [
@@ -1338,6 +1351,118 @@
     "DOAS",
     "UNIT HEATER",
     "SPLIT SYSTEM"
+   ]
+  },
+  "equipment.tag_kind": {
+   "source": "trade practice: the kind of equipment a tag beside a duct-plan box names; the first row whose word the tag has decides (`word:EF` a whole word, else a part of the tag) (moved from duct_reader.rs)",
+   "rules": [
+    {
+     "value": "ahu",
+     "any": [
+      "AHU"
+     ]
+    },
+    {
+     "value": "rtu",
+     "any": [
+      "RTU"
+     ]
+    },
+    {
+     "value": "ptac",
+     "any": [
+      "PTAC"
+     ]
+    },
+    {
+     "value": "vav",
+     "any": [
+      "VAV",
+      "VB"
+     ]
+    },
+    {
+     "value": "fan_coil_unit",
+     "any": [
+      "FCU",
+      "FAN COIL"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "any": [
+      "word:EF",
+      "EXHAUST FAN"
+     ]
+    },
+    {
+     "value": "water_heater",
+     "any": [
+      "word:WH",
+      "WATER HEATER"
+     ]
+    },
+    {
+     "value": "ventilation_unit",
+     "any": [
+      "ERV",
+      "HRV",
+      "MAU"
+     ]
+    }
+   ]
+  },
+  "equipment.tag_prefix_kind": {
+   "source": "trade practice: the kind of equipment a schedule tag starting so names (FCU-1: fan coil unit); the first row whose word the tag starts with decides (moved from duct_reader.rs)",
+   "rules": [
+    {
+     "value": "ahu",
+     "any": [
+      "AHU",
+      "AH-"
+     ]
+    },
+    {
+     "value": "rtu",
+     "any": [
+      "RTU",
+      "RT-"
+     ]
+    },
+    {
+     "value": "ptac",
+     "any": [
+      "PTAC"
+     ]
+    },
+    {
+     "value": "vav",
+     "any": [
+      "VAV"
+     ]
+    },
+    {
+     "value": "fan_coil_unit",
+     "any": [
+      "FCU",
+      "FC-"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "any": [
+      "EF-",
+      "EF "
+     ]
+    },
+    {
+     "value": "ventilation_unit",
+     "any": [
+      "ERV",
+      "HRV",
+      "MAU"
+     ]
+    }
    ]
   },
   "equipment.tags": {
@@ -2486,6 +2611,13 @@
     ]
    ]
   },
+  "sheets.mechanical_title_words": {
+   "source": "drafting convention: a view title with one of these is a mechanical view (moved from guided.rs)",
+   "words": [
+    "MECH",
+    "HVAC"
+   ]
+  },
   "sheets.mount_note_disciplines": {
    "source": "The disciplines whose sheets that aren't plans may list mounting heights in their notes: the general (accessibility) sheets, the architecture's, the trades'. (drafting convention; moved from guided.rs `MOUNT_NOTE_DISCIPLINES`)",
    "words": [
@@ -3216,6 +3348,12 @@
     "PNL"
    ]
   },
+  "units.dropped_type_words": {
+   "source": "trade practice: words a room type's name carries that don't tell its types apart (moved from guided.rs `type_words`)",
+   "words": [
+    "SINGLE"
+   ]
+  },
   "units.not_unit_words": {
    "source": "trade practice: equipment named like a unit (UNIT HEATER, UNIT VENTILATOR) and notes: a tag with one of these names no unit type (moved from unittypes.rs)",
    "words": [
@@ -3234,6 +3372,23 @@
    "words": [
     "PTAC",
     "VTAC"
+   ]
+  },
+  "units.type_word_aliases": {
+   "source": "trade practice: a room type's word and the word it is written as (QUEEN as Q, ACCESSIBLE as ADA) (moved from guided.rs `type_words`)",
+   "pairs": [
+    [
+     "QUEEN",
+     "Q"
+    ],
+    [
+     "ACC",
+     "ADA"
+    ],
+    [
+     "ACCESSIBLE",
+     "ADA"
+    ]
    ]
   },
   "units.type_words": {
@@ -3261,6 +3416,13 @@
     "TYPICAL",
     "TYP.",
     "ROOM"
+   ]
+  },
+  "units.unit_plan_title_words": {
+   "source": "trade practice: an enlarged plan whose title has one of these draws a typical unit (moved from guided.rs)",
+   "words": [
+    "GUESTROOM",
+    "GUEST ROOM"
    ]
   },
   "walls.room_side_words": {
