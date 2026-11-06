@@ -1105,12 +1105,22 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // A run passing a box of its own circuit ends in it (and the next leaves it).
         // A run passing a box of its own circuit ends in it (and the next leaves it): one at its
         // height, or one under or over it when no drop leaves the node for it.
+        // So does one passing equipment of its own circuit fed in its own compartment.
         let breaks = |p: Vec3, degree: usize, drop_here: bool| {
+            let pp = Vec2::new(p.x, p.y);
             degree >= 2
                 && !m.circuit.is_empty()
-                && box_near(&boxes, &taken, &key.level, &m.circuit, p, true)
+                && (box_near(&boxes, &taken, &key.level, &m.circuit, p, true)
                     .and_then(|bi| boxes.get(bi))
                     .is_some_and(|b| (b.entry.z - p.z).abs() <= 3.0 * upf || !drop_here)
+                    || m.feeder.is_none()
+                        && m.devices.is_empty()
+                        && direct.iter().any(|x| {
+                            x.level.eq_ignore_ascii_case(&key.level)
+                                && on_circuit(&x.circuit, &m.circuit)
+                                && Vec2::new(x.at.x, x.at.y).dist(pp) <= reach
+                                && ((x.at.z - p.z).abs() <= 3.0 * upf || !drop_here)
+                        }))
         };
         let (mut chains, nodes, brk) = stitch(ps, tol, &breaks);
         // Junction boxes where three or more runs meet.
