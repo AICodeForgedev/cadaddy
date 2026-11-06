@@ -17707,16 +17707,19 @@ fn plumbing_fixtures(
     let mut found: Vec<(String, [f64; 2], f64, String, cadaddy_doc::Handle)> = Vec::new();
     for e in d.model.iter() {
         // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
-        let lettered: Vec<&cadaddy_doc::Text> = match &e.kind {
-            cadaddy_doc::EntityKind::Text(t) => vec![t],
-            cadaddy_doc::EntityKind::Insert(ins) => ins.attribs.iter().take(8).map(|a| &a.text).collect(),
+        let (lettered, symbol): (Vec<&cadaddy_doc::Text>, bool) = match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) => (vec![t], false),
+            cadaddy_doc::EntityKind::Insert(ins) => (ins.attribs.iter().take(8).map(|a| &a.text).collect(), true),
             _ => continue,
         };
         let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
         for t in lettered {
             let value = t.value.trim();
+            // The sheet's own number lettered on it (its title block's, a reference to it) is no
+            // fixture; a tag symbol's of that mark is one (sheet P-2's lavatories tagged P-2: its
+            // floors' own lavatories, never left to another floor's).
             if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite())
-                || sheet_key(sheet) == value
+                || (!symbol && sheet_key(sheet) == value)
                 || callout(value, t, sheet)
             {
                 continue;
@@ -24425,6 +24428,40 @@ mod tests {
         let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
         tags.sort_by(|a, b| a.1.total_cmp(&b.1));
         assert_eq!(tags, [("P-7", 100.0), ("P-1", 500.0)], "{found:?}");
+    }
+
+    #[test]
+    fn a_lavatory_tagged_with_its_sheets_number_is_a_fixture_and_the_sheets_number_is_not() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // Sheet P-2: two lavatories' tag symbols (P-2), a water closet's (P-1), and the sheet's
+        // number lettered loose (a reference to it, as tall as a tag).
+        add_bubble(&mut s, "P-2", (100.0, 100.0), None);
+        add_bubble(&mut s, "P-2", (300.0, 100.0), None);
+        add_bubble(&mut s, "P-1", (500.0, 100.0), None);
+        s.execute("text", &json!({"at": [700.0, 100.0], "text": "P-2", "height": 2.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-2".into(),
+            level: "1".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-2/1".into(), lo, hi }];
+        let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
+        let schedule =
+            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-2")], extent: [0.0; 4], ..Default::default() };
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
+        tags.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(tags, [("P-2", 100.0), ("P-2", 300.0), ("P-1", 500.0)], "{found:?}");
     }
 
     #[test]
