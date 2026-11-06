@@ -44,6 +44,8 @@
     ],
     "along_ft": 0.5,
     "along_deg": 15.0,
+    "gear_clear_ft": 0.5,
+    "gear_clear_basis": "NEC 110.26(E)(1)(a): the space over electrical gear (its footprint, from the floor to 6 ft above it or the structural ceiling) is dedicated to it and no foreign piping may run there; a filled-in pipe that would is offset past the gear's side, as the field runs it",
     "reach_ft": 150.0,
     "share_ft": 8.0,
     "joint_ft": 1.0,
