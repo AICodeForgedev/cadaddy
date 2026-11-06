@@ -65,8 +65,9 @@ mod tests {
     use cadaddy_doc::{EntityKind, Shape};
     use cadaddy_geom::Vec3;
 
-    fn shape_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("cadaddy-render-shapes-{}", std::process::id()));
+    /// A folder for one test: tests run side by side, and one writing the file another reads fails it.
+    fn shape_dir(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("cadaddy-render-shapes-{}-{test}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let c = cadaddy_fonts::shp::compile("*1,5,BOX\n014,010,01C,018,0\n").unwrap();
         std::fs::write(dir.join("madeup.shx"), &c.shx).unwrap();
@@ -75,7 +76,7 @@ mod tests {
 
     #[test]
     fn a_shape_draws_from_its_loaded_file() {
-        let dir = shape_dir();
+        let dir = shape_dir("a_shape_draws_from_its_loaded_file");
         let mut d = Drawing::default();
         let sh = Shape {
             insert: Vec3::new(10.0, 5.0, 0.0),
@@ -109,7 +110,7 @@ mod tests {
 
     #[test]
     fn hostile_shapes_never_panic() {
-        let dir = shape_dir();
+        let dir = shape_dir("hostile_shapes_never_panic");
         let mut d = Drawing::default();
         d.shape_files.push(dir.join("madeup.shx").to_string_lossy().into_owned());
         for v in [f64::NAN, f64::INFINITY, -1e308, 0.0, 1e308] {

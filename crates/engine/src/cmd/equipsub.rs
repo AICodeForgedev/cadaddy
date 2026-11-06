@@ -230,7 +230,7 @@ pub(crate) fn extra_circuit_tags(
             _ => String::new(),
         };
         let item = format!("{rating}disconnect, {}: {}", e.tag, x.name);
-        for _ in 0..x.qty {
+        for n in 0..x.qty {
             if sp.tags.iter().filter(|t| t.fields.get("device_type").is_some_and(|f| f.value == item)).count() >= x.qty as usize {
                 break;
             }
@@ -260,6 +260,8 @@ pub(crate) fn extra_circuit_tags(
             };
             t.set("type", "DISC", "rule");
             t.set("device_type", item.clone(), "submittal");
+            let serves = format!("{}: {}", e.tag, x.name);
+            t.set("serves", if n == 0 { serves } else { format!("{serves} #{}", n + 1) }, "submittal");
             t.set("sheet", e.source.clone(), "submittal");
             t.set("symbol", "0", "rule");
             t.set("design_value", "not on the drawings", "plan");

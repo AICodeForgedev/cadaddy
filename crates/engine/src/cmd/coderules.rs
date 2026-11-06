@@ -41,6 +41,12 @@ struct RuleFile {
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct CodeRule {
+    #[serde(default)]
+    pub large_equipment_amps: Option<f64>,
+    #[serde(default)]
+    pub large_equipment_width_in: Option<f64>,
+    #[serde(default)]
+    pub large_equipment_cite: Option<String>,
     /// A wireway's sizes, for raceways an enclosure's plate can't take (depth, length step, most
     /// length, the share of its side a plate can use) and the rule.
     pub wireway_depths_in: Vec<f64>,

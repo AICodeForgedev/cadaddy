@@ -103,6 +103,9 @@
         "transformer"
       ],
       "sets": "working_space",
+      "large_equipment_amps": 1200,
+      "large_equipment_width_in": 72,
+      "large_equipment_cite": "NEC 110.26(C)(2): equipment rated 1200 A or more and over 6 ft wide needs an entrance at each end of its working space (or double the depth)",
       "wireway_depths_in": [6, 8, 10, 12],
       "wireway_length_step_in": 12,
       "wireway_max_length_in": 72,
