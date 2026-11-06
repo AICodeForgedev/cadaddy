@@ -24,7 +24,9 @@
 //! - **E-VDROP**: each circuit's length along its raceway from its panel to its farthest device
 //!   (the sticks' own lengths), its smallest conductor against the drawing's length table when it
 //!   prints one (`0-60' = #12`), else the drop (2 K I L / cmil, I from the schedule's load, else
-//!   the rule's share of the breaker) against the 3% of NEC 210.19(A) Informational Note 4.
+//!   the rule's share of the breaker) against the 3% of NEC 210.19(A) Informational Note 4: each
+//!   piece on its own conductor, the legs' with their devices' load spread along them, as the
+//!   routing sizes it (Q6235).
 //! - **E-METHOD**: each run's wiring method (its pieces' type) against the specification's
 //!   wiring-methods table for the area its pieces are in (a guest or dwelling unit, an exposed
 //!   room, else concealed), the project's wiring-method rule, or an approved value-engineering
@@ -1615,9 +1617,9 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                     }
                 }
             }
-            // A circuit on more than one conductor size (its voltage drop's larger one on the
-            // homerun, Q6235): each stick's drop on its own conductor, as feet on the smallest,
-            // its legs' with their devices' load spread along them as the routing has it.
+            // The drop as the routing sizes it (Q6235): each stick's on its own conductor (a
+            // voltage drop's larger one is on the homerun), as feet on the smallest, and the legs'
+            // with their devices' load spread along them (rules `legs_spread`).
             let run_hot = |run: &str| -> Option<(usize, String)> {
                 run_wires
                     .get(run)?
@@ -1627,7 +1629,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                     .min_by_key(|x| x.0)
             };
             let hot_sizes: BTreeSet<String> = sticks.iter().filter_map(|i| net.sticks.get(*i)).filter_map(|s| run_hot(&s.run).map(|x| x.1)).collect();
-            let mixed = (hot_sizes.len() > 1).then(|| {
+            let on_own = (hot_sizes.len() > 1 || rl.vdrop.legs_spread).then(|| {
                 let small = hot_sizes.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0).map(|x| x.1);
                 let cm_small = small.as_ref().and_then(|s| rl.vdrop.cmil.get(s).copied()).filter(|c| *c > 0.0).unwrap_or(1.0);
                 let n = devs.len().max(1) as f64;
@@ -1788,8 +1790,8 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                     );
                     continue;
                 };
-                // Mixed sizes: the drop's feet on the smallest conductor (see `mixed`).
-                let on_smallest = mixed.as_ref().and_then(|d| d.get(node?).copied().flatten()).map(|x| x.0).filter(|x| x.is_finite());
+                // The drop's feet on the smallest conductor (see `on_own`).
+                let on_smallest = on_own.as_ref().and_then(|d| d.get(node?).copied().flatten()).map(|x| x.0).filter(|x| x.is_finite());
                 let vd = mult * rl.vdrop.k_copper * amps * on_smallest.unwrap_or(ft) / cmil;
                 let pct = vd / v * 100.0;
                 let ok = pct <= rl.vdrop.max_pct + 1e-9;
@@ -1797,8 +1799,11 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 if let Some(eq) = on_smallest {
                     m["feet_on_smallest"] = json!(r1(eq));
                     m["sizes"] = json!(hot_sizes.iter().map(|s| format!("#{s}")).collect::<Vec<_>>());
-                    m["method"] =
-                        json!(format!("each piece on its own conductor; the legs' load spread along them ({})", rl.vdrop.legs_spread_source));
+                    m["method"] = json!(if rl.vdrop.legs_spread {
+                        format!("each piece on its own conductor; the legs' load spread along them ({})", rl.vdrop.legs_spread_source)
+                    } else {
+                        "each piece on its own conductor".to_string()
+                    });
                 }
                 m["volts"] = json!(v);
                 m["amps"] = json!(r2(amps));
