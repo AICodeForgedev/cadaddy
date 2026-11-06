@@ -10358,11 +10358,22 @@ fn infer_missing_water(
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let fill = super::waterfill::rules();
     let (_, reach_ft) = super::plumbing::fixture_lines("");
-    // Each floor with fixtures, by its storey: the name its runs give it where it has no water
-    // plan, else its fixtures'.
+    // Each floor with fixtures, by its storey, named as its runs name it where it has no water
+    // plan, else as the building's levels do (else its runs, else its fixtures).
     let mut floors: BTreeMap<String, (String, bool)> = BTreeMap::new();
     for d in devices.iter().filter(|d| d.kind == "plumbing fixture") {
-        floors.entry(storey_key(&d.level)).or_insert_with(|| (d.level.clone(), false));
+        let key = storey_key(&d.level);
+        if floors.contains_key(&key) {
+            continue;
+        }
+        let name = sp
+            .levels
+            .iter()
+            .map(|l| &l.name)
+            .chain(sp.mep.runs.iter().map(|r| &r.level))
+            .find(|n| storey_key(n) == key)
+            .map_or_else(|| d.level.clone(), Clone::clone);
+        floors.insert(key, (name, false));
     }
     for l in levels {
         floors.insert(storey_key(l), (l.clone(), true));

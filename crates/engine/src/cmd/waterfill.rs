@@ -59,6 +59,9 @@ pub(crate) struct FillRules {
     pub branch_size_in: f64,
     /// How far from the nearest main a branch is still run (feet); farther stays unconnected.
     pub reach_ft: f64,
+    /// A need this close to a branch already run (or a room's pipes already joined) takes it, not
+    /// a line of its own back to the main (feet: one room's fixtures, back-to-back rooms).
+    pub share_ft: f64,
     /// Two pipe ends this close are joined (feet).
     pub joint_ft: f64,
     /// A point this close to a room's outline is in it (feet: the walls).
@@ -342,6 +345,8 @@ pub(crate) struct Need {
     pub what: String,
     /// The branch's size (inches); 0: the rules' fixture branch size.
     pub size_in: f64,
+    /// A room's branches: their segments (once joined, later needs may take them).
+    pub segs: Vec<[[f64; 2]; 2]>,
 }
 
 /// A fixture of a floor: its point, what to call it and the lines it takes.
@@ -373,7 +378,7 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
     for f in fixtures.iter().take(MAX_ITEMS) {
         for sys in f.lines.iter().filter(|s| ru.fixture_lines.contains(s)) {
             if !near_pipe(sys, f.at, reach, false) {
-                out.push(Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in: 0.0 });
+                out.push(Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in: 0.0, segs: Vec::new() });
             }
         }
     }
@@ -416,7 +421,8 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
                 continue;
             }
             let size = g.iter().map(|r| r.size_in[0]).fold(0.0, f64::max);
-            out.push(Need { system: sys.clone(), pts, what: format!("the branches of {} run(s)", g.len()), size_in: size });
+            let segs = g.iter().flat_map(|r| r.points.windows(2).map(|w| [w[0], w[1]])).collect();
+            out.push(Need { system: sys.clone(), pts, what: format!("the branches of {} run(s)", g.len()), size_in: size, segs });
         }
     }
     out
@@ -432,17 +438,21 @@ pub(crate) struct Inferred {
     pub unserved: Vec<String>,
 }
 
-/// One piece of a floor's network of mains: its ends, the run it is of (the template a run laid
-/// off it copies) and its bottom.
+/// One piece of a floor's water network: its ends, the run it is of (the template a run laid off
+/// it copies), its bottom, and whether it is a main (joined from the rules' reach) or a branch
+/// (joined only from the rules' share distance).
 struct Piece {
     a: [f64; 2],
     b: [f64; 2],
     run: usize,
     bottom: f64,
+    main: bool,
 }
 
 /// Each need met from the nearest main or riser of its system on `level` (`mains`), the nearest
-/// first, each main carried on joining the network for the next (a branch doesn't): a need beside a main is teed off it
+/// first, each run laid in joining the network for the next: a main carried on as a main, a branch
+/// (and a room's branches once joined) as a branch a need within the rules' share distance takes
+/// instead of a line of its own back to the main (one room's fixtures, back-to-back rooms): a need beside a main is teed off it
 /// at right angles; one past a main's end has the main carried on along its line to it first
 /// (sized as the main), then the branch (its own size, else the rules' fixture branch). Off a
 /// riser: along one axis, then the other. Laid at the main's height. Each run marked
@@ -454,6 +464,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
     }
     let reach = ru.reach_ft.max(0.0) * upf;
     let joint = ru.joint_ft.max(0.0) * upf;
+    let share = ru.share_ft.max(0.0) * upf;
     let mut by_sys: BTreeMap<&str, Vec<Need>> = BTreeMap::new();
     for n in needs {
         if let Some(sys) = ru.water.iter().find(|s| **s == n.system) {
@@ -473,11 +484,11 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
         for (i, r) in templates.iter().enumerate() {
             match r.points.as_slice() {
                 [] => {}
-                [p] => net.push(Piece { a: *p, b: *p, run: i, bottom: main_bottom }),
+                [p] => net.push(Piece { a: *p, b: *p, run: i, bottom: main_bottom, main: true }),
                 pts => {
                     for (k, w) in pts.windows(2).enumerate() {
                         let bottom = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied().unwrap_or(main_bottom);
-                        net.push(Piece { a: w[0], b: w[1], run: i, bottom });
+                        net.push(Piece { a: w[0], b: w[1], run: i, bottom, main: true });
                     }
                 }
             }
@@ -489,7 +500,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
                 for p in &n.pts {
                     for (pi, s) in net.iter().enumerate() {
                         let (d, q, u) = to_segment(*p, s.a, s.b);
-                        if d <= reach && best.as_ref().is_none_or(|b| d < b.0) {
+                        if d <= if s.main { reach } else { share } && best.as_ref().is_none_or(|b| d < b.0) {
                             best = Some((d, ni, *p, q, pi, u));
                         }
                     }
@@ -498,7 +509,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
             let Some((_, ni, p, q, pi, u)) = best else { break };
             let need = left.swap_remove(ni);
             let Some(piece) = net.get(pi) else { break };
-            let (run, bottom) = (piece.run, piece.bottom);
+            let (run, bottom, off_main) = (piece.run, piece.bottom, piece.main);
             let (dx, dy) = (piece.b[0] - piece.a[0], piece.b[1] - piece.a[1]);
             let l = dx.hypot(dy);
             // Past a main's end: carried on along its line to opposite the need. Off a riser:
@@ -530,21 +541,30 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
                 c
             };
             let gap = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]) > joint;
-            // (The run, and whether it is a main the next need may be run from: a branch is not.)
+            let size = if need.size_in > 0.0 { need.size_in } else { ru.branch_size_in };
+            let branch = |what: &str| format!("inferred: {} ({sys} branch to {what})", ru.branch_basis);
+            // (Each run, and whether it is a main: off a branch, both legs are the branch.)
             let mut laid: Vec<(MepRun, bool)> = Vec::new();
             if gap(q, corner) {
-                laid.push((lay(vec![q, corner], t.size_in, format!("inferred: {} ({sys} main carried on to {})", ru.main_basis, need.what)), true));
+                laid.push(if off_main {
+                    (lay(vec![q, corner], t.size_in, format!("inferred: {} ({sys} main carried on to {})", ru.main_basis, need.what)), true)
+                } else {
+                    (lay(vec![q, corner], [size, 0.0], branch(&need.what)), false)
+                });
             }
             if gap(corner, p) {
-                let size = if need.size_in > 0.0 { need.size_in } else { ru.branch_size_in };
-                laid.push((lay(vec![corner, p], [size, 0.0], format!("inferred: {} ({sys} branch to {})", ru.branch_basis, need.what)), false));
+                laid.push((lay(vec![corner, p], [size, 0.0], branch(&need.what)), false));
             }
             for (r, main) in laid {
-                if main && let [a, b] = r.points.as_slice() {
-                    net.push(Piece { a: *a, b: *b, run: templates.len(), bottom });
+                if let [a, b] = r.points.as_slice() {
+                    net.push(Piece { a: *a, b: *b, run: templates.len(), bottom, main });
                     templates.push(r.clone());
                 }
                 out.runs.push(r);
+            }
+            // A room's branches, joined now: a branch the next need may take.
+            for [a, b] in need.segs.iter().take(MAX_ITEMS) {
+                net.push(Piece { a: *a, b: *b, run, bottom, main: false });
             }
             out.served += 1;
         }
@@ -739,6 +759,41 @@ mod tests {
     }
 
     #[test]
+    fn fixtures_of_one_room_share_one_branch_and_a_room_beside_a_joined_one_takes_its_pipes() {
+        let r = ru();
+        let mut main = run("CW", "Level 2", &[[0.0, 2.5], [100.0, 2.5]]);
+        main.height_source = DERIVED.into();
+        // A lavatory and a tub 3' apart, 20' from the main: one line from the main to the first,
+        // the second teed off it (not a second line beside it).
+        let fixtures = vec![
+            Fixture { at: [40.0 * 12.0, 22.5 * 12.0], what: "P-91".into(), lines: vec!["CW".into()] },
+            Fixture { at: [43.0 * 12.0, 22.5 * 12.0], what: "P-92".into(), lines: vec!["CW".into()] },
+        ];
+        let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
+        assert_eq!(n.len(), 2);
+        let inf = infer("Level 2", &[&main], n, 12.0, &r);
+        assert_eq!(inf.served, 2);
+        let total: f64 = inf.runs.iter().map(ft).sum();
+        assert!(
+            (total - (20.0 + 3.0)).abs() < 1e-6,
+            "one 20' line and a 3' stub: {total} {:?}",
+            inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>()
+        );
+        assert!(inf.runs.iter().all(|x| !x.size_source.contains("main carried on")), "a stub off a branch is the branch");
+        // Two rooms' branches back to back 2' apart, 30' from the main: the second takes the first's pipes.
+        let a = run("HW", "Level 2", &[[60.0, 32.5], [60.0, 40.0]]);
+        let b = run("HW", "Level 2", &[[62.0, 33.0], [62.0, 40.0]]);
+        let mut hmain = run("HW", "Level 2", &[[0.0, 2.5], [100.0, 2.5]]);
+        hmain.height_source = DERIVED.into();
+        let n = needs(&[&hmain, &a, &b], &[], 15.0, 12.0, &r, true);
+        assert_eq!(n.len(), 2, "{n:?}");
+        let inf = infer("Level 2", &[&hmain], n, 12.0, &r);
+        assert_eq!(inf.served, 2);
+        let total: f64 = inf.runs.iter().map(ft).sum();
+        assert!((total - (30.0 + 2.0)).abs() < 1e-6, "{total} {:?}", inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>());
+    }
+
+    #[test]
     fn a_runs_provenance_is_the_first_word_of_its_height_source() {
         let mut r = run("CW", "Level 2", &[[0.0, 0.0], [1.0, 0.0]]);
         for (h, p) in [
@@ -766,5 +821,6 @@ mod tests {
             assert!(b.len() > 20, "{b}");
         }
         assert!(r.branch_size_in > 0.0 && r.reach_ft > 0.0 && r.joint_ft > 0.0 && r.sample_ft > 0.0);
+        assert!(r.share_ft > r.joint_ft && r.share_ft < r.reach_ft);
     }
 }
