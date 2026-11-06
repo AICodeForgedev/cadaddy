@@ -775,7 +775,6 @@ struct Piece {
 /// [`INFERRED`] with its basis; a need farther than the rules' reach is left, listed. A run is
 /// not laid where it would run along a pipe of its system already on the floor (`along`: all its
 /// pipe, drawn or filled in) or laid before it: that stretch is that pipe.
-#[cfg(test)]
 pub(crate) fn infer(level: &str, mains: &[&MepRun], along: &[&MepRun], needs: Vec<Need>, upf: f64, ru: &FillRules) -> Inferred {
     infer_clear(level, mains, along, needs, upf, ru, &[])
 }
