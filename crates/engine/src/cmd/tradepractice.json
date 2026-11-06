@@ -78,6 +78,12 @@
       "basis": "code: a duct penetrating a fire-resistance-rated assembly takes a fire damper (IMC 607.5); the field installs one at the wall in the duct's size; alternative: an exception of IMC 607.5 (a fire partition in a sprinklered building, a listed through-penetration) that the engineer may confirm instead"
     },
     {
+      "id": "M-RETURN-PLENUM",
+      "trade": "mechanical",
+      "fills": "a return grille no return duct of its floor reaches",
+      "basis": "trade practice: a return grille the drawings leave unducted returns through the ceiling plenum to its unit (IMC 602 plenum); alternative: a ducted return the engineer may call for"
+    },
+    {
       "id": "A-GRID-COLUMN",
       "trade": "structure",
       "fills": "a column the grid crossing implies where the plans draw none",

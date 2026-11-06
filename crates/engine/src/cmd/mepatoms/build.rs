@@ -1281,9 +1281,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     rl.default_raceway_source
                 ),
             ),
-            // The feeder is the schedule's; its way into the gear's entry plate is laid by rule.
-            made: Made::Inferred,
-            basis: super::super::provenance::rule("E-ROUTE").basis_for(&format!("feeder {} into {}", f.tag, st.gear)),
+            // The feeder's own: its way into the gear's entry plate goes with the feeder's route.
+            made: Made::Drawn,
+            basis: String::new(),
         };
         for mut a in pieces.atoms {
             for x in &mut a.connects {

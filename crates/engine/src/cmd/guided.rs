@@ -10651,22 +10651,26 @@ fn fill_in_rest(
     // The air terminals.
     let duct_rule = super::provenance::rule("M-BRANCH-DUCT");
     let ducts = super::fillin::terminal_ducts(sp, &duct_rule, &|a, b| storey_key(a) == storey_key(b));
-    let (mut t_needs, mut t_served, mut t_ft) = (0usize, 0usize, 0.0);
+    let (mut t_needs, mut t_served, mut t_ft, mut t_plenum) = (0usize, 0usize, 0.0, 0usize);
     let mut t_left: Vec<String> = Vec::new();
     for ((level, sys), f) in ducts {
         t_needs += f.needs;
         t_served += f.served;
         t_ft += f.feet(upf);
         t_left.extend(f.unserved.iter().take(20).map(|u| format!("{level} {sys}: {u}")));
+        t_plenum += f.plenum.len();
         laid.extend(f.runs);
     }
     if t_needs > 0 {
         job.add_finding(
             StageName::BimBuild,
-            &format!("Branch ducts inferred to {t_served} of {t_needs} air terminals no duct reaches ({t_ft:.0} ft)"),
             &format!(
-                "Each is taken off the nearest duct of its system, marked inferred. Basis: {}.{}",
+                "Branch ducts inferred to {t_served} of {t_needs} air terminals no duct reaches ({t_ft:.0} ft); {t_plenum} return grilles return through the ceiling plenum"
+            ),
+            &format!(
+                "Each is taken off the nearest duct of its system, marked inferred. Basis: {}; a return grille no return duct of its floor reaches: {}.{}",
                 duct_rule.basis_for(""),
+                super::provenance::rule("M-RETURN-PLENUM").basis_for(""),
                 if t_left.is_empty() { String::new() } else { format!(" No duct of the system within reach: {}", t_left.join("; ")) }
             ),
             if t_left.is_empty() { 1 } else { 2 },
@@ -10679,7 +10683,7 @@ fn fill_in_rest(
     sp.mep.runs.extend(laid);
     json!({
         "runs": n, "plumbing_runs": n_plumbing, "plumbing": by_system.iter().map(|(k, (n, s, ft))| (k.clone(), json!({"needs": n, "served": s, "ft": (ft * 10.0).round() / 10.0}))).collect::<serde_json::Map<_, _>>(),
-        "by_floor": per_floor, "terminals": {"needs": t_needs, "served": t_served, "ft": (t_ft * 10.0).round() / 10.0, "left": t_left.len()},
+        "by_floor": per_floor, "terminals": {"needs": t_needs, "served": t_served, "ft": (t_ft * 10.0).round() / 10.0, "plenum_return": t_plenum, "left": t_left.len()},
     })
 }
 
@@ -11957,7 +11961,12 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
                 reason: format!("{} says {}, {} says {}", installed.doc, installed.value, design.doc, design.value),
                 rule: doc_order.id.clone(),
             };
-            let _ = super::provenance::correct(&mut store, &c, Source::from_doc(design.kind, &design.doc));
+            let _ = super::provenance::correct_with(
+                &mut store,
+                &c,
+                Source::from_doc(design.kind, &design.doc),
+                Source::from_doc(installed.kind, &installed.doc),
+            );
         }
         let src = Source::from_doc(SourceKind::Schedule, &format!("{} type {}", row.source, row.tag));
         for (k, v) in [
@@ -13252,9 +13261,11 @@ fn dampers_step(
     // A build run again: this step's own elements of the last run go first.
     let mine = |k: &str| k.ends_with("_damper") || k == r.power.device || k == r.fire_alarm.control || k == r.fire_alarm.monitor;
     sp.mep.equipment.retain(|e| {
-        !(mine(&e.kind) && (e.properties.contains_key("TAG_SHEET") || e.properties.contains_key("FEEDS") || e.properties.contains_key("FOR")))
+        let inferred = e.properties.get("STATUS").is_some_and(|v| v.eq_ignore_ascii_case("inferred"));
+        !(mine(&e.kind)
+            && (e.properties.contains_key("TAG_SHEET") || e.properties.contains_key("FEEDS") || e.properties.contains_key("FOR") || inferred))
     });
-    sp.mep.runs.retain(|r| !r.id.starts_with("damper:"));
+    sp.mep.runs.retain(|r| !r.id.starts_with(dampers::RUN_PREFIX));
     sp.mep.devices.retain(|d| d.kind != "damper_power");
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let started = web_time::Instant::now();
@@ -13431,11 +13442,18 @@ fn dampers_step(
         }
     }
     let duct_systems: BTreeSet<String> = sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
-    let ducts: Vec<Duct> = sp
-        .mep
-        .runs
+    // The drawn ducts first: a tagged damper is set only in a duct a plan draws, never in one the
+    // build filled in (Q6216); the code's check walks them all.
+    let mut by_made: Vec<(usize, &cadaddy_walk3d::MepRun)> = sp.mep.runs.iter().enumerate().collect();
+    by_made.sort_by_key(|(_, r)| !super::provenance::made_of_run(r).is_drawn());
+    let n_drawn = by_made
         .iter()
-        .enumerate()
+        .filter(|(_, r)| {
+            duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none() && super::provenance::made_of_run(r).is_drawn()
+        })
+        .count();
+    let ducts: Vec<Duct> = by_made
+        .into_iter()
         .filter(|(_, r)| duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none())
         .map(|(i, r)| Duct {
             run: i,
@@ -13478,7 +13496,7 @@ fn dampers_step(
             .collect()
     };
     let tags_read = found.len();
-    let (mut placed, unplaced) = dampers::place(found, &ducts, &walls, upf);
+    let (mut placed, unplaced) = dampers::place(found, ducts.get(..n_drawn).unwrap_or(&ducts), &walls, upf);
     let all_crossings = dampers::crossings(&ducts, &walls);
     // A rated damper with no wall in reach: the rated wall along its duct, else the architectural
     // plans' rated wall type tag there that the model has without its rating (or not at all).
@@ -13708,6 +13726,9 @@ fn dampers_step(
     let mut unpowered: BTreeMap<String, Vec<String>> = BTreeMap::new();
     // (kind name, the candidate circuits) → the dampers, and what was weighed.
     let mut tied: BTreeMap<(String, String), (Vec<String>, String)> = BTreeMap::new();
+    // Dampers two schedule circuits could feed, put on the first (the usual choice, Q6216): by
+    // kind, the circuit chosen and the candidates.
+    let mut chose_tied: BTreeMap<(String, String, String), Vec<String>> = BTreeMap::new();
     // (panel, circuit, level) → the boxes on it.
     let mut on_circuit: BTreeMap<(String, String, String), Vec<(String, Vec2, f64)>> = BTreeMap::new();
     let (mut boxes, mut control_modules, mut monitor_modules) = (0usize, 0u32, 0u32);
@@ -13875,8 +13896,21 @@ fn dampers_step(
                     dampers::CircuitPick::Tied { candidates, why } => {
                         let names: Vec<String> =
                             candidates.iter().filter_map(|i| schedule_circuits.get(*i)).map(|c| format!("{}-{}", c.panel, c.circuit)).collect();
+                        // The usual choice (Q6216): the first the schedules list, the others kept
+                        // as the alternative, never left unpowered.
+                        let chosen = candidates.first().and_then(|i| schedule_circuits.get(*i)).map(|c| {
+                            (
+                                c.panel.clone(),
+                                c.circuit.clone(),
+                                format!(
+                                    "{} (chosen of {}: the first the panel schedules list, the others the alternative; {why})",
+                                    c.source,
+                                    names.join(", ")
+                                ),
+                            )
+                        });
                         tie = Some((names, why));
-                        None
+                        chosen
                     }
                     dampers::CircuitPick::NoneNamed => None,
                 }
@@ -13894,6 +13928,16 @@ fn dampers_step(
             bsrc.insert("position".to_string(), format!("at damper {tag}'s actuator (rules data)"));
             match &note {
                 Some((panel, circuit, src)) => {
+                    if let Some((names, _)) = &tie {
+                        bprops.insert(
+                            "CIRCUIT_ALTERNATIVES".into(),
+                            names.iter().filter(|n| **n != format!("{panel}-{circuit}")).cloned().collect::<Vec<_>>().join(", "),
+                        );
+                        chose_tied
+                            .entry((kind.name.clone(), format!("{panel}-{circuit}"), names.join(", ")))
+                            .or_default()
+                            .push(format!("{tag} ({} {})", p.found.level, p.found.sheet));
+                    }
                     bprops.insert("PANEL".into(), panel.clone());
                     bprops.insert("CIRCUIT".into(), circuit.clone());
                     bsrc.insert("circuit".to_string(), src.clone());
@@ -14050,9 +14094,12 @@ fn dampers_step(
             if (b.1 - f).len() > 1e-6 {
                 let pts = vec![[f.x, f.y], [b.1.x, f.y], [b.1.x, b.1.y]];
                 let mut run = super::printcond::run("E-DAMPER", &level, "", pts, r.power.conduit_in, b.2 + 0.5);
-                run.id = format!("damper:{panel}-{circuit}:{level}:{k}");
+                run.id = format!("{}{panel}-{circuit}:{level}:{k}", super::dampers::RUN_PREFIX);
                 run.size_source = format!("rules data: {}", r.power.source);
                 run.height_source = "rule: above the dampers' ducts".into();
+                // Laid by rule to the boxes it powers (Q6216): inferred, never drawn.
+                let basis = format!("{}; {}", run.size_source, run.height_source);
+                super::provenance::set_run(&mut run, cadaddy_walk3d::Made::Inferred, basis);
                 conduit_ft += ((b.1.x - f.x).abs() + (b.1.y - f.y).abs()) / upf;
                 runs.push(run);
                 k += 1;
@@ -14198,6 +14245,20 @@ fn dampers_step(
             &format!("the architectural plans tag a rated wall where the damper's duct goes, the wall model differs: {}", what.join("; ")),
             2,
             vec!["Check the wall on the architectural plan: type the model's wall with the tagged rating, or add the wall the model lacks".into()],
+            None,
+            false,
+        );
+    }
+    for ((name, chosen, candidates), tags) in &chose_tied {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{name}s: {candidates} both could feed them: put on {chosen}, the others the alternative"),
+            &format!(
+                "no electrical note names their circuit; the panel schedules list {candidates} for this kind of damper. The field takes the first and the others stay the alternative on each power box (CIRCUIT_ALTERNATIVES): {}",
+                tags.iter().take(20).cloned().collect::<Vec<_>>().join(", ")
+            ),
+            1,
+            vec!["Confirm the circuit where the engineer means another".into()],
             None,
             false,
         );
@@ -14886,7 +14947,8 @@ fn doc_objects_step(
         .mep
         .runs
         .iter()
-        .filter(|r| duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none())
+        // A documented object is set in a duct a plan draws, never in one the build filled in.
+        .filter(|r| duct_systems.contains(&r.system) && r.points.len() >= 2 && r.top_ft.is_none() && super::provenance::made_of_run(r).is_drawn())
         .map(|r| (r.level.clone(), r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect(), r.size_in, r.bottoms_ft.clone(), r.system.clone()))
         .collect();
     // The fire alarm drawings: remote test stations shown.
@@ -14936,6 +14998,10 @@ fn doc_objects_step(
     let mut by_kind: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     let mut boxes: BTreeMap<String, usize> = BTreeMap::new();
     let mut unpowered: Vec<String> = Vec::new();
+    // Objects no note circuits, put on a spare of the nearest panel (Q6216, `E-UNCIRCUITED`).
+    let uncircuited = super::provenance::rule("E-UNCIRCUITED");
+    let mut circuits_inferred: Vec<String> = Vec::new();
+    let mut spares_taken: BTreeMap<String, usize> = BTreeMap::new();
     // Connections only a rule calls for (no document draws or names them): proposed.
     let mut rule_only: Vec<String> = Vec::new();
     for f in &found {
@@ -15093,10 +15159,21 @@ fn doc_objects_step(
                         extra.insert("CIRCUIT".into(), c.clone());
                         props.insert("POWER".into(), format!("panel {p}, circuit {c}"));
                     }
-                    None => {
-                        extra.insert("CIRCUIT".into(), "not named".into());
-                        unpowered.push(format!("{tag} ({} {})", f.level, f.sheet));
-                    }
+                    None => match spare_on_nearest_panel(&sp, &f.level, [at.x, at.y], &mut spares_taken) {
+                        // The field puts it on a spare of the nearest panel of its level (Q6216).
+                        Some((p, c, breaker)) => {
+                            let basis = uncircuited.basis_for(&format!("panel {p}, {breaker}"));
+                            extra.insert("PANEL".into(), p.clone());
+                            extra.insert("CIRCUIT".into(), c.clone());
+                            extra.insert("CIRCUIT_BASIS".into(), basis);
+                            props.insert("POWER".into(), format!("panel {p}, circuit {c} (inferred: {})", uncircuited.id));
+                            circuits_inferred.push(format!("{tag} on {p}-{c}"));
+                        }
+                        None => {
+                            extra.insert("CIRCUIT".into(), "not named".into());
+                            unpowered.push(format!("{tag} ({} {})", f.level, f.sheet));
+                        }
+                    },
                 }
                 let why = if f.via_source.is_empty() { format!("rules data: {} takes power", class.name) } else { f.via_source.clone() };
                 let b = add_box(&mut sp, &r.power_box, 0, extra, why.clone());
@@ -15199,10 +15276,21 @@ fn doc_objects_step(
             false,
         );
     }
+    if !circuits_inferred.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("{} object(s) no note circuits: each put on a spare of the nearest panel of its level (inferred)", circuits_inferred.len()),
+            &format!("{}: {}", uncircuited.basis_for(""), circuits_inferred.iter().take(20).cloned().collect::<Vec<_>>().join(", ")),
+            1,
+            vec!["Check the circuits against the panel schedules where the engineer means another".into()],
+            None,
+            false,
+        );
+    }
     if !unpowered.is_empty() {
         job.add_finding(
             StageName::BimBuild,
-            &format!("{} object(s) take power but no note names their circuit", unpowered.len()),
+            &format!("{} object(s) take power but no note names their circuit and no panel of their level has one to give", unpowered.len()),
             &format!("each has its connection box on no circuit: {}", unpowered.iter().take(20).cloned().collect::<Vec<_>>().join(", ")),
             2,
             vec!["Find the circuit on the panel schedules or ask the engineer".into()],
@@ -15697,6 +15785,42 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     });
 }
 
+/// A spare circuit of the nearest electrical panel on `level` to `at` (sheet units): the panel,
+/// the circuit (the schedule's spares, then its spaces, else a new breaker `X1`…) and what the
+/// breaker is. `taken`: how many each panel gave already. `None`: no panel on that level.
+fn spare_on_nearest_panel(
+    sp: &cadaddy_walk3d::BuildingSpec,
+    level: &str,
+    at: [f64; 2],
+    taken: &mut BTreeMap<String, usize>,
+) -> Option<(String, String, String)> {
+    let kinds = &super::conduitroute::rules().gear.kinds;
+    let panel = sp
+        .mep
+        .equipment
+        .iter()
+        .filter(|e| same_level_name(&e.level, level))
+        .filter(|e| {
+            let k = format!("{} {}", e.kind, e.title).to_ascii_lowercase();
+            kinds.iter().any(|w| k.contains(w.as_str()))
+        })
+        .map(|e| {
+            let c = [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
+            ((c[0] - at[0]).abs() + (c[1] - at[1]).abs(), e)
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))?
+        .1;
+    let (spare, space) = super::conduitroute::gap::spare_circuits(sp, &panel.tag);
+    let free: Vec<String> = spare.into_iter().chain(space).collect();
+    let n = taken.entry(panel.tag.to_ascii_uppercase()).or_default();
+    let got = match free.get(*n) {
+        Some(c) => (panel.tag.clone(), c.clone(), format!("spare {c}")),
+        None => (panel.tag.clone(), format!("X{}", n.saturating_sub(free.len()) + 1), "no spare listed: a new breaker".to_string()),
+    };
+    *n += 1;
+    Some(got)
+}
+
 /// The pull boxes the field sets on panels whose entry window can't take their raceways (the
 /// routing's entry `conflicts` with a raceway count): one per panel and side, as wide as the panel
 /// or the raceways need (`E-ENTRY-PULLBOX`: NEC 314.28(A)(2) for an angle pull, six times the
@@ -15719,6 +15843,16 @@ fn entry_pull_boxes(s: &mut Session, report: &Value) -> usize {
     let mut new_equipment: BTreeSet<String> = BTreeSet::new();
     let mut settled = 0usize;
     for ((gear, level, side), (n, raceways, holds)) in by {
+        // A build run again: the box an earlier run set is there already.
+        if sp
+            .mep
+            .equipment
+            .iter()
+            .any(|e| e.kind == "pull_box" && e.tag.eq_ignore_ascii_case(&format!("{gear}-PB")) && same_level_name(&e.level, &level))
+        {
+            settled += n;
+            continue;
+        }
         let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(&gear) && same_level_name(&e.level, &level)).cloned() else {
             continue;
         };
@@ -27546,6 +27680,18 @@ mod tests {
             get(l1, "cct").map(|x| (x.0, x.1)),
             Some(("4000K".to_string(), SourceKind::Submittal)),
             "decoded from the submitted catalog number"
+        );
+        // Corrected for the field (Q6216): the submittal's value installed, the schedule's kept
+        // beside it as the design value, with the rule.
+        assert_eq!(get(l1, "design:cct").map(|x| (x.0, x.1)), Some(("3500K".to_string(), SourceKind::Schedule)), "the schedule's CCT kept");
+        assert!(get(l1, "correction:cct").is_some_and(|x| x.0.starts_with("G-DOC-ORDER")), "{:?}", get(l1, "correction:cct"));
+        let cf = job.conflicts();
+        assert!(cf["corrected"].as_u64().is_some_and(|n| n >= 1), "{cf}");
+        assert!(
+            job.findings
+                .iter()
+                .any(|f| f.description.starts_with("Lighting conflicts, CCT") && f.corrected.is_some_and(|c| c[0] == c[1] && c[0] > 0)),
+            "the CCT conflict is corrected"
         );
         assert_eq!(get(l1, "lamp").map(|x| x.1), Some(SourceKind::Schedule), "the submittal says nothing of it");
         assert_eq!(get(l1, "mounting_type").map(|x| x.0), Some("RECESSED".to_string()));

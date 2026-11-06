@@ -48,6 +48,9 @@ pub(crate) struct Filled {
     pub served: usize,
     pub runs: Vec<MepRun>,
     pub unserved: Vec<String>,
+    /// Return grilles no return duct of their floor reaches: they return through the ceiling
+    /// plenum (`M-RETURN-PLENUM`), nothing laid.
+    pub plenum: Vec<String>,
 }
 
 impl Filled {
@@ -119,7 +122,7 @@ pub(crate) fn fixture_lines(
         let mains: Vec<&MepRun> = floor_runs.iter().copied().filter(|r| r.system == *sys).take(MAX_ITEMS).collect();
         let ru = fill_rules(rule, sys);
         let inf = super::waterfill::infer(level, &mains, needs, upf, &ru);
-        out.insert(sys.clone(), Filled { needs: n, served: inf.served, runs: inf.runs, unserved: inf.unserved });
+        out.insert(sys.clone(), Filled { needs: n, served: inf.served, runs: inf.runs, unserved: inf.unserved, plenum: Vec::new() });
     }
     out
 }
@@ -132,6 +135,13 @@ fn air_terminal(kind: &str) -> bool {
 /// The duct systems of the spec.
 fn duct_systems(sp: &BuildingSpec) -> Vec<&str> {
     sp.mep.systems.iter().filter(|s| s.kind == MepKind::Duct).map(|s| s.name.as_str()).collect()
+}
+
+/// Whether a terminal returns air (its kind says so, or its system is a return duct system): one
+/// no return duct reaches returns through the ceiling plenum.
+fn returns_air(sp: &BuildingSpec, kind: &str, system: &str) -> bool {
+    kind.to_ascii_lowercase().contains("return")
+        || sp.mep.systems.iter().any(|y| y.name == system && y.duct_type == Some(cadaddy_walk3d::DuctType::Return))
 }
 
 /// Each air terminal with no duct of its system within the rule's connect reach on its floor
@@ -163,7 +173,10 @@ pub(crate) fn terminal_ducts(sp: &BuildingSpec, rule: &PracticeRule, same_floor:
         let mains: Vec<&MepRun> = sp.mep.runs.iter().filter(|r| r.system == sys && same_floor(&r.level, &level)).take(MAX_ITEMS).collect();
         let ru = fill_rules(rule, &sys);
         let inf = super::waterfill::infer(&level, &mains, needs, upf, &ru);
-        out.insert((level, sys), Filled { needs: n, served: inf.served, runs: inf.runs, unserved: inf.unserved });
+        // A return grille no return duct reaches returns through the plenum (the usual; a ducted
+        // return is the alternative).
+        let (plenum, unserved): (Vec<String>, Vec<String>) = inf.unserved.into_iter().partition(|u| returns_air(sp, u, &sys));
+        out.insert((level, sys), Filled { needs: n, served: inf.served, runs: inf.runs, unserved, plenum });
     }
     out
 }
@@ -255,6 +268,7 @@ pub(crate) fn connections(d: &Drawing, sp: Option<&BuildingSpec>) -> Value {
     }
     let mut terminals = Tally::default();
     let mut filled_terminals = 0usize;
+    let mut by_plenum = 0usize;
     if let Some(sp) = sp {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
         let rule = super::provenance::rule("M-BRANCH-DUCT");
@@ -263,7 +277,11 @@ pub(crate) fn connections(d: &Drawing, sp: Option<&BuildingSpec>) -> Value {
         for t in sp.mep.terminals.iter().take(MAX_ITEMS).filter(|t| air_terminal(&t.terminal_kind)) {
             let floor: Vec<&MepRun> =
                 sp.mep.runs.iter().filter(|r| ducts.contains(&r.system.as_str()) && r.level.eq_ignore_ascii_case(&t.level)).collect();
-            let own = reached(&floor, &t.system, &[], t.at, reach);
+            // A return grille no return duct of its floor comes near returns through the
+            // ceiling plenum (`M-RETURN-PLENUM`).
+            let plenum = !reached(&floor, &t.system, &[], t.at, rule.reach_ft.max(0.0) * upf) && returns_air(sp, &t.terminal_kind, &t.system);
+            by_plenum += usize::from(plenum);
+            let own = plenum || reached(&floor, &t.system, &[], t.at, reach);
             filled_terminals += usize::from(
                 own && floor
                     .iter()
@@ -277,6 +295,7 @@ pub(crate) fn connections(d: &Drawing, sp: Option<&BuildingSpec>) -> Value {
     e["by_kind"] = by_kind.iter().map(|(k, (n, c))| (k.clone(), json!({"devices": n, "connected": c}))).collect::<serde_json::Map<_, _>>().into();
     let mut h = terminals.json("terminals");
     h["connected_by_inferred_duct"] = json!(filled_terminals);
+    h["connected_by_plenum_return"] = json!(by_plenum);
     json!({"plumbing": fixtures.json("fixtures"), "electrical": e, "hvac": h})
 }
 
@@ -365,19 +384,35 @@ mod tests {
         };
         sp.mep.terminals =
             vec![t(10.0, 4.0, 10.0, "supply_diffuser"), t(40.0, 25.0, 0.0, "supply_diffuser"), t(30.0, 30.0, 0.0, "sprinkler_pendent")];
+        // A return grille with no return duct near it on its floor: a plenum return, nothing laid.
+        let mut rg = t(70.0, 90.0, 0.0, "return_grille");
+        rg.system = "RA".into();
+        sp.mep.systems.push(
+            serde_json::from_value(
+                json!({"name": "RA", "layer": "M-RETURN", "kind": "duct", "size_in": [12, 10], "bottom_ft": 9.0, "duct_type": "return"}),
+            )
+            .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let mut ra_duct = run("RA", &[[300.0, 300.0], [320.0, 300.0]]);
+        ra_duct.size_in = [12.0, 10.0];
+        sp.mep.runs.push(ra_duct);
+        sp.mep.terminals.push(rg);
         let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
         let rule = super::super::provenance::rule("M-BRANCH-DUCT");
         let got = terminal_ducts(&sp, &rule, &same);
         let f = got.get(&("2".to_string(), "SA".to_string())).unwrap_or_else(|| panic!("{got:?}"));
         assert_eq!((f.needs, f.served), (1, 1), "the diffuser 4 ft off the duct is on it; the sprinkler is no air terminal");
+        let ra = got.get(&("2".to_string(), "RA".to_string())).unwrap_or_else(|| panic!("{got:?}"));
+        assert_eq!((ra.needs, ra.served, ra.unserved.len(), ra.plenum.len()), (1, 0, 0, 1), "a plenum return, no duct laid: {ra:?}");
         assert!(f.runs.iter().all(|r| r.made == Made::Inferred && r.basis.contains("M-BRANCH-DUCT") && r.system == "SA"));
         // No neck size: the rule's for its kind.
         assert!(f.runs.iter().any(|r| (r.size_in[0] - rule.default_size_in).abs() < 1e-9));
         // Measured: one of two air terminals connected before, both after.
         let before = connections(&Drawing::default(), Some(&sp));
-        assert_eq!((before["hvac"]["terminals"].as_u64(), before["hvac"]["connected"].as_u64()), (Some(2), Some(1)));
+        assert_eq!((before["hvac"]["terminals"].as_u64(), before["hvac"]["connected"].as_u64()), (Some(3), Some(2)), "{}", before["hvac"]);
+        assert_eq!(before["hvac"]["connected_by_plenum_return"], json!(1));
         sp.mep.runs.extend(f.runs.iter().cloned());
         let after = connections(&Drawing::default(), Some(&sp));
-        assert_eq!((after["hvac"]["connected"].as_u64(), after["hvac"]["connected_by_inferred_duct"].as_u64()), (Some(2), Some(1)));
+        assert_eq!((after["hvac"]["connected"].as_u64(), after["hvac"]["connected_by_inferred_duct"].as_u64()), (Some(3), Some(1)));
     }
 }

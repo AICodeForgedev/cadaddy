@@ -586,7 +586,31 @@ impl Takeoff {
         let gauge_json = |g: &[Gauge]| -> Vec<Value> {
             g.iter().map(|g| json!({"max_in": if g.max_in.is_finite() { json!(g.max_in) } else { Value::Null }, "gauge": g.gauge, "lb_per_sqft": g.lb_per_sqft})).collect()
         };
-        json!({
+        // Every total split by what the work is by the documents (Q6216): a row of work no plan
+        // draws says so after its system (`CW (inferred)`).
+        let made_of = |sk: &str| {
+            let t = sk.trim_end();
+            if t.ends_with("(inferred)") {
+                "inferred"
+            } else if t.ends_with("(derived)") {
+                "derived"
+            } else {
+                "drawn"
+            }
+        };
+        let mut by_made = serde_json::Map::new();
+        for m in ["drawn", "derived", "inferred"] {
+            let len = |kind: &str| r2(self.pipes.iter().filter(|((_, sk, x, _), _)| *x == kind && made_of(sk) == m).map(|(_, r)| r.length_ft).sum());
+            by_made.insert(
+                m.to_string(),
+                json!({
+                    "duct_length_ft": r2(self.ducts.iter().filter(|((_, sk, _), _)| made_of(sk) == m).map(|(_, r)| r.length_ft).sum()),
+                    "pipe_length_ft": len("pipe"),
+                    "conduit_length_ft": len("conduit"),
+                }),
+            );
+        }
+        let mut out = json!({
             "ducts": ducts, "pipes": pipes, "fittings": fittings, "terminals": terminals,
             "equipment": self.equipment, "hangers": hangers, "lug_kits": self.lug_kits, "labor_conditions": self.labor, "labels": self.labels, "grounding": self.grounding,
             "concrete": self.concrete.iter().map(|r| json!({"category": r.first(), "level": r.get(1), "element": r.get(2), "item": r.get(3), "size": r.get(4), "quantity": r.get(6).and_then(|q| q.parse::<f64>().ok()), "unit": r.get(7)})).collect::<Vec<_>>(),
@@ -604,7 +628,9 @@ impl Takeoff {
                 "hanger_rod_ft": r2(self.hangers.values().map(|r| r.rod_ft).sum()),
             },
             "gauge_table": {"rectangular": gauge_json(&st.rect), "round": gauge_json(&st.round), "allowance_pct": st.allowance * 100.0},
-        })
+        });
+        out["totals"]["by_made"] = Value::Object(by_made);
+        out
     }
 
     /// The takeoff as one flat table (header first), the part asked for: what a spreadsheet,

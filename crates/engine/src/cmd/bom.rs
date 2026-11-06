@@ -1846,6 +1846,12 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
     let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
+    // A takeoff row of work no plan draws says so after its system (`CW (inferred)`, Q6216).
+    let made = |v: &Value| {
+        let sys = v["system"].as_str().unwrap_or_default().trim_end();
+        let tail = sys.rsplit_once('(').map(|(_, t)| t.trim_end_matches(')')).unwrap_or_default();
+        made_of(tail)
+    };
     for d in arr("ducts") {
         let size = format!("{} {}", st(&d, "size"), st(&d, "shape"));
         let lv = st(&d, "level");
@@ -1860,6 +1866,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "length_ft"),
                 status: "model",
                 level: lv.clone(),
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1874,6 +1881,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "weight_lb"),
                 status: "model",
                 level: lv,
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1891,6 +1899,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&p, "length_ft"),
                 status: "model",
                 level: st(&p, "level"),
+                made: made(&p),
                 ..Line::default()
             },
         );
@@ -1907,6 +1916,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&f, "count"),
                 status: "model",
                 level: st(&f, "level"),
+                made: made(&f),
                 ..Line::default()
             },
         );

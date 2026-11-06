@@ -155,6 +155,17 @@ pub(crate) fn of_run(r: &MepRun) -> (Made, String) {
     if let Some(m) = Made::parse(first_word(&r.height_source)).filter(|m| !m.is_drawn()) {
         return (m, r.size_source.clone());
     }
+    // A run the build proposed where only a rule calls for it (an underground proposal), or laid
+    // by rule for objects it powers (a damper's branch conduit).
+    if first_word(&r.height_source).eq_ignore_ascii_case("proposed") {
+        return (
+            Made::Inferred,
+            if r.size_source.trim().is_empty() { "proposed: only a rule calls for it".to_string() } else { format!("proposed: {}", r.size_source) },
+        );
+    }
+    if r.id.starts_with(super::dampers::RUN_PREFIX) {
+        return (Made::Inferred, format!("{}: {}", r.height_source, r.size_source));
+    }
     let hs = r.height_source.trim();
     if hs.eq_ignore_ascii_case(super::conduitroute::ROUTED) {
         return (Made::Inferred, rule("E-ROUTE").basis_for(""));
@@ -208,7 +219,37 @@ pub(crate) fn of_element(e: &Entity) -> Option<(Made, String)> {
     if ps.get("estimated").is_some_and(|p| p.text() == "true") {
         return Some((Made::Inferred, rule("E-ESTIMATED").basis_for("")));
     }
+    // A piece of a route the router laid (a branch circuit's or a low-voltage pathway's raceway,
+    // cable, wire or junction box): the path is the router's.
+    if ps.get(super::mepatoms::ATOM_KEY).is_some()
+        && ps.get("system").map(|p| p.text()).is_some_and(|y| y == super::conduitroute::BRANCH_SYSTEM || y == super::conduitroute::lv::LV_SYSTEM)
+    {
+        return Some((Made::Inferred, rule("E-ROUTE").basis_for("")));
+    }
     Some((Made::Drawn, String::new()))
+}
+
+/// Every built element's provenance ([`of_element`]), and for one with no mark of its own that a
+/// penetration made (a firestop: `penetrant`), its penetrant's when that is filled in: the
+/// firestop of inferred work is inferred work.
+pub(crate) fn resolve_all(d: &Drawing) -> HashMap<Handle, (Made, String)> {
+    let mut out: HashMap<Handle, (Made, String)> = HashMap::new();
+    let mut penetrations: Vec<(Handle, Vec<Handle>)> = Vec::new();
+    for e in d.model.iter().take(MAX_ELEMENTS) {
+        let Some(m) = of_element(e) else { continue };
+        let own = super::bimlook::made_tag(e, STATUS_TAG).and_then(Made::parse).is_some();
+        if !own && m.0.is_drawn() && props::read(&e.common.xdata).get("penetrant").is_some() {
+            penetrations.push((e.handle, super::mepatoms::connects_of(e)));
+        }
+        out.insert(e.handle, m);
+    }
+    for (h, through) in penetrations {
+        let by = through.iter().filter_map(|x| out.get(x)).filter(|(m, _)| !m.is_drawn()).max_by(|a, b| a.0.cmp(&b.0)).cloned();
+        if let Some((m, b)) = by {
+            out.insert(h, (m, format!("the firestop of a penetration by {} work ({})", m.as_str(), b.chars().take(120).collect::<String>())));
+        }
+    }
+    out
 }
 
 /// `xdata` with the provenance tags put at the end of the build's group (a mark already there
@@ -260,8 +301,9 @@ impl Stamped {
 pub(crate) fn stamp(d: &mut Drawing) -> Stamped {
     let mut out = Stamped::default();
     let mut todo: Vec<(Handle, Made, String)> = Vec::new();
+    let all = resolve_all(d);
     for e in d.model.iter().take(MAX_ELEMENTS) {
-        let Some((m, b)) = of_element(e) else { continue };
+        let Some((m, b)) = all.get(&e.handle).cloned() else { continue };
         out.elements += 1;
         let own = super::bimlook::made_tag(e, STATUS_TAG).and_then(Made::parse);
         if own.is_some() && (m.is_drawn() || !b.trim().is_empty()) {
@@ -303,6 +345,12 @@ pub(crate) struct Correction {
 /// value is the documents', a later correction never overwrites it. False when nothing changes
 /// (the corrected value is the design value, or the store is full).
 pub(crate) fn correct(ps: &mut Props, c: &Correction, design_source: Source) -> bool {
+    correct_with(ps, c, design_source, Source::from_doc(SourceKind::Rule, &c.rule))
+}
+
+/// [`correct`], the installed value with its own source (a document the field follows over
+/// another: the approved submittal over the schedule), the rule in its note and `correction:`.
+pub(crate) fn correct_with(ps: &mut Props, c: &Correction, design_source: Source, installed_source: Source) -> bool {
     if c.key.trim().is_empty() || c.corrected.trim() == c.design.trim() {
         return false;
     }
@@ -310,8 +358,8 @@ pub(crate) fn correct(ps: &mut Props, c: &Correction, design_source: Source) -> 
     if !ps.get(&dkey).is_some_and(Prop::has_value) && !ps.set(&dkey, Prop::new(c.design.clone(), design_source)) {
         return false;
     }
-    let mut p = Prop::new(c.corrected.clone(), Source::from_doc(SourceKind::Rule, &c.rule));
-    p.note = Some(c.reason.clone());
+    let mut p = Prop::new(c.corrected.clone(), installed_source);
+    p.note = Some(format!("{}: {}", c.rule, c.reason));
     if !ps.set(&c.key, p) {
         return false;
     }
@@ -378,8 +426,9 @@ pub(crate) fn summary(d: &Drawing, level: Option<&str>, part: Option<&str>, made
     let (mut corrected_elements, mut corrected_values) = (0usize, 0usize);
     let mut by_rule: BTreeMap<String, usize> = BTreeMap::new();
     let mut corrections: Vec<Value> = Vec::new();
+    let resolved = resolve_all(d);
     for e in d.model.iter().take(MAX_ELEMENTS) {
-        let Some((m, b)) = of_element(e) else { continue };
+        let Some((m, b)) = resolved.get(&e.handle).cloned() else { continue };
         let p = super::wallgen::made_as(e).unwrap_or_default();
         let l = super::bspec::made_level(e).unwrap_or_default();
         if level.is_some_and(|x| !x.eq_ignore_ascii_case(&l)) || part.is_some_and(|x| !x.eq_ignore_ascii_case(&p)) || made.is_some_and(|x| x != m) {

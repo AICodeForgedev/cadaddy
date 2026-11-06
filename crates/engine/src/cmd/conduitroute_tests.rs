@@ -562,3 +562,23 @@ fn an_overfilled_box_is_built_with_the_next_box_and_keeps_its_design_box() {
         assert!(t("correction:size").starts_with("E-BOX-FILL"), "{}", t("correction:size"));
     }
 }
+
+#[test]
+fn a_raceway_through_an_obstacle_is_offset_under_it_across_its_box_only() {
+    let mut r: MepRun = serde_json::from_value(json!({
+        "system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [240.0, 0.0], [240.0, 120.0]],
+        "size_in": [0.75, 0.0], "bottoms_ft": [9.5, 9.5], "height_source": ROUTED,
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A pipe across the first leg from x 100 to 140 (with its clearance), the clash at x 120.
+    let got = offset_run(&mut r, Vec2::new(120.0, 0.0), 9.5, [100.0, -10.0, 140.0, 10.0], 8.5, UPF);
+    let (a, b) = got.unwrap_or_else(|| panic!("offset"));
+    assert_eq!((a.x, b.x), (100.0, 140.0));
+    assert_eq!(r.points, vec![[0.0, 0.0], [100.0, 0.0], [140.0, 0.0], [240.0, 0.0], [240.0, 120.0]]);
+    assert_eq!(r.bottoms_ft, vec![9.5, 8.5, 9.5, 9.5], "the stretch across the box drops, the rest stays");
+    // No segment there at that height: nothing changes.
+    let before = r.clone();
+    assert!(offset_run(&mut r, Vec2::new(120.0, 60.0), 9.5, [100.0, 50.0, 140.0, 70.0], 8.5, UPF).is_none());
+    assert!(offset_run(&mut r, Vec2::new(240.0, 60.0), 7.0, [230.0, 50.0, 250.0, 70.0], 6.0, UPF).is_none(), "another height");
+    assert_eq!(r, before);
+}

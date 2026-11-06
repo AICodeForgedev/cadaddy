@@ -437,7 +437,14 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                 reason: why.clone(),
                 rule: format!("{} {}", gf.id, gf.cite),
             };
-            if super::provenance::correct(&mut store, &c, Source::from_doc(SourceKind::Print, "the drawings' receptacle, not tagged GFCI")) {
+            // The installed value keeps the source the rule gave it (why, where).
+            let installed = store.get("receptacle_type").map_or_else(|| rule_src(&gf, &why), |p| p.source.clone());
+            if super::provenance::correct_with(
+                &mut store,
+                &c,
+                Source::from_doc(SourceKind::Print, "the drawings' receptacle, not tagged GFCI"),
+                installed,
+            ) {
                 corrected_circuits.insert((text(&r.store, "panel").to_ascii_uppercase(), text(&r.store, "circuit")));
                 gfci_corrected += 1;
             }
