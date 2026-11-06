@@ -550,6 +550,47 @@ pub(crate) struct RoomBox {
     pub doors: Vec<(Vec2, f64)>,
 }
 
+/// A gear box's conduit entry areas, top and bottom: the submittal's where it draws them, else the
+/// box less margins on the side it's fed from.
+fn entry_plates(g: &SubmittedGear, rule: &super::coderules::CodeRule) -> ([f64; 2], [f64; 2]) {
+    let [_, w, dp] = g.size_in;
+    let margin = rule.plate_margin_in.unwrap_or([2.0, 1.5]);
+    let plate = [(w - 2.0 * margin[0]).max(0.0), (dp - margin[1]).max(0.0)];
+    match (g.top_plate_in, g.bottom_plate_in) {
+        (None, None) => (if g.feed == "bottom" { [0.0, 0.0] } else { plate }, if g.feed == "bottom" { plate } else { [0.0, 0.0] }),
+        (t, b) => (t.unwrap_or([0.0, 0.0]), b.unwrap_or([0.0, 0.0])),
+    }
+}
+
+/// Gear the plans locate takes its box from its submittal: its centre stays, its long side is the
+/// width. Whether anything changed.
+pub(crate) fn take_submitted_size(e: &mut cadaddy_walk3d::MepEquipment, g: &SubmittedGear, rule: &super::coderules::CodeRule, upf: f64) -> bool {
+    if !g.size_in.iter().all(|v| v.is_finite() && *v > 0.0) || !upf.is_finite() || upf <= 0.0 {
+        return false;
+    }
+    let [h, w, dp] = g.size_in;
+    let inch = upf / 12.0;
+    let (dx, dy) = ((e.max[0] - e.min[0]).abs(), (e.max[1] - e.min[1]).abs());
+    let (wx, wy) = if dx >= dy { (w * inch, dp * inch) } else { (dp * inch, w * inch) };
+    let bottom = (rule.mount_top_in.unwrap_or(78.0) - h).max(0.0) / 12.0;
+    let close = |a: f64, b: f64| (a - b).abs() < 1e-6;
+    if close(dx, wx) && close(dy, wy) && close(e.height_ft, h / 12.0) && close(e.bottom_ft, bottom) {
+        return false;
+    }
+    let c = [(e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0];
+    e.min = [c[0] - wx / 2.0, c[1] - wy / 2.0];
+    e.max = [c[0] + wx / 2.0, c[1] + wy / 2.0];
+    e.height_ft = h / 12.0;
+    e.bottom_ft = bottom;
+    e.properties.insert("BOX".into(), format!("{h} H x {w} W x {dp} D in"));
+    e.sources.insert("size".into(), g.source.clone());
+    if e.enclosure.is_none() {
+        let (top_entry_in, bottom_entry_in) = entry_plates(g, rule);
+        e.enclosure = Some(cadaddy_walk3d::Enclosure { top_entry_in, bottom_entry_in, gutter_in: [0.0, 0.0] });
+    }
+    true
+}
+
 /// Whether a point is within `reach` of an outline's walls.
 pub(crate) fn on_walls(outline: &[Vec2], p: Vec2, reach: f64) -> bool {
     let n = outline.len();
@@ -794,13 +835,7 @@ pub(crate) fn plan(
                 continue;
             };
             let [h, w, dp] = g.size_in;
-            let margin = rule.plate_margin_in.unwrap_or([2.0, 1.5]);
-            let plate = [(w - 2.0 * margin[0]).max(0.0), (dp - margin[1]).max(0.0)];
-            // The submittal's drawn conduit areas, where it draws them; else the box less margins.
-            let (top_plate, bottom_plate) = match (g.top_plate_in, g.bottom_plate_in) {
-                (None, None) => (if g.feed == "bottom" { [0.0, 0.0] } else { plate }, if g.feed == "bottom" { plate } else { [0.0, 0.0] }),
-                (t, b) => (t.unwrap_or([0.0, 0.0]), b.unwrap_or([0.0, 0.0])),
-            };
+            let (top_plate, bottom_plate) = entry_plates(g, &rule);
             let top = rule.mount_top_in.unwrap_or(78.0);
             let mut properties: BTreeMap<String, String> = schedules
                 .iter()
@@ -823,6 +858,7 @@ pub(crate) fn plan(
             // Where conduit may come in: each side's area (the submittal's drawn windows, else the
             // box less the rule's margins) and its source; the router lands raceways inside them.
             let drawn = g.top_plate_in.is_some() || g.bottom_plate_in.is_some();
+            let margin = rule.plate_margin_in.unwrap_or([2.0, 1.5]);
             let area_src = if drawn {
                 format!("drawn: {}", g.source)
             } else {
@@ -1117,6 +1153,33 @@ mod tests {
         assert!(w.properties["CORRECTION_RULE"].contains("376"));
         assert_eq!(w.sources["status"], "proposed");
         assert!(wireway_for(&g, 1e6, 68.0, 12.0, &rule).is_none());
+    }
+
+    #[test]
+    fn gear_the_plans_locate_takes_its_box_from_its_submittal() {
+        let rule = crate::cmd::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap();
+        let g = SubmittedGear { size_in: [74.0, 20.0, 5.75], source: "gear submittal p.3".into(), ..Default::default() };
+        let mut e = cadaddy_walk3d::MepEquipment {
+            tag: "A".into(),
+            min: [100.0, 200.0],
+            max: [100.0 + 5.0, 200.0 + 24.0],
+            bottom_ft: 2.5,
+            height_ft: 4.0,
+            ..Default::default()
+        };
+        assert!(take_submitted_size(&mut e, &g, &rule, 12.0));
+        // Taller along y than x on the plan: the width runs that way; the centre stays.
+        assert!((e.max[1] - e.min[1] - 20.0).abs() < 1e-9 && (e.max[0] - e.min[0] - 5.75).abs() < 1e-9, "{e:?}");
+        assert!(((e.min[1] + e.max[1]) / 2.0 - 212.0).abs() < 1e-9);
+        assert!((e.height_ft - 74.0 / 12.0).abs() < 1e-9);
+        assert_eq!(e.properties.get("BOX").map(String::as_str), Some("74 H x 20 W x 5.75 D in"));
+        assert_eq!(e.sources.get("size").map(String::as_str), Some("gear submittal p.3"));
+        assert!(e.enclosure.is_some());
+        assert!(!take_submitted_size(&mut e, &g, &rule, 12.0), "already its size");
+        // No size in the submittal: left alone.
+        let before = e.clone();
+        assert!(!take_submitted_size(&mut e, &SubmittedGear::default(), &rule, 12.0));
+        assert_eq!(e.height_ft, before.height_ft);
     }
 
     #[test]
