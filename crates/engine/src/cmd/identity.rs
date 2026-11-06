@@ -196,7 +196,8 @@ fn elements(d: &Drawing, sp: Option<&BuildingSpec>, sheets: &[SheetBox]) -> Vec<
                 Some(r) => format!("{v} @{r}"),
                 None => v,
             };
-            let number = field("circuit").map(|c| in_room(format!("{ty} {c}")));
+            // What it serves tells apart what a submittal adds with no circuit yet.
+            let number = field("circuit").or_else(|| field("serves")).map(|c| in_room(format!("{ty} {c}")));
             let ty = in_room(ty);
             let sheet = field("sheet").and_then(|n| sheets.iter().position(|s| s.number.eq_ignore_ascii_case(&n))).or_else(|| sheet_at(sheets, at));
             out.push(Element {
@@ -859,6 +860,39 @@ mod tests {
         let (groups, _) = tagid::merge_identities(&items, &|_| 12.0);
         let gone: usize = groups.iter().map(|g| g.merged.len()).sum();
         assert_eq!(gone, 1, "only the one room's switch read twice: {groups:?}");
+    }
+
+    #[test]
+    fn disconnects_side_by_side_serving_different_things_stay_apart() {
+        let mut sp = BuildingSpec::default();
+        let tag = |id: &str, serves: &str, x: f64| {
+            let mut t = cadaddy_walk3d::tags::ElementTag {
+                id: id.into(),
+                kind: "equipment_connection".into(),
+                level: "Level 1".into(),
+                at_ft: [x, 0.0],
+                ..Default::default()
+            };
+            t.set("type", "DISC", "rule");
+            t.set("serves", serves, "submittal");
+            t
+        };
+        sp.tags = vec![tag("device:a", "PUMP: LIGHTS", 10.0), tag("device:b", "PUMP: CONTROLS", 10.5), tag("device:c", "PUMP: CONTROLS", 10.6)];
+        let items: Vec<IdItem> = elements(&Drawing::default(), Some(&sp), &[])
+            .iter()
+            .map(|el| IdItem {
+                kind: el.kind.clone(),
+                level: el.level.clone(),
+                key: el.number.clone().unwrap_or_default(),
+                sort: el.sort.clone(),
+                at: Some(el.at),
+                sheet: String::new(),
+                rank: 1,
+            })
+            .collect();
+        let (groups, _) = tagid::merge_identities(&items, &|_| 12.0);
+        let gone: usize = groups.iter().map(|g| g.merged.len()).sum();
+        assert_eq!(gone, 1, "only the one drawn twice: {groups:?}");
     }
 
     #[test]
