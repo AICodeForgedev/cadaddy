@@ -35,4 +35,4 @@ and trims with panels, breakers with load centers: a release that takes some of 
 the rest is refused, naming what would ship without what; with `allow_unlinked` it is made and
 flagged.
 
-Tests: `crates/engine/tests/procure.rs`.
+Tests: `crates/engine/tests/suite/estimate/procure.rs`.

@@ -267,6 +267,9 @@ fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
     t.id.starts_with("device:") && t.fields.contains_key("symbol") && t.at_ft.iter().all(|v| v.is_finite())
 }
 
+/// Plumbing fixture types with a default height listed, at most (one review item each).
+const MAX_FIXTURE_DEFAULT_TYPES: usize = 200;
+
 /// The WALLGEN tag key linking a built device to its spec tag.
 pub(super) const DEVID: &str = "devid";
 
@@ -285,6 +288,9 @@ pub(crate) struct DeviceBuild {
     pub heights: BTreeMap<&'static str, usize>,
     /// The devices whose height no document gives, by kind.
     pub defaults: BTreeMap<String, usize>,
+    /// The plumbing fixtures whose rough-in height no document gives, by type (`WB-1 WASHER
+    /// BOX`): one review item a type.
+    pub fixture_defaults: BTreeMap<String, usize>,
     /// Wall devices set in a wall's face, and those with no wall within reach.
     pub in_wall: usize,
     pub no_wall: Vec<Value>,
@@ -302,6 +308,7 @@ impl DeviceBuild {
             "built": self.built,
             "heights_from": self.heights,
             "defaults_by_kind": self.defaults,
+            "fixture_defaults_by_type": self.fixture_defaults,
             "in_wall": self.in_wall,
             "no_wall": self.no_wall.len(),
             "no_wall_first": self.no_wall.iter().take(20).collect::<Vec<_>>(),
@@ -1025,6 +1032,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         *report.heights.entry(height.from).or_default() += 1;
         if height.source == SourceKind::Default {
             *report.defaults.entry(vkind.clone()).or_default() += 1;
+            if kind == "plumbing fixture" && report.fixture_defaults.len() < MAX_FIXTURE_DEFAULT_TYPES {
+                let ty = [mark.trim(), name.as_deref().unwrap_or("").trim()].iter().filter(|w| !w.is_empty()).copied().collect::<Vec<_>>().join(" ");
+                *report.fixture_defaults.entry(if ty.is_empty() { "untyped".into() } else { ty }).or_default() += 1;
+            }
         }
         let (w, l, bh) = (BOX_IN[0] * upf / 12.0, BOX_IN[1] * upf / 12.0, BOX_IN[2] * upf / 12.0);
         let at_z = floor + height.inches / 12.0 * upf;
@@ -2335,10 +2346,27 @@ mod tests {
         assert!(floor_fixture("floor drain FD"));
         assert!(!floor_fixture("LAVATORY P-2"));
         assert!(!floor_fixture("WALL CLEANOUT WCO"));
+        // A schedule that names it only CLEANOUT: its WCO mark says it is on the wall.
+        assert!(!floor_fixture("cleanout WCO"));
+        assert!(floor_fixture("cleanout FCO"));
         let (z, d, why) = rules_default("switch", "");
         assert_eq!((z, d), (48.0, super::super::mountlist::Datum::Centre));
         assert!(why.contains("no document"));
         assert_eq!(rules_default("plumbing fixture", "LAVATORY").1, super::super::mountlist::Datum::Top);
+        // The wall connections no document sets a height for, at the trade's heights, each with its basis.
+        for (words, inches) in [
+            ("washing machine box P-91", 42.0),
+            ("hose bibb P-92", 24.0),
+            ("expansion tank ET-9", 72.0),
+            ("thermostatic mixing valve TMV", 60.0),
+            ("water valve WV", 60.0),
+            ("cleanout WCO", 18.0),
+            ("trap primer TP-9", 18.0),
+        ] {
+            let (z, _, why) = rules_default("plumbing fixture", words);
+            assert_eq!(z, inches, "{words}");
+            assert!(why.contains("no document gives one"), "{words}: {why}");
+        }
     }
 
     /// A switch read in a door's opening goes on the wall beside the door, not on the head over

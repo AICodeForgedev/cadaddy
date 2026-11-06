@@ -56,7 +56,7 @@ pub(crate) const CABLE_FILE: &str = "route/cable.json";
 pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
 /// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
-pub(crate) const HOME_PART: &str = ":home:";
+const HOME_PART: &str = ":home:";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
 const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
@@ -177,6 +177,9 @@ pub(crate) struct Derate {
     pub amp_90c: BTreeMap<String, f64>,
     pub small_conductor_max_a: BTreeMap<String, f64>,
     pub small_conductor_source: String,
+    /// NEC 240.6(A) standard breaker ratings, amps (240.4(B): the next one over a conductor's
+    /// allowed current may protect it).
+    pub standard_ratings: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -197,16 +200,19 @@ pub(crate) struct VDrop {
     pub load_pct: f64,
     pub breaker_a: f64,
     pub voltage: f64,
+    /// A multi-pole circuit's line-to-line voltage when its panel's is not read.
+    pub voltage_ll: f64,
+    pub voltage_source: String,
     pub cmil: BTreeMap<String, f64>,
     pub sizes: Vec<String>,
     pub source: String,
-    /// The largest conductor a circuit's legs, taps and switch loops take for its voltage drop
-    /// (a device's terminal); empty: no limit. The homerun takes the rest of the drop.
-    pub leg_max: String,
-    pub leg_source: String,
-    /// The legs' drop as their devices' load spread along them, not all at the farthest.
-    pub legs_spread: bool,
-    pub legs_spread_source: String,
+    /// How the load is placed along the circuit (each device's share at its own distance).
+    pub moment_source: String,
+    /// Upsize the homerun before the legs when that alone holds the drop (Q6234).
+    pub homerun_first: bool,
+    /// Most sizes a homerun goes over its circuit's legs.
+    pub homerun_steps: usize,
+    pub homerun_first_source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1280,45 +1286,6 @@ pub(crate) fn size_for_length(ft: f64, amps: f64, volts: f64, table: &[(f64, Str
             let v = vdrop_pct(s, ft, amps, volts, rl).unwrap_or(0.0);
             (s.clone(), format!("computed: {ft:.0} ft at {amps:.0} A, {volts:.0} V: {v:.1}% on #{s} ({})", rl.vdrop.source))
         })
-}
-
-/// Where a circuit's voltage drop upsizing goes (Q6235): the homerun of `home_ft` carries the
-/// whole load to the panel; the legs, taps and switch loops (`chain_ft` to the farthest device)
-/// stay at the circuit's own `base` size where the drop allows, never above the rules' `leg_max`.
-/// The smallest leg size first, then the smallest homerun size whose drop with it is within the
-/// limit; the homerun never above `need` (the whole circuit's size: no more copper on it than
-/// that). (leg size, homerun size, the drop in percent, within the limit). When no pair makes the
-/// limit, the legs at `leg_max` and the homerun at `need`, over it (the limit is an informational
-/// note's: the circuit is split or the engineer confirms). None: no upsizing, or a size not in
-/// the table.
-pub(crate) fn split_drop(
-    base: &str,
-    need: &str,
-    home_ft: f64,
-    chain_ft: f64,
-    amps: f64,
-    volts: f64,
-    rl: &RouteRules,
-) -> Option<(String, String, f64, bool)> {
-    let sizes: Vec<&String> = rl.vdrop.sizes.iter().filter(|s| rl.vdrop.cmil.contains_key(*s)).collect();
-    let at = |s: &str| sizes.iter().position(|x| x.as_str() == s);
-    let (b, n) = (at(base)?, at(need)?);
-    if n <= b || !(home_ft.is_finite() && chain_ft.is_finite()) {
-        return None;
-    }
-    let cap = if rl.vdrop.leg_max.trim().is_empty() { n } else { at(rl.vdrop.leg_max.trim()).map_or(n, |m| m.clamp(b, n)) };
-    let drop = |leg: &str, home: &str| -> f64 {
-        vdrop_pct(home, home_ft.max(0.0), amps, volts, rl).unwrap_or(f64::INFINITY)
-            + vdrop_pct(leg, chain_ft.max(0.0), amps, volts, rl).unwrap_or(f64::INFINITY)
-    };
-    for li in b..=cap {
-        let Some(leg) = sizes.get(li) else { break };
-        if let Some(home) = (li..=n).filter_map(|hi| sizes.get(hi)).find(|h| drop(leg, h) <= rl.vdrop.max_pct + 1e-9) {
-            return Some(((*leg).clone(), (*home).clone(), drop(leg, home), true));
-        }
-    }
-    let (leg, home) = (sizes.get(cap)?, sizes.get(n)?);
-    Some(((*leg).clone(), (*home).clone(), drop(leg, home), false))
 }
 
 /// Box fill (NEC 314.16(B)): the volume `conductors` (each entering the box) and a device yoke
@@ -2423,6 +2390,66 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
         s.circuits.iter().find(|c| c.number.trim() == first)?.load_va.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6)
     };
+    // The circuit's schedule row, its poles (the row's, else the label's numbers) and its
+    // panel's `volts/phase` (Q6234: the voltage drop at the circuit's own voltage).
+    let row_of = |panel: &str, label: &str| {
+        let num = super::printcond::parse_circuit(label)?.1;
+        let first = num.split(',').next()?.trim().to_string();
+        let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
+        Some((s, s.circuits.iter().find(|c| c.number.trim() == first)?))
+    };
+    let poles_of = |panel: &str, label: &str| -> u32 {
+        let by_label =
+            || super::printcond::parse_circuit(label).map_or(1, |(_, n)| n.split(',').filter(|x| !x.trim().is_empty()).count().min(3) as u32);
+        row_of(panel, label).map(|(_, r)| r.poles).filter(|p| *p > 0).unwrap_or_else(by_label).clamp(1, 3)
+    };
+    let volts_of = |panel: &str| -> Option<String> {
+        let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
+        s.header.iter().find(|(k, _)| k.to_ascii_lowercase().contains("volt")).map(|(_, v)| v.clone())
+    };
+    let order_sz = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
+    // A circuit's given conductors: the plan's, else its schedule row's wire column, else the
+    // default; then never under what its breaker allows. The reason, why and source when the
+    // sizing set them (the reason empty: the schedule's, no larger than the default).
+    let base_conductors = |tag: &ElementTag, panel: &str, label: &str| -> (String, Option<(&'static str, String, &'static str)>) {
+        let given = tag.fields.get("conductors").filter(|f| f.source != "default").map(|f| f.value.clone());
+        let mut why: Option<(&'static str, String, &'static str)> = None;
+        let mk = match given {
+            Some(v) => v,
+            None => match row_of(panel, label).and_then(|(s, r)| gap::schedule_conductors(&r.wire, r.poles.max(1)).map(|m| (m, s, r))) {
+                Some((m, s, r)) => {
+                    let hot = super::mepatoms::conductor_parts(&m).into_iter().find(|p| !p.2).map(|p| p.1).unwrap_or_default();
+                    let bigger = order_sz(&hot) > order_sz("12");
+                    let w = format!(
+                        "{}: panel {} circuit {} wire #{}{}",
+                        size::SCHEDULE,
+                        s.panel.trim(),
+                        r.number.trim(),
+                        hot,
+                        if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }
+                    );
+                    why = Some((if bigger { size::SCHEDULE } else { "" }, w, "schedule"));
+                    m
+                }
+                None => super::printcond::DEFAULT_CONDUCTORS.to_string(),
+            },
+        };
+        let mut parts = super::mepatoms::conductor_parts(&mk);
+        let ccc: u32 = parts.iter().filter(|p| !p.2).fold(0u32, |n, p| n.saturating_add(p.0));
+        let hot = parts.iter().find(|p| !p.2).map(|p| p.1.clone());
+        if let Some((need, w)) = hot.and_then(|h| size::breaker_minimum(&h, ccc, trip_of(panel, label), rl)) {
+            for p in &mut parts {
+                if order_sz(&p.1) < order_sz(&need) {
+                    p.1 = need.clone();
+                }
+            }
+            return (makeup_text(&parts), Some((size::BREAKER, w, "rule")));
+        }
+        (mk, why)
+    };
+    let mut upsized: Vec<Value> = Vec::new();
+    // What drove each upsizing, counted (Q6234).
+    let mut sizing: BTreeMap<&'static str, usize> = BTreeMap::new();
 
     // -- Route each circuit. --
     struct Home {
@@ -2431,6 +2458,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         gear: Option<usize>,
         level: String,
         len_tree_ft: f64,
+        /// Its length past the first box at its whole current: the load moment (Q6234).
+        moment_ft: f64,
         cable: bool,
         method: String,
     }
@@ -2638,7 +2667,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut tree_len = 0.0;
         let mut edge_ft: Vec<(usize, usize, f64)> = Vec::new();
         // The circuit's own makeup per leg (two conductors and a ground, or what the tag says).
-        let makeup = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS).to_string();
+        // Its given size (the plan's, else the panel schedule's wire column), never under what
+        // its breaker allows (Q6234).
+        let (makeup, base_why) = base_conductors(tag, &c.panel, &c.label);
         let parts = super::mepatoms::conductor_parts(&makeup);
         let hots: Vec<(u32, String)> = parts.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone())).collect();
         for (u, v) in &tree {
@@ -2772,6 +2803,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             t.set("split_of", tag.id.clone(), "computed");
             t.set("panel_copy", c.part.clone(), "computed");
         }
+        if let Some((reason, why, src)) = &base_why {
+            t.set("conductors", makeup.clone(), src);
+            t.set("conductor_size", why.clone(), src);
+            if !reason.is_empty() {
+                *sizing.entry(*reason).or_default() += 1;
+            }
+            if upsized.len() < MAX_ITEMS && *reason == size::BREAKER {
+                let given = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS);
+                upsized.push(json!({"circuit": c.label, "level": c.level, "from": given, "to": makeup, "reason": reason, "why": why}));
+            }
+        }
         t.set("route", ROUTED, "computed");
         t.set(
             "conduit",
@@ -2830,7 +2872,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             }
         }
         let farthest = far.iter().copied().filter(|v| v.is_finite()).fold(0.0, f64::max);
-        homes.push(Home { circ: ci, root, gear: gi, level: c.level.clone(), len_tree_ft: farthest, cable, method });
+        // Each device's share of the load (a switch carries none of it).
+        let shares: Vec<f64> = members.iter().map(|m| if m.switch { 0.0 } else { 1.0 }).collect();
+        let moment = size::moment_ft(members.len(), root, &edge_ft, &shares).min(farthest);
+        homes.push(Home { circ: ci, root, gear: gi, level: c.level.clone(), len_tree_ft: farthest, moment_ft: moment, cable, method });
         // Each switch loop's own tag: the circuit's, its conductors the loop's (a part of the
         // circuit as read, like a split circuit's).
         for (id, w) in std::mem::take(&mut switch_tags) {
@@ -2893,7 +2938,6 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let mut grouped_circuits = 0usize;
     let mut home_segs: Vec<gap::HomeSeg> = Vec::new();
-    let mut upsized: Vec<Value> = Vec::new();
     let mut fill_rows: Vec<Value> = Vec::new();
     let mut derated: Vec<Value> = Vec::new();
     let mut corridor_homes = 0usize;
@@ -2921,7 +2965,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Members tap into the lead's box.
         let mut labels: Vec<String> = Vec::new();
         // Each member's own way to the panel: its tap and its conductors (Q6206).
-        let mut member_ways: Vec<(usize, f64, Vec<Part>, Vec<Part>)> = Vec::new();
+        let mut member_ways: Vec<(usize, f64, Vec<Part>)> = Vec::new();
         let mut group_parts: Vec<Part> = Vec::new();
         let mut longest = 0.0_f64;
         let mut trips: Vec<f64> = Vec::new();
@@ -3033,73 +3077,69 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 box_in.entry(c.devs.get(h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
                 box_in.entry(lead_c.devs.get(lead_h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots);
             }
-            // Its conductors by the homerun's length (the legend's bands, else the drop).
+            // Its conductors by the homerun's length: the legend's bands (the whole circuit),
+            // else the voltage drop at the circuit's own voltage with the load where it is, the
+            // homerun upsized first (Q6234).
             let ft = path_len_ft + tap_ft + h.len_tree_ft;
             longest = longest.max(ft);
             let mut parts = super::mepatoms::conductor_parts(&mk);
-            let volts = rl.vdrop.voltage;
+            let sup = size::supply(poles_of(&c.panel, &c.label), volts_of(&c.panel).as_deref(), &c.panel, rl);
             // The schedule's load, else most of the breaker (a default).
             let (amps, load_src) = match load_of(&c.panel, &c.label) {
-                Some(va) => (va / volts.max(1.0), format!("panel {} schedule: {va:.0} VA", c.panel)),
+                Some(va) => (sup.amps(va), format!("panel {} schedule: {va:.0} VA", c.panel)),
                 None => (trip.unwrap_or(rl.vdrop.breaker_a) * rl.vdrop.load_pct / 100.0, format!("default: {}% of the breaker", rl.vdrop.load_pct)),
             };
-            // The legs' conductors (and the taps' and switch loops'): the circuit's, unless its drop
-            // puts them up too.
-            let mut leg_parts = parts.clone();
-            if let Some((need, why)) = size_for_length(ft, amps, volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}"))) {
-                let order = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
-                let at_least = |ps: &mut Vec<Part>, size: &str| {
-                    let mut changed = false;
-                    for p in ps.iter_mut().filter(|p| order(&p.1) < order(size)) {
-                        p.1 = size.to_string();
+            let up_to = |parts: &mut Vec<Part>, need: &str| {
+                let mut changed = false;
+                for p in parts.iter_mut() {
+                    if order_sz(&p.1) < order_sz(need) {
+                        p.1 = need.to_string();
                         changed = true;
                     }
-                    changed
-                };
-                let base = parts.iter().filter(|p| !p.2).map(|p| p.1.clone()).max_by_key(|s| order(s)).unwrap_or_else(|| "12".into());
-                // A computed drop goes on the homerun, as the field lays it (Q6235); a legend's band
-                // is the documents' size for the circuit.
-                // The legs' length for the drop: their devices' load spread along them (rules).
-                let n_dev = c.devs.len().max(1) as f64;
-                let spread = if rl.vdrop.legs_spread { (n_dev + 1.0) / (2.0 * n_dev) } else { 1.0 };
-                let chain_ft = tap_ft + h.len_tree_ft * spread;
-                let split = (!why.starts_with("legend")).then(|| split_drop(&base, &need, path_len_ft, chain_ft, amps, volts, rl)).flatten();
-                let (leg_size, home_size, why) = match &split {
-                    Some((leg, home, pct, within)) => (
-                        leg.clone(),
-                        home.clone(),
-                        format!(
-                            "{why}; laid on the homerun: {:.0} ft on #{home} and {:.0} ft of tap and legs to the farthest device on #{leg}, {pct:.1}%{} ({}{})",
-                            path_len_ft,
-                            tap_ft + h.len_tree_ft,
-                            if *within {
-                                String::new()
-                            } else {
-                                format!(
-                                    ", over the {}% target with the legs at a device's limit: split the circuit or the engineer confirms",
-                                    rl.vdrop.max_pct
-                                )
-                            },
-                            rl.vdrop.leg_source,
-                            if rl.vdrop.legs_spread && c.devs.len() > 1 { format!("; {}", rl.vdrop.legs_spread_source) } else { String::new() }
-                        ),
-                    ),
-                    None => (need.clone(), need.clone(), why),
-                };
-                let legs_up = at_least(&mut leg_parts, &leg_size);
-                if at_least(&mut parts, &home_size) {
+                }
+                changed
+            };
+            let base_hot = parts.iter().find(|p| !p.2).map(|p| p.1.clone()).unwrap_or_else(|| "12".into());
+            if !len_table.is_empty() {
+                if let Some((need, why)) = size_for_length(ft, amps, sup.volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}")))
+                    && up_to(&mut parts, &need)
+                {
                     let now = makeup_text(&parts);
-                    let legs = makeup_text(&leg_parts);
+                    *sizing.entry(size::LEGEND).or_default() += 1;
                     if upsized.len() < MAX_ITEMS {
-                        upsized.push(json!({"circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": now, "legs": legs, "why": why}));
+                        upsized.push(
+                            json!({"circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": now, "reason": size::LEGEND, "why": why}),
+                        );
                     }
                     if let Some(t) = tags.get_mut(*i) {
-                        let src = if why.starts_with("legend") { "legend" } else { "rule" };
-                        if legs_up {
-                            t.set("conductors", legs, "computed");
+                        t.set("conductors", now, "computed");
+                        t.set("conductor_size", why.clone(), "legend");
+                    }
+                }
+            } else if let Some(ds) = size::for_drop(&base_hot, path_len_ft, tap_ft + h.moment_ft, amps, &sup, rl) {
+                let why = format!("{}; load {load_src}", ds.why);
+                if let Some(t) = tags.get_mut(*i) {
+                    t.set("voltage_drop_pct", format!("{:.2}", ds.after_pct), "computed");
+                }
+                if !ds.reason.is_empty() {
+                    // The legs (and the tag) at the legs' size, the homerun at its own.
+                    let mut legs = parts.clone();
+                    up_to(&mut legs, &ds.legs);
+                    up_to(&mut parts, &ds.home);
+                    let (legs_mk, home_mk) = (makeup_text(&legs), makeup_text(&parts));
+                    *sizing.entry(ds.reason).or_default() += 1;
+                    if upsized.len() < MAX_ITEMS {
+                        upsized.push(json!({
+                            "circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": legs_mk, "homerun": home_mk,
+                            "reason": ds.reason, "drop_pct_before": r2(ds.before_pct), "drop_pct": r2(ds.after_pct), "why": why,
+                        }));
+                    }
+                    if let Some(t) = tags.get_mut(*i) {
+                        if ds.legs != base_hot {
+                            t.set("conductors", legs_mk, "computed");
                         }
-                        t.set("homerun_conductors", now, "computed");
-                        t.set("conductor_size", why.clone(), src);
+                        t.set("homerun_conductors", home_mk, "computed");
+                        t.set("conductor_size", why.clone(), "rule");
                     }
                 }
             }
@@ -3116,7 +3156,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 );
                 t.set("homerun_group", format!("{}:{gn}", gear_el.tag), "computed");
             }
-            member_ways.push((h.circ, tap_run_ft, leg_parts, parts.clone()));
+            member_ways.push((h.circ, tap_run_ft, parts.clone()));
             group_parts.extend(parts.into_iter().filter(|p| !p.2));
         }
         if g.len() > 1 {
@@ -3127,13 +3167,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let ccc: u32 = group_parts.iter().fold(0u32, |s, p| s.saturating_add(p.0));
         let trip = trips.iter().copied().fold(0.0, f64::max).max(1.0);
         let mut steps = 0;
-        while group_parts.iter().any(|p| allowed_a(&p.1, ccc, rl) + 1e-9 < trip) && steps < 3 {
+        while group_parts.iter().any(|p| !size::carries(&p.1, ccc, trip, rl)) && steps < 3 {
             for p in &mut group_parts {
-                if allowed_a(&p.1, ccc, rl) + 1e-9 < trip {
+                if !size::carries(&p.1, ccc, trip, rl) {
                     p.1 = larger(&p.1, rl);
                 }
             }
             steps += 1;
+        }
+        if steps > 0 {
+            *sizing.entry(size::DERATE).or_default() += g.len();
         }
         // One ground, the largest size of the group after the adjustment upsized it (NEC 250.122:
         // the circuit's largest; (B) up in proportion when the ungrounded conductors go up).
@@ -3397,17 +3440,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let ft = run_ft(&r, upf);
         l.home += ft;
         l.wire += (ft + box_makeup + pm) * wires_in(&combined);
-        // Each circuit's own way: its tap at its legs' size, the homerun at its own.
-        for (mc, tap, tparts, mparts) in &member_ways {
+        for (mc, tap, mparts) in &member_ways {
             let l = lens.entry(*mc).or_default();
             let way = tap + ft;
             l.own_home += way;
-            l.own_wire += tap * wires_in(tparts) + (ft + box_makeup + pm) * wires_in(mparts);
+            l.own_wire += (way + box_makeup + pm) * wires_in(mparts);
             l.cable += way + box_makeup + pm;
-            if *tap > 0.0 {
-                *cable_sizes.entry(*mc).or_default().entry(cable_size(&makeup_text(tparts))).or_default() += tap;
-            }
-            *cable_sizes.entry(*mc).or_default().entry(cable_size(&makeup_text(mparts))).or_default() += ft + box_makeup + pm;
+            *cable_sizes.entry(*mc).or_default().entry(cable_size(&makeup_text(mparts))).or_default() += way + box_makeup + pm;
         }
         if home_segs.len() < MAX_RUNS {
             home_segs.push(gap::HomeSeg {
@@ -3893,6 +3932,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         rows.push((c.level.clone(), room, *l, cable_sizes.get(&ci).cloned().unwrap_or_default()));
     }
     let lengths = lengths_report(sp, &rows);
+    let conductor_sizing = json!({
+        "upsized_by_reason": sizing.iter().map(|(k, v)| ((*k).to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        "rule": "a branch circuit's conductors are the smallest its breaker allows unless the documents give a size or a voltage-drop or derating calculation needs more",
+        "voltage_drop": rl.vdrop.source, "load": rl.vdrop.moment_source, "homerun_first": rl.vdrop.homerun_first_source,
+    });
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),
@@ -3936,6 +3980,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
     });
+    if let Some(o) = out.report.as_object_mut() {
+        o.insert("conductor_sizing".into(), conductor_sizing);
+    }
     // What Q6206 adds: the labels resolved, the switch loops, the shared raceway, the proposed
     // circuits, each circuit's own lengths.
     // The devices on the routed circuits, by kind (what became routed).
@@ -4976,6 +5023,8 @@ mod gap;
 pub(crate) use gap::panel_end_makeup_ft;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;
+#[path = "conduitroute_size.rs"]
+mod size;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]

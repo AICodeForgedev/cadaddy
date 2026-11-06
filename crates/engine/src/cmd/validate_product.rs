@@ -1032,7 +1032,12 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
                     }
                 }
                 out.tally(&r.rule.id, "unsure");
-                out.skip(&r.rule.id, &format!("{}: {NO_DATA}", it.kind));
+                // Why the documents give it none, where the build says (`product_gap`).
+                let gap = own.text("product_gap").map(|g| cite(&g));
+                match &gap {
+                    Some(g) => out.skip(&r.rule.id, &format!("{}: {NO_DATA} ({g})", it.kind)),
+                    None => out.skip(&r.rule.id, &format!("{}: {NO_DATA}", it.kind)),
+                }
                 let expected = if required.is_empty() {
                     "its product as the submittals and the specification give it".to_string()
                 } else {
@@ -1043,7 +1048,10 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
                     it,
                     "record",
                     "unsure",
-                    format!("{NO_DATA}: the model records no maker, catalog number, colour, configuration, rating or features for this {kind_words}"),
+                    format!(
+                        "{NO_DATA}: the model records no maker, catalog number, colour, configuration, rating or features for this {kind_words}{}",
+                        gap.as_ref().map(|g| format!(": {g}")).unwrap_or_default()
+                    ),
                     cite(&expected),
                     NO_DATA.into(),
                     json!({"field": "record", "requires": required}),

@@ -61,6 +61,6 @@ folder's `viewpoint.bcfv` without a `Viewpoints` list); snapshots are PNG or JPE
 - IFC models attached as references (`ifc.attach`) are coordinated with `ifc.elements` and
   `model.clashes`; the viewer works on a model opened as the drawing.
 
-Tests: `crates/engine/tests/ifc_viewer.rs` (a made-up IFC4 model written in the test; BCF round
+Tests: `crates/engine/tests/suite/files/ifc_viewer.rs` (a made-up IFC4 model written in the test; BCF round
 trips between two sessions, a BCF file as another program might write it, junk files),
-`crates/ui-egui/tests/ifc_palette.rs` (`CADADDY_IFC_SHOTS=<dir>` saves the palette's renders).
+`crates/ui-egui/tests/suite/panels/ifc_palette.rs` (`CADADDY_IFC_SHOTS=<dir>` saves the palette's renders).

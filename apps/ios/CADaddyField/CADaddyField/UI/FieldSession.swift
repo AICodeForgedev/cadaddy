@@ -108,6 +108,12 @@ final class FieldSession: ObservableObject {
 
     func marks(for elementID: String) -> [Mark] { marks.filter { $0.elementID == elementID } }
 
+    /// Where the anchor the room was last aligned to sits in this version's model frame (after an update moved it).
+    var previousAnchorPosition: SIMD3<Float>? {
+        guard record.needsRealign == true, let old = record.previousAnchor else { return nil }
+        return record.anchor?.position(of: old)
+    }
+
     // MARK: marks
 
     func addMark(element: FieldElement, status: MarkStatus, note: String, photo: Data?, pointWorld: SIMD3<Float>? = nil) {
@@ -116,7 +122,7 @@ final class FieldSession: ObservableObject {
             do { photoName = try library.savePhoto(photo, for: record) } catch { self.status = (error as? FieldError)?.message ?? "The photo could not be saved." }
         }
         var m = Mark(elementID: element.info.id, elementKind: element.info.kind, elementTag: element.info.tag, status: status,
-                     note: note.isEmpty ? nil : String(note.prefix(2000)), photo: photoName)
+                     note: note.isEmpty ? nil : String(note.prefix(2000)), photo: photoName, packageVersion: record.currentVersion)
         if isAR, let cam = cameraTransform {
             m.devicePoseWorld = Mark.flatten(cam)
             if let a = alignment { m.devicePoseModel = Mark.flatten(a.matrix.inverse * cam) }
@@ -146,6 +152,8 @@ final class FieldSession: ObservableObject {
         alignment = a
         record.alignmentMethod = method
         record.residualInches = residualInches
+        // Aligned again after an update moved the anchor: the old anchor has done its job.
+        if method != "relocalized", record.needsRealign == true { record.needsRealign = nil; record.previousAnchor = nil }
         try? library.save(record)
     }
 

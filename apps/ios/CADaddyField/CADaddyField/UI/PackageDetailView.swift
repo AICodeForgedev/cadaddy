@@ -16,6 +16,12 @@ struct PackageDetailView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                if session.record.needsRealign == true {
+                    Section {
+                        Label("The anchor moved in this version. Open in AR and align again. The old anchor shows as a grey cross on the plan and in AR.",
+                              systemImage: "scope").font(.subheadline).foregroundStyle(.orange)
+                    }
+                }
                 Section {
                     Button {
                         showAR = true
@@ -39,7 +45,9 @@ struct PackageDetailView: View {
                     LabeledContent("Model", value: "\(session.record.format.rawValue.uppercased()), \(ByteCountFormatter.string(fromByteCount: session.record.modelBytes, countStyle: .file))")
                     if let n = session.record.elementCount { LabeledContent("Objects", value: "\(n)") }
                     if let t = session.record.triangleCount { LabeledContent("Triangles", value: t.formatted()) }
-                    LabeledContent("Opened from", value: session.record.sourceName)
+                    LabeledContent(session.record.remoteName == nil ? "Opened from" : "From the office", value: session.record.remoteName ?? session.record.sourceName)
+                    LabeledContent("Version", value: session.record.currentVersion.label)
+                    if let u = session.record.updated { LabeledContent("Updated", value: u.formatted(date: .abbreviated, time: .shortened)) }
                     if let m = session.record.alignmentMethod {
                         LabeledContent("Last alignment", value: m.replacingOccurrences(of: "_", with: "-")
                                        + (session.record.residualInches.map { String(format: ", residual %.2f in", $0) } ?? ""))
@@ -53,6 +61,10 @@ struct PackageDetailView: View {
                         LabeledContent("Plan", value: String(format: "%.3f, %.3f", x, y) + (a.planUnits.map { " \($0)" } ?? ""))
                     }
                     if let l = a.level { LabeledContent("Level", value: l) }
+                    if let old = session.record.previousAnchor, session.record.needsRealign == true {
+                        LabeledContent("Was", value: [old.name, old.planX.flatMap { x in old.planY.map { String(format: "%.3f, %.3f", x, $0) } }]
+                            .compactMap { $0 }.joined(separator: " · "))
+                    }
                     Text("Quick placement: tap the real floor at this point, then turn the model to match a wall.")
                         .font(.caption).foregroundStyle(.secondary)
                 }

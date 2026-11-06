@@ -2149,6 +2149,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     super::conduitroute::check_box_fill(d, &mut report);
     super::conduitroute::store_report(d, &report);
     mark("MEP atoms");
+    // Each plumbing fixture connected to its waste, vent and water lines (Q6161).
+    let plumbing = super::plumbing::connect(d, &sp);
+    mark("plumbing connections");
     // Each panel-schedule row a breaker inside its panel (Q6166), counted in the index.
     let breakers = super::breakers::build(d, &sp_routed);
     mark("breakers");
@@ -2219,6 +2222,7 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     if let (Some(o), Some(x)) = (r.as_object_mut(), atoms.as_object()) {
         o.extend(x.clone());
     }
+    r["plumbing"] = plumbing;
     if let (Some(o), Some(x)) = (r.as_object_mut(), trade_pieces.as_object()) {
         o.extend(x.clone());
     }

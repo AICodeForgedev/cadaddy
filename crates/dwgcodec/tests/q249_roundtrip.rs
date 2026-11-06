@@ -3,7 +3,7 @@
 //! them in CADADDY_KEEP) until each layout is proven against an independent reader in both
 //! directions; the six-version encode → decode harness below is checked on objects that are
 //! native. That our written files read in acadrust with their values is
-//! `crates/io/tests/q249_native_objects.rs` (`ours_read_in_acadrust_with_their_values`).
+//! `crates/io/tests/suite/dwg/q249_native_objects.rs` (`ours_read_in_acadrust_with_their_values`).
 
 use cadaddy_dwgcodec::Version;
 use cadaddy_dwgcodec::bits::Text;

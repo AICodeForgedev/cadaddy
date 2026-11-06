@@ -525,37 +525,6 @@ fn a_feeders_raceway_stays_in_the_way_of_the_branch_routes_once_cut_into_pieces(
 }
 
 #[test]
-fn a_voltage_drop_goes_on_the_homerun_and_the_legs_keep_a_devices_size() {
-    let rl = rules();
-    // 16 A at 120 V: the drop in percent is 344 x feet / cmil.
-    // Short legs: they stay #12; the homerun takes #6 (the whole circuit's size).
-    assert_eq!(
-        split_drop("12", "6", 150.0, 5.0, 16.0, 120.0, rl),
-        Some(("12".into(), "6".into(), r1_drop(150.0, 26240.0) + r1_drop(5.0, 6530.0), true))
-    );
-    // Longer legs: #12 legs can't make 3% with any homerun up to #6; #10 legs can.
-    let (leg, home, pct, within) = split_drop("12", "6", 131.0, 30.7, 16.0, 120.0, rl).unwrap_or_default();
-    assert_eq!((leg.as_str(), home.as_str(), within), ("10", "6", true), "{pct}");
-    assert!(pct <= 3.0, "{pct}");
-    // Nothing under a device's #10 makes it: the legs at #10, the homerun at the whole circuit's
-    // size, the drop over the target and said so.
-    let (leg, home, pct, within) = split_drop("12", "4", 211.0, 47.5, 16.0, 120.0, rl).unwrap_or_default();
-    assert_eq!((leg.as_str(), home.as_str(), within), ("10", "4", false), "{pct}");
-    assert!(pct > 3.0, "{pct}");
-    // The legs never go above the rules' limit, and a circuit already at or over it keeps its size.
-    assert_eq!(split_drop("8", "6", 150.0, 30.0, 16.0, 120.0, rl).map(|x| x.0), Some("8".to_string()));
-    // No upsizing, or a size the table doesn't have: nothing to split.
-    assert_eq!(split_drop("10", "10", 100.0, 10.0, 16.0, 120.0, rl), None);
-    assert_eq!(split_drop("12", "9", 100.0, 10.0, 16.0, 120.0, rl), None);
-    assert_eq!(split_drop("12", "8", f64::NAN, 10.0, 16.0, 120.0, rl), None);
-}
-
-/// The drop in percent at 16 A, 120 V (K 12.9) over `ft` of `cmil` copper.
-fn r1_drop(ft: f64, cmil: f64) -> f64 {
-    2.0 * 12.9 * 16.0 * ft / cmil / 120.0 * 100.0
-}
-
-#[test]
 fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() {
     let est = super::super::printcond::CIRCUIT_SYSTEM;
     let run = |id: &str, level: &str| {

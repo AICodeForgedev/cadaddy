@@ -1,5 +1,5 @@
 //! The headless backend's `control.methods` lists the methods it answers, all of them documented
-//! in `docs/control-protocol.md` (the app's list is tested in `crates/ui-egui/tests/control_methods.rs`).
+//! in `docs/control-protocol.md` (the app's list is tested in `crates/ui-egui/tests/suite/panels/control_methods.rs`).
 
 use std::collections::BTreeSet;
 

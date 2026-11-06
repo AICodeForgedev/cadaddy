@@ -24,9 +24,7 @@
 //! - **E-VDROP**: each circuit's length along its raceway from its panel to its farthest device
 //!   (the sticks' own lengths), its smallest conductor against the drawing's length table when it
 //!   prints one (`0-60' = #12`), else the drop (2 K I L / cmil, I from the schedule's load, else
-//!   the rule's share of the breaker) against the 3% of NEC 210.19(A) Informational Note 4: each
-//!   piece on its own conductor, the legs' with their devices' load spread along them, as the
-//!   routing sizes it (Q6235).
+//!   the rule's share of the breaker) against the 3% of NEC 210.19(A) Informational Note 4.
 //! - **E-METHOD**: each run's wiring method (its pieces' type) against the specification's
 //!   wiring-methods table for the area its pieces are in (a guest or dwelling unit, an exposed
 //!   room, else concealed), the project's wiring-method rule, or an approved value-engineering
@@ -671,11 +669,6 @@ impl Graph {
     /// The graph of `sticks` (indices into `net.sticks`), ends within `tol` joined, ends within
     /// `tol` of a box joined to the box.
     fn of(net: &Net, sticks: &[usize], tol: f64, boxes_near: &BoxGrid) -> Graph {
-        Graph::weighted(net, sticks, tol, boxes_near, &|_| 1.0)
-    }
-
-    /// [`Graph::of`] with each stick's feet times `weight` of it (the nodes the same).
-    fn weighted(net: &Net, sticks: &[usize], tol: f64, boxes_near: &BoxGrid, weight: &dyn Fn(&Stick) -> f64) -> Graph {
         let mut g = Graph { adj: Vec::new(), box_node: HashMap::new(), ends: Vec::new() };
         let cell = (tol * 4.0).max(1e-6);
         let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
@@ -685,7 +678,7 @@ impl Graph {
             let (na, nb) = (g.adj.len(), g.adj.len() + 1);
             g.adj.push(Vec::new());
             g.adj.push(Vec::new());
-            let len = path_len(&s.path) / net.upf * weight(s);
+            let len = path_len(&s.path) / net.upf;
             g.link(na, nb, len);
             for (node, p) in [(na, s.a), (nb, s.b)] {
                 let (kx, ky, kz) = key(p);
@@ -1488,7 +1481,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
             }
             let dist = g.from(&sources);
             // Each device: its box's node, reached?
-            let mut reach: Vec<(usize, Option<(f64, usize)>, Option<usize>)> = Vec::new();
+            let mut reach: Vec<(usize, Option<(f64, usize)>)> = Vec::new();
             for &di in devs {
                 let Some(dv) = net.devs.get(di) else { continue };
                 let c = (dv.lo + dv.hi) * 0.5;
@@ -1499,7 +1492,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 // The nearest end of its circuit to its box when none touches it.
                 let nearest = g.ends.iter().map(|(n, p, _)| (box_dist2(*p, blo, bhi).sqrt(), *n)).min_by(|a, b| a.0.total_cmp(&b.0));
                 let reached = node.and_then(|n| dist.get(n).copied().flatten());
-                reach.push((di, reached, node));
+                reach.push((di, reached));
                 let Some(r) = on.continuity else { continue };
                 let measured_base = json!({"check": "continuity", "circuit": label, "device": dv.handle.hex(), "device_kind": dv.kind, "box": bi.and_then(|i| net.boxes.get(i)).map(|b| b.handle.hex()), "sticks": sticks.len()});
                 let expected = format!(
@@ -1608,43 +1601,19 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 }
                 continue;
             }
-            let mut by_gear: BTreeMap<usize, (f64, usize, Option<usize>)> = BTreeMap::new();
-            for (di, rch, node) in &reach {
+            let mut by_gear: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
+            for (di, rch) in &reach {
                 if let Some((ft, gi)) = rch {
-                    let e = by_gear.entry(*gi).or_insert((*ft, *di, *node));
+                    let e = by_gear.entry(*gi).or_insert((*ft, *di));
                     if *ft > e.0 {
-                        *e = (*ft, *di, *node);
+                        *e = (*ft, *di);
                     }
                 }
             }
-            // The drop as the routing sizes it (Q6235): each stick's on its own conductor (a
-            // voltage drop's larger one is on the homerun), as feet on the smallest, and the legs'
-            // with their devices' load spread along them (rules `legs_spread`).
-            let run_hot = |run: &str| -> Option<(usize, String)> {
-                run_wires
-                    .get(run)?
-                    .iter()
-                    .filter(|w| !w.ground())
-                    .filter_map(|w| size_rank(&w.size, &rl.vdrop.sizes).map(|k| (k, w.size.clone())))
-                    .min_by_key(|x| x.0)
-            };
-            let hot_sizes: BTreeSet<String> = sticks.iter().filter_map(|i| net.sticks.get(*i)).filter_map(|s| run_hot(&s.run).map(|x| x.1)).collect();
-            let on_own = (hot_sizes.len() > 1 || rl.vdrop.legs_spread).then(|| {
-                let small = hot_sizes.iter().filter_map(|s| size_rank(s, &rl.vdrop.sizes).map(|k| (k, s.clone()))).min_by_key(|x| x.0).map(|x| x.1);
-                let cm_small = small.as_ref().and_then(|s| rl.vdrop.cmil.get(s).copied()).filter(|c| *c > 0.0).unwrap_or(1.0);
-                let n = devs.len().max(1) as f64;
-                let spread = if rl.vdrop.legs_spread { (n + 1.0) / (2.0 * n) } else { 1.0 };
-                let weight = |s: &Stick| -> f64 {
-                    let ratio = run_hot(&s.run).and_then(|(_, z)| rl.vdrop.cmil.get(&z).copied()).filter(|c| *c > 0.0).map_or(1.0, |c| cm_small / c);
-                    let leg = !s.run.contains(super::conduitroute::HOME_PART) && !s.run.contains("#tap");
-                    ratio * if leg { spread } else { 1.0 }
-                };
-                Graph::weighted(&net, &sticks, touch, &boxes_near, &weight).from(&sources)
-            });
             if by_gear.is_empty() {
                 out.unmeasured(VDROP, "a circuit not joined to its panel (E-CONDUIT-CONTINUITY fails it)", 1);
             }
-            for (gi, (ft, di, node)) in by_gear {
+            for (gi, (ft, di)) in by_gear {
                 let Some(dv) = net.devs.get(di) else { continue };
                 let Some(place) = in_scope(&dv.level, (dv.lo + dv.hi) * 0.5) else { continue };
                 let gtag = net.gear.get(gi).map_or_else(|| panel.clone(), |g| g.tag.clone());
@@ -1766,7 +1735,8 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 };
                 let cmil = rl.vdrop.cmil.get(&size).copied();
                 let (amps, load_from) = match load {
-                    Some(va) if v > 0.0 => (va / v, format!("{src}: {va:.0} VA")),
+                    // A three-phase load's current is its VA over √3 times its line voltage (Q6234).
+                    Some(va) if v > 0.0 => (va / (v * if poles >= 3 { 3f64.sqrt() } else { 1.0 }), format!("{src}: {va:.0} VA")),
                     _ => (
                         amps_brk * rl.vdrop.load_pct / 100.0,
                         format!("{}% of its {amps_brk} A breaker (rule; the schedule gives no load)", rl.vdrop.load_pct),
@@ -1790,21 +1760,10 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                     );
                     continue;
                 };
-                // The drop's feet on the smallest conductor (see `on_own`).
-                let on_smallest = on_own.as_ref().and_then(|d| d.get(node?).copied().flatten()).map(|x| x.0).filter(|x| x.is_finite());
-                let vd = mult * rl.vdrop.k_copper * amps * on_smallest.unwrap_or(ft) / cmil;
+                let vd = mult * rl.vdrop.k_copper * amps * ft / cmil;
                 let pct = vd / v * 100.0;
                 let ok = pct <= rl.vdrop.max_pct + 1e-9;
                 let mut m = base;
-                if let Some(eq) = on_smallest {
-                    m["feet_on_smallest"] = json!(r1(eq));
-                    m["sizes"] = json!(hot_sizes.iter().map(|s| format!("#{s}")).collect::<Vec<_>>());
-                    m["method"] = json!(if rl.vdrop.legs_spread {
-                        format!("each piece on its own conductor; the legs' load spread along them ({})", rl.vdrop.legs_spread_source)
-                    } else {
-                        "each piece on its own conductor".to_string()
-                    });
-                }
                 m["volts"] = json!(v);
                 m["amps"] = json!(r2(amps));
                 m["load_from"] = json!(load_from);

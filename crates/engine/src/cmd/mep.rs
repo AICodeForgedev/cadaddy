@@ -26,6 +26,9 @@ use super::perceive::{feet_inches, texts};
 use super::*;
 use crate::{Result, Session};
 
+mod homerun;
+mod twinline;
+
 /// Runs and segments handled, at most (hostile drawings).
 const MAX_RUNS: usize = 20_000;
 const MAX_SEGS: usize = 200_000;
@@ -389,8 +392,141 @@ fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     p.dist(a + d * t)
 }
 
+/// The distance between two segments (0 where they cross).
+fn seg_seg_dist(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> f64 {
+    let cross = |o: Vec2, p: Vec2, q: Vec2| (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+    let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+    if d1 * d2 < 0.0 && d3 * d4 < 0.0 {
+        return 0.0;
+    }
+    seg_dist(a, c, d).min(seg_dist(b, c, d)).min(seg_dist(c, a, b)).min(seg_dist(d, a, b))
+}
+
+/// The line a label is lettered along: a run longer than the label (and two letters' height),
+/// with a stretch parallel to its lettering, at most
+/// [`LABEL_ON_LINE`] of its height off its middle line, and beside it lengthwise (within a
+/// letter's height of its ends: a label in a break of the line). The nearest such run; a label
+/// of one point (a leader's arrow) is on the run its point touches. None: the label is beside
+/// no line of its own.
+fn label_host(line: [Vec2; 2], h: f64, paths: &[&[Vec2]]) -> Option<usize> {
+    if !(h.is_finite() && h > 0.0) {
+        return None;
+    }
+    let [a, b] = line;
+    let len = a.dist(b);
+    // The line runs past its label (not the label's own strokes, a tick, a fitting).
+    let need = len.max(2.0 * h);
+    let mut best: Option<(f64, usize)> = None;
+    for (ci, pts) in paths.iter().enumerate() {
+        if pts.windows(2).filter_map(|w| Some(w.first()?.dist(*w.get(1)?))).sum::<f64>() < need {
+            continue;
+        }
+        for w in pts.windows(2) {
+            let (Some(&p), Some(&q)) = (w.first(), w.get(1)) else { continue };
+            let off = if len <= 1e-9 {
+                let d = seg_dist(a, p, q);
+                (d <= 0.5 * h).then_some(d)
+            } else {
+                let (u, v) = ((b - a) * (1.0 / len), q - p);
+                let lv = v.dot(v).sqrt();
+                if lv <= 1e-9 || (u.x * v.y - u.y * v.x).abs() / lv > LABEL_PARALLEL_SIN {
+                    continue;
+                }
+                // Off the segment's line, from the label's middle; overlap along it.
+                let mid = (a + b) * 0.5;
+                let n = Vec2::new(-v.y / lv, v.x / lv);
+                let off = (mid - p).dot(n).abs();
+                let (s0, s1) = ((a - p).dot(v) / lv, (b - p).dot(v) / lv);
+                let (lo, hi) = (s0.min(s1), s0.max(s1));
+                let gap = (lo - lv).max(-hi).max(0.0);
+                (off <= LABEL_ON_LINE * h && gap <= h).then_some(off)
+            };
+            if let Some(d) = off
+                && best.is_none_or(|(bd, _)| d < bd)
+            {
+                best = Some((d, ci));
+            }
+        }
+    }
+    best.map(|(_, ci)| ci)
+}
+
+/// A pipe label more than this many times the plan's usual label height is outsized.
+const LABEL_OUTSIZED: f64 = 2.0;
+/// How far off a line a label lettered on it may sit, as a share of its height.
+const LABEL_ON_LINE: f64 = 0.75;
+/// Lettering parallel to a line: the sine of the angle between them at most this (10°).
+const LABEL_PARALLEL_SIN: f64 = 0.174;
+
+/// How far a label is from a line: along its lettering from a line parallel to it (a label set
+/// beside or in its pipe), from its middle for a line across it (not a line off its end).
+fn label_dist(line: [Vec2; 2], a: Vec2, b: Vec2) -> f64 {
+    let [p, q] = line;
+    let (u, v) = (q - p, b - a);
+    let (lu, lv) = (u.dot(u).sqrt(), v.dot(v).sqrt());
+    if lu <= 1e-9 || lv <= 1e-9 {
+        return seg_dist((p + q) * 0.5, a, b);
+    }
+    if (u.x * v.y - u.y * v.x).abs() / (lu * lv) <= LABEL_PARALLEL_SIN { seg_seg_dist(p, q, a, b) } else { seg_dist((p + q) * 0.5, a, b) }
+}
+
+/// How wide a character of lettering is, as a share of its height (a typical drafting font's
+/// average advance).
+const LABEL_CHAR_W: f64 = 0.7;
+
+/// Where a label's lettering lies: the middle line of its first row, from its first character to
+/// its last. A label set in a break of the pipe it names lies along that pipe, wherever its
+/// insertion point is. A label of unknown shape (or a point) is its point.
+fn label_line(e: Option<&Entity>, at: Vec2, h: f64, chars: usize) -> [Vec2; 2] {
+    let ok = |v: f64| v.is_finite();
+    let (rot, wf, col, row, span) = match e.map(|e| &e.kind) {
+        Some(EntityKind::Text(t)) => {
+            use cadaddy_doc::{HAlign, VAlign};
+            let span = match (t.halign, t.align_pt) {
+                (HAlign::Aligned | HAlign::Fit, Some(b)) => Some((t.insert.xy(), b.xy())),
+                _ => None,
+            };
+            let col = match t.halign {
+                HAlign::Left | HAlign::Aligned | HAlign::Fit => 0.0,
+                HAlign::Center | HAlign::Middle => 0.5,
+                HAlign::Right => 1.0,
+            };
+            let row = match (t.halign, t.valign) {
+                (HAlign::Middle, _) | (_, VAlign::Middle) => 0.0,
+                (_, VAlign::Top) => -0.5,
+                _ => 0.5,
+            };
+            (t.rotation, t.width_factor, col, row, span)
+        }
+        Some(EntityKind::MText(t)) => {
+            let k = f64::from(t.attach.clamp(1, 9) - 1);
+            (t.rotation, 1.0, (k % 3.0) * 0.5, (k / 3.0).floor() * 0.5 - 0.5, None)
+        }
+        _ => return [at, at],
+    };
+    if !(ok(rot) && ok(h) && h > 0.0 && ok(at.x) && ok(at.y)) {
+        return [at, at];
+    }
+    let dir = Vec2::new(rot.cos(), rot.sin());
+    let up = Vec2::new(-dir.y, dir.x);
+    if let Some((a, b)) = span.filter(|(a, b)| a.is_finite() && b.is_finite() && a.dist(*b) > 0.0) {
+        let mid = up * (0.5 * h);
+        return [a + mid, b + mid];
+    }
+    let wf = if ok(wf) && wf > 0.0 { wf.min(4.0) } else { 1.0 };
+    let w = LABEL_CHAR_W * h * wf * chars.min(200) as f64;
+    let start = at - dir * (col * w) + up * (row * h);
+    [start, start + dir * w]
+}
+
 /// The runs of the plan: systems (the spec's, else drafted from layer names) and their runs.
 pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
+    read_with(s, sp, only, None)
+}
+
+/// [`read`], with the system of a plan's untagged piping when the plan is of one system (a
+/// sanitary plan's: `SAN`; see [`plan_system`]).
+pub(crate) fn read_with(s: &Session, sp: &BuildingSpec, only: Option<&str>, untagged: Option<&'static str>) -> Result<(Vec<MepSystem>, Vec<MepRun>)> {
     let plan = super::verify::plan_session(s)?;
     let d: &Drawing = plan.doc()?;
     let ents = plan_objects(d);
@@ -412,7 +548,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
         // For PDF imports, the model units are paper inches. Detect this and use the right
         // units_per_foot for length computation and tag reach.
         let effective_upf = detect_paper_upf(d, upf);
-        let (tag_systems, tag_runs) = read_pipes_from_tags(&ents, &notes, sp, effective_upf, only);
+        let (tag_systems, tag_runs) = read_pipes_from_tags(&ents, &notes, sp, effective_upf, only, untagged);
         if !tag_systems.is_empty() {
             systems = tag_systems;
             runs = tag_runs;
@@ -500,6 +636,7 @@ pub(crate) fn read(s: &Session, sp: &BuildingSpec, only: Option<&str>) -> Result
                 edited_by: String::new(),
                 top_ft: None,
                 source_sheet: String::new(),
+                slope_in_per_ft: 0.0,
             });
             if runs.len() >= MAX_RUNS {
                 break;
@@ -539,15 +676,35 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
 /// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
 const SHORT_ABBR: &[&str] = &["G", "W", "F", "V", "S"];
 
-/// Parse a pipe system code from a text tag. Returns (size_in, system_code) if found.
-fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
+/// Parse a pipe system code from a text tag. Returns (size_in, system_code, second system) if
+/// found: a tag can name two systems run side by side (`1/2" HW & CW TO LAVATORY`, `HW/CW`), and
+/// a size can be written against its system (`1/2"CW`).
+fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str, Option<&'static str>)> {
     let up = t.to_ascii_uppercase().replace('\u{2033}', "\"");
     let words: Vec<&str> = up.split_whitespace().collect();
     // Skip texts that are too long to be pipe tags (schedules, notes, titles).
     if words.len() > 8 {
         return None;
     }
-    // Pattern 1: `N" SYS` (e.g. "2\" CW", "4\" SAN", "3/4\" HW")
+    let code = |w: &str| {
+        let s = w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
+        PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)).map(|(_, code, ..)| *code)
+    };
+    // A system, or two joined (`HW/CW`, `HW&CW`), then perhaps `& CW` / `AND CW` after it.
+    let systems = |w: &str, rest: &[&str]| -> Option<(&'static str, Option<&'static str>)> {
+        if let Some((a, b)) = w.split_once(['/', '&', '+'])
+            && let (Some(a), Some(b)) = (code(a), code(b))
+        {
+            return Some((a, (a != b).then_some(b)));
+        }
+        let a = code(w)?;
+        let b = match rest {
+            [j, w2, ..] if matches!(*j, "&" | "AND" | "/" | "+") => code(w2).filter(|b| *b != a),
+            _ => None,
+        };
+        Some((a, b))
+    };
+    // Pattern 1: `N" SYS` (e.g. "2\" CW", "4\" SAN", "3/4\" HW", "1/2\"CW", "1/2\" HW & CW")
     for (i, w) in words.iter().enumerate() {
         if !w.contains('"') || w.contains('\'') {
             continue;
@@ -560,12 +717,15 @@ fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
             (_, v) => v,
         };
         if let Some(v) = value.filter(|v| *v > 0.0 && *v <= 24.0) {
-            // System code after the size: any abbreviation is valid here (even single-letter).
-            if let Some(sys) = words.get(i + 1) {
-                let s = sys.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
-                if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
-                    return Some((Some(v), code));
-                }
+            // System code after the size (or written against it): any abbreviation is valid
+            // here (even single-letter).
+            let glued = w.split_once('"').map(|(_, r)| r).filter(|r| !r.is_empty());
+            let (sys, rest) = match glued {
+                Some(g) => (Some(g), words.get(i + 1..).unwrap_or_default()),
+                None => (words.get(i + 1).copied(), words.get(i + 2..).unwrap_or_default()),
+            };
+            if let Some((a, b)) = sys.and_then(|sys| systems(sys, rest)) {
+                return Some((Some(v), a, b));
             }
             // Size without a system: skip (could be any dimension on the drawing).
             return None;
@@ -573,14 +733,14 @@ fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
     }
     // Pattern 2: bare system label (e.g. "CW", "SAN", "HW UP"). Only accept multi-char
     // abbreviations to avoid matching grid labels, room numbers, etc.
-    for w in &words {
+    for (i, w) in words.iter().enumerate() {
         let s = w.trim_end_matches(|c: char| !c.is_ascii_alphanumeric());
         if SHORT_ABBR.iter().any(|a| a.eq_ignore_ascii_case(s)) {
             // Single-letter abbreviations need a size to be valid.
             continue;
         }
-        if let Some((_, code, ..)) = PIPE_SYSTEMS.iter().find(|(abbr, ..)| abbr.eq_ignore_ascii_case(s)) {
-            return Some((None, code));
+        if let Some((a, b)) = systems(s, words.get(i + 1..).unwrap_or_default()) {
+            return Some((None, a, b));
         }
     }
     None
@@ -621,6 +781,8 @@ pub(crate) fn is_outline(pts: &[Vec2], upf: f64) -> bool {
     false
 }
 
+/// How near (feet) a branch's end comes to the line of the pipe it comes off (its tee drawn between).
+const TEE_REACH_FT: f64 = 1.0;
 /// How near (feet) a callout's bubble its box's linework (its leader) comes.
 const CALLOUT_REACH_FT: f64 = 3.0;
 /// How far across both ways (feet) a loop of linework must go to be an outline, not a pipe's
@@ -628,6 +790,121 @@ const CALLOUT_REACH_FT: f64 = 3.0;
 const OUTLINE_ACROSS_FT: f64 = 3.0;
 /// The points of a chain looked at for a loop, at most (the check is quadratic).
 const MAX_OUTLINE_POINTS: usize = 2_000;
+
+/// Whether a colour is a print's screening: the grey the background (the architecture under a
+/// trade's work) is printed in. A light, even grey (true colour, or the grey ACI indexes 8, 9,
+/// 250–254); black, white and the trades' colours are not.
+pub(crate) fn screened(c: &cadaddy_doc::color::Color) -> bool {
+    match c {
+        cadaddy_doc::color::Color::True(rgb) => {
+            let (lo, hi) = (rgb.0.min(rgb.1).min(rgb.2), rgb.0.max(rgb.1).max(rgb.2));
+            lo >= 110 && hi - lo <= 24 && hi < 250
+        }
+        cadaddy_doc::color::Color::Index(i) => matches!(i, 8 | 9 | 250..=254),
+        _ => false,
+    }
+}
+
+/// The system a plumbing plan's title says all its untagged piping is: a sanitary (waste,
+/// soil, drainage) plan's `SAN`, a storm plan's `ST`, a gas plan's `G`, a vent plan's `V`. A plan
+/// of several systems (water: cold, hot and return) names none: its pipes need their tags.
+pub(crate) fn plan_system(title: &str) -> Option<&'static str> {
+    let up = title.to_ascii_uppercase();
+    let has = |w: &str| up.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w);
+    let systems: Vec<&'static str> = [
+        (["SANITARY", "WASTE", "SOIL", "DWV"].iter().any(|w| has(w)) || (has("DRAINAGE") && !has("STORM")), "SAN"),
+        (has("STORM"), "ST"),
+        (has("GAS"), "G"),
+        (has("VENT") && !has("WASTE") && !has("SANITARY"), "V"),
+        (has("WATER") || has("DOMESTIC"), "water"),
+    ]
+    .into_iter()
+    .filter_map(|(on, s)| on.then_some(s))
+    .collect();
+    match systems[..] {
+        [one] if one != "water" => Some(one),
+        _ => None,
+    }
+}
+
+/// The middle lines of a plan that draws its pipes as two lines ([`twinline`]), joined into runs,
+/// with the objects they came from and each run's drawn width (drawing units); `None` when the
+/// plan draws its pipes as single lines.
+#[allow(clippy::type_complexity)]
+fn twin_chains(linework: &[&Arc<Entity>], upf: f64) -> Option<(Vec<(Vec<Vec2>, Vec<Handle>)>, Vec<Option<f64>>)> {
+    let mut segs: Vec<(Vec2, Vec2)> = Vec::new();
+    let mut owner: Vec<Handle> = Vec::new();
+    for e in linework {
+        let pts: Vec<Vec2> = match &e.kind {
+            EntityKind::Line(l) => vec![l.a.xy(), l.b.xy()],
+            EntityKind::LwPolyline(p) => {
+                let mut v: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+                if p.closed
+                    && let Some(f) = v.first().copied()
+                {
+                    v.push(f);
+                }
+                v
+            }
+            _ => continue,
+        };
+        for w in pts.windows(2) {
+            if let [a, b] = w
+                && a.is_finite()
+                && b.is_finite()
+                && a.dist(*b) > 0.0
+            {
+                segs.push((*a, *b));
+                owner.push(e.handle);
+            }
+        }
+        if segs.len() >= MAX_SEGS {
+            break;
+        }
+    }
+    let mids = twinline::middles(&segs, upf);
+    if mids.is_empty() {
+        return None;
+    }
+    let mut chains = Vec::new();
+    let mut widths = Vec::new();
+    for (pts, took) in twinline::paths(&mids, upf) {
+        let mut hs: Vec<Handle> = took.iter().filter_map(|i| mids.get(*i)).flat_map(|m| m.edges).filter_map(|k| owner.get(k).copied()).collect();
+        hs.sort_unstable_by_key(|h| h.0);
+        hs.dedup();
+        // The run's width: its longest middle's.
+        let width = took.iter().filter_map(|i| mids.get(*i)).max_by(|a, b| a.a.dist(a.b).total_cmp(&b.a.dist(b.b))).map(|m| m.width);
+        chains.push((pts, hs));
+        widths.push(width);
+    }
+    Some((chains, widths))
+}
+
+/// The lines and short polylines that may be leaders, and the boxes of the shapes that may be
+/// their arrowheads (filled triangles: hatches, solids, small closed polylines).
+fn leaders_and_arrows(ents: &[&Arc<Entity>]) -> (Vec<homerun::Stroke>, Vec<[Vec2; 2]>) {
+    let mut strokes = Vec::new();
+    let mut arrows = Vec::new();
+    let bbox = |pts: &mut dyn Iterator<Item = Vec2>| {
+        pts.filter(|p| p.is_finite()).fold(None, |b: Option<[Vec2; 2]>, p| {
+            Some(b.map_or([p, p], |[lo, hi]| [Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))]))
+        })
+    };
+    for e in ents {
+        match &e.kind {
+            EntityKind::Line(l) => strokes.push(vec![l.a.xy(), l.b.xy()]),
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() <= 5 => arrows.extend(bbox(&mut p.vertices.iter().map(|v| v.p))),
+            EntityKind::LwPolyline(p) if !p.closed && (2..=4).contains(&p.vertices.len()) => strokes.push(p.vertices.iter().map(|v| v.p).collect()),
+            EntityKind::Hatch(h) => arrows.extend(bbox(&mut h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)))),
+            EntityKind::Solid(s) => arrows.extend(bbox(&mut s.corners.iter().map(|c| c.xy()))),
+            _ => {}
+        }
+        if strokes.len() >= MAX_SEGS {
+            break;
+        }
+    }
+    (strokes, arrows)
+}
 
 /// A followed chain's points, carried on from `from` (the end it was followed from) at its
 /// nearer end: the run is unbroken across the dash's gap or the fitting it was followed over.
@@ -656,7 +933,7 @@ fn follow_tagged(
     notes: &[(Handle, String, Vec2, f64)],
     chains: &[(Vec<Vec2>, Vec<Handle>)],
     run_of: &[Option<usize>],
-    tag_of_run: &[usize],
+    tag_of_run: &[Option<usize>],
     tags: &[(Vec2, String)],
     runs: &[MepRun],
     reach: f64,
@@ -680,11 +957,11 @@ fn follow_tagged(
     // Each tag's nearest chain among those it gave a run.
     let mut nearest: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
     for (ci, ri) in run_of.iter().enumerate().filter_map(|(ci, r)| r.map(|r| (ci, r))) {
-        let (Some(ti), Some((pts, _))) = (tag_of_run.get(ri), chains.get(ci)) else { continue };
-        let Some((at, _)) = tags.get(*ti) else { continue };
+        let (Some(ti), Some((pts, _))) = (tag_of_run.get(ri).copied().flatten(), chains.get(ci)) else { continue };
+        let Some((at, _)) = tags.get(ti) else { continue };
         let d = pts.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist(*at, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min);
-        if nearest.get(ti).is_none_or(|(bd, _)| d < *bd) {
-            nearest.insert(*ti, (d, ci));
+        if nearest.get(&ti).is_none_or(|(bd, _)| d < *bd) {
+            nearest.insert(ti, (d, ci));
         }
     }
     let rules = super::pipefollow::rules();
@@ -718,41 +995,102 @@ fn read_pipes_from_tags(
     sp: &BuildingSpec,
     upf: f64,
     only: Option<&str>,
+    untagged: Option<&'static str>,
 ) -> (Vec<MepSystem>, Vec<MepRun>) {
     // Step 1: find all pipe-system text tags and their positions.
     struct PipeTag {
         at: Vec2,
+        /// Where its lettering lies (see [`label_line`]); its leader's arrow when it has one.
+        line: [Vec2; 2],
         system: &'static str,
+        /// The second system of a tag that names two (`1/2" HW & CW`).
+        also: Option<&'static str>,
         size_in: Option<f64>,
         text: String,
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
-    for (_, t, at, _) in notes {
-        if let Some((sz, sys)) = parse_pipe_tag(t)
+    let mut lettering: Vec<(f64, usize)> = Vec::new();
+    let by_handle: std::collections::HashMap<Handle, &Entity> = ents.iter().map(|e| (e.handle, e.as_ref())).collect();
+    for (hd, t, at, h) in notes {
+        if let Some((sz, sys, also)) = parse_pipe_tag(t)
             && !sys.is_empty()
         {
-            pipe_tags.push(PipeTag { at: *at, system: sys, size_in: sz, text: t.clone() });
+            // A sized label is lettered along its pipe; a bare code may be a word's fragment.
+            let line = if sz.is_some() { label_line(by_handle.get(hd).copied(), *at, *h, t.chars().count()) } else { [*at, *at] };
+            pipe_tags.push(PipeTag { at: *at, line, system: sys, also, size_in: sz, text: t.clone() });
+            lettering.push((*h, t.chars().count()));
         }
     }
-    if pipe_tags.is_empty() {
+    // Lettering far taller than the plan's pipe labels (a mis-sized copy the import made): where
+    // it starts, not along a line it can't be said to lie on.
+    let usual_h = {
+        let mut hs: Vec<f64> = lettering.iter().map(|(h, _)| *h).filter(|h| h.is_finite() && *h > 0.0).collect();
+        hs.sort_by(f64::total_cmp);
+        hs.get(hs.len() / 2).copied()
+    };
+    let outsized = |h: f64| usual_h.is_some_and(|u| h > LABEL_OUTSIZED * u);
+    for (t, (h, _)) in pipe_tags.iter_mut().zip(&lettering) {
+        if outsized(*h) {
+            t.line = [t.at, t.at];
+        }
+    }
+    // A tag with a leader of its own is where its arrow points.
+    if !pipe_tags.is_empty() {
+        let (strokes, arrows) = leaders_and_arrows(ents);
+        let tips: Vec<Vec<Vec2>> =
+            pipe_tags.iter().zip(&lettering).map(|(tag, (h, chars))| homerun::leader_tips(tag.at, *h, *chars, &strokes, &arrows)).collect();
+        let heights: Vec<f64> = lettering.iter().map(|(h, _)| *h).collect();
+        for (tag, tip) in pipe_tags.iter_mut().zip(homerun::sure_tips(&tips, &heights)) {
+            if let Some(tip) = tip {
+                tag.at = tip;
+                tag.line = [tip, tip];
+            }
+        }
+    }
+    if pipe_tags.is_empty() && untagged.is_none() {
         return (Vec::new(), Vec::new());
     }
 
     // Step 2: collect line chains, excluding layers that are known to carry non-pipe geometry
     // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports.
-    let all_chains = chains(
-        &ents
+    let linework: Vec<&Arc<Entity>> = ents
+        .iter()
+        .copied()
+        .filter(|e| {
+            if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+                return false;
+            }
+            let up = e.common.layer.to_ascii_uppercase();
+            !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+        })
+        .collect();
+    // A plan that draws its pipes as two lines, in the trade's pen over the screened background
+    // (the architecture printed grey under it): each pipe's middle line, as wide as it is drawn.
+    // Not the strokes the import took for lettering (their pairs are letters' sides).
+    let dark: Vec<&Arc<Entity>> =
+        linework.iter().copied().filter(|e| !screened(&e.common.color) && !e.common.layer.eq_ignore_ascii_case("PDF-SHX-SOURCE")).collect();
+    let (all_chains, widths) = twin_chains(&dark, upf).unwrap_or_else(|| {
+        // Single lines: the trade's pen, not the grey background, when most of the plan's tags
+        // have its lines near them (a pipe printed dark over the screened architecture); else
+        // every line, as a plan printed all in one pen has to be read.
+        let pen: Vec<&Arc<Entity>> = linework.iter().copied().filter(|e| !screened(&e.common.color)).collect();
+        let pen_chains = chains(&pen);
+        let reach = 2.0 * upf;
+        let near = pipe_tags
             .iter()
-            .copied()
-            .filter(|e| {
-                if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
-                    return false;
-                }
-                let up = e.common.layer.to_ascii_uppercase();
-                !matches!(up.as_str(), "A-WALL" | "HATCH" | "TEXT" | "TITLEBLOCK" | "PDF-MASK" | "DEFPOINTS" | "E-DEVICE")
+            .filter(|t| {
+                pen_chains.iter().any(|(pts, _)| {
+                    pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() >= reach && pts.windows(2).any(|w| seg_dist(t.at, w[0], w[1]) <= reach)
+                })
             })
-            .collect::<Vec<_>>(),
-    );
+            .count();
+        let c = if !pipe_tags.is_empty() && 2 * near >= pipe_tags.len() && pen.len() < linework.len() { pen_chains } else { chains(&linework) };
+        // A run drawn in a pattern (a tube's zigzag) is its middle line.
+        let c: Vec<(Vec<Vec2>, Vec<Handle>)> = c.into_iter().map(|(pts, hs)| (homerun::centreline(&pts, upf).unwrap_or(pts), hs)).collect();
+        let n = c.len();
+        (c, vec![None; n])
+    });
+    let twin = widths.iter().any(Option::is_some);
 
     // The numbered tag bubbles: a sheet-number-shaped tag (`P-7`, `P-2`: a callout's, a fixture's;
     // lettered or a symbol's attribute) with a number (one or two digits) just over it.
@@ -792,14 +1130,68 @@ fn read_pipes_from_tags(
     // generic layers; use a tighter reach to avoid associating walls near pipe tags.
     let has_pen_layers = ents.iter().any(|e| e.common.layer.to_ascii_uppercase().starts_with("PDF-BLACK"));
     let reach = if has_pen_layers { 6.0 * upf } else { 2.0 * upf }; // 6 or 2 feet
-    let min_chain_len = if has_pen_layers { 0.0 } else { 2.0 * upf }; // 2 feet minimum on content mode
+    // 2 feet minimum on content mode; a twin-drawn pipe's middle is a pipe from its first length.
+    let min_chain_len = if has_pen_layers || twin { 0.0 } else { 2.0 * upf };
     let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
     let mut runs = Vec::new();
 
-    // Which run each chain became, and which tag gave it.
+    // A tag lettered along a line (on it, or in a break of it) names that line: no other run takes
+    // it for its own, however near (a stacked pair of mains, each labelled on itself).
+    let hosts: Vec<Option<usize>> = {
+        let paths: Vec<&[Vec2]> = all_chains.iter().map(|(pts, _)| pts.as_slice()).collect();
+        pipe_tags.iter().zip(&lettering).map(|(t, (h, _))| if outsized(*h) { None } else { label_host(t.line, *h, &paths) }).collect()
+    };
+    // The nearest tag within reach of a run, of the tags it may take.
+    // `any`: also the tags lettered on other lines, by where each starts (a run with no tag
+    // nearer, nor one it comes off: as it was read before the lines labels lie on were known).
+    let near = |ci: usize, pts: &[Vec2], any: bool| {
+        pipe_tags
+            .iter()
+            .enumerate()
+            .filter(|(k, _)| any || hosts.get(*k).copied().flatten().is_none_or(|h| h == ci))
+            .map(|(k, t)| {
+                let line = if any { [t.at, t.at] } else { t.line };
+                (k, pts.windows(2).filter_map(|w| Some(label_dist(line, *w.first()?, *w.get(1)?))).fold(f64::INFINITY, f64::min))
+            })
+            .filter(|(_, d)| *d < reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(k, _)| k)
+    };
+    // On a plan that draws its pipes as two lines, a run with no tag of its own takes the tag of
+    // the run it comes off (a branch off a tagged main).
+    let spread: Vec<Option<usize>> = if twin {
+        let seed: Vec<Option<usize>> = all_chains.iter().enumerate().map(|(ci, (pts, _))| near(ci, pts, false)).collect();
+        let paths: Vec<Vec<Vec2>> = all_chains.iter().map(|(pts, _)| pts.clone()).collect();
+        twinline::spread(&paths, &seed, TEE_REACH_FT * upf)
+    } else {
+        Vec::new()
+    };
+    // Each run's own tag: the nearest within reach (of the runs long enough to be pipe).
+    // Last of all, a run with neither: the nearest tag of any line.
+    let own_tags: Vec<(Option<usize>, Option<usize>)> = all_chains
+        .iter()
+        .enumerate()
+        .map(|(ci, (pts, _))| {
+            if min_chain_len > 0.0 && pts.windows(2).map(|w| w[0].dist(w[1])).sum::<f64>() < min_chain_len {
+                return (None, None);
+            }
+            match near(ci, pts, false) {
+                Some(k) => (Some(k), None),
+                None => (None, near(ci, pts, true)),
+            }
+        })
+        .collect();
+    // Tubes under a tag naming two systems: each its manifold's, else shared between the two.
+    let paired = homerun::resolve_pairs(
+        &all_chains.iter().map(|(pts, _)| pts.clone()).collect::<Vec<_>>(),
+        &own_tags.iter().map(|(own, any)| own.or(*any)).collect::<Vec<_>>(),
+        &pipe_tags.iter().map(|t| homerun::Tag { at: t.at, system: t.system, also: t.also }).collect::<Vec<_>>(),
+        upf,
+    );
+    // Which run each chain became, and which tag gave it (a run of the plan's own system, untagged: none).
     let mut run_of: Vec<Option<usize>> = vec![None; all_chains.len()];
-    let mut tag_of_run: Vec<usize> = Vec::new();
-    for (ci, (pts, handles)) in all_chains.iter().enumerate() {
+    let mut tag_of_run: Vec<Option<usize>> = Vec::new();
+    for (ci, ((pts, handles), width)) in all_chains.iter().zip(&widths).enumerate() {
         if pts.len() < 2 {
             continue;
         }
@@ -833,26 +1225,39 @@ fn read_pipes_from_tags(
             continue;
         }
 
-        // Find the nearest pipe tag to this chain.
-        let mut best_tag: Option<(usize, &PipeTag)> = None;
-        let mut best_dist = f64::INFINITY;
-        for (ti, tag) in pipe_tags.iter().enumerate() {
-            let d = segs.iter().map(|(a, b)| seg_dist(tag.at, *a, *b)).fold(f64::INFINITY, f64::min);
-            if d < reach && d < best_dist {
-                best_dist = d;
-                best_tag = Some((ti, tag));
-            }
-        }
-        let Some((tag_index, tag)) = best_tag else { continue };
-
-        let sys_code = tag.system;
+        // The nearest pipe tag to this chain (one lettered on another line only when the chain
+        // takes none from the run it comes off).
+        let (own, any) = own_tags.get(ci).copied().unwrap_or((None, None));
+        let spread_tag = spread.get(ci).copied().flatten();
+        let tag_index = own.or(any.filter(|_| spread_tag.is_none()));
+        let best_tag = tag_index.and_then(|k| pipe_tags.get(k));
+        // Untagged: the tag of the run it comes off, else the plan's own system (a sanitary
+        // plan's piping), else not a pipe.
+        let pair = paired.get(ci).copied().flatten();
+        // A tube from a manifold, tagged by the manifold's tag, is not the manifold's size.
+        let own_tag = best_tag.filter(|t| t.also.is_some() || !pair.is_some_and(|(_, from)| from));
+        let best_tag = best_tag.or_else(|| spread_tag.and_then(|k| pipe_tags.get(k)));
+        // (Only a plan that draws its pipes to scale says which of its untagged lines are pipes.)
+        let Some(sys_code) = pair.map(|(s, _)| s).or(best_tag.map(|t| t.system)).or(untagged.filter(|_| twin)) else { continue };
+        // The tag it was read from, when the run is that tag's system.
+        let tag_index = tag_index.filter(|k| pipe_tags.get(*k).is_some_and(|t| t.system == sys_code));
         systems_seen.insert(sys_code, true);
 
         let (_, _, _, default_size, default_bottom) =
             PIPE_SYSTEMS.iter().find(|(_, code, ..)| *code == sys_code).copied().unwrap_or(("", sys_code, "", 2.0, 10.0));
 
-        let size_in = tag.size_in.unwrap_or(default_size);
-        let size_from_tag = tag.size_in.is_some();
+        // Its own tag's size (a branch is not the size of the main whose tag it took).
+        let tag_size = own_tag.and_then(|t| t.size_in);
+        // A pipe drawn to scale is its size: its outside diameter, as wide as it is drawn.
+        let drawn = width.and_then(|w| twinline::nominal_from_width(w / upf * 12.0));
+        let size_in = tag_size.or(drawn).unwrap_or(default_size);
+        let size_source = if tag_size.is_some() {
+            "tag"
+        } else if drawn.is_some() {
+            "drawn width"
+        } else {
+            "default"
+        };
         let section_ft = size_in / 12.0;
 
         // Check for height tags near this run.
@@ -895,12 +1300,13 @@ fn read_pipes_from_tags(
             objects: handles.iter().map(|h| h.hex()).collect(),
             id: String::new(),
             encased: false,
-            size_source: if size_from_tag { "tag" } else { "default" }.to_string(),
+            size_source: size_source.to_string(),
             height_source: if has_height_tag { "tag" } else { "default" }.to_string(),
             reviewed: false,
             edited_by: String::new(),
             top_ft: None,
             source_sheet: String::new(),
+            slope_in_per_ft: 0.0,
         });
         if let Some(slot) = run_of.get_mut(ci) {
             *slot = Some(runs.len() - 1);
@@ -927,7 +1333,8 @@ fn read_pipes_from_tags(
     let fr = super::pipefollow::rules();
     let bridge = (fr.gap_ft + fr.join_in / 12.0) * upf;
     for (ci, ri, from) in followed {
-        let (Some((pts, handles)), Some(seed), Some(tag)) = (all_chains.get(ci), runs.get(ri), tag_of_run.get(ri).and_then(|t| pipe_tags.get(*t)))
+        let (Some((pts, handles)), Some(seed), Some(tag)) =
+            (all_chains.get(ci), runs.get(ri), tag_of_run.get(ri).copied().flatten().and_then(|t| pipe_tags.get(t)))
         else {
             continue;
         };
@@ -953,6 +1360,7 @@ fn read_pipes_from_tags(
             edited_by: String::new(),
             top_ft: None,
             source_sheet: String::new(),
+            slope_in_per_ft: seed.slope_in_per_ft,
         });
     }
 
@@ -2289,9 +2697,26 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         x.push(t(1000, format!("mepid:{}", id.chars().take(200).collect::<String>())));
         x
     };
+    // A pipe no plan draws (derived from another floor's, or inferred from a rule) apart from
+    // the drawn: its own layer, a `status` tag and its basis.
+    let filled = |r: &MepRun, sy: &MepSystem| {
+        let p = super::waterfill::provenance(r);
+        (sy.kind == MepKind::Pipe && p != super::waterfill::DRAWN).then_some(p)
+    };
+    let layer_of = |r: &MepRun, sy: &MepSystem, level: &str| match filled(r, sy) {
+        Some(p) => mep_layer_name(&format!("{}-{}", sy.name, p.to_ascii_uppercase()), level),
+        None => mep_layer_name(&sy.name, level),
+    };
+    let mark = |r: &MepRun, sy: &MepSystem, mut x: Vec<RawTag>| {
+        if let Some(p) = filled(r, sy) {
+            x.push(t(1000, format!("status:{p}")));
+            x.push(t(1000, format!("basis:{}", r.size_source.chars().take(240).collect::<String>())));
+        }
+        x
+    };
     for (i, s) in shown.iter().enumerate() {
         let (r, sy) = (s.run, s.sy);
-        let layer = mep_layer_name(&sy.name, &s.level);
+        let layer = layer_of(r, sy, &s.level);
         ensure_layer(d, &layer, sy.aci_color());
         let source = source_of(&r.objects);
         let base = run_base(r);
@@ -2307,7 +2732,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let mut seg_mesh = super::wallgen::empty_mesh();
             add_upright_cylinder(&mut seg_mesh, Vec2::new(pt[0], pt[1]), radius, z0, z1);
             if !seg_mesh.faces.is_empty() {
-                let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+                let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
                 if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh))
                     .is_ok()
                 {
@@ -2322,7 +2747,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             piece_mesh(&mut seg_mesh, p, upf);
         }
         if !seg_mesh.faces.is_empty() {
-            let x = tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment"));
+            let x = mark(r, sy, tags(&s.level, source, sy, "part:segment".into(), &[r.size_in], format!("{base}/segment")));
             if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(seg_mesh)).is_ok()
             {
                 total_runs += 1;
@@ -2339,7 +2764,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let ks = fitting_kind_str(p.kind);
             let n = nth.entry(ks).or_default();
             *n += 1;
-            let x = tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}"));
+            let x = mark(r, sy, tags(&s.level, source, sy, format!("part:fitting:{ks}"), &[p.size_a], format!("{base}/{ks}{n}")));
             if d.add(&Space::Model, Common { layer: layer.as_str().into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_fittings += 1;
             }
@@ -2355,7 +2780,7 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
         if m.faces.is_empty() {
             continue;
         }
-        let layer = mep_layer_name(&s.sy.name, &s.level);
+        let layer = layer_of(s.run, s.sy, &s.level);
         ensure_layer(d, &layer, s.sy.aci_color());
         let ks = fitting_kind_str(j.kind);
         // The main size, then the smallest other one (a tee's branch, a transition's other end).
@@ -2367,7 +2792,11 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             .min_by(|a, b| (a.size[0] * a.size[1].max(1.0)).total_cmp(&(b.size[0] * b.size[1].max(1.0))))
             .map(|e| e.size);
         let sizes: Vec<[f64; 2]> = std::iter::once(main).chain(other).collect();
-        let x = tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y));
+        let x = mark(
+            s.run,
+            s.sy,
+            tags(&s.level, source_of(&s.run.objects), s.sy, format!("part:fitting:{ks}"), &sizes, format!("{ks}@{:.2},{:.2}", j.at.x, j.at.y)),
+        );
         if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             total_fittings += 1;
             match j.kind {
@@ -2857,6 +3286,30 @@ mod outline_tests {
     use super::*;
 
     #[test]
+    fn a_plans_title_names_the_system_of_its_untagged_piping() {
+        assert_eq!(plan_system("PLUMBING LEVEL 2 - SANITARY"), Some("SAN"));
+        assert_eq!(plan_system("Waste and Vent Plan"), Some("SAN"));
+        assert_eq!(plan_system("STORM DRAINAGE PLAN"), Some("ST"));
+        assert_eq!(plan_system("SANITARY AND STORM PLAN"), None, "two systems");
+        assert_eq!(plan_system("ROOF STORM PLAN"), Some("ST"));
+        assert_eq!(plan_system("VENT PLAN"), Some("V"));
+        // Water (cold, hot, return) needs its tags; a title of nothing names nothing.
+        assert_eq!(plan_system("PLUMBING LEVEL 1 - WATER"), None);
+        assert_eq!(plan_system("FLOOR PLAN"), None);
+    }
+
+    #[test]
+    fn a_prints_grey_background_is_screened_and_its_black_and_colours_are_not() {
+        use cadaddy_doc::color::{Color, Rgb};
+        assert!(screened(&Color::True(Rgb(171, 171, 171))));
+        assert!(screened(&Color::Index(253)));
+        assert!(!screened(&Color::Index(7)));
+        assert!(!screened(&Color::True(Rgb(0, 0, 0))));
+        assert!(!screened(&Color::True(Rgb(0, 0, 255))));
+        assert!(!screened(&Color::ByLayer));
+    }
+
+    #[test]
     fn a_callout_box_is_an_outline_and_a_pipe_is_not() {
         let p = |v: &[(f64, f64)]| v.iter().map(|(x, y)| Vec2::new(*x, *y)).collect::<Vec<_>>();
         // Inches. A callout's box round two baths (15' x 9'), then its leader down to the bubble.
@@ -2877,6 +3330,181 @@ mod outline_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_label_lettered_on_a_pipe_names_that_pipe_not_the_one_beside_it() {
+        use cadaddy_doc::{HAlign, Text, VAlign};
+        let v = Vec2::new;
+        let text = |at: Vec2, value: &str, rotation: f64, halign: HAlign, valign: VAlign| {
+            let left = halign == HAlign::Left && valign == VAlign::Baseline;
+            Entity::new(
+                Handle(0x40),
+                EntityKind::Text(Text {
+                    insert: Vec3::new(at.x, at.y, 0.0),
+                    align_pt: if left { None } else { Some(Vec3::new(at.x, at.y, 0.0)) },
+                    height: 9.0,
+                    value: value.into(),
+                    rotation,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign,
+                    valign,
+                }),
+            )
+        };
+        // Two mains 12 units apart (y 0 and 12); a label set on the upper one, its baseline 4.5
+        // under it: nearer the lower main by its corner, on the upper by its lettering.
+        let lower: Vec<Vec2> = vec![v(0.0, 0.0), v(400.0, 0.0)];
+        let upper: Vec<Vec2> = vec![v(0.0, 12.0), v(400.0, 12.0)];
+        let paths: Vec<&[Vec2]> = vec![lower.as_slice(), upper.as_slice()];
+        let tag = text(v(100.0, 7.5), "2\" CW", 0.0, HAlign::Left, VAlign::Baseline);
+        let line = label_line(Some(&tag), v(100.0, 7.5), 9.0, 5);
+        assert!((line[0].y - 12.0).abs() < 1e-9 && (line[1].y - 12.0).abs() < 1e-9, "{line:?}");
+        assert!(line[1].x > line[0].x + 20.0, "{line:?}");
+        assert_eq!(label_host(line, 9.0, &paths), Some(1));
+        // Centred, turned to a vertical pipe: along x = 50, centred on its point.
+        let tag = text(v(50.0, 100.0), "2\" CW", std::f64::consts::FRAC_PI_2, HAlign::Center, VAlign::Middle);
+        let line = label_line(Some(&tag), v(50.0, 100.0), 9.0, 5);
+        assert!(line.iter().all(|p| (p.x - 50.0).abs() < 1e-9), "{line:?}");
+        assert!((line[0].y + line[1].y - 200.0).abs() < 1e-9, "{line:?}");
+        let riser: Vec<Vec2> = vec![v(50.0, 20.0), v(50.0, 300.0)];
+        assert_eq!(label_host(line, 9.0, &[riser.as_slice(), upper.as_slice()]), Some(0));
+        // Above the upper main (its middle 16.5 over it): on no line of its own.
+        let tag = text(v(100.0, 24.0), "2\" CW", 0.0, HAlign::Left, VAlign::Baseline);
+        let line = label_line(Some(&tag), v(100.0, 24.0), 9.0, 5);
+        assert_eq!(label_host(line, 9.0, &paths), None);
+        // Across a line (a riser through a horizontal label) is not along it; no entity: a point.
+        assert_eq!(label_host([v(40.0, 100.0), v(80.0, 100.0)], 9.0, &[riser.as_slice()]), None);
+        assert_eq!(label_line(None, v(3.0, 4.0), 9.0, 5), [v(3.0, 4.0), v(3.0, 4.0)]);
+        // A label of one point (a leader's arrow) is on the line it touches.
+        assert_eq!(label_host([v(200.0, 11.0), v(200.0, 11.0)], 9.0, &paths), Some(1));
+        assert_eq!(label_host([v(200.0, 6.0), v(200.0, 6.0)], 9.0, &paths), None);
+        // Hostile heights.
+        assert_eq!(label_host(line, f64::NAN, &paths), None);
+        assert_eq!(label_line(Some(&tag), v(100.0, 24.0), f64::INFINITY, 5), [v(100.0, 24.0), v(100.0, 24.0)]);
+    }
+
+    #[test]
+    fn two_mains_side_by_side_each_take_the_label_lettered_on_it() {
+        use cadaddy_doc::{HAlign, Line, Text, VAlign};
+        use cadaddy_walk3d::Level;
+        let mut n = 0x100u64;
+        let mut ents: Vec<Arc<Entity>> = Vec::new();
+        let mut line = |a: (f64, f64), b: (f64, f64), ents: &mut Vec<Arc<Entity>>| {
+            n += 1;
+            ents.push(Arc::new(Entity::new(Handle(n), EntityKind::Line(Line { a: Vec3::new(a.0, a.1, 0.0), b: Vec3::new(b.0, b.1, 0.0) }))));
+        };
+        // Inches. Two 2" pipes drawn as their edges, their middles 12 apart (y 0 and 12), each
+        // broken where its labels are set; the upper one's branch drops across the lower into a
+        // room below, the lower drawn broken under it (the branch's end nearer than its own next
+        // length).
+        let w = 2.375;
+        for (y, gaps) in [(0.0, vec![(300.0, 330.0), (792.0, 806.0), (900.0, 930.0)]), (12.0, vec![(600.0, 630.0), (1300.0, 1330.0)])] {
+            let mut x = 0.0;
+            for (g0, g1) in gaps.iter().copied().chain([(1600.0, 1600.0)]) {
+                for e in [y - w / 2.0, y + w / 2.0] {
+                    line((x, e), (g0, e), &mut ents);
+                }
+                // Each length's ends closed across.
+                for c in [x, g0] {
+                    line((c, y - w / 2.0), (c, y + w / 2.0), &mut ents);
+                }
+                x = g1;
+            }
+        }
+        for e in [800.0 - w / 2.0, 800.0 + w / 2.0] {
+            line((e, 12.0 - w / 2.0), (e, -240.0), &mut ents);
+        }
+        line((800.0 - w / 2.0, -240.0), (800.0 + w / 2.0, -240.0), &mut ents);
+        n += 1;
+        let text = |h: u64, at: (f64, f64), value: &str, height: f64| {
+            Arc::new(Entity::new(
+                Handle(h),
+                EntityKind::Text(Text {
+                    insert: Vec3::new(at.0, at.1, 0.0),
+                    align_pt: None,
+                    height,
+                    value: value.into(),
+                    rotation: 0.0,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    style: "Standard".into(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Baseline,
+                }),
+            ))
+        };
+        // Each label in a break of its own pipe, its baseline 4" under the pipe's middle: by its
+        // corner the upper pipe's labels are as near the lower pipe as the upper.
+        for (k, (at, v)) in
+            [((301.0, -4.0), "2\" HW"), ((901.0, -4.0), "2\" HW"), ((601.0, 8.0), "2\" CW"), ((1301.0, 8.0), "2\" CW")].into_iter().enumerate()
+        {
+            ents.push(text(n + k as u64, at, v, 8.0));
+        }
+        // A copy of a label the import made huge, over both pipes: no line's own label.
+        ents.push(text(n + 10, (1000.0, -40.0), "2\" HW", 80.0));
+        let refs: Vec<&Arc<Entity>> = ents.iter().collect();
+        let notes = texts(&refs);
+        let sp = BuildingSpec {
+            units_per_foot: 12.0,
+            levels: vec![Level {
+                name: "L1".into(),
+                elevation_ft: 0.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                region: None,
+                base: None,
+                attr: None,
+                sheet: None,
+            }],
+            ..BuildingSpec::default()
+        };
+        let (_, runs) = read_pipes_from_tags(&refs, &notes, &sp, 12.0, None, None);
+        // Every length of each main, and the branch, is its own pipe's system.
+        let along = |y: f64| -> Vec<&str> {
+            runs.iter()
+                .filter(|r| r.points.windows(2).any(|w| (w[0][1] - y).abs() < 1.0 && (w[1][1] - y).abs() < 1.0 && (w[0][0] - w[1][0]).abs() > 24.0))
+                .map(|r| r.system.as_str())
+                .collect()
+        };
+        let (lower, upper) = (along(0.0), along(12.0));
+        assert!(!lower.is_empty() && lower.iter().all(|s| *s == "HW"), "lower {lower:?} in {runs:?}");
+        assert!(!upper.is_empty() && upper.iter().all(|s| *s == "CW"), "upper {upper:?} in {runs:?}");
+        let branch: Vec<&str> = runs.iter().filter(|r| r.points.iter().any(|p| p[1] < -100.0)).map(|r| r.system.as_str()).collect();
+        assert_eq!(branch, ["CW"], "{runs:?}");
+    }
+
+    #[test]
+    fn segments_apart_crossing_and_end_to_end() {
+        let v = Vec2::new;
+        assert_eq!(seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(5.0, -5.0), v(5.0, 5.0)), 0.0);
+        assert!((seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(0.0, 3.0), v(10.0, 3.0)) - 3.0).abs() < 1e-12);
+        assert!((seg_seg_dist(v(0.0, 0.0), v(10.0, 0.0), v(13.0, 4.0), v(20.0, 4.0)) - 5.0).abs() < 1e-12);
+        // A label is measured along its lettering from a line beside it, from its middle from a
+        // line across it (off its end).
+        let label = [v(0.0, 0.0), v(30.0, 0.0)];
+        assert!((label_dist(label, v(-10.0, 4.0), v(50.0, 4.0)) - 4.0).abs() < 1e-12);
+        assert!((label_dist(label, v(40.0, -20.0), v(40.0, 20.0)) - 25.0).abs() < 1e-12);
+        assert!((label_dist([v(3.0, 0.0), v(3.0, 0.0)], v(0.0, 4.0), v(9.0, 4.0)) - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn a_pipe_tag_can_name_two_systems_or_write_its_size_against_its_system() {
+        assert_eq!(parse_pipe_tag("1/2\" HW & CW TO"), Some((Some(0.5), "HW", Some("CW"))));
+        assert_eq!(parse_pipe_tag("3/4\" CW AND HW"), Some((Some(0.75), "CW", Some("HW"))));
+        assert_eq!(parse_pipe_tag("1\" HW/CW"), Some((Some(1.0), "HW", Some("CW"))));
+        assert_eq!(parse_pipe_tag("1/2\"CW TO WATER"), Some((Some(0.5), "CW", None)));
+        assert_eq!(parse_pipe_tag("1 1/2\" HW"), Some((Some(1.5), "HW", None)));
+        assert_eq!(parse_pipe_tag("HW & CW UP"), Some((None, "HW", Some("CW"))));
+        // One system named twice is one; a size and no system is no tag.
+        assert_eq!(parse_pipe_tag("2\" CW & CW"), Some((Some(2.0), "CW", None)));
+        assert_eq!(parse_pipe_tag("12\" O.C."), None);
+        assert_eq!(parse_pipe_tag("1/2\"X TO"), None);
+        // A single letter alone is still no tag.
+        assert_eq!(parse_pipe_tag("V"), None);
+        assert_eq!(parse_pipe_tag("W/D"), None);
+    }
 
     #[test]
     fn runs_with_no_height_of_their_own_sit_in_their_levels_plenum() {
@@ -2982,10 +3610,10 @@ mod tests {
     #[test]
     fn a_one_letter_sanitary_code_reads_after_a_size_only() {
         // A legend's soil/sanitary letter, the way a sanitary plan tags its lines.
-        assert_eq!(parse_pipe_tag("6\" S"), Some((Some(6.0), "SAN")));
-        assert_eq!(parse_pipe_tag("3\" S."), Some((Some(3.0), "SAN")));
-        assert_eq!(parse_pipe_tag("1 1/2\" S"), Some((Some(1.5), "SAN")));
-        assert_eq!(parse_pipe_tag("4\" SAN"), Some((Some(4.0), "SAN")));
+        assert_eq!(parse_pipe_tag("6\" S"), Some((Some(6.0), "SAN", None)));
+        assert_eq!(parse_pipe_tag("3\" S."), Some((Some(3.0), "SAN", None)));
+        assert_eq!(parse_pipe_tag("1 1/2\" S"), Some((Some(1.5), "SAN", None)));
+        assert_eq!(parse_pipe_tag("4\" SAN"), Some((Some(4.0), "SAN", None)));
         // Alone, a letter S is a grid line, a section mark or a compass point: not a pipe.
         assert_eq!(parse_pipe_tag("S"), None);
         assert_eq!(parse_pipe_tag("SECTION S"), None);

@@ -31,6 +31,12 @@ People trust CADaddy with their drawings; a crash loses their work. **This outra
 - **Rust only** (no handwritten JS/TS). **Never break wasm** (`cargo xtask wasm`).
 - **Quality gates** before every commit: `cargo xtask ci` (fmt, clippy -D warnings, tests, assets, layers, wasm). Commit after every feature arc that builds, and push to `main`.
 
+## Where a test goes
+- Integration tests of `cadaddy-engine`, `cadaddy-io` and `cadaddy-ui-egui` are **modules of a few test programs** under `crates/<crate>/tests/suite/<program>/` (engine: `draw`, `annotate`, `model3d`, `script`, `jobs`, `validate`, `estimate`, and `files*` for the ones that install the file hooks; io: `dxf`, `dwg`, `output`; ui-egui: `e2e`, `panels`). Add `my_test.rs` beside the others and `mod my_test;` to that program's `main.rs`; don't add a new top-level `tests/*.rs` file: each one is another link of the whole crate.
+- Run one file's tests with `cargo test -p cadaddy-engine my_test::` (or `--test suite_draw my_test::`).
+- Shared set-up for engine tests: `crate::helper` (`tests/suite/helper.rs`: `session()`, `hooks()`, `serial()`, `run()`, `scratch()`). Don't paste another copy.
+- A test that changes process-wide state (IoHooks other than its program's, `set_write_as`/`set_cdy_hooks`/readers, environment variables, the current folder, panic or crash hooks, the job cancel or progress sink, a global allocator), or that asserts wall-clock times, stays a top-level `tests/<name>.rs` file: a program of its own.
+
 ## Running and looking at the app
 - `cargo run --release -p cadaddy -- --sample --control PORT` (sample drawing + control channel). Pick a free port; other crafting apps use control ports too.
 - Drive it with JSON lines on `127.0.0.1:PORT`. First send the token the app writes each start to `control/PORT.token` in its settings folder (`CADADDY_CONFIG_DIR` when set): `{"id":0,"method":"auth","params":{"token":"…"}}` (docs/control-protocol.md, "The token"). Then:
