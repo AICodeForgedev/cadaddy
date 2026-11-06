@@ -17716,8 +17716,8 @@ fn plumbing_fixtures(
         for t in lettered {
             let value = t.value.trim();
             // The sheet's own number lettered on it (its title block's, a reference to it) is no
-            // fixture; a tag symbol's of that mark is one (sheet P-2's lavatories tagged P-2: its
-            // floors' own lavatories, never left to another floor's).
+            // fixture; a tag symbol's of that mark is one (a sheet whose number is also a fixture
+            // mark tags its floors' own fixtures with it: never left to another floor's).
             if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite())
                 || (!symbol && sheet_key(sheet) == value)
                 || callout(value, t, sheet)
@@ -24435,15 +24435,15 @@ mod tests {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         let lo = s.doc().unwrap().handseed;
-        // Sheet P-2: two lavatories' tag symbols (P-2), a water closet's (P-1), and the sheet's
+        // Sheet P-12: two lavatories' tag symbols (P-12), a water closet's (WC-1), and the sheet's
         // number lettered loose (a reference to it, as tall as a tag).
-        add_bubble(&mut s, "P-2", (100.0, 100.0), None);
-        add_bubble(&mut s, "P-2", (300.0, 100.0), None);
-        add_bubble(&mut s, "P-1", (500.0, 100.0), None);
-        s.execute("text", &json!({"at": [700.0, 100.0], "text": "P-2", "height": 2.0})).unwrap();
+        add_bubble(&mut s, "P-12", (100.0, 100.0), None);
+        add_bubble(&mut s, "P-12", (300.0, 100.0), None);
+        add_bubble(&mut s, "WC-1", (500.0, 100.0), None);
+        s.execute("text", &json!({"at": [700.0, 100.0], "text": "P-12", "height": 2.0})).unwrap();
         let hi = s.doc().unwrap().handseed;
         job.sheet_regions = vec![SheetRegion {
-            number: "P-2".into(),
+            number: "P-12".into(),
             level: "1".into(),
             discipline: "P".into(),
             kind: "plan".into(),
@@ -24454,14 +24454,14 @@ mod tests {
             levels: Vec::new(),
             view: None,
         }];
-        job.sheet_spans = vec![SheetSpan { sheet: "P-2/1".into(), lo, hi }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-12/1".into(), lo, hi }];
         let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
         let schedule =
-            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-2")], extent: [0.0; 4], ..Default::default() };
+            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("WC-1"), row("P-12")], extent: [0.0; 4], ..Default::default() };
         let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
         let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
         tags.sort_by(|a, b| a.1.total_cmp(&b.1));
-        assert_eq!(tags, [("P-2", 100.0), ("P-2", 300.0), ("P-1", 500.0)], "{found:?}");
+        assert_eq!(tags, [("P-12", 100.0), ("P-12", 300.0), ("WC-1", 500.0)], "{found:?}");
     }
 
     #[test]
@@ -25268,11 +25268,11 @@ mod tests {
             for (k, x) in [10_000.0, 10_200.0].into_iter().enumerate() {
                 let x = x + along;
                 room_lines(&mut s, x, 0.0);
-                rooms.push(json!({"name": "TWIN SUITE", "number": format!("{level}0{}", k + 1), "level": level,
+                rooms.push(json!({"name": "TWIN SUITE", "number": format!("{level}7{}", k + 1), "level": level,
                     "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]}));
             }
         }
-        rooms.push(json!({"name": "TWIN SUITE", "number": "501", "level": "5", "outline": [[40_000, 0], [40_288, 0], [40_288, 144], [40_000, 144]]}));
+        rooms.push(json!({"name": "TWIN SUITE", "number": "571", "level": "5", "outline": [[40_000, 0], [40_288, 0], [40_288, 144], [40_000, 144]]}));
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({ "rooms": rooms }));
         }
@@ -25292,44 +25292,45 @@ mod tests {
             ..Default::default()
         };
         let placed = vec![
-            // Floor 3's plan letters a water closet, a lavatory and a sink in room 301.
-            fixture("P-1", "Level 3", [10_020.0, 40.0], "P-2/3"),
-            fixture("P-2", "Level 3", [10_100.0, 40.0], "P-2/3"),
-            fixture("P-11", "Level 3", [10_100.0, 200.0], "P-2/3"),
-            // Floor 4's own plan letters room 401 otherwise: a water closet and a sink of its own type.
-            fixture("P-1", "Level 4", [30_020.0, 40.0], "P-3/4"),
-            fixture("P-5", "Level 4", [30_100.0, 200.0], "P-3/4"),
+            // Floor 3's plan letters a water closet, a lavatory and a sink in room 371.
+            fixture("WC-1", "Level 3", [10_020.0, 40.0], "P-201/3"),
+            fixture("LAV-1", "Level 3", [10_100.0, 40.0], "P-201/3"),
+            fixture("SK-2", "Level 3", [10_100.0, 200.0], "P-201/3"),
+            // Floor 4's own plan letters room 471 otherwise: a water closet and a sink of its own type.
+            fixture("WC-1", "Level 4", [30_020.0, 40.0], "P-371/4"),
+            fixture("SK-1", "Level 4", [30_100.0, 200.0], "P-371/4"),
         ];
         let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed);
         let mut got: Vec<(String, String, bool)> = copies.iter().map(|c| (c.room.clone(), c.tag.clone(), !c.derived.is_empty())).collect();
         got.sort();
-        let want: Vec<(String, String, bool)> = [
+        let mut want: Vec<(String, String, bool)> = [
             // Floor 3's other room: floor 3's set.
-            ("302", "P-1", false),
-            ("302", "P-11", false),
-            ("302", "P-2", false),
+            ("372", "WC-1", false),
+            ("372", "SK-2", false),
+            ("372", "LAV-1", false),
             // Floor 4's other room: floor 4's set, never floor 3's lavatory or sink.
-            ("402", "P-1", false),
-            ("402", "P-5", false),
+            ("472", "WC-1", false),
+            ("472", "SK-1", false),
             // Floor 6 (no plan of its own): the rooms of floor 4 they stand on, marked derived.
-            ("601", "P-1", true),
-            ("601", "P-5", true),
-            ("602", "P-1", true),
-            ("602", "P-5", true),
+            ("671", "WC-1", true),
+            ("671", "SK-1", true),
+            ("672", "WC-1", true),
+            ("672", "SK-1", true),
         ]
         .iter()
         .map(|(r, t, d)| (r.to_string(), t.to_string(), *d))
         .collect();
+        want.sort();
         assert_eq!(got, want, "{report:?}");
-        // Room 401 has floor 4's plan's fixtures only: no tag of floor 3's goes in with them.
-        assert!(!copies.iter().any(|c| c.room == "401"), "{report:?}");
+        // Room 471 has floor 4's plan's fixtures only: no tag of floor 3's goes in with them.
+        assert!(!copies.iter().any(|c| c.room == "471"), "{report:?}");
         // The turned room on floor 5 stacks with none: nothing goes in it.
-        assert!(!copies.iter().any(|c| c.room == "501"), "{report:?}");
+        assert!(!copies.iter().any(|c| c.room == "571"), "{report:?}");
         // A derived copy is where the room it stands on has it, on its own floor, saying so.
-        let w = copies.iter().find(|c| c.room == "601" && c.tag == "P-5").unwrap();
+        let w = copies.iter().find(|c| c.room == "671" && c.tag == "SK-1").unwrap();
         assert!((w.at[0] - 50_100.0).abs() < 1e-6 && (w.at[1] - 200.0).abs() < 1e-6, "{:?}", w.at);
-        assert_eq!((w.level.as_str(), w.sheet.as_str()), ("6", "P-3/4"));
-        assert!(w.derived.starts_with("derived from 4: room 401") && w.derived.contains("trade practice"), "{}", w.derived);
+        assert_eq!((w.level.as_str(), w.sheet.as_str()), ("6", "P-371/4"));
+        assert!(w.derived.starts_with("derived from 4: room 471") && w.derived.contains("trade practice"), "{}", w.derived);
     }
 
     #[test]
@@ -25353,7 +25354,7 @@ mod tests {
             slope_in_per_ft: 0.0,
         };
         let runs = vec![
-            // Floor 3 draws room 301's waste and vent; floor 4 only room 401's vent.
+            // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
             run("SAN", "Level 3", vec![[10_020.0, 20.0], [10_020.0, 260.0]]),
             run("V", "Level 3", vec![[10_030.0, 100.0], [10_060.0, 100.0]]),
             run("V", "Level 4", vec![[30_120.0, 30.0], [30_120.0, 200.0]]),
@@ -25364,10 +25365,10 @@ mod tests {
             copies.iter().map(|r| (r.level.clone(), room_of(r), r.system.clone(), super::super::waterfill::provenance(r).to_string())).collect();
         got.sort();
         let mut want: Vec<(String, i64, String, String)> = [
-            // Room 302: floor 3's set.
+            // Room 372: floor 3's set.
             ("Level 3", 1, "SAN", "drawn"),
             ("Level 3", 1, "V", "drawn"),
-            // Floor 4: its own vent in 402; its waste from the room under each, derived; never floor 3's vent.
+            // Floor 4: its own vent in 472; its waste from the room under each, derived; never floor 3's vent.
             ("Level 4", 100, "SAN", "derived"),
             ("Level 4", 101, "SAN", "derived"),
             ("Level 4", 101, "V", "drawn"),
@@ -25383,7 +25384,7 @@ mod tests {
         want.sort();
         assert_eq!(got, want, "{report:?}");
         let san = copies.iter().find(|r| r.system == "SAN" && room_of(r) == 100).unwrap();
-        assert!(san.size_source.starts_with("derived from 3: room 301"), "{}", san.size_source);
+        assert!(san.size_source.starts_with("derived from 3: room 371"), "{}", san.size_source);
         for (p, q) in san.points.iter().zip([[30_020.0, 20.0], [30_020.0, 260.0]]) {
             assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{:?}", san.points);
         }
