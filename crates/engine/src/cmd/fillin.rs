@@ -113,6 +113,7 @@ pub(crate) fn fixture_lines(
                 what: format!("fixture {}", f.what),
                 size_in: rule.size_for(&f.words),
                 segs: Vec::new(),
+                size_basis: rule.id.clone(),
             })
             .collect();
         if needs.is_empty() {
@@ -121,7 +122,7 @@ pub(crate) fn fixture_lines(
         let n = needs.len();
         let mains: Vec<&MepRun> = floor_runs.iter().copied().filter(|r| r.system == *sys).take(MAX_ITEMS).collect();
         let ru = fill_rules(rule, sys);
-        let inf = super::waterfill::infer(level, &mains, needs, upf, &ru);
+        let inf = super::waterfill::infer(level, &mains, floor_runs, needs, upf, &ru);
         out.insert(sys.clone(), Filled { needs: n, served: inf.served, runs: inf.runs, unserved: inf.unserved, plenum: Vec::new() });
     }
     out
@@ -166,13 +167,14 @@ pub(crate) fn terminal_ducts(sp: &BuildingSpec, rule: &PracticeRule, same_floor:
             what: format!("{} at {:.0},{:.0} ft", t.terminal_kind.replace('_', " "), t.at[0] / upf, t.at[1] / upf),
             size_in: size,
             segs: Vec::new(),
+            size_basis: String::new(),
         });
     }
     for ((level, sys), needs) in groups {
         let n = needs.len();
         let mains: Vec<&MepRun> = sp.mep.runs.iter().filter(|r| r.system == sys && same_floor(&r.level, &level)).take(MAX_ITEMS).collect();
         let ru = fill_rules(rule, &sys);
-        let inf = super::waterfill::infer(&level, &mains, needs, upf, &ru);
+        let inf = super::waterfill::infer(&level, &mains, &mains, needs, upf, &ru);
         // A return grille no return duct reaches returns through the plenum (the usual; a ducted
         // return is the alternative).
         let (plenum, unserved): (Vec<String>, Vec<String>) = inf.unserved.into_iter().partition(|u| returns_air(sp, u, &sys));
@@ -367,8 +369,7 @@ mod tests {
 
     #[test]
     fn an_air_terminal_no_duct_reaches_gets_a_branch_duct_at_its_neck_size() {
-        let mut sp = BuildingSpec::default();
-        sp.units_per_foot = 12.0;
+        let mut sp = BuildingSpec { units_per_foot: 12.0, ..Default::default() };
         sp.mep.systems = vec![
             serde_json::from_value(json!({"name": "SA", "layer": "M-SUPPLY", "kind": "duct", "size_in": [12, 10], "bottom_ft": 9.0}))
                 .unwrap_or_else(|e| panic!("{e}")),

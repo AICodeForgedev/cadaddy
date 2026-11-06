@@ -597,7 +597,9 @@ fn a_raceway_the_ceiling_space_cant_offset_runs_around_the_obstacle_in_plan() {
     assert_eq!(path.len(), 4);
     assert!((extra - 1.0).abs() < 1e-9, "6\" out and back: {extra}");
     // A box past the segment's end, or a diagonal piece: no detour.
-    let mut d: MepRun = serde_json::from_value(json!({"system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [100.0, 100.0]], "size_in": [0.75, 0.0], "bottoms_ft": [9.5]}))
-        .unwrap_or_else(|e| panic!("{e}"));
+    let mut d: MepRun = serde_json::from_value(
+        json!({"system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [100.0, 100.0]], "size_in": [0.75, 0.0], "bottoms_ft": [9.5]}),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
     assert!(detour_run(&mut d, Vec2::new(50.0, 50.0), 9.5, [40.0, 40.0, 60.0, 60.0], UPF).is_none());
 }
