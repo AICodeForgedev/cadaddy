@@ -4922,6 +4922,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     ));
                     sp.mep.runs.extend(room_pipes);
                 }
+                // A derived main where a room's own drawn pipe now runs along it is that pipe.
+                let cut = super::waterfill::clip_derived(&mut sp.mep.runs, upf_runs, &fill);
+                if cut > 0.0 {
+                    progress_line(&format!("  derived water along drawn pipe of its system, taken out: {cut:.0} ft"));
+                }
                 // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
                 // one is a clash.
                 let through = runs_through_hoistways(&sp.mep.runs, &circulation, upf_runs);

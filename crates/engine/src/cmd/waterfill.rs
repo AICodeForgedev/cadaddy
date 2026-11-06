@@ -485,6 +485,43 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
     Some(out)
 }
 
+/// Each [`DERIVED`] run of `runs` less its stretches along a drawn pipe of its system on its
+/// level (laid there after it was derived: a room's own pipes): the drawn pipe is that pipe. The
+/// derived feet taken out.
+pub(crate) fn clip_derived(runs: &mut Vec<MepRun>, upf: f64, ru: &FillRules) -> f64 {
+    if !(upf.is_finite() && upf > 0.0) || !runs.iter().any(|r| provenance(r) == DERIVED) {
+        return 0.0;
+    }
+    let mut drawn: BTreeMap<(&str, &str), Vec<[[f64; 2]; 2]>> = BTreeMap::new();
+    for r in runs.iter().filter(|r| provenance(r) == DRAWN && r.top_ft.is_none()).take(MAX_ITEMS) {
+        drawn.entry((r.level.as_str(), r.system.as_str())).or_default().extend(r.points.windows(2).map(|w| [w[0], w[1]]));
+    }
+    let len = |p: &[[f64; 2]]| p.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>();
+    let min = ru.min_piece_ft.max(0.0) * upf;
+    let mut out: Vec<MepRun> = Vec::with_capacity(runs.len());
+    let mut cut = 0.0;
+    for r in runs.iter() {
+        let segs = drawn.get(&(r.level.as_str(), r.system.as_str()));
+        match segs {
+            Some(segs) if provenance(r) == DERIVED && r.top_ft.is_none() => {
+                let before = len(&r.points);
+                let mut after = 0.0;
+                for (pts, bottoms) in clip_off(&r.points, &r.bottoms_ft, segs, ru, upf, min.max(1e-9)) {
+                    let mut c = r.clone();
+                    after += len(&pts);
+                    c.points = pts;
+                    c.bottoms_ft = bottoms;
+                    out.push(c);
+                }
+                cut += (before - after).max(0.0) / upf;
+            }
+            _ => out.push(r.clone()),
+        }
+    }
+    *runs = out;
+    cut
+}
+
 /// A water line some fixture or room needs on a floor with no water plan ([`infer`]).
 #[derive(Clone, Debug)]
 pub(crate) struct Need {
@@ -520,9 +557,11 @@ pub(crate) fn is_main(r: &MepRun) -> bool {
 /// system within `reach_ft` (as a fixture is connected; a vent, nor a stack of the rules'
 /// `vent_stacks`: the stack vent), and on a floor with no water plan (`branches`) each group of
 /// joined water branches (a room's, from the enlarged details) that touches no main or riser.
+/// A pipe at the edge of the reach (within the rules' joint of it) is not counted on: the fixture
+/// is connected from its built body, whose centre may lie that much off its symbol's point.
 pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: f64, ru: &FillRules, branches: bool) -> Vec<Need> {
     let mut out = Vec::new();
-    let reach = reach_ft.max(0.0) * upf;
+    let reach = (reach_ft.max(0.0) - ru.joint_ft.max(0.0)).max(0.0) * upf;
     let joint = ru.joint_ft.max(0.0) * upf;
     let near_pipe = |sys: &str, p: [f64; 2], d: f64, main_only: bool| {
         runs.iter().filter(|r| r.system == sys && (!main_only || is_main(r))).any(|r| match r.points.as_slice() {
@@ -1036,6 +1075,36 @@ mod tests {
         assert_eq!(parts.len(), 2, "{parts:?}");
         assert!((parts[0].0[0][0] - 30.0).abs() < 3.1 && parts[0].0.len() == 3 && parts[0].1 == vec![8.0, 9.0], "{parts:?}");
         assert!((parts[1].0[0][1] - 120.0).abs() < 3.1 && parts[1].1 == vec![9.0], "{parts:?}");
+    }
+
+    #[test]
+    fn a_derived_main_is_cut_where_a_drawn_pipe_of_its_system_runs_along_it_on_its_floor() {
+        let r = ru();
+        let mut d = run("CW", "Level 2", &[[0.0, 2.5], [40.0, 2.5]]);
+        d.height_source = DERIVED.into();
+        let drawn = run("CW", "Level 2", &[[10.0, 2.6], [20.0, 2.6]]);
+        let other_floor = run("CW", "Level 3", &[[0.0, 2.5], [40.0, 2.5]]);
+        let other_sys = run("HW", "Level 2", &[[0.0, 2.5], [40.0, 2.5]]);
+        let mut runs = vec![d, drawn, other_floor, other_sys];
+        let cut = clip_derived(&mut runs, 12.0, &r);
+        assert!((cut - 10.0).abs() < 0.6, "{cut}");
+        let derived: Vec<&MepRun> = runs.iter().filter(|x| provenance(x) == DERIVED).collect();
+        assert_eq!(derived.len(), 2, "{:?}", derived.iter().map(|x| &x.points).collect::<Vec<_>>());
+        assert!(derived.iter().all(|x| x.level == "Level 2" && x.system == "CW"));
+        assert_eq!(runs.len(), 5, "the drawn ones stay as they are");
+        // Nothing derived: nothing changes.
+        let mut plain = vec![run("CW", "Level 2", &[[0.0, 0.0], [5.0, 0.0]])];
+        assert_eq!(clip_derived(&mut plain, 12.0, &r), 0.0);
+        assert_eq!(plain.len(), 1);
+    }
+
+    #[test]
+    fn a_pipe_at_the_edge_of_reach_is_not_counted_on() {
+        let r = ru();
+        let main = run("HW", "Level 2", &[[0.0, 0.0], [40.0, 0.0]]);
+        let at = |y: f64| vec![Fixture { at: [20.0 * 12.0, y * 12.0], what: "P-95".into(), lines: vec!["HW".into()], words: String::new() }];
+        assert_eq!(needs(&[&main], &at(14.8), 15.0, 12.0, &r, false).len(), 1);
+        assert!(needs(&[&main], &at(13.5), 15.0, 12.0, &r, false).is_empty());
     }
 
     #[test]
