@@ -279,7 +279,7 @@ pub(crate) fn meaning(code: &str, sheet: &str, set: &[LegendEntry]) -> Option<Me
 }
 
 /// A tag's code and number (`FSD-2` → `FSD`, `2`; `FD` → `FD`, ``).
-fn split_tag(v: &str) -> Option<(String, String)> {
+pub(crate) fn split_tag(v: &str) -> Option<(String, String)> {
     let t = v.trim().to_ascii_uppercase();
     let letters: String = t.chars().take_while(|c| c.is_ascii_uppercase() || *c == '/').collect();
     let rest = t.get(letters.len()..)?.trim_start_matches(['-', ' ']);

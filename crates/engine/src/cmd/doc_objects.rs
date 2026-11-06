@@ -322,6 +322,75 @@ pub(crate) fn legend_rows(texts: &[TextItem], sheet: &str) -> Vec<LegendEntry> {
     out
 }
 
+/// The headings of a schedule's column of marks.
+const MARK_HEADINGS: &[&str] = &["MARK", "TAG", "UNIT TAG", "UNIT MARK", "EQUIPMENT TAG", "EQUIPMENT MARK"];
+
+/// The most marks read from the schedules of one sheet.
+const MAX_SCHEDULE_MARKS: usize = 4_000;
+
+/// A mark's key: its code and number (`SD-3`, `SD3` and `SD 3` are one).
+pub(crate) fn mark_key(v: &str) -> Option<String> {
+    super::dampers::split_tag(v).filter(|(_, n)| !n.is_empty()).map(|(c, n)| format!("{c}-{n}"))
+}
+
+/// The marks a sheet's schedules list, each with its schedule's title (`SD-1` under `MARK` in
+/// the `GRILLE, REGISTER, AND DIFFUSER SCHEDULE`): the coded marks (letters and a number) in a
+/// mark heading's column, one under the next, or in its row, one after the next (a schedule
+/// drawn turned); the title the nearest text naming a schedule above the heading (empty when
+/// none is there). Keyed by [`mark_key`].
+pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
+    const MAX_TEXTS: usize = 200_000;
+    let flat: Vec<&TextItem> = texts
+        .iter()
+        .take(MAX_TEXTS)
+        .filter(|t| t.rotation.abs() < 0.05 && t.height > 0.0 && t.at.is_finite() && !t.value.trim().is_empty())
+        .collect();
+    let mut out = BTreeMap::new();
+    let middle = |t: &TextItem| t.at.x + 0.3 * t.height * t.value.trim().chars().count() as f64;
+    for head in flat.iter().filter(|t| MARK_HEADINGS.iter().any(|m| t.value.trim().eq_ignore_ascii_case(m))) {
+        let h = head.height;
+        let title = flat
+            .iter()
+            .filter(|o| o.value.to_ascii_uppercase().contains("SCHEDULE") && o.at.y > head.at.y && o.at.y - head.at.y <= 15.0 * h && (o.at.x - head.at.x).abs() <= 40.0 * h)
+            .min_by(|a, b| (a.at.y - head.at.y).total_cmp(&(b.at.y - head.at.y)))
+            .map_or_else(String::new, |o| o.value.trim().to_string());
+        // Down its column, then along its row: the marks one after another, each within a few
+        // rows (or a column's width) of the last.
+        let mut column: Vec<&&TextItem> = flat
+            .iter()
+            .filter(|o| o.at.y < head.at.y - 0.3 * h && ((o.at.x - head.at.x).abs() < h || (middle(o) - middle(head)).abs() < 1.5 * h))
+            .collect();
+        column.sort_by(|a, b| b.at.y.total_cmp(&a.at.y));
+        let mut row: Vec<&&TextItem> = flat.iter().filter(|o| o.at.x > head.at.x + 0.3 * h && (o.at.y - head.at.y).abs() < 0.5 * h).collect();
+        row.sort_by(|a, b| a.at.x.total_cmp(&b.at.x));
+        // (texts in order, the most from one to the next, in heading heights)
+        let column_next = |a: &TextItem, b: &TextItem| a.at.y - b.at.y;
+        let row_next = |a: &TextItem, b: &TextItem| b.at.x - a.at.x;
+        for (line, next, most) in [(column, &column_next as &dyn Fn(&TextItem, &TextItem) -> f64, 4.0), (row, &row_next, 20.0)] {
+            let mut last: &TextItem = head;
+            for o in line {
+                if next(last, o) > most * h {
+                    break;
+                }
+                let Some(key) = mark_key(&o.value) else { break };
+                if out.len() < MAX_SCHEDULE_MARKS {
+                    out.entry(key).or_insert_with(|| title.clone());
+                }
+                last = o;
+            }
+        }
+    }
+    out
+}
+
+/// The schedule a plan's tag (`code`, `number`) is an item of when that is another class's
+/// than `class` (an `SD-3` the air device schedule lists, though the legend's `SD` is a duct
+/// detector): its title, `a schedule` when it has none. A tag without its number is no mark.
+pub(crate) fn of_another_schedule(code: &str, number: &str, class: &Class, scheduled: &BTreeMap<String, String>) -> Option<String> {
+    let title = mark_key(&format!("{code}-{number}")).and_then(|k| scheduled.get(&k))?;
+    class_of(title).is_none_or(|c| c.kind != class.kind).then(|| if title.is_empty() { "a schedule".to_string() } else { title.clone() })
+}
+
 /// How many objects a note gives (`(2) EV CHARGING STATIONS`, `TWO SITE CAMERAS`,
 /// `… STATIONS (QTY 2)`), 1 when it doesn't say; capped by the rules.
 pub(crate) fn note_count(text: &str, class: &Class) -> u32 {
@@ -656,6 +725,40 @@ mod tests {
         // On an electrical plan SD is the electrical legend's smoke detector: none of ours.
         assert_eq!(meaning("SD", "E-101", "E", &rows).map(|e| e.meaning.as_str()), Some("SMOKE DETECTOR"));
         assert!(meaning("SD", "E-101", "E", &rows).and_then(|e| class_of(&e.meaning)).is_none());
+    }
+
+    #[test]
+    fn a_tag_a_schedule_lists_is_that_schedules_item_not_the_legend_codes_class() {
+        // The abbreviations call SD a duct detector (its symbol, no number); the air device
+        // schedule lists SD-1 and SD-2 under MARK (a column), an equipment schedule drawn turned
+        // lists its units along the MARK row, and a detector schedule lists its own SD-7.
+        let sheet = vec![
+            t("AIR OUTLET AND INLET SCHEDULE", 0.0, 220.0),
+            t("MARK", 2.0, 212.0),
+            t("SD-1", 2.0, 207.0),
+            t("SD-2", 2.0, 202.0),
+            t("RG-1", 2.0, 197.0),
+            t("NOTES: SEE PLANS", 2.0, 150.0),
+            t("UNIT SCHEDULE", 100.0, 220.0),
+            t("MARK", 100.0, 212.0),
+            t("CU-1", 130.0, 212.0),
+            t("CU-2", 160.0, 212.0),
+            t("DUCT SMOKE DETECTOR SCHEDULE", 300.0, 220.0),
+            t("TAG", 300.0, 212.0),
+            t("SD-7", 300.0, 207.0),
+        ];
+        let marks = schedule_marks(&sheet);
+        let keys: Vec<&str> = marks.keys().map(String::as_str).collect();
+        assert_eq!(keys, ["CU-1", "CU-2", "RG-1", "SD-1", "SD-2", "SD-7"], "{marks:?}");
+        assert_eq!(marks.get("SD-2").map(String::as_str), Some("AIR OUTLET AND INLET SCHEDULE"));
+        assert_eq!(mark_key("SD 2").as_deref(), Some("SD-2"));
+        let detector = class_by_kind("duct_smoke_detector").expect("rules data");
+        // A plan's SD-2 is the air outlet schedule's diffuser: no detector. SD-7 is a detector
+        // (its own schedule's); SD-4 (no schedule lists it) and a bare SD are the legend's.
+        assert_eq!(of_another_schedule("SD", "2", detector, &marks).as_deref(), Some("AIR OUTLET AND INLET SCHEDULE"));
+        assert_eq!(of_another_schedule("SD", "7", detector, &marks), None);
+        assert_eq!(of_another_schedule("SD", "4", detector, &marks), None);
+        assert_eq!(of_another_schedule("SD", "", detector, &marks), None);
     }
 
     #[test]

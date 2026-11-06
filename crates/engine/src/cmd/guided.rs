@@ -2774,9 +2774,10 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         }
         // A luminaire the import made no symbol of: its type mark (one the lighting submittals
         // list) printed alone with a circuit label just under it (`H` over `G-1,a`), no device
-        // read beside it: a luminaire there on that circuit.
+        // read beside it: a luminaire there on that circuit. The mark as the schedule prints it:
+        // a lower-case letter is a switch leg (`d` of `G-11 d,e`), never a fixture type.
         if electrical(&sheet) && kind.is_empty() {
-            let luminaire = |v: &str| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.eq_ignore_ascii_case(v));
+            let luminaire = |v: &str| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.trim().eq_ignore_ascii_case(v) && !v.chars().any(|c| c.is_ascii_lowercase()));
             let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
             let mut lone: Vec<super::readers::ReadDevice> = Vec::new();
             for t in sheet_texts.iter().filter(|t| luminaire(t.value.trim()) && !legend.covers(t.at)) {
@@ -14246,6 +14247,16 @@ fn doc_objects_step(
         }
     }
     rows.truncate(40_000);
+    // The marks the set's schedules list (an air device schedule's `SD-1`, `SD-2`): a plan's tag
+    // of one is that schedule's item, not the object a legend gives its code (`SD`, a duct
+    // detector's symbol).
+    let mut scheduled: BTreeMap<String, String> = BTreeMap::new();
+    for texts in legend_pages.iter().map(|(_, _, t)| t).chain(sheets.iter().map(|sh| &sh.texts)) {
+        for (k, title) in dob::schedule_marks(texts) {
+            scheduled.entry(k).or_insert(title);
+        }
+    }
+    let mut of_other_schedules: BTreeMap<String, usize> = BTreeMap::new();
     let legend_used: Vec<Value> = rows
         .iter()
         .filter(|(_, e)| dob::class_of(&e.meaning).is_some())
@@ -14318,6 +14329,10 @@ fn doc_objects_step(
         for tag in super::dampers::tags(&sh.texts, &sh.segs, &sh.rounds, &mine, &known) {
             let Some(e) = dob::meaning(&tag.code, &sh.r.number, &sh.r.discipline, &rows) else { continue };
             let Some(class) = dob::class_of(&e.meaning).filter(|c| c.from_tags && dob::tagged_on(c, &sh.r.discipline)) else { continue };
+            if let Some(title) = dob::of_another_schedule(&tag.code, &tag.number, class, &scheduled) {
+                *of_other_schedules.entry(format!("{}-{} ({title})", tag.code, tag.number)).or_default() += 1;
+                continue;
+            }
             let keynote = ktags
                 .iter()
                 .filter(|(_, _, at)| (*at - tag.at).len() < r.tag_reach_ft.max(1.0) * tag.height)
@@ -15023,7 +15038,7 @@ fn doc_objects_step(
     result["doc_objects"] = json!({
         "built": total, "by_kind": by_kind, "connection_boxes": boxes, "marks_read": marks_read, "already_in_model": already,
         "proposed": proposed, "proposed_by_rule": rule_only.len(), "rooms_called": rooms_called, "unpowered": unpowered, "notes_over_all": rules_over_all, "keynotes_describing_a_tagged_object": tagged_by_keynote, "marks_on_unplaced_plans": unplaced.iter().map(|(k, (n, sh, _))| json!({"kind": k, "marks": n, "sheet": sh})).collect::<Vec<_>>(), "remote_test_stations_shown": remote_tests, "elements": listed,
-        "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered,
+        "sheets": read_by_sheet, "legend_rows": legend_used, "unregistered": unregistered, "tags_of_other_schedules": of_other_schedules,
         "notes_naming": named.iter().map(|(k, (n, via, sh, _, cite))| json!({"kind": k, "count": n, "via": via, "sheet": sh, "note": cite})).collect::<Vec<_>>(),
     });
     Ok(())
@@ -22438,6 +22453,38 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// A lone fixture mark is printed as the schedule prints its type: a lower-case leg letter
+    /// over a circuit (`d` over `G-11`) is a switch leg, not a luminaire of type D.
+    #[test]
+    fn a_lone_leg_letter_over_a_circuit_is_no_luminaire() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        job.luminaire_types = vec!["D".into()];
+        let texts: Vec<(&str, f64, f64, f64)> = vec![("D", 300.0, 506.0, 4.0), ("G-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("G-11", 700.0, 494.0, 4.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let luminaires: Vec<(String, String)> =
+            job.devices.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        assert_eq!(luminaires, [("D".to_string(), "G-2".to_string())], "{r:#}");
     }
 
     /// A registered enlarged view's devices move onto the overall plan where its callout points;

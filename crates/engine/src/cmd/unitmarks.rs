@@ -534,10 +534,12 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
                 (m.at.x - t.at.x).abs() <= STACK_DX_H * t.height && m.at.y - t.at.y > 0.3 * t.height && m.at.y - t.at.y <= STACK_DY_H * t.height
             })
             .find_map(|m| {
-                let v = m.value.trim().to_ascii_uppercase();
-                if marks.luminaires.contains(&v) {
+                // As the schedule prints it: a lower-case letter over a circuit is its switch leg
+                // (`d` of `G-11 d,e`), never a fixture type.
+                let v = m.value.trim();
+                if marks.luminaires.contains(v) {
                     Some((m, "luminaire"))
-                } else if marks.wall_luminaires.contains(&v) {
+                } else if marks.wall_luminaires.contains(v) {
                     Some((m, "wall luminaire"))
                 } else {
                     None
@@ -959,6 +961,19 @@ mod tests {
     }
     fn read(tag: &str, at: [f64; 2], circuit: &str, leg: &str) -> ReadDevice {
         ReadDevice { tag: tag.into(), at, circuit: circuit.into(), leg: leg.into(), sheet: "E-9".into(), level: "1".into(), ..ReadDevice::default() }
+    }
+
+    #[test]
+    fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
+        // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
+        // letter `d` printed over another circuit (`G-11` with its legs `d,e`) is that circuit's
+        // switch leg, though the letter is the same.
+        let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let luminaires: Vec<(String, String)> = got.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        assert_eq!(luminaires, [("D".to_string(), "Q-2".to_string())], "{got:?}");
     }
 
     #[test]

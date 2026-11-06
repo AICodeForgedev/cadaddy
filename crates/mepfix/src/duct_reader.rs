@@ -170,17 +170,20 @@ struct LineSeg {
     a: Vec2,
     b: Vec2,
     layer: String,
+    /// Drawn in a screened (grey) pen: the background a trade's plan is printed over.
+    screened: bool,
 }
 
 /// Extract all straight segments from the model space of a drawing.
 fn line_segments(d: &Drawing) -> Vec<LineSeg> {
     let mut out = Vec::new();
     for e in d.model.iter().take(MAX_SEGS * 2) {
+        let screened = crate::sheet_reader::screened(d, e);
         match &e.kind {
             EntityKind::Line(l) => {
                 let (a, b) = (l.a.xy(), l.b.xy());
                 if a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 {
-                    out.push(LineSeg { a, b, layer: e.common.layer.to_string() });
+                    out.push(LineSeg { a, b, layer: e.common.layer.to_string(), screened });
                 }
             }
             EntityKind::LwPolyline(p) => {
@@ -192,7 +195,7 @@ fn line_segments(d: &Drawing) -> Vec<LineSeg> {
                         continue;
                     };
                     if a.is_finite() && b.is_finite() && a.dist(*b) > 1e-9 {
-                        out.push(LineSeg { a: *a, b: *b, layer: e.common.layer.to_string() });
+                        out.push(LineSeg { a: *a, b: *b, layer: e.common.layer.to_string(), screened });
                     }
                 }
             }
@@ -226,8 +229,17 @@ fn arcs(d: &Drawing) -> Vec<(Vec2, f64, f64, f64, String)> {
 /// read without hidden text to confirm them are left out: two ticks beside a stroke read as
 /// `8"`, and a size or height tag is what makes a pair of lines a duct.
 fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
+    pen_texts(d, false)
+}
+
+/// [`text_entities`], without the words of a screened background when `bg` (a print's room
+/// names and furniture labels under a trade's plan: [`screened_background`]).
+fn pen_texts(d: &Drawing, bg: bool) -> Vec<(String, Vec2, String, f64)> {
     let mut out = Vec::new();
     for e in d.model.iter() {
+        if bg && crate::sheet_reader::screened(d, e) {
+            continue;
+        }
         if let EntityKind::Text(t) = &e.kind {
             if t.style.eq_ignore_ascii_case(cadaddy_io::pdf_read::OCR_TEXT_STYLE) {
                 continue;
@@ -239,6 +251,28 @@ fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
         }
     }
     out
+}
+
+/// The most pieces [`screened_background`] looks at.
+const MAX_BACKGROUND_LOOK: usize = 200_000;
+
+/// Whether a drawing of any layer (a print) draws its work in the drawing pens over a screened
+/// (grey) background: both kinds of linework are on it, in some number. A print drawn all in one
+/// pen (black, or all grey) has no background to leave out.
+fn screened_background(d: &Drawing) -> bool {
+    const SOME: usize = 20;
+    let (mut grey, mut pen) = (0usize, 0usize);
+    for e in d.model.iter().filter(|e| matches!(e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_))).take(MAX_BACKGROUND_LOOK) {
+        if crate::sheet_reader::screened(d, e) {
+            grey += 1;
+        } else {
+            pen += 1;
+        }
+        if grey >= SOME && pen >= SOME {
+            return true;
+        }
+    }
+    false
 }
 
 /// Extract rectangles from closed 4-vertex polylines.
@@ -287,10 +321,10 @@ fn rectangles_all(d: &Drawing) -> Vec<(Vec2, Vec2, String)> {
 
 /// Extract rectangles from closed 4-vertex polylines, keeping only those on layers where
 /// `pred(layer_name)` returns true.
-fn rectangles_filtered(d: &Drawing, pred: &dyn Fn(&str) -> bool) -> Vec<(Vec2, Vec2, String)> {
+fn rectangles_filtered(d: &Drawing, pred: &dyn Fn(&cadaddy_doc::Entity) -> bool) -> Vec<(Vec2, Vec2, String)> {
     let mut out = Vec::new();
     for e in d.model.iter() {
-        if !pred(&e.common.layer) {
+        if !pred(e) {
             continue;
         }
         if let EntityKind::LwPolyline(p) = &e.kind
@@ -682,9 +716,9 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
 
     // Turn markers: rectangles with internal crossing lines (box with X).
     let duct_rects = if all_layers && pdf_filter {
-        rectangles_filtered(d, &is_pdf_mep_line)
+        rectangles_filtered(d, &|e| is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
-        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
+        rectangles_filtered(d, &|e| !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "DUCT")
     };
@@ -755,18 +789,22 @@ fn detect_fittings(d: &Drawing, runs: &[DuctRun], all_layers: bool, pdf_filter: 
 /// Detect terminals (diffusers, grilles) from DEVICE layer (or any layer in all_layers mode).
 fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedTerminal> {
     let mut terminals = Vec::new();
+    // A print that draws its work over a screened background: the background's boxes, lines
+    // and words (the architecture's furniture, casework, room names) are no air devices.
+    let bg = all_layers && screened_background(d);
+    let pen = |e: &cadaddy_doc::Entity| !(bg && crate::sheet_reader::screened(d, e));
     let device_rects = if all_layers && pdf_filter {
-        rectangles_filtered(d, &is_pdf_mep_line)
+        rectangles_filtered(d, &|e| pen(e) && is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
-        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
+        rectangles_filtered(d, &|e| pen(e) && !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "DEVICE")
     };
     let segs = line_segments(d);
     let mut device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
-        segs.iter().filter(|s| is_pdf_mep_line(&s.layer)).collect()
+        segs.iter().filter(|s| !(bg && s.screened) && is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        segs.iter().filter(|s| !is_content_exclude(&s.layer)).collect()
+        segs.iter().filter(|s| !(bg && s.screened) && !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
     };
@@ -775,14 +813,14 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     // A PDF import folds a symbol drawn many times into a block (`PDF-SYM-n`): its box and
     // lines count as drawn where each insert puts them, with its tag beside it. A CAD sheet's
     // device blocks on the DEVICE layer are symbols by their layer.
-    let pick = |layer: &str, block: &str| all_layers || is_pdf_symbol(block) || layer.eq_ignore_ascii_case("DEVICE");
+    let pick = |e: &cadaddy_doc::Entity, block: &str| pen(e) && (all_layers || is_pdf_symbol(block) || e.common.layer.eq_ignore_ascii_case("DEVICE"));
     let (sym_rects, sym_lines) = insert_geometry(d, &pick);
     device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block)| (lo, hi, all_layers || is_pdf_symbol(&block))));
     if all_layers {
         // Boxes a PDF path draws back to its start without closing it.
         for e in d.model.iter() {
             let EntityKind::LwPolyline(p) = &e.kind else { continue };
-            let wanted = if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
+            let wanted = pen(e) && if pdf_filter { is_pdf_mep_line(&e.common.layer) } else { !is_content_exclude(&e.common.layer) };
             if !wanted || (p.closed && p.vertices.len() == 4) || device_rects.len() >= MAX_INSERTS * 2 {
                 continue;
             }
@@ -844,7 +882,7 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     // On a sheet of any layer (a PDF import), a symbol is an air device only with its tag
     // beside it (`CD-1`, `RG-2`, `150 CFM`, as the air device schedule names them).
     let tags: Vec<(Vec2, f64)> = if candidates.iter().any(|c| c.3) {
-        text_entities(d).into_iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (at, h.max(0.0))).collect()
+        pen_texts(d, bg).into_iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (at, h.max(0.0))).collect()
     } else {
         Vec::new()
     };
@@ -884,14 +922,14 @@ fn is_pdf_symbol(block: &str) -> bool {
 /// The closed four-sided boxes (with their block's name) and straight lines of each picked
 /// (`pick(layer, block)`) model-space insert's block, where the insert puts them (one level deep; arrays and blocks of more than 64 objects are left
 /// out: a symbol is a few strokes).
-fn insert_geometry(d: &Drawing, pick: &dyn Fn(&str, &str) -> bool) -> (Vec<(Vec2, Vec2, String)>, Vec<LineSeg>) {
+fn insert_geometry(d: &Drawing, pick: &dyn Fn(&cadaddy_doc::Entity, &str) -> bool) -> (Vec<(Vec2, Vec2, String)>, Vec<LineSeg>) {
     let (mut rects, mut lines) = (Vec::new(), Vec::new());
     for e in d.model.iter() {
         let EntityKind::Insert(ins) = &e.kind else { continue };
         if rects.len() >= MAX_INSERTS || lines.len() >= MAX_SEGS {
             break;
         }
-        if ins.cols > 1 || ins.rows > 1 || !pick(&e.common.layer, &ins.block) {
+        if ins.cols > 1 || ins.rows > 1 || !pick(e, &ins.block) {
             continue;
         }
         let Some(block) = d.block(&ins.block) else { continue };
@@ -904,12 +942,13 @@ fn insert_geometry(d: &Drawing, pick: &dyn Fn(&str, &str) -> bool) -> (Vec<(Vec2
             Vec2::new(at.x + q.x * cs - q.y * sn, at.y + q.x * sn + q.y * cs)
         };
         let layer = e.common.layer.to_string();
+        let screened = crate::sheet_reader::screened(d, e);
         for be in block.entities.iter() {
             match &be.kind {
                 EntityKind::Line(l) => {
                     let (a, b) = (place(l.a.xy()), place(l.b.xy()));
                     if a.is_finite() && b.is_finite() && a.dist(b) > 1e-9 {
-                        lines.push(LineSeg { a, b, layer: layer.clone() });
+                        lines.push(LineSeg { a, b, layer: layer.clone(), screened });
                     }
                 }
                 EntityKind::LwPolyline(p) => {
@@ -926,7 +965,7 @@ fn insert_geometry(d: &Drawing, pick: &dyn Fn(&str, &str) -> bool) -> (Vec<(Vec2
                         if let (Some(&a), Some(&b)) = (pts.get(i), pts.get((i + 1) % n.max(1)))
                             && a.dist(b) > 1e-9
                         {
-                            lines.push(LineSeg { a, b, layer: layer.clone() });
+                            lines.push(LineSeg { a, b, layer: layer.clone(), screened });
                         }
                     }
                 }
@@ -1046,14 +1085,17 @@ pub(crate) fn is_terminal_tag(t: &str) -> bool {
 /// Detect equipment boxes (AHU, VAV, RTU, PTAC, EF) from EQUIP layer or any layer.
 fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<DetectedEquipment> {
     let mut equipment = Vec::new();
+    // The screened background's boxes and words are the architecture's (as for air devices).
+    let bg = all_layers && screened_background(d);
+    let pen = |e: &cadaddy_doc::Entity| !(bg && crate::sheet_reader::screened(d, e));
     let equip_rects = if all_layers && pdf_filter {
-        rectangles_filtered(d, &is_pdf_mep_line)
+        rectangles_filtered(d, &|e| pen(e) && is_pdf_mep_line(&e.common.layer))
     } else if all_layers {
-        rectangles_filtered(d, &|l: &str| !is_content_exclude(l))
+        rectangles_filtered(d, &|e| pen(e) && !is_content_exclude(&e.common.layer))
     } else {
         rectangles(d, "EQUIP")
     };
-    let texts = text_entities(d);
+    let texts = pen_texts(d, bg);
 
     for (min, max, _) in &equip_rects {
         let w = max.x - min.x;
@@ -1065,9 +1107,17 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         // Find the nearest text label for this equipment.
         let reach = w.max(h) * 3.0;
         let center = (*min + *max) * 0.5;
+        // A room's name (`AHU ROOM 145`, `AHU` over `152`) is no unit's tag.
         let tag = texts
             .iter()
-            .filter(|(_, at, layer, _)| (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP")) && at.dist(center) < reach)
+            .enumerate()
+            .filter(|(j, (t, at, layer, _))| {
+                (layer.eq_ignore_ascii_case("TEXT") || layer.eq_ignore_ascii_case("EQUIP"))
+                    && at.dist(center) < reach
+                    && !t.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM"))
+                    && !names_a_room(&texts, *j)
+            })
+            .map(|(_, t)| t)
             .min_by(|(_, a, _, _), (_, b, _, _)| a.dist(center).total_cmp(&b.dist(center)));
 
         let (tag_text, kind) = match tag {
@@ -1127,8 +1177,25 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                 None
             }
         };
-        for (text, at, _, height) in &texts {
+        // Lettering many times the sheet's usual height is a title or a misread glyph, no tag.
+        let mut heights: Vec<f64> = texts.iter().map(|t| t.3).filter(|h| h.is_finite() && *h > 0.0).collect();
+        heights.sort_by(f64::total_cmp);
+        let usual = heights.get(heights.len() / 2).copied().unwrap_or(f64::INFINITY);
+        for (i, (text, at, _, height)) in texts.iter().enumerate() {
+            if *height > TAG_HEIGHT_MAX * usual {
+                continue;
+            }
             if let Some((kind, tag)) = equip_re(text) {
+                // A unit's tag with a control's mark on its line (`FCU-3 T`: the thermostat of
+                // FCU-3) labels that control, not the unit.
+                if labels_a_control(&texts, i) || names_a_room(&texts, i) || text.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM")) {
+                    continue;
+                }
+                // A tag stacked in two lines (`FCU` over `3`) is the whole tag.
+                let (tag, at) = match stacked_number(&texts, i) {
+                    Some((n, mid)) => (format!("{}-{n}", tag.trim_end_matches(['-', ' '])), mid),
+                    None => (tag, *at),
+                };
                 // Don't duplicate if we already found this tag from a rectangle.
                 if equipment.iter().any(|e| e.tag.eq_ignore_ascii_case(&tag)) {
                     continue;
@@ -1147,6 +1214,73 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     }
 
     equipment
+}
+
+/// The tallest a unit's tag is, in the sheet's usual lettering heights.
+const TAG_HEIGHT_MAX: f64 = 4.0;
+
+/// Marks of the controls and sensors a unit's tag labels when printed beside them (rules of
+/// mechanical drafting: a thermostat `T`, a humidistat `H`, a sensor, a switch).
+const CONTROL_MARKS: &[&str] = &["T", "TS", "TSTAT", "T-STAT", "THERMOSTAT", "H", "HS", "HUMIDISTAT", "S", "SS", "SENSOR", "CO2", "TH"];
+
+/// Whether the text `i` (a unit's tag) names the unit a control is for: a control's mark after
+/// the tag in the same text (`FCU-3 T`), or a text that is only a control's mark on its line,
+/// just before or after it, or right over or under it.
+fn labels_a_control(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
+    let Some((t, at, _, h)) = texts.get(i) else { return false };
+    let h = h.max(1e-6);
+    let control = |w: &str| CONTROL_MARKS.iter().any(|m| m.eq_ignore_ascii_case(w.trim()));
+    if t.split_whitespace().skip(1).any(control) {
+        return true;
+    }
+    let width = 0.7 * h * t.trim().chars().count() as f64;
+    texts.iter().enumerate().any(|(j, (o, p, _, oh))| {
+        if j == i || !control(o) || (*oh - h).abs() > 0.5 * h {
+            return false;
+        }
+        let (dx, dy) = (p.x - at.x, p.y - at.y);
+        let beside = dy.abs() < 0.6 * h && dx > -3.0 * h && dx < width + 3.0 * h;
+        let stacked = dx.abs() < width.max(h) && dy.abs() < 3.0 * h;
+        beside || stacked
+    })
+}
+
+/// A tag printed as its code over its number (`FCU` with `3` under it): the number, and the
+/// point between the two. A unit's number has one or two digits.
+fn stacked_number(texts: &[(String, Vec2, String, f64)], i: usize) -> Option<(String, Vec2)> {
+    under(texts, i, &|v: &str| numbered(v, 1, 2))
+}
+
+/// Whether the text `i` is a room's name: its room number (three or four digits) printed under
+/// it (`AHU` over `152` names the room the units stand in, not a unit).
+fn names_a_room(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
+    under(texts, i, &|v: &str| numbered(v, 3, 4)).is_some()
+}
+
+/// Whether `v` is a number of `lo` to `hi` digits, a letter after it allowed (`3`, `12A`).
+fn numbered(v: &str, lo: usize, hi: usize) -> bool {
+    let v = v.trim();
+    let digits = v.chars().take_while(char::is_ascii_digit).count();
+    (lo..=hi).contains(&digits) && v.chars().count() <= digits + 1 && v.chars().skip(digits).all(|c| c.is_ascii_uppercase())
+}
+
+/// The nearest text `want` takes printed right under the text `i` (a line lower, about as tall,
+/// within its width), and the point between the two. Only for a text with no digit of its own.
+fn under(texts: &[(String, Vec2, String, f64)], i: usize, want: &dyn Fn(&str) -> bool) -> Option<(String, Vec2)> {
+    let (t, at, _, h) = texts.get(i)?;
+    if t.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let h = h.max(1e-6);
+    let width = 0.7 * h * t.trim().chars().count() as f64;
+    texts
+        .iter()
+        .filter(|(o, p, _, oh)| {
+            let dy = at.y - p.y;
+            want(o) && (*oh - h).abs() <= 0.5 * h && dy > 0.5 * h && dy < 3.0 * h && p.x > at.x - h && p.x < at.x + width + 0.5 * h
+        })
+        .min_by(|a, b| a.1.dist(*at).total_cmp(&b.1.dist(*at)))
+        .map(|(o, p, _, _)| (o.trim().to_string(), (*at + *p) * 0.5))
 }
 
 // ---- Legend reading ---------------------------------------------------------
@@ -1977,6 +2111,110 @@ mod tests {
         // On a CAD sheet's device layer too.
         let d = grille_sheet("DEVICE", &[], true, &[]);
         assert!(detect_terminals(&d, false, false).is_empty());
+    }
+
+    /// A print's page: boxes with inner bars, lines and texts, each in black or in the screened
+    /// grey of the background a trade's plan is printed over.
+    struct Print {
+        d: Drawing,
+    }
+
+    impl Print {
+        fn new() -> Self {
+            Print { d: Drawing::new_imperial() }
+        }
+        fn common(grey: bool, layer: &str) -> cadaddy_doc::Common {
+            let color = if grey { cadaddy_color::Color::True(cadaddy_color::Rgb(171, 171, 171)) } else { cadaddy_color::Color::Index(7) };
+            cadaddy_doc::Common { layer: layer.into(), color, ..Default::default() }
+        }
+        fn line(&mut self, grey: bool, a: [f64; 2], b: [f64; 2]) {
+            let kind = EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) });
+            self.d.add(&cadaddy_doc::Space::Model, Self::common(grey, "PDF-GEOMETRY"), kind).expect("line");
+        }
+        /// A box `half` wide each way with bars across it (a grille's, a dresser's drawers).
+        fn barred_box(&mut self, grey: bool, c: [f64; 2], half: f64) {
+            let corners = [[c[0] - half, c[1] - half], [c[0] + half, c[1] - half], [c[0] + half, c[1] + half], [c[0] - half, c[1] + half]];
+            let vertices = corners.iter().map(|p| cadaddy_geom::PolyVertex::new(Vec2::new(p[0], p[1]))).collect();
+            let kind = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+            self.d.add(&cadaddy_doc::Space::Model, Self::common(grey, "PDF-GEOMETRY"), kind).expect("box");
+            for k in [-0.5, 0.0, 0.5] {
+                self.line(grey, [c[0] - half, c[1] + k * half], [c[0] + half, c[1] + k * half]);
+            }
+        }
+        fn text(&mut self, grey: bool, layer: &str, v: &str, at: [f64; 2], height: f64) {
+            let kind = EntityKind::Text(cadaddy_doc::Text {
+                insert: cadaddy_geom::Vec3::new(at[0], at[1], 0.0),
+                align_pt: None,
+                height,
+                value: v.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: cadaddy_doc::HAlign::Left,
+                valign: cadaddy_doc::VAlign::Baseline,
+            });
+            self.d.add(&cadaddy_doc::Space::Model, Self::common(grey, layer), kind).expect("text");
+        }
+        /// Walls in the background and pieces of the trade's work in black, enough of each.
+        fn with_both_pens(mut self) -> Self {
+            for i in 0..25 {
+                let x = 3000.0 + 40.0 * f64::from(i);
+                self.line(true, [x, 0.0], [x, 300.0]);
+                self.line(false, [x, 400.0], [x + 20.0, 400.0]);
+            }
+            self
+        }
+    }
+
+    #[test]
+    fn a_prints_screened_background_furniture_is_no_air_device() {
+        // A guest room's dresser and armchair printed in the screened background (boxes with
+        // drawer lines), a sheet callout `M-6` lettered large beside them (it once tagged every
+        // box within six of its heights); a real return grille in black, tagged `RG-1`.
+        let mut p = Print::new().with_both_pens();
+        p.barred_box(true, [500.0, 500.0], 14.0);
+        p.barred_box(true, [560.0, 470.0], 10.0);
+        p.text(false, "TEXT", "M-6", [520.0, 540.0], 60.0);
+        p.text(true, "TEXT", "SINGLE Q", [470.0, 560.0], 9.0);
+        p.barred_box(false, [1500.0, 500.0], 12.0);
+        p.text(false, "TEXT", "RG-1", [1520.0, 515.0], 9.0);
+        let got: Vec<(String, [f64; 2])> = detect_terminals(&p.d, true, false).iter().map(|t| (t.kind.clone(), [t.at.x, t.at.y])).collect();
+        assert_eq!(got, [("return_grille".to_string(), [1500.0, 500.0])]);
+        // A print drawn all in one pen (no background to leave out) reads its boxes as before.
+        let mut one = Print::new();
+        one.barred_box(true, [500.0, 500.0], 14.0);
+        one.text(true, "TEXT", "RG-1", [520.0, 515.0], 9.0);
+        assert_eq!(detect_terminals(&one.d, true, false).len(), 1);
+    }
+
+    #[test]
+    fn a_units_tag_beside_its_control_or_over_a_room_number_is_no_unit() {
+        let mut p = Print::new().with_both_pens();
+        // The thermostat's label `FCU-3` with its `T` (the thermostat of FCU-3), and one in one
+        // text; the unit itself tagged `FCU` over `3` in the room it stands in.
+        p.text(false, "TEXT", "FCU-3", [100.0, 100.0], 4.0);
+        p.text(false, "TEXT", "T", [125.0, 100.0], 4.0);
+        p.text(false, "TEXT", "FCU-4 TSTAT", [100.0, 200.0], 4.0);
+        p.text(false, "TEXT", "FCU", [400.0, 400.0], 4.0);
+        p.text(false, "TEXT", "3", [403.0, 393.0], 4.0);
+        // Rooms named for what stands in them: `AHU` over its number `152`, `AHU ROOM 145` in a
+        // box (the room's outline); a size tag of usual lettering; a misread glyph 50 times as
+        // tall as the lettering.
+        p.text(false, "TEXT", "AHU", [700.0, 400.0], 4.0);
+        p.text(false, "TEXT", "152", [702.0, 393.0], 3.0);
+        let corners = [[900.0, 900.0], [960.0, 900.0], [960.0, 960.0], [900.0, 960.0]];
+        let vertices = corners.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+        let outline = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), outline).expect("room");
+        p.text(false, "TEXT", "AHU ROOM 145", [910.0, 930.0], 4.0);
+        p.text(false, "TEXT", "12\"x8\"", [1200.0, 400.0], 4.0);
+        p.text(false, "TEXT", "PTAC", [1600.0, 900.0], 200.0);
+        let got: Vec<(String, String, [f64; 2])> = detect_equipment(&p.d, true, false)
+            .iter()
+            .map(|e| (e.kind.clone(), e.tag.clone(), [((e.min.x + e.max.x) / 2.0).round(), ((e.min.y + e.max.y) / 2.0).round()]))
+            .collect();
+        assert_eq!(got, [("fan_coil_unit".to_string(), "FCU-3".to_string(), [402.0, 397.0])]);
     }
 
     #[test]
