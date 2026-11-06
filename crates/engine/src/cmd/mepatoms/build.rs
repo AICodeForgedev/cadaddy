@@ -981,7 +981,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .iter()
             .enumerate()
             .filter(|(bi, b)| Some(*bi) != other && b.level.eq_ignore_ascii_case(level))
-            .map(|(bi, b)| (bi, Vec2::new(b.entry.x, b.entry.y).dist(pp) + if on_circuit(&b.circuit, circuit) { 0.0 } else { upf / 12.0 }, (b.entry.z - p.z).abs()))
+            .map(|(bi, b)| {
+                (
+                    bi,
+                    Vec2::new(b.entry.x, b.entry.y).dist(pp) + if on_circuit(&b.circuit, circuit) { 0.0 } else { upf / 12.0 },
+                    (b.entry.z - p.z).abs(),
+                )
+            })
             .filter(|(_, dp, dz)| *dp <= land_reach + upf / 12.0 && *dz <= 3.0 * upf)
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(bi, _, _)| bi)
