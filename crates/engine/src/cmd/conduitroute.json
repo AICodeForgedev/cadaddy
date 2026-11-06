@@ -70,7 +70,11 @@
     "voltage": 120,
     "cmil": {"14": 4110, "12": 6530, "10": 10380, "8": 16510, "6": 26240, "4": 41740, "3": 52620, "2": 66360, "1": 83690, "1/0": 105600, "2/0": 133100},
     "sizes": ["14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0"],
-    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil, K = 12.9 copper, I = 80% of the breaker"
+    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil, K = 12.9 copper, I = 80% of the breaker",
+    "leg_max": "10",
+    "legs_spread": true,
+    "legs_spread_source": "the legs carry the load of the devices past each box, not the whole load: n devices evenly loaded drop as the whole load at (n + 1) / 2n of the way to the farthest (the tap and the homerun carry it all)",
+    "leg_source": "the field lays a voltage drop's larger conductor on the homerun, which carries the whole load to the panel; the legs between the boxes, the taps and the switch loops stay at the circuit's own size where the drop allows, and never above #10, the largest a 15/20 A device's terminal takes (UL 498 receptacles, UL 20 switches, NEC 110.14(A)): a larger conductor is spliced to a pigtail in the box"
   },
   "methods": {
     "raceway": "EMT",

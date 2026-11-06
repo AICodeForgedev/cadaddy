@@ -699,7 +699,7 @@ pub(crate) fn store_circuits(sp: &mut BuildingSpec, circuits: &[ElementTag]) {
 }
 
 /// What marks a circuit as a stamped room's own (its id).
-const ROOM_PART: &str = ":room-";
+pub(crate) const ROOM_PART: &str = ":room-";
 
 /// The circuits of devices a typical room's plan stamped into rooms (`ReadDevice::room`): each
 /// room's own (a guest room has its own panel), per room and circuit an estimated route in the
