@@ -11403,6 +11403,9 @@ const GEAR_SUBMITTAL_WORDS: [&str; 4] = ["GEAR", "SWITCHGEAR", "PANELBOARD", "SW
 /// The electrical gear from the documents ([`super::gearbuild`]): feeder types (the feeder
 /// schedule), each panel's incoming type (the one-line), the gear's box and lugs (the gear
 /// submittals); the gear laid out in its rooms (proposed), built, and checked by `gear.review`.
+/// The most doors weighed for a gear layout (a bound on hostile input).
+const MAX_DOORS_FOR_GEAR: usize = 20_000;
+
 fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(()) };
     if sp.mep.panel_schedules.is_empty() {
@@ -11517,10 +11520,27 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
             .map(|e| (e.handle, super::bspec::stacked_by(e)))
             .collect();
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let doors: Vec<(String, cadaddy_geom::Vec2, f64)> = d
+            .model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("door"))
+            .filter_map(|e| {
+                let (lo, hi) = super::fieldview::mesh_box(e)?;
+                let at = cadaddy_geom::Vec2::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0);
+                Some((super::bspec::made_level(e).unwrap_or_default(), at, (hi[0] - lo[0]).max(hi[1] - lo[1])))
+            })
+            .take(MAX_DOORS_FOR_GEAR)
+            .collect();
         super::bspec::room_elements(d)
             .into_iter()
             .map(|r| super::gearbuild::RoomBox {
                 offset: offsets.get(&r.handle).copied().unwrap_or(cadaddy_geom::Vec2::ZERO),
+                doors: doors
+                    .iter()
+                    .filter(|(l, at, _)| l.eq_ignore_ascii_case(&r.level) && super::gearbuild::on_walls(&r.outline, *at, upf))
+                    .map(|(_, at, w)| (*at, *w))
+                    .collect(),
                 level: r.level,
                 number: r.number.unwrap_or_default(),
                 name: r.name,
@@ -11580,6 +11600,17 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     );
     report_progress(s, json!({"step": "electrical gear"}), &line);
     s.echo(line);
+    if !planned.room_issues.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Electrical rooms the proposed gear layout can't satisfy",
+            &planned.room_issues.join("; "),
+            2,
+            vec!["Change the room or the gear: the layout is proposed".into()],
+            None,
+            false,
+        );
+    }
     for f in findings.iter().take(MAX_QUESTIONS_PER_STAGE) {
         let msg = f.get("message").and_then(Value::as_str).unwrap_or_default();
         let fix = f.get("fix").and_then(Value::as_str).unwrap_or_default();

@@ -470,10 +470,22 @@ fn inside(poly: &[Vec2], p: Vec2) -> bool {
 /// kept inside the room and clear of the gear already placed. The longest walls first; `gap`
 /// between pieces. Gear that doesn't fit is `None`.
 pub(crate) fn place_along_walls(outline: &[Vec2], sizes: &[(f64, f64)], space_w: f64, space_d: f64, gap: f64) -> Vec<Option<Placed>> {
+    place_clear_of(outline, &[], sizes, space_w, space_d, gap)
+}
+
+/// [`place_along_walls`], keeping gear and its working space off `keep_clear` (door swings).
+pub(crate) fn place_clear_of(
+    outline: &[Vec2],
+    keep_clear: &[([f64; 2], [f64; 2])],
+    sizes: &[(f64, f64)],
+    space_w: f64,
+    space_d: f64,
+    gap: f64,
+) -> Vec<Option<Placed>> {
     let n = outline.len();
     let mut edges: Vec<(Vec2, Vec2)> = (0..n).map(|i| (outline[i], outline[(i + 1) % n])).filter(|(a, b)| a.dist(*b) > 1e-9).collect();
     edges.sort_by(|a, b| b.0.dist(b.1).total_cmp(&a.0.dist(a.1)));
-    let mut taken: Vec<([f64; 2], [f64; 2])> = Vec::new();
+    let mut taken: Vec<([f64; 2], [f64; 2])> = keep_clear.to_vec();
     let clear = |lo: [f64; 2], hi: [f64; 2], taken: &[([f64; 2], [f64; 2])]| {
         taken.iter().all(|(a, b)| hi[0] <= a[0] + 1e-9 || lo[0] >= b[0] - 1e-9 || hi[1] <= a[1] + 1e-9 || lo[1] >= b[1] - 1e-9)
     };
@@ -534,6 +546,26 @@ pub(crate) struct RoomBox {
     pub outline: Vec<Vec2>,
     /// How far the build moved the level to stack it (to put new elements where it put the rest).
     pub offset: Vec2,
+    /// The doors on its walls: centre and width, in the outline's coordinates.
+    pub doors: Vec<(Vec2, f64)>,
+}
+
+/// Whether a point is within `reach` of an outline's walls.
+pub(crate) fn on_walls(outline: &[Vec2], p: Vec2, reach: f64) -> bool {
+    let n = outline.len();
+    (0..n).any(|i| {
+        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        let ab = b - a;
+        let len2 = ab.x * ab.x + ab.y * ab.y;
+        let t = if len2 > 1e-12 { (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        p.dist(a + ab * t) <= reach
+    })
+}
+
+/// Whether gear this big needs a second way out of its room (`E-WORKSPACE`'s large equipment).
+fn needs_second_exit(bus_amps: Option<f64>, width_in: f64, doors: usize, rule: &super::coderules::CodeRule) -> bool {
+    let (Some(amps), Some(wide)) = (rule.large_equipment_amps, rule.large_equipment_width_in) else { return false };
+    bus_amps.is_some_and(|a| a >= amps) && width_in > wide && doors < 2
 }
 
 /// The gear and feeders the documents give, ready for the spec.
@@ -545,6 +577,8 @@ pub(crate) struct Planned {
     pub unplaced: Vec<(String, String)>,
     /// The working spaces in front of what was laid out (NEC 110.26), drawn so clashes show.
     pub zones: Vec<Zone>,
+    /// What the layout could not give a room's gear (a door swing, a second exit), with the rule.
+    pub room_issues: Vec<String>,
 }
 
 /// A piece of gear's working space: its plan box and its height.
@@ -726,7 +760,34 @@ pub(crate) fn plan(
         };
         let space_d = list.iter().map(|(t, _)| depth_for(t)).fold(0.0, f64::max);
         let sizes: Vec<(f64, f64)> = list.iter().map(|(_, g)| (g.size_in[1] * inch, g.size_in[2] * inch)).collect();
-        let placed = place_along_walls(&outline, &sizes, rule.width_in.unwrap_or(30.0) * inch, space_d * inch, 6.0 * inch);
+        // Door swings stay clear: a door's width all round its centre, on either side of its wall.
+        let swings: Vec<([f64; 2], [f64; 2])> = room
+            .doors
+            .iter()
+            .map(|(c, w)| {
+                let c = *c - room.offset;
+                ([c.x - w, c.y - w], [c.x + w, c.y + w])
+            })
+            .collect();
+        let (sw, sd, gap) = (rule.width_in.unwrap_or(30.0) * inch, space_d * inch, 6.0 * inch);
+        let mut placed = place_clear_of(&outline, &swings, &sizes, sw, sd, gap);
+        if placed.iter().any(Option::is_none) && !swings.is_empty() {
+            let without = place_along_walls(&outline, &sizes, sw, sd, gap);
+            if without.iter().filter(|p| p.is_some()).count() > placed.iter().filter(|p| p.is_some()).count() {
+                placed = without;
+                out.room_issues.push(format!("room {number}: its gear only fits inside a door's swing; move the door or the gear"));
+            }
+        }
+        for (tag, g) in &list {
+            let bus = header(tag, "bus amps").chars().take_while(char::is_ascii_digit).collect::<String>().parse::<f64>().ok();
+            if needs_second_exit(bus, g.size_in[1], room.doors.len(), &rule) {
+                out.room_issues.push(format!(
+                    "room {number}: {tag} needs a second exit, {} door(s) found ({})",
+                    room.doors.len(),
+                    rule.large_equipment_cite.as_deref().unwrap_or_default()
+                ));
+            }
+        }
         for ((tag, g), at) in list.iter().zip(placed) {
             let Some(at) = at else {
                 out.unplaced.push((tag.clone(), format!("room {number} has no wall run long enough for it and its working space")));
@@ -1006,6 +1067,7 @@ mod tests {
             name: "ELEC".into(),
             outline: vec![Vec2::new(0.0, 0.0), Vec2::new(144.0, 0.0), Vec2::new(144.0, 96.0), Vec2::new(0.0, 96.0)],
             offset: Vec2::new(0.0, 0.0),
+            doors: Vec::new(),
         };
         let p = plan(&sp, &types, &incoming, &gear, &[room]);
         assert_eq!(p.feeders.len(), 2, "{:#?}", p.feeders);
@@ -1055,6 +1117,25 @@ mod tests {
         assert!(w.properties["CORRECTION_RULE"].contains("376"));
         assert_eq!(w.sources["status"], "proposed");
         assert!(wireway_for(&g, 1e6, 68.0, 12.0, &rule).is_none());
+    }
+
+    #[test]
+    fn gear_keeps_off_a_door_swing_and_big_gear_wants_a_second_exit() {
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(120.0, 0.0), Vec2::new(120.0, 72.0), Vec2::new(0.0, 72.0)];
+        let free = place_along_walls(&room, &[(20.0, 6.0)], 30.0, 36.0, 6.0);
+        let free = free[0].clone().unwrap();
+        // A 36" door on the bottom wall where the gear would have gone.
+        let swing = ([free.min[0] - 20.0, -36.0], [free.min[0] + 52.0, 36.0]);
+        let moved = place_clear_of(&room, &[swing], &[(20.0, 6.0)], 30.0, 36.0, 6.0);
+        let moved = moved[0].clone().unwrap();
+        assert!(moved.space_min[0] >= swing.1[0] - 1e-6 || moved.space_min[1] >= swing.1[1] - 1e-6, "{moved:?}");
+
+        let rule = crate::cmd::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap();
+        assert!(needs_second_exit(Some(2000.0), 90.0, 1, &rule), "2000 A, 7.5 ft wide, one door");
+        assert!(!needs_second_exit(Some(2000.0), 90.0, 2, &rule), "two doors");
+        assert!(!needs_second_exit(Some(2000.0), 57.0, 1, &rule), "not over 6 ft wide");
+        assert!(!needs_second_exit(Some(600.0), 90.0, 1, &rule), "under 1200 A");
+        assert!(!needs_second_exit(None, 90.0, 1, &rule), "rating unknown is not a finding");
     }
 
     #[test]
