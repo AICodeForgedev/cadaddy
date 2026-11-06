@@ -230,6 +230,22 @@ pub(crate) fn fixture_lines(words: &str) -> (Vec<String>, f64) {
     (needs(&r, words).to_vec(), r.connect_reach_ft)
 }
 
+/// The storeys above `level` a riser from `z0` to `z1` (drawing units) passes through (more than
+/// a foot into each), and how far each one's plan is from `level`'s (their anchors).
+fn storeys_passed(sp: &BuildingSpec, level: &str, z0: f64, z1: f64) -> Vec<(String, Vec2)> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let all = storeys(sp);
+    let Some(own) = all.iter().find(|l| l.name == level).and_then(|l| anchor(l)) else { return Vec::new() };
+    all.iter()
+        .filter(|l| l.name != level && z1.is_finite() && z0.is_finite())
+        .filter(|l| {
+            let (lo, hi) = (l.elevation_ft * upf, (l.elevation_ft + l.height_ft) * upf);
+            z0.max(lo) + upf < z1.min(hi)
+        })
+        .filter_map(|l| Some((l.name.clone(), anchor(l)? - own)))
+        .collect()
+}
+
 fn bounds_dist(b: &Bounds2, p: Vec2) -> f64 {
     let dx = (b.min.x - p.x).max(0.0).max(p.x - b.max.x);
     let dy = (b.min.y - p.y).max(0.0).max(p.y - b.max.y);
@@ -254,12 +270,29 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             && super::bimlook::made_tag(e, "kind") == Some("pipe")
         {
             let Some(level) = super::bspec::made_level(e) else { continue };
-            let Some((b, ..)) = super::propfill::extent(d, e) else { continue };
+            let Some((b, z0, z1)) = super::propfill::extent(d, e) else { continue };
             let riser = super::bimlook::made_tag(e, "part").is_some_and(|p| p.contains("riser")) || {
                 let w = b.max - b.min;
                 w.x.max(w.y) <= 1.5 * upf
             };
             let provenance = super::provenance::of_element(e).map_or(super::waterfill::DRAWN, |(m, _)| m.as_str());
+            // On its storey's plan (as the model was before its levels were stacked).
+            let off = super::bspec::stacked_by(e);
+            let b = Bounds2 { min: b.min - off, max: b.max - off };
+            // A stack is one riser from the lowest storey it serves (`continuous_risers`): it is on
+            // each storey it passes through, at its place on that storey's plan.
+            if riser {
+                for (name, at) in storeys_passed(sp, &level, z0, z1) {
+                    pipes.push(PipeEl {
+                        handle: e.handle,
+                        system: sys.to_string(),
+                        level: name,
+                        b: Bounds2 { min: b.min + at, max: b.max + at },
+                        riser,
+                        provenance,
+                    });
+                }
+            }
             pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, provenance });
             continue;
         }
@@ -269,6 +302,8 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         let Some(level) = super::bspec::made_level(e) else { continue };
         let Some((b, ..)) = super::propfill::extent(d, e) else { continue };
+        let off = super::bspec::stacked_by(e);
+        let b = Bounds2 { min: b.min - off, max: b.max - off };
         let words = ["fixture", "type", "device_type", "type_mark"].iter().filter_map(|k| ps.get(k).map(Prop::text)).collect::<Vec<_>>().join(" ");
         fixtures.push((e.handle, level, b.center(), words));
     }
