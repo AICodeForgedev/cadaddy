@@ -563,9 +563,13 @@ fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() 
         r.id = format!("{id}#1");
         r
     };
-    let mut sp = BuildingSpec::default();
-    sp.rooms =
-        ["101", "102"].iter().map(|n| cadaddy_walk3d::SpecRoom { name: "GUEST".into(), number: Some((*n).into()), ..Default::default() }).collect();
+    let mut sp = BuildingSpec {
+        rooms: ["101", "102"]
+            .iter()
+            .map(|n| cadaddy_walk3d::SpecRoom { name: "GUEST".into(), number: Some((*n).into()), ..Default::default() })
+            .collect(),
+        ..Default::default()
+    };
     sp.mep.runs = vec![
         // The enlarged plan's tag of a circuit the plan's tag routed.
         run("circuit:L1:E-601:LP1-7", "L1"),

@@ -564,7 +564,9 @@ fn the_nm_scenarios_takeoff_has_what_nm_work_uses_and_drops_the_raceway_it_repla
     assert_eq!(q(&on, "bracket", "Low-voltage mounting bracket", "1 gang"), 1.0);
     assert_eq!(q(&on, "connector", "NM cable connector", "3/8\""), 2.0);
     assert_eq!(q(&on, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"), 6.0);
-    assert_eq!(q(&on, "strap", "Cable staple", "#8"), staples as f64);
+    // The staples by the cable through the room: its legs' #12 (its voltage drop's #8 is on the
+    // homerun only, Q6235).
+    assert_eq!(q(&on, "strap", "Cable staple", "#12"), staples as f64);
     assert_eq!(
         q(&off, "connector", "NM cable connector", "3/8\"") + q(&off, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"),
         0.0
