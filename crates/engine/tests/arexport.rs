@@ -543,23 +543,34 @@ fn the_manifest_lists_each_export_with_sizes_and_hashes() {
     std::fs::write(d.join(".cache/x.json"), b"{}").unwrap();
     std::fs::write(d.join("evil.json"), br#"{"schema": "cadaddy.ar/1", "glb": "../../etc/passwd"}"#).unwrap();
     std::fs::write(d.join("empty.json"), br#"{"schema": "cadaddy.ar/1"}"#).unwrap();
+    // A hand-made sidecar naming only `model` (the field app's own sample layout).
+    std::fs::write(d.join("hand.glb"), b"glTF-ish").unwrap();
+    std::fs::write(d.join("hand.json"), br#"{"format": "cadaddy-ar", "model": "hand.glb", "title": "Sample Room"}"#).unwrap();
+    #[cfg(unix)]
+    {
+        std::fs::write(d.join("linked.json"), br#"{"schema": "cadaddy.ar/1", "glb": "linked.glb"}"#).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", d.join("linked.glb")).unwrap();
+    }
     let before: Vec<(String, Vec<u8>)> = ["guest.glb", "guest.usdz", "guest.json", "sub/corridor.glb", "sub/corridor.json"]
         .iter()
         .map(|n| (n.to_string(), std::fs::read(d.join(n)).unwrap()))
         .collect();
 
     let r = s.execute("bim.export.ar.manifest", &json!({"dir": d.to_string_lossy()})).unwrap();
-    assert_eq!(r["packages"], json!(2), "{r:#}");
-    assert_eq!(r["files"], json!(5), "{r:#}");
+    assert_eq!(r["packages"], json!(3), "{r:#}");
+    assert_eq!(r["files"], json!(7), "{r:#}");
     let skipped = r["skipped"].as_array().unwrap();
     assert!(skipped.iter().any(|x| x["name"] == "evil.json" && x["why"].as_str().unwrap().contains("plain file name")), "{r:#}");
     assert!(skipped.iter().any(|x| x["name"] == "empty.json"), "{r:#}");
+    #[cfg(unix)]
+    assert!(skipped.iter().any(|x| x["name"] == "linked.json" && x["why"].as_str().unwrap().contains("link")), "{r:#}");
     let m: Value = serde_json::from_slice(&std::fs::read(d.join("manifest.json")).unwrap()).unwrap();
     assert_eq!(m["format"], json!("cadaddy-ar-manifest"));
     assert_eq!(m["version"], json!(1));
     let pk = m["packages"].as_array().unwrap();
     let names: Vec<&str> = pk.iter().map(|p| p["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["guest", "sub/corridor"]);
+    assert_eq!(names, ["guest", "hand", "sub/corridor"]);
+    assert_eq!(pk[1]["label"], json!("Sample Room"));
     let guest = &pk[0];
     assert_eq!(guest["label"], json!("101 GUEST"), "{guest:#}");
     assert_eq!(guest["level"], json!("L1"), "{guest:#}");
@@ -572,7 +583,7 @@ fn the_manifest_lists_each_export_with_sizes_and_hashes() {
             assert_eq!(f["sha256"].as_str().unwrap(), sha256_hex(&bytes), "{n}");
         }
     }
-    let roles: Vec<&str> = pk[1]["files"].as_array().unwrap().iter().map(|f| f["role"].as_str().unwrap()).collect();
+    let roles: Vec<&str> = pk[2]["files"].as_array().unwrap().iter().map(|f| f["role"].as_str().unwrap()).collect();
     assert_eq!(roles, ["glb", "sidecar"]);
     // Read-only apart from manifest.json.
     for (n, b) in &before {
@@ -588,7 +599,7 @@ fn the_manifest_lists_each_export_with_sizes_and_hashes() {
     s.execute("bim.export.ar.manifest", &json!({"dir": d.to_string_lossy()})).unwrap();
     let m2: Value = serde_json::from_slice(&std::fs::read(d.join("manifest.json")).unwrap()).unwrap();
     assert_ne!(hashes(&m, 0)[0], hashes(&m2, 0)[0], "the re-exported model's hash changed");
-    assert_eq!(hashes(&m, 1), hashes(&m2, 1), "the untouched export keeps its hashes");
+    assert_eq!(hashes(&m, 2), hashes(&m2, 2), "the untouched export keeps its hashes");
 
     // A manifest.json that isn't ours is kept unless force:true.
     let other = dir("manifest-other");

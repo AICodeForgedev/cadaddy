@@ -180,6 +180,9 @@ struct MarkRow: View {
             if mark.elementGone == true {
                 Label("element no longer in model", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
             }
+            if let was = mark.previousElementID {
+                Text("re-linked after a rebuild (was element \(was))").font(.caption2).foregroundStyle(.secondary)
+            }
             if let v = mark.packageVersion, let c = current, v != c {
                 Text("made against an earlier version (\(v.label))").font(.caption2).foregroundStyle(.secondary)
             }

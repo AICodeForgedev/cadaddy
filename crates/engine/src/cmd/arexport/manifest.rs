@@ -160,13 +160,26 @@ fn package(root: &Path, rel: &str) -> std::result::Result<Option<(Value, u64, us
     let mut files = Vec::new();
     let mut total = 0u64;
     let mut models = 0usize;
-    for role in ["glb", "usdz"] {
-        let Some(n) = side.get(role).and_then(Value::as_str) else { continue };
+    // The models it names: `glb` and `usdz` (bim.export.ar), else `model` (a hand-made or older sidecar).
+    let mut named: Vec<(&str, &str)> = ["glb", "usdz"].iter().filter_map(|r| side.get(*r).and_then(Value::as_str).map(|n| (*r, n))).collect();
+    if named.is_empty()
+        && let Some(n) = side.get("model").and_then(Value::as_str)
+    {
+        let ext = n.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+        if ext == "glb" || ext == "usdz" {
+            named.push((if ext == "glb" { "glb" } else { "usdz" }, n));
+        }
+    }
+    for (role, n) in named {
         // The sidecar names its models beside it; anything else (a path, `..`) is not served.
         if !plain_name(n) {
             return Err(format!("its {role} `{n}` is not a plain file name beside the sidecar"));
         }
         let fp = path.with_file_name(n);
+        // A link could point outside the folder: not served.
+        if std::fs::symlink_metadata(&fp).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            return Err(format!("its {role} {n} is a link"));
+        }
         if !fp.is_file() {
             return Err(format!("its {role} {n} is missing"));
         }

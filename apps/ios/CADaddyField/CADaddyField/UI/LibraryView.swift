@@ -22,7 +22,11 @@ struct LibraryView: View {
             .navigationTitle("CADaddy Field")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { app.tapUpdate() } label: { Label("Update", systemImage: "arrow.triangle.2.circlepath").labelStyle(.titleAndIcon) }
+                    // Icon and word: a toolbar Label collapses to the icon alone, and the owner asked for a visible Update button.
+                    Button { app.tapUpdate() } label: {
+                        HStack(spacing: 6) { Image(systemName: "arrow.triangle.2.circlepath"); Text("Update") }
+                    }
+                    .accessibilityLabel("Update")
                         .disabled(app.updating || app.library == nil)
                         .contextMenu { Button { app.askAddress = true } label: { Label("Change office address…", systemImage: "network") } }
                         .accessibilityHint("Fetches the latest room packages from the office over the local network")

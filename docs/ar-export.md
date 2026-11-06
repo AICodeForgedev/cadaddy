@@ -84,7 +84,7 @@ abstract `class` prim `/CADaddy_AR/Prototypes` that each element references.
 ## The sidecar (`NAME.json`)
 
 ```
-{ "schema": "cadaddy.ar/1", "version": 1, "units": "m", "meters_per_unit": 1, "up_axis": "Y",
+{ "schema": "cadaddy.ar/1", "version": 1, "exported": "2026-11-06T03:58:10Z", "units": "m", "meters_per_unit": 1, "up_axis": "Y",
   "model": "NAME.usdz", "glb": "NAME.glb", "usdz": "NAME.usdz",
   "anchor": {"kind": "room_corner"|"grid_intersection"|"named_point", "name", "level", "room",
              "plan_x", "plan_y", "plan_units": "ft", "floor_elevation_ft", "how", "entry", "model": [0,0,0]},
@@ -128,6 +128,78 @@ goes back):
   Apple's `usdchecker --arkit` adds a rule that the root layer be binary `.usdc`; this export
   writes `.usda` (which AR Quick Look opens), so that one ARKit rule is expected to flag it.
 
+## Serving exports to the field app (`bim.export.ar.manifest`, Q6218)
+
+CADaddy Field's **Update** button pulls the latest packages from the office over the local network.
+The office side is a folder of exports, a manifest, and any static web server:
+
+```
+bim.export.ar {room: "12", path: "exports/room-12"}      (as often as the model changes)
+bim.export.ar.manifest {dir: "exports"}                  writes exports/manifest.json
+python3 -m http.server 8000 --directory exports         or any static server on the office LAN
+```
+
+On the phone, the first tap of Update asks for the address: the folder's URL (for example
+`http://192.168.1.20:8000/` or one with a private path in it, `http://192.168.1.20:8000/k3y/`), or
+the manifest's own URL. The address is stored on the device and can be changed (Library ▸ + ▸ Office
+address, or a long press on Update). Only local addresses are accepted: private, link-local, loopback
+or carrier-grade-NAT IPs, `.local`/`.lan`/`.home.arpa` names and single-label host names. The app's
+Info.plist allows plain HTTP to local hosts only (`NSAllowsLocalNetworking`), not a blanket ATS
+exception. Nothing is fetched except when Update is tapped.
+
+**The command.** `{dir, force?}`. Reads every `.json` in `dir` and two folder levels down (hidden
+entries and links skipped, 10,000 entries at most) and lists each AR sidecar (`schema:
+"cadaddy.ar/1"`, or `format: "cadaddy-ar"`) with the models it names beside it (`glb`, `usdz`, else
+`model`). A sidecar that names a path, `..`, a link or a missing file is skipped and reported. It is
+read-only apart from `manifest.json`. That file goes through the output guard: an earlier manifest is
+replaced, and any other file of that name is replaced only with `force: true`. The answer is `{path,
+packages, files, bytes, names, skipped: [{name, why}]}`.
+
+**The manifest** (`manifest.json`, format version 1):
+
+```
+{ "format": "cadaddy-ar-manifest", "version": 1, "generator": "CADaddy bim.export.ar.manifest",
+  "generated": "2026-11-06T04:00:00Z",
+  "packages": [
+    { "name": "room-12",                  unique: the sidecar's relative path without .json
+      "label": "12 OFFICE",               the sidecar's title, else its rooms, else the anchor's room or level
+      "level": "L2",                      the anchor's level, when known
+      "exported": "2026-11-06T03:58:10Z", the sidecar's own `exported`, else its file time
+      "files": [ { "name": "room-12.glb",  "role": "glb",     "bytes": 20708, "sha256": "…64 hex…" },
+                 { "name": "room-12.usdz", "role": "usdz",    "bytes": 31232, "sha256": "…" },
+                 { "name": "room-12.json", "role": "sidecar", "bytes": 9293,  "sha256": "…" } ] } ] }
+```
+
+- `name` (package and file) is relative to the manifest's folder, `/`-separated, never absolute,
+  never `.`/`..`, with no `\`, `:`, `%` or control characters. The app refuses any other name.
+- `role` is `glb`, `usdz` or `sidecar`. A missing role is taken from the extension. The app
+  downloads the `.glb` (it carries per-object metadata), else the `.usdz`, plus the sidecar.
+- `bytes` is the exact size; `sha256` is lowercase hex.
+
+**What the app does with it.**
+- **Match.** Each package matches a library package by its stored source name: the manifest name it
+  was last updated from, else the file or folder name it was opened from by hand.
+- **Diff.** A package is unchanged when the model's and the sidecar's SHA-256 both match what is
+  stored. Unchanged packages are not downloaded.
+- **Verify, then swap.** Each new or changed file is downloaded under a cap of its stated size and
+  hashed as it arrives. The size and hash are then checked, and the model must open (the full GLB
+  read, or a valid USDZ zip) before anything is replaced. The new version is built beside the old
+  one and swapped in one step (APFS `RENAME_SWAP`). Any failure leaves the old package working and
+  is reported for that package.
+- **Field work carries over.**
+  - Marks and photos carry over, matched by `element_id`.
+  - A rebuild re-issues element ids. A mark whose id is gone follows its device when the old
+    element's `devid` names exactly one new element, and keeps the old id as `element_id_was`.
+  - A mark whose element is really gone stays, flagged `element_gone: true` ("element no longer in
+    model"). It is never deleted.
+  - Each mark keeps the `package_version` (`model_sha256`, `exported`) it was made against.
+- **The saved room.**
+  - An anchor that is the same point (kind, level, units, plan position within 1/8") keeps the
+    saved room and its alignment.
+  - When the anchor moved, the old anchor is kept (shown as a grey cross on the plan and in AR) and
+    the app asks the user to align again.
+
 ## Not in phase 1
 
-The phone app (Q6208 `arapp`, reading this format), LiDAR fitting, writing field status back.
+LiDAR fitting, writing field status back. The phone app is Q6208 `arapp`; its Update button is
+Q6218 `arupdate` (above).

@@ -6,8 +6,12 @@ moved or extra, then export the marks as one JSON file for CADaddy.
 
 - Apple frameworks only: SwiftUI, ARKit, RealityKit, Foundation, plus simd, Compression (zip inflate),
   CryptoKit (package hash) and PhotosUI (photo picker). No third-party packages.
-- No network calls, accounts, analytics or cloud. Packages, marks, photos and saved rooms stay in the
-  app's Application Support folder, which is excluded from backups.
+- No accounts, analytics or cloud. The only network call is **Update**, and only when you tap it: a
+  GET of `manifest.json` and the changed package files from the office address you entered, on the
+  local network only (`NSAllowsLocalNetworking` and `NSLocalNetworkUsageDescription` in Info.plist,
+  no blanket ATS exception). There are no background checks. Packages, marks, photos and saved rooms
+  stay in the app's Application Support folder, which is excluded from backups, and the app works
+  fully offline.
 - Bundle id `dev.aicodeforge.cadaddyfield`, display name "CADaddy Field", author AICodeForge.
 - **Minimum iOS 17.0.** The LiDAR APIs used here (scene reconstruction `.mesh` and RealityKit
   scene-understanding occlusion) exist from iOS 13.4. The UI needs iOS 17 for SwiftUI `.inspector`,
@@ -124,6 +128,31 @@ queue item specifies, using its own synthetic sample (`FieldCore/SamplePackage.s
     no sidecar.
   - Up axes other than Y are refused.
 
+## Update (pull the latest packages from the office)
+
+The office runs `bim.export.ar.manifest {dir}` on its folder of AR exports and serves that folder
+with any static web server on the LAN. The format and the rules are in `docs/ar-export.md`,
+"Serving exports to the field app".
+
+- **Update** sits in the Library toolbar on iPhone and iPad. The first tap asks for the office
+  address, a full URL that may carry a private path. It is stored on the device; change it from
+  + ▸ Office address, or with a long press on Update.
+- A tap fetches the manifest, then downloads only the packages whose model or sidecar hash changed.
+  It shows progress, then the result: N updated, N new, N unchanged, N failed, with the reason for
+  each failure.
+- **Every file is checked before anything is replaced:** its size, its SHA-256, and that the model
+  opens. The package folder is then swapped in one step. Any failure (no Wi-Fi, server unreachable,
+  bad JSON, a `../` or absolute name, an oversized or wrong file, a hash mismatch) gives a plain
+  message, and the old package keeps working.
+- **Marks and photos carry over** by element id, or by the device's stable `devid` after a rebuild.
+  A mark whose element is gone stays and shows "element no longer in model". Exported marks carry
+  the `package_version` they were made against.
+- **The saved room** is kept when the anchor didn't move. When it moved, the old anchor shows as a
+  grey cross and the app asks you to align again.
+
+Debug builds only: `-updateserver URL` presets the address, and `-autoupdate` taps Update once at
+launch. The simulator end-to-end run uses them.
+
 ## Using it in the room
 
 1. **Align**, either way:
@@ -160,6 +189,7 @@ Marks › Export writes `<package> marks.json` and opens the share sheet.
   "app": "CADaddy Field 0.1.0",
   "exported": "2026-11-05T19:52:10.123Z",
   "package": { "name": "…", "model_file": "model.glb", "model_sha256": "…",
+               "version": { "model_sha256": "…", "exported": "2026-11-06T04:00:00Z" },
                "anchor": { "kind": "room_corner", "name": "…", "plan_x": 0, "plan_y": 0, "plan_units": "ft", "level": "…" } },
   "alignment": { "method": "quick | two_point | relocalized | none", "residual_in": 0.42 },
   "marks": [
@@ -171,7 +201,9 @@ Marks › Export writes `<package> marks.json` and opens the share sheet.
       "time": "2026-11-05T19:50:01.250Z",
       "device_pose_world": [16 floats], "device_pose_model": [16 floats],
       "point_world": [x, y, z], "point_model": [x, y, z],
-      "photo": "file name", "photo_data": { "name": "…", "mime": "image/jpeg", "data_base64": "…" }
+      "photo": "file name", "photo_data": { "name": "…", "mime": "image/jpeg", "data_base64": "…" },
+      "package_version": { "model_sha256": "…", "exported": "…" },
+      "element_gone": true, "element_id_was": "E-0998"
     }
   ]
 }
@@ -182,14 +214,16 @@ Marks › Export writes `<package> marks.json` and opens the share sheet.
   is the export frame (metres, Y up, the anchor at the origin), which is the one CADaddy should use.
 - `point_*` is present only for "moved" marks that were tapped in AR.
 - Photos are JPEG, at most 1600 px and 4 MB, embedded as base64.
-- Optional fields are left out when empty.
+- Optional fields are left out when empty. `element_gone` and `element_id_was` are written only by
+  Update: the first when the mark's element is no longer in the model, the second when the mark was
+  re-linked to the same device under a new id.
 - Importing marks into CADaddy is a later item. `MarksExport.decode` refuses files with another
   schema or a newer version.
 
 ## Not in this build
 
 - LiDAR auto-fit to scanned walls
-- Sync back into CADaddy
+- Sync back into CADaddy (pushing marks to the office is a later item; Update only pulls)
 - Editing geometry
 - Accounts
 - App Store submission

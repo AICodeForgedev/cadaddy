@@ -265,6 +265,23 @@ public final class PackageLibrary: @unchecked Sendable {
         var warnings: [String]
         /// The element ids in the model (nil when they can't be known: a USDZ without a sidecar element list).
         var elementIDs: Set<String>?
+        /// Element id → its stable key (`devid`), for elements that have one.
+        var elementKeys: [String: String] = [:]
+    }
+
+    /// The metadata key that names the same device across rebuilds (a rebuild re-issues element ids).
+    static let stableKey = "devid"
+
+    static func keys(_ infos: [ElementInfo]) -> [String: String] {
+        var out: [String: String] = [:]
+        for e in infos { if let k = e.extra[stableKey], !k.isEmpty { out[e.id] = k } }
+        return out
+    }
+
+    /// Element id → stable key of a stored package (empty when it can't be read).
+    func elementKeys(_ r: PackageRecord) -> [String: String] {
+        if r.format == .glb, let (m, _) = try? loadModel(r) { return Self.keys(m.elements.map(\.info)) }
+        return Self.keys(loadSidecar(r).elements)
     }
 
     /// Checks that the model opens (GLB parsed in full; USDZ a valid zip) and the sidecar parses. Throws a FieldError.
@@ -283,11 +300,12 @@ public final class PackageLibrary: @unchecked Sendable {
             v.triangles = model.triangleCount
             v.warnings += model.warnings
             v.elementIDs = Set(model.elements.map(\.info.id))
+            v.elementKeys = Self.keys(model.elements.map(\.info))
         case .usdz:
             guard f.modelData.count >= 4, ZipReader.u32(f.modelData, 0) == 0x0403_4B50 else { throw FieldError("This .usdz file is not a valid USDZ package.") }
             _ = try ZipReader(data: f.modelData)
             v.elementCount = sidecar.map { $0.elements.isEmpty ? nil : $0.elements.count } ?? nil
-            if let els = sidecar?.elements, !els.isEmpty { v.elementIDs = Set(els.map(\.id)) }
+            if let els = sidecar?.elements, !els.isEmpty { v.elementIDs = Set(els.map(\.id)); v.elementKeys = Self.keys(els) }
             if sidecar?.elements.isEmpty ?? true {
                 v.warnings.append("USDZ without a sidecar element list: each object's card shows only what its name says. Open the .glb for full metadata.")
             }
@@ -407,8 +425,12 @@ public final class PackageLibrary: @unchecked Sendable {
                 notes.append("the anchor moved in this version; open it in AR and align again (the old anchor shows as a grey cross)")
             }
             // Marks and photos carry over, matched by element id. A mark whose element is gone stays, flagged.
-            let marks = Self.carryMarks(self.marks(old), from: old.currentVersion, into: v.elementIDs)
+            let oldMarks = self.marks(old)
+            let marks = Self.carryMarks(oldMarks, from: old.currentVersion, into: v.elementIDs,
+                                        oldKeys: oldMarks.isEmpty ? [:] : elementKeys(old), newKeys: v.elementKeys)
             let gone = marks.filter { $0.elementGone == true }.count
+            let relinked = zip(oldMarks, marks).filter { $0.elementID != $1.elementID }.count
+            if relinked > 0 { notes.append("\(relinked) mark\(relinked == 1 ? "" : "s") re-linked to the same device under its new id") }
             if gone > 0 { notes.append("\(gone) mark\(gone == 1 ? "" : "s") on objects no longer in the model (kept)") }
             if !marks.isEmpty {
                 try MarksExport.encoder().encode(marks).write(to: staging.appendingPathComponent("marks.json"), options: .atomic)
@@ -422,13 +444,27 @@ public final class PackageLibrary: @unchecked Sendable {
         }
     }
 
-    /// The marks of the old version for the new one: each keeps the version it was made against and is flagged when its
-    /// element id is no longer in the model (unflagged when it is back). With `ids` unknown the flag is left as it was.
-    public static func carryMarks(_ marks: [Mark], from version: PackageVersion, into ids: Set<String>?) -> [Mark] {
-        marks.map { m in
+    /// The marks of the old version for the new one, matched by element id. Each keeps the version it was made against.
+    /// A mark whose id is gone is re-linked when its old element's stable key (`devid`) names exactly one element of the
+    /// new model (the old id is kept as `element_id_was`); otherwise it stays, flagged "element no longer in model"
+    /// (unflagged when it comes back). With `ids` unknown the flag is left as it was.
+    public static func carryMarks(_ marks: [Mark], from version: PackageVersion, into ids: Set<String>?,
+                                  oldKeys: [String: String] = [:], newKeys: [String: String] = [:]) -> [Mark] {
+        var byKey: [String: String] = [:], dup = Set<String>()
+        for (id, k) in newKeys { if byKey[k] != nil { dup.insert(k) } else { byKey[k] = id } }
+        for k in dup { byKey[k] = nil }
+        return marks.map { m in
             var m = m
             if m.packageVersion == nil { m.packageVersion = version }
-            if let ids { m.elementGone = ids.contains(m.elementID) ? nil : true }
+            guard let ids else { return m }
+            if ids.contains(m.elementID) { m.elementGone = nil; return m }
+            if let k = oldKeys[m.elementID], let new = byKey[k], ids.contains(new) {
+                m.previousElementID = m.previousElementID ?? m.elementID
+                m.elementID = new
+                m.elementGone = nil
+                return m
+            }
+            m.elementGone = true
             return m
         }
     }

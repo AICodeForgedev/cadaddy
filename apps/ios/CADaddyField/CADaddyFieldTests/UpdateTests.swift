@@ -60,10 +60,11 @@ final class UpdateTests: XCTestCase {
     static func hex(_ d: Data) -> String { SHA256.hash(data: d).map { String(format: "%02x", $0) }.joined() }
 
     /// A GLB with one triangle node per element id.
-    static func model(_ ids: [String]) throws -> Data {
+    static func model(_ ids: [String], devids: [String?] = []) throws -> Data {
         try TestSupport.triangleGLB(nodes: ids.enumerated().map { i, id in
-            ["mesh": 0, "name": "Receptacle_R\(i)", "translation": [Double(i), 0.4, -1.0],
-             "extras": ["id": id, "kind": "Receptacle", "tag": "R\(i)", "trade": "electrical"]]
+            var extras: [String: Any] = ["id": id, "kind": "Receptacle", "tag": "R\(i)", "trade": "electrical"]
+            if devids.indices.contains(i), let d = devids[i] { extras["devid"] = d }
+            return ["mesh": 0, "name": "Receptacle_R\(i)", "translation": [Double(i), 0.4, -1.0], "extras": extras]
         })
     }
 
@@ -286,6 +287,26 @@ final class UpdateTests: XCTestCase {
         try serve([("room-a", try Self.model(["E-1", "E-2", "E-3"]), s1)])
         _ = try await run()
         XCTAssertNil(lib.marks(try onlyRecord())[1].elementGone)
+    }
+
+    /// A rebuild re-issues element ids: a mark follows its device by the stable `devid`, keeps the old id, and only a
+    /// device that is really gone is flagged. An ambiguous key (two new elements) is not guessed.
+    func testARebuildsNewIdsReLinkMarksByTheDevicesStableKey() async throws {
+        let s1 = try Self.sidecar()
+        try serve([("room-a", try Self.model(["112", "113", "114"], devids: ["device:L1:4.0,0.8:REC", "device:L1:7.0,0.8:S", "device:L1:9.0,0.8:D"]), s1)])
+        _ = try await run()
+        let old = try onlyRecord()
+        let marks = [Mark(elementID: "112", status: .installed), Mark(elementID: "113", status: .missing), Mark(elementID: "114", status: .moved)]
+        try lib.saveMarks(marks, for: old)
+        StubServer.reset()
+        // Rebuilt: new ids; the switch is gone; the data outlet's key now names two elements.
+        try serve([("room-a", try Self.model(["135", "137", "138"], devids: ["device:L1:4.0,0.8:REC", "device:L1:9.0,0.8:D", "device:L1:9.0,0.8:D"]), s1)])
+        let r = try await run()
+        XCTAssertTrue(r.notes.contains { $0.contains("1 mark re-linked") }, "\(r.notes)")
+        let now = lib.marks(try onlyRecord())
+        XCTAssertEqual(now[0].elementID, "135"); XCTAssertEqual(now[0].previousElementID, "112"); XCTAssertNil(now[0].elementGone)
+        XCTAssertEqual(now[1].elementID, "113"); XCTAssertEqual(now[1].elementGone, true, "the switch is really gone")
+        XCTAssertEqual(now[2].elementID, "114"); XCTAssertEqual(now[2].elementGone, true, "an ambiguous key is not guessed")
     }
 
     func testTheSavedRoomIsKeptWhenTheAnchorIsTheSameAndReAlignAskedWhenItMoved() async throws {

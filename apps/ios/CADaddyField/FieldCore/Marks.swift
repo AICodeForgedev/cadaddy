@@ -37,15 +37,18 @@ public struct Mark: Codable, Equatable, Identifiable, Sendable {
     public var packageVersion: PackageVersion?
     /// Set by an update when the element's id is no longer in the model. The mark is kept, never deleted.
     public var elementGone: Bool?
+    /// The element id the mark was made on, when an update re-linked it to the same device under a new id (a rebuild
+    /// re-issues ids; the device's stable `devid` matched).
+    public var previousElementID: String?
 
     public init(id: UUID = UUID(), elementID: String, elementKind: String? = nil, elementTag: String? = nil, status: MarkStatus,
                 note: String? = nil, photo: String? = nil, time: Date = Mark.now(), devicePoseWorld: [Float]? = nil,
                 devicePoseModel: [Float]? = nil, pointWorld: [Float]? = nil, pointModel: [Float]? = nil,
-                packageVersion: PackageVersion? = nil, elementGone: Bool? = nil) {
+                packageVersion: PackageVersion? = nil, elementGone: Bool? = nil, previousElementID: String? = nil) {
         self.id = id; self.elementID = elementID; self.elementKind = elementKind; self.elementTag = elementTag; self.status = status
         self.note = note; self.photo = photo; self.time = time; self.devicePoseWorld = devicePoseWorld; self.devicePoseModel = devicePoseModel
         self.pointWorld = pointWorld; self.pointModel = pointModel
-        self.packageVersion = packageVersion; self.elementGone = elementGone
+        self.packageVersion = packageVersion; self.elementGone = elementGone; self.previousElementID = previousElementID
     }
 
     /// The current time truncated to whole milliseconds, so it survives the JSON round trip exactly.
@@ -58,7 +61,7 @@ public struct Mark: Codable, Equatable, Identifiable, Sendable {
         case elementID = "element_id", elementKind = "element_kind", elementTag = "element_tag"
         case devicePoseWorld = "device_pose_world", devicePoseModel = "device_pose_model"
         case pointWorld = "point_world", pointModel = "point_model"
-        case packageVersion = "package_version", elementGone = "element_gone"
+        case packageVersion = "package_version", elementGone = "element_gone", previousElementID = "element_id_was"
     }
 
     public static func flatten(_ m: simd_float4x4) -> [Float] {
