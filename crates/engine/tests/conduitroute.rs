@@ -194,10 +194,19 @@ fn a_long_homerun_is_upsized_for_voltage_drop_and_fill_sizes_the_raceway() {
     let r = s.execute("conduit.route", &json!({"section": "conductors_upsized"})).expect("report");
     let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
     let five = up.iter().find(|u| u["circuit"] == json!("LP1-5")).cloned().unwrap_or_default();
-    assert!(five["to"].as_str().is_some_and(|t| t.contains("#8")), "130' at 16 A: #8 for 3%: {r}");
+    // Its one receptacle at the end of a 141' homerun at 16 A: a #8 homerun holds 3% (Q6234:
+    // the homerun is upsized first).
+    assert!(five["homerun"].as_str().is_some_and(|t| t.contains("#8")), "141' at 16 A: #8 for 3%: {r}");
+    assert_eq!(five["reason"], json!("voltage drop: homerun"), "{five}");
     assert!(five["why"].as_str().is_some_and(|w| w.contains("210.19")), "{five}");
+    assert!(five["drop_pct"].as_f64().is_some_and(|p| p <= 3.0) && five["drop_pct_before"].as_f64().is_some_and(|p| p > 3.0), "{five}");
     let wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-5", "group_by": "size"}));
     assert!(wires["rows"].as_array().is_some_and(|rows| rows.iter().any(|x| x["size"] == json!("#8"))), "{wires}");
+    // LP1-1: a #10 homerun alone holds its drop; its legs between its boxes stay #12.
+    let one = up.iter().find(|u| u["circuit"] == json!("LP1-1")).cloned().unwrap_or_default();
+    assert_eq!((one["to"].clone(), one["homerun"].clone()), (json!("2#12 + 1#12G"), json!("2#10 + 1#10G")), "{one}");
+    let legs = count(&mut s, json!({"kind": "wire", "circuit": "LP1-1", "group_by": "size"}));
+    assert!(legs["rows"].as_array().is_some_and(|rows| !rows.is_empty() && rows.iter().all(|x| x["size"] == json!("#12"))), "{legs}");
     // Fill: the shared homerun's four conductors and a ground (upsized for their lengths) in 3/4"
     // EMT, the minimum (a company default).
     let f = s.execute("conduit.route", &json!({"section": "fill"})).expect("fill");
@@ -408,6 +417,46 @@ fn the_panel_schedules_load_sets_the_voltage_drop() {
     assert!(five.is_none(), "500 VA over 130': #12 is enough: {r}");
     let wires = count(&mut s, json!({"kind": "wire", "circuit": "LP1-5", "group_by": "size"}));
     assert!(wires["rows"].as_array().is_some_and(|rows| rows.iter().all(|x| x["size"] == json!("#12"))), "{wires}");
+}
+
+/// The building with `schedules` as its panel schedules, rebuilt.
+fn with_schedules(s: &mut Session, schedules: Value) {
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    spec["mep"]["panel_schedules"] = schedules;
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+}
+
+#[test]
+fn a_two_pole_circuits_drop_is_worked_line_to_line_and_its_breaker_sets_its_smallest_wire() {
+    // Q6234. LP1 is 208Y/120 V. LP1-5 is a two-pole 4,140 VA load: about 20 A at 208 V (it was
+    // worked as 34.5 A at 120 V, and its whole circuit went to #4). LP1-1 is on a 30 A breaker:
+    // #10 in its legs as well as its homerun (240.4(D)), though the plan gives no size.
+    let (mut s, _) = building(|_| {});
+    with_schedules(
+        &mut s,
+        json!([{"panel": "LP1", "source": "E-101", "header": {"volts/phase": "208Y/120V, 3PH, 4W"}, "circuits": [
+            {"number": "1", "description": "EQUIPMENT", "breaker": "30", "poles": 1, "load_va": 1500.0, "source": "E-101"},
+            {"number": "5", "description": "UNIT", "breaker": "20", "poles": 2, "load_va": 4140.0, "source": "E-101"}
+        ]}]),
+    );
+    let r = s.execute("conduit.route", &json!({"section": "conductors_upsized"})).expect("report");
+    let up = r["conductors_upsized"].as_array().cloned().unwrap_or_default();
+    let five = up.iter().find(|u| u["circuit"] == json!("LP1-5")).cloned().unwrap_or_default();
+    let why = five["why"].as_str().unwrap_or_default();
+    assert!(why.contains("19.9 A") && why.contains("208 V") && why.contains("2-pole"), "{five}");
+    // 141' at 19.9 A on 208 V: 5.3% on #12; a #8 homerun holds it (2.1%), its box's own #12.
+    assert_eq!((five["homerun"].clone(), five["to"].clone()), (json!("2#8 + 1#8G"), json!("2#12 + 1#12G")), "{five}");
+    let one = up.iter().find(|u| u["circuit"] == json!("LP1-1") && u["reason"] == json!("breaker minimum")).cloned().unwrap_or_default();
+    assert_eq!(one["to"], json!("2#10 + 1#10G"), "{r}");
+    assert!(one["why"].as_str().is_some_and(|w| w.contains("240.4(D)") && w.contains("30 A")), "{one}");
+    let legs = count(&mut s, json!({"kind": "wire", "circuit": "LP1-1", "group_by": "size"}));
+    assert!(legs["rows"].as_array().is_some_and(|rows| !rows.is_empty() && rows.iter().all(|x| x["size"] == json!("#10"))), "{legs}");
+    // The count by reason.
+    let all = s.execute("conduit.route", &json!({})).expect("report");
+    let by = &all["conductor_sizing"]["upsized_by_reason"];
+    assert_eq!((by["breaker minimum"].clone(), by["voltage drop: homerun"].as_u64().is_some_and(|n| n >= 1)), (json!(1), true), "{by}");
 }
 
 /// Every conduit stick's ends (feet) with its circuit, filtered by circuit.

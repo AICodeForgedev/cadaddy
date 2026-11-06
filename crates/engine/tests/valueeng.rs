@@ -538,7 +538,7 @@ fn the_nm_scenarios_takeoff_has_what_nm_work_uses_and_drops_the_raceway_it_repla
         m
     };
     let (design, alt) = (side("as_designed"), side("alternative"));
-    // The takeoff names a cable by its conductors' size (`#8`), the study by its makeup (`8/2 w/G`).
+    // The takeoff names a cable by its conductors' size (`#12`), the study by its makeup (`12/2 w/G`).
     let cable_ft =
         |m: &std::collections::BTreeMap<(String, String, String), f64>| m.iter().filter(|(k, _)| k.0 == "cable").map(|(_, q)| q).sum::<f64>();
     assert!((cable_ft(&on) - cable_ft(&alt)).abs() < 0.05 && cable_ft(&alt) > 0.0, "{on:?} {alt:?}");
@@ -564,7 +564,10 @@ fn the_nm_scenarios_takeoff_has_what_nm_work_uses_and_drops_the_raceway_it_repla
     assert_eq!(q(&on, "bracket", "Low-voltage mounting bracket", "1 gang"), 1.0);
     assert_eq!(q(&on, "connector", "NM cable connector", "3/8\""), 2.0);
     assert_eq!(q(&on, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"), 6.0);
-    assert_eq!(q(&on, "strap", "Cable staple", "#8"), staples as f64);
+    // The staples at the cable's own size (the takeoff's, `#12`; whatever the drop sized it).
+    let staple_qty: f64 = on.iter().filter(|(k, _)| k.0 == "strap" && k.1 == "Cable staple").map(|(_, q)| q).sum();
+    assert_eq!(staple_qty, staples as f64, "{on:?}");
+    assert!(on.keys().any(|k| k.0 == "strap" && k.1 == "Cable staple" && on.keys().any(|c| c.0 == "cable" && c.2 == k.2)), "{on:?}");
     assert_eq!(
         q(&off, "connector", "NM cable connector", "3/8\"") + q(&off, "nail_plate", "Nail plate (stud guard), 1/16 in steel", "1-1/2 x 3"),
         0.0

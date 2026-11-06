@@ -233,7 +233,8 @@ fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines(
     assert_eq!(find(&v, "switch", "", None)["system"], json!("lighting"));
     let plate = find(&v, "Device plate", "1 gang", Some("LP1-5"));
     assert_eq!((plate["system"].clone(), plate["system_why"].as_str().map(|w| w.contains("LP1-5"))), (json!("lighting"), Some(true)), "{plate}");
-    assert_eq!(find(&v, "THHN copper", "#10", Some("LP1-1"))["system"], json!("power"));
+    // Its legs' wire (#12: only its homerun goes up for the drop, Q6234).
+    assert_eq!(find(&v, "THHN copper", "#12", Some("LP1-1"))["system"], json!("power"));
     assert_eq!(find(&v, "EMT conduit", "2\"", None)["system"], json!("gear"));
     // The aluminum feeder's conductors along its routes (Q6201: its schedule's material).
     assert_eq!(find(&v, "XHHW aluminum", "#2/0", None)["system"], json!("gear"));
@@ -250,7 +251,7 @@ fn the_bid_rolls_the_takeoff_up_by_system_and_floor_every_number_from_its_lines(
     assert!((money(&emt["material"]) - 0.8 * money(&emt["qty_bought"])).abs() < 0.01, "{emt}");
     assert!((money(&emt["labor_unit_hours"]) - 0.05).abs() < 1e-9 && emt["labor_source"] == json!("labor units: Company labor table p.3"), "{emt}");
     assert!((money(&emt["labor_hours"]) - 0.05 * money(&emt["qty"])).abs() < 0.001, "{emt}");
-    let wire = find(&v, "Copper ground, green", "#10", Some("LP1-1"));
+    let wire = find(&v, "Copper ground, green", "#12", Some("LP1-1"));
     assert_eq!(wire["labor_source"], json!("labor units: Company labor table p.9"), "a whole category's row: {wire}");
     // The row with no source isn't used: the switch's labor is the starter book's, marked as a
     // placeholder, and the unsourced row is reported.
