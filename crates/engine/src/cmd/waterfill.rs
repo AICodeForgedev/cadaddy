@@ -341,7 +341,7 @@ pub(crate) struct Need {
     pub system: String,
     /// Where it may be joined (a fixture: its point; a room's branches: their points).
     pub pts: Vec<[f64; 2]>,
-    /// What it serves (`fixture P-9`, `the branches of 2 runs`).
+    /// What it serves (`fixture P-91`, `the branches of 2 run(s)`).
     pub what: String,
     /// The branch's size (inches); 0: the rules' fixture branch size.
     pub size_in: f64,
