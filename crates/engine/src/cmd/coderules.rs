@@ -98,7 +98,7 @@ pub(crate) struct Place {
 /// Whether what a room's receptacles' breakers are known to be says all are GFCI: one at least
 /// known, none known not to be.
 fn all_under_gfci(breakers: &[Option<bool>]) -> bool {
-    breakers.iter().any(|b| *b == Some(true)) && !breakers.iter().any(|b| *b == Some(false))
+    breakers.contains(&Some(true)) && !breakers.contains(&Some(false))
 }
 
 /// A spot for something the drawings don't place: in the first room whose name has one of `words`,
