@@ -2265,21 +2265,32 @@ fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
 /// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
 /// caller names may be written over; any other file there is the caller's and is never touched.
 fn is_job_checkpoint(path: &str) -> bool {
-    let Some(hooks) = super::file::io() else { return false };
-    let Ok(bytes) = std::fs::read(path) else { return false };
-    let Ok(d) = (hooks.read)(&bytes, path) else { return false };
-    d.agent.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()).is_some_and(|a| a.get("guided_job").is_some())
+    checkpoint_agent(path).is_some_and(|a| a.get("guided_job").is_some())
 }
 
-/// The unfinished job of this goal a checkpoint holds, with its drawing (its prints are checked
-/// by the caller: [`check_prints`]).
-fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
-    let hooks = super::file::io()?;
+/// The agent state of the drawing at `path`: from a .cdy file without reading its drawing (a
+/// hotel's is gigabytes in memory), else from the drawing the io hooks read.
+fn checkpoint_agent(path: &str) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
-    let d = (hooks.read)(&bytes, path).ok()?;
-    let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
-    let job: GuidedJob = serde_json::from_value(agent.get("guided_job")?.clone()).ok()?;
-    (job.goal == *goal && !job.is_done()).then_some((d, job))
+    let text = match cadaddy_io::cdy::agent(&bytes) {
+        Ok(text) => text?,
+        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent?,
+    };
+    serde_json::from_str(&text).ok()
+}
+
+/// The unfinished job of this goal a checkpoint holds (its prints are checked by the caller:
+/// [`check_prints`]; its drawing is read when the job goes on from it: [`checkpoint_drawing`]).
+fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<GuidedJob> {
+    let job: GuidedJob = serde_json::from_value(checkpoint_agent(path)?.get("guided_job")?.clone()).ok()?;
+    (job.goal == *goal && !job.is_done()).then_some(job)
+}
+
+/// A checkpoint's drawing (its job state inside).
+fn checkpoint_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
+    let hooks = super::file::io().ok_or_else(|| bad("job.start", "no file reader to read the checkpoint with"))?;
+    let bytes = std::fs::read(path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
+    (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))
 }
 
 /// The stages' names.
@@ -20765,7 +20776,7 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let mut started_over: Option<Value> = None;
     if let Some(any) = any
         && let Some(path) = job.checkpoint.clone()
-        && let Some((d, mut saved)) = read_checkpoint(&path, &job.goal)
+        && let Some(mut saved) = read_checkpoint(&path, &job.goal)
     {
         let check = check_prints(&saved, pdfs, &job.prints_files);
         let note = match &check {
@@ -20823,7 +20834,7 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
             job.audit("job_refreshed", "pipeline", None, Some(from), Some(json!({"checkpoint": path, "other_build": labels(&other), "why": why})));
             started_over = Some(json!({"from": from.label(), "other_build": labels(&other), "started_over": true, "why": why, "prints_note": note}));
         } else {
-            *s.doc_mut()? = d;
+            *s.doc_mut()? = checkpoint_drawing(&path)?;
             // The print set's project lives in the session, not the drawing.
             s.execute("printset.open", &json!({"path": pdfs}))?;
             for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
