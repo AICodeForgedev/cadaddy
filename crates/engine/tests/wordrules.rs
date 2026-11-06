@@ -537,6 +537,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
         "model kinds and property values: our own names (Q6211 kindenum owns them), not words read off a document",
     ),
     (
+        "crates/engine/src/cmd/propfill.rs",
+        "[design_value corrected_value]",
+        "our own output: the property keys of a corrected value (design value, corrected value, its reason and rule), not words read off a document",
+    ),
+    (
         "crates/engine/src/cmd/mep.rs",
         "[BOT BOD]",
         "drafting notation: height, elevation and dimension abbreviations (EL, AFF, BOT, CL, INV, HR), the same on every set",
