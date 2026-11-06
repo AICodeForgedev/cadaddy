@@ -278,14 +278,14 @@ fn xdata_after<'a>(x: &'a [RawTag], app: &str) -> impl Iterator<Item = &'a str> 
 }
 
 /// An entity's provenance strings, `key=value`.
-fn provenance(e: &Entity) -> BTreeMap<String, String> {
+pub(crate) fn provenance(e: &Entity) -> BTreeMap<String, String> {
     xdata_after(&e.common.xdata, PROV_APP)
         .filter_map(|s| s.split_once('='))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect()
 }
 
-fn has_override(e: &Entity) -> bool {
+pub(crate) fn has_override(e: &Entity) -> bool {
     e.common.xdata.iter().any(|t| t.code == 1001 && t.value.trim().eq_ignore_ascii_case(cadaddy_doc::overrides::OVERRIDE_APP))
 }
 

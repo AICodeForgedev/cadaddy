@@ -252,6 +252,23 @@ pub(crate) fn resolve_all(d: &Drawing) -> HashMap<Handle, (Made, String)> {
     out
 }
 
+/// One built element's provenance as [`resolve_all`] gives it (its firestop's from its
+/// penetrant), without reading the whole drawing: for a few elements (a Validate packet's).
+pub(crate) fn resolve_one(d: &Drawing, e: &Entity) -> Option<(Made, String)> {
+    let m = of_element(e)?;
+    let own = super::bimlook::made_tag(e, STATUS_TAG).and_then(Made::parse).is_some();
+    if own || !m.0.is_drawn() || props::read(&e.common.xdata).get("penetrant").is_none() {
+        return Some(m);
+    }
+    let by = super::mepatoms::connects_of(e)
+        .iter()
+        .filter_map(|x| d.model.get(*x))
+        .filter_map(|x| of_element(x))
+        .filter(|(m, _)| !m.is_drawn())
+        .max_by(|a, b| a.0.cmp(&b.0));
+    Some(by.map_or(m, |(m, b)| (m, format!("the firestop of a penetration by {} work ({})", m.as_str(), b.chars().take(120).collect::<String>()))))
+}
+
 /// `xdata` with the provenance tags put at the end of the build's group (a mark already there
 /// replaced).
 fn with_mark(xdata: &[RawTag], made: Made, basis: &str) -> Vec<RawTag> {
@@ -586,6 +603,31 @@ mod tests {
         assert!(!get(col).1.is_empty(), "a rule column says why");
         assert_eq!(get(prop), (Made::Inferred, "no document draws it: rules data".to_string()));
         assert_eq!(get(by_prop), (Made::Inferred, "M-X: a code rule".to_string()));
+    }
+
+    #[test]
+    fn one_element_resolves_as_the_whole_drawing_does() {
+        let mut d = Drawing::default();
+        let inf = built(&mut d, &["status:inferred", "basis:P-X: a rule"]);
+        let drawn = built(&mut d, &["system:CW"]);
+        let fire = built(&mut d, &[]);
+        let plain_fire = built(&mut d, &[]);
+        for (h, through) in [(fire, inf), (plain_fire, drawn)] {
+            d.modify_entity(h, |e| {
+                let mut ps = props::read(&e.common.xdata);
+                ps.set("penetrant", Prop::new("pipe", Source::computed()));
+                ps.set("connects", Prop::new(through.hex(), Source::computed()));
+                e.common.xdata = props::write(&e.common.xdata, &ps).into();
+            })
+            .unwrap_or_else(|e| panic!("{e}"));
+        }
+        let all = resolve_all(&d);
+        for h in [inf, drawn, fire, plain_fire] {
+            let one = d.entity(h).and_then(|e| resolve_one(&d, e));
+            assert_eq!(one.as_ref(), all.get(&h), "{h:?}");
+        }
+        assert_eq!(all.get(&fire).map(|m| m.0), Some(Made::Inferred));
+        assert_eq!(all.get(&plain_fire).map(|m| m.0), Some(Made::Drawn));
     }
 
     #[test]
