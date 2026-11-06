@@ -10382,10 +10382,11 @@ fn water_sources(
     out
 }
 
-/// The water the drawings leave out, inferred ([`super::waterfill::infer`]) once the derived
-/// mains and the rooms' pipes are in: on every floor, each fixture (the plumbing plans' fixtures,
-/// its lines by its schedule row) with no pipe of a water line it takes in reach, run from the
-/// nearest pipe of that system there; on the floors with no water plan (`levels`, as the derive
+/// The water, waste and vent the drawings leave out, inferred ([`super::waterfill::infer`]) once
+/// the derived mains and the rooms' pipes are in: on every floor, each fixture (the plumbing
+/// plans' fixtures, its lines by its schedule row) with no pipe of a line it takes in reach, run
+/// from the nearest pipe of that system there (a drainage branch at the code's fixture drain or
+/// vent size); on the floors with no water plan (`levels`, as the derive
 /// step found them, before other floors' room pipes were laid into their rooms) also each room's
 /// branches joined to no main, all of it from their mains and risers only. Each floor's result is
 /// a finding (what was inferred, on what basis, what is still unconnected). The counts by floor.
@@ -10428,7 +10429,7 @@ fn infer_missing_water(
                 let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
                 let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
                 let (lines, _) = super::plumbing::fixture_lines(&words);
-                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines }
+                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words }
             })
             .collect();
         let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
@@ -10437,16 +10438,18 @@ fn infer_missing_water(
         if n_needs == 0 {
             continue;
         }
-        // A floor with no water plan: from its mains and risers; else from any of its pipes.
-        let mains: Vec<&cadaddy_walk3d::MepRun> = on.iter().copied().filter(|r| !*planless || super::waterfill::is_main(r)).collect();
-        let inf = super::waterfill::infer(level, &mains, needs, upf, &fill);
+        // A floor with no water plan: its water from its mains and risers; else (and its
+        // drainage, which its plans draw) from any of its pipes.
+        let mains: Vec<&cadaddy_walk3d::MepRun> =
+            on.iter().copied().filter(|r| !*planless || !fill.water.contains(&r.system) || super::waterfill::is_main(r)).collect();
+        let inf = super::waterfill::infer(level, &mains, &on, needs, upf, &fill);
         let mut ft: BTreeMap<String, f64> = BTreeMap::new();
         for r in &inf.runs {
             *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
         }
         let ft_s: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
         progress_line(&format!(
-            "  {level}: water inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
+            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
             inf.served,
             inf.runs.len(),
             ft_s.join(", "),
@@ -10455,17 +10458,18 @@ fn infer_missing_water(
         let where_ = if *planless {
             format!("No plan draws {level}'s water where its rooms don't stack on another floor's")
         } else {
-            format!("{level}'s water plan reaches none of these fixtures' lines within {reach_ft:.0} ft")
+            format!("{level}'s plans draw no pipe within {reach_ft:.0} ft of these fixtures' lines")
         };
         job.add_finding(
             StageName::BimBuild,
-            &format!("Water inferred for {level}"),
+            &format!("Water, waste and vent inferred for {level}"),
             &format!(
-                "{where_}: {} fixture or room branch lines are run from the nearest pipe of their system ({}), marked inferred, never reported as drawn. Basis: {}; {}.{}",
+                "{where_}: {} fixture or room branch lines are run from the nearest pipe of their system ({}), marked inferred, never reported as drawn. Basis: {}; {}; {}.{}",
                 inf.served,
                 if ft_s.is_empty() { "nothing laid".to_string() } else { ft_s.join(", ") },
                 fill.main_basis,
                 fill.branch_basis,
+                fill.drain_basis,
                 if inf.unserved.is_empty() {
                     String::new()
                 } else {

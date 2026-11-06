@@ -70,6 +70,51 @@ pub(crate) struct FillRules {
     pub sample_ft: f64,
     /// A copied piece shorter than this is dropped (feet).
     pub min_piece_ft: f64,
+    /// The drainage lines (waste, vent) a fixture with none in reach is run for, on every floor,
+    /// from the nearest pipe of the system.
+    pub drainage: Vec<String>,
+    /// Why a fixture's waste or vent is run to the nearest pipe of its system.
+    pub drain_basis: String,
+    /// The vent line of [`Self::drainage`], and the drainage systems whose stack in reach vents a
+    /// fixture (the stack vent), and why.
+    pub vent: String,
+    pub vent_stacks: Vec<String>,
+    pub vent_stack_basis: String,
+    /// The size of a fixture's drainage branch by its system and words (the first that matches;
+    /// no words: any fixture), with the code section.
+    pub sizes: Vec<LineSize>,
+    /// A laid piece this close to a pipe of its system already there, and running along it (at
+    /// most [`Self::along_deg`] off its line), is that pipe and is not laid again (feet).
+    pub along_ft: f64,
+    pub along_deg: f64,
+}
+
+/// A fixture branch's size by its system and the fixture's words (`plumbing.json` `fill_in.sizes`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct LineSize {
+    pub system: String,
+    pub words: Vec<String>,
+    pub size_in: f64,
+    pub source: String,
+}
+
+impl FillRules {
+    /// The size (inches) and its source of a fixture's `system` branch, by the fixture's words:
+    /// the first rule of that system whose words it has (one with none: any). `None`: no rule.
+    pub(crate) fn size_for(&self, system: &str, words: &str) -> Option<(f64, &str)> {
+        let up = format!(" {} ", words.to_ascii_uppercase());
+        self.sizes
+            .iter()
+            .filter(|z| z.system == system && z.size_in.is_finite() && z.size_in > 0.0)
+            .find(|z| z.words.is_empty() || z.words.iter().any(|w| up.contains(&w.to_ascii_uppercase())))
+            .map(|z| (z.size_in, z.source.as_str()))
+    }
+
+    /// The systems [`infer`] runs lines of: the water, then the drainage.
+    fn filled(&self) -> impl Iterator<Item = &String> {
+        self.water.iter().chain(self.drainage.iter().filter(|d| !self.water.contains(d)))
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -152,6 +197,98 @@ fn to_segment(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, [f64; 2], f64) {
 fn edge_dist(poly: &[[f64; 2]], p: [f64; 2]) -> f64 {
     let n = poly.len();
     (0..n).filter_map(|i| Some(to_segment(p, *poly.get(i)?, *poly.get((i + 1) % n)?).0)).fold(f64::INFINITY, f64::min)
+}
+
+/// The stretches of `a`-`b` that don't lie along `segs` (within `tol` of one, at most `sin_max`
+/// (the sine of the angle) off its line, and beside it, not past its ends), as fractions from `a`
+/// (0) to `b` (1), tested every `step`: a piece laid where a pipe of its system already runs is
+/// that pipe, not a second one beside it. A tee or a crossing is not along.
+fn open_parts(a: [f64; 2], b: [f64; 2], segs: &[[[f64; 2]; 2]], tol: f64, sin_max: f64, step: f64) -> Vec<(f64, f64)> {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let len = dx.hypot(dy);
+    if !(len.is_finite() && len > 0.0) {
+        return Vec::new();
+    }
+    let lo = [a[0].min(b[0]) - tol, a[1].min(b[1]) - tol, a[0].max(b[0]) + tol, a[1].max(b[1]) + tol];
+    let near: Vec<&[[f64; 2]; 2]> = segs
+        .iter()
+        .filter(|[p, q]| {
+            p[0].min(q[0]) <= lo[2] && p[0].max(q[0]) >= lo[0] && p[1].min(q[1]) <= lo[3] && p[1].max(q[1]) >= lo[1] && {
+                let (ex, ey) = (q[0] - p[0], q[1] - p[1]);
+                let l = ex.hypot(ey);
+                l > 0.0 && (dx * ey - dy * ex).abs() / (len * l) <= sin_max
+            }
+        })
+        .collect();
+    if near.is_empty() {
+        return vec![(0.0, 1.0)];
+    }
+    let along = |t: f64| {
+        let m = [a[0] + dx * t, a[1] + dy * t];
+        near.iter().any(|[p, q]| {
+            let (ex, ey) = (q[0] - p[0], q[1] - p[1]);
+            let l2 = ex * ex + ey * ey;
+            let u = ((m[0] - p[0]) * ex + (m[1] - p[1]) * ey) / l2;
+            (0.0..=1.0).contains(&u) && (p[0] + u * ex - m[0]).hypot(p[1] + u * ey - m[1]) <= tol
+        })
+    };
+    let n = ((len / step.max(1e-9)).ceil() as usize).clamp(1, 20_000);
+    let mut out: Vec<(f64, f64)> = Vec::new();
+    for k in 0..n {
+        let (t0, t1) = (k as f64 / n as f64, (k + 1) as f64 / n as f64);
+        if along((t0 + t1) / 2.0) {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if (last.1 - t0).abs() < 1e-12 => last.1 = t1,
+            _ => out.push((t0, t1)),
+        }
+    }
+    out
+}
+
+/// `pts` (each segment at its bottom in `bottoms`) less the stretches of it along `segs`
+/// ([`open_parts`]): the pieces left, each at least `min` long.
+fn clip_off(pts: &[[f64; 2]], bottoms: &[f64], segs: &[[[f64; 2]; 2]], ru: &FillRules, upf: f64, min: f64) -> Vec<(Vec<[f64; 2]>, Vec<f64>)> {
+    let tol = ru.along_ft.max(0.0) * upf;
+    let sin_max = ru.along_deg.clamp(0.0, 90.0).to_radians().sin();
+    let step = (ru.along_ft.max(0.05) * upf / 2.0).max(1e-9);
+    let mut out: Vec<(Vec<[f64; 2]>, Vec<f64>)> = Vec::new();
+    let mut cur: (Vec<[f64; 2]>, Vec<f64>) = (Vec::new(), Vec::new());
+    let mut flush = |cur: &mut (Vec<[f64; 2]>, Vec<f64>)| {
+        let len: f64 = cur.0.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
+        let piece = std::mem::take(cur);
+        if piece.0.len() >= 2 && len > 0.0 && len >= min {
+            out.push(piece);
+        }
+    };
+    for (i, w) in pts.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let bottom = bottoms.get(i).or(bottoms.last()).copied().unwrap_or(0.0);
+        let at = |t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        let parts = if tol > 0.0 { open_parts(a, b, segs, tol, sin_max, step) } else { vec![(0.0, 1.0)] };
+        let mut joined_end = false;
+        for (t0, t1) in parts {
+            // Carried on from the last segment's open end, else a new piece.
+            if !(t0 <= 1e-12 && cur.0.last().is_some_and(|l| (l[0] - a[0]).abs() < 1e-9 && (l[1] - a[1]).abs() < 1e-9)) {
+                flush(&mut cur);
+                cur.0.push(at(t0));
+            }
+            cur.0.push(at(t1));
+            cur.1.push(bottom);
+            joined_end = t1 >= 1.0 - 1e-12;
+        }
+        if !joined_end {
+            flush(&mut cur);
+        }
+    }
+    flush(&mut cur);
+    out
+}
+
+/// The segments of `runs`.
+fn segments<'a>(runs: impl Iterator<Item = &'a MepRun>) -> Vec<[[f64; 2]; 2]> {
+    runs.flat_map(|r| r.points.windows(2).map(|w| [w[0], w[1]])).take(MAX_ITEMS * 4).collect()
 }
 
 /// The type of the room `p` is in: the smallest whose outline holds it, else the nearest within
@@ -278,7 +415,14 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
     let step = ru.sample_ft.max(0.25) * upf;
     let min_piece = ru.min_piece_ft.max(0.0) * upf;
     let basis = format!("derived from {}'s drawn main where this floor's rooms stack on its: {}", src.level, ru.stack_basis);
-    for r in src.runs.iter().filter(|r| r.top_ft.is_none() && r.points.len() >= 2 && provenance(r) == DRAWN && !branch(r)) {
+    // The longest first: a stretch the source floor draws twice (its plan and a second view) is
+    // copied once, the next copy clipped where it runs along one already made.
+    let mut mains: Vec<&MepRun> =
+        src.runs.iter().filter(|r| r.top_ft.is_none() && r.points.len() >= 2 && provenance(r) == DRAWN && !branch(r)).collect();
+    let run_len = |r: &MepRun| r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>();
+    mains.sort_by(|a, b| run_len(b).total_cmp(&run_len(a)));
+    let mut copied: BTreeMap<&str, Vec<[[f64; 2]; 2]>> = BTreeMap::new();
+    for r in mains {
         // Each stretch that stacks, with each segment's bottom.
         let mut pieces: Vec<(Vec<[f64; 2]>, Vec<f64>)> = Vec::new();
         let mut cur: (Vec<[f64; 2]>, Vec<f64>) = (Vec::new(), Vec::new());
@@ -318,6 +462,12 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
             }
         }
         flush(&mut cur, &mut pieces);
+        let done = copied.entry(r.system.as_str()).or_default();
+        let pieces: Vec<(Vec<[f64; 2]>, Vec<f64>)> =
+            pieces.iter().flat_map(|(pts, bottoms)| clip_off(pts, bottoms, done, ru, upf, min_piece.max(1e-9))).collect();
+        for (pts, _) in &pieces {
+            done.extend(pts.windows(2).map(|w| [w[0], w[1]]));
+        }
         for (pts, bottoms) in pieces {
             let mut c = r.clone();
             c.points = pts.iter().map(|p| [p[0] + off[0], p[1] + off[1]]).collect();
@@ -347,6 +497,8 @@ pub(crate) struct Need {
     pub size_in: f64,
     /// A room's branches: their segments (once joined, later needs may take them).
     pub segs: Vec<[[f64; 2]; 2]>,
+    /// Where its size comes from (a drainage branch: the code's fixture drain or vent size).
+    pub size_basis: String,
 }
 
 /// A fixture of a floor: its point, what to call it and the lines it takes.
@@ -354,6 +506,8 @@ pub(crate) struct Fixture {
     pub at: [f64; 2],
     pub what: String,
     pub lines: Vec<String>,
+    /// Its tag and schedule row's words (what sizes its drainage branches).
+    pub words: String,
 }
 
 /// A main or riser (what a branch is run from): a riser, or a run no plan draws on the floor.
@@ -361,10 +515,11 @@ pub(crate) fn is_main(r: &MepRun) -> bool {
     r.top_ft.is_some() || r.points.len() < 2 || provenance(r) != DRAWN
 }
 
-/// The water lines a floor still needs, from its runs (`runs`: the floor's, derived mains among
-/// them) and its fixtures: each fixture's line with no pipe of its system within `reach_ft` (as a
-/// fixture is connected), and on a floor with no water plan (`branches`) each group of joined
-/// branches (a room's, from the enlarged details) that touches no main or riser.
+/// The water and drainage lines a floor still needs, from its runs (`runs`: the floor's, derived
+/// mains among them) and its fixtures: each fixture's line (water or drainage) with no pipe of its
+/// system within `reach_ft` (as a fixture is connected; a vent, nor a stack of the rules'
+/// `vent_stacks`: the stack vent), and on a floor with no water plan (`branches`) each group of
+/// joined water branches (a room's, from the enlarged details) that touches no main or riser.
 pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: f64, ru: &FillRules, branches: bool) -> Vec<Need> {
     let mut out = Vec::new();
     let reach = reach_ft.max(0.0) * upf;
@@ -375,11 +530,22 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
             pts => pts.windows(2).any(|w| to_segment(p, w[0], w[1]).0 <= d),
         })
     };
+    let stack_near = |p: [f64; 2]| {
+        runs.iter()
+            .filter(|r| ru.vent_stacks.contains(&r.system) && (r.top_ft.is_some() || r.points.len() < 2))
+            .any(|r| r.points.first().is_some_and(|q| (q[0] - p[0]).hypot(q[1] - p[1]) <= reach))
+    };
     for f in fixtures.iter().take(MAX_ITEMS) {
-        for sys in f.lines.iter().filter(|s| ru.fixture_lines.contains(s)) {
-            if !near_pipe(sys, f.at, reach, false) {
-                out.push(Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in: 0.0, segs: Vec::new() });
+        for sys in f.lines.iter().filter(|s| ru.fixture_lines.contains(s) || ru.drainage.contains(s)) {
+            if near_pipe(sys, f.at, reach, false) || (*sys == ru.vent && stack_near(f.at)) {
+                continue;
             }
+            let (size_in, size_basis) = if ru.drainage.contains(sys) {
+                ru.size_for(sys, &f.words).map_or((0.0, String::new()), |(z, b)| (z, b.to_string()))
+            } else {
+                (0.0, String::new())
+            };
+            out.push(Need { system: sys.clone(), pts: vec![f.at], what: format!("fixture {}", f.what), size_in, segs: Vec::new(), size_basis });
         }
     }
     // The branches, grouped where their pieces touch.
@@ -422,7 +588,14 @@ pub(crate) fn needs(runs: &[&MepRun], fixtures: &[Fixture], reach_ft: f64, upf: 
             }
             let size = g.iter().map(|r| r.size_in[0]).fold(0.0, f64::max);
             let segs = g.iter().flat_map(|r| r.points.windows(2).map(|w| [w[0], w[1]])).collect();
-            out.push(Need { system: sys.clone(), pts, what: format!("the branches of {} run(s)", g.len()), size_in: size, segs });
+            out.push(Need {
+                system: sys.clone(),
+                pts,
+                what: format!("the branches of {} run(s)", g.len()),
+                size_in: size,
+                segs,
+                size_basis: String::new(),
+            });
         }
     }
     out
@@ -456,8 +629,10 @@ struct Piece {
 /// at right angles; one past a main's end has the main carried on along its line to it first
 /// (sized as the main), then the branch (its own size, else the rules' fixture branch). Off a
 /// riser: along one axis, then the other. Laid at the main's height. Each run marked
-/// [`INFERRED`] with its basis; a need farther than the rules' reach is left, listed.
-pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, ru: &FillRules) -> Inferred {
+/// [`INFERRED`] with its basis; a need farther than the rules' reach is left, listed. A run is
+/// not laid where it would run along a pipe of its system already on the floor (`along`: all its
+/// pipe, drawn or filled in) or laid before it: that stretch is that pipe.
+pub(crate) fn infer(level: &str, mains: &[&MepRun], along: &[&MepRun], needs: Vec<Need>, upf: f64, ru: &FillRules) -> Inferred {
     let mut out = Inferred::default();
     if !(upf.is_finite() && upf > 0.0) {
         return out;
@@ -467,7 +642,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
     let share = ru.share_ft.max(0.0) * upf;
     let mut by_sys: BTreeMap<&str, Vec<Need>> = BTreeMap::new();
     for n in needs {
-        if let Some(sys) = ru.water.iter().find(|s| **s == n.system) {
+        if let Some(sys) = ru.filled().find(|s| **s == n.system) {
             by_sys.entry(sys.as_str()).or_default().push(n);
         }
     }
@@ -480,6 +655,7 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
             .find_map(|r| r.bottoms_ft.first().copied())
             .or_else(|| templates.iter().find_map(|r| r.bottoms_ft.first().copied()))
             .unwrap_or(0.0);
+        let mut there: Vec<[[f64; 2]; 2]> = segments(along.iter().copied().filter(|r| r.system == sys));
         let mut net: Vec<Piece> = Vec::new();
         for (i, r) in templates.iter().enumerate() {
             match r.points.as_slice() {
@@ -542,7 +718,14 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
             };
             let gap = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]) > joint;
             let size = if need.size_in > 0.0 { need.size_in } else { ru.branch_size_in };
-            let branch = |what: &str| format!("inferred: {} ({sys} branch to {what})", ru.branch_basis);
+            let branch = |what: &str| {
+                if ru.drainage.iter().any(|d| d == sys) {
+                    let size = if need.size_basis.is_empty() { String::new() } else { format!("; size: {}", need.size_basis) };
+                    format!("inferred: {} ({sys} branch to {what}{size})", ru.drain_basis)
+                } else {
+                    format!("inferred: {} ({sys} branch to {what})", ru.branch_basis)
+                }
+            };
             // (Each run, and whether it is a main: off a branch, both legs are the branch.)
             let mut laid: Vec<(MepRun, bool)> = Vec::new();
             if gap(q, corner) {
@@ -560,7 +743,14 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], needs: Vec<Need>, upf: f64, 
                     net.push(Piece { a: *a, b: *b, run: templates.len(), bottom, main });
                     templates.push(r.clone());
                 }
-                out.runs.push(r);
+                // Only the stretches no pipe of its system already runs along.
+                for (pts, bottoms) in clip_off(&r.points, &r.bottoms_ft, &there, ru, upf, joint.max(1e-9)) {
+                    let mut c = r.clone();
+                    c.points = pts;
+                    c.bottoms_ft = bottoms;
+                    there.extend(c.points.windows(2).map(|w| [w[0], w[1]]));
+                    out.runs.push(c);
+                }
             }
             // A room's branches, joined now: a branch the next need may take.
             for [a, b] in need.segs.iter().take(MAX_ITEMS) {
@@ -698,16 +888,17 @@ mod tests {
         // Beside the main (x 20): straight across. Past its end (x 70): the main on to x 70, then
         // the branch. Out of reach (x 400): left, listed.
         let fixtures = vec![
-            Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into(), "SAN".into()] },
-            Fixture { at: [70.0 * 12.0, 30.0 * 12.0], what: "P-92".into(), lines: vec!["CW".into(), "HW".into()] },
-            Fixture { at: [400.0 * 12.0, 30.0 * 12.0], what: "P-93".into(), lines: vec!["CW".into()] },
+            Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into(), "SAN".into()], words: String::new() },
+            Fixture { at: [70.0 * 12.0, 30.0 * 12.0], what: "P-92".into(), lines: vec!["CW".into(), "HW".into()], words: String::new() },
+            Fixture { at: [400.0 * 12.0, 30.0 * 12.0], what: "P-93".into(), lines: vec!["CW".into()], words: String::new() },
         ];
         let n = needs(&mains, &fixtures, 15.0, 12.0, &r, true);
-        // CW for all three (none within 15 ft), HW for the second; SAN is not water.
-        assert_eq!(n.len(), 4, "{n:?}");
-        let inf = infer("Level 2", &mains, n, 12.0, &r);
+        // CW for all three (none within 15 ft), HW for the second, the first's waste.
+        assert_eq!(n.len(), 5, "{n:?}");
+        let inf = infer("Level 2", &mains, &mains, n, 12.0, &r);
         assert_eq!(inf.served, 2);
-        assert_eq!(inf.unserved.len(), 2, "{:?}", inf.unserved);
+        assert_eq!(inf.unserved.len(), 3, "{:?}", inf.unserved);
+        assert!(inf.unserved.iter().any(|u| u.contains("SAN")), "no waste pipe on the floor: {:?}", inf.unserved);
         assert!(inf.unserved.iter().any(|u| u.contains("HW")), "no HW main on the floor: {:?}", inf.unserved);
         assert!(inf.unserved.iter().any(|u| u.contains("P-93")), "{:?}", inf.unserved);
         for x in &inf.runs {
@@ -726,7 +917,7 @@ mod tests {
         assert!((on.size_in[0] - 2.0).abs() < 1e-9);
         assert_eq!(inf.runs.len(), 3);
         // A fixture with water in reach needs nothing.
-        let near = vec![Fixture { at: [20.0 * 12.0, 10.0 * 12.0], what: "P-94".into(), lines: vec!["CW".into()] }];
+        let near = vec![Fixture { at: [20.0 * 12.0, 10.0 * 12.0], what: "P-94".into(), lines: vec!["CW".into()], words: String::new() }];
         assert!(needs(&mains, &near, 15.0, 12.0, &r, true).is_empty());
     }
 
@@ -747,7 +938,7 @@ mod tests {
         let n = needs(&all, &[], 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 2, "{n:?}");
         assert!(n.iter().any(|x| x.what == "the branches of 2 run(s)"));
-        let inf = infer("Level 2", &[&main], n, 12.0, &r);
+        let inf = infer("Level 2", &[&main], &all, n, 12.0, &r);
         assert_eq!(inf.served, 2);
         // Main on 24 → 40, tee to (40, 6); then 40 → 60 on, tee to (60, 6): the second carries the
         // first's extension on, not a second line beside it.
@@ -766,12 +957,12 @@ mod tests {
         // A lavatory and a tub 3' apart, 20' from the main: one line from the main to the first,
         // the second teed off it (not a second line beside it).
         let fixtures = vec![
-            Fixture { at: [40.0 * 12.0, 22.5 * 12.0], what: "P-91".into(), lines: vec!["CW".into()] },
-            Fixture { at: [43.0 * 12.0, 22.5 * 12.0], what: "P-92".into(), lines: vec!["CW".into()] },
+            Fixture { at: [40.0 * 12.0, 22.5 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() },
+            Fixture { at: [43.0 * 12.0, 22.5 * 12.0], what: "P-92".into(), lines: vec!["CW".into()], words: String::new() },
         ];
         let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 2);
-        let inf = infer("Level 2", &[&main], n, 12.0, &r);
+        let inf = infer("Level 2", &[&main], &[&main], n, 12.0, &r);
         assert_eq!(inf.served, 2);
         let total: f64 = inf.runs.iter().map(ft).sum();
         assert!(
@@ -787,7 +978,7 @@ mod tests {
         hmain.height_source = DERIVED.into();
         let n = needs(&[&hmain, &a, &b], &[], 15.0, 12.0, &r, true);
         assert_eq!(n.len(), 2, "{n:?}");
-        let inf = infer("Level 2", &[&hmain], n, 12.0, &r);
+        let inf = infer("Level 2", &[&hmain], &[&hmain, &a, &b], n, 12.0, &r);
         assert_eq!(inf.served, 2);
         let total: f64 = inf.runs.iter().map(ft).sum();
         assert!((total - (30.0 + 2.0)).abs() < 1e-6, "{total} {:?}", inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>());
@@ -813,6 +1004,97 @@ mod tests {
     }
 
     #[test]
+    fn a_piece_is_not_laid_where_a_pipe_of_its_system_already_runs_and_a_tee_or_crossing_is_not_along() {
+        let r = ru();
+        let mut main = run("CW", "Level 2", &[[0.0, 2.5], [48.0, 2.5]]);
+        main.height_source = DERIVED.into();
+        // A drawn pipe up from the main to 25 ft; the fixture's need came from the main alone.
+        let up = run("CW", "Level 2", &[[20.0, 2.5], [20.0, 25.0]]);
+        let fixtures = vec![Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() }];
+        let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
+        assert_eq!(n.len(), 1);
+        let inf = infer("Level 2", &[&main], &[&main, &up], n, 12.0, &r);
+        assert_eq!(inf.served, 1);
+        // Only the 5 ft past the drawn pipe is laid.
+        let total: f64 = inf.runs.iter().map(ft).sum();
+        assert!((total - 5.0).abs() < 0.3, "{total} {:?}", inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>());
+        assert!(inf.runs.iter().all(|x| provenance(x) == INFERRED));
+        // Beside it 3 in off: along. A tee off it and a crossing: not.
+        let seg = [[[0.0, 0.0], [120.0, 0.0]]];
+        assert!(open_parts([12.0, 3.0], [96.0, 3.0], &seg, 6.0, 0.26, 3.0).is_empty());
+        assert_eq!(open_parts([60.0, 0.0], [60.0, 120.0], &seg, 6.0, 0.26, 3.0), vec![(0.0, 1.0)]);
+        assert_eq!(open_parts([60.0, -60.0], [60.0, 60.0], &seg, 6.0, 0.26, 3.0), vec![(0.0, 1.0)]);
+        // Carried on past its end: not along; half over it: the other half is laid.
+        assert_eq!(open_parts([120.0, 0.0], [240.0, 0.0], &seg, 6.0, 0.26, 3.0), vec![(0.0, 1.0)]);
+        let half = open_parts([60.0, 0.0], [180.0, 0.0], &seg, 6.0, 0.26, 3.0);
+        assert_eq!(half.len(), 1);
+        assert!((half[0].0 - 0.5).abs() < 0.03 && (half[0].1 - 1.0).abs() < 1e-12, "{half:?}");
+        // A polyline clipped in its middle is two pieces, each at its segment's bottom.
+        let pts = [[0.0, 24.0], [60.0, 24.0], [60.0, 180.0]];
+        let over = [[[-6.0, 24.0], [30.0, 24.0]], [[60.0, 60.0], [60.0, 120.0]]];
+        let parts = clip_off(&pts, &[8.0, 9.0], &over, &r, 12.0, 1.0);
+        assert_eq!(parts.len(), 2, "{parts:?}");
+        assert!((parts[0].0[0][0] - 30.0).abs() < 3.1 && parts[0].0.len() == 3 && parts[0].1 == vec![8.0, 9.0], "{parts:?}");
+        assert!((parts[1].0[0][1] - 120.0).abs() < 3.1 && parts[1].1 == vec![9.0], "{parts:?}");
+    }
+
+    #[test]
+    fn a_main_the_source_floor_draws_twice_is_copied_once() {
+        let below = floor(400.0, 0.0, 6, "STUDIO", 0..0);
+        let mine = floor(0.0, 0.0, 6, "STUDIO", 0..0);
+        // The corridor main, and the same main again 3 in off along half of it (a second view).
+        let runs = vec![run("CW", "Level 1", &[[401.0, 2.5], [471.0, 2.5]]), run("CW", "Level 1", &[[431.0, 2.75], [466.0, 2.75]])];
+        let d = derive(&mine, "Level 2", &[Source { level: "Level 1".into(), rooms: below, runs }], 12.0, &ru()).expect("derived");
+        let total: f64 = d.runs.iter().map(ft).sum();
+        assert!((total - 70.0).abs() < 0.6, "one main, not one and a half: {total} {:?}", d.runs.iter().map(|r| &r.points).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_fixtures_waste_and_vent_are_run_to_the_nearest_pipe_at_the_codes_size_and_a_stack_vents_it() {
+        let r = ru();
+        // A drawn floor: its waste main along y 2.5, a vent main along y 0; a water closet 25 ft off.
+        let san = run("SAN", "Level 3", &[[0.0, 2.5], [60.0, 2.5]]);
+        let vent = run("V", "Level 3", &[[0.0, 0.0], [60.0, 0.0]]);
+        let wc = Fixture {
+            at: [30.0 * 12.0, 27.5 * 12.0],
+            what: "P-91".into(),
+            lines: vec!["SAN".into(), "V".into()],
+            words: "P-91 WATER CLOSET floor mounted".into(),
+        };
+        let all = vec![&san, &vent];
+        let n = needs(&all, std::slice::from_ref(&wc), 15.0, 12.0, &r, false);
+        assert_eq!(n.len(), 2, "{n:?}");
+        let inf = infer("Level 3", &all, &all, n, 12.0, &r);
+        assert_eq!(inf.served, 2, "{:?}", inf.unserved);
+        let s = inf.runs.iter().find(|x| x.system == "SAN").expect("its waste");
+        assert!((s.size_in[0] - 3.0).abs() < 1e-9, "{:?}", s.size_in);
+        assert!(s.size_source.contains(&r.drain_basis) && s.size_source.contains("water closet"), "{}", s.size_source);
+        assert!((ft(s) - 25.0).abs() < 1e-6);
+        let v = inf.runs.iter().find(|x| x.system == "V").expect("its vent");
+        assert!((v.size_in[0] - 1.5).abs() < 1e-9, "{:?}", v.size_in);
+        assert!(inf.runs.iter().all(|x| provenance(x) == INFERRED && x.slope_in_per_ft == 0.0), "the drainage step slopes them");
+        // A waste stack beside it vents it (the stack vent): only its waste is run.
+        let mut stack = run("SAN", "Level 3", &[[31.0, 25.0]]);
+        stack.top_ft = Some(40.0);
+        let n = needs(&[&san, &stack], std::slice::from_ref(&wc), 15.0, 12.0, &r, false);
+        assert!(n.iter().all(|x| x.system != "V"), "{n:?}");
+        // The code's sizes by the fixture's words, the first rule that matches.
+        for (sys, words, size) in [
+            ("SAN", "P-93 TUB SHOWER", 1.5),
+            ("SAN", "P-92 ADA LAVATORY wall hung", 1.25),
+            ("SAN", "P-94 ROLL IN SHOWER", 2.0),
+            ("SAN", "P-95 KITCHEN SINK", 1.5),
+            ("SAN", "FCO CLEANOUT", 3.0),
+            ("SAN", "X-1 SOMETHING", 2.0),
+            ("V", "P-91 WATER CLOSET", 1.5),
+            ("V", "P-92 LAVATORY", 1.25),
+        ] {
+            assert_eq!(r.size_for(sys, words).map(|z| z.0), Some(size), "{sys} {words}");
+        }
+        assert!(r.size_for("CW", "P-91 WATER CLOSET").is_none());
+    }
+
+    #[test]
     fn the_fill_in_rules_are_data_with_their_bases() {
         let r = ru();
         assert_eq!(r.water, ["CW", "HW", "HWR"]);
@@ -822,5 +1104,10 @@ mod tests {
         }
         assert!(r.branch_size_in > 0.0 && r.reach_ft > 0.0 && r.joint_ft > 0.0 && r.sample_ft > 0.0);
         assert!(r.share_ft > r.joint_ft && r.share_ft < r.reach_ft);
+        assert_eq!(r.drainage, ["SAN", "V"]);
+        assert!(r.drainage.contains(&r.vent) && !r.vent_stacks.is_empty());
+        assert!(r.drain_basis.len() > 20 && r.vent_stack_basis.len() > 20);
+        assert!(r.sizes.iter().all(|z| z.size_in > 0.0 && !z.source.is_empty()), "every size has its source");
+        assert!(r.along_ft > 0.0 && r.along_ft < r.joint_ft && r.along_deg > 0.0 && r.along_deg < 45.0);
     }
 }
