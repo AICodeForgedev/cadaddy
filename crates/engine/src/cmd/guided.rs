@@ -2790,10 +2790,17 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 if job.level_at([t.at.x, t.at.y]).is_some_and(|r| !super::printmep::building_level(&r.level)) {
                     continue;
                 }
-                // Its circuit: a label under it, within reach.
+                // Its circuit: a label under it, within reach, lettered as it is (a mark of another
+                // size is no fixture's: a glyph misread from linework, a title).
                 let Some(label) = sheet_texts
                     .iter()
-                    .filter(|o| circuit_text(&o.value, &sheet_numbers) && o.at.y < t.at.y && o.at.dist(t.at) <= reach)
+                    .filter(|o| {
+                        circuit_text(&o.value, &sheet_numbers)
+                            && o.at.y < t.at.y
+                            && o.at.dist(t.at) <= reach
+                            && t.height <= LONE_MARK_SIZE * o.height
+                            && o.height <= LONE_MARK_SIZE * t.height
+                    })
                     .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
                 else {
                     continue;
@@ -3850,6 +3857,9 @@ const TYPE_MARK_REACH_H: f64 = 3.0;
 const DEFAULT_MARK_HEIGHT: f64 = 6.0;
 /// A lone luminaire mark's circuit label is within this of it, in its text heights; a device read
 /// that close is the mark's.
+/// A lone fixture mark and its circuit label are lettered alike: neither more than this many
+/// times the other's height.
+const LONE_MARK_SIZE: f64 = 1.6;
 const LONE_MARK_REACH_H: f64 = 4.0;
 /// A device read within this of where a lone mark's symbol would be drawn (in its text heights)
 /// is that symbol.
@@ -22460,8 +22470,9 @@ mod tests {
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
     }
 
-    /// A lone fixture mark is printed as the schedule prints its type: a lower-case leg letter
-    /// over a circuit (`d` over `Q-11`) is a switch leg, not a luminaire of type D.
+    /// A lone fixture mark is printed as the schedule prints its type, in its label's lettering: a
+    /// lower-case leg letter over a circuit (`d` over `Q-11`) is a switch leg, and a letter read
+    /// from linework at another size is no mark: neither is a luminaire of type D.
     #[test]
     fn a_lone_leg_letter_over_a_circuit_is_no_luminaire() {
         let mut s = crate::Session::new();
@@ -22469,8 +22480,16 @@ mod tests {
         job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
         job.sheets_loaded = true;
         job.luminaire_types = vec!["D".into()];
-        let texts: Vec<(&str, f64, f64, f64)> =
-            vec![("D", 300.0, 506.0, 4.0), ("Q-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("Q-11", 700.0, 494.0, 4.0)];
+        // And a `D` read from linework, lettered two and a half times the label's height, over a
+        // feeder's tag.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("D", 300.0, 506.0, 4.0),
+            ("Q-2", 300.0, 494.0, 4.0),
+            ("d", 700.0, 506.0, 4.0),
+            ("Q-11", 700.0, 494.0, 4.0),
+            ("D", 1100.0, 508.0, 10.0),
+            ("QP1-5", 1110.0, 494.0, 4.0),
+        ];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &[]);
         let hi = s.doc().map_or(0, |d| d.handseed);
