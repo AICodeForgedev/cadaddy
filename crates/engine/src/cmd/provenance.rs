@@ -358,7 +358,15 @@ pub(crate) fn correct_with(ps: &mut Props, c: &Correction, design_source: Source
     if !ps.get(&dkey).is_some_and(Prop::has_value) && !ps.set(&dkey, Prop::new(c.design.clone(), design_source)) {
         return false;
     }
-    let mut p = Prop::new(c.corrected.clone(), installed_source);
+    // Already the installed value (a number stays a number): its source and note change.
+    let same = |old: &Prop| {
+        let (a, b) = (old.text(), c.corrected.trim().to_string());
+        a.trim() == b || a.trim().parse::<f64>().ok().zip(b.parse::<f64>().ok()).is_some_and(|(x, y)| (x - y).abs() < 1e-9)
+    };
+    let mut p = match ps.get(&c.key).filter(|old| same(old)) {
+        Some(old) => Prop { source: installed_source, ..old.clone() },
+        None => Prop::new(c.corrected.clone(), installed_source),
+    };
     p.note = Some(format!("{}: {}", c.rule, c.reason));
     if !ps.set(&c.key, p) {
         return false;
