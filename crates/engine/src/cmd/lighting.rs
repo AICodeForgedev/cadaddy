@@ -809,11 +809,13 @@ pub(crate) struct Links {
     pub conflicts: Vec<Conflict>,
 }
 
-/// Whether a control dims: a dimmer mark (`SD`, `D`, `DS`), or its product says dimmer.
+/// Whether a control dims: a dimmer mark (`SD`, `D`, `DS`; a 3-way or 4-way dimmer `S3D`), or
+/// its product says dimmer.
 fn is_dimmer(c: &Dev) -> bool {
     let m = c.mark.to_ascii_uppercase();
     c.kind == "dimmer"
         || m.starts_with("SD")
+        || super::dimcheck::switch_mark_dims(&m)
         || m == "DS"
         || (m.starts_with('D') && m.len() <= 3)
         || m.split(',').any(|p| p.trim() == "D")

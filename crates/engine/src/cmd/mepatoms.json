@@ -248,6 +248,7 @@
   "phase_source": "panel circuit numbering: circuits 1-2 on phase A, 3-4 on B, 5-6 on C (standard panelboard bussing)",
   "offset_max_ft": 1.0,
   "joint_tol_in": 1.0,
+  "one_raceway_source": "NEC 300.3(B): all conductors of one circuit in the same raceway; trade practice: a circuit's runs that leave a box or run one way together share one conduit to where they part, and a junction box joins them there (NEC 314.16, 4\" square); so a stretch the routing laid twice for one circuit is one raceway with one set of the circuit's conductors",
   "box_reach_ft": 3.0,
   "panel_reach_ft": 5.0,
   "feeder_makeup_ft": 3.0,
