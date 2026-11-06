@@ -26062,6 +26062,8 @@ mod tests {
             top_ft: None,
             source_sheet: "P-9".into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         };
         let runs = vec![
             // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
