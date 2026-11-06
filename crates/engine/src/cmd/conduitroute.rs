@@ -2008,6 +2008,24 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             ceiling_at(level, at + f * (0.75 * upf)).or_else(|| ceiling_at(level, at - f * (0.75 * upf)))
         })
     };
+    // The highest ceiling a square route from `a` to `b` may pass under (either L between them,
+    // looked at every 2 ft): a leg between two boxes runs over every room it crosses, not just
+    // its boxes' rooms.
+    let way_ceiling = |level: &str, a: Vec2, b: Vec2| -> Option<f64> {
+        let step = 2.0 * upf;
+        let mut hi: Option<f64> = None;
+        for corner in [Vec2::new(b.x, a.y), Vec2::new(a.x, b.y)] {
+            for (p, q) in [(a, corner), (corner, b)] {
+                let n = (p.dist(q) / step).ceil().clamp(1.0, 32.0) as usize;
+                for k in 0..=n {
+                    if let Some(z) = ceiling_at(level, p + (q - p) * (k as f64 / n as f64)) {
+                        hi = Some(hi.map_or(z, |h: f64| h.max(z)));
+                    }
+                }
+            }
+        }
+        hi
+    };
     let empty = Field::default();
     // A point of `from`'s own plan on `to`'s.
     let carry = |p: Vec2, from: &str, to: &str| p + move_of(from) - move_of(to);
@@ -2697,20 +2715,36 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 // Along the wall between the boxes: through the bored studs above them.
                 in_wall_legs += 1;
                 let zw = a.top.max(b.top) + rl.route.in_wall_above_box_in / 12.0 * upf;
-                r.points = vec![[a.at.x, a.at.y], [a.at.x, a.at.y], [b.at.x, b.at.y], [b.at.x, b.at.y]];
-                // Along its wall, whichever way the wall runs.
+                // Along its wall, whichever way the wall runs, then square across to the other
+                // box where the two faces are a little apart (a jog in the wall), never a
+                // diagonal through the studs.
+                let jog = a.face.map(|f| a.at + Vec2::new(-f.y, f.x) * (b.at - a.at).dot(Vec2::new(-f.y, f.x)));
+                let mut plan = vec![[a.at.x, a.at.y], [a.at.x, a.at.y]];
+                let mut bot = vec![(a.top - floor) / upf, (zw - floor) / upf];
+                if let Some(c) = jog.filter(|c| c.dist(a.at) > upf / 96.0 && c.dist(b.at) > upf / 96.0) {
+                    plan.push([c.x, c.y]);
+                    bot.push((zw - floor) / upf);
+                }
+                plan.extend([[b.at.x, b.at.y], [b.at.x, b.at.y]]);
+                bot.push((b.top - floor) / upf);
+                r.points = plan;
                 r.source_sheet = IN_WALL.into();
-                r.bottoms_ft = vec![(a.top - floor) / upf, (zw - floor) / upf, (b.top - floor) / upf];
-                tree_len += a.at.dist(b.at) / upf + 2.0 * (zw - a.top.min(b.top)).abs() / upf;
+                r.bottoms_ft = bot;
+                tree_len += run_ft(&r, upf);
             } else {
                 ceiling_legs += 1;
+                // Over the highest ceiling on its way (a room it crosses may be higher than its
+                // boxes' rooms): never exposed under a finished ceiling.
+                let way = way_ceiling(&c.level, a.at, b.at).filter(|z| over.is_none_or(|o| *z > o + upf / 96.0));
+                let leg_tiers = way.map(|z| tiers_of(&c.level, Some(z)).1);
+                let tiers = leg_tiers.as_deref().unwrap_or(&tiers);
                 // Each end rises over its box, or along its wall where that is blocked.
                 let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
                 let own: Vec<Handle> = gi.and_then(|i| gear.get(i)).map(|g| g.handle).into_iter().collect();
                 let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, rl);
                 let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, rl);
                 drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
-                let leg = route_leg(qa, qb, &tiers, r_of(size), field, upf, &[], rl);
+                let leg = route_leg(qa, qb, tiers, r_of(size), field, upf, &[], rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "branch conduit", &c.label, &c.level, size);
                 }
@@ -2979,6 +3013,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Over the highest ceiling along its way: its box's room's, the corridor's, the panel's room's.
         let over = std::iter::once(box_ceiling(&lead_h.level, lead_dev.at, lead_dev.face))
             .chain(plan.iter().skip(1).map(|p| ceiling_at(&lead_h.level, *p)))
+            .chain(plan.windows(2).map(|w| if let [a, b] = w { way_ceiling(&lead_h.level, *a, *b) } else { None }))
             .flatten()
             .fold(None, |a: Option<f64>, z| Some(a.map_or(z, |a| a.max(z))));
         let (_, tiers) = tiers_of(&lead_h.level, over);
@@ -3041,7 +3076,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if *i != g.first().copied().unwrap_or(usize::MAX)
                 && let Some(md) = c.devs.get(h.root).and_then(|d| devs.get(*d))
             {
-                let leg = route_leg(md.at, lead_dev.at, &tiers, r_of(min_in), field, upf, &[], rl);
+                // Over the highest ceiling on the tap's own way too.
+                let way = way_ceiling(&c.level, md.at, lead_dev.at).filter(|z| over.is_none_or(|o| *z > o + upf / 96.0));
+                let tap_tiers = way.map(|z| tiers_of(&c.level, Some(z)).1);
+                let tiers = tap_tiers.as_deref().unwrap_or(&tiers);
+                let leg = route_leg(md.at, lead_dev.at, tiers, r_of(min_in), field, upf, &[], rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "homerun tap", &c.label, &c.level, min_in);
                 }

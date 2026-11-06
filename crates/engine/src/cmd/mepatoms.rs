@@ -272,6 +272,11 @@ pub(crate) struct AtomRules {
     pub offset_max_ft: f64,
     pub joint_tol_in: f64,
     pub box_reach_ft: f64,
+    /// How far a routed run's end may be (in plan) from the box it lands in: the router ends
+    /// each run on its box, so the box nearest its end is that box (any circuit: a tap into
+    /// another circuit's box); none this near ⟹ the end lands on gear or stays open.
+    pub routed_land_ft: f64,
+    pub routed_land_source: String,
     pub panel_reach_ft: f64,
     pub feeder_makeup_ft: f64,
     pub feeder_makeup_source: String,

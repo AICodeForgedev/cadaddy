@@ -233,6 +233,8 @@
   "offset_max_ft": 1.0,
   "joint_tol_in": 1.0,
   "box_reach_ft": 3.0,
+  "routed_land_ft": 1.0,
+  "routed_land_source": "a routed raceway ends in the box it was routed to (the one at its end: its wall's face is a few inches off the device), never another box of its circuit nearby; it drops plumb into it from its route's height (trade practice: square runs, plumb drops in the wall cavity)",
   "panel_reach_ft": 5.0,
   "feeder_makeup_ft": 3.0,
   "feeder_makeup_source": "3 ft of each feeder conductor at each gear it lands on: from where its raceway enters, through the gutter's bending space to the lug (company default; NEC 312.6)",
