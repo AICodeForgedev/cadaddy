@@ -231,6 +231,18 @@ pub(crate) struct AtomRules {
     pub ring: RingRule,
     pub default_raceway: String,
     pub default_raceway_source: String,
+    /// The raceway below the slab or in the earth where the documents name no underground method.
+    pub underground_raceway: String,
+    pub underground_raceway_source: String,
+    /// Whether a buried raceway takes straps below the floor.
+    pub underground_strapped: bool,
+    pub underground_strap_source: String,
+    /// What a callout's steel elbows and risers are (a raceway of `raceways`).
+    pub steel_elbow_raceway: String,
+    pub steel_elbow_source: String,
+    /// The fitting where a buried raceway comes up and runs on in another (`{from}`, `{to}`).
+    pub transition_item: String,
+    pub transition_source: String,
     pub insulation: String,
     pub insulation_source: String,
     /// Each conductor's makeup at each box, feet: the code's minimum and the field allowance
@@ -376,6 +388,34 @@ pub(crate) struct Pieces {
     /// The degrees it turns between its ends (NEC 358.26 and its kin: 360 at most between pull
     /// points).
     pub bend_deg: f64,
+}
+
+impl Pieces {
+    /// Keep only the pieces `keep` says; what each kept one connects to and the ends follow.
+    pub(crate) fn retain(&mut self, keep: impl Fn(usize, &Atom) -> bool) {
+        let mut to: Vec<Option<usize>> = Vec::with_capacity(self.atoms.len());
+        let mut n = 0usize;
+        for (i, a) in self.atoms.iter().enumerate() {
+            if keep(i, a) {
+                to.push(Some(n));
+                n += 1;
+            } else {
+                to.push(None);
+            }
+        }
+        let map = |i: usize| to.get(i).copied().flatten();
+        let atoms = std::mem::take(&mut self.atoms);
+        self.atoms = atoms
+            .into_iter()
+            .zip(&to)
+            .filter(|(_, t)| t.is_some())
+            .map(|(mut a, _)| {
+                a.connects = a.connects.iter().filter_map(|&c| map(c)).collect();
+                a
+            })
+            .collect();
+        self.ends = self.ends.map(|e| e.and_then(map));
+    }
 }
 
 /// A trade size as printed: `3/4"`, `1"`, `1-1/4"`.
@@ -758,6 +798,66 @@ pub(crate) fn raceway_pieces_ending(
         }
     }
     out
+}
+
+/// A buried raceway's pieces as the field installs them (`rules`' underground entries):
+/// - no straps below the floor `floor_z` (sheet units) unless the rules strap it;
+/// - `steel` (its callout asks for steel elbows and risers): its elbows and the sticks rising
+///   through the floor are the steel raceway's;
+/// - each end in `open` (landing in no box or gear) above the floor comes up and runs on in the
+///   raceway `above`: a transition adapter there, not a connector and locknut.
+///
+/// Returns the transitions made.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn bury(p: &mut Pieces, floor_z: f64, tol: f64, steel: bool, open: [bool; 2], above: &str, material: &str, rules: &AtomRules) -> usize {
+    let mut drop: BTreeSet<usize> = BTreeSet::new();
+    if !rules.underground_strapped {
+        for (i, a) in p.atoms.iter().enumerate() {
+            if a.kind == "strap" && a.a.z < floor_z - tol {
+                drop.insert(i);
+            }
+        }
+    }
+    if let Some((sname, st)) = rules.raceways.get_key_value(rules.steel_elbow_raceway.as_str()).filter(|_| steel) {
+        for a in &mut p.atoms {
+            let vertical = a.path.is_empty() && (a.a.x - a.b.x).hypot(a.a.y - a.b.y) <= tol && (a.a.z - a.b.z).abs() > tol;
+            let item = match a.kind {
+                "elbow" => st.elbow.replace("{angle}", &angle_text(a.angle_deg)),
+                "conduit" if vertical => st.stick.clone(),
+                _ => continue,
+            };
+            a.item = item;
+            a.ty = sname.clone();
+            a.source = rules.steel_elbow_source.clone();
+        }
+    }
+    let mut made = 0usize;
+    for (end, is_open) in open.iter().enumerate() {
+        let Some(ci) = p.ends.get(end).copied().flatten() else { continue };
+        let Some(c) = p.atoms.get(ci) else { continue };
+        if !*is_open || c.kind != "connector" || c.a.z <= floor_z + tol {
+            continue;
+        }
+        // Its locknut and bushing go with the connector.
+        for (j, x) in p.atoms.iter().enumerate() {
+            if matches!(x.kind, "locknut" | "bushing") && x.connects == [ci] {
+                drop.insert(j);
+            }
+        }
+        if let Some(c) = p.atoms.get_mut(ci) {
+            c.kind = "coupling";
+            c.item = rules.transition_item.replace("{from}", material).replace("{to}", above);
+            c.ty = material.into();
+            c.source = rules.transition_source.clone();
+            c.extra.push(("transition", format!("{material} to {above}"), rules.transition_source.clone()));
+            c.connects.retain(|j| !drop.contains(j));
+            made += 1;
+        }
+    }
+    if !drop.is_empty() {
+        p.retain(|i, _| !drop.contains(&i));
+    }
+    made
 }
 
 /// A branch circuit's conductors (`2#12 + 1#12G`, `3#10, 1#10G`): count, size, ground.

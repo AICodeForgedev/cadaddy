@@ -1082,6 +1082,12 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             store.set("type", Prop::new(field(t, "device_type").unwrap_or_else(|| kind.to_string()), printed()));
             store.set("type_mark", Prop::new(mark.clone(), printed()));
         }
+        // Built where the plans are silent or wrong: the design value and the basis beside it.
+        for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
+            if let Some(v) = field(t, k) {
+                store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, "code rules")));
+            }
+        }
         // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
         if let Some(leg) = field(t, "switch_leg") {
             store.set("switch_leg", Prop::new(leg, printed()).with_note("the lower-case letter of the fixtures it controls"));
@@ -1947,7 +1953,10 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                             tally,
                         );
                     }
-                    let number = circuit.as_deref().and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.trim().to_string()));
+                    // (`G-13,15`: a two-pole's first.)
+                    let number = circuit
+                        .as_deref()
+                        .and_then(|c| c.rsplit_once(['-', '/', '.']).map(|(_, n)| n.split(',').next().unwrap_or(n).trim().to_string()));
                     let on = |c: &&cadaddy_walk3d::PanelCircuit| number.as_deref().is_some_and(|n| c.number.trim() == n);
                     let printed = schedules.get(&p.trim().to_ascii_uppercase()).copied();
                     let row =
