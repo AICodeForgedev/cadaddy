@@ -4153,7 +4153,7 @@ pub(crate) struct Replaced {
 const BASE_FILE: &str = "route/base.json";
 
 /// A circuit tag id's level, scope (a sheet, or `room-<room>`) and label, a part's `@…` and a
-/// switch loop's `~…` aside: `circuit:Level 1:E-3:LP1-3@P2~sw3` → (`level 1`, `E-3`, `LP1-3`).
+/// switch loop's `~…` aside: `circuit:Level 1:E-101:LP1-3@P2~sw3` → (`level 1`, `E-101`, `LP1-3`).
 fn circuit_key(id: &str) -> Option<(String, String, String)> {
     let rest = id.strip_prefix(super::printcond::CIRCUIT_TAG)?;
     let (head, label) = rest.rsplit_once(':')?;
