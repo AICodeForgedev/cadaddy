@@ -1312,6 +1312,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                 rfi.status = cadaddy_walk3d::RfiStatus::Answered;
                 rfi.answer = Some(a);
             }
+            let room = sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS;
             match sp.rfis.iter_mut().find(|x| x.id == rfi.id) {
                 // Raised before and still open: the review's answer settles it now.
                 Some(old) => {
@@ -1320,7 +1321,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                         old.answer = rfi.answer.clone();
                     }
                 }
-                None if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS => {
+                None if room => {
                     ids.push(rfi.id.clone());
                     sp.rfis.push(rfi);
                 }
