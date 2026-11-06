@@ -5,12 +5,18 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# The commands that need the engine (repro, pdfstats). `cargo merge-check` builds without it, so the
+# merge tool starts in seconds and still runs when the batch under test does not compile.
+default = ["app"]
+app = ["dep:cadaddy-engine", "dep:cadaddy-io"]
+
 [dependencies]
 serde_json = { workspace = true }
 # The engine's Macro type for parsing action-recorder files in `cargo xtask repro`.
-cadaddy-engine = { path = "../crates/engine" }
+cadaddy-engine = { path = "../crates/engine", optional = true }
 # PDF import statistics for `cargo xtask pdfstats`.
-cadaddy-io = { path = "../crates/io" }
+cadaddy-io = { path = "../crates/io", optional = true }
 # `cargo xtask release-key` / `sign-release` (apps/cadaddy/src/relsig.rs): pure Rust, BSD-3-Clause.
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["zeroize"] }
 sha2 = "0.11"

@@ -545,9 +545,14 @@ pub(crate) fn fill_from_oneline(
 /// What a circuit's breaker protects against, by its codes and the legend: (ground fault, arc
 /// fault). `None` when its codes don't say (no codes, or ones the legend doesn't define).
 pub(crate) fn protection(c: &PanelCircuit, legend: &BTreeMap<String, String>) -> (bool, bool) {
+    protection_of(&c.protection, legend)
+}
+
+/// [`protection`] of a breaker's codes.
+pub(crate) fn protection_of(codes: &[String], legend: &BTreeMap<String, String>) -> (bool, bool) {
     let mut gf = false;
     let mut af = false;
-    for code in &c.protection {
+    for code in codes {
         let meaning = legend.get(code).map(String::as_str).unwrap_or_default();
         if matches!(code.as_str(), "GF" | "GFI" | "GFCI" | "GFP" | "GFEP" | "DF" | "DFCI")
             || meaning.contains("GROUND FAULT")
@@ -578,13 +583,19 @@ const CMD: &str = "panels.schedule";
 /// One circuit's devices in the model: (count, rooms, kind → count).
 type OnCircuit = (usize, std::collections::BTreeSet<String>, BTreeMap<String, usize>);
 
-fn circuit_json(c: &PanelCircuit, legend: &BTreeMap<String, String>, on: Option<&OnCircuit>) -> serde_json::Value {
-    let (gf, af) = protection(c, legend);
+fn circuit_json(
+    c: &PanelCircuit,
+    legend: &BTreeMap<String, String>,
+    on: Option<&OnCircuit>,
+    built: Option<&super::propfill::AsBuiltBreakers>,
+) -> serde_json::Value {
+    let (gf, af) = built.map_or_else(|| protection(c, legend), |b| protection_of(&b.codes, legend));
     let meaning: Vec<String> = c.protection.iter().map(|k| legend.get(k).map_or_else(|| k.clone(), |m| format!("{k}: {m}"))).collect();
     serde_json::json!({
         "number": c.number, "description": c.description, "breaker_amps": c.breaker.parse::<f64>().ok(), "poles": c.poles,
         "wire": c.wire, "load_va": c.load_va,
-        "protection": {"codes": c.protection, "ground_fault": gf, "arc_fault": af, "meaning": meaning},
+        "protection": {"codes": c.protection, "ground_fault": gf, "arc_fault": af, "meaning": meaning,
+                       "as_built": built.map(|b| serde_json::json!({"codes": b.codes, "source": b.source}))},
         "devices": on.map_or(serde_json::json!({"count": 0}), |(n, rooms, kinds)| serde_json::json!({"count": n, "rooms": rooms.len(), "by_kind": kinds})),
     })
 }
@@ -628,10 +639,14 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
     let cell = |v: &str| if v.contains([',', '"']) { format!("\"{}\"", v.replace('"', "\"\"")) } else { v.to_string() };
     for sch in &schedules {
         let key = sch.panel.to_ascii_uppercase();
-        let circuits: Vec<Value> = sch.circuits.iter().map(|c| circuit_json(c, &sch.legend, on.get(&(key.clone(), c.number.clone())))).collect();
+        let built = |c: &PanelCircuit| s.doc().ok().and_then(|d| super::propfill::as_built_breakers(d, &sch.panel, &c.description));
+        let circuits: Vec<Value> =
+            sch.circuits.iter().map(|c| circuit_json(c, &sch.legend, on.get(&(key.clone(), c.number.clone())), built(c).as_ref())).collect();
         let desc = |c: &PanelCircuit, w: &str| c.description.to_ascii_uppercase().contains(w);
         for c in &sch.circuits {
-            let (gf, af) = protection(c, &sch.legend);
+            let as_built = built(c);
+            let (gf, af) = as_built.as_ref().map_or_else(|| protection(c, &sch.legend), |b| protection_of(&b.codes, &sch.legend));
+            let codes = as_built.as_ref().map_or(&c.protection, |b| &b.codes).join("/");
             let n = on.get(&(key.clone(), c.number.clone())).map_or(0, |x| x.0);
             csv.push_str(&format!(
                 "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
@@ -644,7 +659,7 @@ fn run(s: &mut crate::Session, p: &serde_json::Value) -> crate::Result<serde_jso
                 c.poles,
                 cell(&c.wire),
                 c.load_va.map(|v| v.to_string()).unwrap_or_default(),
-                cell(&c.protection.join("/")),
+                cell(&codes),
                 gf,
                 af,
                 n

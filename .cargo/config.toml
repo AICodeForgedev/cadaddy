@@ -1,2 +1,4 @@
 [alias]
 xtask = "run --package xtask --"
+# The merge tool without the engine (docs/merge-check.md).
+merge-check = "run --quiet --package xtask --no-default-features -- merge-check"

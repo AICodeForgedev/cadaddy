@@ -361,6 +361,43 @@ fn the_take_off_buys_what_the_code_rules_decided() {
     assert_eq!(item(&mut s), "duplex receptacle, tamper-resistant");
 }
 
+/// The project says what was built: every breaker of a panel AF/GF except its PTAC's, over a
+/// schedule printing AF. Receptacles under them are standard; the print stays in the note.
+#[test]
+fn breakers_as_built_outrank_the_printed_schedule() {
+    let mut s = plan();
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"},
+                     {"number": "5", "description": "PTAC-1", "breaker": "20", "poles": 2, "protection": [], "source": "E-601"},
+                     {"number": "7", "description": "SPACE ONLY", "breaker": "", "poles": 1, "protection": [], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    assert_eq!(device_of(&mut s, "A")["gfci_breaker"]["value"], "no", "as printed");
+    s.execute(
+        "project.rules.set",
+        &json!({"domain": "custom", "key": "breaker_protection.lp1", "value": "AF/GF except PTAC", "tier": "field_verified", "source": "field report 2026-11-05", "reason": "seen in the panels"}),
+    )
+    .unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "yes", "{a:#}");
+    assert_eq!(a["breaker_type"]["value"], "GFCI + AFCI (dual function)");
+    assert_eq!(a["breaker_type"]["source"]["doc"], "field report 2026-11-05");
+    assert!(a["breaker_type"]["note"].as_str().is_some_and(|n| n.contains("prints AF")), "{a:#}");
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
+    // The panel's schedule says so too: what was built, and what was printed.
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
+    let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
+    assert_eq!(c("3")["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c("3")["protection"]["codes"], json!(["AF"]));
+    assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
+    assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
+    assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
+}
+
 #[test]
 fn a_devices_breaker_type_is_its_printed_schedule_rows() {
     let mut s = plan();

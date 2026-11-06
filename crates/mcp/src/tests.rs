@@ -275,10 +275,10 @@ fn tool_err(s: &mut Server, name: &str, args: Value) -> String {
     r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string()
 }
 
-#[test]
-fn agent_manages_drawings_without_losing_work() {
-    // A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
-    // doesn't depend on the real readers; the CLI installs them).
+/// A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
+/// doesn't depend on the real readers; the CLI installs them). Hooks are process-wide and set once,
+/// so every test that saves or opens installs them itself.
+fn stand_in_io() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
     set_io(IoHooks {
         read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
@@ -288,6 +288,11 @@ fn agent_manages_drawings_without_losing_work() {
         read_dwf: None,
         write_dwfx: None,
     });
+}
+
+#[test]
+fn agent_manages_drawings_without_losing_work() {
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "circle 0,0 5"}));
     let docs = tool(&mut s, "list_drawings", json!({}));
@@ -846,6 +851,8 @@ fn serve_cancellable_passes_cancels_on_while_serving() {
 /// B7-017: `save` lists `force` (its refusal says to pass it), and a forced save does not warn that it was ignored.
 #[test]
 fn save_has_a_force_parameter() {
+    // Saving needs a writer; install it here so the test passes alone (not only after another test did).
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     let tools = call(&mut s, 1, "tools/list", json!({}));
     for name in ["save", "bim_from_pdf"] {
@@ -864,15 +871,7 @@ fn save_has_a_force_parameter() {
 /// Headless there is no user to ask: `save {path}` onto another existing file is refused, `force: true` replaces it.
 #[test]
 fn save_onto_another_existing_drawing_needs_force() {
-    use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks {
-        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
-        write: |_, _| Ok(b"saved".to_vec()),
-        plot: None,
-        read_pdf: None,
-        read_dwf: None,
-        write_dwfx: None,
-    });
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
     let dir = std::env::temp_dir().join(format!("cadaddy-mcp-overwrite-{}", std::process::id()));
@@ -894,15 +893,7 @@ fn save_onto_another_existing_drawing_needs_force() {
 /// replaced only with `force: true`, which both tools take.
 #[test]
 fn render_and_plot_tools_guard_their_output_path() {
-    use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks {
-        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
-        write: |_, _| Ok(b"saved".to_vec()),
-        plot: None,
-        read_pdf: None,
-        read_dwf: None,
-        write_dwfx: None,
-    });
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
     let dir = std::env::temp_dir().join(format!("cadaddy-mcp-outguard3-{}", std::process::id()));

@@ -595,6 +595,12 @@ struct Item {
     sheet_at: Option<cadaddy_geom::Vec2>,
     /// The sheet it was read from, when its record says.
     source: Option<String>,
+    /// A build proposed it (only a rule or a note calls for it, no document draws it): not
+    /// counted as present or as a luminaire.
+    proposed: bool,
+    /// Proposed by a rule alone (no document names it either): not counted for its kind
+    /// (G-COVERAGE).
+    rule_only: bool,
 }
 
 /// An element's mounting height as its record has it from the documents (not a rule's or a
@@ -646,6 +652,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 aff_documented: false,
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
                 source: e.source.clone().filter(|s| !s.trim().is_empty()),
+                proposed: ent.is_some_and(super::bimlook::made_proposed),
+                rule_only: ent.is_some_and(super::bimlook::made_by_rule_only),
             }
         })
         .collect();
@@ -722,6 +730,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             aff_documented,
             sheet_at: None,
             source: None,
+            proposed: super::bimlook::made_proposed(e),
+            rule_only: super::bimlook::made_by_rule_only(e),
         });
     }
     for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
@@ -1335,6 +1345,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         let by_id: HashMap<String, &v::Element> = sc.model.elements.iter().take(MAX_ELEMENTS).map(|e| (e.id.to_ascii_uppercase(), e)).collect();
         let lits: Vec<vl::Lit> = mine
             .iter()
+            // A proposed object (no document draws it) is no luminaire the plans show.
+            .filter(|(it, _)| !(lighting_on && it.proposed))
             .map(|(it, a)| vl::Lit {
                 handle: &it.handle,
                 kind: &it.kind,
@@ -1385,6 +1397,28 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             }
         }
     }
+    // What G-COVERAGE reads off the prints (every plan tag, legend symbol and keynote marker of
+    // each kind the documents define), read once: G-PRESENT reads its marks too.
+    use super::validate_coverage as vc;
+    let cov_on = on("G-PRESENT").is_some() || on(vc::RULE).is_some();
+    let census: Vec<vc::Census> = if cov_on {
+        all.iter()
+            .filter(|it| !it.rule_only)
+            .map(|it| vc::Census {
+                handle: it.handle.clone(),
+                kind: it.kind.clone(),
+                mark: it.mark.clone(),
+                name: it.name.clone(),
+                level: it.level.clone(),
+                source: it.source.clone(),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let cov_inp = vc::Input { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, census: &census };
+    let reading = cov_on.then(|| vc::read(&cov_inp));
+    let kinds_of = reading.as_ref().map(|rd| vc::assigned(&cov_inp, rd));
     // G-PRESENT: each room's expected set — what its unit type's enlarged plans (else its
     // level's trade plans) show in it, and its room type's project-rule set.
     let (sets, bad_sets) = expected_sets(&sc.d.project_rules);
@@ -1395,6 +1429,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     if let Some(r) = on("G-PRESENT") {
         let tol_ft = tol(r, "plan_in", 6.0) / 12.0;
         let symbols = vp::Symbols::of(sc.d, sc.sp, sc.frame, &kinds, sc.rules);
+        // The prints' marks of each kind (G-COVERAGE's reading): an element no symbol the job
+        // read stands for, with a mark of its own kind by it, is one the prints show.
+        let (stands, of_kind) = reading.as_ref().zip(kinds_of.as_ref()).map(|(rd, asg)| vc::stands(rd, asg)).unwrap_or_default();
+        let mark_ft = tol(r, "mark_ft", vp::MARK_REACH_FT);
+        let mut stands_at: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, st) in stands.iter().enumerate() {
+            stands_at.entry(st.level.to_ascii_lowercase()).or_default().push(i);
+        }
+        let mut stand_used: BTreeSet<usize> = BTreeSet::new();
+        let mut proposed_skipped = 0u64;
         let base_of = |id: &str| id.split('#').next().unwrap_or(id).to_string();
         let mut by_room: HashMap<String, Vec<&Item>> = HashMap::new();
         for (it, a) in &mine {
@@ -1443,7 +1487,11 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             rooms += 1;
             let parts: &[&Area] = parts_of.get(&room_id).map_or(&[], Vec::as_slice);
             let unit = units.get(&a.level, a.number.as_deref());
-            let held: &[&Item] = by_room.get(&room_id).map_or(&[], Vec::as_slice);
+            // A proposed element (only a rule or a note calls for it) is not counted.
+            let held_all: &[&Item] = by_room.get(&room_id).map_or(&[], Vec::as_slice);
+            proposed_skipped += held_all.iter().filter(|it| it.proposed).count() as u64;
+            let held_own: Vec<&Item> = held_all.iter().copied().filter(|it| !it.proposed).collect();
+            let held: &[&Item] = &held_own;
             let room_label = a.number.as_deref().map_or_else(|| room_id.clone(), |n| format!("{} {n}", a.name.as_deref().unwrap_or("room")));
             let room_type = unit.map(|u| u.name.clone()).or_else(|| a.name.clone()).unwrap_or_else(|| "room".into()).trim().to_ascii_lowercase();
             let mut counted = false;
@@ -1542,11 +1590,68 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                     });
                     findings.push((if verdict == "pass" { 9 } else { sev_rank(&r.rule.severity) }, f));
                 }
+                // Elements no symbol the job read stands for, with a plan mark of their own kind
+                // (a tag, a legend symbol, a keynote marker) within `mark_ft`: nearest pairs
+                // first, each mark once.
+                // Only an element that would be called extra: of a trade those plans show, read
+                // from a sheet compared here.
+                let mut by_mark: Vec<(f64, usize, usize)> = Vec::new();
+                for (j, it) in held.iter().enumerate() {
+                    let trade = held_trade.get(j).copied().unwrap_or("general");
+                    if taken.contains(&j) || !set.trades.contains(trade) {
+                        continue;
+                    }
+                    let source_sheet = it.source.clone().or_else(|| print_sheet(sc.d, &it.handle, sc.frame.upf()));
+                    if !set.compares(source_sheet.as_deref()) {
+                        continue;
+                    }
+                    let h = it.handle.to_ascii_uppercase();
+                    for &si in stands_at.get(&it.level.to_ascii_lowercase()).map_or(&[][..], Vec::as_slice) {
+                        let Some(st) = stands.get(si) else { continue };
+                        let dd = (it.at[0] - st.at[0]).hypot(it.at[1] - st.at[1]);
+                        if dd <= mark_ft && !stand_used.contains(&si) && of_kind.get(st.def).is_some_and(|k| k.contains(&h)) {
+                            by_mark.push((dd, j, si));
+                        }
+                    }
+                }
+                by_mark.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+                let mut marked: HashMap<usize, (usize, f64)> = HashMap::new();
+                for (dd, j, si) in by_mark {
+                    if marked.contains_key(&j) || stand_used.contains(&si) {
+                        continue;
+                    }
+                    stand_used.insert(si);
+                    marked.insert(j, (si, dd));
+                }
+                let mut marked_list: Vec<(&usize, &(usize, f64))> = marked.iter().collect();
+                marked_list.sort_by_key(|x| *x.0);
+                for (j, (si, dd)) in marked_list {
+                    let (Some(it), Some(st)) = (held.get(*j), stands.get(*si)) else { continue };
+                    tally(&r.rule.id, "pass");
+                    present.add(&room_type, &a.level, "pass");
+                    let what = match &it.mark {
+                        Some(m) if !it.kind.eq_ignore_ascii_case(m) => format!("{} ({m})", it.kind.replace('_', " ")),
+                        _ => it.kind.replace('_', " "),
+                    };
+                    let mut f = base(
+                        r,
+                        it,
+                        Some(a),
+                        "pass",
+                        format!("{room_label} has the {what} {} shows there ({} of {})", st.sheet, st.how, st.what),
+                        format!("a {what} where {} marks it", st.sheet),
+                        format!("{} {:.1} ft from the mark", it.kind, dd),
+                        json!({"basis": "plan_mark", "room_type": room_type, "unit_type": unit.map(|u| u.id.clone()), "mark": {"sheet": st.sheet, "sheet_at": pt(st.sheet_at), "how": st.how, "kind": st.what, "at": pt([r2(st.at[0]), r2(st.at[1])])}, "off_ft": r2(*dd), "reach_ft": r2(mark_ft), "read_by": "G-COVERAGE's reading of the plans"}),
+                    );
+                    f["id"] = json!(format!("PS-{}", hash8(&format!("G-PRESENT|{}|pass", it.handle))));
+                    f["area"] = json!(room_id);
+                    findings.push((9, f));
+                }
                 // Elements of the trades those plans show that no symbol stands for.
                 let mut uncompared: BTreeMap<String, u64> = BTreeMap::new();
                 for (j, it) in held.iter().enumerate() {
                     let trade = held_trade.get(j).copied().unwrap_or("general");
-                    if taken.contains(&j) || !set.trades.contains(trade) {
+                    if taken.contains(&j) || marked.contains_key(&j) || !set.trades.contains(trade) {
                         continue;
                     }
                     let source_sheet = it.source.clone().or_else(|| print_sheet(sc.d, &it.handle, sc.frame.upf()));
@@ -1649,6 +1754,13 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 without_set.insert(a.name.clone().or_else(|| unit.map(|u| u.name.clone())).unwrap_or_else(|| room_id.clone()));
             }
         }
+        if proposed_skipped > 0 {
+            *unmeasured
+                .entry(r.rule.id.clone())
+                .or_default()
+                .entry("elements a build proposed (only a rule or a note calls for them, no document draws them): not counted".into())
+                .or_default() += proposed_skipped;
+        }
     }
     // G-KEYNOTE: what each keynote marker's note calls for, at the marker.
     if let Some(r) = on(super::validate_keynote::RULE) {
@@ -1749,21 +1861,8 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     }
     // G-COVERAGE: kind by kind, the prints' marks against the model's elements.
     let mut coverage = None;
-    if let Some(r) = on(super::validate_coverage::RULE) {
-        use super::validate_coverage as vc;
-        let census: Vec<vc::Census> = all
-            .iter()
-            .map(|it| vc::Census {
-                handle: it.handle.clone(),
-                kind: it.kind.clone(),
-                mark: it.mark.clone(),
-                name: it.name.clone(),
-                level: it.level.clone(),
-                source: it.source.clone(),
-            })
-            .collect();
-        let inp = vc::Input { d: sc.d, sp: sc.sp, frame: sc.frame, areas: sc.areas, whole_levels: sc.whole_levels, census: &census };
-        let got = vc::check(&inp, r);
+    if let (Some(r), Some(rd), Some(asg)) = (on(vc::RULE), reading.as_ref(), kinds_of.as_ref()) {
+        let got = vc::check(&cov_inp, r, rd, asg);
         for (rank, verdict, f) in got.findings {
             tally(vc::RULE, verdict);
             findings.push((rank, f));
@@ -2501,6 +2600,8 @@ mod tests {
             aff_documented: false,
             sheet_at: None,
             source: None,
+            proposed: false,
+            rule_only: false,
         };
         assert!(it.is("receptacle") && it.is("ef-2") && it.is("ef-*") && it.is("duplex"));
         assert!(!it.is("ptac") && !it.is("e*x") && !it.is("panel"));
