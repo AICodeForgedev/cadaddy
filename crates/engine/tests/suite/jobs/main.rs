@@ -12,6 +12,7 @@ mod helper;
 mod agentready_hotel;
 mod arch_read;
 mod archbuild;
+mod arexport;
 mod asbuilt;
 mod autospec;
 mod bimux_rw1;

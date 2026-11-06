@@ -4,18 +4,12 @@
 //! scope simplified and reported) and hostile input. Made-up plans only.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 
+use crate::helper::serial;
 use cadaddy_engine::Session;
 use cadaddy_engine::doc::{Arc, Drawing, Entity, EntityKind, Handle, Line};
 use cadaddy_engine::geom::Vec3;
 use serde_json::{Value, json};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 fn dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("cadaddy-arexport-{tag}-{}", std::process::id()));
