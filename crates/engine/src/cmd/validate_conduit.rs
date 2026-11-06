@@ -168,7 +168,7 @@ fn area_for<'a>(areas: &'a [Area], whole_levels: bool, level: &str, at: [f64; 2]
 
 /// The panel and circuit numbers of a circuit label (`LP1-1,3,5`).
 fn circuit_of(label: &str) -> Option<(String, Vec<String>)> {
-    let (panel, nums) = super::printcond::parse_circuit(label)?;
+    let (panel, nums) = super::printcond::parse_circuit_list(label)?;
     let nums: Vec<String> = nums.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
     (!nums.is_empty()).then_some((panel, nums))
 }
@@ -392,6 +392,20 @@ pub(crate) struct Net {
     links: HashMap<Handle, Vec<Handle>>,
     /// What each piece is (`atom` kind, `device`, `gear`).
     what: HashMap<Handle, String>,
+    /// Each level's stacking move (lower-case name): where its plan is in the stacked building.
+    moves: HashMap<String, Vec2>,
+    /// The offset fittings (a jog of the raceway between two sticks): what joins them.
+    offsets: Vec<Join>,
+}
+
+/// A fitting that carries the raceway from one end to the other (an offset): its circuit,
+/// level and two ends.
+#[derive(Clone, Debug)]
+pub(crate) struct Join {
+    pub circuit: String,
+    pub level: String,
+    pub a: Vec3,
+    pub b: Vec3,
 }
 
 /// Coordinates past this (drawing units) are no building's: the piece is skipped.
@@ -465,7 +479,7 @@ fn plan_box(e: &Entity) -> Option<(Vec3, Vec3)> {
 impl Net {
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Net {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-        let mut n = Net { upf, ..Net::default() };
+        let mut n = Net { upf, moves: super::conduitroute::level_moves(d, sp), ..Net::default() };
         let rl = super::conduitroute::rules();
         let gear_word = |k: &str| {
             let k = k.to_ascii_lowercase();
@@ -542,6 +556,13 @@ impl Net {
             });
         }
         n
+    }
+
+    /// A point of `level`'s plan where the stacked building has it: a riser between storeys
+    /// joins the next level's piece, a homerun reaches its panel on another storey.
+    fn up(&self, level: &str, p: Vec3) -> Vec3 {
+        let m = self.moves.get(&level.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+        Vec3::new(p.x + m.x, p.y + m.y, p.z)
     }
 
     fn piece(&mut self, e: &Entity, upf: f64) {
@@ -643,7 +664,27 @@ impl Net {
                     });
                 }
             }
-            "offset" => qty = 1.0,
+            "offset" => {
+                qty = 1.0;
+                let off = super::bspec::stacked_by(e);
+                let off3 = Vec3::new(off.x, off.y, 0.0);
+                if let Some((a, b)) = super::mepatoms::build::stick_ends(&ps)
+                    && sane(a)
+                    && sane(b)
+                    && self.offsets.len() < MAX_PIECES
+                {
+                    // Its ends as the build cut them; a level stacked after carries its body.
+                    let (a, b) = match super::fieldview::mesh_box(e) {
+                        Some((lo, hi)) if off.len() > 1e-9 => {
+                            let c = Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0);
+                            let mid = (a + b) * 0.5;
+                            if (c - (mid + off3)).len() < (c - mid).len() { (a, b) } else { (a - off3, b - off3) }
+                        }
+                        _ => (a, b),
+                    };
+                    self.offsets.push(Join { circuit: text(&ps, "circuit"), level: level.clone(), a, b });
+                }
+            }
             _ => {}
         }
         if self.counted.len() < MAX_PIECES * 4 {
@@ -666,21 +707,26 @@ struct Graph {
 }
 
 impl Graph {
-    /// The graph of `sticks` (indices into `net.sticks`), ends within `tol` joined, ends within
-    /// `tol` of a box joined to the box.
-    fn of(net: &Net, sticks: &[usize], tol: f64, boxes_near: &BoxGrid) -> Graph {
+    /// The graph of `sticks` (indices into `net.sticks`), ends within `tol` joined (where the
+    /// stacked building has them: a riser's end meets the next storey's piece), ends within `tol`
+    /// of a box of their level joined to the box. `ends` holds the stacked points.
+    fn of(net: &Net, sticks: &[usize], offsets: &[usize], tol: f64, boxes_near: &BoxGrid) -> Graph {
         let mut g = Graph { adj: Vec::new(), box_node: HashMap::new(), ends: Vec::new() };
         let cell = (tol * 4.0).max(1e-6);
         let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
         let key = |p: Vec3| (cell_of(p.x, cell), cell_of(p.y, cell), cell_of(p.z, cell));
-        for &si in sticks {
-            let Some(s) = net.sticks.get(si) else { continue };
+        // Each piece the raceway runs through: the sticks, then the offsets that join them
+        // (an offset's index past the sticks': `usize::MAX`).
+        let pieces = sticks.iter().filter_map(|&si| net.sticks.get(si).map(|s| (s.a, s.b, s.level.as_str(), path_len(&s.path) / net.upf, si))).chain(
+            offsets.iter().filter_map(|&oi| net.offsets.get(oi).map(|o| (o.a, o.b, o.level.as_str(), (o.b - o.a).len() / net.upf, usize::MAX))),
+        );
+        for (sa, sb, level, len, si) in pieces {
             let (na, nb) = (g.adj.len(), g.adj.len() + 1);
             g.adj.push(Vec::new());
             g.adj.push(Vec::new());
-            let len = path_len(&s.path) / net.upf;
             g.link(na, nb, len);
-            for (node, p) in [(na, s.a), (nb, s.b)] {
+            for (node, plan) in [(na, sa), (nb, sb)] {
+                let p = net.up(level, plan);
                 let (kx, ky, kz) = key(p);
                 let mut near: Vec<usize> = Vec::new();
                 for dx in -1..=1 {
@@ -701,7 +747,7 @@ impl Graph {
                 }
                 grid.entry((kx, ky, kz)).or_default().push(g.ends.len());
                 g.ends.push((node, p, si));
-                for bi in boxes_near.near(p, tol, net) {
+                for bi in boxes_near.near(plan, tol, net) {
                     let bn = match g.box_node.get(&bi) {
                         Some(x) => *x,
                         None => {
@@ -1436,6 +1482,14 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 }
             }
         }
+        let mut circ_offsets: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (i, o) in net.offsets.iter().enumerate() {
+            if let Some((panel, nums)) = circuit_of(&o.circuit) {
+                for n in nums {
+                    circ_offsets.entry((panel.clone(), n)).or_default().push(i);
+                }
+            }
+        }
         let mut circ_cables: BTreeMap<(String, String), usize> = BTreeMap::new();
         for c in &net.cables {
             if let Some((panel, nums)) = circuit_of(&c.circuit) {
@@ -1467,13 +1521,14 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
             let sticks = circ_sticks.get(&(panel.clone(), number.clone())).cloned().unwrap_or_default();
             let cables = circ_cables.get(&(panel.clone(), number.clone())).copied().unwrap_or(0);
             let gears = gear_by_panel(panel);
-            let g = Graph::of(&net, &sticks, touch, &boxes_near);
+            let offsets = circ_offsets.get(&(panel.clone(), number.clone())).cloned().unwrap_or_default();
+            let g = Graph::of(&net, &sticks, &offsets, touch, &boxes_near);
             // The panel's side: every end within the touch of its box.
             let mut sources: Vec<(usize, usize)> = Vec::new();
             for &(node, p, _) in &g.ends {
                 for &gi in &gears {
                     if let Some(ge) = net.gear.get(gi)
-                        && box_dist2(p, ge.lo, ge.hi) <= touch * touch
+                        && box_dist2(p, net.up(&ge.level, ge.lo), net.up(&ge.level, ge.hi)) <= touch * touch
                     {
                         sources.push((node, gi));
                     }
@@ -1488,9 +1543,15 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 let Some(place) = in_scope(&dv.level, c) else { continue };
                 let bi = box_of.get(&dv.handle).copied();
                 let (blo, bhi) = bi.and_then(|i| net.boxes.get(i)).map_or((dv.lo, dv.hi), |b| (b.lo, b.hi));
-                let node = bi.and_then(|i| g.box_node.get(&i).copied());
+                let (blo, bhi) = (net.up(&dv.level, blo), net.up(&dv.level, bhi));
                 // The nearest end of its circuit to its box when none touches it.
                 let nearest = g.ends.iter().map(|(n, p, _)| (box_dist2(*p, blo, bhi).sqrt(), *n)).min_by(|a, b| a.0.total_cmp(&b.0));
+                // Its box's node; a device the build gave no box (a luminaire wired in its own
+                // compartment): the end that touches its body.
+                let node = match bi {
+                    Some(i) => g.box_node.get(&i).copied(),
+                    None => nearest.filter(|(d, _)| *d <= touch).map(|(_, n)| n),
+                };
                 let reached = node.and_then(|n| dist.get(n).copied().flatten());
                 reach.push((di, reached));
                 let Some(r) = on.continuity else { continue };
@@ -1542,7 +1603,11 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                             .iter()
                             .filter(|(en, _, _)| comp.contains(en))
                             .flat_map(|(_, p, _)| {
-                                gears.iter().filter_map(|gi| net.gear.get(*gi)).map(move |ge| (box_dist2(*p, ge.lo, ge.hi).sqrt(), ge.tag.clone()))
+                                let net = &net;
+                                gears
+                                    .iter()
+                                    .filter_map(move |gi| net.gear.get(*gi))
+                                    .map(move |ge| (box_dist2(*p, net.up(&ge.level, ge.lo), net.up(&ge.level, ge.hi)).sqrt(), ge.tag.clone()))
                             })
                             .min_by(|a, b| a.0.total_cmp(&b.0))
                     });

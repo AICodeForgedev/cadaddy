@@ -273,6 +273,10 @@ pub(crate) struct AtomRules {
     pub joint_tol_in: f64,
     pub box_reach_ft: f64,
     pub panel_reach_ft: f64,
+    /// A routed run's end lands in the box whose entry, or on the panel whose body, is this near
+    /// it (inches): the router ends each run on what it serves.
+    pub routed_touch_in: f64,
+    pub routed_touch_source: String,
     pub feeder_makeup_ft: f64,
     pub feeder_makeup_source: String,
     pub feeder_conductors: BTreeMap<String, ConductorKind>,
@@ -644,6 +648,9 @@ pub(crate) fn raceway_pieces_ending(
             let mut at = Atom::fitting("offset", rw.offset.clone(), material, &size, mid, *b - *a, size_in, &rw.stock_source);
             at.angle_deg = bend_deg(prev.unwrap_or(Vec3::Z), *b - *a);
             at.extra.push(("offset_in", format!("{:.2}", dist(*a, *b) / upf * 12.0), "computed".into()));
+            // The jog's two ends: the raceway runs on through the offset (what follows it end to end).
+            at.extra.push(("start", format!("{:.4},{:.4},{:.4}", a.x, a.y, a.z), "computed".into()));
+            at.extra.push(("end", format!("{:.4},{:.4},{:.4}", b.x, b.y, b.z), "computed".into()));
             out.bend_deg += 2.0 * at.angle_deg;
             if field {
                 at.item = rw.field_offset.clone();

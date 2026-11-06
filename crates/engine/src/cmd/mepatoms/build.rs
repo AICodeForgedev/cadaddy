@@ -24,6 +24,25 @@ const MAX_ATOMS: usize = 1_500_000;
 const SIDES: u32 = 8;
 
 /// A device's box in the making: where it is, which way its face looks, and its device.
+/// A device the build gives no box: where a run enters it.
+struct Bare {
+    device: Handle,
+    level: String,
+    circuit: String,
+    entry: Vec3,
+}
+
+/// The boxless device a run's end at `p` is at: within `touch` of its entry, on its level, of the
+/// run's circuit (`circuit`; `None`: any circuit, a routed run's end), the nearest.
+fn touched_bare(bare: &[Bare], level: &str, p: Vec3, touch: f64, circuit: Option<&str>) -> Option<Handle> {
+    bare.iter()
+        .filter(|b| b.level.eq_ignore_ascii_case(level) && circuit.is_none_or(|c| !c.is_empty() && on_circuit(&b.circuit, c)))
+        .map(|b| (b.device, super::dist(b.entry, p)))
+        .filter(|(_, d)| *d <= touch)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
+}
+
 struct DevBox {
     device: Handle,
     level: String,
@@ -41,6 +60,8 @@ struct Gear {
     plan: Bounds2,
     /// Its can's height, feet (a conductor's makeup down it to the breaker).
     height_ft: Option<f64>,
+    /// Its can's bottom and top (sheet units), when its body is a mesh.
+    z: Option<(f64, f64)>,
 }
 
 /// A run's 3D path (sheet units) and what it is.
@@ -646,7 +667,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .filter(|e| super::super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment")))
         .filter_map(|e| {
             let b = cadaddy_doc::entity_bounds(d, e, 0);
-            let height_ft = match &e.kind {
+            let z = match &e.kind {
                 EntityKind::Mesh(m) => {
                     let (lo, hi) = m
                         .vertices
@@ -654,16 +675,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         .take(100_000)
                         .filter(|p| p.z.is_finite())
                         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
-                    Some((hi - lo) / upf).filter(|h| h.is_finite() && *h > 0.0)
+                    (lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo, hi))
                 }
                 _ => None,
             };
+            let height_ft = z.map(|(lo, hi)| (hi - lo) / upf);
             (!b.is_empty()).then(|| Gear {
                 handle: e.handle,
                 level: super::super::bspec::made_level(e).unwrap_or_default(),
                 tag: super::super::bimlook::made_tag(e, "tag").unwrap_or_default().to_string(),
                 plan: Bounds2::from_points([b.min, b.max]),
                 height_ft,
+                z,
             })
         })
         .take(MAX_DEVICES)
@@ -746,13 +769,27 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .collect();
     // Luminaires by type: (with a box, without, why).
     let mut lum_boxes: BTreeMap<String, (usize, usize, BTreeSet<String>)> = BTreeMap::new();
+    // The devices that take no box (a luminaire wired in its own compartment): where a run enters
+    // one (its top), its level and circuit. A run ends in it as in a box.
+    let mut bare: Vec<Bare> = Vec::new();
     // A switch's or sensor's box with no circuit of its own is on the circuit of what it
     // controls (the router joins it to that circuit: its switch leg lands in it).
     let circuit_of: HashMap<Handle, String> =
         devices.iter().filter_map(|(h, _, ps, ..)| Some((*h, ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty())?))).collect();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
-        let Some(bk) = box_kind(&kind, layer) else { continue };
+        let Some(bk) = box_kind(&kind, layer) else {
+            // A device of a kind that takes no box, on a circuit: its run ends in it.
+            let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty());
+            if let Some(circuit) = circuit
+                && ps.get("misplaced").is_none()
+                && bare.len() < MAX_DEVICES
+            {
+                let c = plan.center();
+                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+            }
+            continue;
+        };
         let theirs = sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).map(|x| {
             let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
             let ours = x.ours_for(&kind, &fa);
@@ -778,6 +815,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             row.2.insert(why_box(dec));
             if !dec.takes_box {
+                let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty()).unwrap_or_default();
+                let c = plan.center();
+                if bare.len() < MAX_DEVICES {
+                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                }
                 continue;
             }
         }
@@ -940,6 +982,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // -- Each group's runs stitched end to end, then cut into their pieces. --
     let tol = rl.joint_tol_in.max(0.01) / 12.0 * upf;
     let reach = rl.box_reach_ft.max(0.0) * upf;
+    // Each level's stacking move: a riser's end on another storey's panel.
+    let moves = super::super::conduitroute::level_moves(d, sp);
+    let routed_touch = if rl.routed_touch_in.is_finite() { rl.routed_touch_in.max(0.01) } else { 6.0 } / 12.0 * upf;
+    // Routed run ends: on a panel, in a box, on neither (left to the nearness search).
+    let (mut routed_on_gear, mut routed_on_box, mut routed_on_device, mut routed_off) = (0usize, 0usize, 0usize, 0usize);
+    let mut to_devices = 0usize;
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
@@ -958,27 +1006,32 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // of its own circuit first, else the nearest one no other circuit took.
     // `own_only`: a box of its own circuit at any height under or over it (a route the readers
     // gave no drop to it).
-    let box_near = |boxes: &[DevBox], taken: &BTreeSet<usize>, level: &str, circuit: &str, p: Vec3, own_only: bool| -> Option<usize> {
-        let pp = Vec2::new(p.x, p.y);
-        boxes
-            .iter()
-            .enumerate()
-            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
-            .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
-            .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
-            .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(bi, _, _, _)| bi)
-    };
+    // `not`: the box the chain's other end landed in (a run never comes back into the box it left).
+    let box_near =
+        |boxes: &[DevBox], taken: &BTreeSet<usize>, level: &str, circuit: &str, p: Vec3, own_only: bool, not: Option<usize>| -> Option<usize> {
+            let pp = Vec2::new(p.x, p.y);
+            boxes
+                .iter()
+                .enumerate()
+                .filter(|(bi, _)| Some(*bi) != not)
+                .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
+                .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+                .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
+                .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(bi, _, _, _)| bi)
+        };
     for (key, (m, ps)) in &paths {
         // A run passing a box of its own circuit ends in it (and the next leaves it).
         // A run passing a box of its own circuit ends in it (and the next leaves it): one at its
         // height, or one under or over it when no drop leaves the node for it.
+        // A run that dips into a device the build gives no box ends in it too.
         let breaks = |p: Vec3, degree: usize, drop_here: bool| {
             degree >= 2
                 && !m.circuit.is_empty()
-                && box_near(&boxes, &taken, &key.level, &m.circuit, p, true)
+                && (box_near(&boxes, &taken, &key.level, &m.circuit, p, true, None)
                     .and_then(|bi| boxes.get(bi))
                     .is_some_and(|b| (b.entry.z - p.z).abs() <= 3.0 * upf || !drop_here)
+                    || touched_bare(&bare, &key.level, p, routed_touch, Some(&m.circuit)).is_some())
         };
         let (mut chains, nodes, brk) = stitch(ps, tol, &breaks);
         // Junction boxes where three or more runs meet.
@@ -1025,6 +1078,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // What each free end lands in: a device's box (an estimated route moves onto it), a
             // panel, else nothing (an open end).
             let mut lands: [Option<Land>; 2] = [None, None];
+            // The box each end landed in.
+            let mut landed: [Option<usize>; 2] = [None, None];
             for (end, land) in lands.iter_mut().enumerate() {
                 let n = c.ends.get(end).copied().unwrap_or(usize::MAX);
                 if let Some(&j) = junction_at.get(&n) {
@@ -1049,10 +1104,51 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         .min_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
                         .map(|(bi, _, _)| bi)
                 };
-                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box) } else { own_outlet() };
+                let other = landed.get(1 - end).copied().flatten();
+                // A routed branch run (Q6152) ends on what its route serves: the panel its end is
+                // on (the top of its can), else the box whose entry it is at, whatever circuit
+                // that box is on (a homerun group's taps meet in its lead's box). Never a nearer
+                // box of its own circuit label elsewhere (its own start, the next unit's).
+                if m.routed && m.devices.is_empty() && m.feeder.is_none() {
+                    if let Some(g) = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves) {
+                        *land = Some(Land::Gear(g));
+                        routed_on_gear += 1;
+                        continue;
+                    }
+                    if let Some(bi) = touched_box(&boxes, &key.level, p, routed_touch, other)
+                        && let Some(b) = boxes.get(bi)
+                    {
+                        taken.insert(bi);
+                        let before = super::path_ft(&c.pts, upf);
+                        land_on(&mut c.pts, end, b.entry, upf);
+                        landing_ft += super::path_ft(&c.pts, upf) - before;
+                        if let Some(l) = landed.get_mut(end) {
+                            *l = Some(bi);
+                        }
+                        *land = Some(Land::Atom(b.atom));
+                        routed_on_box += 1;
+                        continue;
+                    }
+                    if let Some(h) = touched_bare(&bare, &key.level, p, routed_touch, None) {
+                        *land = Some(Land::Device(h));
+                        routed_on_device += 1;
+                        continue;
+                    }
+                    routed_off += 1;
+                } else if m.devices.is_empty()
+                    && m.feeder.is_none()
+                    && let Some(h) = touched_bare(&bare, &key.level, p, routed_touch, Some(&m.circuit))
+                {
+                    *land = Some(Land::Device(h));
+                    continue;
+                }
+                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box, other) } else { own_outlet() };
                 let near_box = near.filter(|_| m.feeder.is_none()).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
+                    if let Some(l) = landed.get_mut(end) {
+                        *l = Some(bi);
+                    }
                     let gap = (entry.z - p.z).abs();
                     if gap > 3.0 * upf {
                         // Not moved: the route gives no drop to it; the gap is said for review.
@@ -1149,7 +1245,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             // Wires in a raceway with a circuit.
             if !m.cable && !m.circuit.is_empty() {
-                let nums: Vec<u32> = super::super::printcond::parse_circuit(&m.circuit)
+                let nums: Vec<u32> = super::super::printcond::parse_circuit_list(&m.circuit)
                     .map(|(_, n)| n.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                     .unwrap_or_default();
                 let voltage = gear_voltage(sp, &m.panel).unwrap_or_else(|| rl.default_voltage.clone());
@@ -1238,6 +1334,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     Some(Land::Gear(g)) => {
                         external.push((e, *g));
                         to_gear += 1;
+                    }
+                    Some(Land::Device(h)) => {
+                        external.push((e, *h));
+                        to_devices += 1;
                     }
                     None => {
                         open_ends += 1;
@@ -1574,6 +1674,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "devicesFed": fed_devices,
         "endsAtBoxes": to_boxes,
         "endsAtPanels": to_gear,
+        "endsAtBoxlessDevices": to_devices,
+        "routedEnds": {"onPanel": routed_on_gear, "inBox": routed_on_box, "onBoxlessDevice": routed_on_device, "byNearness": routed_off},
         "openEnds": open_ends,
         "boxesSizedForFill": boxes_upsized,
         "endsWithNoDrop": entry_gaps,
@@ -1637,6 +1739,8 @@ enum Land {
     Atom(usize),
     /// A gear element.
     Gear(Handle),
+    /// A device the build gives no box (a luminaire wired in its own compartment).
+    Device(Handle),
 }
 
 /// Where an atom is in the model and what it is part of.
@@ -1654,6 +1758,46 @@ struct AtomCtx {
     body: Option<(Vec3, Vec2, f64, f64, f64)>,
     /// Where what it is came from.
     src: Source,
+}
+
+/// Whether a piece of gear is the panel `panel` or a typical room's copy of it (`P-1A` of `P`).
+fn is_panel(tag: &str, panel: &str) -> bool {
+    let (t, p) = (tag.trim().to_ascii_uppercase(), panel.trim().to_ascii_uppercase());
+    !p.is_empty() && (t == p || t.starts_with(&format!("{p}-")))
+}
+
+/// The panel a routed run's end at `p` (on `level`'s plan) is on: a piece of gear whose can holds
+/// `p` within `touch` (in plan, and in height when its body gives one), the run's own panel
+/// first, then the nearest. Gear on another storey is where the stacked building has it (a
+/// riser drops or rises to it): its plan carried by the levels' stacking moves.
+fn touched_gear(gear: &[Gear], level: &str, panel: &str, p: Vec3, touch: f64, moves: &HashMap<String, Vec2>) -> Option<Handle> {
+    let mv = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    // `p` on each gear's own plan.
+    let on = |g: &Gear| {
+        let q = if g.level.eq_ignore_ascii_case(level) { Vec2::new(p.x, p.y) } else { Vec2::new(p.x, p.y) + mv(level) - mv(&g.level) };
+        q.is_finite().then_some(q)
+    };
+    gear.iter()
+        .filter_map(|g| on(g).map(|q| (g, q)))
+        .filter(|(g, q)| g.plan.expand(touch).contains(*q))
+        .filter(|(g, _)| g.level.eq_ignore_ascii_case(level) || g.z.is_some())
+        .filter(|(g, _)| g.z.is_none_or(|(lo, hi)| p.z >= lo - touch && p.z <= hi + touch))
+        .map(|(g, q)| (g.handle, !is_panel(&g.tag, panel), g.plan.center().dist(q)))
+        .min_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(h, _, _)| h)
+}
+
+/// The box a routed run's end at `p` is at: the box of its level whose entry is nearest it,
+/// within `touch`, whatever its circuit, never `not` (the box the run's other end is in).
+fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<usize>) -> Option<usize> {
+    boxes
+        .iter()
+        .enumerate()
+        .filter(|(bi, b)| Some(*bi) != not && b.level.eq_ignore_ascii_case(level))
+        .map(|(bi, b)| (bi, super::dist(b.entry, p)))
+        .filter(|(_, d)| *d <= touch)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(bi, _)| bi)
 }
 
 /// Move a run's end onto a box's entry: a short jog at the run's height, then into the box.

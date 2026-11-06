@@ -99,6 +99,29 @@ const NOT_PANELS: &[&str] =
 /// number (`E-101`: no panel has circuit 101), a dimension, or a zero-padded number (`S-01`: a
 /// room's tag, circuits are never padded) is not one.
 pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
+    parse_numbers(s, 3)
+}
+
+/// Most circuit numbers one raceway's list holds (a homerun's: its group's circuits, each of up
+/// to three poles).
+const MAX_LIST: usize = 42;
+
+/// A raceway's list of circuits as the router writes a homerun's (`LP1-1,3,5,7`): the panel and
+/// its numbers, more than a plan's three when a homerun carries several circuits; a number
+/// repeated once.
+pub(crate) fn parse_circuit_list(s: &str) -> Option<(String, String)> {
+    let (panel, nums) = parse_numbers(s, MAX_LIST)?;
+    let mut seen: Vec<&str> = Vec::new();
+    for n in nums.split(',') {
+        if !seen.contains(&n) {
+            seen.push(n);
+        }
+    }
+    let nums = seen.join(",");
+    Some((panel, nums))
+}
+
+fn parse_numbers(s: &str, most: usize) -> Option<(String, String)> {
     let s = s.trim();
     let (panel, ckt) = s.split_once('/').or_else(|| s.split_once('-'))?;
     let panel = panel.trim().to_ascii_uppercase();
@@ -108,7 +131,7 @@ pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
         && !NOT_PANELS.contains(&panel.as_str());
     let nums: Vec<&str> = ckt.split(',').map(str::trim).collect();
     let ok_ckt = !nums.is_empty()
-        && nums.len() <= 3
+        && nums.len() <= most
         && nums.iter().all(|n| {
             (1..=2).contains(&n.len())
                 && !n.starts_with('0')
@@ -953,6 +976,19 @@ pub(crate) fn circuit_of_run(r: &MepRun) -> Option<&str> {
 mod tests {
     use super::*;
     use crate::Session;
+
+    #[test]
+    fn a_homeruns_list_of_circuits_reads_past_three_numbers_and_once_each() {
+        // A plan's label: three numbers at most (a reader guard).
+        assert_eq!(parse_circuit("LP1-1,3,5"), Some(("LP1".into(), "1,3,5".into())));
+        assert_eq!(parse_circuit("LP1-1,3,5,7"), None);
+        // A homerun's list the router writes: three circuits, one of them two-pole, a repeat.
+        assert_eq!(parse_circuit_list("LP1-1,3,5,7"), Some(("LP1".into(), "1,3,5,7".into())));
+        assert_eq!(parse_circuit_list("RP-2,2,7,9"), Some(("RP".into(), "2,7,9".into())));
+        assert_eq!(parse_circuit_list("RP-0,1"), None);
+        let long = format!("A-{}", (1..=60).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        assert_eq!(parse_circuit_list(&long), None);
+    }
 
     fn sheet(number: &str, level: &str, x: f64) -> SheetRef {
         SheetRef {

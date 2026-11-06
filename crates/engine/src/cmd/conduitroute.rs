@@ -1724,6 +1724,45 @@ struct Circ {
     part: String,
 }
 
+/// Each level's stacking move (lower-case level name → the move its plan takes into the stacked
+/// building): what its built objects were moved by once the build stacked them (a level's
+/// objects all by the same); before that (`model.build` routes and cuts the pieces before it
+/// stacks) the move the stack will make. A point on one level's plan is on another's at
+/// `p + move(from) − move(to)`.
+pub(crate) fn level_moves(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Vec2> {
+    let mut level_off: HashMap<String, Vec2> = HashMap::new();
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).is_some()
+            && let Some(l) = super::bspec::made_level(e)
+        {
+            level_off.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+        }
+    }
+    let stacked_now = level_off.values().any(|v| v.len() > 1e-9);
+    if !stacked_now && sp.stack {
+        let planned: HashMap<String, Vec2> = super::bspec::stack_offsets(d, sp).into_iter().map(|(n, v)| (n.to_ascii_lowercase(), v)).collect();
+        if !planned.is_empty() {
+            return planned;
+        }
+    }
+    level_off
+}
+
+/// A homerun's circuit numbers from its members' labels (`LP1-1`, `LP1-3,5`): each once, in
+/// order (two rooms' circuits of one label share no raceway, but a repeat must not make the list
+/// unreadable).
+fn homerun_numbers(labels: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, nums) in labels.iter().filter_map(|l| super::printcond::parse_circuit_list(l)) {
+        for n in nums.split(',') {
+            if !out.iter().any(|x| x == n) {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
 fn field_of<'a>(t: &'a ElementTag, k: &str) -> Option<&'a str> {
     t.fields.get(k).map(|f| f.value.trim()).filter(|v| !v.is_empty())
 }
@@ -1917,28 +1956,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             trade: "electrical",
         });
     }
-    // Each level's stacking move (a level's built objects all moved by the same): a riser to a
-    // panel on another level stands where the stacked building has that panel.
-    let mut level_off: HashMap<String, Vec2> = HashMap::new();
-    for e in d.model.iter() {
-        if super::wallgen::made_as(e).is_some()
-            && let Some(l) = super::bspec::made_level(e)
-        {
-            level_off.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
-        }
-    }
-    // Each level's stacking move between plans: recorded on its objects once the build stacked
-    // them; before that (model.build routes before it stacks) the move the stack will make.
-    let stacked_now = level_off.values().any(|v| v.len() > 1e-9);
-    let planned: HashMap<String, Vec2> = if !stacked_now && sp.stack {
-        super::bspec::stack_offsets(d, sp).into_iter().map(|(n, v)| (n.to_ascii_lowercase(), v)).collect()
-    } else {
-        HashMap::new()
-    };
-    let move_of = |l: &str| {
-        let k = l.to_ascii_lowercase();
-        planned.get(&k).or_else(|| level_off.get(&k)).copied().unwrap_or(Vec2::new(0.0, 0.0))
-    };
+    // Each level's stacking move: a riser to a panel on another level stands where the stacked
+    // building has that panel.
+    let moves = level_moves(d, sp);
+    let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
     // The framing over each level (the floor joists above it, the roof's trusses), as the trades'
     // layout makes them from the joist and truss documents: each member over the level's space,
     // on its plan.
@@ -2232,10 +2253,26 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
 
     // -- A circuit of a panel there is one of per unit (`P` → P-1A, P-1B …): its devices split
-    // by the nearest copy on their level, each part to its own panel. --
+    // by the nearest copy on their level, each part to its own panel. A typical room's own
+    // circuit (stamped from its plan) is never split: the whole of it goes to that room's copy
+    // (`P-<room>`), even where a device sits nearer the next unit's copy across the party wall
+    // (Q6241); with no copy named for the room, to the copy nearest its devices. --
     let mut split: Vec<Circ> = Vec::new();
-    for c in circs.drain(..) {
+    let mut room_own_panel = 0usize;
+    for mut c in circs.drain(..) {
         let up = c.panel.to_ascii_uppercase();
+        let room = tag_at(c.tag)
+            .filter(|t| t.id.contains(":room-"))
+            .and_then(|t| field_of(t, "room"))
+            .map(|r| r.trim().to_ascii_uppercase())
+            .filter(|r| !r.is_empty() && !up.is_empty());
+        if let Some(room) = room {
+            let own = format!("{up}-{room}");
+            c.gear = gear.iter().position(|g| same_level(&g.level, &c.level) && g.tag.trim().to_ascii_uppercase() == own);
+            room_own_panel += usize::from(c.gear.is_some());
+            split.push(c);
+            continue;
+        }
         let copies: Vec<usize> = gear
             .iter()
             .enumerate()
@@ -2591,8 +2628,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     let t = g.tag.to_ascii_uppercase();
                     same_level(&g.level, &c.level) && !panel_up.is_empty() && (t == panel_up || t.starts_with(&format!("{panel_up}-")))
                 })
-                .map(|(i, g)| (i, Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre)))
-                .filter(|(_, dd)| !room_circuit || *dd <= ROOM_PANEL_FT * upf)
+                .map(|(i, g)| {
+                    (i, g.tag.trim().eq_ignore_ascii_case(&panel_up), Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre))
+                })
+                // A typical room's copy of its panel is its own only when near it; the building's
+                // panel itself (no copy per room) feeds the room's circuit from wherever it is.
+                .filter(|(_, itself, dd)| !room_circuit || *itself || *dd <= ROOM_PANEL_FT * upf)
+                .map(|(i, _, dd)| (i, dd))
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i)
         });
@@ -3466,7 +3508,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             .or_default()
             .extend(combined.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone(), None)));
         // The homerun's own tag: its circuits (one list: panel and numbers), conductors, raceway.
-        let numbers: Vec<String> = labels.iter().filter_map(|l| super::printcond::parse_circuit(l).map(|(_, n)| n)).collect();
+        let numbers: Vec<String> = homerun_numbers(&labels);
         let panel_name = circs.get(lead_h.circ).map(|c| c.panel.clone()).unwrap_or_default();
         let mut t = ElementTag { id: gid, kind: "circuit".into(), level: lead_h.level.clone(), ..ElementTag::default() };
         t.at_ft = [lead_dev.at.x / upf, lead_dev.at.y / upf];
@@ -3610,7 +3652,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let lead_tag = tags.iter().find(|t| super::printcond::circuit_of_run(&lead) == Some(t.id.as_str()));
         let mut t = ElementTag { id: gid, kind: "circuit".into(), level: level.clone(), ..ElementTag::default() };
         t.at_ft = [st.a[0] / upf, st.a[1] / upf];
-        let numbers: Vec<String> = labels.iter().filter_map(|l| super::printcond::parse_circuit(l).map(|(_, n)| n)).collect();
+        let numbers: Vec<String> = homerun_numbers(&labels);
         let panel_name = lead_tag.and_then(|x| field_of(x, "panel")).unwrap_or_default().to_string();
         t.set("circuit", format!("{panel_name}-{}", numbers.join(",")), "computed");
         t.set("circuits", labels.join(", "), "computed");
@@ -4008,6 +4050,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // What Q6200 adds: the switch legs, the cable's paths, the makeup, the lengths by room.
     let more = json!({
         "switch_legs": switch_legs,
+        "room_circuits_on_own_panel": room_own_panel,
         "switch_legs_source": rl.switch_legs.source,
         "cable_stud_legs": stud_legs,
         "cable_paths": cable_paths.len(),
