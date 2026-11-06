@@ -594,6 +594,16 @@ impl Takeoff {
                 "duct_area_sqft": r2(self.ducts.values().map(|r| r.area_sqft).sum()),
                 "duct_weight_lb": r2(self.ducts.values().map(|r| r.weight_lb).sum()),
                 "pipe_length_ft": sum_len("pipe"),
+                // Of it, the pipe no plan draws (derived from another floor's, or inferred).
+                "pipe_length_ft_filled_in": r2(self
+                    .pipes
+                    .iter()
+                    .filter(|((_, sk, x, _), _)| {
+                        *x == "pipe"
+                            && [super::waterfill::DERIVED, super::waterfill::INFERRED].iter().any(|p| sk.ends_with(&format!(" ({p})")))
+                    })
+                    .map(|(_, r)| r.length_ft)
+                    .sum()),
                 "conduit_length_ft": sum_len("conduit"),
                 "fittings": self.fittings.values().sum::<usize>(),
                 "terminals": self.terminals.values().sum::<usize>(),

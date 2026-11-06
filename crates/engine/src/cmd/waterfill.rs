@@ -489,7 +489,7 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
 /// level (laid there after it was derived: a room's own pipes): the drawn pipe is that pipe. The
 /// derived feet taken out.
 pub(crate) fn clip_derived(runs: &mut Vec<MepRun>, upf: f64, ru: &FillRules) -> f64 {
-    if !(upf.is_finite() && upf > 0.0) || !runs.iter().any(|r| provenance(r) == DERIVED) {
+    if !(upf.is_finite() && upf > 0.0 && runs.iter().any(|r| provenance(r) == DERIVED)) {
         return 0.0;
     }
     let mut drawn: BTreeMap<(&str, &str), Vec<[[f64; 2]; 2]>> = BTreeMap::new();

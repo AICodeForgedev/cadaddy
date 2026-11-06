@@ -4848,6 +4848,17 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!(
                         "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
                     ));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Pipe drawn twice, one kept",
+                        &format!(
+                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                        ),
+                        1,
+                        vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
+                        None,
+                        false,
+                    );
                 }
                 // A level whose plans draw its drainage but no water: the plumbers piped it all
                 // the same. Over the area where its rooms stack on the floor it is piped like
