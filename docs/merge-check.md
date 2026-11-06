@@ -76,12 +76,18 @@ between batches: third-party crates and untouched workspace crates are not rebui
 - One persistent cache outside the worktree, e.g. `CARGO_TARGET_DIR=~/wt/merge-target`, never
   deleted after a batch (the cap keeps it bounded; cargo overwrites a crate's outputs in place when
   its sources change, so the size grows only when dependency versions or the toolchain change).
+- **Exactly one warm cache.** A warm cache for a batch that touches the engine is about 110 GB
+  with debug info off (~700 test binaries plus optimized dependencies), so the default
+  `--cap-gb 120` holds one. The merge server keeps this one cache beside the builders' shared
+  target directory, never a second one.
 - `CARGO_BUILD_JOBS` as the server's memory allows; `nice -n 15`.
 - cargo-nextest installs itself on first use (a few minutes, once).
 - The timing data lives in the cache directory (`merge-check/timings.json`); the first run has
   none, so it runs every test in the merge stage and records the times.
 - `tools/merge-replay.sh` replays a batch the old way and the new way under one memory limit and
   reports wall time and peak memory (how the numbers in the revision history were measured).
+  Replay only on a quiet server (merger paused, no builder building): a replay needs about 14 GB
+  of memory and up to a cache's worth of disk, and next to live builds it starves them.
 
 ## Revision history
 
