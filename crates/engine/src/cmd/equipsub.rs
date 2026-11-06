@@ -204,6 +204,19 @@ pub(crate) fn check(e: &EquipmentElectrical, feeder: Option<(&str, &str)>, afc: 
     out
 }
 
+/// The protection the field installs where the drawings' is over the most the submittal allows
+/// (Q6216, `E-EQUIP-OCPD`): the largest standard rating (NEC 240.6(A)) within it, the drawings'
+/// poles kept; and why, by the rule. None: within it, or either value unknown.
+pub(crate) fn field_protection(e: &EquipmentElectrical) -> Option<(String, String)> {
+    let ((amps, poles), max) = (ocpd_of(&e.drawing_ocpd)?, e.max_ocpd_a?);
+    if amps <= max + 1e-9 {
+        return None;
+    }
+    let a = super::conduitroute::standard_at_most(max)?;
+    let rule = super::provenance::rule("E-EQUIP-OCPD");
+    Some((format!("{a:.0}A/{poles}P"), rule.basis_for(&format!("drawn {}, the submittal allows at most {max:.0} A ({})", e.drawing_ocpd, e.source))))
+}
+
 /// The load's word to find its submittal and schedule row by: its label's letters (`ELEV-1` →
 /// `ELEV`), at least three.
 pub(crate) fn stem(tag: &str) -> Option<String> {
@@ -540,5 +553,23 @@ mod tests {
         assert_eq!(review_status("NO EXCEPTIONS TAKEN EXCEPTIONS AS NOTED REVISE & RESUBMIT"), "");
         assert_eq!(review_status("Stamp: NO EXCEPTIONS TAKEN"), "no exceptions taken");
         assert_eq!(stem("ELEV-1").as_deref(), Some("ELEV"));
+    }
+
+    #[test]
+    fn protection_over_the_submittals_limit_is_installed_at_the_largest_standard_rating_within_it() {
+        let e = EquipmentElectrical {
+            tag: "UNIT-9".into(),
+            drawing_ocpd: "90A/3P".into(),
+            max_ocpd_a: Some(82.0),
+            source: "submittal Made-up Unit.pdf p.2".into(),
+            ..Default::default()
+        };
+        let (installed, why) = field_protection(&e).unwrap_or_else(|| panic!("corrected"));
+        assert_eq!(installed, "80A/3P", "240.6(A): 80 A is the largest standard rating within 82 A");
+        assert!(why.starts_with("E-EQUIP-OCPD") && why.contains("90A/3P") && why.contains("82 A"), "{why}");
+        // Within the limit, or a value unknown: as drawn.
+        assert!(field_protection(&EquipmentElectrical { max_ocpd_a: Some(90.0), ..e.clone() }).is_none());
+        assert!(field_protection(&EquipmentElectrical { max_ocpd_a: None, ..e.clone() }).is_none());
+        assert!(field_protection(&EquipmentElectrical { drawing_ocpd: "OL".into(), ..e }).is_none());
     }
 }

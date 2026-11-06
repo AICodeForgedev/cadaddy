@@ -15728,11 +15728,14 @@ fn route_report_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     if n("clashes") > 0 {
         // Corrected for the field (Q6216): each the ceiling space can take is offset under (else
         // over) the obstacle, the design height kept beside the installed one.
-        let fixed = r["clashes_corrected"].as_u64().unwrap_or(0) as usize;
+        // Holes too close in one member: bored as one for both raceways (`E-BORE-SHARE`).
+        let offsets = r["clashes_corrected"].as_u64().unwrap_or(0) as usize;
+        let shared = r["clashes"].as_array().map_or(0, |a| a.iter().filter(|c| c["corrected"]["rule"] == "E-BORE-SHARE").count());
+        let fixed = offsets + shared;
         job.add_conflict(
             StageName::BimBuild,
             &format!(
-                "{} conduit clash(es) the router could not route around: {fixed} built with a field offset, {} left: {}",
+                "{} conduit clash(es) the router could not route around: {offsets} built with a field offset, {shared} holes bored as one for two raceways, {} left: {}",
                 n("clashes"),
                 n("clashes").saturating_sub(fixed),
                 pairs.join("; ")
@@ -16600,12 +16603,10 @@ fn equipment_step(
             // Protection over what the approved submittal allows (Q6216, `E-EQUIP-OCPD`): the
             // field installs the largest standard breaker within it, the drawings' kept.
             if c.check == "protection"
-                && let (Some((_, poles)), Some(max)) = (equipsub::ocpd_of(&e.drawing_ocpd), e.max_ocpd_a)
-                && let Some(a) = super::conduitroute::standard_at_most(max)
+                && let Some((installed, why)) = equipsub::field_protection(&e)
             {
-                let fix = super::provenance::rule("E-EQUIP-OCPD");
-                e.installed_ocpd = format!("{a:.0}A/{poles}P");
-                e.correction = fix.basis_for(&format!("drawn {}, the submittal allows at most {max:.0} A ({})", e.drawing_ocpd, e.source));
+                e.installed_ocpd = installed;
+                e.correction = why;
             }
             conflicts_all.push((l.tag.clone(), c));
         }
@@ -16617,17 +16618,17 @@ fn equipment_step(
     for (tag, c) in &conflicts_all {
         if let Some(e) = rows.iter().find(|e| e.tag == *tag && c.check == "protection" && !e.installed_ocpd.is_empty()) {
             corrected += 1;
-            job.add_finding(
+            job.add_conflict(
                 StageName::BimBuild,
                 &format!(
                     "Equipment {tag} (protection): {}; corrected: {} installed, {} kept as the design",
                     c.message, e.installed_ocpd, e.drawing_ocpd
                 ),
                 &format!("its approved submittal differs from the drawings; {}", e.correction),
-                1,
+                2,
                 vec![c.fix.clone()],
-                None,
-                false,
+                1,
+                1,
             );
             continue;
         }
@@ -16650,14 +16651,14 @@ fn equipment_step(
             });
             rfis.push(id);
         }
-        job.add_finding(
+        job.add_conflict(
             StageName::BimBuild,
             &format!("Equipment {tag} ({}): {}", c.check, c.message),
             "its approved submittal differs from the drawings",
             2,
             vec![c.fix.clone()],
-            None,
-            false,
+            1,
+            0,
         );
     }
     let line = format!(
