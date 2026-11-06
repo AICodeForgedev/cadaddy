@@ -11572,6 +11572,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
     let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
     sp.mep.equipment.extend(planned.equipment);
@@ -11624,6 +11625,69 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             false,
         );
     }
+    // Raceways a can's plate can't take: a wireway built over it (proposed), its basis on it.
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let space_rule = super::coderules::rules().into_iter().find(|r| r.sets == "working_space").unwrap_or_default();
+    let mut wireways = Vec::new();
+    for f in findings.iter().filter(|f| f.get("check").and_then(Value::as_str) == Some("entry")) {
+        let gear_tag = f.get("gear").and_then(Value::as_str).unwrap_or_default();
+        let sq_in =
+            |v: Option<&str>| v.and_then(|t| t.split(',').next_back()).and_then(|t| t.trim().trim_end_matches("sq in").trim().parse::<f64>().ok());
+        let message = f.get("message").and_then(Value::as_str).unwrap_or_default();
+        let need = sq_in(f.get("needed").and_then(Value::as_str));
+        let usable = message.split("sq in usable").next().and_then(|t| t.rsplit(',').next()).and_then(|t| t.trim().parse::<f64>().ok());
+        let g = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(gear_tag));
+        if let (Some(g), Some(need), Some(usable)) = (g, need, usable)
+            && let Some(w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
+        {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Gear {gear_tag}: {} built above it (proposed)", w.properties.get("CORRECTED_VALUE").cloned().unwrap_or_default()),
+                &format!("{} [{}]", w.properties.get("CORRECTION_REASON").cloned().unwrap_or_default(), space_rule.wireway_cite),
+                2,
+                vec!["Or a larger enclosure, a pull section, or splitting the feed: the design value is on the object".into()],
+                None,
+                false,
+            );
+            wireways.push(w);
+        }
+    }
+    // The working spaces and wireways drawn, moved as the build moved their level.
+    let wireway_tags: BTreeSet<String> = wireways.iter().map(|w| w.tag.to_ascii_uppercase()).collect();
+    sp.mep.equipment.retain(|e| !wireway_tags.contains(&e.tag.to_ascii_uppercase()));
+    sp.mep.equipment.extend(wireways);
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    let d = s.doc_mut()?;
+    let offset_of = |l: &str| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(l)).map_or(cadaddy_geom::Vec2::ZERO, |r| r.offset);
+    for h in super::mep::build_equipment(d, &sp, Some(&wireway_tags)) {
+        let off =
+            d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e)).map_or(cadaddy_geom::Vec2::ZERO, |l| offset_of(&l));
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    const ZONE_LAYER: &str = "3D-Working-Space";
+    if !zones.is_empty() {
+        super::mep::ensure_layer(d, ZONE_LAYER, 4);
+    }
+    for z in &zones {
+        let Some(level) = sp.level(&z.level) else { continue };
+        let off = offset_of(&z.level);
+        let (z0, z1) = (level.elevation_ft * upf, (level.elevation_ft + z.height_ft) * upf);
+        let mid = (z.min[1] + z.max[1]) / 2.0 + off.y;
+        let (a, b) = (cadaddy_geom::Vec2::new(z.min[0] + off.x, mid), cadaddy_geom::Vec2::new(z.max[0] + off.x, mid));
+        let mut m = super::wallgen::empty_mesh();
+        super::wallgen::add_box(&mut m, a, b, z.max[1] - z.min[1], z0, z1);
+        if !m.faces.is_empty() {
+            let common = cadaddy_doc::Common { layer: ZONE_LAYER.into(), ..cadaddy_doc::Common::default() };
+            d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Mesh(m))?;
+        }
+    }
+    s.touch();
     result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
     equipment_step(s, job, pages, &types, &tags, result)
 }
@@ -16097,7 +16161,14 @@ fn equipment_step(
         }
         if !equipsub::has_data(&e) {
             let key = format!("equip:{}", l.tag.to_ascii_uppercase());
-            match job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()) {
+            // An agent's reading in this job, else the project's: `custom/equipment_electrical.<TAG>`.
+            let told = job.rules.iter().find(|r| r.key == key).and_then(|r| serde_json::from_str::<Value>(&r.value).ok()).or_else(|| {
+                let name = format!("equipment_electrical.{}", l.tag);
+                let rules = s.doc().ok()?.project_rules.list_domain(cadaddy_doc::projrules::RuleDomain::Custom);
+                let r = rules.iter().find(|r| r.key.eq_ignore_ascii_case(&name))?;
+                serde_json::from_str::<Value>(&r.active.value).ok()
+            });
+            match told {
                 Some(a) => equipsub::merge(&mut e, &equipsub::from_answer(&a)),
                 None if !scanned.is_empty() => {
                     equipment_question(job, &l.tag, &e, &scanned);
@@ -16121,11 +16192,136 @@ fn equipment_step(
         for c in equipsub::check(&e, conductors, afc, &rule) {
             conflicts_all.push((l.tag.clone(), c));
         }
+        // An approved submittal's values are what is built; not one sent back: the drawings' stay.
+        let sent_back = e.status.to_ascii_lowercase().contains("resubmit") || e.status.to_ascii_lowercase().contains("rejected");
+        if !sent_back {
+            equipsub::correct(&mut e, conductors, &rule);
+        }
         rows.push(e);
     }
-    // Each failure an RFI (once) and a finding.
+    // What is corrected goes on its schedule row (the print beside it), priced.
+    for e in rows.iter_mut().filter(|e| !e.correction_reason.is_empty()) {
+        // (A protection corrected: the conductors alone change no row's breaker.)
+        let new = e.max_ocpd_a.filter(|_| !e.corrected_ocpd.is_empty());
+        let (Some((amps, poles)), Some(new)) = (equipsub::ocpd_of(&e.drawing_ocpd), new) else { continue };
+        let word = equipsub::stem(&e.tag).unwrap_or_else(|| e.tag.to_ascii_uppercase());
+        let row = sp.mep.panel_schedules.iter_mut().find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel)).and_then(|p| {
+            p.circuits.iter_mut().find(|c| {
+                let d = c.description.to_ascii_uppercase();
+                d.contains(&e.tag.to_ascii_uppercase()) || d.contains(&word)
+            })
+        });
+        if let Some(c) = row {
+            c.design_breaker = c.breaker.clone();
+            c.breaker = format!("{new:.0}");
+        }
+        let change = s.execute(
+            "estimate.change",
+            &json!({"lines": [
+                {"item": "Circuit breaker", "size": format!("{new:.0}A {poles}P"), "qty": 1},
+                {"item": "Circuit breaker", "size": format!("{amps:.0}A {poles}P"), "qty": -1},
+            ], "why": e.correction_reason}),
+        );
+        if let Some(c) = change.ok().filter(|c| c.get("unpriced").and_then(Value::as_u64) == Some(0)) {
+            e.change_material = c.pointer("/totals/material").and_then(Value::as_f64);
+            e.change_labor_hours = c.pointer("/totals/labor_hours").and_then(Value::as_f64);
+        }
+    }
+    for e in rows.iter().filter(|e| !e.correction_reason.is_empty()) {
+        let parts: Vec<&str> = [e.corrected_ocpd.as_str(), e.corrected_conductors.as_str(), e.corrected_conduit.as_str()]
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect();
+        let cost = e
+            .change_material
+            .map_or_else(|| " (change unpriced)".to_string(), |m| format!(" (change ${m:.2}, {:.2} h)", e.change_labor_hours.unwrap_or(0.0)));
+        job.add_finding(
+            StageName::BimBuild,
+            &format!("Equipment {} built to its submittal: {}{cost}", e.tag, parts.join(", ")),
+            &format!("{} [{}]", e.correction_reason, e.correction_rule),
+            2,
+            vec!["The drawings' values stay beside it on the schedule row and the record".into()],
+            None,
+            false,
+        );
+    }
+    // The other circuits its submittal calls for: built as objects. (In the rooms, and the
+    // hoistways, stairs and corridors traced apart from them.)
+    let mut rooms: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = job_rooms(job).into_iter().map(|(n, l, o, _)| (n, l, o)).collect();
+    for c in &sp.circulation {
+        for [a, b] in c.rects.iter().take(1) {
+            let o = vec![
+                cadaddy_geom::Vec2::new(a[0], a[1]),
+                cadaddy_geom::Vec2::new(b[0], a[1]),
+                cadaddy_geom::Vec2::new(b[0], b[1]),
+                cadaddy_geom::Vec2::new(a[0], b[1]),
+            ];
+            rooms.push((c.name.clone(), c.level.clone(), o));
+        }
+    }
+    // A receptacle a panel schedule calls for in a code place, no plan draws: built.
+    let (built_silent, no_room_silent) = super::coderules::silent_place_receptacles(&mut sp, &rooms);
+    if !built_silent.is_empty() {
+        let line = format!("  receptacles the schedules call for and no plan draws, built: {}", built_silent.join("; "));
+        report_progress(s, json!({"step": "code places"}), &line);
+        s.echo(line);
+        job.add_finding(
+            StageName::BimBuild,
+            "Receptacles built from the panel schedules",
+            &format!(
+                "No plan draws these; the schedule calls for them and the code's place sets their type. Placed on a wall of the room, to be set in the field: {}",
+                built_silent.join("; ")
+            ),
+            2,
+            vec!["Check the spot; the design value and the rule are on each object".into()],
+            None,
+            false,
+        );
+    }
+    if !no_room_silent.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Receptacle circuits with nothing drawn and no room found to build them in",
+            &no_room_silent.join("; "),
+            3,
+            vec!["Say which room each is in".into()],
+            None,
+            false,
+        );
+    }
+    let (mut built_extra, mut no_room_extra) = (Vec::new(), Vec::new());
+    for e in rows.iter().filter(|e| !e.extra_circuits.is_empty()) {
+        let (b, n) = equipsub::extra_circuit_tags(&mut sp, e, &rooms, &rule.cite);
+        built_extra.extend(b);
+        no_room_extra.extend(n);
+    }
+    if !built_extra.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Circuits equipment submittals call for, built as objects",
+            &format!("The drawings have no circuit for these: {}", built_extra.join("; ")),
+            2,
+            vec!["Each needs a breaker and a circuit: the design value and the basis are on the object".into()],
+            None,
+            false,
+        );
+    }
+    if !no_room_extra.is_empty() {
+        job.add_finding(
+            StageName::BimBuild,
+            "Circuits equipment submittals call for, with no room found",
+            &no_room_extra.join("; "),
+            3,
+            vec!["Say which room each is in".into()],
+            None,
+            false,
+        );
+    }
+    // What can't be built (a fault current study): an RFI (once) and a finding.
     let mut rfis = Vec::new();
-    for (tag, c) in &conflicts_all {
+    for (tag, c) in
+        conflicts_all.iter().filter(|(tag, c)| c.check == "sccr" || !rows.iter().any(|e| e.tag == *tag && !e.correction_reason.is_empty()))
+    {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in format!("{tag}|{}|{}", c.check, c.message).bytes() {
             h = (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
@@ -16165,6 +16361,9 @@ fn equipment_step(
     );
     sp.mep.equipment_electrical = rows;
     s.doc_mut()?.building_spec = Some(sp.to_json());
+    if !built_extra.is_empty() || !built_silent.is_empty() {
+        super::propfill::rebuild_devices(s, "bim_build")?;
+    }
     report_progress(s, json!({"step": "equipment connections"}), &line);
     s.echo(line);
     result["equipment_electrical"] = json!({"conflicts": conflicts_all.len(), "rfis": rfis, "asked": asked});

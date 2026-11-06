@@ -53,18 +53,18 @@
       "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)), or in a place below (its circuit's description or its room's name has all of a place's words); it is decided by its circuit like a tagged one.",
       "receptacle_words": ["RCPT", "RCPTS", "RECEPT", "RECEPTS", "RECEPTACLE", "RECEPTACLES", "OUTLET", "OUTLETS", "GFCI", "GFI"],
       "places": [
-        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)"},
-        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)"},
-        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)"},
-        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)"},
-        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
+        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)", "rooms": ["ELEV","ELEVATOR","HOISTWAY"]},
         {"all": ["ROOF"], "cite": "NEC 210.8(B) (rooftop)"},
         {"all": ["EXTERIOR"], "cite": "NEC 210.8 (outdoors)"},
         {"all": ["OUTDOOR"], "cite": "NEC 210.8 (outdoors)"},
-        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)"},
-        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)"},
-        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)"},
-        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)"}
+        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)", "rooms": ["GARAGE"]},
+        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)", "rooms": ["BATH","BATHROOM","TOILET","RR","RESTROOM"]},
+        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)", "rooms": ["RR","RESTROOM","TOILET"]},
+        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)", "rooms": ["LAUNDRY"]}
       ]
     },
     {
@@ -103,6 +103,11 @@
         "transformer"
       ],
       "sets": "working_space",
+      "wireway_depths_in": [6, 8, 10, 12],
+      "wireway_length_step_in": 12,
+      "wireway_max_length_in": 72,
+      "wireway_usable": 0.85,
+      "wireway_cite": "NEC 376.22 (wireway fill), 312.5 (conductors entering enclosures); a wireway above an enclosure takes the raceways its plate can't",
       "rule": "In front of electrical equipment likely to be worked on energized: a clear space as deep as the voltage to ground and the condition call for (0-150 V: 3 ft; 151-600 V: 3, 3.5 or 4 ft by condition 1, 2, 3), at least 30 in wide or the equipment's width, and 6.5 ft high. Gear the plans don't locate is laid out along its room's walls with that space clear (condition 1 assumed and said).",
       "depth_in": [
         [

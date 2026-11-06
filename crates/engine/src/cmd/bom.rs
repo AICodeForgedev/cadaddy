@@ -656,12 +656,18 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     e.1 += 1;
                 }
                 let estimated = r.height_source == super::printcond::ESTIMATED;
+                // Below the slab or in the earth: the underground raceway (the rules'), unstrapped.
+                let rl = super::mepatoms::rules();
+                let buried = (super::ugplan::ug_system(&r.system) || super::ugplan::below_slab(&sp, r))
+                    .then(|| rl.raceways.get(&rl.underground_raceway))
+                    .flatten();
+                let named = |emt: &str, of: fn(&super::mepatoms::Raceway) -> &String| buried.map_or_else(|| emt.to_string(), |w| of(w).clone());
                 add(
                     lines,
                     Line {
                         trade: "electrical",
                         category: "conduit".into(),
-                        item: "EMT conduit".into(),
+                        item: named("EMT conduit", |w| &w.stick),
                         size: size.clone(),
                         unit: "ft",
                         net: len,
@@ -678,21 +684,21 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
-                let straps = (len / STRAP_SPACING_FT).ceil() + 1.0;
+                let straps = if buried.is_some() && !rl.underground_strapped { 0.0 } else { (len / STRAP_SPACING_FT).ceil() + 1.0 };
                 let elbows = r.points.len().saturating_sub(2) as f64 + if rise > 0.0 { 1.0 } else { 0.0 };
-                let parts: [(&str, f64, String); 4] = [
-                    ("EMT coupling", (sticks - 1.0).max(0.0), format!("one per joint between {STICK_FT}' sticks")),
-                    ("EMT connector", 2.0, "one at each conduit end".into()),
-                    ("Conduit strap", straps, format!("within 3' of each end and every {STRAP_SPACING_FT}' (NEC 358.30)")),
-                    ("EMT 90° elbow", elbows, "one at each turn of the routed run".into()),
+                let parts: [(String, f64, String); 4] = [
+                    (named("EMT coupling", |w| &w.coupling), (sticks - 1.0).max(0.0), format!("one per joint between {STICK_FT}' sticks")),
+                    (named("EMT connector", |w| &w.connector), 2.0, "one at each conduit end".into()),
+                    ("Conduit strap".into(), straps, format!("within 3' of each end and every {STRAP_SPACING_FT}' (NEC 358.30)")),
+                    (named("EMT 90° elbow", |w| &w.elbow).replace("{angle}", "90"), elbows, "one at each turn of the routed run".into()),
                 ];
-                for (item, n, rule) in parts {
+                for (item, n, rule) in parts.into_iter().filter(|p| p.1 > 0.0 || buried.is_none()) {
                     add(
                         lines,
                         Line {
                             trade: "electrical",
                             category: "conduit fittings".into(),
-                            item: item.into(),
+                            item,
                             size: size.clone(),
                             unit: "each",
                             net: n,
