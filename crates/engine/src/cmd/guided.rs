@@ -5331,7 +5331,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  typical rooms: mechanical plans' equipment marks (the equipment itself), not devices: {marks}"));
                 }
                 // A typical room's device its circuit's line in the room's panel schedule limits to
-                // one floor (`DISHWASHER (FIRST FLOOR ONLY)`) goes only into that floor's rooms.
+                // one floor (`WET BAR (THIRD FLOOR ONLY)`) goes only into that floor's rooms.
                 let limited = floor_limited(&schedules, &mut stamped);
                 if !limited.is_empty() {
                     let n: usize = limited.values().sum();
@@ -9582,8 +9582,8 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
 /// Each unit room's equipment (PTAC, exhaust fan) that no device connects: a connection on the
 /// circuit the typical panel's schedule names it on (`GUESTROOM PTAC-1` on 13, two poles:
 /// `G-13,15`), placed at the equipment by [`connect_to_equipment`].
-/// The storey a note limits what it describes to: `DISHWASHER (FIRST FLOOR ONLY)`, `3.
-/// DISHWASHERS ARE INSTALLED ON 1ST FLOOR ONLY.`, `LEVEL 2 ONLY` give that storey (its
+/// The storey a note limits what it describes to: `WET BAR (THIRD FLOOR ONLY)`, `5. RANGES
+/// ARE PROVIDED ON 2ND FLOOR ONLY.`, `LEVEL 2 ONLY` give that storey (its
 /// [`storey_key`]: `1`, `2`). `None`: the note sets no such limit (`FLOOR BOX ONLY`, `ONLY ONE
 /// PER FLOOR`).
 fn floor_only(note: &str) -> Option<String> {
@@ -25629,18 +25629,18 @@ mod tests {
 
     #[test]
     fn a_note_limiting_a_typical_rooms_device_to_one_floor_keeps_it_off_the_others() {
-        assert_eq!(floor_only("DISHWASHER (FIRST FLOOR ONLY)").as_deref(), Some("1"));
-        assert_eq!(floor_only("3. DISHWASHERS ARE INSTALLED ON 1ST FLOOR ONLY.").as_deref(), Some("1"));
+        assert_eq!(floor_only("ICE MAKER (FIRST FLOOR ONLY)").as_deref(), Some("1"));
+        assert_eq!(floor_only("5. RANGES ARE PROVIDED ON 1ST FLOOR ONLY.").as_deref(), Some("1"));
         assert_eq!(floor_only("WET BAR - THIRD FLOOR ONLY").as_deref(), Some("3"));
         assert_eq!(floor_only("COFFEE MAKER, LEVEL 2 ONLY").as_deref(), Some("2"));
-        for none in ["DISHWASHER", "FLOOR BOX ONLY", "ONLY ONE PER FLOOR", "ROOF ONLY", "EACH FLOOR ONLY", ""] {
+        for none in ["ICE MAKER", "FLOOR BOX ONLY", "ONLY ONE PER FLOOR", "ROOF ONLY", "EACH FLOOR ONLY", ""] {
             assert_eq!(floor_only(none), None, "{none}");
         }
         let schedule: cadaddy_walk3d::PanelSchedule = serde_json::from_value(json!({
             "panel": "U", "typical_of": 40, "source": "E-9",
             "circuits": [
                 {"number": "5", "description": "KITCHENETTE RECEPTACLE", "poles": 1},
-                {"number": "7", "description": "DISHWASHER (SECOND FLOOR ONLY)", "poles": 1},
+                {"number": "7", "description": "ICE MAKER (SECOND FLOOR ONLY)", "poles": 1},
                 {"number": "9,11", "description": "RANGE - 2ND FLOOR ONLY", "poles": 2}
             ]
         }))
@@ -25653,22 +25653,22 @@ mod tests {
             ..Default::default()
         };
         let mut stamped = vec![
-            dv("U-7", "Level 1", "101"),
-            dv("U-7", "Level 2", "201"),
-            dv("U-7,a", "Level 3", "301"),
-            dv("U-9,11", "Level 3", "301"),
-            dv("U-5", "Level 3", "301"),
+            dv("U-7", "Level 1", "171"),
+            dv("U-7", "Level 2", "271"),
+            dv("U-7,a", "Level 3", "371"),
+            dv("U-9,11", "Level 3", "371"),
+            dv("U-5", "Level 3", "371"),
             // Not a stamped room's (a floor plan's own), or another panel's line: kept.
             dv("U-7", "Level 4", ""),
-            dv("H-7", "Level 4", "401"),
+            dv("H-7", "Level 4", "471"),
         ];
         let gone = floor_limited(&[schedule], &mut stamped);
         let kept: Vec<(&str, &str)> = stamped.iter().map(|d| (d.circuit.as_str(), d.level.as_str())).collect();
         assert_eq!(kept, vec![("U-7", "Level 2"), ("U-5", "Level 3"), ("U-7", "Level 4"), ("H-7", "Level 4")]);
         assert_eq!(gone.values().sum::<usize>(), 3, "{gone:?}");
-        assert!(gone.keys().any(|k| k.starts_with("U-7 DISHWASHER")), "{gone:?}");
+        assert!(gone.keys().any(|k| k.starts_with("U-7 ICE MAKER")), "{gone:?}");
         // No schedules: nothing goes.
-        let mut all = vec![dv("U-7", "Level 1", "101")];
+        let mut all = vec![dv("U-7", "Level 1", "171")];
         assert!(floor_limited(&[], &mut all).is_empty());
         assert_eq!(all.len(), 1);
     }
