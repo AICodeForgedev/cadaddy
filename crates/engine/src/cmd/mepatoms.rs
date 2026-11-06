@@ -40,7 +40,7 @@ pub(crate) const INDEX_FILE: &str = "atoms/index.json";
 /// The property that marks an atom (its kind).
 pub(crate) const ATOM_KEY: &str = "atom";
 /// Most elements looked at, index rows kept, nodes walked (hostile drawings).
-const MAX_ELEMENTS: usize = 2_000_000;
+pub(crate) const MAX_ELEMENTS: usize = 2_000_000;
 const MAX_ROWS: usize = 500_000;
 const MAX_WALK: usize = 200_000;
 /// Most pieces one run is cut into.
@@ -349,6 +349,26 @@ impl AtomRules {
         let list = if on_cable { &self.gang.cable } else { &self.gang.raceway };
         let id = list.get(n.checked_sub(1)?)?;
         self.boxes.get(id).filter(|b| b.holds() >= n)
+    }
+    /// A bigger steel box than `br` for `gangs` devices whose conductors need `need` cu in
+    /// (NEC 314.16): the smallest that holds it, else the largest there is. One or two gangs
+    /// take a bigger square box; three or more a deeper box of as many gangs.
+    pub(crate) fn bigger_box(&self, br: &BoxRule, need: f64, gangs: usize) -> Option<&BoxRule> {
+        let mut bigger: Vec<&BoxRule> = self
+            .boxes
+            .iter()
+            .filter(|(k, b)| {
+                let fits = if gangs <= 2 {
+                    b.holds() >= gangs && (k.starts_with("sq") || k.starts_with("oct"))
+                } else {
+                    b.holds() == gangs && k.starts_with("gang")
+                };
+                b.material == "steel" && b.cubic_in > br.cubic_in + 1e-9 && fits && !b.item.contains("fan")
+            })
+            .map(|(_, b)| b)
+            .collect();
+        bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
+        bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied())
     }
     /// The family a box kind gangs in (none: it doesn't gang).
     pub(crate) fn gang_family(&self, box_kind: &str) -> Option<&str> {
@@ -2131,10 +2151,20 @@ mod tests {
             // Hostile: not a number.
             spot("switch", f64::NAN, 10.0, 48.0, n),
         ];
-        let g = gang_groups(&spots, 24.0, 6.0, 6.0, 4);
+        let sorted = |g: Vec<Vec<usize>>| -> Vec<Vec<usize>> {
+            g.into_iter()
+                .map(|mut x| {
+                    x.sort_unstable();
+                    x
+                })
+                .collect()
+        };
+        let g = sorted(gang_groups(&spots, 24.0, 6.0, 6.0, 4));
         assert_eq!(g, vec![vec![0, 1, 2]], "{g:?}");
-        // Most 2 a box: the row of three is a 2 gang and a lone one.
-        assert_eq!(gang_groups(&spots, 24.0, 6.0, 6.0, 2), vec![vec![0, 1]]);
+        // Most 2 a box: the row of three is a 2 gang (in order along the wall) and a lone one.
+        let two = gang_groups(&spots, 24.0, 6.0, 6.0, 2);
+        assert_eq!(two.len(), 1, "{two:?}");
+        assert!(two.first().is_some_and(|g| g.len() == 2 && g.contains(&1)), "two neighbours, the middle one in: {two:?}");
         assert!(gang_groups(&spots, 24.0, 6.0, 6.0, 1).is_empty());
         assert!(gang_groups(&spots, f64::NAN, 6.0, 6.0, 4).is_empty());
         // The rules: 2 gangs in a 4" square, 3 in a gang box, none past 4.
@@ -2144,6 +2174,14 @@ mod tests {
         assert_eq!(r.gang_box(2, true).map(|b| b.size.as_str()), Some("2 gang"));
         assert!(r.gang_box(5, false).is_none() && r.gang_box(0, false).is_none());
         assert_eq!(r.gang_family("data outlet"), Some("low voltage"));
+        // Too full: two gangs move up to a 4-11/16" square, never into a 3 gang box; three
+        // gangs into a deeper 3 gang box.
+        let (two, three) = (r.gang_box(2, false).unwrap(), r.gang_box(3, false).unwrap());
+        assert_eq!(r.bigger_box(two, 35.0, 2).map(|b| b.item.as_str()), Some("Box, 4-11/16\" square"));
+        assert_eq!(r.bigger_box(three, 45.0, 3).map(|b| (b.item.as_str(), b.holds())), Some(("Device box, 3 gang", 3)));
+        assert!(r.bigger_box(three, 45.0, 3).is_some_and(|b| b.cubic_in >= 45.0));
+        // More than the deepest holds: the deepest, for review.
+        assert_eq!(r.bigger_box(three, 500.0, 3).map(|b| b.cubic_in), Some(54.0));
         assert!(r.gang_family("luminaire").is_none());
     }
 

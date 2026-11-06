@@ -23032,7 +23032,8 @@ mod tests {
         assert_eq!(d9["level"], json!("Level 1"), "{t:#}");
         // The routes' feet, plus the landings on the boxes (Q6157 mepatoms).
         assert!((1400.0 / 12.0 - 0.1..1400.0 / 12.0 + 0.5).contains(&d9["conduit_ft"].as_f64().unwrap_or(0.0)), "{d9:#}");
-        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
+        // Its two fixtures' boxes and their round rings (the boxes category; on EMT a 4" square).
+        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(4.0), "{d9:#}");
         assert!((2500.0 / 12.0 - 0.1..2500.0 / 12.0 + 1.0).contains(&t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0)), "{:#}", t["summary"]);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }

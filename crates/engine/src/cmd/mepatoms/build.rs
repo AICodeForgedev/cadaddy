@@ -919,20 +919,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         let mut fill_note: Option<(&'static str, String, String)> = None;
         let br = if need > br.cubic_in + 1e-9 && br.material == "steel" {
-            let mut bigger: Vec<&super::BoxRule> = rl
-                .boxes
-                .iter()
-                .filter(|(k, b)| {
-                    b.material == "steel"
-                        && b.cubic_in > br.cubic_in + 1e-9
-                        && b.holds() >= n_gang
-                        && (k.starts_with("sq") || k.starts_with("oct") || n_gang > 1 && k.starts_with("gang"))
-                        && !b.item.contains("fan")
-                })
-                .map(|(_, b)| b)
-                .collect();
-            bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
-            match bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied()) {
+            match rl.bigger_box(br, need, n_gang) {
                 Some(b) => {
                     boxes_upsized += 1;
                     fill_note = Some(if b.cubic_in + 1e-9 >= need {
@@ -1089,6 +1076,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let reach = rl.box_reach_ft.max(0.0) * upf;
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
+    let mut taken_direct: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
     let mut to_equipment = 0usize;
@@ -1209,15 +1197,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     *land = Some(Land::Atom(atom));
                     continue;
                 }
-                // Equipment of its own circuit fed in its own wiring compartment: the run ends in it.
+                // Equipment fed in its own wiring compartment, as a box is found: of its own
+                // circuit first, else the nearest one no other run took; the run ends in it.
                 let equipment = direct
                     .iter()
-                    .filter(|_| m.feeder.is_none() && m.devices.is_empty() && !m.circuit.is_empty())
-                    .filter(|x| x.level.eq_ignore_ascii_case(&key.level) && on_circuit(&x.circuit, &m.circuit))
-                    .map(|x| (x.device, Vec2::new(x.at.x, x.at.y).dist(pp)))
-                    .filter(|(_, dp)| *dp <= reach)
-                    .min_by(|a, b| a.1.total_cmp(&b.1));
-                if let Some((dv, _)) = equipment {
+                    .enumerate()
+                    .filter(|_| m.feeder.is_none() && m.devices.is_empty())
+                    .filter(|(xi, x)| {
+                        x.level.eq_ignore_ascii_case(&key.level) && (on_circuit(&x.circuit, &m.circuit) || !at_box && !taken_direct.contains(xi))
+                    })
+                    .map(|(xi, x)| (xi, x.device, x.at, on_circuit(&x.circuit, &m.circuit), Vec2::new(x.at.x, x.at.y).dist(pp), (x.at.z - p.z).abs()))
+                    .filter(|(.., own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || at_box && *own))
+                    .min_by(|a, b| (!a.3, a.4 + a.5).partial_cmp(&(!b.3, b.4 + b.5)).unwrap_or(std::cmp::Ordering::Equal));
+                if let Some((xi, dv, at, ..)) = equipment {
+                    taken_direct.insert(xi);
+                    if (at.z - p.z).abs() <= 3.0 * upf && (m.estimated || m.routed) {
+                        let before = super::path_ft(&c.pts, upf);
+                        land_on(&mut c.pts, end, at, upf);
+                        landing_ft += super::path_ft(&c.pts, upf) - before;
+                    }
                     *land = Some(Land::Device(dv));
                     continue;
                 }
