@@ -433,7 +433,7 @@ pub fn default_room_rules() -> Vec<RoomRule> {
     let cabinet = || item("FIRE EXTINGUISHER CABINET, SEMI-RECESSED", 1.0, "fire_extinguisher");
     vec![
         rule(
-            &["GUEST BATH", "GUEST BATHROOM", "UNIT BATH"],
+            crate::wordrules::group("rooms.specialty_rooms", "guest_bath"),
             "hotel guest bath: one set of bath accessories, no partitions (company standard until the enlarged unit plan or Division 10 spec is read)",
             vec![
                 item("TOILET PAPER HOLDER, RECESSED", 1.0, "accessory"),
@@ -445,33 +445,37 @@ pub fn default_room_rules() -> Vec<RoomRule> {
             ],
         ),
         rule(
-            &["GUEST ROOM", "GUESTROOM", "KING", "QUEEN", "DOUBLE QUEEN"],
+            crate::wordrules::group("rooms.specialty_rooms", "guest_room"),
             "hotel guest room: wardrobe rod and shelf (company standard until the enlarged unit plan is read)",
             vec![item("WARDROBE ROD AND SHELF", 1.0, "accessory")],
         ),
         rule(
-            &["WOMEN", "WOMENS", "LADIES"],
+            crate::wordrules::group("rooms.specialty_rooms", "womens_restroom"),
             "multi-user women's restroom: 2 stalls with the standard accessory set (company standard until the enlarged plan or Division 10 spec is read)",
             with_hygiene(),
         ),
         rule(
-            &["MEN", "MENS"],
+            crate::wordrules::group("rooms.specialty_rooms", "mens_restroom"),
             "multi-user men's restroom: 2 stalls with the standard accessory set (company standard until the enlarged plan or Division 10 spec is read)",
             shared(),
         ),
         rule(
-            &["RESTROOM", "TOILET", "UNISEX", "ALL GENDER"],
+            crate::wordrules::group("rooms.specialty_rooms", "restroom"),
             "multi-user restroom: 2 stalls with the standard accessory set (company standard until the enlarged plan or Division 10 spec is read)",
             with_hygiene(),
         ),
         rule(
-            &["CORRIDOR", "HALL", "HALLWAY"],
+            crate::wordrules::group("rooms.specialty_rooms", "corridor"),
             "corridor: 2 corner guards at its outside corners and one extinguisher cabinet (company standard until the plans show them)",
             vec![guards(), cabinet()],
         ),
-        rule(&["MECH", "MECHANICAL"], "mechanical room: one extinguisher cabinet (company standard until the plans show it)", vec![cabinet()]),
         rule(
-            &["BREAK ROOM", "WORK ROOM", "COPY"],
+            crate::wordrules::group("rooms.specialty_rooms", "mechanical_room"),
+            "mechanical room: one extinguisher cabinet (company standard until the plans show it)",
+            vec![cabinet()],
+        ),
+        rule(
+            crate::wordrules::group("rooms.specialty_rooms", "high_traffic_room"),
             "high-traffic room: 2 corner guards at its outside corners (company standard until the plans show them)",
             vec![guards()],
         ),
@@ -799,7 +803,7 @@ pub fn parse_coats(desc: &str) -> Option<u32> {
 /// The paint sheen the legend names.
 pub fn parse_sheen(desc: &str) -> Option<String> {
     let d = desc.to_ascii_uppercase();
-    ["SEMI-GLOSS", "SEMIGLOSS", "HIGH GLOSS", "GLOSS", "EGGSHELL", "SATIN", "LOW SHEEN", "FLAT", "MATTE"]
+    crate::wordrules::words("finishes.paint_sheens")
         .iter()
         .find(|s| d.contains(*s))
         .map(|s| if *s == "SEMIGLOSS" { "SEMI-GLOSS".to_string() } else { s.to_string() })
@@ -808,7 +812,7 @@ pub fn parse_sheen(desc: &str) -> Option<String> {
 /// The patterned layout a floor code names, if any.
 pub fn pattern_of(desc: &str) -> Option<&'static str> {
     let d = desc.to_ascii_uppercase();
-    ["HERRINGBONE", "CHEVRON", "DIAGONAL", "BASKETWEAVE", "PATTERN"].into_iter().find(|p| d.contains(p))
+    crate::wordrules::words("finishes.floor_patterns").iter().find(|p| d.contains(**p)).copied()
 }
 
 /// Set a paint line's coats and sheen from its legend text (default coats as a stated rule).

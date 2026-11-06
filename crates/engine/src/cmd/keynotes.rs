@@ -452,10 +452,6 @@ impl Work {
     }
 }
 
-/// The words a note gives a conduit's pull line with.
-const PULL_WORDS: [&str; 6] = ["PULL TAPE", "PULL STRING", "PULL LINE", "PULL ROPE", "PULLWIRE", "PULL WIRE"];
-/// The words that put a run over a hard (gypsum board) ceiling.
-const HARD_LID_WORDS: [&str; 4] = ["HARD LID", "HARD-LID", "HARDLID", "GYP"];
 /// The words before the space a run follows (`… PORTION OF CORRIDOR`, `ALONG THE CORRIDOR`).
 const VIA_WORDS: [&str; 5] = ["OF", "IN", "ALONG", "THROUGH", "VIA"];
 
@@ -474,27 +470,13 @@ fn hours(sentence: &str) -> Option<f64> {
     (v > 0.0 && v <= 4.0).then_some(v)
 }
 
-/// The words a note uses for work in the ground or under the slab.
-const BURIED_WORDS: [&str; 11] = [
-    "UNDER SLAB",
-    "UNDERSLAB",
-    "UNDER-SLAB",
-    "BELOW SLAB",
-    "BELOW GRADE",
-    "BELOW GROUND",
-    "UNDERGROUND",
-    "UNDER GROUND",
-    "BURIED",
-    "BURRIED",
-    "IN GRADE",
-];
 /// The trade size assumed for buried conduit a note doesn't size, inches.
 pub(crate) const BURIED_MIN_IN: f64 = 0.75;
 
 /// Whether a text calls for work in the ground or under the slab.
 pub(crate) fn buried(text: &str) -> bool {
     let up = text.to_ascii_uppercase();
-    BURIED_WORDS.iter().any(|w| up.contains(w))
+    cadaddy_mepfix::wordrules::words("keynotes.buried_words").iter().any(|w| up.contains(w))
 }
 
 /// `12"X12"X6"` → [12, 12, 6].
@@ -604,7 +586,7 @@ pub(crate) fn work(text: &str) -> Option<Work> {
     if let Some(i) = words.iter().position(|x| x.trim_end_matches(['.', ',']) == "SYSTEM").filter(|i| *i > 0) {
         w.system = words.get(i - 1).map(|s| s.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string()).unwrap_or_default();
     }
-    let boxy = ["JUNCTION BOX", "PULL BOX", "J-BOX", "BACK BOX", "BACKBOX"].iter().any(|b| up.contains(b));
+    let boxy = cadaddy_mepfix::wordrules::words("keynotes.box_words").iter().any(|b| up.contains(b));
     if boxy {
         w.box_in = words.iter().find_map(|x| dims(x));
     }
@@ -640,11 +622,13 @@ pub(crate) fn work(text: &str) -> Option<Work> {
             } else {
                 Route::ToRiser
             };
-            if PULL_WORDS.iter().any(|p| sentence.contains(p)) && !w.pull_tape.contains(&(size, route.clone())) {
+            if cadaddy_mepfix::wordrules::words("keynotes.pull_words").iter().any(|p| sentence.contains(p))
+                && !w.pull_tape.contains(&(size, route.clone()))
+            {
                 w.pull_tape.push((size, route.clone()));
             }
             if route == Route::ToRiser {
-                w.hard_lid |= HARD_LID_WORDS.iter().any(|p| sentence.contains(p));
+                w.hard_lid |= cadaddy_mepfix::wordrules::words("keynotes.hard_lid_words").iter().any(|p| sentence.contains(p));
                 // The space named last after `OF` / `IN` / `ALONG`: `… PORTION OF CORRIDOR`.
                 let named = sw
                     .iter()

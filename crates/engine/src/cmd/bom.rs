@@ -460,6 +460,8 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
     // The plaster ring each built wall box takes (its wall type's finish on the box's face).
     let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
+    // The devices that share a box (the model's gangs): one plate per box.
+    let plates = s.doc().map(super::propfill::gang_plates).unwrap_or_default();
     // How each built dimmer dims (its leg's fixtures, its own product or a person), by its tag:
     // dimmers are bought by it.
     let protocols: BTreeMap<String, super::dimcheck::DimmerProtocol> =
@@ -575,15 +577,24 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
                     // The ring its wall needs (the built box's mud_ring), else the default.
                     let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
+                    // A device sharing its box with others (the model's gangs): the box's one
+                    // plate, of its gangs, on the first of them.
+                    let gang = if by_atoms { plates.get(&t.id).copied() } else { None };
+                    let plate = gang.filter(|n| *n > 1).map_or_else(|| "1 gang".to_string(), |n| format!("{n} gang"));
                     for (item, size) in [
                         ("Box, 4\" square", "2-1/8\" deep".to_string()),
                         ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
-                        ("Device plate", "1 gang".into()),
+                        ("Device plate", plate),
                     ]
                     .into_iter()
-                    .filter(|(item, _)| !by_atoms || *item == "Device plate")
+                    .filter(|(item, _)| !by_atoms || *item == "Device plate" && gang != Some(0))
                     {
                         let by_wall = item == "Plaster ring" && ring.is_some();
+                        let rule = if gang.is_some() && item == "Device plate" {
+                            format!("one plate per box: its {} ganged devices share it (the model's box)", gang.unwrap_or(1))
+                        } else {
+                            rule.clone()
+                        };
                         add(
                             lines,
                             Line {
@@ -597,7 +608,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 rule: Some(if by_wall {
                                     "the box's wall type: the board and channels on its face (partition legend)".into()
                                 } else {
-                                    rule.clone()
+                                    rule
                                 }),
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
@@ -607,19 +618,23 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             },
                         );
                     }
-                } else if !on.is_empty() && !by_atoms {
-                    // Any other device wired on a circuit: its outlet box.
+                } else if !on.is_empty()
+                    && !by_atoms
+                    && let Some((b, _)) = super::mepatoms::build::box_kind(kind, "").and_then(|k| super::mepatoms::rules().box_for(k, false))
+                {
+                    // Any other device wired on a circuit: its outlet box, as the model's pieces
+                    // would give it on raceway (none for equipment fed in its own compartment).
                     add(
                         lines,
                         Line {
                             trade: "electrical",
                             category: "boxes".into(),
-                            item: "Box, 4\" octagon".into(),
-                            size: "1-1/2\" deep".into(),
+                            item: b.item.clone(),
+                            size: format!("{} deep", super::walltypes::frac(b.depth_in).replace(' ', "-")),
                             unit: "each",
                             net: 1.0,
                             status: "rule",
-                            rule: Some("one outlet box per device wired on a circuit (company default)".into()),
+                            rule: Some(format!("one outlet box per device wired on a circuit: {}", super::mepatoms::rules().box_source)),
                             level: t.level.clone(),
                             elements: vec![t.id.clone()],
                             waste_qty: None,

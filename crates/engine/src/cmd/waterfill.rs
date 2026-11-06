@@ -51,6 +51,9 @@ pub(crate) struct FillRules {
     pub stack_on: Vec<String>,
     /// Why a floor is piped like the one its rooms stack on.
     pub stack_basis: String,
+    /// Why a room no plan of its own floor furnishes takes the fixtures and room piping of the
+    /// room it stands on (or under) on another floor.
+    pub room_stack_basis: String,
     /// Why a main is carried on along its line to a branch.
     pub main_basis: String,
     /// Why a fixture's or a room's branch is teed off the nearest main of its system, at its size.
@@ -144,6 +147,8 @@ pub(crate) struct AreaRoom {
 }
 
 struct Room<'a> {
+    /// Its place in the rooms given.
+    i: usize,
     r: &'a AreaRoom,
     b: [f64; 4],
     c: [f64; 2],
@@ -152,7 +157,8 @@ struct Room<'a> {
 
 fn rooms_of(v: &[AreaRoom]) -> Vec<Room<'_>> {
     v.iter()
-        .filter_map(|r| {
+        .enumerate()
+        .filter_map(|(i, r)| {
             let b = r
                 .outline
                 .iter()
@@ -167,7 +173,7 @@ fn rooms_of(v: &[AreaRoom]) -> Vec<Room<'_>> {
                 .sum::<f64>()
                 .abs()
                 / 2.0;
-            (b[2] > b[0] && b[3] > b[1]).then(|| Room { r, b, c: [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0], area })
+            (b[2] > b[0] && b[3] > b[1]).then(|| Room { i, r, b, c: [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0], area })
         })
         .take(MAX_ROOMS)
         .collect()
@@ -335,6 +341,58 @@ fn lay_over(mine: &[Room<'_>], theirs: &[Room<'_>], upf: f64) -> Option<[f64; 2]
     })
 }
 
+/// Room by room of `here`, the room of `there` it stands on: one of its type at the same place
+/// once `there` is moved by `off` (each centre in the other's box), each used once. Its place
+/// in `there`.
+fn pair_rooms(here: &[Room<'_>], there: &[Room<'_>], off: [f64; 2]) -> Vec<Option<usize>> {
+    let mut used = vec![false; there.len()];
+    here.iter()
+        .map(|a| {
+            let hit = there.iter().enumerate().position(|(j, b)| {
+                let moved = [b.b[0] + off[0], b.b[1] + off[1], b.b[2] + off[0], b.b[3] + off[1]];
+                let c = [b.c[0] + off[0], b.c[1] + off[1]];
+                !used.get(j).copied().unwrap_or(true)
+                    && a.r.words == b.r.words
+                    && a.c[0] >= moved[0]
+                    && a.c[0] <= moved[2]
+                    && a.c[1] >= moved[1]
+                    && a.c[1] <= moved[3]
+                    && c[0] >= a.b[0]
+                    && c[0] <= a.b[2]
+                    && c[1] >= a.b[1]
+                    && c[1] <= a.b[3]
+            });
+            if let Some(u) = hit.and_then(|j| used.get_mut(j)) {
+                *u = true;
+            }
+            hit
+        })
+        .collect()
+}
+
+/// Which rooms of one floor (`mine`) stand on which of another's (`theirs`): the plans laid over
+/// each other by the move like rooms agree on ([`lay_over`]), then room by room one of its type
+/// at the same place. For each room of `mine` (by its place there), the room of `theirs` it
+/// stacks with (by its place there), and the move that takes a point of `theirs` onto `mine`.
+/// `None`: no like rooms to lay the two floors over each other by.
+pub(crate) fn stacked_rooms(mine: &[AreaRoom], theirs: &[AreaRoom], upf: f64) -> Option<([f64; 2], Vec<Option<usize>>)> {
+    if !(upf.is_finite() && upf > 0.0) {
+        return None;
+    }
+    let (here, there) = (rooms_of(mine), rooms_of(theirs));
+    if here.is_empty() || there.is_empty() {
+        return None;
+    }
+    let off = lay_over(&here, &there, upf)?;
+    let mut out = vec![None; mine.len()];
+    for (a, hit) in here.iter().zip(pair_rooms(&here, &there, off)) {
+        if let (Some(slot), Some(j)) = (out.get_mut(a.i), hit.and_then(|j| there.get(j))) {
+            *slot = Some(j.i);
+        }
+    }
+    Some((off, out))
+}
+
 /// A floor's water derived from the floor it is piped like ([`derive`]).
 #[derive(Debug, Default)]
 pub(crate) struct Derived {
@@ -375,28 +433,9 @@ pub(crate) fn derive(mine: &[AreaRoom], level: &str, sources: &[Source], upf: f6
     let off = lay_over(&here, &there, upf)?;
     let margin = ru.room_margin_ft.max(0.0) * upf;
     let mut out = Derived { from: src.level.clone(), rooms: here.len(), ..Derived::default() };
-    // Room by room: one of its type there at the same place (each centre in the other's box).
-    let mut used = vec![false; there.len()];
-    for a in &here {
-        let hit = there.iter().enumerate().position(|(j, b)| {
-            let moved = [b.b[0] + off[0], b.b[1] + off[1], b.b[2] + off[0], b.b[3] + off[1]];
-            let c = [b.c[0] + off[0], b.c[1] + off[1]];
-            !used.get(j).copied().unwrap_or(true)
-                && a.r.words == b.r.words
-                && a.c[0] >= moved[0]
-                && a.c[0] <= moved[2]
-                && a.c[1] >= moved[1]
-                && a.c[1] <= moved[3]
-                && c[0] >= a.b[0]
-                && c[0] <= a.b[2]
-                && c[1] >= a.b[1]
-                && c[1] <= a.b[3]
-        });
-        match hit.and_then(|j| used.get_mut(j)) {
-            Some(u) => {
-                *u = true;
-                out.stacked += 1;
-            }
+    for (a, hit) in here.iter().zip(pair_rooms(&here, &there, off)) {
+        match hit {
+            Some(_) => out.stacked += 1,
             None if out.unstacked.len() < MAX_LISTED => out.unstacked.push(a.r.label.clone()),
             None => {}
         }

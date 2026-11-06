@@ -1305,23 +1305,11 @@ fn check_missing_trade_plans(sheets: &[Value], job: &mut GuidedJob) {
 /// Infer discipline from title text (MUST 2 fallback).
 pub fn infer_discipline_from_title(title: &str) -> Option<&'static str> {
     let upper = title.to_uppercase();
-    // Check for discipline keywords in title or keynote headers.
-    let patterns: &[(&[&str], &str)] = &[
-        (&["ELECTRICAL", "ELEC PLAN", "ELEC. PLAN", "ELECTRICAL KEYNOTES", "POWER PLAN", "LIGHTING PLAN"], "E"),
-        (&["MECHANICAL", "MECH PLAN", "MECH. PLAN", "HVAC", "MECHANICAL KEYNOTES"], "M"),
-        (&["PLUMBING", "PLUMB PLAN", "PLUMB. PLAN", "PLUMBING KEYNOTES"], "P"),
-        (&["ARCHITECTURAL", "ARCH PLAN", "FLOOR PLAN", "REFLECTED CEILING"], "A"),
-        (&["STRUCTURAL", "STRUCT PLAN", "FOUNDATION"], "S"),
-        (&["FIRE PROTECTION", "FIRE ALARM", "SPRINKLER"], "FP"),
-        (&["CIVIL", "SITE PLAN", "GRADING", "PAVING"], "G"),
-        (&["TELECOM", "TECHNOLOGY", "LOW VOLTAGE"], "T"),
-    ];
-    for (keywords, disc) in patterns {
-        if keywords.iter().any(|kw| upper.contains(kw)) {
-            return Some(disc);
-        }
-    }
-    None
+    // Discipline keywords in the title or keynote headers (rule data `sheets.title_discipline`).
+    cadaddy_mepfix::wordrules::groups("sheets.title_discipline")
+        .iter()
+        .find(|(_, keywords)| keywords.iter().any(|kw| upper.contains(kw)))
+        .map(|(disc, _)| *disc)
 }
 
 /// Run the levels stage: detect levels, scales, elevations (MUST 1, 3).
@@ -2331,9 +2319,6 @@ struct DeviceCensus {
     fates: Vec<(u64, super::inventory::MarkFate)>,
 }
 
-/// The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection
-/// and alarm, technology).
-const DEVICE_DISCIPLINES: &[&str] = &["E", "M", "P", "FP", "FA", "F", "T", "LV", "EL", "ME", "MEP"];
 /// An unlisted tag printed by fewer symbols than this is stray lettering, not a question.
 const MIN_REPEATED_TAG: usize = 3;
 /// Most crops drawn for unlisted tags.
@@ -2528,7 +2513,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         let number = sheet.split('/').next().unwrap_or(sheet);
         job.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(number)).is_none_or(|r| {
             let d = r.discipline.trim().to_ascii_uppercase();
-            d.is_empty() || DEVICE_DISCIPLINES.contains(&d.as_str())
+            d.is_empty() || cadaddy_mepfix::wordrules::words("sheets.device_disciplines").contains(&d.as_str())
         })
     };
     for (g, syms) in symbols.iter().enumerate() {
@@ -2680,6 +2665,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         ifc_class: String::new(),
                         equipment: String::new(),
                         near: String::new(),
+                        derived: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -2997,7 +2983,7 @@ fn job_link_pages(
 fn room_view(title: &str, types: &BTreeSet<BTreeSet<String>>, vocabulary: &BTreeSet<String>) -> bool {
     let up = title.to_ascii_uppercase();
     let words = type_words(title, Some(vocabulary));
-    (!words.is_empty() && types.contains(&words)) || ["UNIT", "TYPICAL", "TYP.", "ROOM"].iter().any(|w| up.contains(w))
+    (!words.is_empty() && types.contains(&words)) || cadaddy_mepfix::wordrules::words("units.typical_view_words").iter().any(|w| up.contains(w))
 }
 
 /// An enlarged view the sheet map registered on its overall plan (by its grids, tags, boundary
@@ -3242,19 +3228,13 @@ fn zero_evidence(plans: &[String]) -> Option<QuestionEvidence> {
     })
 }
 
-/// Run the rooms stage: detect rooms from labels (MUST 1, 4).
-/// Uses the same readers (rooms.list) that work directly on the job's sheets.
-/// Finish and material codes of the finish legend (gypsum board, carpet, vinyl and ceramic tile,
-/// acoustic tile, paint, rubber base, wood, epoxy, sealed concrete): a tag of one is no room.
-const FINISH_CODES: [&str; 14] = ["GYP", "GWB", "CPT", "VCT", "LVT", "LVP", "ACT", "PT", "RB", "WD", "CT", "QT", "EPX", "SC"];
-
 /// A finish or material tag (GYP 01, CPT-1, VCT 2, ACT-1) traced in its room: a room read with a
 /// finish code for a name and a short number, or none.
 fn finish_tag(r: &Value) -> bool {
     let name = r.get("name").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
     let first = name.split(|c: char| !c.is_ascii_alphabetic()).next().unwrap_or("");
     let short_number = r.get("number").and_then(Value::as_str).is_none_or(|n| n.trim().len() <= 2);
-    short_number && FINISH_CODES.contains(&first)
+    short_number && cadaddy_mepfix::wordrules::words("rooms.finish_codes").contains(&first)
 }
 
 fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
@@ -3449,7 +3429,7 @@ fn run_rooms(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
 
     if let Some(rooms) = rooms {
         // Check for equipment labels.
-        let equipment_patterns = ["PNLBD", "PANEL", "XFMR", "TRANS", "MCC", "SWG", "ATS", "GEN", "MDP", "CDP"];
+        let equipment_patterns = cadaddy_mepfix::wordrules::words("rooms.equipment_label_words");
         for room in rooms.iter().take(MAX_QUESTIONS_PER_STAGE) {
             let name = room.get("name").and_then(Value::as_str).unwrap_or("?");
             let number = room.get("number").and_then(Value::as_str).unwrap_or("");
@@ -3596,10 +3576,8 @@ const MAX_KEYS: u32 = 10_000;
 fn stated_keys(text: &str) -> Option<u32> {
     let up = text.to_ascii_uppercase();
     let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    let about_building = words.iter().any(|w| ["HOTEL", "MOTEL", "INN", "RESORT", "LODGING", "SCOPE", "PROJECT", "BUILDING"].contains(w))
-        && !words
-            .iter()
-            .any(|w| ["PER", "LOCK", "LOCKS", "CYLINDER", "PANEL", "PANELS", "PANELBOARD", "PANELBOARDS", "CABINET", "DOOR", "DOORS"].contains(w));
+    let about_building = words.iter().any(|w| cadaddy_mepfix::wordrules::words("keys.building_words").contains(w))
+        && !words.iter().any(|w| cadaddy_mepfix::wordrules::words("keys.not_building_words").contains(w));
     let at = |i: usize| words.get(i).copied();
     for (i, w) in words.iter().enumerate() {
         let Some(n) = w.parse::<u32>().ok().filter(|n| (2..=MAX_KEYS).contains(n)) else { continue };
@@ -3854,10 +3832,13 @@ const MAX_LONE_MARKS: usize = 2_000;
 /// A receptacle's designations among the texts printed by it, in a fixed order: `GFCI` (or
 /// `GFI`), `WP` weatherproof, `WR` weather-resistant, `TR` tamper-resistant, `USB`.
 fn receptacle_designations(texts: &[&str]) -> Vec<&'static str> {
-    const DESIGNATIONS: &[(&str, &[&str])] = &[("GFCI", &["GFCI", "GFI"]), ("WP", &["WP"]), ("WR", &["WR"]), ("TR", &["TR"]), ("USB", &["USB"])];
     let words: BTreeSet<String> =
         texts.iter().flat_map(|t| t.split(|c: char| !c.is_ascii_alphanumeric())).filter(|w| !w.is_empty()).map(str::to_ascii_uppercase).collect();
-    DESIGNATIONS.iter().filter(|(_, said)| said.iter().any(|w| words.contains(*w))).map(|(d, _)| *d).collect()
+    cadaddy_mepfix::wordrules::groups("devices.receptacle_designations")
+        .iter()
+        .filter(|(_, said)| said.iter().any(|w| words.contains(*w)))
+        .map(|(d, _)| *d)
+        .collect()
 }
 
 /// Run the devices stage: detect devices, symbols and counts (MUST 1, 4, 9-11).
@@ -5167,6 +5148,9 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         job.devices.extend(typical.added.iter().cloned());
     }
     let mut all_devices = job.devices.clone();
+    // Where each plumbing fixture went: onto the fixture the architectural plan draws, or left at
+    // its tag (recorded on the model's fixtures once they are in it).
+    let mut fixture_fits: Vec<super::fixturefit::Fit> = Vec::new();
     if let Some(sch) = &schedule {
         let fixtures = plumbing_fixtures(s.doc()?, job, sch);
         progress_line(&format!("  plumbing fixture schedule: {} tags; fixtures the plumbing plans tag: {}", sch.rows.len(), fixtures.len()));
@@ -5328,6 +5312,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let marks = drop_equipment_marks(&mut stamped);
                 if marks > 0 {
                     progress_line(&format!("  typical rooms: mechanical plans' equipment marks (the equipment itself), not devices: {marks}"));
+                }
+                // A typical room's device its circuit's line in the room's panel schedule limits to
+                // one floor (`WET BAR (THIRD FLOOR ONLY)`) goes only into that floor's rooms.
+                let limited = floor_limited(&schedules, &mut stamped);
+                if !limited.is_empty() {
+                    let n: usize = limited.values().sum();
+                    progress_line(&format!("  typical-room devices a note limits to another floor, left out of these rooms: {n} ({limited:?})"));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Devices a note limits to one floor",
+                        &format!(
+                            "{n} copies of typical-room devices were left out of rooms on other floors: their circuit's line in the panel schedule limits them to one floor ({})",
+                            limited.keys().cloned().collect::<Vec<_>>().join("; ")
+                        ),
+                        1,
+                        vec!["Check the floor-only items against the enlarged plans' keynotes".into()],
+                        None,
+                        false,
+                    );
                 }
                 // One thing two trades' plans of a typical room show is one device.
                 merged = super::unitmarks::merge_across_trades(&mut stamped, TRADES_MERGE_FT * upf_dev);
@@ -5522,6 +5525,26 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 }
                 counts = (not_placed, stamped.len());
                 out.extend(stamped);
+                // A plumbing plan's tag is set beside its fixture, clear of it: each fixture goes
+                // onto the fixture the architectural plan draws (Q6240), not its tag balloon.
+                if let Some(sch) = &schedule {
+                    let names: BTreeMap<String, String> = sch.rows.iter().map(|r| (r.tag.trim().to_string(), r.fixture.clone())).collect();
+                    let rules = super::fixturefit::rules();
+                    let rep = super::fixturefit::fit_fixtures(s.doc()?, &arch_plan_spans(job), &names, &mut out, upf_dev, rules);
+                    if !rep.fits.is_empty() {
+                        progress_line(&format!(
+                            "  plumbing fixtures onto the fixtures the architectural plans draw: {} moved {:?} (middle move {:.1} ft, largest {:.1} ft); at their tags, none drawn within {} ft: {} {:?}",
+                            rep.moved.values().sum::<usize>(),
+                            rep.moved,
+                            rep.median_move_ft,
+                            rep.largest_move_ft,
+                            rules.reach_ft,
+                            rep.at_tag.values().sum::<usize>(),
+                            rep.at_tag
+                        ));
+                    }
+                    fixture_fits = rep.fits;
+                }
                 out
             }
             _ => all_devices.clone(),
@@ -5797,6 +5820,15 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     if n > 0 {
                         s.doc_mut()?.building_spec = Some(sp.to_json());
                         progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
+                    }
+                }
+                // Where each fixture sits and why: on the drawn fixture, its tag kept beside it.
+                if !fixture_fits.is_empty()
+                    && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
+                {
+                    let n = super::fixturefit::record(&mut sp, &fixture_fits);
+                    if n > 0 {
+                        s.doc_mut()?.building_spec = Some(sp.to_json());
                     }
                 }
                 // The code's devices the plans don't mark: a guest room's receptacles are
@@ -7823,12 +7855,8 @@ fn type_words(text: &str, vocabulary: Option<&BTreeSet<String>>) -> BTreeSet<Str
     upper
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| !w.is_empty())
-        .map(|w| match w {
-            "QUEEN" => "Q".to_string(),
-            "ACC" | "ACCESSIBLE" => "ADA".to_string(),
-            w => w.to_string(),
-        })
-        .filter(|w| w != "SINGLE")
+        .map(|w| cadaddy_mepfix::wordrules::pair_value("units.type_word_aliases", w).unwrap_or(w).to_string())
+        .filter(|w| !cadaddy_mepfix::wordrules::words("units.dropped_type_words").contains(&w.as_str()))
         .filter(|w| vocabulary.is_none_or(|v| v.contains(w)))
         .collect()
 }
@@ -9246,7 +9274,10 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             .min_by(|a, b| dist(a.1, at).total_cmp(&dist(b.1, at)))
             .map(|(v, _)| v.clone())
     };
-    for (v, at) in labels.iter().filter(|(v, _)| v.trim().eq_ignore_ascii_case("PTAC")) {
+    // The room unit's printed tag (rule data `equipment.room_unit_tags`: PTAC for kind ptac).
+    let unit_tag =
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == "ptac").map(|(t, _)| *t).unwrap_or_default();
+    for (v, at) in labels.iter().filter(|(v, _)| !unit_tag.is_empty() && v.trim().eq_ignore_ascii_case(unit_tag)) {
         let body = shapes
             .iter()
             .filter(|(lo, hi, _)| {
@@ -9257,9 +9288,9 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             })
             .min_by(|a, b| dist(mid(a.0, a.1), *at).total_cmp(&dist(mid(b.0, b.1), *at)));
         let Some((lo, hi, _)) = body else { continue };
-        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("PTAC-{n}"));
+        let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("{unit_tag}-{n}"));
         if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
-            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: "tag PTAC".into() });
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: format!("tag {unit_tag}") });
         }
     }
     let squarish = |lo: [f64; 2], hi: [f64; 2]| {
@@ -9358,7 +9389,7 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             .into_iter()
             .filter_map(|v| {
                 let up = v.title.to_ascii_uppercase();
-                let mech = mech_sheet || up.contains("MECH") || up.contains("HVAC");
+                let mech = mech_sheet || cadaddy_mepfix::wordrules::words("sheets.mechanical_title_words").iter().any(|w| up.contains(w));
                 let words = type_words(&v.title, Some(&vocabulary));
                 (mech && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
             })
@@ -9513,13 +9544,10 @@ fn drop_equipment_marks(devices: &mut Vec<super::readers::ReadDevice>) -> usize 
 /// The mechanical equipment kind a device's tag names (`EF`, `PTAC`), if it names one.
 fn equipment_tag_kind(tag: &str) -> Option<&'static str> {
     let tag = tag.trim().to_ascii_uppercase();
-    if tag == "EF" || tag.starts_with("EF-") {
-        Some("exhaust_fan")
-    } else if tag == "PTAC" || tag.starts_with("PTAC-") {
-        Some("ptac")
-    } else {
-        None
-    }
+    cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+        .iter()
+        .find(|(t, _)| tag == *t || tag.strip_prefix(t).is_some_and(|r| r.starts_with('-')))
+        .map(|(_, kind)| *kind)
 }
 
 /// Each stamped device whose tag names mechanical equipment (`EF`, `PTAC`) moved to that
@@ -9562,6 +9590,65 @@ fn connect_to_equipment(equipment: &[cadaddy_walk3d::MepEquipment], devices: &mu
 /// Each unit room's equipment (PTAC, exhaust fan) that no device connects: a connection on the
 /// circuit the typical panel's schedule names it on (`GUESTROOM PTAC-1` on 13, two poles:
 /// `G-13,15`), placed at the equipment by [`connect_to_equipment`].
+/// The storey a note limits what it describes to: `WET BAR (THIRD FLOOR ONLY)`, `5. RANGES
+/// ARE PROVIDED ON 2ND FLOOR ONLY.`, `LEVEL 2 ONLY` give that storey (its
+/// [`storey_key`]: `1`, `2`). `None`: the note sets no such limit (`FLOOR BOX ONLY`, `ONLY ONE
+/// PER FLOOR`).
+fn floor_only(note: &str) -> Option<String> {
+    let up: String = note.chars().take(400).map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_uppercase() } else { ' ' }).collect();
+    let w: Vec<&str> = up.split_whitespace().collect();
+    for (i, x) in w.iter().enumerate() {
+        let next = w.get(i + 1).copied().unwrap_or_default();
+        let after = w.get(i + 2).copied().unwrap_or_default();
+        // `<ordinal> FLOOR ONLY` / `FLOORS ONLY`; `LEVEL <n> ONLY`.
+        let named = if matches!(*x, "FLOOR" | "FLOORS" | "FLR") && next == "ONLY" {
+            i.checked_sub(1).and_then(|j| w.get(j)).map(|o| format!("{o} FLOOR"))
+        } else if matches!(*x, "LEVEL" | "LVL") && after == "ONLY" && next.chars().all(|c| c.is_ascii_digit()) && !next.is_empty() {
+            Some(format!("LEVEL {next}"))
+        } else {
+            None
+        };
+        if let Some((level, cadaddy_walk3d::levels::DatumKind::Floor)) = named.as_deref().and_then(cadaddy_walk3d::levels::canonical_level) {
+            return Some(storey_key(&level));
+        }
+    }
+    None
+}
+
+/// The typical rooms' devices (stamped into rooms on every floor) whose circuit's line in its
+/// panel schedule limits it to one floor ([`floor_only`]), taken out of the rooms of the other
+/// floors. How many went, by the circuit and its line.
+fn floor_limited(schedules: &[cadaddy_walk3d::PanelSchedule], stamped: &mut Vec<super::readers::ReadDevice>) -> BTreeMap<String, usize> {
+    let mut out: BTreeMap<String, usize> = BTreeMap::new();
+    if schedules.is_empty() {
+        return out;
+    }
+    // A circuit's line: its panel's schedule, the line of its number (`G-7`, `G-13,15`: its first).
+    let line = |circuit: &str| -> Option<(String, String)> {
+        let (c, _) = super::propfill::split_switch_leg(circuit);
+        let first = c.split(',').next().unwrap_or("").trim().to_string();
+        let panel = super::propfill::panel_of(&first)?;
+        let (_, number) = first.rsplit_once(['-', '/', '.'])?;
+        let number = number.trim();
+        let sch = schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(&panel))?;
+        let row = sch.circuits.iter().find(|r| r.number.split([',', ' ', '/']).next().is_some_and(|n| n.trim() == number))?;
+        Some((format!("{first} {}", row.description.trim()), row.description.clone()))
+    };
+    stamped.retain(|dv| {
+        if dv.room.is_empty() || dv.circuit.trim().is_empty() {
+            return true;
+        }
+        let Some((key, description)) = line(&dv.circuit) else { return true };
+        let Some(storey) = floor_only(&description) else { return true };
+        if storey_key(&dv.level) == storey {
+            return true;
+        }
+        *out.entry(key).or_default() += 1;
+        false
+    });
+    out
+}
+
 fn scheduled_connections(
     schedules: &[cadaddy_walk3d::PanelSchedule],
     equipment: &[cadaddy_walk3d::MepEquipment],
@@ -9570,20 +9657,12 @@ fn scheduled_connections(
     // The typical panel (one schedule for many rooms) when there is one.
     let typical: Vec<&cadaddy_walk3d::PanelSchedule> = schedules.iter().filter(|p| p.typical_of.is_some()).collect();
     let [panel] = typical.as_slice() else { return Vec::new() };
-    let words = |kind: &str| -> &'static [&'static str] {
-        match kind {
-            "ptac" => &["PTAC"],
-            "exhaust_fan" => &["EXHAUST FAN", "BATH FAN"],
-            _ => &[],
-        }
-    };
+    let words = |kind: &str| -> &'static [&'static str] { cadaddy_mepfix::wordrules::group("equipment.typical_load_words", kind) };
     let mut out = Vec::new();
     for e in equipment.iter().take(MAX_STAMPED) {
         let Some(room) = e.properties.get("room").filter(|r| !r.is_empty()) else { continue };
-        let tag = match e.kind.as_str() {
-            "ptac" => "PTAC",
-            "exhaust_fan" => "EF",
-            _ => continue,
+        let Some(tag) = cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags").iter().find(|(_, kind)| *kind == e.kind).map(|(t, _)| *t) else {
+            continue;
         };
         // Connected already: a connection of its kind in its room.
         if devices.iter().chain(&out).any(|dv| dv.room == *room && dv.tag.to_ascii_uppercase().starts_with(tag)) {
@@ -9736,7 +9815,9 @@ fn units_trade(sheet: &str) -> String {
 fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
     let connection = |dv: &super::readers::ReadDevice| {
         let t = dv.tag.trim().to_ascii_uppercase();
-        t == "EF" || t.starts_with("EF-") || t == "PTAC" || t.starts_with("PTAC-")
+        cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags")
+            .iter()
+            .any(|(tag, _)| t == *tag || t.strip_prefix(tag).is_some_and(|r| r.starts_with('-')))
     };
     let mut seen: BTreeSet<(String, String, String)> = BTreeSet::new();
     // Where each kept one is: another plan's tag put at the same equipment (in no room) is it.
@@ -10022,21 +10103,7 @@ const HALF_BOX_IN: f64 = 2.25;
 /// The kind a typical-height item names (`TOGGLE SWITCH`, `RECEPTACLES`, `VOICE/DATA OUTLETS`).
 fn typical_kind(words: &str) -> Option<&'static str> {
     let up = words.to_ascii_uppercase();
-    if up.contains("PANEL") {
-        Some("panel")
-    } else if up.contains("EMERGENCY") {
-        Some("emergency light")
-    } else if up.contains("SWITCH") {
-        Some("switch")
-    } else if up.contains("RECEPT") {
-        Some("receptacle")
-    } else if ["VOICE", "DATA", "TELEPHONE", "TEL/", "TV", "CATV"].iter().any(|w| up.contains(w)) {
-        Some("low_voltage_outlet")
-    } else if up.contains("THERMOSTAT") {
-        Some("thermostat")
-    } else {
-        None
-    }
+    cadaddy_mepfix::wordrules::first_rule("devices.typical_height_kind", |w| up.contains(w)).map(|r| r.value)
 }
 
 /// One typical-height item (`TOGGLE SWITCH 4'-0" AFF TO TOP`): its kind and centre height.
@@ -10195,9 +10262,13 @@ fn typical_views(
 
 /// The plumbing fixtures of the guest rooms the plumbing plans show (the enlarged sanitary
 /// views draw one pair of rooms a floor, P-1 water closet, P-2 lavatory...): each room of the
-/// same type with none gets the fixture set of the room of its type that has the most, laid in
-/// the way a typical view of that type goes into each of the two (turned and mirrored as each
-/// room is). `placed`: the devices put onto the plans. The copies, and per type how many rooms.
+/// same type gets the tags it lacks of its own floor's set (the tags that floor's plans letter in
+/// its rooms of the type), laid in the way a typical view of that type goes into each of the two
+/// (turned and mirrored as each room is). A floor whose plans letter no room of the type takes,
+/// room by room, the fixtures of the room it stacks with on another floor ([`room_stacking`]: the
+/// same type at the same place), marked derived with the basis; a room that stacks with none
+/// takes none. Another floor's set never goes into a room. `placed`: the devices put onto the
+/// plans. The copies, and per type how many rooms.
 fn copy_room_fixtures(
     d: &cadaddy_doc::Drawing,
     job: &GuidedJob,
@@ -10244,58 +10315,143 @@ fn copy_room_fixtures(
         let b = room_boxes.get(ri)?;
         rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
     };
+    // The rooms each room stacks with on the other floors (rules data's order: below, then above).
+    let fill = super::waterfill::rules();
+    let stacking = room_stacking(&rooms, upf, &fill.stack_on);
     for words in &types {
-        let Some(vs) = views.get(words) else { continue };
         let of_type: Vec<usize> = (0..rooms.len()).filter(|i| rooms.get(*i).is_some_and(|r| type_words(&r.0, None) == *words)).collect();
-        // The type's fixture set: one of each tag the plans letter in the rooms of this type, the
-        // rooms with the most first (a tag lettered across the wall, in the room behind, would
-        // put a second where there is none), taken back into the view that goes into its room.
-        let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
-        let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
-        let mut sources = 0usize;
-        let mut by_count: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
-        by_count.sort_by_key(|i| std::cmp::Reverse(in_room.get(*i).map_or(0, Vec::len)));
-        for src in by_count {
-            let Some((v, fit_src)) = vs.iter().filter(|v| v_used.is_none_or(|u| std::ptr::eq(u, *v))).find_map(|v| fit(v, src).map(|f| (v, f)))
-            else {
-                continue;
-            };
-            v_used = Some(v);
-            sources += 1;
-            for f in in_room.get(src).into_iter().flatten() {
-                let Some(p) = view_point(f.at, fit_src) else { continue };
-                if !set.iter().any(|(_, g)| g.tag == f.tag) {
-                    set.push((p, f));
+        // A type no plan letters a fixture in, on any floor (a stair, a corridor): nothing to lay.
+        if of_type.iter().all(|i| in_room.get(*i).is_none_or(Vec::is_empty)) {
+            continue;
+        }
+        let mut storeys: Vec<String> = of_type.iter().filter_map(|i| rooms.get(*i)).map(|r| storey_key(&r.1)).collect();
+        storeys.sort();
+        storeys.dedup();
+        // Floor by floor, the type's fixture set of that floor's own plans: one of each tag they
+        // letter in its rooms of this type, the rooms with the most first (a tag lettered across
+        // the wall, in the room behind, would put a second where there is none), taken back into
+        // the view that goes into its room. Another floor's rooms never make this floor's set.
+        let mut sets: BTreeMap<String, (&([f64; 4], Vec<cadaddy_geom::Vec2>), Vec<([f64; 2], &super::readers::ReadDevice)>, usize)> = BTreeMap::new();
+        if let Some(vs) = views.get(words) {
+            for storey in &storeys {
+                let mut set: Vec<([f64; 2], &super::readers::ReadDevice)> = Vec::new();
+                let mut v_used: Option<&([f64; 4], Vec<cadaddy_geom::Vec2>)> = None;
+                let mut sources = 0usize;
+                let mut by_count: Vec<usize> = of_type
+                    .iter()
+                    .copied()
+                    .filter(|i| rooms.get(*i).is_some_and(|r| storey_key(&r.1) == *storey) && in_room.get(*i).is_some_and(|f| !f.is_empty()))
+                    .collect();
+                by_count.sort_by_key(|i| std::cmp::Reverse(in_room.get(*i).map_or(0, Vec::len)));
+                for src in by_count {
+                    let Some((v, fit_src)) =
+                        vs.iter().filter(|v| v_used.is_none_or(|u| std::ptr::eq(u, *v))).find_map(|v| fit(v, src).map(|f| (v, f)))
+                    else {
+                        continue;
+                    };
+                    v_used = Some(v);
+                    sources += 1;
+                    for f in in_room.get(src).into_iter().flatten() {
+                        let Some(p) = view_point(f.at, fit_src) else { continue };
+                        if !set.iter().any(|(_, g)| g.tag == f.tag) {
+                            set.push((p, f));
+                        }
+                    }
+                }
+                if let Some(v) = v_used {
+                    sets.insert(storey.clone(), (v, set, sources));
                 }
             }
         }
-        let Some(v) = v_used else { continue };
-        // Each room of the type: the set's fixtures it hasn't (by tag, about there).
+        // Each room of the type on a floor with a set: the set's fixtures it hasn't (by tag, about
+        // there).
         let mut took = 0usize;
+        let mut laid: BTreeMap<usize, Vec<super::readers::ReadDevice>> = BTreeMap::new();
         for ri in of_type.iter().copied() {
-            let Some(fit_t) = fit(v, ri) else { continue };
             let Some((name, level, _, number)) = rooms.get(ri) else { continue };
+            let Some((v, set, _)) = sets.get(&storey_key(level)) else { continue };
+            let Some(fit_t) = fit(v, ri) else { continue };
             let b = room_boxes.get(ri).copied().unwrap_or_default();
             let have = in_room.get(ri).cloned().unwrap_or_default();
-            let mut added = false;
-            for (p, f) in &set {
+            let mut mine = Vec::new();
+            for (p, f) in set {
                 let Some(at) = place_in_room(*p, v.0, b, fit_t) else { continue };
                 // The set is one of each tag: a room with that tag already (where the plans put it,
                 // however its fit lays the set in) takes none.
                 if have.iter().any(|h| h.tag == f.tag) {
                     continue;
                 }
-                out.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
-                added = true;
+                mine.push(super::readers::ReadDevice { at, level: level.clone(), room: stamped_room(name, number, ri), ..(*f).clone() });
             }
-            took += usize::from(added);
-            if out.len() >= MAX_STAMPED {
+            took += usize::from(!mine.is_empty());
+            laid.insert(ri, mine);
+            if out.len() + laid.values().map(Vec::len).sum::<usize>() >= MAX_STAMPED {
                 break;
             }
         }
+        // A room of a floor whose plans letter no room of its type: the fixtures of the room it
+        // stands on (or under) on another floor, the same type at the same place, moved onto it
+        // and marked derived. A room that stacks with none takes none: another floor's room
+        // elsewhere is not its.
+        let mut stacked = 0usize;
+        let mut alone: Vec<String> = Vec::new();
+        for ri in of_type.iter().copied() {
+            let Some((name, level, _, number)) = rooms.get(ri) else { continue };
+            if sets.contains_key(&storey_key(level)) {
+                continue;
+            }
+            let shown = |rj: usize| -> Vec<&super::readers::ReadDevice> {
+                in_room.get(rj).into_iter().flatten().copied().chain(laid.get(&rj).into_iter().flatten()).collect()
+            };
+            let Some((rj, off, theirs)) =
+                stacking.get(ri).into_iter().flatten().map(|(rj, off)| (*rj, *off, shown(*rj))).find(|(_, _, f)| !f.is_empty())
+            else {
+                if alone.len() < MAX_ALONE_LISTED {
+                    alone.push(stamped_room(name, number, ri));
+                }
+                continue;
+            };
+            let have = in_room.get(ri).cloned().unwrap_or_default();
+            let (from_level, from_room) = rooms.get(rj).map(|(n, l, _, num)| (l.clone(), stamped_room(n, num, rj))).unwrap_or_default();
+            let basis = format!(
+                "derived from {from_level}: room {from_room} there is of its type at the same place, and that floor's plans show its fixtures; {}",
+                fill.room_stack_basis
+            );
+            let mut added = false;
+            for f in theirs {
+                if have.iter().any(|h| h.tag == f.tag) || out.len() >= MAX_STAMPED {
+                    continue;
+                }
+                out.push(super::readers::ReadDevice {
+                    at: [f.at[0] + off[0], f.at[1] + off[1]],
+                    level: level.clone(),
+                    room: stamped_room(name, number, ri),
+                    derived: basis.clone(),
+                    ..f.clone()
+                });
+                added = true;
+            }
+            stacked += usize::from(added);
+        }
+        out.extend(laid.into_values().flatten());
         let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
-        let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
-        report.insert(format!("{label}: set {tags:?} from {sources} rooms the plans tag"), took);
+        let said: Vec<String> = sets
+            .iter()
+            .map(|(storey, (_, set, sources))| {
+                let tags: Vec<&str> = set.iter().map(|(_, f)| f.tag.as_str()).collect();
+                let one = format!("set {tags:?} from {sources} rooms the plans tag");
+                if sets.len() == 1 { one } else { format!("storey {storey}: {one}") }
+            })
+            .collect();
+        if !said.is_empty() {
+            report.insert(format!("{label}: {}", said.join("; ")), took);
+        }
+        if stacked > 0 {
+            report.insert(format!("{label}: rooms derived from the room they stack with on another floor"), stacked);
+        }
+        if !alone.is_empty() {
+            report.insert(format!("{label}: rooms no plan of their floor furnishes and that stack with none, left as drawn: {alone:?}"), 0);
+        }
     }
     (out, report)
 }
@@ -10374,7 +10530,6 @@ fn levels_without_water(
     floor_plan: &dyn Fn(&cadaddy_walk3d::MepRun) -> bool,
     roof: &dyn Fn(&str) -> bool,
 ) -> Vec<String> {
-    const WATER: [&str; 3] = ["CW", "HW", "HWR"];
     let mut order: Vec<&str> = Vec::new();
     let mut water: BTreeSet<&str> = BTreeSet::new();
     for r in runs {
@@ -10382,7 +10537,7 @@ fn levels_without_water(
         if drained && !order.contains(&r.level.as_str()) {
             order.push(&r.level);
         }
-        if WATER.contains(&r.system.as_str()) && floor_plan(r) {
+        if cadaddy_mepfix::wordrules::words("pipes.water_systems").contains(&r.system.as_str()) && floor_plan(r) {
             water.insert(&r.level);
         }
     }
@@ -10406,6 +10561,60 @@ fn area_rooms(rooms: &[JobRoom], storey: &str) -> Vec<super::waterfill::AreaRoom
             label: if number.is_empty() { name.clone() } else { format!("{name} {number}") },
         })
         .collect()
+}
+
+/// Each room's rooms on the other storeys that it stacks with ([`super::waterfill::stacked_rooms`]:
+/// the same type at the same place once the two floors' plans are laid over each other), in the
+/// rules data's order (`stack_on`: the storeys below, nearest first, then above): each by its
+/// place in `rooms` with the move that takes a point of it onto this room's floor. A room of a
+/// storey that stacks with none has none: another floor's room is never this one's.
+fn room_stacking(rooms: &[JobRoom], upf: f64, stack_on: &[String]) -> Vec<Vec<(usize, [f64; 2])>> {
+    let mut out: Vec<Vec<(usize, [f64; 2])>> = vec![Vec::new(); rooms.len()];
+    let mut storeys: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, (_, level, _, _)) in rooms.iter().enumerate() {
+        storeys.entry(storey_key(level)).or_default().push(i);
+    }
+    if storeys.len() < 2 {
+        return out;
+    }
+    let area = |idx: &[usize]| -> Vec<super::waterfill::AreaRoom> {
+        idx.iter()
+            .filter_map(|i| rooms.get(*i))
+            .map(|(name, _, o, number)| super::waterfill::AreaRoom {
+                words: type_words(name, None),
+                outline: o.iter().map(|p| [p.x, p.y]).collect(),
+                label: if number.is_empty() { name.clone() } else { format!("{name} {number}") },
+            })
+            .collect()
+    };
+    let height = |k: &str| k.parse::<f64>().ok();
+    for (here, mine_idx) in &storeys {
+        let mine = area(mine_idx);
+        // The other storeys in the rules' order: below (nearest first), then above.
+        let mut order: Vec<&String> = Vec::new();
+        for side in stack_on {
+            let mut v: Vec<(f64, &String)> = storeys
+                .keys()
+                .filter(|k| *k != here)
+                .filter_map(|k| Some((height(k)? - height(here)?, k)))
+                .filter(|(d, _)| if side == "below" { *d < 0.0 } else { side == "above" && *d > 0.0 })
+                .collect();
+            v.sort_by(|a, b| a.0.abs().total_cmp(&b.0.abs()));
+            order.extend(v.into_iter().map(|(_, k)| k).filter(|k| !order.contains(k)).collect::<Vec<_>>());
+        }
+        for there in order {
+            let Some(their_idx) = storeys.get(there) else { continue };
+            let Some((off, pairs)) = super::waterfill::stacked_rooms(&mine, &area(their_idx), upf) else { continue };
+            for (a, hit) in pairs.iter().enumerate() {
+                if let (Some(i), Some(j)) = (mine_idx.get(a), hit.and_then(|h| their_idx.get(h)))
+                    && let Some(slot) = out.get_mut(*i)
+                {
+                    slot.push((*j, off));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The floors a level with no water plan may be piped like, in the rules data's order (`below`:
@@ -10563,9 +10772,12 @@ fn infer_missing_water(
 
 /// The pipes of the guest rooms the plumbing plans show (an enlarged plan draws one or two rooms
 /// a floor with their waste, vent and water lines): each room of the same type and size that
-/// holds no pipe of a system gets that system's pipes of the room of its type that has the most,
-/// laid in as its fixtures are ([`copy_room_fixtures`]: turned and mirrored as each room is). A
-/// type is a typical room's when it repeats on a floor (not a corridor, one a floor). Only the
+/// holds no pipe of a system gets that system's pipes of the room of its type on its own floor
+/// that has the most, laid in as its fixtures are ([`copy_room_fixtures`]: turned and mirrored as
+/// each room is). A system its floor's plans draw in no room of the type comes from the room it
+/// stacks with on another floor ([`room_stacking`]), marked derived with the basis; another
+/// floor's room elsewhere is never copied. A type is a typical room's when it repeats on a floor
+/// (not a corridor, one a floor). Only the
 /// room's part of a pipe is copied (walls included, [`end_pieces`]): where a branch goes on to the
 /// main outside, that is the floor's pipe. `runs`: the runs put onto the plans; `pipe`: whether a run's system is a pipe's.
 /// The copies, and per type what was copied and into how many rooms.
@@ -10664,6 +10876,9 @@ fn copy_room_pipes(
         let b = room_boxes.get(ri)?;
         rigid_room_fit(&vi.1, vi.0, *b, &floor_lines, ROOM_FIT_MARGIN_FT * upf, 6.0 * k_in).map(|(f, _)| f).filter(|f| f.rigid)
     };
+    // The rooms each room stacks with on the other floors (rules data's order: below, then above).
+    let fill = super::waterfill::rules();
+    let stacking = room_stacking(&rooms, upf, &fill.stack_on);
     // What is on the plans, and each copy as it goes in: no pipe laid twice.
     let mut grid = super::runtidy::PipeGrid::new(upf);
     for r in &pipes {
@@ -10683,58 +10898,124 @@ fn copy_room_pipes(
         if per_storey.values().all(|n| *n < 2) {
             continue;
         }
-        // The type's pipes, system by system from the room with the most of it, each taken back
-        // into the view (by its index in `vs`) that goes into its room: the type's rooms of one
-        // hand fit one of its views, of the other hand another.
-        let mut by_len: Vec<usize> = of_type.iter().copied().filter(|i| in_room.get(*i).is_some_and(|f| !f.is_empty())).collect();
-        by_len.sort_by(|a, b| {
-            let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(&length).sum::<f64>());
-            l(b).total_cmp(&l(a))
-        });
-        let mut set: Vec<(usize, [f64; 4], cadaddy_walk3d::MepRun)> = Vec::new();
-        let mut systems: BTreeSet<String> = BTreeSet::new();
-        let mut sources: Vec<String> = Vec::new();
-        for src in by_len {
-            let mine: Vec<&cadaddy_walk3d::MepRun> = in_room.get(src).into_iter().flatten().filter(|r| !systems.contains(&r.system)).collect();
-            if mine.is_empty() {
-                continue;
+        // Floor by floor, the type's pipes of that floor's own plans, system by system from its
+        // room with the most of it, each taken back into the view (by its index in `vs`) that
+        // goes into its room: the type's rooms of one hand fit one of its views, of the other hand
+        // another. Another floor's rooms never make this floor's set.
+        let mut storeys: Vec<String> = of_type.iter().filter_map(|i| rooms.get(*i)).map(|r| digits(&r.1)).collect();
+        storeys.sort();
+        storeys.dedup();
+        type Set = Vec<(usize, [f64; 4], cadaddy_walk3d::MepRun)>;
+        let mut sets: BTreeMap<String, (Set, BTreeSet<String>, Vec<String>)> = BTreeMap::new();
+        for storey in &storeys {
+            let mut by_len: Vec<usize> = of_type
+                .iter()
+                .copied()
+                .filter(|i| rooms.get(*i).is_some_and(|r| digits(&r.1) == *storey) && in_room.get(*i).is_some_and(|f| !f.is_empty()))
+                .collect();
+            by_len.sort_by(|a, b| {
+                let l = |i: &usize| in_room.get(*i).map_or(0.0, |v| v.iter().map(&length).sum::<f64>());
+                l(b).total_cmp(&l(a))
+            });
+            let mut set: Set = Vec::new();
+            let mut systems: BTreeSet<String> = BTreeSet::new();
+            let mut sources: Vec<String> = Vec::new();
+            for src in by_len {
+                let mine: Vec<&cadaddy_walk3d::MepRun> = in_room.get(src).into_iter().flatten().filter(|r| !systems.contains(&r.system)).collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                let Some((vi, fit_src)) = vs.iter().enumerate().find_map(|(i, v)| fit(v, src).map(|f| (i, f))) else { continue };
+                let Some(src_box) = room_boxes.get(src).copied() else { continue };
+                for r in mine {
+                    let Some(points) = r.points.iter().map(|p| view_point(*p, fit_src)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
+                    let mut copy = r.clone();
+                    copy.points = points;
+                    set.push((vi, src_box, copy));
+                }
+                systems.extend(set.iter().map(|(_, _, r)| r.system.clone()));
+                if let Some((_, _, _, number)) = rooms.get(src) {
+                    sources.push(number.clone());
+                }
             }
-            let Some((vi, fit_src)) = vs.iter().enumerate().find_map(|(i, v)| fit(v, src).map(|f| (i, f))) else { continue };
-            let Some(src_box) = room_boxes.get(src).copied() else { continue };
-            for r in mine {
-                let Some(points) = r.points.iter().map(|p| view_point(*p, fit_src)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
-                let mut copy = r.clone();
-                copy.points = points;
-                set.push((vi, src_box, copy));
-            }
-            systems.extend(set.iter().map(|(_, _, r)| r.system.clone()));
-            if let Some((_, _, _, number)) = rooms.get(src) {
-                sources.push(number.clone());
+            if !set.is_empty() {
+                sets.insert(storey.clone(), (set, systems, sources));
             }
         }
-        if set.is_empty() {
+        // Every system some floor's rooms of the type hold.
+        let all_systems: BTreeSet<String> = sets.values().flat_map(|(_, y, _)| y.iter().cloned()).collect();
+        if all_systems.is_empty() {
             continue;
         }
-        // Each room of the type: the systems it holds none of.
+        // Each room of the type: the systems it holds none of, from its floor's set; a system its
+        // floor's plans draw in no room of the type comes from the room it stands on (or under) on
+        // another floor (the same type at the same place: that room's own pipes of it, moved onto
+        // it, marked derived), never from another floor's room elsewhere.
         let mut took = 0usize;
-        for ri in of_type.iter().copied() {
+        let mut stacked = 0usize;
+        // The pipes each room took, by the room: a room above takes the ones laid into the room it
+        // stands on.
+        let mut laid: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        let mut order: Vec<usize> = of_type.clone();
+        // The rooms whose floor has a set first: the rooms stacked on them take what they laid.
+        order.sort_by_key(|ri| rooms.get(*ri).is_none_or(|r| !sets.contains_key(&digits(&r.1))));
+        for ri in order {
             let Some((_, level, _, _)) = rooms.get(ri) else { continue };
             let b = room_boxes.get(ri).copied().unwrap_or_default();
             let storey = digits(level);
             let core = grown(&b, -upf);
+            let mine = sets.get(&storey);
             let mut fits: BTreeMap<usize, Option<RoomFit>> = BTreeMap::new();
-            let mut added = false;
-            for system in &systems {
+            let (mut added, mut derived) = (false, false);
+            for system in &all_systems {
                 let placed: Vec<&cadaddy_walk3d::MepRun> = pipes.iter().copied().chain(out.iter()).collect();
                 if inside_len(&placed, &storey, system, &core) >= ROOM_HAS_PIPE_FT * upf {
                     continue;
                 }
-                for (vi, _, r) in set.iter().filter(|(_, src_box, r)| r.system == *system && same_size(src_box, &b)) {
-                    let Some(v) = vs.get(*vi) else { continue };
-                    let Some(fit_t) = *fits.entry(*vi).or_insert_with(|| fit(v, ri)) else { continue };
-                    let Some(points) = r.points.iter().map(|p| place_in_room(*p, v.0, b, fit_t)).collect::<Option<Vec<[f64; 2]>>>() else { continue };
-                    let mut copy = r.clone();
-                    copy.points = points;
+                let mut copies: Vec<cadaddy_walk3d::MepRun> = Vec::new();
+                if let Some((set, _, _)) = mine.filter(|m| m.1.contains(system)) {
+                    for (vi, _, r) in set.iter().filter(|(_, src_box, r)| r.system == *system && same_size(src_box, &b)) {
+                        let Some(v) = vs.get(*vi) else { continue };
+                        let Some(fit_t) = *fits.entry(*vi).or_insert_with(|| fit(v, ri)) else { continue };
+                        let Some(points) = r.points.iter().map(|p| place_in_room(*p, v.0, b, fit_t)).collect::<Option<Vec<[f64; 2]>>>() else {
+                            continue;
+                        };
+                        let mut copy = r.clone();
+                        copy.points = points;
+                        copies.push(copy);
+                    }
+                } else {
+                    // The room it stacks with whose pipes of the system (its own floor's, or laid
+                    // into it from its floor's set) are there.
+                    let theirs = |rj: usize| -> Vec<cadaddy_walk3d::MepRun> {
+                        in_room
+                            .get(rj)
+                            .into_iter()
+                            .flatten()
+                            .chain(laid.get(&rj).into_iter().flatten().filter_map(|k| out.get(*k)))
+                            .filter(|r| r.system == *system)
+                            .cloned()
+                            .collect()
+                    };
+                    let Some((rj, off, src)) =
+                        stacking.get(ri).into_iter().flatten().map(|(rj, off)| (*rj, *off, theirs(*rj))).find(|(_, _, v)| !v.is_empty())
+                    else {
+                        continue;
+                    };
+                    let (from_level, from_room) = rooms.get(rj).map(|(n, l, _, num)| (l.clone(), stamped_room(n, num, rj))).unwrap_or_default();
+                    for r in src {
+                        let mut copy = r;
+                        copy.points = copy.points.iter().map(|p| [p[0] + off[0], p[1] + off[1]]).collect();
+                        copy.height_source = super::waterfill::DERIVED.into();
+                        copy.size_source = format!(
+                            "derived from {from_level}: room {from_room} there is of its type at the same place, and that floor's plans draw its pipes; {}",
+                            fill.room_stack_basis
+                        );
+                        copies.push(copy);
+                    }
+                    derived = true;
+                }
+                for mut copy in copies {
                     if grid.covered(&storey, &copy) >= ROOM_PIPE_DRAWN_SHARE {
                         continue;
                     }
@@ -10742,17 +11023,29 @@ fn copy_room_pipes(
                     copy.id = String::new();
                     copy.objects = Vec::new();
                     grid.add(&storey, &copy);
+                    laid.entry(ri).or_default().push(out.len());
                     out.push(copy);
                     added = true;
                 }
             }
-            took += usize::from(added);
+            took += usize::from(added && !derived);
+            stacked += usize::from(added && derived);
             if out.len() >= MAX_STAMPED {
                 break;
             }
         }
         let label = words.iter().cloned().collect::<Vec<_>>().join(" ");
-        report.insert(format!("{label}: {} pipes of {systems:?} from rooms {sources:?}", set.len()), took);
+        let said: Vec<String> = sets
+            .iter()
+            .map(|(storey, (set, systems, sources))| {
+                let one = format!("{} pipes of {systems:?} from rooms {sources:?}", set.len());
+                if sets.len() == 1 { one } else { format!("storey {storey}: {one}") }
+            })
+            .collect();
+        report.insert(format!("{label}: {}", said.join("; ")), took);
+        if stacked > 0 {
+            report.insert(format!("{label}: rooms with pipes derived from the room they stack with on another floor"), stacked);
+        }
     }
     (out, report)
 }
@@ -10810,7 +11103,7 @@ fn job_unit_types(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<Value>, Vec
             // FLOOR - SANITARY): every guest room type's, on that floor.
             let up = v.title.to_ascii_uppercase();
             let enlarged = up.contains("ENLARGED") || up.contains("PLAN");
-            if !types.contains(&words) && enlarged && (up.contains("GUESTROOM") || up.contains("GUEST ROOM")) {
+            if !types.contains(&words) && enlarged && cadaddy_mepfix::wordrules::words("units.unit_plan_title_words").iter().any(|w| up.contains(w)) {
                 let Some(region) = v.region.or_else(|| title_cell(v.at, &titles, sh.rect)) else {
                     progress_line(&format!("  unit types: {} {:?} at {:?}: no part of the sheet found for it", sh.number, v.title, v.at));
                     continue;
@@ -10940,20 +11233,9 @@ const TITLE_BLOCK_SHARE: f64 = 0.12;
 /// The views of one unit type kept at most.
 const MAX_UNIT_VIEWS: usize = 40;
 
-/// Marks that tag mechanical equipment (`HP` over its number: heat pump 3). A device so marked is
-/// that equipment's electrical connection.
-const EQUIPMENT_TAGS: &[&str] =
-    &["HP", "AHU", "RTU", "CU", "ACU", "ERV", "HRV", "MAU", "MUA", "UH", "EUH", "CUH", "EWH", "VAV", "VRF", "KEF", "TEF", "GEF"];
-
 /// The words a table's heading names a trade by (`PLUMBING` for the plumbing sheets).
 fn trade_names(trade: &str) -> &'static [&'static str] {
-    match trade {
-        "P" => &["PLUMBING"],
-        "M" => &["MECHANICAL", "HVAC"],
-        "FP" | "F" => &["FIRE PROTECTION", "SPRINKLER"],
-        "L" | "T" => &["LOW VOLTAGE", "TECHNOLOGY", "TELECOM", "SECURITY"],
-        _ => &[],
-    }
+    cadaddy_mepfix::wordrules::group("sheets.trade_heading_words", trade)
 }
 
 /// How far round a mark its sheet's text is quoted for a question about it, in text heights.
@@ -10985,11 +11267,11 @@ fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Op
     let desc = row.description.to_ascii_uppercase();
     let fixtures = !plumbing
         && !table.contains("PLUMBING")
-        && ["LUMINAIRE", "LIGHT FIXTURE", "LIGHTING FIXTURE", "LIGHTING SCHEDULE", "FIXTURE SCHEDULE"].iter().any(|w| table.contains(w));
-    if fixtures || ["LUMINAIRE", "DOWNLIGHT", "TROFFER", "SCONCE", "PENDANT", "LIGHT FIXTURE", "LED FIXTURE"].iter().any(|w| desc.contains(w)) {
+        && cadaddy_mepfix::wordrules::words("schedules.luminaire_table_words").iter().any(|w| table.contains(w));
+    if fixtures || cadaddy_mepfix::wordrules::words("fixtures.luminaire_words").iter().any(|w| desc.contains(w)) {
         return Some(("luminaire", "IfcLightFixture"));
     }
-    if ["EQUIPMENT", "FAN", "PUMP", "HEATER", "UNIT SCHEDULE"].iter().any(|w| table.contains(w)) {
+    if cadaddy_mepfix::wordrules::words("schedules.equipment_table_words").iter().any(|w| table.contains(w)) {
         return Some(("equipment connection", ""));
     }
     None
@@ -11002,7 +11284,7 @@ fn row_kind(row: &cadaddy_mepfix::device_types::LegendRow, plumbing: bool) -> Op
 fn equipment_of(tag: &str, texts: &[cadaddy_mepfix::sheet_facts::TextItem], tag_at: Option<(cadaddy_geom::Vec2, f64)>) -> Option<String> {
     let t = tag.trim().to_ascii_uppercase();
     let letters: String = t.chars().take_while(char::is_ascii_alphabetic).collect();
-    if !EQUIPMENT_TAGS.contains(&letters.as_str()) {
+    if !cadaddy_mepfix::wordrules::words("equipment.tags").contains(&letters.as_str()) {
         return None;
     }
     let digits: String = t.chars().skip(letters.len()).collect();
@@ -11199,27 +11481,7 @@ fn kinds_from_pages(job: &GuidedJob, devices: &mut [super::readers::ReadDevice])
 /// Whether a panel schedule's load is a piece of equipment (its connection is the device).
 fn equipment_load(description: &str) -> bool {
     let u = description.to_ascii_uppercase();
-    [
-        "HEAT PUMP",
-        "HP-",
-        "AHU",
-        "RTU",
-        "CONDENS",
-        "WATER HEATER",
-        "PUMP",
-        "FAN",
-        "UNIT",
-        "MOTOR",
-        "SIGN",
-        "GATE",
-        "OPERATOR",
-        "COMPRESSOR",
-        "HEATER",
-        "ELEVATOR",
-        "DOOR",
-    ]
-    .iter()
-    .any(|w| u.contains(w))
+    cadaddy_mepfix::wordrules::words("equipment.load_words").iter().any(|w| u.contains(w))
 }
 
 /// What each mark that needed resolving resolved to and from where (`HP: equipment connection
@@ -11250,67 +11512,10 @@ const NEAR_TEXT_DEFAULT_H: f64 = 6.0;
 pub(crate) fn legend_kind(description: &str) -> Option<(&'static str, &'static str)> {
     let u = description.to_ascii_uppercase();
     let has = |w: &str| u.contains(w);
-    if ["INSTALL DEVICE AT", "DESIGNATION", "MOUNT 6", "LOWER CASE", "INDICATES", "LIGHTING FIXTURE", "CIRCUITING"].iter().any(|w| has(w)) {
+    if cadaddy_mepfix::wordrules::words("devices.legend_not_device_words").iter().any(|w| has(w)) {
         return None;
     }
-    Some(if has("GFCI") || has("GROUND FAULT") || has("GFI ") {
-        ("gfci_receptacle", "IfcOutlet")
-    } else if has("CEILING MOUNTED") && has("RECEPTACLE") {
-        ("ceiling_receptacle", "IfcOutlet")
-    } else if has("QUAD") && has("RECEPTACLE") {
-        ("quad_receptacle", "IfcOutlet")
-    } else if has("RECEPTACLE") {
-        ("receptacle", "IfcOutlet")
-    } else if has("FLOOR BOX") {
-        ("floor_box", "IfcOutlet")
-    } else if has("3-WAY") || has("THREE WAY") {
-        ("3way_switch", "IfcSwitchingDevice")
-    } else if has("OCCUPANCY") || has("VACANCY") {
-        ("occupancy_sensor", "IfcSensor")
-    } else if has("SWITCH") && !has("DISCONNECT") {
-        ("switch", "IfcSwitchingDevice")
-    } else if has("DISCONNECT") {
-        ("disconnect", "IfcSwitchingDevice")
-    } else if has("SMOKE") {
-        ("smoke_detector", "IfcSensor")
-    } else if has("HEAT SENSOR") || has("HEAT DETECTOR") {
-        ("heat_detector", "IfcSensor")
-    } else if has("PULL STATION") {
-        ("pull_station", "IfcAlarm")
-    } else if has("HORN") || has("STROBE") {
-        ("fire_alarm_notification", "IfcAlarm")
-    } else if has("TELEVISION") || has("TV OUTLET") || has("CATV") {
-        ("tv_outlet", "IfcOutlet")
-    } else if has("DATA") || has("TELEPHONE") {
-        ("data_outlet", "IfcOutlet")
-    } else if has("AUDIO") {
-        ("av_outlet", "IfcOutlet")
-    } else if has("WIRELESS ACCESS") {
-        ("wireless_access_point", "IfcCommunicationsAppliance")
-    } else if has("CAMERA") {
-        ("camera", "IfcCommunicationsAppliance")
-    } else if has("SPEAKER") {
-        ("speaker", "IfcAudioVisualAppliance")
-    } else if has("THERMOSTAT") {
-        ("thermostat", "IfcUnitaryControlElement")
-    } else if has("EXHAUST FAN") {
-        ("exhaust_fan", "IfcFan")
-    } else if has("JUNCTION BOX") {
-        ("junction_box", "IfcJunctionBox")
-    } else if has("PANELBOARD") || has("PANEL BOARD") {
-        ("panel", "IfcElectricDistributionBoard")
-    } else if has("EXIT SIGN") {
-        ("exit_sign", "IfcLightFixture")
-    } else if has("DAMPER") {
-        ("motorized_damper", "IfcDamper")
-    } else if has("DOOR HOLD") {
-        ("door_holder", "IfcElectricAppliance")
-    } else if ["CARD READER", "INTERCOM", "BELL", "PUSH BUTTON", "VOLUME CONTROL", "DOOR CONTACT", "DOOR POWER", "POWER PACK"].iter().any(|w| has(w))
-    {
-        ("low_voltage_device", "IfcCommunicationsAppliance")
-    } else {
-        return None;
-    })
+    cadaddy_mepfix::wordrules::first_rule("devices.legend_kind", has).map(|r| (r.value, r.also))
 }
 
 /// A symbol block's shape, whatever its size and name (a PDF import names the repeated drawings
@@ -11397,9 +11602,6 @@ fn legend_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadad
     pages
 }
 
-/// The gear words a submittal's file name carries when it is a gear submittal.
-const GEAR_SUBMITTAL_WORDS: [&str; 4] = ["GEAR", "SWITCHGEAR", "PANELBOARD", "SWITCHBOARD"];
-
 /// The electrical gear from the documents ([`super::gearbuild`]): feeder types (the feeder
 /// schedule), each panel's incoming type (the one-line), the gear's box and lugs (the gear
 /// submittals); the gear laid out in its rooms (proposed), built, and checked by `gear.review`.
@@ -11430,7 +11632,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     for f in super::submittals::pdf_files(&job.submittals).into_iter().take(MAX_GEAR_SUBMITTALS) {
         let name = std::path::Path::new(&f).file_stem().map_or_else(|| f.clone(), |n| n.to_string_lossy().to_string());
         let up = name.to_ascii_uppercase();
-        if !GEAR_SUBMITTAL_WORDS.iter().any(|w| up.contains(w)) {
+        if !cadaddy_mepfix::wordrules::words("equipment.gear_submittal_words").iter().any(|w| up.contains(w)) {
             continue;
         }
         let Ok(text) =
@@ -11674,7 +11876,7 @@ fn fixture_schedule(pages: &[(String, cadaddy_doc::Drawing)]) -> (Vec<cadaddy_wa
             continue;
         }
         let segs = super::gridtable::segments(d);
-        for title in ["LIGHT FIXTURE SCHEDULE", "LIGHTING FIXTURE SCHEDULE", "LUMINAIRE SCHEDULE"] {
+        for title in cadaddy_mepfix::wordrules::words("schedules.luminaire_titles") {
             for tb in super::gridtable::read_titled(&texts, &segs, title, number) {
                 let (rows, ns) = super::lightsched::fixture_types(&tb);
                 no_subs |= ns;
@@ -11763,7 +11965,8 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
         let m = mark.trim().to_ascii_uppercase();
         // A type is a short tag (`A`, `Q2`, `QX`); a word the reader took for one (a column's
         // heading, `QTY`) isn't.
-        let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic())) || NOT_TYPE_TAGS.contains(&m.as_str());
+        let word = (m.len() >= 4 && m.chars().all(|c| c.is_ascii_alphabetic()))
+            || cadaddy_mepfix::wordrules::words("tags.not_type_tags").contains(&m.as_str());
         if m.is_empty() || m.len() > 6 || m.contains(' ') || word {
             continue;
         }
@@ -12227,9 +12430,6 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
     Ok(())
 }
 
-/// Words a submittal's form prints where a type tag goes that are no type.
-const NOT_TYPE_TAGS: [&str; 10] = ["QTY", "TYP", "REF", "NO", "EA", "PCS", "ITEM", "NOTE", "N/A", "TBD"];
-
 /// A luminaire's type from its mark (`luminaire QX` → `QX`), a control's mark as printed.
 fn lt_type(mark: String) -> String {
     super::lightsched::type_of(&mark)
@@ -12690,7 +12890,7 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     // A level's lanes for a space a note names (`CORRIDOR`): its corridors (all of them for a
     // corridor or hall; else those whose label names it).
     let lanes = |level: &str, via: &str| -> Vec<[[f64; 2]; 2]> {
-        let any = ["CORRIDOR", "HALL", "CORR"].iter().any(|w| via.contains(w));
+        let any = cadaddy_mepfix::wordrules::words("rooms.corridor_words").iter().any(|w| via.contains(w));
         sp.circulation
             .iter()
             .filter(|c| c.level.eq_ignore_ascii_case(level) && matches!(c.kind, cadaddy_walk3d::CirculationKind::Corridor))
@@ -17436,16 +17636,12 @@ const MAX_LEGEND_TEXTS: usize = 5_000;
 /// Most electrical sheets read again for a legend the job's drawing doesn't hold.
 const MAX_LEGEND_SHEETS: usize = 6;
 
-/// The disciplines whose sheets that aren't plans may list mounting heights in their notes: the
-/// general (accessibility) sheets, the architecture's, the trades'.
-const MOUNT_NOTE_DISCIPLINES: [&str; 6] = ["G", "A", "E", "FA", "P", "M"];
-
 /// The mounting heights the notes of the set's sheets that aren't plans list (`9. WIRING
 /// DEVICE MOUNTED HEIGHTS: … RECEPTACLES 1'-4" CENTERLINE`, an accessibility sheet's `WATER
 /// CLOSETS (TO TOP OF SEAT): STANDARD = …`), each with its sheet.
 fn mount_notes(job: &GuidedJob) -> Vec<cadaddy_walk3d::MountNote> {
     let mut out: Vec<cadaddy_walk3d::MountNote> = Vec::new();
-    for disc in MOUNT_NOTE_DISCIPLINES {
+    for disc in cadaddy_mepfix::wordrules::words("sheets.mount_note_disciplines") {
         for (number, d) in non_plan_pages(job, disc) {
             let texts = cadaddy_mepfix::sheet_facts::texts(&d);
             for l in super::mountlist::read_lists(&texts) {
@@ -17510,6 +17706,20 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
     out
 }
 
+/// The handle ranges of the job's architectural plan sheets, `(lo, hi, sheet)`: the sheets of
+/// discipline A whose region is a plan (or that have no region of their own).
+fn arch_plan_spans(job: &GuidedJob) -> Vec<(u64, u64, String)> {
+    job.sheet_spans
+        .iter()
+        .filter(|sp| cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&sp.sheet)).eq_ignore_ascii_case("A"))
+        .filter(|sp| {
+            let regions: Vec<&SheetRegion> = job.sheet_regions.iter().filter(|r| sheet_key(&r.number) == sheet_key(&sp.sheet)).collect();
+            regions.is_empty() || regions.iter().any(|r| matches!(r.kind.as_str(), "plan" | "enlarged_plan"))
+        })
+        .map(|sp| (sp.lo, sp.hi, sp.sheet.clone()))
+        .collect()
+}
+
 /// The set's plumbing fixture schedule: on a plumbing sheet that isn't a plan, else on a plan.
 fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadaddy_mepfix::fixture_schedule::FixtureSchedule> {
     if let Some(s) = non_plan_pages(job, "P").iter().find_map(|(_, page)| cadaddy_mepfix::fixture_schedule::read(page)) {
@@ -17545,6 +17755,9 @@ pub(crate) fn plumbing_schedule_docs(
 
 /// Most plumbing fixtures read from a set's plans.
 const MAX_FIXTURES: usize = 20_000;
+
+/// Rooms listed by name in a report where nothing furnishes them, at most.
+const MAX_ALONE_LISTED: usize = 20;
 
 /// The plumbing fixtures the plumbing plans tag: each tag the schedule lists, lettered on a
 /// plumbing sheet, as a device of kind `plumbing fixture` where it is printed. Not the sheet's own
@@ -17597,16 +17810,19 @@ fn plumbing_fixtures(
     let mut found: Vec<(String, [f64; 2], f64, String, cadaddy_doc::Handle)> = Vec::new();
     for e in d.model.iter() {
         // Lettered, or a tag symbol's attribute (the hexagon P-1 by a water closet).
-        let lettered: Vec<&cadaddy_doc::Text> = match &e.kind {
-            cadaddy_doc::EntityKind::Text(t) => vec![t],
-            cadaddy_doc::EntityKind::Insert(ins) => ins.attribs.iter().take(8).map(|a| &a.text).collect(),
+        let (lettered, symbol): (Vec<&cadaddy_doc::Text>, bool) = match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) => (vec![t], false),
+            cadaddy_doc::EntityKind::Insert(ins) => (ins.attribs.iter().take(8).map(|a| &a.text).collect(), true),
             _ => continue,
         };
         let Some((sheet, _, _)) = spans.iter().find(|(_, lo, hi)| (*lo..*hi).contains(&e.handle.0)) else { continue };
         for t in lettered {
             let value = t.value.trim();
+            // The sheet's own number lettered on it (its title block's, a reference to it) is no
+            // fixture; a tag symbol's of that mark is one (a sheet whose number is also a fixture
+            // mark tags its floors' own fixtures with it: never left to another floor's).
             if !(tags.contains(value) && t.height.is_finite() && t.height > 0.0 && t.insert.is_finite())
-                || sheet_key(sheet) == value
+                || (!symbol && sheet_key(sheet) == value)
                 || callout(value, t, sheet)
             {
                 continue;
@@ -17770,8 +17986,7 @@ fn sheet_of_handle<'a>(spans: &[(&'a str, u64, u64)], h: u64) -> &'a str {
 /// Whether a typical room's type (its words, [`type_words`]) is a room to sleep in: a hotel's
 /// guest room (QUEEN, KING, SUITE…) or a dwelling unit.
 fn sleeping_room(words: &BTreeSet<String>) -> bool {
-    const SLEEPING: &[&str] = &["Q", "KING", "K", "SUITE", "STUDIO", "GUEST", "BEDROOM", "BED", "UNIT", "APT", "APARTMENT", "DWELLING"];
-    words.iter().any(|w| SLEEPING.contains(&w.as_str()))
+    words.iter().any(|w| cadaddy_mepfix::wordrules::words("rooms.sleeping").contains(&w.as_str()))
 }
 
 /// A stamped room's name for its own circuits: its number, else its name and place in the list.
@@ -17796,19 +18011,18 @@ fn room_of_view(title: &str, rooms: &[JobRoom]) -> Option<usize> {
         return Some(i);
     }
     // The name: the title's words but the view's own (ENLARGED, PLAN, the trade, the floor).
-    const VIEW_WORDS: &[&str] =
-        &["ENLARGED", "PLAN", "PLANS", "ELECTRICAL", "MECHANICAL", "PLUMBING", "LIGHTING", "POWER", "FLOOR", "LEVEL", "ROOM", "SCALE"];
     let ordinal =
         |w: &str| w.len() >= 3 && w.chars().next().is_some_and(|c| c.is_ascii_digit()) && ["ST", "ND", "RD", "TH"].iter().any(|e| w.ends_with(e));
     // An equipment room by any of its names (the trades' plans call it MEP, the architect MECH).
     let same = |w: &str| -> String {
-        match w {
-            "MEP" | "MECH" | "MECHANICAL" | "ELEC" | "EQUIPMENT" => "MEP".to_string(),
-            w => w.to_string(),
-        }
+        if cadaddy_mepfix::wordrules::words("rooms.equipment_room_names").contains(&w) { "MEP".to_string() } else { w.to_string() }
     };
-    let name: Vec<String> =
-        tokens.iter().copied().filter(|w| !VIEW_WORDS.contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit())).map(same).collect();
+    let name: Vec<String> = tokens
+        .iter()
+        .copied()
+        .filter(|w| !cadaddy_mepfix::wordrules::words("sheets.view_title_words").contains(w) && !ordinal(w) && !w.chars().all(|c| c.is_ascii_digit()))
+        .map(same)
+        .collect();
     if name.is_empty() {
         return None;
     }
@@ -19017,8 +19231,8 @@ fn building_levels(job: &GuidedJob) -> Vec<Value> {
         // background shows the walls), the one with the most levels.
         // Q6037: exclude disciplines that don't carry building walls/doors (life safety,
         // fire protection, fire alarm, general/civil, structural, telecom).
-        const NON_BUILDING: &[&str] = &["SL", "FP", "FA", "G", "C", "S", "T"];
-        let building_plan = |r: &&SheetRegion| floor_plan(r) && !NON_BUILDING.contains(&r.discipline.as_str());
+        let building_plan =
+            |r: &&SheetRegion| floor_plan(r) && !cadaddy_mepfix::wordrules::words("sheets.non_building_disciplines").contains(&r.discipline.as_str());
         let mut by: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
         for r in job.sheet_regions.iter().filter(|r| building_plan(r)) {
             by.entry(r.discipline.as_str()).or_default().insert(r.level.as_str());
@@ -19368,47 +19582,10 @@ fn is_room_like_name(name: &str) -> bool {
     }
     // Reject names that are clearly not rooms: building materials, notes, single words that are
     // structural/finish labels, or very short fragments.
-    const NOT_ROOMS: &[&str] = &[
-        "WALL",
-        "ROOF",
-        "ROOFING",
-        "CEILING",
-        "FLOOR",
-        "SLAB",
-        "HEIGHT",
-        "APPLICABLE",
-        "TYP",
-        "TYPICAL",
-        "NIC",
-        "N.I.C",
-        "EXIST",
-        "EXISTING",
-        "SIM",
-        "SIMILAR",
-        "ABV",
-        "ABOVE",
-        "BLW",
-        "BELOW",
-        "TPO",
-        "EPDM",
-        "CMU",
-        "GYP",
-        "ACT",
-        "VCT",
-        "CPT",
-        "CONC",
-        "CLG",
-        "FLR",
-        "DEMO",
-        "NEW",
-        "FINISH",
-        "PAINT",
-        "BASE",
-    ];
-    for bad_name in NOT_ROOMS {
+    for bad_name in cadaddy_mepfix::wordrules::words("rooms.not_rooms") {
         // Exact match or the entire name is one of these words (possibly with punctuation).
         let cleaned: String = upper.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ').collect();
-        if cleaned.split_whitespace().all(|w| NOT_ROOMS.contains(&w)) {
+        if cleaned.split_whitespace().all(|w| cadaddy_mepfix::wordrules::words("rooms.not_rooms").contains(&w)) {
             return false;
         }
         if cleaned == *bad_name {
@@ -20331,6 +20508,23 @@ fn apply_rules_for_stage(s: &mut Session, job: &mut GuidedJob, _stage: StageName
                 rule.auto_applied = rule.auto_applied.saturating_add(1);
             }
         }
+        // Words the job adds to a reader's word list (`words:rooms.sleeping`).
+        if super::wordrules::is_words_key(&rule.key) {
+            let set = s.execute(
+                "project.rules.set",
+                &json!({
+                    "domain": "custom",
+                    "key": &rule.key,
+                    "value": &rule.value,
+                    "source": "guided_job",
+                    "tier": "project_rule",
+                    "reason": "word list rule from the guided job",
+                }),
+            );
+            if set.is_ok() {
+                rule.auto_applied = rule.auto_applied.saturating_add(1);
+            }
+        }
         // Apply scale overrides.
         if rule.key.starts_with("scale:") {
             let _ = s.execute(
@@ -21093,7 +21287,7 @@ fn cmd_rules(s: &mut Session, _p: &Value) -> Result<Value> {
             })
         })
         .collect();
-    Ok(json!({"rules": rules, "count": rules.len()}))
+    Ok(json!({"rules": rules, "count": rules.len(), "word_lists": super::wordrules::report_json()}))
 }
 
 /// Q6021 MUST 3: warnings the report raises when the job is done but something is off.
@@ -21712,7 +21906,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{stage?: name} → {stage, description, status, questions_total, questions_answered, result} or {stages}")
             .noundo(),
         CommandSpec::new("job.rules", "Job Learned Rules", cmd_rules)
-            .params("{} → {rules: [{key, value, from_question, stage, auto_applied}], count}")
+            .params("{} → {rules: [{key, value, from_question, stage, auto_applied}], count, word_lists: {file, lists, added: {list: [word]}, unknown: [list], problems, missing: [list]}} (word_lists: the readers' word lists (wordrules.json) with the words this job adds through `words:<list>` project rules)")
             .noundo(),
         CommandSpec::new("job.report", "Job Report", cmd_report)
             .params("{} → {job_id, goal, done, progress, stages, totals, rules_learned, audit_entries, inventory: the print inventory's coverage once the BIM build took it — {coverage: {marks, classified, classified_pct, object_marks, objects, objects_built, built_pct, unexplained}, by_trade, by_sheet, sheets_not_read} (bim.inventory lists the marks)}")
@@ -23220,7 +23414,9 @@ mod tests {
         let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
         let mk = super::super::mepatoms::rules().makeup_ft;
         assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0 * mk)).abs() < 0.02, "{lines:#?}");
-        assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
+        // On EMT the box is the trade's 4" square with a round ring (fix-box-count-high).
+        assert_eq!(get("Box, 4\" square")["net"], json!(3.0), "one box per fixture on the circuit: {lines:#?}");
+        assert!(get("Box, 4\" octagon").is_null(), "{lines:#?}");
         assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
 
         // The takeoff stage: by level and circuit.
@@ -23229,7 +23425,8 @@ mod tests {
         assert_eq!(d9["level"], json!("Level 1"), "{t:#}");
         // The routes' feet, plus the landings on the boxes (Q6157 mepatoms).
         assert!((1400.0 / 12.0 - 0.1..1400.0 / 12.0 + 0.5).contains(&d9["conduit_ft"].as_f64().unwrap_or(0.0)), "{d9:#}");
-        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(2.0), "{d9:#}");
+        // Its two fixtures' boxes and their round rings (the boxes category; on EMT a 4" square).
+        assert!(d9["wire_ft"]["#12"].as_f64().unwrap_or(0.0) > 0.0 && d9["boxes"] == json!(4.0), "{d9:#}");
         assert!((2500.0 / 12.0 - 0.1..2500.0 / 12.0 + 1.0).contains(&t["summary"]["conduit_ft"].as_f64().unwrap_or(0.0)), "{:#}", t["summary"]);
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join(format!("cadaddy-{}", job.id)));
     }
@@ -24318,6 +24515,110 @@ mod tests {
     }
 
     #[test]
+    fn a_plumbing_fixture_sits_on_the_fixture_the_architectural_plan_draws_not_at_its_tag() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let rect = |s: &mut crate::Session, x0: f64, y0: f64, x1: f64, y1: f64| {
+            let v =
+                [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].iter().map(|p| cadaddy_geom::PolyVertex::new(cadaddy_geom::Vec2::new(p[0], p[1]))).collect();
+            let pl = cadaddy_doc::LwPolyline { vertices: v, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false };
+            s.doc_mut().unwrap().add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), cadaddy_doc::EntityKind::LwPolyline(pl)).unwrap();
+        };
+        // A-9, the bath as the architectural plan draws it (inches): a tub across the top, a
+        // water closet (its tank against the wall, its bowl), a vanity and its basin with its drain.
+        let a_lo = s.doc().unwrap().handseed;
+        rect(&mut s, 0.0, 66.0, 60.0, 98.0);
+        rect(&mut s, 8.0, 0.0, 28.0, 9.5);
+        rect(&mut s, 10.5, 11.0, 25.5, 29.0);
+        rect(&mut s, 36.0, 0.0, 84.0, 20.0);
+        rect(&mut s, 51.0, 5.0, 69.0, 17.0);
+        s.execute("circle", &json!({"center": [60.0, 11.0], "radius": 0.75})).unwrap();
+        let a_hi = s.doc().unwrap().handseed;
+        // P-9, the plumbing plan over it: its tags set clear of the fixtures, the water
+        // closet's over the tub, the lavatory's in the door swing.
+        let t = |s: &mut crate::Session, at: [f64; 2], v: &str| {
+            s.execute("text", &json!({"at": at, "text": v, "height": 4.6})).unwrap();
+        };
+        t(&mut s, [20.0, 80.0], "WC-7");
+        t(&mut s, [40.0, 45.0], "LV-7");
+        let p_hi = s.doc().unwrap().handseed;
+        let region = |n: &str, discipline: &str| SheetRegion {
+            number: n.into(),
+            level: "1".into(),
+            discipline: discipline.into(),
+            kind: "plan".into(),
+            rect: [-100.0, -100.0, 200.0, 200.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        job.sheet_regions = vec![region("A-9", "A"), region("P-9", "P")];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-9".into(), lo: a_lo, hi: a_hi }, SheetSpan { sheet: "P-9".into(), lo: a_hi, hi: p_hi }];
+        let row = |tag: &str, fixture: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture {
+            tag: tag.into(),
+            fixture: fixture.into(),
+            ..Default::default()
+        };
+        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule {
+            rows: vec![row("WC-7", "WATER CLOSET"), row("LV-7", "LAVATORY")],
+            extent: [0.0; 4],
+            ..Default::default()
+        };
+        let mut found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        assert_eq!(found.len(), 2, "{found:?}");
+        let names: BTreeMap<String, String> = schedule.rows.iter().map(|r| (r.tag.clone(), r.fixture.clone())).collect();
+        let rep = super::super::fixturefit::fit_fixtures(
+            s.doc().unwrap(),
+            &arch_plan_spans(&job),
+            &names,
+            &mut found,
+            12.0,
+            super::super::fixturefit::rules(),
+        );
+        let at = |tag: &str| found.iter().find(|f| f.tag == tag).map(|f| f.at).unwrap_or_default();
+        let off = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]);
+        assert!(off(at("WC-7"), [18.0, 14.5]) <= 6.0, "the water closet on its bowl and tank, not in the tub: {:?}", at("WC-7"));
+        assert!(off(at("LV-7"), [60.0, 11.0]) <= 6.0, "the lavatory on its basin, not in the door swing: {:?}", at("LV-7"));
+        assert!(rep.fits.iter().all(|f| f.provenance == "drawn" && f.basis.contains("A-9")), "{rep:?}");
+    }
+
+    #[test]
+    fn a_lavatory_tagged_with_its_sheets_number_is_a_fixture_and_the_sheets_number_is_not() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let lo = s.doc().unwrap().handseed;
+        // Sheet P-12: two lavatories' tag symbols (P-12), a water closet's (WC-1), and the sheet's
+        // number lettered loose (a reference to it, as tall as a tag).
+        add_bubble(&mut s, "P-12", (100.0, 100.0), None);
+        add_bubble(&mut s, "P-12", (300.0, 100.0), None);
+        add_bubble(&mut s, "WC-1", (500.0, 100.0), None);
+        s.execute("text", &json!({"at": [700.0, 100.0], "text": "P-12", "height": 2.0})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-12".into(),
+            level: "1".into(),
+            discipline: "P".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-12/1".into(), lo, hi }];
+        let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
+        let schedule =
+            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("WC-1"), row("P-12")], extent: [0.0; 4], ..Default::default() };
+        let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
+        let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
+        tags.sort_by(|a, b| a.1.total_cmp(&b.1));
+        assert_eq!(tags, [("P-12", 100.0), ("P-12", 300.0), ("WC-1", 500.0)], "{found:?}");
+    }
+
+    #[test]
     fn a_typical_rooms_height_notes_go_to_its_devices_in_every_room() {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
@@ -25074,6 +25375,257 @@ mod tests {
         for (p, q) in san.points.iter().zip([[10_420.0, 20.0], [10_420.0, 260.0]]) {
             assert!((p[0] - q[0]).abs() < 7.0 && (p[1] - q[1]).abs() < 7.0, "{:?}", san.points);
         }
+    }
+
+    /// Four floors of one room type (TWIN SUITE, 144 x 288) under a typical enlarged view on P-9:
+    /// floor 3's rooms at x 10 000 and 10 200, floor 4's and floor 6's the same rooms 20 000 and
+    /// 40 000 along (they stack), floor 5's one room turned (no room of its type stacks with it).
+    fn stacked_floors() -> (crate::Session, GuidedJob) {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let room_lines = |s: &mut crate::Session, x: f64, y: f64| {
+            for (a, b) in [([0.0, 0.0], [144.0, 0.0]), ([144.0, 0.0], [144.0, 288.0]), ([144.0, 288.0], [0.0, 288.0]), ([0.0, 288.0], [0.0, 0.0])] {
+                line(s, [x + a[0], y + a[1]], [x + b[0], y + b[1]]);
+            }
+            for k in 1..6 {
+                line(s, [x, y + 48.0 * f64::from(k)], [x + 144.0, y + 48.0 * f64::from(k)]);
+            }
+            line(s, [x, y + 24.0], [x + 60.0, y + 24.0]);
+        };
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [4234.0 + a[0], a[1]], [4234.0 + b[0], b[1]]);
+        }
+        room_lines(&mut s, 4534.0, 200.0);
+        s.execute("text", &json!({"at": [4534.0, 181.0], "text": "ENLARGED TWIN SUITE", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [4534.0, 172.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "P-9".into(),
+            level: "T".into(),
+            discipline: "P".into(),
+            kind: "enlarged_plan".into(),
+            rect: [4234.0, 0.0, 6234.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "P-9".into(), lo, hi }];
+        let mut rooms = Vec::new();
+        for (level, along) in [("3", 0.0), ("4", 20_000.0), ("6", 40_000.0)] {
+            for (k, x) in [10_000.0, 10_200.0].into_iter().enumerate() {
+                let x = x + along;
+                room_lines(&mut s, x, 0.0);
+                rooms.push(json!({"name": "TWIN SUITE", "number": format!("{level}7{}", k + 1), "level": level,
+                    "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]}));
+            }
+        }
+        rooms.push(json!({"name": "TWIN SUITE", "number": "571", "level": "5", "outline": [[40_000, 0], [40_288, 0], [40_288, 144], [40_000, 144]]}));
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({ "rooms": rooms }));
+        }
+        (s, job)
+    }
+
+    #[test]
+    fn a_rooms_fixtures_come_from_its_own_floors_plans_or_the_room_it_stacks_with() {
+        let (s, job) = stacked_floors();
+        let fixture = |tag: &str, level: &str, at: [f64; 2], sheet: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            level: level.into(),
+            sheet: sheet.into(),
+            kind: "plumbing fixture".into(),
+            handle: format!("{tag}{level}"),
+            ..Default::default()
+        };
+        let placed = vec![
+            // Floor 3's plan letters a water closet, a lavatory and a sink in room 371.
+            fixture("WC-1", "Level 3", [10_020.0, 40.0], "P-201/3"),
+            fixture("LAV-1", "Level 3", [10_100.0, 40.0], "P-201/3"),
+            fixture("SK-2", "Level 3", [10_100.0, 200.0], "P-201/3"),
+            // Floor 4's own plan letters room 471 otherwise: a water closet and a sink of its own type.
+            fixture("WC-1", "Level 4", [30_020.0, 40.0], "P-371/4"),
+            fixture("SK-1", "Level 4", [30_100.0, 200.0], "P-371/4"),
+        ];
+        let (copies, report) = copy_room_fixtures(s.doc().unwrap(), &job, &placed);
+        let mut got: Vec<(String, String, bool)> = copies.iter().map(|c| (c.room.clone(), c.tag.clone(), !c.derived.is_empty())).collect();
+        got.sort();
+        let mut want: Vec<(String, String, bool)> = [
+            // Floor 3's other room: floor 3's set.
+            ("372", "WC-1", false),
+            ("372", "SK-2", false),
+            ("372", "LAV-1", false),
+            // Floor 4's other room: floor 4's set, never floor 3's lavatory or sink.
+            ("472", "WC-1", false),
+            ("472", "SK-1", false),
+            // Floor 6 (no plan of its own): the rooms of floor 4 they stand on, marked derived.
+            ("671", "WC-1", true),
+            ("671", "SK-1", true),
+            ("672", "WC-1", true),
+            ("672", "SK-1", true),
+        ]
+        .iter()
+        .map(|(r, t, d)| (r.to_string(), t.to_string(), *d))
+        .collect();
+        want.sort();
+        assert_eq!(got, want, "{report:?}");
+        // Room 471 has floor 4's plan's fixtures only: no tag of floor 3's goes in with them.
+        assert!(!copies.iter().any(|c| c.room == "471"), "{report:?}");
+        // The turned room on floor 5 stacks with none: nothing goes in it.
+        assert!(!copies.iter().any(|c| c.room == "571"), "{report:?}");
+        // A derived copy is where the room it stands on has it, on its own floor, saying so.
+        let w = copies.iter().find(|c| c.room == "671" && c.tag == "SK-1").unwrap();
+        assert!((w.at[0] - 50_100.0).abs() < 1e-6 && (w.at[1] - 200.0).abs() < 1e-6, "{:?}", w.at);
+        assert_eq!((w.level.as_str(), w.sheet.as_str()), ("6", "P-371/4"));
+        assert!(w.derived.starts_with("derived from 4: room 471") && w.derived.contains("trade practice"), "{}", w.derived);
+    }
+
+    #[test]
+    fn a_rooms_pipes_come_from_its_own_floors_plans_or_the_room_it_stacks_with() {
+        let (s, job) = stacked_floors();
+        let run = |system: &str, level: &str, points: Vec<[f64; 2]>| cadaddy_walk3d::MepRun {
+            system: system.into(),
+            level: level.into(),
+            points,
+            size_in: [2.0, 0.0],
+            bottoms_ft: vec![0.0],
+            objects: Vec::new(),
+            id: String::new(),
+            encased: false,
+            size_source: "tag".into(),
+            height_source: "default".into(),
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: "P-9".into(),
+            slope_in_per_ft: 0.0,
+        };
+        let runs = vec![
+            // Floor 3 draws room 371's waste and vent; floor 4 only room 471's vent.
+            run("SAN", "Level 3", vec![[10_020.0, 20.0], [10_020.0, 260.0]]),
+            run("V", "Level 3", vec![[10_030.0, 100.0], [10_060.0, 100.0]]),
+            run("V", "Level 4", vec![[30_120.0, 30.0], [30_120.0, 200.0]]),
+        ];
+        let (copies, report) = copy_room_pipes(s.doc().unwrap(), &job, &runs, &|_| true);
+        let room_of = |r: &cadaddy_walk3d::MepRun| ((r.points[0][0] - 10_000.0) / 200.0).floor() as i64;
+        let mut got: Vec<(String, i64, String, String)> =
+            copies.iter().map(|r| (r.level.clone(), room_of(r), r.system.clone(), super::super::waterfill::provenance(r).to_string())).collect();
+        got.sort();
+        let mut want: Vec<(String, i64, String, String)> = [
+            // Room 372: floor 3's set.
+            ("Level 3", 1, "SAN", "drawn"),
+            ("Level 3", 1, "V", "drawn"),
+            // Floor 4: its own vent in 472; its waste from the room under each, derived; never floor 3's vent.
+            ("Level 4", 100, "SAN", "derived"),
+            ("Level 4", 101, "SAN", "derived"),
+            ("Level 4", 101, "V", "drawn"),
+            // Floor 6 (nothing drawn): the rooms of floor 4 under them, derived.
+            ("6", 200, "SAN", "derived"),
+            ("6", 200, "V", "derived"),
+            ("6", 201, "SAN", "derived"),
+            ("6", 201, "V", "derived"),
+        ]
+        .iter()
+        .map(|(l, r, y, p)| (l.to_string(), *r, y.to_string(), p.to_string()))
+        .collect();
+        want.sort();
+        assert_eq!(got, want, "{report:?}");
+        let san = copies.iter().find(|r| r.system == "SAN" && room_of(r) == 100).unwrap();
+        assert!(san.size_source.starts_with("derived from 3: room 371"), "{}", san.size_source);
+        for (p, q) in san.points.iter().zip([[30_020.0, 20.0], [30_020.0, 260.0]]) {
+            assert!((p[0] - q[0]).abs() < 1e-6 && (p[1] - q[1]).abs() < 1e-6, "{:?}", san.points);
+        }
+        // The turned room on floor 5: none.
+        assert!(!copies.iter().any(|r| r.points[0][0] >= 40_000.0 && r.points[0][0] < 40_300.0), "{got:?}");
+    }
+
+    /// A fixture copied from the room it stacks with is a derived element with its basis; one
+    /// its own floor's plan shows has neither.
+    #[test]
+    fn a_fixture_derived_from_the_room_below_is_marked_so_on_its_element() {
+        let mut s = crate::Session::new();
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        let dv = |x: f64, derived: &str| super::super::readers::ReadDevice {
+            tag: "WC-1".into(),
+            at: [x, 120.0],
+            sheet: "P-201/1".into(),
+            level: "Level 2".into(),
+            kind: "plumbing fixture".into(),
+            handle: format!("{:X}", 0x100 + x as u64),
+            derived: derived.into(),
+            ..Default::default()
+        };
+        let devices = [dv(120.0, "derived from 1: room 171 there is of its type at the same place; trade practice"), dv(600.0, "")];
+        super::super::readers::place_devices(&mut s, &devices, "test").unwrap_or_else(|e| panic!("{e}"));
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        super::super::propfill::fill(&mut s, false).unwrap_or_else(|e| panic!("{e}"));
+        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
+        let els = got["elements"].as_array().cloned().unwrap_or_default();
+        assert_eq!(els.len(), 2, "{got:#}");
+        let derived: Vec<&Value> = els.iter().filter(|e| e["props"]["status"]["value"] == "derived").collect();
+        assert_eq!(derived.len(), 1, "{got:#}");
+        let basis = derived[0]["props"]["basis"]["value"].as_str().unwrap_or_default();
+        assert!(basis.starts_with("derived from 1: room 171"), "{basis}");
+        assert_eq!(derived[0]["props"]["status"]["source"]["kind"], "rule", "{:#}", derived[0]);
+        assert!(els.iter().any(|e| e["props"].get("status").is_none()), "the drawn one says nothing: {got:#}");
+    }
+
+    #[test]
+    fn a_note_limiting_a_typical_rooms_device_to_one_floor_keeps_it_off_the_others() {
+        assert_eq!(floor_only("ICE MAKER (FIRST FLOOR ONLY)").as_deref(), Some("1"));
+        assert_eq!(floor_only("5. RANGES ARE PROVIDED ON 1ST FLOOR ONLY.").as_deref(), Some("1"));
+        assert_eq!(floor_only("WET BAR - THIRD FLOOR ONLY").as_deref(), Some("3"));
+        assert_eq!(floor_only("COFFEE MAKER, LEVEL 2 ONLY").as_deref(), Some("2"));
+        for none in ["ICE MAKER", "FLOOR BOX ONLY", "ONLY ONE PER FLOOR", "ROOF ONLY", "EACH FLOOR ONLY", ""] {
+            assert_eq!(floor_only(none), None, "{none}");
+        }
+        let schedule: cadaddy_walk3d::PanelSchedule = serde_json::from_value(json!({
+            "panel": "U", "typical_of": 40, "source": "E-9",
+            "circuits": [
+                {"number": "5", "description": "KITCHENETTE RECEPTACLE", "poles": 1},
+                {"number": "7", "description": "ICE MAKER (SECOND FLOOR ONLY)", "poles": 1},
+                {"number": "9,11", "description": "RANGE - 2ND FLOOR ONLY", "poles": 2}
+            ]
+        }))
+        .unwrap();
+        let dv = |circuit: &str, level: &str, room: &str| super::super::readers::ReadDevice {
+            tag: "WP".into(),
+            circuit: circuit.into(),
+            level: level.into(),
+            room: room.into(),
+            ..Default::default()
+        };
+        let mut stamped = vec![
+            dv("U-7", "Level 1", "171"),
+            dv("U-7", "Level 2", "271"),
+            dv("U-7,a", "Level 3", "371"),
+            dv("U-9,11", "Level 3", "371"),
+            dv("U-5", "Level 3", "371"),
+            // Not a stamped room's (a floor plan's own), or another panel's line: kept.
+            dv("U-7", "Level 4", ""),
+            dv("H-7", "Level 4", "471"),
+        ];
+        let gone = floor_limited(&[schedule], &mut stamped);
+        let kept: Vec<(&str, &str)> = stamped.iter().map(|d| (d.circuit.as_str(), d.level.as_str())).collect();
+        assert_eq!(kept, vec![("U-7", "Level 2"), ("U-5", "Level 3"), ("U-7", "Level 4"), ("H-7", "Level 4")]);
+        assert_eq!(gone.values().sum::<usize>(), 3, "{gone:?}");
+        assert!(gone.keys().any(|k| k.starts_with("U-7 ICE MAKER")), "{gone:?}");
+        // No schedules: nothing goes.
+        let mut all = vec![dv("U-7", "Level 1", "171")];
+        assert!(floor_limited(&[], &mut all).is_empty());
+        assert_eq!(all.len(), 1);
     }
 
     #[test]

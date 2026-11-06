@@ -1375,15 +1375,6 @@ fn controls_named(text: &str) -> Vec<&'static str> {
     out
 }
 
-/// Each product's dimming (`dimming_of`) from its catalog number and its pages, and whether it is
-/// a luminaire (its pages speak of lumens, LEDs, CCT…). A product whose pages name several
-/// controls with nothing saying which was ordered is a question.
-/// Words a lighting cut sheet uses of its product; a product whose pages use two of them is a
-/// luminaire.
-const LIGHTING_WORDS: &[&str] = &["LUMEN", "LUMINAIRE", "LED", "CCT", "CRI", "FOOTCANDLE", "PHOTOMETRIC", "EXIT"];
-/// A luminaire whose cut sheet says it goes on a wall (not the wall-wash trims of a downlight).
-const WALL_MOUNT_WORDS: &[&str] = &["WALL MOUNT", "WALL-MOUNT", "WALL BRACKET", "SCONCE", "WALL PACK", "WALLPACK", "EXIT SIGN", "EXIT LIGHT"];
-
 /// A custom fixture's shop drawing names no maker or catalog number in a field of its own: its
 /// title block does. The maker is the letterhead its web address spells (`www.examplelighting.com`
 /// under `EXAMPLE LIGHTING`), the catalog number the drawing's number (`DRAWING NUMBER` and one
@@ -1469,7 +1460,10 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
             read_title_block(p, lines);
         }
         if p.bim_type.category.is_empty() {
-            let words = LIGHTING_WORDS.iter().filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w))).count();
+            let words = cadaddy_mepfix::wordrules::words("fixtures.lighting_words")
+                .iter()
+                .filter(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w)))
+                .count();
             if words >= 2 {
                 p.bim_type.category = "luminaire".into();
             }
@@ -1477,7 +1471,9 @@ fn settle_dimming(types: &mut [SpecProposal], blocks: &[Vec<String>], result: &m
         // Where a luminaire goes: on a wall when its cut sheet says so (an exit sign, a sconce, a
         // wall pack); the ceiling otherwise.
         if p.bim_type.category == "luminaire" && p.bim_type.get_field(bimspec::keys::MOUNTING).is_none() {
-            let wall = WALL_MOUNT_WORDS.iter().find(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w)));
+            let wall = cadaddy_mepfix::wordrules::words("fixtures.wall_mount_words")
+                .iter()
+                .find(|w| lines.iter().any(|l| l.to_ascii_uppercase().contains(**w)));
             if let Some(w) = wall {
                 let source = format!("{} (its cut sheet: {})", p.file_source, w.to_ascii_lowercase());
                 p.bim_type.set_field(bimspec::keys::MOUNTING, SpecField::new("wall").with_source(source).with_confidence(Confidence::Inferred));
@@ -1770,41 +1766,12 @@ fn extract_location_rule(line: &str, section: &str, page: &str) -> Option<Locati
 
     // Patterns: "MC cable permitted concealed in walls", "EMT exposed", "PVC below slab",
     // "rigid conduit in wet locations", etc.
-    let raceway_keywords = [
-        "mc cable",
-        "mc ",
-        "emt ",
-        "emt,",
-        "rigid conduit",
-        "rigid metallic",
-        "imc ",
-        "pvc ",
-        "pvc conduit",
-        "rnmc",
-        "lfmc",
-        "lfnc",
-        "fmc ",
-        "wiremold",
-        "surface raceway",
-    ];
+    let raceway_keywords = cadaddy_mepfix::wordrules::words("specs.raceway_words");
 
-    let location_keywords = [
-        "concealed",
-        "exposed",
-        "below slab",
-        "above ceiling",
-        "in walls",
-        "wet location",
-        "damp location",
-        "underground",
-        "exterior",
-        "above accessible ceiling",
-        "in concrete",
-        "direct burial",
-    ];
+    let location_keywords = cadaddy_mepfix::wordrules::words("specs.location_words");
 
     let mut found_material = String::new();
-    for kw in &raceway_keywords {
+    for kw in raceway_keywords {
         if lower.contains(kw) {
             found_material = kw.trim().to_string();
             break;
@@ -1816,7 +1783,7 @@ fn extract_location_rule(line: &str, section: &str, page: &str) -> Option<Locati
     }
 
     let mut found_location = String::new();
-    for kw in &location_keywords {
+    for kw in location_keywords {
         if lower.contains(kw) {
             found_location = kw.to_string();
             break;

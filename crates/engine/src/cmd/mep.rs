@@ -812,7 +812,7 @@ pub(crate) fn plan_system(title: &str) -> Option<&'static str> {
     let up = title.to_ascii_uppercase();
     let has = |w: &str| up.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == w);
     let systems: Vec<&'static str> = [
-        (["SANITARY", "WASTE", "SOIL", "DWV"].iter().any(|w| has(w)) || (has("DRAINAGE") && !has("STORM")), "SAN"),
+        (cadaddy_mepfix::wordrules::words("pipes.sanitary_title_words").iter().any(|w| has(w)) || (has("DRAINAGE") && !has("STORM")), "SAN"),
         (has("STORM"), "ST"),
         (has("GAS"), "G"),
         (has("VENT") && !has("WASTE") && !has("SANITARY"), "V"),

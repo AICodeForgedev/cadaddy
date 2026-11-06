@@ -117,7 +117,7 @@ fn category(word: &str) -> Option<&'static str> {
 /// and receptacle) → `ptac`.
 fn kind_of(item: &str) -> String {
     let w = upper(item);
-    if w.split_whitespace().any(|x| x == "PTAC" || x == "VTAC") {
+    if w.split_whitespace().any(|x| crate::wordrules::words("units.packaged_unit_words").contains(&x)) {
         return "ptac".into();
     }
     w.split_whitespace().collect::<Vec<_>>().join("_").to_ascii_lowercase()

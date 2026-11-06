@@ -76,10 +76,6 @@ pub struct SheetMap {
 
 // ---- Title block parsing ------------------------------------------------------------
 
-/// Known discipline prefixes: sheet number prefix → discipline code.
-const DISCIPLINE_PREFIX: &[(&str, &str)] =
-    &[("FP", "FP"), ("FA", "FA"), ("SL", "SL"), ("M", "M"), ("P", "P"), ("S", "S"), ("A", "A"), ("G", "G"), ("E", "E"), ("C", "C"), ("T", "T")];
-
 /// The discipline a sheet number's letters name: `M-101`, `M101`, `M1.01` and `FP-201` alike.
 fn discipline_of(number: &str) -> Option<&'static str> {
     let up = number.trim().to_ascii_uppercase();
@@ -88,7 +84,7 @@ fn discipline_of(number: &str) -> Option<&'static str> {
     if !(next == '-' || next == '.' || next.is_ascii_digit()) {
         return None;
     }
-    DISCIPLINE_PREFIX.iter().find(|(p, _)| *p == letters).map(|(_, d)| *d)
+    crate::wordrules::pairs("sheets.discipline_prefix").iter().find(|(p, _)| *p == letters).map(|(_, d)| *d)
 }
 
 /// Whether a text reads as a sheet number: one or two letters, an optional `-` or `.`, then a
@@ -310,7 +306,7 @@ fn ordinal(word: &str) -> Option<u32> {
 /// A word that, before `FLOOR` or `LEVEL`, names the first floor: `GROUND FLOOR`, `GRADE LEVEL`,
 /// `MAIN FLOOR`, `STREET LEVEL`.
 fn is_first_floor_word(word: &str) -> bool {
-    matches!(word, "GROUND" | "GRADE" | "MAIN" | "STREET")
+    crate::wordrules::words("levels.first_floor_words").contains(&word)
 }
 
 fn detect_level(title: &str) -> Option<String> {

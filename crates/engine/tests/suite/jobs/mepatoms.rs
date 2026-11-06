@@ -11,6 +11,11 @@ use serde_json::{Value, json};
 /// circuit LP1-3's estimated route from LP1 to a receptacle: 20'-8" along the ceiling and a
 /// drop to the box (25' in all).
 fn building(wiring: Option<&str>) -> Session {
+    building_with(wiring, "receptacle").0
+}
+
+/// [`building`] with the device at the route's end of `kind`; the build's report beside it.
+fn building_with(wiring: Option<&str>, kind: &str) -> (Session, Value) {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     if let Some(w) = wiring {
@@ -21,7 +26,7 @@ fn building(wiring: Option<&str>) -> Session {
         "version": 1, "units_per_foot": 12,
         "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
         "tags": [
-            {"id": "device:L1:20.7,10.0", "kind": "receptacle", "level": "L1", "at_ft": [248.0 / 12.0, 10.0], "fields": {
+            {"id": "device:L1:20.7,10.0", "kind": kind, "level": "L1", "at_ft": [248.0 / 12.0, 10.0], "fields": {
                 "type": {"value": "A", "source": "plan"},
                 "symbol": {"value": "1F0", "source": "plan"},
                 "sheet": {"value": "E-101", "source": "plan"},
@@ -59,7 +64,7 @@ fn building(wiring: Option<&str>) -> Session {
     // The estimated route as the readers gave it (routing it is Q6152's, tests/conduitroute.rs).
     let built = s.execute("model.build", &json!({"route": false})).expect("build");
     assert!(built["atoms"].as_u64().unwrap_or(0) > 0, "{built}");
-    s
+    (s, built)
 }
 
 fn count(s: &mut Session, q: Value) -> Value {
@@ -363,4 +368,145 @@ fn an_edit_off_the_model_leaves_the_stored_index_as_it_is() {
     s.execute("line", &json!({"points": [[-500, -500], [-400, -500]]})).expect("line");
     let after = s.doc().expect("doc").embedded.get("atoms/index.json").cloned().expect("index");
     assert!(std::sync::Arc::ptr_eq(&before, &after));
+}
+
+/// A 20' x 10' room of 6" walls with the devices given as (kind, x ft, y ft, mounting height in),
+/// on circuit LP1-3.
+fn room_with(devices: &[(&str, f64, f64, f64)]) -> Session {
+    room_with_circuit(devices, "LP1-3")
+}
+
+/// [`room_with`], the devices on `circuit` (none: empty).
+fn room_with_circuit(devices: &[(&str, f64, f64, f64)], circuit: &str) -> Session {
+    let mut d = Drawing::new_imperial();
+    let o = [((0., 0.), (20., 0.)), ((20., 0.), (20., 10.)), ((20., 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let i = [((0.5, 0.5), (19.5, 0.5)), ((19.5, 0.5), (19.5, 9.5)), ((19.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    for (a, b) in o.into_iter().chain(i) {
+        wall_line(&mut d, a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let tags: Vec<Value> = devices
+        .iter()
+        .map(|(kind, x, y, h)| {
+            json!({"id": format!("device:L1:{x},{y}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": {
+                "symbol": {"value": "1F0", "source": "plan"}, "sheet": {"value": "E-101", "source": "plan"},
+                "circuit": {"value": circuit, "source": "plan"}, "mount_height_in": {"value": h.to_string(), "source": "note"}
+            }})
+        })
+        .collect();
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": tags
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s
+}
+
+#[test]
+fn devices_side_by_side_in_one_wall_share_one_box_ring_and_plate() {
+    // Test finding (fix-box-count-high): every wall device got a box of its own, so a row of
+    // switches at a door was bought as a box, ring and plate each. Three switches 18" apart, two
+    // receptacles 12" apart, a data outlet beside them (low voltage never shares a power box)
+    // and a receptacle alone on the far wall.
+    let mut s = room_with(&[
+        ("switch", 5.0, 0.8, 48.0),
+        ("switch", 6.5, 0.8, 48.0),
+        ("switch", 8.0, 0.8, 48.0),
+        ("receptacle", 12.0, 0.8, 18.0),
+        ("receptacle", 13.0, 0.8, 18.0),
+        ("data_outlet", 14.5, 0.8, 18.0),
+        ("receptacle", 10.0, 9.2, 18.0),
+    ]);
+    let boxes = count(&mut s, json!({"kind": "box", "group_by": "item", "verify": true}));
+    assert_eq!(boxes["verify"]["matches"], json!(true), "{boxes}");
+    let by = |rows: &Value, k: &str, v: &str| {
+        rows["rows"].as_array().into_iter().flatten().filter(|r| r[k] == json!(v)).map(|r| r["count"].as_u64().unwrap_or(0)).sum::<u64>()
+    };
+    // The switches: one 3 gang box; the two receptacles: one 4" square; the data outlet and the
+    // lone receptacle: a 4" square each.
+    assert_eq!(boxes["count"], json!(4), "one box per gang location, not per device: {boxes}");
+    assert_eq!(by(&boxes, "item", "Device box, 3 gang"), 1, "{boxes}");
+    assert_eq!(by(&boxes, "item", "Box, 4\" square"), 3, "{boxes}");
+    let rings = count(&mut s, json!({"kind": "ring", "group_by": "size"}));
+    assert_eq!(rings["count"], json!(4), "{rings}");
+    assert_eq!(by(&rings, "size", "3 gang, 1/2\" deep"), 1, "{rings}");
+    assert_eq!(by(&rings, "size", "2 gang, 1/2\" deep"), 1, "{rings}");
+    assert_eq!(by(&rings, "size", "1 gang, 1/2\" deep"), 2, "{rings}");
+    // Every device is in a box (the shared one says which devices it holds).
+    let d = s.doc().expect("doc");
+    let devices: Vec<String> =
+        d.model.iter().filter(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle.hex()).collect();
+    assert_eq!(devices.len(), 7);
+    for h in &devices {
+        let el = s.execute("bim.element", &json!({"handle": h})).expect("element");
+        assert!(el["box"]["handle"].is_string(), "{el}");
+    }
+    // The BOM: one plate per box, of its gangs.
+    let bom = s.execute("bim.bom", &json!({})).expect("bom");
+    let plates: Vec<(String, f64)> = bom["lines"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|l| l["item"] == json!("Device plate"))
+        .map(|l| (l["size"].as_str().unwrap_or_default().to_string(), l["net"].as_f64().unwrap_or(0.0)))
+        .collect();
+    let plate = |size: &str| plates.iter().filter(|(s, _)| s == size).map(|(_, n)| n).sum::<f64>();
+    assert_eq!((plate("3 gang"), plate("2 gang")), (1.0, 1.0), "{plates:?}");
+    // The data outlet's plate is the low voltage trade's (its scope), the lone receptacle's ours.
+    assert!(plate("1 gang") <= 2.0, "{plates:?}");
+}
+
+#[test]
+fn equipment_is_fed_in_its_own_compartment_and_its_run_ends_in_it() {
+    // Test finding (fix-box-count-high): an equipment connection (a fan, a room air conditioner)
+    // got a 4" square box of its own, though its raceway lands in the unit's wiring compartment.
+    let (mut s, built) = building_with(None, "equipment_connection");
+    assert_eq!(count(&mut s, json!({"kind": "box", "circuit": "LP1-3"}))["count"], json!(0), "no outlet box at equipment");
+    let atoms = &built["atoms"];
+    let report = if atoms.is_object() { atoms } else { &built };
+    let text = report.to_string();
+    assert!(text.contains("\"endsAtEquipment\":1"), "the route's end lands in the equipment: {text}");
+    // Not an open end: only the drawn run's two ends land in nothing, as with a receptacle there.
+    let (_, base) = building_with(None, "receptacle");
+    assert_eq!(built["openEnds"], base["openEnds"], "{text}");
+    assert_eq!(built["openEnds"], json!(2), "{text}");
+    assert!(text.contains("own wiring compartment"), "it says why there is no box: {text}");
+    // The chain from the equipment walks back to its panel.
+    let dev = {
+        let d = s.doc().expect("doc");
+        d.model.iter().find(|e| cadaddy_engine::cmd::wallgen::made_as(e).as_deref() == Some("device")).map(|e| e.handle.hex()).expect("device")
+    };
+    let chain = s.execute("bim.chain", &json!({"handle": dev})).expect("chain");
+    assert_eq!(chain["source"]["tag"], json!("LP1"), "{chain}");
+    // Its connector stays: the raceway ends in the unit's knockout.
+    assert!(count(&mut s, json!({"kind": "connector", "circuit": "LP1-3"}))["count"].as_u64().unwrap_or(0) >= 2);
+}
+
+#[test]
+fn a_luminaire_box_follows_the_wiring_method() {
+    // On raceway: the trade's 4" square with a 4" round ring, no octagon (fix-box-count-high).
+    let (mut s, _) = building_with(None, "luminaire");
+    let b = count(&mut s, json!({"kind": "box", "circuit": "LP1-3", "group_by": "item"}));
+    assert_eq!(b["rows"][0]["item"], json!("Box, 4\" square"), "{b}");
+    assert_eq!(b["count"], json!(1), "{b}");
+    let r = count(&mut s, json!({"kind": "ring", "circuit": "LP1-3", "group_by": "size"}));
+    assert_eq!(r["rows"][0]["size"], json!("4\" round, 1/2\" deep"), "{r}");
+    // On cable (NM): the octagon, no ring.
+    let (mut s, _) = building_with(Some("NM cable"), "luminaire");
+    let b = count(&mut s, json!({"kind": "box", "circuit": "LP1-3", "group_by": "item"}));
+    assert_eq!(b["rows"][0]["item"], json!("Box, 4\" octagon"), "{b}");
+    assert_eq!(count(&mut s, json!({"kind": "ring", "circuit": "LP1-3"}))["count"], json!(0));
+}
+
+#[test]
+fn a_device_of_no_known_kind_on_no_circuit_takes_no_box() {
+    let mut s = room_with(&[("device", 5.0, 0.8, 48.0)]);
+    assert_eq!(count(&mut s, json!({"kind": "box"}))["count"], json!(1), "on a circuit: its box");
+    let mut s = room_with_circuit(&[("device", 5.0, 0.8, 48.0)], "");
+    assert_eq!(count(&mut s, json!({"kind": "box"}))["count"], json!(0), "on no circuit: not known to be wired");
 }

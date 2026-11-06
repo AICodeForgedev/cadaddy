@@ -1543,6 +1543,9 @@ pub(crate) struct Routed {
     pub feeders: BTreeSet<String>,
     /// Each leg's path as a cable runs it where that is not the raceway's ([`CABLE_FILE`]).
     pub cable: Vec<MepRun>,
+    /// The raceway's minimum trade size the routing used, and where it came from (the
+    /// specification's, else the rules'): an estimated route left takes it (Q6235).
+    pub minimum: Option<(f64, String)>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -2384,6 +2387,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     };
     let min_in = methods.min_size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rl.methods.minimum_size_in.max(0.5));
     let min_src = if methods.min_size_in.is_some() { methods.min_size_source.clone() } else { rl.methods.minimum_source.clone() };
+    out.minimum = Some((min_in, min_src.clone()));
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     let texts = drawing_texts(d);
@@ -4234,6 +4238,57 @@ pub(crate) struct Replaced {
 /// Where the stored spec's [`Replaced`] is kept (among the drawing's embedded files).
 const BASE_FILE: &str = "route/base.json";
 
+/// A circuit tag id's level, scope (a sheet, or `room-<room>`) and label, a part's `@…` and a
+/// switch loop's `~…` aside: `circuit:Level 1:E-101:LP1-3@P2~sw3` → (`level 1`, `E-101`, `LP1-3`).
+fn circuit_key(id: &str) -> Option<(String, String, String)> {
+    let rest = id.strip_prefix(super::printcond::CIRCUIT_TAG)?;
+    let (head, label) = rest.rsplit_once(':')?;
+    let (level, scope) = head.split_once(':')?;
+    let label = label.split(['@', '~']).next().unwrap_or_default().trim();
+    (!label.is_empty()).then(|| (level.trim().to_ascii_lowercase(), scope.trim().to_string(), label.to_ascii_uppercase()))
+}
+
+/// The estimated routes' circuit tags the routing routed under another tag (Q6235: one route a
+/// run). A circuit read on two sheets (a plan and its enlargement) has a tag on each, and a
+/// typical room's view stamps its circuits as the view's: the routing routes the one circuit
+/// (or each real room's own), so a route estimated for another tag of it on that level is the same
+/// conduit twice. An estimate in a real room (a room of the spec) stays unless that room's own
+/// circuit is routed: another room's circuit of the label is not its.
+pub(crate) fn estimates_routed_elsewhere(sp: &BuildingSpec, routed: &Routed) -> BTreeSet<String> {
+    let room_part = super::printcond::ROOM_PART;
+    let mut done: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut done_in_room: BTreeSet<(String, String, String)> = BTreeSet::new();
+    for t in routed.tags.iter().filter(|t| !t.id.contains(HOME_PART)) {
+        let Some((level, scope, label)) = circuit_key(&t.id) else { continue };
+        if let Some(room) = scope.strip_prefix(&room_part[1..]) {
+            done_in_room.insert((level.clone(), room.to_ascii_uppercase(), label.clone()));
+        }
+        done.insert((level, label));
+    }
+    let real_room = |room: &str| sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(room.trim())));
+    sp.mep
+        .runs
+        .iter()
+        .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM)
+        .filter_map(|r| super::printcond::circuit_of_run(r))
+        .filter(|id| {
+            let Some((level, scope, label)) = circuit_key(id) else { return false };
+            if !done.contains(&(level.clone(), label.clone())) {
+                return false;
+            }
+            match scope.strip_prefix(&room_part[1..]) {
+                Some(room) if real_room(room) => done_in_room.contains(&(level, room.to_ascii_uppercase(), label)),
+                _ => true,
+            }
+        })
+        .map(str::to_string)
+        .take(MAX_RUNS)
+        .collect()
+}
+
+/// How an estimated route left is sized (its `size_source`), so a later routing sizes it again.
+const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routing's minimum: ";
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
 /// runs and the routed tags come in (the drawn conduit stays as it is). What went: the tags and
 /// estimated runs as read (a routing's own earlier output is not among them).
@@ -4245,16 +4300,51 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
     // A split circuit's own tag gives way to its parts'.
     routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
-    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it.
+    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it; nor
+    // does another tag of a circuit routed (Q6235).
+    let elsewhere = estimates_routed_elsewhere(sp, routed);
     let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
         r.system == BRANCH_SYSTEM
             || r.system == lv::LV_SYSTEM
-            || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c)))
+            || (r.system == super::printcond::CIRCUIT_SYSTEM
+                && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c) || elsewhere.contains(c)))
     };
     replaced.runs =
         sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));
+    // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
+    // the routing's minimum, not the reader's default size (Q6235).
+    if let Some((min_in, min_src)) = &routed.minimum {
+        let rl = rules();
+        let of: HashMap<&str, (&str, &str)> = sp
+            .tags
+            .iter()
+            .map(|t| {
+                let f = |k: &str| t.fields.get(k).map(|f| f.value.as_str());
+                (t.id.as_str(), (f("conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS), f("conduit").unwrap_or_default()))
+            })
+            .collect();
+        for r in sp
+            .mep
+            .runs
+            .iter_mut()
+            .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM && (r.size_source == "default" || r.size_source.starts_with(EST_FILL)))
+        {
+            let (mk, named) =
+                super::printcond::circuit_of_run(r).and_then(|c| of.get(c)).copied().unwrap_or((super::printcond::DEFAULT_CONDUCTORS, ""));
+            let method = super::mepatoms::rules().raceway_named(named).map_or_else(|| rl.methods.raceway.clone(), |(k, _)| k.to_string());
+            if let Some((t, area, allowed)) = fill_size(&super::mepatoms::conductor_parts(mk), &method, *min_in, rl) {
+                r.size_in[0] = t;
+                r.size_source = format!(
+                    "{EST_FILL}{mk}: {} sq in of conductors in {} sq in allowed ({}); not under the minimum: {min_src}",
+                    r3(area),
+                    r3(allowed),
+                    rl.fill.source
+                );
+            }
+        }
+    }
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
     sp.mep.runs.extend(routed.runs.iter().cloned());
@@ -4529,6 +4619,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     s.touch();
     Ok(json!({
         "routed": true, "removed": old.len(), "atoms": atoms["atoms"], "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+        "boxes": {"made": atoms["boxesMade"], "by_reason": atoms["boxesByReason"], "no_box": atoms["noBox"], "gang_boxes": atoms["gangBoxes"],
+            "ganged_devices": atoms["gangedDevices"], "ends_at_equipment": atoms["endsAtEquipment"], "open_ends": atoms["openEnds"]},
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
     }))
@@ -4604,7 +4696,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{} → {routed, removed, atoms, seconds, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{} → {routed, removed, atoms, seconds, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")

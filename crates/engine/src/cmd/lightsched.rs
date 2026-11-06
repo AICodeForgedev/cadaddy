@@ -81,11 +81,10 @@ pub(crate) fn same_maker(a: &str, b: &str) -> bool {
         return fa == fb;
     }
     // Words every maker's name may carry don't make two makers one.
-    const GENERIC: [&str; 10] = ["LIGHTING", "LIGHT", "ELECTRIC", "SOLUTIONS", "PRODUCTS", "COMPANY", "CORP", "GROUP", "INTERNATIONAL", "INDUSTRIES"];
     let words = |v: &str| {
         v.to_ascii_uppercase()
             .split(|c: char| !c.is_ascii_alphanumeric())
-            .filter(|w| w.len() >= 4 && !GENERIC.contains(w))
+            .filter(|w| w.len() >= 4 && !cadaddy_mepfix::wordrules::words("fixtures.generic_maker_words").contains(w))
             .map(str::to_string)
             .collect::<Vec<_>>()
     };
