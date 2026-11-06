@@ -233,11 +233,12 @@ fn text_entities(d: &Drawing) -> Vec<(String, Vec2, String, f64)> {
 }
 
 /// [`text_entities`], without the words of a screened background when `bg` (a print's room
-/// names and furniture labels under a trade's plan: [`screened_background`]).
+/// names and furniture labels under a trade's plan: [`screened_background`]). A print's hidden
+/// text (its searchable words, never painted) has no pen: it stays.
 fn pen_texts(d: &Drawing, bg: bool) -> Vec<(String, Vec2, String, f64)> {
     let mut out = Vec::new();
     for e in d.model.iter() {
-        if bg && crate::sheet_reader::screened(d, e) {
+        if bg && !e.common.layer.eq_ignore_ascii_case(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER) && crate::sheet_reader::screened(d, e) {
             continue;
         }
         if let EntityKind::Text(t) = &e.kind {
@@ -801,10 +802,11 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         rectangles(d, "DEVICE")
     };
     let segs = line_segments(d);
+    let pen_line = |s: &&LineSeg| !(bg && s.screened);
     let mut device_lines: Vec<&LineSeg> = if all_layers && pdf_filter {
-        segs.iter().filter(|s| !(bg && s.screened) && is_pdf_mep_line(&s.layer)).collect()
+        segs.iter().filter(pen_line).filter(|s| is_pdf_mep_line(&s.layer)).collect()
     } else if all_layers {
-        segs.iter().filter(|s| !(bg && s.screened) && !is_content_exclude(&s.layer)).collect()
+        segs.iter().filter(pen_line).filter(|s| !is_content_exclude(&s.layer)).collect()
     } else {
         segs.iter().filter(|s| s.layer.eq_ignore_ascii_case("DEVICE")).collect()
     };
@@ -2128,7 +2130,8 @@ mod tests {
             cadaddy_doc::Common { layer: layer.into(), color, ..Default::default() }
         }
         fn line(&mut self, grey: bool, a: [f64; 2], b: [f64; 2]) {
-            let kind = EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) });
+            let kind =
+                EntityKind::Line(cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) });
             self.d.add(&cadaddy_doc::Space::Model, Self::common(grey, "PDF-GEOMETRY"), kind).expect("line");
         }
         /// A box `half` wide each way with bars across it (a grille's, a dresser's drawers).
@@ -2179,8 +2182,28 @@ mod tests {
         p.text(true, "TEXT", "SINGLE Q", [470.0, 560.0], 9.0);
         p.barred_box(false, [1500.0, 500.0], 12.0);
         p.text(false, "TEXT", "RG-1", [1520.0, 515.0], 9.0);
+        // One tagged in the print's hidden text (its searchable words, on a layer of the
+        // background's grey): a tag all the same.
+        let mut hidden = cadaddy_doc::Layer::new(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER);
+        hidden.color = cadaddy_color::Color::Index(8);
+        p.d.layers.push(hidden);
+        p.barred_box(false, [2000.0, 500.0], 12.0);
+        let tag = EntityKind::Text(cadaddy_doc::Text {
+            insert: cadaddy_geom::Vec3::new(2020.0, 515.0, 0.0),
+            align_pt: None,
+            height: 9.0,
+            value: "RG-2".into(),
+            rotation: 0.0,
+            width_factor: 1.0,
+            oblique: 0.0,
+            style: "Standard".into(),
+            halign: cadaddy_doc::HAlign::Left,
+            valign: cadaddy_doc::VAlign::Baseline,
+        });
+        let on_hidden = cadaddy_doc::Common { layer: cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER.into(), ..Default::default() };
+        p.d.add(&cadaddy_doc::Space::Model, on_hidden, tag).expect("hidden tag");
         let got: Vec<(String, [f64; 2])> = detect_terminals(&p.d, true, false).iter().map(|t| (t.kind.clone(), [t.at.x, t.at.y])).collect();
-        assert_eq!(got, [("return_grille".to_string(), [1500.0, 500.0])]);
+        assert_eq!(got, [("return_grille".to_string(), [1500.0, 500.0]), ("return_grille".to_string(), [2000.0, 500.0])]);
         // A print drawn all in one pen (no background to leave out) reads its boxes as before.
         let mut one = Print::new();
         one.barred_box(true, [500.0, 500.0], 14.0);

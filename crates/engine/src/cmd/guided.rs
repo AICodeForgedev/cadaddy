@@ -2777,7 +2777,12 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // read beside it: a luminaire there on that circuit. The mark as the schedule prints it:
         // a lower-case letter is a switch leg (`d` of `G-11 d,e`), never a fixture type.
         if electrical(&sheet) && kind.is_empty() {
-            let luminaire = |v: &str| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.trim().eq_ignore_ascii_case(v) && !v.chars().any(|c| c.is_ascii_lowercase()));
+            let luminaire = |v: &str| {
+                job.luminaire_types
+                    .iter()
+                    .chain(&job.wall_luminaire_types)
+                    .any(|l| l.trim().eq_ignore_ascii_case(v) && !v.chars().any(|c| c.is_ascii_lowercase()))
+            };
             let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
             let mut lone: Vec<super::readers::ReadDevice> = Vec::new();
             for t in sheet_texts.iter().filter(|t| luminaire(t.value.trim()) && !legend.covers(t.at)) {
@@ -22464,7 +22469,8 @@ mod tests {
         job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
         job.sheets_loaded = true;
         job.luminaire_types = vec!["D".into()];
-        let texts: Vec<(&str, f64, f64, f64)> = vec![("D", 300.0, 506.0, 4.0), ("G-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("G-11", 700.0, 494.0, 4.0)];
+        let texts: Vec<(&str, f64, f64, f64)> =
+            vec![("D", 300.0, 506.0, 4.0), ("G-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("G-11", 700.0, 494.0, 4.0)];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &[]);
         let hi = s.doc().map_or(0, |d| d.handseed);

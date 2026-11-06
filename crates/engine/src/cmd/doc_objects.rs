@@ -351,7 +351,12 @@ pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
         let h = head.height;
         let title = flat
             .iter()
-            .filter(|o| o.value.to_ascii_uppercase().contains("SCHEDULE") && o.at.y > head.at.y && o.at.y - head.at.y <= 15.0 * h && (o.at.x - head.at.x).abs() <= 40.0 * h)
+            .filter(|o| {
+                o.value.to_ascii_uppercase().contains("SCHEDULE")
+                    && o.at.y > head.at.y
+                    && o.at.y - head.at.y <= 15.0 * h
+                    && (o.at.x - head.at.x).abs() <= 40.0 * h
+            })
             .min_by(|a, b| (a.at.y - head.at.y).total_cmp(&(b.at.y - head.at.y)))
             .map_or_else(String::new, |o| o.value.trim().to_string());
         // Down its column, then along its row: the marks one after another, each within a few

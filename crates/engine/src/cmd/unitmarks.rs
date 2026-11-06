@@ -972,7 +972,8 @@ mod tests {
         let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
         let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
         let got = read_view(&view, &[], &marks);
-        let luminaires: Vec<(String, String)> = got.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        let luminaires: Vec<(String, String)> =
+            got.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
         assert_eq!(luminaires, [("D".to_string(), "Q-2".to_string())], "{got:?}");
     }
 
