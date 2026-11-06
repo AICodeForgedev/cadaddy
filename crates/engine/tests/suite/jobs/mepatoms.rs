@@ -196,6 +196,35 @@ fn an_estimated_emt_route_has_its_wires_and_lands_in_the_box() {
 }
 
 #[test]
+fn a_box_takes_the_raceway_that_lands_in_it() {
+    // Q6243. LP1-3's estimated route read as 1-1/4" lands in the receptacle's box: the trade's
+    // 4" square box's knockouts take 1" at most, so the box is a 4-11/16" square one (to
+    // 1-1/4"), the 4" square kept beside it as the design's, with why and the rule.
+    let mut s = building(None);
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    for r in spec["mep"]["runs"].as_array_mut().into_iter().flatten().filter(|r| r["system"] == json!("E-CIRCUIT-EST")) {
+        r["size_in"] = json!([1.25, 0]);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    assert!(built.to_string().contains("\"boxesSizedForRaceway\":1"), "{built}");
+    assert_eq!(count(&mut s, json!({"kind": "box", "type": "4\" square"}))["count"], json!(0));
+    assert_eq!(count(&mut s, json!({"kind": "box", "type": "4-11/16\" square"}))["count"], json!(1));
+    let d = s.doc().expect("doc");
+    let b = d
+        .model
+        .iter()
+        .map(|e| cadaddy_engine::doc::props::read(&e.common.xdata))
+        .find(|p| p.get("atom").map(|x| x.text()).as_deref() == Some("box"))
+        .expect("the box");
+    let t = |k: &str| b.get(k).map(|x| x.text()).unwrap_or_default();
+    assert_eq!((t("design_value").as_str(), t("corrected_value").as_str()), ("Box, 4\" square", "Box, 4-11/16\" square"));
+    assert!(t("correction_reason").contains("1 1/4\" raceway") && t("correction_rule").contains("knockout"), "{}", t("correction_reason"));
+    assert_eq!(t("cubic_in"), "42");
+}
+
+#[test]
 fn bim_count_equals_a_full_recount_and_an_edit_keeps_the_index_current() {
     let mut s = building(None);
     for q in [json!({}), json!({"kind": "conduit"}), json!({"level": "L1", "group_by": "kind"}), json!({"kind": "receptacle"})] {
