@@ -103,6 +103,11 @@
         "transformer"
       ],
       "sets": "working_space",
+      "wireway_depths_in": [6, 8, 10, 12],
+      "wireway_length_step_in": 12,
+      "wireway_max_length_in": 72,
+      "wireway_usable": 0.85,
+      "wireway_cite": "NEC 376.22 (wireway fill), 312.5 (conductors entering enclosures); a wireway above an enclosure takes the raceways its plate can't",
       "rule": "In front of electrical equipment likely to be worked on energized: a clear space as deep as the voltage to ground and the condition call for (0-150 V: 3 ft; 151-600 V: 3, 3.5 or 4 ft by condition 1, 2, 3), at least 30 in wide or the equipment's width, and 6.5 ft high. Gear the plans don't locate is laid out along its room's walls with that space clear (condition 1 assumed and said).",
       "depth_in": [
         [

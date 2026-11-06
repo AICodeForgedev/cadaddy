@@ -10908,6 +10908,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
     let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
     sp.mep.equipment.extend(planned.equipment);
@@ -10960,6 +10961,69 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
             false,
         );
     }
+    // Raceways a can's plate can't take: a wireway built over it (proposed), its basis on it.
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let space_rule = super::coderules::rules().into_iter().find(|r| r.sets == "working_space").unwrap_or_default();
+    let mut wireways = Vec::new();
+    for f in findings.iter().filter(|f| f.get("check").and_then(Value::as_str) == Some("entry")) {
+        let gear_tag = f.get("gear").and_then(Value::as_str).unwrap_or_default();
+        let sq_in =
+            |v: Option<&str>| v.and_then(|t| t.split(',').next_back()).and_then(|t| t.trim().trim_end_matches("sq in").trim().parse::<f64>().ok());
+        let message = f.get("message").and_then(Value::as_str).unwrap_or_default();
+        let need = sq_in(f.get("needed").and_then(Value::as_str));
+        let usable = message.split("sq in usable").next().and_then(|t| t.rsplit(',').next()).and_then(|t| t.trim().parse::<f64>().ok());
+        let g = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(gear_tag));
+        if let (Some(g), Some(need), Some(usable)) = (g, need, usable)
+            && let Some(w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
+        {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Gear {gear_tag}: {} built above it (proposed)", w.properties.get("CORRECTED_VALUE").cloned().unwrap_or_default()),
+                &format!("{} [{}]", w.properties.get("CORRECTION_REASON").cloned().unwrap_or_default(), space_rule.wireway_cite),
+                2,
+                vec!["Or a larger enclosure, a pull section, or splitting the feed: the design value is on the object".into()],
+                None,
+                false,
+            );
+            wireways.push(w);
+        }
+    }
+    // The working spaces and wireways drawn, moved as the build moved their level.
+    let wireway_tags: BTreeSet<String> = wireways.iter().map(|w| w.tag.to_ascii_uppercase()).collect();
+    sp.mep.equipment.retain(|e| !wireway_tags.contains(&e.tag.to_ascii_uppercase()));
+    sp.mep.equipment.extend(wireways);
+    s.doc_mut()?.building_spec = Some(sp.to_json());
+    let d = s.doc_mut()?;
+    let offset_of = |l: &str| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(l)).map_or(cadaddy_geom::Vec2::ZERO, |r| r.offset);
+    for h in super::mep::build_equipment(d, &sp, Some(&wireway_tags)) {
+        let off =
+            d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e)).map_or(cadaddy_geom::Vec2::ZERO, |l| offset_of(&l));
+        if off.len() > 1e-9 {
+            let m = cadaddy_geom::Mat3::translate(off);
+            let _ = d.modify_entity(h, |e| {
+                e.kind.transform(&m);
+                e.common.xdata = super::bspec::with_stacked(&e.common.xdata, off).into();
+            });
+        }
+    }
+    const ZONE_LAYER: &str = "3D-Working-Space";
+    if !zones.is_empty() {
+        super::mep::ensure_layer(d, ZONE_LAYER, 4);
+    }
+    for z in &zones {
+        let Some(level) = sp.level(&z.level) else { continue };
+        let off = offset_of(&z.level);
+        let (z0, z1) = (level.elevation_ft * upf, (level.elevation_ft + z.height_ft) * upf);
+        let mid = (z.min[1] + z.max[1]) / 2.0 + off.y;
+        let (a, b) = (cadaddy_geom::Vec2::new(z.min[0] + off.x, mid), cadaddy_geom::Vec2::new(z.max[0] + off.x, mid));
+        let mut m = super::wallgen::empty_mesh();
+        super::wallgen::add_box(&mut m, a, b, z.max[1] - z.min[1], z0, z1);
+        if !m.faces.is_empty() {
+            let common = cadaddy_doc::Common { layer: ZONE_LAYER.into(), ..cadaddy_doc::Common::default() };
+            d.add(&cadaddy_doc::Space::Model, common, cadaddy_doc::EntityKind::Mesh(m))?;
+        }
+    }
+    s.touch();
     result["gear"] = json!({"placed": placed, "feeders": feeders, "unplaced": planned.unplaced, "review": review});
     equipment_step(s, job, pages, &types, &tags, result)
 }
