@@ -7117,7 +7117,21 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
             n("no_product_data"),
             pl.get("no_product_data_by_tag").map(Value::to_string).unwrap_or_default(),
             pl.get("rough_in_from").map(Value::to_string).unwrap_or_default(),
-            pl.get("submittals").map(Value::to_string).unwrap_or_default(),
+            pl.get("submittals")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|sb| format!(
+                    "{} rev {} ({} items, {} approved, {} sent back, {} catalog numbers)",
+                    sb["file"].as_str().unwrap_or_default(),
+                    sb["revision"].as_str().unwrap_or_default(),
+                    sb["items"],
+                    sb["approved"],
+                    sb["sent_back"],
+                    sb["catalogs"]
+                ))
+                .collect::<Vec<_>>()
+                .join("; "),
             n("powered"),
             n("connection_boxes"),
             pl.get("connections_by").map(Value::to_string).unwrap_or_default(),

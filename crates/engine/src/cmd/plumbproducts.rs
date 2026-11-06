@@ -310,8 +310,10 @@ pub(crate) struct SubProduct {
 pub(crate) struct SubItem {
     pub products: Vec<SubProduct>,
     pub status: Status,
-    /// The review's response, as written.
+    /// The review's response, as written, and whether it attaches a condition or a correction
+    /// (a response code, or words other than "no exceptions").
     pub response: String,
+    pub noted: bool,
     /// The catalog number its first product's cut sheet prints, and the page.
     pub catalog: Option<(String, Option<u32>)>,
     /// Every value its first product's pages print under a catalog label (value, page, strong).
@@ -412,6 +414,7 @@ pub(crate) fn read_submittal(r: &Rules, text: &str, file: &str, path: &str, know
                         .unwrap_or(Status::Approved);
                     let it = sub.items.entry(tag.clone()).or_default();
                     it.status = status;
+                    it.noted = code.is_some() || (!response.is_empty() && !response.to_ascii_uppercase().contains("NO EXCEPTION"));
                     it.response = match code.as_ref().and_then(|c| legend.get(c)) {
                         Some(w) => clean(&format!("{} ({w}): {response}", code.clone().unwrap_or_default())),
                         None => response,
@@ -1137,7 +1140,18 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         typed += 1;
     }
     // The documents against each other, per tag: one conflict each, the submittal kept.
+    // Each with what settles it: the design team's review of the submittal when it took no
+    // exception and attached no condition (its answer); else open.
     let mut conflicts: Vec<super::lighting::Conflict> = Vec::new();
+    let answer_of = |tag: &str| -> Option<String> {
+        chosen(&docs.submittals, tag).filter(|(_, it)| it.status == Status::Approved && !it.noted).map(|(sb, it)| {
+            clean(&format!(
+                "the design team's review of {}: {}",
+                sb.doc(None),
+                if it.response.is_empty() { "approved" } else { it.response.as_str() }
+            ))
+        })
+    };
     for (tag, handles) in &by_tag {
         if conflicts.len() >= MAX_CONFLICTS {
             break;
@@ -1212,6 +1226,15 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
             &handles,
         ));
     }
+    // What settles each: a sent-back submittal never; the others the review that approved the
+    // item with no condition.
+    let settled_by = |c: &super::lighting::Conflict| -> Option<String> {
+        if c.topic == "submittal sent back" {
+            return None;
+        }
+        c.about.strip_prefix("plumbing fixture ").and_then(answer_of)
+    };
+    let answered = conflicts.iter().filter(|c| settled_by(c).is_some()).count();
     // The electrical connections: a box beside each powered fixture in the spec (the electrical
     // takeoff counts it), its panel and circuit where a panel schedule names its tag.
     let mut boxes = 0usize;
@@ -1284,10 +1307,24 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         }
         let mut ids: Vec<String> = Vec::new();
         for c in &conflicts {
-            let rfi = c.to_rfi("plumbing");
-            if !sp.rfis.iter().any(|x| x.id == rfi.id) && sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS {
-                ids.push(rfi.id.clone());
-                sp.rfis.push(rfi);
+            let mut rfi = c.to_rfi("plumbing");
+            if let Some(a) = settled_by(c) {
+                rfi.status = cadaddy_walk3d::RfiStatus::Answered;
+                rfi.answer = Some(a);
+            }
+            match sp.rfis.iter_mut().find(|x| x.id == rfi.id) {
+                // Raised before and still open: the review's answer settles it now.
+                Some(old) => {
+                    if old.status == cadaddy_walk3d::RfiStatus::Open && rfi.status == cadaddy_walk3d::RfiStatus::Answered {
+                        old.status = rfi.status;
+                        old.answer = rfi.answer.clone();
+                    }
+                }
+                None if sp.rfis.len() < cadaddy_walk3d::rfi::MAX_RFIS => {
+                    ids.push(rfi.id.clone());
+                    sp.rfis.push(rfi);
+                }
+                None => {}
             }
         }
         s.doc_mut()?.building_spec = Some(sp.to_json());
@@ -1325,6 +1362,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
         "connection_boxes": boxes,
         "connections_by": by_basis,
         "conflicts": conflicts.len(),
+        "conflicts_answered_by_review": answered,
         "conflicts_by_topic": super::lighting::by_topic(&conflicts),
         "types": typed,
     }))
@@ -1505,9 +1543,9 @@ mod tests {
         let tags = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, level, Handle(0));
         let mut store = Props::default();
         if !mark.is_empty() {
-            store.set("type_mark", Prop::new(mark, Source::print("P-2", None)));
+            store.set("type_mark", Prop::new(mark, Source::print("P-501", None)));
         }
-        store.set("kind", Prop::new("plumbing_fixture", Source::print("P-2", None)));
+        store.set("kind", Prop::new("plumbing_fixture", Source::print("P-501", None)));
         for (k, p) in extra {
             store.set(k, p.clone());
         }
@@ -1545,7 +1583,7 @@ mod tests {
                 fixture: "WATER CLOSET (TANK)".into(),
                 sizes: [("waste".to_string(), "3\"".to_string()), ("cw".to_string(), "1/2\"".to_string())].into_iter().collect(),
             }],
-            sheet: "P-1".into(),
+            sheet: "P-500".into(),
             submittals: vec![
                 read_submittal(&rules(), &package(), "Plumbing Package", "Plumbing Package.pdf", &known(&["WC-1", "LV-1", "SK-1", "RP-1"]))
                     .expect("read"),
@@ -1600,6 +1638,12 @@ mod tests {
         assert_eq!(topics["submittal sent back"], 1, "{v}");
         assert_eq!(topics["approved makers"], 1, "{v}");
         assert!(sp.rfis.iter().any(|r| r.topic == "plumbing: maker" && r.sides.len() == 2), "{:?}", sp.rfis);
+        // The maker's disagreement is settled by the review that took no exception; the sent-back
+        // sink's stays open.
+        let rfi = |t: &str| sp.rfis.iter().find(|r| r.topic == t).expect("rfi");
+        assert_eq!(rfi("plumbing: maker").status, cadaddy_walk3d::RfiStatus::Answered);
+        assert!(rfi("plumbing: maker").answer.as_deref().is_some_and(|a| a.contains("No exceptions taken")));
+        assert_eq!(rfi("plumbing: submittal sent back").status, cadaddy_walk3d::RfiStatus::Open);
         assert_eq!(v["with_product"], 4, "{v}");
         assert_eq!(v["no_product_data"], 2, "{v}");
         // A level whose water mains are proposed (no water plan of its own): its fixtures' water
