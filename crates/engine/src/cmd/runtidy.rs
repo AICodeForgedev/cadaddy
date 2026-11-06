@@ -47,7 +47,7 @@ fn length(pts: &[Vec2]) -> f64 {
 }
 
 /// How far `p` is from the segment `a..b`.
-fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
+pub(crate) fn seg_dist(p: Vec2, a: Vec2, b: Vec2) -> f64 {
     let ab = b - a;
     let l2 = ab.dot(ab);
     if l2 <= 1e-18 {
@@ -220,6 +220,288 @@ pub(crate) fn drop_repeats(runs: &mut Vec<MepRun>, upf: f64, ducts: &dyn Fn(&Mep
     before - runs.len()
 }
 
+/// The share of a pipe run's length that must lie along another sheet's run of its system for it
+/// to be that run drawn again.
+const DRAWN_TWICE_SHARE: f64 = 0.8;
+/// How far apart (feet) two sheets' lines of one pipe may lie once both are on the plans (their
+/// registrations differ by a little).
+const DRAWN_TWICE_FT: f64 = 1.0;
+/// Most pipe runs compared.
+const MAX_TWICE_RUNS: usize = 100_000;
+
+/// How close (inches) a sheet's own second trace of a pipe lies along its first (one line read
+/// twice: pipes of one system drawn side by side are further apart than that).
+const RETRACED_IN: f64 = 2.0;
+/// A stretch of a run drawn again (along a kept run, at most [`STRAIGHT_DEG`] off its line) at
+/// least this long (feet) is cut out of a run otherwise drawn once.
+const DRAWN_TWICE_CUT_FT: f64 = 1.0;
+
+/// Pipe runs drawn on two sheets (an enlarged plan and the floor's plan, or two views of one
+/// floor), or read twice off one: once both are on the plans, a run (`pipe`) of one system and
+/// level that lies along runs of other sheets of that system and level (within a foot, or its
+/// size), or along its own sheet's within [`RETRACED_IN`], over most of its length
+/// ([`DRAWN_TWICE_SHARE`]) is the same pipe drawn again, and is dropped; one drawn again over only
+/// a stretch (running along the kept run, [`DRAWN_TWICE_CUT_FT`] or more) has that stretch cut out
+/// and keeps the rest. The runs of the sheets `rank` puts first (lower) stay; among one rank, the
+/// longer. Risers are left alone. How many were dropped, how many cut, and the length taken out
+/// (feet).
+pub(crate) fn drop_drawn_twice(runs: &mut Vec<MepRun>, upf: f64, pipe: &dyn Fn(&MepRun) -> bool, rank: &dyn Fn(&str) -> u8) -> (usize, usize, f64) {
+    let foot = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let len = |r: &MepRun| length(&r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>());
+    let mut order: Vec<usize> =
+        (0..runs.len()).filter(|i| runs.get(*i).is_some_and(|r| pipe(r) && r.top_ft.is_none() && r.points.len() >= 2)).take(MAX_TWICE_RUNS).collect();
+    order.sort_by(|a, b| {
+        let (Some(ra), Some(rb)) = (runs.get(*a), runs.get(*b)) else { return std::cmp::Ordering::Equal };
+        rank(&ra.source_sheet).cmp(&rank(&rb.source_sheet)).then(len(rb).total_cmp(&len(ra)))
+    });
+    let cell = 4.0 * foot;
+    let key = |p: Vec2| ((p.x / cell).floor() as i64, (p.y / cell).floor() as i64);
+    // Kept runs' segments by (level, system, cell): (sheet, a, b).
+    let mut grid: std::collections::HashMap<(String, String, i64, i64), Vec<(String, Vec2, Vec2)>> = std::collections::HashMap::new();
+    let mut drop = vec![false; runs.len()];
+    let mut dropped_ft = 0.0;
+    // Runs cut where a stretch is drawn again: the pieces left.
+    let mut cut: Vec<(usize, Vec<MepRun>)> = Vec::new();
+    let sin_max = STRAIGHT_DEG.to_radians().sin();
+    for i in order {
+        let Some(r) = runs.get(i) else { continue };
+        let pts: Vec<Vec2> = r.points.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+        let reach = (DRAWN_TWICE_FT * foot).max(r.size_in[0].max(0.0) / 12.0 * foot);
+        let retraced = RETRACED_IN / 12.0 * foot;
+        let total = length(&pts);
+        let mut covered = 0.0;
+        // Each segment's samples: (from, to, length, along a kept run).
+        let mut samples: Vec<Vec<(f64, f64, f64, bool)>> = Vec::with_capacity(pts.len());
+        for w in pts.windows(2) {
+            let [a, b] = w else { continue };
+            let l = a.dist(*b);
+            let n = ((l / (0.5 * foot)).ceil() as usize).clamp(1, 2_000);
+            let mut seg = Vec::with_capacity(n);
+            for k in 0..n {
+                let q = a.lerp(*b, (k as f64 + 0.5) / n as f64);
+                let (cx, cy) = key(q);
+                let (mut hit, mut along) = (false, false);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        let Some(segs) = grid.get(&(r.level.clone(), r.system.clone(), cx.saturating_add(dx), cy.saturating_add(dy))) else {
+                            continue;
+                        };
+                        for (sheet, s0, s1) in segs {
+                            let d = seg_dist(q, *s0, *s1);
+                            if !(d <= retraced || (*sheet != r.source_sheet && d <= reach)) {
+                                continue;
+                            }
+                            hit = true;
+                            // Beside it and on its line: the same pipe, not a tee or a crossing.
+                            let (u, v) = (*b - *a, *s1 - *s0);
+                            let (lu, lv) = (u.len(), v.len());
+                            let t = if lv > 0.0 { (q - *s0).dot(v) / (lv * lv) } else { -1.0 };
+                            if lu > 0.0 && lv > 0.0 && (u.x * v.y - u.y * v.x).abs() / (lu * lv) <= sin_max && (0.0..=1.0).contains(&t) {
+                                along = true;
+                            }
+                        }
+                    }
+                }
+                if hit {
+                    covered += l / n as f64;
+                }
+                seg.push((k as f64 / n as f64, (k + 1) as f64 / n as f64, l / n as f64, along));
+            }
+            samples.push(seg);
+        }
+        if total > 0.0 && covered >= DRAWN_TWICE_SHARE * total {
+            if let Some(d) = drop.get_mut(i) {
+                *d = true;
+            }
+            dropped_ft += total / foot;
+            continue;
+        }
+        // A stretch drawn again, long enough, is cut out; a short one (a joint) is not.
+        let flat: Vec<(usize, usize)> = samples.iter().enumerate().flat_map(|(si, v)| (0..v.len()).map(move |k| (si, k))).collect();
+        let mut k = 0;
+        while k < flat.len() {
+            let along = |j: usize| flat.get(j).and_then(|(si, sk)| samples.get(*si)?.get(*sk)).is_some_and(|s| s.3);
+            if !along(k) {
+                k += 1;
+                continue;
+            }
+            let mut e = k;
+            let mut len = 0.0;
+            while along(e) {
+                len += flat.get(e).and_then(|(si, sk)| samples.get(*si)?.get(*sk)).map_or(0.0, |s| s.2);
+                e += 1;
+            }
+            if len < DRAWN_TWICE_CUT_FT * foot {
+                for j in k..e {
+                    if let Some(s) = flat.get(j).and_then(|(si, sk)| samples.get_mut(*si)?.get_mut(*sk)) {
+                        s.3 = false;
+                    }
+                }
+            }
+            k = e;
+        }
+        let mut pieces: Vec<MepRun> = Vec::new();
+        if samples.iter().flatten().any(|s| s.3) {
+            let mut cur: Vec<[f64; 2]> = Vec::new();
+            let mut bottoms: Vec<f64> = Vec::new();
+            let mut flush = |cur: &mut Vec<[f64; 2]>, bottoms: &mut Vec<f64>| {
+                let p: Vec<Vec2> = cur.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+                if cur.len() >= 2 && length(&p) >= 0.5 * foot {
+                    let mut c = r.clone();
+                    c.points = std::mem::take(cur);
+                    c.bottoms_ft = std::mem::take(bottoms);
+                    pieces.push(c);
+                }
+                cur.clear();
+                bottoms.clear();
+            };
+            for (si, (w, seg)) in pts.windows(2).zip(&samples).enumerate() {
+                let [a, b] = w else { continue };
+                let bottom = r.bottoms_ft.get(si).or(r.bottoms_ft.last()).copied().unwrap_or(0.0);
+                for (t0, t1, _, along) in seg {
+                    if *along {
+                        flush(&mut cur, &mut bottoms);
+                        continue;
+                    }
+                    let (p0, p1) = (a.lerp(*b, *t0), a.lerp(*b, *t1));
+                    let joined = cur.last().is_some_and(|l| (l[0] - p0.x).abs() < 1e-9 && (l[1] - p0.y).abs() < 1e-9);
+                    if !joined {
+                        flush(&mut cur, &mut bottoms);
+                        cur.push([p0.x, p0.y]);
+                    }
+                    // One straight stretch of this segment is one segment.
+                    if joined && *t0 > 1e-12 && bottoms.last().is_some_and(|x| (x - bottom).abs() < 1e-12) && cur.len() >= 2 {
+                        if let Some(l) = cur.last_mut() {
+                            *l = [p1.x, p1.y];
+                        }
+                    } else {
+                        cur.push([p1.x, p1.y]);
+                        bottoms.push(bottom);
+                    }
+                }
+            }
+            flush(&mut cur, &mut bottoms);
+            let left: f64 = pieces.iter().map(|c| length(&c.points.iter().map(|p| Vec2::new(p[0], p[1])).collect::<Vec<_>>())).sum();
+            dropped_ft += (total - left).max(0.0) / foot;
+        }
+        let kept: Vec<Vec<Vec2>> = if pieces.is_empty() && !samples.iter().flatten().any(|s| s.3) {
+            vec![pts.clone()]
+        } else {
+            pieces.iter().map(|c| c.points.iter().map(|p| Vec2::new(p[0], p[1])).collect()).collect()
+        };
+        if samples.iter().flatten().any(|s| s.3) {
+            cut.push((i, pieces));
+        }
+        for w in kept.iter().flat_map(|p| p.windows(2)) {
+            let [a, b] = w else { continue };
+            let n = ((a.dist(*b) / cell).ceil() as usize).clamp(1, 1_000);
+            let mut seen = std::collections::BTreeSet::new();
+            for k in 0..=n {
+                let (cx, cy) = key(a.lerp(*b, k as f64 / n as f64));
+                if seen.insert((cx, cy)) {
+                    grid.entry((r.level.clone(), r.system.clone(), cx, cy)).or_default().push((r.source_sheet.clone(), *a, *b));
+                }
+            }
+        }
+    }
+    let n_cut = cut.len();
+    let mut extra: Vec<MepRun> = Vec::new();
+    for (i, mut pieces) in cut {
+        if pieces.is_empty() {
+            if let Some(d) = drop.get_mut(i) {
+                *d = true;
+            }
+            continue;
+        }
+        let first = pieces.remove(0);
+        if let Some(r) = runs.get_mut(i) {
+            *r = first;
+        }
+        extra.extend(pieces);
+    }
+    let before = runs.len();
+    let mut i = 0;
+    runs.retain(|_| {
+        let keep = !drop.get(i).copied().unwrap_or(false);
+        i += 1;
+        keep
+    });
+    let dropped = before - runs.len();
+    runs.extend(extra);
+    (dropped, n_cut, dropped_ft)
+}
+
+/// Pipe segments by storey, system and 4 ft cell: how much of a run lies along pipe already
+/// there (a copy laid where its room's own plan draws that pipe is no second pipe).
+pub(crate) struct PipeGrid {
+    foot: f64,
+    cells: std::collections::HashMap<(String, String, i64, i64), Vec<(Vec2, Vec2)>>,
+}
+
+impl PipeGrid {
+    /// An empty grid for drawings of `upf` units a foot.
+    pub(crate) fn new(upf: f64) -> Self {
+        Self { foot: if upf.is_finite() && upf > 0.0 { upf } else { 12.0 }, cells: std::collections::HashMap::new() }
+    }
+
+    fn key(&self, storey: &str, system: &str, p: Vec2) -> (String, String, i64, i64) {
+        let cell = 4.0 * self.foot;
+        (storey.to_string(), system.to_string(), (p.x / cell).floor() as i64, (p.y / cell).floor() as i64)
+    }
+
+    /// `r`'s segments, on `storey`.
+    pub(crate) fn add(&mut self, storey: &str, r: &MepRun) {
+        let cell = 4.0 * self.foot;
+        for w in r.points.windows(2) {
+            let [a, b] = w else { continue };
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            if !(a.is_finite() && b.is_finite()) {
+                continue;
+            }
+            let n = ((a.dist(b) / cell).ceil() as usize).clamp(1, 1_000);
+            let mut seen = std::collections::BTreeSet::new();
+            for k in 0..=n {
+                let key = self.key(storey, &r.system, a.lerp(b, k as f64 / n as f64));
+                if seen.insert(key.clone()) {
+                    self.cells.entry(key).or_default().push((a, b));
+                }
+            }
+        }
+    }
+
+    /// The share (0..1) of `r`'s length, on `storey`, within a foot (or its size) of the
+    /// segments of its system added.
+    pub(crate) fn covered(&self, storey: &str, r: &MepRun) -> f64 {
+        let reach = (DRAWN_TWICE_FT * self.foot).max(r.size_in[0].max(0.0) / 12.0 * self.foot);
+        let (mut total, mut covered) = (0.0, 0.0);
+        for w in r.points.windows(2) {
+            let [a, b] = w else { continue };
+            let (a, b) = (Vec2::new(a[0], a[1]), Vec2::new(b[0], b[1]));
+            if !(a.is_finite() && b.is_finite()) {
+                continue;
+            }
+            let l = a.dist(b);
+            total += l;
+            let n = ((l / (0.5 * self.foot)).ceil() as usize).clamp(1, 2_000);
+            for k in 0..n {
+                let q = a.lerp(b, (k as f64 + 0.5) / n as f64);
+                let (s, y, cx, cy) = self.key(storey, &r.system, q);
+                let hit = (-1..=1).any(|dx| {
+                    (-1..=1).any(|dy| {
+                        self.cells
+                            .get(&(s.clone(), y.clone(), cx.saturating_add(dx), cy.saturating_add(dy)))
+                            .is_some_and(|segs| segs.iter().any(|(s0, s1)| seg_dist(q, *s0, *s1) <= reach))
+                    })
+                });
+                if hit {
+                    covered += l / n as f64;
+                }
+            }
+        }
+        if total > 0.0 { covered / total } else { 0.0 }
+    }
+}
+
 /// [`tidy_run`] on every run of a reading.
 pub(crate) fn tidy_runs(runs: Vec<MepRun>, upf: f64) -> Vec<MepRun> {
     runs.iter().flat_map(|r| tidy_run(r, upf)).collect()
@@ -245,11 +527,98 @@ mod tests {
             edited_by: String::new(),
             top_ft: None,
             source_sheet: "M-101".into(),
+            slope_in_per_ft: 0.0,
         }
     }
 
     fn turns(r: &MepRun) -> Vec<f64> {
         r.points.windows(3).map(|w| turn_deg(Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]), Vec2::new(w[2][0], w[2][1]))).collect()
+    }
+
+    #[test]
+    fn a_pipe_drawn_on_the_enlarged_plan_and_the_floor_plan_is_one_pipe() {
+        let pipe = |pts: &[[f64; 2]], sheet: &str, system: &str| MepRun {
+            system: system.into(),
+            source_sheet: sheet.into(),
+            size_in: [2.0, 0.0],
+            ..run(pts)
+        };
+        let mut runs = vec![
+            // The floor plan's line, and the enlarged plan's of the same pipe 4" off.
+            pipe(&[[0.0, 0.0], [240.0, 0.0]], "P-201", "SAN"),
+            pipe(&[[10.0, 4.0], [230.0, 4.0]], "P-601", "SAN"),
+            // Another system along it stays; so does a parallel pipe 3 ft away.
+            pipe(&[[0.0, 6.0], [240.0, 6.0]], "P-601", "V"),
+            pipe(&[[0.0, 36.0], [240.0, 36.0]], "P-201", "SAN"),
+        ];
+        let (n, _, ft) = drop_drawn_twice(&mut runs, 12.0, &|_| true, &|s| u8::from(s != "P-601"));
+        assert_eq!(n, 1);
+        assert!((ft - 20.0).abs() < 1e-9, "{ft}");
+        // The enlarged plan's (ranked first) stays.
+        assert_eq!(runs.iter().filter(|r| r.system == "SAN").map(|r| r.source_sheet.as_str()).collect::<Vec<_>>(), ["P-601", "P-201"]);
+        assert_eq!(runs.len(), 3);
+    }
+
+    #[test]
+    fn a_pipe_read_twice_off_one_sheet_is_one_pipe() {
+        let pipe = |pts: &[[f64; 2]]| MepRun { system: "HW".into(), source_sheet: "P-601".into(), size_in: [0.5, 0.0], ..run(pts) };
+        let mut runs = vec![
+            pipe(&[[0.0, 0.0], [240.0, 0.0]]),
+            // The same line traced again 1" off, part of it.
+            pipe(&[[20.0, 1.0], [200.0, 1.0]]),
+            // A second pipe of the system beside it, 4" off, stays.
+            pipe(&[[0.0, 4.0], [240.0, 4.0]]),
+        ];
+        let (n, c, ft) = drop_drawn_twice(&mut runs, 12.0, &|_| true, &|_| 0);
+        assert_eq!((n, c), (1, 0));
+        assert!((ft - 15.0).abs() < 1e-9, "{ft}");
+        assert_eq!(runs.iter().map(|r| r.points[0][1]).collect::<Vec<_>>(), [0.0, 4.0]);
+    }
+
+    #[test]
+    fn a_stretch_of_a_run_drawn_again_is_cut_out_and_the_rest_kept_but_not_a_tee_or_a_crossing() {
+        let pipe = |pts: &[[f64; 2]]| MepRun { system: "V".into(), source_sheet: "P-301".into(), size_in: [3.0, 0.0], ..run(pts) };
+        let mut runs = vec![
+            // The long line, and a zigzag trace that runs 1" along it for 10 ft of its 30 ft.
+            pipe(&[[0.0, 0.0], [360.0, 0.0]]),
+            pipe(&[[60.0, 60.0], [60.0, 1.0], [180.0, 1.0], [180.0, 60.0], [240.0, 60.0]]),
+            // A tee off the line and a pipe crossing it: theirs to keep whole.
+            pipe(&[[300.0, 0.0], [300.0, 96.0]]),
+            pipe(&[[330.0, -48.0], [330.0, 48.0]]),
+        ];
+        let (n, c, ft) = drop_drawn_twice(&mut runs, 12.0, &|_| true, &|_| 0);
+        assert_eq!((n, c), (0, 1), "{:?}", runs.iter().map(|r| &r.points).collect::<Vec<_>>());
+        assert!((ft - 10.0).abs() < 0.6, "{ft}");
+        // The zigzag is two pieces now: its drop to the line, and its rise and run on from it.
+        assert_eq!(runs.len(), 5, "{:?}", runs.iter().map(|r| &r.points).collect::<Vec<_>>());
+        let zig: Vec<&MepRun> = runs.iter().filter(|r| r.points.iter().any(|p| (p[1] - 60.0).abs() < 1e-9)).collect();
+        assert_eq!(zig.len(), 2, "{:?}", zig.iter().map(|r| &r.points).collect::<Vec<_>>());
+        let ft = |r: &MepRun| r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / 12.0;
+        let zig_ft: f64 = zig.iter().map(|r| ft(r)).sum();
+        assert!((zig_ft - (298.0 - 120.0) / 12.0).abs() < 0.6, "{zig_ft}");
+        // The line, the tee and the crossing whole.
+        let total: f64 = runs.iter().map(ft).sum();
+        assert!((total - (30.0 + zig_ft + 8.0 + 8.0)).abs() < 1e-6, "{total}");
+        for r in &runs {
+            assert_eq!(r.bottoms_ft.len(), r.points.len() - 1, "{:?}", r.points);
+        }
+    }
+
+    #[test]
+    fn a_pipe_grid_says_how_much_of_a_run_lies_along_pipe_already_there() {
+        let pipe = |pts: &[[f64; 2]], system: &str| MepRun { system: system.into(), size_in: [2.0, 0.0], ..run(pts) };
+        let mut g = PipeGrid::new(12.0);
+        g.add("2", &pipe(&[[0.0, 0.0], [120.0, 0.0]], "SAN"));
+        // Half of it along the line, 6" off; the rest past its end.
+        let r = pipe(&[[60.0, 6.0], [180.0, 6.0]], "SAN");
+        assert!((g.covered("2", &r) - 0.55).abs() < 0.06, "{}", g.covered("2", &r));
+        // Another system, another storey, or 3 ft away: none.
+        assert_eq!(g.covered("2", &pipe(&[[0.0, 0.0], [120.0, 0.0]], "V")), 0.0);
+        assert_eq!(g.covered("3", &pipe(&[[0.0, 0.0], [120.0, 0.0]], "SAN")), 0.0);
+        assert_eq!(g.covered("2", &pipe(&[[0.0, 36.0], [120.0, 36.0]], "SAN")), 0.0);
+        // A hostile run (no length, NaN) is covered by nothing and doesn't panic.
+        assert_eq!(g.covered("2", &pipe(&[[1.0, 1.0]], "SAN")), 0.0);
+        let _ = g.covered("2", &pipe(&[[f64::NAN, 0.0], [1.0, f64::INFINITY]], "SAN"));
     }
 
     #[test]
