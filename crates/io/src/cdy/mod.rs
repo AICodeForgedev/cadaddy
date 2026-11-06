@@ -71,6 +71,17 @@ pub fn manifest(bytes: &[u8]) -> Option<serde_json::Value> {
     serde_json::from_slice(&container::find(bytes, b"MANI")?.data).ok()
 }
 
+/// The agent state of a .cdy file (a guided job's state, notes, review decisions), read without
+/// reading the drawing: `Ok(None)` when the file holds none, an error when it isn't a readable .cdy
+/// file (read the whole file then).
+pub fn agent(bytes: &[u8]) -> std::result::Result<Option<String>, String> {
+    container::header(bytes)?;
+    if container::index(bytes).is_none() {
+        return Err("the file's index is damaged".into());
+    }
+    Ok(container::find(bytes, b"AGNT").and_then(|c| String::from_utf8(c.data).ok()))
+}
+
 /// Most chunk and unreadable-span entries `verify` lists.
 const MAX_LISTED_CHUNKS: usize = 2000;
 
