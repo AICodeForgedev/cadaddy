@@ -172,6 +172,15 @@ pub(crate) fn kind_of(c: &PanelCircuit, legend: &BTreeMap<String, String>, sheet
     Kind { ty, features: feats, codes: said, source }
 }
 
+/// [`kind_of`], its source saying so where the type is what was built, not what was printed.
+fn kind_with_as_built(c: &PanelCircuit, s: &PanelSchedule, built_as: &BTreeMap<(String, String), String>) -> Kind {
+    let mut k = kind_of(c, &s.legend, &s.source);
+    if let Some(said) = built_as.get(&(s.panel.clone(), c.number.clone())) {
+        k.source = said.clone();
+    }
+    k
+}
+
 /// What a row is: a breaker (with a load), a spare breaker, or a space (no breaker).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Row {
@@ -641,7 +650,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
         d.remove_entity(*h);
     }
     let gone: BTreeSet<Handle> = old.iter().copied().collect();
-    let scheds = schedules(sp);
+    let mut scheds = schedules(sp);
+    // What was built, where the project says so, over what its schedule prints.
+    let mut built_as: BTreeMap<(String, String), String> = BTreeMap::new();
+    for s in scheds.values_mut() {
+        let (panel, sheet) = (s.panel.clone(), s.source.clone());
+        for c in &mut s.circuits {
+            if let Some(b) = super::propfill::as_built_breakers(d, &panel, &c.description) {
+                let printed = if c.protection.is_empty() { "none".to_string() } else { c.protection.join("/") };
+                built_as.insert((panel.clone(), c.number.clone()), format!("{}: as built; {sheet} prints {printed}", b.source));
+                c.protection = b.codes;
+            }
+        }
+    }
     let tags: BTreeSet<String> = scheds.keys().cloned().chain(sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase())).collect();
     let equipment: BTreeSet<String> = sp.mep.equipment.iter().map(|e| e.tag.trim().to_ascii_uppercase()).filter(|t| !t.is_empty()).collect();
     let mut panels = panels_of(d);
@@ -789,7 +810,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Report {
                 u.breakers += 1;
             }
             let label = format!("{}-{}", panel_type, t.iter().map(u32::to_string).collect::<Vec<_>>().join(","));
-            made.push(Made { panel: pi, row: ri, numbers: t, label, kind: kind_of(c, &s.legend, &s.source), spare: row == Row::Spare });
+            made.push(Made { panel: pi, row: ri, numbers: t, label, kind: kind_with_as_built(c, s, &built_as), spare: row == Row::Spare });
         }
         let highest = taken.iter().max().copied().unwrap_or(0);
         match header_fact(&s.header, &r.total_header_words).and_then(|(k, v)| first_number(v).map(|n| (k, v, n))) {
