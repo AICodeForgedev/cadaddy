@@ -150,9 +150,9 @@ fn screen(s: &mut Session, rules: &[&str]) -> Vec<Value> {
 
 #[test]
 fn a_circuit_tagged_on_two_sheets_has_one_route() {
-    // LP1-7 is tagged on its plan and again on an enlarged plan, whose read left an estimated
-    // route for its tag. The routing routes the circuit (the plan's tag): the enlargement's
-    // estimate is the same conduit and goes; another circuit's estimate stays.
+    // LP1-7 is tagged on its plan and again on an enlarged plan, each read with an estimated
+    // route. The routing routes the circuit by the plan's tag (its route is by the devices): the
+    // enlargement's estimate is the same conduit and goes; another circuit's estimate stays.
     let est = |id: &str, y: f64| {
         json!({"system": "E-CIRCUIT-EST", "level": "L1", "id": format!("{id}#1"), "points": [[1800.0, y], [2100.0, y]], "size_in": [0.75, 0], "bottoms_ft": [9.25],
                "size_source": "default", "height_source": "estimated route", "source_sheet": "E-601"})
@@ -162,7 +162,8 @@ fn a_circuit_tagged_on_two_sheets_has_one_route() {
         10.0,
         4,
         vec![circuit("E-601", "LP1-7"), circuit("E-601", "LP1-9")],
-        vec![est("circuit:L1:E-601:LP1-7", 60.0), est("circuit:L1:E-601:LP1-9", 200.0)],
+        // The plan's estimate along the devices (they join its tag), the enlargement's 25' off.
+        vec![est("circuit:L1:E-101:LP1-7", 120.0), est("circuit:L1:E-601:LP1-7", 420.0), est("circuit:L1:E-601:LP1-9", 200.0)],
     );
     let left = count(&mut s, json!({"kind": "conduit", "system": "E-CIRCUIT-EST", "group_by": "circuit"}));
     let circuits: Vec<String> =
