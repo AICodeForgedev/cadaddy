@@ -1735,7 +1735,8 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 };
                 let cmil = rl.vdrop.cmil.get(&size).copied();
                 let (amps, load_from) = match load {
-                    Some(va) if v > 0.0 => (va / v, format!("{src}: {va:.0} VA")),
+                    // A three-phase load's current is its VA over √3 times its line voltage (Q6234).
+                    Some(va) if v > 0.0 => (va / (v * if poles >= 3 { 3f64.sqrt() } else { 1.0 }), format!("{src}: {va:.0} VA")),
                     _ => (
                         amps_brk * rl.vdrop.load_pct / 100.0,
                         format!("{}% of its {amps_brk} A breaker (rule; the schedule gives no load)", rl.vdrop.load_pct),
