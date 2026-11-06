@@ -204,6 +204,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 ifc_class: String::new(),
                 equipment: f("equipment"),
                 near: String::new(),
+                derived: String::new(),
             }
         })
         .collect();
@@ -1397,6 +1398,10 @@ pub struct ReadDevice {
     /// shows it).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub near: String,
+    /// Not read off its own floor's plans: copied from the room it stacks with on another floor.
+    /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub derived: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1566,6 +1571,12 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // that room's, traced as a room or not).
         if !dv.room.is_empty() {
             e.set("room", dv.room.clone(), "rule");
+        }
+        // Copied from the room it stacks with on another floor: said so, with the basis, so it
+        // never passes for one its own floor's plans show.
+        if !dv.derived.is_empty() {
+            e.set("status", super::waterfill::DERIVED, "rule");
+            e.set("basis", dv.derived.clone(), "rule");
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {
