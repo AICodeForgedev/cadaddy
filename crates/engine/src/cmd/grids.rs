@@ -151,6 +151,75 @@ fn bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64) -> Vec<Bubble> {
     out
 }
 
+/// The grid bubbles among some objects: each one's centre, radius and label. A bubble's grid line
+/// (10' or more) ends at it and points through its centre; or it stands in a row of bubbles of
+/// its family, each label once, in sequence (a dashed grid's pieces are too short to be its line). `strict` (an electrical plan, whose circuit and leader lines end
+/// at its devices the same way): both. A device reader must not take a grid's label (`A`, `C`,
+/// `F`) for a device's type mark.
+pub(crate) fn grid_bubbles(d: &Drawing, ents: &[&Arc<Entity>], k: f64, strict: bool) -> Vec<(Vec2, f64, String)> {
+    let found = bubbles(d, ents, k);
+    if found.is_empty() {
+        return Vec::new();
+    }
+    let lines = grid_lines(ents, k);
+    let pointed = |b: &Bubble| {
+        lines.iter().any(|(a, c)| {
+            let near = a.dist(b.at).min(c.dist(b.at));
+            let len = a.dist(*c);
+            near <= 1.3 * b.r && len > 1e-9 && ((*c - *a).cross(b.at - *a)).abs() / len <= GRID_THROUGH * b.r
+        })
+    };
+    let family = |l: &str| l.chars().next().is_some_and(|c| c.is_ascii_digit());
+    // A grid's row: bubbles of its family on one line across or down, each label once (a
+    // corridor's alternating fixture marks, `E G E G`, repeat theirs), three of them in sequence
+    // along it (`A B C`, `1 2 3`; a stacked plan's fixtures lined up floor over floor are not).
+    let in_row = |b: &Bubble| {
+        let row = |same: &dyn Fn(&Bubble) -> bool, along: &dyn Fn(Vec2) -> f64| {
+            let mut labels: Vec<(String, Vec2)> = Vec::new();
+            for o in found.iter().filter(|o| same(o) && family(&o.label) == family(&b.label)) {
+                let l = o.label.to_ascii_uppercase();
+                // The same bubble drawn twice is one.
+                if !labels.iter().any(|(m, p)| *m == l && p.dist(o.at) <= 0.5 * b.r) {
+                    labels.push((l, o.at));
+                }
+            }
+            let distinct: std::collections::BTreeSet<&str> = labels.iter().map(|(l, _)| l.as_str()).collect();
+            if distinct.len() < 3 || distinct.len() != labels.len() {
+                return false;
+            }
+            labels.sort_by(|x, y| along(x.1).total_cmp(&along(y.1)));
+            let ords: Vec<i64> = labels.iter().filter_map(|(l, _)| grid_ordinal(l)).collect();
+            ords.windows(3).any(|w| {
+                let (d1, d2) = (w[1] - w[0], w[2] - w[1]);
+                d1 == d2 && d1.abs() == 1
+            })
+        };
+        row(&|o: &Bubble| (o.at.x - b.at.x).abs() <= 0.5 * b.r, &|p: Vec2| p.y)
+            || row(&|o: &Bubble| (o.at.y - b.at.y).abs() <= 0.5 * b.r, &|p: Vec2| p.x)
+    };
+    found.iter().filter(|b| if strict { pointed(b) && in_row(b) } else { pointed(b) || in_row(b) }).map(|b| (b.at, b.r, b.label.clone())).collect()
+}
+
+/// A grid label's place in its sequence: a number's value, a letter's place in the alphabet grids
+/// use (no I, no O); none for one between grids (`F.3`) or of more letters.
+fn grid_ordinal(label: &str) -> Option<i64> {
+    let l = label.trim();
+    if !l.is_empty() && l.len() <= 3 && l.chars().all(|c| c.is_ascii_digit()) {
+        return l.parse().ok();
+    }
+    let mut chars = l.chars();
+    let (Some(c), None) = (chars.next(), chars.next()) else { return None };
+    let c = c.to_ascii_uppercase();
+    if !c.is_ascii_uppercase() || c == 'I' || c == 'O' {
+        return None;
+    }
+    let skipped = i64::from(c > 'I') + i64::from(c > 'O');
+    Some(i64::from(c as u8 - b'A') - skipped)
+}
+
+/// A grid line points through its bubble's centre: off it by at most this share of its radius.
+const GRID_THROUGH: f64 = 0.25;
+
 /// The centre and radius of a path drawn as a circle: every point within 6% of one radius from
 /// the centre and the points going at least 300° round it.
 fn round_path(pts: &[Vec2]) -> Option<(Vec2, f64)> {
@@ -627,6 +696,10 @@ pub(crate) struct GridPlacer {
     upf: f64,
     levels: Vec<(String, Vec<(String, Vec2)>)>,
     sheets: Vec<([f64; 4], Vec<(String, Vec2)>)>,
+    /// The views on those sheets, smallest first: a sheet of several enlarged views repeats the
+    /// same grids at other places (and a view's grid drawn across the sheet crosses its
+    /// neighbours'), so a point in a view goes by its own view's grids.
+    views: Vec<([f64; 4], Vec<(String, Vec2)>)>,
     /// Per level then per sheet: objects, bubbles and grids found (for the progress lines).
     counts: Vec<(usize, usize, usize)>,
 }
@@ -634,10 +707,15 @@ pub(crate) struct GridPlacer {
 /// Fewest shared grid intersections for a fit.
 const MIN_GRID_PAIRS: usize = 3;
 
+/// How far round a view its grid bubbles are looked for, a share of its longer side (a view's
+/// region may be the plan it draws without the bubbles round it).
+const VIEW_BUBBLE_MARGIN: f64 = 0.12;
+
 impl GridPlacer {
     /// `levels`: each level's key and its architectural plan's region; `sheets`: the rectangles
-    /// of the sheets whose points may need placing.
-    pub(crate) fn new(d: &Drawing, upf: f64, levels: &[(String, [f64; 4])], sheets: &[[f64; 4]]) -> Self {
+    /// of the sheets whose points may need placing; `views`: the regions of the views drawn on
+    /// them (a view off those sheets is left out).
+    pub(crate) fn new(d: &Drawing, upf: f64, levels: &[(String, [f64; 4])], sheets: &[[f64; 4]], views: &[[f64; 4]]) -> Self {
         let k = units_per_inch(d);
         let objs: Vec<(Vec2, &Arc<Entity>)> = plan_objects(d)
             .into_iter()
@@ -648,15 +726,29 @@ impl GridPlacer {
             .collect();
         let inside = |r: &[f64; 4], c: Vec2| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]);
         let mut counts = Vec::new();
-        let mut xs_in = |r: &[f64; 4], one_floor: bool| {
-            let mine: Vec<&Arc<Entity>> = objs.iter().filter(|(c, _)| inside(r, *c)).map(|(_, e)| *e).collect();
+        let mut xs_in = |r: &[f64; 4], one_floor: bool, from: &[(Vec2, &Arc<Entity>)]| {
+            let mine: Vec<&Arc<Entity>> = from.iter().filter(|(c, _)| inside(r, *c)).map(|(_, e)| *e).collect();
             let gs = grids_with(d, &mine, k, true, one_floor);
             counts.push((mine.len(), bubbles(d, &mine, k).len(), gs.len()));
             intersections(&gs, k)
         };
-        let levels: Vec<(String, Vec<(String, Vec2)>)> = levels.iter().map(|(key, r)| (key.clone(), xs_in(r, true))).collect();
-        let sheets: Vec<([f64; 4], Vec<(String, Vec2)>)> = sheets.iter().map(|r| (*r, xs_in(r, false))).collect();
-        GridPlacer { k, upf, levels, sheets, counts }
+        let levels: Vec<(String, Vec<(String, Vec2)>)> = levels.iter().map(|(key, r)| (key.clone(), xs_in(r, true, &objs))).collect();
+        let mut on_views = Vec::new();
+        let mut sheet_xs = Vec::new();
+        for r in sheets {
+            let mine: Vec<(Vec2, &Arc<Entity>)> = objs.iter().filter(|(c, _)| inside(r, *c)).copied().collect();
+            sheet_xs.push((*r, xs_in(r, false, &mine)));
+            // Its views (by their middles), each by its own objects.
+            for v in views.iter().filter(|v| inside(r, Vec2::new(0.5 * (v[0] + v[2]), 0.5 * (v[1] + v[3])))).take(MAX_ITEMS) {
+                // Its bubbles stand just off the plan it draws.
+                let m = VIEW_BUBBLE_MARGIN * (v[2] - v[0]).abs().max((v[3] - v[1]).abs());
+                let wide = [v[0].min(v[2]) - m, v[1].min(v[3]) - m, v[0].max(v[2]) + m, v[1].max(v[3]) + m];
+                on_views.push((*v, xs_in(&wide, false, &mine)));
+            }
+        }
+        let area = |r: &[f64; 4]| ((r[2] - r[0]) * (r[3] - r[1])).abs();
+        on_views.sort_by(|a, b| area(&a.0).total_cmp(&area(&b.0)));
+        GridPlacer { k, upf, levels, sheets: sheet_xs, views: on_views, counts }
     }
 
     /// How many grid intersections each level's plan and each sheet gave (for the progress lines).
@@ -672,8 +764,16 @@ impl GridPlacer {
     pub(crate) fn place(&self, p: [f64; 2], level: &str) -> Option<(f64, [f64; 2])> {
         let at = Vec2::new(p[0], p[1]);
         let inside = |r: &[f64; 4]| p[0] >= r[0].min(r[2]) && p[0] <= r[0].max(r[2]) && p[1] >= r[1].min(r[3]) && p[1] <= r[1].max(r[3]);
-        let (_, xs) = self.sheets.iter().find(|(r, _)| inside(r))?;
+        let sheet = &self.sheets.iter().find(|(r, _)| inside(r))?.1;
         let (_, plan) = self.levels.iter().find(|(key, _)| key == level)?;
+        // Its own view's grids first; else the sheet's (a view no region was found for, one with
+        // no grids of its own, or a region that took in only part of its view).
+        let view = self.views.iter().find(|(r, xs)| inside(r) && !xs.is_empty());
+        view.and_then(|(_, xs)| self.place_by(xs, at, plan)).or_else(|| self.place_by(sheet, at, plan))
+    }
+
+    /// [`Self::place`] by the grid intersections `xs` of the sheet or view `at` is on, onto `plan`'s.
+    fn place_by(&self, xs: &[(String, Vec2)], at: Vec2, plan: &[(String, Vec2)]) -> Option<(f64, [f64; 2])> {
         // The nearest instance of each label: the view `p` is in repeats its labels elsewhere.
         let mut near: Vec<(&str, Vec2, f64)> = Vec::new();
         for (label, q) in xs {
@@ -701,7 +801,11 @@ impl GridPlacer {
                     continue;
                 }
                 let agree: Vec<(Vec2, Vec2)> = cands.iter().copied().filter(|(a, b)| (*a * s + t).dist(*b) <= tol).collect();
-                if agree.len() >= MIN_GRID_PAIRS && best.as_ref().is_none_or(|b| agree.len() > b.0) {
+                // Crossings along one grid line fix the place along it only: they must spread
+                // both ways (two grids at least each way).
+                let spread = cadaddy_geom::Bounds2::from_points(agree.iter().map(|(_, b)| *b));
+                let both_ways = !spread.is_empty() && spread.width() > 2.0 * tol && spread.height() > 2.0 * tol;
+                if agree.len() >= MIN_GRID_PAIRS && both_ways && best.as_ref().is_none_or(|b| agree.len() > b.0) {
                     // The fit of all that agree.
                     if let Some((s2, t2, miss)) = fit(&agree).filter(|f| f.2 <= tol && (0.1..=10.0).contains(&f.0)) {
                         let _ = miss;
@@ -926,6 +1030,9 @@ pub(crate) fn linework_fit_within(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, h
 /// copies are among them, so a placement as good one bay over shows in the margin.
 const PART_OFFSETS: usize = 6;
 
+/// Scales a linework fit tries at most (1% apart).
+const MAX_FIT_SCALES: usize = 1_000;
+
 /// [`linework_fit_within`] for a view of a part of the floor (an enlarged plan of a few rooms):
 /// it may be any size under the plan's, and each scale proposes its best few offsets, so the
 /// margin says when it fits as well elsewhere (a run of identical rooms).
@@ -942,17 +1049,21 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
     // A few thousand source points are enough to score with.
     let stride = (src.len() / 2000).max(1);
     let few: Vec<Vec2> = src.iter().step_by(stride).copied().collect();
-    let mut cands: Vec<(f64, f64, (i64, i64))> = Vec::new();
     // A view with neither grids nor tags is the whole floor: placed, it spans half the plan's
     // linework or more (not a shrunk copy in a dense corner).
     let (sb, tb) = (cadaddy_geom::Bounds2::from_points(few.iter().copied()), cadaddy_geom::Bounds2::from_points(tgt.iter().copied()));
     let (sw, tw) = (sb.width().max(sb.height()), tb.width().max(tb.height()));
+    let mut scales = Vec::new();
     let mut s = lo;
-    while s <= hi {
-        if (whole && sw * s < 0.5 * tw) || sw * s > 1.2 * tw {
-            s *= 1.01;
-            continue;
+    while s <= hi && scales.len() < MAX_FIT_SCALES {
+        if !((whole && sw * s < 0.5 * tw) || sw * s > 1.2 * tw) {
+            scales.push(s);
         }
+        s *= 1.01;
+    }
+    // Each scale's proposals on their own (in parallel; kept in scale order).
+    let propose = |&s: &f64| -> Vec<(f64, f64, (i64, i64))> {
+        let mut cands = Vec::new();
         let scells: std::collections::HashSet<(i64, i64)> =
             few.iter().map(|p| ((p.x * s / coarse).floor() as i64, (p.y * s / coarse).floor() as i64)).collect();
         let mut votes: std::collections::HashMap<(i64, i64), u32> = std::collections::HashMap::new();
@@ -976,12 +1087,18 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
                 cands.push((f64::from(n) / scells.len() as f64, s, o));
             }
         }
-        s *= 1.01;
-    }
+        cands
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let cands: Vec<(f64, f64, (i64, i64))> = {
+        use rayon::prelude::*;
+        scales.par_iter().flat_map_iter(propose).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let cands: Vec<(f64, f64, (i64, i64))> = scales.iter().flat_map(propose).collect();
     let fine = Occupancy::new(tgt, 12.0 * k, 1);
     // Refine every scale's proposal on the 1' grid: scale ±0.5%, offset within two coarse cells.
-    let mut refined: Vec<(f64, f64, Vec2)> = Vec::new();
-    for &(_, s0, o) in &cands {
+    let refine = |&(_, s0, o): &(f64, f64, (i64, i64))| -> (f64, f64, Vec2) {
         let t0 = Vec2::new(o.0 as f64 * coarse, o.1 as f64 * coarse);
         let mut best = (0.0, s0, t0);
         for si in -1..=1 {
@@ -1003,8 +1120,15 @@ fn fit_linework(src: &[Vec2], tgt: &[Vec2], k: f64, lo: f64, hi: f64, whole: boo
         let under: Vec<Vec2> = tgt.iter().copied().filter(|p| placed.contains(*p)).step_by((tgt.len() / 20_000).max(1)).collect();
         let precision = if under.is_empty() { 0.0 } else { under.iter().filter(|p| mine.hit(**p)).count() as f64 / under.len() as f64 };
         let f = if best.0 + precision > 0.0 { 2.0 * best.0 * precision / (best.0 + precision) } else { 0.0 };
-        refined.push((f, s, t));
-    }
+        (f, s, t)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut refined: Vec<(f64, f64, Vec2)> = {
+        use rayon::prelude::*;
+        cands.par_iter().map(refine).collect()
+    };
+    #[cfg(target_arch = "wasm32")]
+    let mut refined: Vec<(f64, f64, Vec2)> = cands.iter().map(refine).collect();
     refined.sort_by(|a, b| b.0.total_cmp(&a.0));
     // Polish the best few on 3" steps and 0.1% of scale: a right fit a few inches off loses
     // points to a wrong one that happens to sit on lines.
@@ -1115,7 +1239,7 @@ mod tests {
         pdf_grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
         pdf_grid_view(&mut s, [5000.0, 0.0], 0.5, &gx, &gy);
         let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
-        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6000.0, 1000.0]]);
+        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6000.0, 1000.0]], &[]);
         let at = [5000.0 + 450.0 * 0.5, 150.0 * 0.5];
         let (k, t) = g.place(at, "1false").expect("placed by path bubbles and dashed grids");
         let q = [at[0] * k + t[0], at[1] * k + t[1]];
@@ -1256,7 +1380,7 @@ mod tests {
         grid_view(&mut s, [5000.0, 0.0], 1.2, &gx[..2], &gy);
         grid_view(&mut s, [7000.0, 0.0], 1.2, &[(300.0, "B"), (600.0, "C")], &gy);
         let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
-        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 9000.0, 1000.0]]);
+        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 9000.0, 1000.0]], &[]);
         // A decoy near the second view: a tag in a circle labelled like a grid on the plan.
         s.execute("circle", &json!({"center": [7000.0 + 200.0, 500.0], "radius": 20.0})).unwrap();
         s.execute("text", &json!({"at": [7000.0 + 196.0, 496.0], "text": "A", "height": 9.6})).unwrap();
@@ -1268,5 +1392,47 @@ mod tests {
         assert!((q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "landed at {q:?}");
         // Nothing for a level without a plan, or a point on no sheet.
         assert!(g.place(at, "2false").is_none() && g.place([20000.0, 0.0], "1false").is_none());
+    }
+
+    #[test]
+    fn views_stacked_on_one_sheet_each_go_by_their_own_grids() {
+        let mut s = crate::Session::new();
+        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
+        grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
+        // A sheet of enlarged views at 1.2x: B-C on top, A-B under it a little to the right. Read
+        // across the whole sheet, the lower view's A and B cross the upper view's 1 and 2 at
+        // other places than its own A and B.
+        let (top, low) = ([5000.0, 1500.0], [5150.0, 0.0]);
+        grid_view(&mut s, top, 1.2, &gx[1..], &gy);
+        grid_view(&mut s, low, 1.2, &gx[..2], &gy);
+        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
+        let sheet = [[4700.0, -300.0, 7000.0, 2600.0]];
+        let view = |o: [f64; 2]| [o[0] - 140.0, o[1] - 140.0, o[0] + 1210.0, o[1] + 850.0];
+        // A point between B and C of the upper view, nearer the lower view's B than its own:
+        // (450, 150) on the plan.
+        let at = [top[0] + 450.0 * 1.2, top[1] + 150.0 * 1.2];
+        let land = |g: &GridPlacer, at: [f64; 2]| g.place(at, "1false").map(|(k, t)| [at[0] * k + t[0], at[1] * k + t[1]]);
+        let by_views = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &sheet, &[view(top), view(low)]);
+        let q = land(&by_views, at).expect("placed by its own view's grids");
+        assert!((q[0] - 450.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "landed at {q:?}");
+        // The lower view's point (150, 150) by the lower view's grids.
+        let q = land(&by_views, [low[0] + 150.0 * 1.2, low[1] + 150.0 * 1.2]).expect("lower view placed");
+        assert!((q[0] - 150.0).abs() < 1e-3 && (q[1] - 150.0).abs() < 1e-3, "lower view's point landed at {q:?}");
+        // The sheet's grids alone mix the two views up.
+        let by_sheet = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &sheet, &[]);
+        assert!(land(&by_sheet, at).is_none_or(|q| (q[0] - 450.0).abs() > 12.0), "the sheet's grids alone placed it right");
+    }
+
+    #[test]
+    fn crossings_along_one_grid_line_place_nothing() {
+        let mut s = crate::Session::new();
+        let (gx, gy) = ([(0.0, "A"), (300.0, "B"), (600.0, "C")], [(0.0, "1"), (300.0, "2")]);
+        grid_view(&mut s, [0.0, 0.0], 1.0, &gx, &gy);
+        // A view showing grid 1 only: A-1, B-1, C-1 lie along one line and can't say how far
+        // across it the view sits.
+        grid_view(&mut s, [5000.0, 0.0], 1.0, &gx, &gy[..1]);
+        let plan = [("1false".to_string(), [-200.0, -200.0, 1100.0, 800.0])];
+        let g = GridPlacer::new(s.doc().unwrap(), 12.0, &plan, &[[4700.0, -300.0, 6200.0, 1000.0]], &[]);
+        assert!(g.place([5000.0 + 450.0, 150.0], "1false").is_none());
     }
 }

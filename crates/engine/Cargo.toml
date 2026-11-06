@@ -49,6 +49,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 nix = { version = "0.30", default-features = false, features = ["resource"] }
 
 [dev-dependencies]
+# Counts the bytes the test binary holds (undo and close memory tests).
+cadaddy-memcount = { workspace = true }
 # Real DXF files for the external reference tests (io is a lower layer).
 cadaddy-io = { workspace = true }
 # WAT-to-WASM for the plug-in fuel-exhaustion test (MIT OR Apache-2.0).

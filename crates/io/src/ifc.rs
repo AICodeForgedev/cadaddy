@@ -92,11 +92,32 @@ enum Class {
     Condenser,
     FlowMeter,
     Transformer,
+    /// Dampers in their ducts (fire, smoke, combination, motorized, backdraft, volume).
+    Damper,
+    /// Fire alarm control and monitor modules.
+    Controller,
+    /// The documents' other objects (Q6192): detectors and sensors, door holders, annunciators,
+    /// valves, drains, cameras, appliances.
+    Sensor,
+    Actuator,
+    UnitaryControlElement,
+    Valve,
+    WasteTerminal,
+    AudioVisualAppliance,
+    ElectricAppliance,
     // Concrete.
     Footing,
     Pile,
     ReinforcingBar,
     MechanicalFastener,
+    // A trade's pieces (Q6162).
+    Member,
+    Plate,
+    ReinforcingMesh,
+    Tendon,
+    TendonAnchor,
+    DiscreteAccessory,
+    BuildingElementPart,
 }
 
 impl Class {
@@ -142,10 +163,26 @@ impl Class {
             Class::Condenser => ("IfcCondenser", "NOTDEFINED"),
             Class::FlowMeter => ("IfcFlowMeter", "NOTDEFINED"),
             Class::Transformer => ("IfcTransformer", "VOLTAGE"),
+            Class::Damper => ("IfcDamper", "NOTDEFINED"),
+            Class::Controller => ("IfcController", "NOTDEFINED"),
+            Class::Sensor => ("IfcSensor", "NOTDEFINED"),
+            Class::Actuator => ("IfcActuator", "NOTDEFINED"),
+            Class::UnitaryControlElement => ("IfcUnitaryControlElement", "NOTDEFINED"),
+            Class::Valve => ("IfcValve", "NOTDEFINED"),
+            Class::WasteTerminal => ("IfcWasteTerminal", "NOTDEFINED"),
+            Class::AudioVisualAppliance => ("IfcAudioVisualAppliance", "NOTDEFINED"),
+            Class::ElectricAppliance => ("IfcElectricAppliance", "NOTDEFINED"),
             Class::Footing => ("IfcFooting", "NOTDEFINED"),
             Class::Pile => ("IfcPile", "BORED"),
             Class::ReinforcingBar => ("IfcReinforcingBar", "MAIN"),
             Class::MechanicalFastener => ("IfcMechanicalFastener", "ANCHORBOLT"),
+            Class::Member => ("IfcMember", "MEMBER"),
+            Class::Plate => ("IfcPlate", "SHEET"),
+            Class::ReinforcingMesh => ("IfcReinforcingMesh", "MESH"),
+            Class::Tendon => ("IfcTendon", "STRAND"),
+            Class::TendonAnchor => ("IfcTendonAnchor", "NOTDEFINED"),
+            Class::DiscreteAccessory => ("IfcDiscreteAccessory", "USERDEFINED"),
+            Class::BuildingElementPart => ("IfcBuildingElementPart", "USERDEFINED"),
         }
     }
 
@@ -190,10 +227,26 @@ impl Class {
             "Condenser" => Class::Condenser,
             "FlowMeter" => Class::FlowMeter,
             "Transformer" => Class::Transformer,
+            "Damper" => Class::Damper,
+            "Controller" => Class::Controller,
+            "Sensor" => Class::Sensor,
+            "Actuator" => Class::Actuator,
+            "UnitaryControlElement" => Class::UnitaryControlElement,
+            "Valve" => Class::Valve,
+            "WasteTerminal" => Class::WasteTerminal,
+            "AudioVisualAppliance" => Class::AudioVisualAppliance,
+            "ElectricAppliance" => Class::ElectricAppliance,
             "Footing" => Class::Footing,
             "Pile" => Class::Pile,
             "ReinforcingBar" => Class::ReinforcingBar,
             "MechanicalFastener" => Class::MechanicalFastener,
+            "Member" => Class::Member,
+            "Plate" => Class::Plate,
+            "ReinforcingMesh" => Class::ReinforcingMesh,
+            "Tendon" => Class::Tendon,
+            "TendonAnchor" => Class::TendonAnchor,
+            "DiscreteAccessory" => Class::DiscreteAccessory,
+            "BuildingElementPart" => Class::BuildingElementPart,
             _ => return None,
         })
     }
@@ -237,6 +290,37 @@ fn equipment_class(kind: &str) -> (Class, &'static str) {
         "switchboard" | "switchgear" => (Class::ElectricDistributionBoard, "SWITCHBOARD"),
         "transformer" => (Class::Transformer, "VOLTAGE"),
         "disconnect" => (Class::SwitchingDevice, "SWITCHDISCONNECTOR"),
+        // Dampers (Q6182): their IFC4 damper types.
+        "fire_smoke_damper" => (Class::Damper, "FIRESMOKEDAMPER"),
+        "fire_damper" | "ceiling_radiation_damper" => (Class::Damper, "FIREDAMPER"),
+        "smoke_damper" => (Class::Damper, "SMOKEDAMPER"),
+        "motorized_damper" => (Class::Damper, "CONTROLDAMPER"),
+        "backdraft_damper" => (Class::Damper, "BACKDRAFTDAMPER"),
+        "volume_damper" => (Class::Damper, "BALANCINGDAMPER"),
+        "rated_damper" => (Class::Damper, "FIREDAMPER"),
+        k if k.ends_with("_damper") => (Class::Damper, "NOTDEFINED"),
+        // A damper's power box and its fire alarm modules.
+        "damper_power_box" => (Class::JunctionBox, "POWER"),
+        "fa_control_module" => (Class::Controller, "TWOPOSITION"),
+        "fa_monitor_module" => (Class::Controller, "NOTDEFINED"),
+        // The documents' other objects (Q6192) and their connections.
+        "duct_smoke_detector" => (Class::Sensor, "SMOKESENSOR"),
+        "occupancy_sensor" => (Class::Sensor, "MOVEMENTSENSOR"),
+        "door_holder" => (Class::Actuator, "ELECTRICACTUATOR"),
+        "fire_alarm_annunciator" => (Class::UnitaryControlElement, "ALARMPANEL"),
+        "exit_sign" => (Class::LightFixture, "SECURITYLIGHTING"),
+        "sump_pump" => (Class::Pump, "SUMPPUMP"),
+        "recirculation_pump" => (Class::Pump, "CIRCULATOR"),
+        "wall_hydrant" => (Class::Valve, "DRAWOFFCOCK"),
+        "deck_drain" => (Class::WasteTerminal, "FLOORTRAP"),
+        "roof_drain" => (Class::WasteTerminal, "ROOFDRAIN"),
+        "grille_register" => (Class::AirTerminal, "GRILLE"),
+        "site_camera" => (Class::AudioVisualAppliance, "CAMERA"),
+        "range" => (Class::ElectricAppliance, "ELECTRICCOOKER"),
+        "rooftop_unit" => (Class::UnitaryEquipment, "ROOFTOPUNIT"),
+        "equipment_power_box" => (Class::JunctionBox, "POWER"),
+        "data_outlet" => (Class::Outlet, "DATAOUTLET"),
+        "fa_remote_test_station" => (Class::SwitchingDevice, "KEYPAD"),
         _ => (Class::Proxy, "NOTDEFINED"),
     }
 }
@@ -274,6 +358,42 @@ fn size_label_in(s: [f64; 2]) -> String {
         t.trim_end_matches('0').trim_end_matches('.').to_string()
     };
     if s[1] > 0.0 { format!("{}\"x{}\"", n(s[0]), n(s[1])) } else { format!("{}\"Ø", n(s[0])) }
+}
+
+/// A trade's piece (`part:atom:<kind>`, Q6162): its IFC class, predefined type and object type
+/// (for `USERDEFINED`).
+fn trade_piece_class(kind: &str) -> (Class, &'static str, &'static str) {
+    match kind {
+        // A pour is a part of its slab (the slab is the floor element).
+        "pour" => (Class::BuildingElementPart, "USERDEFINED", "CONCRETE POUR"),
+        "underlayment" => (Class::Ceiling, "FLOORING", ""),
+        "rebar" => (Class::ReinforcingBar, "MAIN", ""),
+        "mesh" => (Class::ReinforcingMesh, "MESH", ""),
+        "tendon" => (Class::Tendon, "STRAND", ""),
+        "anchor" => (Class::TendonAnchor, "NOTDEFINED", ""),
+        "chair" | "embed" => (Class::DiscreteAccessory, "USERDEFINED", "SUPPORT"),
+        "vapor_barrier" => (Class::Ceiling, "MEMBRANE", ""),
+        "stud" => (Class::Member, "STUD", ""),
+        "track" | "plate" => (Class::Member, "PLATE", ""),
+        "blocking" | "backing" | "furring" | "grid_main" | "grid_tee" | "wall_angle" | "rim" => (Class::Member, "MEMBER", ""),
+        "truss" => (Class::Member, "CHORD", ""),
+        "header" => (Class::Beam, "LINTEL", ""),
+        "joist" => (Class::Beam, "JOIST", ""),
+        "sheathing" => (Class::Plate, "SHEET", ""),
+        "sheet" => (Class::Ceiling, "CLADDING", ""),
+        "tile" => (Class::Ceiling, "CEILING", ""),
+        "flooring" => (Class::Ceiling, "FLOORING", ""),
+        "base" => (Class::Ceiling, "SKIRTINGBOARD", ""),
+        "paint" => (Class::Ceiling, "USERDEFINED", "COATING"),
+        "batt" | "board" => (Class::BuildingElementPart, "INSULATION", ""),
+        "cmu" => (Class::BuildingElementPart, "USERDEFINED", "MASONRY UNIT"),
+        "frame" => (Class::BuildingElementPart, "USERDEFINED", "DOOR FRAME"),
+        "firestop" => (Class::DiscreteAccessory, "USERDEFINED", "FIRESTOP"),
+        "hardware_set" => (Class::DiscreteAccessory, "USERDEFINED", "DOOR HARDWARE"),
+        "accessory" => (Class::DiscreteAccessory, "USERDEFINED", "ACCESSORY"),
+        "corner_bead" | "tape" | "compound" | "screws" => (Class::DiscreteAccessory, "USERDEFINED", "FINISHING"),
+        _ => (Class::Proxy, "NOTDEFINED", ""),
+    }
 }
 
 fn class_of(e: &Entity) -> Kind {
@@ -358,6 +478,47 @@ fn class_of(e: &Entity) -> Kind {
                     .filter_map(|v| v.split_once('='))
                     .map(|(a, b)| (a.to_string(), b.to_string()))
                     .collect();
+                return k;
+            }
+            // A trade's piece (Q6162): a pour, a bar, a stud, a sheet, a batt, a firestop…, as
+            // the IFC class it is, named as what it is bought as.
+            "atom" => {
+                let piece = mep_part.as_deref().and_then(|p| p.strip_prefix("atom:")).unwrap_or_default();
+                let (class, pre, object_type) = trade_piece_class(piece);
+                let item = extra("type:").unwrap_or_else(|| piece.to_string());
+                // A tendon's anchors: the stressing (live) end and the fixed (dead) end.
+                let pre = match (class, item.contains("live"), item.contains("dead")) {
+                    (Class::TendonAnchor, true, _) => "TENSIONING_END",
+                    (Class::TendonAnchor, _, true) => "FIXED_END",
+                    _ => pre,
+                };
+                let mut k = kind(class, t.get(1).cloned(), item, String::new());
+                k.predefined = pre;
+                k.object_type = object_type;
+                k.description = extra("trade:").unwrap_or_default();
+                return k;
+            }
+            // A piece of an electrical run (Q6157): a stick, a fitting, a box, a support, cable or
+            // a conductor.
+            "mep" if mep_part.as_deref().is_some_and(|p| p.starts_with("atom:")) => {
+                let piece = mep_part.as_deref().and_then(|p| p.strip_prefix("atom:")).unwrap_or_default();
+                let (class, pre) = match piece {
+                    "conduit" => (Class::Conduit, "CONDUITSEGMENT"),
+                    "elbow" | "bend" | "offset" => (Class::ConduitFitting, "BEND"),
+                    "box" | "ring" => (Class::JunctionBox, "NOTDEFINED"),
+                    // A support of the raceway: a carrier fitting of its own kind (it reads back).
+                    "strap" => (Class::ConduitFitting, "USERDEFINED"),
+                    "cable" => (Class::Cable, "CABLESEGMENT"),
+                    "wire" => (Class::Cable, "CONDUCTORSEGMENT"),
+                    _ => (Class::ConduitFitting, "NOTDEFINED"),
+                };
+                let sys_name = extra("system:");
+                let mut k = kind(class, t.get(1).cloned(), extra("type:").unwrap_or_else(|| piece.to_string()), String::new());
+                k.predefined = pre;
+                if piece == "strap" {
+                    k.object_type = "SUPPORT";
+                }
+                k.system_name = sys_name;
                 return k;
             }
             "mep" => {
@@ -777,7 +938,19 @@ pub fn write_ifc(d: &Drawing, name: &str) -> Result<Vec<u8>> {
             _ => {
                 let desc = if kd.description.is_empty() { "$".to_string() } else { step_str(&kd.description) };
                 let object_type = if kd.object_type.is_empty() { "$".to_string() } else { step_str(kd.object_type) };
-                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},.{pre}.)")
+                // The reinforcing elements' own attributes (IFC4) between the tag and the
+                // predefined type, not given here.
+                let (before, after) = match kd.class {
+                    // SteelGrade, NominalDiameter, CrossSectionArea, BarLength; BarSurface after.
+                    Class::ReinforcingBar => ("$,$,$,$,", ",$"),
+                    // SteelGrade, MeshLength, MeshWidth, the bars' diameters, areas and spacings.
+                    Class::ReinforcingMesh => ("$,$,$,$,$,$,$,$,$,", ""),
+                    // SteelGrade; after: diameter, area, force, prestress, friction, slip, radius.
+                    Class::Tendon => ("$,", ",$,$,$,$,$,$,$"),
+                    Class::TendonAnchor => ("$,", ""),
+                    _ => ("", ""),
+                };
+                format!("{upper}('{g}',$,{nm},{desc},{object_type},#{place},#{pds},{tag},{before}.{pre}.{after})")
             }
         };
         let product = o.add(line);
@@ -2427,6 +2600,13 @@ fn class_name(upper: &str) -> String {
         "BuildingElementPart",
         "TransportElement",
         "VirtualElement",
+        // Reinforcement and accessories (concrete, a trade's pieces).
+        "ReinforcingBar",
+        "ReinforcingMesh",
+        "Tendon",
+        "TendonAnchor",
+        "MechanicalFastener",
+        "DiscreteAccessory",
     ];
     let bare = upper.strip_prefix("IFC").unwrap_or(upper);
     KNOWN.iter().find(|k| k.eq_ignore_ascii_case(bare)).map_or_else(
@@ -2654,6 +2834,32 @@ pub fn ifc_tag(e: &Entity) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dampers_and_their_modules_are_written_as_their_ifc_classes() {
+        let class = |k: &str| {
+            let (c, pre) = equipment_class(k);
+            (c.ifc().0, pre)
+        };
+        assert_eq!(class("fire_smoke_damper"), ("IfcDamper", "FIRESMOKEDAMPER"));
+        assert_eq!(class("fire_damper"), ("IfcDamper", "FIREDAMPER"));
+        assert_eq!(class("ceiling_radiation_damper"), ("IfcDamper", "FIREDAMPER"));
+        assert_eq!(class("smoke_damper"), ("IfcDamper", "SMOKEDAMPER"));
+        assert_eq!(class("motorized_damper"), ("IfcDamper", "CONTROLDAMPER"));
+        assert_eq!(class("odd_damper"), ("IfcDamper", "NOTDEFINED"));
+        assert_eq!(class("damper_power_box"), ("IfcJunctionBox", "POWER"));
+        assert_eq!(class("fa_control_module"), ("IfcController", "TWOPOSITION"));
+        assert_eq!(class("duct_smoke_detector"), ("IfcSensor", "SMOKESENSOR"));
+        assert_eq!(class("door_holder"), ("IfcActuator", "ELECTRICACTUATOR"));
+        assert_eq!(class("roof_drain"), ("IfcWasteTerminal", "ROOFDRAIN"));
+        assert_eq!(class("equipment_power_box"), ("IfcJunctionBox", "POWER"));
+        assert_eq!(class_of_read("Sensor"), Some("IfcSensor"));
+        assert_eq!(class_of_read("Damper"), Some("IfcDamper"));
+    }
+
+    fn class_of_read(name: &str) -> Option<&'static str> {
+        Class::of_read(name).map(|c| c.ifc().0)
+    }
 
     #[test]
     fn strings_and_reals_are_valid_step() {

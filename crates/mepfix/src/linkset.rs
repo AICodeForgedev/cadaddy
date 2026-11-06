@@ -91,6 +91,48 @@ impl Sheet {
         self.text_mid(detail, [c[0], c[1] + 0.17], 0.12);
         self.text_mid(sheet, [c[0], c[1] - 0.17], 0.12);
     }
+    /// A callout bubble as the import makes a bubble drawn again and again: a `PDF-SYM-` symbol
+    /// of its circle and divider with the sheet number as its attribute, the detail number
+    /// beside it as plain lettering.
+    fn symbol_bubble(&mut self, c: [f64; 2], detail: &str, sheet: &str) {
+        let r = 0.35;
+        if !self.d.blocks.contains_key("PDF-SYM-2") {
+            let mut b = Block::new("PDF-SYM-2");
+            b.entities.push(cadaddy_doc::Entity {
+                handle: self.d.new_handle(),
+                common: common(),
+                kind: EntityKind::Circle(Circle { center: Vec3::ZERO, radius: r }),
+            });
+            let kind = EntityKind::Line(Line { a: Vec3::new(-r, 0.0, 0.0), b: Vec3::new(r, 0.0, 0.0) });
+            b.entities.push(cadaddy_doc::Entity { handle: self.d.new_handle(), common: common(), kind });
+            self.d.blocks.insert("PDF-SYM-2".into(), std::sync::Arc::new(b));
+        }
+        let w = 0.35 * 0.12 * sheet.chars().count() as f64;
+        let attrib = Attrib {
+            tag: "TAG".into(),
+            text: text_ent(sheet, c[0] - w, c[1] - 0.17 - 0.06, 0.12, 0.0),
+            invisible: false,
+            constant: false,
+            prompt: String::new(),
+            props: AttribProps::default(),
+            multiline: None,
+            modes: AttribModes::default(),
+        };
+        let ins = Insert {
+            block: "PDF-SYM-2".into(),
+            insert: Vec3::new(c[0], c[1], 0.0),
+            scale: Vec3::new(1.0, 1.0, 1.0),
+            rotation: 0.0,
+            attribs: vec![attrib],
+            cols: 1,
+            rows: 1,
+            col_spacing: 0.0,
+            row_spacing: 0.0,
+            clip: None,
+        };
+        self.add(EntityKind::Insert(ins));
+        self.text_mid(detail, [c[0], c[1] + 0.17], 0.12);
+    }
     /// Grid lines with a bubble at each end: x lines (label, x) and y lines (label, y).
     fn grid(&mut self, xs: &[(&str, f64)], ys: &[(&str, f64)], span_x: [f64; 2], span_y: [f64; 2]) {
         let r = 0.3;
@@ -187,6 +229,20 @@ fn e1() -> Drawing {
     s.text("MATCH LINE - SEE SHEET E-2", [18.65, 6.0], 0.1, std::f64::consts::FRAC_PI_2);
     s.text("REFER TO ARCHITECTURAL DRAWINGS FOR EXACT LOCATIONS.", [1.0, 22.0], 0.1, 0.0);
     s.text("SEE SHEET E-4 FOR MOUNTING HEIGHTS", [1.0, 21.6], 0.1, 0.0);
+    s.view_title("1", "E-1", "FIRST FLOOR POWER PLAN - AREA A", "SCALE: 1/8\" = 1'-0\"", [4.0, 18.5]);
+    s.d
+}
+
+/// E-1 with its 1/E-3 bubble made a symbol by the import (the sheet number its attribute) on
+/// its boundary's edge, and a numbered note that refers to the enlarged plans in words.
+pub fn e1_symbol_bubble() -> Drawing {
+    let mut s = Sheet::new();
+    s.title_block("E-1", "FIRST FLOOR POWER PLAN - AREA A");
+    s.grid(&[("1", 4.0), ("2", 8.0), ("3", 12.0), ("4", 16.0)], &[("A", 4.0), ("B", 8.0), ("C", 12.0)], [2.0, 17.0], [2.0, 14.0]);
+    // The bubble sits on the boundary's top edge, no leader.
+    s.rect([7.5, 3.5, 16.5, 12.5]);
+    s.symbol_bubble([12.0, 12.85], "1", "E-3");
+    s.text("1. CORE CIRCUITS: REFER TO ENLARGED PLANS FOR LAYOUT.", [24.0, 22.0], 0.1, 0.0);
     s.view_title("1", "E-1", "FIRST FLOOR POWER PLAN - AREA A", "SCALE: 1/8\" = 1'-0\"", [4.0, 18.5]);
     s.d
 }

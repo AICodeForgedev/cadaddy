@@ -286,6 +286,41 @@ pub(crate) fn height_tag(t: &str, section_ft: f64) -> Option<f64> {
     }
 }
 
+/// The deepest invert note read (feet): deeper is a datum's elevation, not a depth.
+const MAX_INVERT_FT: f64 = 20.0;
+
+/// The depth of an invert note by a drain (`24" INVERT`, `INV. 2'-0"`, `IE -4'-0"`), feet below
+/// the finished floor. None for an elevation on a site datum (`IE 645.20`: no foot or inch mark;
+/// `INV 98'-6"`: deeper than any slab's drain), for a positive elevation (`INV EL 4'-0"` is above
+/// the floor or on a datum) and for a legend's row (`IE  INVERT ELEVATION`: no value).
+pub(crate) fn invert_tag(t: &str) -> Option<f64> {
+    let up = t.trim().to_ascii_uppercase();
+    if up.len() > 60 {
+        return None;
+    }
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric() && c != '.').filter(|w| !w.is_empty()).collect();
+    let is_key = |w: &str| matches!(w.trim_end_matches('.'), "INVERT" | "INV" | "IE" | "I.E");
+    let key = words.iter().copied().find(|w| is_key(w))?;
+    // The keyword as a word (`IE` in `SUPPLIES IE 2'` is the second one).
+    let at = up.match_indices(key).map(|(i, _)| i).find(|&i| {
+        let prev = up.get(..i).and_then(|b| b.chars().next_back());
+        let next = up.get(i + key.len()..).and_then(|a| a.chars().next());
+        !prev.is_some_and(|c| c.is_ascii_alphanumeric()) && !next.is_some_and(|c| c.is_ascii_alphanumeric())
+    })?;
+    let (before, after) = (up.get(..at)?, up.get(at + key.len()..)?);
+    let elevation = words.iter().any(|w| matches!(w.trim_end_matches('.'), "EL" | "ELEV" | "ELEVATION"));
+    // The value after the keyword (`INV 24"`), else before it (`24" INVERT`).
+    let (inches, negative) = match feet_inches(after) {
+        Some(v) => (v, after.trim_start_matches(|c: char| c == ' ' || c == '.' || c == ':' || c == '=' || c.is_ascii_alphabetic()).starts_with('-')),
+        None => (feet_inches(before)?, before.trim_start().starts_with('-')),
+    };
+    if elevation && !negative {
+        return None;
+    }
+    let ft = inches / 12.0;
+    (ft.is_finite() && ft > 0.0 && ft <= MAX_INVERT_FT).then_some(ft)
+}
+
 /// Chains of segments joined end to end (polylines stay whole), with their source objects.
 fn chains(ents: &[&Arc<Entity>]) -> Vec<(Vec<Vec2>, Vec<Handle>)> {
     let mut pieces: Vec<(Vec<Vec2>, Vec<Handle>)> = Vec::new();
@@ -483,6 +518,8 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
     ("HWC", "HWR", "Hot Water Return", 0.5, 10.0),
     ("SAN", "SAN", "Sanitary", 3.0, 0.0),
     ("SS", "SAN", "Sanitary", 3.0, 0.0),
+    // Soil / sanitary: the one-letter code plumbing legends give the sanitary line (`6" S`).
+    ("S", "SAN", "Sanitary", 3.0, 0.0),
     ("W", "SAN", "Sanitary Waste", 3.0, 0.0),
     ("V", "V", "Vent", 2.0, 10.0),
     ("G", "G", "Gas", 1.0, 10.0),
@@ -500,7 +537,7 @@ const PIPE_SYSTEMS: &[(&str, &str, &str, f64, f64)] = &[
 
 /// Abbreviations that require a size prefix (like `1" G`) because they are too short to be
 /// reliable as standalone tags on a plumbing drawing (could be grid labels, notes, etc.).
-const SHORT_ABBR: &[&str] = &["G", "W", "F", "V"];
+const SHORT_ABBR: &[&str] = &["G", "W", "F", "V", "S"];
 
 /// Parse a pipe system code from a text tag. Returns (size_in, system_code) if found.
 fn parse_pipe_tag(t: &str) -> Option<(Option<f64>, &'static str)> {
@@ -562,6 +599,117 @@ fn parse_pipe_size_str(s: &str) -> Option<f64> {
     }
 }
 
+/// Whether a chain of linework is an outline, not a pipe: it comes back to (within 6") a point it
+/// passed, having gone round an area at least 3' across both ways (a callout's box, a shape's
+/// edges). A pipe's run, branches and all, never closes round an area.
+pub(crate) fn is_outline(pts: &[Vec2], upf: f64) -> bool {
+    let near = 0.5 * upf;
+    let across = OUTLINE_ACROSS_FT * upf;
+    let n = pts.len().min(MAX_OUTLINE_POINTS);
+    for i in 0..n {
+        let Some(a) = pts.get(i) else { continue };
+        let (mut lo, mut hi) = (*a, *a);
+        for j in i + 1..n {
+            let Some(b) = pts.get(j) else { continue };
+            lo = Vec2::new(lo.x.min(b.x), lo.y.min(b.y));
+            hi = Vec2::new(hi.x.max(b.x), hi.y.max(b.y));
+            if j > i + 2 && b.dist(*a) <= near && hi.x - lo.x >= across && hi.y - lo.y >= across {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// How near (feet) a callout's bubble its box's linework (its leader) comes.
+const CALLOUT_REACH_FT: f64 = 3.0;
+/// How far across both ways (feet) a loop of linework must go to be an outline, not a pipe's
+/// offset or a fitting drawn round.
+const OUTLINE_ACROSS_FT: f64 = 3.0;
+/// The points of a chain looked at for a loop, at most (the check is quadratic).
+const MAX_OUTLINE_POINTS: usize = 2_000;
+
+/// A followed chain's points, carried on from `from` (the end it was followed from) at its
+/// nearer end: the run is unbroken across the dash's gap or the fitting it was followed over.
+/// An end farther than `reach` from it (the chain was followed by a stretch in its middle) is
+/// left as drawn.
+fn bridged(pts: &[Vec2], from: Option<Vec2>, reach: f64) -> Vec<[f64; 2]> {
+    let mut out: Vec<[f64; 2]> = pts.iter().map(|p| [p.x, p.y]).collect();
+    let (Some(first), Some(last), Some(from)) = (pts.first(), pts.last(), from) else { return out };
+    let (d0, d1) = (first.dist(from), last.dist(from));
+    if d0 <= d1 {
+        if d0 > 1e-9 && d0 <= reach {
+            out.insert(0, [from.x, from.y]);
+        }
+    } else if d1 > 1e-9 && d1 <= reach {
+        out.push([from.x, from.y]);
+    }
+    out
+}
+
+/// The chains that continue the tag-read runs (Q6181, [`super::pipefollow`]): (chain, the
+/// run it continues, the point it carries on from). A run is followed from when its chain is the one nearest its tag (the
+/// tag's own line, not something else in its reach); a chain any tag reaches is never taken.
+#[allow(clippy::too_many_arguments)]
+fn follow_tagged(
+    ents: &[&Arc<Entity>],
+    notes: &[(Handle, String, Vec2, f64)],
+    chains: &[(Vec<Vec2>, Vec<Handle>)],
+    run_of: &[Option<usize>],
+    tag_of_run: &[usize],
+    tags: &[(Vec2, String)],
+    runs: &[MepRun],
+    reach: f64,
+    upf: f64,
+) -> Vec<(usize, usize, Option<Vec2>)> {
+    use super::pipefollow::{Line, Pen, Seed, follow};
+    let by: BTreeMap<Handle, &Arc<Entity>> = ents.iter().map(|e| (e.handle, *e)).collect();
+    let near_tags = |pts: &[Vec2]| -> Vec<String> {
+        tags.iter().filter(|(at, _)| pts.windows(2).any(|w| matches!(w, [a, b] if seg_dist(*at, *a, *b) < reach))).map(|(_, k)| k.clone()).collect()
+    };
+    let lines: Vec<Line> = chains
+        .iter()
+        .enumerate()
+        .map(|(ci, (pts, hs))| Line {
+            pts,
+            pen: hs.first().and_then(|h| by.get(h)).map(|e| Pen::of(e)),
+            run: run_of.get(ci).copied().flatten().is_some(),
+            near_tags: near_tags(pts),
+        })
+        .collect();
+    // Each tag's nearest chain among those it gave a run.
+    let mut nearest: BTreeMap<usize, (f64, usize)> = BTreeMap::new();
+    for (ci, ri) in run_of.iter().enumerate().filter_map(|(ci, r)| r.map(|r| (ci, r))) {
+        let (Some(ti), Some((pts, _))) = (tag_of_run.get(ri), chains.get(ci)) else { continue };
+        let Some((at, _)) = tags.get(*ti) else { continue };
+        let d = pts.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist(*at, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min);
+        if nearest.get(ti).is_none_or(|(bd, _)| d < *bd) {
+            nearest.insert(*ti, (d, ci));
+        }
+    }
+    let rules = super::pipefollow::rules();
+    let seeds: Vec<Seed> = nearest
+        .iter()
+        .map(|(ti, (_, ci))| (*ti, *ci))
+        .filter(|(_, ci)| {
+            let Some(l) = lines.get(*ci) else { return false };
+            let layer_ok =
+                l.pen.as_ref().is_some_and(|p| !rules.never_layers.iter().any(|w| !w.is_empty() && p.layer.contains(&w.to_ascii_uppercase())));
+            layer_ok && !is_outline(l.pts, upf)
+        })
+        .map(|(ti, chain)| {
+            let kind = tags.get(ti).map(|(_, k)| k.clone()).unwrap_or_default();
+            let size_in = kind.split_whitespace().nth(1).and_then(|z| z.parse::<f64>().ok()).filter(|z| z.is_finite()).unwrap_or(0.0);
+            Seed { chain, kind, size_in }
+        })
+        .collect();
+    follow(ents, &lines, &seeds, notes, upf)
+        .into_iter()
+        .filter_map(|f| seeds.get(f.seed).and_then(|sd| run_of.get(sd.chain).copied().flatten()).map(|ri| (f.line, ri, f.from)))
+        .filter(|(_, ri, _)| runs.get(*ri).is_some())
+        .collect()
+}
+
 /// Read pipe runs from text tags when no MEP-standard layers exist (PDF imports).
 /// Finds pipe system tags in the drawing text, then associates nearby line chains as runs.
 fn read_pipes_from_tags(
@@ -576,7 +724,6 @@ fn read_pipes_from_tags(
         at: Vec2,
         system: &'static str,
         size_in: Option<f64>,
-        #[allow(dead_code)]
         text: String,
     }
     let mut pipe_tags: Vec<PipeTag> = Vec::new();
@@ -607,6 +754,39 @@ fn read_pipes_from_tags(
             .collect::<Vec<_>>(),
     );
 
+    // The numbered tag bubbles: a sheet-number-shaped tag (`P-7`, `P-2`: a callout's, a fixture's;
+    // lettered or a symbol's attribute) with a number (one or two digits) just over it.
+    let digits: Vec<(Vec2, f64)> = notes
+        .iter()
+        .filter(|(_, t, _, _)| (1..=2).contains(&t.trim().len()) && t.trim().chars().all(|c| c.is_ascii_digit()))
+        .map(|(_, _, at, h)| (*at, *h))
+        .take(MAX_OUTLINE_POINTS)
+        .collect();
+    let mut sheet_refs: Vec<(Vec2, f64)> =
+        notes.iter().filter(|(_, t, _, _)| cadaddy_mepfix::sheet_facts::is_sheet_number(t.trim())).map(|(_, _, at, h)| (*at, *h)).collect();
+    for e in ents.iter() {
+        if let EntityKind::Insert(ins) = &e.kind {
+            sheet_refs.extend(
+                ins.attribs
+                    .iter()
+                    .take(4)
+                    .filter(|a| cadaddy_mepfix::sheet_facts::is_sheet_number(a.text.value.trim()))
+                    .map(|a| (a.text.insert.xy(), a.text.height)),
+            );
+        }
+        if sheet_refs.len() >= MAX_OUTLINE_POINTS {
+            break;
+        }
+    }
+    let bubbles: Vec<Vec2> = sheet_refs
+        .iter()
+        .filter(|(at, h)| {
+            let h = h.max(1e-6);
+            digits.iter().any(|(d, dh)| (d.x - at.x).abs() <= 3.0 * h.max(*dh) && d.y > at.y && d.y - at.y <= 4.0 * h.max(*dh))
+        })
+        .map(|(at, _)| *at)
+        .collect();
+
     // Step 3: for each chain, find the nearest pipe tag. If within reach, assign it as a pipe run.
     // Content-mode imports (no PDF-BLACK layers) mix pipe geometry with walls and annotation on
     // generic layers; use a tighter reach to avoid associating walls near pipe tags.
@@ -616,7 +796,10 @@ fn read_pipes_from_tags(
     let mut systems_seen: BTreeMap<&str, bool> = BTreeMap::new();
     let mut runs = Vec::new();
 
-    for (pts, handles) in &all_chains {
+    // Which run each chain became, and which tag gave it.
+    let mut run_of: Vec<Option<usize>> = vec![None; all_chains.len()];
+    let mut tag_of_run: Vec<usize> = Vec::new();
+    for (ci, (pts, handles)) in all_chains.iter().enumerate() {
         if pts.len() < 2 {
             continue;
         }
@@ -633,6 +816,11 @@ fn read_pipes_from_tags(
         if only.is_some_and(|o| !o.eq_ignore_ascii_case(&level.name)) {
             continue;
         }
+        // Linework that comes back round on itself through a tagged area (a detail callout's box
+        // and leader, the fixtures of a bath pair round their tag bubbles): an outline, not a pipe.
+        if !bubbles.is_empty() && pts.iter().any(|p| bubbles.iter().any(|b| b.dist(*p) <= CALLOUT_REACH_FT * upf)) && is_outline(pts, upf) {
+            continue;
+        }
 
         let segs: Vec<(Vec2, Vec2)> = pts
             .windows(2)
@@ -646,16 +834,16 @@ fn read_pipes_from_tags(
         }
 
         // Find the nearest pipe tag to this chain.
-        let mut best_tag: Option<&PipeTag> = None;
+        let mut best_tag: Option<(usize, &PipeTag)> = None;
         let mut best_dist = f64::INFINITY;
-        for tag in &pipe_tags {
+        for (ti, tag) in pipe_tags.iter().enumerate() {
             let d = segs.iter().map(|(a, b)| seg_dist(tag.at, *a, *b)).fold(f64::INFINITY, f64::min);
             if d < reach && d < best_dist {
                 best_dist = d;
-                best_tag = Some(tag);
+                best_tag = Some((ti, tag));
             }
         }
-        let Some(tag) = best_tag else { continue };
+        let Some((tag_index, tag)) = best_tag else { continue };
 
         let sys_code = tag.system;
         systems_seen.insert(sys_code, true);
@@ -714,9 +902,58 @@ fn read_pipes_from_tags(
             top_ft: None,
             source_sheet: String::new(),
         });
+        if let Some(slot) = run_of.get_mut(ci) {
+            *slot = Some(runs.len() - 1);
+        }
+        tag_of_run.push(tag_index);
         if runs.len() >= MAX_RUNS {
             break;
         }
+    }
+
+    // Step 4 (Q6181): the drawn pipe past its tag's reach. Each tag's own line (the tagged
+    // chain nearest it) is followed on along untagged linework of its pen.
+    let followed = follow_tagged(
+        ents,
+        notes,
+        &all_chains,
+        &run_of,
+        &tag_of_run,
+        &pipe_tags.iter().map(|t| (t.at, format!("{} {}", t.system, t.size_in.map_or_else(String::new, |z| z.to_string())))).collect::<Vec<_>>(),
+        &runs,
+        reach,
+        upf,
+    );
+    let fr = super::pipefollow::rules();
+    let bridge = (fr.gap_ft + fr.join_in / 12.0) * upf;
+    for (ci, ri, from) in followed {
+        let (Some((pts, handles)), Some(seed), Some(tag)) = (all_chains.get(ci), runs.get(ri), tag_of_run.get(ri).and_then(|t| pipe_tags.get(*t)))
+        else {
+            continue;
+        };
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
+        let source = format!("followed from {}", tag.text.trim());
+        let bottom = seed.bottoms_ft.first().copied().unwrap_or(0.0);
+        let points = bridged(pts, from, bridge);
+        let bottoms_ft = vec![bottom; points.len().saturating_sub(1).max(1)];
+        runs.push(MepRun {
+            system: seed.system.clone(),
+            level: seed.level.clone(),
+            points,
+            size_in: seed.size_in,
+            bottoms_ft,
+            objects: handles.iter().map(|h| h.hex()).collect(),
+            id: String::new(),
+            encased: false,
+            size_source: source.clone(),
+            height_source: if seed.height_source == "tag" { source } else { seed.height_source.clone() },
+            reviewed: false,
+            edited_by: String::new(),
+            top_ft: None,
+            source_sheet: String::new(),
+        });
     }
 
     // Build system entries for the seen codes.
@@ -1718,6 +1955,93 @@ fn piece_mesh(m: &mut Mesh, p: &Piece, upf: f64) {
     }
 }
 
+/// The spec's equipment as model elements: a box (or an upright cylinder) per scheduled item,
+/// tagged with its kind, tag, systems and schedule row for IFC; `only` (upper-case tags) limits it
+/// to those (gear added to a built model). The handles built.
+pub(crate) fn build_equipment(d: &mut Drawing, sp: &BuildingSpec, only: Option<&std::collections::BTreeSet<String>>) -> Vec<Handle> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
+    // tag, systems and schedule row for IFC. --
+    let mut built: Vec<Handle> = Vec::new();
+    let t = |code: i32, v: String| RawTag { code, value: v };
+    // Equipment on a housekeeping pad stands on it.
+    let pads = super::concrete::elements(sp, &d.bim_types);
+    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
+    // A panel hangs in or on a wall: the built walls, for putting it on its wall's face.
+    let panel = |k: &str| matches!(k.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center");
+    let walls = if sp.mep.equipment.iter().any(|e| panel(&e.kind)) { super::propfill::wall_footprints(d) } else { Vec::new() };
+    for e in sp.mep.equipment.iter().take(MAX_RUNS).filter(|e| only.is_none_or(|o| o.contains(&e.tag.to_ascii_uppercase()))) {
+        let Some(level) = sp.level(&e.level) else { continue };
+        let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
+        if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
+            continue;
+        }
+        let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
+        ensure_layer(d, &layer, 30);
+        let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+        let z0 = (level.elevation_ft + on_pad(e)) * upf;
+        let z1 = z0 + e.height_ft * upf;
+        let mut m = super::wallgen::empty_mesh();
+        // A panel on the face of the wall nearest it: recessed (its front flush, its back in the
+        // wall) when its mounting says so, else on the face; turned with the wall.
+        let face = if panel(&e.kind) && !e.round {
+            super::propfill::wall_face(&walls, &level.name, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some((z0 + z1) * 0.5))
+        } else {
+            None
+        };
+        let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+        if let Some(f) = &face {
+            let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+            let along = f.along * (w / 2.0);
+            // The box's middle line, half its depth from the face (into the wall when recessed).
+            let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
+            super::wallgen::add_box(&mut m, mid - along, mid + along, dp, z0, z1);
+        } else if e.round {
+            add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
+        } else {
+            let cy = (lo.y + hi.y) / 2.0;
+            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
+        }
+        if m.faces.is_empty() {
+            continue;
+        }
+        let cap = |v: String| -> String { v.chars().take(250).collect() };
+        let mut xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, level.name.clone()),
+            t(1000, Handle(0).hex()),
+            t(1000, "kind:equipment".into()),
+            t(1000, cap(format!("part:equipment:{}", sanitise(&e.kind, 40)))),
+            t(1000, cap(format!("tag:{}", e.tag))),
+        ];
+        for sy in e.systems.iter().take(32) {
+            xdata.push(t(1000, cap(format!("system:{sy}"))));
+        }
+        if !e.title.is_empty() {
+            xdata.push(t(1000, cap(format!("title:{}", e.title))));
+        }
+        for (k, v) in e.properties.iter().take(64) {
+            xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
+        }
+        for (k, v) in e.sources.iter().take(8) {
+            xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
+        }
+        match &face {
+            Some(f) => {
+                xdata.push(t(1000, format!("prop:HOST_WALL={}", f.wall.hex())));
+                xdata.push(t(1000, format!("prop:HOST_FACE={:.3},{:.3}", f.out.x, f.out.y)));
+            }
+            None if panel(&e.kind) => xdata.push(t(1000, "prop:PLACEMENT=review: no wall within 3' of where it was read".into())),
+            None => {}
+        }
+        if let Ok(h) = d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)) {
+            built.push(h);
+        }
+    }
+    built
+}
+
 /// Sanitise a name for use in a layer name (alphanumeric, dash, underscore only).
 pub(crate) fn sanitise(name: &str, max: usize) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(max).collect()
@@ -1772,6 +2096,88 @@ pub(crate) fn run_base(r: &MepRun) -> String {
     format!("{src}@{at}")
 }
 
+/// A feeder's raceway where it comes in through a gear's entry plate: one of `conduits` in rows
+/// across the gear from one corner (what doesn't fit runs past its edge, so a crowded plate
+/// shows), up to the ceiling (a top entry) or down into the slab.
+pub(crate) struct FeederStub {
+    /// The feeder (`Feeder::tag`), its index, and the gear it enters.
+    pub feeder: String,
+    pub index: usize,
+    pub gear: String,
+    pub level: String,
+    pub at: Vec2,
+    /// From and to, sheet units; `gear_end_low`: the end at the gear is `z0` (a top entry).
+    pub z0: f64,
+    pub z1: f64,
+    pub gear_end_low: bool,
+    pub trade_in: f64,
+    pub od_in: f64,
+}
+
+/// The feeders' raceways at the gear they enter (both ends of each feeder).
+pub(crate) fn feeder_stubs(sp: &BuildingSpec, types: &cadaddy_doc::bimspec::BimTypes, upf: f64) -> Vec<FeederStub> {
+    let rules = super::gear::Rules::of(sp);
+    let pads = super::concrete::elements(sp, types);
+    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
+    let mut out = Vec::new();
+    for (fi, f) in sp.mep.feeders.iter().enumerate().take(MAX_RUNS) {
+        if !(f.conduit_in.is_finite() && f.conduit_in > 0.0) || f.conduits == 0 {
+            continue;
+        }
+        for (tag, side) in
+            [(&f.to, f.entry.as_str()), (&f.from, if f.from_entry.trim().is_empty() { f.entry.as_str() } else { f.from_entry.as_str() })]
+        {
+            let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(tag.trim())) else { continue };
+            let Some(level) = sp.level(&g.level) else { continue };
+            let top = side.trim().eq_ignore_ascii_case("top");
+            let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
+            let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
+            let z_floor = level.elevation_ft * upf;
+            let z_top = (level.elevation_ft + on_pad(g) + g.height_ft) * upf;
+            let (z0, z1) = if top {
+                (z_top, ((level.elevation_ft + level.height_ft.max(on_pad(g) + g.height_ft + 1.0)) * upf).max(z_top + upf))
+            } else {
+                (z_floor - upf, (level.elevation_ft + on_pad(g)) * upf)
+            };
+            if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
+                continue;
+            }
+            // Where this feeder's raceways start on the plate: after the ones placed before it.
+            let before: u32 = sp
+                .mep
+                .feeders
+                .iter()
+                .take_while(|x| !std::ptr::eq(*x, f))
+                .filter(|x| {
+                    let here_to = x.to.trim().eq_ignore_ascii_case(tag.trim()) && x.entry.trim().eq_ignore_ascii_case(side.trim());
+                    let xs = if x.from_entry.trim().is_empty() { &x.entry } else { &x.from_entry };
+                    let here_from = x.from.trim().eq_ignore_ascii_case(tag.trim()) && xs.trim().eq_ignore_ascii_case(side.trim());
+                    here_to || here_from
+                })
+                .fold(0u32, |a, x| a.saturating_add(x.conduits.min(400)));
+            let pitch = (rules.od(f.conduit_in) + rules.spacing_in) / 12.0 * upf;
+            let per_row = (((hi.x - lo.x) / pitch).floor() as u32).max(1);
+            for k in 0..f.conduits.min(400) {
+                let n = before.saturating_add(k);
+                let c = Vec2::new(lo.x + pitch * (f64::from(n % per_row) + 0.5), lo.y + pitch * (f64::from(n / per_row) + 0.5));
+                out.push(FeederStub {
+                    feeder: f.tag.clone(),
+                    index: fi,
+                    gear: g.tag.clone(),
+                    level: level.name.clone(),
+                    at: c,
+                    z0,
+                    z1,
+                    gear_end_low: top,
+                    trade_in: f.conduit_in,
+                    od_in: rules.od(f.conduit_in),
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Build the layer name for a system on a level: `3D-MEP-<system>-<level>`.
 pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
     let sys = sanitise(system, 40);
@@ -1782,6 +2188,12 @@ pub(crate) fn mep_layer_name(system: &str, level: &str) -> String {
 /// The shown systems' runs into model space (sheet units), one mesh per run on its system's
 /// layer per level. The counts.
 pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
+    build_with(d, sp, false)
+}
+
+/// [`build`]; with `atoms`, conduit and cable runs are left to [`super::mepatoms`], which makes
+/// each of their pieces an element of its own.
+pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Value {
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
     let mut total_runs = 0usize;
     let mut total_elbows = 0usize;
@@ -1806,6 +2218,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .take(MAX_RUNS)
         .filter_map(|r| {
             let sy = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show)?;
+            if atoms && matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
+                return None;
+            }
             let level = sp.level(&r.level)?;
             Some(Shown { run: r, sy, level: level.name.clone(), base_z: level.elevation_ft * upf })
         })
@@ -1993,126 +2408,32 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
     }
 
-    // -- Equipment: a box (or an upright cylinder) per scheduled item, tagged with its kind,
-    // tag, systems and schedule row for IFC. --
-    let mut total_equipment = 0usize;
-    // Equipment on a housekeeping pad stands on it.
-    let pads = super::concrete::elements(sp, &d.bim_types);
-    let on_pad = |e: &cadaddy_walk3d::MepEquipment| super::concrete::pad_top(&pads, &e.tag).map_or(e.bottom_ft, |t| e.bottom_ft.max(t));
-    for e in sp.mep.equipment.iter().take(MAX_RUNS) {
-        let Some(level) = sp.level(&e.level) else { continue };
-        let ok = e.min.iter().chain(&e.max).chain([&e.bottom_ft, &e.height_ft]).all(|v| v.is_finite());
-        if !ok || e.height_ft <= 0.0 || e.height_ft > 100.0 {
-            continue;
-        }
-        let layer = format!("3D-MEP-EQUIP-{}", sanitise(&level.name, 16));
-        ensure_layer(d, &layer, 30);
-        let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
-        let z0 = (level.elevation_ft + on_pad(e)) * upf;
-        let z1 = z0 + e.height_ft * upf;
-        let mut m = super::wallgen::empty_mesh();
-        if e.round {
-            add_upright_cylinder(&mut m, (lo + hi) * 0.5, (hi.x - lo.x).min(hi.y - lo.y) / 2.0, z0, z1);
-        } else {
-            let cy = (lo.y + hi.y) / 2.0;
-            super::wallgen::add_box(&mut m, Vec2::new(lo.x, cy), Vec2::new(hi.x, cy), hi.y - lo.y, z0, z1);
-        }
-        if m.faces.is_empty() {
-            continue;
-        }
-        let cap = |v: String| -> String { v.chars().take(250).collect() };
-        let mut xdata = vec![
-            t(1001, super::wallgen::APP.into()),
-            t(1000, "mep".into()),
-            t(1000, level.name.clone()),
-            t(1000, Handle(0).hex()),
-            t(1000, "kind:equipment".into()),
-            t(1000, cap(format!("part:equipment:{}", sanitise(&e.kind, 40)))),
-            t(1000, cap(format!("tag:{}", e.tag))),
-        ];
-        for sy in e.systems.iter().take(32) {
-            xdata.push(t(1000, cap(format!("system:{sy}"))));
-        }
-        if !e.title.is_empty() {
-            xdata.push(t(1000, cap(format!("title:{}", e.title))));
-        }
-        for (k, v) in e.properties.iter().take(64) {
-            xdata.push(t(1000, cap(format!("prop:{k}={v}"))));
-        }
-        for (k, v) in e.sources.iter().take(8) {
-            xdata.push(t(1000, cap(format!("prop:SOURCE {k}={v}"))));
-        }
-        if d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
-            total_equipment += 1;
-        }
-    }
+    let total_equipment = build_equipment(d, sp, None).len();
 
     // -- Feeders: their raceways where they come in through each gear's entry plates (rows
     // across the gear from one corner; what doesn't fit runs past its edge, so a crowded plate
     // shows), up to the ceiling or down into the slab. --
-    let rules = super::gear::Rules::of(sp);
     let mut total_stubs = 0usize;
-    for f in sp.mep.feeders.iter().take(MAX_RUNS) {
-        if !(f.conduit_in.is_finite() && f.conduit_in > 0.0) || f.conduits == 0 {
+    let stubs = if atoms { Vec::new() } else { feeder_stubs(sp, &d.bim_types, upf) };
+    for st in stubs {
+        let layer = format!("3D-ELEC-RACEWAY-{}", sanitise(&st.level, 16));
+        ensure_layer(d, &layer, 1);
+        let mut m = super::wallgen::empty_mesh();
+        add_upright_cylinder(&mut m, st.at, st.od_in / 24.0 * upf, st.z0, st.z1);
+        if m.faces.is_empty() {
             continue;
         }
-        for (tag, side) in
-            [(&f.to, f.entry.as_str()), (&f.from, if f.from_entry.trim().is_empty() { f.entry.as_str() } else { f.from_entry.as_str() })]
-        {
-            let Some(g) = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(tag.trim())) else { continue };
-            let Some(level) = sp.level(&g.level) else { continue };
-            let top = side.trim().eq_ignore_ascii_case("top");
-            let lo = Vec2::new(g.min[0].min(g.max[0]), g.min[1].min(g.max[1]));
-            let hi = Vec2::new(g.min[0].max(g.max[0]), g.min[1].max(g.max[1]));
-            let z_floor = level.elevation_ft * upf;
-            let z_top = (level.elevation_ft + on_pad(g) + g.height_ft) * upf;
-            let (z0, z1) = if top {
-                (z_top, ((level.elevation_ft + level.height_ft.max(on_pad(g) + g.height_ft + 1.0)) * upf).max(z_top + upf))
-            } else {
-                (z_floor - upf, (level.elevation_ft + on_pad(g)) * upf)
-            };
-            if !(z0.is_finite() && z1.is_finite() && z1 > z0) {
-                continue;
-            }
-            // Where this feeder's raceways start on the plate: after the ones placed before it.
-            let before: u32 = sp
-                .mep
-                .feeders
-                .iter()
-                .take_while(|x| !std::ptr::eq(*x, f))
-                .filter(|x| {
-                    let here_to = x.to.trim().eq_ignore_ascii_case(tag.trim()) && x.entry.trim().eq_ignore_ascii_case(side.trim());
-                    let xs = if x.from_entry.trim().is_empty() { &x.entry } else { &x.from_entry };
-                    let here_from = x.from.trim().eq_ignore_ascii_case(tag.trim()) && xs.trim().eq_ignore_ascii_case(side.trim());
-                    here_to || here_from
-                })
-                .fold(0u32, |a, x| a.saturating_add(x.conduits.min(400)));
-            let pitch = (rules.od(f.conduit_in) + rules.spacing_in) / 12.0 * upf;
-            let per_row = (((hi.x - lo.x) / pitch).floor() as u32).max(1);
-            let layer = format!("3D-ELEC-RACEWAY-{}", sanitise(&level.name, 16));
-            ensure_layer(d, &layer, 1);
-            for k in 0..f.conduits.min(400) {
-                let n = before.saturating_add(k);
-                let c = Vec2::new(lo.x + pitch * (f64::from(n % per_row) + 0.5), lo.y + pitch * (f64::from(n / per_row) + 0.5));
-                let mut m = super::wallgen::empty_mesh();
-                add_upright_cylinder(&mut m, c, rules.od(f.conduit_in) / 24.0 * upf, z0, z1);
-                if m.faces.is_empty() {
-                    continue;
-                }
-                let xdata = vec![
-                    t(1001, super::wallgen::APP.into()),
-                    t(1000, "mep".into()),
-                    t(1000, level.name.clone()),
-                    t(1000, Handle(0).hex()),
-                    t(1000, format!("system:{}", f.tag.chars().take(60).collect::<String>())),
-                    t(1000, "kind:conduit".into()),
-                    t(1000, "part:segment".into()),
-                ];
-                if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok()
-                {
-                    total_stubs += 1;
-                }
-            }
+        let xdata = vec![
+            t(1001, super::wallgen::APP.into()),
+            t(1000, "mep".into()),
+            t(1000, st.level.clone()),
+            t(1000, Handle(0).hex()),
+            t(1000, format!("system:{}", st.feeder.chars().take(60).collect::<String>())),
+            t(1000, "kind:conduit".into()),
+            t(1000, "part:segment".into()),
+        ];
+        if d.add(&Space::Model, Common { layer: layer.clone().into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
+            total_stubs += 1;
         }
     }
 
@@ -2221,7 +2542,16 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
         run: &'a MepRun,
         piece: Piece,
         w: f64,
+        /// A conduit or cable dropping down a wall to its device: below the ceiling by design.
+        drop: bool,
     }
+    let wiring = |sys: &str| {
+        sp.mep
+            .systems
+            .iter()
+            .find(|x| x.name == sys)
+            .is_some_and(|x| matches!(x.kind, cadaddy_walk3d::MepKind::Conduit | cadaddy_walk3d::MepKind::Cable))
+    };
     let mut items: Vec<Item> = Vec::new();
     for r in sp.mep.runs.iter().take(MAX_RUNS) {
         let Some(level) = sp.level(&r.level) else { continue };
@@ -2233,12 +2563,14 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
                 let z0 = (level.elevation_ft + bot) * upf;
                 let z1 = (level.elevation_ft + top) * upf;
                 let at = Vec2::new(pt[0], pt[1]);
-                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w });
+                // Ending at a device's height above its floor (an outlet, a switch), not on it.
+                let drop = wiring(&r.system) && bot > 0.0 && bot < level.ceiling_ft;
+                items.push(Item { run: r, piece: Piece::segment(at, at, z0, z1, r.size_in), w, drop });
             }
             continue;
         }
         let (ps, _) = pieces(r, level.elevation_ft * upf, upf, &[]);
-        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w }));
+        items.extend(ps.into_iter().filter(|p| !p.is_fitting()).map(|piece| Item { run: r, piece, w, drop: false }));
     }
     let handles = |r: &MepRun| r.objects.iter().take(5).cloned().collect::<Vec<_>>();
     // Below the ceiling of the room it passes through (else the level's), into the slab above.
@@ -2262,7 +2594,7 @@ pub(crate) fn run_clashes(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|(_, z, _)| *z)
             .fold(f64::NAN, f64::min);
         let ceiling = if ceiling.is_finite() { ceiling } else { (level.elevation_ft + level.ceiling_ft) * upf };
-        if it.piece.z0 < ceiling - tol {
+        if it.piece.z0 < ceiling - tol && !it.drop {
             out.push(json!({
                 "kind": "below_ceiling", "systems": [it.run.system], "level": it.run.level,
                 "message": format!("{} hangs {} below the ceiling", it.run.system, cadaddy_walk3d::inches((ceiling - it.piece.z0) / upf * 12.0)),
@@ -2469,7 +2801,7 @@ fn carry_previous(out: &mut [Value], prev: &[&Value], radius: f64) -> Vec<Value>
 }
 
 /// The convex hull of points (a ceiling's outline from its mesh), counterclockwise.
-fn hull(pts: &[Vec2]) -> Vec<Vec2> {
+pub(crate) fn hull(pts: &[Vec2]) -> Vec<Vec2> {
     let mut p: Vec<Vec2> = pts.iter().copied().filter(|q| q.is_finite()).collect();
     p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
     p.dedup_by(|a, b| a.dist(*b) < 1e-9);
@@ -2518,6 +2850,28 @@ fn closest_mid(a: Vec2, b: Vec2, c: Vec2, e: Vec2) -> Vec2 {
         return a + r * t;
     }
     (a + b + c + e) * 0.25
+}
+
+#[cfg(test)]
+mod outline_tests {
+    use super::*;
+
+    #[test]
+    fn a_callout_box_is_an_outline_and_a_pipe_is_not() {
+        let p = |v: &[(f64, f64)]| v.iter().map(|(x, y)| Vec2::new(*x, *y)).collect::<Vec<_>>();
+        // Inches. A callout's box round two baths (15' x 9'), then its leader down to the bubble.
+        let boxed = p(&[(0.0, 0.0), (180.0, 0.0), (180.0, 108.0), (0.0, 108.0), (0.0, 3.0), (90.0, -2.0), (90.0, -60.0)]);
+        assert!(is_outline(&boxed, 12.0));
+        // A main with branches off it (an L and a T), traced out and back along a branch.
+        let main = p(&[(0.0, 0.0), (300.0, 0.0), (300.0, -48.0), (300.0, 0.0), (420.0, 0.0), (420.0, 60.0)]);
+        assert!(!is_outline(&main, 12.0));
+        // A pipe drawn as its two edges (2" apart) out and back: thin, no area: not an outline.
+        let edges = p(&[(0.0, 0.0), (240.0, 0.0), (240.0, 2.0), (0.0, 2.0), (0.0, 0.5)]);
+        assert!(!is_outline(&edges, 12.0));
+        // A fitting drawn round (a 1' square): too small to be an outline.
+        let fitting = p(&[(0.0, 0.0), (12.0, 0.0), (12.0, 12.0), (0.0, 12.0), (0.0, 0.0)]);
+        assert!(!is_outline(&fitting, 12.0));
+    }
 }
 
 #[cfg(test)]
@@ -2623,5 +2977,39 @@ mod tests {
         assert!(draft_system("E-COND").is_some_and(|s| s.kind == MepKind::Conduit));
         assert!(draft_system("E-CABL-TRAY").is_some_and(|s| s.kind == MepKind::Tray && s.size_in == [12.0, 4.0]));
         assert!(draft_system("A-WALL").is_none());
+    }
+
+    #[test]
+    fn a_one_letter_sanitary_code_reads_after_a_size_only() {
+        // A legend's soil/sanitary letter, the way a sanitary plan tags its lines.
+        assert_eq!(parse_pipe_tag("6\" S"), Some((Some(6.0), "SAN")));
+        assert_eq!(parse_pipe_tag("3\" S."), Some((Some(3.0), "SAN")));
+        assert_eq!(parse_pipe_tag("1 1/2\" S"), Some((Some(1.5), "SAN")));
+        assert_eq!(parse_pipe_tag("4\" SAN"), Some((Some(4.0), "SAN")));
+        // Alone, a letter S is a grid line, a section mark or a compass point: not a pipe.
+        assert_eq!(parse_pipe_tag("S"), None);
+        assert_eq!(parse_pipe_tag("SECTION S"), None);
+        // A size before another word is no pipe either.
+        assert_eq!(parse_pipe_tag("6\" SLEEVE"), None);
+        assert_eq!(parse_pipe_tag("24\" INVERT"), None);
+    }
+
+    #[test]
+    fn an_invert_note_is_a_depth_below_the_floor_never_a_datum_elevation() {
+        assert_eq!(invert_tag("24\" INVERT"), Some(2.0));
+        assert_eq!(invert_tag("48\" INVERT"), Some(4.0));
+        assert_eq!(invert_tag("INV. 2'-6\""), Some(2.5));
+        assert_eq!(invert_tag("IE -3'-0\""), Some(3.0));
+        assert_eq!(invert_tag("INV EL -1'-6\""), Some(1.5));
+        // A site datum's elevation, a positive elevation, a legend's row, other words: none.
+        assert_eq!(invert_tag("IE 645.20"), None);
+        assert_eq!(invert_tag("INV 98'-6\""), None);
+        assert_eq!(invert_tag("INV EL 4'-0\""), None);
+        assert_eq!(invert_tag("IE INVERT ELEVATION"), None);
+        assert_eq!(invert_tag("6\" S"), None);
+        assert_eq!(invert_tag("INVESTIGATE 24\""), None);
+        assert_eq!(invert_tag("SUPPLIES IE -2'-0\""), Some(2.0));
+        // An invert note is no height tag, no pipe tag.
+        assert_eq!(height_tag("24\" INVERT", 0.5), None);
     }
 }

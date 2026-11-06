@@ -102,7 +102,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("estimate.set_scope", "Set Estimate Scope", run_set_scope)
             .params("{lines?: [key] | trade?, category?, item?, scope: in_contract|by_others|nic|ofci|alternate:<n>, reason, citation?} → {lines}"),
         CommandSpec::new("estimate.settings", "Estimate Settings", run_settings)
-            .params("{tax_pct?, overhead_pct?, profit_pct?, contingency_pct?, bond_pct?, crew_rate?, today?: YYYY-MM-DD, stale_days?, tier?: normal|difficult|very_difficult (the job's labor tier), context?: production-model context, duration_days?, peak_crew?, high_work_ft?: work this high needs a lift (14), gross_sf?: building area for hours/SF} → {settings}"),
+            .params("{tax_pct?, overhead_pct?, profit_pct?, contingency_pct?, bond_pct?, crew_rate?, today?: YYYY-MM-DD, stale_days?, pricebook?: bool (default true: lines the drawing's prices miss are priced from the material price book before the starter book), pricebook_folder?: path (this machine's price book; default the pricebook folder in the settings folder), tier?: normal|difficult|very_difficult (the job's labor tier), context?: production-model context, duration_days?, peak_crew?, high_work_ft?: work this high needs a lift (14), gross_sf?: building area for hours/SF} → {settings}"),
         CommandSpec::new("estimate.set_factor", "Set Estimate Factor", run_set_factor)
             .params("{lines?: [key] | trade?, category?, item?, factor?: a factor in factors.csv (height, ceiling, exposure, wall, floor, learning_curve), tier?: normal|difficult|very_difficult, reason, citation?, remove?: bool} → {lines, factor?, tier?}"),
         CommandSpec::new("estimate.observe", "Record Field Observation", run_observe)
@@ -118,6 +118,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("estimate.compare", "Compare Estimate What-If", run_compare)
             .params("{assembly?: {from, to}, scope?: {key: scope}, settings?: {…}} → {now, what_if, delta}")
+            .noundo(),
+        CommandSpec::new("estimate.change", "Price a Change", run_change)
+            .params("{lines: [{item, size?, unit?: each (default), qty: added (negative: removed), trade?: electrical (default), category?}], why?} → {lines: [{item, size, qty, material, labor_hours, labor_cost, cost, via, priced}], totals: {material, labor_hours, labor_cost, cost}, unpriced, why}: what a change costs (an RFI's fix, a code rule's device), each line priced as the estimate prices it (the drawing's prices, the price book, the starter book); labor cost at the estimate's crew rate")
             .noundo(),
         CommandSpec::new("estimate.export", "Export Estimate", run_export)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path: .xlsx or .csv file, format?: xlsx|csv (from the extension), columns?: [key|trade|category|item|size|unit|qty|net|level|material|labor_hours|labor_cost|cost|total|scope|status|via]} → {path, lines, total, columns}")
@@ -299,6 +302,14 @@ fn find_family_match(pool: &[Value], item: &str, unit: &str, category: &str, sys
 
 /// Parse CSV text (quoted fields, doubled quotes) into header-keyed rows.
 pub(crate) fn csv_rows(text: &str) -> Vec<BTreeMap<String, String>> {
+    let rows = csv_cells(text);
+    let Some(header) = rows.first().cloned() else { return Vec::new() };
+    let header: Vec<String> = header.iter().map(|h| h.to_ascii_lowercase()).collect();
+    rows.into_iter().skip(1).map(|r| header.iter().cloned().zip(r).collect()).collect()
+}
+
+/// Parse CSV text into rows of cells (blank rows dropped).
+pub(crate) fn csv_cells(text: &str) -> Vec<Vec<String>> {
     let mut rows: Vec<Vec<String>> = Vec::new();
     for line in text.lines().take(MAX_ROWS) {
         let mut cells = Vec::new();
@@ -323,9 +334,7 @@ pub(crate) fn csv_rows(text: &str) -> Vec<BTreeMap<String, String>> {
             rows.push(cells.into_iter().map(|c| c.trim().to_string()).collect());
         }
     }
-    let Some(header) = rows.first().cloned() else { return Vec::new() };
-    let header: Vec<String> = header.iter().map(|h| h.to_ascii_lowercase()).collect();
-    rows.into_iter().skip(1).map(|r| header.iter().cloned().zip(r).collect()).collect()
+    rows
 }
 
 fn num(r: &BTreeMap<String, String>, k: &str) -> Option<f64> {
@@ -682,6 +691,12 @@ fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
         }
         set.insert("today".into(), json!(d));
     }
+    if let Some(b) = p.get("pricebook").and_then(Value::as_bool) {
+        set.insert("pricebook".into(), json!(b));
+    }
+    if let Some(f) = str_param(p, "pricebook_folder") {
+        set.insert("pricebook_folder".into(), json!(f.trim()));
+    }
     if let Some(tier) = str_param(p, "tier") {
         if !labor::TIERS.contains(&tier) {
             return Err(bad("estimate.settings", "`tier` is normal, difficult or very_difficult"));
@@ -699,7 +714,7 @@ fn run_settings(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------------- the calculator ----------------
 
 /// Days since 0000-03-01 for a YYYY-MM-DD date (for ages in days).
-fn parse_date(d: &str) -> Option<i64> {
+pub(crate) fn parse_date(d: &str) -> Option<i64> {
     let mut it = d.trim().split('-');
     let (y, m, dd) = (it.next()?.parse::<i64>().ok()?, it.next()?.parse::<i64>().ok()?, it.next()?.parse::<i64>().ok()?);
     if !(1..=12).contains(&m) || !(1..=31).contains(&dd) || !(1900..=3000).contains(&y) {
@@ -743,7 +758,7 @@ pub(super) fn price_all(s: &mut Session, st: &Map<String, Value>) -> Result<(Vec
 }
 
 /// Price the lines of a BOM (`bim.bom`'s result).
-fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
+pub(super) fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let lines = bom["lines"].as_array().cloned().unwrap_or_default();
     let crew = setting(st, "crew_rate", 0.0);
     let today_str = st.get("settings").and_then(|x| x["today"].as_str()).unwrap_or_default().to_string();
@@ -755,6 +770,10 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
     let price_map: Map<String, Value> = st.get("price_map").and_then(Value::as_object).cloned().unwrap_or_default();
     // Q6012: starter cost book as fallback when no user/baseline price matches.
     let starter: Vec<Value> = starter_prices();
+    // The material price book (recent dated prices: shipped, and this machine's), before the
+    // starter book; `settings.pricebook: false` leaves it out.
+    let settings = st.get("settings").cloned().unwrap_or(json!({}));
+    let pbook = (settings["pricebook"].as_bool() != Some(false)).then(|| super::pricebook::load(settings["pricebook_folder"].as_str()));
     // Q5301: exact match → family match (never crossing system/material/size) → None.
     let find_in = |pool: &[Value], item: &str, size: &str, unit: &str, category: &str, system: &str| -> Option<(usize, &'static str)> {
         // 1. Exact: item+size match.
@@ -906,46 +925,73 @@ fn price_lines(st: &Map<String, Value>, bom: &Value) -> (Vec<Priced>, f64) {
                                 book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
                             }
                         }
-                        // Q6012: try the starter cost book before giving up.
-                        None => match find_in(&starter, item, size, &unit, category, system) {
-                            Some((si, kind)) => {
-                                let sp = &starter[si];
-                                pr.via = if kind == "family" {
-                                    let ri = sp["item"].as_str().unwrap_or_default();
-                                    format!("priced by family row: {ri} — {STARTER_SOURCE}")
-                                } else {
-                                    STARTER_SOURCE.to_string()
-                                };
-                                pr.match_kind = if kind == "family" { "starter_family" } else { "starter_book" };
-                                let m = sp["material"].as_f64().unwrap_or(0.0);
-                                let h = sp["labor_hours"].as_f64();
-                                pr.material_unit = Some(m);
-                                book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
-                            }
-                            None => {
-                                // Q6020: nearest row is a SUGGESTION, never applied silently.
-                                if let Some(near) = find_price_by_words(&prices, item, &unit, category, system)
-                                    .or_else(|| find_price_by_words(&starter, item, &unit, category, system))
+                        // The price book, then the starter cost book, before giving up.
+                        None => match pbook.as_ref().and_then(|b| super::pricebook::lookup(b, item, size, &unit)) {
+                            Some(super::pricebook::Found::Priced { material, parts, date }) => {
+                                pr.via = format!("price book: {}", super::pricebook::source_text(&parts));
+                                pr.match_kind = "price_book";
+                                if let (Some(t), Some(d)) = (today, parse_date(&date))
+                                    && (t - d) as f64 > stale
                                 {
-                                    let ni = near["item"].as_str().unwrap_or_default();
-                                    let ns = near["size"].as_str().unwrap_or_default();
-                                    let near_desc = if ns.is_empty() { ni.to_string() } else { format!("{ni} {ns}") };
-                                    let item_desc = if size.is_empty() { item.to_string() } else { format!("{item} {size}") };
                                     pr.issues.push((
-                                        "unpriced",
-                                        format!(
-                                            "{item_desc} has no price; nearest row: {near_desc} \u{2014} estimate.set_price or estimate.map_price"
-                                        ),
-                                        "estimate.set_price or estimate.map_price".into(),
-                                    ));
-                                } else {
-                                    pr.issues.push((
-                                        "unpriced",
-                                        "no assembly and no price".into(),
-                                        "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
+                                        "stale_price",
+                                        format!("price book dated {date} ({} days old)", t - d),
+                                        "update the price (pricebook.set or pricebook.import)".into(),
                                     ));
                                 }
+                                pr.material_unit = Some(material);
+                                // Its labor: the starter book's for the item (the price book holds material).
+                                book = find_in(&starter, item, size, &unit, category, system)
+                                    .and_then(|(si, _)| starter[si]["labor_hours"].as_f64())
+                                    .or_else(|| base["items"][item]["labor"]["normal"].as_f64());
                             }
+                            Some(super::pricebook::Found::Excluded(why)) => {
+                                pr.via = format!("excluded in the price book: {why}");
+                                pr.match_kind = "price_book";
+                                if pr.scope.is_none() {
+                                    pr.scope = Some("nic".into());
+                                }
+                            }
+                            None => match find_in(&starter, item, size, &unit, category, system) {
+                                Some((si, kind)) => {
+                                    let sp = &starter[si];
+                                    pr.via = if kind == "family" {
+                                        let ri = sp["item"].as_str().unwrap_or_default();
+                                        format!("priced by family row: {ri} — {STARTER_SOURCE}")
+                                    } else {
+                                        STARTER_SOURCE.to_string()
+                                    };
+                                    pr.match_kind = if kind == "family" { "starter_family" } else { "starter_book" };
+                                    let m = sp["material"].as_f64().unwrap_or(0.0);
+                                    let h = sp["labor_hours"].as_f64();
+                                    pr.material_unit = Some(m);
+                                    book = h.or_else(|| base["items"][item]["labor"]["normal"].as_f64());
+                                }
+                                None => {
+                                    // Q6020: nearest row is a SUGGESTION, never applied silently.
+                                    if let Some(near) = find_price_by_words(&prices, item, &unit, category, system)
+                                        .or_else(|| find_price_by_words(&starter, item, &unit, category, system))
+                                    {
+                                        let ni = near["item"].as_str().unwrap_or_default();
+                                        let ns = near["size"].as_str().unwrap_or_default();
+                                        let near_desc = if ns.is_empty() { ni.to_string() } else { format!("{ni} {ns}") };
+                                        let item_desc = if size.is_empty() { item.to_string() } else { format!("{item} {size}") };
+                                        pr.issues.push((
+                                            "unpriced",
+                                            format!(
+                                                "{item_desc} has no price; nearest row: {near_desc} \u{2014} estimate.set_price or estimate.map_price"
+                                            ),
+                                            "estimate.set_price or estimate.map_price".into(),
+                                        ));
+                                    } else {
+                                        pr.issues.push((
+                                            "unpriced",
+                                            "no assembly and no price".into(),
+                                            "map an assembly (estimate.set_assembly) or add a price (estimate.set_price)".into(),
+                                        ));
+                                    }
+                                }
+                            },
                         },
                     }
                 }
@@ -1404,6 +1450,51 @@ fn run_explain(s: &mut Session, p: &Value) -> Result<Value> {
         }));
     }
     Err(bad("estimate.explain", "give a `line` key or `total: true`"))
+}
+
+/// Most lines one change prices.
+const MAX_CHANGE_LINES: usize = 200;
+
+fn run_change(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "estimate.change";
+    let lines = p.get("lines").and_then(Value::as_array).filter(|l| !l.is_empty()).ok_or_else(|| bad(C, "`lines` is required: [{item, qty}]"))?;
+    let (_, st) = state(s, C)?;
+    let mut out = Vec::new();
+    let (mut material, mut hours, mut labor, mut cost) = (0.0, 0.0, 0.0, 0.0);
+    let mut unpriced = Vec::new();
+    for l in lines.iter().take(MAX_CHANGE_LINES) {
+        let g = |k: &str, d: &str| l.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).unwrap_or(d).to_string();
+        let item = g("item", "");
+        let qty = l.get("qty").and_then(Value::as_f64).filter(|q| q.is_finite() && q.abs() <= 1e9).unwrap_or(0.0);
+        if item.is_empty() || qty == 0.0 {
+            return Err(bad(C, format!("each line needs an item and a qty: {l}")));
+        }
+        let line = json!({
+            "trade": g("trade", "electrical"), "category": g("category", ""), "item": item, "size": g("size", ""),
+            "unit": g("unit", "each"), "total": qty.abs(), "net": qty.abs(),
+        });
+        let (priced, _) = price_lines(&st, &json!({ "lines": [line] }));
+        let sign = qty.signum();
+        let Some(pr) = priced.first() else { continue };
+        let ok = !pr.match_kind.is_empty();
+        if !ok {
+            unpriced.push(format!("{item} {}", g("size", "")).trim().to_string());
+        }
+        material += sign * pr.material;
+        hours += sign * pr.labor_hours;
+        labor += sign * pr.labor_cost;
+        cost += sign * pr.cost;
+        out.push(json!({
+            "item": item, "size": g("size", ""), "qty": qty, "material": sign * pr.material, "labor_hours": sign * pr.labor_hours,
+            "labor_cost": sign * pr.labor_cost, "cost": sign * pr.cost, "via": pr.via, "priced": ok,
+        }));
+    }
+    Ok(json!({
+        "lines": out,
+        "totals": {"material": material, "labor_hours": hours, "labor_cost": labor, "cost": cost},
+        "unpriced": unpriced,
+        "why": p.get("why").cloned().unwrap_or(Value::Null),
+    }))
 }
 
 fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
@@ -2019,6 +2110,23 @@ mod tests {
     }
 
     #[test]
+    fn a_change_is_priced_line_by_line_a_removal_negative() {
+        let mut s = Session::new();
+        job(&mut s);
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-10-21", "pricebook": false })).unwrap();
+        let c = s
+            .execute("estimate.change", &json!({"lines": [{"item": "GFCI receptacle", "qty": 3}, {"item": "Duplex receptacle", "qty": -3}]}))
+            .unwrap();
+        // The starter book: GFCI 19.00 + 0.50 h, duplex 2.50 + 0.40 h.
+        let m = c["totals"]["material"].as_f64().unwrap_or(0.0);
+        let h = c["totals"]["labor_hours"].as_f64().unwrap_or(0.0);
+        assert!((m - 3.0 * (19.0 - 2.5)).abs() < 0.01, "{c}");
+        assert!((h - 3.0 * (0.5 - 0.4)).abs() < 0.01, "{c}");
+        assert!(c["lines"][1]["material"].as_f64().unwrap_or(0.0) < 0.0);
+        assert!(s.execute("estimate.change", &json!({"lines": [{"item": "", "qty": 1}]})).is_err());
+    }
+
+    #[test]
     fn starter_book_prices_a_model_with_no_user_costs() {
         let mut s = Session::new();
         job(&mut s);
@@ -2040,6 +2148,70 @@ mod tests {
         assert!(!f.is_empty(), "should have a starter_cost_book finding: {st}");
         // Totals should be > 0 (the estimate is not $0 any more).
         assert!(st["totals"]["total"].as_f64().unwrap_or(0.0) > 0.0, "total should be > 0: {st}");
+    }
+
+    #[test]
+    fn the_price_book_prices_a_line_and_takes_a_newer_quote() {
+        let mut s = Session::new();
+        job(&mut s);
+        let dir = std::env::temp_dir().join(format!("cadaddy-pricebook-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let folder = dir.to_string_lossy().to_string();
+        s.execute("estimate.settings", &json!({ "crew_rate": 75, "today": "2026-11-02", "pricebook_folder": folder })).unwrap();
+        s.execute("estimate.set_scope", &json!({ "trade": "electrical", "scope": "in_contract", "reason": "ours" })).unwrap();
+        let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+        let line = q["lines"].as_array().unwrap().iter().find(|l| l["unit"].as_str() == Some("each")).cloned().expect("a counted line");
+        let item = line["item"].as_str().unwrap().to_string();
+        let size = line["size"].as_str().unwrap_or_default().to_string();
+        s.execute("pricebook.set", &json!({"key": "testkey", "unit_price": 12.5, "unit": "each", "vendor": "Test Supply", "location": "North", "date": "2026-10-01", "folder": folder})).unwrap();
+        s.execute("pricebook.map", &json!({"item": item, "size": size, "keys": ["testkey"], "folder": folder})).unwrap();
+        let via = |s: &mut Session| {
+            let q = s.execute("estimate.query", &json!({ "limit": 200 })).unwrap();
+            let l = q["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|l| l["item"].as_str() == Some(item.as_str()) && l["size"].as_str().unwrap_or_default() == size)
+                .cloned()
+                .unwrap();
+            l["via"].as_str().unwrap_or_default().to_string()
+        };
+        assert!(via(&mut s).starts_with("price book: testkey $12.5000 Test Supply (North) 2026-10-01 QUOTE"), "{}", via(&mut s));
+        // The same vendor and location's newer quote replaces it; the old one is kept in the history.
+        let r = s
+            .execute(
+                "pricebook.set",
+                &json!({"key": "testkey", "unit_price": 14.0, "vendor": "Test Supply", "location": "North", "date": "2026-11-01", "folder": folder}),
+            )
+            .unwrap();
+        assert_eq!(r["replaced"]["unit_price"], json!(12.5), "{r}");
+        assert_eq!(r["quotes"], json!(1));
+        assert!(std::fs::read_to_string(dir.join("history.csv")).unwrap().contains("12.5"));
+        // Another vendor's quote sits beside it; the lowest is the price, the spread said.
+        let r = s
+            .execute(
+                "pricebook.set",
+                &json!({"key": "testkey", "unit_price": 13.0, "vendor": "Other Supply", "date": "2026-11-02", "folder": folder}),
+            )
+            .unwrap();
+        assert_eq!(r["quotes"], json!(2), "{r}");
+        let v = via(&mut s);
+        assert!(v.contains("Other Supply") && v.contains("of 2 ($13.0000-$14.0000)"), "{v}");
+        // An import older than what a vendor's quote holds is kept out; a new key is added.
+        let csv = dir.join("old.csv");
+        std::fs::write(&csv, "key,description,unit,unit price $,source type,vendor / book,location,price date\ntestkey,old,each,9.99,QUOTE,Test Supply,North,2026-01-01\nnewkey,new item,each,3.00,WEB,Some Store,,2026-11-02\n").unwrap();
+        let r = s.execute("pricebook.import", &json!({"path": csv.to_string_lossy(), "folder": folder})).unwrap();
+        assert_eq!(r["quotes"], json!({"added": 1, "updated": 0, "kept_newer": 1}), "{r}");
+        let list = s.execute("pricebook.list", &json!({"search": "testkey", "folder": folder})).unwrap();
+        assert_eq!(list["keys"][0]["price"]["unit_price"], json!(13.0), "{list}");
+        assert_eq!(list["keys"][0]["quotes"].as_array().map(Vec::len), Some(2));
+        // The rule: a vendor's quote.
+        s.execute("pricebook.settings", &json!({"pick": "vendor", "vendor": "Test Supply", "folder": folder})).unwrap();
+        assert!(via(&mut s).contains("Test Supply's quote"), "{}", via(&mut s));
+        // Off, the line goes back to the other books.
+        s.execute("estimate.settings", &json!({ "pricebook": false })).unwrap();
+        assert!(!via(&mut s).starts_with("price book"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

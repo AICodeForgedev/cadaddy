@@ -8,19 +8,21 @@
 //!   tree, Level ▸ Trade ▸ Category ▸ Type ▸ element; a branch shown or hidden, selected and
 //!   zoomed to.
 //! - `bim.element {handle?, open_source?}`: one element's properties (type, size, level,
-//!   system, circuit, quantity, source sheet and spot, linked issues); `open_source` goes to it
-//!   on the sheet.
+//!   system, circuit, quantity, source sheet and spot, linked issues) and where it is (plan
+//!   point, bottom and top, height above its floor, host wall and face); `open_source` goes to
+//!   it on the sheet.
 //!
 //! The settings live in the building spec (`bim_view`). [`display`] is what the 3D view and
 //! `model.render` draw: a drawing holding only the built model (the objects shared, not
 //! copied), its layers coloured by trade, the ghosted trades see-through.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use cadaddy_doc::color::Color;
 use cadaddy_doc::{Drawing, Entity, EntityKind, Handle};
 use cadaddy_geom::Vec3;
+use cadaddy_walk3d::validate::{ModelWall, WallSpan};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -207,6 +209,26 @@ pub fn made_tag<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
     })
 }
 
+/// The value of property `key` a build wrote on an element (`prop:STATUS=proposed`).
+pub fn made_prop<'a>(e: &'a Entity, key: &str) -> Option<&'a str> {
+    made_tags(e)?.iter().filter(|t| t.code == 1000).find_map(|t| {
+        let (k, v) = t.value.strip_prefix("prop:")?.split_once('=')?;
+        k.trim().eq_ignore_ascii_case(key).then_some(v.trim())
+    })
+}
+
+/// Whether a build proposed an element only a rule or a note calls for, no document drawing it
+/// (`prop:STATUS=proposed`): it is not counted as drawn.
+pub fn made_proposed(e: &Entity) -> bool {
+    made_prop(e, "STATUS").is_some_and(|v| v.eq_ignore_ascii_case("proposed"))
+}
+
+/// Whether a build proposed an element only a rule calls for (`prop:NOT_DRAWN=…`): no document
+/// draws or names it, so it is no evidence the documents' kind is in the model.
+pub fn made_by_rule_only(e: &Entity) -> bool {
+    made_proposed(e) && made_prop(e, "NOT_DRAWN").is_some()
+}
+
 /// The plan object a built element was made from.
 pub fn made_source(e: &Entity) -> Option<Handle> {
     let h = made_tags(e)?.get(2).and_then(|t| u64::from_str_radix(t.value.trim(), 16).ok())?;
@@ -321,6 +343,21 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
             "equipment" => ("equipment", "Equipment"),
             _ => ("equipment", "Equipment"),
         };
+        // A piece of a run (Q6157): its category by what it is, its type what it is bought as.
+        if let Some(piece) = mpart.strip_prefix("atom:") {
+            let category = match piece {
+                "conduit" => noun.to_string(),
+                "box" | "ring" => "Boxes".into(),
+                "breaker" => "Breakers".into(),
+                "strap" => format!("{noun} Supports"),
+                "cable" => "Cable".into(),
+                "wire" => "Wire".into(),
+                "bend" => format!("{noun} Bends"),
+                _ => format!("{noun} Fittings"),
+            };
+            let ty = own_type.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| title(piece));
+            return mk(key, &category, sized(&ty));
+        }
         if let Some(term) = mpart.strip_prefix("terminal:") {
             let (key, cat) = match kind.as_str() {
                 "duct" => ("terminals", "Air Terminals"),
@@ -339,6 +376,17 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
     }
     let p = part.to_ascii_lowercase();
     let typed = |fallback: &str| own_type.clone().filter(|t| !t.is_empty()).unwrap_or_else(|| fallback.to_string());
+    // A trade's piece (Q6162): under its trade, by what it is, its type what it is bought as.
+    if p == "atom" {
+        let trade = made_tag(e, "trade").unwrap_or("other").to_string();
+        let kind = made_tag(e, "part").and_then(|x| x.strip_prefix("atom:")).unwrap_or("piece").replace('_', " ");
+        let key = match trade.as_str() {
+            "concrete" | "framing" | "masonry" => "structure",
+            "openings" => "openings",
+            _ => "architecture",
+        };
+        return mk(key, &format!("{} {}", title(&trade), title(&kind)), typed(&title(&kind)));
+    }
     match p.as_str() {
         "wall" => mk("architecture", "Walls", typed("Wall")),
         "floor" => mk("architecture", "Floors", typed("Floor")),
@@ -374,6 +422,46 @@ pub fn classify(d: &Drawing, e: &Entity) -> Option<Class> {
         _ if layer.contains("STRUCT") || layer.contains("COLUMN") => mk("structure", &title(&p), typed(&title(&p))),
         _ => mk("architecture", &title(&p), typed(&title(&p))),
     }
+}
+
+/// What a model element the build didn't make is: a room volume (`rooms.build`) of a room the
+/// model doesn't hold as a room element, or an object read from IFC. `bim_props find` lists them
+/// ([`super::elemprops::elements`]), so `bim.tree` and `bim.element` take them too: one meaning
+/// of "model element" for all three.
+fn classify_other(e: &Entity) -> Option<Class> {
+    let (kind, name, level) = match super::rooms3d::room_of(&e.common) {
+        Some(name) => ("room", name, String::new()),
+        None => {
+            let t = super::ifcref::tag(e)?;
+            (cadaddy_doc::props::kind_of_ifc_class(&t.class), t.name, t.level.unwrap_or_default())
+        }
+    };
+    let (key, category) = match kind {
+        "wall" => ("architecture", "Walls"),
+        "floor" => ("architecture", "Floors"),
+        "ceiling" => ("architecture", "Ceilings"),
+        "roof" => ("architecture", "Roofs"),
+        "room" => ("architecture", "Rooms"),
+        "door" => ("openings", "Doors"),
+        "window" => ("openings", "Windows"),
+        "duct" => ("duct", "Duct"),
+        "pipe" => ("pipe", "Pipe"),
+        "conduit" => ("conduit", "Conduit"),
+        "light_fixture" => ("lights", "Light Fixtures"),
+        "fixture" => ("fixtures", "Plumbing Fixtures"),
+        "device" => ("devices", "Devices"),
+        "equipment" => ("equipment", "Equipment"),
+        _ => ("architecture", "Elements"),
+    };
+    let group = trade(key).map_or("Architecture", |t| t.group);
+    let ty = if name.trim().is_empty() { title(kind) } else { name.trim().to_string() };
+    Some(Class { key, group, category: category.into(), ty, level })
+}
+
+/// The model's elements with what each is: those `bim_props find` lists, so every handle it
+/// returns opens in `bim.element` and `bim.tree` totals the same.
+fn model_elements(d: &Drawing) -> impl Iterator<Item = (&Arc<Entity>, Class)> {
+    super::elemprops::elements(d).filter_map(move |(e, _)| classify(d, e).or_else(|| classify_other(e)).map(|c| (e, c)))
 }
 
 // ─── The drawing the view draws ──────────────────────────────────────────────
@@ -522,7 +610,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new("bim.element", "Element Properties", run_element)
             .params(
-                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}]}",
+                "{handle? (default the one selected), open_source?: bool (plan view, zoomed to its source on the sheet, the source selected)} → {handle, trade, group, category, type, size, level, system, circuit, quantity: {count, length_ft?, area_sf?, height_ft?}, source: {handle, kind, layer, at, sheet?, sheet_file?}, attributes, issues: [{kind: bcf|rfi, guid|id, title, status}], at: [x,y] (building feet on its level's plan), bottom_ft, top_ft (above the datum), aff_in, center_aff_in, top_aff_in (above its level's floor), at_ceiling, host: {wall, type, face, off_face_in, off_centreline_in, thickness_in, along_ft, from: stored|nearest} | null (when hosted: its stored host wall's face, else the face of a wall there at its height, within the G-HOST tolerance), in_opening? (on the face line of a wall piece over an opening, below it: that face + wall_from_aff_in, wall_to_aff_in), stored_host? (its stored host wall is not among its level's built walls), nearest_wall (within 10 ft; a wall: itself, measured from its longest piece, `at` that piece's middle), wall_unmeasured? (a wall whose footprint gives no centreline: why), form: {kind, template, trade, project, required, filled, missing: [key], conflicts: [key], fields: [{key, required, status: documented|derived|default|conflict|missing|n/a, value?, unit?, source?, from_key?, reason?, check?}]} (its kind's object form, bim.forms)}",
             )
             .noundo(),
     ]
@@ -774,8 +862,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
         }
         if bool_or(p, "select", false) || bool_or(p, "zoom", false) {
             let d = s.doc()?;
-            let hs: Vec<Handle> =
-                d.model.iter().take(MAX_SCAN).filter(|e| classify(d, e).is_some_and(|c| under(path, &c))).map(|e| e.handle).collect();
+            let hs: Vec<Handle> = model_elements(d).filter(|(_, c)| under(path, c)).map(|(e, _)| e.handle).collect();
             if hs.is_empty() {
                 return Err(bad(CMD, format!("nothing in the model is under {path:?}")));
             }
@@ -810,8 +897,7 @@ fn run_tree(s: &mut Session, p: &Value) -> Result<Value> {
     let look = Look::of(d);
     let mut tree: BTreeMap<String, Groups> = BTreeMap::new();
     let mut total = 0usize;
-    for e in d.model.iter().take(MAX_SCAN) {
-        let Some(c) = classify(d, e) else { continue };
+    for (e, c) in model_elements(d) {
         let ok = |f: Option<&str>, v: &str| f.is_none_or(|f| f.eq_ignore_ascii_case(v));
         if !(ok(fl, &c.level) && ok(fg, c.group) && ok(fc, &c.category) && ok(ft, &c.ty)) {
             continue;
@@ -880,21 +966,36 @@ fn span(pts: &[Vec3], flat: bool) -> f64 {
     if d.is_finite() { d } else { 0.0 }
 }
 
-fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
+pub(crate) fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
+    // A piece of a run knows its own length (a bent stick's, a cable's along its path).
+    if super::mepatoms::is_atom(e)
+        && let Some(l) =
+            cadaddy_doc::props::read(&e.common.xdata).get("length_ft").and_then(|p| p.text().parse::<f64>().ok()).filter(|v| v.is_finite())
+    {
+        return json!({ "count": 1, "length_ft": (l * 100.0).round() / 100.0 });
+    }
     let EntityKind::Mesh(m) = &e.kind else { return json!({ "count": 1 }) };
     let pts: Vec<Vec3> = m.vertices.iter().take(200_000).copied().filter(|p| p.is_finite()).collect();
     let (z0, z1) = pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.z), hi.max(p.z)));
     let height = if z1 >= z0 { z1 - z0 } else { 0.0 };
     let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
     let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    // Its plan area: its faces facing up, or (a ceiling drawn as one face seen from below) down,
+    // whichever there is more of. Never -0 (an empty sum of floats).
     let up_area = || {
-        m.triangles()
-            .into_iter()
-            .take(400_000)
-            .map(|t| (t[1] - t[0]).cross(t[2] - t[0]))
-            .filter(|n| n.is_finite() && n.len() > 0.0 && (n.z / n.len()) > 0.7)
-            .map(|n| n.len() * 0.5)
-            .sum::<f64>()
+        let (mut up, mut down) = (0.0_f64, 0.0_f64);
+        for n in m.triangles().into_iter().take(400_000).map(|t| (t[1] - t[0]).cross(t[2] - t[0])) {
+            if !n.is_finite() || n.len() <= 0.0 {
+                continue;
+            }
+            let k = n.z / n.len();
+            if k > 0.7 {
+                up += n.len() * 0.5;
+            } else if k < -0.7 {
+                down += n.len() * 0.5;
+            }
+        }
+        up.max(down).max(0.0)
     };
     match c.category.as_str() {
         "Walls" | "Parapets" | "Railings" | "Curtain Walls" => {
@@ -909,6 +1010,115 @@ fn quantity(c: &Class, e: &Entity, upf: f64) -> Value {
     }
 }
 
+/// Categories that are not hosted by a wall (the walls themselves, slabs, runs, structure).
+const UNHOSTED: [&str; 19] = [
+    "Wall", "Floor", "Ceiling", "Soffit", "Roof", "Room", "Site", "Grid", "Parapet", "Railing", "Stair", "Column", "Beam", "Footing", "Brace",
+    "Duct", "Pipe", "Conduit", "Cable",
+];
+
+/// Where a built element is, so an agent can check its position without reading meshes: its
+/// plan point (`at`, building feet on its level's plan), its bottom and top (`bottom_ft`,
+/// `top_ft`: feet above the building's datum), its bottom, centre and top above its level's
+/// floor (`aff_in`, `center_aff_in`, `top_aff_in`), whether it reaches the ceiling, and its host
+/// wall: the wall face nearest it within the G-HOST tolerance (`host`; none for runs, slabs,
+/// structure and what hangs at the ceiling), and the nearest wall within 10 ft whatever it is
+/// (`nearest_wall`, the face's side and the distance off it, inches, negative inside the wall).
+fn placement(s: &Session, e: &Entity, c: &Class) -> serde_json::Map<String, Value> {
+    const CMD: &str = "bim.element";
+    let mut out = serde_json::Map::new();
+    let (Ok(d), Ok((sp, _))) = (s.doc(), super::bspec::current(s, CMD)) else { return out };
+    let frame = super::validate::Frame::of_spec(d, &sp);
+    let upf = frame.upf();
+    let b = cadaddy_doc::entity_bounds(d, e, 0);
+    if b.is_empty() {
+        return out;
+    }
+    let r2 = |v: f64| if v.is_finite() { (v * 100.0).round() / 100.0 } else { 0.0 };
+    let at = frame.built_on(&c.level, e, b.center());
+    out.insert("at".into(), json!([r2(at[0]), r2(at[1])]));
+    let z = match &e.kind {
+        EntityKind::Mesh(m) => {
+            let (z0, z1) = m
+                .vertices
+                .iter()
+                .take(1_000_000)
+                .filter(|p| p.z.is_finite())
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
+            (z0 <= z1).then_some((z0, z1))
+        }
+        EntityKind::Insert(i) if i.insert.z.is_finite() => Some((i.insert.z, i.insert.z)),
+        _ => None,
+    };
+    let level = sp.level(&c.level);
+    let floor = level.map_or(0.0, |l| l.elevation_ft);
+    let ceiling = level.map(|l| if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }).filter(|c| c.is_finite() && *c > 0.0);
+    let mut at_ceiling = false;
+    if let Some((z0, z1)) = z {
+        let (bot, top) = (z0 / upf, z1 / upf);
+        let (aff, top_aff) = ((bot - floor) * 12.0, (top - floor) * 12.0);
+        out.insert("bottom_ft".into(), json!(r2(bot)));
+        out.insert("top_ft".into(), json!(r2(top)));
+        out.insert("aff_in".into(), json!(r2(aff)));
+        out.insert("center_aff_in".into(), json!(r2((aff + top_aff) / 2.0)));
+        out.insert("top_aff_in".into(), json!(r2(top_aff)));
+        at_ceiling = ceiling.is_some_and(|c| top_aff >= c * 12.0 - 12.0 && aff > 12.0);
+        out.insert("at_ceiling".into(), json!(at_ceiling));
+    }
+    let hostable = !UNHOSTED.iter().any(|k| c.category.contains(k)) && !at_ceiling;
+    let search = super::validate_prescreen::HOST_SEARCH_FT;
+    // A built wall: measured from its own longest piece, so its nearest wall is itself (its
+    // box's centre may lie in the opening under its header).
+    if let (Some("wall"), EntityKind::Mesh(mesh)) = (super::wallgen::made_as(e).as_deref(), &e.kind) {
+        let studs = HashMap::new();
+        let own = super::validate::mesh_walls(e, mesh, &frame, Some(&c.level), &studs);
+        let len = |w: &&ModelWall| (w.b[0] - w.a[0]).hypot(w.b[1] - w.a[1]);
+        let longest = own
+            .walls
+            .iter()
+            .max_by(|a, b| len(a).total_cmp(&len(b)))
+            .or_else(|| own.spans.iter().map(|s| &s.wall).max_by(|a, b| len(a).total_cmp(&len(b))));
+        if let Some(w) = longest {
+            let mid = [(w.a[0] + w.b[0]) / 2.0, (w.a[1] + w.b[1]) / 2.0];
+            out.insert("at".into(), json!([r2(mid[0]), r2(mid[1])]));
+            let near = super::validate_prescreen::nearest_wall(mid, own.walls.iter().chain(own.spans.iter().map(|s| &s.wall)), search);
+            out.insert("host".into(), Value::Null);
+            out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
+            return out;
+        }
+        if let Some(u) = own.unmeasured.first() {
+            out.insert("wall_unmeasured".into(), json!(u.why));
+        }
+    }
+    let pieces = super::validate::walls_near(d, &sp, &frame, &c.level, [at[0], at[1], at[0], at[1]], search);
+    let walls: Vec<&ModelWall> = pieces.walls.iter().collect();
+    let spans: Vec<&WallSpan> = pieces.spans.iter().collect();
+    let near = super::validate_prescreen::nearest_wall(at, walls.iter().copied().chain(spans.iter().map(|s| &s.wall)), search);
+    let tol = super::validate_rules::effective(&d.project_rules)
+        .ok()
+        .and_then(|(rs, _)| rs.into_iter().find(|r| r.rule.id == "G-HOST").and_then(|r| r.rule.tolerance.get("plan_in").copied()))
+        .unwrap_or(6.0);
+    let center = out.get("center_aff_in").and_then(Value::as_f64);
+    let stored = super::validate::stored_host(e);
+    let h = super::validate_prescreen::host_of(at, center, stored.as_deref(), &walls, &spans, tol);
+    let host = h.face.as_ref().filter(|f| hostable && h.opening.is_none() && f.off_face_in.abs() <= tol).map(|f| {
+        let mut j = f.to_json();
+        j["from"] = json!(h.from);
+        j
+    });
+    out.insert("host".into(), host.unwrap_or(Value::Null));
+    if let (true, Some((f, bottom, top))) = (hostable, &h.opening) {
+        let mut j = f.to_json();
+        j["wall_from_aff_in"] = json!(r2(*bottom));
+        j["wall_to_aff_in"] = json!(r2(*top));
+        out.insert("in_opening".into(), j);
+    }
+    if let Some(m) = &h.stored_missing {
+        out.insert("stored_host".into(), json!({"wall": m, "why": "not among the built walls of its level"}));
+    }
+    out.insert("nearest_wall".into(), near.map_or(Value::Null, |f| f.to_json()));
+    out
+}
+
 fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "bim.element";
     let hs = targets(s, p)?;
@@ -919,7 +1129,9 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let d = s.doc()?;
     let e = d.model.get(h).cloned().ok_or_else(|| bad(CMD, format!("there is no object {} in the model", h.hex())))?;
-    let c = classify(d, &e).ok_or_else(|| bad(CMD, format!("{} is not part of the built model (run model.build / bim.build)", h.hex())))?;
+    let c = classify(d, &e)
+        .or_else(|| model_elements(d).find(|(x, _)| x.handle == h).map(|(_, c)| c))
+        .ok_or_else(|| bad(CMD, format!("{} is not part of the built model (run model.build / bim.build)", h.hex())))?;
     let upf = super::bspec::current(s, CMD).map(|(sp, _)| sp.units_per_foot).unwrap_or(12.0);
     let d = s.doc()?;
     let src = made_source(&e).and_then(|sh| d.model.get(sh).cloned());
@@ -985,7 +1197,9 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    let out = json!({
+    let place = placement(s, &e, &c);
+    let piece = super::mepatoms::element_detail(s.doc()?, &e, upf);
+    let mut out = json!({
         "handle": hex,
         "trade": c.key,
         "trade_label": trade(c.key).map_or("", |t| t.label),
@@ -1001,6 +1215,25 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         "attributes": attributes,
         "issues": issues,
     });
+    if let Some(o) = out.as_object_mut() {
+        o.extend(place);
+    }
+    // A piece of a run: what it is, its run, circuit and neighbours; a device: its box and what
+    // feeds it, and how its face stands off its wall's (Q6157).
+    if let Some(Value::Object(x)) = piece {
+        let atom = x.contains_key("connects");
+        if let Some(o) = out.as_object_mut() {
+            if atom {
+                o.insert("piece".into(), Value::Object(x));
+            } else {
+                o.extend(x);
+            }
+        }
+    }
+    // Its kind's form: each field's value, status and source (Q6173).
+    if let Some(f) = super::forms::element_form(s.doc()?, &e) {
+        out["form"] = f;
+    }
     if bool_or(p, "open_source", false) {
         let Some(se) = src else { return Err(bad(CMD, format!("{hex} has no source object on the sheet"))) };
         let b = cadaddy_doc::entity_bounds(s.doc()?, &se, 0);
@@ -1017,4 +1250,26 @@ fn run_element(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(out);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod quantity_tests {
+    use super::*;
+
+    #[test]
+    fn a_ceiling_drawn_as_one_face_from_below_has_its_area() {
+        // A 10' x 12' ceiling (inches) facing down, and an empty mesh: 120 sf, and 0 (not -0).
+        let sq = [(0.0, 0.0), (0.0, 144.0), (120.0, 144.0), (120.0, 0.0)].map(|(x, y)| Vec3::new(x, y, 108.0));
+        let m = cadaddy_doc::Mesh {
+            vertices: sq.to_vec(),
+            faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }],
+            kind: cadaddy_doc::MeshKind::Polyface,
+        };
+        let class = Class { key: "ceiling", group: "architecture", category: "Ceilings".into(), ty: String::new(), level: String::new() };
+        let q = quantity(&class, &Entity::new(Handle(1), EntityKind::Mesh(m)), 12.0);
+        assert_eq!(q["area_sf"], json!(120.0), "{q}");
+        let empty = cadaddy_doc::Mesh { vertices: Vec::new(), faces: Vec::new(), kind: cadaddy_doc::MeshKind::Polyface };
+        let q = quantity(&class, &Entity::new(Handle(2), EntityKind::Mesh(empty)), 12.0);
+        assert!(q["area_sf"].as_f64().is_some_and(|a| a == 0.0 && a.is_sign_positive()), "{q}");
+    }
 }

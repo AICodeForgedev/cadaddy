@@ -20,7 +20,7 @@ fn rpc(s: &mut Server, method: &str, params: Value) -> Value {
     serde_json::from_str(&s.handle_line(&line).expect("a reply")).expect("JSON")
 }
 
-/// The real file formats, as `cadaddy-cli` installs them.
+/// The real file formats (and the writer for a chosen version), as `cadaddy-cli` installs them.
 fn io() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
     set_io(IoHooks {
@@ -30,6 +30,9 @@ fn io() {
         read_pdf: Some(cadaddy_io::pdf_read::read_json),
         read_dwf: None,
         write_dwfx: None,
+    });
+    cadaddy_engine::cmd::file::set_write_as(|d, name, o| {
+        cadaddy_io::write_with(d, name, &cadaddy_io::SaveOptions { version: o.version, binary: o.binary }).map_err(|e| e.to_string())
     });
 }
 
@@ -227,4 +230,43 @@ fn a_call_that_changes_the_drawing_is_not_repeated_after_a_lost_answer() {
     assert_eq!(got.lock().unwrap().iter().filter(|m| *m == "engine.execute").count(), 1);
     // The next call reconnects.
     assert_eq!(r.call("cmdline.state", json!({})).unwrap(), json!("cmdline.state"));
+}
+
+/// B11-001: `save` lists `version` and `binary`, and a versioned or binary save writes what was
+/// asked without warning that it was ignored.
+#[test]
+fn save_takes_version_and_binary() {
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-saveversion-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = server();
+    let tools = rpc(&mut s, "tools/list", json!({}));
+    let save = tools["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == "save").unwrap().clone();
+    for k in ["version", "binary"] {
+        assert!(save["inputSchema"]["properties"][k]["description"].is_string(), "{k}: {save}");
+    }
+    tool(&mut s, "new_drawing", json!({"metric": true})).unwrap();
+    tool(&mut s, "execute", json!({"command": "circle", "params": {"center": [0, 0], "radius": 1}})).unwrap();
+    for (version, code) in [(json!("2000"), "AC1015"), (json!(2010), "AC1024")] {
+        for ext in ["dwg", "dxf"] {
+            let path = dir.join(format!("v{}.{ext}", code)).to_string_lossy().into_owned();
+            let r = tool(&mut s, "save", json!({"path": path, "version": version, "force": true})).unwrap();
+            assert!(!r.contains("is not a parameter"), "{r}");
+            let bytes = std::fs::read(&path).unwrap();
+            let text = String::from_utf8_lossy(&bytes);
+            let got = if ext == "dwg" {
+                text.get(..6).unwrap_or_default().to_string()
+            } else {
+                text.lines().skip_while(|l| l.trim() != "$ACADVER").nth(2).unwrap_or_default().trim().to_string()
+            };
+            assert_eq!(got, code, "{ext} {version}");
+        }
+    }
+    let path = dir.join("bin.dxf").to_string_lossy().into_owned();
+    let r = tool(&mut s, "save", json!({"path": path, "binary": true, "force": true})).unwrap();
+    assert!(!r.contains("is not a parameter"), "{r}");
+    assert!(std::fs::read(&path).unwrap().starts_with(b"AutoCAD Binary DXF"));
+    // A save to the drawing's own file keeps its version: a `version` there is refused, by name.
+    let (_, e) = tool(&mut s, "save", json!({"version": "2000"})).unwrap_err();
+    assert!(e.contains("`version`"), "{e}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

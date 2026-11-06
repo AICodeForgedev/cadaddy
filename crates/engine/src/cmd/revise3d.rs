@@ -520,6 +520,8 @@ fn paged(report: &Value, p: &Value) -> Value {
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "model.revise";
     if p.get("last").and_then(Value::as_bool).unwrap_or(false) {
+        // The last revision includes the one the plan's latest edits are waiting for.
+        wallgen::update_model(s);
         return match &s.state()?.last_revision {
             Some(r) => Ok(paged(r, p)),
             None => Err(bad(cmd, "no revision has found plan changes yet")),

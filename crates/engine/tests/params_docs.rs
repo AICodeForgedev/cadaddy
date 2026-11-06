@@ -306,21 +306,15 @@ fn agents_unknown_parameters_are_refused_and_the_apps_warned() {
 
 /// The commands whose documentation leaves their parameters open (agents' unknown keys pass):
 /// exactly these, so that a doc made open by accident (an ellipsis inside a nested value, as
-/// PLOT's `shade?: {…}` was) shows here and a new open one is a deliberate edit.
+/// PLOT's `shade?: {…}` was) shows here and a new open one is a deliberate edit. One where a value
+/// goes (`"A4"|"A3"|…`, `<layout>`, `2000…2018`) doesn't open a doc (battle test 7 B7-019).
 #[test]
 fn the_commands_with_open_parameters_are_these() {
     let open: Vec<&str> = cadaddy_engine::command_specs().iter().filter(|c| cadaddy_engine::takes_open_params(c)).map(|c| c.id).collect();
     let expected = [
-        "document.bytes",
-        "qselect",
         "dimoverride",
-        "dimedit",
-        "gradient",
         "xbind",
-        "bedit",
-        "blockify",
         "light.set",
-        "renderexposure",
         "material.edit",
         "wallgen",
         "estimate.set_price",
@@ -330,19 +324,11 @@ fn the_commands_with_open_parameters_are_these() {
         "ifc.elements",
         "printrev.compare",
         "rfi.export",
-        "imagetrace",
         "fourd.link",
         "array",
         "arrayclassic",
-        "symbol",
-        "part",
-        "getsel",
-        "group",
         "-group",
-        "pagesetup",
         "-plot",
-        "pdfimport",
-        "publish",
         "attach",
         "properties.set",
         "chprop",
@@ -350,15 +336,8 @@ fn the_commands_with_open_parameters_are_these() {
         "dimstyle",
         "dimstyle.dimension",
         "dimstyle.override",
-        "drawing.query",
-        "countlist",
-        "counttable",
-        "count",
         "options",
         "measuregeom",
-        "tabledit",
-        "field",
-        "markupimport",
         "wedge",
     ];
     assert_eq!(open, expected, "open parameter docs changed");

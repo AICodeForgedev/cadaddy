@@ -98,7 +98,9 @@ fn links_resolve_by_rules_and_by_hand() {
     let ducts = of(&s, "IfcDuctSegment", Some("M-DUCT-SUPP"));
     let pipes = of(&s, "IfcPipeSegment", None);
     let conduits = of(&s, "IfcCableCarrierSegment", None);
-    assert!(!walls.is_empty() && ducts.len() == 1 && pipes.len() == 1 && conduits.len() == 1, "{walls:?} {ducts:?} {pipes:?} {conduits:?}");
+    // The conduit run as its sticks (Q6157 mepatoms): one or more segments.
+    let c = conduits.len() as u64;
+    assert!(!walls.is_empty() && ducts.len() == 1 && pipes.len() == 1 && c >= 1, "{walls:?} {ducts:?} {pipes:?} {conduits:?}");
     let r = s.execute("fourd.import", &json!({"rows": rows()})).unwrap();
     assert_eq!(r["tasks"], 4, "{r}");
     assert_eq!(r["notes"].as_array().unwrap().len(), 1, "the bad row is noted: {r}");
@@ -106,10 +108,10 @@ fn links_resolve_by_rules_and_by_hand() {
     assert_eq!(r["empty"], json!(["E10"]), "the conduit task has no rule yet");
     // Pick the conduit by hand: by handles, and by the selection.
     let l = s.execute("fourd.link", &json!({"task": "E10", "handles": conduits})).unwrap();
-    assert_eq!((l["elements"].as_u64(), l["added"].as_u64()), (Some(1), Some(1)), "{l}");
+    assert_eq!((l["elements"].as_u64(), l["added"].as_u64()), (Some(c), Some(c)), "{l}");
     let list = s.execute("fourd.list", &json!({})).unwrap();
     let n = |id: &str| list["tasks"].as_array().unwrap().iter().find(|t| t["id"] == id).unwrap()["elements"].as_u64().unwrap() as usize;
-    assert_eq!((n("W10"), n("M10"), n("P10"), n("E10")), (walls.len(), 1 + of(&s, "IfcDuctFitting", None).len(), 1, 1), "{list}");
+    assert_eq!((n("W10"), n("M10"), n("P10"), n("E10")), (walls.len(), 1 + of(&s, "IfcDuctFitting", None).len(), 1, c as usize), "{list}");
     // The duct's fittings are IfcDuctFitting: `class=Duct*` covers them too.
     let fittings = of(&s, "IfcDuctFitting", Some("M-DUCT-SUPP"));
     assert_eq!(n("M10"), 1 + fittings.len(), "{fittings:?}");
@@ -123,7 +125,7 @@ fn links_resolve_by_rules_and_by_hand() {
     assert_eq!(r["elements"], 1);
     // Re-importing keeps hand picks of tasks with the same id.
     s.execute("fourd.import", &json!({"rows": rows()})).unwrap();
-    assert_eq!(s.execute("fourd.list", &json!({})).unwrap()["tasks"][3]["elements"], 1);
+    assert_eq!(s.execute("fourd.list", &json!({})).unwrap()["tasks"][3]["elements"], c);
     s.execute("fourd.import", &json!({"rows": rows(), "merge": false})).unwrap();
     assert_eq!(s.execute("fourd.list", &json!({})).unwrap()["tasks"][3]["elements"], 0);
     // Bad input is an error, never a panic.
@@ -147,34 +149,36 @@ fn the_state_at_a_date_is_right() {
     assert_eq!(ducts.len(), 2);
     let pipes = of(&s, "IfcPipeSegment", None);
     let w = walls.len() as u64;
+    // The conduit run's sticks (Q6157 mepatoms).
+    let c = conduits.len() as u64;
 
     let v = state(&mut s, "2026-03-01");
-    assert_eq!(counts(&v), (0, 0, w + 4), "{v}");
+    assert_eq!(counts(&v), (0, 0, w + 3 + c), "{v}");
     let v = state(&mut s, "2026-03-02");
     assert_eq!(set(&v, "inProgress"), walls, "the first day is in progress");
     let v = state(&mut s, "2026-03-06");
-    assert_eq!(counts(&v), (0, w, 4), "so is the last");
+    assert_eq!(counts(&v), (0, w, 3 + c), "so is the last");
     let v = state(&mut s, "2026-03-07");
     assert_eq!(set(&v, "built"), walls);
-    assert_eq!(counts(&v), (w, 0, 4));
+    assert_eq!(counts(&v), (w, 0, 3 + c));
     let v = state(&mut s, "2026-03-11");
     assert_eq!(set(&v, "inProgress"), sorted([ducts.clone(), pipes.clone()].concat()));
     let v = state(&mut s, "2026-03-13");
-    assert_eq!(counts(&v), (w + 1, 2, 1), "the pipe is done, the duct finishing: {v}");
+    assert_eq!(counts(&v), (w + 1, 2, c), "the pipe is done, the duct finishing: {v}");
     assert_eq!(
         v["tasks"],
         json!([{"id": "W10", "phase": "built"}, {"id": "M10", "phase": "in_progress"}, {"id": "P10", "phase": "built"}, {"id": "E10", "phase": "not_yet"}])
     );
     let v = state(&mut s, "2026-03-17");
-    assert_eq!(counts(&v), (w + 4, 0, 0));
+    assert_eq!(counts(&v), (w + 3 + c, 0, 0));
     assert!(v["counts"]["unscheduled"].as_u64().unwrap() > 0, "plan linework and tags are on no task");
     // No date: the schedule's start.
     assert_eq!(s.execute("fourd.state", &json!({"handles": false})).unwrap()["date"], "2026-03-02");
 
     // The staged drawing: not-yet work gone (or pale), in-progress work orange, the rest kept.
     let doc = s.doc().unwrap().clone();
-    let (st, c) = fourd::staged(&doc, day("2026-03-11").unwrap(), false).unwrap();
-    assert_eq!(c, Counts { built: walls.len(), in_progress: 3, not_yet: 1, unscheduled: c.unscheduled });
+    let (st, cs) = fourd::staged(&doc, day("2026-03-11").unwrap(), false).unwrap();
+    assert_eq!(cs, Counts { built: walls.len(), in_progress: 3, not_yet: c as usize, unscheduled: cs.unscheduled });
     let h = |x: &str| Handle(u64::from_str_radix(x, 16).unwrap());
     assert!(st.entity(h(&conduits[0])).is_none(), "the conduit isn't there yet");
     let duct = st.entity(h(&ducts[0])).unwrap();

@@ -53,8 +53,17 @@ const SET: &[&str] = &["A-101", "A-102", "E-101", "M-101", "M-102", "P-101", "P-
 fn run_job(tag: &str, only: &[&str]) -> Session {
     let dir = job_folder(tag, only);
     let mut s = Session::new();
-    let st =
+    let mut st =
         s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "takeoff", "auto": true, "checkpoint": false})).expect("job.start");
+    // A set whose electrical plan prints no device marks (its only letters by symbols are the
+    // grids' bubbles, no devices: Q6165) is asked about it even in auto mode: none, it says.
+    if st["done"] != json!(true) {
+        let next = s.execute("job.next", &json!({})).expect("job.next");
+        let q = &next["question"];
+        assert!(q["question"].as_str().is_some_and(|t| t.contains("No device symbols counted on the electrical plans")), "{next}");
+        st = s.execute("job.answer", &json!({"id": q["id"], "answer": "No devices on these sheets"})).expect("job.answer");
+        st = if st["done"] == json!(true) { st } else { s.execute("job.status", &json!({})).expect("status") };
+    }
     assert_eq!(st["done"], json!(true), "{st}");
     s
 }

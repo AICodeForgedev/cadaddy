@@ -191,6 +191,21 @@ fn find_text_reads_texts_and_render_shows_one_area() {
     assert_eq!(w["count"], 2);
     assert_eq!(tool(&mut s, "find_text", json!({"layer": "nope"}))["count"], 0);
 
+    // `pattern` is read as `contains`, and says nothing about being ignored.
+    let p = call(&mut s, 8, "tools/call", json!({"name": "find_text", "arguments": {"pattern": "cocina"}}));
+    let text = p["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("COCINA") && !text.contains("not a parameter"), "{text}");
+    // A bad value is one message: no warning about another name glued onto the error.
+    let bad = call(
+        &mut s,
+        8,
+        "tools/call",
+        json!({"name": "execute", "arguments": {"command": "circle", "params": {"center": [0, 0], "radius": "nan"}, "extra": 1}}),
+    );
+    let text = bad["result"]["content"][0]["text"].as_str().or(bad["error"]["message"].as_str()).unwrap_or("");
+    assert_eq!(bad["result"]["isError"], json!(true), "{text}");
+    assert!(!text.contains("it was ignored"), "{text}");
+
     // A render of one area takes the area's shape.
     let r = call(&mut s, 9, "tools/call", json!({"name": "render", "arguments": {"window": [[0, 0], [10, 5]]}}));
     let c = &r["result"]["content"][0];
@@ -260,10 +275,10 @@ fn tool_err(s: &mut Server, name: &str, args: Value) -> String {
     r["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string()
 }
 
-#[test]
-fn agent_manages_drawings_without_losing_work() {
-    // A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
-    // doesn't depend on the real readers; the CLI installs them).
+/// A stand-in file format: writing stores a marker, reading gives a fresh drawing (this crate
+/// doesn't depend on the real readers; the CLI installs them). Hooks are process-wide and set once,
+/// so every test that saves or opens installs them itself.
+fn stand_in_io() {
     use cadaddy_engine::cmd::file::{IoHooks, set_io};
     set_io(IoHooks {
         read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
@@ -273,6 +288,11 @@ fn agent_manages_drawings_without_losing_work() {
         read_dwf: None,
         write_dwfx: None,
     });
+}
+
+#[test]
+fn agent_manages_drawings_without_losing_work() {
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "circle 0,0 5"}));
     let docs = tool(&mut s, "list_drawings", json!({}));
@@ -831,6 +851,8 @@ fn serve_cancellable_passes_cancels_on_while_serving() {
 /// B7-017: `save` lists `force` (its refusal says to pass it), and a forced save does not warn that it was ignored.
 #[test]
 fn save_has_a_force_parameter() {
+    // Saving needs a writer; install it here so the test passes alone (not only after another test did).
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     let tools = call(&mut s, 1, "tools/list", json!({}));
     for name in ["save", "bim_from_pdf"] {
@@ -849,15 +871,7 @@ fn save_has_a_force_parameter() {
 /// Headless there is no user to ask: `save {path}` onto another existing file is refused, `force: true` replaces it.
 #[test]
 fn save_onto_another_existing_drawing_needs_force() {
-    use cadaddy_engine::cmd::file::{IoHooks, set_io};
-    set_io(IoHooks {
-        read: |_, _| Ok(cadaddy_engine::doc::Drawing::new_metric()),
-        write: |_, _| Ok(b"saved".to_vec()),
-        plot: None,
-        read_pdf: None,
-        read_dwf: None,
-        write_dwfx: None,
-    });
+    stand_in_io();
     let mut s = Server::new(Box::new(Headless::default()));
     tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
     let dir = std::env::temp_dir().join(format!("cadaddy-mcp-overwrite-{}", std::process::id()));
@@ -872,6 +886,43 @@ fn save_onto_another_existing_drawing_needs_force() {
     let r = call(&mut s, 2, "tools/call", json!({"name": "save", "arguments": {"path": path, "force": true}}));
     assert_ne!(r["result"]["isError"], json!(true), "{r}");
     assert_ne!(std::fs::read(&other).unwrap(), b"another drawing");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The `render` and `plot` tools never write over the open drawing; an existing unrelated file is
+/// replaced only with `force: true`, which both tools take.
+#[test]
+fn render_and_plot_tools_guard_their_output_path() {
+    stand_in_io();
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "command_line", json!({"text": "line 0,0 10,10"}));
+    let dir = std::env::temp_dir().join(format!("cadaddy-mcp-outguard3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mine = dir.join("mine.dxf");
+    let mine_path = mine.to_string_lossy().into_owned();
+    tool(&mut s, "save", json!({"path": mine_path}));
+    let before = std::fs::read(&mine).unwrap();
+    let r = call(&mut s, 1, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": mine_path, "force": true}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert_eq!(std::fs::read(&mine).unwrap(), before, "render replaced the open drawing");
+
+    let png = dir.join("view.png");
+    std::fs::write(&png, b"precious").unwrap();
+    let png_path = png.to_string_lossy().into_owned();
+    let r = call(&mut s, 2, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": png_path}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true"), "{r}");
+    assert_eq!(std::fs::read(&png).unwrap(), b"precious");
+    let r = call(&mut s, 3, "tools/call", json!({"name": "render", "arguments": {"width": 32, "height": 32, "path": png_path, "force": true}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    assert_ne!(std::fs::read(&png).unwrap(), b"precious");
+
+    let pdf = dir.join("sheet.pdf");
+    std::fs::write(&pdf, b"precious").unwrap();
+    let r = call(&mut s, 4, "tools/call", json!({"name": "plot", "arguments": {"path": pdf.to_string_lossy()}}));
+    assert_eq!(r["result"]["isError"], json!(true), "{r}");
+    assert!(r.to_string().contains("force:true") && !r.to_string().contains("is not a parameter"), "{r}");
+    assert_eq!(std::fs::read(&pdf).unwrap(), b"precious");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -1080,4 +1131,25 @@ fn undo_redo_take_engine_options_and_refuse_unknown_arguments() {
         assert!(r["error"]["message"].as_str().is_some_and(|m| m.contains("is not a parameter")), "{r}");
         assert_eq!(count(&mut s), before + 1, "{name} acted");
     }
+}
+
+/// The validate tool tells an agent the judging loop and reaches the engine's validate commands.
+#[test]
+fn the_validate_tool_tells_the_loop() {
+    let defs = crate::tools::tool_definitions(false);
+    let t = defs["tools"].as_array().unwrap().iter().find(|t| t["name"] == "validate").expect("the validate tool");
+    let d = t["description"].as_str().unwrap();
+    for word in ["start", "next", "report", "status", "plant", "unsure", "prints/", "evidence", "confidence"] {
+        assert!(d.contains(word), "{word} in {d}");
+    }
+    let order = ["1. start", "2. next", "4. report", "5. Repeat"];
+    let at: Vec<usize> = order.iter().map(|w| d.find(w).unwrap_or_else(|| panic!("{w}"))).collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}");
+    let mut s = Server::new(Box::new(Headless::default()));
+    let st = tool(&mut s, "validate", json!({"action": "status"}));
+    assert!(st.to_string().contains("no validate run yet"), "{st}");
+    let r = call(&mut s, 98, "tools/call", json!({"name": "validate", "arguments": {"action": "fly"}}));
+    assert!(r.to_string().contains("start, next, report, status or plant"), "{r}");
+    let e = tool_err(&mut s, "validate", json!({"action": "next"}));
+    assert!(e.contains("no validate run yet"), "{e}");
 }

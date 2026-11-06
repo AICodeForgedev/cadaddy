@@ -67,8 +67,10 @@ fn every_plainly_typed_parameter_refuses_a_wrong_value() {
             let mut p = serde_json::Map::new();
             p.insert(k.to_string(), json!({ "a": [1] }));
             let params = Value::Object(p);
+            // A field of a value given at the top (`view {angle}`, `ucs`'s) is refused as no
+            // parameter of the command (battle test 7 B7-019).
             if let Err(e) = s.execute_agent(spec.id, &params)
-                && e.to_string().contains(&format!("`{k}` must be"))
+                && (e.to_string().contains(&format!("`{k}` must be")) || e.to_string().contains(&format!("`{k}` is not a parameter")))
             {
                 refused += 1;
                 continue;
@@ -116,4 +118,126 @@ fn text_and_mleaderstyle_name_the_wrong_type() {
         let e = s.execute_agent(cmd, &params).unwrap_err().to_string();
         assert!(e.contains(&format!("`{key}` must be")), "{cmd}: {e}");
     }
+}
+
+// ---- parammsgs3 (battle test 6, B7-019 / B7-020) ----
+
+#[test]
+fn the_doc_reader_skips_choice_values_prose_and_defaults() {
+    // purge's `layers` is a value of `type`, not a parameter.
+    let purge = find_command("purge").unwrap();
+    let wrong = "lay".to_string() + "ers";
+    assert!(unknown_params(purge, &json!({ wrong.as_str(): 12345 })).contains(&wrong));
+    assert!(unknown_params(purge, &json!({ "type": "layers" })).is_empty());
+    // texts: `TEXT, MTEXT` in the prose after the result are not parameters.
+    let texts = find_command("texts").unwrap();
+    assert!(unknown_params(texts, &json!({ "MTEXT": 1 })).contains(&"MTEXT".to_string()));
+    assert!(unknown_params(texts, &json!({ "contains": "a", "limit": 3 })).is_empty());
+    // model.clashes: the default's class names are not parameters.
+    let clashes = find_command("model.clashes").unwrap();
+    let known = documented_params(clashes.params);
+    for k in ["Zone", "SpatialZone", "Annotation", "Grid", "Site"] {
+        assert!(!known.contains(&k), "{k} in {known:?}");
+    }
+    assert!(known.contains(&"ignore_classes") && known.contains(&"max_clashes"));
+    // A parameter listed after `|` with its own `?` still counts.
+    assert_eq!(documented_params("{object?: closed object | points?: [[x,y]]}"), ["object", "points"]);
+    let plain = documented_params("{type?: all | blocks | layers, names?: x}");
+    assert!(plain.contains(&"type") && plain.contains(&"names") && !plain.contains(&"layers") && !plain.contains(&"blocks"), "{plain:?}");
+}
+
+#[test]
+fn mleaderstyle_refuses_numbers_it_cannot_use() {
+    let mut s = Session::new();
+    for (k, v) in [("arrowSize", json!(-5)), ("landingGap", json!(-1)), ("dogleg", json!(-0.5)), ("textHeight", json!(0)), ("textHeight", json!(-2))]
+    {
+        let e = s.execute("mleaderstyle", &json!({ "name": "Plan A", k: v })).unwrap_err().to_string();
+        assert!(e.contains(&format!("`{k}` must be")), "{k}: {e}");
+    }
+    let e = s.execute("mleaderstyle", &json!({ "name": "Plan A", "arrowSize": "big" })).unwrap_err().to_string();
+    assert!(e.contains("`arrowSize` must be a number"), "{e}");
+    // Nothing was created by the refused calls.
+    assert!(s.doc().unwrap().mleader_styles.iter().all(|st| st.name != "Plan A"));
+    s.execute("mleaderstyle", &json!({ "name": "Plan A", "arrowSize": 0.25, "textHeight": 0.1 })).unwrap();
+    assert!(s.doc().unwrap().mleader_styles.iter().any(|st| st.name == "Plan A" && (st.arrow_size - 0.25).abs() < 1e-9));
+}
+
+#[test]
+fn an_agent_gets_non_finite_text_and_negative_sizes_refused() {
+    let mut s = Session::new();
+    for text in ["nan", "NaN", "inf", "-Infinity", " +inf "] {
+        let e = s.execute_agent("circle", &json!({ "center": [0, 0], "radius": text })).unwrap_err().to_string();
+        assert!(e.contains("`radius` must be"), "{text}: {e}");
+        let e = s.execute_agent("mleaderstyle", &json!({ "name": "S", "textHeight": text })).unwrap_err().to_string();
+        assert!(e.contains("`textHeight` must be"), "{text}: {e}");
+    }
+    let e = s.execute_agent("mleaderstyle", &json!({ "name": "S", "arrowSize": -5 })).unwrap_err().to_string();
+    assert!(e.contains("`arrowSize` must be 0 or more"), "{e}");
+    let wrong = "lay".to_string() + "ers";
+    let e = s.execute_agent("purge", &json!({ wrong.as_str(): 12345 })).unwrap_err().to_string();
+    assert!(e.contains("`layers` is not a parameter of purge"), "{e}");
+    assert!(s.doc().unwrap().model.iter().next().is_none());
+}
+
+#[test]
+fn undohistory_says_what_is_wrong_with_the_step() {
+    let mut s = Session::new();
+    let e = s.execute("undohistory", &json!({ "action": "to", "step": -1 })).unwrap_err().to_string();
+    assert!(e.contains("`step` must be a whole number, 0 or more") && !e.contains("is required"), "{e}");
+    let e = s.execute("undohistory", &json!({ "action": "to" })).unwrap_err().to_string();
+    assert!(e.contains("`step` is required"), "{e}");
+}
+
+#[test]
+fn silent_accepts_of_wrong_values_in_the_command_table() {
+    // For every documented parameter with a numeric name: 'nan' / 'inf' text, and -1 where the
+    // name can't be negative (a size, count, radius…), must not run. Counts for the report.
+    let numeric = [
+        "radius",
+        "dist",
+        "count",
+        "scale",
+        "angle",
+        "height",
+        "width",
+        "length",
+        "size",
+        "offset",
+        "rows",
+        "columns",
+        "spacing",
+        "factor",
+        "tolerance",
+        "thickness",
+        "gap",
+        "depth",
+        "diameter",
+        "segments",
+        "step",
+        "dogleg",
+    ];
+    let non_negative = ["radius", "diameter", "height", "width", "size", "count", "segments", "gap", "dogleg", "tolerance", "limit"];
+    let (mut tried, mut accepted) = (0, Vec::new());
+    for spec in command_specs() {
+        let doc = params_doc(spec);
+        for k in documented_params(doc) {
+            let lk = k.to_ascii_lowercase();
+            if param_kind(doc, k) == Some(ParamKind::Text) || !numeric.iter().any(|w| lk.contains(w)) {
+                continue;
+            }
+            let mut values = vec![json!("nan"), json!("-inf")];
+            if non_negative.iter().any(|w| lk.contains(w)) {
+                values.push(json!(-1));
+            }
+            for v in values {
+                tried += 1;
+                let mut s = Session::new();
+                if s.execute_agent(spec.id, &json!({ k: v })).is_ok() {
+                    accepted.push(format!("{} {k}={v}", spec.id));
+                }
+            }
+        }
+    }
+    println!("COUNTS non_finite_or_negative_tried={tried} accepted={}", accepted.len());
+    assert!(accepted.is_empty(), "{accepted:?}");
 }

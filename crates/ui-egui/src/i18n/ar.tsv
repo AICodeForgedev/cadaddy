@@ -3281,3 +3281,147 @@ menu	View	عرض
 	Remove Company Standard	إزالة معيار الشركة
 	Set Company Standard	تعيين معيار الشركة
 	Standards	المعايير
+	 ({n} shown; Export writes them all)	 (يُعرض {n}؛ التصدير يكتبها كلها)
+	(no picture)	(لا صورة)
+	A false alarm	إنذار كاذب
+	Confidence:	الثقة:
+	Current room	الغرفة الحالية
+	Defer	تأجيل
+	Expected:	المتوقع:
+	False alarms: {rate}	الإنذارات الكاذبة: {rate}
+	Findings ({n})	النتائج ({n})
+	Found:	الموجود:
+	From the 2D drawing	من الرسم ثنائي الأبعاد
+	From the BIM model	من نموذج BIM
+	Issue:	المشكلة:
+	It is a real error	إنه خطأ حقيقي
+	Leave it for a field decision	اتركه لقرار في الموقع
+	No file chosen. Type: automation.takeoff {params}	لم يُختر ملف. اكتب: automation.takeoff {params}
+	No findings to review.	لا توجد نتائج للمراجعة.
+	No run yet: choose a scope and trades, then Start.	لا يوجد تشغيل بعد: اختر النطاق والتخصصات ثم ابدأ.
+	No takeoff yet: Refresh runs it.	لا يوجد حصر بعد: التحديث يشغّله.
+	Overall	الإجمالي
+	Refresh	تحديث
+	Reject	رفض
+	Resume	استئناف
+	Rules ({on} of {all} on)	القواعد ({on} من {all} مفعّلة)
+	Scope:	النطاق:
+	Scores	الدرجات
+	Show answered	إظهار المُجاب عنها
+	Takeoff	حصر الكميات
+	Takeoff written to {path}	كُتب حصر الكميات في {path}
+	Trades:	التخصصات:
+	done	مكتمل
+	judging	قيد التقييم
+	project	المشروع
+	waiting for an agent	في انتظار وكيل
+	{done} of {total} areas, {state}	{done} من {total} مناطق، {state}
+	{source}: {n} lines	{source}: {n} سطرًا
+	Automation Takeoff	حصر الكميات الآلي
+	Cancel Validation Run	إلغاء تشغيل التحقق
+	Change a Validation Rule	تغيير قاعدة تحقق
+	Validation Areas	مناطق التحقق
+	Validation Evidence Packet	حزمة أدلة التحقق
+	Validation Prescreen	الفحص المسبق للتحقق
+	Validation Rules	قواعد التحقق
+	Validate	تحقق
+	Automation	الأتمتة
+	Model Checks	فحوصات النموذج
+	Qty	الكمية
+	Elements	العناصر
+	Fire	الحريق
+	Validate: waiting for an agent	التحقق: في انتظار وكيل
+	Validate Model Against Prints (Agent)	التحقق من النموذج مقابل المخططات (وكيل)
+	Next Validation Packet	حزمة التحقق التالية
+	Report Validation Findings	الإبلاغ عن نتائج التحقق
+	Validation Run Status	حالة جولة التحقق
+	Plant Validation Errors	زرع أخطاء للتحقق
+	Model Fidelity	دقة النموذج
+	Model Fidelity Rules	قواعد دقة النموذج
+	Model Fidelity Report	تقرير دقة النموذج
+	Fidelity	الدقة
+	Auto	تلقائي
+	Floor	الطابق
+	Detail	التفاصيل
+	Print Inventory	جرد المخططات
+	Piece	القطعة
+	Raceway run	مسار القناة
+	Connects to	يتصل بـ
+	Height AFF	الارتفاع فوق الأرضية المنتهية
+	Host wall	الجدار المضيف
+	Wall face	وجه الجدار
+	Outlet box	علبة المخرج
+	Fed by	التغذية من
+	Count Model Pieces	عدّ قطع النموذج
+	Edit Model Piece	تحرير قطعة النموذج
+	Walk the Feed	تتبّع التغذية
+	Lay Out Trade Pieces	توزيع قطع الحِرف
+	Trade Pieces Report	تقرير قطع الحِرف
+	Trade Piece Rules	قواعد قطع الحِرف
+	Read Trade Documents	قراءة مستندات الحِرف
+	Object Forms	نماذج الكائنات
+	Create Object Forms	إنشاء نماذج الكائنات
+	Edit Object Form Field	تحرير حقل نموذج الكائن
+	Record Object Field Value	تسجيل قيمة حقل الكائن
+	Object Form Log	سجل نماذج الكائنات
+	Revert Object Form Change	التراجع عن تغيير نموذج الكائن
+	Promote Object Form to Template	ترقية نموذج الكائن إلى قالب
+	Object Completeness	اكتمال الكائنات
+	Object Form	نموذج الكائن
+	Wall Faces	واجهات الجدران
+	Place Devices on Wall Faces	وضع الأجهزة على واجهات الجدران
+	Devices Follow Their Walls	الأجهزة تتبع جدرانها
+	Room Layout	تخطيط الغرفة
+	Tie a Device to an Object	ربط جهاز بكائن
+	Add Casework or Appliance Object	إضافة كائن خزائن أو جهاز منزلي
+	Conduit Routing Report	تقرير مسارات الأنابيب الكهربائية
+	Reroute Conduit	إعادة توجيه الأنابيب الكهربائية
+	Conduit Takeoff	حصر كميات الأنابيب الكهربائية
+	Wire Pull Schedule	جدول سحب الأسلاك
+	Conduit Cut and Bend List	قائمة قص وثني الأنابيب الكهربائية
+	Material Release List	قائمة إصدار المواد
+	Field Paperwork Sheets	أوراق مستندات الموقع
+	Scope by Trade	نطاق العمل حسب الحرفة
+	Value Engineering Scenario	سيناريو هندسة القيمة
+	Value Engineering Decision	قرار هندسة القيمة
+	Read Drawn Dimensions	قراءة الأبعاد المرسومة
+	Underground Plan Report	تقرير مخطط الأعمال تحت الأرض
+	Update Model from Plans	تحديث النموذج من المخططات
+	Load Calculation	حساب الأحمال
+	A crash report was kept on this computer: Help > Report a Problem offers it.	تم الاحتفاظ بتقرير عن العطل على هذا الكمبيوتر: يعرضه تعليمات > الإبلاغ عن مشكلة.
+	A recovery copy of the drawing with unsaved changes was autosaved.	تم حفظ نسخة استرداد من الرسم ذي التغييرات غير المحفوظة تلقائيًا.
+	Autosave failed	فشل الحفظ التلقائي
+	Autosave failed: {message}	فشل الحفظ التلقائي: {message}
+	Backup copies are off, so the current file will be replaced.	النسخ الاحتياطية متوقفة، لذا سيُستبدل الملف الحالي.
+	Backup copy	نسخة احتياطية
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	تعذّر على CADaddy كتابة نسخة استرداد، لذا ستضيع التغييرات الأخيرة إذا توقف التطبيق الآن.
+	CADaddy has to close	يجب إغلاق CADaddy
+	Close CADaddy	إغلاق CADaddy
+	Create backup copy with each save	إنشاء نسخة احتياطية مع كل حفظ
+	DXF keeps them. Use Save As to keep them in the drawing.	يحتفظ بها DXF. استخدم حفظ باسم للاحتفاظ بها في الرسم.
+	Details	التفاصيل
+	Dismiss	تجاهل
+	Drawing Recovery offers them at the next start.	يعرضها استرداد الرسم عند التشغيل التالي.
+	Internal error	خطأ داخلي
+	No drawing needed a new recovery copy.	لم يحتج أي رسم إلى نسخة استرداد جديدة.
+	Part of CADaddy failed, and the app kept running.	تعطّل جزء من CADaddy، واستمر التطبيق في العمل.
+	Part of CADaddy keeps failing, so it can't continue.	يستمر جزء من CADaddy في التعطّل، لذا لا يمكنه المتابعة.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	تم حفظ نسخ استرداد من {count} رسومات ذات تغييرات غير محفوظة تلقائيًا.
+	Save Anyway	حفظ على أي حال
+	Save cancelled: {path} was not changed.	أُلغي الحفظ: لم يتغير {path}.
+	Save your work and restart CADaddy.	احفظ عملك وأعد تشغيل CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	احفظ عملك. يحاول الحفظ التلقائي مجددًا بعد فاصل SAVETIME؛ ومجلده في الخيارات.
+	Saving {name} will remove content	سيؤدي حفظ {name} إلى إزالة محتوى
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	لا يبدو الملف الحالي كاملًا، لذا يبقى {name} كما هو وسيُستبدل الملف الحالي.
+	The current file is kept as {name} until the next save.	يُحتفظ بالملف الحالي باسم {name} حتى الحفظ التالي.
+	This format can't keep these objects yet: {objects}.	لا يمكن لهذا التنسيق الاحتفاظ بهذه الكائنات بعد: {objects}.
+	{count} more types	{count} أنواع أخرى
+	Review by Impact	المراجعة حسب الأثر
+	Resolve Review Item by Impact	حسم بند المراجعة حسب الأثر
+	Open Review Item	فتح بند المراجعة
+	Review Audit Trail	سجل تدقيق المراجعة
+	Accuracy Trend	اتجاه الدقة
+	Measure Build Accuracy	قياس دقة البناء
+	Export for AR	تصدير للواقع المعزز
+	AR Export Rules	قواعد تصدير الواقع المعزز
+	Panel Breakers	قواطع اللوحة

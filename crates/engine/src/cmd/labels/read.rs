@@ -86,6 +86,9 @@ fn row(cols: &[Option<Col>], cells: &[String], source: &str) -> Option<PanelCirc
         room: dash(get(Col::Room)),
         breaker: dash(get(Col::Breaker)),
         poles,
+        protection: Vec::new(),
+        wire: String::new(),
+        load_va: None,
         source: source.to_string(),
     })
 }

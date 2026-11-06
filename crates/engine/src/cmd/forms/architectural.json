@@ -1,0 +1,128 @@
+{
+  "trade": "architectural",
+  "about": "Standard object forms for architectural kinds (same field format as electrical.json).",
+  "templates": [
+    {
+      "kind": "wall",
+      "label": "Wall",
+      "aliases": ["partition"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "aliases": ["wall_type", "type_mark"]},
+        {"key": "assembly", "type": "text", "required": true, "aliases": ["layers"], "note": "its layers, face to face"},
+        {"key": "fire_rating", "type": "text", "required": true, "aliases": ["rating"]},
+        {"key": "height", "type": "number", "unit": "ft", "required": true},
+        {"key": "thickness", "type": "number", "unit": "in", "required": false},
+        {"key": "stud_size", "type": "text", "required": true, "aliases": ["stud"]},
+        {"key": "stud_spacing", "type": "number", "unit": "in", "required": true, "aliases": ["spacing"]},
+        {"key": "finish_a", "type": "text", "required": false},
+        {"key": "finish_b", "type": "text", "required": false},
+        {"key": "room_a", "type": "text", "required": false},
+        {"key": "room_b", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "door",
+      "label": "Door",
+      "aliases": [],
+      "fields": [
+        {"key": "number", "type": "text", "required": true, "aliases": ["mark"]},
+        {"key": "type", "type": "text", "required": true, "aliases": ["type_mark", "door_type"]},
+        {"key": "width", "type": "number", "unit": "in", "required": true},
+        {"key": "height", "type": "number", "unit": "in", "required": true},
+        {"key": "frame", "type": "text", "required": true},
+        {"key": "hardware_set", "type": "text", "required": true, "aliases": ["hardware"]},
+        {"key": "fire_rating", "type": "text", "required": true, "aliases": ["rating"]},
+        {"key": "swing", "type": "text", "required": false},
+        {"key": "from_room", "type": "text", "required": false},
+        {"key": "to_room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "window",
+      "label": "Window",
+      "aliases": ["glazing", "storefront"],
+      "fields": [
+        {"key": "number", "type": "text", "required": false, "aliases": ["mark"]},
+        {"key": "type_mark", "type": "text", "required": true, "aliases": ["type", "window_type"]},
+        {"key": "width", "type": "number", "unit": "in", "required": true},
+        {"key": "height", "type": "number", "unit": "in", "required": true},
+        {"key": "sill_height", "type": "number", "unit": "in", "required": true},
+        {"key": "hardware", "type": "text", "required": false},
+        {"key": "fire_rating", "type": "text", "required": false, "aliases": ["rating"]},
+        {"key": "room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "room",
+      "label": "Room",
+      "aliases": ["space"],
+      "fields": [
+        {"key": "number", "type": "text", "required": true},
+        {"key": "name", "type": "text", "required": true},
+        {"key": "area", "type": "number", "unit": "sf", "required": true},
+        {"key": "ceiling_height", "type": "number", "unit": "ft", "required": true},
+        {"key": "floor_finish", "type": "text", "required": true},
+        {"key": "wall_finish", "type": "text", "required": true},
+        {"key": "ceiling_finish", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "ceiling",
+      "label": "Ceiling",
+      "aliases": ["soffit"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "aliases": ["ceiling_type"]},
+        {"key": "height", "type": "number", "unit": "ft", "required": true},
+        {"key": "finish", "type": "text", "required": true},
+        {"key": "area", "type": "number", "unit": "sf", "required": false},
+        {"key": "room", "type": "text", "required": true},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "floor",
+      "label": "Floor / floor finish",
+      "aliases": ["floor_finish", "slab"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true},
+        {"key": "assembly", "type": "text", "required": false},
+        {"key": "thickness", "type": "number", "unit": "in", "required": false},
+        {"key": "finish", "type": "text", "required": true, "aliases": ["floor_finish"]},
+        {"key": "area", "type": "number", "unit": "sf", "required": true},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "drywall_sheet",
+      "label": "Drywall sheet",
+      "aliases": ["gypsum_board", "drywall"],
+      "fields": [
+        {"key": "type", "type": "text", "required": true, "note": "regular, type X, moisture resistant"},
+        {"key": "thickness", "type": "number", "unit": "in", "required": true},
+        {"key": "size", "type": "text", "unit": "ft", "required": true, "note": "4x8, 4x10, 4x12"},
+        {"key": "fire_rating", "type": "text", "required": false},
+        {"key": "wall", "type": "ref", "required": true, "aliases": ["host_wall"]},
+        {"key": "layer", "type": "text", "required": false, "aliases": ["face"]},
+        {"key": "room", "type": "text", "required": false},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    },
+    {
+      "kind": "stud",
+      "label": "Stud",
+      "aliases": ["framing_member"],
+      "fields": [
+        {"key": "size", "type": "text", "required": true, "note": "3-5/8 in, 6 in, 2x4"},
+        {"key": "material", "type": "text", "required": true, "aliases": ["gauge"]},
+        {"key": "length", "type": "number", "unit": "ft", "required": true},
+        {"key": "spacing", "type": "number", "unit": "in", "required": false},
+        {"key": "wall", "type": "ref", "required": true, "aliases": ["host_wall"]},
+        {"key": "level", "type": "text", "required": true}
+      ]
+    }
+  ]
+}

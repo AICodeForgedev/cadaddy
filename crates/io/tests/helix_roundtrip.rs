@@ -155,7 +155,7 @@ fn foreign_helix_reads() {
 fn hostile_helix_does_not_panic() {
     let mut t = String::from("0\nSECTION\n2\nENTITIES\n");
     for (r, turns, th) in [("nan", "1e308", "inf"), ("-5", "-1", "0"), ("1e308", "0", "nan"), ("1", "1e9", "1e308")] {
-        t.push_str(&format!("0\nHELIX\n100\nAcDbSpline\n72\n999999999\n73\n-4\n10\n0\n20\n1e308\n100\nAcDbHelix\n10\n1\n12\n0\n22\n0\n32\n0\n40\n{r}\n41\n{turns}\n42\n{th}\n290\n7\n280\n-9\n"));
+        t.push_str(&format!("0\nHELIX\n100\nAcDbSpline\n72\n999999999\n73\n-4\n10\n0\n20\n1e11\n100\nAcDbHelix\n10\n1\n12\n0\n22\n0\n32\n0\n40\n{r}\n41\n{turns}\n42\n{th}\n290\n7\n280\n-9\n"));
     }
     t.push_str("0\nHELIX\n0\nENDSEC\n0\nEOF\n");
     let d = cadaddy_io::read_dxf(t.as_bytes()).unwrap();

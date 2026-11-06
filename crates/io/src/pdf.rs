@@ -456,6 +456,7 @@ fn sheet(d: &Drawing, space: &Space, o: &PdfOptions, links_to: &[(Handle, String
         field_shading: false,
         color_overrides: std::collections::BTreeMap::new(),
         layer_lines: Vec::new(),
+        skip_hatches: false,
     };
     let k = unit_mm * PT_PER_MM;
     let window = o.window.filter(|w| matches!(space, Space::Model) && !w.is_empty());

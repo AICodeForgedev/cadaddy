@@ -1338,3 +1338,73 @@ menu	View	Προβολή
 	Trim to Block Objects	Κλάδεμα σε αντικείμενα μπλοκ
 	Extend to Block Objects	Επέκταση σε αντικείμενα μπλοκ
 	Super Hatch	Υπερ-διαγράμμιση
+	 ({n} shown; Export writes them all)	 (εμφανίζονται {n}· η εξαγωγή τις γράφει όλες)
+	(no picture)	(χωρίς εικόνα)
+	A false alarm	Ψευδής συναγερμός
+	Confidence:	Βεβαιότητα:
+	Current room	Τρέχων χώρος
+	Defer	Αναβολή
+	Expected:	Αναμενόμενο:
+	False alarms: {rate}	Ψευδείς συναγερμοί: {rate}
+	Findings ({n})	Ευρήματα ({n})
+	Found:	Βρέθηκε:
+	From the 2D drawing	Από το 2D σχέδιο
+	From the BIM model	Από το μοντέλο BIM
+	Issue:	Πρόβλημα:
+	It is a real error	Είναι πραγματικό σφάλμα
+	Leave it for a field decision	Αφήστε το για απόφαση στο εργοτάξιο
+	No file chosen. Type: automation.takeoff {params}	Δεν επιλέχθηκε αρχείο. Πληκτρολογήστε: automation.takeoff {params}
+	No findings to review.	Δεν υπάρχουν ευρήματα για έλεγχο.
+	No run yet: choose a scope and trades, then Start.	Καμία εκτέλεση ακόμη: επιλέξτε εύρος και ειδικότητες, μετά Έναρξη.
+	No takeoff yet: Refresh runs it.	Δεν υπάρχει ακόμη επιμέτρηση: η Ανανέωση την εκτελεί.
+	Overall	Συνολικά
+	Refresh	Ανανέωση
+	Reject	Απόρριψη
+	Resume	Συνέχιση
+	Rules ({on} of {all} on)	Κανόνες ({on} από {all} ενεργοί)
+	Scope:	Εύρος:
+	Scores	Βαθμολογίες
+	Show answered	Εμφάνιση απαντημένων
+	Takeoff	Επιμέτρηση
+	Takeoff written to {path}	Η επιμέτρηση γράφτηκε στο {path}
+	Trades:	Ειδικότητες:
+	done	ολοκληρώθηκε
+	judging	σε αξιολόγηση
+	project	έργο
+	waiting for an agent	αναμονή για πράκτορα
+	{done} of {total} areas, {state}	{done} από {total} περιοχές, {state}
+	{source}: {n} lines	{source}: {n} γραμμές
+	Automation Takeoff	Επιμέτρηση αυτοματισμού
+	Cancel Validation Run	Ακύρωση επικύρωσης
+	Change a Validation Rule	Αλλαγή κανόνα επικύρωσης
+	Validation Areas	Περιοχές επικύρωσης
+	Validation Evidence Packet	Πακέτο τεκμηρίων επικύρωσης
+	Validation Prescreen	Προέλεγχος επικύρωσης
+	Validation Rules	Κανόνες επικύρωσης
+	Validate	Επικύρωση
+	Automation	Αυτοματισμός
+	Model Checks	Έλεγχοι μοντέλου
+	Qty	Ποσ.
+	Elements	Στοιχεία
+	Fire	Πυρασφάλεια
+	Level	Στάθμη
+	Trade	Ειδικότητα
+	System	Σύστημα
+	Category	Κατηγορία
+	Size	Μέγεθος
+	Unit	Μονάδα
+	Architecture	Αρχιτεκτονικά
+	Electrical	Ηλεκτρολογικά
+	Mechanical	Μηχανολογικά
+	Plumbing	Υδραυλικά
+	Building	Κτίριο
+	Accept	Αποδοχή
+	cancelled	ακυρώθηκε
+	Model Takeoff	Επιμέτρηση μοντέλου
+	Quantity Takeoff	Επιμέτρηση ποσοτήτων
+	Next Validation Packet	Επόμενο πακέτο επικύρωσης
+	Plant Validation Errors	Τοποθέτηση σφαλμάτων επικύρωσης
+	Report Validation Findings	Αναφορά ευρημάτων επικύρωσης
+	Validate Model Against Prints (Agent)	Επικύρωση μοντέλου έναντι σχεδίων (πράκτορας)
+	Validate: waiting for an agent	Επικύρωση: αναμονή για πράκτορα
+	Validation Run Status	Κατάσταση επικύρωσης

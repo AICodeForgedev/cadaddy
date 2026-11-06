@@ -84,7 +84,10 @@ fn run_undo(s: &mut Session, p: &Value) -> Result<Value> {
     match str_param(p, "action").unwrap_or("list").to_ascii_lowercase().as_str() {
         "list" => listing(s),
         "to" => {
-            let target = p.get("step").and_then(Value::as_u64).ok_or_else(|| bad("undohistory", "`step` is required"))?;
+            let target = match p.get("step").filter(|v| !v.is_null()) {
+                None => return Err(bad("undohistory", "`step` is required")),
+                Some(v) => v.as_u64().ok_or_else(|| bad("undohistory", format!("`step` must be a whole number, 0 or more (got {v})")))?,
+            };
             let (done, total, group) = {
                 let st = s.state()?;
                 (st.undo.len(), st.undo.len() + st.redo.len(), st.undo_ctl.group)

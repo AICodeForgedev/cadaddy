@@ -37,7 +37,7 @@ const MAX_TABLES: usize = 200;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("mep.qty", "MEP Quantities", run_qty).params(
-            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx), format?: csv|xlsx, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits|labels|grounding|concrete} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], labels: [{item, unit, qty, note}] (what the labels need: labels.bom), grounding: [{item, unit, qty, note}] (grounding.takeoff), concrete: [{category, level, element, item, size, quantity, unit}] (pads, bases, encasement: Concrete when ours, Concrete, by others (owner) otherwise), totals, rows, csv, path?, table?}",
+            "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx; an existing file only with force: true), format?: csv|xlsx, force?: bool, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits|labels|grounding|concrete} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], labels: [{item, unit, qty, note}] (what the labels need: labels.bom), grounding: [{item, unit, qty, note}] (grounding.takeoff), concrete: [{category, level, element, item, size, quantity, unit}] (pads, bases, encasement: Concrete when ours, Concrete, by others (owner) otherwise), totals, rows, csv, path?, table?}",
         ),
         CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).params("{} → {tables}: rebuild every linked takeoff table from the model now"),
     ]
@@ -941,6 +941,12 @@ pub(crate) fn refresh(d: &mut Drawing, sp: &BuildingSpec) -> usize {
 // ---------------- commands ----------------
 
 fn run_qty(s: &mut Session, p: &Value) -> Result<Value> {
+    // The file it writes: never a drawing's name or the open drawing's file, and an existing file
+    // only with force: true (checked before anything is worked out).
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(path) = str_param(p, "file").filter(|x| !x.trim().is_empty()) {
+        super::exchange::guard_output(s, "mep.qty", p, path)?;
+    }
     let (sp, _) = current(s, "mep.qty")?;
     let st = settings("mep.qty", p)?;
     if let Some(l) = &st.level
@@ -1017,6 +1023,23 @@ fn run_refresh(s: &mut Session, _: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_existing_file_is_replaced_only_with_force() {
+        let dir = std::env::temp_dir().join(format!("cadaddy-mepqty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let f = dir.join("qty.csv");
+        std::fs::write(&f, "theirs").expect("write");
+        let mut s = crate::Session::new();
+        s.execute("new", &serde_json::json!({})).expect("new");
+        let err = s.execute("mep.qty", &serde_json::json!({"file": f.to_string_lossy()})).expect_err("refused");
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(std::fs::read_to_string(&f).expect("read"), "theirs");
+        // With force it goes on (to what the drawing has: no spec here).
+        let forced = s.execute("mep.qty", &serde_json::json!({"file": f.to_string_lossy(), "force": true}));
+        assert!(forced.as_ref().is_err_and(|e| !e.to_string().contains("already exists")) || forced.is_ok());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn sizes_read_as_printed() {

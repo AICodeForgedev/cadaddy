@@ -33,7 +33,7 @@ use crate::{Result, Session};
 
 /// Findings kept at most (of each kind: a filter by kind sees all of its own up to this), and
 /// handles per finding.
-const MAX_FINDINGS: usize = 2_000;
+const MAX_FINDINGS: usize = 20_000;
 const MAX_HANDLES: usize = 50;
 /// Walls compared for overlaps, at most (hostile drawings).
 const MAX_WALLS: usize = 20_000;
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{kind?: leak|opening_not_in_wall|wall_without_height|walls_overlap|fixture_above_ceiling|fixture_below_floor|level_unmatched|not_built|outside_building, limit?: 1–1000 (100), cursor?: from `next`, bcf?: bool (a BCF topic per matching issue, up to 500), bcf_path?: .bcf file (those topics exported)} → {issues: [{kind, message, level?, at?, handles}] (a page: `limit` from `cursor`), total, byKind, next? (the cursor of the next page), bcf?: {created, topics, skipped, path?}}")
             .files(),
         CommandSpec::new("model.render", "Render Model View", run_render)
-            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor)} → {path?|png, width, height, triangles}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else the PNG comes back as base64), output?: same as path, width?, height? (800×600), style?: bim (default: trade colours, shaded with edges, the shell ghosted from outside)|realistic|shaded|shadedwithedges|hidden|wireframe, ghost?: bool, level?: name (an axonometric of it), room?: name or number, eye?: [x,y,z], target?: [x,y,z] (a camera pose), dir?: [x,y,z] (view direction towards the viewer), around?: [x0,y0,x1,y1] (only the model inside this plan box: a close-up), mark?: [x,y] (a red post at this plan point on `level`'s floor), fidelity?: auto|building|floor|room|detail (draw the built model as the 3D view's fidelity tier does: auto by the view's height)} → {path?|png, width, height, triangles, fidelity?}")
             .noundo(),
         CommandSpec::new("model.overlay", "Model Overlay", run_overlay)
             .params("{force?: bool (replace an existing file; otherwise it is refused), path?: PNG file (else base64), output?: same as path, width?, height? (1200×900), level?: name} → {path?|png, footprints, differences: [{kind: wall_not_built|opening_not_built|wall_not_in_plan, handle, at}]}")
@@ -86,8 +86,12 @@ fn built(d: &Drawing) -> Vec<Built> {
 /// other built objects should stand in.
 const SHELL: &[&str] = &["wall", "floor", "curtainwall", "column", "roof"];
 
-/// How far past its level's shell a built object may stand (a condenser on its pad, a canopy):
-/// 10 feet, or 5% of the shell's size when that is more.
+/// How far past its level's shell a built object stands before it is a finding (a wall pack, a
+/// condenser on its pad right by the wall are within it), feet.
+const OUTSIDE_FT: f64 = 5.0;
+
+/// How far past its level's shell a whole-building view frames (a condenser on its pad, a
+/// canopy): 10 feet, or 5% of the shell's size when that is more.
 fn shell_margin(b: &Bounds2, upf: f64) -> f64 {
     (10.0 * upf).max(0.05 * b.width().max(b.height()))
 }
@@ -391,6 +395,9 @@ impl Finding {
 }
 
 fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> {
+    // Each check's end on the progress sink (a big model's first check takes minutes).
+    let clock = web_time::Instant::now();
+    let step = |what: &str| super::guided::progress_line(&format!("  model.issues: {what} checked at {:.1} s", clock.elapsed().as_secs_f64()));
     let (sp, _) = current(s, "model.issues")?;
     let upf = units(&sp);
     let plan = plan_session(s)?;
@@ -422,7 +429,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
         let Some((_, shell)) = shells.iter().find(|(n, _)| n.eq_ignore_ascii_case(&level)) else { continue };
         let Some(c) = centre(d, e) else { continue };
         let by = shell_dist(shell, c);
-        if !by.is_finite() || by <= shell_margin(shell, upf) {
+        if !by.is_finite() || by <= OUTSIDE_FT * upf {
             continue;
         }
         // MEP by what it is (duct, pipe, equipment).
@@ -446,6 +453,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             handles: hs,
         });
     }
+    step("objects outside the building");
     // Rooms that leak.
     let rs = rooms(&plan, &sp)?;
     let mut reported: Vec<(Handle, Handle)> = Vec::new();
@@ -500,6 +508,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             }
         }
     }
+    step("rooms that leak");
     // Walls without height, and walls overlapping each other.
     let walls: Vec<(&Built, Footprint)> = made.iter().filter(|b| b.part == "wall").take(MAX_WALLS).map(|b| (b, footprint(&b.mesh))).collect();
     for (b, f) in &walls {
@@ -522,6 +531,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             handles: o.handles.to_vec(),
         });
     }
+    step("walls");
     // Fixtures above their room's ceiling or below the floor.
     let scene = cadaddy_walk3d::derive(pd, &sp.to_rules());
     let suf = if scene.units_per_foot.is_finite() && scene.units_per_foot > 0.0 { scene.units_per_foot } else { upf };
@@ -554,6 +564,7 @@ fn issues(s: &Session) -> Result<(Vec<Finding>, BTreeMap<&'static str, usize>)> 
             });
         }
     }
+    step("fixtures");
     // Levels that don't match.
     let mut levels: Vec<&cadaddy_walk3d::Level> = sp.levels.iter().collect();
     levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
@@ -695,7 +706,7 @@ fn run_issues(s: &mut Session, p: &Value) -> Result<Value> {
     let mut out = json!({ "total": found, "issues": list, "byKind": by });
     // Past the cap: how many there are, and that the list stops.
     if found > matching.len() {
-        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept; fix those, then check again")});
+        out["truncated"] = json!({"found": found, "listed": matching.len(), "note": format!("only the first {MAX_FINDINGS} issues of each kind are kept (all of them are counted); fix those, then check again")});
     }
     if from.saturating_add(limit) < matching.len() {
         out["next"] = json!(from + limit);
@@ -921,7 +932,26 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
     let tol = if size.is_finite() && size > 0.0 { size / 1500.0 } else { 1.0 };
     let bg = cadaddy_color::Rgb(255, 255, 255);
     let (progress, total) = (AtomicUsize::new(0), AtomicUsize::new(0));
-    let m3 = model3::build(&md, &Space::Model, tol, bg, &progress, &total);
+    // Fidelity (as the 3D view draws it): the built model by tier, at the one asked for (auto:
+    // the one the view's height calls for).
+    let fidelity = match p.get("fidelity").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => match v.as_str().map(str::trim) {
+            Some(t) if t.eq_ignore_ascii_case("auto") => Some(None),
+            Some(t) => {
+                Some(Some(model3::Tier::parse(t).ok_or_else(|| bad("model.render", "`fidelity` must be auto, building, floor, room or detail"))?))
+            }
+            None => return Err(bad("model.render", "`fidelity` must be auto, building, floor, room or detail")),
+        },
+    };
+    let m3 = match fidelity {
+        Some(_) => {
+            let md = std::sync::Arc::new(md.clone());
+            let classify = super::fidelity::classifier(&md);
+            model3::build_fid(std::sync::Arc::clone(&md), &Space::Model, tol, bg, &progress, &total, &[], &classify, model3::FidOptions::default())
+        }
+        None => model3::build(&md, &Space::Model, tol, bg, &progress, &total),
+    };
     // Half-spaces `n · p >= c` the view keeps: a room's box (a foot round its outline), the
     // space in front of a camera, the building's frame.
     let mut keep_in: Vec<(Vec3, f64)> = Vec::new();
@@ -980,11 +1010,29 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         .unwrap_or(m3.bounds);
     let initial_view = fit_bounds(&view_bounds, proj, w, h);
     // Cull and pick LODs; flatten only the visible parts into a triangle list.
-    let mut sc = if let Some(iv) = &initial_view {
-        let vis = m3.visible(iv);
-        m3.flatten_visible(&vis)
-    } else {
-        m3.flatten()
+    let mut tier_drawn = None;
+    let mut sc = match (&initial_view, fidelity) {
+        (Some(iv), Some(fixed)) => {
+            let auto = super::fidelity::Rules::of(&md).0.auto.tiers();
+            let tier = fixed.unwrap_or_else(|| auto.tier(iv.height / super::fidelity::units_per_foot(&md), None));
+            tier_drawn = Some(tier);
+            let vis = m3.visible_at(iv, tier, None);
+            let mut sc = m3.flatten_visible(&vis);
+            let mut st = model3::Stream::default();
+            st.update(&m3, iv, tier, f64::INFINITY);
+            for k in st.visible(iv) {
+                if let Some(c) = st.cells.get(&k) {
+                    sc.tris.extend_from_slice(&c.scene.tris);
+                    sc.lines.extend_from_slice(&c.scene.lines);
+                }
+            }
+            sc
+        }
+        (Some(iv), None) => {
+            let vis = m3.visible(iv);
+            m3.flatten_visible(&vis)
+        }
+        (None, _) => m3.flatten(),
     };
     // Clip by the half-spaces (room box, camera front, building frame, plan box).
     if !keep_in.is_empty() {
@@ -1044,6 +1092,9 @@ fn run_render(s: &mut Session, p: &Value) -> Result<Value> {
         "prototypes": m3.protos.len(),
         "style": if bim { "bim" } else { style.name() },
     });
+    if let Some(t) = tier_drawn {
+        out["fidelity"] = json!(t.name());
+    }
     if outliers > 0 {
         out["outliers"] = json!(outliers);
     }

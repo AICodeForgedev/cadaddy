@@ -281,6 +281,15 @@ fn files(app: &CadApp, ui: &mut egui::Ui, changes: &mut Map<String, Value>) {
         crate::rtl::trail(ui, "");
         ui.end_row();
 
+        // ISAVEBAK: keep the previous file as `<name>.bak` when saving over a drawing.
+        crate::rtl::lead(ui, crate::tl!("Backup copy"));
+        let mut bak = cadaddy_engine::autosave::isavebak();
+        if ui.checkbox(&mut bak, crate::tl!("Create backup copy with each save")).changed() {
+            changes.insert("ISAVEBAK".into(), json!(i32::from(bak)));
+        }
+        crate::rtl::trail(ui, crate::tl!("Backup copy"));
+        ui.end_row();
+
         crate::rtl::lead(ui, crate::tl!("Default save version"));
         let current = crate::SaveVersion::parse(&app.ui.save_version).unwrap_or_default();
         let mut version = current;

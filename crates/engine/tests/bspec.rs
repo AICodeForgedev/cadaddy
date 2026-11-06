@@ -146,8 +146,17 @@ fn model(s: &Session) -> Vec<String> {
         .iter()
         .filter(|e| made_as(e).is_some())
         .map(|e| {
-            // The source handle (fourth tag) names plan objects, the same in both sessions.
-            let tags: Vec<&str> = e.common.xdata.iter().map(|t| t.value.as_str()).collect();
+            // The source handle (fourth tag) names plan objects, the same in both sessions. A
+            // trade piece's references to other built elements (its host, what it connects to)
+            // are their handles, new with each build.
+            let mut x = e.common.xdata.to_vec();
+            if made_as(e).as_deref() == Some("atom") {
+                let mut ps = cadaddy_doc::props::read(&x);
+                ps.remove("host");
+                ps.remove("connects");
+                x = cadaddy_doc::props::write(&x, &ps);
+            }
+            let tags: Vec<&str> = x.iter().map(|t| t.value.as_str()).collect();
             format!("{} {:?} {:?}", e.common.layer, tags, e.kind)
         })
         .collect()
@@ -305,9 +314,11 @@ fn model_build_follows_the_spec_and_is_deterministic() {
     other.execute("bspec.set", &json!({"spec": spec(), "replace": true})).unwrap();
     other.execute("model.build", &json!({})).unwrap();
     assert_eq!(model(&other), first);
-    // Associative: moving the partition rebuilds it; clear removes everything.
+    // Associative: moving the partition leaves the model behind and the update rebuilds it;
+    // clear removes everything.
     let h = s.doc().unwrap().model.iter().find(|e| e.common.layer == "A-WALL-CL").unwrap().handle;
     s.execute("move", &json!({"handles": [h.hex()], "from": [0, 0], "to": [24, 0]})).unwrap();
+    s.execute("model.update", &json!({})).unwrap();
     let moved = made(&s, "wall");
     assert!(moved.iter().any(|(m, _)| (x_range(m).0 - (17.0 * 12.0 - 2.4375)).abs() < 1e-6), "partition not rebuilt");
     let n = s.execute("model.build", &json!({"clear": true})).unwrap()["removed"].as_u64().unwrap();

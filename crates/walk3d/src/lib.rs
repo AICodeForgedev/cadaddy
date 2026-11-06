@@ -32,6 +32,7 @@ pub mod tags;
 mod takeoff;
 mod tour;
 pub mod validate;
+pub mod validate_kinds;
 pub mod video;
 mod walker;
 
@@ -42,18 +43,18 @@ pub use levels::{Datum, DatumKind, LevelNote, ShaftMark, ShaftRun, SheetLink};
 pub use math::{Mat4, V3};
 pub use measure::{Dim, DimKind, measure};
 pub use pick::{Hit, pick};
-pub use rfi::{Rfi, RfiKind, RfiStatus, Severity};
+pub use rfi::{Rfi, RfiKind, RfiSide, RfiStatus, Severity};
 pub use rules::{DeviceRules, LayerKind, LayerRule, Level, Mount, Openings, Rules};
 // A room of the building spec (`derive::Room` is a room found in the plan).
 pub use concrete::{Concrete, ConcreteElement, Depression, Embed, MAX_CONCRETE, PadDecision, Pour, Rebar, Signoff};
 pub use spec::{
     ArcFlash, Assembly, AssemblyLayer, Band, BandKind, Bond, BuildingSpec, Busbar, CeilingArea, CeilingGrid, CeilingItem, CeilingKind, CeilingType,
-    Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, Exterior, Facade, Family, FamilyKind,
-    Feeder, GridColumn, GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Hoistway, Issue, ItemKind, LayerRole, LayerSide,
-    LevelParapet, MAX_ASSEMBLY_LAYERS, MarkStatus, Mep, MepEquipment, MepKind, MepRevision, MepRun, MepSystem, MepTerminal, OpeningTag, PanelCircuit,
-    PartPath, Pick, PointOfEntry, Rcp, Role, Roof, RoofDrain, RoofSlope, Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site,
-    Soffit, SoffitType, Stair, Surfaces, Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, feet, inches, level_at, merge,
-    pipe_system_default_color, pitch_text,
+    Circulation, CirculationKind, Cricket, Described, DuctType, ElecDevice, Electrode, Enclosure, Equipment, EquipmentElectrical, Exterior, Facade,
+    Family, FamilyKind, Feeder, FixtureType, GridColumn, GroundRequirement, Grounding, Hang, Head, HeadTo, HeadTrack, HeightRule, Hoistway, Issue,
+    ItemKind, LayerRole, LayerSide, LevelParapet, LoadSummary, LoadSummaryLine, MAX_ASSEMBLY_LAYERS, MarkStatus, Mep, MepEquipment, MepInvert,
+    MepKind, MepRevision, MepRun, MepSystem, MepTerminal, MountNote, OpeningTag, PanelCircuit, PanelSchedule, PartPath, Pick, PointOfEntry, Rcp,
+    Role, Roof, RoofDrain, RoofSlope, Room as SpecRoom, SPEC_VERSION, Schedule, ScheduleRow, Service, Side, Site, Soffit, SoffitType, Stair,
+    Surfaces, Termination, UferNote, ValueStatus, WallFrom, WallMark, WallType, feet, inches, level_at, merge, pipe_system_default_color, pitch_text,
 };
 pub use takeoff::{Takeoff, TakeoffRow, takeoff};
 pub use tour::{Look, MAX_FRAMES, MAX_TOUR_STOPS, Pose, TOURS_VERSION, Tour, TourPath, Tours, Viewpoint};

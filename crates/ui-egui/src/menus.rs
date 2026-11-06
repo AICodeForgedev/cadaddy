@@ -47,6 +47,7 @@ pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("ui.float.symbols", "Symbols", &["Window", "Palette Windows", "Symbols"], None),
     ("ui.float.quickCalc", "QuickCalc", &["Window", "Palette Windows", "QuickCalc"], None),
     ("ui.panel.planstomodel", "Plans to Model", &["Window", "Plans to Model"], None),
+    (crate::validatepalette::COMMAND, "Validate", &["Window", "Validate"], None),
     ("ui.toggle.systemcursor", "Show System Cursor", &["View", "Accessibility", "Show System Cursor"], None),
     ("ui.animations.system", "Use System Setting", &["View", "Accessibility", "Animation Effects", "Use System Setting"], None),
     ("ui.animations.on", "On", &["View", "Accessibility", "Animation Effects", "On"], None),
@@ -190,6 +191,16 @@ fn file_dialogs_off(app: &CadApp) -> bool {
     cadaddy_engine::sysvars::get(&app.session, "FILEDIA").and_then(|v| v.as_i64()) == Some(0)
 }
 
+/// A user's QSAVE: a drawing with no file yet picks one, and saving over a file that would lose
+/// content asks first. `None` lets the engine save. JSON calls carry params and never get here;
+/// they report the loss in their result instead.
+fn user_qsave(app: &mut CadApp) -> Option<Result<Value, String>> {
+    if app.session.state().is_ok_and(|s| s.path.is_none()) {
+        return run_ui_command(app, "ui.saveas", &Value::Null);
+    }
+    app.hold_lossy_save().then_some(Ok(Value::Null))
+}
+
 fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if params.is_null()
         && file_dialogs_off(app)
@@ -257,6 +268,14 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
     }
     if id == "ui.panel.planstomodel" || (id == "planstomodel" && params.is_null()) {
         return Some(crate::planstomodel::open(app));
+    }
+    // Automation ▸ Validate opens its panel; Automation ▸ Takeoff (a click, no parameters) runs
+    // the takeoff into its window. With parameters AUTOMATION.TAKEOFF is the engine's command.
+    if id == crate::validatepalette::COMMAND {
+        return Some(crate::validatepalette::open(app));
+    }
+    if id == crate::takeoffwin::COMMAND && params.is_null() {
+        return Some(crate::takeoffwin::run(app));
     }
     // SYMBOLS typed or from a menu opens the symbol library palette, expanded.
     if id == "ui.panel.symbols" || (id == "symbols" && params.is_null()) {
@@ -394,7 +413,7 @@ fn run_ui_command_inner(app: &mut CadApp, id: &str, params: &Value) -> Option<Re
             }
             Ok(Value::Null)
         }
-        "qsave" if no_path && app.session.state().is_ok_and(|s| s.path.is_none()) => return run_ui_command(app, "ui.saveas", &Value::Null),
+        "qsave" if no_path => return user_qsave(app),
         // EXPORTPDF from the menu or typed: ask where to save the PDF (PLOT and PRINT open the Plot
         // dialog, `managers::route`). JSON calls (scripts, control channel, MCP) always carry
         // params, never get here and never open a dialog.

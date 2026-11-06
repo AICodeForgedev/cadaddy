@@ -3359,3 +3359,147 @@ menu	Modify	Edita
 	Remove Company Standard	Rimuovi standard aziendale
 	Set Company Standard	Imposta standard aziendale
 	Standards	Standard
+	 ({n} shown; Export writes them all)	 ({n} mostrate; Esporta le scrive tutte)
+	(no picture)	(nessuna immagine)
+	A false alarm	Un falso allarme
+	Confidence:	Affidabilità:
+	Current room	Locale corrente
+	Defer	Rimanda
+	Expected:	Previsto:
+	False alarms: {rate}	Falsi allarmi: {rate}
+	Findings ({n})	Rilievi ({n})
+	Found:	Trovato:
+	From the 2D drawing	Dal disegno 2D
+	From the BIM model	Dal modello BIM
+	Issue:	Problema:
+	It is a real error	È un errore reale
+	Leave it for a field decision	Lasciare a una decisione in cantiere
+	No file chosen. Type: automation.takeoff {params}	Nessun file scelto. Digitare: automation.takeoff {params}
+	No findings to review.	Nessun rilievo da esaminare.
+	No run yet: choose a scope and trades, then Start.	Nessuna esecuzione: scegliere ambito e discipline, poi Avvia.
+	No takeoff yet: Refresh runs it.	Nessun computo: Aggiorna lo esegue.
+	Overall	Complessivo
+	Refresh	Aggiorna
+	Reject	Rifiuta
+	Resume	Riprendi
+	Rules ({on} of {all} on)	Regole ({on} di {all} attive)
+	Scope:	Ambito:
+	Scores	Punteggi
+	Show answered	Mostra con risposta
+	Takeoff	Computo
+	Takeoff written to {path}	Computo scritto in {path}
+	Trades:	Discipline:
+	done	completato
+	judging	in valutazione
+	project	progetto
+	waiting for an agent	in attesa di un agente
+	{done} of {total} areas, {state}	{done} di {total} aree, {state}
+	{source}: {n} lines	{source}: {n} righe
+	Automation Takeoff	Computo automazione
+	Cancel Validation Run	Annulla convalida
+	Change a Validation Rule	Modifica regola di convalida
+	Validation Areas	Aree di convalida
+	Validation Evidence Packet	Pacchetto prove di convalida
+	Validation Prescreen	Controllo preliminare di convalida
+	Validation Rules	Regole di convalida
+	Validate	Convalida
+	Automation	Automazione
+	Model Checks	Controlli del modello
+	Qty	Q.tà
+	Elements	Elementi
+	Fire	Antincendio
+	Validate: waiting for an agent	Convalida: in attesa di un agente
+	Validate Model Against Prints (Agent)	Convalida il modello rispetto alle tavole (agente)
+	Next Validation Packet	Pacchetto di convalida successivo
+	Report Validation Findings	Segnala i risultati della convalida
+	Validation Run Status	Stato dell’esecuzione di convalida
+	Plant Validation Errors	Inserisci errori di convalida
+	Model Fidelity	Fedeltà del modello
+	Model Fidelity Rules	Regole di fedeltà del modello
+	Model Fidelity Report	Rapporto di fedeltà del modello
+	Fidelity	Fedeltà
+	Auto	Automatico
+	Floor	Piano
+	Detail	Dettaglio
+	Print Inventory	Inventario delle tavole
+	Piece	Pezzo
+	Raceway run	Tratta di canalizzazione
+	Connects to	Collegato a
+	Height AFF	Altezza dal pavimento finito
+	Host wall	Parete ospite
+	Wall face	Faccia della parete
+	Outlet box	Scatola di derivazione
+	Fed by	Alimentato da
+	Count Model Pieces	Conta i pezzi del modello
+	Edit Model Piece	Modifica pezzo del modello
+	Walk the Feed	Percorri l'alimentazione
+	Lay Out Trade Pieces	Disponi i pezzi per categoria
+	Trade Pieces Report	Rapporto pezzi per categoria
+	Trade Piece Rules	Regole dei pezzi per categoria
+	Read Trade Documents	Leggi i documenti delle categorie
+	Object Forms	Moduli degli oggetti
+	Create Object Forms	Crea moduli degli oggetti
+	Edit Object Form Field	Modifica campo del modulo oggetto
+	Record Object Field Value	Registra valore del campo oggetto
+	Object Form Log	Registro dei moduli degli oggetti
+	Revert Object Form Change	Annulla modifica del modulo oggetto
+	Promote Object Form to Template	Promuovi modulo oggetto a modello
+	Object Completeness	Completezza degli oggetti
+	Object Form	Modulo oggetto
+	Wall Faces	Facce delle pareti
+	Place Devices on Wall Faces	Posiziona i dispositivi sulle facce delle pareti
+	Devices Follow Their Walls	I dispositivi seguono le loro pareti
+	Room Layout	Layout della stanza
+	Tie a Device to an Object	Collega un dispositivo a un oggetto
+	Add Casework or Appliance Object	Aggiungi oggetto arredo o elettrodomestico
+	Conduit Routing Report	Rapporto percorsi tubi protettivi
+	Reroute Conduit	Ricalcola percorsi tubi protettivi
+	Conduit Takeoff	Computo tubi protettivi
+	Wire Pull Schedule	Programma di tiro dei cavi
+	Conduit Cut and Bend List	Distinta di taglio e piegatura dei tubi
+	Material Release List	Elenco di rilascio materiali
+	Field Paperwork Sheets	Fogli della documentazione di cantiere
+	Scope by Trade	Ambito per categoria
+	Value Engineering Scenario	Scenario di value engineering
+	Value Engineering Decision	Decisione di value engineering
+	Read Drawn Dimensions	Leggi le quote disegnate
+	Underground Plan Report	Rapporto pianta impianti interrati
+	Update Model from Plans	Aggiorna modello dalle piante
+	Load Calculation	Calcolo dei carichi
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Un rapporto sull'arresto è stato conservato su questo computer: Guida > Segnala un problema lo propone.
+	A recovery copy of the drawing with unsaved changes was autosaved.	È stata salvata automaticamente una copia di ripristino del disegno con modifiche non salvate.
+	Autosave failed	Salvataggio automatico non riuscito
+	Autosave failed: {message}	Salvataggio automatico non riuscito: {message}
+	Backup copies are off, so the current file will be replaced.	Le copie di backup sono disattivate, quindi il file attuale verrà sostituito.
+	Backup copy	Copia di backup
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy non è riuscito a scrivere una copia di ripristino, quindi le modifiche recenti andrebbero perse se l'app si fermasse ora.
+	CADaddy has to close	CADaddy deve chiudersi
+	Close CADaddy	Chiudi CADaddy
+	Create backup copy with each save	Crea una copia di backup a ogni salvataggio
+	DXF keeps them. Use Save As to keep them in the drawing.	Il DXF li conserva. Usa Salva con nome per mantenerli nel disegno.
+	Details	Dettagli
+	Dismiss	Ignora
+	Drawing Recovery offers them at the next start.	Ripristino disegni li proporrà al prossimo avvio.
+	Internal error	Errore interno
+	No drawing needed a new recovery copy.	Nessun disegno richiedeva una nuova copia di ripristino.
+	Part of CADaddy failed, and the app kept running.	Una parte di CADaddy non ha funzionato e l'app è rimasta in esecuzione.
+	Part of CADaddy keeps failing, so it can't continue.	Una parte di CADaddy continua a non funzionare, quindi non può proseguire.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Sono state salvate automaticamente copie di ripristino di {count} disegni con modifiche non salvate.
+	Save Anyway	Salva comunque
+	Save cancelled: {path} was not changed.	Salvataggio annullato: {path} non è stato modificato.
+	Save your work and restart CADaddy.	Salva il lavoro e riavvia CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Salva il lavoro. Il salvataggio automatico riprova dopo l'intervallo SAVETIME; la sua cartella è in Opzioni.
+	Saving {name} will remove content	Il salvataggio di {name} rimuoverà dei contenuti
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Il file attuale non sembra completo, quindi {name} resta com'è e il file attuale verrà sostituito.
+	The current file is kept as {name} until the next save.	Il file attuale viene conservato come {name} fino al prossimo salvataggio.
+	This format can't keep these objects yet: {objects}.	Questo formato non può ancora conservare questi oggetti: {objects}.
+	{count} more types	altri {count} tipi
+	Review by Impact	Revisione per impatto
+	Resolve Review Item by Impact	Risolvi voce di revisione per impatto
+	Open Review Item	Apri voce di revisione
+	Review Audit Trail	Registro di controllo della revisione
+	Accuracy Trend	Andamento della precisione
+	Measure Build Accuracy	Misura la precisione del modello
+	Export for AR	Esporta per la realtà aumentata
+	AR Export Rules	Regole di esportazione per la realtà aumentata
+	Panel Breakers	Interruttori del quadro

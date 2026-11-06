@@ -579,6 +579,29 @@ impl Workbook {
     /// The cells of sheet `name` (default the first), limited to `range` (`A1:C5`), as rows of
     /// text, empty cells as empty strings.
     pub fn cells(&self, sheet: Option<&str>, range: Option<&str>) -> Result<Vec<Vec<String>>, String> {
+        self.read_cells(sheet, range, true)
+    }
+
+    /// As [`Self::cells`], numbers unformatted (full precision: a price, not its two decimals).
+    pub fn values(&self, sheet: Option<&str>, range: Option<&str>) -> Result<Vec<Vec<String>>, String> {
+        self.read_cells(sheet, range, false)
+    }
+
+    /// The formulas of sheet `name` (default the first): each formula cell's reference (`B2`)
+    /// and its formula (no `=`), in sheet order.
+    pub fn formulas(&self, sheet: Option<&str>) -> Result<Vec<(String, String)>, String> {
+        let (_, xml) = self.sheet_xml(sheet)?;
+        let mut rows = Vec::new();
+        xml.find_all("row", &mut rows);
+        Ok(rows
+            .iter()
+            .flat_map(|row| row.elements().filter(|e| e.name == "c"))
+            .filter_map(|c| Some((c.attr("r")?.to_string(), c.child("f").map(Element::text)?)))
+            .take(MAX_CELLS)
+            .collect())
+    }
+
+    fn sheet_xml(&self, sheet: Option<&str>) -> Result<(&str, Element), String> {
         let (name, path) = match sheet {
             Some(n) => self.sheets.iter().find(|(s, _)| s.eq_ignore_ascii_case(n.trim())).ok_or_else(|| format!("no sheet \"{n}\""))?,
             None => self.sheets.first().ok_or("the workbook has no sheets")?,
@@ -586,6 +609,11 @@ impl Workbook {
         let key = clean_name(path);
         let part = parts_of(&self.bytes, &[key])?;
         let xml = part_xml(&part, key).map_err(|e| format!("sheet \"{name}\": {e}"))?.ok_or_else(|| format!("sheet \"{name}\" can't be read"))?;
+        Ok((name.as_str(), xml))
+    }
+
+    fn read_cells(&self, sheet: Option<&str>, range: Option<&str>, formatted: bool) -> Result<Vec<Vec<String>>, String> {
+        let (name, xml) = self.sheet_xml(sheet)?;
         let bounds = match range {
             Some(r) => {
                 let (a, b) = r.split_once(':').unwrap_or((r, r));
@@ -626,10 +654,11 @@ impl Workbook {
                         }
                     }
                     _ => match v.and_then(|s| s.trim().parse::<f64>().ok()).filter(|n| n.is_finite()) {
-                        Some(n) => {
+                        Some(n) if formatted => {
                             let style = c.attr("s").and_then(|s| s.parse::<usize>().ok()).unwrap_or(0);
                             format_number(n, self.formats.get(style).map_or("General", String::as_str))
                         }
+                        Some(n) => format!("{n}"),
                         None => String::new(),
                     },
                 };
@@ -703,15 +732,80 @@ fn sheet_xml(rows: &[Vec<String>], header: bool) -> String {
 /// A workbook of named sheets, each `rows` as they are ([`write_sheets_with_headers`] styles the
 /// first rows as headers).
 pub fn write_sheets(sheets: &[(String, Vec<Vec<String>>)]) -> Result<Vec<u8>, String> {
-    write_book(sheets, false)
+    let xml: Vec<(String, String)> = sheets.iter().map(|(n, rows)| (n.clone(), sheet_xml(rows, false))).collect();
+    write_book(&xml, false)
 }
 
 /// As [`write_sheets`], every sheet's first row a bold header, frozen in view.
 pub fn write_sheets_with_headers(sheets: &[(String, Vec<Vec<String>>)]) -> Result<Vec<u8>, String> {
-    write_book(sheets, true)
+    let xml: Vec<(String, String)> = sheets.iter().map(|(n, rows)| (n.clone(), sheet_xml(rows, true))).collect();
+    write_book(&xml, false)
 }
 
-fn write_book(sheets: &[(String, Vec<Vec<String>>)], header: bool) -> Result<Vec<u8>, String> {
+/// One cell written by [`write_cells`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cell {
+    Empty,
+    /// Always text, even when it reads as a number or starts with `=`.
+    Text(String),
+    Number(f64),
+    /// A live formula (no leading `=`) and the number it gives now (shown until the spreadsheet
+    /// recalculates; the workbook recalculates when opened).
+    Formula(String, f64),
+    /// A formula giving text, and the text it gives now.
+    FormulaText(String, String),
+}
+
+impl Cell {
+    pub fn text(t: impl Into<String>) -> Self {
+        Cell::Text(t.into())
+    }
+}
+
+/// A workbook of named sheets of [`Cell`]s, formulas live; every sheet's first row a bold header,
+/// frozen in view.
+pub fn write_cells(sheets: &[(String, Vec<Vec<Cell>>)]) -> Result<Vec<u8>, String> {
+    let xml: Vec<(String, String)> = sheets.iter().map(|(n, rows)| (n.clone(), cells_xml(rows))).collect();
+    write_book(&xml, true)
+}
+
+/// One worksheet's XML from cells; the first row bold and frozen.
+fn cells_xml(rows: &[Vec<Cell>]) -> String {
+    let mut data = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">"#,
+    );
+    if !rows.is_empty() {
+        data.push_str(r#"<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>"#);
+    }
+    data.push_str("<sheetData>");
+    let num = |v: f64| if v.is_finite() { format_number(v, "General") } else { "0".into() };
+    for (r, row) in rows.iter().enumerate() {
+        data.push_str(&format!(r#"<row r="{}">"#, r + 1));
+        let style = if r == 0 { r#" s="1""# } else { "" };
+        for (c, v) in row.iter().enumerate() {
+            let at = format!("{}{}", col_name(c), r + 1);
+            match v {
+                Cell::Empty => {}
+                Cell::Text(t) if t.is_empty() => {}
+                Cell::Text(t) => {
+                    data.push_str(&format!(r#"<c r="{at}"{style} t="inlineStr"><is><t xml:space="preserve">{}</t></is></c>"#, xml_escape(t)))
+                }
+                Cell::Number(n) => data.push_str(&format!(r#"<c r="{at}"{style}><v>{}</v></c>"#, num(*n))),
+                Cell::Formula(f, n) => data.push_str(&format!(r#"<c r="{at}"{style}><f>{}</f><v>{}</v></c>"#, xml_escape(f), num(*n))),
+                Cell::FormulaText(f, t) => {
+                    data.push_str(&format!(r#"<c r="{at}"{style} t="str"><f>{}</f><v>{}</v></c>"#, xml_escape(f), xml_escape(t)));
+                }
+            }
+        }
+        data.push_str("</row>");
+    }
+    data.push_str("</sheetData></worksheet>");
+    data
+}
+
+/// The workbook of sheets (name, worksheet XML); `recalc`: the spreadsheet recalculates its
+/// formulas when it opens the file.
+fn write_book(sheets: &[(String, String)], recalc: bool) -> Result<Vec<u8>, String> {
     if sheets.is_empty() {
         return Err("a workbook needs a sheet".into());
     }
@@ -742,13 +836,13 @@ fn write_book(sheets: &[(String, Vec<Vec<String>>)], header: bool) -> Result<Vec
     let mut parts: Vec<(String, Vec<u8>)> = vec![
         ("[Content_Types].xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>{overrides}</Types>"#).into_bytes()),
         ("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#.into()),
-        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheet_list}</sheets></workbook>"#).into_bytes()),
+        ("xl/workbook.xml".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{sheet_list}</sheets>{calc}</workbook>"#, calc = if recalc { r#"<calcPr fullCalcOnLoad="1"/>"# } else { "" }).into_bytes()),
         ("xl/_rels/workbook.xml.rels".into(), format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}<Relationship Id="rId{styles_rel}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#).into_bytes()),
         // Two cell formats: plain, and bold (headers).
         ("xl/styles.xml".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs></styleSheet>"#.into()),
     ];
-    for (i, (_, rows)) in sheets.iter().enumerate() {
-        parts.push((format!("xl/worksheets/sheet{}.xml", i + 1), sheet_xml(rows, header).into_bytes()));
+    for (i, (_, xml)) in sheets.iter().enumerate() {
+        parts.push((format!("xl/worksheets/sheet{}.xml", i + 1), xml.clone().into_bytes()));
     }
     zip::write(&parts)
 }
@@ -783,6 +877,24 @@ mod tests {
         assert!(write_sheets(&[]).is_err());
         // The one-sheet form still writes what it did.
         assert_eq!(open(&write(&a, "T").unwrap()).unwrap().cells(None, None).unwrap(), a);
+    }
+
+    #[test]
+    fn formulas_are_written_live_with_their_values_now() {
+        let rows = vec![
+            vec![Cell::text("item"), Cell::text("qty"), Cell::text("each"), Cell::text("cost")],
+            vec![Cell::text("=not a formula"), Cell::Number(3.0), Cell::Number(2.5), Cell::Formula("B2*C2".into(), 7.5)],
+            vec![Cell::text("x & y"), Cell::Empty, Cell::Empty, Cell::FormulaText("IF(D2>5,\"high\",\"low\")".into(), "high".into())],
+        ];
+        let bytes = write_cells(&[("Sheet & One".into(), rows)]).unwrap();
+        let wb = open(&bytes).unwrap();
+        // The values now read as cells; the formulas as formulas; text never becomes one.
+        assert_eq!(wb.cells(None, None).unwrap()[1], ["=not a formula", "3", "2.5", "7.5"]);
+        assert_eq!(wb.cells(None, None).unwrap()[2], ["x & y", "", "", "high"]);
+        assert_eq!(wb.formulas(None).unwrap(), [("D2".to_string(), "B2*C2".to_string()), ("D3".into(), "IF(D2>5,\"high\",\"low\")".into())]);
+        // The workbook recalculates when opened.
+        let parts = parts_of(&bytes, &["xl/workbook.xml"]).unwrap();
+        assert!(String::from_utf8_lossy(parts.get("xl/workbook.xml").unwrap()).contains("fullCalcOnLoad=\"1\""));
     }
 
     #[test]

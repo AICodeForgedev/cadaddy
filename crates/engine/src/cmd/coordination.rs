@@ -763,7 +763,7 @@ fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn iso_date() -> String {
+pub(crate) fn iso_date() -> String {
     let now = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let days = now / 86400;
     let secs = now % 86400;

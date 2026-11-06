@@ -152,3 +152,39 @@ fn dgn_v8_and_bad_input_are_refused() {
     }
     let _: Value = json!(null);
 }
+
+#[test]
+fn attaching_a_damaged_design_file_passes_the_reader_warnings_on() {
+    hooks();
+    let d = dir("damaged");
+    let path = d.join("site.dgn").display().to_string();
+    let mut s = Session::new();
+    site(&mut s);
+    s.execute("dgnexport", &json!({"path": path})).unwrap();
+    let whole = s.execute("dgnattach", &json!({"path": path})).unwrap();
+    assert_eq!(whole["warnings"], json!([]), "{whole}");
+    let bytes = std::fs::read(&path).unwrap();
+    let mut warned = 0;
+    for cut in (1600..bytes.len()).step_by(7) {
+        let cut_path = d.join("cut.dgn").display().to_string();
+        std::fs::write(&cut_path, &bytes[..cut]).unwrap();
+        let mut t = Session::new();
+        if let Ok(r) = t.execute("dgnattach", &json!({"path": cut_path})) {
+            let size = r["size"].as_array().unwrap();
+            assert!(size.iter().all(|v| v.as_f64().unwrap() <= 1e12), "{r}");
+            warned += usize::from(!r["warnings"].as_array().unwrap().is_empty());
+        }
+    }
+    assert!(warned > 0, "no cut file attached with a warning");
+}
+
+#[test]
+fn dist_and_id_refuse_values_too_large_to_report() {
+    let mut s = Session::new();
+    let e = s.execute("dist", &json!({"p1": [-1e308, 0], "p2": [1e308, 5]})).unwrap_err().to_string();
+    assert!(e.contains("the distance is too large to compute"), "{e}");
+    let e = s.execute("id", &json!({"at": [1e308, 0]})).unwrap_err().to_string();
+    assert!(e.contains("too large"), "{e}");
+    let r = s.execute("dist", &json!({"p1": [0, 0], "p2": [3, 4]})).unwrap();
+    assert!(r["message"].as_str().unwrap().starts_with("Distance = 5.0000"), "{r}");
+}

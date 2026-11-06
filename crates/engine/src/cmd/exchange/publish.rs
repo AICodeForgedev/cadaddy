@@ -126,7 +126,7 @@ const MAX_FOLDER: usize = 10_000;
 /// drawing's that exist) or else its usual ones (Model if it has objects, then the layouts in tab
 /// order). `stamp` forces the plot stamp on or off. A drawing that fails is reported and the rest
 /// go on.
-pub(super) fn folder(folder: &str, out: Option<&str>, layouts: Option<&[String]>, stamp: Option<bool>) -> Result<Value> {
+pub(super) fn folder(folder: &str, out: Option<&str>, layouts: Option<&[String]>, stamp: Option<bool>, force: bool) -> Result<Value> {
     let cmd = "publish";
     let hook = io().and_then(|h| h.plot).ok_or_else(|| bad(cmd, "plotting is not available in this build"))?;
     let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(folder)
@@ -148,6 +148,9 @@ pub(super) fn folder(folder: &str, out: Option<&str>, layouts: Option<&[String]>
         let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let target = out_dir.join(format!("{stem}.pdf")).to_string_lossy().into_owned();
         let r = (|| -> Result<usize> {
+            if !force && Path::new(&target).exists() {
+                return Err(bad(cmd, format!("{target} already exists: choose another `out` folder, or pass force:true to replace it")));
+            }
             let d = read_drawing(cmd, &file)?;
             let mut sheets: Vec<String> = match layouts {
                 Some(names) => names

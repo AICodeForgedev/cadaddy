@@ -70,7 +70,8 @@ fn answers_stand_alone_run_their_stage_once_and_the_job_can_go_on_unattended() {
     let dir = job_folder("batch");
     let pdfs = dir.display().to_string();
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false})).expect("job.start");
+    // No specification for the made-up set (`specs: false`): the job doesn't stop to ask for one.
+    let st = s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false, "specs": false})).expect("job.start");
     assert_eq!(st["current_stage"], "levels", "{st}");
 
     // MUST 1 + 3: the level questions in one call, with an id that isn't there. Level 2 takes a
@@ -138,8 +139,10 @@ fn answers_stand_alone_run_their_stage_once_and_the_job_can_go_on_unattended() {
 
     // rerun: false holds the re-run; job.next runs it.
     let devices = open_questions(&mut s, "devices");
-    let verify = devices.iter().find(|id| question_text(&mut s, id).contains("type right?")).expect("a device spot check").clone();
-    let r = s.execute("job.answer", &json!({"id": verify, "answer": "Not a device", "rerun": false})).expect("held");
+    // The set's only marks by symbols are its grids' A and B, no device types (Q6165): its
+    // completeness question's re-check holds the devices stage's re-run the same way.
+    let none = devices.iter().find(|id| question_text(&mut s, id).contains("No devices detected")).expect("the no-devices question").clone();
+    let r = s.execute("job.answer", &json!({"id": none, "answer": "There should be devices — re-check", "rerun": false})).expect("held");
     assert_eq!((r["rerun"].clone(), r["rerun_held"]["from"].clone()), (json!([]), json!("devices")), "{r}");
     assert_eq!(s.execute("job.status", &json!({})).expect("status")["rerun_held"], "devices");
     let n = s.execute("job.next", &json!({})).expect("job.next");
@@ -176,7 +179,7 @@ fn a_level_name_answer_renames_the_built_level() {
     let dir = job_folder("rename");
     let pdfs = dir.display().to_string();
     let mut s = Session::new();
-    s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false})).expect("job.start");
+    s.execute("job.start", &json!({"pdfs": pdfs, "goal": "bim", "checkpoint": false, "specs": false})).expect("job.start");
     let ids = open_questions(&mut s, "levels");
     let level_two = ids.iter().find(|id| question_text(&mut s, id).contains("\"2\"")).expect("level 2's question").clone();
     // Run to the end on the defaults, then name level 2.

@@ -3103,3 +3103,147 @@
 	Remove Company Standard	Firmenstandard entfernen
 	Set Company Standard	Firmenstandard festlegen
 	Standards	Standards
+	 ({n} shown; Export writes them all)	 ({n} angezeigt; Export schreibt alle)
+	(no picture)	(kein Bild)
+	A false alarm	Ein Fehlalarm
+	Confidence:	Sicherheit:
+	Current room	Aktueller Raum
+	Defer	Zurückstellen
+	Expected:	Erwartet:
+	False alarms: {rate}	Fehlalarme: {rate}
+	Findings ({n})	Befunde ({n})
+	Found:	Gefunden:
+	From the 2D drawing	Aus der 2D-Zeichnung
+	From the BIM model	Aus dem BIM-Modell
+	Issue:	Problem:
+	It is a real error	Es ist ein echter Fehler
+	Leave it for a field decision	Für eine Entscheidung vor Ort lassen
+	No file chosen. Type: automation.takeoff {params}	Keine Datei gewählt. Eingeben: automation.takeoff {params}
+	No findings to review.	Keine Befunde zu prüfen.
+	No run yet: choose a scope and trades, then Start.	Noch kein Lauf: Umfang und Gewerke wählen, dann Starten.
+	No takeoff yet: Refresh runs it.	Noch kein Aufmaß: Aktualisieren erstellt es.
+	Overall	Gesamt
+	Refresh	Aktualisieren
+	Reject	Ablehnen
+	Resume	Fortsetzen
+	Rules ({on} of {all} on)	Regeln ({on} von {all} aktiv)
+	Scope:	Umfang:
+	Scores	Bewertungen
+	Show answered	Beantwortete zeigen
+	Takeoff	Aufmaß
+	Takeoff written to {path}	Aufmaß geschrieben nach {path}
+	Trades:	Gewerke:
+	done	fertig
+	judging	wird beurteilt
+	project	Projekt
+	waiting for an agent	Warten auf einen Agenten
+	{done} of {total} areas, {state}	{done} von {total} Bereichen, {state}
+	{source}: {n} lines	{source}: {n} Zeilen
+	Automation Takeoff	Automatisierung: Aufmaß
+	Cancel Validation Run	Prüflauf abbrechen
+	Change a Validation Rule	Prüfregel ändern
+	Validation Areas	Prüfbereiche
+	Validation Evidence Packet	Prüf-Nachweispaket
+	Validation Prescreen	Validierungsvorprüfung
+	Validation Rules	Prüfregeln
+	Validate	Prüfen
+	Automation	Automatisierung
+	Model Checks	Modellprüfungen
+	Qty	Menge
+	Elements	Elemente
+	Fire	Brandschutz
+	Validate: waiting for an agent	Prüfen: Warten auf einen Agenten
+	Validate Model Against Prints (Agent)	Modell anhand der Pläne prüfen (Agent)
+	Next Validation Packet	Nächstes Prüfpaket
+	Report Validation Findings	Prüfergebnisse melden
+	Validation Run Status	Status des Prüflaufs
+	Plant Validation Errors	Prüffehler einbauen
+	Model Fidelity	Modell-Detailtreue
+	Model Fidelity Rules	Regeln der Modell-Detailtreue
+	Model Fidelity Report	Bericht zur Modell-Detailtreue
+	Fidelity	Detailtreue
+	Auto	Automatisch
+	Floor	Geschoss
+	Detail	Detail
+	Print Inventory	Planinventar
+	Piece	Bauteil
+	Raceway run	Rohrstrecke
+	Connects to	Verbunden mit
+	Height AFF	Höhe über OKFF
+	Host wall	Zugehörige Wand
+	Wall face	Wandfläche
+	Outlet box	Unterputzdose
+	Fed by	Gespeist von
+	Count Model Pieces	Modellteile zählen
+	Edit Model Piece	Modellteil bearbeiten
+	Walk the Feed	Einspeisung verfolgen
+	Lay Out Trade Pieces	Gewerkteile anordnen
+	Trade Pieces Report	Bericht Gewerkteile
+	Trade Piece Rules	Regeln für Gewerkteile
+	Read Trade Documents	Gewerkdokumente lesen
+	Object Forms	Objektformulare
+	Create Object Forms	Objektformulare erstellen
+	Edit Object Form Field	Objektformularfeld bearbeiten
+	Record Object Field Value	Objektfeldwert erfassen
+	Object Form Log	Protokoll der Objektformulare
+	Revert Object Form Change	Objektformularänderung zurücknehmen
+	Promote Object Form to Template	Objektformular zur Vorlage machen
+	Object Completeness	Objektvollständigkeit
+	Object Form	Objektformular
+	Wall Faces	Wandflächen
+	Place Devices on Wall Faces	Geräte auf Wandflächen platzieren
+	Devices Follow Their Walls	Geräte folgen ihren Wänden
+	Room Layout	Raumlayout
+	Tie a Device to an Object	Gerät an ein Objekt binden
+	Add Casework or Appliance Object	Einbaumöbel- oder Geräteobjekt hinzufügen
+	Conduit Routing Report	Bericht Installationsrohr-Führung
+	Reroute Conduit	Installationsrohre neu führen
+	Conduit Takeoff	Installationsrohr-Mengenermittlung
+	Wire Pull Schedule	Kabelzugplan
+	Conduit Cut and Bend List	Schnitt- und Biegeliste für Installationsrohre
+	Material Release List	Materialabrufliste
+	Field Paperwork Sheets	Baustellenunterlagen-Blätter
+	Scope by Trade	Leistungsumfang nach Gewerk
+	Value Engineering Scenario	Value-Engineering-Szenario
+	Value Engineering Decision	Value-Engineering-Entscheidung
+	Read Drawn Dimensions	Gezeichnete Bemaßungen lesen
+	Underground Plan Report	Bericht Erdverlegungsplan
+	Update Model from Plans	Modell aus Plänen aktualisieren
+	Load Calculation	Lastberechnung
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Ein Absturzbericht wurde auf diesem Computer gespeichert: Hilfe > Problem melden bietet ihn an.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Eine Wiederherstellungskopie der Zeichnung mit ungespeicherten Änderungen wurde automatisch gespeichert.
+	Autosave failed	Automatisches Speichern fehlgeschlagen
+	Autosave failed: {message}	Automatisches Speichern fehlgeschlagen: {message}
+	Backup copies are off, so the current file will be replaced.	Sicherungskopien sind ausgeschaltet, daher wird die aktuelle Datei ersetzt.
+	Backup copy	Sicherungskopie
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy konnte keine Wiederherstellungskopie schreiben; würde die App jetzt beendet, gingen die letzten Änderungen verloren.
+	CADaddy has to close	CADaddy muss beendet werden
+	Close CADaddy	CADaddy beenden
+	Create backup copy with each save	Bei jedem Speichern eine Sicherungskopie erstellen
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF behält sie. Mit „Speichern unter“ bleiben sie in der Zeichnung.
+	Details	Details
+	Dismiss	Schließen
+	Drawing Recovery offers them at the next start.	Die Zeichnungswiederherstellung bietet sie beim nächsten Start an.
+	Internal error	Interner Fehler
+	No drawing needed a new recovery copy.	Keine Zeichnung brauchte eine neue Wiederherstellungskopie.
+	Part of CADaddy failed, and the app kept running.	Ein Teil von CADaddy ist fehlgeschlagen; die App läuft weiter.
+	Part of CADaddy keeps failing, so it can't continue.	Ein Teil von CADaddy schlägt immer wieder fehl, daher kann es nicht weitermachen.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Wiederherstellungskopien von {count} Zeichnungen mit ungespeicherten Änderungen wurden automatisch gespeichert.
+	Save Anyway	Trotzdem speichern
+	Save cancelled: {path} was not changed.	Speichern abgebrochen: {path} wurde nicht geändert.
+	Save your work and restart CADaddy.	Speichern Sie Ihre Arbeit und starten Sie CADaddy neu.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Speichern Sie Ihre Arbeit. Das automatische Speichern versucht es nach dem SAVETIME-Intervall erneut; sein Ordner steht in den Optionen.
+	Saving {name} will remove content	Beim Speichern von {name} geht Inhalt verloren
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Die aktuelle Datei scheint unvollständig zu sein; {name} bleibt daher, wie es ist, und die aktuelle Datei wird ersetzt.
+	The current file is kept as {name} until the next save.	Die aktuelle Datei bleibt bis zum nächsten Speichern als {name} erhalten.
+	This format can't keep these objects yet: {objects}.	Dieses Format kann diese Objekte noch nicht behalten: {objects}.
+	{count} more types	{count} weitere Typen
+	Review by Impact	Prüfung nach Auswirkung
+	Resolve Review Item by Impact	Prüfpunkt nach Auswirkung erledigen
+	Open Review Item	Prüfpunkt öffnen
+	Review Audit Trail	Prüfprotokoll
+	Accuracy Trend	Genauigkeitstrend
+	Measure Build Accuracy	Baugenauigkeit messen
+	Export for AR	Export für AR
+	AR Export Rules	Regeln für den AR-Export
+	Panel Breakers	Schutzschalter der Verteilung

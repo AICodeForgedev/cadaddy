@@ -280,3 +280,257 @@ fn finish_detail_carries_source() {
     let od = office["finishDetail"].as_array().unwrap();
     assert!(od.iter().any(|d| d["slot"] == "floor" && d["source"] == "schedule"), "schedule finish source: {od:?}");
 }
+
+/// Two made-up guest suites side by side. SUITE 5010's name and number are printed on its bed
+/// (a 5' × 6'-8" box, smaller than any habitable room); SUITE 5011's number sits in a closet
+/// drawn in the room's corner, outside the room's outline, and the room also holds a large OCR
+/// copy of another number.
+#[test]
+fn a_name_on_the_furniture_and_a_number_outside_the_outline_still_make_the_room() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [520.0, 320.0]);
+    rect(&mut s, [6.0, 6.0], [254.0, 314.0]);
+    rect(&mut s, [266.0, 6.0], [514.0, 314.0]);
+    // The bed in 5010; the closet in 5011's corner.
+    rect(&mut s, [80.0, 150.0], [140.0, 230.0]);
+    rect(&mut s, [266.0, 6.0], [326.0, 66.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [90.0, 190.0], "SUITE");
+    text(&mut s, [90.0, 170.0], "5010");
+    text(&mut s, [330.0, 70.0], "SUITE");
+    text(&mut s, [310.0, 55.0], "5011");
+    s.execute("text", &json!({"at": [400.0, 200.0], "text": "5099", "height": 30})).unwrap();
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    let suites: Vec<&Value> = rooms.iter().filter(|r| r["name"] == "SUITE").collect();
+    assert_eq!(suites.len(), 2, "{r}");
+    let by = |n: &str| suites.iter().find(|r| r["number"] == n).copied().unwrap_or_else(|| panic!("no SUITE {n} in {r}"));
+    // The room round the bed, not the bed.
+    let a = by("5010");
+    assert!((a["area"].as_f64().unwrap() - 248.0 * 308.0).abs() < 1.0, "{a}");
+    // The tag in the closet, not the OCR copy inside the room; the closet is not the room.
+    let b = by("5011");
+    assert!((b["area"].as_f64().unwrap() - (248.0 * 308.0 - 60.0 * 60.0)).abs() < 1.0, "{b}");
+    assert!(!rooms.iter().any(|r| r["number"] == "5099"), "{r}");
+}
+
+/// A guest room as the hotel's mirrored units print it: the name's insertion point lands on a
+/// desk's outline, and the number lies on the bed drawn against the headboard wall (its outline
+/// cuts into the room's). The room is still traced and numbered.
+#[test]
+fn a_room_is_traced_past_the_furniture_under_its_name_and_numbered_off_its_bed() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    // A desk (2' x 2') under the name's start; a bed against the bottom wall: its outline
+    // touches the wall, so the room's traced boundary goes round it.
+    rect(&mut s, [96.0, 150.0], [120.0, 174.0]);
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 150.0], [180.0, 150.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 160.0], "DOUBLE Q");
+    text(&mut s, [110.0, 145.0], "205");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    let q = room(rooms, "DOUBLE Q");
+    assert_eq!(q["number"], "205", "{r}");
+    assert!(q["areaSqFt"].as_f64().unwrap() > 200.0, "the room, not the desk: {q}");
+}
+
+/// A two-line name (`SINGLE Q ADA` over `(TUB)`) with its number a third line down, on the bed:
+/// the number is still the room's.
+#[test]
+fn a_two_line_names_number_three_lines_down_is_its_rooms() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [252.0, 252.0]);
+    rect(&mut s, [6.0, 6.0], [246.0, 246.0]);
+    s.execute("layer.new", &json!({"name": "A-FURN", "current": true})).unwrap();
+    s.execute("pline", &json!({"vertices": [[60.0, 6.0], [60.0, 140.0], [180.0, 140.0], [180.0, 6.0]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [90.0, 160.0], "SINGLE Q ADA");
+    text(&mut s, [100.0, 151.0], "(TUB)");
+    text(&mut s, [104.0, 137.0], "220");
+    let r = s.execute("rooms.list", &json!({})).unwrap();
+    let q = r["rooms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["name"].as_str().is_some_and(|n| n.starts_with("SINGLE Q ADA")))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(q["number"], "220", "{r}");
+}
+
+/// A detail callout's sheet number in a room (`A411`) is not the room's number: the room's own
+/// printed number is, and a room with only the callout has none.
+#[test]
+fn a_callouts_sheet_number_is_no_rooms_number() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 120.0], "OFFICE");
+    text(&mut s, [100.0, 100.0], "101");
+    text(&mut s, [150.0, 40.0], "A411");
+    text(&mut s, [340.0, 120.0], "STORAGE");
+    text(&mut s, [340.0, 100.0], "A411");
+    s.execute("bspec.set", &json!({"spec": {"sheets": [{"number": "A411", "discipline": "A"}]}})).unwrap();
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "OFFICE")["number"], "101", "{rooms:?}");
+    assert!(room(rooms, "STORAGE")["number"].is_null(), "{rooms:?}");
+}
+
+/// A label whose point sits just across a line from its room (CHECK IN beside a storefront's
+/// frame, its text running into the room) still names the room its whole box is in.
+#[test]
+fn a_label_whose_point_sits_just_outside_its_room_names_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    // A storefront's frame: a 15" strip (24 sq ft) down the room's side.
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [20.0, 120.0], "CHECK IN");
+    text(&mut s, [100.0, 100.0], "142");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "CHECK IN")["number"], "142", "{rooms:?}");
+    // A note whose point is farther out (5" across, its text 6" tall) names nothing there.
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [16.0, 120.0], "FOR GUEST ROOM LAYOUTS AND SIZES");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
+    // Nor a note on a notes box's edge (no room number in the box).
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [240.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [21.0, 234.0]);
+    rect(&mut s, [21.0, 6.0], [234.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [20.0, 120.0], "FOR GUEST ROOM LAYOUTS AND SIZES");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert!(!rooms.iter().any(|x| x["name"].as_str().is_some_and(|n| n.starts_with("FOR GUEST"))), "{rooms:?}");
+}
+
+/// A closet's door that opens back flat against the wall outside (a 170° swing, flattened to a
+/// polyline as a PDF print arrives, its leaf drawn from the hinge) closes the closet: the trace
+/// stays in it instead of running on through the gap into the lounge.
+#[test]
+fn a_door_opening_back_against_its_wall_closes_its_room() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [474.0, 234.0]);
+    // The closet's walls, 36" of door opening between (400,120) and the hinge at (436,120).
+    s.execute("pline", &json!({"vertices": [[340, 234], [340, 120], [400, 120]], "closed": false})).unwrap();
+    s.execute("pline", &json!({"vertices": [[436, 120], [474, 120]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-DOOR", "current": true})).unwrap();
+    let swing: Vec<[f64; 2]> = (0..=16)
+        .map(|i| {
+            let a = (180.0 + 170.0 * f64::from(i) / 16.0_f64).to_radians();
+            [436.0 + 36.0 * a.cos(), 120.0 + 36.0 * a.sin()]
+        })
+        .collect();
+    s.execute("pline", &json!({"vertices": swing, "closed": false})).unwrap();
+    s.execute("pline", &json!({"vertices": [[436, 120], swing[16]], "closed": false})).unwrap();
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [380.0, 180.0], "AHU");
+    text(&mut s, [380.0, 172.0], "152");
+    text(&mut s, [150.0, 120.0], "LOUNGE");
+    text(&mut s, [150.0, 100.0], "150");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert_eq!(room(rooms, "LOUNGE")["number"], "150", "{rooms:?}");
+}
+
+/// The import took three closets' `AHU` boxes for a repeated symbol (a `PDF-SYM-` insert, the
+/// word its TAG): the word over the room's number still names the room.
+#[test]
+fn an_equipment_rooms_name_taken_for_a_symbols_mark_still_names_it() {
+    use cadaddy_engine::doc::{Attrib, AttribModes, AttribProps, Block, Common, HAlign, Insert, Space, Text, VAlign};
+    use cadaddy_engine::geom::Vec3;
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 105.0], "152");
+    text(&mut s, [340.0, 120.0], "OFFICE");
+    text(&mut s, [340.0, 105.0], "101");
+    let d = s.doc_mut().unwrap();
+    d.blocks.insert("PDF-SYM-7".into(), std::sync::Arc::new(Block::new("PDF-SYM-7")));
+    let t = Text {
+        insert: Vec3::new(100.0, 120.0, 0.0),
+        align_pt: None,
+        height: 6.0,
+        value: "AHU".into(),
+        rotation: 0.0,
+        width_factor: 1.0,
+        oblique: 0.0,
+        style: "Standard".into(),
+        halign: HAlign::default(),
+        valign: VAlign::default(),
+    };
+    let attrib = Attrib {
+        tag: "TAG".into(),
+        text: t,
+        invisible: false,
+        constant: false,
+        prompt: String::new(),
+        props: AttribProps::default(),
+        multiline: None,
+        modes: AttribModes::default(),
+    };
+    let ins = Insert {
+        block: "PDF-SYM-7".into(),
+        insert: Vec3::new(100.0, 112.0, 0.0),
+        scale: Vec3::new(1.0, 1.0, 1.0),
+        rotation: 0.0,
+        attribs: vec![attrib],
+        cols: 1,
+        rows: 1,
+        col_spacing: 0.0,
+        row_spacing: 0.0,
+        clip: None,
+    };
+    d.add(&Space::Model, Common { layer: "A-ANNO".into(), ..Common::default() }, EntityKind::Insert(ins)).unwrap();
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert_eq!(room(rooms, "OFFICE")["number"], "101", "{rooms:?}");
+}
+
+/// An equipment room tagged by the unit it houses (`AHU` over its number) is a room; an equipment
+/// tag with its own number (`AHU-1`) names none.
+#[test]
+fn an_equipment_rooms_tag_names_it() {
+    let mut s = Session::new();
+    s.execute("layer.new", &json!({"name": "A-WALL", "current": true})).unwrap();
+    rect(&mut s, [0.0, 0.0], [480.0, 240.0]);
+    rect(&mut s, [6.0, 6.0], [234.0, 234.0]);
+    rect(&mut s, [246.0, 6.0], [474.0, 234.0]);
+    s.execute("layer.new", &json!({"name": "A-ANNO", "current": true})).unwrap();
+    text(&mut s, [100.0, 120.0], "AHU");
+    text(&mut s, [100.0, 105.0], "152");
+    text(&mut s, [340.0, 120.0], "AHU-1");
+    let r = s.execute("rooms.list", &json!({"outline": false})).unwrap();
+    let rooms = r["rooms"].as_array().unwrap();
+    assert_eq!(room(rooms, "AHU")["number"], "152", "{rooms:?}");
+    assert!(!rooms.iter().any(|x| x["name"] == "AHU-1"), "{rooms:?}");
+}

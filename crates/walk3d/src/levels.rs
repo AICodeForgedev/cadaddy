@@ -120,6 +120,69 @@ pub struct SheetRegistration {
     pub residual: Option<f64>,
 }
 
+impl SheetRegistration {
+    /// Where a sheet point lands on the reference plan.
+    pub fn to_project(&self, p: [f64; 2]) -> [f64; 2] {
+        [self.a * p[0] - self.b * p[1] + self.tx, self.b * p[0] + self.a * p[1] + self.ty]
+    }
+    /// Where a point of the reference plan is on this sheet (none for a degenerate fit).
+    pub fn to_sheet(&self, p: [f64; 2]) -> Option<[f64; 2]> {
+        let det = self.a * self.a + self.b * self.b;
+        if !det.is_finite() || det < 1e-18 {
+            return None;
+        }
+        let (qx, qy) = (p[0] - self.tx, p[1] - self.ty);
+        let out = [(self.a * qx + self.b * qy) / det, (-self.b * qx + self.a * qy) / det];
+        out.iter().all(|v| v.is_finite()).then_some(out)
+    }
+    /// The plan's scale on this sheet against the reference (1 = drawn alike).
+    pub fn scale(&self) -> f64 {
+        self.a.hypot(self.b)
+    }
+}
+
+/// Most views recorded on one sheet (hostile input).
+pub const MAX_VIEWS_PER_SHEET: usize = 64;
+
+/// Keep where one view of a sheet was placed on its level's plan (an enlarged plan, a partial
+/// plan, one level's view of a sheet printing several), as a link of its own: the sheet's link
+/// with `view` set to the view's title and part of the sheet, and `registration` to the fit.
+/// What is stored is only the placement already decided, so the evidence for a model element
+/// can be cropped from the view that placed it. The same view placed again replaces its link.
+/// The sheet's own link (`number` with no view) is copied for the number, title, discipline
+/// and rectangle; with none, `rect` is the view's.
+pub fn record_view_placement(sheets: &mut Vec<SheetLink>, number: &str, level: &str, view: SheetView, fit: SheetRegistration) -> bool {
+    let same_number = |s: &SheetLink| s.number.eq_ignore_ascii_case(number);
+    if !view.rect.iter().all(|v| v.is_finite()) || !fit.scale().is_finite() || fit.scale() <= 0.0 || number.trim().is_empty() {
+        return false;
+    }
+    let base = sheets.iter().find(|s| same_number(s) && s.view.is_none()).cloned();
+    let view_rect = view.rect;
+    let same_view = |s: &SheetLink| {
+        same_number(s) && s.level.as_deref().is_some_and(|l| l.eq_ignore_ascii_case(level)) && s.view.as_ref().is_some_and(|v| v.rect == view_rect)
+    };
+    let link = SheetLink {
+        number: base.as_ref().map_or_else(|| number.to_string(), |b| b.number.clone()),
+        title: base.as_ref().map(|b| b.title.clone()).unwrap_or_default(),
+        discipline: base.as_ref().and_then(|b| b.discipline.clone()),
+        level: Some(level.to_string()),
+        source: base.as_ref().map(|b| b.source.clone()).unwrap_or_default(),
+        rect: base.as_ref().and_then(|b| b.rect).or(Some(view.rect)),
+        levels: Vec::new(),
+        registration: Some(fit),
+        view: Some(view),
+    };
+    if let Some(old) = sheets.iter_mut().find(|s| same_view(s)) {
+        *old = link;
+        return true;
+    }
+    if sheets.iter().filter(|s| same_number(s) && s.view.is_some()).count() >= MAX_VIEWS_PER_SHEET || sheets.len() >= crate::spec::MAX_ITEMS {
+        return false;
+    }
+    sheets.push(link);
+    true
+}
+
 /// A level name and elevation read from one note.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LevelNote {
@@ -931,6 +994,49 @@ fn rename_in(v: &mut serde_json::Value, old: &str, new: &str, n: &mut usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_view_placement_is_kept_as_a_link_and_maps_both_ways() {
+        let fit = SheetRegistration {
+            reference: "A-101".into(),
+            method: "view_fit".into(),
+            a: 0.5,
+            b: 0.0,
+            tx: 10.0,
+            ty: -4.0,
+            matched: 0,
+            residual: None,
+        };
+        let back = fit.to_sheet(fit.to_project([30.0, 8.0])).unwrap_or([0.0; 2]);
+        assert!((back[0] - 30.0).abs() < 1e-9 && (back[1] - 8.0).abs() < 1e-9, "{back:?}");
+        let rot = SheetRegistration { a: 0.0, b: 2.0, ..fit.clone() };
+        let q = rot.to_sheet(rot.to_project([3.0, -7.0])).unwrap_or([0.0; 2]);
+        assert!((q[0] - 3.0).abs() < 1e-9 && (q[1] + 7.0).abs() < 1e-9, "{q:?}");
+        assert!(SheetRegistration { a: 0.0, b: 0.0, ..fit.clone() }.to_sheet([1.0, 1.0]).is_none());
+        let mut sheets = vec![SheetLink {
+            number: "A-401".into(),
+            title: "ENLARGED PLANS".into(),
+            discipline: Some("A".into()),
+            level: None,
+            source: "model".into(),
+            rect: Some([0.0, 0.0, 100.0, 60.0]),
+            levels: Vec::new(),
+            registration: None,
+            view: None,
+        }];
+        let view = SheetView { title: "ENLARGED PLAN - ROOM A".into(), rect: [10.0, 10.0, 40.0, 30.0] };
+        assert!(record_view_placement(&mut sheets, "a-401", "L1", view.clone(), fit.clone()));
+        assert!(record_view_placement(&mut sheets, "A-401", "L1", view.clone(), SheetRegistration { tx: 11.0, ..fit.clone() }));
+        assert_eq!(sheets.len(), 2, "the same view placed again replaces its link");
+        let link = sheets.get(1).cloned().unwrap_or_else(|| sheets[0].clone());
+        assert_eq!(link.number, "A-401");
+        assert_eq!(link.discipline.as_deref(), Some("A"));
+        assert_eq!(link.rect, Some([0.0, 0.0, 100.0, 60.0]));
+        assert_eq!(link.view, Some(view));
+        assert_eq!(link.registration.map(|r| r.tx), Some(11.0));
+        let bad = SheetView { title: String::new(), rect: [f64::NAN, 0.0, 1.0, 1.0] };
+        assert!(!record_view_placement(&mut sheets, "A-401", "L1", bad, fit));
+    }
 
     fn note(t: &str) -> Option<(String, f64)> {
         parse_level_note(t).map(|n| (n.name, (n.elevation_ft * 1e6).round() / 1e6))

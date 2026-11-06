@@ -33,6 +33,39 @@ fn wanted(names: &str, name: &str) -> bool {
     names.split(',').map(str::trim).filter(|n| !n.is_empty()).any(|n| wildcard(n, name))
 }
 
+/// Whether `text` is a linetype file: at least one `*NAME` line, and each one followed by its
+/// pattern line starting with the alignment field `A,`. Any other text (a DXF, a script, a
+/// .pat) is refused whole rather than read for whatever `*` lines it happens to have.
+fn check_lin(text: &str, source: &str) -> std::result::Result<(), String> {
+    let not_lin = |why: String| format!("{source} is not a linetype file: {why}");
+    let mut header: Option<(usize, &str)> = None;
+    let mut any = false;
+    for (i, line) in text.trim_start_matches('\u{feff}').lines().enumerate() {
+        let (no, line) = (i.saturating_add(1), line.trim());
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+        if let Some((at, name)) = header.take() {
+            let alignment = line.get(..2).is_some_and(|a| a.eq_ignore_ascii_case("a,"));
+            if !alignment {
+                return Err(not_lin(format!("`{name}` (line {at}) has no A, pattern line")));
+            }
+            continue;
+        }
+        if line.starts_with('*') {
+            header = Some((no, line.split(',').next().unwrap_or(line)));
+            any = true;
+        } else {
+            return Err(not_lin(format!("line {no} is neither a *NAME line nor a comment")));
+        }
+    }
+    match header {
+        Some((at, name)) => Err(not_lin(format!("`{name}` (line {at}) has no A, pattern line"))),
+        None if !any => Err(not_lin("it has no *NAME lines".into())),
+        None => Ok(()),
+    }
+}
+
 /// The linetypes of `text` that `names` asks for, without the reserved names.
 fn read(text: &str, names: &str, out: &mut Loaded) -> Vec<Linetype> {
     let parsed = parse_lin(text);
@@ -93,6 +126,7 @@ fn put(d: &mut Drawing, mut lt: Linetype, reload: bool, out: &mut Loaded) {
 pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let (text, source) = support_text("linetype", p, "file", "text")?.ok_or_else(|| bad("linetype", "`file` or `text` is required"))?;
     let names = str_param(p, "load").unwrap_or("*");
+    check_lin(&text, &source).map_err(|m| bad("linetype", m))?;
     let mut out = Loaded::default();
     let found = read(&text, names, &mut out);
     if found.is_empty() {
@@ -176,6 +210,11 @@ impl DashLinetype {
                 return Ok(());
             }
         };
+        if let Err(m) = check_lin(&text, path) {
+            s.echo(m);
+            self.ask = Ask::Option;
+            return Ok(());
+        }
         let mut out = Loaded::default();
         let found = read(&text, &self.names, &mut out);
         for w in out.warnings.drain(..) {

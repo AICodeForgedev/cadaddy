@@ -208,7 +208,9 @@ fn run_get(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(crate) fn parse_color(v: &Value) -> Option<Color> {
-    v.as_str().and_then(Color::parse).or_else(|| v.as_i64().and_then(|i| i16::try_from(i).ok()).map(Color::from_aci))
+    v.as_str()
+        .and_then(Color::parse)
+        .or_else(|| v.as_i64().filter(|i| (0..=256).contains(i)).and_then(|i| i16::try_from(i).ok()).map(Color::from_aci))
 }
 
 /// A transparency as JSON, in the form `properties.set` takes: "ByLayer", "ByBlock" or a percentage.
@@ -281,7 +283,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         .get("thickness")
         .map(|v| v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad("properties.set", "thickness must be a finite number")))
         .transpose()?;
-    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).ok_or_else(|| bad("properties.set", "bad lineweight"))).transpose()?;
+    let lw = p.get("lineweight").map(|v| super::layer::parse_lw(v).map_err(|m| bad("properties.set", m))).transpose()?;
     let d = s.doc_mut()?;
     // An explicit object linetype must be ByLayer, ByBlock or a loaded definition (as `linetype current` requires).
     let linetype = str_param(p, "linetype")
@@ -663,19 +665,8 @@ fn run_linetype(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_lweight(s: &mut Session, p: &Value) -> Result<Value> {
     let v = p.get("lineweight").ok_or_else(|| bad("lweight", "`lineweight` is required"))?;
-    let code = match v.as_str().map(str::to_ascii_lowercase).as_deref() {
-        Some("bylayer") => -1,
-        Some("byblock") => -2,
-        Some("default") => -3,
-        _ => {
-            let mm = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().trim_end_matches("mm").trim().parse().ok()));
-            (mm.filter(|m: &f64| m.is_finite()).ok_or_else(|| bad("lweight", "Enter a lineweight in millimetres, ByLayer, ByBlock or Default."))?
-                * 100.0)
-                .round()
-                .clamp(0.0, 211.0) as i64
-        }
-    };
-    s.doc_mut()?.header.set_i64("CELWEIGHT", code);
+    let code = super::layer::parse_lw(v).map_err(|m| bad("lweight", m))?.to_dxf();
+    s.doc_mut()?.header.set_i64("CELWEIGHT", i64::from(code));
     ok()
 }
 
@@ -1173,6 +1164,16 @@ fn run_mleaderstyle(s: &mut Session, p: &Value) -> Result<Value> {
         Some("insertion") => Some(false),
         Some(_) => return Err(bad("mleaderstyle", "`blockAttach` must be \"center\" or \"insertion\"")),
     };
+    // A number that can't be used is refused by name, not dropped (battle test 6: arrowSize -5
+    // made the style with the default 0.18).
+    for (key, zero_ok) in [("arrowSize", true), ("textHeight", false), ("landingGap", true), ("dogleg", true)] {
+        let Some(v) = p.get(key).filter(|v| !v.is_null()) else { continue };
+        match v.as_f64() {
+            Some(n) if n.is_finite() && (n > 0.0 || zero_ok && n == 0.0) => {}
+            Some(_) => return Err(bad("mleaderstyle", format!("`{key}` must be {} (got {v})", if zero_ok { "0 or more" } else { "more than 0" }))),
+            None => return Err(bad("mleaderstyle", format!("`{key}` must be a number"))),
+        }
+    }
     if let Some(n) = str_param(p, "name") {
         names::check("mleaderstyle", "multileader style", n.trim())?;
     }
@@ -1326,9 +1327,28 @@ fn var(s: &Session, name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use cadaddy_color::Color;
     use serde_json::json;
 
     use crate::Session;
+
+    #[test]
+    fn properties_set_rejects_out_of_range_colour() {
+        let mut s = Session::new();
+        s.execute("line", &json!({ "points": [[0, 0], [50, 0]] })).unwrap();
+        let h = s.doc().unwrap().model.last().unwrap().handle.hex();
+        s.execute("properties.set", &json!({ "handles": [h], "color": 1 })).unwrap();
+        let col = |s: &Session| s.doc().unwrap().model.last().unwrap().common.color;
+        for bad in [300, -5, 257] {
+            let e = s.execute("properties.set", &json!({ "handles": [h], "color": bad })).unwrap_err();
+            assert!(e.to_string().contains("bad colour"), "{e}");
+            assert_eq!(col(&s), Color::Index(1));
+        }
+        s.execute("properties.set", &json!({ "handles": [h], "color": 256 })).unwrap();
+        assert_eq!(col(&s), Color::ByLayer);
+        s.execute("properties.set", &json!({ "handles": [h], "color": 0 })).unwrap();
+        assert_eq!(col(&s), Color::ByBlock);
+    }
 
     #[test]
     fn properties_set_rejects_unloaded_linetype() {

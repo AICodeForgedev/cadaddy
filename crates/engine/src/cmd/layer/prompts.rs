@@ -187,11 +187,11 @@ fn matching(s: &mut Session, list: &str) -> Vec<String> {
     out
 }
 
-/// Nearest standard lineweight to `mm`.
-fn snap_lineweight(mm: f64) -> f64 {
-    let want = mm * 100.0;
-    let best = Lineweight::STANDARD.iter().copied().min_by(|a, b| (f64::from(*a) - want).abs().total_cmp(&(f64::from(*b) - want).abs())).unwrap_or(0);
-    f64::from(best) / 100.0
+/// A standard lineweight typed in millimetres ("0.25", "0.25mm"), as millimetres; anything else
+/// (0.31, 9, nan) is refused rather than snapped.
+fn standard_mm(t: &str) -> Option<f64> {
+    let mm = t.trim().trim_end_matches("mm").trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=2.11).contains(v))?;
+    Lineweight::STANDARD.iter().map(|w| f64::from(*w) / 100.0).find(|w| (w - mm).abs() < 1e-6)
 }
 
 impl LayerM {
@@ -492,11 +492,11 @@ impl LayerM {
             },
             Stage::Lweight => match text {
                 None => Ok(Step::Continue),
-                Some(t) => match t.trim_end_matches("mm").trim().parse::<f64>().ok().filter(|v| v.is_finite() && (0.0..=2.11).contains(v)) {
-                    Some(mm) => back(self, Stage::Layers(Change::Lweight(snap_lineweight(mm)))),
+                Some(t) => match standard_mm(&t) {
+                    Some(mm) => back(self, Stage::Layers(Change::Lweight(mm))),
                     None => {
                         self.stage = Stage::Lweight;
-                        Err(retry("Enter a lineweight from 0.0mm to 2.11mm."))
+                        Err(retry(format!("{t} is not a lineweight; enter a standard lineweight in mm ({}).", super::standard_mm_list())))
                     }
                 },
             },

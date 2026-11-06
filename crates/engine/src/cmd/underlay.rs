@@ -65,12 +65,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("dwfout", "DWF Out", run_dwfout)
             .menu(&["File", "Export", "DWF..."])
             .alias(&["dwf"])
-            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model; one ePlot section each), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwf\", path? | data, pages}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model; one ePlot section each), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwf\", path? | data, pages}")
             .noundo(),
         CommandSpec::new("dwfxout", "DWFx Out", run_dwfxout)
             .menu(&["File", "Export", "DWFx..."])
             .alias(&["dwfx"])
-            .params("{path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units; layouts are always at paper size), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwfx\", path? | data, pages}: one named page per sheet, one Canvas per layer, hyperlinks kept")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), path? (else returns base64 `data`), layouts?: [name | \"Model\"] (default: Model if it has objects, then every layout in tab order), scale?: drawing units per sheet inch for model space (default 1:1 in the drawing's units; layouts are always at paper size), fit?: bool (model space fitted to 24 x 18 in instead)} → {format: \"dwfx\", path? | data, pages}: one named page per sheet, one Canvas per layer, hyperlinks kept")
             .noundo(),
     ]
 }
@@ -130,6 +130,9 @@ pub(crate) fn read_dgn(path: &str) -> Result<(Drawing, Vec2, Vec2)> {
     let ext = d.extents(&cadaddy_doc::Space::Model);
     if ext.is_empty() {
         return Err(bad("dgnattach", format!("{path}: the design file has nothing in it")));
+    }
+    if !(cadaddy_doc::within_limit(&ext, 1e12) && ext.width() <= 1e12 && ext.height() <= 1e12) {
+        return Err(bad("dgnattach", format!("{path}: the design file's extents lie beyond \u{b1}1e12 (it is damaged)")));
     }
     let to_origin = Mat3::translate(-ext.min);
     let hs: Vec<Handle> = d.model.iter().map(|e| e.handle).collect();
@@ -563,6 +566,10 @@ fn write_sheets(s: &mut Session, p: &Value, cmd: &str, format: &str, model_only:
         && !k.as_f64().is_some_and(|k| k.is_finite() && k > 0.0)
     {
         return Err(bad(cmd, "`scale` must be a positive number of drawing units per sheet inch"));
+    }
+    if let Some(path) = str_param(p, "path") {
+        super::exchange::output_path(s, cmd, path, &[format])?;
+        super::exchange::guard_output(s, cmd, p, path)?;
     }
     let d = s.doc()?;
     let spaces = out_spaces(cmd, d, p, model_only)?;

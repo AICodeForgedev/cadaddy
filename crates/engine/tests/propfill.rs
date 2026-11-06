@@ -187,6 +187,100 @@ fn device_of(s: &mut Session, mark: &str) -> Value {
 }
 
 #[test]
+fn a_switch_takes_its_wiring_device_sections_product_record() {
+    let mut s = plan();
+    fill(&mut s);
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let spec = dir.join("26 27 26 - Wiring Devices.txt");
+    std::fs::write(
+        &spec,
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Hubbell.\n2) Leviton.\n\
+         2.8 FINISHES\nA. Device Color:\n1. Wiring Devices Connected to Normal Power System: white unless otherwise indicated.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    let r = s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    assert!(r["elements"].as_u64().unwrap_or(0) >= 1, "{r:#}");
+    let sw = device_of(&mut s, "S");
+    assert_eq!(sw["color"]["value"], "white", "{sw:#}");
+    assert_eq!(sw["color"]["source"]["kind"], "spec");
+    assert_eq!(sw["rating"]["value"], "120/277 V, 20 A");
+    assert!(sw["approved_makers"]["value"].as_str().is_some_and(|m| m.contains("Hubbell") && m.contains("listed makers only")), "{sw:#}");
+    let product: Value = serde_json::from_str(sw["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["section"].as_str().is_some_and(|x| x.starts_with("26 27 26")), "{product:#}");
+    assert_eq!(product["approved"]["none"], "no submittal for this kind");
+    assert_eq!(product["resolved"]["configuration"], "single pole");
+    // A kind no section speaks for and no submittal covers is listed with why.
+    assert!(r["no_product_data"].as_object().is_some_and(|m| !m.is_empty()), "{r:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A device in no room stands in a corridor the plans trace: that is its room (the takeoff
+/// counts the corridor's receptacles by it).
+#[test]
+fn a_device_in_a_corridor_is_in_the_corridor() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = sp["tags"].as_array_mut() {
+        t.push(device(80.0, 5.0, "C", "", "1F9"));
+    }
+    sp["circulation"] = json!([{"kind": "corridor", "level": "L1", "name": "CORRIDOR", "at": [960, 60], "rects": [[[900, 0], [1100, 120]]]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = fill(&mut s);
+    let c = device_of(&mut s, "C");
+    assert_eq!(c["room"]["value"], "CORRIDOR", "{c:#}");
+    assert_eq!(r["devices_in_no_room"], json!({}), "{r:#}");
+}
+
+/// A general note's panelboard height to top puts each scheduled panel on a wall at its centre
+/// (the top less half its box), from the note; a person's height stays.
+#[test]
+fn a_notes_panelboard_height_to_top_is_each_wall_panels() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["bottom_ft"] = json!(3.0);
+    sp["mep"]["equipment"][1]["height_ft"] = json!(3.5);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s
+        .execute("bim.props.fill", &json!({"panel_top_in": 78.0, "panel_top_doc": "E-1 general note: PANELBOARDS 6'-6\" AFF TO TOP"}))
+        .expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
+    let lp = find(&mut s, "equipment", json!({"type_mark": "LP1"}));
+    let el = get(&mut s, &lp[0]);
+    let h = &el["mount_height"];
+    // A 42" box whose top is at 78": its centre at 57".
+    assert_eq!(h["value"], json!(57.0), "{el:#}");
+    assert_eq!(h["source"]["kind"], "note");
+    // One of a typical panel's (the guest rooms' `LP1-201` of the schedule's `LP1`) too.
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["mep"]["equipment"][1]["tag"] = json!("LP1-201");
+    sp["mep"]["equipment"][1]["circuits"] = json!([]);
+    sp["mep"]["panel_schedules"] = json!([{"panel": "LP1", "circuits": []}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("bim.props.fill", &json!({"panel_top_in": 78.0})).expect("fill");
+    assert_eq!(r["panels_heighted"], json!(1), "{r:#}");
+}
+
+/// A typical room's unit keeps its devices to what the build stamped and booked into it: a read
+/// device standing in it is in it as a model element, but its spec tag isn't given the unit.
+#[test]
+fn a_units_room_is_not_written_onto_unbooked_devices_tags() {
+    let mut s = plan();
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "102", "type": "Q", "hand": "normal"}]}})).expect("units");
+    let r = fill(&mut s);
+    assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102", "the element stands in it");
+    assert_eq!(r["device_tags_roomed"], json!(2), "the two outside the unit: {r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> =
+        sp["spec"]["tags"].as_array().into_iter().flatten().filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string)).collect();
+    assert!(!rooms.iter().any(|r| r == "102"), "{rooms:?}");
+}
+
+#[test]
 fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location() {
     let mut s = plan();
     let r = fill(&mut s);
@@ -212,8 +306,14 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert_eq!(a["room"]["value"], "101");
     assert_eq!(a["room"]["source"]["kind"], "computed");
     assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "on the south wall: {a:#}");
-    // 5', 0.8' on the plan, 20" up.
-    assert_eq!(a["location"]["value"], "5.00, 0.80, 1.67", "{a:#}");
+    // bim.element's host is the wall the build put it on, measured.
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    let el = s.execute("bim.element", &json!({"handle": ha[0]})).unwrap();
+    assert_eq!(el["host"]["wall"], a["host_wall"]["value"], "{el:#}");
+    assert!(el["host"]["stored_wall"].is_null(), "the same wall: {el:#}");
+    // Read at 5', 0.8' on the plan: set in the south wall, its face flush with the wall's inside
+    // face (0.5'; its box's middle 1" behind it), 20" up.
+    assert_eq!(a["location"]["value"], "5.00, 0.42, 1.67", "{a:#}");
     assert_eq!(a["location"]["unit"], "ft");
     // A bare circuit number names no panel.
     let sw = device_of(&mut s, "S");
@@ -221,9 +321,179 @@ fn read_devices_become_elements_with_circuit_panel_room_wall_height_and_location
     assert!(sw["panel"].is_null(), "{sw:#}");
     assert_eq!(sw["fed_from"]["value"], "circuit 12");
     assert_eq!(device_of(&mut s, "FA")["room"]["value"], "102");
+    // The spec's read devices carry their rooms too (the takeoff counts by room).
+    assert_eq!(r["device_tags_roomed"], json!(4), "{r:#}");
+    let sp = s.execute("bspec.get", &json!({})).expect("spec");
+    let rooms: Vec<String> = sp["spec"]["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["id"].as_str().is_some_and(|i| i.starts_with("device:")))
+        .filter_map(|t| t["fields"]["room"]["value"].as_str().map(str::to_string))
+        .collect();
+    assert_eq!(rooms.len(), 4, "{rooms:?}");
+    assert!(rooms.iter().any(|r| r == "101") && rooms.iter().any(|r| r == "102"), "{rooms:?}");
     // No circuit printed: none presented.
     let j = device_of(&mut s, "J");
     assert!(j["circuit"].is_null() && j["fed_from"].is_null(), "{j:#}");
+}
+
+/// A receptacle the print or a sink calls GFCI on a GFCI breaker goes on the bill of materials as
+/// a standard one: the take-off follows the code rules' decision. A receptacle in a guest room is
+/// bought tamper-resistant.
+#[test]
+fn the_take_off_buys_what_the_code_rules_decided() {
+    let mut s = plan();
+    let got = s.execute("bspec.get", &json!({})).unwrap();
+    let mut tags = got["spec"]["tags"].as_array().unwrap().clone();
+    let a = tags.iter_mut().find(|t| t["fields"]["type"]["value"] == "A").unwrap();
+    a["kind"] = json!("receptacle");
+    a["fields"]["device_type"] = json!({"value": "GFCI receptacle", "source": "rule"});
+    let id = a["id"].as_str().unwrap().to_string();
+    let sched = json!({"tags": tags, "mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    let item = |s: &mut Session| -> String {
+        let b = s.execute("bim.bom", &json!({})).unwrap();
+        let on = |l: &&Value| l["category"] == "devices" && l["elements"].as_array().is_some_and(|e| e.iter().any(|x| x == id.as_str()));
+        b["lines"].as_array().unwrap().iter().find(on).unwrap()["item"].as_str().unwrap().to_string()
+    };
+    assert_eq!(item(&mut s), "duplex receptacle");
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "101", "type": "Q", "hand": "normal"}]}})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(item(&mut s), "duplex receptacle, tamper-resistant");
+}
+
+/// The project says what was built: every breaker of a panel AF/GF except its PTAC's, over a
+/// schedule printing AF. Receptacles under them are standard; the print stays in the note.
+#[test]
+fn breakers_as_built_outrank_the_printed_schedule() {
+    let mut s = plan();
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"},
+                     {"number": "5", "description": "PTAC-1", "breaker": "20", "poles": 2, "protection": [], "source": "E-601"},
+                     {"number": "7", "description": "SPACE ONLY", "breaker": "", "poles": 1, "protection": [], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    assert_eq!(device_of(&mut s, "A")["gfci_breaker"]["value"], "no", "as printed");
+    s.execute(
+        "project.rules.set",
+        &json!({"domain": "custom", "key": "breaker_protection.lp1", "value": "AF/GF except PTAC", "tier": "field_verified", "source": "field report 2026-11-05", "reason": "seen in the panels"}),
+    )
+    .unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "yes", "{a:#}");
+    assert_eq!(a["breaker_type"]["value"], "GFCI + AFCI (dual function)");
+    assert_eq!(a["breaker_type"]["source"]["doc"], "field report 2026-11-05");
+    assert!(a["breaker_type"]["note"].as_str().is_some_and(|n| n.contains("prints AF")), "{a:#}");
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(device_of(&mut s, "A")["receptacle_type"]["value"], "standard");
+    // The panel's schedule says so too: what was built, and what was printed.
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1"})).unwrap();
+    let c = |n: &str| r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == n).cloned().unwrap();
+    assert_eq!(c("3")["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c("3")["protection"]["codes"], json!(["AF"]));
+    assert_eq!(c("3")["protection"]["as_built"]["source"], "field report 2026-11-05");
+    assert!(c("5")["protection"]["as_built"].is_null(), "{r:#}");
+    assert!(c("7")["protection"]["as_built"].is_null(), "a space has no breaker: {r:#}");
+}
+
+#[test]
+fn a_devices_breaker_type_is_its_printed_schedule_rows() {
+    let mut s = plan();
+    // The schedule as printed: circuit 3 a dual-function breaker (AF/GF, the legend's GF a
+    // ground fault interrupter), 5 an AFCI one.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF", "GF"], "source": "E-601"},
+                     {"number": "5", "description": "LIGHTS", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).expect("schedules");
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["breaker_type"]["value"], "GFCI + AFCI (dual function)", "{a:#}");
+    assert_eq!(a["gfci_breaker"]["value"], "yes");
+    assert_eq!(a["breaker_type"]["source"]["kind"], "schedule");
+    assert_eq!(a["breaker_type"]["source"]["doc"], "E-601 panel LP1 circuit 3");
+    // The breaker itself still from the panel's own row.
+    assert_eq!(a["breaker"]["value"], "20A");
+    // The schedule as data: each circuit's breaker type and the model's devices on it; as CSV;
+    // as a CADaddy table.
+    let csv = std::env::temp_dir().join(format!("cadaddy-panels-{}.csv", std::process::id()));
+    let r = s.execute("panels.schedule", &json!({"panel": "lp1", "csv": csv.to_string_lossy(), "place": {"panel": "LP1", "at": [0, -100]}})).unwrap();
+    let c3 = r["panels"][0]["circuits"].as_array().unwrap().iter().find(|c| c["number"] == "3").cloned().unwrap();
+    assert_eq!(c3["protection"]["ground_fault"], true, "{r:#}");
+    assert_eq!(c3["protection"]["meaning"][1], "GF: GROUND FAULT INTERRUPTER");
+    assert_eq!(c3["breaker_amps"], json!(20.0));
+    assert!(c3["devices"]["count"].as_u64().unwrap_or(0) >= 1, "{c3:#}");
+    assert!(std::fs::read_to_string(&csv).unwrap().contains("LP1,,E-601,3,RECEPTACLES OFFICE 101,20,1,,,AF/GF,true,true,"));
+    let _ = std::fs::remove_file(&csv);
+    assert!(!r["placed"].is_null(), "{r:#}");
+    s.execute("undo", &json!({})).unwrap();
+    // The code rules: under a GFCI breaker it is a standard receptacle, protected by its breaker;
+    // the office is no guest room (no TR rule), and the documents don't say TR.
+    let ha = find(&mut s, "device", json!({"type_mark": "A"}));
+    s.execute("bim.props.set", &json!({"handle": ha[0], "key": "kind", "value": "receptacle"})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert_eq!(r["gfci"]["breaker"], 1, "{r:#}");
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci"]["value"], "breaker", "{a:#}");
+    assert_eq!(a["receptacle_type"]["value"], "standard");
+    assert_eq!(a["receptacle_type"]["source"]["kind"], "rule");
+    assert!(a["tamper_resistant"].is_null(), "{a:#}");
+    assert_eq!(a["tr_documented"]["value"], "not stated in the documents");
+    // As a guest room (a typical unit fitted into it), every receptacle is TR.
+    s.execute("bspec.set", &json!({"spec": {"unit_instances": [{"number": "101", "type": "Q", "hand": "normal"}]}})).unwrap();
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    assert!(r["tamper_resistant"].as_u64().unwrap_or(0) >= 1, "{r:#}");
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["tamper_resistant"]["value"], "yes", "{a:#}");
+    assert!(a["tamper_resistant"]["source"]["doc"].as_str().is_some_and(|d| d.contains("406.12") && d.contains("101")), "{a:#}");
+    // Its product follows: the section's tamper-resistant receptacle, where the documents say TR.
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-tr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.2 STRAIGHT-BLADE RECEPTACLES\nA. Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\n\
+         B. Tamper-Resistant Convenience Receptacles: 125 V, 20 A; comply with NEMA WD 1.\n\
+         1. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\na. Hubbell.\nb. Leviton.\nPART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    let product: Value = serde_json::from_str(a["product"]["value"].as_str().unwrap_or("null")).unwrap();
+    assert!(product["required"]["product"].as_str().is_some_and(|p| p.to_ascii_uppercase().contains("TAMPER")), "{product:#}");
+    assert!(product["resolved"]["features"].as_array().is_some_and(|f| f.iter().any(|x| x == "TR")), "{product:#}");
+    assert!(a["tr_documented"]["value"].as_str().is_some_and(|d| d.starts_with("26 27 26") && d.to_ascii_uppercase().contains("TAMPER")), "{a:#}");
+    assert_eq!(a["tr_documented"]["source"]["kind"], "spec");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Beside a sink on an AFCI-only breaker, the untagged receptacle needs GFCI: the circuit's
+    // first (here its only one) is the GFCI device.
+    let sched = json!({"mep": {"panel_schedules": [{"panel": "LP1", "source": "E-601", "legend": {"GF": "GROUND FAULT INTERRUPTER", "AF": "ARC FAULT"},
+        "circuits": [{"number": "3", "description": "RECEPTACLES OFFICE 101", "breaker": "20", "poles": 1, "protection": ["AF"], "source": "E-601"}]}]}});
+    s.execute("bspec.set", &json!({"spec": sched})).unwrap();
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["gfci_breaker"]["value"], "no", "{a:#}");
+    let at: Vec<f64> = a["location"]["value"].as_str().unwrap().split(',').map(|v| v.trim().parse().unwrap()).collect();
+    let sink = find(&mut s, "fixture", json!({}));
+    assert!(!sink.is_empty(), "the plan's diffuser");
+    let level = a["level"]["value"].clone();
+    for (k, v) in [("type", json!("SINK")), ("location", json!(format!("{:.2}, {:.2}, 3.00", at[0] + 4.0, at[1]))), ("level", level)] {
+        s.execute("bim.props.set", &json!({"handle": sink[0], "key": k, "value": v})).unwrap();
+    }
+    let r = s.execute("bim.coderules", &json!({})).unwrap();
+    let a = device_of(&mut s, "A");
+    let sk = get(&mut s, &sink[0]);
+    assert_eq!(a["gfci"]["value"], "device", "{r:#} {a:#} SINK {sk:#}");
+    assert_eq!(a["receptacle_type"]["value"], "GFCI");
+    assert!(a["receptacle_type"]["source"]["doc"].as_str().is_some_and(|d| d.contains("needs GFCI") && d.contains("sink")), "{a:#}");
 }
 
 #[test]
@@ -311,8 +581,8 @@ fn a_device_read_on_a_trade_sheet_lands_on_its_levels_architectural_plan() {
     // Where it was read stays its source.
     assert_eq!(b["circuit"]["source"]["doc"], "E-101");
     assert_eq!(b["circuit"]["source"]["at"], json!([3300.0, 60.0]));
-    // Devices read on the plan itself stay where they are.
-    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.80, 1.67");
+    // Devices read on the plan itself stay where they are, in their wall's face.
+    assert_eq!(device_of(&mut s, "A")["location"]["value"], "5.00, 0.42, 1.67");
 }
 
 #[test]
@@ -540,4 +810,131 @@ fn the_guided_job_fills_the_elements_properties() {
     }
     assert!(k["room"]["filled"]["number"].as_u64().unwrap_or(0) > 0, "{:#}", k["room"]);
     assert!(k["wall"]["filled"]["type"].as_u64().unwrap_or(0) > 0, "{:#}", k["wall"]);
+}
+
+/// Two rooms sharing a 6" partition (x 19.75'–20.25'), a receptacle drawn on each face of it
+/// and one on the outer wall: each takes the room on the face it serves, none is in no room.
+#[test]
+fn a_device_on_a_shared_wall_takes_the_room_on_its_face() {
+    let _g = serial();
+    let mut d = Drawing::new_imperial();
+    let outer = [((0., 0.), (40.5, 0.)), ((40.5, 0.), (40.5, 10.)), ((40.5, 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let left = [((0.5, 0.5), (19.75, 0.5)), ((19.75, 0.5), (19.75, 9.5)), ((19.75, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let right = [((20.25, 0.5), (40.0, 0.5)), ((40.0, 0.5), (40.0, 9.5)), ((40.0, 9.5), (20.25, 9.5)), ((20.25, 9.5), (20.25, 0.5))];
+    for (a, b) in outer.into_iter().chain(left).chain(right) {
+        line(&mut d, "A-WALL", a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Shared Wall", None);
+    text(&mut s, "A-ROOM-TAG", [110.0, 64.0], "OFFICE");
+    text(&mut s, "A-ROOM-TAG", [116.0, 52.0], "101");
+    text(&mut s, "A-ROOM-TAG", [350.0, 64.0], "STORAGE");
+    text(&mut s, "A-ROOM-TAG", [356.0, 52.0], "102");
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}, {"layer": "A-ROOM-TAG", "role": "room_tag"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6}],
+        "tags": [device(19.9, 5.0, "A", "", "1F0"), device(20.1, 5.0, "B", "", "1F1"), device(30.0, 0.35, "C", "", "1F2"),
+                 device(10.0, 2.0, "D", "", "1F3"), device(10.0, 5.0, "E", "", "1F4")]
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    s.execute("rooms.build", &json!({})).expect("rooms");
+    let r = fill(&mut s);
+    assert_eq!(device_of(&mut s, "A")["room"]["value"], "101", "the partition's west face: {r:#}");
+    assert_eq!(device_of(&mut s, "B")["room"]["value"], "102", "its east face");
+    assert_eq!(device_of(&mut s, "C")["room"]["value"], "102", "the outer wall's inside face");
+    assert!(r["devices_in_no_room"].as_object().is_none_or(|m| m.is_empty()), "{r:#}");
+    // Each wall device set in its wall, its box's face flush with the wall's face (its middle 1"
+    // inside), where it was along the wall: A in the partition's west face (19.75'), D read 1.5'
+    // into the room in the south wall's inside face (0.5'); E, a device of no known kind mid-room
+    // 4.5' from any wall, stays for review.
+    let xy = |el: &Value| -> (f64, f64) {
+        let v: Vec<f64> = el["location"]["value"].as_str().unwrap_or("").split(',').filter_map(|p| p.trim().parse().ok()).collect();
+        (v.first().copied().unwrap_or(f64::NAN), v.get(1).copied().unwrap_or(f64::NAN))
+    };
+    let (ax, ay) = xy(&device_of(&mut s, "A"));
+    assert!((ax - (19.75 + 1.0 / 12.0)).abs() < 0.02 && (ay - 5.0).abs() < 0.02, "A at {ax}, {ay}");
+    let (dx, dy) = xy(&device_of(&mut s, "D"));
+    assert!((dx - 10.0).abs() < 0.02 && (dy - (0.5 - 1.0 / 12.0)).abs() < 0.02, "D at {dx}, {dy}");
+    let a = device_of(&mut s, "A");
+    assert!(a["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()) && a["face_normal"]["value"].is_string(), "{a:#}");
+    let e = device_of(&mut s, "E");
+    assert_eq!(xy(&e), (10.0, 5.0));
+    assert!(e["placement"]["value"].as_str().is_some_and(|p| p.starts_with("review")), "{e:#}");
+}
+
+/// A room's load center read beside its wall is hosted in it: recessed (its front flush with the
+/// wall's room face, its back in the wall), turned with the wall, the wall's handle on it; filed
+/// as electrical gear.
+#[test]
+fn a_recessed_room_panel_is_built_in_its_wall() {
+    let _g = serial();
+    let mut s = plan();
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(eq) = spec["mep"]["equipment"].as_array_mut() {
+        // Read 1' into office 101 off its south wall (inside face at y = 6").
+        eq.push(
+            json!({"tag": "G-101", "kind": "panel", "level": "L1", "min": [100.0, 18.0], "max": [114.0, 22.0], "bottom_ft": 4.5, "height_ft": 2.0,
+                       "properties": {"MOUNTING": "recessed, front flush with the wall"}}),
+        );
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let d = s.doc().expect("doc");
+    let panel = d.model.iter().find(|e| e.common.xdata.iter().any(|t| t.value == "tag:G-101")).expect("the panel built");
+    let b = cadaddy_engine::doc::entity_bounds(d, panel, 0);
+    // Its 14" along the wall, its 4" deep into the wall (y 2"..6": the wall is 0..6").
+    assert!((b.max.y - 6.0).abs() < 0.01 && (b.min.y - 2.0).abs() < 0.01, "in the wall: {b:?}");
+    assert!((b.max.x - b.min.x - 14.0).abs() < 0.01, "along the wall: {b:?}");
+    assert!(panel.common.xdata.iter().any(|t| t.value.starts_with("prop:HOST_WALL=")), "{:?}", panel.common.xdata);
+}
+
+#[test]
+fn a_product_no_section_speaks_for_cites_the_submittal_its_maker_comes_from() {
+    use cadaddy_engine::doc::props::{self, Prop, Source, SourceKind};
+    let mut s = plan();
+    fill(&mut s);
+    // A made-up submittal's maker on receptacle A; the section read speaks for switches only.
+    let a = find(&mut s, "device", json!({"type_mark": "A"}));
+    let h = cadaddy_engine::doc::Handle::parse_hex(&a[0]).unwrap();
+    assert!(s.doc_mut().unwrap().model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        store.set("manufacturer", Prop::new("MAKER ONE", Source::from_doc(SourceKind::Submittal, "Submittal 26 27 26-1 p.2")));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+    let dir = std::env::temp_dir().join(format!("cadaddy-products-sub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("26 27 26 - Wiring Devices.txt"),
+        "SECTION 262726 - WIRING DEVICES\nPART 2 - PRODUCTS\n2.4 TOGGLE SWITCHES\nB. Switches, 120/277 V, 20 A:\n1. Single Pole:\n\
+         a. Manufacturers: Subject to compliance with requirements, provide products by one of the following:\n1) Maker Two.\n\
+         PART 3 - EXECUTION\n",
+    )
+    .unwrap();
+    s.execute("bim.products", &json!({"specs": [dir.to_string_lossy()]})).unwrap();
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["product"]["source"]["kind"], "submittal", "{a:#}");
+    assert_eq!(a["product"]["source"]["doc"], "Submittal 26 27 26-1 p.2", "{a:#}");
+    assert!(a["approved_makers"].is_null(), "no section's makers: {a:#}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A device a typical plan stamped into a unit, drawn on the line of the next room's wall (an
+/// entry's receptacle on the corridor's wall line), is fed from its unit's own panel.
+#[test]
+fn a_stamped_device_on_a_neighbours_wall_line_is_fed_from_its_units_panel() {
+    let mut s = plan();
+    let mut sp = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    sp["tags"][0]["fields"]["room"] = json!({"value": "102", "source": "rule"});
+    sp["mep"]["equipment"][1]["tag"] = json!("LP1-102");
+    sp["mep"]["equipment"][1]["circuits"] = json!([]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": sp})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    fill(&mut s);
+    let a = device_of(&mut s, "A");
+    assert_eq!(a["room"]["value"], "101", "it stands in 101: {a:#}");
+    let panel = find(&mut s, "equipment", json!({"type_mark": "LP1-102"}));
+    assert_eq!(a["fed_from_handle"]["value"], json!(panel[0]), "its unit's panel: {a:#}");
 }

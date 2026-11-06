@@ -11,10 +11,16 @@
 //!   each with its element handles, and what changed since the last takeoff ([`takeoff`]).
 //!   `bim.takeoff.show {line}` selects a line's elements and frames them in 3D.
 //! - `bim.estimate {cost_table}`: the takeoff priced from a cost table (CSV or XLSX: item, unit,
-//!   material, labor_hrs, optional waste), with a change order against an earlier estimate.
+//!   material, labor_hrs, optional waste), with a change order against an earlier estimate; or
+//!   `bim.estimate {price_book}`: its material priced from a price-book workbook by each line's
+//!   catalog number, else its Item Map row ([`priced`]).
 //! - `bim.issue.*`: issues, RFIs and punch items pinned to elements, with a photo, an assignee, a
 //!   status and a viewpoint, kept as BCF topics ([`super::bcf`]) and so exported and imported as
 //!   BCF 2.1 or 3.0; `bim.issue.marks` puts them on the plan (the sheets) as numbered marks.
+//! - `bim.bid {price_book?, labor_units?, …}`: the bid package (Q6196): the takeoff by system and
+//!   floor with material, labor hours from labor-unit data, allowances and markups, the value
+//!   engineering alternates, inclusions/exclusions/clarifications, a Web Prices workbook and a
+//!   one-page proposal letter ([`bid`]).
 //! - `bim.field.link {at, from}`: a sheet point to a 3D view of that spot, and a 3D point back to
 //!   its level and sheet point.
 //!
@@ -31,8 +37,12 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{Result, Session};
 
+mod bid;
+#[cfg(test)]
+mod bid_tests;
 mod clash;
 mod issues;
+mod priced;
 mod takeoff;
 
 /// The embedded file the work state is kept in.
@@ -44,6 +54,7 @@ pub fn specs() -> Vec<CommandSpec> {
     let mut v = clash::specs();
     v.extend(takeoff::specs());
     v.extend(issues::specs());
+    v.extend(bid::specs());
     v
 }
 
@@ -82,6 +93,10 @@ pub(crate) struct El {
     pub level: String,
     pub lo: Vec3,
     pub hi: Vec3,
+    /// A piece of a run (Q6157): the run it is part of (one clash per run, not per stick).
+    pub run: String,
+    /// Set in a wall as its trade sets it there: a box, its ring, a drop in the wall's cavity.
+    pub in_wall: bool,
 }
 
 impl El {
@@ -144,20 +159,51 @@ pub(crate) fn classify(e: &Entity) -> Option<(&'static str, String, String, Stri
                 let kind = super::fieldview::tag_value(&tags, "kind").unwrap_or("mep");
                 let system = super::fieldview::tag_value(&tags, "system").unwrap_or_default().to_string();
                 let p = super::fieldview::tag_value(&tags, "part").unwrap_or_default();
-                let cat = if p.starts_with("fitting") {
+                // A piece of a run (Q6157): sticks are its conduit, the rest its fittings, boxes,
+                // supports, cable and wire.
+                let piece = p.strip_prefix("atom:").map(|k| match k {
+                    "conduit" => "conduit",
+                    "box" | "ring" => "box",
+                    "strap" => "support",
+                    "cable" => "cable",
+                    "wire" => "wire",
+                    "breaker" => "breaker",
+                    _ => "fitting",
+                });
+                let cat = if let Some(piece) = piece {
+                    piece
+                } else if p.starts_with("fitting") {
                     "fitting"
                 } else if p.starts_with("terminal") {
                     "terminal"
                 } else {
                     kind
                 };
+                // Electrical gear scheduled as equipment (a room's load center, a panelboard) is
+                // the electrician's.
+                let gear = p.strip_prefix("equipment:").is_some_and(|k| {
+                    matches!(
+                        k.to_ascii_lowercase().as_str(),
+                        "panel" | "panelboard" | "load_center" | "switchboard" | "switchgear" | "transformer" | "disconnect"
+                    )
+                });
                 let t = match kind {
                     "tray" | "cable" | "grounding" => "electrical",
+                    _ if piece.is_some() => "electrical",
+                    "equipment" if gear => "electrical",
                     _ => long_trade(cadaddy_walk3d::field::trade_of(kind, &system)),
                 };
                 (t, cat.to_string(), system, level)
             }
             "device" => (long_trade(cadaddy_walk3d::field::trade_of("device", &layer)), "device".into(), layer, level),
+            // A trade's piece (Q6162): structure for concrete, framing and masonry, else the
+            // architecture's; its category the piece (`piece:stud`), its system its trade.
+            "atom" => {
+                let trade = super::fieldview::tag_value(&tags, "trade").unwrap_or("other").to_string();
+                let kind = super::fieldview::tag_value(&tags, "part").and_then(|p| p.strip_prefix("atom:")).unwrap_or("piece").to_string();
+                let t = if matches!(trade.as_str(), "concrete" | "framing" | "masonry") { "structure" } else { "architecture" };
+                (t, format!("piece:{kind}"), trade, level)
+            }
             other => {
                 let kind = super::fieldview::tag_value(&tags, "kind").unwrap_or(other);
                 (long_trade(cadaddy_walk3d::field::trade_of(kind, &layer)), other.to_string(), layer, level)
@@ -195,7 +241,24 @@ pub(crate) fn elements(d: &Drawing) -> Vec<El> {
         .filter_map(|e| {
             let (lo, hi) = super::fieldview::mesh_box(e)?;
             let (trade, category, system, level) = classify(e)?;
-            Some(El { handle: e.handle, trade, category, system, level, lo: Vec3::new(lo[0], lo[1], lo[2]), hi: Vec3::new(hi[0], hi[1], hi[2]) })
+            let (run, in_wall) = if super::mepatoms::is_atom(e) {
+                let ps = cadaddy_doc::props::read(&e.common.xdata);
+                let t = |k: &str| ps.get(k).map(cadaddy_doc::props::Prop::text).unwrap_or_default();
+                (t("run"), matches!(t("atom").as_str(), "box" | "ring") || t("vertical") == "true")
+            } else {
+                (String::new(), false)
+            };
+            Some(El {
+                handle: e.handle,
+                trade,
+                category,
+                system,
+                level,
+                lo: Vec3::new(lo[0], lo[1], lo[2]),
+                hi: Vec3::new(hi[0], hi[1], hi[2]),
+                run,
+                in_wall,
+            })
         })
         .take(MAX_ELEMENTS)
         .collect()

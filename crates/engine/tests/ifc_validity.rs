@@ -434,6 +434,14 @@ const ELEMENTS: &[&str] = &[
     "IFCCABLECARRIERFITTING",
     "IFCAIRTERMINAL",
     "IFCFIRESUPPRESSIONTERMINAL",
+    "IFCMEMBER",
+    "IFCPLATE",
+    "IFCBUILDINGELEMENTPART",
+    "IFCDISCRETEACCESSORY",
+    "IFCREINFORCINGBAR",
+    "IFCREINFORCINGMESH",
+    "IFCTENDON",
+    "IFCTENDONANCHOR",
 ];
 const SPATIAL: &[&str] = &["IFCSITE", "IFCBUILDING", "IFCBUILDINGSTOREY", "IFCSPACE"];
 const OBJECTS: &[&str] = &[
@@ -472,6 +480,14 @@ const OBJECTS: &[&str] = &[
     "IFCCONDENSER",
     "IFCFLOWMETER",
     "IFCDISTRIBUTIONSYSTEM",
+    "IFCMEMBER",
+    "IFCPLATE",
+    "IFCBUILDINGELEMENTPART",
+    "IFCDISCRETEACCESSORY",
+    "IFCREINFORCINGBAR",
+    "IFCREINFORCINGMESH",
+    "IFCTENDON",
+    "IFCTENDONANCHOR",
 ];
 const PLACEMENT: &[&str] = &["IFCLOCALPLACEMENT"];
 const QUANTITIES: &[&str] = &["IFCQUANTITYLENGTH", "IFCQUANTITYAREA", "IFCQUANTITYVOLUME"];
@@ -597,6 +613,53 @@ fn schema() -> HashMap<&'static str, Vec<A>> {
         ]),
     );
     m.insert("IFCBEAM", element(&["BEAM", "JOIST", "HOLLOWCORE", "LINTEL", "SPANDREL", "T_BEAM", "USERDEFINED", "NOTDEFINED"]));
+    // A trade's pieces (Q6162): members, sheets, parts, accessories and reinforcement.
+    m.insert(
+        "IFCMEMBER",
+        element(&[
+            "BRACE",
+            "CHORD",
+            "COLLAR",
+            "MEMBER",
+            "MULLION",
+            "PLATE",
+            "POST",
+            "PURLIN",
+            "RAFTER",
+            "STRINGER",
+            "STRUT",
+            "STUD",
+            "USERDEFINED",
+            "NOTDEFINED",
+        ]),
+    );
+    m.insert("IFCPLATE", element(&["CURTAIN_PANEL", "SHEET", "USERDEFINED", "NOTDEFINED"]));
+    m.insert("IFCBUILDINGELEMENTPART", element(&["INSULATION", "PRECASTPANEL", "USERDEFINED", "NOTDEFINED"]));
+    m.insert("IFCDISCRETEACCESSORY", element(&["ANCHORPLATE", "BRACKET", "SHOE", "USERDEFINED", "NOTDEFINED"]));
+    // IfcReinforcingElement: the tag, then SteelGrade and each one's own attributes.
+    let reinforcing = |own: &[A]| {
+        let mut v = product();
+        v.extend([A::Text { opt: true }, A::Text { opt: true }]);
+        v.extend_from_slice(own);
+        v
+    };
+    let r = A::Real { opt: true };
+    m.insert(
+        "IFCREINFORCINGBAR",
+        reinforcing(&[
+            r,
+            r,
+            r,
+            A::Enum { opt: true, of: &["ANCHORING", "EDGE", "LIGATURE", "MAIN", "PUNCHING", "RING", "SHEAR", "STUD", "USERDEFINED", "NOTDEFINED"] },
+            A::Enum { opt: true, of: &["PLAIN", "TEXTURED"] },
+        ]),
+    );
+    m.insert("IFCREINFORCINGMESH", reinforcing(&[r, r, r, r, r, r, r, r, A::Enum { opt: true, of: &["MESH", "USERDEFINED", "NOTDEFINED"] }]));
+    m.insert(
+        "IFCTENDON",
+        reinforcing(&[A::Enum { opt: true, of: &["BAR", "COATED", "STRAND", "WIRE", "USERDEFINED", "NOTDEFINED"] }, r, r, r, r, r, r, r]),
+    );
+    m.insert("IFCTENDONANCHOR", reinforcing(&[A::Enum { opt: true, of: &["COUPLER", "FIXED_END", "TENSIONING_END", "USERDEFINED", "NOTDEFINED"] }]));
     m.insert("IFCGEOGRAPHICELEMENT", element(&["TERRAIN", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCDUCTSEGMENT", element(&["RIGIDSEGMENT", "FLEXIBLESEGMENT", "USERDEFINED", "NOTDEFINED"]));
     m.insert("IFCPIPESEGMENT", element(&["CULVERT", "FLEXIBLESEGMENT", "RIGIDSEGMENT", "GUTTER", "SPOOL", "USERDEFINED", "NOTDEFINED"]));
@@ -1292,14 +1355,24 @@ fn the_export_is_valid_ifc4_with_every_part_as_its_class() {
     let parts = parts(&s);
     assert_eq!(n("IFCWALL"), parts["wall"]);
     assert_eq!(n("IFCSLAB"), parts["floor"]);
-    assert_eq!(n("IFCCOVERING"), parts["ceiling"]);
+    // Coverings: the ceilings, and the trades' pieces that are coverings (sheets, paint,
+    // flooring, base, tiles, the vapor barrier: Q6162), as the model's index counts them.
+    let covering_pieces: usize = ["sheet", "paint", "flooring", "base", "tile", "vapor_barrier", "underlayment"]
+        .iter()
+        .map(|k| s.execute("bim.count", &json!({"kind": k})).unwrap()["count"].as_u64().unwrap_or(0) as usize)
+        .sum();
+    assert!(covering_pieces > 0, "the building's walls are boarded");
+    assert_eq!(n("IFCCOVERING"), parts["ceiling"] + covering_pieces);
     assert_eq!((n("IFCDOOR"), n("IFCWINDOW"), n("IFCCOLUMN"), n("IFCCURTAINWALL")), (1, 1, 1, 1));
     assert_eq!((n("IFCSTAIR"), n("IFCRAILING")), (parts["stair"], parts["railing"]));
     // MEP: segments + fittings as their IFC classes. The duct run has a corner → 1 segment + 1 fitting.
     assert_eq!(n("IFCDUCTSEGMENT"), 1, "duct segment");
     assert_eq!(n("IFCDUCTFITTING"), 1, "duct fitting (the elbow)");
     assert_eq!(n("IFCPIPESEGMENT"), 1, "pipe segment");
-    assert_eq!(n("IFCCABLECARRIERSEGMENT"), 1, "conduit segment");
+    // The conduit run as its sticks, its fittings and supports as carrier fittings (Q6157).
+    let sticks = s.execute("bim.count", &json!({"kind": "conduit"})).unwrap()["count"].as_u64().unwrap() as usize;
+    assert!(sticks >= 1);
+    assert_eq!(n("IFCCABLECARRIERSEGMENT"), sticks, "conduit segment");
     // Distribution systems group MEP objects by system name.
     assert!(n("IFCDISTRIBUTIONSYSTEM") >= 3, "one IfcDistributionSystem per MEP system: {}", n("IFCDISTRIBUTIONSYSTEM"));
     assert!(n("IFCRELASSIGNSTOGROUP") >= 3, "one IfcRelAssignsToGroup per system: {}", n("IFCRELASSIGNSTOGROUP"));

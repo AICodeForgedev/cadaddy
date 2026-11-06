@@ -274,9 +274,17 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     eprintln!("devices by level: {by_level:?}");
     assert!(by_level.keys().all(|l| !l.is_empty()), "every device has a level: {by_level:?}");
     let bom = s.execute("bim.bom", &json!({"group_by": "level"})).expect("bom");
-    let lines: Vec<&serde_json::Value> = bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices").collect();
+    // The electrical devices, and the plumbing plans' fixtures their schedule types (Q6165: the
+    // plumbing trade's, not electrical "device type" lines).
+    let lines: Vec<&serde_json::Value> =
+        bom["lines"].as_array().into_iter().flatten().filter(|l| l["category"] == "devices" || l["category"] == "plumbing fixtures").collect();
     let units: f64 = lines.iter().filter_map(|l| l["net"].as_f64()).sum();
-    assert_eq!(units, inserted as f64, "the BOM counts the model's devices: {lines:#?}");
-    assert!(lines.iter().all(|l| l["trade"] == "electrical" && l["level"].as_str().is_some_and(|v| !v.is_empty())));
+    // Another trade's devices (thermostats, fire alarm, low voltage: bim.scope) leave the device
+    // lines for `by_others`, one entry each (Q6167).
+    let others = bom["by_others"].as_array().into_iter().flatten().filter(|x| x["trade"] != "concrete").count();
+    assert_eq!(units + others as f64, inserted as f64, "the BOM counts the model's devices: {lines:#?} by others {others}");
+    assert!(lines.iter().all(|l| l["level"].as_str().is_some_and(|v| !v.is_empty())));
+    assert!(lines.iter().all(|l| (l["category"] == "devices") == (l["trade"] == "electrical")), "{lines:#?}");
+    assert!(!lines.iter().any(|l| l["item"].as_str().is_some_and(|i| i.starts_with("device type"))), "{lines:#?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

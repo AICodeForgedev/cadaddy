@@ -21,6 +21,18 @@ const MIN_ROOM_WIDTH_IN: f64 = 36.0;
 const MAX_ROOMS_PER_REGION: usize = 250;
 /// Rooms traced at most over all the sheet regions (a whole print set).
 const MAX_ROOMS_ALL_REGIONS: usize = 8_000;
+/// A habitable room's least floor area, square feet (IBC 1208.3, IRC R304.1: 70 sf): a smaller
+/// loop round a bedroom's or a unit's name is the furniture the name is printed on.
+const HABITABLE_MIN_SF: f64 = 70.0;
+/// Words of a room to sleep or live in (a unit type, a bedroom), for [`HABITABLE_MIN_SF`].
+const HABITABLE_WORDS: &[&str] = &["Q", "K", "QUEEN", "KING", "SUITE", "STUDIO", "UNIT", "BEDROOM", "BED", "LIVING", "APT", "APARTMENT", "DWELLING"];
+/// How far from its name a room's number tag may be when it isn't inside the traced outline,
+/// in the name's text heights (a tag's two or three lines, the number printed on furniture).
+const NUMBER_REACH_HEIGHTS: f64 = 6.0;
+/// A room tag's number text height to its name's: at least, at most.
+const TAG_SIZE_BAND: (f64, f64) = (0.75, 1.33);
+/// Two traced outlines are one room when their areas and bounds agree within this share.
+const SAME_OUTLINE_SHARE: f64 = 0.02;
 
 /// A straight segment of a line or polyline.
 #[derive(Clone, Debug)]
@@ -28,6 +40,20 @@ pub(crate) struct Seg {
     pub a: Vec2,
     pub b: Vec2,
     pub layer: String,
+    /// The mean width of the closed outline the segment is a side of (see [`outline_width`]),
+    /// infinite for an open line.
+    pub outline_width: f64,
+}
+
+/// The mean width of a closed outline: twice its area over its perimeter (a `w × l` rectangle
+/// gives `w·l / (w + l)`, about `w` when it is long and thin). Infinite when it is no outline.
+pub(crate) fn outline_width(pts: &[Vec2]) -> f64 {
+    if pts.len() < 3 {
+        return f64::INFINITY;
+    }
+    let perimeter: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
+    let area = cadaddy_geom::shoelace(pts).abs();
+    if perimeter.is_finite() && perimeter > 1e-12 && area.is_finite() { 2.0 * area / perimeter } else { f64::INFINITY }
 }
 
 /// The straight segments of the space's lines and polylines.
@@ -38,11 +64,20 @@ pub(crate) fn segments(ents: &[&std::sync::Arc<Entity>]) -> Vec<Seg> {
             break;
         }
         match &e.kind {
-            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string() }),
+            EntityKind::Line(l) => out.push(Seg { a: l.a.xy(), b: l.b.xy(), layer: e.common.layer.to_string(), outline_width: f64::INFINITY }),
             EntityKind::LwPolyline(p) => {
+                // A closed outline (flagged closed, or ending where it starts): how wide it is.
+                let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
+                let straight = p.vertices.iter().all(|v| v.bulge == 0.0);
+                let ends_at_start = pts.len() >= 4 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9);
+                let width = match (straight, p.closed, ends_at_start) {
+                    (true, true, _) => outline_width(&pts),
+                    (true, false, true) => outline_width(pts.get(..pts.len() - 1).unwrap_or_default()),
+                    _ => f64::INFINITY,
+                };
                 for sg in (Polyline { vertices: p.vertices.clone(), closed: p.closed }).segments() {
                     if let Segment::Line(l) = sg {
-                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string() });
+                        out.push(Seg { a: l.a, b: l.b, layer: e.common.layer.to_string(), outline_width: width });
                     }
                 }
             }
@@ -152,6 +187,157 @@ pub(crate) fn pairs(_d: &Drawing, segs: &[Seg], lim: &Limits) -> Vec<Pair> {
     out
 }
 
+/// A dash of a dashed line is at most this long, inches (a plan's hidden or overhead line drawn
+/// as separate pieces: about ⅛" of paper at the coarsest plan scale).
+const DASH_MAX_IN: f64 = 30.0;
+/// The space between two dashes is at most this, inches (narrower than any door or window).
+const DASH_GAP_MAX_IN: f64 = 12.0;
+/// Dashes in a row, at least, before pieces of a line are read as a dashed line.
+const DASH_RUN: usize = 3;
+/// Dashed lines looked at, at most (hostile drawings).
+const MAX_DASH_LINES: usize = 200_000;
+
+/// Takes out the dashes of dashed lines (hidden or overhead lines a print flattens into separate
+/// pieces: a soffit, a header or a wall above). Three or more pieces on one line, each at most
+/// [`DASH_MAX_IN`] long and about as long as the next, with about equal gaps of at most
+/// [`DASH_GAP_MAX_IN`] between them, are a dashed line: no wall's face (paired with another line
+/// it made a wall across a door's opening). A wall's face broken by other walls (pieces much
+/// longer) or by doors and windows (gaps wider) is kept. `k` is drawing units per inch. Returns
+/// how many pieces were taken out.
+pub(crate) fn drop_dashes(segs: &mut Vec<Seg>, k: f64) -> usize {
+    use std::f64::consts::PI;
+    if !(k.is_finite() && k > 0.0) {
+        return 0;
+    }
+    let (max_len, max_gap, line_tol) = (DASH_MAX_IN * k, DASH_GAP_MAX_IN * k, 0.5 * k);
+    // Short pieces grouped by line: direction (half-degree buckets) and offset across it.
+    let mut lines: std::collections::HashMap<(i64, i64), Vec<(f64, f64, usize)>> = std::collections::HashMap::new();
+    for (i, sg) in segs.iter().enumerate() {
+        let d = sg.b - sg.a;
+        let len = d.len();
+        if !(len > 1e-9 && len <= max_len) {
+            continue;
+        }
+        let ang = d.y.atan2(d.x).rem_euclid(PI);
+        let bucket = ((ang.to_degrees() * 2.0).round() as i64).rem_euclid(360);
+        let u = Vec2::new((bucket as f64 / 2.0).to_radians().cos(), (bucket as f64 / 2.0).to_radians().sin());
+        let n = u.perp();
+        let off = (n.dot(sg.a.mid(sg.b)) / line_tol).round() as i64;
+        let (s0, s1) = minmax(u.dot(sg.a), u.dot(sg.b));
+        if lines.len() < MAX_DASH_LINES || lines.contains_key(&(bucket, off)) {
+            lines.entry((bucket, off)).or_default().push((s0, s1, i));
+        }
+    }
+    let mut dash = vec![false; segs.len()];
+    let close = |a: f64, b: f64, share: f64, slack: f64| (a - b).abs() <= share * a.max(b) + slack;
+    for run in lines.values_mut() {
+        if run.len() < DASH_RUN {
+            continue;
+        }
+        run.sort_by(|a, b| a.0.total_cmp(&b.0));
+        // Grow rows of dashes: each piece about as long as the last, each gap about as wide.
+        let mut start = 0usize;
+        let mut last_gap: Option<f64> = None;
+        let mark = |from: usize, to: usize, dash: &mut Vec<bool>| {
+            if to + 1 - from >= DASH_RUN {
+                for r in run.get(from..=to).into_iter().flatten() {
+                    if let Some(d) = dash.get_mut(r.2) {
+                        *d = true;
+                    }
+                }
+            }
+        };
+        let rows: Vec<(f64, f64, usize)> = run.clone();
+        for j in 1..rows.len() {
+            let (Some(prev), Some(cur)) = (rows.get(j - 1), rows.get(j)) else { continue };
+            let gap = cur.0 - prev.1;
+            let steady = gap > 0.05 * k
+                && gap <= max_gap
+                && close(prev.1 - prev.0, cur.1 - cur.0, 0.15, 0.25 * k)
+                && last_gap.is_none_or(|g| close(g, gap, 0.25, 0.5 * k));
+            if steady {
+                last_gap = Some(gap);
+            } else {
+                mark(start, j - 1, &mut dash);
+                start = j;
+                last_gap = None;
+            }
+        }
+        mark(start, rows.len() - 1, &mut dash);
+    }
+    let before = segs.len();
+    let mut it = dash.iter();
+    segs.retain(|_| !it.next().copied().unwrap_or(false));
+    before - segs.len()
+}
+
+/// Drops the pairs a thin outline's side makes with another wall's face. A side of a closed
+/// outline thinner than any wall (a trim piece, a shelf or a jamb drawn beside a wall) paired
+/// with a line that is already the face of a wall on its far side is no wall: one line can't be
+/// a wall's face on both of its sides, so the space between them is air the plan leaves open.
+/// A thin outline's side paired with a line that bounds no other wall stays (real faces are drawn
+/// as thin closed outlines too), and so does one whose far wall has a thin outline's side for a
+/// face itself (two walls drawn with thin finish layers, side by side). Returns how many were
+/// dropped.
+pub(crate) fn drop_sliver_pairs(segs: &[Seg], found: &mut Vec<Pair>, lim: &Limits) -> usize {
+    let thin = |i: usize| segs.get(i).is_some_and(|s| s.outline_width < lim.min_thick);
+    if !found.iter().any(|p| thin(p.faces[0]) || thin(p.faces[1])) {
+        return 0;
+    }
+    // Which pairs each line is a face of.
+    let mut by_face: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for (k, p) in found.iter().enumerate() {
+        for f in p.faces {
+            by_face.entry(f).or_default().push(k);
+        }
+    }
+    // The side of the line `f` a segment's middle is on (+1 / −1, 0 on it).
+    let side = |f: &Seg, s: &Seg| {
+        let d = f.b - f.a;
+        let len = d.len();
+        if len <= 1e-12 {
+            return 0.0;
+        }
+        let v = d.cross(s.a.mid(s.b) - f.a) / len;
+        if v.abs() <= 1e-9 { 0.0 } else { v.signum() }
+    };
+    // How far two pairs run side by side along the first one's centreline.
+    let overlap = |p: &Pair, q: &Pair| {
+        let len = p.c0.dist(p.c1);
+        if len <= 1e-12 {
+            return 0.0;
+        }
+        let u = (p.c1 - p.c0) * (1.0 / len);
+        let (a, b) = minmax(u.dot(q.c0 - p.c0), u.dot(q.c1 - p.c0));
+        (b.min(len) - a.max(0.0)).max(0.0)
+    };
+    let mut drop = vec![false; found.len()];
+    for (k, p) in found.iter().enumerate() {
+        for (t, f) in [(p.faces[0], p.faces[1]), (p.faces[1], p.faces[0])] {
+            if !thin(t) {
+                continue;
+            }
+            let (Some(ts), Some(fs)) = (segs.get(t), segs.get(f)) else { continue };
+            let here = side(fs, ts);
+            let far_wall = by_face.get(&f).into_iter().flatten().any(|&q| {
+                q != k
+                    && found.get(q).is_some_and(|qp| {
+                        let other = if qp.faces[0] == f { qp.faces[1] } else { qp.faces[0] };
+                        !thin(other) && segs.get(other).is_some_and(|os| side(fs, os) * here < 0.0) && overlap(p, qp) > 0.5 * p.length
+                    })
+            });
+            if far_wall {
+                drop[k] = true;
+                break;
+            }
+        }
+    }
+    let before = found.len();
+    let mut it = drop.iter();
+    found.retain(|_| !it.next().copied().unwrap_or(false));
+    before - found.len()
+}
+
 /// Two faces measured as a wall: the gap between their lines, their overlap and the centreline.
 struct FacePair {
     gap: f64,
@@ -235,6 +421,21 @@ pub(crate) struct Opening {
     pub confidence: f64,
     /// A swing whose leaf is drawn too (a line from the hinge to an end of the arc).
     pub leaf: bool,
+    /// The arc's end the drawn leaf reaches: the door's open end (the other one is where it
+    /// shuts).
+    pub open_end: Option<Vec2>,
+}
+
+/// The end of a swing (hinged at `c`, its arc ending at `ends`) its leaf is drawn to: a line
+/// from the hinge to that end, within `tol`. A leaf drawn as a thin outline has a side along it.
+/// Whether a leaf is drawn at all, and the end when it is drawn to one only.
+fn leaf_end(segs: &[Seg], c: Vec2, ends: [Vec2; 2], tol: f64) -> (bool, Option<Vec2>) {
+    let to = |e: Vec2| segs.iter().any(|g| (g.a.dist(c) < tol && g.b.dist(e) < tol) || (g.b.dist(c) < tol && g.a.dist(e) < tol));
+    match (to(ends[0]), to(ends[1])) {
+        (true, false) => (true, Some(ends[0])),
+        (false, true) => (true, Some(ends[1])),
+        (a, b) => (a || b, None),
+    }
 }
 
 /// Door swings (arcs of 60–100° with a door's radius, 16"–54", ideally with a leaf line from the
@@ -256,10 +457,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                 let c = a.center.xy();
                 let ends = [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius];
                 let tol = a.radius * 0.05;
-                let leaf = segs.iter().any(|g| {
-                    let (p, q) = (g.a, g.b);
-                    ends.iter().any(|e| (p.dist(c) < tol && q.dist(*e) < tol) || (q.dist(c) < tol && p.dist(*e) < tol))
-                });
+                let (leaf, open_end) = leaf_end(segs, c, ends, tol);
                 let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
                 let confidence = (0.5 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
                 items.push(Opening {
@@ -272,6 +470,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: None,
                     confidence,
                     leaf,
+                    open_end,
                 });
             }
             // A swing flattened to a polyline (how PDF prints arrive): a quarter-ish circle run.
@@ -282,10 +481,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     continue;
                 }
                 let tol = r * 0.05;
-                let leaf = segs.iter().any(|g| {
-                    let (p, q) = (g.a, g.b);
-                    ends.iter().any(|e| (p.dist(c) < tol && q.dist(*e) < tol) || (q.dist(c) < tol && p.dist(*e) < tol))
-                });
+                let (leaf, open_end) = leaf_end(segs, c, ends, tol);
                 let on_door_layer = e.common.layer.to_ascii_uppercase().contains("DOOR");
                 let confidence = (0.45 + 0.3 * f64::from(u8::from(leaf)) + 0.2 * f64::from(u8::from(on_door_layer))).min(1.0);
                 items.push(Opening {
@@ -298,6 +494,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: None,
                     confidence,
                     leaf,
+                    open_end,
                 });
             }
             EntityKind::Insert(i) => {
@@ -321,6 +518,7 @@ pub(crate) fn openings(d: &Drawing, ents: &[&std::sync::Arc<Entity>], segs: &[Se
                     block: Some(i.block.clone()),
                     confidence: 0.75,
                     leaf: false,
+                    open_end: None,
                 });
             }
             _ => {}
@@ -334,11 +532,18 @@ const MAX_LEAVES: usize = 200_000;
 /// Most plan objects looked at for the jambs door swings end on.
 const MAX_LEAF_SCAN: usize = 5_000_000;
 
+/// A door's swing is a quarter-ish circle up to here.
+const SWING_MAX_DEG: f64 = 100.0;
+/// A door that opens back flat against its wall swings about this far. Only with something drawn
+/// at the arc's centre (the leaf from its hinge): a half circle alone is no door.
+const WIDE_SWING_MAX_DEG: f64 = 185.0;
+
 /// The closed leaf of every door swing in `d` (an arc of 60–100° with a door's radius, or a
-/// flattened one): a line from the hinge to the end of the arc where the wall's jamb is (an end
-/// of other linework), so a room traced on the plan ends at its door instead of running on
-/// through the gap, and the swing stays in the room it opens into. When neither end (or both)
-/// meets a jamb, both leaves are drawn.
+/// flattened one, or a door opening back against its wall): a line from the hinge to the end of
+/// the arc where the wall's jamb is (an end of other linework), so a room traced on the plan ends
+/// at its door instead of running on through the gap, and the swing stays in the room it opens
+/// into. When neither end (or both) meets a jamb, both leaves are drawn; a door opening back
+/// against its wall always gets both (the end its leaf is drawn to is the open one).
 pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line)> {
     let (rmin, rmax) = (16.0 * k, 54.0 * k);
     // Ends of the plan's straight linework, filed by cell.
@@ -377,19 +582,27 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
                     sweep = std::f64::consts::TAU;
                 }
                 let c = a.center.xy();
-                ((60.0..=100.0).contains(&sweep.to_degrees()) && (rmin..=rmax).contains(&a.radius))
-                    .then(|| (c, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
+                let deg = sweep.to_degrees();
+                ((60.0..=WIDE_SWING_MAX_DEG).contains(&deg) && (rmin..=rmax).contains(&a.radius))
+                    .then(|| (c, deg, [c + Vec2::from_angle(a.start) * a.radius, c + Vec2::from_angle(a.end) * a.radius]))
             }
             EntityKind::LwPolyline(p) if !p.closed && (3..=200).contains(&p.vertices.len()) => {
                 let pts = Polyline { vertices: p.vertices.clone(), closed: false }.tessellate(1e-3);
-                flat_swing(&pts).filter(|(_, r, _, _)| (rmin..=rmax).contains(r)).map(|(c, _, _, ends)| (c, ends))
+                flat_arc(&pts)
+                    .filter(|(_, r, deg, _)| (rmin..=rmax).contains(r) && (60.0..=WIDE_SWING_MAX_DEG).contains(deg))
+                    .map(|(c, _, deg, ends)| (c, deg, ends))
             }
             _ => None,
         };
-        let Some((hinge, arc_ends)) = swing else { continue };
+        let Some((hinge, deg, arc_ends)) = swing else { continue };
         let tol = 0.05 * hinge.dist(arc_ends[0]);
+        let wide = deg > SWING_MAX_DEG;
+        if wide && !jamb(hinge, 2.0 * tol) {
+            continue;
+        }
         let at_jamb = arc_ends.map(|p| jamb(p, tol));
         let leaves: Vec<Vec2> = match at_jamb {
+            _ if wide => arc_ends.to_vec(),
             [true, false] => vec![arc_ends[0]],
             [false, true] => vec![arc_ends[1]],
             _ => arc_ends.to_vec(),
@@ -407,6 +620,12 @@ pub(crate) fn door_leaves(d: &Drawing, k: f64) -> Vec<(Common, cadaddy_doc::Line
 /// A run of points that is a door swing: on one circle (within 5% of its radius) through 60–100°.
 /// Its centre (the hinge), radius, sweep in degrees and two ends.
 pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
+    flat_arc(pts).filter(|(_, _, deg, _)| (60.0..=SWING_MAX_DEG).contains(deg))
+}
+
+/// A run of points on one circle (within 5% of its radius): its centre, radius, sweep in degrees
+/// and two ends.
+fn flat_arc(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
     let (first, last) = (*pts.first()?, *pts.last()?);
     let mid = *pts.get(pts.len() / 2)?;
     let d = 2.0 * (first.x * (mid.y - last.y) + mid.x * (last.y - first.y) + last.x * (first.y - mid.y));
@@ -428,7 +647,7 @@ pub(crate) fn flat_swing(pts: &[Vec2]) -> Option<(Vec2, f64, f64, [Vec2; 2])> {
     let sweep = |from: f64, to: f64| (to - from).rem_euclid(std::f64::consts::TAU);
     let (s_mid, s_end) = (sweep(ang(first), ang(mid)), sweep(ang(first), ang(last)));
     let deg = if s_mid <= s_end { s_end } else { std::f64::consts::TAU - s_end }.to_degrees();
-    (60.0..=100.0).contains(&deg).then_some((c, r, deg, [first, last]))
+    Some((c, r, deg, [first, last]))
 }
 
 pub(super) fn run_openings(s: &mut Session, p: &Value) -> Result<Value> {
@@ -740,8 +959,106 @@ fn labels_to_trace<T>(mut names: Vec<T>, at: impl Fn(&T) -> Vec2, score: impl Fn
     per.into_iter().flatten().take(MAX_ROOMS_ALL_REGIONS).collect()
 }
 
+/// Two outlines are one loop: the same corners, whichever each starts at and whichever way it
+/// goes round.
+fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let area = |p: &[Vec2]| cadaddy_geom::shoelace(p).abs();
+    (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
+}
+
+/// A label's width per character, in its text height (a room tag's capitals).
+const LABEL_CHAR_WIDTH: f64 = 0.6;
+/// A tag's number is within this of its name, in the name's text height (under its last line:
+/// a two-line name, `DOUBLE Q ADA` over `(TUB)`, puts it about 5 heights from the first; the
+/// next room's tag is 10 or more away).
+const TAG_NUMBER_REACH: f64 = 5.5;
+/// The least a room its label doesn't fit inside may be, sq ft (a smaller loop under a label is a
+/// piece of furniture's linework).
+const OVERHUNG_ROOM_MIN_SQFT: f64 = 40.0;
+
 /// [`rooms_found`], the labels read only inside `regions` (sheet rectangles), sheet by sheet.
+/// Room traces remembered per drawing.
+const TRACES_KEPT: usize = 4;
+
+/// The rooms traced in a drawing state (the drawing as a command left it, shared with undo), so
+/// asking again in the same state reads them instead of tracing again: a model with no room
+/// elements traced its plan (up to 103 s) on every `rooms.list`, `rooms.build` and
+/// `bim_props fill`, and a job asked about 6 times. "No rooms" is remembered too. Any edit makes
+/// a new drawing state, so an edited wall or label is traced again.
+#[derive(Clone, Debug, Default)]
+pub struct TraceCache {
+    traces: Vec<Trace>,
+}
+
+#[derive(Clone, Debug)]
+struct Trace {
+    state: std::sync::Weak<Drawing>,
+    space: cadaddy_doc::Space,
+    regions: Option<Vec<[f64; 4]>>,
+    rooms: std::sync::Arc<Vec<FoundRoom>>,
+}
+
+/// Whether a trace of `old` holds for `now`: the same model objects (their chunks still shared:
+/// nothing in model space changed) and the same of everything else the trace reads (units and
+/// the other header values, layers, blocks, the building spec, the job's sheets). A command that
+/// took the drawing for writing and changed nothing there (`bim.props.fill` reseating no device)
+/// leaves a new state the old trace still holds for.
+fn trace_holds(old: &Drawing, now: &Drawing) -> bool {
+    old.model.unchanged_from(&now.model)
+        && old.blocks.same(&now.blocks)
+        && old.header == now.header
+        && old.building_spec == now.building_spec
+        && old.agent == now.agent
+        && old.layers == now.layers
+}
+
+impl TraceCache {
+    fn get(&self, d: &std::sync::Arc<Drawing>, space: &cadaddy_doc::Space, regions: Option<&[[f64; 4]]>) -> Option<std::sync::Arc<Vec<FoundRoom>>> {
+        let same_ask = |t: &&Trace| t.space == *space && t.regions.as_deref() == regions;
+        let exact = self.traces.iter().filter(same_ask).find(|t| std::ptr::eq(t.state.as_ptr(), std::sync::Arc::as_ptr(d)));
+        // In paper space only the very same state: its objects are a layout's, not compared here.
+        let holds =
+            || self.traces.iter().filter(same_ask).filter(|_| !space.is_paper()).find(|t| t.state.upgrade().is_some_and(|old| trace_holds(&old, d)));
+        exact.or_else(holds).map(|t| std::sync::Arc::clone(&t.rooms))
+    }
+    fn put(&mut self, d: &std::sync::Arc<Drawing>, space: cadaddy_doc::Space, regions: Option<&[[f64; 4]]>, rooms: std::sync::Arc<Vec<FoundRoom>>) {
+        // States nothing holds any more can't be asked about again.
+        self.traces.retain(|t| t.state.strong_count() > 0);
+        if self.traces.len() >= TRACES_KEPT {
+            self.traces.remove(0);
+        }
+        self.traces.push(Trace { state: std::sync::Arc::downgrade(d), space, regions: regions.map(<[_]>::to_vec), rooms });
+    }
+    /// How many traces are remembered.
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.traces.len()
+    }
+}
+
+/// [`trace_rooms_in`], read from the drawing state's remembered trace when there is one
+/// ([`TraceCache`]).
 pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
+    let space = s.space();
+    let state = std::sync::Arc::clone(&s.state()?.doc);
+    if let Some(rooms) = s.state()?.room_trace.get(&state, &space, regions) {
+        return Ok(rooms.as_ref().clone());
+    }
+    let rooms = trace_rooms_in(s, regions)?;
+    // Traced in the state it was asked in (the trace changes nothing): remembered for it.
+    if let Ok(st) = s.state_mut()
+        && std::sync::Arc::ptr_eq(&st.doc, &state)
+    {
+        st.room_trace.put(&state, space, regions, std::sync::Arc::new(rooms.clone()));
+    }
+    Ok(rooms)
+}
+
+/// The rooms around the plan's name labels, traced.
+fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<FoundRoom>> {
     // A slow phase (over 2 s) goes to the job's progress lines: which one held a long trace up.
     let started = web_time::Instant::now();
     let mut last = 0.0f64;
@@ -771,6 +1088,26 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // around the tag) bound no room.
     let mut tag_blocks = std::collections::HashSet::new();
     let mut tag_numbers: Vec<Label> = Vec::new();
+    // A room's name the import took for a repeated symbol's mark (three equipment closets' `AHU`
+    // boxes alike: a symbol, the word its TAG): still the room's name where it was printed. (Names
+    // only: a number on a symbol is a door's or a device's.)
+    let mut symbol_names: Vec<Label> = Vec::new();
+    for e in &on_tags {
+        let EntityKind::Insert(i) = &e.kind else { continue };
+        if !i.block.starts_with("PDF-SYM-") {
+            continue;
+        }
+        for a in i.attribs.iter().filter(|a| a.tag.eq_ignore_ascii_case("TAG")) {
+            let v = a.text.value.trim();
+            let (at, h) = (a.text.justify_point(), a.text.height);
+            let word = EQUIPMENT_WORDS.contains(&v.to_ascii_uppercase().as_str()) || room_name_score(v) >= 3;
+            let printed = all.iter().any(|(_, t, q, _, _)| t.trim().eq_ignore_ascii_case(v) && q.dist(at) <= 0.5 * h.max(1e-9));
+            if !v.is_empty() && v.chars().count() <= 40 && h.is_finite() && h > 0.0 && word && !room_number(v) && !printed {
+                symbol_names.push((e.handle, v.to_string(), at, h, false));
+            }
+        }
+    }
+    all.extend(symbol_names);
     for e in &on_tags {
         let EntityKind::Insert(i) = &e.kind else { continue };
         // A title block (its sheet number, title, project, date) is not a room tag.
@@ -796,7 +1133,25 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     }
     // Untagged, a spec with rooms names them.
     let spec_rooms = spec.as_ref().filter(|sp| !tagged && !sp.rooms.is_empty()).map(|sp| sp.rooms.as_slice());
-    let score = |(_, t, _, _, tag): &Label| if *tag { 4 } else { room_name_score(t) };
+    // An equipment room tagged by the unit it houses: the word alone (`AHU`) over a room number,
+    // as a room's tag prints its name over its number. (A plan's equipment tag has its own number:
+    // `AHU-1`.)
+    let numbered_below = |t: &str, at: Vec2, h: f64| {
+        let w = t.trim().to_ascii_uppercase();
+        EQUIPMENT_WORDS.contains(&w.as_str())
+            && all.iter().any(|(_, n, q, nh, _)| {
+                room_number(n) && (*nh - h).abs() <= 0.3 * h && at.y - q.y >= 0.5 * h && at.y - q.y <= 3.0 * h && (q.x - at.x).abs() <= 3.0 * h
+            })
+    };
+    let score = |(_, t, at, h, tag): &Label| {
+        if *tag {
+            4
+        } else if numbered_below(t, *at, *h) {
+            1
+        } else {
+            room_name_score(t)
+        }
+    };
     let mut names: Vec<Label> = all
         .iter()
         .filter(|(_, t, _, _, tag)| t.chars().count() <= 40 && (*tag || !note_like(t)))
@@ -824,7 +1179,15 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     // The drawing's best names, or each sheet's best in turn (the stable sort keeps the order above).
     let names = labels_to_trace(names, |n| n.2, score, regions);
     phase("labels");
-    let mut numbers: Vec<Label> = all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t)).cloned().collect();
+    // A detail or section callout's sheet (`A131`, `A411`) reads like a lettered room number: one
+    // of the set's sheet numbers is no room's.
+    let mut sheet_numbers: std::collections::BTreeSet<String> =
+        spec.as_ref().map(|sp| sp.sheets.iter().map(|x| x.number.trim().to_ascii_uppercase()).collect()).unwrap_or_default();
+    if let Ok(Some(job)) = crate::cmd::guided::load_job(s) {
+        sheet_numbers.extend(job.sheet_regions.iter().map(|r| r.number.split('/').next().unwrap_or(&r.number).trim().to_ascii_uppercase()));
+    }
+    let mut numbers: Vec<Label> =
+        all.iter().filter(|(_, t, _, _, tag)| !tag && room_number(t) && !sheet_numbers.contains(&t.trim().to_ascii_uppercase())).cloned().collect();
     numbers.extend(tag_numbers);
     // Read sheet by sheet: trace on the plans' own objects only (a whole print set side by side
     // is so large its trace tolerance - a fraction of the extents - opens every room).
@@ -871,43 +1234,212 @@ pub(crate) fn rooms_found_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> R
     };
     let plan = plan.as_ref().unwrap_or(s);
     let mut out: Vec<FoundRoom> = Vec::new();
+    // Rooms whose only number inside is another size than their name (taken when no tag is near).
+    let mut any_size: Vec<(usize, String)> = Vec::new();
+    // Whether each room in `out` was traced from round what its name is printed on.
+    let mut out_probed: Vec<bool> = Vec::new();
     let mut outline_cache = None;
+    let habitable_area = HABITABLE_MIN_SF * 144.0 * k * k;
     for (h, name, at, height, _) in names {
-        let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, at, &mut outline_cache) else { continue };
-        let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
-        let poly = polygon(outer);
-        if poly.len() < 3 {
-            continue;
+        // The room around the label: the first outline, traced from the label's point, its middle,
+        // just above or below it or just outside its box, that holds the whole label (a piece of furniture drawn under
+        // the label - a mirrored unit's desk - traces a loop the label overhangs); else, as
+        // before, the one its point traces.
+        let th = if height.is_finite() && height > 0.0 { height } else { 6.0 * k };
+        let wide = name.chars().count() as f64 * th * LABEL_CHAR_WIDTH;
+        let seeds = [
+            at,
+            at + Vec2::new(wide / 2.0, th / 2.0),
+            at + Vec2::new(wide / 2.0, 1.8 * th),
+            at + Vec2::new(wide / 2.0, -1.2 * th),
+            // Just outside the label's box, each side (a desk wider than the label's middle).
+            at + Vec2::new(-1.5 * th, th / 2.0),
+            at + Vec2::new(wide + 1.5 * th, th / 2.0),
+            at + Vec2::new(wide / 2.0, 4.0 * th),
+            at + Vec2::new(wide / 2.0, -3.0 * th),
+        ];
+        let corners = [
+            at + Vec2::new(0.05 * wide, 0.1 * th),
+            at + Vec2::new(0.95 * wide, 0.1 * th),
+            at + Vec2::new(0.05 * wide, 0.9 * th),
+            at + Vec2::new(0.95 * wide, 0.9 * th),
+        ];
+        let mut first: Option<(Vec<Vec2>, f64)> = None;
+        let mut holds: Option<(Vec<Vec2>, f64)> = None;
+        // Whether a loop holding its whole box took it for a note (below): no room is traced
+        // round it then either.
+        let mut note = false;
+        for (i, seed) in seeds.into_iter().enumerate() {
+            let Ok(loops) = crate::cmd::hatch::loops_at_lazy(plan, seed, &mut outline_cache) else { continue };
+            let Some(outer) = loops.iter().find(|l| l.outer).or(loops.first()) else { continue };
+            let poly = polygon(outer);
+            if poly.len() < 3 {
+                continue;
+            }
+            let area = cadaddy_geom::shoelace(&poly).abs();
+            // In the room: inside its outline or on one of its islands (furniture standing in it).
+            let islands: Vec<Vec<Vec2>> = loops.iter().filter(|l| !l.outer).map(polygon).filter(|p| p.len() >= 3).collect();
+            let in_room = |c: Vec2| cadaddy_geom::point_in_polygon(&poly, c) || islands.iter().any(|p| cadaddy_geom::point_in_polygon(p, c));
+            // (The label in it: its point, or its whole box where its point sits on a line - a
+            // storefront's - just outside: within half its height of the outline, the room's
+            // number in it too. A note's point farther out, or a note on a notes box's edge, is no
+            // room's label.)
+            let whole = corners.iter().all(|c| in_room(*c));
+            let on_edge = in_room(at)
+                || (crate::cmd::guided::edge_distance(&poly, at) <= 0.5 * th
+                    && numbers.iter().any(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q)));
+            if whole && !on_edge && area >= min_area {
+                note = true;
+            }
+            if area < min_area || !(i == 0 || in_room(at) || (whole && on_edge)) {
+                continue;
+            }
+            if whole && !on_edge {
+                continue;
+            }
+            if whole {
+                holds = Some((poly, area));
+                break;
+            }
+            // A loop the label overhangs is its room only when it is room-sized (not a desk).
+            if i == 0 && area >= OVERHUNG_ROOM_MIN_SQFT * 144.0 * k * k {
+                first = Some((poly, area));
+            }
         }
-        let area = cadaddy_geom::shoelace(&poly).abs();
-        if area < min_area {
-            continue;
-        }
+        // A room to live in is at least a habitable room's size; any room at least the least
+        // room's. A smaller loop round the name is what it is printed on (a bed, a tag's box):
+        // the room is the loop round that.
+        let least = if tag_words(&name).iter().any(|w| HABITABLE_WORDS.contains(&w.as_str())) { habitable_area } else { min_area };
+        let (poly, area, probed) = match holds.or(first) {
+            Some((poly, area)) if area >= least => (poly, area, false),
+            _ if note => continue,
+            _ => {
+                let Some(p) = crate::cmd::bspec::outline_round_label(plan, at, &mut outline_cache, least) else { continue };
+                if p.len() < 3 {
+                    continue;
+                }
+                let area = cadaddy_geom::shoelace(&p).abs();
+                if area < min_area {
+                    continue;
+                }
+                (p, area, true)
+            }
+        };
         // One room per outline: a second label in the same room is its number or a note.
-        if out.iter().any(|q| q.outline.len() == poly.len() && q.outline.iter().zip(&poly).all(|(a, b)| a.dist(*b) < 1e-6)) {
+        // (The same loop traced from another seed, or again from round the furniture its name is
+        // on, may start at another corner.)
+        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
+        let tol = SAME_OUTLINE_SHARE * (b.width() + b.height());
+        if out.iter().zip(&out_probed).any(|(q, q_probed)| {
+            let qb = cadaddy_geom::Bounds2::from_points(q.outline.iter().copied());
+            same_loop(&q.outline, &poly)
+                || ((probed || *q_probed)
+                    && (q.area - area).abs() <= SAME_OUTLINE_SHARE * area
+                    && qb.min.dist(b.min) <= tol
+                    && qb.max.dist(b.max) <= tol)
+        }) {
             continue;
         }
         // Read sheet by sheet, a schedule's or legend's cells trace too: no room is narrower.
-        let b = cadaddy_geom::Bounds2::from_points(poly.iter().copied());
         if regions.is_some() && b.width().min(b.height()) < MIN_ROOM_WIDTH_IN * k {
             continue;
         }
         let perimeter: f64 = poly.iter().zip(poly.iter().cycle().skip(1)).map(|(a, b)| a.dist(*b)).sum();
-        // The room number: a number inside the outline, the one in the name's tag block, else the
-        // nearest to the name.
-        let number = numbers
-            .iter()
-            .filter(|(_, _, q, _, _)| cadaddy_geom::point_in_polygon(&poly, *q))
-            .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
-            .map(|(_, t, _, _, _)| t.clone());
+        // The room number: the one in the name's tag block, else a number inside the outline of
+        // the name's size, nearest the name (an OCR copy's or a note's digits inside the room are
+        // another size); else the tag's own number just under or beside the name (on a bed's
+        // linework that cuts into the traced outline); else the tag nearest the name
+        // ([`number_from_nearest_tag`]); else one of any size inside.
+        let inside_numbers = |sized: bool| {
+            numbers
+                .iter()
+                .filter(|(nh, _, q, qh, _)| {
+                    cadaddy_geom::point_in_polygon(&poly, *q)
+                        && (!sized || *nh == h || (*qh >= TAG_SIZE_BAND.0 * height && *qh <= TAG_SIZE_BAND.1 * height))
+                })
+                .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, t, _, _, _)| t.clone())
+        };
+        let beside = || {
+            numbers
+                .iter()
+                .filter(|(_, _, q, _, _)| q.dist(at) <= TAG_NUMBER_REACH * th)
+                .min_by(|a, b| u8::from(a.0 != h).cmp(&u8::from(b.0 != h)).then(a.2.dist(at).total_cmp(&b.2.dist(at))).then_with(|| a.1.cmp(&b.1)))
+                .map(|(_, t, _, _, _)| t.clone())
+        };
+        let number = inside_numbers(true).or_else(beside);
+        if number.is_none()
+            && let Some(any) = inside_numbers(false)
+        {
+            any_size.push((out.len(), any));
+        }
         let share = area / sheet;
         let confidence = (0.5 + 0.2 * f64::from(u8::from(number.is_some())) + if share < 0.5 { 0.3 } else { 0.0 }
             - if poly.len() > 200 { 0.1 } else { 0.0 })
         .clamp(0.0, 1.0);
         out.push(FoundRoom { name, number, at, label: h, text_height: height, outline: poly, area, perimeter, confidence });
+        out_probed.push(probed);
     }
-    phase(&format!("tracing {} rooms", out.len()));
+    let taken = number_from_nearest_tag(&mut out, &numbers, regions);
+    for (i, t) in any_size {
+        if let Some(r) = out.get_mut(i).filter(|r| r.number.is_none()) {
+            r.number = Some(t);
+        }
+    }
+    phase(&format!("tracing {} rooms ({taken} numbered from the tag nearest the name)", out.len()));
     Ok(out)
+}
+
+/// Each room traced without a number takes the number tag nearest its name that no room has (in
+/// its sheet region) and that lies in no other room, within [`NUMBER_REACH_HEIGHTS`] of the
+/// name's height: a tag printed on the room's furniture or in a notch of its outline. Nearest
+/// pairs first, so two rooms never share a tag. Returns how many took one.
+fn number_from_nearest_tag(rooms: &mut [FoundRoom], numbers: &[Label], regions: Option<&[[f64; 4]]>) -> usize {
+    let region_of = |p: Vec2| {
+        regions
+            .and_then(|rs| rs.iter().position(|r| p.x >= r[0].min(r[2]) && p.x <= r[0].max(r[2]) && p.y >= r[1].min(r[3]) && p.y <= r[1].max(r[3])))
+    };
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, r) in rooms.iter().enumerate().filter(|(_, r)| r.number.is_none()) {
+        let reach = NUMBER_REACH_HEIGHTS * r.text_height;
+        if !(reach.is_finite() && reach > 0.0) {
+            continue;
+        }
+        let region = region_of(r.at);
+        for (j, (_, t, q, qh, _)) in numbers.iter().enumerate() {
+            // A tag prints its number at its name's size (a note's, a dimension's or an OCR
+            // copy's digits are another size).
+            let same_size = *qh >= TAG_SIZE_BAND.0 * r.text_height && *qh <= TAG_SIZE_BAND.1 * r.text_height;
+            if !same_size || q.dist(r.at) > reach || region_of(*q) != region {
+                continue;
+            }
+            // Another room's: its number already, or inside its outline.
+            let held = rooms.iter().enumerate().any(|(o, x)| {
+                o != i
+                    && ((x.number.as_deref().map(str::trim) == Some(t.trim()) && region_of(x.at) == region)
+                        || cadaddy_geom::point_in_polygon(&x.outline, *q))
+            });
+            if !held {
+                pairs.push((q.dist(r.at), i, j));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut taken = 0;
+    for (_, i, j) in pairs {
+        let Some(t) = numbers.get(j).map(|n| n.1.trim().to_string()) else { continue };
+        let Some(region) = rooms.get(i).filter(|r| r.number.is_none()).map(|r| region_of(r.at)) else { continue };
+        // A number one room took (the same tag, or its copy on the sheet) no other takes.
+        if rooms.iter().any(|x| x.number.as_deref() == Some(t.as_str()) && region_of(x.at) == region) {
+            continue;
+        }
+        if let Some(r) = rooms.get_mut(i) {
+            r.number = Some(t);
+            r.confidence = (r.confidence + 0.1).min(1.0);
+            taken += 1;
+        }
+    }
+    taken
 }
 
 pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
@@ -932,6 +1464,123 @@ pub(super) fn run_rooms(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seg(a: (f64, f64), b: (f64, f64), w: f64) -> Seg {
+        Seg { a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), layer: "A-WALL".into(), outline_width: w }
+    }
+
+    fn rect_sides(x0: f64, y0: f64, x1: f64, y1: f64) -> Vec<Seg> {
+        let r = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+        let w = outline_width(&r);
+        (0..4).map(|i| (r[i], r[(i + 1) % 4])).map(|(a, b)| seg((a.x, a.y), (b.x, b.y), w)).collect()
+    }
+
+    #[test]
+    fn a_dashed_line_is_no_wall_face_but_a_wall_broken_by_walls_or_windows_is() {
+        // Inches (k = 1). An overhead line across a 40" opening drawn as 18" dashes with 9" gaps.
+        let mut segs: Vec<Seg> = (0..5).map(|i| f64::from(i) * 27.0).map(|x| seg((x, 3.3), (x + 18.0, 3.3), f64::INFINITY)).collect();
+        // A corridor face broken every 25' by 7" party walls; a facade with 36" windows between
+        // 24" piers; a wall face drawn in two pieces.
+        segs.extend((0..4).map(|i| f64::from(i) * 307.0).map(|x| seg((x, 100.0), (x + 300.0, 100.0), f64::INFINITY)));
+        segs.extend((0..4).map(|i| f64::from(i) * 60.0).map(|x| seg((x, 200.0), (x + 24.0, 200.0), f64::INFINITY)));
+        segs.extend([seg((0.0, 300.0), (20.0, 300.0), f64::INFINITY), seg((26.0, 300.0), (46.0, 300.0), f64::INFINITY)]);
+        // The dashes drawn right to left, and a vertical dashed line.
+        segs.extend((0..4).map(|i| f64::from(i) * 15.0).map(|y| seg((500.0, y + 10.0), (500.0, y), f64::INFINITY)));
+        let n = segs.len();
+        assert_eq!(drop_dashes(&mut segs, 1.0), 9);
+        assert_eq!(segs.len(), n - 9);
+        assert!(segs.iter().all(|s| (s.a.y - 3.3).abs() > 1e-9 && s.a.x != 500.0));
+        assert_eq!(segs.iter().filter(|s| s.a.y == 100.0).count(), 4);
+        assert_eq!(segs.iter().filter(|s| s.a.y == 200.0).count(), 4);
+        assert_eq!(segs.iter().filter(|s| s.a.y == 300.0).count(), 2);
+        // No units: nothing taken.
+        assert_eq!(drop_dashes(&mut segs, 0.0), 0);
+    }
+
+    #[test]
+    fn a_thin_outline_beside_another_walls_face_is_no_wall_but_a_thin_outline_face_is() {
+        // Inches. A 7" party wall (faces y 0 and y 7, 10' long) with a closed 1.8" × 3' rectangle
+        // 4" off each face (trim drawn beside it at a unit's entry).
+        let rect = [Vec2::new(10.0, 11.0), Vec2::new(46.0, 11.0), Vec2::new(46.0, 12.8), Vec2::new(10.0, 12.8)];
+        let w = outline_width(&rect);
+        assert!((1.6..1.8).contains(&w), "{w}");
+        assert!(outline_width(&rect[..2]).is_infinite());
+        let mut segs = vec![seg((0.0, 0.0), (120.0, 0.0), f64::INFINITY), seg((0.0, 7.0), (120.0, 7.0), f64::INFINITY)];
+        segs.extend(rect_sides(10.0, 11.0, 46.0, 12.8));
+        segs.extend(rect_sides(10.0, -5.8, 46.0, -4.0));
+        let lim = Limits { min_thick: 2.5, max_thick: 20.0, min_len: 12.0 };
+        let d = Drawing::default();
+        let mut found = pairs(&d, &segs, &lim);
+        let between = |p: &Pair| {
+            let y = (p.c0.y + p.c1.y) / 2.0;
+            y - p.thickness / 2.0 >= 7.0 - 1e-6 || y + p.thickness / 2.0 <= 1e-6
+        };
+        // Before: the wall's faces pair with the rectangles' sides into 4"/5.8" "walls" in the air.
+        assert!(found.iter().filter(|p| between(p)).count() >= 4, "{:?}", found.iter().map(|p| p.thickness).collect::<Vec<_>>());
+        let dropped = drop_sliver_pairs(&segs, &mut found, &lim);
+        assert!(dropped >= 4, "{dropped}");
+        assert!(!found.iter().any(between), "{:?}", found.iter().map(|p| (p.c0, p.thickness)).collect::<Vec<_>>());
+        // The party wall itself stays.
+        assert!(found.iter().any(|p| (p.thickness - 7.0).abs() < 1e-6));
+
+        // A wall whose one face is a thin outline (a jamb or a finish layer drawn closed) and
+        // whose other face bounds nothing else: it stays.
+        let mut segs = rect_sides(0.0, 0.0, 48.0, 1.5);
+        segs.push(seg((0.0, 6.0), (48.0, 6.0), f64::INFINITY));
+        let mut found = pairs(&d, &segs, &lim);
+        assert!(!found.is_empty());
+        assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+        assert!(found.iter().any(|p| (p.thickness - 6.0).abs() < 1e-6));
+
+        // Two walls drawn with thin finish layers, side by side 5" apart: neither is dropped.
+        let mut segs = rect_sides(0.0, 0.0, 48.0, 0.6);
+        segs.extend(rect_sides(0.0, 4.1, 48.0, 4.7));
+        segs.extend(rect_sides(0.0, 9.7, 48.0, 10.3));
+        segs.extend(rect_sides(0.0, 13.8, 48.0, 14.4));
+        let mut found = pairs(&d, &segs, &lim);
+        let n = found.len();
+        assert!(n > 4);
+        assert_eq!(drop_sliver_pairs(&segs, &mut found, &lim), 0);
+    }
+
+    #[test]
+    fn one_loop_from_another_corner_or_the_other_way_round_is_the_same_room() {
+        let v = |x: f64, y: f64| Vec2::new(x, y);
+        let a = [v(0.0, 0.0), v(10.0, 0.0), v(10.0, 5.0), v(0.0, 5.0)];
+        let b = [v(10.0, 5.0), v(0.0, 5.0), v(0.0, 0.0), v(10.0, 0.0)];
+        let c = [v(0.0, 5.0), v(10.0, 5.0), v(10.0, 0.0), v(0.0, 0.0)];
+        assert!(same_loop(&a, &b) && same_loop(&a, &c));
+        assert!(!same_loop(&a, &[v(0.0, 0.0), v(11.0, 0.0), v(11.0, 5.0), v(0.0, 5.0)]));
+        assert!(!same_loop(&a, &a[..3]));
+    }
+
+    /// A swing wider than a quarter circle is a door only with something drawn from its centre.
+    #[test]
+    fn a_half_circle_alone_is_no_door_but_a_wide_swing_with_its_leaf_is() {
+        let arc = |sweep: f64, n: u32| -> Vec<[f64; 2]> {
+            (0..=n)
+                .map(|i| {
+                    let a = (180.0 + sweep * f64::from(i) / f64::from(n)).to_radians();
+                    [36.0 * a.cos(), 36.0 * a.sin()]
+                })
+                .collect()
+        };
+        let leaves = |lines: &[Vec<[f64; 2]>]| {
+            let mut s = Session::new();
+            for l in lines {
+                s.execute("pline", &serde_json::json!({"vertices": l, "closed": false})).unwrap();
+            }
+            door_leaves(s.doc().unwrap(), 1.0).len()
+        };
+        let wide = arc(170.0, 16);
+        assert_eq!(leaves(std::slice::from_ref(&wide)), 0);
+        let leaf = vec![[0.0, 0.0], wide[16]];
+        assert_eq!(leaves(&[wide, leaf]), 2);
+        // A quarter swing needs no leaf drawn.
+        assert_eq!(leaves(&[arc(90.0, 16)]), 2);
+        // Past a half circle: no door's.
+        assert_eq!(leaves(&[arc(220.0, 16), vec![[0.0, 0.0], [36.0, 0.0]]]), 0);
+    }
 
     #[test]
     fn a_short_room_name_is_no_device_mark() {
@@ -981,5 +1630,58 @@ mod tests {
         // The best names first within a sheet.
         let scored = labels_to_trace(vec![(0, Vec2::new(5.0, 5.0)), (1, Vec2::new(6.0, 5.0))], |n| n.1, |n| u8::from(n.0 == 1), Some(&regions));
         assert_eq!(scored.first().map(|n| n.0), Some(1));
+    }
+
+    /// A 10' × 10' room outline (inches) with a name label inside, in a new imperial drawing.
+    fn one_room(label: bool) -> Session {
+        let mut s = Session::empty();
+        s.new_drawing(false);
+        s.execute("pline", &json!({"vertices": [[0, 0], [120, 0], [120, 120], [0, 120]], "closed": true})).unwrap();
+        if label {
+            s.execute("text", &json!({"at": [40, 60], "text": "OFFICE", "height": 6})).unwrap();
+        }
+        s
+    }
+
+    #[test]
+    fn a_room_trace_is_read_again_in_the_same_drawing_state_and_traced_again_after_an_edit() {
+        let mut s = one_room(true);
+        let first = rooms_found(&mut s).unwrap();
+        assert_eq!(first.len(), 1, "the labelled outline is a room");
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        // Asked again in the same state: read, not traced again (no second entry).
+        let again = rooms_found(&mut s).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again.first().map(|r| r.label), first.first().map(|r| r.label));
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        // Taken for writing and nothing changed (a new state, the old one kept by undo): still read.
+        let kept = std::sync::Arc::clone(&s.state().unwrap().doc);
+        let _ = s.doc_mut().unwrap();
+        assert!(!std::sync::Arc::ptr_eq(&kept, &s.state().unwrap().doc), "a new drawing state");
+        assert_eq!(rooms_found(&mut s).unwrap().len(), 1);
+        assert_eq!(s.state().unwrap().room_trace.len(), 1, "the trace of the unchanged state holds");
+        // An edit to the plan: traced again, and the edit is seen (the outline erased: no room).
+        let outline = s.doc().unwrap().model.iter().find(|e| matches!(e.kind, EntityKind::LwPolyline(_))).map(|e| e.handle.hex()).unwrap();
+        s.execute("erase", &json!({"handles": [outline]})).unwrap();
+        assert!(rooms_found(&mut s).unwrap().is_empty(), "the erased outline bounds no room");
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
+        // Undo brings back the state the room was traced in: read again, not traced.
+        s.execute("undo", &json!({})).unwrap();
+        assert_eq!(rooms_found(&mut s).unwrap().len(), 1);
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
+    }
+
+    #[test]
+    fn no_rooms_is_remembered_too() {
+        // An outline with no label: the trace finds nothing, and that is kept for the state.
+        let mut s = one_room(false);
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 1);
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert!(rooms_found(&mut s).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 1, "\"no rooms\" read, not traced again");
+        // Different regions are a different question.
+        assert!(rooms_found_in(&mut s, Some(&[[0.0, 0.0, 200.0, 200.0]])).unwrap().is_empty());
+        assert_eq!(s.state().unwrap().room_trace.len(), 2);
     }
 }

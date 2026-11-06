@@ -131,6 +131,11 @@ pub struct BuildingSpec {
     /// Concrete: slabs, footings, piers, equipment pads, encasement; pad decisions and pours.
     #[serde(default, skip_serializing_if = "crate::concrete::Concrete::is_empty")]
     pub concrete: crate::concrete::Concrete,
+    /// What the trades' documents say (`trades.read`, Q6162: concrete mixes, the PT design,
+    /// joist and truss layouts, door hardware sets, accessories…, each fact with its file and
+    /// page) and the project's trade rules: the engine's trade atoms are laid out from them.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub trades: serde_json::Value,
     /// Columns at structural grid intersections (`grids.columns`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<GridColumn>,
@@ -152,6 +157,11 @@ pub struct BuildingSpec {
     /// dimension strings, rooms, the rules file and its gate setting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prints: Option<Box<crate::validate::Prints>>,
+    /// The mounting heights the set's notes give kinds of items (a general note's list, an
+    /// accessibility sheet's), read off sheets the model doesn't hold (`job.start` reads them):
+    /// the build and Validate take a device's height from them when nothing nearer gives one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mount_notes: Vec<MountNote>,
     /// Devices (fixture and device layers): types, mounting heights, attributes.
     #[serde(default)]
     pub devices: DeviceRules,
@@ -671,6 +681,9 @@ pub struct Room {
     /// Ceiling height above the floor, feet; none = the level's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ceiling_ft: Option<f64>,
+    /// Where `ceiling_ft` was read (`9'-0" on A-501 ENLARGED UNIT RCP`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ceiling_source: Option<String>,
     #[serde(default)]
     pub materials: Surfaces,
     /// Base finish from the room finish schedule (`RB-1 4" RUBBER BASE`).
@@ -1190,6 +1203,27 @@ pub struct Mep {
     /// gear's lugs and what comes in through its entry plates.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub feeders: Vec<Feeder>,
+    /// The panel schedules as printed (their circuits and breaker types), panels the plans place
+    /// or not.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub panel_schedules: Vec<PanelSchedule>,
+    /// The load summaries and demand calculations the electrical sheets print (the service's
+    /// and panels'), as printed: what the model's load calculation is compared with.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub load_summaries: Vec<LoadSummary>,
+    /// The occupancy groups the code sheet names (`R-1, B`) and where they were read (`G-001:
+    /// GROUP R-1 OCCUPANCY`): the load calculation's demand rules.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub occupancy_source: String,
+    /// Equipment connections' electrical data from their submittals, beside what the drawings
+    /// give them (protection, feeder): what the build checks and reports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub equipment_electrical: Vec<EquipmentElectrical>,
+    /// The light fixture schedule as printed: each type's basis of design and data.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fixture_schedule: Vec<FixtureType>,
     /// The tables gear is checked with (conduit sizes, conductor areas, wire-bending space),
     /// when a project's differ from the defaults.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1222,6 +1256,25 @@ pub struct Mep {
     /// height above the floor, in feet.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elevation_bands: Vec<ElevationBand>,
+    /// The inverts the plumbing plans print by their drains (`24" INVERT`): depths below the
+    /// finished floor the slab level's buried drains are sloped between.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inverts: Vec<MepInvert>,
+}
+
+/// An invert a plan prints by a drain: where (drawing units, as the runs), its level, and the
+/// depth of the pipe's invert below that level's finished floor.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MepInvert {
+    pub level: String,
+    pub at: [f64; 2],
+    /// Feet below the finished floor (positive).
+    pub depth_ft: f64,
+    /// The note as printed.
+    pub text: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub source_sheet: String,
 }
 
 /// The grounding electrode system, the bonds and the telecom grounding.
@@ -1459,8 +1512,15 @@ impl Mep {
             && self.equipment.is_empty()
             && self.revisions.is_empty()
             && self.feeders.is_empty()
+            && self.panel_schedules.is_empty()
+            && self.load_summaries.is_empty()
+            && self.occupancy.is_empty()
+            && self.equipment_electrical.is_empty()
+            && self.fixture_schedule.is_empty()
+            && self.gear_rules.is_none()
             && self.devices.is_empty()
             && self.arc_flash.is_empty()
+            && self.labels_printed.is_empty()
             && self.grounding.is_none()
             && self.services.is_empty()
             && self.required_services.is_empty()
@@ -1738,9 +1798,127 @@ pub struct PanelCircuit {
     /// Breaker amps and poles, as the schedule prints them.
     pub breaker: String,
     pub poles: u32,
+    /// Its breaker's type codes as the schedule marks it (`AF`, `GF`; `AF/GF` both), the
+    /// schedule's legend saying what each is ([`PanelSchedule::legend`]).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub protection: Vec<String>,
+    /// Its wire size as the schedule prints it (`12`, `4/0`), and its load, VA.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub wire: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_va: Option<f64>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
+}
+
+/// A light fixture schedule's row: the type and its basis of design.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FixtureType {
+    pub tag: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub lamp: String,
+    pub va: Option<f64>,
+    pub voltage: String,
+    pub installation: String,
+    pub description: String,
+    /// The schedule's note numbers on it (`2,3,5`).
+    pub notes: String,
+    /// The sheet it was read from.
+    pub source: String,
+    /// The quantity the schedule gives, when it has a quantity column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantity: Option<u32>,
+}
+
+/// An equipment connection's electrical data (its submittal's, else unknown) and the drawings'
+/// provision for it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EquipmentElectrical {
+    /// Its tag on the one-line (`ELEV-1`) and what the schedule calls it.
+    pub tag: String,
+    pub description: String,
+    /// The drawings': its source panel, protection (`70A/3P`) and feeder type tag.
+    pub source_panel: String,
+    pub drawing_ocpd: String,
+    pub feeder: String,
+    /// The submittal's: volts and phases, nameplate / full-load / minimum circuit amps, the most
+    /// protection it allows (amps, and the fuse class when it names one), acceleration amps,
+    /// horsepower and kW, the controller's short-circuit current rating (amps).
+    pub volts: Option<f64>,
+    pub phase: Option<u32>,
+    pub nameplate_a: Option<f64>,
+    pub fla: Option<f64>,
+    pub mca: Option<f64>,
+    pub max_ocpd_a: Option<f64>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub fuse_class: String,
+    pub accel_a: Option<f64>,
+    pub hp: Option<f64>,
+    pub kw: Option<f64>,
+    pub sccr_a: Option<f64>,
+    /// Where its data came from (the submittal's file and page, or an agent's reading of it) and
+    /// the submittal's review status.
+    pub source: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub status: String,
+}
+
+/// A panel's schedule as printed (a panel the plans may not place, or a typical one every guest
+/// room has): its circuits, and the legend its breaker codes are read with.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelSchedule {
+    /// The panel's tag (`G`, `DP1`).
+    pub panel: String,
+    /// "TYPICAL OF 124 REQUIRED": the number of panels it is the schedule of.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub typical_of: Option<u32>,
+    /// The sheet it is on.
+    pub source: String,
+    pub circuits: Vec<PanelCircuit>,
+    /// The schedule legend's codes: `GF` → `GROUND FAULT INTERRUPTER`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub legend: BTreeMap<String, String>,
+    /// Its header's facts as printed: `bus amps` → `125A`, `volts/phase`, `mounting`, `location`…
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub header: BTreeMap<String, String>,
+    /// The totals printed under its circuits: `connected_va`, `connected_a`, `demand_va`,
+    /// `demand_a`, and the per-phase subtotals `phase_a_va`, `phase_b_va`, `phase_c_va`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub totals: BTreeMap<String, f64>,
+}
+
+/// A load summary or demand calculation the electrical sheets print (the service's, or one
+/// panel's): each line's label and its numbers as printed, left to right.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoadSummary {
+    /// Its title as printed, and the panel it names (empty: the building's, the service).
+    pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub panel: String,
+    /// The code section it says it is based on (`220.84`), when it names one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub basis: String,
+    /// The sheet it is on.
+    pub source: String,
+    pub lines: Vec<LoadSummaryLine>,
+}
+
+/// One line of a load summary: its label and its numbers (VA, kVA, amps or percent as printed;
+/// the units are the label's).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoadSummaryLine {
+    pub label: String,
+    pub values: Vec<f64>,
+    /// The line's texts after its label, as printed (`3,000 x 125% = 3,750`).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 /// An air terminal (diffuser, register, grille) or VAV/mixing box on a duct run.
@@ -1995,6 +2173,9 @@ pub struct CeilingArea {
     /// Why the type is a guess, when it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guess: Option<String>,
+    /// Where its height was read (the tag and the sheet or view).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 /// A suspended ceiling grid: tile size (inches, along and across `angle_deg`) and a line
@@ -2138,6 +2319,28 @@ impl Issue {
     pub fn warning(path: impl Into<String>, message: impl Into<String>) -> Issue {
         Issue { error: false, path: path.into(), message: message.into(), handles: Vec::new() }
     }
+}
+
+/// A mounting height a sheet's notes give a kind of item: `RECEPTACLES 1'-4" CENTERLINE` under a
+/// general note's `DEVICE MOUNTED HEIGHTS`, `WATER CLOSETS (TO TOP OF SEAT): STANDARD = 15" TO 16".
+/// ADA = 17" TO 19"` on an accessibility sheet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MountNote {
+    /// The sheet it is on.
+    pub sheet: String,
+    /// What it is for, as written (`LIGHT SWITCH`, `WATER CLOSETS`).
+    pub subject: String,
+    /// Its height above the floor, inches: the one it gives (`STANDARD =`), else none.
+    pub inches: Option<f64>,
+    /// The height it gives an accessible room's (`ADA =`), inches.
+    pub ada_inches: Option<f64>,
+    /// What the height is measured to on the item: `centre`, `top` or `bottom`.
+    pub datum: String,
+    /// It says the item is at the ceiling (`STANDARD = CEILING HEIGHT`).
+    pub ceiling: bool,
+    /// The words read.
+    pub text: String,
 }
 
 impl Default for BuildingSpec {
@@ -2615,12 +2818,14 @@ impl BuildingSpec {
             rcp: Rcp::default(),
             mep: Mep::default(),
             concrete: crate::concrete::Concrete::default(),
+            trades: serde_json::Value::Null,
             columns: Vec::new(),
             schedule: Schedule::default(),
             walls: Vec::new(),
             rfis: Vec::new(),
             procurement: None,
             prints: None,
+            mount_notes: Vec::new(),
             ceiling_types: Vec::new(),
             soffit_types: Vec::new(),
             devices: r.devices.clone(),
@@ -3257,6 +3462,14 @@ impl BuildingSpec {
                                 &at,
                                 format!("{n} risers of {}: under the 4\" minimum (IBC 1011.5.2) — fewer treads", inches(riser)),
                             ));
+                        } else if riser < crate::stairs::RISER_SHALLOW_IN - 1e-9 {
+                            out.push(Issue::warning(
+                                &at,
+                                format!(
+                                    "{n} risers of {}: lawful, but shallower than stairs are drawn (5\") — check the tread count read off the plan, or whether it is a ladder",
+                                    inches(riser)
+                                ),
+                            ));
                         }
                         if tread.is_finite() && tread < tread_min - 1e-9 {
                             let limit = if irc {
@@ -3386,6 +3599,39 @@ pub fn level_at(levels: &[Level], x: f64, y: f64) -> Option<&Level> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A spec whose MEP holds only panel schedules (read before anything is built) keeps them
+    /// when it is saved and read back.
+    #[test]
+    fn mep_with_only_panel_schedules_survives_a_save() {
+        let sp = BuildingSpec {
+            mep: Mep {
+                panel_schedules: vec![PanelSchedule {
+                    panel: "P1".into(),
+                    circuits: vec![PanelCircuit { number: "7".into(), description: "RADIO AMPLIFIER".into(), ..Default::default() }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!sp.mep.is_empty());
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.panel_schedules, sp.mep.panel_schedules);
+        let labels = Mep { labels_printed: [("P1".to_string(), "PANEL P1".to_string())].into_iter().collect(), ..Default::default() };
+        assert!(!labels.is_empty() && Mep::default().is_empty());
+    }
+
+    #[test]
+    fn a_spec_holding_only_schedules_keeps_them_when_saved() {
+        let mut sp = BuildingSpec::default();
+        sp.mep.fixture_schedule.push(FixtureType { tag: "Q1".into(), quantity: Some(4), ..FixtureType::default() });
+        sp.mep.panel_schedules.push(PanelSchedule { panel: "P1".into(), ..PanelSchedule::default() });
+        let back = BuildingSpec::from_json(&sp.to_json()).unwrap_or_default();
+        assert_eq!(back.mep.fixture_schedule.len(), 1, "the fixture schedule is MEP data too");
+        assert_eq!(back.mep.fixture_schedule[0].quantity, Some(4));
+        assert_eq!(back.mep.panel_schedules.len(), 1);
+    }
 
     #[test]
     fn a_corridors_edges_run_round_its_floor_not_between_its_rectangles() {

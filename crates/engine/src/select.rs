@@ -14,6 +14,16 @@ pub fn hit_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
 /// [`hit_polylines`] where only what lies in `area` matters: a pattern hatch's strokes are made
 /// only there. A hatch around thousands of islands took seconds to stroke in full on every pick.
 fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) -> Vec<Vec<Vec2>> {
+    hit_polylines_with(d, e, tol, area, false)
+}
+
+/// [`hit_polylines`] for a boundary search: hatches inside block references and arrays are left
+/// out (their pattern lines are never boundary candidates, and drawing them dominates the time).
+pub fn linework_polylines(d: &Drawing, e: &Entity, tol: f64) -> Vec<Vec<Vec2>> {
+    hit_polylines_with(d, e, tol, None, true)
+}
+
+fn hit_polylines_with(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>, skip_hatches: bool) -> Vec<Vec<Vec2>> {
     match &e.kind {
         EntityKind::Text(_)
         | EntityKind::MText(_)
@@ -35,7 +45,7 @@ fn hit_polylines_in(d: &Drawing, e: &Entity, tol: f64, area: Option<Bounds2>) ->
                 let list = cadaddy_render::build_entities(
                     d,
                     std::iter::once(e),
-                    &cadaddy_render::Options { tolerance: tol, text: false, ..Default::default() },
+                    &cadaddy_render::Options { tolerance: tol, text: false, skip_hatches, ..Default::default() },
                 );
                 v = list.prims.iter().map(|p| list.points(p).to_vec()).collect();
                 v.push(vec![c[0], c[1], c[2], c[3], c[0]]);
@@ -545,27 +555,115 @@ pub fn class_name(k: &EntityKind) -> &'static str {
     }
 }
 
-/// Most comma-separated names one class filter takes.
-const MAX_CLASS_NAMES: usize = 64;
+/// Most comma-separated names one name filter takes.
+const MAX_FILTER_NAMES: usize = 64;
+/// Longest name filter accepted, in characters.
+pub const MAX_FILTER_LEN: usize = 1024;
+/// Matching steps one name filter may spend over all the names it tests: a hostile `*` pattern
+/// stops matching instead of hanging the query.
+const NAME_FILTER_BUDGET: u64 = 20_000_000;
+/// Distinct names one filter remembers its answer for.
+const NAME_FILTER_CACHE: usize = 100_000;
 
-/// Whether `e` is of a class `pattern` names: comma-separated names, each a class (`AcDbLine`),
-/// a DXF type (`LINE`) or a type name (`Line`, `Block Reference`), any case, with `*` and `?`
-/// wildcards.
-pub fn class_matches(e: &Entity, pattern: &str) -> bool {
-    let names = [class_name(&e.kind), e.kind.dxf_name(), e.kind.type_name()];
-    pattern
-        .split(',')
-        .map(str::trim)
-        .filter(|p| !p.is_empty())
-        .take(MAX_CLASS_NAMES)
-        .any(|p| names.iter().any(|n| crate::cmd::qselect::wildcard(p, n)))
+/// A name filter as AutoCAD's object filters and the `CLass` option take it: a comma list of
+/// names with the wildcards `*` (any run), `?` (any character), `#` (a digit), `@` (a letter),
+/// `.` (neither), `~` (first: not), `[...]` (a set, `[~...]` not in it) and `` ` `` (the next
+/// character as is), any case. A name also matches itself exactly, so a name holding a wildcard
+/// character (`E-1#2`, `A,B`) still finds itself.
+pub struct NameFilter {
+    whole: Vec<char>,
+    patterns: Vec<Vec<char>>,
+    budget: u64,
+    exhausted: bool,
+    seen: std::collections::HashMap<String, bool>,
+}
+
+impl NameFilter {
+    /// The filter `pattern` spells; `None` when it is longer than [`MAX_FILTER_LEN`].
+    pub fn new(pattern: &str) -> Option<NameFilter> {
+        if pattern.chars().count() > MAX_FILTER_LEN {
+            return None;
+        }
+        let lower = pattern.trim().to_lowercase();
+        let mut budget = NAME_FILTER_BUDGET;
+        let mut exhausted = false;
+        let patterns = match crate::lisp::builtins::split_patterns(&lower, &mut budget) {
+            Ok(ps) => ps.into_iter().map(trim_pattern).filter(|p| !p.is_empty()).take(MAX_FILTER_NAMES).collect(),
+            Err(()) => {
+                exhausted = true;
+                Vec::new()
+            }
+        };
+        Some(NameFilter { whole: lower.chars().collect(), patterns, budget, exhausted, seen: Default::default() })
+    }
+
+    /// Whether `name` passes the filter.
+    pub fn matches(&mut self, name: &str) -> bool {
+        self.matches_any(&[name])
+    }
+
+    /// Whether an object known by any of `names` (a class, a DXF type and a type name) passes the
+    /// filter: a plain name or pattern needs one of them to match; a `~` pattern needs none of
+    /// them to match what follows the `~`, so `~LINE` leaves out lines however they are named.
+    pub fn matches_any(&mut self, names: &[&str]) -> bool {
+        let key = names.iter().map(|n| n.to_lowercase()).collect::<Vec<_>>().join("\u{0}");
+        if let Some(hit) = self.seen.get(&key) {
+            return *hit;
+        }
+        let texts: Vec<Vec<char>> = key.split('\u{0}').map(|t| t.chars().take(MAX_FILTER_LEN * 4).collect()).collect();
+        let mut hit = texts.contains(&self.whole);
+        for p in &self.patterns {
+            if hit || self.exhausted {
+                break;
+            }
+            let negated = p.first() == Some(&'~') && p.len() > 1;
+            let mut one = |text: &Vec<char>| {
+                *p == *text
+                    || match crate::lisp::builtins::match_pattern(text, p, &mut self.budget) {
+                        Ok(m) => m,
+                        Err(()) => {
+                            self.exhausted = true;
+                            false
+                        }
+                    }
+            };
+            hit = if negated { texts.iter().all(&mut one) } else { texts.iter().any(&mut one) };
+        }
+        if self.seen.len() < NAME_FILTER_CACHE {
+            self.seen.insert(key, hit);
+        }
+        hit
+    }
+
+    /// Whether matching ran out of steps (the pattern is too complex), so some names that would
+    /// match were reported as not matching.
+    pub fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+}
+
+/// One comma-separated alternative without the spaces around it (a space escaped with `` ` ``
+/// stays).
+fn trim_pattern(mut p: Vec<char>) -> Vec<char> {
+    while p.last().is_some_and(|c| c.is_whitespace()) && p.len().checked_sub(2).and_then(|i| p.get(i)) != Some(&'`') {
+        p.pop();
+    }
+    let lead = p.iter().take_while(|c| c.is_whitespace()).count();
+    p.split_off(lead)
+}
+
+/// Whether `e` is of a class `filter` names: a class (`AcDbLine`), a DXF type (`LINE`) or a type
+/// name (`Line`, `Block Reference`), with wildcards and comma lists (see [`NameFilter`]).
+pub fn class_matches(e: &Entity, filter: &mut NameFilter) -> bool {
+    filter.matches_any(&[class_name(&e.kind), e.kind.dxf_name(), e.kind.type_name()])
 }
 
 /// The visible, selectable objects in `space` of the classes `pattern` names (see
 /// [`class_matches`]).
 pub fn select_class(d: &Drawing, space: &Space, pattern: &str) -> Vec<Handle> {
     let Some(store) = d.space(space) else { return Vec::new() };
-    store.iter().filter(|e| selectable(d, e) && class_matches(e, pattern)).map(|e| e.handle).collect()
+    let Some(mut filter) = NameFilter::new(pattern) else { return Vec::new() };
+    store.iter().filter(|e| selectable(d, e) && class_matches(e, &mut filter)).map(|e| e.handle).collect()
 }
 
 /// The classes of the visible objects in `space`, sorted (what `?` lists): "AcDbLine (LINE)".

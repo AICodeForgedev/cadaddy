@@ -3267,3 +3267,147 @@ menu	Modify	Modifikace
 	Remove Company Standard	Odebrat firemní standard
 	Set Company Standard	Nastavit firemní standard
 	Standards	Standardy
+	 ({n} shown; Export writes them all)	 (zobrazeno {n}; export zapíše všechny)
+	(no picture)	(bez obrázku)
+	A false alarm	Planý poplach
+	Confidence:	Jistota:
+	Current room	Aktuální místnost
+	Defer	Odložit
+	Expected:	Očekáváno:
+	False alarms: {rate}	Plané poplachy: {rate}
+	Findings ({n})	Nálezy ({n})
+	Found:	Nalezeno:
+	From the 2D drawing	Z 2D výkresu
+	From the BIM model	Z modelu BIM
+	Issue:	Problém:
+	It is a real error	Je to skutečná chyba
+	Leave it for a field decision	Nechat na rozhodnutí na stavbě
+	No file chosen. Type: automation.takeoff {params}	Nebyl vybrán soubor. Zadejte: automation.takeoff {params}
+	No findings to review.	Žádné nálezy ke kontrole.
+	No run yet: choose a scope and trades, then Start.	Zatím žádný běh: zvolte rozsah a profese, pak Spustit.
+	No takeoff yet: Refresh runs it.	Zatím žádný výkaz: Obnovit jej spustí.
+	Overall	Celkem
+	Refresh	Obnovit
+	Reject	Odmítnout
+	Resume	Pokračovat
+	Rules ({on} of {all} on)	Pravidla (zapnuto {on} z {all})
+	Scope:	Rozsah:
+	Scores	Skóre
+	Show answered	Zobrazit zodpovězené
+	Takeoff	Výkaz výměr
+	Takeoff written to {path}	Výkaz zapsán do {path}
+	Trades:	Profese:
+	done	hotovo
+	judging	posuzuje se
+	project	projekt
+	waiting for an agent	čeká se na agenta
+	{done} of {total} areas, {state}	{done} z {total} oblastí, {state}
+	{source}: {n} lines	{source}: {n} řádků
+	Automation Takeoff	Výkaz automatizace
+	Cancel Validation Run	Zrušit ověřování
+	Change a Validation Rule	Změnit pravidlo ověření
+	Validation Areas	Oblasti ověření
+	Validation Evidence Packet	Balíček podkladů ověření
+	Validation Prescreen	Předběžná kontrola ověření
+	Validation Rules	Pravidla ověření
+	Validate	Ověřit
+	Automation	Automatizace
+	Model Checks	Kontroly modelu
+	Qty	Množ.
+	Elements	Prvky
+	Fire	Požární ochrana
+	Validate: waiting for an agent	Ověření: čeká se na agenta
+	Validate Model Against Prints (Agent)	Ověřit model podle výkresů (agent)
+	Next Validation Packet	Další balíček ověření
+	Report Validation Findings	Nahlásit zjištění ověření
+	Validation Run Status	Stav běhu ověření
+	Plant Validation Errors	Vložit chyby pro ověření
+	Model Fidelity	Věrnost modelu
+	Model Fidelity Rules	Pravidla věrnosti modelu
+	Model Fidelity Report	Zpráva o věrnosti modelu
+	Fidelity	Věrnost
+	Auto	Automaticky
+	Floor	Podlaží
+	Detail	Detail
+	Print Inventory	Soupis výkresů
+	Piece	Díl
+	Raceway run	Trasa elektroinstalační trubky
+	Connects to	Připojeno k
+	Height AFF	Výška nad čistou podlahou
+	Host wall	Hostitelská stěna
+	Wall face	Líc stěny
+	Outlet box	Elektroinstalační krabice
+	Fed by	Napájeno z
+	Count Model Pieces	Spočítat díly modelu
+	Edit Model Piece	Upravit díl modelu
+	Walk the Feed	Projít napájení
+	Lay Out Trade Pieces	Rozvrhnout díly profesí
+	Trade Pieces Report	Přehled dílů profesí
+	Trade Piece Rules	Pravidla dílů profesí
+	Read Trade Documents	Načíst dokumenty profesí
+	Object Forms	Formuláře objektů
+	Create Object Forms	Vytvořit formuláře objektů
+	Edit Object Form Field	Upravit pole formuláře objektu
+	Record Object Field Value	Zaznamenat hodnotu pole objektu
+	Object Form Log	Protokol formulářů objektů
+	Revert Object Form Change	Vrátit změnu formuláře objektu
+	Promote Object Form to Template	Povýšit formulář objektu na šablonu
+	Object Completeness	Úplnost objektů
+	Object Form	Formulář objektu
+	Wall Faces	Plochy stěn
+	Place Devices on Wall Faces	Umístit zařízení na plochy stěn
+	Devices Follow Their Walls	Zařízení následují své stěny
+	Room Layout	Rozvržení místnosti
+	Tie a Device to an Object	Svázat zařízení s objektem
+	Add Casework or Appliance Object	Přidat objekt nábytku nebo spotřebiče
+	Conduit Routing Report	Zpráva o trasování elektroinstalačních trubek
+	Reroute Conduit	Přetrasovat elektroinstalační trubky
+	Conduit Takeoff	Výkaz elektroinstalačních trubek
+	Wire Pull Schedule	Plán zatahování vodičů
+	Conduit Cut and Bend List	Seznam řezů a ohybů trubek
+	Material Release List	Seznam uvolnění materiálu
+	Field Paperwork Sheets	Listy montážní dokumentace
+	Scope by Trade	Rozsah prací podle profese
+	Value Engineering Scenario	Scénář hodnotového inženýrství
+	Value Engineering Decision	Rozhodnutí o hodnotovém inženýrství
+	Read Drawn Dimensions	Načíst kreslené kóty
+	Underground Plan Report	Zpráva o plánu podzemních rozvodů
+	Update Model from Plans	Aktualizovat model z výkresů
+	Load Calculation	Výpočet zatížení
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Zpráva o pádu zůstala v tomto počítači: nabízí ji Nápověda > Nahlásit problém.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Záchranná kopie výkresu s neuloženými změnami byla automaticky uložena.
+	Autosave failed	Automatické uložení selhalo
+	Autosave failed: {message}	Automatické uložení selhalo: {message}
+	Backup copies are off, so the current file will be replaced.	Záložní kopie jsou vypnuté, takže aktuální soubor bude nahrazen.
+	Backup copy	Záložní kopie
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy nemohl zapsat záchrannou kopii, takže by se nedávné změny ztratily, kdyby se aplikace teď zastavila.
+	CADaddy has to close	CADaddy se musí zavřít
+	Close CADaddy	Zavřít CADaddy
+	Create backup copy with each save	Při každém uložení vytvořit záložní kopii
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF je zachová. Použijte Uložit jako, aby ve výkresu zůstaly.
+	Details	Podrobnosti
+	Dismiss	Zavřít
+	Drawing Recovery offers them at the next start.	Obnova výkresů je nabídne při příštím spuštění.
+	Internal error	Vnitřní chyba
+	No drawing needed a new recovery copy.	Žádný výkres nepotřeboval novou záchrannou kopii.
+	Part of CADaddy failed, and the app kept running.	Část CADaddy selhala a aplikace běží dál.
+	Part of CADaddy keeps failing, so it can't continue.	Část CADaddy stále selhává, takže nemůže pokračovat.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Záchranné kopie výkresů s neuloženými změnami (počet: {count}) byly automaticky uloženy.
+	Save Anyway	Přesto uložit
+	Save cancelled: {path} was not changed.	Uložení zrušeno: {path} se nezměnil.
+	Save your work and restart CADaddy.	Uložte svou práci a restartujte CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Uložte svou práci. Automatické ukládání to zkusí znovu po intervalu SAVETIME; jeho složka je v Možnostech.
+	Saving {name} will remove content	Uložením {name} se odstraní obsah
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Aktuální soubor nevypadá celý, takže {name} zůstane beze změny a aktuální soubor bude nahrazen.
+	The current file is kept as {name} until the next save.	Aktuální soubor zůstane jako {name} až do příštího uložení.
+	This format can't keep these objects yet: {objects}.	Tento formát zatím nedokáže zachovat tyto objekty: {objects}.
+	{count} more types	další typy: {count}
+	Review by Impact	Kontrola podle dopadu
+	Resolve Review Item by Impact	Vyřešit položku kontroly podle dopadu
+	Open Review Item	Otevřít položku kontroly
+	Review Audit Trail	Auditní záznam kontroly
+	Accuracy Trend	Trend přesnosti
+	Measure Build Accuracy	Změřit přesnost sestavení
+	Export for AR	Export pro rozšířenou realitu
+	AR Export Rules	Pravidla exportu pro rozšířenou realitu
+	Panel Breakers	Jističe rozvaděče

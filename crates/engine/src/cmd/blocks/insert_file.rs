@@ -34,10 +34,15 @@ impl FileRef {
         !self.explicit && s.doc().is_ok_and(|d| d.block(&self.name).is_some())
     }
 
-    /// Read the file and (re)define its block. Returns the block's name.
-    pub fn define(&self, s: &mut Session) -> Result<String> {
+    /// Read the file and (re)define its block. Returns the block's name and what reading the file
+    /// said (objects it dropped, damage), which is echoed too, as on opening it.
+    pub fn define(&self, s: &mut Session) -> Result<(String, Vec<String>)> {
         let src = read_drawing(&self.path)?;
-        define_from(s, &src, &self.name)
+        let name = define_from(s, &src, &self.name)?;
+        for note in &src.read_notes {
+            s.echo(note.clone());
+        }
+        Ok((name, src.read_notes.clone()))
     }
 }
 
@@ -246,9 +251,11 @@ pub(crate) fn factor_note(f: f64) -> String {
     format!("Drawing units differ: scaled by {f}.")
 }
 
-/// The JSON INSERT parameters with `file` defined as a block and `*name` as `explode: true`.
-pub(super) fn json_params(s: &mut Session, p: &Value) -> Result<Value> {
+/// The JSON INSERT parameters with `file` defined as a block and `*name` as `explode: true`, and
+/// what reading that file said.
+pub(super) fn json_params(s: &mut Session, p: &Value) -> Result<(Value, Vec<String>)> {
     let mut p = p.clone();
+    let mut notes = Vec::new();
     let mut name = str_param(&p, "name").map(str::trim).map(str::to_string);
     if let Some(n) = name.as_deref().and_then(|n| n.strip_prefix('*')) {
         name = Some(n.trim().to_string());
@@ -256,12 +263,14 @@ pub(super) fn json_params(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(path) = str_param(&p, "file").map(str::to_string) {
         let n = name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| stem(&path));
-        name = Some(FileRef { name: n, path, explicit: true }.define(s)?);
+        let (defined, read) = FileRef { name: n, path, explicit: true }.define(s)?;
+        name = Some(defined);
+        notes = read;
     }
     if let Some(n) = name {
         p["name"] = json!(n);
     }
-    Ok(p)
+    Ok((p, notes))
 }
 
 /// Bring a drawing's model space into this one as it is (DGNIMPORT): its objects, with the

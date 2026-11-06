@@ -90,7 +90,7 @@ fn common(t: &T) -> Common {
 /// Apply the OCS → WCS transform for 2D entities with a non-default extrusion.
 /// A VIEWPORT's view twist (51, degrees) in radians; 0 when absent or not finite.
 fn viewport_twist(t: &T) -> f64 {
-    t.f(51).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians())
+    t.f(51).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()))
 }
 
 /// An object whose points were turned into the world system on reading: its extrusion is plain
@@ -1763,7 +1763,7 @@ fn tables(tags: &[Tag], d: &mut Drawing, rx: &mut Rx) {
                 };
                 // 70 bit 1: a paper space view; its layout is CADaddy xdata.
                 let layout = (t.i(70).unwrap_or(0) & 1 != 0).then(|| field("LAYOUT").unwrap_or_default());
-                let twist = t.f(50).filter(|a| a.is_finite()).map_or(0.0, |a| a.rem_euclid(360.0).to_radians());
+                let twist = t.f(50).map_or(0.0, |a| cadaddy_geom::norm_angle(a.to_radians()));
                 // The view direction: the plan view when missing, zero or not a number.
                 let dir = Some(t.p(11)).filter(|d| d.is_finite() && d.len() > 1e-12).map(|d| d.normalized()).filter(|d| (*d - Vec3::Z).len() > 1e-9);
                 let ucs = (t.i(72).unwrap_or(0) == 1)
@@ -2077,7 +2077,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
         return Err(IoError::Format("no sections found".into()));
     }
     let bad_heights = fix_text_heights(&mut secs);
-    let undefined = drop_undefined(&mut secs);
+    let (undefined, beyond_limit) = drop_undefined(&mut secs);
     let mut d = Drawing::new_imperial();
     d.layouts.clear();
     // A file without $INSUNITS declares no units (#1209); only new drawings take the template's.
@@ -2103,7 +2103,7 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             d.bump_handseed(h);
         }
     }
-    d.kept_handles = kept_handles(&secs);
+    d.kept_handles = kept_handles(&secs).into();
     let mut skipped = std::collections::BTreeMap::new();
     count_skipped(&mut skipped, "(no section)", outside);
     for s in &secs {
@@ -2305,6 +2305,9 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
     crate::dxf_raw::read(&secs, &mut d);
     crate::mark_dynamic_copies_anonymous(&mut d);
     fill_measurements(&mut d);
+    // A size (radius, text height, insert scale, width, bulge) that puts an object beyond the
+    // limit drops it as a coordinate there does.
+    let beyond_limit = beyond_limit.saturating_add(d.drop_beyond_limit(LIMIT));
     d.skipped_records = skipped;
     if cut_off {
         d.read_notes.push(CUT_OFF_NOTE.into());
@@ -2324,12 +2327,24 @@ pub(crate) fn read_tags(tags: Vec<Tag>) -> Result<Drawing> {
             if n == 1 { "was" } else { "were" }
         ));
     }
+    if beyond_limit > 0 {
+        let n = beyond_limit;
+        d.read_notes.push(format!(
+            "DXF: {n} object{} had coordinates or a size beyond \u{b1}1e12 (the limit CADaddy works within) and {} dropped",
+            if n == 1 { "" } else { "s" },
+            if n == 1 { "was" } else { "were" }
+        ));
+    }
     if undefined.1 > 0 {
         let n = undefined.1;
         d.read_notes.push(format!("DXF: {n} undefined (NaN/inf) number{} in the header, tables or objects read as 0", if n == 1 { "" } else { "s" }));
     }
     Ok(d)
 }
+
+/// How far from the origin an object may reach (every command works within it); one beyond it is
+/// dropped on reading.
+pub(crate) const LIMIT: f64 = 1e12;
 
 /// A TEXT, MTEXT, ATTRIB or ATTDEF whose height (group 40) is NaN or infinite gets the default
 /// height (it used to read as 1e-9, invisibly); returns how many were changed.
@@ -2352,14 +2367,17 @@ fn fix_text_heights(secs: &mut [cadaddy_dxf::Section]) -> usize {
 /// Objects with a NaN or infinite number (the parser keeps those as NaN) are dropped from the
 /// ENTITIES section and from blocks, with the vertices and attributes that follow a dropped
 /// POLYLINE or INSERT; returns how many objects were dropped and how many other records
-/// (tables, header, objects) hold such a number, which reads as 0 there.
-fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
+/// (tables, header, objects) hold such a number, which reads as 0 there. An object with a
+/// coordinate beyond ±1e12 (the limit every command applies) goes the same way, counted apart.
+fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> ((usize, usize), usize) {
     // Coordinates (10-39) decide where an object is; other numbers (radii, pattern line offsets,
     // extended data) have their own readers, which take a bad one for 0 or skip it.
     let bad = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if !r.is_finite());
-    let (mut objects, mut others) = (0usize, 0usize);
+    let huge = |t: &Tag| (10..=39).contains(&t.code) && matches!(t.value, cadaddy_dxf::Value::Real(r) if r.is_finite() && r.abs() > LIMIT);
+    let (mut objects, mut others, mut oversize) = (0usize, 0usize, 0usize);
     for s in secs.iter_mut() {
-        if !s.tags.iter().any(bad) {
+        let drops_objects = matches!(s.name.as_str(), "ENTITIES" | "BLOCKS");
+        if !s.tags.iter().any(|t| bad(t) || (drops_objects && huge(t))) {
             continue;
         }
         if !matches!(s.name.as_str(), "ENTITIES" | "BLOCKS") {
@@ -2385,8 +2403,12 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
                 if kind == "SEQEND" {
                     in_dropped_group = false;
                 }
-            } else if !structural && rec.iter().any(bad) {
-                objects = objects.saturating_add(1);
+            } else if !structural && rec.iter().any(|t| bad(t) || huge(t)) {
+                if rec.iter().any(bad) {
+                    objects = objects.saturating_add(1);
+                } else {
+                    oversize = oversize.saturating_add(1);
+                }
                 if let Some(at) = group_at.take().filter(|_| matches!(kind.as_str(), "VERTEX" | "ATTRIB")) {
                     // A vertex or attribute with an undefined number: its whole polyline or insert goes.
                     kept.truncate(at);
@@ -2406,7 +2428,7 @@ fn drop_undefined(secs: &mut [cadaddy_dxf::Section]) -> (usize, usize) {
         }
         s.tags = kept;
     }
-    (objects, others)
+    ((objects, others), oversize)
 }
 
 fn count_skipped(skipped: &mut std::collections::BTreeMap<String, usize>, section: &str, n: usize) {
@@ -2677,7 +2699,7 @@ impl Objects {
         }
         // Parametric constraints and parameters.
         if let Some((c, p)) = self.xrecord_text(crate::dxf_ext::CONSTRAINTS_KEY).and_then(|t| crate::dxf_ext::parse_constraints(&t)) {
-            d.constraints = c;
+            d.constraints = c.into();
             d.parametric = p;
         }
         // The annotation scale list (a metric drawing without one gets the metric defaults),
@@ -3034,6 +3056,10 @@ fn page_setup(t: &T) -> PageSetup {
     }
     .into();
     p.plot_style_table = t.s(7).unwrap_or_default();
+    // Paper image origin: kept as the file has it, so a save puts the sheet back where it was.
+    // 0,0 is what a page without one writes, so it reads back as none.
+    p.image_origin =
+        t.f(148).zip(t.f(149)).map(|(x, y)| Vec2::new(x, y)).filter(|o| o.is_finite() && o.x.abs() < 1e12 && o.y.abs() < 1e12 && *o != Vec2::ZERO);
     p
 }
 

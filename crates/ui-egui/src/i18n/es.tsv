@@ -74,6 +74,8 @@
 	AutoConstrain	Restricciones automáticas
 	Automatic save every	Guardado automático cada
 	Automatic save file location	Ubicación de los archivos de guardado automático
+	Backup copy	Copia de seguridad
+	Create backup copy with each save	Crear una copia de seguridad en cada guardado
 	Axis, End	Eje, extremo
 	B	N
 	Base	Base
@@ -3293,3 +3295,145 @@
 	Remove Company Standard	Quitar estándar de la empresa
 	Set Company Standard	Definir estándar de la empresa
 	Standards	Estándares
+	 ({n} shown; Export writes them all)	 ({n} mostradas; Exportar las escribe todas)
+	(no picture)	(sin imagen)
+	A false alarm	Una falsa alarma
+	Confidence:	Confianza:
+	Current room	Habitación actual
+	Defer	Aplazar
+	Expected:	Esperado:
+	False alarms: {rate}	Falsas alarmas: {rate}
+	Findings ({n})	Hallazgos ({n})
+	Found:	Encontrado:
+	From the 2D drawing	Del dibujo 2D
+	From the BIM model	Del modelo BIM
+	Issue:	Problema:
+	It is a real error	Es un error real
+	Leave it for a field decision	Dejarlo para una decisión en obra
+	No file chosen. Type: automation.takeoff {params}	No se eligió ningún archivo. Escriba: automation.takeoff {params}
+	No findings to review.	No hay hallazgos que revisar.
+	No run yet: choose a scope and trades, then Start.	Aún no hay ejecución: elija el alcance y las especialidades y pulse Iniciar.
+	No takeoff yet: Refresh runs it.	Aún no hay mediciones: Actualizar las calcula.
+	Overall	Global
+	Refresh	Actualizar
+	Reject	Rechazar
+	Resume	Reanudar
+	Rules ({on} of {all} on)	Reglas ({on} de {all} activas)
+	Scope:	Alcance:
+	Scores	Puntuaciones
+	Show answered	Mostrar respondidos
+	Takeoff	Mediciones
+	Takeoff written to {path}	Mediciones escritas en {path}
+	Trades:	Especialidades:
+	done	terminado
+	judging	en evaluación
+	project	proyecto
+	waiting for an agent	esperando a un agente
+	{done} of {total} areas, {state}	{done} de {total} áreas, {state}
+	{source}: {n} lines	{source}: {n} líneas
+	Automation Takeoff	Mediciones de automatización
+	Cancel Validation Run	Cancelar validación
+	Change a Validation Rule	Cambiar una regla de validación
+	Validation Areas	Áreas de validación
+	Validation Evidence Packet	Paquete de evidencias de validación
+	Validation Prescreen	Revisión previa de validación
+	Validation Rules	Reglas de validación
+	Validate	Validar
+	Automation	Automatización
+	Model Checks	Comprobaciones del modelo
+	Qty	Cant.
+	Elements	Elementos
+	Fire	Incendios
+	Validate: waiting for an agent	Validar: esperando a un agente
+	Validate Model Against Prints (Agent)	Validar el modelo con los planos (agente)
+	Next Validation Packet	Siguiente paquete de validación
+	Report Validation Findings	Informar de los hallazgos de validación
+	Validation Run Status	Estado de la ejecución de validación
+	Plant Validation Errors	Plantar errores de validación
+	Model Fidelity	Fidelidad del modelo
+	Model Fidelity Rules	Reglas de fidelidad del modelo
+	Model Fidelity Report	Informe de fidelidad del modelo
+	Fidelity	Fidelidad
+	Auto	Automático
+	Floor	Planta
+	Detail	Detalle
+	Print Inventory	Inventario de planos
+	Piece	Pieza
+	Raceway run	Tramo de canalización
+	Connects to	Conecta con
+	Height AFF	Altura sobre piso terminado
+	Host wall	Muro anfitrión
+	Wall face	Cara del muro
+	Outlet box	Caja de salida
+	Fed by	Alimentado desde
+	Count Model Pieces	Contar piezas del modelo
+	Edit Model Piece	Editar pieza del modelo
+	Walk the Feed	Recorrer la alimentación
+	Lay Out Trade Pieces	Distribuir piezas por oficio
+	Trade Pieces Report	Informe de piezas por oficio
+	Trade Piece Rules	Reglas de piezas por oficio
+	Read Trade Documents	Leer documentos de oficios
+	Object Forms	Formularios de objetos
+	Create Object Forms	Crear formularios de objetos
+	Edit Object Form Field	Editar campo del formulario de objeto
+	Record Object Field Value	Registrar valor de campo del objeto
+	Object Form Log	Registro de formularios de objetos
+	Revert Object Form Change	Revertir cambio del formulario de objeto
+	Promote Object Form to Template	Convertir formulario de objeto en plantilla
+	Object Completeness	Completitud de objetos
+	Object Form	Formulario de objeto
+	Wall Faces	Caras de muro
+	Place Devices on Wall Faces	Colocar dispositivos en caras de muro
+	Devices Follow Their Walls	Los dispositivos siguen a sus muros
+	Room Layout	Distribución de la habitación
+	Tie a Device to an Object	Vincular un dispositivo a un objeto
+	Add Casework or Appliance Object	Agregar objeto de mueble empotrado o electrodoméstico
+	Conduit Routing Report	Informe de trazado de conductos eléctricos
+	Reroute Conduit	Retrazar conductos eléctricos
+	Conduit Takeoff	Cómputo de conductos eléctricos
+	Wire Pull Schedule	Programa de tendido de cables
+	Conduit Cut and Bend List	Lista de cortes y curvas de conductos
+	Material Release List	Lista de liberación de materiales
+	Field Paperwork Sheets	Hojas de documentación de obra
+	Scope by Trade	Alcance por oficio
+	Value Engineering Scenario	Escenario de ingeniería de valor
+	Value Engineering Decision	Decisión de ingeniería de valor
+	Read Drawn Dimensions	Leer cotas dibujadas
+	Underground Plan Report	Informe del plan de instalación subterránea
+	Update Model from Plans	Actualizar modelo desde planos
+	Load Calculation	Cálculo de cargas
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Se guardó un informe del fallo en este equipo: Ayuda > Informar de un problema lo ofrece.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Se guardó automáticamente una copia de recuperación del dibujo con cambios sin guardar.
+	Autosave failed	Error del guardado automático
+	Autosave failed: {message}	Error del guardado automático: {message}
+	Backup copies are off, so the current file will be replaced.	Las copias de seguridad están desactivadas, así que se reemplazará el archivo actual.
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy no pudo escribir una copia de recuperación, así que los cambios recientes se perderían si la aplicación se detuviera ahora.
+	CADaddy has to close	CADaddy tiene que cerrarse
+	Close CADaddy	Cerrar CADaddy
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF los conserva. Use Guardar como para mantenerlos en el dibujo.
+	Details	Detalles
+	Dismiss	Descartar
+	Drawing Recovery offers them at the next start.	Recuperación de dibujos los ofrece en el próximo inicio.
+	Internal error	Error interno
+	No drawing needed a new recovery copy.	Ningún dibujo necesitaba una nueva copia de recuperación.
+	Part of CADaddy failed, and the app kept running.	Una parte de CADaddy falló y la aplicación siguió funcionando.
+	Part of CADaddy keeps failing, so it can't continue.	Una parte de CADaddy sigue fallando, así que no puede continuar.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Se guardaron automáticamente copias de recuperación de {count} dibujos con cambios sin guardar.
+	Save Anyway	Guardar de todos modos
+	Save cancelled: {path} was not changed.	Guardado cancelado: {path} no se modificó.
+	Save your work and restart CADaddy.	Guarde su trabajo y reinicie CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Guarde su trabajo. El guardado automático lo intenta de nuevo tras el intervalo SAVETIME; su carpeta está en Opciones.
+	Saving {name} will remove content	Guardar {name} eliminará contenido
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	El archivo actual no parece completo, así que {name} se queda como está y se reemplazará el archivo actual.
+	The current file is kept as {name} until the next save.	El archivo actual se conserva como {name} hasta el próximo guardado.
+	This format can't keep these objects yet: {objects}.	Este formato aún no puede conservar estos objetos: {objects}.
+	{count} more types	{count} tipos más
+	Review by Impact	Revisión por impacto
+	Resolve Review Item by Impact	Resolver elemento de revisión por impacto
+	Open Review Item	Abrir elemento de revisión
+	Review Audit Trail	Registro de auditoría de revisión
+	Accuracy Trend	Tendencia de precisión
+	Measure Build Accuracy	Medir la precisión del modelo
+	Export for AR	Exportar para RA
+	AR Export Rules	Reglas de exportación para RA
+	Panel Breakers	Interruptores del tablero

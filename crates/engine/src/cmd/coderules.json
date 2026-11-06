@@ -1,0 +1,212 @@
+{
+  "about": "Code rules the build applies to the model's devices on its first run (bim.coderules), and Validate checks again. Each rule: its id, the code section, what it sets, and where it applies. Validate's E-RECEPT-TYPE / E-RECEPT-TR prescreen and its G-PRODUCT-CODE rule (TR, GFCI by circuit, WR outdoors) read the same file. The lighting step reads E-LIGHT-OCC (the energy code's occupant-sensor spaces and a guest room's master control).",
+  "rules": [
+    {
+      "id": "E-RECEPT-TR",
+      "cite": "NEC 406.12",
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
+      "sets": "tamper_resistant",
+      "rule": "Every 125/250 V, 15 and 20 A receptacle in a guest room or guest suite of a hotel or motel, and in a dwelling unit, is tamper-resistant (GFCI receptacles included).",
+      "max_amps": 20,
+      "max_volts": 250,
+      "rooms": {
+        "unit_rooms": true,
+        "name_words": [
+          "GUEST",
+          "SUITE",
+          "DWELLING",
+          "APARTMENT",
+          "BEDROOM",
+          "SLEEPING",
+          "LODGING"
+        ]
+      }
+    },
+    {
+      "id": "E-RECEPT-GFCI",
+      "cite": "NEC 210.8",
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "ceiling_receptacle"
+      ],
+      "sets": "gfci",
+      "rule": "GFCI protection is judged per circuit: a receptacle on a GFCI (or dual-function) breaker is already protected and is a standard device; where the print tags GFCI and the breaker isn't, the first device on the circuit is a GFCI receptacle and the ones after it on its load side are standard. A GFCI receptacle on a GFCI breaker is double protection. When the breaker's type isn't known the decision is left undecided.",
+      "tags": [
+        "GFCI",
+        "GFI",
+        "GF"
+      ],
+      "sink_reach_ft": 6,
+      "sink_words": [
+        "SINK",
+        "LAV",
+        "LAVATORY",
+        "KITCHENETTE"
+      ],
+      "location_rule": "A receptacle the print doesn't tag GFCI needs it within 6 ft of the outside edge of a sink (NEC 210.8(A)(7), (B)(5)), or in a place below (its circuit's description or its room's name has all of a place's words); it is decided by its circuit like a tagged one.",
+      "receptacle_words": ["RCPT", "RCPTS", "RECEPT", "RECEPTS", "RECEPTACLE", "RECEPTACLES", "OUTLET", "OUTLETS", "GFCI", "GFI"],
+      "places": [
+        {"all": ["ELEVATOR", "PIT"], "cite": "NEC 620.6 (elevator pit)"},
+        {"all": ["ELEVATOR", "CAB"], "cite": "NEC 620.6 (elevator car)"},
+        {"all": ["ELEVATOR", "CAR"], "cite": "NEC 620.6 (elevator car)"},
+        {"all": ["ELEVATOR", "SHAFT"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["HOISTWAY"], "cite": "NEC 620.6 (hoistway)"},
+        {"all": ["ROOF"], "cite": "NEC 210.8(B) (rooftop)"},
+        {"all": ["EXTERIOR"], "cite": "NEC 210.8 (outdoors)"},
+        {"all": ["OUTDOOR"], "cite": "NEC 210.8 (outdoors)"},
+        {"all": ["GARAGE"], "cite": "NEC 210.8 (garage)"},
+        {"all": ["BATHROOM"], "cite": "NEC 210.8 (bathroom)"},
+        {"all": ["RESTROOM"], "cite": "NEC 210.8 (bathroom)"},
+        {"all": ["LAUNDRY"], "cite": "NEC 210.8 (laundry area)"}
+      ]
+    },
+    {
+      "id": "E-RECEPT-WR",
+      "cite": "NEC 406.9(A), (B)",
+      "kinds": [
+        "receptacle",
+        "quad_receptacle",
+        "gfci_receptacle",
+        "weatherproof_receptacle"
+      ],
+      "sets": "weather_resistant",
+      "rule": "A 15 or 20 A, 125 or 250 V nonlocking receptacle in a damp or wet location (outdoors: an exterior wall, a roof, a balcony, a patio or deck) is a listed weather-resistant type. In our own words: verify with the authority having jurisdiction.",
+      "places": [
+        {"all": ["EXTERIOR"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["OUTDOOR"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["OUTSIDE"], "cite": "NEC 406.9 (outdoors)"},
+        {"all": ["ROOF"], "cite": "NEC 406.9 (roof)"},
+        {"all": ["ROOFTOP"], "cite": "NEC 406.9 (roof)"},
+        {"all": ["BALCONY"], "cite": "NEC 406.9 (balcony)"},
+        {"all": ["PATIO"], "cite": "NEC 406.9 (patio)"},
+        {"all": ["DECK"], "cite": "NEC 406.9 (deck)"},
+        {"all": ["TERRACE"], "cite": "NEC 406.9 (terrace)"},
+        {"all": ["POOL"], "cite": "NEC 406.9 (pool area)"}
+      ]
+    },
+    {
+      "id": "E-WORKSPACE",
+      "cite": "NEC 110.26(A)",
+      "kinds": [
+        "panel",
+        "panelboard",
+        "switchboard",
+        "load_center",
+        "disconnect",
+        "transformer"
+      ],
+      "sets": "working_space",
+      "rule": "In front of electrical equipment likely to be worked on energized: a clear space as deep as the voltage to ground and the condition call for (0-150 V: 3 ft; 151-600 V: 3, 3.5 or 4 ft by condition 1, 2, 3), at least 30 in wide or the equipment's width, and 6.5 ft high. Gear the plans don't locate is laid out along its room's walls with that space clear (condition 1 assumed and said).",
+      "depth_in": [
+        [
+          150,
+          36,
+          36,
+          36
+        ],
+        [
+          600,
+          36,
+          42,
+          48
+        ],
+        [
+          1000,
+          36,
+          48,
+          60
+        ]
+      ],
+      "width_in": 30,
+      "height_in": 78,
+      "mount_top_in": 78,
+      "plate_margin_in": [
+        2.0,
+        1.5
+      ]
+    },
+    {
+      "id": "E-EQUIP-ELEC",
+      "cite": "NEC 110.3(B), 110.10, 240.4, 409.22, 430.22, 440.33, 620.13, 620.16",
+      "kinds": [
+        "equipment_connection"
+      ],
+      "sets": "equipment_electrical",
+      "rule": "An equipment connection follows its approved submittal: its protection no larger than the maker's maximum (fuse class as named), its conductors' ampacity at least 125% of its nameplate / full-load current (its minimum circuit amps when given), its controller's short-circuit current rating at least the available fault current where it is installed. Where the drawings differ, the build reports both values and the fix.",
+      "conductor_factor": 1.25,
+      "disconnect_factor": 1.15,
+      "disconnect_sizes_a": [30, 60, 100, 200, 400, 600, 800, 1200],
+      "disconnect_cite": "NEC 430.110(A) (a motor's disconnect at least 115% of its full-load current), 440.12(A) (an air-conditioning unit's at least 115% of its rated-load or nameplate current), 620.51 (an elevator's: fused or circuit breaker, lockable open); standard switch sizes",
+      "unit_disconnect_words": ["UNIT MOUNTED DISCONNECT", "UNIT-MOUNTED DISCONNECT", "FACTORY MOUNTED DISCONNECT", "FACTORY-MOUNTED DISCONNECT", "FACTORY INSTALLED DISCONNECT", "FACTORY-INSTALLED DISCONNECT", "INTEGRAL DISCONNECT", "DISCONNECT, FACTORY", "DISCONNECT (FACTORY"],
+      "ampacity_75c": {
+        "cu": {
+          "14": 20,
+          "12": 25,
+          "10": 35,
+          "8": 50,
+          "6": 65,
+          "4": 85,
+          "3": 100,
+          "2": 115,
+          "1": 130,
+          "1/0": 150,
+          "2/0": 175,
+          "3/0": 200,
+          "4/0": 230,
+          "250": 255,
+          "300": 285,
+          "350": 310,
+          "400": 335,
+          "500": 380,
+          "600": 420
+        },
+        "al": {
+          "12": 20,
+          "10": 30,
+          "8": 40,
+          "6": 50,
+          "4": 65,
+          "3": 75,
+          "2": 90,
+          "1": 100,
+          "1/0": 120,
+          "2/0": 135,
+          "3/0": 155,
+          "4/0": 180,
+          "250": 205,
+          "300": 230,
+          "350": 250,
+          "400": 270,
+          "500": 310,
+          "600": 340
+        }
+      }
+    },
+    {
+      "id": "E-LIGHT-OCC",
+      "cite": "IECC C405.2.1",
+      "kinds": ["occupancy_sensor"],
+      "sets": "occupant_sensor_required",
+      "rule": "Lights in these spaces are controlled by an occupant sensor that turns them off soon after the space is left: classrooms, lecture and training rooms; conference, meeting and multipurpose rooms; copy and print rooms; lounges and break rooms; enclosed offices and open office areas; restrooms; storage rooms; locker rooms; warehouse storage. The starter list in our own words, section numbers by edition: verify with the authority having jurisdiction.",
+      "editions": {"2015": "IECC 2015 C405.2.1", "2018": "IECC 2018 C405.2.1", "2021": "IECC 2021 C405.2.1"},
+      "spaces": [
+        {"all": ["CLASSROOM"]}, {"all": ["LECTURE"]}, {"all": ["TRAINING"]}, {"all": ["CONFERENCE"]}, {"all": ["MEETING"]},
+        {"all": ["MULTIPURPOSE"]}, {"all": ["COPY"]}, {"all": ["PRINT"]}, {"all": ["LOUNGE"]}, {"all": ["BREAK"]},
+        {"all": ["OFFICE"]}, {"all": ["RESTROOM"]}, {"all": ["RR"]}, {"all": ["TOILET"]}, {"all": ["STOR"]}, {"all": ["LOCKER"]},
+        {"all": ["WAREHOUSE"]}
+      ],
+      "guest_rooms": {
+        "editions": {"2015": "IECC 2015 C405.2.4", "2018": "IECC 2018 C405.2.4", "2021": "IECC 2021 C405.2.5"},
+        "rule": "Each hotel or motel guest room (sleeping unit) has a master control that turns off its luminaires and switched receptacles within 20 minutes of the room being left: a card key or captive key switch, or an occupant sensor. In our own words: verify with the authority having jurisdiction.",
+        "controls": ["CARD", "KEY", "MASTER", "OCCUPANCY", "OCCUPANT", "VACANCY", "SENSOR"]
+      }
+    }
+  ]
+}

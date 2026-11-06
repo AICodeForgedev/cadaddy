@@ -1,7 +1,7 @@
 //! Table cell styles, formulas, TABLEDIT and TABLEEXPORT.
 
 use cadaddy_color::Color;
-use cadaddy_doc::{CellBorder, CellFormat, CellStyle, Drawing, EntityKind, Handle, Lineweight, Table, TableStyle};
+use cadaddy_doc::{CellBorder, CellFormat, CellStyle, Drawing, EntityKind, Handle, Table, TableStyle};
 use cadaddy_geom::Vec2;
 use serde_json::{Value, json};
 
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .interactive(|s| Ok(Box::new(TableEditM { cell: s.tabledit_walk.flatten(), walk: s.tabledit_walk.is_some() }))),
         CommandSpec::new("tableexport", "Export Table", run_export)
             .files()
-            .params("{handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
+            .params("{force?: bool (replace an existing file; otherwise it is refused), handle, path? (.csv, or .xlsx for an Excel workbook), separator?: \",\" | \"\\t\"} → {csv, rows, cols, path?}")
             .interactive(|_| Ok(Box::new(ExportM::default()))),
     ]
 }
@@ -69,24 +69,6 @@ fn align_value(v: &Value) -> Option<u8> {
     Some(vert * 3 + horiz + 1)
 }
 
-/// A lineweight parameter: millimetres, or ByBlock / ByLayer / Default.
-fn lineweight_value(v: &Value) -> Option<Lineweight> {
-    if let Some(mm) = v.as_f64() {
-        if !(mm.is_finite() && (0.0..=2.11).contains(&mm)) {
-            return None;
-        }
-        let want = (mm * 100.0).round() as u16;
-        // The nearest standard lineweight.
-        return Lineweight::STANDARD.iter().min_by_key(|w| w.abs_diff(want)).map(|w| Lineweight::Mm100(*w));
-    }
-    match v.as_str()?.trim().to_ascii_lowercase().as_str() {
-        "byblock" => Some(Lineweight::ByBlock),
-        "bylayer" => Some(Lineweight::ByLayer),
-        "default" => Some(Lineweight::Default),
-        s => s.trim_end_matches("mm").trim().parse::<f64>().ok().and_then(|mm| lineweight_value(&json!(mm))),
-    }
-}
-
 fn apply_border(b: &mut CellBorder, v: &Value) -> std::result::Result<(), String> {
     if let Some(on) = v.as_bool() {
         b.visible = on;
@@ -99,7 +81,7 @@ fn apply_border(b: &mut CellBorder, v: &Value) -> std::result::Result<(), String
         b.color = color_value(c).ok_or_else(|| format!("invalid border color {c}"))?;
     }
     if let Some(w) = v.get("lineweight") {
-        b.lineweight = lineweight_value(w).ok_or_else(|| format!("invalid lineweight {w}"))?;
+        b.lineweight = crate::cmd::layer::parse_lw(w)?;
     }
     Ok(())
 }
@@ -578,6 +560,9 @@ fn write_text(path: &str, text: &str) -> Result<()> {
 
 fn run_export(s: &mut Session, p: &Value) -> Result<Value> {
     let id = "tableexport";
+    if let Some(path) = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()) {
+        super::super::exchange::guard_output(s, id, p, path)?;
+    }
     let h = table_handle(s, p, id)?;
     let t = match s.doc()?.entity(h).map(|e| &e.kind) {
         Some(EntityKind::Table(t)) => t.clone(),

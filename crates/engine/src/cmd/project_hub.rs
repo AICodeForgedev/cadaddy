@@ -445,7 +445,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("project.delete", "Delete Project", run_delete)
             .files()
-            .params("{path?: project folder (default: the open project), confirm: true} → {deleted, bytes}: removes the folder and everything in it for good; refused without confirm: true")
+            .params("{path?: project folder (default: the open project), confirm: true, discard?: true (delete although a drawing of it has unsaved changes), deleteUnmanaged?: true (an agent: also the files its manifest doesn't list)} → {deleted, bytes}: removes the folder and everything in it for good; refused without confirm: true, and (a dry run says what it would take: wouldDelete) while a drawing of it has unsaved changes or, for an agent, the folder holds files the project doesn't manage")
             .enabled(always)
             .noundo(),
         CommandSpec::new("project.company.list", "Company Standards", run_company_list)
@@ -552,7 +552,7 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "project.delete";
     let dir = project_dir(s, p, cmd)?;
     let m = project::read_manifest(&dir).map_err(|e| bad(cmd, format!("`{dir}` is not a project folder ({e}); nothing was deleted")))?;
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) && crate::agent::writes_allowed() {
         return Err(bad(
             cmd,
             format!(
@@ -561,13 +561,86 @@ fn run_delete(s: &mut Session, p: &Value) -> Result<Value> {
             ),
         ));
     }
+    let discard = p.get("discard").and_then(Value::as_bool) == Some(true);
+    let unsaved: Vec<String> =
+        s.docs.iter().filter(|d| d.is_dirty() && d.path.as_deref().is_some_and(|x| project::in_project(&dir, x))).map(|d| d.title.clone()).collect();
+    let (foreign, foreign_more) = unmanaged_files(&dir, &m);
+    let bytes = project::dir_size(&dir);
+    if !crate::agent::writes_allowed() {
+        // A dry run says what it would take, and takes nothing.
+        return Ok(
+            json!({ "wouldDelete": { "path": dir, "bytes": bytes, "unsavedDrawings": unsaved, "unmanagedFiles": foreign, "unmanagedMore": foreign_more } }),
+        );
+    }
+    if !unsaved.is_empty() && !discard {
+        return Err(bad(
+            cmd,
+            format!(
+                "unsaved changes in {}: save them (document.close save: true), or pass discard: true to delete the project without them; nothing was deleted",
+                unsaved.join(", ")
+            ),
+        ));
+    }
+    if (!foreign.is_empty() || foreign_more > 0) && s.agent.from_agent && p.get("deleteUnmanaged").and_then(Value::as_bool) != Some(true) {
+        let more = if foreign_more > 0 { format!(" and {foreign_more} more") } else { String::new() };
+        return Err(bad(
+            cmd,
+            format!(
+                "the folder holds files the project doesn't manage ({}{more}); nothing was deleted: move them out, or pass deleteUnmanaged: true to delete them too",
+                foreign.join(", ")
+            ),
+        ));
+    }
     if is_open(s, &dir) {
         project::close_project_state(s, false)?;
     }
-    let bytes = project::dir_size(&dir);
     std::fs::remove_dir_all(&dir).map_err(|e| other(format!("cannot delete {dir}: {e}")))?;
     unregister(s, &dir);
     Ok(json!({ "deleted": m.name, "path": dir, "bytes": bytes }))
+}
+
+/// Files under a project folder that its manifest doesn't manage (not `project.json`, not a
+/// listed drawing or file, nothing in a hidden folder): the first few, and how many more.
+fn unmanaged_files(dir: &str, m: &project::ProjectManifest) -> (Vec<String>, usize) {
+    const LISTED: usize = 20;
+    const WALKED: usize = 100_000;
+    let managed: std::collections::HashSet<String> = m.drawings.iter().map(|d| d.path.replace('\\', "/")).collect();
+    let root = std::path::Path::new(dir);
+    let mut stack = vec![root.to_path_buf()];
+    let (mut listed, mut more, mut seen) = (Vec::new(), 0usize, 0usize);
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            seen += 1;
+            if seen > WALKED {
+                return (listed, more.saturating_add(1));
+            }
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(md) = e.metadata() else { continue };
+            if md.is_dir() {
+                stack.push(e.path());
+                continue;
+            }
+            let rel = e.path().strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or(name);
+            if rel == "project.json"
+                || managed.contains(&rel)
+                // A managed drawing's backup: `plan.bak` for a DWG, `plan.dxf.bak` for the others.
+                || rel.strip_suffix(".bak").is_some_and(|r| managed.contains(r) || managed.iter().any(|m| m.rsplit_once('.').is_some_and(|(stem, _)| stem == r)))
+            {
+                continue;
+            }
+            if listed.len() < LISTED {
+                listed.push(rel);
+            } else {
+                more += 1;
+            }
+        }
+    }
+    listed.sort();
+    (listed, more)
 }
 
 fn std_params<'a>(p: &'a Value, cmd: &str) -> Result<(&'a str, &'a str)> {

@@ -3074,3 +3074,147 @@
 	Remove Company Standard	Retirer la norme de l'entreprise
 	Set Company Standard	Définir la norme de l'entreprise
 	Standards	Normes
+	 ({n} shown; Export writes them all)	 ({n} affichées ; Exporter les écrit toutes)
+	(no picture)	(pas d’image)
+	A false alarm	Une fausse alerte
+	Confidence:	Confiance :
+	Current room	Pièce actuelle
+	Defer	Différer
+	Expected:	Attendu :
+	False alarms: {rate}	Fausses alertes : {rate}
+	Findings ({n})	Constats ({n})
+	Found:	Trouvé :
+	From the 2D drawing	Du dessin 2D
+	From the BIM model	Du modèle BIM
+	Issue:	Problème :
+	It is a real error	C’est une vraie erreur
+	Leave it for a field decision	Laisser pour une décision sur chantier
+	No file chosen. Type: automation.takeoff {params}	Aucun fichier choisi. Tapez : automation.takeoff {params}
+	No findings to review.	Aucun constat à examiner.
+	No run yet: choose a scope and trades, then Start.	Pas encore d’exécution : choisissez la portée et les corps d’état, puis Démarrer.
+	No takeoff yet: Refresh runs it.	Pas encore de métré : Actualiser le lance.
+	Overall	Global
+	Refresh	Actualiser
+	Reject	Rejeter
+	Resume	Reprendre
+	Rules ({on} of {all} on)	Règles ({on} sur {all} actives)
+	Scope:	Portée :
+	Scores	Scores
+	Show answered	Afficher les réponses
+	Takeoff	Métré
+	Takeoff written to {path}	Métré écrit dans {path}
+	Trades:	Corps d’état :
+	done	terminé
+	judging	en évaluation
+	project	projet
+	waiting for an agent	en attente d’un agent
+	{done} of {total} areas, {state}	{done} sur {total} zones, {state}
+	{source}: {n} lines	{source} : {n} lignes
+	Automation Takeoff	Métré d’automatisation
+	Cancel Validation Run	Annuler la validation
+	Change a Validation Rule	Modifier une règle de validation
+	Validation Areas	Zones de validation
+	Validation Evidence Packet	Dossier de preuves de validation
+	Validation Prescreen	Prévérification de la validation
+	Validation Rules	Règles de validation
+	Validate	Valider
+	Automation	Automatisation
+	Model Checks	Contrôles du modèle
+	Qty	Qté
+	Elements	Éléments
+	Fire	Incendie
+	Validate: waiting for an agent	Valider : en attente d’un agent
+	Validate Model Against Prints (Agent)	Valider le modèle par rapport aux plans (agent)
+	Next Validation Packet	Paquet de validation suivant
+	Report Validation Findings	Signaler les constats de validation
+	Validation Run Status	État de l’exécution de validation
+	Plant Validation Errors	Insérer des erreurs de validation
+	Model Fidelity	Fidélité du modèle
+	Model Fidelity Rules	Règles de fidélité du modèle
+	Model Fidelity Report	Rapport de fidélité du modèle
+	Fidelity	Fidélité
+	Auto	Auto
+	Floor	Étage
+	Detail	Détail
+	Print Inventory	Inventaire des plans
+	Piece	Pièce
+	Raceway run	Tronçon de conduit
+	Connects to	Relié à
+	Height AFF	Hauteur au-dessus du sol fini
+	Host wall	Mur hôte
+	Wall face	Face du mur
+	Outlet box	Boîte de sortie
+	Fed by	Alimenté par
+	Count Model Pieces	Compter les pièces du modèle
+	Edit Model Piece	Modifier une pièce du modèle
+	Walk the Feed	Suivre l'alimentation
+	Lay Out Trade Pieces	Disposer les pièces par corps d'état
+	Trade Pieces Report	Rapport des pièces par corps d'état
+	Trade Piece Rules	Règles des pièces par corps d'état
+	Read Trade Documents	Lire les documents des corps d'état
+	Object Forms	Formulaires d'objets
+	Create Object Forms	Créer les formulaires d'objets
+	Edit Object Form Field	Modifier un champ du formulaire d'objet
+	Record Object Field Value	Enregistrer la valeur d'un champ d'objet
+	Object Form Log	Journal des formulaires d'objets
+	Revert Object Form Change	Annuler une modification du formulaire d'objet
+	Promote Object Form to Template	Promouvoir le formulaire d'objet en modèle
+	Object Completeness	Complétude des objets
+	Object Form	Formulaire d'objet
+	Wall Faces	Faces de mur
+	Place Devices on Wall Faces	Placer les appareils sur les faces de mur
+	Devices Follow Their Walls	Les appareils suivent leurs murs
+	Room Layout	Disposition de la pièce
+	Tie a Device to an Object	Lier un appareil à un objet
+	Add Casework or Appliance Object	Ajouter un objet mobilier ou appareil ménager
+	Conduit Routing Report	Rapport de tracé des conduits
+	Reroute Conduit	Retracer les conduits
+	Conduit Takeoff	Métré des conduits
+	Wire Pull Schedule	Tableau de tirage des câbles
+	Conduit Cut and Bend List	Liste de coupe et de cintrage des conduits
+	Material Release List	Liste de lancement des matériaux
+	Field Paperwork Sheets	Feuilles de documents de chantier
+	Scope by Trade	Périmètre par corps de métier
+	Value Engineering Scenario	Scénario d'ingénierie de la valeur
+	Value Engineering Decision	Décision d'ingénierie de la valeur
+	Read Drawn Dimensions	Lire les cotes dessinées
+	Underground Plan Report	Rapport du plan des réseaux enterrés
+	Update Model from Plans	Mettre à jour le modèle depuis les plans
+	Load Calculation	Calcul des charges
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Un rapport d'incident a été conservé sur cet ordinateur : Aide > Signaler un problème le propose.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Une copie de récupération du dessin aux modifications non enregistrées a été enregistrée automatiquement.
+	Autosave failed	Échec de l'enregistrement automatique
+	Autosave failed: {message}	Échec de l'enregistrement automatique : {message}
+	Backup copies are off, so the current file will be replaced.	Les copies de sauvegarde sont désactivées : le fichier actuel sera remplacé.
+	Backup copy	Copie de sauvegarde
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy n'a pas pu écrire de copie de récupération : les modifications récentes seraient perdues si l'application s'arrêtait maintenant.
+	CADaddy has to close	CADaddy doit se fermer
+	Close CADaddy	Fermer CADaddy
+	Create backup copy with each save	Créer une copie de sauvegarde à chaque enregistrement
+	DXF keeps them. Use Save As to keep them in the drawing.	Le DXF les conserve. Utilisez Enregistrer sous pour les garder dans le dessin.
+	Details	Détails
+	Dismiss	Ignorer
+	Drawing Recovery offers them at the next start.	La récupération de dessins les proposera au prochain démarrage.
+	Internal error	Erreur interne
+	No drawing needed a new recovery copy.	Aucun dessin n'avait besoin d'une nouvelle copie de récupération.
+	Part of CADaddy failed, and the app kept running.	Une partie de CADaddy a échoué, et l'application a continué de fonctionner.
+	Part of CADaddy keeps failing, so it can't continue.	Une partie de CADaddy échoue sans cesse : il ne peut pas continuer.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Des copies de récupération de {count} dessins aux modifications non enregistrées ont été enregistrées automatiquement.
+	Save Anyway	Enregistrer quand même
+	Save cancelled: {path} was not changed.	Enregistrement annulé : {path} n'a pas été modifié.
+	Save your work and restart CADaddy.	Enregistrez votre travail et redémarrez CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Enregistrez votre travail. L'enregistrement automatique réessaiera après l'intervalle SAVETIME ; son dossier se trouve dans Options.
+	Saving {name} will remove content	L'enregistrement de {name} supprimera du contenu
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Le fichier actuel ne semble pas complet : {name} reste tel quel et le fichier actuel sera remplacé.
+	The current file is kept as {name} until the next save.	Le fichier actuel est conservé sous {name} jusqu'au prochain enregistrement.
+	This format can't keep these objects yet: {objects}.	Ce format ne peut pas encore conserver ces objets : {objects}.
+	{count} more types	{count} autres types
+	Review by Impact	Revue par impact
+	Resolve Review Item by Impact	Résoudre l'élément de revue par impact
+	Open Review Item	Ouvrir l'élément de revue
+	Review Audit Trail	Journal d'audit de la revue
+	Accuracy Trend	Tendance de précision
+	Measure Build Accuracy	Mesurer la précision du modèle
+	Export for AR	Exporter pour la RA
+	AR Export Rules	Règles d'export pour la RA
+	Panel Breakers	Disjoncteurs du tableau

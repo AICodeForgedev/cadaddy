@@ -147,6 +147,35 @@ fn doors_and_windows_take_their_opening_sizes() {
 }
 
 #[test]
+fn a_window_gap_a_demising_wall_meets_is_two_windows() {
+    // Two rooms (x 0-20 and 20.5-40) whose south wall has one 12' gap (x 14-26) that the 6" wall
+    // between them meets end-on: a pier there, a window each side, none across it.
+    let mut d = Drawing::new_imperial();
+    for (a, b) in [((0., 0.), (14., 0.)), ((26., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))] {
+        line(&mut d, a, b);
+    }
+    for (a, b) in
+        [((0.5, 0.5), (14., 0.5)), ((26., 0.5), (39.5, 0.5)), ((39.5, 0.5), (39.5, 9.5)), ((39.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))]
+    {
+        line(&mut d, a, b);
+    }
+    for x in [20.0, 20.5] {
+        line(&mut d, (x, 0.5), (x, 9.5));
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!(r["windows"], json!(2), "{r}");
+    let mut spans: Vec<(f64, f64)> = made(&s, "window")
+        .iter()
+        .map(|g| g.vertices.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.x), hi.max(v.x))))
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!(spans.len() == 2 && (spans[0].0 - 168.0).abs() < 1e-3 && (spans[0].1 - 240.0).abs() < 1e-3, "{spans:?}");
+    assert!((spans[1].0 - 246.0).abs() < 1e-3 && (spans[1].1 - 312.0).abs() < 1e-3, "{spans:?}");
+}
+
+#[test]
 fn the_building_follows_the_plan_while_associative() {
     let mut s = room();
     s.execute("wallgen", &json!({"rules": rules()})).unwrap();
@@ -163,8 +192,11 @@ fn the_building_follows_the_plan_while_associative() {
         .collect();
     assert_eq!(east.len(), 2);
     s.execute("move", &json!({"handles": east, "from": [0, 0], "to": [24, 0]})).unwrap();
+    // The model is behind the plan until it is updated (or a command reads it).
+    assert!((wall_x(&s) - 240.0).abs() < 1e-6, "not rebuilt with every edit: {}", wall_x(&s));
+    s.execute("model.update", &json!({})).unwrap();
     assert!((wall_x(&s) - 264.0).abs() < 1e-6, "rebuilt with the plan: {}", wall_x(&s));
-    // One undo takes back the move and the rebuild together.
+    // One undo takes back the move and the rebuild together (the update made no undo step).
     s.undo().unwrap();
     assert!((wall_x(&s) - 240.0).abs() < 1e-6);
     // Not associative: the plan moves alone.
@@ -462,4 +494,80 @@ fn door_blocks_sit_in_their_openings() {
     assert!((flat_area(f, 0.0) - 480.0 * 360.0).abs() < 0.5, "{}", flat_area(f, 0.0));
     let ceiling = made(&s, "ceiling");
     assert!(near(plan_box(ceiling.first().unwrap()), (0.0, 0.0, 480.0, 360.0)));
+}
+
+/// Two units' entry doors either side of a demising wall, drawn as prints draw them: each leaf a
+/// thin closed outline standing open against the demising wall, an overhead line dashed across
+/// the openings; and a bath door whose short jamb (under a foot) is no wall piece.
+#[test]
+fn doors_drawn_open_against_a_wall_are_doors_not_walls() {
+    let mut d = Drawing::new_imperial();
+    let mut add = |kind: EntityKind| {
+        let h = Handle(d.handseed.max(0x100));
+        d.handseed = h.0 + 1;
+        let mut e = Entity::new(h, kind);
+        e.common.layer = "A-WALL".into();
+        d.model.push(e);
+    };
+    let v = |x: f64, y: f64| json!({"p": {"x": x * 12.0, "y": y * 12.0}, "bulge": 0.0, "start_width": 0.0, "end_width": 0.0});
+    let poly = |pts: Vec<Value>, closed: bool| -> EntityKind {
+        EntityKind::LwPolyline(serde_json::from_value(json!({"vertices": pts, "closed": closed})).unwrap())
+    };
+    let ln = |a: (f64, f64), b: (f64, f64)| {
+        EntityKind::Line(Line { a: Vec3 { x: a.0 * 12.0, y: a.1 * 12.0, z: 0.0 }, b: Vec3 { x: b.0 * 12.0, y: b.1 * 12.0, z: 0.0 } })
+    };
+    let rect = |x0: f64, y0: f64, x1: f64, y1: f64| poly(vec![v(x0, y0), v(x1, y0), v(x1, y1), v(x0, y1)], true);
+    // Feet. The corridor wall (faces y 10 and 10.5) with the entries' opening x 11.5–18.5; the
+    // demising wall (faces x 14.75 and 15.25) up to it from y 0.
+    for (a, b) in [((0., 10.), (11.5, 10.)), ((0., 10.5), (11.5, 10.5)), ((18.5, 10.), (30., 10.)), ((18.5, 10.5), (30., 10.5))] {
+        add(ln(a, b));
+    }
+    for (a, b) in [((14.75, 0.), (14.75, 10.)), ((15.25, 0.), (15.25, 10.))] {
+        add(ln(a, b));
+    }
+    // Each 3' leaf (1.8" thick) open against the demising wall, 4" off its face, and its swing
+    // from the closed end on the corridor wall's line to the open end.
+    let quarter = |c: (f64, f64), from: f64, to: f64| -> Vec<Value> {
+        (0..=9).map(|i| from + (to - from) * f64::from(i) / 9.0).map(|a| v(c.0 + 3.0 * a.cos(), c.1 + 3.0 * a.sin())).collect()
+    };
+    use std::f64::consts::PI;
+    add(rect(14.25, 7.0, 14.4, 10.0));
+    add(poly(quarter((14.4, 10.0), PI, 1.5 * PI), false));
+    add(rect(15.6, 7.0, 15.75, 10.0));
+    add(poly(quarter((15.6, 10.0), 2.0 * PI, 1.5 * PI), false));
+    // An overhead line across the opening, dashed in 18" pieces 9" apart, 3.6" off a finish line.
+    for i in 0..3 {
+        let x = 11.6 + 2.25 * f64::from(i);
+        add(ln((x, 10.15), (x + 1.5, 10.15)));
+    }
+    add(ln((11.5, 10.45), (18.5, 10.45)));
+    // A bath: its wall (faces x 25 and 25.5) from y 0 to 4, a 3' door to y 7 hinged at a 9"
+    // jamb that meets the bath's north wall (faces y 7.75 and 8.25, x 20–25.5); the leaf open
+    // along y 7.
+    for (a, b) in [((25., 0.), (25., 4.)), ((25.5, 0.), (25.5, 4.)), ((25., 7.), (25., 7.75)), ((25.5, 7.), (25.5, 7.75))] {
+        add(ln(a, b));
+    }
+    for (a, b) in [((20., 7.75), (25., 7.75)), ((20., 8.25), (25.5, 8.25)), ((25.5, 7.75), (25.5, 8.25))] {
+        add(ln(a, b));
+    }
+    add(rect(22.0, 6.85, 25.0, 7.0));
+    add(poly(quarter((25.0, 7.0), 1.5 * PI, PI), false));
+    let mut s = Session::empty();
+    s.open_drawing(d, "Plan", None);
+    let r = s.execute("wallgen", &json!({"rules": rules()})).unwrap();
+    assert_eq!(r["doors"], json!(3), "{r}");
+    let walls = made(&s, "wall");
+    // No wall between a leaf and the demising wall (the stubs a leaf's side made with its face).
+    let stub = walls.iter().find(|m| {
+        let (x0, y0, x1, y1) = plan_box(m);
+        x1 > 14.3 * 12.0 && x0 < 14.7 * 12.0 && y0 > 6.0 * 12.0 && y1 < 10.0 * 12.0 && (x1 - x0) < 12.0
+            || x1 > 15.3 * 12.0 && x0 < 15.7 * 12.0 && y0 > 6.0 * 12.0 && y1 < 10.0 * 12.0 && (x1 - x0) < 12.0
+    });
+    assert!(stub.is_none(), "{:?}", stub.map(plan_box));
+    // The openings are open at door height (no wall across them from the dashed line), and so is
+    // the bath door's.
+    assert!(!wall_at(&walls, 13.0 * 12.0, 10.25 * 12.0, 40.0), "the west entry is open");
+    assert!(!wall_at(&walls, 17.0 * 12.0, 10.25 * 12.0, 40.0), "the east entry is open");
+    assert!(!wall_at(&walls, 25.25 * 12.0, 5.5 * 12.0, 40.0), "the bath door is open");
+    assert!(wall_at(&walls, 5.0 * 12.0, 10.25 * 12.0, 40.0) && wall_at(&walls, 25.25 * 12.0, 2.0 * 12.0, 40.0), "the walls beside them");
 }

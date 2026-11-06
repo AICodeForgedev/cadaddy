@@ -1,0 +1,13 @@
+[package]
+name = "cadaddy-memcount"
+description = "Test support: a global allocator that counts the bytes the program holds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# The one crate that may use `unsafe` for a counting allocator: `GlobalAlloc` is an unsafe trait.
+# It forwards every call to the system allocator and only adds to a counter. Every other lint is
+# the workspace's. Only tests depend on it.
+[lints.rust]
+unsafe_code = "allow"

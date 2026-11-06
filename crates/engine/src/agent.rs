@@ -246,6 +246,36 @@ impl Session {
         None
     }
 
+    /// The rails at the command itself, for the routes that reach it without passing
+    /// [`Session::guard_call`]: a command typed at the command line (its file name is a later
+    /// prompt), LISP `(command …)` at any depth, a script, the prompts' last answer. Checked
+    /// again for an outermost call, it says the same as the first check. An agent's save, WBLOCK
+    /// or EXPORT over another file, and its close of a drawing with changes, wait for the user
+    /// (or are refused when nobody can be asked).
+    pub(crate) fn guard_run(&mut self, cmd: &str, params: &Value) -> Result<()> {
+        if !self.agent.from_agent || self.agent.dry_run {
+            return Ok(());
+        }
+        if self.agent.confirm {
+            if let Some(question) = self.needs_confirmation(cmd, params) {
+                return Err(EngineError::Other(self.ask_user(cmd, params, question)));
+            }
+            return Ok(());
+        }
+        if let Some(path) = self.overwrite_target(cmd, params) {
+            return Err(bad(
+                cmd,
+                format!("{path} already exists and is not this drawing's own file: choose another name, or pass force:true to replace it"),
+            ));
+        }
+        if self.agent.headless && matches!(cmd, "close" | "closeall") && self.unsaved_to_close(cmd, params).is_some() {
+            // Nobody to ask, and the close tools (which take save / discard) are the way to say so.
+            let doc_cmd = if cmd == "close" { "document.close" } else { "document.closeall" };
+            return Err(bad(cmd, format!("a drawing to close has unsaved changes: use {doc_cmd} with save: true or discard: true")));
+        }
+        Ok(())
+    }
+
     /// Park an agent's call for the user's Allow/Deny; the message to hand back to the agent.
     pub fn ask_user(&mut self, command: &str, params: &Value, question: String) -> String {
         let message = format!("Waiting for the user: {question} (they answer in CADaddy; agent.confirm turns this off)");
@@ -263,7 +293,9 @@ impl Session {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "etransmit" | "render") || bool_or(params, "force", false) {
+            if !matches!(cmd, "saveas" | "qsave" | "wblock" | "export" | "plot" | "exportpdf" | "etransmit" | "render")
+                || bool_or(params, "force", false)
+            {
                 return None;
             }
             let given = str_param(params, "path").or_else(|| str_param(params, "output")).map(str::trim).filter(|p| !p.is_empty())?;
@@ -293,16 +325,28 @@ impl Session {
                     None => format!("an agent wants to save over {path}"),
                 })
             }
-            "close" => {
-                let i = params.get("index").and_then(Value::as_u64).map_or(self.active, |i| i as usize);
-                let d = self.docs.get(i)?;
-                d.is_dirty().then(|| format!("an agent wants to close {} without saving its changes", d.title))
+            "wblock" | "export" => {
+                let path = self.overwrite_target(cmd, params)?;
+                Some(format!("an agent wants to replace {path} with its {cmd} output"))
             }
-            "closeall" => {
-                self.docs.iter().any(|d| d.is_dirty()).then(|| "an agent wants to close every drawing, some with unsaved changes".to_string())
+            "close" | "closeall" => self.unsaved_to_close(cmd, params),
+            "project.delete" if params.get("confirm").and_then(Value::as_bool) == Some(true) => {
+                let dir = str_param(params, "path").map(str::to_string).or_else(|| self.project.as_ref().map(|ps| ps.manifest.dir.clone()))?;
+                Some(format!("an agent wants to delete the project folder {dir} and everything in it"))
             }
             _ => None,
         }
+    }
+
+    /// What closing (`close` of one drawing, or `closeall`) would throw away: the question for
+    /// the user, when a drawing to close has unsaved changes.
+    fn unsaved_to_close(&self, cmd: &str, params: &Value) -> Option<String> {
+        if cmd == "closeall" {
+            return self.docs.iter().any(|d| d.is_dirty()).then(|| "an agent wants to close every drawing, some with unsaved changes".to_string());
+        }
+        let i = params.get("index").and_then(Value::as_u64).map_or(self.active, |i| i as usize);
+        let d = self.docs.get(i)?;
+        d.is_dirty().then(|| format!("an agent wants to close {} without saving its changes", d.title))
     }
 
     /// Run `cmd` and put everything back: what it would change, and its result.

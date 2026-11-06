@@ -19,10 +19,8 @@
 //!   crashing.
 //!
 //! These bound the input- and output-size variants. A small file that declares a huge internal
-//! table or section can still make the dependency allocate before any size is known; fully fixing
-//! that requires an upstream fix in `acadrust` (validate declared sizes against a decoded-memory
-//! budget) or running the decode in a separate worker with an OS memory limit. The limits here
-//! keep the blast radius bounded in the meantime.
+//! table or section can still make the dependency allocate before any size is known, so the app
+//! and the CLI run both directions in a child process ([`worker`]): what that kills is the child.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -64,6 +62,23 @@ fn mb(n: u64) -> String {
     if m >= 100.0 { format!("{m:.0} MB") } else { format!("{m:.1} MB") }
 }
 
+/// The reader library's error text in plain words: a file cut short and a missing required part
+/// say so, and the library's "returning partial document" wording never reaches the user (nothing
+/// opened when this is shown).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn plain_error(e: &str) -> String {
+    let lower = e.to_ascii_lowercase();
+    if lower.contains("failed to fill whole buffer") || lower.contains("unexpected end") || lower.contains("header read failed") {
+        "the DWG file is cut short (its header is incomplete); nothing could be read".to_string()
+    } else if let Some(part) = lower.find("section '").map(|i| &e[i + 9..]).and_then(|r| r.split('\'').next()).filter(|_| lower.contains("not found"))
+    {
+        let part = part.strip_prefix("AcDb:").unwrap_or(part).to_ascii_lowercase();
+        format!("the DWG file is damaged: a required part ({part}) is missing")
+    } else {
+        e.replace(", returning partial document", "")
+    }
+}
+
 pub mod salvage;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -98,7 +113,7 @@ mod native {
                 acadrust::DwgReader::from_stream_with_options(Cursor::new(bytes), acadrust::DwgReadOptions::failsafe()).read_with_stats()
             })
             .map_err(|_| "the DWG reader failed on this file".to_string())?
-            .map_err(|e| format!("DWG: {e}"))
+            .map_err(|e| format!("DWG: {}", super::plain_error(&e.to_string())))
         };
         // Records read: none when the objects stream itself couldn't be read.
         let records = |o: &acadrust::ReadOutcome| {
@@ -127,7 +142,7 @@ mod native {
         // read (a damaged header or section map, or not a DWG at all), nothing was read.
         if !outcome.stats.record_stream_read {
             let why = outcome.stats.diagnostics.first().map(|d| d.message.trim_start_matches("Failsafe: ").to_string());
-            return Err(format!("DWG: {}", why.unwrap_or_else(|| "the file's objects couldn't be read".to_string())));
+            return Err(format!("DWG: {}", why.map_or_else(|| "the file's objects couldn't be read".to_string(), |w| super::plain_error(&w))));
         }
         let mut notes = read_notes(&outcome.stats);
         if !salvaged.is_empty() {
@@ -945,6 +960,30 @@ mod native {
 #[cfg(not(target_arch = "wasm32"))]
 pub use native::{custom_records, dwg_to_dxf, dwg_to_dxf_noted, dwg_to_dxf_with, dxf_to_dwg, dxf_to_dwg_as, dxf_to_dwg_named};
 
+/// The bridge in a child process, so a decoder that dies ends one open or save, not the app.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod worker;
+#[cfg(not(target_arch = "wasm32"))]
+pub use worker::{WORKER_ARG, crash_worker_for_test, decode, encode_named, serve_if_asked, use_own_worker, use_worker};
+
+/// There's no worker in the web build.
+#[cfg(target_arch = "wasm32")]
+pub const WORKER_ARG: &str = "--dwg-worker";
+#[cfg(target_arch = "wasm32")]
+pub fn serve_if_asked() -> Option<i32> {
+    None
+}
+#[cfg(target_arch = "wasm32")]
+pub fn use_own_worker() {}
+#[cfg(target_arch = "wasm32")]
+pub fn decode(bytes: &[u8], limits: Limits) -> Result<(Vec<u8>, Vec<String>), String> {
+    dwg_to_dxf_noted(bytes, limits)
+}
+#[cfg(target_arch = "wasm32")]
+pub fn encode_named(dxf: &[u8], version: &str, linetypes: &[String]) -> Result<Vec<u8>, String> {
+    dxf_to_dwg_named(dxf, version, linetypes)
+}
+
 /// The error for a DWG version CADaddy can't write.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn unsupported(version: &str) -> String {
@@ -1219,5 +1258,29 @@ mod tests {
         assert_eq!(ls.iter().filter(|t| t.ends_with("COMPONENT")).count(), 5, "{ls:?}");
         assert!(ls.contains(&"LSDEFINITION") && !ls.contains(&"LSINTERNALCOMPONENT"), "{ls:?}");
         assert_eq!(notes, ["DWG: 3 DGN line style components that no line style definition uses were left out"]);
+    }
+
+    #[test]
+    fn reader_errors_are_plain_words() {
+        assert_eq!(
+            plain_error("file header read failed, returning partial document: IO error: failed to fill whole buffer"),
+            "the DWG file is cut short (its header is incomplete); nothing could be read"
+        );
+        assert_eq!(
+            plain_error("Failed to extract classes section: Parse error: Section 'AcDb:Classes' not found"),
+            "the DWG file is damaged: a required part (classes) is missing"
+        );
+        assert_eq!(plain_error("something else, returning partial document"), "something else");
+    }
+
+    #[test]
+    fn truncated_dwg_is_refused_in_plain_words() {
+        let dxf = "0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n5\n21\n5\n0\nENDSEC\n0\nEOF\n";
+        let dwg = dxf_to_dwg(dxf.as_bytes()).unwrap();
+        for keep in [16, dwg.len() / 2] {
+            if let Err(e) = dwg_to_dxf_noted(&dwg[..keep], Limits::DEFAULT) {
+                assert!(!e.contains("partial document") && !e.contains("IO error"), "{keep}: {e}");
+            }
+        }
     }
 }

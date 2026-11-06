@@ -1706,7 +1706,8 @@ fn entity(w: &mut W, d: &Drawing, e: &Entity, owner: &str, paper: bool, cx: &Ctx
             w.i(69, i64::from(v.id));
             // The view centre is in display coordinates (the target is the origin), which the
             // twist turns.
-            let twist = if v.twist.is_finite() { v.twist } else { 0.0 };
+            // Within one turn, so a hostile twist (from JSON or MCP) writes a sane angle.
+            let twist = cadaddy_geom::norm_angle(v.twist);
             w.p2(12, v.view_center.rotate(twist));
             w.f(45, v.view_height);
             if twist != 0.0 {
@@ -2614,7 +2615,7 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         layers: HashMap::new(),
         reactors: hatch_reactors(d),
         materials: HashMap::new(),
-        kept: d.kept_handles.clone(),
+        kept: (*d.kept_handles).clone(),
         used: std::iter::once(&d.model)
             .chain(d.layouts.iter().map(|l| &l.entities))
             .chain(d.blocks.values().map(|b| &b.entities))
@@ -3204,7 +3205,8 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
         }
         w.f(43, 0.0);
         w.f(44, 0.0);
-        w.f(50, if v.twist.is_finite() { v.twist.to_degrees() } else { 0.0 });
+        // Within one turn, so a hostile twist writes a sane angle.
+        w.f(50, cadaddy_geom::norm_angle(v.twist).to_degrees());
         w.i(71, 0);
         w.i(281, 0);
         // A UCS kept with the view: its origin and axes (a named one also by name, in xdata).
@@ -3714,8 +3716,10 @@ fn tags_for(d: &Drawing, version: Version, target: Version, dwg: bool, bridge: b
             w.s(7, &page.plot_style_table);
             w.i(75, if page.scale_to_fit { 0 } else { 16 });
             w.f(147, scale);
-            w.f(148, 0.0);
-            w.f(149, 0.0);
+            // The paper image origin the file had, else 0,0.
+            let origin = page.image_origin.filter(|o| o.is_finite()).unwrap_or(Vec2::ZERO);
+            w.f(148, origin.x);
+            w.f(149, origin.y);
             w.s(100, "AcDbLayout");
             w.s(1, name);
             w.i(70, flags);

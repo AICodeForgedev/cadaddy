@@ -3075,3 +3075,147 @@
 	Remove Company Standard	Удалить стандарт компании
 	Set Company Standard	Задать стандарт компании
 	Standards	Стандарты
+	 ({n} shown; Export writes them all)	 (показано {n}; экспорт запишет все)
+	(no picture)	(нет изображения)
+	A false alarm	Ложная тревога
+	Confidence:	Уверенность:
+	Current room	Текущее помещение
+	Defer	Отложить
+	Expected:	Ожидалось:
+	False alarms: {rate}	Ложные тревоги: {rate}
+	Findings ({n})	Находки ({n})
+	Found:	Найдено:
+	From the 2D drawing	Из 2D-чертежа
+	From the BIM model	Из BIM-модели
+	Issue:	Проблема:
+	It is a real error	Это настоящая ошибка
+	Leave it for a field decision	Оставить для решения на объекте
+	No file chosen. Type: automation.takeoff {params}	Файл не выбран. Введите: automation.takeoff {params}
+	No findings to review.	Нет находок для проверки.
+	No run yet: choose a scope and trades, then Start.	Проверок ещё нет: выберите область и разделы, затем «Начать».
+	No takeoff yet: Refresh runs it.	Подсчёта ещё нет: «Обновить» запускает его.
+	Overall	Итого
+	Refresh	Обновить
+	Reject	Отклонить
+	Resume	Продолжить
+	Rules ({on} of {all} on)	Правила (включено {on} из {all})
+	Scope:	Область:
+	Scores	Оценки
+	Show answered	Показать с ответом
+	Takeoff	Подсчёт
+	Takeoff written to {path}	Подсчёт записан в {path}
+	Trades:	Разделы:
+	done	готово
+	judging	оценивается
+	project	проект
+	waiting for an agent	ожидание агента
+	{done} of {total} areas, {state}	{done} из {total} зон, {state}
+	{source}: {n} lines	{source}: строк {n}
+	Automation Takeoff	Подсчёт автоматизации
+	Cancel Validation Run	Отменить проверку
+	Change a Validation Rule	Изменить правило проверки
+	Validation Areas	Зоны проверки
+	Validation Evidence Packet	Пакет доказательств проверки
+	Validation Prescreen	Предварительная проверка
+	Validation Rules	Правила проверки
+	Validate	Проверить
+	Automation	Автоматизация
+	Model Checks	Проверки модели
+	Qty	Кол-во
+	Elements	Элементы
+	Fire	Пожарная безопасность
+	Validate: waiting for an agent	Проверка: ожидание агента
+	Validate Model Against Prints (Agent)	Проверка модели по чертежам (агент)
+	Next Validation Packet	Следующий пакет проверки
+	Report Validation Findings	Сообщить результаты проверки
+	Validation Run Status	Состояние прогона проверки
+	Plant Validation Errors	Внедрить ошибки для проверки
+	Model Fidelity	Детализация модели
+	Model Fidelity Rules	Правила детализации модели
+	Model Fidelity Report	Отчёт о детализации модели
+	Fidelity	Детализация
+	Auto	Авто
+	Floor	Этаж
+	Detail	Подробно
+	Print Inventory	Опись чертежей
+	Piece	Деталь
+	Raceway run	Участок кабелепровода
+	Connects to	Соединено с
+	Height AFF	Высота от чистого пола
+	Host wall	Стена размещения
+	Wall face	Лицевая сторона стены
+	Outlet box	Монтажная коробка
+	Fed by	Питание от
+	Count Model Pieces	Подсчитать детали модели
+	Edit Model Piece	Изменить деталь модели
+	Walk the Feed	Пройти по питанию
+	Lay Out Trade Pieces	Разложить детали по видам работ
+	Trade Pieces Report	Отчёт по деталям видов работ
+	Trade Piece Rules	Правила деталей видов работ
+	Read Trade Documents	Прочитать документы видов работ
+	Object Forms	Формы объектов
+	Create Object Forms	Создать формы объектов
+	Edit Object Form Field	Изменить поле формы объекта
+	Record Object Field Value	Записать значение поля объекта
+	Object Form Log	Журнал форм объектов
+	Revert Object Form Change	Отменить изменение формы объекта
+	Promote Object Form to Template	Сделать форму объекта шаблоном
+	Object Completeness	Полнота объектов
+	Object Form	Форма объекта
+	Wall Faces	Грани стен
+	Place Devices on Wall Faces	Разместить устройства на гранях стен
+	Devices Follow Their Walls	Устройства следуют за стенами
+	Room Layout	Планировка помещения
+	Tie a Device to an Object	Привязать устройство к объекту
+	Add Casework or Appliance Object	Добавить объект мебели или бытового прибора
+	Conduit Routing Report	Отчёт о трассировке кабельных труб
+	Reroute Conduit	Перетрассировать кабельные трубы
+	Conduit Takeoff	Ведомость кабельных труб
+	Wire Pull Schedule	Ведомость протяжки проводов
+	Conduit Cut and Bend List	Ведомость резки и гибки труб
+	Material Release List	Ведомость отпуска материалов
+	Field Paperwork Sheets	Листы полевой документации
+	Scope by Trade	Объём работ по специальности
+	Value Engineering Scenario	Сценарий стоимостного инжиниринга
+	Value Engineering Decision	Решение по стоимостному инжинирингу
+	Read Drawn Dimensions	Прочитать начерченные размеры
+	Underground Plan Report	Отчёт по плану подземных сетей
+	Update Model from Plans	Обновить модель по планам
+	Load Calculation	Расчёт нагрузок
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Отчёт о сбое сохранён на этом компьютере: его предлагает Справка > Сообщить о проблеме.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Резервная копия чертежа с несохранёнными изменениями сохранена автоматически.
+	Autosave failed	Ошибка автосохранения
+	Autosave failed: {message}	Ошибка автосохранения: {message}
+	Backup copies are off, so the current file will be replaced.	Резервные копии отключены, поэтому текущий файл будет заменён.
+	Backup copy	Резервная копия
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy не удалось записать резервную копию, поэтому последние изменения будут потеряны, если приложение сейчас остановится.
+	CADaddy has to close	CADaddy должен закрыться
+	Close CADaddy	Закрыть CADaddy
+	Create backup copy with each save	Создавать резервную копию при каждом сохранении
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF их сохраняет. Используйте «Сохранить как», чтобы оставить их в чертеже.
+	Details	Подробности
+	Dismiss	Закрыть
+	Drawing Recovery offers them at the next start.	Восстановление чертежей предложит их при следующем запуске.
+	Internal error	Внутренняя ошибка
+	No drawing needed a new recovery copy.	Ни одному чертежу не потребовалась новая резервная копия.
+	Part of CADaddy failed, and the app kept running.	Часть CADaddy дала сбой, но приложение продолжает работать.
+	Part of CADaddy keeps failing, so it can't continue.	Часть CADaddy продолжает давать сбои, поэтому он не может продолжить работу.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Резервные копии чертежей с несохранёнными изменениями ({count}) сохранены автоматически.
+	Save Anyway	Всё равно сохранить
+	Save cancelled: {path} was not changed.	Сохранение отменено: {path} не изменён.
+	Save your work and restart CADaddy.	Сохраните работу и перезапустите CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Сохраните работу. Автосохранение повторит попытку через интервал SAVETIME; его папка указана в Параметрах.
+	Saving {name} will remove content	При сохранении {name} часть содержимого будет удалена
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Текущий файл выглядит неполным, поэтому {name} остаётся без изменений, а текущий файл будет заменён.
+	The current file is kept as {name} until the next save.	Текущий файл сохраняется как {name} до следующего сохранения.
+	This format can't keep these objects yet: {objects}.	Этот формат пока не может сохранить эти объекты: {objects}.
+	{count} more types	ещё типов: {count}
+	Review by Impact	Проверка по влиянию
+	Resolve Review Item by Impact	Решить пункт проверки по влиянию
+	Open Review Item	Открыть пункт проверки
+	Review Audit Trail	Журнал аудита проверки
+	Accuracy Trend	Динамика точности
+	Measure Build Accuracy	Измерить точность модели
+	Export for AR	Экспорт для AR
+	AR Export Rules	Правила экспорта для AR
+	Panel Breakers	Автоматы щита

@@ -241,6 +241,21 @@ fn a_stair_no_code_lets_be_built_is_left_out_not_built() {
     assert!(w.starts_with("S2:") && w.contains("146 risers") && w.contains("under the 4\" minimum"), "{r}");
 }
 
+/// Risers lawful but shallower than stairs are drawn (31 of 4⅝" over a 12' storey: a tread count
+/// misread, or a ladder) are built with a warning, never silently.
+#[test]
+fn a_stair_of_very_shallow_risers_is_built_with_a_warning() {
+    let mut s = plan();
+    s.execute("stairs.detect", &json!({"store": true})).unwrap();
+    s.execute("bspec.set", &json!({"spec": {"stairs": [{"name": "S1", "runs": [{"from": [100, 22], "to": [430, 22], "treads": 30}]}]}})).unwrap();
+    let s1 = by_name(&s.execute("stairs.list", &json!({})).unwrap(), "S1").clone();
+    let w = s1["warnings"].to_string();
+    assert!(w.contains("31 risers") && w.contains("shallower than stairs are drawn"), "{s1}");
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert!(r.get("stairs_left_out").is_none(), "lawful: built, {r}");
+    assert!(r["warnings"].to_string().contains("shallower than stairs are drawn"), "{r}");
+}
+
 /// A tread checked as it's printed: 10.994" reads 11" and meets the 11" minimum.
 #[test]
 fn a_tread_is_checked_as_printed() {

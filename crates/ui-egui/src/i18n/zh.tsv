@@ -3361,3 +3361,147 @@
 	Remove Company Standard	移除公司标准
 	Set Company Standard	设置公司标准
 	Standards	标准
+	 ({n} shown; Export writes them all)	（显示 {n} 行；导出会写入全部）
+	(no picture)	（无图片）
+	A false alarm	误报
+	Confidence:	置信度：
+	Current room	当前房间
+	Defer	推迟
+	Expected:	预期：
+	False alarms: {rate}	误报率：{rate}
+	Findings ({n})	发现 ({n})
+	Found:	实际：
+	From the 2D drawing	来自二维图形
+	From the BIM model	来自 BIM 模型
+	Issue:	问题：
+	It is a real error	确实是错误
+	Leave it for a field decision	留待现场决定
+	No file chosen. Type: automation.takeoff {params}	未选择文件。请输入：automation.takeoff {params}
+	No findings to review.	没有需要审阅的发现。
+	No run yet: choose a scope and trades, then Start.	尚无运行：选择范围和专业，然后点击“开始”。
+	No takeoff yet: Refresh runs it.	尚无工程量：点击“刷新”运行。
+	Overall	总体
+	Refresh	刷新
+	Reject	拒绝
+	Resume	继续
+	Rules ({on} of {all} on)	规则（已启用 {on}/{all}）
+	Scope:	范围：
+	Scores	得分
+	Show answered	显示已回答
+	Takeoff	工程量
+	Takeoff written to {path}	工程量已写入 {path}
+	Trades:	专业：
+	done	完成
+	judging	评判中
+	project	项目
+	waiting for an agent	等待智能体
+	{done} of {total} areas, {state}	{total} 个区域中的 {done} 个，{state}
+	{source}: {n} lines	{source}：{n} 行
+	Automation Takeoff	自动化工程量
+	Cancel Validation Run	取消验证运行
+	Change a Validation Rule	更改验证规则
+	Validation Areas	验证区域
+	Validation Evidence Packet	验证证据包
+	Validation Prescreen	验证预检
+	Validation Rules	验证规则
+	Validate	验证
+	Automation	自动化
+	Model Checks	模型检查
+	Qty	数量
+	Elements	图元
+	Fire	消防
+	Validate: waiting for an agent	验证：正在等待代理
+	Validate Model Against Prints (Agent)	对照图纸验证模型（代理）
+	Next Validation Packet	下一个验证包
+	Report Validation Findings	报告验证结果
+	Validation Run Status	验证运行状态
+	Plant Validation Errors	植入验证错误
+	Model Fidelity	模型精细度
+	Model Fidelity Rules	模型精细度规则
+	Model Fidelity Report	模型精细度报告
+	Fidelity	精细度
+	Auto	自动
+	Floor	楼层
+	Detail	细节
+	Print Inventory	图纸清单
+	Piece	构件
+	Raceway run	线管段
+	Connects to	连接到
+	Height AFF	距完成地面高度
+	Host wall	宿主墙
+	Wall face	墙面
+	Outlet box	出线盒
+	Fed by	供电来自
+	Count Model Pieces	统计模型构件
+	Edit Model Piece	编辑模型构件
+	Walk the Feed	追溯供电
+	Lay Out Trade Pieces	布置各工种构件
+	Trade Pieces Report	各工种构件报告
+	Trade Piece Rules	各工种构件规则
+	Read Trade Documents	读取各工种文件
+	Object Forms	对象表单
+	Create Object Forms	创建对象表单
+	Edit Object Form Field	编辑对象表单字段
+	Record Object Field Value	记录对象字段值
+	Object Form Log	对象表单日志
+	Revert Object Form Change	撤销对象表单更改
+	Promote Object Form to Template	将对象表单提升为模板
+	Object Completeness	对象完整度
+	Object Form	对象表单
+	Wall Faces	墙面
+	Place Devices on Wall Faces	将设备放置在墙面上
+	Devices Follow Their Walls	设备随墙移动
+	Room Layout	房间布局
+	Tie a Device to an Object	将设备关联到对象
+	Add Casework or Appliance Object	添加橱柜或电器对象
+	Conduit Routing Report	电线管走向报告
+	Reroute Conduit	重新布置电线管
+	Conduit Takeoff	电线管工程量
+	Wire Pull Schedule	穿线计划表
+	Conduit Cut and Bend List	电线管切割与弯管清单
+	Material Release List	材料发放清单
+	Field Paperwork Sheets	现场作业单图纸
+	Scope by Trade	按工种划分范围
+	Value Engineering Scenario	价值工程方案
+	Value Engineering Decision	价值工程决定
+	Read Drawn Dimensions	读取绘制的尺寸
+	Underground Plan Report	地下管线平面报告
+	Update Model from Plans	从平面图更新模型
+	Load Calculation	负荷计算
+	A crash report was kept on this computer: Help > Report a Problem offers it.	崩溃报告已保存在此计算机上：可在“帮助 > 报告问题”中找到。
+	A recovery copy of the drawing with unsaved changes was autosaved.	已自动保存含未保存更改的图形的恢复副本。
+	Autosave failed	自动保存失败
+	Autosave failed: {message}	自动保存失败：{message}
+	Backup copies are off, so the current file will be replaced.	备份副本已关闭，因此将替换当前文件。
+	Backup copy	备份副本
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy 无法写入恢复副本，如果应用现在停止，最近的更改将丢失。
+	CADaddy has to close	CADaddy 必须关闭
+	Close CADaddy	关闭 CADaddy
+	Create backup copy with each save	每次保存时创建备份副本
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF 会保留它们。请使用“另存为”将它们保留在图形中。
+	Details	详细信息
+	Dismiss	关闭
+	Drawing Recovery offers them at the next start.	下次启动时，“图形恢复”会提供它们。
+	Internal error	内部错误
+	No drawing needed a new recovery copy.	没有图形需要新的恢复副本。
+	Part of CADaddy failed, and the app kept running.	CADaddy 的一部分出错，应用仍在运行。
+	Part of CADaddy keeps failing, so it can't continue.	CADaddy 的一部分持续出错，无法继续。
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	已自动保存 {count} 个含未保存更改的图形的恢复副本。
+	Save Anyway	仍然保存
+	Save cancelled: {path} was not changed.	已取消保存：{path} 未更改。
+	Save your work and restart CADaddy.	请保存您的工作并重新启动 CADaddy。
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	请保存您的工作。自动保存会在 SAVETIME 间隔后重试；其文件夹在“选项”中。
+	Saving {name} will remove content	保存 {name} 将删除部分内容
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	当前文件看起来不完整，因此 {name} 保持不变，并将替换当前文件。
+	The current file is kept as {name} until the next save.	当前文件将保留为 {name}，直到下次保存。
+	This format can't keep these objects yet: {objects}.	此格式暂时无法保留这些对象：{objects}。
+	{count} more types	另外 {count} 种类型
+	Review by Impact	按影响审查
+	Resolve Review Item by Impact	按影响处理审查项
+	Open Review Item	打开审查项
+	Review Audit Trail	审查审计记录
+	Accuracy Trend	精度趋势
+	Measure Build Accuracy	测量构建精度
+	Export for AR	导出为增强现实
+	AR Export Rules	增强现实导出规则
+	Panel Breakers	配电盘断路器

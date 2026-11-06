@@ -1044,7 +1044,7 @@ fn oversized_dwg_and_dxf_are_rejected_early() {
     // Lines that aren't even group codes: the size is reported before anything is parsed.
     let text = "not a group code\nx\n".repeat(60);
     let e = cadaddy_dxf::parse_with_limit(text.as_bytes(), 50).unwrap_err();
-    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADaddy reads");
+    assert_eq!(e.to_string(), "drawing too large: 60 DXF group codes, more than the 50 CADaddy reads (set CADADDY_MAX_DXF_TAGS to read more)");
 }
 
 /// Issue #800: one unreadable object record doesn't fail the whole DWG. The reader skips it, the
@@ -1071,9 +1071,10 @@ fn damaged_dwg_opens_partially_and_says_what_it_left_out() {
         b[at..at + 6].iter_mut().for_each(|x| *x ^= 0xA5);
         let Ok(d) = read(&b, "damaged.dwg") else { continue };
         if d.entity_count() < 200 {
-            assert_eq!(d.read_notes.len(), 1, "{} lines read, no note", d.entity_count());
+            assert!(!d.read_notes.is_empty(), "{} lines read, no note", d.entity_count());
         }
-        if let [note] = d.read_notes.as_slice() {
+        // A line the damage threw beyond ±1e12 is dropped by the DXF reader, with its own note.
+        if let [note] = d.read_notes.iter().filter(|n| !n.contains("beyond \u{b1}1e12")).collect::<Vec<_>>().as_slice() {
             assert!(note.starts_with("DWG: ") && note.contains(" couldn't be read and "), "{note}");
             assert!(note.ends_with("saving over the original file would lose it") || note.ends_with("would lose them"), "{note}");
             partial += 1;
@@ -1325,7 +1326,7 @@ fn parametric_sample(d: &mut Drawing) -> (Vec<Constraint>, Parametric) {
             name_format: 1,
         },
     };
-    d.constraints = constraints.clone();
+    d.constraints = constraints.clone().into();
     d.parametric = parametric.clone();
     (constraints, parametric)
 }
@@ -3290,8 +3291,8 @@ mod damaged_files {
             Some(EntityKind::Line(l)) => assert_eq!((l.a.x, l.a.y), (2.0, 3.0)),
             other => panic!("{other:?}"),
         }
-        // A good file has no such note, and a large finite number is not undefined.
-        let ok = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", line("1e300", "5"));
+        // A good file has no such note, and a large finite number within the limit is not undefined.
+        let ok = format!("0\nSECTION\n2\nENTITIES\n{}0\nENDSEC\n0\nEOF\n", line("1e11", "5"));
         let d = read_dxf(ok.as_bytes()).unwrap();
         assert_eq!(d.entity_count(), 1);
         assert!(!notes(&d).contains("undefined"), "{}", notes(&d));
@@ -3337,4 +3338,123 @@ mod damaged_files {
         let check = cdy::verify(&twice).unwrap();
         assert_eq!(check["appendedCopy"].as_u64(), Some(good.len() as u64), "{check}");
     }
+}
+
+#[test]
+fn dxf_objects_beyond_the_coordinate_limit_are_dropped_with_one_note() {
+    let line = |x: &str| format!("0\nLINE\n8\n0\n10\n0\n20\n0\n11\n{x}\n21\n5\n");
+    let dxf = format!("0\nSECTION\n2\nENTITIES\n{}{}{}{}0\nENDSEC\n0\nEOF\n", line("10"), line("1e308"), line("-2e12"), line("1e12"));
+    let d = read(dxf.as_bytes(), "far.dxf").unwrap();
+    assert_eq!(d.entity_count(), 2, "the two lines within ±1e12 stay");
+    let notes: Vec<&String> = d.read_notes.iter().filter(|n| n.contains("beyond")).collect();
+    assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
+    assert!(notes[0].starts_with("DXF: 2 objects had coordinates or a size beyond \u{b1}1e12"), "{}", notes[0]);
+}
+
+#[test]
+fn dxf_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_same_note() {
+    let block = "0\nSECTION\n2\nBLOCKS\n0\nBLOCK\n8\n0\n2\nU\n70\n0\n10\n0\n20\n0\n3\nU\n0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n0\n0\nENDBLK\n8\n0\n0\nENDSEC\n";
+    let far = [
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e300\n",
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n1e13\n",
+        "0\nARC\n8\n0\n10\n0\n20\n0\n40\n1e300\n50\n0\n51\n90\n",
+        "0\nTEXT\n8\n0\n10\n0\n20\n0\n40\n1e300\n1\nbig\n",
+        "0\nMTEXT\n8\n0\n10\n0\n20\n0\n40\n1\n41\n1e300\n1\nwide text\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e13\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e300\n42\n1e300\n",
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e300\n10\n10\n20\n0\n",
+    ];
+    let kept = [
+        "0\nLINE\n8\n0\n10\n0\n20\n0\n11\n10\n21\n0\n",
+        "0\nCIRCLE\n8\n0\n10\n0\n20\n0\n40\n5\n",
+        "0\nPOINT\n8\n0\n10\n1e11\n20\n1e11\n",
+        "0\nINSERT\n8\n0\n2\nU\n10\n0\n20\n0\n41\n1e9\n",
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n0.5\n10\n10\n20\n0\n",
+        // A segment barely bent: a huge radius, but it stays by its chord.
+        "0\nLWPOLYLINE\n8\n0\n90\n2\n70\n0\n10\n0\n20\n0\n42\n1e-9\n10\n10000\n20\n0\n",
+    ];
+    let dxf = format!("{block}0\nSECTION\n2\nENTITIES\n{}{}0\nENDSEC\n0\nEOF\n", far.concat(), kept.concat());
+    let d = read(dxf.as_bytes(), "sizes.dxf").unwrap();
+    assert_eq!(d.entity_count(), kept.len(), "{:?}", d.model.iter().map(|e| e.kind.type_name()).collect::<Vec<_>>());
+    let notes: Vec<&String> = d.read_notes.iter().filter(|n| n.contains("beyond")).collect();
+    assert_eq!(notes.len(), 1, "{:?}", d.read_notes);
+    let want = format!("DXF: {} objects had coordinates or a size beyond \u{b1}1e12", far.len());
+    assert!(notes[0].starts_with(&want), "{}", notes[0]);
+    // The block keeps its line: only references that blow it up go.
+    assert_eq!(d.block("U").map(|b| b.entities.len()), Some(1));
+}
+
+#[test]
+fn dwg_objects_whose_size_is_beyond_the_limit_are_dropped_with_the_note() {
+    let mut d = Drawing::new_imperial();
+    d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::ZERO, b: Vec3::new(10.0, 0.0, 0.0) })).unwrap();
+    d.add(&Space::Model, Common::default(), EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 1e300 })).unwrap();
+    let bytes = write_dwg(&d, Version::R2018, DwgEngine::Bridge).unwrap();
+    for engine in [DwgEngine::Bridge, DwgEngine::Native] {
+        let back = read_dwg(&bytes, engine).unwrap();
+        assert_eq!(back.entity_count(), 1, "{engine:?}");
+        assert!(
+            back.read_notes.iter().any(|n| n.contains("1 object had coordinates or a size beyond \u{b1}1e12")),
+            "{engine:?}: {:?}",
+            back.read_notes
+        );
+    }
+}
+
+thread_local! {
+    /// The group-code limits [`tag_caps`](super::tag_caps) gives in this test, when lowered.
+    pub(super) static TAG_CAPS: std::cell::Cell<Option<(usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with the DXF group-code limit at `dxf` and the DWG's ceiling at `dwg`.
+fn with_tag_caps<T>(dxf: usize, dwg: usize, f: impl FnOnce() -> T) -> T {
+    let before = TAG_CAPS.replace(Some((dxf, dwg)));
+    let r = f();
+    TAG_CAPS.set(before);
+    r
+}
+
+/// A DWG CADaddy writes reopens even when its DXF rendition is over the cap that guards DXF
+/// files (a 98 MB DWG of 1.13 M objects converts to 60 M group codes, over 50 M): the cap for
+/// the intermediate scales with the DWG, and a runaway expansion is still refused.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn dwg_over_the_dxf_cap_reopens_and_a_runaway_one_is_refused() {
+    let dwg = ac1024_dwg(3000);
+    let tags = cadaddy_dxf::parse(&cadaddy_dwg::dwg_to_dxf(&dwg).unwrap()).unwrap().len();
+    assert!(tags > 1000, "{tags}");
+    // The DXF reader's own cap would refuse it, as the unfixed DWG path did.
+    assert!(cadaddy_dxf::parse_with_limit(&cadaddy_dwg::dwg_to_dxf(&dwg).unwrap(), tags / 2).is_err());
+    // The cap for DXF files is half the file's groups; the DWG still opens, with every entity.
+    let d = with_tag_caps(tags / 2, 100 * tags, || read(&dwg, "big.dwg")).unwrap();
+    assert_eq!(d.entity_count(), 3000);
+    // A ceiling under what the file converts to refuses it cleanly (a hostile expansion).
+    let e = with_tag_caps(10, 10, || read(&dwg, "big.dwg")).unwrap_err().to_string();
+    assert!(e.contains("drawing too large") && e.contains("DXF converted from this DWG"), "{e}");
+    // The limit scales with the file and stays between floor and ceiling.
+    assert_eq!(dwg_tag_limit(1000, 50, 10_000_000), 2000);
+    assert_eq!(dwg_tag_limit(10, 50, 10_000_000), 50);
+    assert_eq!(dwg_tag_limit(1 << 30, 50, 1000), 1000);
+}
+
+/// Saving a drawing CADaddy would not reopen is refused, naming the limit and the way out; with
+/// `force` it is written; a drawing within the limit saves as before.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn saving_a_file_too_big_to_reopen_is_refused_without_force() {
+    let d = many_entities(500);
+    for name in ["big.dwg", "big.dxf"] {
+        let e = with_tag_caps(100, 100, || write(&d, name)).unwrap_err().to_string();
+        let what = if name.ends_with("dwg") { "DWG" } else { "DXF" };
+        assert!(e.contains(&format!("too large to save as {what}")) && e.contains("force:true") && e.contains(".cdy"), "{e}");
+        let forced = cadaddy_dxf::with_oversize_allowed(true, || with_tag_caps(100, 100, || write(&d, name))).unwrap();
+        assert!(forced.len() > 1000);
+        // Within the limit nothing changes.
+        assert!(write(&d, name).is_ok());
+    }
+    // Binary DXF is held to the same limit.
+    let opts = SaveOptions { binary: true, ..SaveOptions::default() };
+    assert!(with_tag_caps(100, 100, || write_with(&d, "big.dxf", &opts)).is_err());
+    // .cdy has no such limit.
+    assert!(with_tag_caps(100, 100, || write(&d, "big.cdy")).is_ok());
 }

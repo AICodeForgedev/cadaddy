@@ -684,6 +684,7 @@ name = "cadaddy-dwg"
 version = "0.7.10"
 dependencies = [
  "acadrust",
+ "log",
 ]
 
 [[package]]
@@ -715,6 +716,7 @@ dependencies = [
  "cadaddy-fonts",
  "cadaddy-geom",
  "cadaddy-io",
+ "cadaddy-memcount",
  "cadaddy-mepfix",
  "cadaddy-render",
  "cadaddy-rhai-bridge",
@@ -805,6 +807,10 @@ dependencies = [
  "log",
  "serde_json",
 ]
+
+[[package]]
+name = "cadaddy-memcount"
+version = "0.7.10"
 
 [[package]]
 name = "cadaddy-mepfix"

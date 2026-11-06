@@ -334,6 +334,32 @@ pub struct Model {
     pub runs: Vec<Run>,
     /// Type marks the catalog has (the drawing's BIM types), with their fields.
     pub types: BTreeMap<String, BTreeMap<String, String>>,
+    /// Pieces of walls that don't stand on the floor (the wall over a door or window opening):
+    /// not in `walls` (an opening is a gap in the plan), but a face an element may be on.
+    pub wall_spans: Vec<WallSpan>,
+    /// Walls the model has whose footprint gives no centreline, with why.
+    pub unmeasured_walls: Vec<UnmeasuredWall>,
+}
+
+/// A piece of a wall that spans only part of its level's height (over an opening).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WallSpan {
+    pub wall: ModelWall,
+    /// Its bottom and top, inches above its level's floor.
+    pub bottom_in: f64,
+    pub top_in: f64,
+}
+
+/// A wall of the model that can't be measured, and why.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UnmeasuredWall {
+    pub id: String,
+    pub level: String,
+    /// Where it is, feet on its level's plan.
+    pub at: [f64; 2],
+    pub why: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -488,6 +514,10 @@ impl Model {
         self.elements.truncate(MAX_ITEMS);
         self.walls.retain(|w| fin2(w.a) && fin2(w.b) && w.thickness_in.is_finite());
         self.walls.truncate(MAX_ITEMS);
+        self.wall_spans
+            .retain(|s| fin2(s.wall.a) && fin2(s.wall.b) && s.wall.thickness_in.is_finite() && s.bottom_in.is_finite() && s.top_in.is_finite());
+        self.wall_spans.truncate(MAX_ITEMS);
+        self.unmeasured_walls.truncate(MAX_ITEMS);
         self.openings.retain(|o| fin2(o.min) && fin2(o.max));
         self.openings.truncate(MAX_ITEMS);
         for r in &mut self.runs {

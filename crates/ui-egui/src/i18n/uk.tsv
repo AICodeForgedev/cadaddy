@@ -1278,6 +1278,8 @@
 	Automatic save every	Автозбереження кожні
 	min	хв
 	Automatic save file location	Папка файлів автозбереження
+	Backup copy	Резервна копія
+	Create backup copy with each save	Створювати резервну копію під час кожного збереження
 	Drawings with no file yet are saved in the default version. 0 minutes turns automatic save off.	Креслення, що ще не мають файлу, зберігаються в типовій версії. 0 хвилин вимикає автозбереження.
 	Time-sensitive right-click: a quick click is Enter, holding opens the menu	Клік правою кнопкою з урахуванням часу: швидкий клік — Enter, утримання відкриває меню
 	Turned off, a right-click while a command runs always opens the shortcut menu.	Якщо вимкнено, клік правою кнопкою під час команди завжди відкриває контекстне меню.
@@ -3413,5 +3415,160 @@
 	Set Company Standard	Задати стандарт компанії
 	Standards	Стандарти
 	Apply Submittals	Застосувати погоджену документацію
+	Apply Product Data	Застосувати дані про вироби
+	Apply Code Rules	Застосувати норми
+	Panel Schedules	Розклади щитів
+	Estimate	Кошторис
+	Price Book	Довідник цін
+	Add Material Quote	Додати пропозицію ціни
+	Remove Material Quote	Вилучити пропозицію ціни
+	Price Book Settings	Параметри довідника цін
+	Map Item to Price	Зіставити позицію з ціною
+	Import Price Book	Імпортувати довідник цін
 	Dimming Check	Перевірка регулювання яскравості
 	Read Partition Type Legend	Прочитати легенду типів перегородок
+	 ({n} shown; Export writes them all)	 (показано {n}; експорт запише всі)
+	(no picture)	(немає зображення)
+	A false alarm	Хибна тривога
+	Confidence:	Упевненість:
+	Current room	Поточне приміщення
+	Defer	Відкласти
+	Expected:	Очікувано:
+	False alarms: {rate}	Хибні тривоги: {rate}
+	Findings ({n})	Знахідки ({n})
+	Found:	Знайдено:
+	From the 2D drawing	З 2D-креслення
+	From the BIM model	З BIM-моделі
+	Issue:	Проблема:
+	It is a real error	Це справжня помилка
+	Leave it for a field decision	Залишити для рішення на об’єкті
+	No file chosen. Type: automation.takeoff {params}	Файл не вибрано. Введіть: automation.takeoff {params}
+	No findings to review.	Немає знахідок для перегляду.
+	No run yet: choose a scope and trades, then Start.	Перевірок ще немає: виберіть обсяг і розділи, потім «Почати».
+	No takeoff yet: Refresh runs it.	Підрахунку ще немає: «Оновити» запускає його.
+	Overall	Загалом
+	Refresh	Оновити
+	Reject	Відхилити
+	Resume	Продовжити
+	Rules ({on} of {all} on)	Правила (увімкнено {on} з {all})
+	Scope:	Обсяг:
+	Scores	Оцінки
+	Show answered	Показати з відповіддю
+	Takeoff	Підрахунок
+	Takeoff written to {path}	Підрахунок записано у {path}
+	Trades:	Розділи:
+	done	готово
+	judging	оцінюється
+	project	проєкт
+	waiting for an agent	очікування агента
+	{done} of {total} areas, {state}	{done} з {total} зон, {state}
+	{source}: {n} lines	{source}: рядків {n}
+	Automation Takeoff	Підрахунок автоматизації
+	Cancel Validation Run	Скасувати перевірку
+	Validate	Перевірити
+	Automation	Автоматизація
+	Model Checks	Перевірки моделі
+	Qty	К-сть
+	Elements	Елементи
+	Fire	Пожежна безпека
+	System	Система
+	Validate: waiting for an agent	Перевірка: очікування агента
+	Validate Model Against Prints (Agent)	Перевірка моделі за кресленнями (агент)
+	Next Validation Packet	Наступний пакет перевірки
+	Report Validation Findings	Повідомити результати перевірки
+	Validation Run Status	Стан прогону перевірки
+	Plant Validation Errors	Додати помилки для перевірки
+	Change a Validation Rule	Змінити правило перевірки
+	Validation Areas	Області перевірки
+	Validation Evidence Packet	Пакет доказів перевірки
+	Validation Prescreen	Попередня перевірка
+	Validation Rules	Правила перевірки
+	Model Fidelity	Деталізація моделі
+	Model Fidelity Rules	Правила деталізації моделі
+	Model Fidelity Report	Звіт про деталізацію моделі
+	Fidelity	Деталізація
+	Auto	Авто
+	Floor	Поверх
+	Detail	Деталі
+	Print Inventory	Опис креслень
+	Piece	Деталь
+	Raceway run	Ділянка кабелепроводу
+	Connects to	З'єднано з
+	Height AFF	Висота від чистої підлоги
+	Host wall	Стіна розміщення
+	Wall face	Лицьова поверхня стіни
+	Outlet box	Монтажна коробка
+	Fed by	Живлення від
+	Count Model Pieces	Порахувати деталі моделі
+	Edit Model Piece	Змінити деталь моделі
+	Walk the Feed	Пройти живленням
+	Lay Out Trade Pieces	Розкласти деталі за видами робіт
+	Trade Pieces Report	Звіт про деталі видів робіт
+	Trade Piece Rules	Правила деталей видів робіт
+	Read Trade Documents	Прочитати документи видів робіт
+	Object Forms	Форми об'єктів
+	Create Object Forms	Створити форми об'єктів
+	Edit Object Form Field	Змінити поле форми об'єкта
+	Record Object Field Value	Записати значення поля об'єкта
+	Object Form Log	Журнал форм об'єктів
+	Revert Object Form Change	Скасувати зміну форми об'єкта
+	Promote Object Form to Template	Зробити форму об'єкта шаблоном
+	Object Completeness	Повнота об'єктів
+	Object Form	Форма об'єкта
+	Price a Change	Оцінити зміну
+	Value Engineering	Інженерна оптимізація вартості
+	Value Engineering Scenario	Сценарій оптимізації вартості
+	Value Engineering Decision	Рішення щодо оптимізації вартості
+	Wall Faces	Грані стін
+	Place Devices on Wall Faces	Розмістити пристрої на гранях стін
+	Devices Follow Their Walls	Пристрої слідують за стінами
+	Room Layout	Планування приміщення
+	Tie a Device to an Object	Прив'язати пристрій до об'єкта
+	Add Casework or Appliance Object	Додати об'єкт меблів або побутового приладу
+	Conduit Routing Report	Звіт про трасування кабельних труб
+	Reroute Conduit	Перетрасувати кабельні труби
+	Conduit Takeoff	Відомість кабельних труб
+	Wire Pull Schedule	Відомість протягування проводів
+	Conduit Cut and Bend List	Відомість різання та гнуття труб
+	Material Release List	Відомість відпуску матеріалів
+	Field Paperwork Sheets	Аркуші польової документації
+	Scope by Trade	Обсяг робіт за фахом
+	Read Drawn Dimensions	Прочитати накреслені розміри
+	Underground Plan Report	Звіт про план підземних мереж
+	Update Model from Plans	Оновити модель за планами
+	Load Calculation	Розрахунок навантажень
+	A crash report was kept on this computer: Help > Report a Problem offers it.	Звіт про збій збережено на цьому комп'ютері: його пропонує Довідка > Повідомити про проблему.
+	A recovery copy of the drawing with unsaved changes was autosaved.	Резервну копію креслення з незбереженими змінами збережено автоматично.
+	Autosave failed	Помилка автозбереження
+	Autosave failed: {message}	Помилка автозбереження: {message}
+	Backup copies are off, so the current file will be replaced.	Резервні копії вимкнено, тому поточний файл буде замінено.
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy не вдалося записати резервну копію, тому останні зміни буде втрачено, якщо застосунок зараз зупиниться.
+	CADaddy has to close	CADaddy має закритися
+	Close CADaddy	Закрити CADaddy
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF їх зберігає. Скористайтеся «Зберегти як», щоб залишити їх у кресленні.
+	Details	Подробиці
+	Dismiss	Закрити
+	Drawing Recovery offers them at the next start.	Відновлення креслень запропонує їх під час наступного запуску.
+	Internal error	Внутрішня помилка
+	No drawing needed a new recovery copy.	Жодному кресленню не знадобилася нова резервна копія.
+	Part of CADaddy failed, and the app kept running.	Частина CADaddy дала збій, але застосунок продовжує працювати.
+	Part of CADaddy keeps failing, so it can't continue.	Частина CADaddy постійно дає збій, тому він не може продовжити роботу.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Резервні копії креслень із незбереженими змінами ({count}) збережено автоматично.
+	Save Anyway	Усе одно зберегти
+	Save cancelled: {path} was not changed.	Збереження скасовано: {path} не змінено.
+	Save your work and restart CADaddy.	Збережіть роботу та перезапустіть CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Збережіть роботу. Автозбереження повторить спробу через інтервал SAVETIME; його папку вказано в Параметрах.
+	Saving {name} will remove content	Під час збереження {name} частину вмісту буде видалено
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Поточний файл виглядає неповним, тому {name} залишається без змін, а поточний файл буде замінено.
+	The current file is kept as {name} until the next save.	Поточний файл зберігається як {name} до наступного збереження.
+	This format can't keep these objects yet: {objects}.	Цей формат поки що не може зберегти ці об'єкти: {objects}.
+	{count} more types	ще типів: {count}
+	Review by Impact	Перевірка за впливом
+	Resolve Review Item by Impact	Вирішити пункт перевірки за впливом
+	Open Review Item	Відкрити пункт перевірки
+	Review Audit Trail	Журнал аудиту перевірки
+	Accuracy Trend	Динаміка точності
+	Measure Build Accuracy	Виміряти точність моделі
+	Export for AR	Експорт для AR
+	AR Export Rules	Правила експорту для AR
+	Panel Breakers	Автомати щита

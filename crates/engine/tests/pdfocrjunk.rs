@@ -35,7 +35,7 @@ fn a_plot_read_back_has_its_own_words_and_no_ocr_junk() {
         .drawing
         .model
         .iter()
-        .filter(|e| e.common.layer.as_str() != cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER)
+        .filter(|e| ![cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER, cadaddy_io::pdf_read::OCR_REVIEW_LAYER].contains(&e.common.layer.as_str()))
         .filter_map(|e| match &e.kind {
             EntityKind::Text(t) => Some(t.value.trim().to_string()),
             EntityKind::MText(t) => Some(t.contents.trim().to_string()),

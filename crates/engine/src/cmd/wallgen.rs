@@ -55,6 +55,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(
             "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
         ),
+        CommandSpec::new("model.update", "Update Model from Plans", run_update)
+            .params("{} → {behind: bool (the plan had changed since the associative model was last built), rebuilt: bool}: build the model again now when edits to the plan have left it behind (it is built again anyway before the next command that reads it, and when editing stops for a moment)")
+            .noundo(),
         CommandSpec::new("wallgen.plan", "Planned Walls", run_plan)
             .params("{level: name (of the building spec), window?: [[x,y],[x,y]] (only walls with an end inside), limit?: walls listed (2000, at most 20000)} → {level, walls: [{a: [x,y], b: [x,y], thickness}], total, truncated, notes}: what the level's plan was read as — the walls model.build would build there (centrelines and thickness, sheet units, before openings are cut)")
             .noundo(),
@@ -785,38 +788,322 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
-/// The objects on the rules' layers, by handle, as the drawing holds them (shared pointers: an
-/// edit replaces the object's).
-fn plan(d: &Drawing, g: &WallGen) -> Vec<(Handle, *const Entity)> {
-    let watched = |layer: &str| {
-        g.rules.layer(layer).is_some() || g.spec.as_ref().and_then(|sp| sp.role(layer)).is_some_and(|r| r.role != cadaddy_walk3d::Role::Ignore)
-    };
-    d.model.iter().filter(|e| made_as(e).is_none() && watched(&e.common.layer)).map(|e| (e.handle, Arc::as_ptr(e))).collect()
+/// Whether `layer` holds plan objects the model is built from (the rules' layers, the spec's
+/// roles other than ignored ones).
+fn watched(g: &WallGen, layer: &str) -> bool {
+    g.rules.layer(layer).is_some() || g.spec.as_ref().and_then(|sp| sp.role(layer)).is_some_and(|r| r.role != cadaddy_walk3d::Role::Ignore)
 }
 
-/// After a command: when the drawing has an associative WALLGEN and an object on its rules'
-/// layers changed, build again (in the same undo step).
+/// Whether a plan object (an object on the rules' layers that the build didn't make) differs
+/// between `a` and `b`: added, removed, changed, or moved to or from a plan layer. Only the
+/// objects that changed are looked at (shared chunks are skipped whole), so the cost follows the
+/// edit, not the drawing's size.
+fn plan_touched(a: &Drawing, b: &Drawing, g: &WallGen) -> Vec<Handle> {
+    if a.model.unchanged_from(&b.model) {
+        return Vec::new();
+    }
+    let (added, modified, erased) = a.model.changes(&b.model);
+    let plan_obj = |e: &Entity| made_as(e).is_none() && watched(g, &e.common.layer);
+    added
+        .into_iter()
+        .chain(modified)
+        .chain(erased)
+        .filter(|h| a.model.get(*h).is_some_and(|e| plan_obj(e)) || b.model.get(*h).is_some_and(|e| plan_obj(e)))
+        .collect()
+}
+
+/// Whether object `h` is the very same in `a` and `b` (or in neither).
+fn same_object(a: &Drawing, b: &Drawing, h: Handle) -> bool {
+    match (a.model.get(h), b.model.get(h)) {
+        (Some(x), Some(y)) => Arc::ptr_eq(x, y),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+/// How long a person or agent must stop editing before a model the plan has moved past is built
+/// again ([`Session::update_model_when_idle`] in the app's frame loop and the MCP server).
+pub const IDLE_REBUILD: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Most drawing states remembered as behind their model.
+const MAX_BEHIND: usize = 4096;
+
+/// The drawing states (the drawing as one command left it, shared with undo) whose plan has
+/// changed since the associative model was last built: an edit to the plan marks the model
+/// behind instead of building it again on the spot (a large building takes minutes to build; 10
+/// wall lines took 10 builds). The model is built again once, before the next command that reads
+/// it, or when editing stops for [`IDLE_REBUILD`]. Undo and redo bring back states as they are,
+/// so a state left behind is still known as one when undo returns to it.
+#[derive(Clone, Debug, Default)]
+pub struct Behind {
+    /// Each state, with the build it is behind (the drawing that build left).
+    states: Vec<(std::sync::Weak<Drawing>, Option<std::sync::Weak<Drawing>>)>,
+    /// When the last command in a state behind the plan ran.
+    last_edit: Option<web_time::Instant>,
+}
+
+fn same_state(w: &std::sync::Weak<Drawing>, d: &Arc<Drawing>) -> bool {
+    std::ptr::eq(w.as_ptr(), Arc::as_ptr(d))
+}
+
+impl Behind {
+    fn find(&self, d: &Arc<Drawing>) -> Option<&Option<std::sync::Weak<Drawing>>> {
+        self.states.iter().find(|(w, _)| same_state(w, d)).map(|(_, b)| b)
+    }
+    fn holds(&self, d: &Arc<Drawing>) -> bool {
+        self.find(d).is_some()
+    }
+    /// Whether `d` is a state behind and `built` (the last build's drawing) is newer than the
+    /// build it is behind.
+    fn rebuilt_since(&self, d: &Arc<Drawing>, built: Option<&Arc<Drawing>>) -> bool {
+        match (self.find(d), built) {
+            (Some(Some(was)), Some(b)) => !same_state(was, b),
+            (Some(None), Some(_)) => true,
+            _ => false,
+        }
+    }
+    fn add(&mut self, d: &Arc<Drawing>, built: Option<&Arc<Drawing>>) {
+        if self.holds(d) {
+            return;
+        }
+        // States nothing holds any more (undo forgot them) can't come back.
+        self.states.retain(|(w, _)| w.strong_count() > 0);
+        if self.states.len() >= MAX_BEHIND {
+            self.states.remove(0);
+        }
+        self.states.push((Arc::downgrade(d), built.map(Arc::downgrade)));
+    }
+    fn forget(&mut self, d: &Arc<Drawing>) {
+        self.states.retain(|(w, _)| !same_state(w, d));
+    }
+    /// Whether `d` (a drawing state) is one the plan has moved past the model in.
+    pub fn holds_doc(&self, d: &Arc<Drawing>) -> bool {
+        self.holds(d)
+    }
+    /// How long since the last command in a state behind the plan (none yet: long ago).
+    pub fn since_last_edit(&self) -> std::time::Duration {
+        self.last_edit.map_or(std::time::Duration::MAX, |t| t.elapsed())
+    }
+}
+
+/// Whether the active drawing's associative model is behind its plan (built again before the
+/// next command that reads it, [`update_model`]).
+pub fn model_behind(s: &Session) -> bool {
+    s.state().is_ok_and(|st| st.model_behind.holds(&st.doc))
+}
+
+/// After a command: when the drawing has an associative model and an object on its rules'
+/// layers changed, the model is behind the plan: marked so (built again later, [`Behind`]).
 pub(crate) fn after_command(s: &mut Session, before: Option<&Arc<Drawing>>) {
     let Some(before) = before else { return };
     let Ok(st) = s.state() else { return };
-    let Some(g) = st.wallgen.clone().filter(|g| g.auto) else { return };
-    if Arc::ptr_eq(before, &st.doc) || plan(before, &g) == plan(&st.doc, &g) {
+    let Some(g) = st.wallgen.as_ref().filter(|g| g.auto) else { return };
+    if Arc::ptr_eq(before, &st.doc) {
+        touch(s);
         return;
     }
-    // Built during this command (a guided job builds as one of its steps) from the plan as it
-    // is now: the model is current.
     let built = st.model_record.as_ref().and_then(|r| r.built.as_ref());
-    if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc) || plan(&b.0, &g) == plan(&st.doc, &g)) {
+    if built.is_some_and(|b| Arc::ptr_eq(&b.0, &st.doc)) {
         return;
     }
-    // Rebuilt keeping the hand edits whose plan objects didn't change; the edits that conflict
-    // are echoed and kept in the drawing's last revision (`model.revise {last: true}`).
+    if st.model_behind.rebuilt_since(before, built.map(|b| &b.0)) {
+        // A drawing behind, and a build newer than the one it was behind (this command's:
+        // `model.update`, `model.revise`, `model.build`; or one on another branch of the undo
+        // history): current when that build's plan objects are the plan's now.
+        if built.is_some_and(|b| plan_touched(&b.0, &st.doc, g).is_empty()) {
+            return;
+        }
+    } else if !st.model_behind.holds(before) {
+        // Model space untouched (a command that drew on a sheet's paper space), or no plan
+        // object changed: the model is as current as it was.
+        let touched = plan_touched(before, &st.doc, g);
+        if touched.is_empty() {
+            return;
+        }
+        // Built during this command (a guided job builds as one of its steps) from the plan as
+        // it is now: the model is current. (Only the plan objects this command changed are
+        // compared with the build's: the rest of the drawing may have changed a lot since.)
+        if built.is_some_and(|b| touched.iter().all(|h| same_object(&b.0, &st.doc, *h))) {
+            return;
+        }
+    }
+    // Otherwise a drawing behind stays behind whatever changed (no plan to compare).
+    let built = built.map(|b| Arc::clone(&b.0));
+    let Ok(st) = s.state_mut() else { return };
+    let doc = Arc::clone(&st.doc);
+    st.model_behind.add(&doc, built.as_ref());
+    st.model_behind.last_edit = Some(web_time::Instant::now());
+}
+
+/// A command ran (undo and redo too): editing hasn't stopped, so an idle rebuild waits.
+pub(crate) fn touch(s: &mut Session) {
+    if let Ok(st) = s.state_mut()
+        && st.model_behind.holds(&st.doc)
+    {
+        st.model_behind.last_edit = Some(web_time::Instant::now());
+    }
+}
+
+/// Commands that run before a model behind its plan is built again: plain 2D drawing and editing,
+/// layers, views, selection, undo and redo, the session's drawing list. They don't read the model,
+/// so they don't wait for a build. Every other command (anything that reads, lists, counts,
+/// checks, saves or plots the model) builds it first: a command missing here only waits for the
+/// build, it never reads a model behind its plan.
+pub(crate) fn runs_with_model_behind(id: &str) -> bool {
+    const PLAIN: &[&str] = &[
+        "line",
+        "xline",
+        "ray",
+        "pline",
+        "polyline",
+        "lwpolyline",
+        "circle",
+        "arc",
+        "ellipse",
+        "rectang",
+        "rectangle",
+        "polygon",
+        "donut",
+        "spline",
+        "point",
+        "text",
+        "mtext",
+        "dtext",
+        "leader",
+        "mleader",
+        "qleader",
+        "hatch",
+        "gradient",
+        "boundary",
+        "revcloud",
+        "wipeout",
+        "solid",
+        "trace",
+        "move",
+        "copy",
+        "rotate",
+        "scale",
+        "mirror",
+        "offset",
+        "trim",
+        "extend",
+        "fillet",
+        "chamfer",
+        "break",
+        "join",
+        "stretch",
+        "lengthen",
+        "explode",
+        "erase",
+        "delete",
+        "oops",
+        "align",
+        "arrayrect",
+        "arraypolar",
+        "arraypath",
+        "array",
+        "properties.set",
+        "chprop",
+        "change",
+        "matchprop",
+        "draworder",
+        "block",
+        "insert",
+        "attdef",
+        "undo",
+        "redo",
+        "u",
+        "mredo",
+        "regen",
+        "regenall",
+        "redraw",
+        "redrawall",
+        "select",
+        "pselect",
+        "qselect",
+        "id",
+        "dist",
+        "list",
+        "area",
+        "measuregeom",
+        "cancel",
+        "zoom",
+        "pan",
+        "view",
+        "ddim",
+        "dimstyle",
+        "style",
+        "ltscale",
+        "units",
+        "model.update",
+        // The session's drawings: listing, switching and closing them read no model (the MCP
+        // server lists them after every call).
+        "document.list",
+        "document.switch",
+        "document.close",
+        "document.closeall",
+        "new",
+        "qnew",
+        "open",
+        // A LISP routine: the commands it runs follow this list one by one; what it reads
+        // itself (entget, ssget) is the drawing as it is.
+        "lisp",
+    ];
+    // Builds that replace the model whole (building it first would be thrown away), and
+    // `model.revise`, which compares the plan with the last build itself.
+    const REBUILDS: &[&str] = &["model.build", "wallgen", "model.revise"];
+    let id = id.to_ascii_lowercase();
+    PLAIN.contains(&id.as_str())
+        || REBUILDS.contains(&id.as_str())
+        || ["layer.", "view.", "zoom.", "pan.", "dim", "select.", "selection.", "draw.", "osnap", "snap", "grid", "ortho", "polar"]
+            .iter()
+            .any(|p| id.starts_with(p))
+}
+
+/// Build the active drawing's associative model again when the plan has moved past it, keeping
+/// the hand edits whose plan objects didn't change (the edits that conflict are echoed and kept
+/// in the drawing's last revision, `model.revise {last: true}`). The rebuild joins the drawing
+/// state it was made for: no undo step of its own (the plan edit's undo takes it back too).
+/// True when it built.
+pub fn update_model(s: &mut Session) -> bool {
+    if s.model_updating {
+        return false;
+    }
+    let Ok(st) = s.state() else { return false };
+    if !st.model_behind.holds(&st.doc) {
+        return false;
+    }
+    let behind = Arc::clone(&st.doc);
+    let Some(g) = st.wallgen.clone().filter(|g| g.auto) else {
+        if let Ok(st) = s.state_mut() {
+            st.model_behind.forget(&behind);
+        }
+        return false;
+    };
     let (old, rooms) =
         st.model_record.as_ref().map_or_else(Default::default, |r| r.plan.iter().cloned().partition::<Vec<_>, _>(|i| i.kind != "room"));
     let how = super::revise3d::Revise { by_handle: true, tolerance: None, rebuild: true, auto: true };
-    if let Err(e) = super::revise3d::revise(s, &g, old, rooms, &how) {
+    s.model_updating = true;
+    let r = super::revise3d::revise(s, &g, old, rooms, &how);
+    s.model_updating = false;
+    if let Err(e) = &r {
         s.echo(e.to_string());
     }
+    // Built (the drawing is a new state now), or nothing to build, or the build failed: either
+    // way this state isn't built again before every command.
+    if let Ok(st) = s.state_mut()
+        && Arc::ptr_eq(&st.doc, &behind)
+    {
+        st.model_behind.forget(&behind);
+    }
+    r.is_ok_and(|v| v.get("rebuilt").and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// `model.update`: build an associative model behind its plan now ([`update_model`]).
+fn run_update(s: &mut Session, _p: &Value) -> Result<Value> {
+    let behind = model_behind(s);
+    let built = update_model(s);
+    Ok(json!({ "behind": behind, "rebuilt": built }))
 }
 
 // ---------- walls from the plan's face pairs ----------
@@ -1170,6 +1457,7 @@ pub(crate) fn fit_families(
                     block: Some(ins.block.clone()),
                     confidence: 1.0,
                     leaf: false,
+                    open_end: None,
                 });
             }
         }
@@ -1328,8 +1616,18 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // Layers whose wall type draws the centreline aren't paired: each line is a wall.
     let (centre_ents, pair_ents): (Vec<&Arc<Entity>>, Vec<&Arc<Entity>>) =
         wall_ents.iter().copied().partition(|e| wall_type(g, &e.common.layer).is_some_and(|t| t.from == cadaddy_walk3d::WallFrom::Centerline));
-    let segs = segments(&pair_ents);
+    let mut segs = segments(&pair_ents);
+    // A dashed line (an overhead or hidden line drawn in pieces) is no wall's face.
+    let dashes = super::perceive::geometry::drop_dashes(&mut segs, k);
+    if dashes > 0 {
+        notes.push(format!("{}: {dashes} dashes of dashed lines (overhead, hidden) not taken for wall faces.", level.name));
+    }
     let mut found = pairs(d, &segs, &lim);
+    // A thin outline's side paired with another wall's face is the air beside that wall.
+    let slivers = super::perceive::geometry::drop_sliver_pairs(&segs, &mut found, &lim);
+    if slivers > 0 {
+        notes.push(format!("{}: {slivers} line pairs between a thin outline (trim, a shelf) and another wall's face left out.", level.name));
+    }
     // A screened pair in line with a solid wall and meeting its end fills a gap in the wall (a
     // window's glazing drawn lighter): it is wall too.
     if !screened_ents.is_empty() && !found.is_empty() {
@@ -1469,22 +1767,46 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .take(MAX_OBJECTS)
         .map(|o| {
             let drawn_swing = if o.kind == "door" && o.block.is_none() { o.swing.map(|(_, ends)| ends) } else { None };
-            let (wi, _) = open_grid
-                .at(o.at)
-                .iter()
-                .filter_map(|&i| {
-                    let w = &pl.walls[i];
-                    let len = w.a.dist(w.b);
-                    if len <= 1e-9 {
-                        return None;
+            // The wall it opens in: the hinge (or the block) on its centreline within its
+            // thickness, a swing shutting along it (`ends`: the arc ends it may shut at).
+            let pick = |ends: Option<[Vec2; 2]>| -> Option<(usize, f64)> {
+                // The walls by the hinge, and by the ends it may shut at (the opening's other
+                // jamb).
+                let mut near: Vec<usize> = open_grid.at(o.at).to_vec();
+                for e in ends.into_iter().flatten() {
+                    for &i in open_grid.at(e) {
+                        if !near.contains(&i) {
+                            near.push(i);
+                        }
                     }
-                    let u = (w.b - w.a) * (1.0 / len);
-                    let off = u.perp().dot(o.at - w.a).abs();
-                    let s = u.dot(o.at - w.a);
-                    let fits = drawn_swing.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
-                    (fits && off <= w.thickness.max(2.0 * k) && s >= -o.width && s <= len + o.width).then_some((i, off))
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1))?;
+                }
+                near.iter()
+                    .filter_map(|&i| {
+                        let w = pl.walls.get(i)?;
+                        let len = w.a.dist(w.b);
+                        if len <= 1e-9 {
+                            return None;
+                        }
+                        let u = (w.b - w.a) * (1.0 / len);
+                        let off = u.perp().dot(o.at - w.a).abs();
+                        let s = u.dot(o.at - w.a);
+                        let fits = ends.is_none_or(|ends| swing_shuts_along(w, o.at, ends, o.width, k));
+                        // A hinge up to a leaf (and a frame: the wall's thickness) past the wall's
+                        // end: the door shuts onto that end (its other jamb too short to be a wall
+                        // piece).
+                        let reach = o.width + w.thickness.max(2.0 * k);
+                        (fits && off <= w.thickness.max(2.0 * k) && s >= -reach && s <= len + reach).then_some((i, off))
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+            };
+            // A leaf drawn to one end most often stands open there (against the wall beside the
+            // door), so the wall at the other end comes first; a plan drawing the leaf shut in
+            // its wall still finds it by either end.
+            let shut_end = drawn_swing.zip(o.open_end).map(|(ends, open)| {
+                let closed = if ends[0].dist(open) <= ends[1].dist(open) { ends[1] } else { ends[0] };
+                [closed, closed]
+            });
+            let (wi, _) = shut_end.and_then(|e| pick(Some(e))).or_else(|| pick(drawn_swing))?;
             Some((wi, drawn_swing.is_some_and(|ends| solid_through_grid(&pl.walls, Some(&open_grid), wi, o.at, ends, k))))
         })
         .collect();
@@ -1572,6 +1894,15 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // door swing's opening covers it), a window in an outside wall, else a cased opening.
     // Uses a spatial grid so each wall only checks nearby collinear neighbors for gaps.
     let (min_gap, max_gap) = (oz.min_ft * upf, oz.max_ft * upf);
+    // The level's corridors (traced before the walls are built): a gap in their air is no
+    // opening (Q6160).
+    let corridors: Vec<&cadaddy_walk3d::Circulation> = g
+        .spec
+        .iter()
+        .flat_map(|sp| sp.circulation.iter())
+        .filter(|c| c.kind == cadaddy_walk3d::CirculationKind::Corridor && c.level.eq_ignore_ascii_case(&level.name))
+        .collect();
+    let mut corridor_gaps = 0usize;
     let n = pl.walls.len().min(10_000);
     let mut gaps = Vec::new();
     let gap_cell = max_gap.max(max_thick);
@@ -1608,9 +1939,17 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     }
                 }
             });
-            if !between {
-                gaps.push((i, a.b, a.b + u * gap, a.thickness));
+            if between {
+                continue;
             }
+            // Another wall running across the gap (a corridor's walls between two rooms' walls
+            // that happen to line up, a demising wall between two units' bath walls), or the gap
+            // in a corridor's air (two units' entry or bath walls lined up across it): no header
+            // spans it. A door swing hung there or the outside beyond it still make it a door or
+            // a window (Q6160).
+            let in_air = in_corridor_air(&corridors, gap_mid, u.perp(), a.thickness);
+            let no_header = in_air || gap_crossed(&pl.walls[..n], i, j, a.b, a.b + u * gap);
+            gaps.push((i, a.b, a.b + u * gap, a.thickness, no_header, in_air));
         }
     }
     // Outside: no other wall across one side of it.
@@ -1632,35 +1971,85 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     // The swings drawn on the level (arcs and flattened arcs of a door's sweep and radius), for
     // the gaps to hang doors from.
     let swings = drawn_swings(&ents, k);
-    for (wi, g0, g1, t) in gaps {
+    for (wi, g0, g1, t, no_header, in_air) in gaps {
         let width = g0.dist(g1);
         let u = (g1 - g0) * (1.0 / width.max(1e-12));
-        // A door swing (an arc, or a polyline of chords) hung from a jamb: its hinge there, its
-        // leaf the gap wide (or half of it, a pair's). Not any curve about that far from it
-        // (furniture, text, a fixture by a wide opening) (Q5273).
-        let mut leaf = None;
-        for sw in &swings {
-            for jamb in [g0, g1] {
-                let leaf_fits = (sw.r - width).abs() <= 0.2 * width + t || (sw.r - width / 2.0).abs() <= 0.1 * width + t;
-                if sw.c.dist(jamb) <= t + 2.0 * k && leaf_fits {
-                    // The open end: the end farthest from the wall line.
-                    let open = if u.perp().dot(sw.ends[0] - jamb).abs() >= u.perp().dot(sw.ends[1] - jamb).abs() { sw.ends[0] } else { sw.ends[1] };
-                    let along = if jamb == g0 { u } else { -u };
-                    let inset = along * (LEAF_IN * k / 2.0);
-                    leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (width / open.dist(jamb).max(1e-12)), sw.handle, along));
+        // A wall meeting the gap end-on (a demising wall between two rooms' windows) parts it: a
+        // pier the wall's width, full height, and an opening each side of it. Inside, a wall
+        // running across the gap parts it too (a demising wall between two units' entry doors);
+        // across an outside wall's gap it is a mullion's or the frame's.
+        let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
+        let crossing_parts = !is_outside;
+        let mut piers: Vec<(f64, f64)> = pl
+            .walls
+            .iter()
+            .enumerate()
+            .filter(|(ci, c)| *ci != wi && u.cross(c.b - c.a).abs() > 0.5 * c.a.dist(c.b))
+            .filter_map(|(_, c)| {
+                // Where its centreline crosses the gap's line, else the end that meets it.
+                let n = u.perp();
+                let (da, db) = (n.dot(c.a - g0), n.dot(c.b - g0));
+                let hit = if da * db < 0.0 && crossing_parts {
+                    Some(c.a + (c.b - c.a) * (da / (da - db)))
+                } else {
+                    [c.a, c.b].into_iter().find(|e| seg_dist(*e, g0, g1) <= c.thickness / 2.0 + t)
+                };
+                hit.and_then(|e| {
+                    let s = u.dot(e - g0);
+                    (s > 0.1 * width && s < 0.9 * width).then(|| ((s - c.thickness / 2.0).max(0.0), (s + c.thickness / 2.0).min(width)))
+                })
+            })
+            .take(16)
+            .collect();
+        piers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let mut from = 0.0;
+        for (p0, p1) in &piers {
+            if *p0 > from {
+                spans.push((from, *p0));
+            }
+            from = from.max(*p1);
+        }
+        spans.push((from, width));
+        // A door swing (an arc, or a polyline of chords) hung from a jamb of the gap or of an
+        // opening a pier parts off: its hinge there, its leaf that opening wide (or half of it, a
+        // pair's). Not any curve about that far from it (furniture, text, a fixture by a wide
+        // opening) (Q5273).
+        let mut leaves = Vec::new();
+        for &(s0, s1) in &spans {
+            let (j0, j1) = (g0 + u * s0, g0 + u * s1);
+            let span = s1 - s0;
+            let mut leaf = None;
+            for sw in &swings {
+                for (jamb, along) in [(j0, u), (j1, -u)] {
+                    let leaf_fits = (sw.r - span).abs() <= 0.2 * span + t || (sw.r - span / 2.0).abs() <= 0.1 * span + t;
+                    // It shuts across this opening: an end of its arc on the gap's line, a leaf
+                    // from the hinge into the opening (not a swing hinged by the jamb that shuts
+                    // along another wall, or whose open leaf rests along this line's other way).
+                    let shuts = sw.ends.iter().any(|e| u.perp().dot(*e - jamb).abs() <= t + 2.0 * k && along.dot(*e - sw.c) >= 0.7 * sw.r);
+                    if sw.c.dist(jamb) <= t + 2.0 * k && leaf_fits && shuts {
+                        // The open end: the end farthest from the wall line.
+                        let open =
+                            if u.perp().dot(sw.ends[0] - jamb).abs() >= u.perp().dot(sw.ends[1] - jamb).abs() { sw.ends[0] } else { sw.ends[1] };
+                        let inset = along * (LEAF_IN * k / 2.0);
+                        leaf = Some((jamb + inset, jamb + inset + (open - jamb) * (span / open.dist(jamb).max(1e-12)), sw.handle, along, (j0, j1)));
+                    }
                 }
             }
+            leaves.extend(leaf);
         }
         // Covered by a door found from its swing already.
         let covered = pl.leaves.iter().any(|l| !l.window && (seg_dist(l.a, g0, g1) <= t || l.a.dist(g0) <= t || l.a.dist(g1) <= t));
         let Some(w) = pl.walls.get(wi) else { continue };
         let source = w.source;
-        let is_outside = outside((g0 + g1) * 0.5, u.perp(), &pl.walls);
         let (z0, top) = (pl.z0, w.top);
         let mut extra = Vec::new();
-        if leaf.is_some() || covered {
+        if !leaves.is_empty() || covered {
             extra.push((g0, g1, z0 + pl.door_head, top));
-            if let Some((a, b, h, along)) = leaf.filter(|_| !covered) {
+            if !leaves.is_empty() {
+                extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
+            }
+            for (a, b, h, along, frame) in leaves.into_iter().filter(|_| !covered) {
                 pl.leaves.push(Leaf {
                     a,
                     b,
@@ -1671,32 +2060,49 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
                     sill: None,
                     along: Some(along),
                     pair: None,
-                    frame: Some((g0, g1)),
+                    frame: Some(frame),
                 });
                 doors += 1;
             }
-        } else if is_outside {
-            extra.push((g0, g1, z0, z0 + pl.sill));
-            extra.push((g0, g1, z0 + pl.head, top));
-            pl.leaves.push(Leaf {
-                a: g0,
-                b: g1,
-                window: true,
-                thickness: t,
-                source,
-                head: None,
-                sill: None,
-                along: None,
-                pair: None,
-                frame: Some((g0, g1)),
-            });
-            windows += 1;
+        } else if is_outside && !in_air {
+            // (A gap in a corridor's air is inside the building, whatever a ray finds.)
+            extra.extend(piers.iter().map(|(p0, p1)| (g0 + u * *p0, g0 + u * *p1, z0, top)));
+            for (s0, s1) in spans {
+                let (a, b) = (g0 + u * s0, g0 + u * s1);
+                if s1 - s0 < MIN_WINDOW_IN * k {
+                    extra.push((a, b, z0, top));
+                    continue;
+                }
+                extra.push((a, b, z0, z0 + pl.sill));
+                extra.push((a, b, z0 + pl.head, top));
+                pl.leaves.push(Leaf {
+                    a,
+                    b,
+                    window: true,
+                    thickness: t,
+                    source,
+                    head: None,
+                    sill: None,
+                    along: None,
+                    pair: None,
+                    frame: Some((a, b)),
+                });
+                windows += 1;
+            }
+        } else if no_header {
+            corridor_gaps += 1;
         } else if width <= 8.0 * upf {
             extra.push((g0, g1, z0 + pl.door_head, top));
         }
         if let Some(w) = pl.walls.get_mut(wi) {
             w.extra.extend(extra.into_iter().filter(|(_, _, lo, hi)| hi > lo));
         }
+    }
+    if corridor_gaps > 0 {
+        notes.push(format!(
+            "{}: {corridor_gaps} gaps between lined-up walls (across a corridor, or another wall across them) left open (no header).",
+            level.name
+        ));
     }
     let (doors, windows) = one_per_swing(&mut pl.leaves, 6.0 * k).unwrap_or((doors, windows));
     let doors = doors.saturating_sub(one_door_per_opening(&mut pl.leaves, 6.0 * k));
@@ -1706,6 +2112,50 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
     }
     pl
 }
+
+/// Whether a wall other than `i` and `j` (the two pieces either side of the gap `g0`–`g1`) runs
+/// across the gap: its centreline crosses the gap's line between the gap's ends, away from them by
+/// more than half its thickness (a wall meeting a jamb end-on is the jamb's return, not across),
+/// and goes on past the line on both sides.
+fn gap_crossed(walls: &[PlanWall], i: usize, j: usize, g0: Vec2, g1: Vec2) -> bool {
+    let width = g0.dist(g1);
+    if !(width.is_finite() && width > 1e-9) {
+        return false;
+    }
+    let u = (g1 - g0) * (1.0 / width);
+    walls.iter().enumerate().take(MAX_OBJECTS).any(|(k, c)| {
+        if k == i || k == j {
+            return false;
+        }
+        let d = c.b - c.a;
+        let den = u.cross(d);
+        // Parallel to the gap: along it, not across it.
+        if den.abs() <= 0.5 * d.len() {
+            return false;
+        }
+        // Where the wall's line meets the gap's (s along the gap, t along the wall).
+        let s = (c.a - g0).cross(d) / den;
+        let t = (c.a - g0).cross(u) / den;
+        let margin = c.thickness / 2.0;
+        // Through the gap's line, past it both sides by half its thickness: a wall that only
+        // ends on the line (a partition meeting an outside wall in a window's gap) runs up to the
+        // opening, not across it.
+        let past = margin / d.len().max(1e-9);
+        s > margin && s < width - margin && t > past && t < 1.0 - past
+    })
+}
+
+/// Whether a gap's middle `mid` is in a corridor's air: the corridor's floor on both sides of the
+/// gap's line (`nrm` across it), a wall's thickness `t` off it. A gap in a wall along a corridor
+/// (a cased opening into a lobby) has the corridor on one side only.
+fn in_corridor_air(corridors: &[&cadaddy_walk3d::Circulation], mid: Vec2, nrm: Vec2, t: f64) -> bool {
+    let off = nrm * t.max(1e-6);
+    let on_floor = |p: Vec2| corridors.iter().any(|c| c.holds([p.x, p.y]));
+    on_floor(mid) && on_floor(mid + off) && on_floor(mid - off)
+}
+
+/// A window narrower than this (inches) beside a pier is no window: the pier's slot, filled.
+const MIN_WINDOW_IN: f64 = 12.0;
 
 /// A door swing drawn on a plan: its hinge (the centre), radius, two ends and source.
 struct Swing {
@@ -1743,6 +2193,11 @@ fn drawn_swings(ents: &[&Arc<Entity>], k: f64) -> Vec<Swing> {
         }
     }
     out
+}
+
+/// The hinge points of the door swings among `ents` (`k` units per inch).
+pub(crate) fn swing_hinges(ents: &[&Arc<Entity>], k: f64) -> Vec<Vec2> {
+    drawn_swings(ents, k).into_iter().map(|s| s.c).collect()
 }
 
 /// Walls looked at for the building's outline, at most (a level; hostile drawings).
@@ -2226,5 +2681,67 @@ mod tests {
         for ((k, n, at), (wk, wn, wat)) in seeds[1].iter().zip(want) {
             assert!(*k == wk && n == wn && at.dist(wat) < 1e-9, "{seeds:?}");
         }
+    }
+
+    fn plan_wall(a: (f64, f64), b: (f64, f64)) -> PlanWall {
+        PlanWall {
+            a: Vec2::new(a.0, a.1),
+            b: Vec2::new(b.0, b.1),
+            thickness: 6.0,
+            top: 108.0,
+            source: Handle(0),
+            cuts: Vec::new(),
+            extra: Vec::new(),
+            wall_type: None,
+        }
+    }
+
+    #[test]
+    fn a_gap_another_wall_runs_across_is_no_opening() {
+        // Two pieces of one line, x 0–100 and 172–300 (a 6' gap), inches.
+        let mut walls = vec![plan_wall((0.0, 0.0), (100.0, 0.0)), plan_wall((172.0, 0.0), (300.0, 0.0))];
+        let (g0, g1) = (Vec2::new(100.0, 0.0), Vec2::new(172.0, 0.0));
+        // Nothing across: an opening.
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A wall meeting the jamb end-on (the room's return wall) is no wall across it.
+        walls.push(plan_wall((100.0, 0.0), (100.0, -96.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A wall that lies along the gap's line is no wall across it either.
+        walls.push(plan_wall((110.0, 0.0), (160.0, 0.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A partition ending on the gap's line from one side (meeting an outside wall in a
+        // window's gap) runs up to the opening, not across it.
+        walls.push(plan_wall((136.0, 0.0), (136.0, 120.0)));
+        assert!(!gap_crossed(&walls, 0, 1, g0, g1));
+        // A demising wall running across the gap's middle: two walls lined up, no opening.
+        walls.push(plan_wall((136.0, -120.0), (136.0, 120.0)));
+        assert!(gap_crossed(&walls, 0, 1, g0, g1));
+    }
+
+    #[test]
+    fn a_gap_across_a_corridor_is_no_opening_one_along_it_is() {
+        // A corridor 66" wide (y 0–66) along x, inches.
+        let corridor = cadaddy_walk3d::Circulation {
+            kind: cadaddy_walk3d::CirculationKind::Corridor,
+            level: "Level 2".into(),
+            name: "CORRIDOR".into(),
+            at: [500.0, 33.0],
+            rects: vec![[[0.0, 0.0], [1000.0, 66.0]]],
+        };
+        let cs = [&corridor];
+        // Two units' entry walls lined up across it: the gap runs y 0–66 at x 300.
+        let (g0, g1) = (Vec2::new(300.0, 0.0), Vec2::new(300.0, 66.0));
+        let u = (g1 - g0) * (1.0 / g0.dist(g1));
+        assert!(in_corridor_air(&cs, (g0 + g1) * 0.5, u.perp(), 6.0));
+        // A cased opening in the corridor's own wall (y −3, centreline): corridor one side only.
+        let (h0, h1) = (Vec2::new(300.0, -3.0), Vec2::new(372.0, -3.0));
+        let v = (h1 - h0) * (1.0 / h0.dist(h1));
+        assert!(!in_corridor_air(&cs, (h0 + h1) * 0.5, v.perp(), 6.0));
+        // A gap in a room, away from the corridor.
+        let (k0, k1) = (Vec2::new(300.0, 100.0), Vec2::new(300.0, 160.0));
+        let w = (k1 - k0) * (1.0 / k0.dist(k1));
+        assert!(!in_corridor_air(&cs, (k0 + k1) * 0.5, w.perp(), 6.0));
+        // No corridors traced: nothing is in a corridor's air.
+        assert!(!in_corridor_air(&[], (g0 + g1) * 0.5, u.perp(), 6.0));
     }
 }

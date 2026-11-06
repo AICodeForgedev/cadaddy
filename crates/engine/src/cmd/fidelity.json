@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "source": "company default: CADaddy fidelity rules (view.fidelity.rules edits them per project)",
+  "auto": { "building_ft": 240, "floor_ft": 90, "room_ft": 12, "margin": 0.15 },
+  "default_tier": "floor",
+  "rules": [
+    { "kinds": ["wire", "conductor"], "tier": "detail", "why": "pulled inside a raceway: hidden by it at every scale" },
+    { "kinds": ["coupling", "connector", "locknut", "bushing", "strap", "ring", "hanger", "support", "clip", "anchor", "fastener", "screw", "nail", "seam", "tape"], "tier": "detail", "why": "fittings, supports and fasteners: only seen up close" },
+    { "atoms": true, "kinds": ["conduit", "cable", "elbow", "bend", "offset"], "tier": "room", "line_from": "floor", "why": "raceway and cable pieces: at floor scale the run shows as a line" },
+    { "atoms": true, "kinds": ["box"], "tier": "room", "why": "outlet and junction boxes" },
+    { "kinds": ["stud", "track", "joist", "header", "sheet", "drywall", "rebar", "mesh", "block", "brick", "insulation"], "tier": "room", "why": "framing, sheets and reinforcement as pieces" },
+    { "atoms": true, "kinds": ["plate", "blocking", "backing", "furring", "sheathing", "batt", "board", "cmu", "rim", "truss", "tendon", "pour"], "tier": "room", "why": "the trades' pieces inside walls, floors and the roof" },
+    { "atoms": true, "kinds": ["paint", "flooring", "base", "tile", "grid_main", "grid_tee", "wall_angle", "vapor_barrier", "underlayment", "firestop", "frame", "hardware_set", "accessory", "compound", "screws", "corner_bead", "embed", "chair"], "tier": "detail", "why": "finishes, accessories and the trades' small pieces: only seen up close" },
+    { "trades": ["equipment"], "words": ["switchboard", "switchgear", "transformer", "generator", "transfer switch", "distribution", "substation", "air handling", "air handler", "ahu", "rtu", "rooftop", "roof top", "exhaust fan", "chiller", "boiler", "cooling tower", "condensing", "condenser", "ptac", "vrf", "water heater", "pump", "makeup air", "make-up air", "elevator"], "tier": "building", "why": "big gear and rooftop/mechanical units show at building scale" },
+    { "trades": ["equipment"], "min_extent_ft": 4, "tier": "building", "why": "equipment 4 ft or larger" },
+    { "trades": ["equipment"], "tier": "floor", "why": "panels and other equipment" },
+    { "kinds": ["duct"], "min_size_in": 18, "tier": "building", "why": "main ducts" },
+    { "kinds": ["duct"], "tier": "floor", "why": "branch ducts" },
+    { "kinds": ["pipe"], "min_size_in": 3, "tier": "building", "why": "mains and risers 3 in and over" },
+    { "kinds": ["pipe"], "min_size_in": 1.25, "tier": "floor", "why": "mid-size pipe" },
+    { "kinds": ["pipe"], "tier": "room", "line_from": "floor", "why": "small pipe: a line at floor scale" },
+    { "kinds": ["conduit", "tray"], "tier": "floor", "why": "conduit runs as runs, cable tray" },
+    { "trades": ["terminals"], "tier": "floor", "why": "air terminals" },
+    { "trades": ["devices", "lights", "fixtures"], "tier": "room", "why": "devices, luminaires and plumbing fixtures" },
+    { "trades": ["fire"], "categories": ["sprinklers"], "tier": "room", "why": "sprinkler heads" },
+    { "parts": ["grid"], "tier": "room", "why": "ceiling grid" },
+    { "parts": ["floor", "roof", "cricket", "parapet", "roof-drain", "curtainwall", "column", "beam", "footing", "brace", "ground", "site"], "tier": "building", "why": "slabs, roof, structure and site" },
+    { "parts": ["wall"], "words": ["exterior", "ext", "shell", "facade"], "tier": "building", "why": "exterior walls: the shell" },
+    { "trades": ["structure", "site"], "tier": "building", "why": "structure and site" },
+    { "parts": ["wall", "door", "window", "glass", "ceiling", "soffit", "stair", "railing", "room"], "tier": "floor", "why": "walls, openings, ceilings, stairs, rooms" }
+  ]
+}

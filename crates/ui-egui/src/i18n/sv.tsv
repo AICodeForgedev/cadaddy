@@ -3450,3 +3450,147 @@ menu	Modify	Ändra
 	Remove Company Standard	Ta bort företagsstandard
 	Set Company Standard	Ange företagsstandard
 	Standards	Standarder
+	 ({n} shown; Export writes them all)	 ({n} visas; Exportera skriver alla)
+	(no picture)	(ingen bild)
+	A false alarm	Falskt larm
+	Confidence:	Säkerhet:
+	Current room	Aktuellt rum
+	Defer	Skjut upp
+	Expected:	Förväntat:
+	False alarms: {rate}	Falsklarm: {rate}
+	Findings ({n})	Fynd ({n})
+	Found:	Hittat:
+	From the 2D drawing	Från 2D-ritningen
+	From the BIM model	Från BIM-modellen
+	Issue:	Problem:
+	It is a real error	Det är ett verkligt fel
+	Leave it for a field decision	Lämna till ett beslut på plats
+	No file chosen. Type: automation.takeoff {params}	Ingen fil vald. Skriv: automation.takeoff {params}
+	No findings to review.	Inga fynd att granska.
+	No run yet: choose a scope and trades, then Start.	Ingen körning ännu: välj omfattning och discipliner och sedan Starta.
+	No takeoff yet: Refresh runs it.	Ingen mängdning ännu: Uppdatera kör den.
+	Overall	Totalt
+	Refresh	Uppdatera
+	Reject	Avvisa
+	Resume	Återuppta
+	Rules ({on} of {all} on)	Regler ({on} av {all} på)
+	Scope:	Omfattning:
+	Scores	Resultat
+	Show answered	Visa besvarade
+	Takeoff	Mängdning
+	Takeoff written to {path}	Mängdning skriven till {path}
+	Trades:	Discipliner:
+	done	klar
+	judging	bedöms
+	project	projekt
+	waiting for an agent	väntar på en agent
+	{done} of {total} areas, {state}	{done} av {total} områden, {state}
+	{source}: {n} lines	{source}: {n} rader
+	Automation Takeoff	Automatiserad mängdning
+	Cancel Validation Run	Avbryt valideringen
+	Change a Validation Rule	Ändra en valideringsregel
+	Validation Areas	Valideringsområden
+	Validation Evidence Packet	Valideringens underlagspaket
+	Validation Prescreen	Förkontroll av validering
+	Validation Rules	Valideringsregler
+	Validate	Validera
+	Automation	Automatisering
+	Model Checks	Modellkontroller
+	Qty	Antal
+	Elements	Element
+	Fire	Brand
+	Validate: waiting for an agent	Validera: väntar på en agent
+	Validate Model Against Prints (Agent)	Validera modellen mot ritningarna (agent)
+	Next Validation Packet	Nästa valideringspaket
+	Report Validation Findings	Rapportera valideringsfynd
+	Validation Run Status	Status för valideringskörning
+	Plant Validation Errors	Plantera valideringsfel
+	Model Fidelity	Modellens detaljnivå
+	Model Fidelity Rules	Regler för modellens detaljnivå
+	Model Fidelity Report	Rapport om modellens detaljnivå
+	Fidelity	Detaljnivå
+	Auto	Auto
+	Floor	Våning
+	Detail	Detalj
+	Print Inventory	Ritningsinventering
+	Piece	Del
+	Raceway run	Rörsträcka
+	Connects to	Ansluter till
+	Height AFF	Höjd över färdigt golv
+	Host wall	Värdvägg
+	Wall face	Väggyta
+	Outlet box	Apparatdosa
+	Fed by	Matas från
+	Count Model Pieces	Räkna modelldelar
+	Edit Model Piece	Redigera modelldel
+	Walk the Feed	Följ matningen
+	Lay Out Trade Pieces	Lägg ut yrkesdelar
+	Trade Pieces Report	Rapport över yrkesdelar
+	Trade Piece Rules	Regler för yrkesdelar
+	Read Trade Documents	Läs yrkesdokument
+	Object Forms	Objektformulär
+	Create Object Forms	Skapa objektformulär
+	Edit Object Form Field	Redigera fält i objektformulär
+	Record Object Field Value	Registrera objektfältvärde
+	Object Form Log	Logg för objektformulär
+	Revert Object Form Change	Återställ ändring i objektformulär
+	Promote Object Form to Template	Gör objektformulär till mall
+	Object Completeness	Objektens fullständighet
+	Object Form	Objektformulär
+	Wall Faces	Väggsidor
+	Place Devices on Wall Faces	Placera enheter på väggsidor
+	Devices Follow Their Walls	Enheter följer sina väggar
+	Room Layout	Rumslayout
+	Tie a Device to an Object	Knyt en enhet till ett objekt
+	Add Casework or Appliance Object	Lägg till inrednings- eller vitvaruobjekt
+	Conduit Routing Report	Rapport över elrörsdragning
+	Reroute Conduit	Dra om elrör
+	Conduit Takeoff	Mängdavtagning elrör
+	Wire Pull Schedule	Kabeldragningsschema
+	Conduit Cut and Bend List	Kap- och böjlista för elrör
+	Material Release List	Materialavropslista
+	Field Paperwork Sheets	Arbetsplatsdokument
+	Scope by Trade	Omfattning per yrke
+	Value Engineering Scenario	Scenario för värdeanalys
+	Value Engineering Decision	Beslut om värdeanalys
+	Read Drawn Dimensions	Läs ritade mått
+	Underground Plan Report	Rapport över markförlagd plan
+	Update Model from Plans	Uppdatera modell från ritningar
+	Load Calculation	Lastberäkning
+	A crash report was kept on this computer: Help > Report a Problem offers it.	En kraschrapport sparades på den här datorn: Hjälp > Rapportera ett problem erbjuder den.
+	A recovery copy of the drawing with unsaved changes was autosaved.	En återställningskopia av ritningen med osparade ändringar sparades automatiskt.
+	Autosave failed	Automatisk sparning misslyckades
+	Autosave failed: {message}	Automatisk sparning misslyckades: {message}
+	Backup copies are off, so the current file will be replaced.	Säkerhetskopior är avstängda, så den aktuella filen ersätts.
+	Backup copy	Säkerhetskopia
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy kunde inte skriva en återställningskopia, så de senaste ändringarna går förlorade om appen stoppas nu.
+	CADaddy has to close	CADaddy måste stängas
+	Close CADaddy	Stäng CADaddy
+	Create backup copy with each save	Skapa en säkerhetskopia vid varje sparning
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF behåller dem. Använd Spara som för att behålla dem i ritningen.
+	Details	Detaljer
+	Dismiss	Stäng
+	Drawing Recovery offers them at the next start.	Ritningsåterställning erbjuder dem vid nästa start.
+	Internal error	Internt fel
+	No drawing needed a new recovery copy.	Ingen ritning behövde en ny återställningskopia.
+	Part of CADaddy failed, and the app kept running.	En del av CADaddy misslyckades, och appen fortsatte att köras.
+	Part of CADaddy keeps failing, so it can't continue.	En del av CADaddy fortsätter att misslyckas, så det kan inte fortsätta.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	Återställningskopior av {count} ritningar med osparade ändringar sparades automatiskt.
+	Save Anyway	Spara ändå
+	Save cancelled: {path} was not changed.	Sparningen avbröts: {path} ändrades inte.
+	Save your work and restart CADaddy.	Spara ditt arbete och starta om CADaddy.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	Spara ditt arbete. Automatisk sparning försöker igen efter SAVETIME-intervallet; dess mapp finns i Alternativ.
+	Saving {name} will remove content	Om {name} sparas tas innehåll bort
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	Den aktuella filen ser inte hel ut, så {name} förblir som den är och den aktuella filen ersätts.
+	The current file is kept as {name} until the next save.	Den aktuella filen behålls som {name} till nästa sparning.
+	This format can't keep these objects yet: {objects}.	Det här formatet kan inte behålla de här objekten än: {objects}.
+	{count} more types	{count} typer till
+	Review by Impact	Granskning efter påverkan
+	Resolve Review Item by Impact	Lös granskningspunkt efter påverkan
+	Open Review Item	Öppna granskningspunkt
+	Review Audit Trail	Granskningslogg
+	Accuracy Trend	Precisionstrend
+	Measure Build Accuracy	Mät byggets precision
+	Export for AR	Exportera för AR
+	AR Export Rules	Regler för AR-export
+	Panel Breakers	Centralens brytare

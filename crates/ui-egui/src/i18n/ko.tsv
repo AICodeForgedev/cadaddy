@@ -3286,3 +3286,147 @@ menu	Modify	수정
 	Remove Company Standard	회사 표준 제거
 	Set Company Standard	회사 표준 설정
 	Standards	표준
+	 ({n} shown; Export writes them all)	 ({n}개 표시됨, 내보내기는 모두 기록)
+	(no picture)	(그림 없음)
+	A false alarm	잘못된 경보
+	Confidence:	신뢰도:
+	Current room	현재 실
+	Defer	보류
+	Expected:	예상:
+	False alarms: {rate}	잘못된 경보: {rate}
+	Findings ({n})	결과 ({n})
+	Found:	발견:
+	From the 2D drawing	2D 도면에서
+	From the BIM model	BIM 모델에서
+	Issue:	문제:
+	It is a real error	실제 오류임
+	Leave it for a field decision	현장 결정으로 남김
+	No file chosen. Type: automation.takeoff {params}	파일을 선택하지 않았습니다. 입력: automation.takeoff {params}
+	No findings to review.	검토할 결과가 없습니다.
+	No run yet: choose a scope and trades, then Start.	아직 실행이 없습니다. 범위와 공종을 고른 뒤 시작하세요.
+	No takeoff yet: Refresh runs it.	아직 물량 산출이 없습니다. 새로 고침으로 실행합니다.
+	Overall	전체
+	Refresh	새로 고침
+	Reject	거부
+	Resume	재개
+	Rules ({on} of {all} on)	규칙 ({all}개 중 {on}개 켜짐)
+	Scope:	범위:
+	Scores	점수
+	Show answered	답변한 항목 표시
+	Takeoff	물량 산출
+	Takeoff written to {path}	물량 산출을 {path}에 기록함
+	Trades:	공종:
+	done	완료
+	judging	판정 중
+	project	프로젝트
+	waiting for an agent	에이전트 대기 중
+	{done} of {total} areas, {state}	{total}개 영역 중 {done}개, {state}
+	{source}: {n} lines	{source}: {n}줄
+	Automation Takeoff	자동화 물량 산출
+	Cancel Validation Run	검증 실행 취소
+	Change a Validation Rule	검증 규칙 변경
+	Validation Areas	검증 영역
+	Validation Evidence Packet	검증 증거 패킷
+	Validation Prescreen	검증 사전 점검
+	Validation Rules	검증 규칙
+	Validate	검증
+	Automation	자동화
+	Model Checks	모델 검사
+	Qty	수량
+	Elements	요소
+	Fire	소방
+	Validate: waiting for an agent	검증: 에이전트를 기다리는 중
+	Validate Model Against Prints (Agent)	도면 대비 모델 검증(에이전트)
+	Next Validation Packet	다음 검증 패킷
+	Report Validation Findings	검증 결과 보고
+	Validation Run Status	검증 실행 상태
+	Plant Validation Errors	검증용 오류 심기
+	Model Fidelity	모델 충실도
+	Model Fidelity Rules	모델 충실도 규칙
+	Model Fidelity Report	모델 충실도 보고서
+	Fidelity	충실도
+	Auto	자동
+	Floor	층
+	Detail	세부
+	Print Inventory	도면 목록
+	Piece	부재
+	Raceway run	전선관 구간
+	Connects to	연결 대상
+	Height AFF	마감 바닥 기준 높이
+	Host wall	호스트 벽
+	Wall face	벽면
+	Outlet box	아웃렛 박스
+	Fed by	급전원
+	Count Model Pieces	모델 부재 수 세기
+	Edit Model Piece	모델 부재 편집
+	Walk the Feed	급전 경로 따라가기
+	Lay Out Trade Pieces	공종별 부재 배치
+	Trade Pieces Report	공종별 부재 보고서
+	Trade Piece Rules	공종별 부재 규칙
+	Read Trade Documents	공종 문서 읽기
+	Object Forms	객체 양식
+	Create Object Forms	객체 양식 만들기
+	Edit Object Form Field	객체 양식 필드 편집
+	Record Object Field Value	객체 필드 값 기록
+	Object Form Log	객체 양식 기록
+	Revert Object Form Change	객체 양식 변경 되돌리기
+	Promote Object Form to Template	객체 양식을 템플릿으로 승격
+	Object Completeness	객체 완성도
+	Object Form	객체 양식
+	Wall Faces	벽면
+	Place Devices on Wall Faces	벽면에 장치 배치
+	Devices Follow Their Walls	장치가 벽을 따라 이동
+	Room Layout	실 배치
+	Tie a Device to an Object	장치를 객체에 연결
+	Add Casework or Appliance Object	캐비닛 또는 가전 객체 추가
+	Conduit Routing Report	전선관 경로 보고서
+	Reroute Conduit	전선관 경로 재설정
+	Conduit Takeoff	전선관 물량 산출
+	Wire Pull Schedule	전선 인입 일정표
+	Conduit Cut and Bend List	전선관 절단 및 벤딩 목록
+	Material Release List	자재 출고 목록
+	Field Paperwork Sheets	현장 문서 시트
+	Scope by Trade	공종별 범위
+	Value Engineering Scenario	가치 공학 시나리오
+	Value Engineering Decision	가치 공학 결정
+	Read Drawn Dimensions	그려진 치수 읽기
+	Underground Plan Report	지중 배관 계획 보고서
+	Update Model from Plans	도면에서 모델 업데이트
+	Load Calculation	부하 계산
+	A crash report was kept on this computer: Help > Report a Problem offers it.	충돌 보고서가 이 컴퓨터에 저장되었습니다. 도움말 > 문제 보고에서 제공합니다.
+	A recovery copy of the drawing with unsaved changes was autosaved.	저장하지 않은 변경 내용이 있는 도면의 복구 사본이 자동 저장되었습니다.
+	Autosave failed	자동 저장 실패
+	Autosave failed: {message}	자동 저장 실패: {message}
+	Backup copies are off, so the current file will be replaced.	백업 사본이 꺼져 있으므로 현재 파일이 바뀝니다.
+	Backup copy	백업 사본
+	CADaddy could not write a recovery copy, so recent changes would be lost if the app stopped now.	CADaddy가 복구 사본을 쓰지 못했습니다. 지금 앱이 멈추면 최근 변경 내용이 사라집니다.
+	CADaddy has to close	CADaddy를 닫아야 합니다
+	Close CADaddy	CADaddy 닫기
+	Create backup copy with each save	저장할 때마다 백업 사본 만들기
+	DXF keeps them. Use Save As to keep them in the drawing.	DXF는 이를 유지합니다. 도면에 유지하려면 다른 이름으로 저장을 사용하세요.
+	Details	세부 정보
+	Dismiss	닫기
+	Drawing Recovery offers them at the next start.	다음 시작 시 도면 복구에서 제공합니다.
+	Internal error	내부 오류
+	No drawing needed a new recovery copy.	새 복구 사본이 필요한 도면이 없었습니다.
+	Part of CADaddy failed, and the app kept running.	CADaddy의 일부에서 오류가 발생했지만 앱은 계속 실행 중입니다.
+	Part of CADaddy keeps failing, so it can't continue.	CADaddy의 일부에서 오류가 계속 발생해 계속할 수 없습니다.
+	Recovery copies of {count} drawings with unsaved changes were autosaved.	저장하지 않은 변경 내용이 있는 도면 {count}개의 복구 사본이 자동 저장되었습니다.
+	Save Anyway	그래도 저장
+	Save cancelled: {path} was not changed.	저장이 취소되었습니다. {path}은(는) 바뀌지 않았습니다.
+	Save your work and restart CADaddy.	작업을 저장하고 CADaddy를 다시 시작하세요.
+	Save your work. Autosave tries again after the SAVETIME interval; its folder is in Options.	작업을 저장하세요. 자동 저장은 SAVETIME 간격이 지나면 다시 시도하며, 폴더는 옵션에 있습니다.
+	Saving {name} will remove content	{name}을(를) 저장하면 내용이 제거됩니다
+	The current file doesn't look whole, so {name} stays as it is and the current file will be replaced.	현재 파일이 완전하지 않은 것 같아 {name}은(는) 그대로 두고 현재 파일을 바꿉니다.
+	The current file is kept as {name} until the next save.	현재 파일은 다음 저장 때까지 {name}(으)로 유지됩니다.
+	This format can't keep these objects yet: {objects}.	이 형식은 아직 다음 객체를 유지할 수 없습니다: {objects}.
+	{count} more types	{count}개 형식 더
+	Review by Impact	영향별 검토
+	Resolve Review Item by Impact	영향별 검토 항목 해결
+	Open Review Item	검토 항목 열기
+	Review Audit Trail	검토 감사 기록
+	Accuracy Trend	정확도 추세
+	Measure Build Accuracy	빌드 정확도 측정
+	Export for AR	AR용 내보내기
+	AR Export Rules	AR 내보내기 규칙
+	Panel Breakers	분전반 차단기

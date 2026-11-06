@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
-exclude = ["examples/plugins/hello-plugin"]
+exclude = ["examples/plugins/hello-plugin", "apps/ios"]
 # default-members
 
 [workspace.package]
@@ -17,6 +17,7 @@ cadaddy-geom = { path = "crates/geom" }
 cadaddy-dxf = { path = "crates/dxf" }
 cadaddy-dwg = { path = "crates/dwg" }
 cadaddy-dwgcodec = { path = "crates/dwgcodec" }
+cadaddy-memcount = { path = "crates/memcount" }
 cadaddy-color = { path = "crates/color" }
 cadaddy-doc = { path = "crates/doc" }
 cadaddy-constraints = { path = "crates/constraints" }

@@ -130,3 +130,26 @@ fn a_drawing_with_two_layouts_saves_without_a_layouts_notice() {
         assert_clean_save(&mut s, &format!("lay.{f}"), "two layouts");
     }
 }
+
+/// A mesh face of more than four vertices is stored in DWG/DXF as a fan of triangles whose inner
+/// edges are hidden: the shape and its visible edges are kept, so the first save of a BIM model
+/// no longer says "mesh faces changed", and neither does the next.
+#[test]
+fn an_n_gon_mesh_face_stored_as_a_fan_saves_clean() {
+    use cadaddy_doc::{EntityKind, Mesh, MeshFace, MeshKind};
+    hooks();
+    for f in ["dxf", "dwg"] {
+        let mut s = Session::new();
+        let vertices = (0..6)
+            .map(|i| {
+                let a = f64::from(i) * std::f64::consts::TAU / 6.0;
+                cadaddy_geom::Vec3::new(5.0 * a.cos(), 5.0 * a.sin(), f64::from(i % 2))
+            })
+            .collect();
+        // A hexagon with one of its own edges hidden, and a quad.
+        let faces = vec![MeshFace { v: vec![0, 1, 2, 3, 4, 5], hidden: 0b1000 }, MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }];
+        s.add_entity(EntityKind::Mesh(Mesh { vertices, faces, kind: MeshKind::Polyface })).unwrap();
+        assert_clean_save(&mut s, &format!("ngon.{f}"), "n-gon mesh");
+        assert_clean_save(&mut s, &format!("ngon-again.{f}"), "n-gon mesh saved again");
+    }
+}

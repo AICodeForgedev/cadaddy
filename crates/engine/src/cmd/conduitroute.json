@@ -1,0 +1,158 @@
+{
+  "_doc": "Conduit routing (Q6152): the rules data the router, its checks and its takeoff use. Every value carries its source. Clearances, tiers and grouping limits are company defaults a project rule or the documents override; the code tables are the NEC's (2023 numbering).",
+  "route": {
+    "above_ceiling_in": 3,
+    "tier_step_in": 4,
+    "structure_depth_in": 12,
+    "default_ceiling_ft": 9.0,
+    "corridor_min_ft": 20.0,
+    "in_wall_max_ft": 12.0,
+    "in_wall_above_box_in": 6,
+    "drop_spacing_in": 1.5,
+    "drop_reach_ft": 2.0,
+    "drop_step_in": 6,
+    "bend_penalty_ft": 3.0,
+    "max_detour_ft": 8.0,
+    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear"
+  },
+  "clearance_in": {
+    "duct": 1.0,
+    "pipe": 1.0,
+    "fitting": 1.0,
+    "terminal": 1.0,
+    "equipment": 3.0,
+    "conduit": 0.5,
+    "structure": 0.5,
+    "other": 0.5,
+    "source": "company default clearances between trades (a project rule overrides); gear working space is NEC 110.26(A)"
+  },
+  "grouping": {
+    "max_circuits": 3,
+    "reach_ft": 30.0,
+    "source": "company default: up to three branch circuits share a homerun when the specification sets no number (NEC 310.15(C)(1) adjustment applies above three current-carrying conductors)"
+  },
+  "fill": {
+    "one_pct": 53,
+    "two_pct": 31,
+    "over_two_pct": 40,
+    "source": "NEC Chapter 9, Table 1 (53% one conductor, 31% two, 40% over two); Table 4 raceway areas; Table 5 THHN/THWN-2 areas",
+    "area_sq_in": {
+      "EMT": [[0.5, 0.304], [0.75, 0.533], [1.0, 0.864], [1.25, 1.496], [1.5, 2.036], [2.0, 3.356], [2.5, 5.858], [3.0, 8.846], [3.5, 11.545], [4.0, 14.753]],
+      "IMC": [[0.5, 0.342], [0.75, 0.586], [1.0, 0.959], [1.25, 1.647], [1.5, 2.225], [2.0, 3.630], [2.5, 5.135], [3.0, 7.922], [3.5, 10.584], [4.0, 13.631]],
+      "RMC": [[0.5, 0.314], [0.75, 0.549], [1.0, 0.887], [1.25, 1.526], [1.5, 2.071], [2.0, 3.408], [2.5, 4.866], [3.0, 7.499], [3.5, 10.010], [4.0, 12.882]],
+      "PVC": [[0.5, 0.285], [0.75, 0.508], [1.0, 0.832], [1.25, 1.453], [1.5, 1.986], [2.0, 3.291], [2.5, 4.695], [3.0, 7.268], [3.5, 9.737], [4.0, 12.554]]
+    },
+    "wire_sq_in": {
+      "14": 0.0097, "12": 0.0133, "10": 0.0211, "8": 0.0366, "6": 0.0507, "4": 0.0824, "3": 0.0973, "2": 0.1158, "1": 0.1562,
+      "1/0": 0.1855, "2/0": 0.2223, "3/0": 0.2679, "4/0": 0.3237
+    }
+  },
+  "derate": {
+    "source": "NEC 310.15(C)(1): adjustment for more than three current-carrying conductors; ampacity from Table 310.16 (90 °C column derated, never above the 75 °C column at the terminations, 110.14(C))",
+    "factors": [[4, 6, 0.80], [7, 9, 0.70], [10, 20, 0.50], [21, 30, 0.45], [31, 40, 0.40], [41, 1000, 0.35]],
+    "amp_75c": {"14": 20, "12": 25, "10": 35, "8": 50, "6": 65, "4": 85, "3": 100, "2": 115, "1": 130, "1/0": 150, "2/0": 175, "3/0": 200, "4/0": 230},
+    "amp_90c": {"14": 25, "12": 30, "10": 40, "8": 55, "6": 75, "4": 95, "3": 115, "2": 130, "1": 145, "1/0": 170, "2/0": 195, "3/0": 225, "4/0": 260},
+    "small_conductor_max_a": {"14": 15, "12": 20, "10": 30},
+    "small_conductor_source": "NEC 240.4(D): #14 15 A, #12 20 A, #10 30 A"
+  },
+  "box_fill": {
+    "source": "NEC 314.16(B): each conductor entering 1 volume, all grounds 1, each device yoke 2 (the largest conductor's), Table 314.16(B) volumes",
+    "cu_in": {"18": 1.5, "16": 1.75, "14": 2.0, "12": 2.25, "10": 2.5, "8": 3.0, "6": 5.0},
+    "yoke": 2,
+    "grounds": 1,
+    "bigger": [["4\" square", "4-11/16\" square, 2-1/8\" deep", 42.0], ["device", "4\" square, 2-1/8\" deep, with a device ring", 30.3], ["4\" octagon", "4\" square, 2-1/8\" deep", 30.3]]
+  },
+  "vdrop": {
+    "max_pct": 3.0,
+    "k_copper": 12.9,
+    "load_pct": 80,
+    "breaker_a": 20,
+    "voltage": 120,
+    "cmil": {"14": 4110, "12": 6530, "10": 10380, "8": 16510, "6": 26240, "4": 41740, "3": 52620, "2": 66360, "1": 83690, "1/0": 105600, "2/0": 133100},
+    "sizes": ["14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0"],
+    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil, K = 12.9 copper, I = 80% of the breaker"
+  },
+  "methods": {
+    "raceway": "EMT",
+    "mc": "MC",
+    "ac": "AC",
+    "nm": "NM",
+    "se": "SER",
+    "uf": "UF",
+    "prefer": ["raceway", "mc", "ac", "nm"],
+    "branch_words": ["BRANCH"],
+    "feeder_words": ["FEEDER", "SERVICE"],
+    "unit_words": ["DWELLING", "GUEST", "SLEEPING", "UNIT"],
+    "concealed_words": ["CONCEALED", "CEILING", "WALL", "PARTITION"],
+    "exposed_words": ["EXPOSED"],
+    "below_words": ["UNDERGROUND", "BELOW SLAB", "UNDER SLAB", "IN SLAB", "CONCRETE", "BELOW GRADE"],
+    "exposed_rooms": ["MECH", "ELEC", "STORAGE", "PUMP", "RISER", "BOILER", "MAINT", "JANITOR", "TRASH", "FIRE", "SPRINKLER", "UNFINISHED"],
+    "minimum_size_in": 0.75,
+    "minimum_source": "company default 3/4\" (NEC 358.20(A) allows 1/2\" EMT)",
+    "source": "the specification's wiring-methods table (MasterFormat 26 05 19) by area and use; raceway is EMT (26 05 33) unless the documents name another"
+  },
+  "firestop": {
+    "item": "Firestop system, through-penetration (UL listed)",
+    "floor_unrated": "not given (confirm the floor/ceiling assembly; an unrated floor still needs its annular space sealed, IBC 714.6)",
+    "source": "IBC 714 / NEC 300.21: penetrations of fire-rated assemblies firestopped with a listed system"
+  },
+  "framing": {
+    "flange_in": 1.5,
+    "edge_in": 0.125,
+    "hole_over_in": 0.375,
+    "min_end_ft": [[1.5, 0.5], [2.0, 1.0], [3.0, 2.0], [4.0, 3.0], [5.0, 4.0], [6.5, 5.0]],
+    "apart_x": 2.0,
+    "hole_penalty_ft": 0.5,
+    "truss_chord_in": 3.5,
+    "bored_item": "Bored hole through I-joist web",
+    "truss_item": "Raceway through truss web (no bore)",
+    "source": "company default from the I-joist makers' published web-hole rules (holes in the web only, flanges never cut or drilled, 1/8 in of web kept above and below a hole, the bigger the hole the farther from the bearing, holes apart by twice the larger one); a hole is the trade size plus 3/8 in; the joist submittal's own hole chart overrides (project rule); truss chords are never bored, raceway passes between them"
+  },
+  "entry": {
+    "spacing_in": 0.5,
+    "locknut_od_in": {"0.5": 1.375, "0.75": 1.75, "1.0": 2.0, "1.25": 2.5, "1.5": 2.75, "2.0": 3.375, "2.5": 3.875, "3.0": 4.625, "3.5": 5.25, "4.0": 5.75},
+    "source": "locknut/bushing outside diameters by trade size plus 1/2 in between them (company default; manufacturers' data)"
+  },
+  "gear": {
+    "kinds": ["panel", "switchboard", "switchgear", "transformer", "disconnect", "load center", "loadcenter", "mcc", "motor control", "meter", "distribution", "ats", "transfer switch"],
+    "working_depth_ft": 3.0,
+    "working_height_ft": 6.5,
+    "dedicated_above_ft": 6.0,
+    "window_margin_in": 1.5,
+    "source": "NEC 110.26(A) working space (3 ft deep for 0-150 V to ground, condition 1; 6-1/2 ft high), 110.26(E)(1) dedicated electrical space (the footprint to 6 ft above the equipment); a window the submittal doesn't give is the box's top less 1-1/2 in margins (derived)"
+  },
+  "cable": {
+    "above_box_in": 12,
+    "in_wall_max_ft": 30.0,
+    "below_floor_in": 6,
+    "source": "company default: NM, MC and AC cable runs from box to box through the studs of the room's walls, 12 in above the higher box (bored in the stud's middle, NEC 300.4(A)(1)), along its wall and round a corner onto the next, up to 30 ft; a box in the ceiling, on the far wall or in another room is reached up the wall through the top plate and across the framing over the ceiling; a circuit fed from below (its panel on a lower storey) goes down from each box through the bottom plate and across in the floor framing, 6 in under the floor, up into the next box"
+  },
+  "switch_legs": {
+    "source": "a switch or sensor with no circuit of its own is on the circuit of what it controls (the switch leg: the device's box joined to its luminaires' circuit, NEC 404.2(C) brings the grounded conductor to it)"
+  },
+  "branchgap": {
+    "tag_reading": {
+      "source": "a circuit label with no circuit tag on its level is the circuit its panel's schedule lists by that number (the schedule is the panel's circuit list for every level it serves), else the same circuit as tagged on another level's plan, else on the panel the riser names"
+    },
+    "switch_loop": {
+      "single": 3,
+      "three_way": 4,
+      "four_way": 5,
+      "kinds": ["switch", "dimmer", "occupancy sensor", "vacancy sensor"],
+      "source": "a leg into a switch's box carries the line, the switched leg and the grounded conductor (NEC 404.2(C)), with the ground: 3 insulated for a single-pole switch; a 3-way's leg the common and its 2 travelers with the grounded conductor (4); a 4-way's its 2 pairs of travelers with the grounded conductor (5)"
+    },
+    "shared": {
+      "max_ccc": 9,
+      "same_path_in": 1.0,
+      "merge": false,
+      "merge_source": "off by default: with it on, each stretch is built as its one raceway and the homeruns join it in a junction box; Validate's box fill counts the conductors that pass through such a box once per run (314.16(B)(1) counts them once), so the stretches are reported (each as its one raceway would be) and the homeruns keep their own raceways until that check counts pass-through conductors once",
+      "source": "company default: homeruns of one panel on one path (the same line and tier) are one raceway, up to 9 current-carrying conductors (NEC 310.15(C)(1): 70 % keeps #12 THHN (90 °C, 30 A) at 21 A over its 20 A breaker); more take another raceway beside it; each sized by NEC Chapter 9 Table 1 / Table 4 / Table 5 with its ground"
+    },
+    "proposed": {
+      "kinds": ["receptacle", "duplex receptacle", "gfci receptacle", "quad receptacle", "device", "junction box", "equipment connection", "disconnect"],
+      "spare_words": ["SPARE"],
+      "space_words": ["SPACE"],
+      "source": "a power device the prints give no circuit: proposed on the nearest panel of its level with a spare breaker (else a new one), not drawn, priced apart from the takeoff, with a review item and an RFI (the documents don't say; nothing is guessed silently)"
+    }
+  }
+}

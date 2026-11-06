@@ -202,6 +202,12 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 kind: t.kind.clone(),
                 leg: f("switch_leg"),
                 room: String::new(),
+                aff_in: None,
+                aff_note: String::new(),
+                kind_source: String::new(),
+                ifc_class: String::new(),
+                equipment: f("equipment"),
+                near: String::new(),
             }
         })
         .collect();
@@ -1051,6 +1057,9 @@ pub(crate) fn gfci_by_sinks(sp: &mut cadaddy_walk3d::BuildingSpec) -> (usize, us
     (n, by.len())
 }
 
+/// A wall device this close to a room's outline (feet) is on the room's face of the wall.
+const ROOM_FACE_FT: f64 = 0.33;
+
 /// NEC 406.12: the receptacles of a hotel's guest rooms (and a dwelling's) are tamper-resistant.
 /// Each receptacle device in one of `rooms` (level, outline in model units) its plan doesn't mark
 /// TR is taken off as one, from the rule; the receptacles and the rooms changed.
@@ -1067,7 +1076,13 @@ pub(crate) fn tamper_resistant_in_rooms(sp: &mut cadaddy_walk3d::BuildingSpec, r
             continue;
         }
         let p = cadaddy_geom::Vec2::new(t.at_ft[0] * upf, t.at_ft[1] * upf);
-        let Some(i) = rooms.iter().position(|(l, o)| same_level(l, &t.level) && cadaddy_geom::point_in_polygon(o, p)) else { continue };
+        // In the room, or drawn on its wall's face (a receptacle on the wall line, just off the
+        // room's outline: not as far as the wall's other face).
+        let Some(i) = rooms.iter().position(|(l, o)| {
+            same_level(l, &t.level) && (cadaddy_geom::point_in_polygon(o, p) || super::guided::edge_distance(o, p) <= ROOM_FACE_FT * upf)
+        }) else {
+            continue;
+        };
         let with = if mark.is_empty() || mark.eq_ignore_ascii_case("REC") { "TR".to_string() } else { format!("{mark}/TR") };
         t.set("device_type", receptacle_item(&with), "rule");
         t.set("tamper_resistant", "NEC 406.12: a guest room's receptacles", "rule");
@@ -1105,6 +1120,7 @@ pub(crate) fn device_kind(tag: &str) -> &'static str {
         "FA" | "HS" | "SS" | "FS" | "ST" | "CM" => "fire alarm device",
         "TV" | "DA" | "TEL" | "WAP" | "CR" | "CAM" => "low voltage outlet",
         "EF" | "FCU" | "WH" | "PTAC" => "equipment connection",
+        "T" | "TSTAT" | "TH" => "thermostat",
         _ => "device",
     }
 }
@@ -1225,7 +1241,7 @@ fn devices_to_model(s: &mut Session, p: &Value, mut placed: Value) -> Result<Val
     let r = super::propfill::rebuild_devices(s, CMD)?;
     placed["elements"] = json!(r.built);
     placed["elements_replaced"] = json!(r.removed);
-    match super::propfill::fill(s) {
+    match super::propfill::fill(s, false) {
         Ok(f) => placed["filled"] = f["filled"]["device"].clone(),
         Err(e) => placed["fill_error"] = json!(e.to_string()),
     }
@@ -1375,6 +1391,25 @@ pub struct ReadDevice {
     /// The room a typical room's plan stamped it into (its circuits are that room's own).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub room: String,
+    /// Its mounting height printed by it on a typical room's plan (`44" AFF`), inches to its
+    /// middle, and the note and sheet it was read from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aff_in: Option<f64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub aff_note: String,
+    /// Where its kind came from when a legend row named it (`E-1 ELECTRICAL LEGEND: DUPLEX
+    /// RECEPTACLE - NEMA 5-20R, UNO`), and the IFC class that row's kind is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind_source: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub ifc_class: String,
+    /// The equipment it connects (`HP-3`), when its mark is that equipment's tag.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub equipment: String,
+    /// The text printed round its mark on its sheet (a question about a mark nothing resolved
+    /// shows it).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub near: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1438,13 +1473,17 @@ fn device_level(sp: &cadaddy_walk3d::BuildingSpec, dv: &ReadDevice) -> String {
     cadaddy_walk3d::level_at(&sp.levels, dv.at[0], dv.at[1]).or_else(|| sp.levels.first()).map_or_else(String::new, |l| l.name.clone())
 }
 
-/// What a device's BOM line calls it: `switch S3`, `device type A`.
+/// What a device's BOM line calls it: `switch S3`; a mark no legend, schedule or known list
+/// resolved says so (`UNRESOLVED device mark A`): a person answers its review question.
 fn device_item(tag: &str) -> String {
     match device_kind(tag) {
-        "device" => format!("device type {tag}"),
+        "device" => format!("{UNRESOLVED} {tag}"),
         k => format!("{k} {tag}"),
     }
 }
+
+/// The start of an unresolved device's BOM item.
+pub(crate) const UNRESOLVED: &str = "UNRESOLVED device mark";
 
 /// Put `devices` in the drawing's building model as element tags on their levels (`kind`,
 /// `type`, `device_type`, `circuit` when known, `sheet`, `symbol`), replacing the devices an
@@ -1474,8 +1513,13 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let level = device_level(&sp, dv);
         let at_ft = [dv.at[0] / upf, dv.at[1] / upf];
         let base = format!("device:{level}:{:.1},{:.1}", at_ft[0], at_ft[1]);
-        // Two marks on one symbol spot (a switch and its sensor) are two devices.
+        // Two marks on one symbol spot (a switch and its sensor) are two devices; so are one mark's
+        // devices of two rooms there (mirrored units' thermostats on the wall they share).
         let id = if ids.contains(&base) { format!("{base}:{tag}") } else { base };
+        let id = match (ids.contains(&id), dv.room.trim()) {
+            (true, room) if !room.is_empty() => format!("{id}:{room}"),
+            _ => id,
+        };
         if !ids.insert(id.clone()) {
             continue;
         }
@@ -1487,13 +1531,15 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         let mut e = cadaddy_walk3d::tags::ElementTag { id, kind: kind.replace(' ', "_"), level: level.clone(), at_ft, ..Default::default() };
         e.set("type", tag, "plan");
         let item = match read {
-            "" => device_item(tag),
+            "" | "device" => device_item(tag),
             "wall luminaire" => format!("luminaire {tag}"),
             "receptacle" => receptacle_item(tag),
             _ => format!("{read} {tag}"),
         };
         e.set("device_type", item, "plan");
-        let detector = read == "fire alarm device" && matches!(tag.to_ascii_uppercase().as_str(), "S" | "SD" | "H" | "HD" | "D" | "DD");
+        // A smoke, heat or duct detector: `S`, `SD`, or its mark with a subscript (`SR`).
+        let up = tag.to_ascii_uppercase();
+        let detector = read == "fire alarm device" && up.chars().count() <= 2 && up.starts_with(['S', 'H', 'D']);
         if read == "wall luminaire" {
             e.set("mount", "wall", "submittal");
         } else if luminaire || detector {
@@ -1505,8 +1551,42 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.leg.is_empty() {
             e.set("switch_leg", dv.leg.clone(), "plan");
         }
+        if !dv.kind_source.is_empty() {
+            e.set("kind_source", dv.kind_source.clone(), "legend");
+        }
+        if !dv.equipment.is_empty() {
+            e.set("equipment", dv.equipment.clone(), "plan");
+        }
+        // A mark nothing resolved: what a person is asked about (its sheet, symbol and the text
+        // printed round it).
+        if kind == "device" && matches!(read, "" | "device") {
+            e.set("unresolved", if dv.near.is_empty() { "no text near it" } else { dv.near.as_str() }, "plan");
+        }
+        // A luminaire stays a `device` element by its mark; what it is, said for its readers.
+        if luminaire {
+            e.set("device_kind", if read == "wall luminaire" { "wall_luminaire" } else { "luminaire" }, "submittal");
+            e.set("ifc_class", "IfcLightFixture", "submittal");
+        }
+        if !dv.ifc_class.is_empty() {
+            e.set("ifc_class", dv.ifc_class.clone(), "legend");
+        }
+        if matches!(read, "smoke_detector" | "heat_detector" | "ceiling_receptacle") {
+            e.set("mount", "ceiling", "legend");
+        }
         e.set("sheet", if dv.sheet.is_empty() { "current drawing" } else { dv.sheet.as_str() }, "plan");
         e.set("symbol", dv.handle.clone(), "plan");
+        // A typical room's device knows the room it was stamped into (its bath, its closet are
+        // that room's, traced as a room or not).
+        if !dv.room.is_empty() {
+            e.set("room", dv.room.clone(), "rule");
+        }
+        // Its height as printed by it on its typical room's plan.
+        if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {
+            e.set("mount_height_in", format!("{h}"), "note");
+            if !dv.aff_note.is_empty() {
+                e.set("mount_height_note", dv.aff_note.clone(), "note");
+            }
+        }
         sp.tags.push(e);
         *by_type.entry(tag.to_string()).or_default() += 1;
         *by_level.entry(level).or_default() += 1;
@@ -1653,13 +1733,15 @@ mod tests {
                 {"id": "device:Level 2:6.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [6, 5], "fields": {"type": {"value": "GFCI", "source": "plan"}}},
                 {"id": "device:Level 2:7.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [7, 5], "fields": {"type": {"value": "TR", "source": "plan"}}},
                 {"id": "device:Level 2:8.0,5.0", "kind": "switch", "level": "Level 2", "at_ft": [8, 5], "fields": {"type": {"value": "S", "source": "plan"}}},
-                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}}
+                {"id": "device:Level 2:50.0,5.0", "kind": "receptacle", "level": "Level 2", "at_ft": [50, 5], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:20.2,9.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20.2, 9], "fields": {"type": {"value": "REC", "source": "plan"}}},
+                {"id": "device:Level 2:20.6,9.0", "kind": "receptacle", "level": "Level 2", "at_ft": [20.6, 9], "fields": {"type": {"value": "REC", "source": "plan"}}}
             ]}"#,
         )
         .expect("spec");
-        // Guest room 201 on level 2: 0..20' x 0..15'.
+        // Guest room 201 on level 2: 0..20' x 0..15' (its east wall 20'..20.75').
         let room = vec![Vec2::new(0.0, 0.0), Vec2::new(240.0, 0.0), Vec2::new(240.0, 180.0), Vec2::new(0.0, 180.0)];
-        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (2, 1));
+        assert_eq!(super::tamper_resistant_in_rooms(&mut sp, &[("2".to_string(), room)]), (3, 1));
         let item =
             |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("device_type")).map(|f| (f.value.clone(), f.source.clone()));
         assert_eq!(item("device:Level 2:5.0,5.0"), Some(("duplex receptacle, tamper-resistant".to_string(), "rule".to_string())));
@@ -1668,6 +1750,9 @@ mod tests {
         assert_eq!(item("device:Level 2:7.0,5.0"), None);
         assert_eq!(item("device:Level 2:8.0,5.0"), None);
         assert_eq!(item("device:Level 2:50.0,5.0"), None);
+        // Drawn on the room's face of its wall: the room's; on the wall's far face: not.
+        assert_eq!(item("device:Level 2:20.2,9.0").map(|i| i.0), Some("duplex receptacle, tamper-resistant".to_string()));
+        assert_eq!(item("device:Level 2:20.6,9.0"), None);
     }
 
     #[test]

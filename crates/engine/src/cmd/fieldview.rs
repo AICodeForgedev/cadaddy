@@ -258,6 +258,9 @@ pub fn package(d: &Drawing, sp: &BuildingSpec, project: &str) -> FieldPackage {
         let (kind, system) = match part {
             // Walls come from the plan's wall faces (below): a closed wall's mesh boxes the room.
             "floor" | "ceiling" | "wall" => continue,
+            // A building trade's pieces (studs, sheets, bars) sit inside their walls, slabs and
+            // ceilings on layers that start off: not something to tap in the field.
+            "atom" => continue,
             "mep" => {
                 let p = tag_value(&tags, "part").unwrap_or_default();
                 // Straight runs come from the spec as centrelines (below).

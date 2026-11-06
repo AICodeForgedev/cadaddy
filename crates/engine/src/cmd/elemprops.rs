@@ -78,6 +78,15 @@ pub fn element_kind(e: &Entity) -> Option<String> {
     None
 }
 
+/// What an element is, said as a reader would: a device's own kind as the build wrote it
+/// (`receptacle`, `smoke_detector`, from its legend row or its sheet), else [`element_kind`]'s.
+pub(crate) fn reported_kind(e: &Entity, kind: String) -> String {
+    if kind != "device" {
+        return kind;
+    }
+    cadaddy_doc::props::read(&e.common.xdata).get("kind").map(|p| p.text()).filter(|k| !k.trim().is_empty() && k != "device").unwrap_or(kind)
+}
+
 fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
     let layer = e.common.layer.to_ascii_uppercase();
     match part {
@@ -100,6 +109,8 @@ fn kind_of_part<'a>(e: &Entity, part: &'a str) -> &'a str {
                     "duct" => "duct",
                     "pipe" => "pipe",
                     "conduit" | "cable" | "tray" | "grounding" => "conduit",
+                    // A breaker in its panel (Q6166): a piece, not a piece of equipment.
+                    "breaker" => "breaker",
                     _ => "equipment",
                 }
             }

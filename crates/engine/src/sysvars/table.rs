@@ -39,6 +39,12 @@ enum Kind {
     Point,
     /// The name of a multiline style of the drawing.
     MlineStyle,
+    /// A transparency: ByLayer, ByBlock or 0-90 (`true`: "use current" too, HPTRANSPARENCY).
+    Transparency(bool),
+    /// A layer name (the layer may be made later); `.` or "use current" for the current layer.
+    LayerName,
+    /// A file or program name (no `< > | * ? "`).
+    FileText,
 }
 
 /// A default that may depend on the drawing's units (MEASUREMENT 1 = metric).
@@ -126,7 +132,7 @@ const HEADER: &[(&str, Kind, Def)] = &[
 /// checked like [`HEADER`]'s, stored in the drawing, returned by GETVAR.
 const STORED: &[(&str, Kind, Def)] = &[
     ("BLIPMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
-    ("CETRANSPARENCY", Kind::Text, Def::Str("ByLayer")),
+    ("CETRANSPARENCY", Kind::Transparency(false), Def::Str("ByLayer")),
     ("CMDDIA", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("COORDS", Kind::Choice(&[0, 1, 2, 3]), Def::Int(1)),
     ("COPYMODE", Kind::Choice(&[0, 1]), Def::Int(0)),
@@ -147,11 +153,10 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("HPBOUND", Kind::Choice(&[0, 1]), Def::Int(1)),
     ("HPDOUBLE", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("HPDRAWORDER", Kind::Int(0, 4), Def::Int(3)),
-    ("HPLAYER", Kind::Text, Def::Str(".")),
+    ("HPLAYER", Kind::LayerName, Def::Str(".")),
     ("HPOBJWARNING", Kind::Int(1, 1_073_741_823), Def::Int(10_000)),
     ("HPSPACE", Kind::Real { min: 0.0, strict: true }, Def::Real(1.0)),
-    ("HPTRANSPARENCY", Kind::Text, Def::Str("use current")),
-    ("ISAVEBAK", Kind::Choice(&[0, 1]), Def::Int(1)),
+    ("HPTRANSPARENCY", Kind::Transparency(true), Def::Str("use current")),
     ("ISAVEPERCENT", Kind::Int(0, 100), Def::Int(50)),
     ("ISOLINES", Kind::Int(0, 2047), Def::Int(4)),
     ("LENSLENGTH", Kind::Real { min: 0.0, strict: true }, Def::Real(50.0)),
@@ -164,7 +169,7 @@ const STORED: &[(&str, Kind, Def)] = &[
     ("MIRRHATCH", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("MLEADERSCALE", Kind::Real { min: 0.0, strict: false }, Def::Real(1.0)),
     ("MSLTSCALE", Kind::Choice(&[0, 1]), Def::Int(1)),
-    ("MTEXTED", Kind::Text, Def::Str("Internal")),
+    ("MTEXTED", Kind::FileText, Def::Str("Internal")),
     ("NOMUTT", Kind::Choice(&[0, 1]), Def::Int(0)),
     ("OFFSETGAPTYPE", Kind::Choice(&[0, 1, 2]), Def::Int(0)),
     ("OSNAPCOORD", Kind::Choice(&[0, 1, 2]), Def::Int(2)),
@@ -411,7 +416,8 @@ pub(super) fn set(s: &mut Session, name: &str, v: &Value) -> Option<Result<()>> 
 }
 
 fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(String) -> EngineError) -> Result<()> {
-    let real = || super::as_f64(v);
+    // Reals are kept to the size of the largest coordinate (1e300 is refused, not stored).
+    let real = || super::as_f64(v).filter(|f| f.abs() <= super::Bound::LARGEST);
     match kind {
         Kind::Choice(allowed) => {
             let i = int_value(v).filter(|i| allowed.contains(i));
@@ -429,7 +435,7 @@ fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(S
             s.doc_mut()?.header.set_f64(name, f);
         }
         Kind::AnyReal => {
-            let f = real().ok_or_else(|| bad("a number".into()))?;
+            let f = real().ok_or_else(|| bad("a number from -1e12 to 1e12".into()))?;
             s.doc_mut()?.header.set_f64(name, f);
         }
         Kind::Angle => {
@@ -437,7 +443,7 @@ fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(S
                 Value::String(t) => s.angle_settings().amount(t),
                 _ => v.as_f64().map(f64::to_radians),
             };
-            let a = a.filter(|a| a.is_finite()).ok_or_else(|| bad("an angle".into()))?;
+            let a = a.filter(|a| super::finite_angle(*a)).ok_or_else(|| bad(super::ANGLE_ALLOWED.into()))?;
             s.doc_mut()?.header.set_f64(name, cadaddy_geom::norm_angle(a));
         }
         Kind::Pattern => {
@@ -446,7 +452,9 @@ fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(S
             s.doc_mut()?.header.set_str(name, &p);
         }
         Kind::Name => {
-            let t = v.as_str().map(str::trim).filter(|t| t.chars().count() <= 255).ok_or_else(|| bad("a name, or . for none".into()))?;
+            // A block name follows the symbol table name rule (INSERT checks the block exists).
+            let t = v.as_str().map(str::trim).filter(|t| t.is_empty() || *t == "." || crate::cmd::names::is_valid(t));
+            let t = t.ok_or_else(|| bad("a block name (no < > / \\ \" : ; ? * | , = `), or . for none".into()))?;
             let t = if t == "." { "" } else { t };
             s.doc_mut()?.header.set_str(name, t);
         }
@@ -469,6 +477,43 @@ fn set_header(s: &mut Session, name: &str, kind: Kind, v: &Value, bad: impl Fn(S
         Kind::Point => {
             let p = crate::cmd::point_value(v).filter(|p| p.is_finite()).ok_or_else(|| bad("a point x,y".into()))?;
             s.doc_mut()?.header.set(name, cadaddy_doc::HVal::Point(p.to3(0.0)));
+        }
+        Kind::Transparency(use_current) => {
+            let t = match v {
+                Value::String(t) => t.trim().to_string(),
+                Value::Number(_) => int_value(v).map(|i| i.to_string()).unwrap_or_default(),
+                _ => String::new(),
+            };
+            let canon = if t.eq_ignore_ascii_case("ByLayer") {
+                Some("ByLayer".to_string())
+            } else if t.eq_ignore_ascii_case("ByBlock") {
+                Some("ByBlock".to_string())
+            } else if use_current && (t.eq_ignore_ascii_case("use current") || t == ".") {
+                Some("use current".to_string())
+            } else {
+                t.parse::<i64>().ok().filter(|i| (0..=90).contains(i)).map(|i| i.to_string())
+            };
+            let allowed = if use_current { "use current, ByLayer, ByBlock or 0 to 90" } else { "ByLayer, ByBlock or 0 to 90" };
+            s.doc_mut()?.header.set_str(name, &canon.ok_or_else(|| bad(allowed.into()))?);
+        }
+        Kind::LayerName => {
+            let t = match v {
+                Value::String(t) => t.trim().to_string(),
+                Value::Number(n) => n.to_string(),
+                _ => String::new(),
+            };
+            let t = if t == "." || t.eq_ignore_ascii_case("use current") { ".".to_string() } else { t };
+            if t != "." && !crate::cmd::names::is_valid(&t) {
+                return Err(bad("a layer name (no < > / \\ \" : ; ? * | , = `), or . for the current layer".into()));
+            }
+            s.doc_mut()?.header.set_str(name, &t);
+        }
+        Kind::FileText => {
+            let t = match v {
+                Value::Number(n) => n.to_string(),
+                _ => super::file_text(name, v)?.to_string(),
+            };
+            s.doc_mut()?.header.set_str(name, &t);
         }
         Kind::MlineStyle => {
             let t = v.as_str().map(str::trim).unwrap_or_default();

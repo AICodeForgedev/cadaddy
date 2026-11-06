@@ -1,0 +1,36 @@
+{
+  "_about": "bim.bid (Q6196): how a takeoff line is put in a bid system, the trades a bid covers, and the words of its letter. Rules data, no job's values: classes of work by the words of the takeoff's own items and categories. First matching rule wins; a line whose category is in `inherit` takes its circuit's system (the system of the devices on that circuit), else `default_system`.",
+  "trades": ["electrical"],
+  "systems": [
+    {"id": "power", "name": "Power"},
+    {"id": "lighting", "name": "Lighting and lighting controls"},
+    {"id": "fire_alarm", "name": "Fire alarm"},
+    {"id": "low_voltage", "name": "Low voltage pathways and rough-in"},
+    {"id": "site", "name": "Site and underground"},
+    {"id": "gear", "name": "Gear, distribution and feeders"},
+    {"id": "general", "name": "General conditions and allowances"}
+  ],
+  "default_system": "power",
+  "underground_system": "site",
+  "allowance_system": "general",
+  "inherit": ["wire", "conduit", "conduit fittings", "boxes", "cable", "tray", "fittings", "supports", "hangers"],
+  "rules": [
+    {"system": "fire_alarm", "categories": ["fire alarm"], "why": "a fire alarm category"},
+    {"system": "fire_alarm", "words": ["fire alarm", "smoke detector", "heat detector", "duct detector", "horn", "strobe", "pull station", "facp", "nac panel", "monitor module", "relay module", "annunciator"], "why": "a fire alarm device"},
+    {"system": "low_voltage", "words": ["low voltage", "data outlet", "telephone", "tv outlet", "television", "card reader", "access control", "camera", "wireless access point", "bda", "das", "intercom", "nurse call", "communications"], "why": "a low voltage device or pathway"},
+    {"system": "low_voltage", "line_systems": ["bda", "das", "data", "tele", "comm", "lv", "low voltage", "security", "av"], "why": "a raceway of a low voltage system"},
+    {"system": "gear", "words": ["switchboard", "switchgear", "panelboard", "panel ", "panel cover", "transformer", "disconnect", "meter", "service entrance", "main breaker", "breaker", "ats", "transfer switch", "generator", "busway", "motor control", "mcc"], "why": "distribution equipment"},
+    {"system": "gear", "categories": ["equipment", "gear", "breakers"], "words_none": ["equipment connection"], "why": "electrical equipment"},
+    {"system": "gear", "categories": ["wire", "cable"], "no_circuit": true, "sizes": ["#6", "#4", "#3", "#2", "#1", "1/0", "2/0", "3/0", "4/0", "250", "300", "350", "400", "500", "600", "750"], "why": "a feeder-size conductor on no branch circuit"},
+    {"system": "gear", "line_systems": ["feeder", "service"], "why": "a feeder or service raceway"},
+    {"system": "gear", "categories": ["conduit", "conduit fittings"], "no_circuit": true, "sizes": ["1-1/4\"", "1-1/2\"", "2\"", "2-1/2\"", "3\"", "3-1/2\"", "4\"", "5\"", "6\""], "why": "a raceway of feeder size on no branch circuit"},
+    {"system": "lighting", "words": ["luminaire", "light fixture", "lighting", "lamp", "switch", "dimmer", "occupancy sensor", "vacancy sensor", "photocell", "daylight sensor", "dimming control", "time clock", "emergency battery", "exit sign"], "words_none": ["transfer switch", "safety switch", "disconnect switch"], "why": "a lighting device or control"},
+    {"system": "power", "words": ["receptacle", "equipment connection", "junction box", "damper", "branch circuit", "motor", "outlet", "ev charger", "hand dryer", "water heater"], "why": "a power device or connection"}
+  ],
+  "letter": {
+    "title": "PROPOSAL",
+    "scope": "We propose to furnish and install the work described below, as shown on the documents listed in the bid workbook, for the base bid of",
+    "footer": "Prepared with CADaddy (AICodeForge). Every amount is traced to its takeoff lines in the bid workbook.",
+    "full_lists": "The full inclusions, exclusions, clarifications and assumptions are in the bid workbook (sheet Scope)."
+  }
+}

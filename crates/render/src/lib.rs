@@ -346,6 +346,9 @@ pub struct Options {
     /// Layer boundary lines for wall meshes: each entry is two 3D points forming a line segment.
     /// These are drawn as thin grey lines over wall entities to show the assembly layer stack.
     pub layer_lines: Vec<([f64; 3], [f64; 3])>,
+    /// Leave hatches out (their pattern lines and fills): a boundary search follows only the
+    /// linework, also inside block references and arrays.
+    pub skip_hatches: bool,
 }
 
 impl Options {
@@ -373,6 +376,7 @@ impl Default for Options {
             field_shading: false,
             color_overrides: std::collections::BTreeMap::new(),
             layer_lines: Vec::new(),
+            skip_hatches: false,
         }
     }
 }
@@ -760,13 +764,18 @@ fn build_space(d: &Drawing, space: &Space, opts: &Options, plotting: bool) -> Di
         b.list.sheet = paper::sheet(d, name);
     }
     if let Some(store) = d.space(space) {
+        // A large model space is built in parallel; the overlays below (layer lines) go on it
+        // the same.
         #[cfg(not(target_arch = "wasm32"))]
-        if !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK {
+        let parallel = !paper && !plotting && b.styles.is_none() && store.len() >= 2 * PARALLEL_CHUNK;
+        #[cfg(target_arch = "wasm32")]
+        let parallel = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if parallel {
             build_parallel(&mut b, d, store);
-            return b.list;
         }
         let mut viewports = 0usize;
-        for e in store.iter() {
+        for e in store.iter().filter(|_| !parallel) {
             if paper && let EntityKind::Viewport(vp) = &e.kind {
                 if viewports < MAX_VIEWPORTS {
                     viewports += 1;
@@ -1601,6 +1610,7 @@ fn entity_parts(b: &mut Builder, ctx: &Ctx, e: &Entity) {
                 dimension(b, ctx, e, dm, lw, lt.as_ref(), ltscale);
             }
         }
+        EntityKind::Hatch(_) if b.opts.skip_hatches => {}
         EntityKind::Hatch(h) => hatch::draw(b, ctx, e, h, rgb, lw, tol),
         EntityKind::MLine(m) => mline::draw(b, ctx, e, m, rgb, lw, tol),
         EntityKind::LwPolyline(p) if p.const_width > 0.0 || p.vertices.iter().any(|v| v.start_width > 0.0 || v.end_width > 0.0) => {

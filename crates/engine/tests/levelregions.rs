@@ -207,18 +207,21 @@ fn what_a_reader_built_off_the_building_is_listed_with_its_source() {
         json!({"tag": tag, "kind": "ahu", "level": "Level 1", "min": [x, y], "max": [x + 40.0, y + 40.0], "bottom_ft": 0.0, "height_ft": 4.0,
                "properties": {"SOURCE": "sheet=M-101"}})
     };
-    let equipment = json!([box_at(480.0 + 720.0, 160.0, "AHU = AIR HANDLING UNIT"), box_at(300.0, 200.0, "P-1")]);
+    // And a condensing unit 7' past the wall: more than 5' out, so listed too.
+    let equipment =
+        json!([box_at(480.0 + 720.0, 160.0, "AHU = AIR HANDLING UNIT"), box_at(300.0, 200.0, "P-1"), box_at(480.0 + 84.0, 160.0, "CU-1")]);
     s.execute("bspec.set", &json!({"spec": {"mep": {"equipment": equipment}}})).unwrap();
     let r = s.execute("model.build", &json!({})).unwrap();
     let made = s.doc().unwrap().model.iter().filter(|e| made_as(e).as_deref() == Some("mep")).count();
     assert!(made >= 2, "both boxes built: {r}");
     let issues = s.execute("model.issues", &json!({"kind": "outside_building"})).unwrap();
     let list = issues["issues"].as_array().cloned().unwrap_or_default();
-    assert_eq!(list.len(), 1, "only the stray equipment: {issues}");
-    let msg = list[0]["message"].as_str().unwrap_or("");
-    assert!(msg.contains("equipment") && msg.contains("AIR HANDLING UNIT") && msg.contains("outside Level 1"), "{msg}");
-    assert_eq!(list[0]["level"], json!("Level 1"));
-    assert_eq!(list[0]["handles"].as_array().map(Vec::len), Some(1), "{issues}");
+    assert_eq!(list.len(), 2, "the stray equipment and the unit 7' out, not the pump inside: {issues}");
+    let ahu = list.iter().find(|i| i["message"].as_str().is_some_and(|m| m.contains("AIR HANDLING UNIT"))).expect("the stray");
+    let msg = ahu["message"].as_str().unwrap_or("");
+    assert!(msg.contains("equipment") && msg.contains("outside Level 1"), "{msg}");
+    assert_eq!(ahu["level"], json!("Level 1"));
+    assert_eq!(ahu["handles"].as_array().map(Vec::len), Some(1), "{issues}");
 
     // The default render frames the building: the stray is out of the picture, so the building
     // fills it.
@@ -277,7 +280,16 @@ fn a_jobs_other_sheets_are_theirs_not_outside_every_level() {
         set.truth.sheets.iter().map(|sh| (set.file(&sh.pdf).unwrap().to_vec(), format!("{} {}", sh.number, sh.title), String::new())).collect();
     std::fs::write(dir.join("Full Set.pdf"), cadaddy_io::pdf_merge::merge(&pages).unwrap()).unwrap();
     let mut s = Session::new();
-    let st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).unwrap();
+    let mut st = s.execute("job.start", &json!({"pdfs": dir.display().to_string(), "goal": "bim", "auto": true, "checkpoint": false})).unwrap();
+    // Its electrical plan prints no device marks (the letters by its symbols are the grids'
+    // bubbles, no devices: Q6165), which the job asks about even in auto mode: none, it says.
+    if st["done"] != json!(true) {
+        let next = s.execute("job.next", &json!({})).unwrap();
+        let q = &next["question"];
+        assert!(q["question"].as_str().is_some_and(|t| t.contains("No device symbols counted on the electrical plans")), "{next}");
+        s.execute("job.answer", &json!({"id": q["id"], "answer": "No devices on these sheets"})).unwrap();
+        st = s.execute("job.status", &json!({})).unwrap();
+    }
     assert_eq!(st["done"], json!(true), "{st}");
     let _ = std::fs::remove_dir_all(&dir);
 

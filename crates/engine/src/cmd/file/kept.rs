@@ -51,6 +51,47 @@ fn drop_placeholders(kind: &cadaddy_doc::EntityKind, forms: &mut [&mut serde_jso
     }
 }
 
+/// A mesh's faces as a polyface mesh holds them: a face of three or four vertices as it is, a
+/// larger one as a fan of triangles from its first vertex whose inner edges are hidden (the DWG and
+/// DXF writers' form: a polyface face has at most four vertices). Faces a file can't hold (fewer
+/// than three vertices, or a vertex that isn't there) are left as they are, so they still differ.
+fn polyface_faces(m: &cadaddy_doc::Mesh) -> Vec<cadaddy_doc::MeshFace> {
+    let mut out = Vec::with_capacity(m.faces.len());
+    for f in &m.faces {
+        let n = f.v.len();
+        if n <= 4 || f.v.iter().any(|i| *i as usize >= m.vertices.len()) {
+            out.push(f.clone());
+            continue;
+        }
+        let hidden = |k: usize| k < 64 && f.hidden & (1 << k) != 0;
+        for k in 1..n - 1 {
+            // Triangle 0, k, k+1: its edge 0→k is inner unless k = 1, k→k+1 is the face's own,
+            // k+1→0 is inner unless k+1 = n-1.
+            let (Some(&a), Some(&b), Some(&c)) = (f.v.first(), f.v.get(k), f.v.get(k + 1)) else { continue };
+            let bits = u64::from(k != 1 || hidden(0)) | u64::from(hidden(k)) << 1 | u64::from(k + 1 != n - 1 || hidden(n - 1)) << 2;
+            out.push(cadaddy_doc::MeshFace { v: vec![a, b, c], hidden: bits });
+        }
+    }
+    out
+}
+
+/// A mesh whose faces of more than four vertices came back as their polyface fans
+/// ([`polyface_faces`]: the same triangles, the inner edges hidden, the face's own edges as they
+/// were) keeps its shape: `a`'s faces are taken as the file's. Any other difference in the faces
+/// (a vertex, a triangle or an edge's visibility) still shows.
+fn take_fanned_faces(kind: &cadaddy_doc::EntityKind, a: &mut serde_json::Value, b: &serde_json::Value) {
+    let cadaddy_doc::EntityKind::Mesh(m) = kind else { return };
+    if !m.faces.iter().any(|f| f.v.len() > 4) {
+        return;
+    }
+    let Some(theirs) = b.get("faces") else { return };
+    if serde_json::to_value(polyface_faces(m)).is_ok_and(|fan| fan == *theirs)
+        && let Some(o) = a.as_object_mut()
+    {
+        o.insert("faces".into(), theirs.clone());
+    }
+}
+
 /// Whether `n` is an anonymous block's name: `*`, a letter and a number (`*D12`, `*U3`, `*X1`).
 fn is_anonymous_block_name(n: &str) -> bool {
     let b = n.as_bytes();
@@ -69,7 +110,7 @@ fn step(len: usize) -> usize {
 }
 
 /// The parts of a drawing compared, named as the notice names them.
-const PARTS: [&str; 20] = [
+const PARTS: [&str; 22] = [
     "objects",
     "object properties",
     "layers",
@@ -90,6 +131,8 @@ const PARTS: [&str; 20] = [
     "geometric and dimensional constraints",
     "parameters",
     "the scale list",
+    "materials",
+    "other programs' data",
 ];
 
 fn v<T: Serialize>(t: &T) -> serde_json::Value {
@@ -162,6 +205,7 @@ fn objects_kept(a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, dept
                 // reported with nothing listed under it.
                 let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
                 drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
+                take_fanned_faces(&e.kind, &mut ka, &kb);
                 kept(&ka, &kb, depth + 2)
             }))
 }
@@ -277,13 +321,31 @@ pub const MAX_LISTED: usize = 50;
 /// Objects compared one by one per space or block for the detailed list (past it, spread evenly).
 const DETAIL_SAMPLE: usize = 50_000;
 
-/// Losses gathered by feature.
+/// Losses gathered by feature, and the parts ([`PARTS`]) they are in.
 #[derive(Default)]
-struct Losses(std::collections::BTreeMap<(String, &'static str), Loss>);
+struct Losses {
+    by_feature: std::collections::BTreeMap<(String, &'static str), Loss>,
+    /// The part being compared, which [`Losses::add`] counts as losing something.
+    part: &'static str,
+    parts: std::collections::BTreeSet<&'static str>,
+}
 
 impl Losses {
+    /// Compare `part` next.
+    fn in_part(&mut self, part: &'static str) -> &mut Self {
+        self.part = part;
+        self
+    }
+
     fn add(&mut self, feature: String, what: &'static str, handle: Option<String>, name: Option<String>) {
-        let l = self.0.entry((feature.clone(), what)).or_insert_with(|| Loss { feature, what, count: 0, handles: Vec::new(), names: Vec::new() });
+        self.parts.insert(self.part);
+        let l = self.by_feature.entry((feature.clone(), what)).or_insert_with(|| Loss {
+            feature,
+            what,
+            count: 0,
+            handles: Vec::new(),
+            names: Vec::new(),
+        });
         l.count = l.count.saturating_add(1);
         if let Some(h) = handle.filter(|_| l.handles.len() < MAX_LISTED) {
             l.handles.push(h);
@@ -404,6 +466,7 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
     }
     let (mut ka, mut kb) = (content(v(&e.kind)), content(v(&f.kind)));
     drop_placeholders(&e.kind, &mut [&mut ka, &mut kb]);
+    take_fanned_faces(&e.kind, &mut ka, &kb);
     let (kind, h) = (kind_name(&ka), Some(e.handle.hex()));
     if kind_name(&kb) != kind {
         out.add(format!("{kind} objects (written as {})", kind_name(&kb)), "changed", h, name);
@@ -434,9 +497,15 @@ fn compare_pair(e: &cadaddy_doc::Entity, f: &cadaddy_doc::Entity, out: &mut Loss
         let feature = if field.is_empty() { format!("{kind} objects") } else { format!("{kind} {}", words(&field)) };
         out.add(feature, "changed", h.clone(), name.clone());
     }
+    // In model space an object's properties are a part of their own; in a block or layout, that one's.
+    let part = out.part;
+    if part == "objects" {
+        out.part = "object properties";
+    }
     for field in changed_fields(&v(&e.common), &v(&f.common)) {
         out.add(format!("object {}", words(&field)), "changed", h.clone(), name.clone());
     }
+    out.part = part;
 }
 
 /// Whether `back` was read from a Release 12 DXF file, which has no handles: its objects are
@@ -537,13 +606,10 @@ pub fn check_written(
     read: fn(&[u8], &str) -> Result<Drawing, String>,
 ) -> Result<(Vec<&'static str>, Vec<Loss>), String> {
     let back = opened(read(bytes, name)?);
-    let (mut lost, detail) = (lost_parts(d, &back), losses_of(d, &back));
-    // A category is derived from the same comparison as the detail: one with nothing listed under
-    // it is a disagreement between the two, and a notice that names nothing helps nobody.
-    debug_assert!(lost.is_empty() || !detail.is_empty(), "notKept {lost:?} with an empty notKeptDetail");
-    if detail.is_empty() {
-        lost.clear();
-    }
+    // One comparison (one sample) for both: the categories are the parts the detail lists losses
+    // in. A big drawing's categories came from a 2,000-object sample and its detail from 50,000,
+    // so a detail could come with no category at all (S5-006).
+    let (detail, lost) = losses_and_parts(d, &back);
     Ok((lost, detail))
 }
 
@@ -566,6 +632,12 @@ pub fn losses_between(d: &Drawing, back: &Drawing) -> Vec<Loss> {
 }
 
 fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
+    losses_and_parts(d, back).0
+}
+
+/// [`losses_of`], and the parts ([`PARTS`], in that order) the losses are in: the save notice's
+/// categories come from the same comparison as its detail, so neither names what the other doesn't (S5-006).
+fn losses_and_parts(d: &Drawing, back: &Drawing) -> (Vec<Loss>, Vec<&'static str>) {
     fn v<T: Serialize>(t: &T) -> serde_json::Value {
         serde_json::to_value(t).unwrap_or_default()
     }
@@ -574,13 +646,15 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
     let objects = |a: &cadaddy_doc::EntityStore, b: &cadaddy_doc::EntityStore, block: Option<&str>, out: &mut Losses| {
         if r12 { compare_r12(d, a, b, block, out) } else { compare_objects((d, a), (back, b), block, out) }
     };
-    objects(&d.model, &back.model, None, &mut out);
+    objects(&d.model, &back.model, None, out.in_part("objects"));
+    out.in_part("layouts");
     for l in &d.layouts {
         match back.layouts.iter().find(|x| x.name.eq_ignore_ascii_case(&l.name)) {
             Some(m) => objects(&l.entities, &m.entities, Some(&l.name), &mut out),
             None => out.add("layouts".into(), "dropped", None, Some(l.name.clone())),
         }
     }
+    out.in_part("blocks");
     for (n, b) in d.blocks.iter().filter(|(_, b)| !b.anonymous) {
         match back.blocks.get(n) {
             Some(m) => {
@@ -602,7 +676,7 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
         ("multiline styles", v(&d.mline_styles), v(&back.mline_styles)),
     ];
     for (t, a, b) in &tables {
-        compare_table(t, a, b, &mut out);
+        compare_table(t, a, b, out.in_part(t));
     }
     // The rest as whole parts (counted by their items).
     let whole: [(&str, serde_json::Value, serde_json::Value); 10] = [
@@ -620,7 +694,8 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
     for (part, a, b) in whole {
         if !kept(&a, &b, 0) {
             let count = a.as_array().map_or(1, Vec::len);
-            let l = out.0.entry((part.to_string(), "changed")).or_insert_with(|| Loss {
+            out.parts.insert(part);
+            let l = out.by_feature.entry((part.to_string(), "changed")).or_insert_with(|| Loss {
                 feature: part.into(),
                 what: "changed",
                 count: 0,
@@ -630,10 +705,10 @@ fn losses_of(d: &Drawing, back: &Drawing) -> Vec<Loss> {
             l.count = count;
         }
     }
-    compare_foreign(&d.foreign, &back.foreign, &mut out);
-    let mut list: Vec<Loss> = out.0.into_values().collect();
+    compare_foreign(&d.foreign, &back.foreign, out.in_part("other programs' data"));
+    let mut list: Vec<Loss> = out.by_feature.into_values().collect();
     list.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.feature.cmp(&b.feature)));
-    list
+    (list, PARTS.into_iter().filter(|p| out.parts.contains(p)).collect())
 }
 
 /// Whether group `code` holds a handle (the object's own, or a reference to another), which a
@@ -775,6 +850,31 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_object_read_back_as_a_raw_record_is_reported() {
+        let typed = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: 1.0 }),
+            )
+        };
+        let raw = |h: u64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Unknown(cadaddy_doc::Unknown { dxf_type: "CIRCLE".into(), tags: Vec::new() }),
+            )
+        };
+        let (mut d, mut back) = (Drawing::new_imperial(), Drawing::new_imperial());
+        d.model.push(typed(0x100));
+        back.model.push(raw(0x100));
+        let notes = losses_between(&d, &back);
+        assert!(notes.iter().any(|l| l.feature == "circle objects (kept as stored, not editable)" && l.handles == vec!["100".to_string()]), "{notes:?}");
+        // A raw record read back raw loses nothing.
+        let mut same = Drawing::new_imperial();
+        same.model.push(raw(0x100));
+        assert!(losses_between(&same, &same.clone()).is_empty());
+    }
+
+    #[test]
     fn objects_compared_a_pair_at_a_time_still_name_what_changed() {
         let circle = |h: u64, r: f64| {
             cadaddy_doc::Entity::new(
@@ -820,6 +920,94 @@ mod tests {
         back.model = Default::default();
         back.model.push(circle(0x101, 1.0));
         assert_eq!(lost_parts(&d, &back), vec!["objects"]);
+    }
+
+    /// S5-006: the save's categories come from the detail's own comparison. A change the
+    /// 2,000-object sample steps over (every other object of 3,000) was listed in the detail with
+    /// no category, and an agent reading `notKept` was told the save was clean.
+    #[test]
+    fn categories_come_from_the_same_sample_as_the_detail() {
+        thread_local! {
+            static BACK: std::cell::RefCell<Option<Drawing>> = const { std::cell::RefCell::new(None) };
+        }
+        let circle = |h: u64, r: f64| {
+            cadaddy_doc::Entity::new(
+                cadaddy_doc::Handle(h),
+                cadaddy_doc::EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(1.0, 2.0, 0.0), radius: r }),
+            )
+        };
+        let mut d = Drawing::new_imperial();
+        for h in 0..3000 {
+            d.model.push(circle(0x100 + h, 1.0));
+        }
+        let mut block = cadaddy_doc::Block::new("Door");
+        block.entities.push(circle(0x10000, 1.0));
+        d.blocks.insert("Door".into(), std::sync::Arc::new(block));
+        let read: fn(&[u8], &str) -> Result<Drawing, String> = |_, _| BACK.with(|b| b.borrow().clone()).ok_or_else(|| "nothing".to_string());
+        let check = |back: Drawing| {
+            BACK.with(|b| *b.borrow_mut() = Some(back));
+            check_written(&d, "x.dxf", b"", read).unwrap()
+        };
+        // One radius changed, at an object the sample steps over.
+        let mut back = d.clone();
+        back.model = Default::default();
+        for h in 0..3000 {
+            back.model.push(circle(0x100 + h, if h == 1 { 1.5 } else { 1.0 }));
+        }
+        assert!(lost_parts(&d, &back).is_empty(), "the 2,000-object sample misses it");
+        let (lost, detail) = check(back);
+        assert_eq!(lost, vec!["objects"], "{detail:?}");
+        assert!(detail.iter().any(|l| l.feature == "circle radius" && l.handles == vec!["101".to_string()]), "{detail:?}");
+        // An object's layer: its properties; a block object's anything: the blocks.
+        let mut back = d.clone();
+        back.model.modify(cadaddy_doc::Handle(0x103), |e| e.common.layer = "Walls".into());
+        let mut other = cadaddy_doc::Block::new("Door");
+        let mut c = circle(0x10000, 1.0);
+        c.common.layer = "Walls".into();
+        other.entities.push(c);
+        back.blocks.insert("Door".into(), std::sync::Arc::new(other));
+        let (lost, detail) = check(back);
+        assert_eq!(lost, vec!["object properties", "blocks"], "{detail:?}");
+        // Nothing lost: no category, no detail.
+        assert_eq!(check(d.clone()), (Vec::new(), Vec::new()));
+    }
+
+    /// A polyface face holds at most four vertices: a larger face is stored as a fan of triangles
+    /// from its first vertex, the fan's inner edges hidden. That keeps its shape and visible
+    /// edges, so it is no loss (every BIM model's first DWG/DXF save said "mesh faces changed");
+    /// any other change to the faces still is.
+    #[test]
+    fn an_n_gon_stored_as_its_fan_is_kept_but_a_changed_fan_is_not() {
+        use cadaddy_doc::{Mesh, MeshFace, MeshKind};
+        let face = |v: &[u32], hidden: u64| MeshFace { v: v.to_vec(), hidden };
+        let mesh = |faces: Vec<MeshFace>| {
+            let vertices = (0..5u32).map(|i| cadaddy_geom::Vec3::new(f64::from(i), f64::from(i * i), 0.0)).collect();
+            cadaddy_doc::Entity::new(cadaddy_doc::Handle(0x100), cadaddy_doc::EntityKind::Mesh(Mesh { vertices, faces, kind: MeshKind::Polyface }))
+        };
+        let mut d = Drawing::new_imperial();
+        // Its edge 2→3 hidden.
+        d.model.push(mesh(vec![face(&[0, 1, 2, 3, 4], 0b100)]));
+        let back = |faces: Vec<MeshFace>| {
+            let mut b = d.clone();
+            b.model = Default::default();
+            b.model.push(mesh(faces));
+            b
+        };
+        // Triangles 0-1-2, 0-2-3, 0-3-4: edges 0→2 and 0→3 inner (hidden), 2→3 hidden as it was.
+        let fan = back(vec![face(&[0, 1, 2], 0b100), face(&[0, 2, 3], 0b111), face(&[0, 3, 4], 0b001)]);
+        assert!(losses_between(&d, &fan).is_empty(), "{:?}", losses_between(&d, &fan));
+        assert!(lost_parts(&d, &fan).is_empty());
+        for (what, faces) in [
+            ("an inner edge drawn", vec![face(&[0, 1, 2], 0), face(&[0, 2, 3], 0b111), face(&[0, 3, 4], 0b001)]),
+            ("a hidden edge drawn", vec![face(&[0, 1, 2], 0b100), face(&[0, 2, 3], 0b101), face(&[0, 3, 4], 0b001)]),
+            ("another triangle", vec![face(&[0, 1, 3], 0b100), face(&[0, 2, 3], 0b111), face(&[0, 3, 4], 0b001)]),
+            ("a triangle missing", vec![face(&[0, 1, 2], 0b100), face(&[0, 2, 3], 0b111)]),
+        ] {
+            let b = back(faces);
+            let l = losses_between(&d, &b);
+            assert!(l.iter().any(|l| l.feature == "mesh faces" && l.what == "changed"), "{what}: {l:?}");
+            assert_eq!(lost_parts(&d, &b), vec!["objects"], "{what}");
+        }
     }
 
     #[test]

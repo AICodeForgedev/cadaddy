@@ -1147,3 +1147,12 @@ fn entmod_of_an_unedited_list_changes_nothing() {
     }
     assert_eq!(before, snap(&s));
 }
+
+#[test]
+fn atof_out_of_range_exponent_reads_whole_token() {
+    let mut s = Session::new();
+    // Overflow must not fall back to a shorter prefix such as "1e40".
+    assert_eq!(ok(&mut s, "(> (atof \"1e400\") 1e300)"), "T");
+    assert_eq!(ok(&mut s, "(< (atof \"-1e400\") -1e300)"), "T");
+    assert_eq!(ok(&mut s, "(= (atof \"1e-400\") 0.0)"), "T");
+}

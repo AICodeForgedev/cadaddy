@@ -168,8 +168,8 @@ pub struct DimStyle {
     pub text_gap: f64,
     /// DIMDEC decimal places.
     pub decimals: u8,
-    /// DIMADEC angular decimals.
-    pub angular_decimals: u8,
+    /// DIMADEC angular decimals: 0-8, or -1 for "use DIMDEC" (see [`DimStyle::angular_places`]).
+    pub angular_decimals: i8,
     /// DIMLFAC linear scale factor.
     pub linear_factor: f64,
     /// DIMTAD text above line (0 centred, 1 above).
@@ -517,11 +517,20 @@ impl DimStyle {
                     serde_json::json!(n.as_f64().filter(|x| x.is_finite()).unwrap_or(0.0).round() as i64)
                 }
                 (Value::Number(_), Value::Number(_)) if matches!(field, "dimLineweight" | "extLineweight") => coerced,
-                // A value below 0 or one that rounds above 255 is refused; DIMADEC -1 reads as 0.
+                // DIMADEC: -1 (use DIMDEC) to 8, kept as given.
+                (Value::Number(_), Value::Number(n)) if field == "angularDecimals" => {
+                    match n.as_f64().filter(|x| x.is_finite()).map(f64::round).filter(|x| (-1.0..=8.0).contains(x)) {
+                        Some(x) => serde_json::json!(x as i64),
+                        None => {
+                            rejected.push(k.clone());
+                            continue;
+                        }
+                    }
+                }
+                // A value below 0 or one that rounds above 255 is refused.
                 (Value::Number(o), Value::Number(n)) if o.is_u64() && !n.is_u64() => {
-                    let min = if field == "angularDecimals" { -1.0 } else { 0.0 };
-                    match n.as_f64().filter(|x| x.is_finite() && *x >= min).map(f64::round).filter(|x| *x <= 255.0) {
-                        Some(x) => serde_json::json!(x.max(0.0) as u64),
+                    match n.as_f64().filter(|x| x.is_finite() && *x >= 0.0).map(f64::round).filter(|x| *x <= 255.0) {
+                        Some(x) => serde_json::json!(x as u64),
                         None => {
                             rejected.push(k.clone());
                             continue;
@@ -563,6 +572,11 @@ impl DimStyle {
             }
         }
         rejected
+    }
+
+    /// The decimal places of angular dimension text: DIMADEC, or DIMDEC when DIMADEC is -1.
+    pub fn angular_places(&self) -> u8 {
+        u8::try_from(self.angular_decimals).unwrap_or(self.decimals)
     }
 
     /// The overall scale: the style's DIMSCALE, else the drawing's `dimscale`, else 1. Zero means
@@ -838,6 +852,10 @@ pub struct PageSetup {
     pub mm_units: Option<bool>,
     /// Plots of this page setup carry the drawing's plot stamp ([`crate::plotstamp`]).
     pub plot_stamp: bool,
+    /// The paper image origin (DXF groups 148/149, in plot paper units) as the file had it, so a
+    /// save keeps where the sheet sits; `None` for a page CADaddy made, written as 0,0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_origin: Option<Vec2>,
 }
 
 impl Default for PageSetup {
@@ -860,6 +878,7 @@ impl Default for PageSetup {
             plot_transparency: false,
             mm_units: None,
             plot_stamp: false,
+            image_origin: None,
         }
     }
 }

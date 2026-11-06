@@ -315,7 +315,8 @@ fn run_block(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
     let from_file = str_param(p, "file").is_some();
-    let p = &insert_file::json_params(s, p)?;
+    let (p, read_notes) = insert_file::json_params(s, p)?;
+    let p = &p;
     let name = str_param(p, "name").ok_or_else(|| bad("insert", "`name` is required"))?.to_string();
     let at = point_req("insert", p, "at")?;
     // `scale`: one factor, or [x, y] for different X and Y scale factors.
@@ -348,6 +349,9 @@ fn run_insert(s: &mut Session, p: &Value) -> Result<Value> {
         o.insert("unitFactor".into(), json!(factor));
         if factor != 1.0 {
             o.insert("note".into(), json!(insert_file::factor_note(factor)));
+        }
+        if !read_notes.is_empty() {
+            o.insert("warnings".into(), json!(read_notes));
         }
     }
     Ok(reply)
@@ -390,6 +394,7 @@ fn run_attdef(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn run_wblock(s: &mut Session, p: &Value) -> Result<Value> {
+    s.guard_run("wblock", p)?;
     let path = wblock::with_extension(str_param(p, "path").ok_or_else(|| bad("wblock", "`path` is required"))?);
     if let Some(d) = s.docs.iter().find(|d| d.path.as_deref().is_some_and(|x| super::file::same_file(x, &path))) {
         return Err(bad("wblock", format!("{path} is the open drawing {}: choose another file name so it isn't replaced", d.title)));
@@ -737,7 +742,7 @@ impl InsertM {
     /// Define the block from a file, then choose it; a file that can't be read is reported.
     fn choose_file(&mut self, s: &mut Session, f: &insert_file::FileRef) -> Result<()> {
         match f.define(s) {
-            Ok(name) => {
+            Ok((name, _)) => {
                 self.unit_factor = Some(insert_file::block_factor(s, &name));
                 self.choose(s, &name)
             }
