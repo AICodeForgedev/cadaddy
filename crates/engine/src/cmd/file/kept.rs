@@ -839,14 +839,14 @@ mod tests {
         );
         let mut out = Losses::default();
         compare_pair(&circle, &stored, &mut out, None);
-        let list: Vec<_> = out.0.into_values().collect();
+        let list: Vec<_> = out.by_feature.into_values().collect();
         assert_eq!(list.len(), 1, "{list:?}");
         assert_eq!(list[0].feature, "circle objects (kept as stored, not editable)");
         assert_eq!(list[0].handles, vec!["100".to_string()]);
         // The same kind on both sides says nothing.
         let mut out = Losses::default();
         compare_pair(&circle, &circle, &mut out, None);
-        assert!(out.0.is_empty());
+        assert!(out.by_feature.is_empty());
     }
 
     #[test]
@@ -867,7 +867,10 @@ mod tests {
         d.model.push(typed(0x100));
         back.model.push(raw(0x100));
         let notes = losses_between(&d, &back);
-        assert!(notes.iter().any(|l| l.feature == "circle objects (kept as stored, not editable)" && l.handles == vec!["100".to_string()]), "{notes:?}");
+        assert!(
+            notes.iter().any(|l| l.feature == "circle objects (kept as stored, not editable)" && l.handles == vec!["100".to_string()]),
+            "{notes:?}"
+        );
         // A raw record read back raw loses nothing.
         let mut same = Drawing::new_imperial();
         same.model.push(raw(0x100));
