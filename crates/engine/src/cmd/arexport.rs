@@ -26,6 +26,7 @@
 //! Read-only: the drawing is not changed.
 
 mod glb;
+mod manifest;
 mod usdz;
 
 use std::collections::{BTreeMap, HashMap};
@@ -62,6 +63,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CMD, "Export for AR", run)
             .params(
                 "{room?: number or name, rooms?: [number or name] (default: one room, the first built), level?: name (all of it, or the level of `box`/`room`), box?: {min: [x, y], max: [x, y], z?: [from, to]} (building feet on the level; z feet above its floor), trades?: [trade or system] (electrical, plumbing, lights, conduit), kinds?: [kind] (receptacle, device, duct), anchor?: {corner: n (1-based, the sidecar's points) | grid: \"A-1\" | name: text, at?: [x, y] (building feet; without it the plan text `name`)} (default: the room corner nearest its entry), context?: \"translucent\"|\"solid\"|\"off\", small?: bool (keep the trades' loose pieces), clip?: bool (default true: cut what runs past the rooms or box, as a wall running on down the corridor), formats?: [\"glb\", \"usdz\"] (default both), max_triangles?, max_bytes? (lower the rules' caps), path?: where to write (NAME.glb / NAME.usdz / NAME.json beside each other; default beside the drawing), force?: bool (replace existing files)} → {files: {glb?, usdz?, sidecar}, bytes, nodes, meshes, triangles, kinds, trades, anchor, scope, dropped, simplified, cut_to_scope, seconds, checks}",
+            )
+            .noundo()
+            .files(),
+        CommandSpec::new(manifest::CMD, "AR Export Manifest", manifest::run)
+            .params(
+                "{dir: folder of AR exports (each NAME.json sidecar with its NAME.glb / NAME.usdz; subfolders two deep), force?: bool (replace a manifest.json this command did not write)} → {path, packages, files, bytes, names, skipped: [{name, why}]} — writes DIR/manifest.json (name, label, level, exported, and each file's relative name, byte size and SHA-256) so any static web server can serve the folder to the field app's Update button; nothing else is written",
             )
             .noundo()
             .files(),
@@ -1730,6 +1737,7 @@ fn sidecar_json(built: &Built, summary: &Value, points: &[Value], stem: &str, gl
     let scene = &built.scene;
     let mut v = summary.clone();
     v["version"] = json!(1);
+    v["exported"] = json!(super::project::timestamp());
     v["model"] = json!(if usdz { format!("{stem}.usdz") } else { format!("{stem}.glb") });
     v["glb"] = if glb { json!(format!("{stem}.glb")) } else { Value::Null };
     v["usdz"] = if usdz { json!(format!("{stem}.usdz")) } else { Value::Null };

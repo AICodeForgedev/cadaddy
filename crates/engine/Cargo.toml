@@ -29,6 +29,8 @@ log = { workspace = true }
 rstar = { version = "0.12", default-features = false }
 # Deflate for ETRANSMIT's ZIP archives (MIT OR Zlib OR Apache-2.0; already used by cadaddy-io).
 miniz_oxide = "0.8"
+# SHA-256 of AR export files for the field app's update manifest (MIT OR Apache-2.0; already used by the app and xtask).
+sha2 = "0.11"
 # Human-readable project rules files (MIT OR Apache-2.0; already used by cadaddy-ui-egui).
 toml = "1"
 # Embedded scripting language (MIT OR Apache-2.0). Sandboxed: Engine::new_raw() + selective packages.

@@ -1,5 +1,6 @@
 // CADaddy Field — opens CADaddy AR packages, aligns them to the real room and shows each object's data.
-// Apple frameworks only; no network, no accounts, no analytics. Packages and marks stay on the device.
+// Apple frameworks only; no accounts, no analytics. Packages and marks stay on the device. The only network use is the
+// Update button: when tapped, it fetches the office's manifest.json over the local network (FieldCore/Update.swift).
 
 import RealityKit
 import SwiftUI
@@ -39,6 +40,13 @@ final class AppModel: ObservableObject {
     @Published var selection: UUID?
     @Published var importing = false
     @Published var alert: String?
+    // Update (Q6218)
+    @Published var updating = false
+    @Published var updateProgress: UpdateProgress?
+    @Published var updateReport: UpdateReport?
+    @Published var askAddress = false
+    @Published var serverAddress: String = UserDefaults.standard.string(forKey: UpdateServer.defaultsKey) ?? ""
+    private var updateTask: Task<Void, Never>?
     /// Debug-only screen automation for screenshots: `-demo library|elements|card|marks|preview`.
     let demoScreen: String?
 
@@ -53,7 +61,56 @@ final class AppModel: ObservableObject {
         reload()
         if library == nil { alert = "CADaddy Field can't create its library folder on this device." }
         if demoScreen != nil { prepareDemo() }
+        #if DEBUG
+        // `-updateserver URL` presets the address and `-autoupdate` taps Update once at launch (simulator end-to-end run).
+        if let i = args.firstIndex(of: "-updateserver"), args.indices.contains(i + 1) { serverAddress = args[i + 1] }
+        if args.contains("-autoupdate") { DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { self.tapUpdate() } }
+        #endif
     }
+
+    // MARK: Update
+
+    /// The Update button: asks for the address the first time, then runs one update. Nothing runs at any other time.
+    func tapUpdate() {
+        guard !updating else { return }
+        if serverAddress.trimmingCharacters(in: .whitespaces).isEmpty { askAddress = true; return }
+        runUpdate()
+    }
+
+    /// Checks and stores the address (on this device only). Returns an error message, or nil when it was saved.
+    func saveAddress(_ text: String) -> String? {
+        do { _ = try UpdateServer.manifestURL(text) } catch { return (error as? FieldError)?.message ?? "That address can't be used." }
+        serverAddress = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        UserDefaults.standard.set(serverAddress, forKey: UpdateServer.defaultsKey)
+        return nil
+    }
+
+    func runUpdate() {
+        guard let library, !updating else { return }
+        updating = true
+        updateReport = nil
+        updateProgress = UpdateProgress(done: 0, total: 1, current: "Checking the office for updates…")
+        let address = serverAddress
+        updateTask = Task { [weak self] in
+            let updater = PackageUpdater(library: library)
+            let outcome: Result<UpdateReport, FieldError>
+            do {
+                outcome = .success(try await updater.run(address: address) { p in Task { @MainActor in self?.updateProgress = p } })
+            } catch {
+                outcome = .failure((error as? FieldError) ?? FieldError("The update stopped: \(error.localizedDescription)"))
+            }
+            guard let self else { return }
+            self.updating = false
+            self.updateProgress = nil
+            self.reload()
+            switch outcome {
+            case let .success(r): self.updateReport = r
+            case let .failure(e): self.alert = e.message
+            }
+        }
+    }
+
+    func cancelUpdate() { updateTask?.cancel() }
 
     func reload() {
         packages = library?.list() ?? []

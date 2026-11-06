@@ -127,7 +127,7 @@ struct ElementCardView: View {
                 let marks = session.marks(for: e.info.id)
                 if !marks.isEmpty {
                     Section("Marks on this object") {
-                        ForEach(marks) { m in MarkRow(mark: m) }
+                        ForEach(marks) { m in MarkRow(mark: m, current: session.record.currentVersion) }
                     }
                 }
             }
@@ -166,6 +166,8 @@ struct PendingMove {
 
 struct MarkRow: View {
     let mark: Mark
+    /// The package's current version: a mark made against another version says so.
+    var current: PackageVersion?
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack {
@@ -175,6 +177,15 @@ struct MarkRow: View {
                 Text(mark.time, style: .time).font(.caption).foregroundStyle(.secondary)
             }
             if let n = mark.note { Text(n).font(.caption) }
+            if mark.elementGone == true {
+                Label("element no longer in model", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+            }
+            if let was = mark.previousElementID {
+                Text("re-linked after a rebuild (was element \(was))").font(.caption2).foregroundStyle(.secondary)
+            }
+            if let v = mark.packageVersion, let c = current, v != c {
+                Text("made against an earlier version (\(v.label))").font(.caption2).foregroundStyle(.secondary)
+            }
             HStack(spacing: 8) {
                 if mark.photo != nil { Label("photo", systemImage: "photo").font(.caption2) }
                 if let p = mark.pointModel, p.count == 3 {
@@ -201,7 +212,7 @@ struct MarksListView: View {
                 let ms = session.marks.filter { $0.status == s }
                 if !ms.isEmpty {
                     Section("\(s.label) (\(ms.count))") {
-                        ForEach(ms) { m in MarkRow(mark: m) }
+                        ForEach(ms) { m in MarkRow(mark: m, current: session.record.currentVersion) }
                             .onDelete { idx in session.deleteMarks(Set(idx.map { ms[$0].id })) }
                     }
                 }

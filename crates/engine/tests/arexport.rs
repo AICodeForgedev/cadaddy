@@ -519,3 +519,107 @@ fn hostile_calls_are_refused_not_panicked() {
     assert!(e.contains("force:true"), "{e}");
     assert_eq!(std::fs::read(d.join("keep.glb")).unwrap(), b"precious");
 }
+
+fn sha256_hex(b: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Q6218 arupdate: `bim.export.ar.manifest {dir}` lists each export in a folder with every file's
+/// relative name, size and SHA-256; re-running replaces its own manifest; only the re-exported
+/// room's hashes change; nothing but manifest.json is written; hostile folders are refused or
+/// skipped, never panicked on.
+#[test]
+fn the_manifest_lists_each_export_with_sizes_and_hashes() {
+    let _g = serial();
+    let mut s = built(json!({}));
+    let d = dir("manifest");
+    export(&mut s, &d, "guest", json!({"room": "101"}));
+    std::fs::create_dir_all(d.join("sub")).unwrap();
+    export(&mut s, &d.join("sub"), "corridor", json!({"room": "102", "formats": ["glb"]}));
+    // Not a package: a stray .json, a hidden folder, and a sidecar naming a path outside.
+    std::fs::write(d.join("notes.json"), b"{\"hello\": 1}").unwrap();
+    std::fs::create_dir_all(d.join(".cache")).unwrap();
+    std::fs::write(d.join(".cache/x.json"), b"{}").unwrap();
+    std::fs::write(d.join("evil.json"), br#"{"schema": "cadaddy.ar/1", "glb": "../../etc/passwd"}"#).unwrap();
+    std::fs::write(d.join("empty.json"), br#"{"schema": "cadaddy.ar/1"}"#).unwrap();
+    // A hand-made sidecar naming only `model` (the field app's own sample layout).
+    std::fs::write(d.join("hand.glb"), b"glTF-ish").unwrap();
+    std::fs::write(d.join("hand.json"), br#"{"format": "cadaddy-ar", "model": "hand.glb", "title": "Sample Room"}"#).unwrap();
+    #[cfg(unix)]
+    {
+        std::fs::write(d.join("linked.json"), br#"{"schema": "cadaddy.ar/1", "glb": "linked.glb"}"#).unwrap();
+        std::os::unix::fs::symlink("/etc/hosts", d.join("linked.glb")).unwrap();
+    }
+    let before: Vec<(String, Vec<u8>)> = ["guest.glb", "guest.usdz", "guest.json", "sub/corridor.glb", "sub/corridor.json"]
+        .iter()
+        .map(|n| (n.to_string(), std::fs::read(d.join(n)).unwrap()))
+        .collect();
+
+    let r = s.execute("bim.export.ar.manifest", &json!({"dir": d.to_string_lossy()})).unwrap();
+    assert_eq!(r["packages"], json!(3), "{r:#}");
+    assert_eq!(r["files"], json!(7), "{r:#}");
+    let skipped = r["skipped"].as_array().unwrap();
+    assert!(skipped.iter().any(|x| x["name"] == "evil.json" && x["why"].as_str().unwrap().contains("plain file name")), "{r:#}");
+    assert!(skipped.iter().any(|x| x["name"] == "empty.json"), "{r:#}");
+    #[cfg(unix)]
+    assert!(skipped.iter().any(|x| x["name"] == "linked.json" && x["why"].as_str().unwrap().contains("link")), "{r:#}");
+    let m: Value = serde_json::from_slice(&std::fs::read(d.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!(m["format"], json!("cadaddy-ar-manifest"));
+    assert_eq!(m["version"], json!(1));
+    let pk = m["packages"].as_array().unwrap();
+    let names: Vec<&str> = pk.iter().map(|p| p["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["guest", "hand", "sub/corridor"]);
+    assert_eq!(pk[1]["label"], json!("Sample Room"));
+    let guest = &pk[0];
+    assert_eq!(guest["label"], json!("101 GUEST"), "{guest:#}");
+    assert_eq!(guest["level"], json!("L1"), "{guest:#}");
+    assert!(guest["exported"].as_str().unwrap().ends_with('Z'), "{guest:#}");
+    for p in pk {
+        for f in p["files"].as_array().unwrap() {
+            let n = f["name"].as_str().unwrap();
+            let bytes = std::fs::read(d.join(n)).unwrap();
+            assert_eq!(f["bytes"].as_u64().unwrap() as usize, bytes.len(), "{n}");
+            assert_eq!(f["sha256"].as_str().unwrap(), sha256_hex(&bytes), "{n}");
+        }
+    }
+    let roles: Vec<&str> = pk[2]["files"].as_array().unwrap().iter().map(|f| f["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["glb", "sidecar"]);
+    // Read-only apart from manifest.json.
+    for (n, b) in &before {
+        assert_eq!(&std::fs::read(d.join(n)).unwrap(), b, "{n} unchanged");
+    }
+
+    // Re-export one room (a changed model) and re-run: its own manifest is replaced without
+    // force, the guest room's hashes change and the corridor's don't.
+    let hashes = |m: &Value, i: usize| -> Vec<String> {
+        m["packages"][i]["files"].as_array().unwrap().iter().map(|f| f["sha256"].as_str().unwrap().to_string()).collect()
+    };
+    export(&mut s, &d, "guest", json!({"room": "101", "context": "off", "force": true}));
+    s.execute("bim.export.ar.manifest", &json!({"dir": d.to_string_lossy()})).unwrap();
+    let m2: Value = serde_json::from_slice(&std::fs::read(d.join("manifest.json")).unwrap()).unwrap();
+    assert_ne!(hashes(&m, 0)[0], hashes(&m2, 0)[0], "the re-exported model's hash changed");
+    assert_eq!(hashes(&m, 2), hashes(&m2, 2), "the untouched export keeps its hashes");
+
+    // A manifest.json that isn't ours is kept unless force:true.
+    let other = dir("manifest-other");
+    std::fs::write(other.join("manifest.json"), b"{\"mine\": true}").unwrap();
+    let e = s.execute("bim.export.ar.manifest", &json!({"dir": other.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("force:true"), "{e}");
+    assert_eq!(std::fs::read(other.join("manifest.json")).unwrap(), b"{\"mine\": true}");
+    let r = s.execute("bim.export.ar.manifest", &json!({"dir": other.to_string_lossy(), "force": true})).unwrap();
+    assert_eq!(r["packages"], json!(0));
+
+    // Hostile calls.
+    for (p, says) in [
+        (json!({}), "required"),
+        (json!({"dir": ""}), "required"),
+        (json!({"dir": 7}), "required"),
+        (json!({"dir": d.join("nowhere").to_string_lossy()}), "not a folder"),
+        (json!({"dir": d.join("guest.glb").to_string_lossy()}), "not a folder"),
+        (json!({"dir": d.to_string_lossy(), "force": "yes"}), "force"),
+    ] {
+        let e = s.execute("bim.export.ar.manifest", &p).expect_err(&p.to_string()).to_string();
+        assert!(e.contains(says), "{p}: {e}");
+    }
+}
