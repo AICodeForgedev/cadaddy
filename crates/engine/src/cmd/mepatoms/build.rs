@@ -68,6 +68,9 @@ struct GroupKey {
     buried: bool,
     /// Its callout asks for steel elbows and risers.
     steel: bool,
+    /// Buried work called for as several conduits on one route (`TWO (2) …`): each copy is its
+    /// own raceway, not runs meeting in a box.
+    copy: usize,
 }
 
 /// What a group's runs are: raceway material or cable kind, circuit, conductors, and sources.
@@ -485,6 +488,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let ve_feeders = super::super::valueeng::approved_feeders(d);
     let mut paths: BTreeMap<GroupKey, (Method, Vec<Path3>)> = BTreeMap::new();
     let mut cable_circuits: BTreeSet<String> = BTreeSet::new();
+    // The buried runs seen so far by their route: the next identical one is another conduit.
+    let mut copies: HashMap<String, usize> = HashMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
         let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show) else { continue };
         if !matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
@@ -563,6 +568,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         let buried = matches!(sy.kind, MepKind::Conduit) && (super::super::ugplan::ug_system(&r.system) || super::super::ugplan::below_slab(sp, r));
         let steel = buried && r.height_source.contains(super::super::ugplan::STEEL_ELLS);
+        let copy = if buried && feeder.is_none() && copies.len() < MAX_RUNS {
+            let n = copies.entry(format!("{}|{}|{:?}|{:?}|{:?}|{:?}", r.system, r.level, r.points, r.bottoms_ft, r.top_ft, r.size_in)).or_default();
+            *n += 1;
+            *n - 1
+        } else {
+            0
+        };
         // Buried: the spec's underground method, else the raceway its buried system's own name
         // or layer says, else the rules'. A circuit's label names its raceway above the floor:
         // where it differs it is kept beside the material built, with the reason.
@@ -614,7 +626,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some(f) => f.from.clone(),
             None => panel,
         };
-        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable, buried, steel };
+        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable, buried, steel, copy };
         let devices: Vec<Handle> = pathway
             .map(|t| {
                 ["device", "joins"]
@@ -1120,6 +1132,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     _ => None,
                 })
                 .collect();
+            // A buried run's steel elbows and risers are the callout's material, not the group's.
+            let called = c.runs.first().and_then(|i| sp.mep.runs.get(*i)).map(|r| r.height_source.clone()).unwrap_or_default();
             for mut a in pieces.atoms {
                 for x in &mut a.connects {
                     *x += base;
@@ -1127,7 +1141,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 if a.kind == "cable" {
                     panel_makeup(&mut a, &at_panel, rl);
                 }
-                atoms.push((a, ctx.clone()));
+                let mut actx = ctx.clone();
+                if key.steel && !m.cable && a.ty != m.name {
+                    actx.src = Source::from_doc(SourceKind::Print, &format!("{} ({called})", rl.steel_elbow_source));
+                }
+                atoms.push((a, actx));
             }
             // Wires in a raceway with a circuit.
             if !m.cable && !m.circuit.is_empty() {

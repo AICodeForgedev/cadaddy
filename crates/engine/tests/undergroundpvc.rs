@@ -12,6 +12,12 @@ use serde_json::{Value, json};
 /// work of system `system`: 40' of 1" two feet under the floor, stubbed up at both ends to a foot
 /// above it (each stub its own riser run). `why`: the buried runs' height source.
 fn building(system: &str, why: &str, methods: Option<Value>) -> Session {
+    building_of(system, why, methods, 1)
+}
+
+/// [`building`] with `conduits` conduits on the buried route (a callout's `TWO (2) …`: the same
+/// runs again for each).
+fn building_of(system: &str, why: &str, methods: Option<Value>, conduits: usize) -> Session {
     let mut s = Session::empty();
     s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
     if let Some(m) = methods {
@@ -30,12 +36,9 @@ fn building(system: &str, why: &str, methods: Option<Value>) -> Session {
                 {"name": "E-COND", "layer": "E-COND", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 10},
                 {"name": system, "layer": system, "kind": "conduit", "size_in": [1, 0], "bottom_ft": -2}
             ],
-            "runs": [
-                {"system": "E-COND", "level": "L1", "points": [[0, 600], [240, 600]], "size_in": [0.75, 0], "bottoms_ft": [10], "size_source": "tag", "height_source": "tag"},
-                ug(json!([[0, 0]]), -2.0, Some(1.0)),
-                ug(json!([[0, 0], [480, 0]]), -2.0, None),
-                ug(json!([[480, 0]]), -2.0, Some(1.0))
-            ]
+            "runs": std::iter::once(json!({"system": "E-COND", "level": "L1", "points": [[0, 600], [240, 600]], "size_in": [0.75, 0], "bottoms_ft": [10], "size_source": "tag", "height_source": "tag"}))
+                .chain((0..conduits).flat_map(|_| [ug(json!([[0, 0]]), -2.0, Some(1.0)), ug(json!([[0, 0], [480, 0]]), -2.0, None), ug(json!([[480, 0]]), -2.0, Some(1.0))]))
+                .collect::<Vec<_>>()
         }
     });
     s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
@@ -139,7 +142,10 @@ fn a_callouts_steel_elbows_and_risers_are_steel() {
     // The 40' across is PVC; the risers are steel.
     assert!(ft("PVC") > 30.0 && ft("PVC") <= 40.0 + 1e-6, "{ps:?}");
     assert!(ft("RMC") > 0.0 && ft("RMC") <= 6.0 + 1e-6, "{ps:?}");
+    // Each steel piece says so, and its type's source is the callout.
     assert!(ps.iter().filter(|p| p.2 == "RMC").all(|p| p.5.contains("steel elbows and risers")), "{ps:?}");
+    assert!(ps.iter().filter(|p| p.2 == "RMC").all(|p| p.4.contains("called: Plan 1 note")), "{ps:?}");
+    assert!(ps.iter().filter(|p| p.2 == "PVC").all(|p| !p.4.contains("steel")), "{ps:?}");
 }
 
 #[test]
@@ -169,4 +175,16 @@ fn a_spec_not_built_into_pieces_takes_off_its_buried_runs_as_pvc_unstrapped() {
     assert_eq!(net("PVC coupling"), 3.0, "{lines:?}");
     // The straps are the run over the ceiling's only.
     assert_eq!(net("Conduit strap"), 3.0, "{lines:?}");
+}
+
+#[test]
+fn two_conduits_called_on_one_route_are_two_raceways_not_runs_meeting_in_a_box() {
+    let mut s = building_of("E-UG", "called: Plan 1 note (telecom service)", None, 2);
+    let ps = pieces(&s, "E-UG");
+    let ft: f64 = ps.iter().filter(|p| p.0 == "conduit").map(|p| p.3).sum();
+    assert!(ft > 80.0 && ft <= 92.0 + 1e-6, "{ps:?}");
+    // Each its own elbows and its own transition at each stub; no box in the ground.
+    assert_eq!(count(&mut s, json!({"kind": "elbow", "system": "E-UG", "type": "PVC"}))["count"], json!(4), "{ps:?}");
+    assert_eq!(count(&mut s, json!({"kind": "coupling", "system": "E-UG", "item": "transition"}))["count"], json!(4), "{ps:?}");
+    assert_eq!(count(&mut s, json!({"kind": "box", "system": "E-UG"}))["count"], json!(0), "{ps:?}");
 }
