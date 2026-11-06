@@ -4875,11 +4875,25 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
                 let pipes: BTreeSet<String> =
                     sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
-                let (twice, twice_ft) = super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
-                    u8::from(!enlarged.contains(&sheet_key(sheet)))
-                });
-                if twice > 0 {
-                    progress_line(&format!("  pipe runs drawn twice, one kept: {twice} dropped ({twice_ft:.0} ft)"));
+                let (twice, twice_cut, twice_ft) =
+                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
+                        u8::from(!enlarged.contains(&sheet_key(sheet)))
+                    });
+                if twice + twice_cut > 0 {
+                    progress_line(&format!(
+                        "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
+                    ));
+                    job.add_finding(
+                        StageName::BimBuild,
+                        "Pipe drawn twice, one kept",
+                        &format!(
+                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                        ),
+                        1,
+                        vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
+                        None,
+                        false,
+                    );
                 }
                 // A level whose plans draw its drainage but no water: the plumbers piped it all
                 // the same. Over the area where its rooms stack on the floor it is piped like
@@ -4956,6 +4970,11 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         ft / upf_runs
                     ));
                     sp.mep.runs.extend(room_pipes);
+                }
+                // A derived main where a room's own drawn pipe now runs along it is that pipe.
+                let cut = super::waterfill::clip_derived(&mut sp.mep.runs, upf_runs, &fill);
+                if cut > 0.0 {
+                    progress_line(&format!("  derived water along drawn pipe of its system, taken out: {cut:.0} ft"));
                 }
                 // An elevator hoistway is closed floor to roof: a duct, pipe or conduit through
                 // one is a clash.
@@ -7217,6 +7236,44 @@ fn products_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) {
     );
     report_progress(s, json!({"step": "products", "elements": v.get("elements")}), &line);
     s.echo(line);
+    // The plumbing fixtures' products (Q6205).
+    if let Some(pl) = v.get("plumbing").filter(|pl| pl.get("fixtures").is_some()) {
+        let n = |k: &str| pl.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let line = format!(
+            "  plumbing products: {} fixtures, {} with a product (maker from {}, catalog from {}), {} with no document data {}; rough-in sizes from {}; submittals {}; powered {} ({} connection boxes {}); water derived on {}; conflicts {} {}",
+            n("fixtures"),
+            n("with_product"),
+            pl.get("maker_from").map(Value::to_string).unwrap_or_default(),
+            pl.get("catalog_from").map(Value::to_string).unwrap_or_default(),
+            n("no_product_data"),
+            pl.get("no_product_data_by_tag").map(Value::to_string).unwrap_or_default(),
+            pl.get("rough_in_from").map(Value::to_string).unwrap_or_default(),
+            pl.get("submittals")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .map(|sb| format!(
+                    "{} rev {} ({} items, {} approved, {} sent back, {} catalog numbers)",
+                    sb["file"].as_str().unwrap_or_default(),
+                    sb["revision"].as_str().unwrap_or_default(),
+                    sb["items"],
+                    sb["approved"],
+                    sb["sent_back"],
+                    sb["catalogs"]
+                ))
+                .collect::<Vec<_>>()
+                .join("; "),
+            n("powered"),
+            n("connection_boxes"),
+            pl.get("connections_by").map(Value::to_string).unwrap_or_default(),
+            n("water_derived"),
+            n("conflicts"),
+            pl.get("conflicts_by_topic").map(Value::to_string).unwrap_or_default()
+        );
+        report_progress(s, json!({"step": "plumbing products", "fixtures": n("fixtures"), "with_product": n("with_product")}), &line);
+        s.echo(line);
+        result["plumbing_products"] = pl.clone();
+    }
     let none: Vec<String> = v
         .get("no_product_data")
         .and_then(Value::as_object)
@@ -10455,10 +10512,11 @@ fn water_sources(
     out
 }
 
-/// The water the drawings leave out, inferred ([`super::waterfill::infer`]) once the derived
-/// mains and the rooms' pipes are in: on every floor, each fixture (the plumbing plans' fixtures,
-/// its lines by its schedule row) with no pipe of a water line it takes in reach, run from the
-/// nearest pipe of that system there; on the floors with no water plan (`levels`, as the derive
+/// The water, waste and vent the drawings leave out, inferred ([`super::waterfill::infer`]) once
+/// the derived mains and the rooms' pipes are in: on every floor, each fixture (the plumbing
+/// plans' fixtures, its lines by its schedule row) with no pipe of a line it takes in reach, run
+/// from the nearest pipe of that system there (a drainage branch at the code's fixture drain or
+/// vent size); on the floors with no water plan (`levels`, as the derive
 /// step found them, before other floors' room pipes were laid into their rooms) also each room's
 /// branches joined to no main, all of it from their mains and risers only. Each floor's result is
 /// a finding (what was inferred, on what basis, what is still unconnected). The counts by floor.
@@ -10501,7 +10559,7 @@ fn infer_missing_water(
                 let row = schedule.and_then(|s| s.rows.iter().find(|r| r.tag.eq_ignore_ascii_case(d.tag.trim())));
                 let words = row.map_or_else(|| d.tag.clone(), |r| format!("{} {} {}", d.tag, r.fixture, r.description));
                 let (lines, _) = super::plumbing::fixture_lines(&words);
-                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines }
+                super::waterfill::Fixture { at: d.at, what: d.tag.clone(), lines, words }
             })
             .collect();
         let on: Vec<&cadaddy_walk3d::MepRun> = sp.mep.runs.iter().filter(|r| storey_key(&r.level) == *key).collect();
@@ -10510,16 +10568,18 @@ fn infer_missing_water(
         if n_needs == 0 {
             continue;
         }
-        // A floor with no water plan: from its mains and risers; else from any of its pipes.
-        let mains: Vec<&cadaddy_walk3d::MepRun> = on.iter().copied().filter(|r| !*planless || super::waterfill::is_main(r)).collect();
-        let inf = super::waterfill::infer(level, &mains, needs, upf, &fill);
+        // A floor with no water plan: its water from its mains and risers; else (and its
+        // drainage, which its plans draw) from any of its pipes.
+        let mains: Vec<&cadaddy_walk3d::MepRun> =
+            on.iter().copied().filter(|r| !*planless || !fill.water.contains(&r.system) || super::waterfill::is_main(r)).collect();
+        let inf = super::waterfill::infer(level, &mains, &on, needs, upf, &fill);
         let mut ft: BTreeMap<String, f64> = BTreeMap::new();
         for r in &inf.runs {
             *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
         }
         let ft_s: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
         progress_line(&format!(
-            "  {level}: water inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
+            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
             inf.served,
             inf.runs.len(),
             ft_s.join(", "),
@@ -10528,17 +10588,18 @@ fn infer_missing_water(
         let where_ = if *planless {
             format!("No plan draws {level}'s water where its rooms don't stack on another floor's")
         } else {
-            format!("{level}'s water plan reaches none of these fixtures' lines within {reach_ft:.0} ft")
+            format!("{level}'s plans draw no pipe within {reach_ft:.0} ft of these fixtures' lines")
         };
         job.add_finding(
             StageName::BimBuild,
-            &format!("Water inferred for {level}"),
+            &format!("Water, waste and vent inferred for {level}"),
             &format!(
-                "{where_}: {} fixture or room branch lines are run from the nearest pipe of their system ({}), marked inferred, never reported as drawn. Basis: {}; {}.{}",
+                "{where_}: {} fixture or room branch lines are run from the nearest pipe of their system ({}), marked inferred, never reported as drawn. Basis: {}; {}; {}.{}",
                 inf.served,
                 if ft_s.is_empty() { "nothing laid".to_string() } else { ft_s.join(", ") },
                 fill.main_basis,
                 fill.branch_basis,
+                fill.drain_basis,
                 if inf.unserved.is_empty() {
                     String::new()
                 } else {
@@ -17765,6 +17826,27 @@ fn plumbing_schedule(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Option<cadadd
         .find_map(|r| cadaddy_mepfix::fixture_schedule::read(&super::printmep::sheet_drawing(d, r)))
 }
 
+/// The set's plumbing fixture schedule (as [`plumbing_schedule`] finds it), its sheet and the
+/// rough-in table: on the schedule's sheet, else on another plumbing sheet that isn't a plan.
+pub(crate) fn plumbing_schedule_docs(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+) -> Option<(cadaddy_mepfix::fixture_schedule::FixtureSchedule, Vec<cadaddy_mepfix::fixture_schedule::ConnectionRow>, String)> {
+    use cadaddy_mepfix::fixture_schedule as fsch;
+    let pages = non_plan_pages(job, "P");
+    let found = pages.iter().find_map(|(name, page)| fsch::read(page).map(|s| (s, fsch::read_connections_on(page), name.clone()))).or_else(|| {
+        job_sheet_refs(job).iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("P")).take(MAX_LEGEND_SHEETS).find_map(|r| {
+            let sd = super::printmep::sheet_drawing(d, r);
+            fsch::read(&sd).map(|s| (s, fsch::read_connections_on(&sd), r.number.clone()))
+        })
+    });
+    let (schedule, mut connections, sheet) = found?;
+    if connections.is_empty() {
+        connections = pages.iter().map(|(_, page)| fsch::read_connections_on(page)).find(|c| !c.is_empty()).unwrap_or_default();
+    }
+    Some((schedule, connections, sheet))
+}
+
 /// Most plumbing fixtures read from a set's plans.
 const MAX_FIXTURES: usize = 20_000;
 
@@ -24533,7 +24615,8 @@ mod tests {
         job.sheet_regions = vec![region("P-4", 0.0), region("P-7", 5000.0)];
         job.sheet_spans = vec![SheetSpan { sheet: "P-4".into(), lo, hi }];
         let row = |tag: &str| cadaddy_mepfix::fixture_schedule::ScheduledFixture { tag: tag.into(), ..Default::default() };
-        let schedule = cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-7")], extent: [0.0; 4] };
+        let schedule =
+            cadaddy_mepfix::fixture_schedule::FixtureSchedule { rows: vec![row("P-1"), row("P-7")], extent: [0.0; 4], ..Default::default() };
         let found = plumbing_fixtures(s.doc().unwrap(), &job, &schedule);
         let mut tags: Vec<(&str, f64)> = found.iter().map(|f| (f.tag.as_str(), f.at[0])).collect();
         tags.sort_by(|a, b| a.1.total_cmp(&b.1));

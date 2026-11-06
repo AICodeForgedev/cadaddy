@@ -44,3 +44,18 @@ rayon = { workspace = true }
 # lopdf needs randomness (rand → getrandom); in the browser it comes from crypto.getRandomValues.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
+
+# The test programs under tests/suite/: each folds many test files into one binary (one link
+# of the crate instead of one per file). A test file that needs a process of its own stays a
+# top-level file in tests/ (see CLAUDE.md, "Where a test goes").
+[[test]]
+name = "suite_dwg"
+path = "tests/suite/dwg/main.rs"
+
+[[test]]
+name = "suite_dxf"
+path = "tests/suite/dxf/main.rs"
+
+[[test]]
+name = "suite_output"
+path = "tests/suite/output/main.rs"

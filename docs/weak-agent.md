@@ -53,5 +53,5 @@ lost track, a rebuild after the answers, accuracy up by more than 0.3, under 1,5
 5. **`bim_job import` answered with nothing**, and an unknown action came back as a protocol error
    rather than a tool error: the tool returned past the server's result wrapping. Fixed.
 
-Engine regression tests: `crates/engine/tests/agentready.rs` (`what_the_weak_agent_tripped_on`);
+Engine regression tests: `crates/engine/tests/suite/files/agentready.rs` (`what_the_weak_agent_tripped_on`);
 MCP: the weak agent itself and the suite entry for `bim_job`.

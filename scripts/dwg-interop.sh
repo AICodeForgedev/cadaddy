@@ -20,7 +20,7 @@ ODA=${ODA-ODAFileConverter}
 LC_DWG2DXF=${LC_DWG2DXF-}
 DXFRW_DWG2DXF=${DXFRW_DWG2DXF-}
 
-CADADDY_INTEROP_DIR=$DIR cargo test -p cadaddy-engine --test dwginterop -- --ignored --exact interop_write
+CADADDY_INTEROP_DIR=$DIR cargo test -p cadaddy-engine --test suite_files_plotpdf -- --ignored --exact dwginterop::interop_write
 
 have() { [ -n "$1" ] && command -v "$1" >/dev/null 2>&1; }
 
@@ -61,5 +61,5 @@ dwg2dxf_all() { # program-folder, command-style (old|new), binary
 if have "$LC_DWG2DXF"; then dwg2dxf_all librecad old "$LC_DWG2DXF"; fi
 if have "$DXFRW_DWG2DXF"; then dwg2dxf_all libdxfrw new "$DXFRW_DWG2DXF"; fi
 
-CADADDY_INTEROP_DIR=$DIR cargo test -p cadaddy-engine --test dwginterop -- --ignored --exact interop_compare
+CADADDY_INTEROP_DIR=$DIR cargo test -p cadaddy-engine --test suite_files_plotpdf -- --ignored --exact dwginterop::interop_compare
 echo "matrix: $DIR/matrix.md"
