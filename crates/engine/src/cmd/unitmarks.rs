@@ -423,6 +423,21 @@ const LABEL_FAR_H: f64 = 12.0;
 /// Marks of one view read at most.
 const MAX_VIEW_MARKS: usize = 2_000;
 
+/// A keynote's number under a label it is about: this many label heights down at most.
+const KEYNOTE_UNDER_H: f64 = 3.5;
+
+/// A keynote marker's number: one to three digits alone.
+fn keynote_number(t: &TextItem) -> bool {
+    let v = t.value.trim();
+    (1..=3).contains(&v.len()) && v.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The middle of a text's lettering (its point is the start of its baseline).
+fn middle_of(t: &TextItem) -> Vec2 {
+    let n = t.value.trim().chars().count() as f64;
+    t.at + Vec2::from_angle(t.rotation) * (0.3 * t.height * n) + Vec2::from_angle(t.rotation + std::f64::consts::FRAC_PI_2) * (0.5 * t.height)
+}
+
 /// Whether a label is a circuit: `LP-1`, `LP-3,5`, `LP-1,a` (its leg after it), never a sheet
 /// number.
 fn circuit_label(t: &str, sheet_numbers: &BTreeSet<String>) -> Option<(String, Option<char>)> {
@@ -534,10 +549,12 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
                 (m.at.x - t.at.x).abs() <= STACK_DX_H * t.height && m.at.y - t.at.y > 0.3 * t.height && m.at.y - t.at.y <= STACK_DY_H * t.height
             })
             .find_map(|m| {
-                let v = m.value.trim().to_ascii_uppercase();
-                if marks.luminaires.contains(&v) {
+                // As the schedule prints it: a lower-case letter over a circuit is its switch leg
+                // (`d` of `Q-11 d,e`), never a fixture type.
+                let v = m.value.trim();
+                if marks.luminaires.contains(v) {
                     Some((m, "luminaire"))
-                } else if marks.wall_luminaires.contains(&v) {
+                } else if marks.wall_luminaires.contains(v) {
                     Some((m, "wall luminaire"))
                 } else {
                     None
@@ -579,7 +596,11 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
     }
     // The legend's symbols drawn loose: those no read device stands on. Each takes the label by it,
     // the nearest pairs first.
-    let fresh: Vec<&Symbol> = symbols.iter().filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size)).collect();
+    // A drawing with a bare number printed in it is a keynote's marker (`1` in its box), though
+    // a legend symbol is drawn the same: no device.
+    let numbered = |f: &Symbol| texts.iter().any(|t| keynote_number(t) && middle_of(t).dist(f.at) <= 0.5 * f.size);
+    let fresh: Vec<&Symbol> =
+        symbols.iter().filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size) && !numbered(f)).collect();
     let mut by_label: Vec<(f64, usize, usize)> = Vec::new();
     for (j, f) in fresh.iter().enumerate().filter(|(_, f)| f.powered) {
         for (i, (t, _, _)) in circuits.iter().enumerate().filter(|(i, _)| !taken.get(*i).copied().unwrap_or(true)) {
@@ -680,9 +701,16 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             }
         }
     }
-    // The circuit labels left: each names a device.
+    // The circuit labels left: each names a device. One printed over a keynote's number (a
+    // feeder's `QP1-5` over its keynote) is what the keynote is about: no device.
+    let keynoted = |t: &TextItem| {
+        texts.iter().any(|k| {
+            let dy = middle_of(t).y - middle_of(k).y;
+            keynote_number(k) && dy > 0.3 * t.height && dy <= KEYNOTE_UNDER_H * t.height && (middle_of(k).x - middle_of(t).x).abs() <= 1.5 * t.height
+        })
+    };
     for (i, (t, c, leg)) in circuits.iter().enumerate() {
-        if taken.get(i).copied().unwrap_or(true) || out.len() >= MAX_VIEW_MARKS {
+        if taken.get(i).copied().unwrap_or(true) || out.len() >= MAX_VIEW_MARKS || keynoted(t) {
             continue;
         }
         let circuit = full(c, *leg);
@@ -959,6 +987,49 @@ mod tests {
     }
     fn read(tag: &str, at: [f64; 2], circuit: &str, leg: &str) -> ReadDevice {
         ReadDevice { tag: tag.into(), at, circuit: circuit.into(), leg: leg.into(), sheet: "E-9".into(), level: "1".into(), ..ReadDevice::default() }
+    }
+
+    #[test]
+    fn a_keynote_box_drawn_like_a_legend_symbol_and_the_label_over_it_are_no_devices() {
+        // The legend's light: a box with a bar down its middle (a `1` in a keynote's box is drawn
+        // the same). Drawn loose at (100, 100) with its circuit Q-2 by it; a keynote's box at
+        // (300, 100) with its number `1` in it, under the feeder tag `QP1-5` it is about.
+        let light = |o: [f64; 2]| {
+            vec![
+                seg([o[0] - 4.0, o[1] - 4.0], [o[0] + 4.0, o[1] - 4.0]),
+                seg([o[0] + 4.0, o[1] - 4.0], [o[0] + 4.0, o[1] + 4.0]),
+                seg([o[0] + 4.0, o[1] + 4.0], [o[0] - 4.0, o[1] + 4.0]),
+                seg([o[0] - 4.0, o[1] + 4.0], [o[0] - 4.0, o[1] - 4.0]),
+                seg([o[0], o[1] - 3.0], [o[0], o[1] + 3.0]),
+            ]
+        };
+        let tps = vec![Template::new("STRIP LIGHT", "E-0", "luminaire", "IfcLightFixture", &light([500.0, 500.0]), 4.0).unwrap()];
+        let mut scene = light([100.0, 100.0]);
+        scene.extend(light([300.0, 100.0]));
+        let sc = Scene::new(scene, 10.0);
+        let texts = [text("Q-2", [108.0, 98.0]), text("1", [299.0, 98.0]), text("QP1-5", [295.0, 110.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let found = find_symbols(&tps, &sc, view.rect, 4.0);
+        assert_eq!(found.len(), 2, "both drawings match the legend's: {found:?}");
+        let got = read_view(&view, &legend_symbols(&tps, &found), &marks);
+        let devices: Vec<(String, String, [i64; 2])> =
+            got.iter().map(|d| (d.kind.clone(), d.circuit.clone(), [d.at[0].round() as i64, d.at[1].round() as i64])).collect();
+        assert_eq!(devices, [("luminaire".to_string(), "Q-2".to_string(), [100, 100])], "{got:?}");
+    }
+
+    #[test]
+    fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
+        // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
+        // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
+        // switch leg, though the letter is the same.
+        let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let luminaires: Vec<(String, String)> =
+            got.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        assert_eq!(luminaires, [("D".to_string(), "Q-2".to_string())], "{got:?}");
     }
 
     #[test]
