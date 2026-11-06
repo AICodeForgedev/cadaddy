@@ -50,6 +50,9 @@ struct DevBox {
     /// The point a run enters it at (its top centre; a floor box's: its centre).
     entry: Vec3,
     atom: usize,
+    /// The device's own top centre: where the router ends the device's runs (a gang box sits
+    /// at its first device; the others' runs end at their own device).
+    at: Vec3,
 }
 
 /// Equipment fed in its own wiring compartment (no box of ours): where its runs end in it.
@@ -1000,7 +1003,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let members: &[Handle] = gang.and_then(|g| gangs.get(g)).map_or(&[], Vec::as_slice);
         if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
             external.push((bi, *h));
-            boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi });
+            let c = plan.center();
+            boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
             ganged_devices += 1;
             continue;
         }
@@ -1164,7 +1168,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 b.0.connects.push(ri);
             }
         }
-        boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi });
+        boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
     }
 
     // -- Each group's runs stitched end to end, then cut into their pieces. --
@@ -2042,14 +2046,15 @@ fn touched_gear(gear: &[Gear], level: &str, panel: &str, p: Vec3, touch: f64, mo
         .map(|(h, _, _)| h)
 }
 
-/// The box a routed run's end at `p` is at: the box of its level whose entry is nearest it,
-/// within `touch`, whatever its circuit, never `not` (the box the run's other end is in).
+/// The box a routed run's end at `p` is at: the box of its level whose entry, or whose device
+/// (where the router ends the device's runs; a gang box holds several), is nearest it, within
+/// `touch`, whatever its circuit, never `not` (the box the run's other end is in).
 fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<usize>) -> Option<usize> {
     boxes
         .iter()
         .enumerate()
         .filter(|(bi, b)| Some(*bi) != not && b.level.eq_ignore_ascii_case(level))
-        .map(|(bi, b)| (bi, super::dist(b.entry, p)))
+        .map(|(bi, b)| (bi, super::dist(b.entry, p).min(super::dist(b.at, p))))
         .filter(|(_, d)| *d <= touch)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(bi, _)| bi)

@@ -322,6 +322,8 @@ impl Cable {
 pub(crate) struct BoxEl {
     pub handle: Handle,
     pub of: Option<Handle>,
+    /// A gang box's other devices (it holds them all).
+    pub ganged: Vec<Handle>,
     pub cubic_in: Option<f64>,
     pub size: String,
     pub level: String,
@@ -655,6 +657,7 @@ impl Net {
                     self.boxes.push(BoxEl {
                         handle: e.handle,
                         of: Handle::parse_hex(&text(&ps, "box_of")),
+                        ganged: text(&ps, "devices").split(',').filter_map(|h| Handle::parse_hex(h.trim())).take(64).collect(),
                         cubic_in: num(&ps, "cubic_in").filter(|v| *v > 0.0),
                         size: text(&ps, "size"),
                         level: level.clone(),
@@ -1513,7 +1516,18 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         if let Some(_r) = on.continuity {
             out.unmeasured(CONTINUITY, "a device with no circuit (nothing to follow)", no_circuit);
         }
-        let box_of: HashMap<Handle, usize> = net.boxes.iter().enumerate().filter_map(|(i, b)| Some((b.of?, i))).collect();
+        // Each device's box: a gang box holds each of its devices.
+        let mut box_of: HashMap<Handle, usize> = HashMap::new();
+        for (i, b) in net.boxes.iter().enumerate() {
+            for h in b.ganged.iter().copied().chain(b.of) {
+                box_of.entry(h).or_insert(i);
+            }
+        }
+        for (i, b) in net.boxes.iter().enumerate() {
+            if let Some(h) = b.of {
+                box_of.insert(h, i);
+            }
+        }
         let gear_by_panel =
             |panel: &str| -> Vec<usize> { net.gear.iter().enumerate().filter(|(_, g)| is_panel(&g.tag, panel)).map(|(i, _)| i).collect() };
         for ((panel, number), devs) in &circ_devs {
