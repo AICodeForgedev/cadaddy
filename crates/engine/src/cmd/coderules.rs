@@ -439,6 +439,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
     if changed > 0 {
         s.touch();
     }
+    tags_follow_decisions(s)?;
     Ok(json!({
         "receptacles": recs.len(),
         "elements": changed,
@@ -450,9 +451,74 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
     }))
 }
 
+/// The item of a receptacle's bill-of-materials line after the code rules' decisions: GFCI or
+/// standard by its circuit (what the print tagged it, or a sink nearby, only asks), and
+/// tamper-resistant where the rule says. An item that names no receptacle of these stays.
+fn decided_item(item: &str, receptacle_type: &str, tamper_resistant: bool) -> String {
+    const GFCI: &str = "GFCI receptacle";
+    const STANDARD: &str = "duplex receptacle";
+    let rest = item.strip_prefix(GFCI).or_else(|| item.strip_prefix(STANDARD));
+    let Some(rest) = rest else { return item.to_string() };
+    let base = match receptacle_type {
+        t if t.eq_ignore_ascii_case("GFCI") => GFCI,
+        t if t.eq_ignore_ascii_case("standard") => STANDARD,
+        _ => item.strip_suffix(rest).unwrap_or(item),
+    };
+    let tr = if tamper_resistant && !rest.contains("tamper-resistant") { ", tamper-resistant" } else { "" };
+    format!("{base}{rest}{tr}")
+}
+
+/// The take-off reads the building spec's device tags: they carry each built receptacle's decision
+/// too, so a GFCI breaker's receptacles aren't bought as GFCI devices.
+fn tags_follow_decisions(s: &mut Session) -> Result<()> {
+    let Ok((mut sp, true)) = super::bspec::current(s, CMD) else { return Ok(()) };
+    let mut decided: BTreeMap<String, (String, bool, String)> = BTreeMap::new();
+    for e in s.doc()?.model.iter() {
+        let Some(id) = super::bimlook::made_tag(e, super::propfill::DEVID) else { continue };
+        let store = props::read(&e.common.xdata);
+        let value = |k: &str| store.get(k).filter(|p| p.has_value()).map(Prop::text).unwrap_or_default();
+        let gfci = value("gfci");
+        let tr = value("tamper_resistant").eq_ignore_ascii_case("yes");
+        if !gfci.is_empty() || tr {
+            decided.insert(id.to_string(), (value("receptacle_type"), tr, gfci));
+        }
+    }
+    let mut changed = false;
+    for t in sp.tags.iter_mut().filter(|t| t.kind == "receptacle") {
+        let Some((kind, tr, gfci)) = decided.get(&t.id) else { continue };
+        let Some(item) = t.fields.get("device_type").map(|f| f.value.clone()) else { continue };
+        let next = decided_item(&item, kind, *tr);
+        if next != item {
+            t.set("device_type", next, "rule");
+            changed = true;
+        }
+        if !gfci.is_empty() && t.fields.get("gfci").is_none_or(|f| f.value != *gfci) {
+            t.set("gfci", gfci.clone(), "rule");
+            changed = true;
+        }
+    }
+    if changed {
+        s.doc_mut()?.building_spec = Some(sp.to_json());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_receptacles_item_follows_its_decisions() {
+        // Under a GFCI breaker a GFCI-tagged receptacle is bought standard; what else it is stays.
+        assert_eq!(decided_item("GFCI receptacle", "standard", false), "duplex receptacle");
+        assert_eq!(decided_item("GFCI receptacle, weatherproof", "standard", true), "duplex receptacle, weatherproof, tamper-resistant");
+        assert_eq!(decided_item("duplex receptacle", "GFCI", true), "GFCI receptacle, tamper-resistant");
+        // Tamper-resistant once; undecided keeps the print's.
+        assert_eq!(decided_item("duplex receptacle, tamper-resistant", "", true), "duplex receptacle, tamper-resistant");
+        assert_eq!(decided_item("GFCI receptacle", "", false), "GFCI receptacle");
+        // Not one of these: left alone.
+        assert_eq!(decided_item("quad receptacle", "standard", true), "quad receptacle");
+    }
 
     #[test]
     fn the_rules_file_reads() {

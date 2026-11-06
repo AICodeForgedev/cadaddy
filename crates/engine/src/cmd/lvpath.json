@@ -1,0 +1,97 @@
+{
+  "_doc": "Low-voltage pathways (Q6203 lvpathways): how each low-voltage outlet's pathway is read from the documents and routed when they say nothing. Words are how statements are recognised (the documents' own statements always win); defaults are company defaults, each with its source.",
+  "kinds": {
+    "words": ["LOW VOLTAGE", "LOW_VOLTAGE", "DATA", "TELEPHONE", "PHONE", "VOICE", "TEL", "TV", "CATV", "TELEVISION", "CABLE TV", "CARD READER", "CARD_READER", "ACCESS POINT", "WAP", "CAMERA", "CCTV", "AUDIO", "VISUAL", "AV", "INTERCOM", "DOOR AJAR", "DOORBELL", "VOLUME CONTROL", "COMMUNICATIONS", "TELECOM"],
+    "not_words": ["FIRE ALARM", "SMOKE", "HORN", "STROBE", "PULL STATION", "SPRINKLER", "RECEPTACLE", "DUPLEX", "SWITCH", "LUMINAIRE", "THERMOSTAT", "SPEAKER STROBE", "HEAT DETECTOR"],
+    "enclosure_words": ["STRUCTURED MEDIA", "MEDIA PANEL", "MEDIA ENCLOSURE", "LV PANEL", "LOW VOLTAGE PANEL", "LV ENCLOSURE", "LOW VOLTAGE ENCLOSURE", "DATA ENCLOSURE", "TELECOM ENCLOSURE"],
+    "source": "a low-voltage outlet is a device whose kind names a communications, security or audio-visual outlet (TIA-568 work area outlets, card readers, cameras, access points); fire alarm devices have their own wiring"
+  },
+  "methods": {
+    "ENT": {"words": ["ENT", "ELECTRICAL NONMETALLIC TUBING", "SMURF TUBE", "SMURF", "NONMETALLIC TUBING"], "raceway": true},
+    "EMT": {"words": ["EMT", "ELECTRICAL METALLIC TUBING"], "raceway": true},
+    "FMC": {"words": ["FMC", "FLEX", "FLEXIBLE METAL CONDUIT", "FLEXIBLE CONDUIT"], "raceway": true},
+    "RMC": {"words": ["RMC", "GRC", "RIGID STEEL", "RIGID METAL CONDUIT", "RIGID GALVANIZED"], "raceway": true},
+    "PVC": {"words": ["PVC", "RNC", "RIGID NONMETALLIC"], "raceway": true},
+    "J-HOOK": {"words": ["J-HOOK", "J-HOOKS", "J HOOK", "J HOOKS", "JHOOK", "JHOOKS", "OPEN CABLE", "OPEN CABLING", "BRIDLE RING", "BRIDLE RINGS", "CABLE HOOK", "CABLE HOOKS"], "raceway": false},
+    "prefer": ["ENT", "EMT", "FMC", "RMC", "PVC", "J-HOOK"],
+    "prefer_source": "company default: where the documents allow more than one method (\"conduit or ENT\"), the first of these they allow, the lighter and quicker one to install; a method the documents name alone is used as named",
+    "generic_words": ["CONDUIT", "CONDUITS", "RACEWAY", "RACEWAYS"]
+  },
+  "statements": {
+    "pathway_words": ["CONDUIT", "CONDUITS", "RACEWAY", "RACEWAYS", "PATHWAY", "PATHWAYS", "STUB", "STUBS", "STUBBED", "STUB-UP", "STUB-UPS", "STUB UP", "SLEEVE", "SLEEVES", "TUBING", "TUBE", "J-HOOK", "J-HOOKS", "J HOOK", "J HOOKS", "MUD RING", "MUD RINGS", "LOW VOLTAGE BRACKET", "LV BRACKET", "MOUNTING BRACKET"],
+    "lv_words": ["LOW VOLTAGE", "LOW-VOLTAGE", "LV", "DATA", "TELEPHONE", "PHONE", "VOICE", "TV", "CATV", "TELEVISION", "COMMUNICATIONS", "TELECOMMUNICATIONS", "TELECOM", "CAT5E", "CAT6", "CABLING", "CARD READER", "CARD READERS", "CAMERA", "CAMERAS", "CCTV", "ACCESS POINT", "ACCESS POINTS", "WAP", "WAPS", "SECURITY", "AUDIO", "INTERCOM", "DOOR AJAR"],
+    "power_words": ["RECEPTACLE", "RECEPTACLES", "BRANCH CIRCUIT", "BRANCH CIRCUITS", "FEEDER", "FEEDERS", "LUMINAIRE", "LUMINAIRES", "LIGHTING", "120V", "120 V", "208V", "277V", "HOMERUNS FOR POWER"],
+    "unit_words": ["GUEST ROOM", "GUEST ROOMS", "GUESTROOM", "GUESTROOMS", "DWELLING", "DWELLING UNIT", "DWELLING UNITS", "APARTMENT", "APARTMENTS", "SUITE", "SUITES", "SLEEPING ROOM", "SLEEPING ROOMS", "SLEEPING UNIT", "SLEEPING UNITS", "PATIENT ROOM", "PATIENT ROOMS", "RESIDENTIAL UNIT", "RESIDENTIAL UNITS"],
+    "common_words": ["COMMON AREA", "COMMON AREAS", "ADMIN", "ADMINISTRATION", "BACK OF HOUSE", "BOH", "PUBLIC AREA", "PUBLIC AREAS", "AMENITY", "AMENITIES", "OFFICE", "OFFICES", "LOBBY"],
+    "all_words": ["EACH ROUGH-IN", "EACH ROUGH IN", "LOW VOLTAGE DEVICES", "LOW-VOLTAGE DEVICES", "ALL LOW VOLTAGE", "ALL LOW-VOLTAGE", "EACH LOW VOLTAGE", "EVERY LOW VOLTAGE", "EACH OUTLET", "EVERY OUTLET", "ALL OUTLETS", "EACH TELECOMMUNICATIONS OUTLET"],
+    "to_corridor": ["CORRIDOR", "CORRIDORS", "HALLWAY", "HALL"],
+    "to_ceiling": ["ACCESSIBLE CEILING", "ABOVE CEILING", "ABOVE THE CEILING", "CEILING SPACE", "ABOVE ACCESSIBLE", "ABOVE RECESSED CEILINGS", "STUB-UPS TO ABOVE", "STUBBED UP", "STUB UP", "STUB-UP"],
+    "to_room": ["MDF", "IDF", "TELECOMMUNICATIONS ROOM", "TELECOM ROOM", "EQUIPMENT ROOM", "SERVER ROOM", "DATA ROOM", "COMM ROOM", "BACKBOARD"],
+    "home_words": ["HOME RUN", "HOME RUNS", "HOMERUN", "HOMERUNS", "HOME-RUN", "RUN TO", "BACK TO"],
+    "to_enclosure": ["STRUCTURED MEDIA", "MEDIA PANEL", "MEDIA ENCLOSURE", "LV PANEL", "LOW VOLTAGE PANEL", "ENCLOSURE"],
+    "to_sleeve": ["SLEEVE", "SLEEVES", "SLEEVED"],
+    "one_per_room": ["ONE CONDUIT PER", "ONE(1) CONDUIT PER", "ONE (1) CONDUIT PER", "ONE PATHWAY PER", "ONE RACEWAY PER", "PER EACH GUEST ROOM", "PER GUEST ROOM", "PER ROOM", "PER UNIT", "EACH GUEST ROOM SHALL HAVE ONE", "EACH UNIT SHALL HAVE ONE", "EACH ROOM SHALL HAVE ONE"],
+    "minimum_words": ["MINIMUM", "MIN", "MIN."],
+    "bracket_words": ["MUD RING", "MUD RINGS", "LOW VOLTAGE BRACKET", "LOW-VOLTAGE BRACKET", "LV BRACKET", "LOW VOLTAGE RING", "LOW VOLTAGE MOUNTING BRACKET", "MOUNTING BRACKET", "BRACKET"],
+    "box_words": ["BOX", "BOXES", "BACK BOX", "BACKBOX", "JUNCTION BOX", "OUTLET BOX", "SINGLE GANG BOX", "DEVICE BOX"],
+    "firestop_words": ["FIRE CAULK", "FIRESTOP", "FIRESTOPPING", "FIRE STOP", "FIRE-STOP", "FIRE STOPPING", "FIRE SEAL", "SLEEVE SEALS"],
+    "hard_ceiling_words": ["HARD CEILING", "HARD CEILINGS", "GYPSUM CEILING", "GYP CEILING", "DRYWALL CEILING"],
+    "sheet_title_words": ["LOW VOLTAGE", "LOW-VOLTAGE", "TELECOM", "TELECOMMUNICATIONS", "TECHNOLOGY", "COMMUNICATIONS", "STRUCTURED CABLING", "DATA AND VOICE", "VOICE AND DATA", "SECURITY SYSTEMS"],
+    "kind_words": {
+      "camera": ["CAMERA", "CAMERAS", "CCTV", "CAM"],
+      "card reader": ["CARD READER", "CARD READERS", "CR"],
+      "access point": ["ACCESS POINT", "ACCESS POINTS", "WAP", "WAPS"],
+      "tv": ["TV", "TELEVISION", "CATV"],
+      "data": ["DATA", "TELEPHONE", "PHONE", "VOICE"],
+      "door ajar": ["DOOR AJAR"]
+    },
+    "spec_application_words": {
+      "concealed": ["CONCEALED IN CEILINGS", "CONCEALED IN INTERIOR WALLS", "CONCEALED IN WALLS", "CONCEALED IN CEILINGS AND INTERIOR WALLS"],
+      "exposed": ["EXPOSED, NOT SUBJECT TO PHYSICAL DAMAGE", "EXPOSED, NOT SUBJECT TO SEVERE PHYSICAL DAMAGE"]
+    },
+    "source": "a document statement of a low-voltage pathway: a note, legend note or specification paragraph naming a pathway (conduit, tubing, stub, sleeve, J-hooks) for low-voltage outlets; the low-voltage system's own documents (its sheets, Division 27 and 28) govern its pathways over a general electrical note, a more specific statement (a kind of outlet, a type of room) over a general one"
+  },
+  "defaults": {
+    "unit": {"method": "ENT", "size_in": 0.75, "to": "corridor", "source": "rules default: a dwelling or guest unit's low-voltage outlet gets 3/4\" ENT from its box up the wall and over the room's ceiling into the corridor's ceiling space, where the cabling runs (NEC 362.10 allows ENT concealed in walls, floors and ceilings; TIA-569 work area pathway)"},
+    "common": {"method": "EMT", "size_in": 0.75, "to": "ceiling", "source": "rules default: an outlet outside the units gets a 3/4\" EMT stub from its box up into the accessible ceiling space above (TIA-569 work area pathway; NEC 358.10)"},
+    "exposed": {"method": "EMT", "size_in": 0.75, "to": "ceiling", "source": "rules default: an outlet in an exposed room (mechanical, electrical, storage) gets a 3/4\" EMT stub up to the structure (NEC 358.10)"}
+  },
+  "geometry": {
+    "stub_above_ceiling_in": 6,
+    "into_corridor_ft": 1.0,
+    "at_ceiling_in": 6,
+    "source": "company default: a stub ends 6 in above the ceiling it rises into; a run to the corridor ends 1 ft past the corridor's wall in its ceiling space; a device within 6 in of its ceiling is in the ceiling space already (its cable needs no raceway to reach it)"
+  },
+  "fittings": {
+    "stub_end": "Insulated bushing",
+    "stub_end_source": "NEC 300.4(G) and the usual communications pathway specification: a stub-up not ending in a box or enclosure ends in an insulated bushing (protects the cable)",
+    "pull_string": "Pull string",
+    "pull_string_source": "TIA-569 and the usual communications pathway specification: a pull line in every empty pathway, its length the pathway's plus 2 ft at each end",
+    "pull_string_extra_ft": 2.0
+  },
+  "bracket": {
+    "item": "Low-voltage mounting bracket",
+    "size": "1 gang",
+    "default": false,
+    "source": "rules default: a low-voltage outlet takes a box (the device box the build makes) unless the documents call for a low-voltage bracket or mud ring at it"
+  },
+  "jhooks": {
+    "item": "J-hook",
+    "spacing_ft": 5.0,
+    "spacing_source": "TIA-569 / BICSI: a cable support at most every 5 ft and at each change of direction",
+    "ours": false,
+    "ours_source": "rules default: J-hooks and open cable are the cabling contractor's (they are not a raceway); a document putting them on the electrical trade makes them ours"
+  },
+  "sleeve": {
+    "item": "Sleeve through rated wall",
+    "over_in": 0.25,
+    "source": "TIA-569 / IBC 714: a cable pathway through a rated wall passes in a sleeve one trade size over the pathway, firestopped with a listed system"
+  },
+  "firestop": {
+    "item": "Firestop system, through-penetration (UL listed)",
+    "floor_unrated": "not given (confirm the floor/ceiling assembly)",
+    "source": "IBC 714 / NEC 300.21 and 800.26: penetrations of fire-rated walls and floors by low-voltage pathways firestopped with a listed system; the rating is the crossed wall type's assembly (partition legend)",
+    "ours": true,
+    "ours_source": "rules default: the trade that makes the penetration firestops it, unless the documents give it to another"
+  }
+}

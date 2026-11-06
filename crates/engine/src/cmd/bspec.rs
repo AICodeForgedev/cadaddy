@@ -2152,6 +2152,9 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
     // Each plumbing fixture connected to its waste, vent and water lines (Q6161).
     let plumbing = super::plumbing::connect(d, &sp);
     mark("plumbing connections");
+    // Each panel-schedule row a breaker inside its panel (Q6166), counted in the index.
+    let breakers = super::breakers::build(d, &sp_routed);
+    mark("breakers");
     // Concrete: slabs, footings, pads, bases and encasement, with rebar and what is cast in.
     let concrete = super::concrete::build(d, &sp);
     mark("concrete");
@@ -2224,6 +2227,10 @@ pub(crate) fn build_spec_with_budget(s: &mut Session, g: &WallGen, budget_s: u64
         o.extend(x.clone());
     }
     r["gridColumns"] = json!(grid_columns);
+    r["breakers"] = json!({
+        "breakers": breakers.breakers, "spares": breakers.spares, "spaces": breakers.spaces, "panels": breakers.panels.len(),
+        "devicesLinked": breakers.devices_linked, "mismatches": breakers.mismatches_total,
+    });
     r["conduitRoute"] = json!({
         "circuits": routed.report["routed_circuits"], "runs": routed.report["runs"], "homeruns": routed.report["homeruns"],
         "routed_ft": routed.report["routed_ft"], "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len),

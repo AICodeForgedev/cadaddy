@@ -713,6 +713,53 @@ fn conflict_items(s: &Session) -> Vec<Item> {
         .collect()
 }
 
+/// The plans and the panel schedules that don't meet (Q6166, the build's breakers): a circuit
+/// the plans use with no breaker on its panel's schedule, a schedule row nothing on the plans is
+/// on, a panel with devices and no schedule, a schedule with no panel to hold its breakers. The
+/// answer (which document holds) is the record; the documents are the schedule's sheet and the
+/// plans the circuit is on.
+fn breaker_items(s: &Session) -> Vec<Item> {
+    let Ok(d) = s.doc() else { return Vec::new() };
+    let Some(r) = super::breakers::stored(d) else { return Vec::new() };
+    let mut out: Vec<Item> = Vec::new();
+    for m in r.mismatches.iter().take(MAX_QUEUED_FAILURES) {
+        let (candidates, rank) = match m.kind.as_str() {
+            "plan_no_row" => (
+                vec![
+                    json!({"answer": "the schedule is right: the plan's circuit number is wrong", "from": m.sheet}),
+                    json!({"answer": "the plans are right: the schedule misses the circuit (add its breaker)", "from": "the plans"}),
+                ],
+                1.3,
+            ),
+            "row_no_plan" => (
+                vec![
+                    json!({"answer": "the load is not on the plans: the breaker stays (spare or equipment)", "from": m.sheet}),
+                    json!({"answer": "the plans miss the circuit's devices", "from": "the plans"}),
+                ],
+                1.6,
+            ),
+            _ => (vec![json!({"answer": "the schedule is on another sheet", "from": "the electrical sheets"})], 1.4),
+        };
+        out.push(Item {
+            id: format!("RV-B{}", hash(&format!("breaker|{}", m.id()))),
+            kind: "conflict",
+            level: m.level.clone(),
+            title: cut(&m.title(), 160),
+            detail: json!({"breakers": m.kind, "panel": m.panel, "circuit": m.circuit, "devices": m.devices, "rooms": m.rooms, "description": m.description, "sheet": m.sheet, "elements": m.elements}),
+            candidates,
+            documents: [m.sheet.clone(), "the plans the circuit is on".into()].into_iter().filter(|x| !x.is_empty()).collect(),
+            documented: true,
+            rank,
+            key: json!({"breakers": m.id()}),
+            system: String::new(),
+        });
+    }
+    if r.mismatches_total > r.mismatches.len() {
+        out.push(more_item("conflict", r.mismatches_total - r.mismatches.len(), r.mismatches_total, "bim.breakers {limit: 500} lists them"));
+    }
+    out
+}
+
 /// An answered device-mark question into the model: its devices take the kind (`not a device`
 /// takes them out), the answer and its citation their source.
 fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, who: &str) -> Result<()> {
@@ -768,6 +815,7 @@ fn all_items(s: &mut Session, st: &State) -> Vec<Item> {
     v.extend(question_items(s));
     v.extend(scope_items(s));
     v.extend(conflict_items(s));
+    v.extend(breaker_items(s));
     v.sort_by(|a, b| a.rank.total_cmp(&b.rank).then(a.id.cmp(&b.id)));
     v
 }
@@ -1217,6 +1265,8 @@ fn apply(s: &mut Session, item: &Item, answer: &Value, cite: Option<&Citation>, 
             super::validate_run::judge_answer(answer).map(|_| ()).map_err(|e| bad("review.resolve", e))
         }
         "question" => answer_question(s, item, answer, cite, who),
+        // The plans against a panel schedule (Q6166): the decision is the record.
+        "conflict" if item.key.get("breakers").is_some() || item.key.get("not_queued").is_some() => Ok(()),
         // Documents that disagree (the build's checks): the answer settles the RFI.
         "conflict" if item.key.is_string() => {
             let text = answer.as_str().map_or_else(|| answer.to_string(), str::to_string);

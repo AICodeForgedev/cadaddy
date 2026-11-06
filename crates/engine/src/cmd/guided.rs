@@ -6002,6 +6002,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The specification's wiring methods by area, minimum raceway and circuits per homerun: what
     // the build routes the circuits by (Q6152).
     route_methods_step(s, job);
+    // The documents' low-voltage pathways (Q6203): what the build routes each outlet's by.
+    lv_pathways_step(s, job, &scope_docs);
     // The slab level's drains its plans give no height (Q6148): under its floor to the building
     // drain, built there, not in its ceiling.
     let mut drain_slope = Value::Null;
@@ -6418,6 +6420,45 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     }
     route_report_step(s, job, &mut result);
     bim_step(s, job, "conduit routes final", t);
+    // Each panel-schedule row a breaker inside its panel, linked to the circuits and devices as
+    // they stand now (Q6166); the plans and the schedules that don't meet are review items.
+    let t = web_time::Instant::now();
+    match s.execute("bim.breakers", &json!({"limit": 20})) {
+        Ok(v) => {
+            let n = |k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+            let by_kind = v.get("mismatches_by_kind").map(Value::to_string).unwrap_or_default();
+            progress_line(&format!(
+                "  breakers: {} and {} spares in {} panels, {} spaces; devices on them {} (not linked {}); plans vs schedules: {} {by_kind}",
+                n("breakers"),
+                n("spares"),
+                n("panels_total"),
+                n("spaces"),
+                n("devices_linked"),
+                n("devices_unlinked"),
+                n("mismatches_total")
+            ));
+            if n("mismatches_total") > 0 {
+                let first: Vec<String> =
+                    v["mismatches"].as_array().into_iter().flatten().take(5).filter_map(|m| m["title"].as_str().map(str::to_string)).collect();
+                job.add_finding(
+                    StageName::BimBuild,
+                    &format!("{} circuits on the plans and rows of the panel schedules don't meet", n("mismatches_total")),
+                    &first.join("; "),
+                    2,
+                    vec!["review.list {kind: \"conflict\"} lists them; the schedule or the plans settle each".into()],
+                    None,
+                    false,
+                );
+            }
+            let mut compact = v.clone();
+            if let Some(o) = compact.as_object_mut() {
+                o.remove("panels");
+            }
+            result["breakers"] = compact;
+        }
+        Err(e) => result["breakers_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "breakers", t);
     // The wiring-method alternatives the code and the spec allow, priced from the final routes
     // (after the last reroute: the scenarios replace the pieces as they stand).
     let t = web_time::Instant::now();
@@ -15040,6 +15081,54 @@ fn route_methods_step(s: &mut Session, job: &GuidedJob) {
     }
 }
 
+/// The documents' low-voltage pathways (Q6203): every note, legend note and specification
+/// paragraph that names a pathway for the low-voltage outlets (the scope reading's documents,
+/// and the sheets whose title names the low-voltage systems whatever their number's prefix, read
+/// as that trade's), stored for the router.
+fn lv_pathways_step(s: &mut Session, job: &GuidedJob, docs: &[super::scope::Doc]) {
+    let t0 = web_time::Instant::now();
+    let mut all: Vec<super::scope::Doc> = docs.to_vec();
+    let mut lv_sheets: Vec<String> = Vec::new();
+    let read_pdf = super::file::io().and_then(|h| h.read_pdf);
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let text = |c: &Value, k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    let wanted: BTreeSet<usize> = super::conduitroute::lv::lv_sheets(&classified).into_iter().collect();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    for (i, c) in classified.iter().enumerate().take(5_000) {
+        let number = text(c, "number");
+        if number.is_empty() || !wanted.contains(&i) || lv_sheets.len() >= MAX_LEGEND_SHEETS * 2 {
+            continue;
+        }
+        let name = number.split('/').next().unwrap_or("").to_string();
+        // Read already (its discipline's sheets): it speaks for the low-voltage trade.
+        if let Some(d) = all.iter_mut().find(|d| d.name == name) {
+            d.trade = Some("low voltage".into());
+            lv_sheets.push(name);
+            continue;
+        }
+        let Some(read) = read_pdf else { continue };
+        if let Ok(page) = sheet_page(job, c, &mut files, read) {
+            let mut doc = super::scope::sheet_doc(&name, &cadaddy_mepfix::sheet_facts::texts(&page));
+            doc.trade = Some("low voltage".into());
+            all.push(doc);
+            lv_sheets.push(name);
+        }
+    }
+    let lv = super::conduitroute::lv::read(&all);
+    progress_line(&format!(
+        "  low-voltage pathways: {} statement(s) from {} document(s) (low-voltage sheets {}); minimum size {}; firestop by {}; {:.1} s",
+        lv.statements.len(),
+        lv.docs_read,
+        if lv_sheets.is_empty() { "none".to_string() } else { lv_sheets.join(", ") },
+        lv.min_size_in.map_or_else(|| "not said".to_string(), |v| format!("{v} in")),
+        if lv.firestop_by.is_empty() { "not said" } else { lv.firestop_by.as_str() },
+        t0.elapsed().as_secs_f64()
+    ));
+    if let Ok(d) = s.doc_mut() {
+        lv.store(d);
+    }
+}
+
 /// What routing the circuits found (Q6152): its line, the clashes by trade pair and level, the
 /// entry windows the submittals don't give (a question), the windows too small, the boxes
 /// overfilled; the takeoff written beside the job's drawing.
@@ -16744,11 +16833,15 @@ fn trim_swallowed(rooms: &mut [JobRoom]) {
                 continue;
             }
             let inside = b[0] >= a[0] - tol && b[2] <= a[2] + tol && b[1] >= a[1] - tol && b[3] <= a[3] + tol;
-            if !inside {
-                continue;
-            }
             let full_y = b[1] <= a[1] + tol && b[3] >= a[3] - tol;
             let full_x = b[0] <= a[0] + tol && b[2] >= a[2] - tol;
+            // Or one reaching in from a side, as deep as the room (a neighbour the trace took
+            // half of: 232's took 230's bath side).
+            let side = (full_y && ((b[0] < a[0] - tol && b[2] > a[0] + tol) || (b[2] > a[2] + tol && b[0] < a[2] - tol)))
+                || (full_x && ((b[1] < a[1] - tol && b[3] > a[1] + tol) || (b[3] > a[3] + tol && b[1] < a[3] - tol)));
+            if !inside && !side {
+                continue;
+            }
             if full_y && b[0] <= a[0] + tol && b[2] < a[2] - tol {
                 a[0] = b[2];
                 cut = true;
@@ -22501,6 +22594,13 @@ mod tests {
         assert_eq!(xs(0), Some((0.0, 144.0)));
         assert_eq!(xs(2), Some((300.0, 444.0)));
         assert_eq!(xs(3), Some((0.0, 900.0)), "another level's room");
+        // A trace that took in part of its neighbour (the neighbour reaching in from its side, no
+        // smaller one inside) is cut back to where the neighbour ends.
+        let mut rooms: Vec<JobRoom> =
+            vec![("DOUBLE Q".into(), "2".into(), rect(0.0, 144.0), "230".into()), ("DOUBLE Q".into(), "2".into(), rect(64.0, 294.0), "232".into())];
+        trim_swallowed(&mut rooms);
+        assert_eq!(xs(1), Some((144.0, 294.0)), "232 cut back to where 230 ends");
+        assert_eq!(xs(0), Some((0.0, 144.0)));
     }
 
     /// A general note's typical mounting heights, item by item, to each one's centre.
@@ -22711,9 +22811,11 @@ mod tests {
         assert!((1100.0 / 12.0 - 0.01..1100.0 / 12.0 + 0.5).contains(&ft), "{lines:#?}");
         assert_eq!(conduit["status"], json!("rule"));
         assert!(conduit["rule"].as_str().unwrap_or_default().contains("estimated route"));
-        // 2#12 + 1#12G (the default) over the conduit plus 1' at each end of 3 pulls.
+        // 2#12 + 1#12G (the default) over the conduit plus the box makeup (rules data: 300.14's
+        // 6" and the field allowance) at each end of 3 pulls.
         let wire = lines.iter().find(|l| l["item"] == "THHN copper" && l["size"] == "#12").copied().unwrap_or(&Value::Null);
-        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0)).abs() < 0.02, "{lines:#?}");
+        let mk = super::super::mepatoms::rules().makeup_ft;
+        assert!((wire["net"].as_f64().unwrap_or(0.0) - 2.0 * (ft + 6.0 * mk)).abs() < 0.02, "{lines:#?}");
         assert_eq!(get("Box, 4\" octagon")["net"], json!(3.0), "one box per fixture on the circuit");
         assert!(get("EMT connector")["net"].as_f64().unwrap_or(0.0) >= 6.0);
 

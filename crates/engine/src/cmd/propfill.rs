@@ -271,7 +271,7 @@ fn read_device(t: &cadaddy_walk3d::tags::ElementTag) -> bool {
 const MAX_FIXTURE_DEFAULT_TYPES: usize = 200;
 
 /// The WALLGEN tag key linking a built device to its spec tag.
-const DEVID: &str = "devid";
+pub(super) const DEVID: &str = "devid";
 
 fn round2(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
