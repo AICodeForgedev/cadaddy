@@ -645,6 +645,8 @@ fn ug_riser(level: &str, src: &str, at: [f64; 2], size: f64, bottom: f64, top: f
 /// How a called run's height source starts (`called: E-101 note (service_primary)`): the runs
 /// [`place`] makes, so a rerun replaces them.
 pub(crate) const CALLED_PREFIX: &str = "called: ";
+/// What a called run's height source says when its callout asks for steel elbows and risers.
+pub(crate) const STEEL_ELLS: &str = "steel elbows and risers";
 /// How a proposal's runs' source starts (`ug feeder 7 SB1→P2`).
 pub(crate) const PROPOSAL_PREFIX: &str = "ug ";
 
@@ -757,7 +759,7 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
             fates.push(fate("placed_elsewhere", 0, "built by the keynotes step from its tag".into()));
             continue;
         }
-        let why = format!("{CALLED_PREFIX}{} ({}{})", c.cite(), c.what, if c.steel_ells { ", steel elbows and risers" } else { "" });
+        let why = format!("{CALLED_PREFIX}{} ({}{})", c.cite(), c.what, if c.steel_ells { format!(", {STEEL_ELLS}") } else { String::new() });
         let (size, size_from) = match c.size_in {
             Some(v) => (v, "note".to_string()),
             None => (super::keynotes::BURIED_MIN_IN, "rule: smallest trade size (the note gives none)".to_string()),
@@ -1833,9 +1835,7 @@ pub(crate) fn proposal_runs(sp: &BuildingSpec, p: &Proposal) -> Vec<MepRun> {
 /// The spec's below-slab wiring method, as the job read its wiring-methods table: the first
 /// application naming work below the slab or in the ground, with its methods and section.
 pub(crate) fn below_method(d: &cadaddy_doc::Drawing) -> Option<String> {
-    let m = super::conduitroute::Methods::stored(d);
-    let words = ["UNDERGROUND", "BELOW SLAB", "UNDER SLAB", "BELOW GRADE", "IN SLAB", "BELOW GROUND"];
-    m.applications.iter().find(|a| words.iter().any(|w| a.application.to_ascii_uppercase().contains(w))).map(|a| {
+    below_app(d).map(|a| {
         format!(
             "{} ({}{}): {}",
             a.application.trim(),
@@ -1844,6 +1844,14 @@ pub(crate) fn below_method(d: &cadaddy_doc::Drawing) -> Option<String> {
             a.methods.join(", ")
         )
     })
+}
+
+/// The application of the spec's wiring-methods table that names work below the slab or in the
+/// ground (its first), as the job read it.
+pub(crate) fn below_app(d: &cadaddy_doc::Drawing) -> Option<super::conduitroute::MethodApp> {
+    let m = super::conduitroute::Methods::stored(d);
+    let words = ["UNDERGROUND", "BELOW SLAB", "UNDER SLAB", "BELOW GRADE", "IN SLAB", "BELOW GROUND"];
+    m.applications.into_iter().find(|a| words.iter().any(|w| a.application.to_ascii_uppercase().contains(w)))
 }
 
 /// The framing over the slab level (the joists or trusses of the floor above it), when the

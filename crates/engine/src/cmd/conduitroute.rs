@@ -4413,8 +4413,9 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
     let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string()]);
-    // A feeder's pieces don't make their system's other runs pieces (the underground plan's
-    // runs on the feeders' buried system stay whole): feeder runs are cut on their own.
+    // A feeder's pieces don't make their system's other runs pieces: feeder runs are cut on
+    // their own. The buried work (the underground plan's runs) is cut with the rest once the
+    // model has pieces: a takeoff counts it like any raceway.
     let feeder_bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
     let of_feeder =
         |e: &Entity| super::bimlook::made_tag(e, "mepid").and_then(|id| id.split_once('#')).is_some_and(|(base, _)| feeder_bases.contains(base));
@@ -4431,9 +4432,12 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         })
         .map(|e| e.handle)
         .collect();
+    if !old.is_empty() {
+        systems.insert(super::ugplan::E_UG.to_string());
+    }
     // The feeders' routed runs are cut into their pieces too (a job routes them after the build,
-    // as whole runs): those whole runs go.
-    let feeder_whole = feeder_whole_runs(d, &sp);
+    // as whole runs), and the buried work: those whole runs go.
+    let feeder_whole = feeder_whole_runs(d, &sp, systems.contains(super::ugplan::E_UG));
     let mut shifted = sp.clone();
     shifted.mep.runs.retain(|r| systems.contains(&r.system) || super::ugplan::is_feeder_run(r));
     // A feeder's entry stubs are cut again only where they were pieces already; a routed feeder
@@ -4508,11 +4512,11 @@ fn is_obstacle(el: &super::bimwork::El) -> bool {
     }
 }
 
-/// The whole-run objects (not pieces) of the spec's feeder runs: on the feeder system, or a run's
-/// own (its id begins with the run's).
-fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
+/// The whole-run objects (not pieces) of the spec's feeder runs (on the feeder system, or a run's
+/// own: its id begins with the run's) and, `buried`, of the buried work's raceway.
+fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec, buried: bool) -> Vec<Handle> {
     let bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
-    if bases.is_empty() {
+    if bases.is_empty() && !buried {
         return Vec::new();
     }
     d.model
@@ -4521,6 +4525,7 @@ fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
         .filter(|e| {
             let Some(sy) = super::bimlook::made_tag(e, "system") else { return false };
             sy == super::gearbuild::FEEDER_SYSTEM
+                || (buried && sy == super::ugplan::E_UG && super::bimlook::made_tag(e, "kind") == Some("conduit"))
                 || super::bimlook::made_tag(e, "mepid").and_then(|id| id.rsplit_once('/')).is_some_and(|(base, _)| bases.contains(base))
         })
         .map(|e| e.handle)
@@ -4533,14 +4538,21 @@ fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// After `moved` devices were set in their walls again (a merge removed the walls they were in):
 /// their boxes, rings and the raceways' drops are pieces built where the devices stood, so the
-/// circuits are routed again and the pieces cut again where the devices are now. Nothing to do
-/// when none moved or the model has no pieces yet (the build makes them where the devices are).
+/// circuits are routed again and the pieces cut again where the devices are now. The same when
+/// buried work was built as whole runs since the last cut (the underground plan's): it is cut
+/// into its pieces with the rest. Nothing to do when neither, or the model has no pieces yet
+/// (the build makes them where the devices are).
 pub(crate) fn follow_reseated(s: &mut Session, moved: usize) -> Option<Result<Value>> {
-    if moved == 0 {
-        return None;
-    }
-    let has_atoms = s.doc().ok()?.model.iter().any(|e| mep_piece(e));
-    has_atoms.then(|| reroute(s))
+    let d = s.doc().ok()?;
+    let whole_buried = || {
+        d.model.iter().any(|e| {
+            !super::mepatoms::is_atom(e)
+                && super::bimlook::made_tag(e, "system") == Some(super::ugplan::E_UG)
+                && super::bimlook::made_tag(e, "kind") == Some("conduit")
+        })
+    };
+    let has_atoms = d.model.iter().any(|e| mep_piece(e));
+    (has_atoms && (moved > 0 || whole_buried())).then(|| reroute(s))
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────

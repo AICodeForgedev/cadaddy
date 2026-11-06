@@ -383,9 +383,6 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
     assert!(whole(&s) > 0, "the job's whole runs");
     let r = s.execute("conduit.reroute", &json!({})).unwrap();
     assert_eq!(r["routed"], json!(true), "{r}");
-    // Again (the job reroutes once its devices are reseated): the feeder's buried pieces don't
-    // make the underground plan's run pieces; it stays whole, once.
-    s.execute("conduit.reroute", &json!({})).unwrap();
     let ug = |s: &crate::Session, atom: bool| {
         s.doc()
             .unwrap()
@@ -395,8 +392,14 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
             .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.starts_with("@200.00,-200.00")))
             .count()
     };
-    assert!(ug(&s, false) > 0, "the underground plan's run stays whole");
-    assert_eq!(ug(&s, true), 0, "and is not cut into pieces besides");
+    // The underground plan's run is cut into its pieces with the rest (a takeoff counts it), its
+    // whole run gone; again (the job reroutes once its devices are reseated) it is cut once.
+    let once = ug(&s, true);
+    assert!(once > 0, "the underground plan's run is in pieces");
+    assert_eq!(ug(&s, false), 0, "its whole run gives way to them");
+    s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(ug(&s, true), once, "cut once, not twice");
+    assert_eq!(ug(&s, false), 0);
     assert_eq!(whole(&s), 0, "the whole runs give way to the pieces");
     let d = s.doc().unwrap();
     let wire: Vec<(String, String, f64)> = d
@@ -421,6 +424,59 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
         .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("conduit") && p.get("system").map(Prop::text).as_deref() == Some("E-FEEDER"))
         .count();
     assert!(sticks >= 5, "44' of 2-1/2\" in 10' sticks: {sticks}");
+}
+
+#[test]
+fn buried_work_built_whole_after_the_last_cut_is_cut_into_its_pieces_with_no_device_reseated() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Buried Stub", None);
+    // A made-up storey with a 20' conduit over the ceiling (the model is built with pieces).
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "mep": {
+            "systems": [{"name": "E-COND", "layer": "E-COND", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 10}],
+            "runs": [{"system": "E-COND", "level": "L1", "points": [[0, 600], [240, 600]], "size_in": [0.75, 0], "bottoms_ft": [10]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    // The underground step after the job's last reroute: a called run built whole, 30' two feet
+    // under the floor and stubbed up to a foot above it.
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    sp.mep
+        .systems
+        .push(serde_json::from_value(json!({"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": -2})).unwrap());
+    let ug = |pts: Vec<[f64; 2]>, top: Option<f64>| -> MepRun {
+        serde_json::from_value(json!({"system": "E-UG", "level": "L1", "points": pts, "size_in": [1.0, 0.0], "bottoms_ft": [-2.0], "top_ft": top,
+            "source_sheet": "Plan 1", "height_source": "called: Plan 1 note (telecom service)"}))
+        .unwrap()
+    };
+    let runs = vec![ug(vec![[0.0, 0.0], [360.0, 0.0]], None), ug(vec![[360.0, 0.0]], Some(1.0))];
+    sp.mep.runs.extend(runs.iter().cloned());
+    let mut part = sp.clone();
+    part.mep.runs = runs;
+    let d = s.doc_mut().unwrap();
+    d.building_spec = Some(sp.to_json());
+    super::mep::build(d, &part);
+    let ug_of = |s: &crate::Session, atom: bool| {
+        s.doc().unwrap().model.iter().filter(|e| super::mepatoms::is_atom(e) == atom && super::bimlook::made_tag(e, "system") == Some("E-UG")).count()
+    };
+    assert!(ug_of(&s, false) > 0 && ug_of(&s, true) == 0, "built whole");
+    let r = super::follow_reseated(&mut s, 0).expect("the buried work is cut").unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    assert_eq!(ug_of(&s, false), 0, "no whole run left");
+    let d = s.doc().unwrap();
+    let ty: Vec<String> = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("system").map(Prop::text).as_deref() == Some("E-UG") && p.get("atom").map(Prop::text).as_deref() == Some("conduit"))
+        .map(|p| p.get("type").map(Prop::text).unwrap_or_default())
+        .collect();
+    assert!(!ty.is_empty() && ty.iter().all(|t| t == "PVC"), "{ty:?}");
+    // Nothing left to cut and no device moved: no reroute.
+    assert!(super::follow_reseated(&mut s, 0).is_none());
 }
 
 #[test]
