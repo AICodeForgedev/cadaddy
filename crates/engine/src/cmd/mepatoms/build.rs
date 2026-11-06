@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::super::propfill::WithNote;
 use super::{
-    Atom, BoxRule, Pieces, WireOpts, X3, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
+    Atom, BoxRule, Pieces, WireOpts, X3, bury, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
     wires, wires_with,
 };
 
@@ -63,6 +63,11 @@ struct GroupKey {
     level: String,
     circuit_tag: String,
     cable: bool,
+    /// Below the slab or in the earth: its own raceway (the underground method), not the one
+    /// above the floor.
+    buried: bool,
+    /// Its callout asks for steel elbows and risers.
+    steel: bool,
 }
 
 /// What a group's runs are: raceway material or cable kind, circuit, conductors, and sources.
@@ -84,6 +89,8 @@ struct Method {
     devices: Vec<Handle>,
     /// A feeder's run (`mep.feeders` index): its conductors are the feeder's, landing on gear.
     feeder: Option<usize>,
+    /// Below the slab or in the earth ([`GroupKey::buried`]).
+    buried: bool,
 }
 
 /// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
@@ -464,6 +471,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
 
     // -- What each run is: raceway or cable, its material, circuit and conductors. --
+    // Below the slab or in the earth: the spec's underground method (its wiring-methods table),
+    // else the rules' underground raceway; never the method above the floor.
+    let below_doc = super::super::ugplan::below_app(d).and_then(|a| {
+        let (k, _) = a.methods.iter().find_map(|m| rl.raceway_named(m))?;
+        let what = format!("spec {} {}: {}: {}", a.section.trim(), a.item.trim(), a.application.trim(), a.methods.join(", "));
+        Some((k.to_string(), Source::from_doc(SourceKind::Print, &what)))
+    });
+    let below_rule = rl
+        .raceways
+        .get_key_value(rl.underground_raceway.as_str())
+        .map(|(k, _)| (k.clone(), Source::from_doc(SourceKind::Default, &rl.underground_raceway_source)));
     let ve_feeders = super::super::valueeng::approved_feeders(d);
     let mut paths: BTreeMap<GroupKey, (Method, Vec<Path3>)> = BTreeMap::new();
     let mut cable_circuits: BTreeSet<String> = BTreeSet::new();
@@ -543,7 +561,31 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), s.clone()))
         };
-        let (cable, name, source) = from_named
+        let buried = matches!(sy.kind, MepKind::Conduit) && (super::super::ugplan::ug_system(&r.system) || super::super::ugplan::below_slab(sp, r));
+        let steel = buried && r.height_source.contains(super::super::ugplan::STEEL_ELLS);
+        // Buried: the spec's underground method, else the raceway its buried system's own name
+        // or layer says, else the rules'. A circuit's label names its raceway above the floor:
+        // where it differs it is kept beside the material built, with the reason.
+        let below = buried
+            .then(|| {
+                let (k, s) =
+                    below_doc.clone().or_else(|| from_system().filter(|(c, _, _)| !c).map(|(_, k, s)| (k, s))).or_else(|| below_rule.clone())?;
+                let s = match from_named.as_ref().filter(|(c, n, _)| *c || *n != k) {
+                    Some((_, n, ns)) => Source::from_doc(
+                        s.kind,
+                        &format!(
+                            "{} (below the slab; the circuit names {n}: {}, kept for above the floor)",
+                            s.doc.clone().unwrap_or_default(),
+                            ns.doc.clone().unwrap_or_default()
+                        ),
+                    ),
+                    None => s,
+                };
+                Some((false, k, s))
+            })
+            .flatten();
+        let (cable, name, source) = below
+            .or(from_named)
             .or_else(from_system)
             .or_else(from_rule)
             .unwrap_or_else(|| (false, rl.default_raceway.clone(), Source::from_doc(SourceKind::Default, &rl.default_raceway_source)));
@@ -572,7 +614,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some(f) => f.from.clone(),
             None => panel,
         };
-        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
+        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable, buried, steel };
         let devices: Vec<Handle> = pathway
             .map(|t| {
                 ["device", "joins"]
@@ -581,7 +623,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .collect()
             })
             .unwrap_or_default();
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder };
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder, buried };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
     }
 
@@ -890,6 +932,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut taken: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    // Buried raceway that comes up into the raceway above the floor: the project's wiring method
+    // there, else the default.
+    let mut transitions = 0usize;
+    let above = wiring.as_ref().and_then(|(v, _)| rl.raceway_named(v)).map_or_else(|| rl.default_raceway.clone(), |(k, _)| k.to_string());
     let (mut feeder_chains, mut feeder_wire_ft) = (0usize, 0.0_f64);
     // Run ends that land in nothing: where two or more meet (a homerun joining a raceway shared
     // with others, Q6206) they meet in a junction box.
@@ -1033,13 +1079,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // A low-voltage pathway's end in no box (a stub into the ceiling space) takes a bushing.
             let lv_run = key.system == super::super::conduitroute::lv::LV_SYSTEM;
             let open = [lv_run && lands[0].is_none(), lv_run && lands[1].is_none()];
-            let pieces: Pieces = if m.cable {
+            let mut pieces: Pieces = if m.cable {
                 let Some(cr) = rl.cables.get(&m.name) else { continue };
                 cable_pieces(&c.pts, upf, &m.name, cr, &m.conductors, rl)
             } else {
                 let Some(rw) = rl.raceways.get(&m.name) else { continue };
                 raceway_pieces_ending(&c.pts, upf, size_in, &m.name, rw, large_conductors(&m.conductors, rl.bushing_min_awg), open, rl)
             };
+            // Buried: no straps in the ground, the callout's steel elbows, and a transition where
+            // it comes up into the raceway above the floor.
+            if m.buried && !m.cable {
+                let floor = sp.level(&key.level).map_or(0.0, |l| l.elevation_ft * upf);
+                transitions += bury(&mut pieces, floor, tol, key.steel, [lands[0].is_none(), lands[1].is_none()], &above, &m.name, rl);
+            }
             // More bends between its ends than the code allows between pull points.
             let max_bends = if m.cable { 0.0 } else { rl.raceways.get(&m.name).map_or(0.0, |r| r.max_bends_deg) };
             let over = max_bends > 0.0 && pieces.bend_deg > max_bends + 1.0;
@@ -1508,6 +1560,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "boxesSizedForFill": boxes_upsized,
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
+        "buriedTransitions": transitions,
         "landingFt": (landing_ft * 10.0).round() / 10.0,
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
