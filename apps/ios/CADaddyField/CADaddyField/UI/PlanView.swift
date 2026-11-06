@@ -120,6 +120,15 @@ struct PlanView: View {
         cross.move(to: CGPoint(x: a.x, y: a.y - 10)); cross.addLine(to: CGPoint(x: a.x, y: a.y + 10))
         ctx.stroke(cross, with: .color(.red), lineWidth: 2)
         ctx.draw(Text("anchor").font(.caption2).foregroundColor(.red), at: CGPoint(x: a.x + 24, y: a.y + 10))
+        // After an update moved the anchor: the one the room was last aligned to, in grey.
+        if let old = session.previousAnchorPosition {
+            let o = fit.toScreen(old)
+            var c = Path()
+            c.move(to: CGPoint(x: o.x - 10, y: o.y)); c.addLine(to: CGPoint(x: o.x + 10, y: o.y))
+            c.move(to: CGPoint(x: o.x, y: o.y - 10)); c.addLine(to: CGPoint(x: o.x, y: o.y + 10))
+            ctx.stroke(c, with: .color(.gray), lineWidth: 2)
+            ctx.draw(Text("old anchor").font(.caption2).foregroundColor(.gray), at: CGPoint(x: o.x + 30, y: o.y + 10))
+        }
         for (i, pk) in picked.enumerated() {
             let p = fit.toScreen(pk.position)
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - 8, y: p.y - 8, width: 16, height: 16)), with: .color(.orange))

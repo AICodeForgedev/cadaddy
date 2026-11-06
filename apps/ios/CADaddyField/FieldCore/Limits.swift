@@ -36,6 +36,10 @@ public enum FieldLimits {
     /// Marks per package and photo size kept with a mark.
     public static let maxMarksPerPackage = 50_000
     public static let maxPhotoBytes = 4 * 1024 * 1024
+    /// Update manifest (`manifest.json` from the office): its size, packages listed, files per package.
+    public static let maxManifestBytes: Int64 = 8 * 1024 * 1024
+    public static let maxManifestPackages = 2_000
+    public static let maxManifestFilesPerPackage = 16
 }
 
 /// An error with a message for the user. The app shows `message` as is.

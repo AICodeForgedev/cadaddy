@@ -59,6 +59,11 @@ final class ARController: NSObject, ARSessionDelegate {
         worldAnchor.addChild(markers)
         builder.root.isEnabled = false
         builder.root.addChild(Self.anchorMarker())
+        if let old = session.previousAnchorPosition {
+            let m = Self.anchorMarker(color: .systemGray)
+            m.position = old
+            builder.root.addChild(m)
+        }
         view.scene.addAnchor(worldAnchor)
         view.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped(_:))))
         view.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(panned(_:))))
@@ -108,7 +113,11 @@ final class ARController: NSObject, ARSessionDelegate {
         config.environmentTexturing = .automatic
         var relocalizing = false
         let mapURL = session.library.worldMapURL(session.record)
-        if useMap, let data = try? Data(contentsOf: mapURL) {
+        // After an update moved the anchor the saved room no longer fits: align again (the old anchor shows in grey).
+        if session.record.needsRealign == true {
+            session.status = "The anchor moved in this version: align again. The grey cross is where the old anchor was."
+        }
+        if useMap, session.record.needsRealign != true, let data = try? Data(contentsOf: mapURL) {
             if let map = try? NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) {
                 config.initialWorldMap = map
                 relocalizing = true
@@ -495,9 +504,9 @@ final class ARController: NSObject, ARSessionDelegate {
     private func clearMarkers() { markers.children.removeAll() }
 
     /// A red cross on the model's anchor (origin), so the user sees which real point it must sit on.
-    static func anchorMarker() -> Entity {
+    static func anchorMarker(color: UIColor = .systemRed) -> Entity {
         let e = Entity()
-        let mat = UnlitMaterial(color: .systemRed)
+        let mat = UnlitMaterial(color: color)
         for size in [SIMD3<Float>(0.4, 0.004, 0.02), SIMD3<Float>(0.02, 0.004, 0.4)] {
             let bar = ModelEntity(mesh: .generateBox(size: size), materials: [mat])
             bar.position = SIMD3(0, 0.003, 0)
