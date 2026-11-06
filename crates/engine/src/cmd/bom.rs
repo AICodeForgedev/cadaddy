@@ -114,6 +114,23 @@ struct Line {
     waste_qty: Option<f64>,
     /// What its items are as a product (Q6164); lines of different products never merge.
     product: Product,
+    /// What its items are by the documents (Q6216): empty for drawn, `derived` or `inferred`;
+    /// lines of different provenance never merge.
+    made: &'static str,
+}
+
+/// A line's provenance by name.
+fn made_name(m: &str) -> &str {
+    if m.is_empty() { "drawn" } else { m }
+}
+
+/// A provenance as a line keeps it.
+fn made_of(m: &str) -> &'static str {
+    match cadaddy_walk3d::Made::parse(m) {
+        Some(cadaddy_walk3d::Made::Derived) => "derived",
+        Some(cadaddy_walk3d::Made::Inferred) => "inferred",
+        _ => "",
+    }
 }
 
 impl Line {
@@ -397,6 +414,7 @@ fn rough_in_lines(
                 waste_qty: None,
                 circuit: circuit.to_string(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -538,6 +556,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: String::new(),
                         product,
+                        made: "",
                     },
                 );
             }
@@ -571,6 +590,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: on.clone(),
                         product,
+                        made: "",
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
@@ -615,6 +635,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 waste_qty: None,
                                 circuit: on.clone(),
                                 product: Product::default(),
+                                made: "",
                             },
                         );
                     }
@@ -640,6 +661,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             waste_qty: None,
                             circuit: on.clone(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                 }
@@ -696,6 +718,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: label.clone(),
                         product: Product::default(),
+                        made: "",
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
@@ -724,6 +747,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             waste_qty: None,
                             circuit: label.clone(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                 }
@@ -757,6 +781,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             waste_qty: None,
                             circuit: String::new(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -776,6 +801,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 waste_qty: None,
                                 circuit: String::new(),
                                 product: Product::default(),
+                                made: "",
                             },
                         );
                     }
@@ -806,6 +832,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     waste_qty: None,
                     circuit: label_of(t),
                     product: Product::default(),
+                    made: "",
                 },
             );
         }
@@ -842,6 +869,7 @@ fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 waste_qty: None,
                 circuit: String::new(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -877,6 +905,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                     waste_qty: None,
                     circuit: String::new(),
                     product: Product::default(),
+                    made: "",
                 },
             );
         }
@@ -903,6 +932,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                 waste_qty: None,
                 circuit: String::new(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -950,6 +980,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 waste_qty: None,
                 circuit: k.circuit.clone(),
                 product: Product::default(),
+                made: made_of(&k.made),
             },
         );
     }
@@ -978,6 +1009,7 @@ fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
                 circuit: p.circuit,
                 waste_qty: None,
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -1835,6 +1867,12 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
     let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
+    // A takeoff row of work no plan draws says so after its system (`CW (inferred)`, Q6216).
+    let made = |v: &Value| {
+        let sys = v["system"].as_str().unwrap_or_default().trim_end();
+        let tail = sys.rsplit_once('(').map(|(_, t)| t.trim_end_matches(')')).unwrap_or_default();
+        made_of(tail)
+    };
     for d in arr("ducts") {
         let size = format!("{} {}", st(&d, "size"), st(&d, "shape"));
         let lv = st(&d, "level");
@@ -1849,6 +1887,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "length_ft"),
                 status: "model",
                 level: lv.clone(),
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1863,6 +1902,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "weight_lb"),
                 status: "model",
                 level: lv,
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1880,6 +1920,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&p, "length_ft"),
                 status: "model",
                 level: st(&p, "level"),
+                made: made(&p),
                 ..Line::default()
             },
         );
@@ -1896,6 +1937,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&f, "count"),
                 status: "model",
                 level: st(&f, "level"),
+                made: made(&f),
                 ..Line::default()
             },
         );
@@ -2021,6 +2063,8 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                         (p, c) if !p.is_empty() && !c.is_empty() && c != "not named" => format!("{p}-{c}"),
                         _ => String::new(),
                     },
+                    // A rule's or a note's object is inferred work: counted, apart (Q6216).
+                    made: if proposed { "inferred" } else { "" },
                     ..Line::default()
                 },
             );
@@ -2455,6 +2499,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
                     waste_qty,
                     circuit: String::new(),
                     product: Product::default(),
+                    made: "",
                 },
             );
         };
@@ -2602,7 +2647,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // common one when all lines share a level).
     let mut grouped: Vec<Line> = Vec::new();
     for l in lines {
-        match grouped.iter_mut().find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule) {
+        match grouped
+            .iter_mut()
+            .find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule && x.made == l.made)
+        {
             Some(x) => {
                 // When merging, keep the existing level (first wins); mark mixed if they differ.
                 if !by_level && !l.level.is_empty() && x.level.is_empty() {
@@ -2642,7 +2690,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let mut v = json!({
                 "trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit,
                 "net": round(l.net), "waste_pct": round(pct), "waste": round(waste), "total": round(l.net + waste),
-                "status": l.status, "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
+                "status": l.status, "made": made_name(l.made), "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
             });
             if let Some(r) = &l.rule {
                 v["rule"] = json!(r);

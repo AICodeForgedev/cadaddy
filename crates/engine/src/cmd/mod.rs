@@ -169,6 +169,7 @@ pub(crate) mod pipefollow;
 pub mod review_impact;
 /// The plan's rooms as last traced, by drawing state (kept in each drawing's state).
 pub(crate) use perceive::geometry::TraceCache as RoomTraceCache;
+pub(crate) mod fillin;
 mod pline_opts;
 pub(crate) mod plotstamp;
 pub mod plotters;
@@ -181,6 +182,7 @@ pub mod printrev;
 pub mod printset;
 pub mod projrules;
 mod props;
+pub(crate) mod provenance;
 pub mod pulllist;
 pub mod readers;
 pub mod redline;
@@ -848,6 +850,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(grounding::specs());
         v.extend(mepqty::specs());
         v.extend(mepatoms::specs());
+        v.extend(provenance::specs());
         v.extend(conduitroute::specs());
         v.extend(pulllist::specs());
         v.extend(tradeatoms::specs());

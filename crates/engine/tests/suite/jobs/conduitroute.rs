@@ -399,6 +399,60 @@ fn a_typical_units_circuit_goes_to_each_units_own_panel() {
 }
 
 #[test]
+fn a_typical_rooms_circuit_stays_on_its_own_rooms_panel_beside_the_party_wall() {
+    // Q6241: rooms A1 and A2 side by side (the party wall at 20'), each with its own copy of
+    // the typical panel RP (RP-A1 at its west wall, RP-A2 just across the party wall). Room A1's
+    // last receptacle sits at 18', nearer RP-A2 than its own panel: the whole of room A1's RP-1
+    // still goes to RP-A1, never across the wall to the next unit's panel.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let mut tags = vec![
+        receptacle(1, 3.0, 5.0, "RP-1"),
+        receptacle(2, 10.0, 5.0, "RP-1"),
+        receptacle(3, 18.0, 5.0, "RP-1"),
+        receptacle(4, 25.0, 5.0, "RP-1"),
+        receptacle(5, 35.0, 5.0, "RP-1"),
+    ];
+    for room in ["A1", "A2"] {
+        let mut c = circuit("RP-1");
+        c["id"] = json!(format!("circuit:L1:room-{room}:RP-1"));
+        c["fields"]["panel"] = json!({"value": "RP", "source": "plan"});
+        c["fields"]["room"] = json!({"value": room, "source": "computed"});
+        tags.push(c);
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {
+            "systems": [{"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}],
+            "runs": [
+                {"id": "circuit:L1:room-A1:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[36, 60], [120, 60], [216, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25, 9.25], "size_source": "tag", "height_source": "estimated route"},
+                {"id": "circuit:L1:room-A2:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[300, 60], [420, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25], "size_source": "tag", "height_source": "estimated route"}
+            ],
+            "equipment": [
+                {"tag": "RP-A1", "kind": "panel", "level": "L1", "min": [6, 100], "max": [20, 104], "height_ft": 2, "bottom_ft": 4.5},
+                {"tag": "RP-A2", "kind": "panel", "level": "L1", "min": [252, 100], "max": [266, 104], "height_ft": 2, "bottom_ft": 4.5}
+            ]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    // Each room's homerun lands on its own copy's top (6'-6"): RP-A1 at 0.5'-1.67', RP-A2 at
+    // 21'-22.17'. No stick crosses the party wall at 20': room A1's receptacle at 18' is on its
+    // own room's chain, never tapped into room A2's homerun.
+    let st = sticks(&s);
+    let on = |x0: f64, x1: f64| st.iter().filter(|(_, a, b)| [a, b].iter().any(|p| (x0..=x1).contains(&p[0]) && (p[2] - 6.5).abs() < 0.05)).count();
+    assert!(on(0.4, 1.8) >= 1 && on(20.9, 22.3) >= 1, "{st:?}");
+    assert!(st.iter().all(|(_, a, b)| (a[0] < 20.0) == (b[0] < 20.0)), "a stick across the party wall: {st:?}");
+    let r = s.execute("conduit.route", &json!({"max": 1000})).expect("report");
+    assert_eq!(r["room_circuits_on_own_panel"], json!(2), "{r}");
+    assert_eq!(r["routed_circuits"], json!(2), "{r}");
+}
+
+#[test]
 fn the_panel_schedules_load_sets_the_voltage_drop() {
     // LP1-5 is 130' long: at 80% of a 20 A breaker it needs #8; its schedule says 500 VA (about
     // 4 A), for which #12 holds the drop under 3%.

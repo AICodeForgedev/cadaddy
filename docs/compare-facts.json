@@ -1,7 +1,7 @@
 {
   "commands": {
-    "callableAsJson": 1257,
-    "count": 1257,
+    "callableAsJson": 1258,
+    "count": 1258,
     "ids": [
       "-attedit",
       "-block",
@@ -171,6 +171,7 @@
       "bim.props.get",
       "bim.props.set",
       "bim.props.summary",
+      "bim.provenance",
       "bim.remove_type",
       "bim.schedule",
       "bim.scope",

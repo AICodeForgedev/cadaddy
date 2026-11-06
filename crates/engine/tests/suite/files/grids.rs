@@ -328,7 +328,8 @@ fn built_columns_name_their_drawn_outlines() {
     assert_eq!((sp["columns"][0]["source"].clone(), sp["columns"][0]["status"].clone()), (json!(want[0].1), json!("rule")));
     let b = s.execute("model.build", &json!({})).unwrap();
     assert_eq!(b["gridColumns"], json!(4), "{b}");
-    // Each built column's build tags: [column, level, source handle, grid:…, status:rule].
+    // Each built column's build tags: [column, level, source handle, grid:…, status:inferred]
+    // (a column at a grid crossing is laid in by rule, Q6216), and the rule as its basis.
     let mut built: Vec<(String, String, String)> = s
         .doc()
         .unwrap()
@@ -343,7 +344,15 @@ fn built_columns_name_their_drawn_outlines() {
         })
         .collect();
     built.sort();
-    assert_eq!(built, want.iter().map(|(g, h)| (g.clone(), h.clone(), "status:rule".to_string())).collect::<Vec<_>>());
+    assert_eq!(built, want.iter().map(|(g, h)| (g.clone(), h.clone(), "status:inferred".to_string())).collect::<Vec<_>>());
+    let based = s
+        .doc()
+        .unwrap()
+        .model
+        .iter()
+        .filter(|e| made_as(e).as_deref() == Some("column"))
+        .all(|e| e.common.xdata.iter().any(|t| t.value.starts_with("basis:A-GRID-COLUMN")));
+    assert!(based, "each says why: the grid column rule");
 }
 
 #[test]

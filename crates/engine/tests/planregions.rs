@@ -160,7 +160,8 @@ fn a_sheet_with_two_plans_gives_each_level_only_its_own_plan() {
     // views are laid on their own plans; a run that can't be is left out with a finding.
     let q = s.execute("mep.qty", &json!({})).expect("mep.qty");
     let duct: f64 = duct.iter().map(|x| x.2).sum();
-    let model = q["totals"]["duct_length_ft"].as_f64().expect("duct");
+    // The drawn total (filled-in work is counted apart, by_made).
+    let model = q["totals"]["by_made"]["drawn"]["duct_length_ft"].as_f64().expect("drawn duct");
     assert!(model <= duct + 1.0 && model >= 0.95 * duct, "{} read {duct}", q["totals"]);
     let state = s.doc().ok().and_then(|d| d.agent.clone()).unwrap_or_default();
     assert!(model >= duct - 1.0 || state.contains("MEP items not placed"), "runs left out without a finding: {} read {duct}", q["totals"]);

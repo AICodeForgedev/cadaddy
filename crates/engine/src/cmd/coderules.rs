@@ -223,7 +223,7 @@ pub(crate) fn rules() -> Vec<CodeRule> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec::new(CMD, "Apply Code Rules", run)
-        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided}, gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
+        .params("{} → {receptacles, tamper_resistant: n (in guest rooms / dwellings: NEC 406.12), tr_documented: {stated, not_stated}, gfci: {device, load_side, breaker, double_protection_avoided, none, undecided, device_each (each a GFCI device: which is first on its circuit isn't known), device_breaker_unknown (a GFCI device: its breaker's type isn't in the schedule)}, gfci_corrected (receptacles the drawings show standard built GFCI, the design type kept), gfci_circuits: [{panel, circuit, description, rule, needs}] (the panel schedules' receptacle circuits in a place needing GFCI, an elevator pit, a roof, whose breaker isn't GFCI), rules: [id]}: each receptacle gets `tamper_resistant` (yes, with the rule and its room) and `tr_documented` (where the documents say it, or that they don't); and by its circuit (its breaker's type from the panel schedule, bim.props.fill's `gfci_breaker`) `gfci` (device | load side | breaker | none | undecided), `receptacle_type` (GFCI | standard) and `protected_by`, each with its source; a person's values stay")
         .menu(&["Tools", "Building", "Apply Code Rules"])]
 }
 
@@ -436,6 +436,8 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         }
     }
     let mut tally: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut corrected_circuits: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut gfci_corrected = 0usize;
     let mut corrections = 0usize;
     let mut tr_count = 0usize;
     let (mut stated, mut not_stated) = (0usize, 0usize);
@@ -552,22 +554,55 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
                     *tally.entry("load_side").or_default() += 1;
                 }
                 None => {
-                    let note =
-                        format!("{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known");
-                    set("gfci", json!("undecided"), rule_src(&gf, &note), None);
-                    *tally.entry("undecided").or_default() += 1;
+                    // Which is first on the circuit isn't known: the field sets a GFCI receptacle at
+                    // each place that needs one (Q6216; the alternative: the first one GFCI, the
+                    // rest on its load side).
+                    let note = format!(
+                        "{why} on {circuit}, whose breaker isn't GFCI, with others that need it: which is first on the circuit isn't known, so each is a GFCI device (alternative: the first one GFCI, the rest on its load side)"
+                    );
+                    set("gfci", json!("device"), rule_src(&gf, &note), None);
+                    set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
+                    *tally.entry("device_each").or_default() += 1;
                 }
             },
             (true, None) => {
-                let note = format!("{why}; {circuit}'s breaker type isn't in the panel schedule");
-                set("gfci", json!("undecided"), rule_src(&gf, &note), None);
-                *tally.entry("undecided").or_default() += 1;
+                // The breaker's type isn't in the panel schedule: the usual is a standard breaker,
+                // so the field sets a GFCI receptacle here (Q6216; the alternative, a GFCI breaker,
+                // makes it a standard one).
+                let note = format!(
+                    "{why}; {circuit}'s breaker type isn't in the panel schedule: a GFCI receptacle here (alternative: a GFCI breaker and a standard receptacle)"
+                );
+                set("gfci", json!("device"), rule_src(&gf, &note), None);
+                set("receptacle_type", json!("GFCI"), rule_src(&gf, &note), None);
+                *tally.entry("device_breaker_unknown").or_default() += 1;
             }
             (false, Some(false)) => {
                 set("gfci", json!("none"), breaker_src, Some("not tagged GFCI; its breaker isn't GFCI"));
                 *tally.entry("none").or_default() += 1;
             }
             (false, None) => {}
+        }
+        // A receptacle the documents draw standard that the code makes its circuit's GFCI: the
+        // field installs the GFCI, the drawings' type kept beside it (Q6216).
+        if !r.tagged && store.get("receptacle_type").is_some_and(|p| p.text() == "GFCI" && p.source.kind == SourceKind::Rule) {
+            let c = super::provenance::Correction {
+                key: "receptacle_type".into(),
+                design: "standard".into(),
+                corrected: "GFCI".into(),
+                reason: why.clone(),
+                rule: format!("{} {}", gf.id, gf.cite),
+            };
+            // The installed value keeps the source the rule gave it (why, where).
+            let installed = store.get("receptacle_type").map_or_else(|| rule_src(&gf, &why), |p| p.source.clone());
+            if super::provenance::correct_with(
+                &mut store,
+                &c,
+                Source::from_doc(SourceKind::Print, "the drawings' receptacle, not tagged GFCI"),
+                installed,
+            ) {
+                corrected_circuits.insert((text(&r.store, "panel").to_ascii_uppercase(), text(&r.store, "circuit")));
+                gfci_corrected += 1;
+            }
         }
         // What the drawing says, and what is built instead of it: side by side, never silently.
         let decided = store.get("receptacle_type").filter(|p| p.has_value()).map(Prop::text).unwrap_or_default();
@@ -590,6 +625,11 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
             changes.push((r.handle, store));
         }
     }
+    // The schedules' GFCI places: corrected where the circuit's first receptacle was built GFCI.
+    for g in &mut gfci_circuits {
+        let key = (g["panel"].as_str().unwrap_or_default().to_ascii_uppercase(), g["circuit"].as_str().unwrap_or_default().to_string());
+        g["corrected"] = json!(corrected_circuits.contains(&key));
+    }
     let d = s.doc_mut()?;
     let mut changed = 0usize;
     for (h, store) in changes {
@@ -609,6 +649,7 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         "gfci": tally,
         "corrections": corrections,
         "gfci_circuits": gfci_circuits,
+        "gfci_corrected": gfci_corrected,
         "rules": all.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
     }))
 }

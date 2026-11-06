@@ -679,7 +679,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> usize {
             t(1000, format!("grid:{}", c.grid)),
         ];
         if !c.status.is_empty() {
-            xdata.push(t(1000, format!("status:{}", c.status)));
+            // One provenance mark (Q6216): a column a rule put at a grid crossing is inferred.
+            let made = cadaddy_walk3d::Made::parse(&c.status).unwrap_or(if c.status.eq_ignore_ascii_case("rule") {
+                cadaddy_walk3d::Made::Inferred
+            } else {
+                cadaddy_walk3d::Made::Drawn
+            });
+            xdata.extend(super::provenance::tags(made, &super::provenance::rule("A-GRID-COLUMN").basis_for(&format!("grid {}", c.grid))));
         }
         if d.add(&Space::Model, Common { layer: "3D-Columns".into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
             n += 1;

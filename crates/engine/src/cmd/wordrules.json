@@ -1053,6 +1053,24 @@
     ]
    ]
   },
+  "equipment.control_marks": {
+   "source": "drafting practice: the marks of the controls and sensors a unit's tag labels when printed beside them (a thermostat, a humidistat, a sensor, a switch: `FCU-1 T` is the thermostat of FCU-1, not the unit) (fix-symbol-misread)",
+   "words": [
+    "T",
+    "TS",
+    "TSTAT",
+    "T-STAT",
+    "THERMOSTAT",
+    "H",
+    "HS",
+    "HUMIDISTAT",
+    "S",
+    "SS",
+    "SENSOR",
+    "CO2",
+    "TH"
+   ]
+  },
   "equipment.floor_mounting_words": {
    "source": "trade practice: a mounting with one of these stands on the floor (moved from concrete.rs `needs_pad`)",
    "words": [
@@ -2418,6 +2436,17 @@
     "LIGHT FIXTURE SCHEDULE",
     "LIGHTING FIXTURE SCHEDULE",
     "LUMINAIRE SCHEDULE"
+   ]
+  },
+  "schedules.mark_headings": {
+   "source": "format vocabulary of construction schedules: the headings of a schedule's column of marks; the marks under one are that schedule's items (fix-symbol-misread)",
+   "words": [
+    "MARK",
+    "TAG",
+    "UNIT TAG",
+    "UNIT MARK",
+    "EQUIPMENT TAG",
+    "EQUIPMENT MARK"
    ]
   },
   "sheets.device_disciplines": {
