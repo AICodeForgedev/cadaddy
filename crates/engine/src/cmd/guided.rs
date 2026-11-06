@@ -2775,7 +2775,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         // A luminaire the import made no symbol of: its type mark (one the lighting submittals
         // list) printed alone with a circuit label just under it (`H` over `G-1,a`), no device
         // read beside it: a luminaire there on that circuit. The mark as the schedule prints it:
-        // a lower-case letter is a switch leg (`d` of `G-11 d,e`), never a fixture type.
+        // a lower-case letter is a switch leg (`d` of `Q-11 d,e`), never a fixture type.
         if electrical(&sheet) && kind.is_empty() {
             let luminaire = |v: &str| {
                 job.luminaire_types
@@ -14252,7 +14252,7 @@ fn doc_objects_step(
         }
     }
     rows.truncate(40_000);
-    // The marks the set's schedules list (an air device schedule's `SD-1`, `SD-2`): a plan's tag
+    // The marks the set's schedules list (an air device schedule's `SD-5`, `SD-6`): a plan's tag
     // of one is that schedule's item, not the object a legend gives its code (`SD`, a duct
     // detector's symbol).
     let mut scheduled: BTreeMap<String, String> = BTreeMap::new();
@@ -22461,7 +22461,7 @@ mod tests {
     }
 
     /// A lone fixture mark is printed as the schedule prints its type: a lower-case leg letter
-    /// over a circuit (`d` over `G-11`) is a switch leg, not a luminaire of type D.
+    /// over a circuit (`d` over `Q-11`) is a switch leg, not a luminaire of type D.
     #[test]
     fn a_lone_leg_letter_over_a_circuit_is_no_luminaire() {
         let mut s = crate::Session::new();
@@ -22470,7 +22470,7 @@ mod tests {
         job.sheets_loaded = true;
         job.luminaire_types = vec!["D".into()];
         let texts: Vec<(&str, f64, f64, f64)> =
-            vec![("D", 300.0, 506.0, 4.0), ("G-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("G-11", 700.0, 494.0, 4.0)];
+            vec![("D", 300.0, 506.0, 4.0), ("Q-2", 300.0, 494.0, 4.0), ("d", 700.0, 506.0, 4.0), ("Q-11", 700.0, 494.0, 4.0)];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &[]);
         let hi = s.doc().map_or(0, |d| d.handseed);
@@ -22490,7 +22490,7 @@ mod tests {
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let luminaires: Vec<(String, String)> =
             job.devices.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
-        assert_eq!(luminaires, [("D".to_string(), "G-2".to_string())], "{r:#}");
+        assert_eq!(luminaires, [("D".to_string(), "Q-2".to_string())], "{r:#}");
     }
 
     /// A registered enlarged view's devices move onto the overall plan where its callout points;

@@ -550,7 +550,7 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             })
             .find_map(|m| {
                 // As the schedule prints it: a lower-case letter over a circuit is its switch leg
-                // (`d` of `G-11 d,e`), never a fixture type.
+                // (`d` of `Q-11 d,e`), never a fixture type.
                 let v = m.value.trim();
                 if marks.luminaires.contains(v) {
                     Some((m, "luminaire"))
@@ -702,7 +702,7 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         }
     }
     // The circuit labels left: each names a device. One printed over a keynote's number (a
-    // feeder's `DP1-5` over its keynote) is what the keynote is about: no device.
+    // feeder's `QP1-5` over its keynote) is what the keynote is about: no device.
     let keynoted = |t: &TextItem| {
         texts.iter().any(|k| {
             let dy = middle_of(t).y - middle_of(k).y;
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
         // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
-        // letter `d` printed over another circuit (`G-11` with its legs `d,e`) is that circuit's
+        // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
         // switch leg, though the letter is the same.
         let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
         let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };

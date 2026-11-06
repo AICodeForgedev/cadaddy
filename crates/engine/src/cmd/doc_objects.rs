@@ -328,12 +328,12 @@ const MARK_HEADINGS: &[&str] = &["MARK", "TAG", "UNIT TAG", "UNIT MARK", "EQUIPM
 /// The most marks read from the schedules of one sheet.
 const MAX_SCHEDULE_MARKS: usize = 4_000;
 
-/// A mark's key: its code and number (`SD-3`, `SD3` and `SD 3` are one).
+/// A mark's key: its code and number (`SD-5`, `SD5` and `SD 5` are one).
 pub(crate) fn mark_key(v: &str) -> Option<String> {
     super::dampers::split_tag(v).filter(|(_, n)| !n.is_empty()).map(|(c, n)| format!("{c}-{n}"))
 }
 
-/// The marks a sheet's schedules list, each with its schedule's title (`SD-1` under `MARK` in
+/// The marks a sheet's schedules list, each with its schedule's title (`SD-5` under `MARK` in
 /// the `GRILLE, REGISTER, AND DIFFUSER SCHEDULE`): the coded marks (letters and a number) in a
 /// mark heading's column, one under the next, or in its row, one after the next (a schedule
 /// drawn turned); the title the nearest text naming a schedule above the heading (empty when
@@ -389,7 +389,7 @@ pub(crate) fn schedule_marks(texts: &[TextItem]) -> BTreeMap<String, String> {
 }
 
 /// The schedule a plan's tag (`code`, `number`) is an item of when that is another class's
-/// than `class` (an `SD-3` the air device schedule lists, though the legend's `SD` is a duct
+/// than `class` (an `SD-5` the air device schedule lists, though the legend's `SD` is a duct
 /// detector): its title, `a schedule` when it has none. A tag without its number is no mark.
 pub(crate) fn of_another_schedule(code: &str, number: &str, class: &Class, scheduled: &BTreeMap<String, String>) -> Option<String> {
     let title = mark_key(&format!("{code}-{number}")).and_then(|k| scheduled.get(&k))?;
@@ -735,32 +735,32 @@ mod tests {
     #[test]
     fn a_tag_a_schedule_lists_is_that_schedules_item_not_the_legend_codes_class() {
         // The abbreviations call SD a duct detector (its symbol, no number); the air device
-        // schedule lists SD-1 and SD-2 under MARK (a column), an equipment schedule drawn turned
+        // schedule lists SD-5 and SD-6 under MARK (a column), an equipment schedule drawn turned
         // lists its units along the MARK row, and a detector schedule lists its own SD-7.
         let sheet = vec![
             t("AIR OUTLET AND INLET SCHEDULE", 0.0, 220.0),
             t("MARK", 2.0, 212.0),
-            t("SD-1", 2.0, 207.0),
-            t("SD-2", 2.0, 202.0),
-            t("RG-1", 2.0, 197.0),
+            t("SD-5", 2.0, 207.0),
+            t("SD-6", 2.0, 202.0),
+            t("RG-4", 2.0, 197.0),
             t("NOTES: SEE PLANS", 2.0, 150.0),
             t("UNIT SCHEDULE", 100.0, 220.0),
             t("MARK", 100.0, 212.0),
-            t("CU-1", 130.0, 212.0),
-            t("CU-2", 160.0, 212.0),
+            t("CU-8", 130.0, 212.0),
+            t("CU-9", 160.0, 212.0),
             t("DUCT SMOKE DETECTOR SCHEDULE", 300.0, 220.0),
             t("TAG", 300.0, 212.0),
             t("SD-7", 300.0, 207.0),
         ];
         let marks = schedule_marks(&sheet);
         let keys: Vec<&str> = marks.keys().map(String::as_str).collect();
-        assert_eq!(keys, ["CU-1", "CU-2", "RG-1", "SD-1", "SD-2", "SD-7"], "{marks:?}");
-        assert_eq!(marks.get("SD-2").map(String::as_str), Some("AIR OUTLET AND INLET SCHEDULE"));
-        assert_eq!(mark_key("SD 2").as_deref(), Some("SD-2"));
+        assert_eq!(keys, ["CU-8", "CU-9", "RG-4", "SD-5", "SD-6", "SD-7"], "{marks:?}");
+        assert_eq!(marks.get("SD-6").map(String::as_str), Some("AIR OUTLET AND INLET SCHEDULE"));
+        assert_eq!(mark_key("SD 6").as_deref(), Some("SD-6"));
         let detector = class_by_kind("duct_smoke_detector").expect("rules data");
-        // A plan's SD-2 is the air outlet schedule's diffuser: no detector. SD-7 is a detector
+        // A plan's SD-6 is the air outlet schedule's diffuser: no detector. SD-7 is a detector
         // (its own schedule's); SD-4 (no schedule lists it) and a bare SD are the legend's.
-        assert_eq!(of_another_schedule("SD", "2", detector, &marks).as_deref(), Some("AIR OUTLET AND INLET SCHEDULE"));
+        assert_eq!(of_another_schedule("SD", "6", detector, &marks).as_deref(), Some("AIR OUTLET AND INLET SCHEDULE"));
         assert_eq!(of_another_schedule("SD", "7", detector, &marks), None);
         assert_eq!(of_another_schedule("SD", "4", detector, &marks), None);
         assert_eq!(of_another_schedule("SD", "", detector, &marks), None);

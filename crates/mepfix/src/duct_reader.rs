@@ -1109,7 +1109,7 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         // Find the nearest text label for this equipment.
         let reach = w.max(h) * 3.0;
         let center = (*min + *max) * 0.5;
-        // A room's name (`AHU ROOM 145`, `AHU` over `152`) is no unit's tag.
+        // A room's name (`AHU ROOM 907`, `AHU` over `908`) is no unit's tag.
         let tag = texts
             .iter()
             .enumerate()
@@ -1188,12 +1188,12 @@ fn detect_equipment(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
                 continue;
             }
             if let Some((kind, tag)) = equip_re(text) {
-                // A unit's tag with a control's mark on its line (`FCU-3 T`: the thermostat of
-                // FCU-3) labels that control, not the unit.
+                // A unit's tag with a control's mark on its line (`FCU-7 T`: the thermostat of
+                // FCU-7) labels that control, not the unit.
                 if labels_a_control(&texts, i) || names_a_room(&texts, i) || text.split_whitespace().any(|w| w.eq_ignore_ascii_case("ROOM")) {
                     continue;
                 }
-                // A tag stacked in two lines (`FCU` over `3`) is the whole tag.
+                // A tag stacked in two lines (`FCU` over `7`) is the whole tag.
                 let (tag, at) = match stacked_number(&texts, i) {
                     Some((n, mid)) => (format!("{}-{n}", tag.trim_end_matches(['-', ' '])), mid),
                     None => (tag, *at),
@@ -1226,7 +1226,7 @@ const TAG_HEIGHT_MAX: f64 = 4.0;
 const CONTROL_MARKS: &[&str] = &["T", "TS", "TSTAT", "T-STAT", "THERMOSTAT", "H", "HS", "HUMIDISTAT", "S", "SS", "SENSOR", "CO2", "TH"];
 
 /// Whether the text `i` (a unit's tag) names the unit a control is for: a control's mark after
-/// the tag in the same text (`FCU-3 T`), or a text that is only a control's mark on its line,
+/// the tag in the same text (`FCU-7 T`), or a text that is only a control's mark on its line,
 /// just before or after it, or right over or under it.
 fn labels_a_control(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
     let Some((t, at, _, h)) = texts.get(i) else { return false };
@@ -1254,7 +1254,7 @@ fn stacked_number(texts: &[(String, Vec2, String, f64)], i: usize) -> Option<(St
 }
 
 /// Whether the text `i` is a room's name: its room number (three or four digits) printed under
-/// it (`AHU` over `152` names the room the units stand in, not a unit).
+/// it (`AHU` over `908` names the room the units stand in, not a unit).
 fn names_a_room(texts: &[(String, Vec2, String, f64)], i: usize) -> bool {
     under(texts, i, &|v: &str| numbered(v, 3, 4)).is_some()
 }
@@ -2173,15 +2173,15 @@ mod tests {
     #[test]
     fn a_prints_screened_background_furniture_is_no_air_device() {
         // A guest room's dresser and armchair printed in the screened background (boxes with
-        // drawer lines), a sheet callout `M-6` lettered large beside them (it once tagged every
-        // box within six of its heights); a real return grille in black, tagged `RG-1`.
+        // drawer lines), a sheet callout `M-9` lettered large beside them (it once tagged every
+        // box within six of its heights); a real return grille in black, tagged `RG-5`.
         let mut p = Print::new().with_both_pens();
         p.barred_box(true, [500.0, 500.0], 14.0);
         p.barred_box(true, [560.0, 470.0], 10.0);
-        p.text(false, "TEXT", "M-6", [520.0, 540.0], 60.0);
-        p.text(true, "TEXT", "SINGLE Q", [470.0, 560.0], 9.0);
+        p.text(false, "TEXT", "M-9", [520.0, 540.0], 60.0);
+        p.text(true, "TEXT", "GUEST ROOM", [470.0, 560.0], 9.0);
         p.barred_box(false, [1500.0, 500.0], 12.0);
-        p.text(false, "TEXT", "RG-1", [1520.0, 515.0], 9.0);
+        p.text(false, "TEXT", "RG-5", [1520.0, 515.0], 9.0);
         // One tagged in the print's hidden text (its searchable words, on a layer of the
         // background's grey): a tag all the same.
         let mut hidden = cadaddy_doc::Layer::new(cadaddy_io::pdf_read::HIDDEN_TEXT_LAYER);
@@ -2192,7 +2192,7 @@ mod tests {
             insert: cadaddy_geom::Vec3::new(2020.0, 515.0, 0.0),
             align_pt: None,
             height: 9.0,
-            value: "RG-2".into(),
+            value: "RG-6".into(),
             rotation: 0.0,
             width_factor: 1.0,
             oblique: 0.0,
@@ -2207,37 +2207,37 @@ mod tests {
         // A print drawn all in one pen (no background to leave out) reads its boxes as before.
         let mut one = Print::new();
         one.barred_box(true, [500.0, 500.0], 14.0);
-        one.text(true, "TEXT", "RG-1", [520.0, 515.0], 9.0);
+        one.text(true, "TEXT", "RG-5", [520.0, 515.0], 9.0);
         assert_eq!(detect_terminals(&one.d, true, false).len(), 1);
     }
 
     #[test]
     fn a_units_tag_beside_its_control_or_over_a_room_number_is_no_unit() {
         let mut p = Print::new().with_both_pens();
-        // The thermostat's label `FCU-3` with its `T` (the thermostat of FCU-3), and one in one
-        // text; the unit itself tagged `FCU` over `3` in the room it stands in.
-        p.text(false, "TEXT", "FCU-3", [100.0, 100.0], 4.0);
+        // The thermostat's label `FCU-7` with its `T` (the thermostat of FCU-7), and one in one
+        // text; the unit itself tagged `FCU` over `7` in the room it stands in.
+        p.text(false, "TEXT", "FCU-7", [100.0, 100.0], 4.0);
         p.text(false, "TEXT", "T", [125.0, 100.0], 4.0);
-        p.text(false, "TEXT", "FCU-4 TSTAT", [100.0, 200.0], 4.0);
+        p.text(false, "TEXT", "FCU-8 TSTAT", [100.0, 200.0], 4.0);
         p.text(false, "TEXT", "FCU", [400.0, 400.0], 4.0);
-        p.text(false, "TEXT", "3", [403.0, 393.0], 4.0);
-        // Rooms named for what stands in them: `AHU` over its number `152`, `AHU ROOM 145` in a
+        p.text(false, "TEXT", "7", [403.0, 393.0], 4.0);
+        // Rooms named for what stands in them: `AHU` over its number `908`, `AHU ROOM 907` in a
         // box (the room's outline); a size tag of usual lettering; a misread glyph 50 times as
         // tall as the lettering.
         p.text(false, "TEXT", "AHU", [700.0, 400.0], 4.0);
-        p.text(false, "TEXT", "152", [702.0, 393.0], 3.0);
+        p.text(false, "TEXT", "908", [702.0, 393.0], 3.0);
         let corners = [[900.0, 900.0], [960.0, 900.0], [960.0, 960.0], [900.0, 960.0]];
         let vertices = corners.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
         let outline = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed: true, const_width: 0.0, elevation: 0.0, plinegen: false });
         p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), outline).expect("room");
-        p.text(false, "TEXT", "AHU ROOM 145", [910.0, 930.0], 4.0);
+        p.text(false, "TEXT", "AHU ROOM 907", [910.0, 930.0], 4.0);
         p.text(false, "TEXT", "12\"x8\"", [1200.0, 400.0], 4.0);
         p.text(false, "TEXT", "PTAC", [1600.0, 900.0], 200.0);
         let got: Vec<(String, String, [f64; 2])> = detect_equipment(&p.d, true, false)
             .iter()
             .map(|e| (e.kind.clone(), e.tag.clone(), [((e.min.x + e.max.x) / 2.0).round(), ((e.min.y + e.max.y) / 2.0).round()]))
             .collect();
-        assert_eq!(got, [("fan_coil_unit".to_string(), "FCU-3".to_string(), [402.0, 397.0])]);
+        assert_eq!(got, [("fan_coil_unit".to_string(), "FCU-7".to_string(), [402.0, 397.0])]);
     }
 
     #[test]
