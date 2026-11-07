@@ -1152,7 +1152,8 @@ mod tests {
         let junction = [read_as("junction_box")];
         let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: junction.iter().collect() };
         let got = read_view(&view, &legend_symbols(&tps, &found), &marks);
-        let line: Vec<(&str, &str, bool)> = got.iter().map(|d| (d.kind.as_str(), d.circuit.as_str(), (d.at[0] - 100.0).hypot(d.at[1] - 94.0) < 2.0)).collect();
+        let line: Vec<(&str, &str, bool)> =
+            got.iter().map(|d| (d.kind.as_str(), d.circuit.as_str(), (d.at[0] - 100.0).hypot(d.at[1] - 94.0) < 2.0)).collect();
         assert_eq!(line, [("receptacle", "Q-4", true)], "{got:?}");
         let receptacle = [read_as("receptacle")];
         let view = View { read: receptacle.iter().collect(), ..view };

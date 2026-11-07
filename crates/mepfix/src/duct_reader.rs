@@ -2379,7 +2379,11 @@ mod tests {
         // An exhaust fan's box drawn in pieces (a frame in it) by its mark `EF` over its number,
         // a grille's tag farther off.
         let (fx, fy) = (1750.0, 500.0);
-        path(&mut p, &[[fx - 2.0, fy + 8.0], [fx - 8.0, fy + 8.0], [fx - 8.0, fy - 8.0], [fx + 8.0, fy - 8.0], [fx + 8.0, fy + 8.0], [fx + 2.0, fy + 8.0]], false);
+        path(
+            &mut p,
+            &[[fx - 2.0, fy + 8.0], [fx - 8.0, fy + 8.0], [fx - 8.0, fy - 8.0], [fx + 8.0, fy - 8.0], [fx + 8.0, fy + 8.0], [fx + 2.0, fy + 8.0]],
+            false,
+        );
         path(&mut p, &[[fx - 4.0, fy - 4.0], [fx + 4.0, fy - 4.0], [fx + 4.0, fy + 4.0], [fx - 4.0, fy + 4.0]], true);
         p.text(false, "TEXT", "EF", [fx + 14.0, fy + 2.0], 4.58);
         p.text(false, "TEXT", "5", [fx + 15.0, fy - 5.0], 4.58);

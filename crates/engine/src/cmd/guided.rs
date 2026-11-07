@@ -23546,8 +23546,10 @@ mod tests {
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
         got.sort();
-        let want: Vec<(String, String)> =
-            [("H", "K-1"), ("H", "K-1"), ("REC", "K-1"), ("REC", "K-3"), ("REC", "K-5"), ("REC", "K-9")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+        let want: Vec<(String, String)> = [("H", "K-1"), ("H", "K-1"), ("REC", "K-1"), ("REC", "K-3"), ("REC", "K-5"), ("REC", "K-9")]
+            .iter()
+            .map(|(t, c)| (t.to_string(), c.to_string()))
+            .collect();
         assert_eq!(got, want, "{r:#}");
         assert!(job.devices.iter().all(|d| d.circuit != "E-5"), "the bubble: {:?}", job.devices);
         // The `H` over `K-1,a` is a fixture of its own beside the receptacle.
