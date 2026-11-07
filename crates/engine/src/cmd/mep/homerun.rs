@@ -5,7 +5,8 @@
 //! than the tube, and every tube under such a tag takes its first system. Here:
 //! - a run drawn in a pattern is measured along its middle ([`centreline`]);
 //! - a tag's leader takes the tag to what its arrow points at, when the leader is surely its
-//!   ([`leader_tips`], [`sure_tips`]);
+//!   ([`leader_tips`], [`sure_tips`]); a leader is no pipe, whoever's lettering it starts from
+//!   ([`leader_strokes`]);
 //! - a tube under a two-system tag takes the system of the manifold it comes from, the one a
 //!   single-system tag points at ([`resolve_pairs`]); one that reaches no known manifold is
 //!   shared out between the tag's two systems, as the tag says each fixture gets one of each.
@@ -43,6 +44,11 @@ const MANIFOLD_TAG_FT: f64 = 2.5;
 const MANIFOLD_PAIR_FT: f64 = 4.0;
 /// Most tube ends clustered on one sheet.
 const MAX_ENDS: usize = 100_000;
+/// A leader's line has at most this many points (a shoulder and the slant to its arrow).
+const LEADER_POINTS: usize = 3;
+/// Most lettering looked at for leaders, and most characters of one line measured.
+const MAX_LETTERING: usize = 200_000;
+const MAX_CHARS: usize = 120;
 
 /// The middle line of a run drawn in a pattern (its strokes a small zigzag about it), or `None`
 /// when the run is drawn plain (its segments longer than a pattern's, or turning one way, as a
@@ -147,6 +153,131 @@ pub(crate) fn leader_tips(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], ar
         }
     }
     tips
+}
+
+/// The strokes that are leaders, which are no pipe: a line or short polyline (at most
+/// [`LEADER_POINTS`] points, up to [`LEADER_HOPS`] of them joined end to end) that starts beside
+/// a line of lettering (`lettering`: where it is, its height, its characters; a pipe tag's or any
+/// note's) and ends on the point of an arrowhead (`heads`: filled triangles) that points back
+/// along it, [`LEADER_MIN_H`] to [`LEADER_MAX_H`] text heights long. A pipe drawn to a riser's
+/// dot or a valve's fill ends on no triangle's point; one with a flow arrow carries its lettering
+/// at the arrow, not at the far end. Indices into `strokes`, and into `heads` of their arrowheads.
+pub(crate) fn leader_strokes(
+    lettering: &[(Vec2, f64, usize)],
+    strokes: &[Stroke],
+    heads: &[[Vec2; 3]],
+) -> (std::collections::BTreeSet<usize>, std::collections::BTreeSet<usize>) {
+    let mut out = std::collections::BTreeSet::new();
+    let mut arrowheads = std::collections::BTreeSet::new();
+    let lettering: Vec<(Vec2, f64, usize)> = lettering
+        .iter()
+        .filter(|(at, h, chars)| at.is_finite() && h.is_finite() && *h > 0.0 && *chars > 0)
+        .take(MAX_LETTERING)
+        .map(|(at, h, chars)| (*at, *h, (*chars).min(MAX_CHARS)))
+        .collect();
+    if lettering.is_empty() || heads.is_empty() {
+        return (out, arrowheads);
+    }
+    // Cells of a few text heights: the strokes' ends and the heads' points by cell.
+    let mut hs: Vec<f64> = lettering.iter().map(|l| l.1).collect();
+    hs.sort_by(f64::total_cmp);
+    let cell = hs.get(hs.len() / 2).copied().unwrap_or(1.0) * 4.0;
+    let key = |p: Vec2| -> Option<(i64, i64)> {
+        let (x, y) = ((p.x / cell).floor(), (p.y / cell).floor());
+        (x.abs() < 1e15 && y.abs() < 1e15).then_some((x as i64, y as i64))
+    };
+    let mut ends: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, s) in strokes.iter().enumerate().filter(|(_, s)| (2..=LEADER_POINTS).contains(&s.len())) {
+        for p in [s.first(), s.last()].into_iter().flatten() {
+            if let Some(k) = key(*p) {
+                ends.entry(k).or_default().push(i);
+            }
+        }
+    }
+    let mut points: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, t) in heads.iter().enumerate().filter(|(_, t)| t.iter().all(|p| p.is_finite())) {
+        for p in t {
+            if let Some(k) = key(*p) {
+                points.entry(k).or_default().push(i);
+            }
+        }
+    }
+    let near = |grid: &HashMap<(i64, i64), Vec<usize>>, lo: Vec2, hi: Vec2| -> Vec<usize> {
+        let (Some(a), Some(b)) = (key(lo), key(hi)) else { return Vec::new() };
+        let mut v = Vec::new();
+        for x in a.0..=b.0.min(a.0.saturating_add(64)) {
+            for y in a.1..=b.1.min(a.1.saturating_add(64)) {
+                v.extend(grid.get(&(x, y)).into_iter().flatten().copied());
+            }
+        }
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let len = |s: &Stroke| s.windows(2).filter_map(|w| Some(w.first()?.dist(*w.get(1)?))).sum::<f64>();
+    // An arrowhead on `tip`, pointing back the way the leader came in (from `back`).
+    let head_at = |tip: Vec2, back: Vec2, h: f64| {
+        let r = Vec2::new(0.5 * h, 0.5 * h);
+        near(&points, tip - r, tip + r).into_iter().find(|i| {
+            let Some(t) = heads.get(*i) else { return false };
+            let (lo, hi) = t.iter().fold((t[0], t[0]), |(lo, hi), p| (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))));
+            let size = (hi.x - lo.x).max(hi.y - lo.y);
+            let mid = Vec2::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
+            size <= ARROW_MAX_H * h
+                && size > 1e-9
+                && t.iter().any(|p| p.dist(tip) <= 0.5 * h)
+                && (mid.x - tip.x) * (back.x - tip.x) + (mid.y - tip.y) * (back.y - tip.y) > 0.0
+        })
+    };
+    for (at, h, chars) in lettering {
+        let w = 0.9 * h * chars as f64;
+        let beside = |p: Vec2| p.y >= at.y - h && p.y <= at.y + 2.0 * h && [at.x - w, at.x, at.x + w].iter().any(|x| (p.x - x).abs() <= 2.0 * h);
+        for si in near(&ends, Vec2::new(at.x - w - 2.0 * h, at.y - h), Vec2::new(at.x + w + 2.0 * h, at.y + 2.0 * h)) {
+            let Some(s) = strokes.get(si) else { continue };
+            let (Some(&a), Some(&b)) = (s.first(), s.last()) else { continue };
+            for (start, far) in [(a, b), (b, a)] {
+                if !beside(start) {
+                    continue;
+                }
+                // The point before the far end: the way the leader comes into its arrow.
+                let before = |s: &Stroke, end: Vec2| {
+                    if s.last().is_some_and(|p| p.dist(end) <= 1e-9) { s.iter().rev().nth(1).copied() } else { s.get(1).copied() }
+                };
+                let (mut used, mut tip, mut back, mut total) = (vec![si], far, before(s, far).unwrap_or(start), len(s));
+                for _ in 0..LEADER_HOPS {
+                    if head_at(tip, back, h).is_some() || total > LEADER_MAX_H * h {
+                        break;
+                    }
+                    let r = Vec2::new(0.1 * h, 0.1 * h);
+                    let next = near(&ends, tip - r, tip + r).into_iter().find_map(|ti| {
+                        let t = strokes.get(ti).filter(|_| !used.contains(&ti))?;
+                        let (c, d) = (*t.first()?, *t.last()?);
+                        if c.dist(tip) <= 0.1 * h && d.dist(tip) > 0.1 * h {
+                            Some((ti, d))
+                        } else if d.dist(tip) <= 0.1 * h && c.dist(tip) > 0.1 * h {
+                            Some((ti, c))
+                        } else {
+                            None
+                        }
+                    });
+                    let Some((ti, d)) = next else { break };
+                    let Some(t) = strokes.get(ti) else { break };
+                    back = before(t, d).unwrap_or(tip);
+                    tip = d;
+                    total += len(t);
+                    used.push(ti);
+                }
+                if total >= LEADER_MIN_H * h
+                    && total <= LEADER_MAX_H * h
+                    && let Some(head) = head_at(tip, back, h)
+                {
+                    out.extend(used);
+                    arrowheads.insert(head);
+                }
+            }
+        }
+    }
+    (out, arrowheads)
 }
 
 /// Where each tag points, of tags whose leaders are known (`tips` from [`leader_tips`], `h`
@@ -419,6 +550,31 @@ mod tests {
         // Hostile values.
         assert!(leader_tips(v(f64::NAN, 0.0), h, 9, std::slice::from_ref(&leader), &[arrow]).is_empty());
         assert!(leader_tips(at, 0.0, 9, &[leader], &[arrow]).is_empty());
+    }
+
+    #[test]
+    fn a_leader_is_a_line_from_lettering_to_an_arrowheads_point() {
+        let h = 6.0;
+        let notes = [(v(100.0, 60.0), h, 21)];
+        // A shoulder by the note, then a slant down to a triangle whose point is its end.
+        let leader = vec![v(97.0, 62.0), v(90.0, 62.0), v(60.0, 0.0)];
+        let head = [v(60.0, 0.0), v(56.0, 8.0), v(63.0, 8.0)];
+        // A pipe passing the note, and one from beside it to a triangle pointing away from it
+        // (the next pipe's flow arrow): neither is a leader.
+        let pipe = vec![v(0.0, 58.0), v(240.0, 58.0)];
+        let away = vec![v(103.0, 61.0), v(160.0, 61.0)];
+        let away_head = [v(160.0, 61.0), v(168.0, 57.0), v(168.0, 65.0)];
+        let strokes = [leader.clone(), pipe, away];
+        let (found, arrowheads) = leader_strokes(&notes, &strokes, &[head, away_head]);
+        assert_eq!(found.into_iter().collect::<Vec<_>>(), vec![0]);
+        assert_eq!(arrowheads.into_iter().collect::<Vec<_>>(), vec![0]);
+        // In two lines end to end; with no triangle (a riser's dot), none.
+        let (a, b) = (vec![v(97.0, 62.0), v(90.0, 62.0)], vec![v(90.0, 62.0), v(60.0, 0.0)]);
+        assert_eq!(leader_strokes(&notes, &[a.clone(), b.clone()], &[head]).0.len(), 2);
+        assert!(leader_strokes(&notes, &[a, b], &[]).0.is_empty());
+        // A head too big to be an arrow's, and hostile lettering.
+        assert!(leader_strokes(&notes, std::slice::from_ref(&leader), &[[v(60.0, 0.0), v(20.0, 80.0), v(100.0, 80.0)]]).0.is_empty());
+        assert!(leader_strokes(&[(v(f64::NAN, 0.0), h, 9), (v(100.0, 60.0), 0.0, 9)], &[leader], &[head]).0.is_empty());
     }
 
     #[test]

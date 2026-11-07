@@ -84,6 +84,10 @@ pub(crate) struct FillRules {
     /// most [`Self::along_deg`] off its line), is that pipe and is not laid again (feet).
     pub along_ft: f64,
     pub along_deg: f64,
+    /// A filled-in leg at most this far (degrees) off the building's lines (the floor's pipe, by
+    /// length: [`axes`]) runs along them; one farther is laid as two legs that do, and why.
+    pub square_deg: f64,
+    pub square_basis: String,
     /// How far (feet) a filled-in pipe is offset clear of electrical gear's dedicated space it
     /// would otherwise cross, and why.
     pub gear_clear_ft: f64,
@@ -649,6 +653,43 @@ pub(crate) struct Fixture {
     pub words: String,
 }
 
+/// The building's lines on a floor: the direction (a unit vector, and the one square to it) its
+/// pipe runs in most, by length, the angle taken to the degree within a quarter turn. None drawn:
+/// the drawing's axes.
+pub(crate) fn axes<'a>(runs: impl Iterator<Item = &'a MepRun>) -> ([f64; 2], [f64; 2]) {
+    let mut by = [0.0f64; 90];
+    for r in runs.take(MAX_ITEMS) {
+        for w in r.points.windows(2) {
+            let (dx, dy) = (w[1][0] - w[0][0], w[1][1] - w[0][1]);
+            let l = dx.hypot(dy);
+            if !(l.is_finite() && l > 0.0) {
+                continue;
+            }
+            let deg = dy.atan2(dx).to_degrees().rem_euclid(90.0).round() as usize % 90;
+            if let Some(b) = by.get_mut(deg) {
+                *b += l;
+            }
+        }
+    }
+    // Each degree with its neighbours (a line drawn a hair off).
+    let score = |i: usize| (0..3).filter_map(|k| by.get((i + 89 + k) % 90)).sum::<f64>();
+    let best = (0..90).max_by(|a, b| score(*a).total_cmp(&score(*b)).then(b.cmp(a))).filter(|i| score(*i) > 0.0).unwrap_or(0);
+    let t = (best as f64).to_radians();
+    ([t.cos(), t.sin()], [-t.sin(), t.cos()])
+}
+
+/// How far (degrees) the segment a-b runs off the nearer of the lines `u` and the one square to it.
+fn off_square(a: [f64; 2], b: [f64; 2], u: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l = dx.hypot(dy);
+    if !(l.is_finite() && l > 1e-9) {
+        return 0.0;
+    }
+    let c = ((dx * u[0] + dy * u[1]) / l).abs().min(1.0);
+    let s = ((dx * -u[1] + dy * u[0]) / l).abs().min(1.0);
+    c.min(s).asin().to_degrees()
+}
+
 /// A main or riser (what a branch is run from): a riser, or a run no plan draws on the floor.
 pub(crate) fn is_main(r: &MepRun) -> bool {
     r.top_ft.is_some() || r.points.len() < 2 || provenance(r) != DRAWN
@@ -765,13 +806,22 @@ struct Piece {
     main: bool,
 }
 
+/// The corner of two legs from `q` to `p` along the lines `u` and `v`, the longer first.
+fn square_corner(q: [f64; 2], p: [f64; 2], u: [f64; 2], v: [f64; 2]) -> [f64; 2] {
+    let (dx, dy) = (p[0] - q[0], p[1] - q[1]);
+    let (du, dv) = (dx * u[0] + dy * u[1], dx * v[0] + dy * v[1]);
+    if du.abs() >= dv.abs() { [q[0] + u[0] * du, q[1] + u[1] * du] } else { [q[0] + v[0] * dv, q[1] + v[1] * dv] }
+}
+
 /// Each need met from the nearest main or riser of its system on `level` (`mains`), the nearest
 /// first, each run laid in joining the network for the next: a main carried on as a main, a branch
 /// (and a room's branches once joined) as a branch a need within the rules' share distance takes
 /// instead of a line of its own back to the main (one room's fixtures, back-to-back rooms): a need beside a main is teed off it
 /// at right angles; one past a main's end has the main carried on along its line to it first
 /// (sized as the main), then the branch (its own size, else the rules' fixture branch). Off a
-/// riser: along one axis, then the other. Laid at the main's height. Each run marked
+/// riser: along one axis, then the other. Every leg runs square to the building ([`axes`]): one
+/// that would run on a slant (off a pipe drawn on one) is laid as two legs along its lines
+/// ([`FillRules::square_deg`]). A branch run off another branch is shared no further. Laid at the main's height. Each run marked
 /// [`INFERRED`] with its basis; a need farther than the rules' reach is left, listed. A run is
 /// not laid where it would run along a pipe of its system already on the floor (`along`: all its
 /// pipe, drawn or filled in) or laid before it: that stretch is that pipe.
@@ -797,6 +847,9 @@ pub(crate) fn infer_clear(
     let reach = ru.reach_ft.max(0.0) * upf;
     let joint = ru.joint_ft.max(0.0) * upf;
     let share = ru.share_ft.max(0.0) * upf;
+    // The building's lines, from the floor's pipe.
+    let (line_u, line_v) = axes(along.iter().chain(mains.iter()).copied());
+    let square = ru.square_deg.max(0.0);
     let mut by_sys: BTreeMap<&str, Vec<Need>> = BTreeMap::new();
     for n in needs {
         if let Some(sys) = ru.filled().find(|s| **s == n.system) {
@@ -856,6 +909,10 @@ pub(crate) fn infer_clear(
             } else {
                 q
             };
+            // Square to the building: legs off its lines (off a pipe drawn on a slant) are two
+            // that run along them.
+            let squared = off_square(q, corner, line_u) > square || off_square(corner, p, line_u) > square;
+            let corner = if squared { square_corner(q, p, line_u, line_v) } else { corner };
             let Some(t) = templates.get(run).cloned() else { break };
             let lay = |pts: Vec<[f64; 2]>, size: [f64; 2], basis: String| {
                 let mut c = t.clone();
@@ -877,17 +934,18 @@ pub(crate) fn infer_clear(
             let gap = |a: [f64; 2], b: [f64; 2]| (b[0] - a[0]).hypot(b[1] - a[1]) > joint;
             let size = if need.size_in > 0.0 { need.size_in } else { ru.branch_size_in };
             let branch = |what: &str| {
+                let sq = if squared { format!("; {}", ru.square_basis) } else { String::new() };
                 if ru.drainage.iter().any(|d| d == sys) {
                     let size = if need.size_basis.is_empty() { String::new() } else { format!("; size: {}", need.size_basis) };
-                    format!("inferred: {} ({sys} branch to {what}{size})", ru.drain_basis)
+                    format!("inferred: {} ({sys} branch to {what}{size}){sq}", ru.drain_basis)
                 } else {
-                    format!("inferred: {} ({sys} branch to {what})", ru.branch_basis)
+                    format!("inferred: {} ({sys} branch to {what}){sq}", ru.branch_basis)
                 }
             };
             // (Each run, and whether it is a main: off a branch, both legs are the branch.)
             let mut laid: Vec<(MepRun, bool)> = Vec::new();
             if gap(q, corner) {
-                laid.push(if off_main {
+                laid.push(if off_main && !squared {
                     (lay(vec![q, corner], t.size_in, format!("inferred: {} ({sys} main carried on to {})", ru.main_basis, need.what)), true)
                 } else {
                     (lay(vec![q, corner], [size, 0.0], branch(&need.what)), false)
@@ -906,9 +964,13 @@ pub(crate) fn infer_clear(
                     r.size_source = format!("{}; offset clear of {what}'s dedicated space: {}", r.size_source, ru.gear_clear_basis);
                     out.cleared += 1;
                 }
+                // A branch another need may share is one teed off a main: a need served off a
+                // branch is the last on it (no fixture-to-fixture chain across rooms).
                 if r.points.len() >= 2 {
-                    for w in r.points.windows(2) {
-                        net.push(Piece { a: w[0], b: w[1], run: templates.len(), bottom, main });
+                    if off_main {
+                        for w in r.points.windows(2) {
+                            net.push(Piece { a: w[0], b: w[1], run: templates.len(), bottom, main });
+                        }
                     }
                     templates.push(r.clone());
                 }
@@ -1187,6 +1249,59 @@ mod tests {
         assert_eq!(inf.served, 2);
         let total: f64 = inf.runs.iter().map(ft).sum();
         assert!((total - (30.0 + 2.0)).abs() < 1e-6, "{total} {:?}", inf.runs.iter().map(|x| &x.points).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_row_of_fixtures_branches_square_off_the_main_with_no_chain_from_fixture_to_fixture() {
+        let r = ru();
+        let mut main = run("HW", "Level 2", &[[0.0, 2.5], [100.0, 2.5]]);
+        main.height_source = DERIVED.into();
+        // Five fixtures 6' apart along a row of rooms, 20-22' off the corridor main: each within
+        // the rules' share of the one before it.
+        let names = ["P-91", "P-92", "P-93", "P-94", "P-95"];
+        let fixtures: Vec<Fixture> = names
+            .iter()
+            .enumerate()
+            .map(|(i, w)| Fixture {
+                at: [(20.0 + 6.0 * i as f64) * 12.0, if i % 2 == 0 { 22.5 } else { 24.5 } * 12.0],
+                what: (*w).into(),
+                lines: vec!["HW".into()],
+                words: String::new(),
+            })
+            .collect();
+        let n = needs(&[&main], &fixtures, 15.0, 12.0, &r, true);
+        let inf = infer("Level 2", &[&main], &[&main], n, 12.0, &r);
+        assert_eq!(inf.served, 5);
+        let pts = |x: &MepRun| x.points.iter().map(|p| (p[0] / 12.0, p[1] / 12.0)).collect::<Vec<_>>();
+        let all: Vec<_> = inf.runs.iter().map(pts).collect();
+        let square = |x: &MepRun| x.points.windows(2).all(|w| (w[1][0] - w[0][0]).abs() < 1e-6 || (w[1][1] - w[0][1]).abs() < 1e-6);
+        assert!(inf.runs.iter().all(square), "every leg along the building's lines: {all:?}");
+        // Each fixture's line joins the main, or the line of a fixture that joins the main: never
+        // a fixture whose own line comes off a third's.
+        let on = |p: [f64; 2], x: &MepRun| x.points.windows(2).any(|w| to_segment(p, w[0], w[1]).0 < 1e-6);
+        let host = |name: &str| -> Option<String> {
+            let mine: Vec<&MepRun> = inf.runs.iter().filter(|x| x.size_source.contains(&format!("to fixture {name})"))).collect();
+            let start = mine.iter().map(|x| x.points[0]).find(|p| !mine.iter().any(|y| y.points.last().is_some_and(|e| (e[0] - p[0]).hypot(e[1] - p[1]) < 1e-6)))?;
+            if on(start, &main) {
+                return Some("main".into());
+            }
+            names.iter().find(|o| **o != name && inf.runs.iter().any(|x| x.size_source.contains(&format!("to fixture {o})")) && on(start, x))).map(|o| o.to_string())
+        };
+        for name in names {
+            let h = host(name).unwrap_or_default();
+            assert!(h == "main" || host(&h).as_deref() == Some("main"), "{name} comes off {h}, which comes off {:?}: {all:?}", host(&h));
+        }
+        // Off a room's branch drawn on a slant: two legs along the building's lines, not a tee
+        // square to the slant.
+        let mut slant = run("CW", "Level 2", &[[0.0, 0.0], [10.0, 5.0]]);
+        slant.height_source = DERIVED.into();
+        let main2 = run("CW", "Level 2", &[[-40.0, -20.0], [60.0, -20.0]]);
+        let f = [Fixture { at: [24.0 * 12.0, 24.0 * 12.0], what: "P-96".into(), lines: vec!["CW".into()], words: String::new() }];
+        let n = needs(&[&slant], &f, 15.0, 12.0, &r, true);
+        let inf = infer("Level 2", &[&slant], &[&slant, &main2], n, 12.0, &r);
+        assert_eq!(inf.served, 1);
+        assert!(inf.runs.iter().all(square), "{:?}", inf.runs.iter().map(pts).collect::<Vec<_>>());
+        assert!(inf.runs.iter().all(|x| x.size_source.contains("square to the building")), "the basis says so");
     }
 
     #[test]

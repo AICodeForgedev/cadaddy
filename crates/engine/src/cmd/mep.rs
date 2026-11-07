@@ -882,30 +882,87 @@ fn twin_chains(linework: &[&Arc<Entity>], upf: f64) -> Option<(Vec<(Vec<Vec2>, V
     Some((chains, widths))
 }
 
-/// The lines and short polylines that may be leaders, and the boxes of the shapes that may be
-/// their arrowheads (filled triangles: hatches, solids, small closed polylines).
-fn leaders_and_arrows(ents: &[&Arc<Entity>]) -> (Vec<homerun::Stroke>, Vec<[Vec2; 2]>) {
-    let mut strokes = Vec::new();
-    let mut arrows = Vec::new();
+/// The lines and short polylines that may be leaders, and the shapes that may be their
+/// arrowheads (filled triangles: hatches, solids, small closed polylines).
+struct LeaderMarks {
+    /// Each line's or short polyline's points, and its entity.
+    strokes: Vec<homerun::Stroke>,
+    handles: Vec<Handle>,
+    /// The boxes of the shapes that may be arrowheads.
+    arrows: Vec<[Vec2; 2]>,
+    /// Of them, the triangles: three corners, and their entities.
+    heads: Vec<[Vec2; 3]>,
+    head_handles: Vec<Handle>,
+}
+
+/// The three corners of a shape drawn as a triangle (its closing point repeated or not).
+fn triangle(pts: &mut dyn Iterator<Item = Vec2>) -> Option<[Vec2; 3]> {
+    let mut v: Vec<Vec2> = Vec::new();
+    for p in pts.take(6) {
+        if !p.is_finite() {
+            return None;
+        }
+        if v.last().is_none_or(|q| q.dist(p) > 1e-9) {
+            v.push(p);
+        }
+    }
+    if v.len() == 4 && v.first().zip(v.last()).is_some_and(|(a, b)| a.dist(*b) <= 1e-9) {
+        v.pop();
+    }
+    match v.as_slice() {
+        [a, b, c] => Some([*a, *b, *c]),
+        _ => None,
+    }
+}
+
+fn leaders_and_arrows(ents: &[&Arc<Entity>]) -> LeaderMarks {
+    let mut m = LeaderMarks { strokes: Vec::new(), handles: Vec::new(), arrows: Vec::new(), heads: Vec::new(), head_handles: Vec::new() };
     let bbox = |pts: &mut dyn Iterator<Item = Vec2>| {
         pts.filter(|p| p.is_finite()).fold(None, |b: Option<[Vec2; 2]>, p| {
             Some(b.map_or([p, p], |[lo, hi]| [Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))]))
         })
     };
     for e in ents {
+        let mut stroke = |pts: Vec<Vec2>| {
+            m.strokes.push(pts);
+            m.handles.push(e.handle);
+        };
         match &e.kind {
-            EntityKind::Line(l) => strokes.push(vec![l.a.xy(), l.b.xy()]),
-            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() <= 5 => arrows.extend(bbox(&mut p.vertices.iter().map(|v| v.p))),
-            EntityKind::LwPolyline(p) if !p.closed && (2..=4).contains(&p.vertices.len()) => strokes.push(p.vertices.iter().map(|v| v.p).collect()),
-            EntityKind::Hatch(h) => arrows.extend(bbox(&mut h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p)))),
-            EntityKind::Solid(s) => arrows.extend(bbox(&mut s.corners.iter().map(|c| c.xy()))),
+            EntityKind::Line(l) => stroke(vec![l.a.xy(), l.b.xy()]),
+            EntityKind::LwPolyline(p) if p.closed && p.vertices.len() <= 5 => {
+                m.arrows.extend(bbox(&mut p.vertices.iter().map(|v| v.p)));
+                if p.vertices.iter().all(|v| v.bulge.abs() < 1e-9)
+                    && let Some(t) = triangle(&mut p.vertices.iter().map(|v| v.p))
+                {
+                    m.heads.push(t);
+                    m.head_handles.push(e.handle);
+                }
+            }
+            EntityKind::LwPolyline(p) if !p.closed && (2..=4).contains(&p.vertices.len()) => stroke(p.vertices.iter().map(|v| v.p).collect()),
+            EntityKind::Hatch(h) => {
+                m.arrows.extend(bbox(&mut h.loops.iter().flat_map(|l| l.vertices.iter().map(|v| v.p))));
+                if let [l] = h.loops.as_slice()
+                    && l.vertices.iter().all(|v| v.bulge.abs() < 1e-9)
+                    && let Some(t) = triangle(&mut l.vertices.iter().map(|v| v.p))
+                {
+                    m.heads.push(t);
+                    m.head_handles.push(e.handle);
+                }
+            }
+            EntityKind::Solid(s) => {
+                m.arrows.extend(bbox(&mut s.corners.iter().map(|c| c.xy())));
+                if let Some(t) = triangle(&mut s.corners.iter().map(|c| c.xy())) {
+                    m.heads.push(t);
+                    m.head_handles.push(e.handle);
+                }
+            }
             _ => {}
         }
-        if strokes.len() >= MAX_SEGS {
+        if m.strokes.len() >= MAX_SEGS {
             break;
         }
     }
-    (strokes, arrows)
+    m
 }
 
 /// A followed chain's points, carried on from `from` (the end it was followed from) at its
@@ -1037,10 +1094,11 @@ fn read_pipes_from_tags(
         }
     }
     // A tag with a leader of its own is where its arrow points.
+    let marks = leaders_and_arrows(ents);
     if !pipe_tags.is_empty() {
-        let (strokes, arrows) = leaders_and_arrows(ents);
+        let (strokes, arrows) = (&marks.strokes, &marks.arrows);
         let tips: Vec<Vec<Vec2>> =
-            pipe_tags.iter().zip(&lettering).map(|(tag, (h, chars))| homerun::leader_tips(tag.at, *h, *chars, &strokes, &arrows)).collect();
+            pipe_tags.iter().zip(&lettering).map(|(tag, (h, chars))| homerun::leader_tips(tag.at, *h, *chars, strokes, arrows)).collect();
         let heights: Vec<f64> = lettering.iter().map(|(h, _)| *h).collect();
         for (tag, tip) in pipe_tags.iter_mut().zip(homerun::sure_tips(&tips, &heights)) {
             if let Some(tip) = tip {
@@ -1053,13 +1111,28 @@ fn read_pipes_from_tags(
         return (Vec::new(), Vec::new());
     }
 
+    // The leaders of every tag and note, arrowheads and all: a line from lettering to an arrowhead
+    // is no pipe, though its tag names one (the slant from `1/2" CW TO LAVATORY` to the fixture
+    // it points at).
+    let leaders: std::collections::HashSet<Handle> = {
+        let lettering: Vec<(Vec2, f64, usize)> = notes.iter().map(|(_, t, at, h)| (*at, *h, t.chars().count())).collect();
+        let (strokes, heads) = homerun::leader_strokes(&lettering, &marks.strokes, &marks.heads);
+        strokes
+            .into_iter()
+            .filter_map(|i| marks.handles.get(i).copied())
+            .chain(heads.into_iter().filter_map(|i| marks.head_handles.get(i).copied()))
+            .collect()
+    };
+    drop(marks);
+
     // Step 2: collect line chains, excluding layers that are known to carry non-pipe geometry
-    // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports.
+    // (architecture walls, fills, title-block borders, masks) on content-mode PDF imports, and the
+    // leaders.
     let linework: Vec<&Arc<Entity>> = ents
         .iter()
         .copied()
         .filter(|e| {
-            if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) {
+            if !matches!(&e.kind, EntityKind::Line(_) | EntityKind::LwPolyline(_)) || leaders.contains(&e.handle) {
                 return false;
             }
             let up = e.common.layer.to_ascii_uppercase();
@@ -3478,6 +3551,76 @@ mod tests {
         assert!(!upper.is_empty() && upper.iter().all(|s| *s == "CW"), "upper {upper:?} in {runs:?}");
         let branch: Vec<&str> = runs.iter().filter(|r| r.points.iter().any(|p| p[1] < -100.0)).map(|r| r.system.as_str()).collect();
         assert_eq!(branch, ["CW"], "{runs:?}");
+    }
+
+    #[test]
+    fn a_tags_leader_is_not_a_pipe() {
+        use cadaddy_doc::{HAlign, Line, LwPolyline, Text, VAlign};
+        use cadaddy_geom::PolyVertex;
+        use cadaddy_walk3d::Level;
+        let mut ents: Vec<Arc<Entity>> = Vec::new();
+        let mut n = 0x200u64;
+        let mut add = |kind: EntityKind, ents: &mut Vec<Arc<Entity>>| {
+            n += 1;
+            ents.push(Arc::new(Entity::new(Handle(n), kind)));
+        };
+        let poly = |pts: &[(f64, f64)], closed: bool| {
+            EntityKind::LwPolyline(LwPolyline {
+                vertices: pts.iter().map(|(x, y)| PolyVertex { p: Vec2::new(*x, *y), bulge: 0.0, start_width: 0.0, end_width: 0.0 }).collect(),
+                closed,
+                const_width: 0.0,
+                elevation: 0.0,
+                plinegen: false,
+            })
+        };
+        let text = |at: (f64, f64), value: &str| {
+            EntityKind::Text(Text {
+                insert: Vec3::new(at.0, at.1, 0.0),
+                align_pt: None,
+                height: 6.0,
+                value: value.into(),
+                rotation: 0.0,
+                width_factor: 1.0,
+                oblique: 0.0,
+                style: "Standard".into(),
+                halign: HAlign::Left,
+                valign: VAlign::Baseline,
+            })
+        };
+        // Inches, a plan at 1" = 1'. A cold water line along y 0 (20'); a note 5' over it whose
+        // leader (a shoulder, then a slant) ends in an arrowhead on the line.
+        add(EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(240.0, 0.0, 0.0) }), &mut ents);
+        add(text((100.0, 60.0), "1/2\" CW TO LAVATORY"), &mut ents);
+        add(poly(&[(97.0, 62.0), (90.0, 62.0), (60.0, 0.0)], false), &mut ents);
+        add(poly(&[(60.0, 0.0), (56.0, 8.0), (63.0, 8.0)], true), &mut ents);
+        // A second line lettered along itself, ending at a small square (a valve box): a pipe.
+        add(text((300.0, 102.0), "1\" HW"), &mut ents);
+        add(poly(&[(296.0, 100.0), (380.0, 100.0), (380.0, 60.0)], false), &mut ents);
+        add(poly(&[(377.0, 57.0), (383.0, 57.0), (383.0, 63.0), (377.0, 63.0)], true), &mut ents);
+        let refs: Vec<&Arc<Entity>> = ents.iter().collect();
+        let notes = texts(&refs);
+        let sp = BuildingSpec {
+            units_per_foot: 12.0,
+            levels: vec![Level {
+                name: "L1".into(),
+                elevation_ft: 0.0,
+                height_ft: 10.0,
+                ceiling_ft: 8.0,
+                region: None,
+                base: None,
+                attr: None,
+                sheet: None,
+            }],
+            ..BuildingSpec::default()
+        };
+        let (_, runs) = read_pipes_from_tags(&refs, &notes, &sp, 12.0, None, None);
+        // No run on the leader's slant; the line it points at is the note's cold water.
+        let slant = runs.iter().filter(|r| r.points.windows(2).any(|w| (w[1][0] - w[0][0]).abs() > 1.0 && (w[1][1] - w[0][1]).abs() > 1.0)).count();
+        assert_eq!(slant, 0, "{runs:?}");
+        let main: Vec<&str> = runs.iter().filter(|r| r.points.iter().all(|p| p[1].abs() < 1e-6)).map(|r| r.system.as_str()).collect();
+        assert_eq!(main, ["CW"], "{runs:?}");
+        let hw = runs.iter().filter(|r| r.system == "HW" && r.points.iter().any(|p| (p[0] - 380.0).abs() < 1e-6 && (p[1] - 60.0).abs() < 1e-6)).count();
+        assert_eq!(hw, 1, "{runs:?}");
     }
 
     #[test]
