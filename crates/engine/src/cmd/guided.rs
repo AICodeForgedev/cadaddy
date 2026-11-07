@@ -11686,8 +11686,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         let usable = message.split("sq in usable").next().and_then(|t| t.rsplit(',').next()).and_then(|t| t.trim().parse::<f64>().ok());
         let g = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(gear_tag));
         if let (Some(g), Some(need), Some(usable)) = (g, need, usable)
-            && let Some(w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
+            && let Some(mut w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
         {
+            super::gearbuild::wireway_clear_of_walls(&mut w, g, &sp.walls, &sp.wall_types, upf);
             job.add_finding(
                 StageName::BimBuild,
                 &format!("Gear {gear_tag}: {} built above it (proposed)", w.properties.get("CORRECTED_VALUE").cloned().unwrap_or_default()),
