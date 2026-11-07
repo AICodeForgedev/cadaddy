@@ -8516,6 +8516,60 @@ fn rigid_room_fit(
     best.map(|(f, on, _)| (f, on))
 }
 
+/// A one-room plan's room where the rooms stage's trace of it leaked: the plan draws the whole
+/// room, so a traced outline larger than the view's drawn unit (`unit`, either way round) is no
+/// outline of that room (a trace that ran out under a tag's box into the rooms beside it). The
+/// view is laid instead round the room's own tag (`tag`: the room lies within the view's reach of
+/// it), and the room is the view's unit laid there. `None` when the trace fits the view, or no
+/// fit round the tag holds the tag.
+#[allow(clippy::too_many_arguments)]
+fn one_room_round_its_tag(
+    d: &cadaddy_doc::Drawing,
+    lines: &[cadaddy_geom::Vec2],
+    view: [f64; 4],
+    unit: [f64; 4],
+    traced: [f64; 4],
+    tag: cadaddy_geom::Vec2,
+    margin: f64,
+    tol: f64,
+) -> Option<(RoomFit, Vec<cadaddy_geom::Vec2>)> {
+    let (uw, uh) = (unit[2] - unit[0], unit[3] - unit[1]);
+    let (tw, th) = (traced[2] - traced[0], traced[3] - traced[1]);
+    let fits = |w: f64, h: f64| tw <= w + margin && th <= h + margin;
+    if !(uw > 0.0 && uh > 0.0 && tag.is_finite()) || fits(uw, uh) || fits(uh, uw) {
+        return None;
+    }
+    // The view's middle lands within half its diagonal of any point of the room it draws.
+    let reach = 0.5 * (view[2] - view[0]).hypot(view[3] - view[1]);
+    let search = [tag.x - reach, tag.y - reach, tag.x + reach, tag.y + reach];
+    let floor = FloorLines::new(d, &[search], margin, 2.0 * tol);
+    let (fit, _) = rigid_room_fit(lines, view, search, &floor, margin, tol)?;
+    let outline: Vec<cadaddy_geom::Vec2> = [[unit[0], unit[1]], [unit[2], unit[1]], [unit[2], unit[3]], [unit[0], unit[3]]]
+        .iter()
+        .map(|c| fit.to + turn_vec(cadaddy_geom::Vec2::new(c[0], c[1]) - fit.from, fit.k))
+        .collect();
+    cadaddy_geom::point_in_polygon(&outline, tag).then_some((fit, outline))
+}
+
+/// Where the rooms stage read a room's tag (its `at`): by its level and number (its name when it
+/// has none).
+fn job_room_tag(job: &GuidedJob, level: &str, number: &str, name: &str) -> Option<cadaddy_geom::Vec2> {
+    let rooms = job.stage(StageName::Rooms).and_then(|st| st.result.as_ref()).and_then(|r| r.get("rooms")).and_then(Value::as_array)?;
+    rooms
+        .iter()
+        .find(|r| {
+            let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("").trim();
+            s("level") == level.trim()
+                && if number.trim().is_empty() {
+                    s("name").eq_ignore_ascii_case(name.trim())
+                } else {
+                    s("number").eq_ignore_ascii_case(number.trim())
+                }
+        })
+        .and_then(|r| r.get("at"))
+        .and_then(|a| Some(cadaddy_geom::Vec2::new(a.get(0)?.as_f64()?, a.get(1)?.as_f64()?)))
+}
+
 /// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
 const FIT_OFFSETS_TRIED: usize = 3;
 
@@ -8636,6 +8690,8 @@ fn stamp_typical_rooms(
         let sheet_hinges = plan_hinges(&sub);
         let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
         let mut told_fit: BTreeSet<[u64; 4]> = BTreeSet::new();
+        // A one-room plan's room laid round its tag where its trace leaked (by the view).
+        let mut leaked: BTreeMap<[u64; 4], Option<(RoomFit, Vec<cadaddy_geom::Vec2>)>> = BTreeMap::new();
         // The sheet's devices (where each view draws its own), and each view's linework.
         let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
         let reach = ROOM_WALL_FT * 12.0 * k_in;
@@ -8729,25 +8785,46 @@ fn stamp_typical_rooms(
             if let Some((title, view, i)) =
                 one_room.iter().filter(|(_, r, _)| inside(r) && area(r) < typical).min_by(|a, b| area(&a.1).total_cmp(&area(&b.1)))
             {
-                if let Some((name, level, outline, number)) = rooms.get(*i)
+                if let Some((name, level, traced, number)) = rooms.get(*i)
                     && out.len() < MAX_STAMPED
-                    && let turn = turn_of(view, *i, outline)
-                    && let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn)
+                    && let fixed = leaked
+                        .entry(view.map(f64::to_bits))
+                        .or_insert_with(|| {
+                            let unit = unit_box(view)?;
+                            let tag = job_room_tag(job, level, number, name)?;
+                            let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = sheet_objects
+                                .iter()
+                                .filter(|e| {
+                                    super::bspec::centre(&sub, e)
+                                        .is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3])
+                                })
+                                .copied()
+                                .collect();
+                            let lines = super::grids::line_samples(&mine, 12.0 * k_in);
+                            one_room_round_its_tag(d, &lines, *view, unit, bbox(traced), tag, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 6.0 * k_in)
+                        })
+                        .clone()
+                    && let (outline, turn) = match fixed {
+                        Some((fit, o)) => (o, fit),
+                        None => (traced.clone(), turn_of(view, *i, traced)),
+                    }
+                    && let Some(at) = place_in_room(dv.at, *view, bbox(&outline), turn)
                 {
                     if told_fit.insert(view.map(f64::to_bits)) {
+                        let how = if &outline == traced { "its box" } else { "its trace leaked past the view, laid round its tag: its box" };
                         progress_line(&format!(
-                            "  one-room plan {sheet} {title}: room {number} {level}, its box {:?}, the view {view:?} laid by {turn:?}",
-                            bbox(outline)
+                            "  one-room plan {sheet} {title}: room {number} {level}, {how} {:?}, the view {view:?} laid by {turn:?}",
+                            bbox(&outline)
                         ));
                     }
-                    if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
+                    if furnished(level, &outline) && !authority.iter().any(|(l, o)| l == level && *o == outline) {
                         authority.push((level.clone(), outline.clone()));
                     }
                     let mut copy = (*dv).clone();
                     copy.at = at;
                     copy.level.clone_from(level);
                     copy.room = stamped_room(name, number, *i);
-                    panel_into(copy.room.clone(), false, level, view, outline, turn, &mut panels, &mut panel_rooms);
+                    panel_into(copy.room.clone(), false, level, view, &outline, turn, &mut panels, &mut panel_rooms);
                     out.push(copy);
                     *report.entry(format!("{sheet} {title}")).or_default() += 1;
                 }
@@ -28050,6 +28127,61 @@ mod tests {
         let mut near = vec![super::super::readers::ReadDevice { tag: "EF".into(), at: [17.0, 120.0], level: "Level 3".into(), ..Default::default() }];
         assert_eq!(connect_to_equipment(&[eq], &mut near, 180.0), 1);
         assert_eq!(near[0].at, [17.0, 16.0]);
+    }
+
+    #[test]
+    fn a_one_room_plans_room_whose_trace_leaked_is_laid_round_its_tag() {
+        use cadaddy_doc::{Drawing, Line};
+        use cadaddy_geom::Vec2;
+        let mut d = Drawing::default();
+        let mut line = |a: Vec2, b: Vec2| {
+            d.add(&Space::Model, Common::default(), EntityKind::Line(Line { a: Vec3::new(a.x, a.y, 0.0), b: Vec3::new(b.x, b.y, 0.0) })).ok();
+        };
+        // The room (12' x 27') in its own terms: its walls, a partition and a box in a corner.
+        let room: [((f64, f64), (f64, f64)); 9] = [
+            ((0.0, 0.0), (144.0, 0.0)),
+            ((144.0, 0.0), (144.0, 324.0)),
+            ((144.0, 324.0), (0.0, 324.0)),
+            ((0.0, 324.0), (0.0, 0.0)),
+            ((0.0, 100.0), (90.0, 100.0)),
+            ((100.0, 250.0), (130.0, 250.0)),
+            ((130.0, 250.0), (130.0, 300.0)),
+            ((130.0, 300.0), (100.0, 300.0)),
+            ((100.0, 300.0), (100.0, 250.0)),
+        ];
+        // On the floor plan at (5000, 1000), a plain room beside it; on the one-room plan a
+        // quarter turned, far off on its sheet.
+        let plan = |p: (f64, f64)| Vec2::new(5000.0 + p.0, 1000.0 + p.1);
+        let sheet = |p: (f64, f64)| Vec2::new(20_000.0 + p.1, 144.0 - p.0);
+        for (a, b) in room {
+            line(plan(a), plan(b));
+            line(sheet(a), sheet(b));
+        }
+        for (a, b) in [((4850.0, 1000.0), (4994.0, 1000.0)), ((4994.0, 1000.0), (4994.0, 1324.0)), ((4994.0, 1324.0), (4850.0, 1324.0))] {
+            line(Vec2::new(a.0, a.1), Vec2::new(b.0, b.1));
+        }
+        let view = [19_980.0, -20.0, 20_344.0, 164.0];
+        let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> = super::super::bspec::plan_objects(&d)
+            .into_iter()
+            .filter(|e| super::super::bspec::centre(&d, e).is_some_and(|c| c.x >= view[0] && c.x <= view[2] && c.y >= view[1] && c.y <= view[3]))
+            .collect();
+        let lines = super::super::grids::line_samples(&mine, 12.0);
+        let unit = [20_000.0, 0.0, 20_324.0, 144.0];
+        // The trace ran out under the tag into the rooms beside it: wider than the view either way.
+        let leaked = [4500.0, 900.0, 5150.0, 1100.0];
+        let tag = Vec2::new(5050.0, 1150.0);
+        let (fit, outline) = one_room_round_its_tag(&d, &lines, view, unit, leaked, tag, 36.0, 6.0).expect("laid round its tag");
+        let b = outline.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        });
+        for (got, want) in b.iter().zip([5000.0, 1000.0, 5144.0, 1324.0]) {
+            assert!((got - want).abs() <= 6.0, "{b:?} for {fit:?}");
+        }
+        // The box in the room's corner lands on the plan's box.
+        let q = place_in_room([20_275.0, 29.0], view, b, fit).expect("rigid");
+        assert!(plan((115.0, 275.0)).dist(Vec2::new(q[0], q[1])) <= 6.0, "{q:?}");
+        // A trace the view could draw is the room's outline: left alone.
+        assert!(one_room_round_its_tag(&d, &lines, view, unit, [5000.0, 1000.0, 5144.0, 1324.0], tag, 36.0, 6.0).is_none());
     }
 
     #[test]
