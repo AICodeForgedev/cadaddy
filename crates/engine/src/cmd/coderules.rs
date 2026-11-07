@@ -494,7 +494,11 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         let req = text(&r.store, "required_features").to_ascii_uppercase();
         let prod = text(&r.store, "product").to_ascii_uppercase();
         let mark = format!("{} {}", text(&r.store, "type_mark"), text(&r.store, "type")).to_ascii_uppercase();
-        let documented = if req.contains("TAMPER") || prod.contains("TAMPER") {
+        // A keynote by it (or over its room) asks for it: documented wherever it is.
+        let keyed = r.store.get("keynote_features").filter(|p| p.has_value() && p.text().to_ascii_uppercase().contains("TAMPER"));
+        let documented = if let Some(p) = keyed {
+            (p.source.doc.clone().unwrap_or_else(|| "its keynote".into()), p.source.clone())
+        } else if req.contains("TAMPER") || prod.contains("TAMPER") {
             r.store.get("required_features").filter(|p| p.has_value() && req.contains("TAMPER")).map_or_else(
                 || ("the specification (its product record)".to_string(), Source::from_doc(SourceKind::Spec, "product record")),
                 |p| (p.source.doc.clone().unwrap_or_else(|| "the specification".into()), p.source.clone()),
@@ -512,6 +516,10 @@ fn run(s: &mut Session, _p: &Value) -> Result<Value> {
         set("tr_documented", json!(documented.0), documented.1, None);
         if let Some(why) = guest(&r.room) {
             set("tamper_resistant", json!("yes"), rule_src(&tr, &why), Some("every receptacle in a guest room, GFCI included"));
+            tr_count += 1;
+        } else if let Some(p) = keyed {
+            // Not a room the code lists, but its keynote asks for it.
+            set("tamper_resistant", json!("yes"), p.source.clone(), Some("its keynote asks for a tamper-resistant receptacle"));
             tr_count += 1;
         }
         // GFCI by circuit.
