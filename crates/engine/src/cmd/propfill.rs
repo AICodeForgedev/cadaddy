@@ -483,6 +483,7 @@ impl Seat {
         let side_said = match self.side_why {
             "circuit" => "the side its circuit's other devices are on",
             "left" => "its symbol on the wall's centreline, nothing else said a side",
+            "room" => "the side of the room its documents put it in; past its symbol's side is no room",
             _ => "the side its symbol is drawn on",
         };
         let moved = super::walltypes::frac(self.moved / upf * 12.0);
@@ -497,6 +498,51 @@ impl Seat {
     }
 }
 
+/// What stands past a wall's faces, for the side a device serves, where each level's plan is drawn
+/// (a stacked level's moved back): the built rooms (by their numbers, else names) and the plans'
+/// corridors, stairs and hoistways.
+#[derive(Default)]
+struct Sides {
+    rooms: Vec<(String, String, Vec<Vec2>, Bounds2)>,
+    circulation: Vec<(String, String, Vec<[[f64; 2]; 2]>)>,
+}
+
+impl Sides {
+    fn of(d: &Drawing, sp: &BuildingSpec) -> Self {
+        let rooms = super::bspec::room_elements(d)
+            .into_iter()
+            .filter(|r| r.outline.len() >= 3)
+            .map(|r| {
+                let off = d.model.get(r.handle).map_or(Vec2::ZERO, |e| super::bspec::stacked_by(e));
+                let outline: Vec<Vec2> = r.outline.iter().map(|v| *v - off).collect();
+                (r.level.to_ascii_lowercase(), room_label(r.number.as_deref(), &r.name), outline.clone(), Bounds2::from_points(outline))
+            })
+            .collect();
+        let circulation = sp
+            .circulation
+            .iter()
+            .filter(|c| !c.name.trim().is_empty())
+            .map(|c| (c.level.to_ascii_lowercase(), c.name.trim().to_string(), c.rects.clone()))
+            .collect();
+        Sides { rooms, circulation }
+    }
+
+    /// The room, else the corridor, stair or hoistway, of `level` at `p`.
+    fn at(&self, level: &str, p: Vec2) -> Option<&str> {
+        let lv = level.to_ascii_lowercase();
+        self.rooms
+            .iter()
+            .find(|(l, _, o, b)| *l == lv && b.contains(p) && cadaddy_geom::point_in_polygon(o, p))
+            .map(|(_, n, _, _)| n.as_str())
+            .or_else(|| {
+                self.circulation
+                    .iter()
+                    .find(|(l, _, rects)| *l == lv && rects.iter().any(|[a, b]| p.x >= a[0] && p.x <= b[0] && p.y >= a[1] && p.y <= b[1]))
+                    .map(|(_, n, _)| n.as_str())
+            })
+    }
+}
+
 /// A wall device further than this from any wall (feet) stays where it was read, for review; one
 /// between [`HOST_SNAP_FT`] and this goes in the nearest wall, marked for review.
 const FAR_SNAP_FT: f64 = 6.0;
@@ -508,7 +554,16 @@ const FAR_SNAP_FT: f64 = 6.0;
 /// are on; else the wall's left. A wall within [`HOST_SNAP_FT`] first, else within
 /// [`FAR_SNAP_FT`] (marked) when `far_ok` (a kind that is always on a wall: a receptacle, a
 /// switch; not a device of no known kind, which may stand in the room); none: not seated.
-fn seat(pieces: &[HostPiece], level: &str, p: Vec2, zc: f64, others: &[Vec2], upf: f64, far_ok: bool) -> Option<Seat> {
+fn seat(
+    pieces: &[HostPiece],
+    level: &str,
+    p: Vec2,
+    zc: f64,
+    others: &[Vec2],
+    upf: f64,
+    far_ok: bool,
+    serves: Option<(&Sides, &str)>,
+) -> Option<Seat> {
     let slack = PIECE_SLACK_IN / 12.0 * upf;
     let (a, far) = match across(pieces, level, p, zc, HOST_SNAP_FT * upf, slack) {
         Some(a) => (a, false),
@@ -528,6 +583,22 @@ fn seat(pieces: &[HostPiece], level: &str, p: Vec2, zc: f64, others: &[Vec2], up
             })
             .sum();
         if votes != 0.0 { (votes.signum(), "circuit") } else { (1.0, "left") }
+    };
+    // The room the documents put it in (a typical room's plan it was stamped from) is past the
+    // other face, and nothing is past this one (its symbol fell outside the room, or on the line):
+    // it faces that room.
+    let (side, side_why) = match serves.filter(|(_, r)| !r.trim().is_empty()) {
+        Some((sides, room)) => {
+            let probe = |s: f64| a.piece.a + a.u * a.t + a.n * (s * (a.piece.half + FACE_PROBE_FT * upf));
+            let is_room = |x: Option<&str>| x.is_some_and(|x| x.trim().eq_ignore_ascii_case(room.trim()));
+            let here = sides.at(level, probe(side));
+            if !is_room(here) && (here.is_none() || side_why != "symbol") && is_room(sides.at(level, probe(-side))) {
+                (-side, "room")
+            } else {
+                (side, side_why)
+            }
+        }
+        None => (side, side_why),
     };
     let len = a.piece.a.dist(a.piece.b);
     // Along the face where it was read, its box within the piece and clear of the stretch of the
@@ -677,6 +748,7 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         return 0;
     }
     let pieces = host_pieces(d, upf);
+    let sides = Sides::of(d, sp);
     let devices: Vec<&cadaddy_walk3d::tags::ElementTag> = sp.tags.iter().filter(|t| read_device(t)).take(MAX_DEVICES).collect();
     let by_circuit = circuit_points(sp, &devices);
     let mut moved = 0;
@@ -696,7 +768,8 @@ pub(crate) fn rehost_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
         let mut store = props::read(&e.common.xdata);
         let known = !matches!(t.kind.trim(), "" | "device");
-        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf, known) {
+        let documented_room = t.fields.get("room").map(|f| f.value.trim().to_string()).filter(|r| !r.is_empty());
+        match seat(&pieces, &level.name, p, (z0 + z1) / 2.0, &others, upf, known, documented_room.as_deref().map(|r| (&sides, r))) {
             Some(st) => {
                 let l = BOX_IN[1] * upf / 12.0;
                 let w = BOX_IN[0] * upf / 12.0;
@@ -941,6 +1014,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
     // The built walls' pieces, for setting a wall device in its wall's face; the floors, for what
     // lies outside the building.
     let pieces = host_pieces(d, upf);
+    let sides = Sides::of(d, sp);
     let fps = footprints(d, sp);
     let by_circuit = circuit_points(sp, &devices);
     for t in devices {
@@ -1151,7 +1225,10 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
-        let placed_on = on_wall.then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device")).flatten();
+        let documented_room = field(t, "room");
+        let placed_on = on_wall
+            .then(|| seat(&pieces, &level.name, p, zc, &others, upf, vkind != "device", documented_room.as_deref().map(|r| (&sides, r))))
+            .flatten();
         let (centre, along) = match &placed_on {
             Some(st) => (st.centre, st.along),
             None => (p, Vec2::new(1.0, 0.0)),
@@ -2530,20 +2607,21 @@ mod tests {
         // Read 6" north of the wall over the door, at 18": the header is no host; the solid piece
         // is 5' off: only a known wall kind goes in it, marked.
         let p = Vec2::new(60.0, 6.0);
-        assert!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false).is_none());
-        let far = seat(&pieces, "L1", p, 18.0, &[], 12.0, true).expect("in the solid piece");
+        assert!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, None).is_none());
+        let far = seat(&pieces, "L1", p, 18.0, &[], 12.0, true, None).expect("in the solid piece");
         assert_eq!(far.wall, Handle(2));
         assert!(far.far);
         // At 90" the piece over the door is there: in its north face, flush.
-        let st = seat(&pieces, "L1", p, 90.0, &[], 12.0, false).expect("over the door");
+        let st = seat(&pieces, "L1", p, 90.0, &[], 12.0, false, None).expect("over the door");
         assert_eq!((st.wall, st.far, st.side_why), (Handle(1), false, "symbol"));
         assert!((st.centre.y - 2.0).abs() < 1e-9 && (st.out.y - 1.0).abs() < 1e-9, "its face at 3\", its middle 1\" behind: {:?}", st.centre);
         // On the centreline: the side its circuit's other devices are on.
-        let st = seat(&pieces, "L1", Vec2::new(180.0, 0.5), 18.0, &[Vec2::new(170.0, -40.0), Vec2::new(200.0, -30.0)], 12.0, false).expect("seated");
+        let st =
+            seat(&pieces, "L1", Vec2::new(180.0, 0.5), 18.0, &[Vec2::new(170.0, -40.0), Vec2::new(200.0, -30.0)], 12.0, false, None).expect("seated");
         assert_eq!(st.side_why, "circuit");
         assert!(st.out.y < 0.0 && (st.centre.y + 2.0).abs() < 1e-9, "south face: {:?}", st.centre);
         // Along the wall where it was read, its box within the piece.
-        let st = seat(&pieces, "L1", Vec2::new(239.5, 8.0), 18.0, &[], 12.0, false).expect("at the end");
+        let st = seat(&pieces, "L1", Vec2::new(239.5, 8.0), 18.0, &[], 12.0, false, None).expect("at the end");
         assert!((st.centre.x - 238.0).abs() < 1e-9, "{:?}", st.centre);
     }
 
@@ -2559,7 +2637,7 @@ mod tests {
         // wall 2's line. Measured to wall 2's square end it is 11.3" off; a round cap would put it
         // 6" off, nearer than wall 1's face (6.6"), and seat it on wall 2 behind wall 1.
         let pieces = vec![thick(1, (0.0, -120.0), (0.0, 120.0), 3.375), thick(2, (-60.0, 0.0), (-1.3, 0.0), 5.5)];
-        let st = seat(&pieces, "L1", Vec2::new(13.375, 2.0), 42.0, &[], 12.0, true).expect("seated");
+        let st = seat(&pieces, "L1", Vec2::new(13.375, 2.0), 42.0, &[], 12.0, true, None).expect("seated");
         assert_eq!(st.wall, Handle(1), "in the wall it is drawn on");
         assert!(st.out.x > 0.99 && (st.centre.x - 2.375).abs() < 1e-9, "on the east face, toward its room: {:?} {:?}", st.centre, st.out);
         assert!((st.centre.y - 2.0).abs() < 1e-9, "across from where it was drawn: {:?}", st.centre);
@@ -2577,13 +2655,13 @@ mod tests {
         // body, so it is wall 2's, on its north face; along the face it may not sit where wall 1
         // fills the corner (x < 3): its 4" box goes just clear of it, not half inside it.
         let pieces = vec![thick(1, (0.0, 0.0), (0.0, 120.0), 3.0), thick(2, (0.0, 0.0), (120.0, 0.0), 3.0)];
-        let st = seat(&pieces, "L1", Vec2::new(3.5, 2.0), 18.0, &[], 12.0, false).expect("seated");
+        let st = seat(&pieces, "L1", Vec2::new(3.5, 2.0), 18.0, &[], 12.0, false, None).expect("seated");
         assert_eq!(st.wall, Handle(2));
         assert!(st.out.y > 0.99, "{:?}", st.out);
         let eps = BURIED_EPS_IN;
         assert!(st.centre.x >= 3.0 - eps + 2.0 - 1e-9 && st.centre.x <= 5.0 + 1e-9, "clear of wall 1, as near as it allows: {:?}", st.centre);
         // Read further along, nothing moves it.
-        let st = seat(&pieces, "L1", Vec2::new(40.0, 4.0), 18.0, &[], 12.0, false).expect("seated");
+        let st = seat(&pieces, "L1", Vec2::new(40.0, 4.0), 18.0, &[], 12.0, false, None).expect("seated");
         assert!((st.centre.x - 40.0).abs() < 1e-9, "{:?}", st.centre);
         // The free place nearest the point; none free: the plain clamp.
         assert!((free_spot(10.0, 100.0, 4.0, &[(8.0, 12.0)]) - 6.0).abs() < 1e-9);
@@ -2594,6 +2672,28 @@ mod tests {
         let touching = vec![thick(1, (0.0, 0.0), (120.0, 0.0), 3.0), thick(3, (60.0, 3.0 + 0.2), (60.0, 60.0), 3.0)];
         let host = touching.first().expect("host");
         assert!(buried(&touching, host, "L1", 18.0, 1.0, &[2.9, 1.1], eps).is_empty());
+    }
+
+    #[test]
+    fn a_device_faces_the_room_its_documents_put_it_in_when_its_symbol_fell_outside_every_room() {
+        // Inches. A wall on y = 0, 6" thick; room "R1" south of it, nothing traced north (outside,
+        // or a space no plan names). A typical room's receptacle, stamped into R1, has its symbol
+        // north of the wall line.
+        let pieces = vec![piece(1, (0.0, 0.0), (240.0, 0.0), (0.0, 120.0))];
+        let r1 = vec![Vec2::new(0.0, -3.0), Vec2::new(240.0, -3.0), Vec2::new(240.0, -150.0), Vec2::new(0.0, -150.0)];
+        let mut sides = Sides { rooms: vec![("l1".into(), "R1".into(), r1.clone(), Bounds2::from_points(r1))], circulation: Vec::new() };
+        let p = Vec2::new(100.0, 8.0);
+        let st = seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R1"))).expect("seated");
+        assert_eq!(st.side_why, "room");
+        assert!(st.out.y < -0.99 && (st.centre.y + 2.0).abs() < 1e-9, "R1's face: {:?}", st.centre);
+        // Nothing documented, or another room documented: the symbol's side, as before.
+        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, None).map(|s| (s.side_why, s.out.y > 0.99)), Some(("symbol", true)));
+        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R2"))).map(|s| s.side_why), Some("symbol"));
+        // A corridor past its symbol's side: it serves the corridor (the plan drew it there).
+        sides.circulation.push(("l1".into(), "CORRIDOR".into(), vec![[[0.0, 3.0], [240.0, 60.0]]]));
+        assert_eq!(seat(&pieces, "L1", p, 18.0, &[], 12.0, false, Some((&sides, "R1"))).map(|s| s.side_why), Some("symbol"));
+        assert_eq!(sides.at("L1", Vec2::new(10.0, 10.0)), Some("CORRIDOR"));
+        assert_eq!(sides.at("L2", Vec2::new(10.0, -10.0)), None);
     }
 
     #[test]
