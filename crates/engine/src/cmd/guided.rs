@@ -2715,7 +2715,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
         // A symbol the import tagged with the circuit label beside it may still have its type
         // mark printed by it (`H` over a downlight whose `G-1,a` the import took): the nearest
         // device mark within reach that no other symbol is nearer. A mark with a circuit label of
-        // its own printed under it (`H1` over `G-1,a` by a receptacle tagged `G-1`) is that
+        // its own printed under it (`K2` over `Q-1,a` by a receptacle tagged `Q-1`) is that
         // label's fixture's, not this symbol's.
         let page_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
         let labelled_apart = |t: &TextItem, label: Option<(cadaddy_geom::Vec2, f64)>| {
@@ -23729,12 +23729,12 @@ mod tests {
         ]}));
         job.sheets_loaded = true;
         job.luminaire_types = vec!["H".into()];
-        // Lettering 2 high. The table: a round 40 across at (200, 500), keynote `27` and circuit
+        // Lettering 2 high. The table: a round 40 across at (200, 500), keynote `12` and circuit
         // `K-3` lettered inside it, its receptacle at (185, 490). The giant `H` (10 high) 12 off
         // the receptacle at (600, 500). A real downlight `H` (2 high) over its `K-1` at (900, 500).
         // The receptacle tagged `K-1` whose symbol the import put between `H` and `K-1,a`.
         let texts: Vec<(&str, f64, f64, f64)> = vec![
-            ("27", 195.0, 506.0, 2.0),
+            ("12", 195.0, 506.0, 2.0),
             ("K-3", 194.0, 492.0, 2.0),
             ("H", 608.0, 506.0, 10.0),
             ("H", 899.0, 504.0, 2.0),

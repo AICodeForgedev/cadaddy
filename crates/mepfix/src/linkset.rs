@@ -256,7 +256,7 @@ pub fn e1_symbol_bubble() -> Drawing {
 pub fn e1_with_lookalikes() -> Drawing {
     let mut s = Sheet { d: e1() };
     s.circle([24.0, 10.0], 1.0);
-    s.text_mid("27", [23.8, 10.3], 0.1);
+    s.text_mid("12", [23.8, 10.3], 0.1);
     s.device("N-3", [23.4, 9.5]);
     s.text_mid("N-3", [24.0, 9.6], 0.1);
     s.device("N-5", [26.5, 12.0]);

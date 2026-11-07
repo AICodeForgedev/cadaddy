@@ -2352,30 +2352,30 @@ mod tests {
         // The face's top in two short pieces either side of the neck.
         path(&mut p, &[[cx - i, cy + i], [cx - 3.0, cy + i]], false);
         path(&mut p, &[[cx + 3.0, cy + i], [cx + i, cy + i]], false);
-        p.text(false, "TEXT", "CD-4", [cx - 45.0, cy + 4.0], 4.58);
-        p.text(false, "TEXT", "150", [cx - 45.0, cy - 4.0], 4.58);
+        p.text(false, "TEXT", "CD-4", [cx - 45.0, cy + 4.0], 4.5);
+        p.text(false, "TEXT", "180", [cx - 45.0, cy - 4.0], 4.5);
         // A diffuser with a plain frame for its face and its round neck in it, tagged.
         let (sx, sy) = (1150.0, 500.0);
         path(&mut p, &[[sx - 8.0, sy - 8.0], [sx + 8.0, sy - 8.0], [sx + 8.0, sy + 8.0], [sx - 8.0, sy + 8.0]], true);
         path(&mut p, &[[sx - 5.0, sy - 5.0], [sx + 5.0, sy - 5.0], [sx + 5.0, sy + 5.0], [sx - 5.0, sy + 5.0]], true);
         let neck = EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(sx, sy, 0.0), radius: 3.0 });
         p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), neck).expect("neck");
-        p.text(false, "TEXT", "CD-2", [sx + 12.0, sy], 4.58);
+        p.text(false, "TEXT", "CD-2", [sx + 12.0, sy], 4.5);
         // A return grille: a box with bars across it, tagged.
         p.barred_box(false, [1450.0, 500.0], 8.0);
-        p.text(false, "TEXT", "RG-8", [1462.0, 500.0], 4.58);
+        p.text(false, "TEXT", "RG-8", [1462.0, 500.0], 4.5);
         // The exhaust grille: a closed box with an X, tagged.
         let (gx, gy) = (1300.0, 500.0);
         path(&mut p, &[[gx - 8.0, gy - 8.0], [gx + 8.0, gy - 8.0], [gx + 8.0, gy + 8.0], [gx - 8.0, gy + 8.0]], true);
         p.line(false, [gx - 8.0, gy - 8.0], [gx + 8.0, gy + 8.0]);
         p.line(false, [gx - 8.0, gy + 8.0], [gx + 8.0, gy - 8.0]);
-        p.text(false, "TEXT", "EG-6", [gx + 12.0, gy], 4.58);
+        p.text(false, "TEXT", "EG-6", [gx + 12.0, gy], 4.5);
         // A duct's box drawn with a double line (a second square just inside the first), a
         // grille's tag by it: no grille.
         let (qx, qy) = (1900.0, 500.0);
         path(&mut p, &[[qx - 7.4, qy - 7.4], [qx + 7.4, qy - 7.4], [qx + 7.4, qy + 7.4], [qx - 7.4, qy + 7.4]], true);
         path(&mut p, &[[qx + 6.9, qy + 6.6], [qx + 6.9, qy - 6.6], [qx - 6.9, qy - 6.6], [qx - 6.9, qy + 6.6], [qx + 6.9, qy + 6.6]], false);
-        p.text(false, "TEXT", "RG-9", [qx + 12.0, qy], 4.58);
+        p.text(false, "TEXT", "RG-9", [qx + 12.0, qy], 4.5);
         // An exhaust fan's box drawn in pieces (a frame in it) by its mark `EF` over its number,
         // a grille's tag farther off.
         let (fx, fy) = (1750.0, 500.0);
@@ -2385,15 +2385,15 @@ mod tests {
             false,
         );
         path(&mut p, &[[fx - 4.0, fy - 4.0], [fx + 4.0, fy - 4.0], [fx + 4.0, fy + 4.0], [fx - 4.0, fy + 4.0]], true);
-        p.text(false, "TEXT", "EF", [fx + 14.0, fy + 2.0], 4.58);
-        p.text(false, "TEXT", "5", [fx + 15.0, fy - 5.0], 4.58);
-        p.text(false, "TEXT", "RG-11", [fx - 40.0, fy + 20.0], 4.58);
+        p.text(false, "TEXT", "EF", [fx + 14.0, fy + 2.0], 4.5);
+        p.text(false, "TEXT", "5", [fx + 15.0, fy - 5.0], 4.5);
+        p.text(false, "TEXT", "RG-11", [fx - 40.0, fy + 20.0], 4.5);
         // Three sides of a box with an X in them (casework), tagged all the same.
         let (ux, uy) = (1600.0, 500.0);
         path(&mut p, &[[ux - 10.0, uy + 10.0], [ux - 10.0, uy - 10.0], [ux + 10.0, uy - 10.0], [ux + 10.0, uy + 10.0]], false);
         p.line(false, [ux - 10.0, uy - 10.0], [ux + 10.0, uy + 10.0]);
         p.line(false, [ux - 10.0, uy + 10.0], [ux + 10.0, uy - 10.0]);
-        p.text(false, "TEXT", "EG-7", [ux + 14.0, uy], 4.58);
+        p.text(false, "TEXT", "EG-7", [ux + 14.0, uy], 4.5);
         let got: Vec<(String, [f64; 2])> =
             detect_terminals(&p.d, true, false).iter().map(|t| (t.kind.clone(), [t.at.x.round(), t.at.y.round()])).collect();
         let mut got = got;
