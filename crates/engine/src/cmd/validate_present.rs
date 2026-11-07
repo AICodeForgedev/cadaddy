@@ -229,11 +229,17 @@ fn job_symbols(d: &Drawing) -> Vec<(String, String, String, [f64; 2])> {
         let p = [a.first()?.as_f64()?, a.get(1)?.as_f64()?];
         p.iter().all(|x| x.is_finite()).then_some(p)
     };
-    let mut out: Vec<(String, String, String, [f64; 2])> = list("devices")
+    let read: Vec<super::readers::ReadDevice> = list("devices")
         .filter_map(|v| serde_json::from_value::<super::readers::ReadDevice>(v.clone()).ok())
         .filter(|dv| dv.at.iter().all(|x| x.is_finite()))
-        .map(|dv| (if dv.kind.trim().is_empty() { "device".to_string() } else { dv.kind }, dv.tag.trim().to_string(), dv.sheet, dv.at))
         .collect();
+    let mut out: Vec<(String, String, String, [f64; 2])> =
+        one_fixture_per_spot(&read, super::guided::SAME_FIXTURE_FT * super::elemprops::units_per_foot(d))
+            .into_iter()
+            .map(|dv| {
+                (if dv.kind.trim().is_empty() { "device".to_string() } else { dv.kind.clone() }, dv.tag.trim().to_string(), dv.sheet.clone(), dv.at)
+            })
+            .collect();
     let mep = job.get("mep");
     let mep_list = |k: &str| mep.and_then(|m| m.get(k)).and_then(Value::as_array).into_iter().flatten().take(MAX_SYMBOLS);
     for e in mep_list("equipment") {
@@ -247,6 +253,29 @@ fn job_symbols(d: &Drawing) -> Vec<(String, String, String, [f64; 2])> {
     }
     out.truncate(MAX_SYMBOLS);
     out
+}
+
+/// The read devices with one fixture read twice on a sheet counted once (Q6252, the build's
+/// rule for its stamped copies): two luminaires of one tag on one sheet within `reach` (sheet
+/// units) on one circuit (a leg letter only one copy read is no other circuit) are one.
+fn one_fixture_per_spot(read: &[super::readers::ReadDevice], reach: f64) -> Vec<&super::readers::ReadDevice> {
+    let mut kept: Vec<&super::readers::ReadDevice> = Vec::new();
+    for dv in read {
+        let twice = super::guided::is_fixture(dv)
+            && kept.iter().any(|k| {
+                let ((ca, la), (cb, lb)) = (super::guided::circuit_and_leg(&k.circuit), super::guided::circuit_and_leg(&dv.circuit));
+                super::guided::is_fixture(k)
+                    && k.sheet == dv.sheet
+                    && k.tag.trim().eq_ignore_ascii_case(dv.tag.trim())
+                    && (k.at[0] - dv.at[0]).hypot(k.at[1] - dv.at[1]) <= reach
+                    && (ca.is_empty() || cb.is_empty() || ca == cb)
+                    && (la.is_empty() || lb.is_empty() || la == lb)
+            });
+        if !twice {
+            kept.push(dv);
+        }
+    }
+    kept
 }
 
 impl<'a> Symbols<'a> {
@@ -651,5 +680,31 @@ mod tests {
         assert!(!same_kind("device", Some("A"), "device", Some("B")));
         assert!(!same_kind("device", None, "device", None));
         assert!(!same_kind("", None, "", None));
+    }
+
+    #[test]
+    fn one_fixture_read_twice_on_a_sheet_is_expected_once() {
+        let dv = |tag: &str, kind: &str, x: f64, circuit: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            at: [x, 0.0],
+            sheet: "E-101".into(),
+            circuit: circuit.into(),
+            ..Default::default()
+        };
+        // The symbol on `LP1-3` and its mark over `LP1-3,a`, 3.6 in apart: one. Two fixtures of
+        // the type 3 ft apart, two receptacles that near, and another sheet's copy stay.
+        let mut other = dv("F7", "luminaire", 30.0, "LP1-3");
+        other.sheet = "E-102".into();
+        let read = vec![
+            dv("F7", "luminaire", 30.0, "LP1-3"),
+            dv("F7", "luminaire", 33.6, "LP1-3,a"),
+            dv("F7", "luminaire", 66.0, "LP1-3"),
+            dv("REC", "receptacle", 40.0, "LP1-5"),
+            dv("REC", "receptacle", 43.6, "LP1-5"),
+            other,
+        ];
+        let kept: Vec<f64> = one_fixture_per_spot(&read, 12.0).iter().map(|d| d.at[0]).collect();
+        assert_eq!(kept, vec![30.0, 66.0, 40.0, 43.6, 30.0]);
     }
 }

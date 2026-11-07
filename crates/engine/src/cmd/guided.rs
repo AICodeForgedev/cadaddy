@@ -11573,7 +11573,7 @@ fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64, fixture
 /// A circuit label's circuits and its switch leg apart (`LP1-3,a`: `LP1-3` and `A`; a trailing
 /// single letter is the leg, never a circuit number), upper case. `LP1-3` and `LP1-3,a` are one circuit, the
 /// leg read on one copy only; legs `a` and `b` are two.
-fn circuit_and_leg(label: &str) -> (String, String) {
+pub(crate) fn circuit_and_leg(label: &str) -> (String, String) {
     let mut parts: Vec<&str> = label.split(',').map(str::trim).collect();
     let mut legs: Vec<&str> = Vec::new();
     while parts.len() > 1 && parts.last().is_some_and(|p| p.len() == 1 && p.chars().all(|c| c.is_ascii_alphabetic())) {
@@ -11584,13 +11584,13 @@ fn circuit_and_leg(label: &str) -> (String, String) {
 }
 
 /// A luminaire: by its kind or its IFC class as read.
-fn is_fixture(dv: &super::readers::ReadDevice) -> bool {
+pub(crate) fn is_fixture(dv: &super::readers::ReadDevice) -> bool {
     dv.kind.to_ascii_lowercase().contains("luminaire") || dv.ifc_class.eq_ignore_ascii_case("IfcLightFixture")
 }
 
 /// Two copies of one luminaire's tag on one circuit in one room this near (feet) are one fixture
 /// read twice: two fixtures never stand closer than their own size.
-const SAME_FIXTURE_FT: f64 = 1.0;
+pub(crate) const SAME_FIXTURE_FT: f64 = 1.0;
 
 /// A floor plan's device this near where a typical plan's copy of the same tag lands is that
 /// device (feet).
