@@ -23491,11 +23491,7 @@ mod tests {
         assert_eq!(sp.tags.iter().find(|t| t.id == "device:2").and_then(|t| t.fields.get("mount")).map(|f| f.value.as_str()), Some("ceiling"));
         {
             let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
-            let jb = d
-                .model
-                .iter()
-                .find(|e| super::super::bimlook::made_tag(e, "devid").as_deref() == Some("device:2"))
-                .unwrap_or_else(|| panic!("the box"));
+            let jb = d.model.iter().find(|e| super::super::bimlook::made_tag(e, "devid") == Some("device:2")).unwrap_or_else(|| panic!("the box"));
             let cadaddy_doc::EntityKind::Mesh(m) = &jb.kind else { panic!("a mesh") };
             let top = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
             assert!((top - 108.0).abs() < 1e-6, "its top at the level's 9' ceiling: {top}");
@@ -25158,7 +25154,7 @@ mod tests {
         s.doc_mut().unwrap().building_spec = Some(sp.to_json());
         let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
             let d = s.doc().unwrap();
-            let (bx, _, _) = super::super::propfill::extent(&d, d.model.get(h).unwrap()).unwrap();
+            let (bx, _, _) = super::super::propfill::extent(d, d.model.get(h).unwrap()).unwrap();
             [(bx.center().x * 100.0).round() / 100.0, (bx.center().y * 100.0).round() / 100.0]
         };
         let before: Vec<[f64; 2]> = [b, w, far, out].iter().map(|h| centre(&s, *h)).collect();

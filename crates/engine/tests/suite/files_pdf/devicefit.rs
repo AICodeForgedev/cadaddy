@@ -463,6 +463,7 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
         device(30.0, 5.0, "XQ", "luminaire", "1A2", json!({"mount": "wall"})),
         device(25.0, 5.0, "WQ", "luminaire", "1A3", json!({"mount": "wall"})),
         device(5.0, 0.8, "OS2", "occupancy_sensor", "1A4", json!({})),
+        device(15.0, 5.0, "OS3", "occupancy_sensor", "1A5", json!({"mount_height_in": "44", "mount_height_note": "OS3 44\" AFF"})),
     ];
     let extra = json!({"mep": {"fixture_schedule": [
         {"tag": "XQ", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
@@ -487,4 +488,8 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
     let os2 = props(&mut s, "OS2");
     assert_eq!(os2["mounting"]["value"], "wall", "{os2:#}");
     assert_eq!(os2["mount_height_from"]["value"], "default", "{os2:#}");
+    // A document's wall height (its typical room's note) keeps one drawn clear of the walls off
+    // the ceiling: the documents come first.
+    let os3 = props(&mut s, "OS3");
+    assert_eq!((os3["mounting"]["value"].clone(), os3["mount_height"]["value"].clone()), (json!("wall"), json!(44.0)), "{os3:#}");
 }

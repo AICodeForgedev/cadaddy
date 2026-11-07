@@ -1071,37 +1071,6 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             _ if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Mount::Floor,
             _ => Mount::Wall,
         };
-        // Drawn clear of every wall, a luminaire, sensor, detector or exit sign hangs from the
-        // ceiling over it (a wall it isn't on can't hold it); one its documents put on a wall,
-        // only when its schedule, legend or type allows a ceiling too (`CEILING/VARIES`).
-        let installation = {
-            let ty = super::lightsched::type_of(&mark);
-            sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty).map(|r| r.installation.clone()).unwrap_or_default()
-        };
-        let stated_wall = field(t, "mount").as_deref() == Some("wall");
-        let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y)).map(|g| g / upf);
-        let hung = (mount == Mount::Wall
-            && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
-            && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words}"))
-            && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}"))))
-        .then(|| {
-            format!(
-                "drawn {:.1} ft from the nearest wall face{}: hung from the ceiling ({})",
-                gap_ft.unwrap_or_default(),
-                if stated_wall && !installation.trim().is_empty() {
-                    format!(", its schedule's installation {}", installation.trim())
-                } else {
-                    String::new()
-                },
-                clear_rule.why
-            )
-        });
-        let mount = if hung.is_some() {
-            report.hung += 1;
-            Mount::Ceiling
-        } else {
-            mount
-        };
         let symbol_hex = field(t, "symbol").unwrap_or_default();
         let room_no = field(t, "room");
         let ask = vh::Ask {
@@ -1181,6 +1150,39 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 })
                 .or_else(|| docs.rule_of(&ask, &d.project_rules).map(|f| found(f, "project_rule", SourceKind::Rule)))
                 .filter(plausible)
+        };
+        // Drawn clear of every wall, a luminaire, sensor, detector or exit sign hangs from the
+        // ceiling over it (a wall it isn't on can't hold it); one its documents put on a wall,
+        // only when its schedule, legend or type allows a ceiling too (`CEILING/VARIES`), and
+        // never one a document gives a wall height (a note's `44" AFF`).
+        let installation = {
+            let ty = super::lightsched::type_of(&mark);
+            sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty).map(|r| r.installation.clone()).unwrap_or_default()
+        };
+        let stated_wall = field(t, "mount").as_deref() == Some("wall");
+        let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y)).map(|g| g / upf);
+        let hung = (mount == Mount::Wall
+            && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
+            && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words}"))
+            && (!stated_wall || clear_rule.allows_ceiling(&format!("{installation} {fixture_words} {legend_words}")))
+            && documented().is_none_or(|c| c.inches >= WALL_BOX_FT * 12.0))
+        .then(|| {
+            format!(
+                "drawn {:.1} ft from the nearest wall face{}: hung from the ceiling ({})",
+                gap_ft.unwrap_or_default(),
+                if stated_wall && !installation.trim().is_empty() {
+                    format!(", its schedule's installation {}", installation.trim())
+                } else {
+                    String::new()
+                },
+                clear_rule.why
+            )
+        });
+        let mount = if hung.is_some() {
+            report.hung += 1;
+            Mount::Ceiling
+        } else {
+            mount
         };
         let floor = level.elevation_ft * upf;
         let height: Chosen = match mount {
