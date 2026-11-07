@@ -1643,7 +1643,7 @@ fn plan_level(d: &Drawing, g: &WallGen, level: &cadaddy_walk3d::Level, upf: f64,
         .filter(|b| !b.is_empty())
         .map(|b| b.center())
         .collect();
-    let strings = drop_dimension_strings(&mut found, &figures);
+    let strings = drop_dimension_strings(&mut found, &figures, k);
     if strings > 0 {
         notes.push(format!("{}: {strings} line pairs of dimension strings and their extension lines not taken for walls.", level.name));
     }
@@ -2274,6 +2274,9 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
+/// Two dimension strings side by side stand at least this far apart, inches.
+const DIMENSION_STRINGS_APART_IN: f64 = 10.0;
+
 /// A text that is a figure in feet (`12'-6"`, `38'-8 3/8"`, `3'`): a dimension's.
 fn is_dimension_figure(e: &Entity) -> bool {
     let value = match &e.kind {
@@ -2288,7 +2291,7 @@ fn is_dimension_figure(e: &Entity) -> bool {
 /// Line pairs that are no wall: a pair with a dimension's figure lettered between its lines is two
 /// dimension strings side by side, and a pair across one of those is its extension lines (a wall
 /// stops at the building's face; a dimension string runs outside it). How many were dropped.
-fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figures: &[Vec2]) -> usize {
+fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figures: &[Vec2], k: f64) -> usize {
     if figures.is_empty() {
         return 0;
     }
@@ -2301,15 +2304,17 @@ fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figu
         let along = (at - p.c0).dot(u);
         along >= 0.0 && along <= len && (at - p.c0).cross(u).abs() <= p.thickness / 2.0
     };
-    let strings: Vec<(Vec2, Vec2, f64)> =
-        found.iter().filter(|p| figures.iter().any(|f| between(p, *f))).map(|p| (p.c0, p.c1, p.thickness)).collect();
+    // Two strings stand at least this far apart: closer, a figure between the lines is one
+    // lettered across a wall.
+    let is_string = |p: &super::perceive::geometry::Pair| p.thickness >= DIMENSION_STRINGS_APART_IN * k && figures.iter().any(|f| between(p, *f));
+    let strings: Vec<(Vec2, Vec2, f64)> = found.iter().filter(|p| is_string(p)).map(|p| (p.c0, p.c1, p.thickness)).collect();
     if strings.is_empty() {
         return 0;
     }
     let before = found.len();
     let side = |p: Vec2, q: Vec2, r: Vec2| (q - p).cross(r - p);
     found.retain(|p| {
-        !figures.iter().any(|f| between(p, *f))
+        !is_string(p)
             && !strings.iter().any(|&(a, b, t)| {
                 // Reaching the string: an end within its width, or crossing it.
                 let crosses = side(a, b, p.c0) * side(a, b, p.c1) < 0.0 && side(p.c0, p.c1, a) * side(p.c0, p.c1, b) < 0.0;
@@ -2627,7 +2632,7 @@ mod tests {
             line_pair([0.0, 400.0], [400.0, 400.0], 8.0),
             line_pair([0.0, 0.0], [0.0, 400.0], 8.0),
         ];
-        let dropped = drop_dimension_strings(&mut found, &[Vec2::new(200.0, 503.0)]);
+        let dropped = drop_dimension_strings(&mut found, &[Vec2::new(200.0, 503.0)], 1.0);
         assert_eq!(dropped, 2);
         assert_eq!(found.len(), 2);
         assert!(found.iter().all(|p| p.thickness == 8.0 && p.c1.y <= 400.0), "the two walls stay");
@@ -2637,7 +2642,10 @@ mod tests {
     fn a_figure_outside_a_walls_faces_leaves_the_wall() {
         // A room's dimension lettered beside a wall, not between its faces.
         let mut found = vec![line_pair([0.0, 0.0], [400.0, 0.0], 8.0)];
-        assert_eq!(drop_dimension_strings(&mut found, &[Vec2::new(200.0, 12.0)]), 0);
+        assert_eq!(drop_dimension_strings(&mut found, &[Vec2::new(200.0, 12.0)], 1.0), 0);
+        assert_eq!(found.len(), 1);
+        // A figure lettered across a wall, between its faces, leaves it too: strings stand farther apart.
+        assert_eq!(drop_dimension_strings(&mut found, &[Vec2::new(200.0, 1.0)], 1.0), 0);
         assert_eq!(found.len(), 1);
     }
 
