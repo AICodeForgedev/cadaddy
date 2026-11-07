@@ -84,6 +84,7 @@ struct Gear {
 }
 
 /// A run's 3D path (sheet units) and what it is.
+#[derive(Clone, Debug)]
 struct Path3 {
     pts: Vec<Vec3>,
     run: usize,
@@ -324,6 +325,265 @@ impl Nodes {
     fn degree(&self, n: usize) -> usize {
         self.members.get(n).map_or(0, Vec::len)
     }
+}
+
+/// Most segment pairs one group's raceway is compared over when it is laid once (hostile specs).
+const MAX_ONCE_PAIRS: usize = 4_000_000;
+/// Two pieces of raceway this close to parallel (the sine of the angle between them) lie on one
+/// line when they are also within the joint tolerance of it.
+const ONCE_PARALLEL: f64 = 0.01;
+
+/// What laying a group's raceway once took out: the stretches another of its runs already ran,
+/// their length (sheet units), and the runs split where another leaves them (a junction there).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Once {
+    stretches: usize,
+    removed: f64,
+    tees: usize,
+}
+
+/// What laying one group's raceway once left: its pieces, what went, and where its cut runs
+/// ended as routed (another group's run ending at one of them still meets this group there).
+struct Laid {
+    paths: Vec<Path3>,
+    once: Once,
+    cut_ends: Vec<Vec3>,
+}
+
+/// The distance from `p` to the piece `a`–`b`, and where along it (0 at `a`, its length at `b`).
+fn along(p: Vec3, a: Vec3, b: Vec3) -> (f64, f64) {
+    let l = super::dist(a, b);
+    if !(l.is_finite() && l > 1e-12) {
+        return (super::dist(p, a), 0.0);
+    }
+    let d = (b - a) * (1.0 / l);
+    let t = (p - a).dot(d).clamp(0.0, l);
+    (super::dist(p, a + d * t), t)
+}
+
+/// One circuit's raceway laid once along each route (Q6245): the conductors of a circuit that
+/// run one way together are in one raceway (NEC 300.3(B)), so where a later run of the group
+/// runs a stretch an earlier one already runs (two legs of the circuit's tree leaving one box the
+/// same way, the same leg routed twice) that stretch goes from the later run, and the runs are
+/// split where one leaves another (three ends meet there: the junction box [`stitch`] finds).
+/// The paths in order (each cut into the pieces left of it), what went, and the cut runs' ends.
+fn lay_once(paths: Vec<Path3>, tol: f64) -> Laid {
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-6 };
+    let mut kept: Vec<(Vec3, Vec3)> = Vec::new();
+    let mut out: Vec<Path3> = Vec::new();
+    let mut once = Once::default();
+    // Where the cut runs end (as drawn, and their new ends): another run passing one is split.
+    let mut ends: Vec<Vec3> = Vec::new();
+    let mut cut_ends: Vec<Vec3> = Vec::new();
+    let mut pairs = 0usize;
+    for p in paths {
+        // Each piece of it: what of it no earlier run runs (its free stretches, along it), and
+        // what went.
+        let mut segs: Vec<(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)> = Vec::new();
+        for w in p.pts.windows(2) {
+            let &[a, b] = w else { continue };
+            let l = super::dist(a, b);
+            if !(l.is_finite() && l > 1e-9) {
+                // (A point twice: kept as the run has it.)
+                segs.push((a, b, 0.0, Vec::new(), 0));
+                continue;
+            }
+            let d = (b - a) * (1.0 / l);
+            // The stretches of this piece an earlier run runs.
+            let mut cover: Vec<(f64, f64)> = Vec::new();
+            for &(ka, kb) in &kept {
+                pairs += 1;
+                if pairs > MAX_ONCE_PAIRS {
+                    break;
+                }
+                let kl = super::dist(ka, kb);
+                if !(kl.is_finite() && kl > 1e-9) {
+                    continue;
+                }
+                let e = (kb - ka) * (1.0 / kl);
+                if d.cross(e).len() > ONCE_PARALLEL {
+                    continue;
+                }
+                // On one line: both ends of the earlier piece within the tolerance of this one's line.
+                let off = |q: Vec3| {
+                    let t = (q - a).dot(d);
+                    (super::dist(q, a + d * t), t)
+                };
+                let ((da, ta), (db, tb)) = (off(ka), off(kb));
+                if da > tol || db > tol {
+                    continue;
+                }
+                let (lo, hi) = (ta.min(tb).max(0.0), ta.max(tb).min(l));
+                if hi - lo > tol {
+                    cover.push((lo, hi));
+                }
+            }
+            cover.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut merged: Vec<(f64, f64)> = Vec::new();
+            for (lo, hi) in cover {
+                match merged.last_mut() {
+                    Some(m) if lo <= m.1 + tol => m.1 = m.1.max(hi),
+                    _ => merged.push((lo, hi)),
+                }
+            }
+            // What is left of it: the stretches between, longer than the tolerance (no stub).
+            let mut free: Vec<(f64, f64)> = Vec::new();
+            let mut at = 0.0;
+            for &(lo, hi) in &merged {
+                if lo - at > tol {
+                    free.push((at, lo));
+                }
+                at = at.max(hi);
+            }
+            if l - at > tol {
+                free.push((at, l));
+            }
+            segs.push((a, b, l, free, merged.len()));
+        }
+        // A rise out of a box or a drop into one is each raceway's own (one conduit in, one out
+        // of a box, each in its own knockout), unless the run goes on along the other beyond it:
+        // then the two leave the box as one.
+        let vertical = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.y - b.y).len() <= tol && (a.z - b.z).abs() > tol;
+        let whole =
+            |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.3.len() == 1 && seg.3.first().is_some_and(|f| f.0 <= tol && f.1 >= seg.2 - tol);
+        let starts_covered = |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.2 > 0.0 && seg.3.first().is_none_or(|f| f.0 > tol);
+        let ends_covered = |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.2 > 0.0 && seg.3.last().is_none_or(|f| f.1 < seg.2 - tol);
+        let carried: Vec<bool> = (0..segs.len())
+            .map(|i| {
+                let Some(seg) = segs.get(i) else { return true };
+                if seg.2 <= 0.0 || whole(seg) || !vertical(seg.0, seg.1) {
+                    return true;
+                }
+                // The next piece of length after it, and the one before it.
+                let next = segs.iter().skip(i + 1).find(|x| x.2 > 0.0);
+                let prev = segs.iter().take(i).rev().find(|x| x.2 > 0.0);
+                next.is_some_and(|x| !vertical(x.0, x.1) && starts_covered(x)) || prev.is_some_and(|x| !vertical(x.0, x.1) && ends_covered(x))
+            })
+            .collect();
+        for (seg, keep_cut) in segs.iter_mut().zip(&carried) {
+            if !keep_cut {
+                seg.3 = vec![(0.0, seg.2)];
+            }
+        }
+        let mut cut = false;
+        let mut cur: Vec<Vec3> = p.pts.first().copied().into_iter().collect();
+        let mut pieces: Vec<Vec<Vec3>> = Vec::new();
+        for (a, b, l, free, stretches) in segs {
+            if l <= 0.0 {
+                if cur.last().is_some_and(|q| super::dist(*q, a) <= 1e-9) {
+                    cur.push(b);
+                }
+                continue;
+            }
+            let d = (b - a) * (1.0 / l);
+            let gone = l - free.iter().map(|(x, y)| y - x).sum::<f64>();
+            if gone > tol {
+                once.stretches += stretches.max(1);
+                once.removed += gone;
+                cut = true;
+            }
+            let mut free_to = 0.0;
+            for (n, (lo, hi)) in free.iter().copied().enumerate() {
+                let (pa, pb) = if lo <= 0.0 && hi >= l { (a, b) } else { (a + d * lo, a + d * hi) };
+                if n > 0 || lo > tol || cur.is_empty() {
+                    // A stretch went before this one: the piece so far ends, a new one starts.
+                    if cur.len() >= 2 {
+                        pieces.push(std::mem::take(&mut cur));
+                    }
+                    cur = vec![pa];
+                }
+                cur.push(pb);
+                kept.push((pa, pb));
+                free_to = hi;
+            }
+            if free.is_empty() || l - free_to > tol {
+                // It ends in a stretch another run runs: the next piece starts at its end.
+                if cur.len() >= 2 {
+                    pieces.push(std::mem::take(&mut cur));
+                }
+                cur = vec![b];
+            }
+        }
+        if !cut {
+            // Nothing of it run twice: the run as it is, point for point.
+            out.push(p);
+            continue;
+        }
+        if cur.len() >= 2 {
+            pieces.push(cur);
+        }
+        ends.extend(p.pts.first().copied());
+        ends.extend(p.pts.last().copied());
+        cut_ends.extend(p.pts.first().copied());
+        cut_ends.extend(p.pts.last().copied());
+        for pc in &pieces {
+            ends.extend(pc.first().copied());
+            ends.extend(pc.last().copied());
+        }
+        out.extend(pieces.into_iter().map(|pts| Path3 { pts, run: p.run }));
+    }
+    if ends.is_empty() {
+        return Laid { paths: out, once, cut_ends };
+    }
+    // A run another's cut end lies on (not at its own ends) is split there.
+    let mut split: Vec<Path3> = Vec::with_capacity(out.len());
+    for p in out {
+        let last = p.pts.len().saturating_sub(1);
+        let (first_pt, last_pt) = (p.pts.first().copied(), p.pts.last().copied());
+        // At one of its own ends (a point twice there included): no split.
+        let own_end = |q: Vec3| [first_pt, last_pt].iter().flatten().any(|e| super::dist(*e, q) <= tol);
+        // Where a cut run's end lies on it (inside a piece, or on a corner that isn't its end).
+        let splits_at = |i: usize, a: Vec3, b: Vec3| -> Vec<f64> {
+            let l = super::dist(a, b);
+            if !(l.is_finite() && l > tol) {
+                return Vec::new();
+            }
+            let mut at: Vec<f64> = ends
+                .iter()
+                .filter(|q| !own_end(**q))
+                .filter_map(|q| {
+                    let (dd, t) = along(*q, a, b);
+                    let inner = t > tol && t < l - tol || t >= l - tol && i + 1 < last;
+                    (dd <= tol && inner).then_some(t)
+                })
+                .collect();
+            at.sort_by(f64::total_cmp);
+            at.dedup_by(|x, y| (*x - *y).abs() <= tol);
+            at
+        };
+        if !p.pts.windows(2).enumerate().any(|(i, w)| matches!(w, &[a, b] if !splits_at(i, a, b).is_empty())) {
+            split.push(p);
+            continue;
+        }
+        let mut cur: Vec<Vec3> = Vec::new();
+        let mut parts: Vec<Vec<Vec3>> = Vec::new();
+        for (i, w) in p.pts.windows(2).enumerate() {
+            let &[a, b] = w else { continue };
+            if cur.is_empty() {
+                cur.push(a);
+            }
+            let l = super::dist(a, b);
+            let at = splits_at(i, a, b);
+            let d = if l > 1e-9 { (b - a) * (1.0 / l) } else { Vec3::new(0.0, 0.0, 0.0) };
+            for &t in &at {
+                let q = if t >= l - tol { b } else { a + d * t };
+                cur.push(q);
+                if cur.len() >= 2 {
+                    parts.push(std::mem::take(&mut cur));
+                    once.tees += 1;
+                }
+                cur.push(q);
+            }
+            if at.is_empty() || cur.last().is_none_or(|q| super::dist(*q, b) > 1e-9) {
+                cur.push(b);
+            }
+        }
+        if cur.len() >= 2 {
+            parts.push(cur);
+        }
+        split.extend(parts.into_iter().map(|pts| Path3 { pts, run: p.run }));
+    }
+    Laid { paths: split, once, cut_ends }
 }
 
 /// Runs joined where exactly two ends meet: each chain goes from a free end, a junction (three
@@ -780,6 +1040,40 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .unwrap_or_default();
         let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder, buried };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
+    }
+    // The raceway the model lays for a circuit (routed or estimated), laid once along each route
+    // (Q6245). Drawn conduit stays as drawn; buried copies of one route, a feeder's sets, cable
+    // (each cable its own) and a low-voltage outlet's pathway are each their own.
+    let joint = rl.joint_tol_in.max(0.01) / 12.0 * upf;
+    let mut laid = Once::default();
+    // Where a shared raceway's runs end, by level (Q6206: the homeruns' open ends meet it there
+    // in a junction box).
+    let mut shared_ends: BTreeMap<String, Vec<(Vec3, usize)>> = BTreeMap::new();
+    for (gi, (key, (_, ps))) in paths.iter().enumerate() {
+        for p in ps.iter().take(MAX_RUNS).filter(|p| sp.mep.runs.get(p.run).is_some_and(|r| r.id.contains(":shared-"))) {
+            let at = shared_ends.entry(key.level.clone()).or_default();
+            at.extend(p.pts.first().map(|q| (*q, gi)));
+            at.extend(p.pts.last().map(|q| (*q, gi)));
+        }
+    }
+    // Where a group's cut run ended at a shared raceway's end: the group's chain still ends
+    // there, so it meets the shared raceway in its junction as it did.
+    let mut meets: BTreeMap<GroupKey, Vec<Vec3>> = BTreeMap::new();
+    for (gi, (key, (m, ps))) in paths.iter_mut().enumerate() {
+        if key.cable || key.buried || key.copy > 0 || m.feeder.is_some() || !m.devices.is_empty() || !(m.routed || m.estimated) {
+            continue;
+        }
+        let got = lay_once(std::mem::take(ps), joint);
+        *ps = got.paths;
+        laid.stretches += got.once.stretches;
+        laid.removed += got.once.removed;
+        laid.tees += got.once.tees;
+        let others = shared_ends.get(key.level.as_str());
+        let at: Vec<Vec3> =
+            got.cut_ends.into_iter().filter(|q| others.is_some_and(|o| o.iter().any(|(p, g)| *g != gi && super::dist(*p, *q) <= joint))).collect();
+        if !at.is_empty() {
+            meets.insert(key.clone(), at);
+        }
     }
 
     // -- The gear (panels) home runs end at. --
@@ -1339,8 +1633,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         // height, or one under or over it when no drop leaves the node for it.
         // So does one passing equipment of its own circuit fed in its own compartment, and one
         // that dips into a device the build gives no box.
+        let meet = meets.get(key).map_or(&[][..], Vec::as_slice);
         let breaks = |p: Vec3, degree: usize, drop_here: bool| {
             let pp = Vec2::new(p.x, p.y);
+            if degree >= 2 && meet.iter().any(|q| super::dist(*q, p) <= tol) {
+                return true;
+            }
             degree >= 2
                 && !m.circuit.is_empty()
                 && (box_near(&boxes, &taken, &key.level, &m.circuit, p, true, None)
@@ -2101,6 +2399,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     if junctions > 0 {
         box_reasons.insert("junction (three or more runs meet)".into(), junctions);
     }
+    if laid.stretches > 0 && notes.len() < 200 {
+        notes.push(format!(
+            "{} stretch(es) of a circuit's raceway the routing laid twice laid once ({:.1} ft; {} run(s) split where another leaves them): {}",
+            laid.stretches,
+            laid.removed / upf,
+            laid.tees,
+            rl.one_raceway_source
+        ));
+    }
     json!({
         "atoms": total,
         "atomsByKind": by_kind,
@@ -2126,6 +2433,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "runsOverBendLimit": over_bends,
         "buriedTransitions": transitions,
         "landingFt": (landing_ft * 10.0).round() / 10.0,
+        "racewayLaidOnce": {"stretches": laid.stretches, "ft": (laid.removed / upf * 10.0).round() / 10.0, "tees": laid.tees, "source": rl.one_raceway_source},
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
         "feederRunsWired": feeder_chains,
@@ -2487,5 +2795,202 @@ pub(crate) fn gear_voltage(sp: &BuildingSpec, panel: &str) -> Option<String> {
         Some("120/208".into())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(run: usize, pts: &[[f64; 3]]) -> Path3 {
+        Path3 { pts: pts.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect(), run }
+    }
+
+    fn length(ps: &[Path3]) -> f64 {
+        ps.iter().map(|p| p.pts.windows(2).map(|w| if let [a, b] = w { super::super::dist(*a, *b) } else { 0.0 }).sum::<f64>()).sum()
+    }
+
+    #[test]
+    fn a_stretch_two_legs_of_one_circuit_run_is_laid_once_and_they_part_in_a_box() {
+        // Two legs leave one box (0,0) up to the ceiling (z 0 → 96) and east 20' together, then
+        // one turns north and the other south: the shared rise and run are laid once.
+        let a = path(0, &[[0.0, 0.0, 0.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, 120.0, 96.0]]);
+        let b = path(1, &[[0.0, 0.0, 0.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, -120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, b], 1.0);
+        assert!((length(&laid) - (96.0 + 240.0 + 120.0 + 120.0)).abs() < 1e-6, "{once:?} {}", length(&laid));
+        assert!((once.removed - 336.0).abs() < 1e-6, "{once:?}");
+        // The second leg is what is left of it: from where they part.
+        let second: Vec<&Path3> = laid.iter().filter(|p| p.run == 1).collect();
+        assert_eq!(second.len(), 1);
+        assert!(second.first().is_some_and(|p| p.pts.first().is_some_and(|q| super::super::dist(*q, Vec3::new(240.0, 0.0, 96.0)) < 1e-6)));
+        // The same leg routed twice is one raceway.
+        let c = path(2, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![c.clone(), Path3 { pts: c.pts.iter().rev().copied().collect(), run: 3 }], 1.0);
+        assert!((length(&laid) - 120.0).abs() < 1e-6 && once.stretches == 1, "{once:?}");
+    }
+
+    #[test]
+    fn a_leg_that_leaves_another_midway_splits_it_there_for_the_junction() {
+        // The second leg runs the first one's last 10' then turns off: the first is split where
+        // the second leaves it, so three ends meet there.
+        let a = path(0, &[[0.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let b = path(1, &[[240.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, b], 1.0);
+        assert_eq!(once.tees, 1, "{once:?}");
+        let at = Vec3::new(120.0, 0.0, 96.0);
+        let ends =
+            laid.iter().flat_map(|p| [p.pts.first().copied(), p.pts.last().copied()]).flatten().filter(|q| super::super::dist(*q, at) < 1.0).count();
+        assert_eq!(ends, 3, "{:?}", laid.iter().map(|p| &p.pts).collect::<Vec<_>>());
+        assert!((length(&laid) - 360.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_conduit_into_a_box_and_the_next_out_of_it_are_two() {
+        // Device to device: one run drops into the box at (120, 0), the next rises out of it
+        // and goes on the other way. Two conduits at the box (one in, one out), nothing taken.
+        let into = path(0, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 0.0, 20.0]]);
+        let out = path(1, &[[120.0, 0.0, 20.0], [120.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![into, out], 1.0);
+        assert_eq!(once, Once::default());
+        assert_eq!(laid.len(), 2);
+        // The same, but the second goes back the way the first came: that stretch (and its rise
+        // with it) was laid twice.
+        let into = path(0, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 0.0, 20.0]]);
+        let back = path(1, &[[120.0, 0.0, 20.0], [120.0, 0.0, 96.0], [60.0, 0.0, 96.0], [60.0, 60.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![into, back], 1.0);
+        assert!((once.removed - (76.0 + 60.0)).abs() < 1e-6, "{once:?}");
+        assert!((length(&laid) - (120.0 + 76.0 + 60.0)).abs() < 1e-6, "{laid:?}");
+    }
+
+    #[test]
+    fn a_run_is_never_split_at_its_own_end_or_on_a_point_it_has_twice() {
+        // A routed run starts with its box's point twice (then rises): another run cut there
+        // makes no zero-length piece of it.
+        let a = path(0, &[[0.0, 0.0, 20.0], [0.0, 0.0, 20.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, 0.0, 20.0]]);
+        let b = path(1, &[[0.0, 0.0, 20.0], [0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a.clone(), b], 1.0);
+        assert!(laid.iter().all(|p| length(std::slice::from_ref(p)) > 1.0), "{laid:?}");
+        // The first is split only where the second leaves it (120, 0): two pieces, its points kept.
+        let first: Vec<&Path3> = laid.iter().filter(|p| p.run == 0).collect();
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(once.tees, 1);
+        assert_eq!(first.first().map(|p| p.pts.len()), Some(4), "{first:?}");
+        assert!((length(&laid) - (length(std::slice::from_ref(&a)) + 120.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legs_side_by_side_or_crossing_or_at_another_height_stay_as_they_are() {
+        // Parallel 6" apart (two raceways), crossing at a point, one a tier higher: nothing laid
+        // twice, nothing taken.
+        let a = path(0, &[[0.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let side = path(1, &[[0.0, 6.0, 96.0], [240.0, 6.0, 96.0]]);
+        let cross = path(2, &[[120.0, -60.0, 96.0], [120.0, 60.0, 96.0]]);
+        let high = path(3, &[[0.0, 0.0, 108.0], [240.0, 0.0, 108.0]]);
+        let before = length(&[a.clone(), side.clone(), cross.clone(), high.clone()]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, side, cross, high], 1.0);
+        assert_eq!(once, Once::default());
+        assert_eq!(laid.len(), 4);
+        assert!((length(&laid) - before).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hostile_paths_are_laid_once_without_panicking() {
+        let nan = path(0, &[[f64::NAN, 0.0, 0.0], [1.0, f64::INFINITY, 0.0]]);
+        let one = path(1, &[[0.0, 0.0, 0.0]]);
+        let zero = path(2, &[[5.0, 5.0, 5.0], [5.0, 5.0, 5.0]]);
+        let laid = lay_once(vec![nan, one, zero, path(3, &[])], f64::NAN).paths;
+        assert!(laid.len() <= 4);
+        let Laid { paths: laid, once, .. } = lay_once(Vec::new(), 1.0);
+        assert!(laid.is_empty() && once == Once::default());
+    }
+
+    /// A switch leg that starts where a run of its circuit ended, that run all along another of
+    /// the circuit's runs: laid once it is as if routed once (the leg leaves the raceway there);
+    /// and a homerun run that ended at a shared raceway's end still meets it in its junction box.
+    #[test]
+    fn a_run_another_raceway_met_still_meets_it_when_its_stretch_is_laid_once() {
+        let run = |id: &str, pts: serde_json::Value| json!({"system": "E-BRANCH", "level": "Level 1", "id": id, "points": pts, "size_in": [0.5, 0], "bottoms_ft": [8.0, 8.0], "height_source": "routed"});
+        let tag = |id: &str| json!({"id": id, "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {"circuit": {"value": "Q-1", "source": "plan"}, "panel": {"value": "Q", "source": "plan"}}});
+        let spec = |runs: Vec<serde_json::Value>| {
+            let sp = json!({
+                "version": 1, "units_per_foot": 12,
+                "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+                "mep": {"systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}], "runs": runs},
+                "tags": [tag("circuit:Level 1:room-1:Q-1"), tag("circuit:Level 1:room-1:Q-1~sw1")]
+            });
+            cadaddy_walk3d::BuildingSpec::from_json(&sp.to_string()).expect("spec")
+        };
+        let leg = run("circuit:Level 1:room-1:Q-1~sw1#3", json!([[240, 0], [240, 120]]));
+        // Run 2 is all along run 1: it goes, and its end at (240, 0) is inside run 1.
+        let twice = spec(vec![
+            run("circuit:Level 1:room-1:Q-1#1", json!([[0, 0], [480, 0]])),
+            run("circuit:Level 1:room-1:Q-1#2", json!([[0, 0], [240, 0]])),
+            leg.clone(),
+        ]);
+        // As the field runs it: one raceway, the leg leaving it at (240, 0).
+        let once = spec(vec![
+            run("circuit:Level 1:room-1:Q-1#1", json!([[0, 0], [240, 0]])),
+            run("circuit:Level 1:room-1:Q-1#2", json!([[240, 0], [480, 0]])),
+            leg,
+        ]);
+        let (mut d1, mut d2) = (Drawing::default(), Drawing::default());
+        let (r1, r2) = (build(&mut d1, &twice), build(&mut d2, &once));
+        assert_eq!(r1["racewayLaidOnce"]["ft"], json!(20.0), "{r1}");
+        for k in ["openEnds", "junctionBoxes", "atomChains"] {
+            assert_eq!(r1[k], r2[k], "{k}: {r1} vs {r2}");
+        }
+        // A homerun's two runs, the second all along the first, its end where a shared
+        // raceway starts: the shared raceway still meets the homerun there.
+        let home = |id: &str| run(id, json!([[0, 0], [480, 0]]));
+        let mut sp = spec(vec![
+            home("circuit:Level 1:home:Q:1#home"),
+            run("circuit:Level 1:home:Q:1#home2", json!([[0, 0], [240, 0]])),
+            run("circuit:Level 1:home:Q:shared-0#shared", json!([[240, 0], [240, 120]])),
+        ]);
+        sp.tags.push(cadaddy_walk3d::tags::ElementTag {
+            id: "circuit:Level 1:home:Q:1".into(),
+            kind: "circuit".into(),
+            level: "Level 1".into(),
+            ..Default::default()
+        });
+        sp.tags.push(cadaddy_walk3d::tags::ElementTag {
+            id: "circuit:Level 1:home:Q:shared-0".into(),
+            kind: "circuit".into(),
+            level: "Level 1".into(),
+            ..Default::default()
+        });
+        let mut d3 = Drawing::default();
+        let r3 = build(&mut d3, &sp);
+        assert_eq!(r3["racewayLaidOnce"]["ft"], json!(20.0), "{r3}");
+        assert_eq!(r3["junctionBoxes"], json!(1), "the shared raceway meets the homerun: {r3}");
+    }
+
+    /// Two routed runs of one circuit leaving a box the same way: the circuit's shared stretch is
+    /// one raceway, with its junction box where they part.
+    #[test]
+    fn the_atoms_lay_one_circuits_shared_stretch_once() {
+        let routed = |id: &str, end: f64| json!({"system": "E-BRANCH", "level": "Level 1", "id": id, "points": [[0, 0], [240, 0], [240, end]], "size_in": [0.5, 0], "bottoms_ft": [8.0, 8.0], "height_source": "routed"});
+        let sp = json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+            "mep": {
+                "systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}],
+                "runs": [routed("circuit:Level 1:room-1:Q-1#1", 120.0), routed("circuit:Level 1:room-1:Q-1#2", -120.0)]
+            },
+            "tags": [{"id": "circuit:Level 1:room-1:Q-1", "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {"circuit": {"value": "Q-1", "source": "plan"}, "panel": {"value": "Q", "source": "plan"}}}]
+        });
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_string()).expect("spec");
+        let mut d = Drawing::default();
+        let r = build(&mut d, &sp);
+        // 20' shared and two 10' legs: 40' of conduit, not 60'.
+        let conduit_ft: f64 = d
+            .model
+            .iter()
+            .filter(|e| props::read(&e.common.xdata).get(super::super::ATOM_KEY).map(Prop::text).as_deref() == Some("conduit"))
+            .filter_map(|e| props::read(&e.common.xdata).get("length_ft").map(Prop::text).and_then(|t| t.parse::<f64>().ok()))
+            .sum();
+        assert!((conduit_ft - 40.0).abs() < 0.5, "{conduit_ft} ft {r}");
+        assert_eq!(r["racewayLaidOnce"]["ft"], json!(20.0), "{r}");
+        assert_eq!(r["junctionBoxes"], json!(1), "{r}");
     }
 }

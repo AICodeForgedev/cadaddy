@@ -17,8 +17,8 @@
 //!   luminaire when the legend says a lower-case letter after a circuit is a fixture's switch
 //!   leg, else a receptacle (a symbol only its circuit labels is a receptacle, as the device
 //!   reading takes it);
-//! - the switch designations no read switch took, one switch for each designation a label
-//!   names (`3,D,a`: a 3-way and a dimmer on leg a).
+//! - the switch designations no read switch took, one switch for each label: the letters by
+//!   one switch symbol are that switch's (`3,D,a`: one 3-way dimmer, `S3D`, on leg a).
 //!
 //! The marks found are new read devices (their sheet point, the view's sheet and level), so the
 //! stamping puts them into every room of the type and Validate expects them there. This module
@@ -450,8 +450,12 @@ fn circuit_label(t: &str, sheet_numbers: &BTreeSet<String>) -> Option<(String, O
     (super::guided::circuit_text(head, sheet_numbers) || super::printcond::parse_circuit(head).is_some()).then(|| (head.to_string(), leg))
 }
 
-/// The switches a designation printed by switch symbols names, as (tag, leg): `3,D,a` a 3-way
-/// (`S3`) and a dimmer (`SD`) on leg `a`; one designation as [`super::readers::switch_designation`].
+/// The switch a designation printed by a switch symbol names, as (tag, leg): `3,D,a` is one
+/// 3-way dimmer (`S3D`) on leg `a` (Q6245). The letters a symbol carries are that one device's:
+/// its kind of switching (`3` 3-way, `4` 4-way, `2` double pole), what it does besides (`D`
+/// dimmer, `K` key, `P` pilot light…), and its leg. A second switch is a second symbol with its
+/// own designation, never a second letter by the first. One code as
+/// [`super::readers::switch_designation`]. Empty when it is no switch's designation.
 pub(crate) fn switch_designations(t: &str) -> Vec<(String, String)> {
     if let Some(one) = super::readers::switch_designation(t) {
         return vec![one];
@@ -463,10 +467,26 @@ pub(crate) fn switch_designations(t: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
     let each: Option<Vec<(String, String)>> = codes.iter().map(|c| super::readers::switch_designation(&format!("{c},{}", leg.trim()))).collect();
-    let each = each.unwrap_or_default();
-    // A designation names each switch once (`3,3,a` is no reading).
+    let Some(each) = each else { return Vec::new() };
+    // A designation names each property once (`3,3,a` is no reading).
     let tags: BTreeSet<&str> = each.iter().map(|(tag, _)| tag.as_str()).collect();
-    if tags.len() == each.len() { each } else { Vec::new() }
+    if tags.len() != each.len() {
+        return Vec::new();
+    }
+    // A switch with an occupancy sensor's code (`3,OS,a`) is that sensor switch: one device of
+    // the sensor's mark.
+    if let Some((tag, leg)) = each.iter().find(|(tag, _)| tag.starts_with("OS")) {
+        return vec![(tag.clone(), leg.clone())];
+    }
+    // Its switching first (the digit), then the rest in the order printed: `D,3` is `S3D` too.
+    let (digits, letters): (Vec<&str>, Vec<&str>) =
+        codes.iter().copied().filter(|c| *c != "1").partition(|c| c.chars().all(|ch| ch.is_ascii_digit()));
+    if digits.len() > 1 {
+        // Two kinds of switching (`3,4,a`) are no one switch.
+        return Vec::new();
+    }
+    let tag = format!("S{}{}", digits.concat(), letters.concat());
+    vec![(tag, leg.trim().to_string())]
 }
 
 /// A read device's kind: the one read, else what its tag says.
@@ -733,23 +753,22 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         dv.circuit = circuit;
         out.push(dv);
     }
-    // The switch designations no read switch took.
+    // The switch designations no read switch took: one switch each, whatever letters it
+    // carries (a switch read on its lettering is the one it names).
     for t in &texts {
         let named = switch_designations(&t.value);
-        if named.len() < 2 && view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
+        if view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
             continue;
         }
-        for (n, (tag, leg)) in named.iter().enumerate() {
+        for (tag, leg) in &named {
             let have = view.read.iter().copied().chain(out.iter()).any(|dv| {
                 dv.leg == *leg && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch"))
             });
             if have || out.len() >= MAX_VIEW_MARKS {
                 continue;
             }
-            // Side by side along the lettering: one switch symbol each.
-            let at = t.at + Vec2::from_angle(t.rotation) * (0.6 * t.height * n as f64);
             let tag = if tag.is_empty() { "S".to_string() } else { tag.clone() };
-            let mut dv = new(&tag, at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
+            let mut dv = new(&tag, t.at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
             if super::readers::device_kind(&tag) == "device" {
                 dv.kind = "switch".into();
@@ -972,13 +991,18 @@ mod tests {
     }
 
     #[test]
-    fn several_designations_by_one_label_are_one_switch_each() {
+    fn the_letters_by_one_switch_symbol_name_one_switch() {
         let tags = |t: &str| switch_designations(t).into_iter().map(|(t, l)| format!("{t}:{l}")).collect::<Vec<_>>();
-        assert_eq!(tags("3,D,a"), ["S3:a", "SD:a"]);
+        // One symbol, one switch (Q6245): a 3-way dimmer, not a 3-way beside a dimmer.
+        assert_eq!(tags("3,D,a"), ["S3D:a"]);
+        assert_eq!(tags("D,3,a"), ["S3D:a"], "its switching first, whatever order the letters are printed in");
         assert_eq!(tags("D,b"), ["SD:b"]);
-        assert_eq!(tags("4, M ,c"), ["S4:c", "SM:c"]);
+        assert_eq!(tags("4, M ,c"), ["S4M:c"]);
+        assert_eq!(tags("1,K,d"), ["SK:d"], "a single pole switch's 1 adds nothing");
+        assert_eq!(tags("3,OS,e"), ["OS:e"], "a sensor switch is the sensor");
         assert_eq!(tags("c"), [":c"]);
-        assert!(tags("3,3,a").is_empty(), "the same switch twice is no reading");
+        assert!(tags("3,3,a").is_empty(), "the same letter twice is no reading");
+        assert!(tags("3,4,a").is_empty(), "two kinds of switching are no one switch");
         assert!(tags("Q-1,b").is_empty() && tags("1,2,3,4,5,a").is_empty() && tags("3,D").is_empty());
     }
 
@@ -1048,8 +1072,10 @@ mod tests {
             // A circuit alone with GFCI by it: a receptacle.
             text("Q-4", [20.0, 140.0]),
             text("GFCI", [20.0, 133.0]),
-            // Two switches' designation, one of them read.
+            // A switch read on its designation (its symbol a block): no second one from its
+            // letters; and a 3-way dimmer's designation no read switch took: one switch.
             text("3,D,a", [150.0, 20.0]),
+            text("D,3,b", [150.0, 60.0]),
             // A data outlet drawn loose with its mark by it.
             text("2X", [178.0, 150.0]),
             // A sheet number in a note: never a circuit.
@@ -1105,7 +1131,7 @@ mod tests {
                 "K2 luminaire Q-1,a -",
                 "LUMINAIRE luminaire Q-1,d -",
                 "REC receptacle Q-13,15 -",
-                "SD - - a"
+                "S3D - - b"
             ],
             "{got:?}"
         );

@@ -25849,8 +25849,7 @@ mod tests {
                 "H9 luminaire K-1,a",
                 "LUMINAIRE luminaire K-1,d",
                 "REC receptacle K-13,15",
-                "S3 switch ",
-                "SD switch ",
+                "S3D switch ",
                 "TV low voltage outlet "
             ],
             "{:#?}",
@@ -25866,14 +25865,15 @@ mod tests {
         // The TV where its block's second copy is drawn, by what the first was read as.
         let tv_at = typical.added.iter().find(|dv| dv.tag == "TV").map(|dv| dv.at);
         assert!(tv_at.is_some_and(|p| (p[0] - (vx + 136.5)).abs() < 2.0 && (p[1] - (vy + 220.0)).abs() < 2.0), "{tv_at:?}");
-        // Into each room of the type: all eleven, the same kinds the view shows.
+        // Into each room of the type: all ten, the same kinds the view shows (its 3-way dimmer
+        // one switch).
         let mut all = job.devices.clone();
         all.extend(typical.added.iter().cloned());
         let unplaced: Vec<&super::super::readers::ReadDevice> = all.iter().collect();
         job.devices = all.clone();
         let stamped = stamp_typical_rooms(d, &job, &[], &unplaced);
         for n in ["301", "302"] {
-            assert_eq!(stamped.devices.iter().filter(|dv| dv.room == n).count(), 11, "room {n}: {:?}", stamped.devices);
+            assert_eq!(stamped.devices.iter().filter(|dv| dv.room == n).count(), 10, "room {n}: {:?}", stamped.devices);
         }
         let table = unit_type_table(&job, &typical, &stamped.devices, &[]);
         let line = table.iter().find(|l| l.unit_type == "KING-STUDIO");
@@ -25881,7 +25881,7 @@ mod tests {
             line.is_some_and(|l| l.rooms == 2 && l.kinds.values().all(|k| k.sheets > 0 && k.fewest == k.sheets && k.most == k.sheets)),
             "{table:?}"
         );
-        assert_eq!(line.map(|l| l.kinds.values().map(|k| k.sheets).sum::<usize>()), Some(11));
+        assert_eq!(line.map(|l| l.kinds.values().map(|k| k.sheets).sum::<usize>()), Some(10));
         // A device two trades' plans showed at one place is held once for both: a room whose
         // copy merged with another trade's holds it all the same.
         let mut fewer = stamped.devices.clone();
