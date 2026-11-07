@@ -485,8 +485,8 @@ fn start(app: &mut CadApp, c: &Choices, resume: Option<&Value>) {
     if let Some(o) = p.as_object_mut() {
         o.retain(|_, v| !v.is_null());
     }
-    let r = app.run("validate", p);
-    report(app, r);
+    // A validation run reads the model against every print: off the UI thread (Q6269).
+    app.run_background("validate", p, report);
 }
 
 /// The selected finding's detail, read once per drawing revision.

@@ -165,10 +165,10 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("mep.read", "Read MEP Runs", run_read).params(
+        CommandSpec::new("mep.read", "Read MEP Runs", run_read).long().params(
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
-        CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
+        CommandSpec::new("model.clashes", "Model Clashes", run_clashes).long()
             .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
