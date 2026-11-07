@@ -17,8 +17,8 @@
 //!   luminaire when the legend says a lower-case letter after a circuit is a fixture's switch
 //!   leg, else a receptacle (a symbol only its circuit labels is a receptacle, as the device
 //!   reading takes it);
-//! - the switch designations no read switch took, one switch for each designation a label
-//!   names (`3,D,a`: a 3-way and a dimmer on leg a).
+//! - the switch designations no read switch took, one switch for each label: the letters by
+//!   one switch symbol are that switch's (`3,D,a`: one 3-way dimmer, `S3D`, on leg a).
 //!
 //! The marks found are new read devices (their sheet point, the view's sheet and level), so the
 //! stamping puts them into every room of the type and Validate expects them there. This module
@@ -423,6 +423,21 @@ const LABEL_FAR_H: f64 = 12.0;
 /// Marks of one view read at most.
 const MAX_VIEW_MARKS: usize = 2_000;
 
+/// A keynote's number under a label it is about: this many label heights down at most.
+const KEYNOTE_UNDER_H: f64 = 3.5;
+
+/// A keynote marker's number: one to three digits alone.
+fn keynote_number(t: &TextItem) -> bool {
+    let v = t.value.trim();
+    (1..=3).contains(&v.len()) && v.chars().all(|c| c.is_ascii_digit())
+}
+
+/// The middle of a text's lettering (its point is the start of its baseline).
+fn middle_of(t: &TextItem) -> Vec2 {
+    let n = t.value.trim().chars().count() as f64;
+    t.at + Vec2::from_angle(t.rotation) * (0.3 * t.height * n) + Vec2::from_angle(t.rotation + std::f64::consts::FRAC_PI_2) * (0.5 * t.height)
+}
+
 /// Whether a label is a circuit: `LP-1`, `LP-3,5`, `LP-1,a` (its leg after it), never a sheet
 /// number.
 fn circuit_label(t: &str, sheet_numbers: &BTreeSet<String>) -> Option<(String, Option<char>)> {
@@ -435,8 +450,12 @@ fn circuit_label(t: &str, sheet_numbers: &BTreeSet<String>) -> Option<(String, O
     (super::guided::circuit_text(head, sheet_numbers) || super::printcond::parse_circuit(head).is_some()).then(|| (head.to_string(), leg))
 }
 
-/// The switches a designation printed by switch symbols names, as (tag, leg): `3,D,a` a 3-way
-/// (`S3`) and a dimmer (`SD`) on leg `a`; one designation as [`super::readers::switch_designation`].
+/// The switch a designation printed by a switch symbol names, as (tag, leg): `3,D,a` is one
+/// 3-way dimmer (`S3D`) on leg `a` (Q6245). The letters a symbol carries are that one device's:
+/// its kind of switching (`3` 3-way, `4` 4-way, `2` double pole), what it does besides (`D`
+/// dimmer, `K` key, `P` pilot light…), and its leg. A second switch is a second symbol with its
+/// own designation, never a second letter by the first. One code as
+/// [`super::readers::switch_designation`]. Empty when it is no switch's designation.
 pub(crate) fn switch_designations(t: &str) -> Vec<(String, String)> {
     if let Some(one) = super::readers::switch_designation(t) {
         return vec![one];
@@ -448,10 +467,26 @@ pub(crate) fn switch_designations(t: &str) -> Vec<(String, String)> {
         return Vec::new();
     }
     let each: Option<Vec<(String, String)>> = codes.iter().map(|c| super::readers::switch_designation(&format!("{c},{}", leg.trim()))).collect();
-    let each = each.unwrap_or_default();
-    // A designation names each switch once (`3,3,a` is no reading).
+    let Some(each) = each else { return Vec::new() };
+    // A designation names each property once (`3,3,a` is no reading).
     let tags: BTreeSet<&str> = each.iter().map(|(tag, _)| tag.as_str()).collect();
-    if tags.len() == each.len() { each } else { Vec::new() }
+    if tags.len() != each.len() {
+        return Vec::new();
+    }
+    // A switch with an occupancy sensor's code (`3,OS,a`) is that sensor switch: one device of
+    // the sensor's mark.
+    if let Some((tag, leg)) = each.iter().find(|(tag, _)| tag.starts_with("OS")) {
+        return vec![(tag.clone(), leg.clone())];
+    }
+    // Its switching first (the digit), then the rest in the order printed: `D,3` is `S3D` too.
+    let (digits, letters): (Vec<&str>, Vec<&str>) =
+        codes.iter().copied().filter(|c| *c != "1").partition(|c| c.chars().all(|ch| ch.is_ascii_digit()));
+    if digits.len() > 1 {
+        // Two kinds of switching (`3,4,a`) are no one switch.
+        return Vec::new();
+    }
+    let tag = format!("S{}{}", digits.concat(), letters.concat());
+    vec![(tag, leg.trim().to_string())]
 }
 
 /// A read device's kind: the one read, else what its tag says.
@@ -534,10 +569,12 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
                 (m.at.x - t.at.x).abs() <= STACK_DX_H * t.height && m.at.y - t.at.y > 0.3 * t.height && m.at.y - t.at.y <= STACK_DY_H * t.height
             })
             .find_map(|m| {
-                let v = m.value.trim().to_ascii_uppercase();
-                if marks.luminaires.contains(&v) {
+                // As the schedule prints it: a lower-case letter over a circuit is its switch leg
+                // (`d` of `Q-11 d,e`), never a fixture type.
+                let v = m.value.trim();
+                if marks.luminaires.contains(v) {
                     Some((m, "luminaire"))
-                } else if marks.wall_luminaires.contains(&v) {
+                } else if marks.wall_luminaires.contains(v) {
                     Some((m, "wall luminaire"))
                 } else {
                     None
@@ -579,7 +616,11 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
     }
     // The legend's symbols drawn loose: those no read device stands on. Each takes the label by it,
     // the nearest pairs first.
-    let fresh: Vec<&Symbol> = symbols.iter().filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size)).collect();
+    // A drawing with a bare number printed in it is a keynote's marker (`1` in its box), though
+    // a legend symbol is drawn the same: no device.
+    let numbered = |f: &Symbol| texts.iter().any(|t| keynote_number(t) && middle_of(t).dist(f.at) <= 0.5 * f.size);
+    let fresh: Vec<&Symbol> =
+        symbols.iter().filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size) && !numbered(f)).collect();
     let mut by_label: Vec<(f64, usize, usize)> = Vec::new();
     for (j, f) in fresh.iter().enumerate().filter(|(_, f)| f.powered) {
         for (i, (t, _, _)) in circuits.iter().enumerate().filter(|(i, _)| !taken.get(*i).copied().unwrap_or(true)) {
@@ -680,9 +721,16 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
             }
         }
     }
-    // The circuit labels left: each names a device.
+    // The circuit labels left: each names a device. One printed over a keynote's number (a
+    // feeder's `QP1-5` over its keynote) is what the keynote is about: no device.
+    let keynoted = |t: &TextItem| {
+        texts.iter().any(|k| {
+            let dy = middle_of(t).y - middle_of(k).y;
+            keynote_number(k) && dy > 0.3 * t.height && dy <= KEYNOTE_UNDER_H * t.height && (middle_of(k).x - middle_of(t).x).abs() <= 1.5 * t.height
+        })
+    };
     for (i, (t, c, leg)) in circuits.iter().enumerate() {
-        if taken.get(i).copied().unwrap_or(true) || out.len() >= MAX_VIEW_MARKS {
+        if taken.get(i).copied().unwrap_or(true) || out.len() >= MAX_VIEW_MARKS || keynoted(t) {
             continue;
         }
         let circuit = full(c, *leg);
@@ -705,23 +753,22 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
         dv.circuit = circuit;
         out.push(dv);
     }
-    // The switch designations no read switch took.
+    // The switch designations no read switch took: one switch each, whatever letters it
+    // carries (a switch read on its lettering is the one it names).
     for t in &texts {
         let named = switch_designations(&t.value);
-        if named.len() < 2 && view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
+        if view.read.iter().any(|dv| !dv.leg.is_empty() && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height) {
             continue;
         }
-        for (n, (tag, leg)) in named.iter().enumerate() {
+        for (tag, leg) in &named {
             let have = view.read.iter().copied().chain(out.iter()).any(|dv| {
                 dv.leg == *leg && at_of(dv).dist(t.at) <= SWITCH_AT_H * t.height && (dv.tag == *tag || (tag.is_empty() && kind_of(dv) == "switch"))
             });
             if have || out.len() >= MAX_VIEW_MARKS {
                 continue;
             }
-            // Side by side along the lettering: one switch symbol each.
-            let at = t.at + Vec2::from_angle(t.rotation) * (0.6 * t.height * n as f64);
             let tag = if tag.is_empty() { "S".to_string() } else { tag.clone() };
-            let mut dv = new(&tag, at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
+            let mut dv = new(&tag, t.at, "", &format!("{} switch designation {}", view.sheet, t.value.trim()));
             dv.leg.clone_from(leg);
             if super::readers::device_kind(&tag) == "device" {
                 dv.kind = "switch".into();
@@ -944,13 +991,18 @@ mod tests {
     }
 
     #[test]
-    fn several_designations_by_one_label_are_one_switch_each() {
+    fn the_letters_by_one_switch_symbol_name_one_switch() {
         let tags = |t: &str| switch_designations(t).into_iter().map(|(t, l)| format!("{t}:{l}")).collect::<Vec<_>>();
-        assert_eq!(tags("3,D,a"), ["S3:a", "SD:a"]);
+        // One symbol, one switch (Q6245): a 3-way dimmer, not a 3-way beside a dimmer.
+        assert_eq!(tags("3,D,a"), ["S3D:a"]);
+        assert_eq!(tags("D,3,a"), ["S3D:a"], "its switching first, whatever order the letters are printed in");
         assert_eq!(tags("D,b"), ["SD:b"]);
-        assert_eq!(tags("4, M ,c"), ["S4:c", "SM:c"]);
+        assert_eq!(tags("4, M ,c"), ["S4M:c"]);
+        assert_eq!(tags("1,K,d"), ["SK:d"], "a single pole switch's 1 adds nothing");
+        assert_eq!(tags("3,OS,e"), ["OS:e"], "a sensor switch is the sensor");
         assert_eq!(tags("c"), [":c"]);
-        assert!(tags("3,3,a").is_empty(), "the same switch twice is no reading");
+        assert!(tags("3,3,a").is_empty(), "the same letter twice is no reading");
+        assert!(tags("3,4,a").is_empty(), "two kinds of switching are no one switch");
         assert!(tags("Q-1,b").is_empty() && tags("1,2,3,4,5,a").is_empty() && tags("3,D").is_empty());
     }
 
@@ -959,6 +1011,49 @@ mod tests {
     }
     fn read(tag: &str, at: [f64; 2], circuit: &str, leg: &str) -> ReadDevice {
         ReadDevice { tag: tag.into(), at, circuit: circuit.into(), leg: leg.into(), sheet: "E-9".into(), level: "1".into(), ..ReadDevice::default() }
+    }
+
+    #[test]
+    fn a_keynote_box_drawn_like_a_legend_symbol_and_the_label_over_it_are_no_devices() {
+        // The legend's light: a box with a bar down its middle (a `1` in a keynote's box is drawn
+        // the same). Drawn loose at (100, 100) with its circuit Q-2 by it; a keynote's box at
+        // (300, 100) with its number `1` in it, under the feeder tag `QP1-5` it is about.
+        let light = |o: [f64; 2]| {
+            vec![
+                seg([o[0] - 4.0, o[1] - 4.0], [o[0] + 4.0, o[1] - 4.0]),
+                seg([o[0] + 4.0, o[1] - 4.0], [o[0] + 4.0, o[1] + 4.0]),
+                seg([o[0] + 4.0, o[1] + 4.0], [o[0] - 4.0, o[1] + 4.0]),
+                seg([o[0] - 4.0, o[1] + 4.0], [o[0] - 4.0, o[1] - 4.0]),
+                seg([o[0], o[1] - 3.0], [o[0], o[1] + 3.0]),
+            ]
+        };
+        let tps = vec![Template::new("STRIP LIGHT", "E-0", "luminaire", "IfcLightFixture", &light([500.0, 500.0]), 4.0).unwrap()];
+        let mut scene = light([100.0, 100.0]);
+        scene.extend(light([300.0, 100.0]));
+        let sc = Scene::new(scene, 10.0);
+        let texts = [text("Q-2", [108.0, 98.0]), text("1", [299.0, 98.0]), text("QP1-5", [295.0, 110.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 400.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let found = find_symbols(&tps, &sc, view.rect, 4.0);
+        assert_eq!(found.len(), 2, "both drawings match the legend's: {found:?}");
+        let got = read_view(&view, &legend_symbols(&tps, &found), &marks);
+        let devices: Vec<(String, String, [i64; 2])> =
+            got.iter().map(|d| (d.kind.clone(), d.circuit.clone(), [d.at[0].round() as i64, d.at[1].round() as i64])).collect();
+        assert_eq!(devices, [("luminaire".to_string(), "Q-2".to_string(), [100, 100])], "{got:?}");
+    }
+
+    #[test]
+    fn a_switch_leg_letter_over_a_circuit_is_no_fixture_type() {
+        // The schedule's type D printed over its circuit is a luminaire D; the lower-case leg
+        // letter `d` printed over another circuit (`Q-11` with its legs `d,e`) is that circuit's
+        // switch leg, though the letter is the same.
+        let texts = [text("D", [20.0, 28.0]), text("Q-2", [20.0, 20.0]), text("d", [80.0, 28.0]), text("Q-11", [80.0, 20.0])];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: Vec::new() };
+        let marks = Marks { luminaires: ["D".to_string()].into(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let got = read_view(&view, &[], &marks);
+        let luminaires: Vec<(String, String)> =
+            got.iter().filter(|d| d.kind.contains("luminaire")).map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        assert_eq!(luminaires, [("D".to_string(), "Q-2".to_string())], "{got:?}");
     }
 
     #[test]
@@ -977,8 +1072,10 @@ mod tests {
             // A circuit alone with GFCI by it: a receptacle.
             text("Q-4", [20.0, 140.0]),
             text("GFCI", [20.0, 133.0]),
-            // Two switches' designation, one of them read.
+            // A switch read on its designation (its symbol a block): no second one from its
+            // letters; and a 3-way dimmer's designation no read switch took: one switch.
             text("3,D,a", [150.0, 20.0]),
+            text("D,3,b", [150.0, 60.0]),
             // A data outlet drawn loose with its mark by it.
             text("2X", [178.0, 150.0]),
             // A sheet number in a note: never a circuit.
@@ -1034,7 +1131,7 @@ mod tests {
                 "K2 luminaire Q-1,a -",
                 "LUMINAIRE luminaire Q-1,d -",
                 "REC receptacle Q-13,15 -",
-                "SD - - a"
+                "S3D - - b"
             ],
             "{got:?}"
         );

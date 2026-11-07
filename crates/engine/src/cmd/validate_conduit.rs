@@ -168,7 +168,7 @@ fn area_for<'a>(areas: &'a [Area], whole_levels: bool, level: &str, at: [f64; 2]
 
 /// The panel and circuit numbers of a circuit label (`LP1-1,3,5`).
 fn circuit_of(label: &str) -> Option<(String, Vec<String>)> {
-    let (panel, nums) = super::printcond::parse_circuit(label)?;
+    let (panel, nums) = super::printcond::parse_circuit_list(label)?;
     let nums: Vec<String> = nums.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect();
     (!nums.is_empty()).then_some((panel, nums))
 }
@@ -275,6 +275,7 @@ pub(crate) struct Stick {
 /// A conductor pulled in a raceway.
 #[derive(Clone, Debug)]
 pub(crate) struct Wire {
+    pub handle: Handle,
     pub run: String,
     pub circuit: String,
     /// The tables' key (`12`, `3/0`).
@@ -322,6 +323,8 @@ impl Cable {
 pub(crate) struct BoxEl {
     pub handle: Handle,
     pub of: Option<Handle>,
+    /// A gang box's other devices (it holds them all).
+    pub ganged: Vec<Handle>,
     pub cubic_in: Option<f64>,
     pub size: String,
     pub level: String,
@@ -392,6 +395,46 @@ pub(crate) struct Net {
     links: HashMap<Handle, Vec<Handle>>,
     /// What each piece is (`atom` kind, `device`, `gear`).
     what: HashMap<Handle, String>,
+    /// Each level's stacking move (lower-case name): where its plan is in the stacked building.
+    moves: HashMap<String, Vec2>,
+    /// The offset fittings (a jog of the raceway between two sticks): what joins them.
+    offsets: Vec<Join>,
+    /// Every raceway piece (stick, fitting, wire, cable, box…): what a finding about its run,
+    /// circuit, box or takeoff line covers, and what a packet says of it.
+    pub pieces: Vec<Piece>,
+}
+
+/// One raceway piece of the model, whatever its kind (`atom`): its run, circuit, takeoff line
+/// and plan box.
+#[derive(Clone, Debug)]
+pub(crate) struct Piece {
+    pub handle: Handle,
+    /// `conduit`, `wire`, `cable`, `box`, `offset`, `coupling`…
+    pub atom: String,
+    pub run: String,
+    pub circuit: String,
+    pub level: String,
+    pub item: String,
+    pub size: String,
+    /// Its plan box (drawing units, unstacked), when its body is drawn.
+    pub lo_hi: Option<(Vec3, Vec3)>,
+}
+
+impl Piece {
+    fn at(&self) -> Option<Vec3> {
+        self.lo_hi.map(|(lo, hi)| (lo + hi) * 0.5)
+    }
+}
+
+/// A fitting that carries the raceway from one end to the other (an offset): its circuit,
+/// level and two ends.
+#[derive(Clone, Debug)]
+pub(crate) struct Join {
+    pub handle: Handle,
+    pub circuit: String,
+    pub level: String,
+    pub a: Vec3,
+    pub b: Vec3,
 }
 
 /// Coordinates past this (drawing units) are no building's: the piece is skipped.
@@ -465,7 +508,7 @@ fn plan_box(e: &Entity) -> Option<(Vec3, Vec3)> {
 impl Net {
     pub(crate) fn of(d: &Drawing, sp: &BuildingSpec) -> Net {
         let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-        let mut n = Net { upf, ..Net::default() };
+        let mut n = Net { upf, moves: super::conduitroute::level_moves(d, sp), ..Net::default() };
         let rl = super::conduitroute::rules();
         let gear_word = |k: &str| {
             let k = k.to_ascii_lowercase();
@@ -544,6 +587,13 @@ impl Net {
         n
     }
 
+    /// A point of `level`'s plan where the stacked building has it: a riser between storeys
+    /// joins the next level's piece, a homerun reaches its panel on another storey.
+    fn up(&self, level: &str, p: Vec3) -> Vec3 {
+        let m = self.moves.get(&level.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+        Vec3::new(p.x + m.x, p.y + m.y, p.z)
+    }
+
     fn piece(&mut self, e: &Entity, upf: f64) {
         let ps = props::read(&e.common.xdata);
         let kind = text(&ps, super::mepatoms::ATOM_KEY);
@@ -607,6 +657,7 @@ impl Net {
             "wire" if self.wires.len() < MAX_PIECES => {
                 qty = length.unwrap_or(0.0);
                 self.wires.push(Wire {
+                    handle: e.handle,
                     run: text(&ps, "run"),
                     circuit: text(&ps, "circuit"),
                     size: awg(&text(&ps, "size")),
@@ -634,6 +685,7 @@ impl Net {
                     self.boxes.push(BoxEl {
                         handle: e.handle,
                         of: Handle::parse_hex(&text(&ps, "box_of")),
+                        ganged: text(&ps, "devices").split(',').filter_map(|h| Handle::parse_hex(h.trim())).take(64).collect(),
                         cubic_in: num(&ps, "cubic_in").filter(|v| *v > 0.0),
                         size: text(&ps, "size"),
                         level: level.clone(),
@@ -643,8 +695,40 @@ impl Net {
                     });
                 }
             }
-            "offset" => qty = 1.0,
+            "offset" => {
+                qty = 1.0;
+                let off = super::bspec::stacked_by(e);
+                let off3 = Vec3::new(off.x, off.y, 0.0);
+                if let Some((a, b)) = super::mepatoms::build::stick_ends(&ps)
+                    && sane(a)
+                    && sane(b)
+                    && self.offsets.len() < MAX_PIECES
+                {
+                    // Its ends as the build cut them; a level stacked after carries its body.
+                    let (a, b) = match super::fieldview::mesh_box(e) {
+                        Some((lo, hi)) if off.len() > 1e-9 => {
+                            let c = Vec3::new((lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0);
+                            let mid = (a + b) * 0.5;
+                            if (c - (mid + off3)).len() < (c - mid).len() { (a, b) } else { (a - off3, b - off3) }
+                        }
+                        _ => (a, b),
+                    };
+                    self.offsets.push(Join { handle: e.handle, circuit: text(&ps, "circuit"), level: level.clone(), a, b });
+                }
+            }
             _ => {}
+        }
+        if self.pieces.len() < MAX_PIECES * 4 {
+            self.pieces.push(Piece {
+                handle: e.handle,
+                atom: kind.clone(),
+                run: text(&ps, "run"),
+                circuit: text(&ps, "circuit"),
+                level: level.clone(),
+                item: text(&ps, "item"),
+                size: text(&ps, "size"),
+                lo_hi: plan_box(e),
+            });
         }
         if self.counted.len() < MAX_PIECES * 4 {
             self.counted.push(Counted { kind, item: text(&ps, "item"), size: text(&ps, "size"), level, qty });
@@ -666,21 +750,26 @@ struct Graph {
 }
 
 impl Graph {
-    /// The graph of `sticks` (indices into `net.sticks`), ends within `tol` joined, ends within
-    /// `tol` of a box joined to the box.
-    fn of(net: &Net, sticks: &[usize], tol: f64, boxes_near: &BoxGrid) -> Graph {
+    /// The graph of `sticks` (indices into `net.sticks`), ends within `tol` joined (where the
+    /// stacked building has them: a riser's end meets the next storey's piece), ends within `tol`
+    /// of a box of their level joined to the box. `ends` holds the stacked points.
+    fn of(net: &Net, sticks: &[usize], offsets: &[usize], tol: f64, boxes_near: &BoxGrid) -> Graph {
         let mut g = Graph { adj: Vec::new(), box_node: HashMap::new(), ends: Vec::new() };
         let cell = (tol * 4.0).max(1e-6);
         let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
         let key = |p: Vec3| (cell_of(p.x, cell), cell_of(p.y, cell), cell_of(p.z, cell));
-        for &si in sticks {
-            let Some(s) = net.sticks.get(si) else { continue };
+        // Each piece the raceway runs through: the sticks, then the offsets that join them
+        // (an offset's index past the sticks': `usize::MAX`).
+        let pieces = sticks.iter().filter_map(|&si| net.sticks.get(si).map(|s| (s.a, s.b, s.level.as_str(), path_len(&s.path) / net.upf, si))).chain(
+            offsets.iter().filter_map(|&oi| net.offsets.get(oi).map(|o| (o.a, o.b, o.level.as_str(), (o.b - o.a).len() / net.upf, usize::MAX))),
+        );
+        for (sa, sb, level, len, si) in pieces {
             let (na, nb) = (g.adj.len(), g.adj.len() + 1);
             g.adj.push(Vec::new());
             g.adj.push(Vec::new());
-            let len = path_len(&s.path) / net.upf;
             g.link(na, nb, len);
-            for (node, p) in [(na, s.a), (nb, s.b)] {
+            for (node, plan) in [(na, sa), (nb, sb)] {
+                let p = net.up(level, plan);
                 let (kx, ky, kz) = key(p);
                 let mut near: Vec<usize> = Vec::new();
                 for dx in -1..=1 {
@@ -701,7 +790,7 @@ impl Graph {
                 }
                 grid.entry((kx, ky, kz)).or_default().push(g.ends.len());
                 g.ends.push((node, p, si));
-                for bi in boxes_near.near(p, tol, net) {
+                for bi in boxes_near.near(plan, tol, net) {
                     let bn = match g.box_node.get(&bi) {
                         Some(x) => *x,
                         None => {
@@ -716,6 +805,25 @@ impl Graph {
             }
         }
         g
+    }
+
+    /// Each node's component (the lowest node joined to it), every node once.
+    fn labels(&self) -> Vec<usize> {
+        let mut label = vec![usize::MAX; self.adj.len()];
+        for start in 0..self.adj.len() {
+            if label.get(start).is_some_and(|l| *l != usize::MAX) {
+                continue;
+            }
+            let mut todo = vec![start];
+            while let Some(x) = todo.pop() {
+                match label.get_mut(x) {
+                    Some(l) if *l == usize::MAX => *l = start,
+                    _ => continue,
+                }
+                todo.extend(self.adj.get(x).into_iter().flatten().map(|(m, _)| *m).filter(|m| label.get(*m).is_some_and(|l| *l == usize::MAX)));
+            }
+        }
+        label
     }
 
     /// The nodes joined to `n`.
@@ -939,13 +1047,111 @@ fn panel_volts(sp: &BuildingSpec, panel: &str) -> Option<(f64, f64)> {
     None
 }
 
+/// How near (inches) two raceway ends meet, by E-CONDUIT-CONTINUITY's `touch_in`.
+pub(crate) fn touch_in(continuity: Option<&Effective>) -> f64 {
+    continuity.map_or(DEFAULT_TOUCH_IN, |r| tol(r, "touch_in", DEFAULT_TOUCH_IN))
+}
+
+/// A finding's id: its rule, level, what it is about and its verdict.
+fn finding_id(rule: &str, level: &str, key: &str, verdict: &str) -> String {
+    format!("PS-{}", super::validate_run::hash8(&format!("{rule}|{level}|{key}|{verdict}")))
+}
+
+/// The pieces one finding names in `handles`, at most (a level's takeoff line).
+const MAX_COVER: usize = 5_000;
+
+/// Each finding's `handles`: every raceway piece its measurement covers, so its verdict reaches
+/// each piece and not only the stick or device it is placed at (`handle`). A run's fill,
+/// derating, method and clear run: the run's sticks, fittings, wires and cables; a circuit's
+/// voltage drop: every piece of the circuit but its boxes; a box's fill: the box; a clash: the
+/// stick; a takeoff line: the pieces it counts in scope; a device's continuity: the pieces it
+/// was followed through (`by_id`, set by the continuity check). Only raceway pieces are named
+/// (the device a continuity or voltage-drop finding is placed at stays its `handle`). `in_scope` keeps the pieces of
+/// the scope (a piece with no drawn body is kept by its run or circuit).
+fn cover(
+    net: &Net,
+    findings: &mut [(u8, &'static str, &'static str, Value)],
+    by_id: &HashMap<String, Vec<Handle>>,
+    in_scope: impl Fn(&Piece) -> bool,
+) {
+    let mut by_run: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut by_circuit: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut by_line: HashMap<(String, String, String), Vec<usize>> = HashMap::new();
+    for (i, p) in net.pieces.iter().enumerate() {
+        if !in_scope(p) {
+            continue;
+        }
+        by_line.entry((p.atom.clone(), p.item.clone(), p.size.clone())).or_default().push(i);
+        if p.atom == "box" {
+            continue;
+        }
+        if !p.run.is_empty() {
+            by_run.entry(p.run.as_str()).or_default().push(i);
+        }
+        if let Some((panel, nums)) = circuit_of(&p.circuit) {
+            for n in nums {
+                by_circuit.entry((panel.clone(), n)).or_default().push(i);
+            }
+        }
+    }
+    let handles = |ids: &[usize]| -> Vec<Handle> { ids.iter().filter_map(|i| net.pieces.get(*i)).map(|p| p.handle).collect() };
+    // Only raceway pieces are named: a device a finding is placed at is its subject, not a piece.
+    let is_piece: std::collections::HashSet<Handle> = net.pieces.iter().map(|p| p.handle).collect();
+    for (_, rule, _, f) in findings.iter_mut() {
+        let m = &f["measured"];
+        let s = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+        let mut hs: Vec<Handle> = match (*rule, s("check").as_str()) {
+            (_, _) if by_id.contains_key(f["id"].as_str().unwrap_or_default()) => {
+                by_id.get(f["id"].as_str().unwrap_or_default()).cloned().unwrap_or_default()
+            }
+            (FILL | DERATE | METHOD, _) | (CLASH, "clash") if m.get("b").is_none() && !s("run").is_empty() => {
+                by_run.get(s("run").as_str()).map(|v| handles(v)).unwrap_or_default()
+            }
+            (VDROP, _) => match circuit_of(&s("circuit")) {
+                Some((panel, nums)) => {
+                    let mut ids: Vec<usize> = nums.into_iter().filter_map(|n| by_circuit.get(&(panel.clone(), n))).flatten().copied().collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    handles(&ids)
+                }
+                None => Vec::new(),
+            },
+            // A line is counted over the scope's levels.
+            (TAKEOFF, _) => by_line.get(&(s("kind"), s("item"), s("size"))).map(|v| handles(v)).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if let Some(h) = f["handle"].as_str().and_then(Handle::parse_hex)
+            && is_piece.contains(&h)
+            && !hs.contains(&h)
+        {
+            hs.insert(0, h);
+        }
+        if hs.is_empty() {
+            continue;
+        }
+        let total = hs.len();
+        hs.truncate(MAX_COVER);
+        f["handles"] = json!(hs.iter().map(|h| h.hex()).collect::<Vec<_>>());
+        if total > MAX_COVER {
+            f["handles_more"] = json!(total - MAX_COVER);
+        }
+    }
+}
+
 /// Run the conduit rules over the scope.
 pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
+    if !on.any() {
+        return Checked::default();
+    }
+    check_net(cx, on, &Net::of(cx.d, cx.sp))
+}
+
+/// Run the conduit rules over the scope on the model's pieces read once (`net`).
+pub(crate) fn check_net(cx: &Ctx, on: On, net: &Net) -> Checked {
     let mut out = Checked::default();
     if !on.any() {
         return out;
     }
-    let net = Net::of(cx.d, cx.sp);
     let rl = super::conduitroute::rules();
     let upf = net.upf;
     let frame = cx.frame;
@@ -970,7 +1176,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         if got.len() >= MAX_FINDINGS * ALL.len() {
             return;
         }
-        let id = format!("PS-{}", super::validate_run::hash8(&format!("{rule}|{level}|{key}|{verdict}")));
+        let id = finding_id(rule, level, key, verdict);
         got.push((
             rank(verdict, &r.rule.severity),
             rule,
@@ -986,6 +1192,13 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
     };
 
     let routed = !net.sticks.is_empty() || !net.cables.is_empty();
+    // The pieces a finding was measured through, by its id (set where the check knows them).
+    let mut covers: HashMap<String, Vec<Handle>> = HashMap::new();
+    // Each run's pieces but its boxes (sticks, fittings, wires, cables).
+    let mut run_pieces: HashMap<&str, Vec<Handle>> = HashMap::new();
+    for p in net.pieces.iter().filter(|p| p.atom != "box" && !p.run.is_empty()) {
+        run_pieces.entry(p.run.as_str()).or_default().push(p.handle);
+    }
     // Runs: sticks, wires and cables by run.
     let mut run_sticks: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (i, s) in net.sticks.iter().enumerate().filter(|(_, s)| !s.run.is_empty()) {
@@ -1000,7 +1213,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         let s = ids.iter().filter_map(|i| net.sticks.get(*i)).max_by(|a, b| (a.b - a.a).len().total_cmp(&(b.b - b.a).len()))?;
         Some((s, (s.a + s.b) * 0.5))
     };
-    let boxes_near = BoxGrid::of(&net);
+    let boxes_near = BoxGrid::of(net);
 
     // ---- E-CONDUIT-FILL and E-DERATE: each raceway run.
     if on.fill.is_some() || on.derate.is_some() {
@@ -1436,6 +1649,14 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 }
             }
         }
+        let mut circ_offsets: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+        for (i, o) in net.offsets.iter().enumerate() {
+            if let Some((panel, nums)) = circuit_of(&o.circuit) {
+                for n in nums {
+                    circ_offsets.entry((panel.clone(), n)).or_default().push(i);
+                }
+            }
+        }
         let mut circ_cables: BTreeMap<(String, String), usize> = BTreeMap::new();
         for c in &net.cables {
             if let Some((panel, nums)) = circuit_of(&c.circuit) {
@@ -1459,7 +1680,18 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         if let Some(_r) = on.continuity {
             out.unmeasured(CONTINUITY, "a device with no circuit (nothing to follow)", no_circuit);
         }
-        let box_of: HashMap<Handle, usize> = net.boxes.iter().enumerate().filter_map(|(i, b)| Some((b.of?, i))).collect();
+        // Each device's box: a gang box holds each of its devices.
+        let mut box_of: HashMap<Handle, usize> = HashMap::new();
+        for (i, b) in net.boxes.iter().enumerate() {
+            for h in b.ganged.iter().copied().chain(b.of) {
+                box_of.entry(h).or_insert(i);
+            }
+        }
+        for (i, b) in net.boxes.iter().enumerate() {
+            if let Some(h) = b.of {
+                box_of.insert(h, i);
+            }
+        }
         let gear_by_panel =
             |panel: &str| -> Vec<usize> { net.gear.iter().enumerate().filter(|(_, g)| is_panel(&g.tag, panel)).map(|(i, _)| i).collect() };
         for ((panel, number), devs) in &circ_devs {
@@ -1467,19 +1699,21 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
             let sticks = circ_sticks.get(&(panel.clone(), number.clone())).cloned().unwrap_or_default();
             let cables = circ_cables.get(&(panel.clone(), number.clone())).copied().unwrap_or(0);
             let gears = gear_by_panel(panel);
-            let g = Graph::of(&net, &sticks, touch, &boxes_near);
+            let offsets = circ_offsets.get(&(panel.clone(), number.clone())).cloned().unwrap_or_default();
+            let g = Graph::of(net, &sticks, &offsets, touch, &boxes_near);
             // The panel's side: every end within the touch of its box.
             let mut sources: Vec<(usize, usize)> = Vec::new();
             for &(node, p, _) in &g.ends {
                 for &gi in &gears {
                     if let Some(ge) = net.gear.get(gi)
-                        && box_dist2(p, ge.lo, ge.hi) <= touch * touch
+                        && box_dist2(p, net.up(&ge.level, ge.lo), net.up(&ge.level, ge.hi)) <= touch * touch
                     {
                         sources.push((node, gi));
                     }
                 }
             }
             let dist = g.from(&sources);
+            let labels = if on.continuity.is_some() { g.labels() } else { Vec::new() };
             // Each device: its box's node, reached?
             let mut reach: Vec<(usize, Option<(f64, usize)>)> = Vec::new();
             for &di in devs {
@@ -1488,9 +1722,15 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 let Some(place) = in_scope(&dv.level, c) else { continue };
                 let bi = box_of.get(&dv.handle).copied();
                 let (blo, bhi) = bi.and_then(|i| net.boxes.get(i)).map_or((dv.lo, dv.hi), |b| (b.lo, b.hi));
-                let node = bi.and_then(|i| g.box_node.get(&i).copied());
+                let (blo, bhi) = (net.up(&dv.level, blo), net.up(&dv.level, bhi));
                 // The nearest end of its circuit to its box when none touches it.
                 let nearest = g.ends.iter().map(|(n, p, _)| (box_dist2(*p, blo, bhi).sqrt(), *n)).min_by(|a, b| a.0.total_cmp(&b.0));
+                // Its box's node; a device the build gave no box (a luminaire wired in its own
+                // compartment): the end that touches its body.
+                let node = match bi {
+                    Some(i) => g.box_node.get(&i).copied(),
+                    None => nearest.filter(|(d, _)| *d <= touch).map(|(_, n)| n),
+                };
                 let reached = node.and_then(|n| dist.get(n).copied().flatten());
                 reach.push((di, reached));
                 let Some(r) = on.continuity else { continue };
@@ -1501,7 +1741,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 );
                 let (verdict, issue, found, extra) = if sticks.is_empty() && cables > 0 {
                     // A cable run: followed by its pieces' links.
-                    let ok = linked_to_panel(&net, bi.map(|i| net.boxes.get(i).map_or(dv.handle, |b| b.handle)).unwrap_or(dv.handle), panel);
+                    let ok = linked_to_panel(net, bi.map(|i| net.boxes.get(i).map_or(dv.handle, |b| b.handle)).unwrap_or(dv.handle), panel);
                     if ok {
                         (
                             "pass",
@@ -1542,7 +1782,11 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                             .iter()
                             .filter(|(en, _, _)| comp.contains(en))
                             .flat_map(|(_, p, _)| {
-                                gears.iter().filter_map(|gi| net.gear.get(*gi)).map(move |ge| (box_dist2(*p, ge.lo, ge.hi).sqrt(), ge.tag.clone()))
+                                let net = &net;
+                                gears
+                                    .iter()
+                                    .filter_map(move |gi| net.gear.get(*gi))
+                                    .map(move |ge| (box_dist2(*p, net.up(&ge.level, ge.lo), net.up(&ge.level, ge.hi)).sqrt(), ge.tag.clone()))
                             })
                             .min_by(|a, b| a.0.total_cmp(&b.0))
                     });
@@ -1571,27 +1815,61 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                         json!({"from_panel_ft": r1(ft)}),
                     )
                 };
+                // What it was followed through: its box, and the raceway joined to it (to the
+                // panel on a pass; the piece cut off on a fail), else the end that stops short.
+                let key = format!("{}|{}", label, dv.handle.hex());
+                let mut cov: Vec<Handle> = Vec::new();
+                let mut seen: BTreeSet<Handle> = BTreeSet::new();
+                let mut add = |h: Handle, cov: &mut Vec<Handle>| {
+                    if seen.insert(h) {
+                        cov.push(h);
+                    }
+                };
+                if let Some(b) = bi.and_then(|i| net.boxes.get(i)) {
+                    add(b.handle, &mut cov);
+                }
+                let joined = node.or_else(|| nearest.map(|(_, n)| n));
+                if let Some(lab) = joined.and_then(|n| labels.get(n).copied()) {
+                    let whole = node.is_some();
+                    let mut runs: BTreeSet<&str> = BTreeSet::new();
+                    for &(en, _, si) in &g.ends {
+                        let same = if whole { labels.get(en) == Some(&lab) } else { Some(en) == joined };
+                        if let Some(st) = net.sticks.get(si).filter(|_| same) {
+                            add(st.handle, &mut cov);
+                            if whole && !st.run.is_empty() {
+                                runs.insert(st.run.as_str());
+                            }
+                        }
+                    }
+                    if whole {
+                        let mut bs: Vec<Handle> = g
+                            .box_node
+                            .iter()
+                            .filter(|(_, bn)| labels.get(**bn) == Some(&lab))
+                            .filter_map(|(b, _)| net.boxes.get(*b))
+                            .map(|b| b.handle)
+                            .collect();
+                        bs.sort_unstable();
+                        for h in bs {
+                            add(h, &mut cov);
+                        }
+                    }
+                    for run in runs {
+                        for h in run_pieces.get(run).into_iter().flatten() {
+                            add(*h, &mut cov);
+                        }
+                    }
+                }
+                if !cov.is_empty() {
+                    covers.insert(finding_id(CONTINUITY, &dv.level, &key, verdict), cov);
+                }
                 let mut m = measured_base;
                 if let (Some(o), Some(x)) = (m.as_object_mut(), extra.as_object()) {
                     for (k, v) in x {
                         o.insert(k.clone(), v.clone());
                     }
                 }
-                push(
-                    CONTINUITY,
-                    r,
-                    Some(dv.handle),
-                    &dv.kind,
-                    &format!("{}|{}", label, dv.handle.hex()),
-                    verdict,
-                    issue,
-                    expected,
-                    found,
-                    m,
-                    &dv.level,
-                    place,
-                    "prescreen",
-                );
+                push(CONTINUITY, r, Some(dv.handle), &dv.kind, &key, verdict, issue, expected, found, m, &dv.level, place, "prescreen");
             }
             // E-VDROP: each panel instance's farthest device.
             let Some(r) = on.vdrop else { continue };
@@ -1735,7 +2013,8 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
                 };
                 let cmil = rl.vdrop.cmil.get(&size).copied();
                 let (amps, load_from) = match load {
-                    Some(va) if v > 0.0 => (va / v, format!("{src}: {va:.0} VA")),
+                    // A three-phase load's current is its VA over √3 times its line voltage (Q6234).
+                    Some(va) if v > 0.0 => (va / (v * if poles >= 3 { 3f64.sqrt() } else { 1.0 }), format!("{src}: {va:.0} VA")),
                     _ => (
                         amps_brk * rl.vdrop.load_pct / 100.0,
                         format!("{}% of its {amps_brk} A breaker (rule; the schedule gives no load)", rl.vdrop.load_pct),
@@ -1806,7 +2085,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         let mut box_runs: HashMap<usize, BTreeSet<&str>> = HashMap::new();
         for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
             for p in [s.a, s.b] {
-                for bi in boxes_near.near(p, touch, &net) {
+                for bi in boxes_near.near(p, touch, net) {
                     box_runs.entry(bi).or_default().insert(s.run.as_str());
                 }
             }
@@ -1999,7 +2278,7 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
         let mut run_boxes: HashMap<&str, Vec<usize>> = HashMap::new();
         for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
             for p in [s.a, s.b] {
-                for bi in boxes_near.near(p, touch, &net) {
+                for bi in boxes_near.near(p, touch, net) {
                     let v = run_boxes.entry(s.run.as_str()).or_default();
                     if !v.contains(&bi) {
                         v.push(bi);
@@ -2343,7 +2622,217 @@ pub(crate) fn check(cx: &Ctx, on: On) -> Checked {
             );
         }
     }
+    cover(net, &mut got, &covers, |p| match p.at() {
+        Some(c) => in_scope(&p.level, c).is_some(),
+        None => true,
+    });
     out.findings = got;
+    out
+}
+
+/// What a Validate packet says of the raceway: each piece's facts and the runs.
+#[derive(Default)]
+pub(crate) struct PacketRaceways {
+    /// By piece: its run geometry (a stick's two ends and heights, what each end touches, the
+    /// wires pulled in it; a box's volume and what enters it; a wire's raceway; a fitting's or
+    /// cable's links).
+    pub facts: HashMap<Handle, Value>,
+    /// The raceway runs the pieces are part of: circuit, raceway, sticks, conductors.
+    pub runs: Vec<Value>,
+}
+
+/// Wires a stick or run lists, at most.
+const MAX_LISTED: usize = 64;
+
+/// The raceway facts of the pieces `own` (a packet's own elements), from the model's pieces:
+/// ends in building feet on the level's plan with their heights above its floor (inches), what
+/// each end touches within `touch_in` (boxes, the next stick or fitting), the stored links, the
+/// wires of each stick's run, each box's volume (cubic inches) and the sticks entering it.
+pub(crate) fn packet_raceways(net: &Net, sp: &BuildingSpec, frame: &Frame, own: &BTreeSet<Handle>, touch_in: f64) -> PacketRaceways {
+    let mut out = PacketRaceways::default();
+    if own.is_empty() {
+        return out;
+    }
+    let upf = net.upf;
+    let tol = (touch_in.max(0.0) / 12.0 * upf).max(1e-6);
+    let floor = |level: &str| sp.level(level).map_or(0.0, |l| l.elevation_ft) * upf;
+    let at = |level: &str, p: Vec3| -> (Value, f64) {
+        let ft = frame.to_ft_on(level, Vec2::new(p.x, p.y));
+        (pt([r2(ft[0]), r2(ft[1])]), r2((p.z - floor(level)) / upf * 12.0))
+    };
+    let hex = |hs: &[Handle]| -> Vec<String> { hs.iter().take(MAX_LINKS).map(|h| h.hex()).collect() };
+    // The levels the packet's pieces are on: only their pieces are joined.
+    let levels: BTreeSet<String> = net.pieces.iter().filter(|p| own.contains(&p.handle)).map(|p| p.level.to_ascii_lowercase()).collect();
+    let on_level = |l: &str| levels.contains(&l.to_ascii_lowercase());
+    // Every stick and offset end of those levels on a grid (where the stacked building has them).
+    let cell = (tol * 4.0).max(1e-6);
+    let key = |p: Vec3| (cell_of(p.x, cell), cell_of(p.y, cell), cell_of(p.z, cell));
+    let mut ends: HashMap<(i64, i64, i64), Vec<(Handle, Vec3)>> = HashMap::new();
+    let mut put = |h: Handle, level: &str, p: Vec3| ends.entry(key(net.up(level, p))).or_default().push((h, net.up(level, p)));
+    for s in net.sticks.iter().filter(|s| on_level(&s.level)) {
+        put(s.handle, &s.level, s.a);
+        put(s.handle, &s.level, s.b);
+    }
+    for o in net.offsets.iter().filter(|o| on_level(&o.level)) {
+        put(o.handle, &o.level, o.a);
+        put(o.handle, &o.level, o.b);
+    }
+    let near_ends = |level: &str, p: Vec3, me: Handle| -> Vec<Handle> {
+        let q = net.up(level, p);
+        let (kx, ky, kz) = key(q);
+        let mut hs: Vec<Handle> = Vec::new();
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    for (h, e) in ends.get(&(kx.saturating_add(dx), ky.saturating_add(dy), kz.saturating_add(dz))).into_iter().flatten() {
+                        if *h != me && (*e - q).len() <= tol && !hs.contains(h) {
+                            hs.push(*h);
+                        }
+                    }
+                }
+            }
+        }
+        hs.sort_unstable();
+        hs
+    };
+    let boxes_near = BoxGrid::of(net);
+    let box_touches = |p: Vec3| -> Vec<Handle> {
+        let mut hs: Vec<Handle> = boxes_near.near(p, tol, net).into_iter().filter_map(|i| net.boxes.get(i)).map(|b| b.handle).collect();
+        hs.sort_unstable();
+        hs
+    };
+    // The sticks entering each box (an end within the touch), every stick of those levels.
+    let mut entering: HashMap<Handle, Vec<Handle>> = HashMap::new();
+    for s in net.sticks.iter().filter(|s| on_level(&s.level)) {
+        for p in [s.a, s.b] {
+            for b in box_touches(p) {
+                let v = entering.entry(b).or_default();
+                if !v.contains(&s.handle) && v.len() < MAX_LINKS {
+                    v.push(s.handle);
+                }
+            }
+        }
+    }
+    let mut run_wires: HashMap<&str, Vec<&Wire>> = HashMap::new();
+    for w in net.wires.iter().filter(|w| !w.run.is_empty()) {
+        run_wires.entry(w.run.as_str()).or_default().push(w);
+    }
+    let mut run_sticks: HashMap<&str, Vec<&Stick>> = HashMap::new();
+    for s in net.sticks.iter().filter(|s| !s.run.is_empty()) {
+        run_sticks.entry(s.run.as_str()).or_default().push(s);
+    }
+    let wire_json = |w: &Wire| json!({"handle": w.handle.hex(), "size": format!("#{}", w.size), "role": w.role});
+    let makeup = |ws: &[&Wire]| {
+        let mut by: BTreeMap<(bool, String), u32> = BTreeMap::new();
+        for w in ws {
+            *by.entry((w.ground(), w.size.clone())).or_default() += 1;
+        }
+        by.iter().map(|((g, s), n)| format!("{n}#{s}{}", if *g { "G" } else { "" })).collect::<Vec<_>>().join(" + ")
+    };
+    let links = |h: Handle| -> Vec<String> { net.links.get(&h).map(|v| hex(v)).unwrap_or_default() };
+    for s in net.sticks.iter().filter(|s| own.contains(&s.handle)) {
+        let (a, za) = at(&s.level, s.a);
+        let (b, zb) = at(&s.level, s.b);
+        let ws: &[&Wire] = run_wires.get(s.run.as_str()).map_or(&[], Vec::as_slice);
+        let touch = |p: Vec3| {
+            let mut hs = box_touches(p);
+            hs.extend(near_ends(&s.level, p, s.handle));
+            hex(&hs)
+        };
+        out.facts.insert(
+            s.handle,
+            json!({
+                "piece": "stick", "run": s.run, "circuit": s.circuit, "panel": s.panel, "raceway": format!("{} {}", s.size, s.ty).trim(),
+                "ends_ft": [a, b], "ends_aff_in": [za, zb], "length_ft": r2(path_len(&s.path) / upf), "vertical": s.vertical,
+                "touches": {"a": touch(s.a), "b": touch(s.b)},
+                "links": links(s.handle),
+                "wires": ws.iter().take(MAX_LISTED).map(|w| wire_json(w)).collect::<Vec<_>>(),
+                "conductors": makeup(ws),
+            }),
+        );
+    }
+    for o in net.offsets.iter().filter(|o| own.contains(&o.handle)) {
+        let (a, za) = at(&o.level, o.a);
+        let (b, zb) = at(&o.level, o.b);
+        let touch = |p: Vec3| {
+            let mut hs = box_touches(p);
+            hs.extend(near_ends(&o.level, p, o.handle));
+            hex(&hs)
+        };
+        out.facts.insert(
+            o.handle,
+            json!({"piece": "offset", "circuit": o.circuit, "ends_ft": [a, b], "ends_aff_in": [za, zb], "touches": {"a": touch(o.a), "b": touch(o.b)}, "links": links(o.handle)}),
+        );
+    }
+    for b in net.boxes.iter().filter(|b| own.contains(&b.handle)) {
+        let (lo, zlo) = at(&b.level, b.lo);
+        let (hi, zhi) = at(&b.level, b.hi);
+        let mut ent = entering.get(&b.handle).cloned().unwrap_or_default();
+        ent.sort_unstable();
+        out.facts.insert(
+            b.handle,
+            json!({
+                "piece": "box", "size": b.size, "cubic_in": b.cubic_in.map(r2), "box_of": b.of.map(|h| h.hex()),
+                "devices": hex(&b.ganged), "plan_ft": [lo, hi], "aff_in": [zlo, zhi],
+                "entering": hex(&ent), "links": hex(&b.links),
+            }),
+        );
+    }
+    for w in net.wires.iter().filter(|w| own.contains(&w.handle)) {
+        let raceway: Vec<String> = run_sticks.get(w.run.as_str()).into_iter().flatten().take(MAX_LISTED).map(|s| s.handle.hex()).collect();
+        out.facts.insert(
+            w.handle,
+            json!({"piece": "wire", "run": w.run, "circuit": w.circuit, "size": format!("#{}", w.size), "role": w.role, "in_raceway": raceway}),
+        );
+    }
+    for c in net.cables.iter().filter(|c| own.contains(&c.handle)) {
+        out.facts.insert(c.handle, json!({"piece": "cable", "run": c.run, "circuit": c.circuit, "type": c.ty, "links": hex(&c.links)}));
+    }
+    // The fittings (couplings, connectors…): the stick ends inside them, their links.
+    let rest: Vec<&Piece> = net.pieces.iter().filter(|p| own.contains(&p.handle) && !out.facts.contains_key(&p.handle)).collect();
+    for p in rest {
+        let mut touch: Vec<Handle> = Vec::new();
+        if let Some((lo, hi)) = p.lo_hi {
+            let (lo3, hi3) = (net.up(&p.level, lo), net.up(&p.level, hi));
+            let c = (lo3 + hi3) * 0.5;
+            let reach = ((hi3 - lo3).len() * 0.5 + tol).max(tol);
+            let span = (reach / cell).ceil().clamp(1.0, 8.0) as i64;
+            let (kx, ky, kz) = key(c);
+            for dx in -span..=span {
+                for dy in -span..=span {
+                    for dz in -span..=span {
+                        for (h, e) in ends.get(&(kx.saturating_add(dx), ky.saturating_add(dy), kz.saturating_add(dz))).into_iter().flatten() {
+                            if box_dist2(*e, lo3, hi3) <= tol * tol && !touch.contains(h) && touch.len() < MAX_LINKS {
+                                touch.push(*h);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        touch.sort_unstable();
+        out.facts.insert(p.handle, json!({"piece": p.atom, "run": p.run, "circuit": p.circuit, "touches": hex(&touch), "links": links(p.handle)}));
+    }
+    // The runs of the packet's pieces, whole.
+    let runs: BTreeSet<&str> = net.pieces.iter().filter(|p| own.contains(&p.handle) && !p.run.is_empty()).map(|p| p.run.as_str()).collect();
+    for run in runs.into_iter().take(MAX_PIECES) {
+        let sticks: &[&Stick] = run_sticks.get(run).map_or(&[], Vec::as_slice);
+        let ws: &[&Wire] = run_wires.get(run).map_or(&[], Vec::as_slice);
+        let lead = sticks.first();
+        let here: Vec<String> =
+            net.pieces.iter().filter(|p| p.run == run && own.contains(&p.handle)).take(MAX_COVER).map(|p| p.handle.hex()).collect();
+        out.runs.push(json!({
+            "run": run,
+            "circuit": lead.map(|s| s.circuit.clone()),
+            "panel": lead.map(|s| s.panel.clone()),
+            "raceway": lead.map(|s| format!("{} {}", s.size, s.ty).trim().to_string()),
+            "sticks": sticks.len(),
+            "length_ft": r2(sticks.iter().map(|s| path_len(&s.path)).sum::<f64>() / upf),
+            "conductors": makeup(ws),
+            "wires": ws.iter().take(MAX_LISTED).map(|w| wire_json(w)).collect::<Vec<_>>(),
+            "pieces_here": here,
+        }));
+    }
     out
 }
 

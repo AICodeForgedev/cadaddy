@@ -556,14 +556,14 @@ pub(crate) fn protection_of(codes: &[String], legend: &BTreeMap<String, String>)
     let mut af = false;
     for code in codes {
         let meaning = legend.get(code).map(String::as_str).unwrap_or_default();
-        if matches!(code.as_str(), "GF" | "GFI" | "GFCI" | "GFP" | "GFEP" | "DF" | "DFCI")
+        if cadaddy_mepfix::wordrules::words("breakers.ground_fault_codes").contains(&code.as_str())
             || meaning.contains("GROUND FAULT")
             || meaning.contains("GFCI")
             || meaning.contains("DUAL")
         {
             gf = true;
         }
-        if matches!(code.as_str(), "AF" | "AFCI" | "AFI" | "DF" | "DFCI")
+        if cadaddy_mepfix::wordrules::words("breakers.arc_fault_codes").contains(&code.as_str())
             || meaning.contains("ARC FAULT")
             || meaning.contains("AFCI")
             || meaning.contains("DUAL")

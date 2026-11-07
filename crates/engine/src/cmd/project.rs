@@ -162,7 +162,7 @@ pub(super) fn timestamp() -> String {
 }
 
 /// Seconds since 1970 as an ISO 8601 UTC time (days from civil, proleptic Gregorian).
-fn iso8601(secs: u64) -> String {
+pub(super) fn iso8601(secs: u64) -> String {
     let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
     let z = days + 719_468;
     let era = z.div_euclid(146_097);

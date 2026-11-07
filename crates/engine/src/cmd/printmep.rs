@@ -402,25 +402,13 @@ fn path_ft(points: &[[f64; 2]], upf: f64) -> f64 {
     total / upf
 }
 
-/// Words of a title that make a sheet or view a reference one (not a plan to read runs off).
-const REFERENCE_WORDS: &[(&str, &str)] = &[
-    ("SCHEDULE", "schedule"),
-    ("DETAIL", "detail"),
-    ("LEGEND", "legend"),
-    ("DIAGRAM", "diagram"),
-    ("RISER", "riser"),
-    ("SECTION", "section"),
-    ("ELEVATION", "elevation"),
-    ("NOTES", "notes"),
-];
-
 /// What kind of reference sheet `title` names (`detail`), none for a plan's title.
 fn reference_title(title: &str) -> Option<&'static str> {
     let up = title.to_ascii_uppercase();
     if up.contains("PLAN") {
         return None;
     }
-    REFERENCE_WORDS.iter().find(|(w, _)| up.contains(w)).map(|(_, k)| *k)
+    cadaddy_mepfix::wordrules::pairs("sheets.reference_words").iter().find(|(w, _)| up.contains(w)).map(|(_, k)| *k)
 }
 
 /// Whether the cut-out sheet `sub` is a details/schedules/diagrams sheet by its own titles: its
@@ -458,7 +446,7 @@ fn untagged_system(sub: &Drawing) -> Option<&'static str> {
         .iter()
         .filter(|t| {
             let up = t.to_ascii_uppercase();
-            ["SANITARY", "WASTE", "SOIL", "DRAINAGE", "DWV", "STORM", "GAS", "VENT", "WATER", "DOMESTIC"].iter().any(|w| up.contains(w))
+            cadaddy_mepfix::wordrules::words("pipes.plan_title_system_words").iter().any(|w| up.contains(w))
         })
         .map(|t| super::mep::plan_system(t))
         .collect();
@@ -1033,6 +1021,8 @@ mod tests {
             top_ft: None,
             source_sheet: sheet.into(),
             slope_in_per_ft: 0.0,
+            made: Default::default(),
+            basis: String::new(),
         }
     }
 

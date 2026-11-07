@@ -62,6 +62,12 @@ const KNOWN: &[&str] = &[
     // Read side proven against tables another program wrote (tests/records.rs
     // a_draw_order_table_written_by_another_program_decodes); its encoder stays on the stash path.
     "SORTENTSTABLE",
+    // Clip boundaries of xrefs and blocks (XCLIP) and the files underlays point at (spec §20.4.99
+    // onward; the layouts are proven against an independent reader in tests/records.rs).
+    "SPATIAL_FILTER",
+    "PDFDEFINITION",
+    "DWFDEFINITION",
+    "DGNDEFINITION",
     // Not here (stashed, `ek::object` returns None): TABLESTYLE, MATERIAL, VISUALSTYLE and FIELD,
     // until each is proven against an independent reader both ways.
 ];
@@ -181,6 +187,16 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
             g.i(281, i64::from(units));
         }
         "MLEADERSTYLE" => mleaderstyle(&mut o, &mut g)?,
+        "SPATIAL_FILTER" => spatial_filter(&mut o, &mut g)?,
+        "PDFDEFINITION" | "DWFDEFINITION" | "DGNDEFINITION" => {
+            // The file the underlay shows and the page, sheet or model in it (spec: two variable
+            // texts after the common object data).
+            let path = o.text()?;
+            let page = o.text()?;
+            g.s(100, "AcDbUnderlayDefinition");
+            g.s(1, path);
+            g.s(2, page);
+        }
         "IMAGEDEF_REACTOR" => {
             let version = o.d.bl()?;
             g.s(100, "AcDbRasterImageDefReactor");
@@ -196,6 +212,49 @@ pub fn decode(raw: &RawObject, v: Version, classes: &Classes, names: &Names) -> 
     }
     groups.extend(super::eed_groups(&c.eed, names, v >= Version::R2007));
     Ok(Some(Record { name, handle, owner: c.owner, groups, block }))
+}
+
+/// SPATIAL_FILTER (the clip boundary of an XCLIP): the boundary polygon in the clip plane, the
+/// plane's normal and origin, the display and front/back clip switches with their distances, and
+/// the two 4x3 transforms (twelve doubles each, group 40 like the distances).
+fn spatial_filter(o: &mut Obj, g: &mut G) -> Result<()> {
+    let n = count(i32::from(o.d.bs()?), "clip boundary points")?;
+    let mut points = Vec::new();
+    for _ in 0..n {
+        points.push(o.d.rd2()?);
+    }
+    let normal = o.d.bd3()?;
+    let origin = o.d.bd3()?;
+    let display = o.d.bs()?;
+    let front = o.d.bs()?;
+    let front_dist = if front != 0 { Some(o.d.bd()?) } else { None };
+    let back = o.d.bs()?;
+    let back_dist = if back != 0 { Some(o.d.bd()?) } else { None };
+    let mut matrices = [0.0; 24];
+    for m in &mut matrices {
+        *m = o.d.bd()?;
+    }
+    g.s(100, "AcDbFilter");
+    g.s(100, "AcDbSpatialFilter");
+    g.i(70, n as i64);
+    for p in points {
+        g.p2(10, p);
+    }
+    g.p(210, normal);
+    g.p(11, origin);
+    g.i(71, i64::from(display));
+    g.i(72, i64::from(front));
+    if let Some(d) = front_dist {
+        g.f(40, d);
+    }
+    g.i(73, i64::from(back));
+    if let Some(d) = back_dist {
+        g.f(41, d);
+    }
+    for m in matrices {
+        g.f(40, m);
+    }
+    Ok(())
 }
 
 /// The common table data after the object's: name, flags (64 referenced, 16 xref-dependent);
@@ -464,18 +523,125 @@ fn block_record(o: &mut Obj, g: &mut G) -> Result<BlockInfo> {
 
 /// Every table record and object of a file decoded, and those that couldn't be, with why.
 pub fn decode_all(dwg: &crate::Dwg) -> Result<(Vec<Record>, Vec<(u64, String)>)> {
+    decode_records(dwg, false)
+}
+
+/// [`decode_all`], but an object this module doesn't decode (a custom class, a proxy, dynamic block
+/// data, SUN, FIELDLIST, a type not read yet; or damaged data) is kept raw ([`raw_record`]) in
+/// its place, so nothing is left out: `failed` then holds only objects that couldn't be kept
+/// either (a class the file doesn't list). The second list is the kept objects' handles and
+/// DXF names, with why when the data was damaged.
+pub fn decode_all_keeping(dwg: &crate::Dwg) -> Result<(Vec<Record>, Vec<(u64, String)>, Vec<(u64, String)>)> {
+    let (recs, failed, kept) = decode_records_keeping(dwg, true)?;
+    Ok((recs, failed, kept))
+}
+
+fn decode_records(dwg: &crate::Dwg, keep_raw: bool) -> Result<(Vec<Record>, Vec<(u64, String)>)> {
+    let (recs, failed, _) = decode_records_keeping(dwg, keep_raw)?;
+    Ok((recs, failed))
+}
+
+type Listed = Vec<(u64, String)>;
+
+fn decode_records_keeping(dwg: &crate::Dwg, keep_raw: bool) -> Result<(Vec<Record>, Listed, Listed)> {
     let classes = dwg.classes()?;
     let names = Names::read(dwg, &classes);
     let mut out = Vec::new();
     let mut failed = Vec::new();
+    let mut kept = Vec::new();
     for raw in &dwg.objects {
-        match decode(raw, dwg.version, &classes, &names) {
-            Ok(Some(r)) => out.push(r),
-            Ok(None) => {}
-            Err(e) => failed.push((raw.handle, e.to_string())),
+        let why = match decode(raw, dwg.version, &classes, &names) {
+            Ok(Some(r)) => {
+                out.push(r);
+                continue;
+            }
+            Ok(None) => String::new(),
+            Err(e) => e.to_string(),
+        };
+        if !keep_raw {
+            if !why.is_empty() {
+                failed.push((raw.handle, why));
+            }
+            continue;
+        }
+        let Some(name) = object_name(raw.type_code, &classes) else {
+            // Not an object (an entity, or a table's control object), or a class the file
+            // doesn't list: the first are decoded elsewhere, the second can't be named.
+            if why.is_empty() && raw.type_code >= 500 && classes.get(raw.type_code).is_none() {
+                failed.push((raw.handle, format!("class {}: not in the file's class list", raw.type_code)));
+            } else if !why.is_empty() {
+                failed.push((raw.handle, why));
+            }
+            continue;
+        };
+        match raw_record(raw, dwg.version, &names, &name) {
+            Some(r) => {
+                kept.push((r.handle, if why.is_empty() { name } else { format!("{name}: {why}") }));
+                out.push(r);
+            }
+            None => failed.push((raw.handle, format!("{name}: {}", if why.is_empty() { "too large to keep".to_string() } else { why }))),
         }
     }
-    Ok((out, failed))
+    Ok((out, failed, kept))
+}
+
+/// The DXF name of an object that is neither an entity nor a table's control object: a class the
+/// file lists as an object class, or a fixed object type this module doesn't decode.
+fn object_name(t: u16, classes: &Classes) -> Option<String> {
+    match t {
+        t if t >= 500 => classes.get(t).filter(|c| c.item_class_id == 0x1F3).map(|c| c.dxf_name.to_string_lossy()),
+        // The fixed object types this module has no decoder for. (The others are table controls,
+        // rebuilt from their records, entities, and records decoded above: a damaged one of
+        // those is a failure, listed as such.)
+        71 => Some("VP_ENT_HDR".into()),
+        75 => Some("DUMMY".into()),
+        76 => Some("LONG_TRANSACTION".into()),
+        81 => Some("VBA_PROJECT".into()),
+        _ => None,
+    }
+}
+
+/// An object that isn't decoded kept as it was stored: its handle, extension dictionary and owner
+/// where its common data can be read, then `100 AcDbCadaddyRawDwg`, the object type (70), the
+/// file's DWG version (1), the data's length (90) and the object's data (310, in chunks of 127
+/// bytes: everything between its size and its CRC, with its data, string and handle streams).
+/// `None` when the data is too large to keep.
+pub fn raw_record(raw: &RawObject, v: Version, names: &Names, name: &str) -> Option<Record> {
+    if raw.data.len() > super::MAX_RAW {
+        return None;
+    }
+    let mut groups = Vec::new();
+    let mut owner = None;
+    let mut xdata = Vec::new();
+    {
+        let mut g = G(&mut groups);
+        match Obj::open(raw, v).and_then(|mut o| object_common(&mut o).map(|c| (o.handle, c))) {
+            Ok((handle, c)) => {
+                g.h(5, handle);
+                if let Some(r) = c.xdict {
+                    g.s(102, "{ACAD_XDICTIONARY");
+                    g.h(360, r);
+                    g.s(102, "}");
+                }
+                if let Some(h) = c.owner {
+                    g.h(330, h);
+                }
+                owner = c.owner;
+                xdata = super::eed_groups(&c.eed, names, v >= Version::R2007);
+            }
+            Err(_) => g.h(5, raw.handle),
+        }
+    }
+    let mut g = G(&mut groups);
+    g.s(100, super::RAW_SUBCLASS);
+    g.i(70, i64::from(raw.type_code));
+    g.s(1, v.id());
+    g.i(90, i64::try_from(raw.data.len()).unwrap_or(i64::MAX));
+    for chunk in raw.data.chunks(127) {
+        g.0.push(Group { code: 310, value: Value::Str(chunk.iter().map(|b| format!("{b:02X}")).collect()) });
+    }
+    groups.extend(xdata);
+    Some(Record { name: name.to_string(), handle: raw.handle, owner, groups, block: None })
 }
 
 /// A colour (CMC) as a DXF colour number: from R2004 the raw value's method byte decides

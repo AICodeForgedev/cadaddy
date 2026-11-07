@@ -92,11 +92,23 @@ fn control_dims(mark: &str, item: &str) -> Option<bool> {
     if item.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "dimmer" || w == "dimmers") {
         return Some(true);
     }
+    if switch_mark_dims(&mark.trim().to_ascii_uppercase()) {
+        return Some(true);
+    }
     match mark.trim().to_ascii_uppercase().as_str() {
         "SD" | "DS" => Some(true),
         "S" | "S2" | "S3" | "S4" | "SP" | "SM" | "SH" | "SK" | "SOR" | "SWT" => Some(false),
         _ => None,
     }
+}
+
+/// Whether a switch's mark makes it a dimmer: `S`, its kind of switching (a digit: `S3D` a 3-way
+/// dimmer), then a `D` among its letters (`SD`, `S3D`, `S4DK`); upper case.
+pub(crate) fn switch_mark_dims(mark: &str) -> bool {
+    mark.strip_prefix('S').is_some_and(|rest| {
+        let letters = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+        letters.len() <= 3 && letters.contains('D') && letters.chars().all(|c| c.is_ascii_uppercase())
+    })
 }
 
 /// A switch leg's 0-10V fixtures and the control pair they need.
@@ -505,6 +517,18 @@ mod tests {
     use cadaddy_doc::props::{Prop, Props, Source, SourceKind};
     use cadaddy_doc::{Common, EntityKind, Handle, Space};
     use cadaddy_geom::Vec2;
+
+    #[test]
+    fn a_3_way_dimmers_mark_dims_and_a_plain_3_way_does_not() {
+        for m in ["SD", "S3D", "S4D", "S2D", "S3DK"] {
+            assert!(switch_mark_dims(m), "{m}");
+            assert_eq!(control_dims(m, ""), Some(true), "{m}");
+        }
+        for m in ["S", "S3", "S4", "SWT", "SOR", "SK", "OS", "D3", "S3d", ""] {
+            assert!(!switch_mark_dims(m), "{m}");
+        }
+        assert_eq!(control_dims("S3", ""), Some(false));
+    }
 
     /// A fixture element as the build and `bim.submittals` leave it.
     fn fixture(s: &mut Session, mark: &str, circuit: &str, leg: &str, dimming: Option<&str>, at: f64) {

@@ -499,52 +499,9 @@ fn intent(ws: &[String]) -> Intent {
 /// The element kinds a text names, in the order it names them: `receptacle` → a device, `duct`
 /// → a duct run… (`segment:duct` narrows segments to ducts).
 fn named_kinds(ws: &[String]) -> Vec<&'static str> {
-    const NAMES: &[(&str, &str)] = &[
-        ("receptacle", "elec_device"),
-        ("receptacles", "elec_device"),
-        ("outlet", "elec_device"),
-        ("switch", "elec_device"),
-        ("switches", "elec_device"),
-        ("device", "elec_device"),
-        ("light", "elec_device"),
-        ("luminaire", "elec_device"),
-        ("jbox", "elec_device"),
-        ("junction", "elec_device"),
-        ("disconnect", "elec_device"),
-        ("duct", "segment:duct"),
-        ("ductwork", "segment:duct"),
-        ("pipe", "segment:pipe"),
-        ("piping", "segment:pipe"),
-        ("conduit", "elec_conduit"),
-        ("raceway", "elec_conduit"),
-        ("diffuser", "terminal"),
-        ("grille", "terminal"),
-        ("register", "terminal"),
-        ("louver", "terminal"),
-        ("sprinkler", "terminal"),
-        ("head", "terminal"),
-        ("ahu", "equipment"),
-        ("vav", "equipment"),
-        ("fan", "equipment"),
-        ("pump", "equipment"),
-        ("heater", "equipment"),
-        ("unit", "equipment"),
-        ("equipment", "equipment"),
-        ("lavatory", "fixture"),
-        ("lav", "fixture"),
-        ("sink", "fixture"),
-        ("toilet", "fixture"),
-        ("wc", "fixture"),
-        ("urinal", "fixture"),
-        ("shower", "fixture"),
-        ("drain", "fixture"),
-        ("wall", "wall"),
-        ("partition", "wall"),
-        ("stud", "wall"),
-    ];
     let mut out = Vec::new();
     for w in ws {
-        if let Some((_, k)) = NAMES.iter().find(|(n, _)| n == w)
+        if let Some((_, k)) = crate::wordrules::pairs("asbuilt.kind_words").iter().find(|(n, _)| n == w)
             && !out.contains(k)
         {
             out.push(*k);

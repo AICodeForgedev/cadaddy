@@ -45,12 +45,21 @@ struct Need {
 
 const RULES: &str = include_str!("plumbing.json");
 
+/// The drainage systems of the rules data (`SAN`, `ST`): a vent's stack vent is a riser of one.
+pub(crate) fn drainage_systems() -> Vec<String> {
+    rules().drainage_systems
+}
+
 fn rules() -> Rules {
     serde_json::from_str(RULES).unwrap_or_default()
 }
 
 /// Most runs and elements looked at.
 const MAX_ITEMS: usize = 500_000;
+
+/// What the lowest floor's drainage stack says of its length below the slab: the underground
+/// plan's stack base carries it to the building drain.
+pub(crate) const STACK_GOES_BELOW: &str = "on below the slab to the building drain: the underground plan's stack base";
 
 /// The drainage fall IPC 704.1 sets for a pipe of `size_in`, and its source.
 fn slope_for(r: &Rules, size_in: f64) -> Option<(f64, &str)> {
@@ -107,8 +116,9 @@ fn anchor(l: &Level) -> Option<Vec2> {
 
 /// The stacks as the building has them: a riser of one system at the same place (within the rules
 /// data's `stack_join_ft`, on each storey's plan) on storeys one above the other is one riser from
-/// the lowest of them to the top of the highest; the lowest storey's waste stack starts under its
-/// slab, at the drain it empties into. How many stacks, and how many risers they replaced.
+/// the lowest of them to the top of the highest; the lowest storey's waste stack stands on its
+/// floor, and the underground plan carries it on to the drain it empties into
+/// ([`STACK_GOES_BELOW`]). How many stacks, and how many risers they replaced.
 pub(crate) fn continuous_risers(sp: &mut BuildingSpec) -> Value {
     let r = rules();
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
@@ -183,12 +193,19 @@ pub(crate) fn continuous_risers(sp: &mut BuildingSpec) -> Value {
             run.top_ft = Some(e1 - e0 + top_rel);
             run.height_source = format!("stack from {} through {top_name}", run.level);
         }
+        // The lowest floor's drainage stack goes on below its slab into the building drain. That
+        // length is the underground work's (`ugplan::stack_bases`: from the drain's invert the
+        // plans give there, else the rule's, up to the floor), so the stack stands on the floor
+        // and says where it goes on: carried down here too, the underground plan would see a
+        // stack already below the floor, and connect none (or the length would count twice).
         if *li == 0 && drains.contains(&run.system.as_str()) && invert_ft > 0.0 {
-            if let Some(b) = run.bottoms_ft.first_mut() {
-                *b = -invert_ft;
+            if let Some(b) = run.bottoms_ft.first_mut()
+                && *b > 0.0
+            {
+                *b = 0.0;
             }
-            if !run.height_source.contains("below slab") {
-                run.height_source = format!("{} (from below slab: {})", run.height_source, r.below_slab_why);
+            if !run.height_source.contains(STACK_GOES_BELOW) {
+                run.height_source = format!("{} ({STACK_GOES_BELOW})", run.height_source);
             }
         }
     }
@@ -225,6 +242,22 @@ pub(crate) fn fixture_lines(words: &str) -> (Vec<String>, f64) {
     (needs(&r, words).to_vec(), r.connect_reach_ft)
 }
 
+/// The storeys above `level` a riser from `z0` to `z1` (drawing units) passes through (more than
+/// a foot into each), and how far each one's plan is from `level`'s (their anchors).
+fn storeys_passed(sp: &BuildingSpec, level: &str, z0: f64, z1: f64) -> Vec<(String, Vec2)> {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let all = storeys(sp);
+    let Some(own) = all.iter().find(|l| l.name == level).and_then(|l| anchor(l)) else { return Vec::new() };
+    all.iter()
+        .filter(|l| l.name != level && z1.is_finite() && z0.is_finite())
+        .filter(|l| {
+            let (lo, hi) = (l.elevation_ft * upf, (l.elevation_ft + l.height_ft) * upf);
+            z0.max(lo) + upf < z1.min(hi)
+        })
+        .filter_map(|l| Some((l.name.clone(), anchor(l)? - own)))
+        .collect()
+}
+
 fn bounds_dist(b: &Bounds2, p: Vec2) -> f64 {
     let dx = (b.min.x - p.x).max(0.0).max(p.x - b.max.x);
     let dy = (b.min.y - p.y).max(0.0).max(p.y - b.max.y);
@@ -249,16 +282,29 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             && super::bimlook::made_tag(e, "kind") == Some("pipe")
         {
             let Some(level) = super::bspec::made_level(e) else { continue };
-            let Some((b, ..)) = super::propfill::extent(d, e) else { continue };
+            let Some((b, z0, z1)) = super::propfill::extent(d, e) else { continue };
             let riser = super::bimlook::made_tag(e, "part").is_some_and(|p| p.contains("riser")) || {
                 let w = b.max - b.min;
                 w.x.max(w.y) <= 1.5 * upf
             };
-            let provenance = match super::bimlook::made_tag(e, "status") {
-                Some(v) if v.eq_ignore_ascii_case(super::waterfill::DERIVED) => super::waterfill::DERIVED,
-                Some(v) if v.eq_ignore_ascii_case(super::waterfill::INFERRED) => super::waterfill::INFERRED,
-                _ => super::waterfill::DRAWN,
-            };
+            let provenance = super::provenance::of_element(e).map_or(super::waterfill::DRAWN, |(m, _)| m.as_str());
+            // On its storey's plan (as the model was before its levels were stacked).
+            let off = super::bspec::stacked_by(e);
+            let b = Bounds2 { min: b.min - off, max: b.max - off };
+            // A stack is one riser from the lowest storey it serves (`continuous_risers`): it is on
+            // each storey it passes through, at its place on that storey's plan.
+            if riser {
+                for (name, at) in storeys_passed(sp, &level, z0, z1) {
+                    pipes.push(PipeEl {
+                        handle: e.handle,
+                        system: sys.to_string(),
+                        level: name,
+                        b: Bounds2 { min: b.min + at, max: b.max + at },
+                        riser,
+                        provenance,
+                    });
+                }
+            }
             pipes.push(PipeEl { handle: e.handle, system: sys.to_string(), level, b, riser, provenance });
             continue;
         }
@@ -268,6 +314,8 @@ pub(crate) fn connect(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         }
         let Some(level) = super::bspec::made_level(e) else { continue };
         let Some((b, ..)) = super::propfill::extent(d, e) else { continue };
+        let off = super::bspec::stacked_by(e);
+        let b = Bounds2 { min: b.min - off, max: b.max - off };
         let words = ["fixture", "type", "device_type", "type_mark"].iter().filter_map(|k| ps.get(k).map(Prop::text)).collect::<Vec<_>>().join(" ");
         fixtures.push((e.handle, level, b.center(), words));
     }
@@ -468,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn a_stack_on_three_floors_is_one_riser_from_under_the_slab() {
+    fn a_stack_on_three_floors_is_one_riser_from_the_lowest_floor() {
         let mut sp = spec();
         // The same stack on each floor's plan (an inch off on Level 3), and a vent on Level 2 only.
         sp.mep.runs = vec![
@@ -495,9 +543,48 @@ mod tests {
         assert_eq!(san.len(), 2);
         assert_eq!(san[0].level, "Level 1");
         assert_eq!(san[0].top_ft, Some(30.0));
-        assert_eq!(san[0].bottoms_ft[0], -1.5);
+        // It stands on the floor: its length under the slab is the underground plan's stack base.
+        assert_eq!(san[0].bottoms_ft[0], 0.0);
+        assert!(san[0].height_source.contains(STACK_GOES_BELOW), "{}", san[0].height_source);
         assert_eq!(sp.mep.runs.iter().filter(|r| r.system == "V").count(), 1);
         assert_eq!(sp.mep.runs.iter().filter(|r| r.system == "EC" && r.top_ft == Some(10.0)).count(), 2);
+    }
+
+    #[test]
+    fn the_plumbing_rebuild_keeps_every_systems_drawn_runs() {
+        // Drawn runs of every piping system on each floor, and the underground plan's, with one
+        // stack on two floors. Drainage and the stacks through the floors change heights and join
+        // the stack's risers; no system's runs go.
+        let mut sp = spec();
+        let systems = ["FP", "G", "HWR", "CW", "HW", "SAN", "V", "ST", "P-UG-SAN", "P-UG-V", "E-BRANCH"];
+        for (i, level) in ["Level 1", "Level 2"].iter().enumerate() {
+            let x = 10_000.0 * i as f64 + 100.0;
+            for (k, sys) in systems.iter().enumerate() {
+                let y = 100.0 + 50.0 * k as f64;
+                sp.mep.runs.push(run(sys, level, vec![[x, y], [x + 240.0, y]], 2.0, None));
+            }
+            sp.mep.runs.push(run("SAN", level, vec![[x + 600.0, 600.0]], 4.0, Some(10.0)));
+        }
+        for (name, kind) in systems.iter().map(|s| (*s, if *s == "E-BRANCH" { "conduit" } else { "pipe" })) {
+            sp.mep.systems.push(
+                serde_json::from_value(json!({"name": name, "kind": kind, "layer": name, "size_in": [1.0, 0.0], "bottom_ft": 0.0}))
+                    .unwrap_or_else(|e| panic!("{e}")),
+            );
+        }
+        let count = |sp: &BuildingSpec| {
+            let mut m: BTreeMap<String, usize> = BTreeMap::new();
+            for r in sp.mep.runs.iter().filter(|r| r.top_ft.is_none()) {
+                *m.entry(r.system.clone()).or_default() += 1;
+            }
+            m
+        };
+        let before = count(&sp);
+        assert_eq!(before.len(), systems.len());
+        drainage(&mut sp);
+        let joined = continuous_risers(&mut sp);
+        assert_eq!(joined["risers_joined"], 1, "{joined}");
+        assert_eq!(count(&sp), before, "drawn runs per system");
+        assert_eq!(sp.mep.runs.iter().filter(|r| r.top_ft.is_some()).count(), 1, "the stack, one riser");
     }
 
     #[test]

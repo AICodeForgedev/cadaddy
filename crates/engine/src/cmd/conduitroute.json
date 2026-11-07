@@ -8,12 +8,14 @@
     "corridor_min_ft": 20.0,
     "in_wall_max_ft": 12.0,
     "in_wall_above_box_in": 6,
+    "box_side_under_top_in": 1.5,
+    "box_side_reach_ft": 4.0,
     "drop_spacing_in": 1.5,
     "drop_reach_ft": 2.0,
     "drop_step_in": 6,
     "bend_penalty_ft": 3.0,
     "max_detour_ft": 8.0,
-    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear"
+    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear; trade practice: a unit's own receptacle under it (its keynote's), every way over its box blocked by the unit: the raceway leaves the box's side (1-1/2 in under its top, a side knockout) and runs along the wall under the unit, up to 4 ft, to rise clear of it"
   },
   "clearance_in": {
     "duct": 1.0,
@@ -53,14 +55,21 @@
     "amp_75c": {"14": 20, "12": 25, "10": 35, "8": 50, "6": 65, "4": 85, "3": 100, "2": 115, "1": 130, "1/0": 150, "2/0": 175, "3/0": 200, "4/0": 230},
     "amp_90c": {"14": 25, "12": 30, "10": 40, "8": 55, "6": 75, "4": 95, "3": 115, "2": 130, "1": 145, "1/0": 170, "2/0": 195, "3/0": 225, "4/0": 260},
     "small_conductor_max_a": {"14": 15, "12": 20, "10": 30},
-    "small_conductor_source": "NEC 240.4(D): #14 15 A, #12 20 A, #10 30 A"
+    "small_conductor_source": "NEC 240.4(D): #14 15 A, #12 20 A, #10 30 A",
+    "standard_ratings": [15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 80, 90, 100, 110, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500, 600, 700, 800]
   },
   "box_fill": {
     "source": "NEC 314.16(B): each conductor entering 1 volume, all grounds 1, each device yoke 2 (the largest conductor's), Table 314.16(B) volumes",
     "cu_in": {"18": 1.5, "16": 1.75, "14": 2.0, "12": 2.25, "10": 2.5, "8": 3.0, "6": 5.0},
     "yoke": 2,
     "grounds": 1,
-    "bigger": [["4\" square", "4-11/16\" square, 2-1/8\" deep", 42.0], ["device", "4\" square, 2-1/8\" deep, with a device ring", 30.3], ["4\" octagon", "4\" square, 2-1/8\" deep", 30.3]]
+    "bigger_source": "the next box of NEC Table 314.16(A); past the largest (4-11/16 in square, 2-1/8 in deep, 42 cu in) the field adds an extension ring, whose marked volume NEC 314.16(A) adds to the box: 21 cu in is taken for a 4-11/16 in square, 1-1/2 in deep ring, below what such rings are marked (check the marking of the ring installed)", "bigger": [["4\" square", "4-11/16\" square, 2-1/8\" deep", 42.0], ["device", "4\" square, 2-1/8\" deep, with a device ring", 30.3], ["4\" octagon", "4\" square, 2-1/8\" deep", 30.3], ["4-11/16\" square", "4-11/16\" square, 2-1/8\" deep, with a 4-11/16\" square, 1-1/2\" deep extension ring", 63.0], ["4\" square", "4-11/16\" square, 2-1/8\" deep, with a 4-11/16\" square, 1-1/2\" deep extension ring", 63.0]]
+  },
+  "terminals": {
+    "max_size": "10",
+    "pigtail_in": 8,
+    "connector": "Wire connector, twist-on",
+    "source": "NEC 110.14(A) and UL 498: a 15, 20 or 30 A wiring device's terminals take #14 to #10 copper; a larger circuit conductor (a voltage-drop or schedule size) is spliced in the device's box to a pigtail of the size the circuit's breaker needs (NEC 240.4), one per conductor the device lands, at least 6 in free (NEC 300.14); a pigtail that starts and ends in the box adds no fill (NEC 314.16(B)(1))"
   },
   "vdrop": {
     "max_pct": 3.0,
@@ -68,9 +77,15 @@
     "load_pct": 80,
     "breaker_a": 20,
     "voltage": 120,
+    "voltage_ll": 208,
+    "voltage_source": "company default 120 V line to neutral, 208 V line to line (a 208Y/120 V system)",
     "cmil": {"14": 4110, "12": 6530, "10": 10380, "8": 16510, "6": 26240, "4": 41740, "3": 52620, "2": 66360, "1": 83690, "1/0": 105600, "2/0": 133100},
     "sizes": ["14", "12", "10", "8", "6", "4", "3", "2", "1", "1/0", "2/0"],
-    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil, K = 12.9 copper, I = 80% of the breaker"
+    "source": "NEC 210.19(A) Informational Note No. 4 (3% branch circuit); VD = 2 K I L / cmil single-phase, 1.732 K I L / cmil three-phase, K = 12.9 copper; I = the panel schedule's load at the circuit's voltage, else 80% of the breaker",
+    "moment_source": "load moment: the homerun carries the whole current, each stretch past it the share of the devices beyond it (equal shares, switches none)",
+    "homerun_first": true,
+    "homerun_steps": 2,
+    "homerun_first_source": "trade practice: the homerun is upsized first (a homerun up to two sizes larger, the circuit's own size past its first box) when that alone holds the drop; else the legs go up too"
   },
   "methods": {
     "raceway": "EMT",
@@ -152,7 +167,7 @@
       "kinds": ["receptacle", "duplex receptacle", "gfci receptacle", "quad receptacle", "device", "junction box", "equipment connection", "disconnect"],
       "spare_words": ["SPARE"],
       "space_words": ["SPACE"],
-      "source": "a power device the prints give no circuit: proposed on the nearest panel of its level with a spare breaker (else a new one), not drawn, priced apart from the takeoff, with a review item and an RFI (the documents don't say; nothing is guessed silently)"
+      "source": "a power device the prints give no circuit is put on a spare circuit of the nearest panel of its level and routed, marked inferred (tradepractice.json E-UNCIRCUITED); one with no panel of its level within that rule's reach is proposed on the nearest panel with a spare breaker (else a new one), not built, priced apart, with a review item"
     }
   }
 }

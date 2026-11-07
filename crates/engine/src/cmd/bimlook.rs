@@ -122,7 +122,15 @@ pub struct Look {
     /// Tree branches hidden: [level, trade?, category?, type?].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub hidden_paths: Vec<Vec<String>>,
+    /// Filled-in work apart from drawn (Q6216): what was derived from a matching source and
+    /// what a rule inferred, each in its own colour ([`DERIVED_RGB`], [`INFERRED_RGB`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub apart: bool,
 }
+
+/// The colours of derived and inferred work when the view shows it apart from drawn.
+pub const DERIVED_RGB: [u8; 3] = [0, 168, 150];
+pub const INFERRED_RGB: [u8; 3] = [226, 48, 196];
 
 impl Look {
     /// The settings kept in `d`'s building spec (the defaults when none are).
@@ -571,6 +579,19 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
             out.model.push_shared(Arc::clone(e));
             continue;
         };
+        // Filled-in work apart from drawn: its own colour, solid.
+        let apart = if look.apart { super::provenance::of_element(e).map(|x| x.0).filter(|m| !m.is_drawn()) } else { None };
+        if let Some(m) = apart {
+            let c3 = if m == cadaddy_walk3d::Made::Derived { DERIVED_RGB } else { INFERRED_RGB };
+            let mut c = (**e).clone();
+            c.common.color = Color::True(cadaddy_color::Rgb(c3[0], c3[1], c3[2]));
+            c.common.material = Option::<String>::None.into();
+            if let Some(o) = off {
+                c.kind.transform(&cadaddy_geom::Mat3::translate(o));
+            }
+            items.push(c);
+            continue;
+        }
         let on_layer = layer_trade.get(&e.common.layer.to_ascii_uppercase()).copied().flatten() == Some(k);
         let own_material = e.common.material.as_deref().map(str::trim).is_some_and(|m| !m.is_empty() && !m.eq_ignore_ascii_case("BYLAYER"));
         if off.is_none() && on_layer && matches!(e.common.color, Color::ByLayer) && !(ghosted(k) && own_material) {
@@ -600,7 +621,7 @@ pub fn compose(d: &Drawing, look: &Look, ghost: bool, stack: bool, keep: &dyn Fn
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("bim.look", "BIM View", run_look).menu(&["View", "BIM View"]).params(
-            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, style, built, trades}: how 3D and model.render draw the built model",
+            "{on?: bool, ghost?: bool | \"auto\" (the shell see-through, MEP solid; auto: when there is MEP), ghost_opacity?: 0.02-1 (0.2), sheet?: bool (the sheet's own lines in 3D too; default false), level?: name | null (show one level), apart?: bool (filled-in work apart from drawn: derived and inferred elements each in their own colour), style?: visual style (default shadededges)} → {on, ghost, ghost_opacity, sheet, level, apart, made: {drawn, derived, inferred}, style, built, trades}: how 3D and model.render draw the built model",
         ),
         CommandSpec::new("bim.trades", "Trade Colours", run_trades).params(
             "{colors?: {trade: [r, g, b] | \"#rrggbb\"}, visible?: {trade: bool}, reset?: bool | [trade]} → {trades: [{trade, label, group, color, default, visible, ghosted, count}]}: the one colour table every trade is drawn in",
@@ -654,10 +675,14 @@ fn level_name(s: &Session, cmd: &str, want: &str) -> Result<String> {
 fn look_json(d: &Drawing, look: &Look, style: &str) -> Value {
     let mut counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut built = 0usize;
+    let mut made: BTreeMap<&'static str, usize> = BTreeMap::new();
     for e in d.model.iter().take(MAX_SCAN) {
         if let Some(c) = classify(d, e) {
             built += 1;
             *counts.entry(c.key).or_default() += 1;
+            if let Some((m, _)) = super::provenance::of_element(e) {
+                *made.entry(m.as_str()).or_default() += 1;
+            }
         }
     }
     json!({
@@ -667,6 +692,8 @@ fn look_json(d: &Drawing, look: &Look, style: &str) -> Value {
         "ghost_opacity": look.opacity(),
         "sheet": look.sheet,
         "level": look.level,
+        "apart": look.apart,
+        "made": made,
         "style": style,
         "built": built,
         "trades": counts,
@@ -687,6 +714,9 @@ fn run_look(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(b) = p.get("sheet").and_then(Value::as_bool) {
         look.sheet = b;
+    }
+    if let Some(b) = p.get("apart").and_then(Value::as_bool) {
+        look.apart = b;
     }
     match p.get("level") {
         Some(Value::Null) => look.level = None,

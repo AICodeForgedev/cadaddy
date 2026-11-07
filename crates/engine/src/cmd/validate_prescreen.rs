@@ -652,8 +652,8 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
                 aff_documented: false,
                 sheet_at: ent.and_then(|x| vh::sheet_point(d, x)),
                 source: e.source.clone().filter(|s| !s.trim().is_empty()),
-                proposed: ent.is_some_and(super::bimlook::made_proposed),
-                rule_only: ent.is_some_and(super::bimlook::made_by_rule_only),
+                proposed: ent.is_some_and(inferred_work),
+                rule_only: ent.is_some_and(rule_only_work),
             }
         })
         .collect();
@@ -676,6 +676,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             continue;
         }
         let Some(kind) = super::elemprops::element_kind(e).filter(|k| MEP_KINDS.contains(&k.as_str())) else { continue };
+        let device = kind == "device";
         let kind = super::elemprops::reported_kind(e, kind);
         let Some(level) = super::elemprops::level_of(e) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);
@@ -702,8 +703,12 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
         };
         // A built part's height record is its own, else the plan element's it was built from.
         let record = vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x)));
-        let aff_documented =
-            mounting == Mounting::Ceiling && record.as_ref().is_some_and(|r| !r.assumed && r.inches <= ceiling * 12.0 - CEILING_BAND_IN);
+        // A ceiling-band part its documents mount lower on a wall, and a device its documents
+        // mount low on a wall (a receptacle in a unit's sub-base, its box near the floor): judged
+        // at their middle against those documents.
+        let aff_documented = (mounting == Mounting::Ceiling
+            && record.as_ref().is_some_and(|r| !r.assumed && r.inches <= ceiling * 12.0 - CEILING_BAND_IN))
+            || (mounting == Mounting::Floor && device && record.as_ref().is_some_and(|r| !r.assumed));
         let c = super::bimlook::classify(d, e);
         let mark = super::validate_kind::mark_of(e);
         let r = kinds.resolve(&kind, mark.as_deref(), Some(e));
@@ -730,14 +735,27 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             aff_documented,
             sheet_at: None,
             source: None,
-            proposed: super::bimlook::made_proposed(e),
-            rule_only: super::bimlook::made_by_rule_only(e),
+            proposed: inferred_work(e),
+            rule_only: rule_only_work(e),
         });
     }
     for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
         it.host = twin_host.get(&it.handle.to_ascii_uppercase()).cloned();
     }
     out
+}
+
+/// Whether the build filled an element in by a rule, no document drawing it (Q6216: the model's
+/// provenance `inferred`, a note's or a rule's proposal among it): no print shows it, so it is
+/// neither present nor extra against the prints.
+fn inferred_work(e: &cadaddy_doc::Entity) -> bool {
+    super::provenance::of_element(e).is_some_and(|(m, _)| m == cadaddy_walk3d::Made::Inferred)
+}
+
+/// Whether only a rule calls for an element (no document names it either): no evidence the
+/// documents' kind is in the model.
+fn rule_only_work(e: &cadaddy_doc::Entity) -> bool {
+    super::bimlook::made_by_rule_only(e) || (inferred_work(e) && !super::bimlook::made_proposed(e))
 }
 
 /// The tolerance `name` of a rule, else `default`.
@@ -1958,6 +1976,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         }
         findings.extend(lit.findings);
     }
+    // Each finding on an element carries what it is by the documents and what the build
+    // corrected; a fail that is only the correction itself is judged on its basis (Q6259).
+    super::validate_basis::Basis::of(sc.d).screen(&mut findings, &mut checked);
     findings.sort_by(|a, b| {
         let k = |f: &Value| {
             (

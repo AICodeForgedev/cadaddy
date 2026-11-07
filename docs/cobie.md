@@ -61,6 +61,6 @@ reads `n/a`, as COBie asks; no required cell is left blank.
 - **Equipment**: tag, class, type, maker, model, systems, room, storey, GlobalId (the components
   that aren't doors or windows).
 
-Tests: `crates/engine/tests/cobie.rs` (a made-up hotel corner written as IFC4 in the test; every
+Tests: `crates/engine/tests/suite/files/cobie.rs` (a made-up hotel corner written as IFC4 in the test; every
 sheet checked; fifteen ways a workbook breaks, each caught at its sheet, row and column; the
 schedules; a model built with WALLGEN).

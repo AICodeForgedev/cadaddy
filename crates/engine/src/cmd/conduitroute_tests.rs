@@ -383,9 +383,6 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
     assert!(whole(&s) > 0, "the job's whole runs");
     let r = s.execute("conduit.reroute", &json!({})).unwrap();
     assert_eq!(r["routed"], json!(true), "{r}");
-    // Again (the job reroutes once its devices are reseated): the feeder's buried pieces don't
-    // make the underground plan's run pieces; it stays whole, once.
-    s.execute("conduit.reroute", &json!({})).unwrap();
     let ug = |s: &crate::Session, atom: bool| {
         s.doc()
             .unwrap()
@@ -395,8 +392,14 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
             .filter(|e| super::bimlook::made_tag(e, "mepid").is_some_and(|m| m.starts_with("@200.00,-200.00")))
             .count()
     };
-    assert!(ug(&s, false) > 0, "the underground plan's run stays whole");
-    assert_eq!(ug(&s, true), 0, "and is not cut into pieces besides");
+    // The underground plan's run is cut into its pieces with the rest (a takeoff counts it), its
+    // whole run gone; again (the job reroutes once its devices are reseated) it is cut once.
+    let once = ug(&s, true);
+    assert!(once > 0, "the underground plan's run is in pieces");
+    assert_eq!(ug(&s, false), 0, "its whole run gives way to them");
+    s.execute("conduit.reroute", &json!({})).unwrap();
+    assert_eq!(ug(&s, true), once, "cut once, not twice");
+    assert_eq!(ug(&s, false), 0);
     assert_eq!(whole(&s), 0, "the whole runs give way to the pieces");
     let d = s.doc().unwrap();
     let wire: Vec<(String, String, f64)> = d
@@ -421,6 +424,59 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
         .filter(|p| p.get("atom").map(Prop::text).as_deref() == Some("conduit") && p.get("system").map(Prop::text).as_deref() == Some("E-FEEDER"))
         .count();
     assert!(sticks >= 5, "44' of 2-1/2\" in 10' sticks: {sticks}");
+}
+
+#[test]
+fn buried_work_built_whole_after_the_last_cut_is_cut_into_its_pieces_with_no_device_reseated() {
+    let mut s = crate::Session::empty();
+    s.open_drawing(cadaddy_doc::Drawing::new_imperial(), "Sample Buried Stub", None);
+    // A made-up storey with a 20' conduit over the ceiling (the model is built with pieces).
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "mep": {
+            "systems": [{"name": "E-COND", "layer": "E-COND", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 10}],
+            "runs": [{"system": "E-COND", "level": "L1", "points": [[0, 600], [240, 600]], "size_in": [0.75, 0], "bottoms_ft": [10]}]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).unwrap();
+    s.execute("model.build", &json!({})).unwrap();
+    // The underground step after the job's last reroute: a called run built whole, 30' two feet
+    // under the floor and stubbed up to a foot above it.
+    let (mut sp, _) = super::bspec::current(&s, "test").unwrap();
+    sp.mep
+        .systems
+        .push(serde_json::from_value(json!({"name": "E-UG", "layer": "E-UG", "kind": "conduit", "size_in": [1, 0], "bottom_ft": -2})).unwrap());
+    let ug = |pts: Vec<[f64; 2]>, top: Option<f64>| -> MepRun {
+        serde_json::from_value(json!({"system": "E-UG", "level": "L1", "points": pts, "size_in": [1.0, 0.0], "bottoms_ft": [-2.0], "top_ft": top,
+            "source_sheet": "Plan 1", "height_source": "called: Plan 1 note (telecom service)"}))
+        .unwrap()
+    };
+    let runs = vec![ug(vec![[0.0, 0.0], [360.0, 0.0]], None), ug(vec![[360.0, 0.0]], Some(1.0))];
+    sp.mep.runs.extend(runs.iter().cloned());
+    let mut part = sp.clone();
+    part.mep.runs = runs;
+    let d = s.doc_mut().unwrap();
+    d.building_spec = Some(sp.to_json());
+    super::mep::build(d, &part);
+    let ug_of = |s: &crate::Session, atom: bool| {
+        s.doc().unwrap().model.iter().filter(|e| super::mepatoms::is_atom(e) == atom && super::bimlook::made_tag(e, "system") == Some("E-UG")).count()
+    };
+    assert!(ug_of(&s, false) > 0 && ug_of(&s, true) == 0, "built whole");
+    let r = super::follow_reseated(&mut s, 0).expect("the buried work is cut").unwrap();
+    assert_eq!(r["routed"], json!(true), "{r}");
+    assert_eq!(ug_of(&s, false), 0, "no whole run left");
+    let d = s.doc().unwrap();
+    let ty: Vec<String> = d
+        .model
+        .iter()
+        .map(|e| props::read(&e.common.xdata))
+        .filter(|p| p.get("system").map(Prop::text).as_deref() == Some("E-UG") && p.get("atom").map(Prop::text).as_deref() == Some("conduit"))
+        .map(|p| p.get("type").map(Prop::text).unwrap_or_default())
+        .collect();
+    assert!(!ty.is_empty() && ty.iter().all(|t| t == "PVC"), "{ty:?}");
+    // Nothing left to cut and no device moved: no reroute.
+    assert!(super::follow_reseated(&mut s, 0).is_none());
 }
 
 #[test]
@@ -522,4 +578,238 @@ fn a_feeders_raceway_stays_in_the_way_of_the_branch_routes_once_cut_into_pieces(
     assert!(is_obstacle(&el("conduit", super::gearbuild::FEEDER_SYSTEM, "@1.00,2.00#0")), "a feeder's sticks");
     assert!(!is_obstacle(&el("conduit", BRANCH_SYSTEM, "@1.00,2.00#0")), "the branch pieces this routing cuts again");
     assert!(!is_obstacle(&el("device", "", "")));
+}
+
+#[test]
+fn an_overfilled_box_is_built_with_the_next_box_and_keeps_its_design_box() {
+    // A 4" square (30.3 cu in) a device's twelve #12 enter, with its ground and a yoke: 33.75 cu
+    // in (314.16(B)). The field sets a 4-11/16" square (42 cu in); the design box stays beside it.
+    let mut d = Drawing::default();
+    let mut ps = props::Props::default();
+    let rule = || props::Source::from_doc(props::SourceKind::Rule, "box rule (made-up)");
+    ps.set(crate::cmd::mepatoms::ATOM_KEY, Prop::new("box", props::Source::computed()));
+    ps.set("box_of", Prop::new("1A2", props::Source::computed()));
+    ps.set("size", Prop::new("4\" square, 2-1/8\" deep", rule()));
+    ps.set("cubic_in", Prop::new("30.3", rule()));
+    let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x1A2), BRANCH_SYSTEM, "box", "4\" square, 2-1/8\" deep", "box", "x/box0");
+    let xdata = props::write(&tags, &ps);
+    let h = d
+        .add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() },
+            EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    let pending = json!({"box_fill": {"pending": [{"device": "1A2", "kind": "receptacle", "level": "L1", "circuit": "LP9-1", "yoke": true, "conductors": [[12, "12"]]}]}});
+    for _ in 0..2 {
+        let mut report = pending.clone();
+        check_box_fill(&mut d, &mut report);
+        let bf = &report["box_fill"];
+        assert_eq!((bf["checked"].as_u64(), bf["corrected"].as_u64()), (Some(1), Some(1)), "{bf}");
+        assert_eq!(bf["over"][0]["corrected"], json!(true), "{bf}");
+        let e = d.model.get(h).unwrap_or_else(|| panic!("the box"));
+        let got = props::read(&e.common.xdata);
+        let t = |k: &str| got.get(k).map(Prop::text).unwrap_or_default();
+        assert_eq!(t("size"), "4-11/16\" square, 2-1/8\" deep", "installed");
+        assert_eq!(t("cubic_in"), "42");
+        // The design value kept, never overwritten by a second check.
+        assert_eq!(t("design:size"), "4\" square, 2-1/8\" deep");
+        assert_eq!(t("design:cubic_in"), "30.3");
+        assert!(t("correction:size").starts_with("E-BOX-FILL"), "{}", t("correction:size"));
+    }
+}
+
+#[test]
+fn a_box_past_the_largest_gets_an_extension_ring_and_keeps_its_design_box() {
+    // A 4-11/16" square (42 cu in, the largest box of the rules) twenty #12 enter, with its
+    // ground and a yoke: 51.75 cu in. The field adds an extension ring, whose marked volume
+    // 314.16(A) adds; the design box stays beside it with the reason.
+    let mut d = Drawing::default();
+    let mut ps = props::Props::default();
+    let rule = || props::Source::from_doc(props::SourceKind::Rule, "box rule (made-up)");
+    ps.set(crate::cmd::mepatoms::ATOM_KEY, Prop::new("box", props::Source::computed()));
+    ps.set("box_of", Prop::new("1B3", props::Source::computed()));
+    ps.set("size", Prop::new("4-11/16\" square, 2-1/8\" deep", rule()));
+    ps.set("cubic_in", Prop::new("42", rule()));
+    let tags = crate::cmd::mepatoms::build::mep_tags("L1", Handle(0x1B3), BRANCH_SYSTEM, "box", "4-11/16\" square, 2-1/8\" deep", "box", "x/box1");
+    let xdata = props::write(&tags, &ps);
+    let h = d
+        .add(
+            &cadaddy_doc::Space::Model,
+            cadaddy_doc::Common { xdata: xdata.into(), ..cadaddy_doc::Common::default() },
+            EntityKind::Mesh(crate::cmd::wallgen::empty_mesh()),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut report = json!({"box_fill": {"pending": [{"device": "1B3", "kind": "receptacle", "level": "L1", "circuit": "LP9-2", "yoke": true, "conductors": [[20, "12"]]}]}});
+    check_box_fill(&mut d, &mut report);
+    assert_eq!(report["box_fill"]["corrected"].as_u64(), Some(1), "{}", report["box_fill"]);
+    let e = d.model.get(h).unwrap_or_else(|| panic!("the box"));
+    let got = props::read(&e.common.xdata);
+    let t = |k: &str| got.get(k).map(Prop::text).unwrap_or_default();
+    assert!(t("size").contains("extension ring"), "{}", t("size"));
+    assert_eq!(t("cubic_in"), "63");
+    assert_eq!(t("design:size"), "4-11/16\" square, 2-1/8\" deep");
+    assert_eq!(t("design:cubic_in"), "42");
+    assert!(t("correction:size").contains("314.16(A)"), "the ring's basis: {}", t("correction:size"));
+}
+
+#[test]
+fn a_raceway_through_an_obstacle_is_offset_under_it_across_its_box_only() {
+    let mut r: MepRun = serde_json::from_value(json!({
+        "system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [240.0, 0.0], [240.0, 120.0]],
+        "size_in": [0.75, 0.0], "bottoms_ft": [9.5, 9.5], "height_source": ROUTED,
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A pipe across the first leg from x 100 to 140 (with its clearance), the clash at x 120.
+    let got = offset_run(&mut r, Vec2::new(120.0, 0.0), 9.5, [100.0, -10.0, 140.0, 10.0], 8.5, UPF);
+    let (a, b) = got.unwrap_or_else(|| panic!("offset"));
+    assert_eq!((a.x, b.x), (100.0, 140.0));
+    assert_eq!(r.points, vec![[0.0, 0.0], [100.0, 0.0], [140.0, 0.0], [240.0, 0.0], [240.0, 120.0]]);
+    assert_eq!(r.bottoms_ft, vec![9.5, 8.5, 9.5, 9.5], "the stretch across the box drops, the rest stays");
+    // No segment there at that height: nothing changes.
+    let before = r.clone();
+    assert!(offset_run(&mut r, Vec2::new(120.0, 60.0), 9.5, [100.0, 50.0, 140.0, 70.0], 8.5, UPF).is_none());
+    assert!(offset_run(&mut r, Vec2::new(240.0, 60.0), 7.0, [230.0, 50.0, 250.0, 70.0], 6.0, UPF).is_none(), "another height");
+    assert_eq!(r, before);
+}
+
+#[test]
+fn a_raceway_the_ceiling_space_cant_offset_runs_around_the_obstacle_in_plan() {
+    let mut r: MepRun = serde_json::from_value(json!({
+        "system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [240.0, 0.0]],
+        "size_in": [0.75, 0.0], "bottoms_ft": [9.5], "height_source": ROUTED,
+    }))
+    .unwrap_or_else(|e| panic!("{e}"));
+    // A duct 40" across the run, its box reaching 6" one side and 30" the other: round the near side.
+    let (path, extra) = detour_run(&mut r, Vec2::new(120.0, 0.0), 9.5, [100.0, -6.0, 140.0, 30.0], UPF).unwrap_or_else(|| panic!("a detour"));
+    assert_eq!(r.points, vec![[0.0, 0.0], [100.0, 0.0], [100.0, -6.0], [140.0, -6.0], [140.0, 0.0], [240.0, 0.0]]);
+    assert_eq!(r.bottoms_ft, vec![9.5; 5], "at the same height");
+    assert_eq!(path.len(), 4);
+    assert!((extra - 1.0).abs() < 1e-9, "6\" out and back: {extra}");
+    // A box past the segment's end, or a diagonal piece: no detour.
+    let mut d: MepRun = serde_json::from_value(
+        json!({"system": BRANCH_SYSTEM, "level": "L1", "points": [[0.0, 0.0], [100.0, 100.0]], "size_in": [0.75, 0.0], "bottoms_ft": [9.5]}),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    assert!(detour_run(&mut d, Vec2::new(50.0, 50.0), 9.5, [40.0, 40.0, 60.0, 60.0], UPF).is_none());
+}
+
+fn hole(member: usize, along_in: f64, raceway_in: f64, end_ft: f64) -> Bored {
+    Bored {
+        level: "L1".into(),
+        circuit: format!("LP9-{member}"),
+        obstacle: member,
+        member: "I-joist".into(),
+        host: Handle(0x90 + member as u64),
+        at: Vec2::new(along_in, 0.0),
+        z: 120.0,
+        along: along_in,
+        dia_in: raceway_in + 0.375,
+        raceway_in,
+        end_ft,
+        design: String::new(),
+    }
+}
+
+#[test]
+fn two_holes_too_close_share_one_hole_where_the_hole_rule_takes_it() {
+    let fr = &rules().framing;
+    // Two 3/4" raceways 1" apart in one joist, 4 ft from its bearing: one 1-7/8" hole for both
+    // (the rule takes it 1 ft from the bearing), the design's two holes kept beside it.
+    let mut bored = vec![hole(1, 24.0, 0.75, 4.0), hole(1, 26.0, 0.75, 4.0), hole(2, 24.0, 0.75, 4.0)];
+    let pairs = close_holes(&mut bored, fr, UPF);
+    assert_eq!(pairs.len(), 1, "only the pair in one member");
+    let c = pairs[0].corrected.as_ref().unwrap_or_else(|| panic!("shared: {:?}", pairs[0]));
+    assert_eq!(c["rule"], json!("E-BORE-SHARE"));
+    assert!(c["design"].as_str().unwrap_or_default().starts_with("two holes"), "{c}");
+    assert_eq!(bored.len(), 2, "the second hole is gone");
+    assert!((bored[0].dia_in - 1.875).abs() < 1e-9, "{:?}", bored[0]);
+    assert!(bored[0].design.starts_with("two holes"), "the design kept");
+    assert!((bored[1].dia_in - 1.125).abs() < 1e-9, "the other member's hole stays");
+    // Two 2" raceways close to the bearing: the 4-3/8" hole they'd share must stand 4 ft off it;
+    // they stay a clash item, both holes as designed.
+    let mut near = vec![hole(3, 24.0, 2.0, 1.5), hole(3, 27.0, 2.0, 1.5)];
+    let pairs = close_holes(&mut near, fr, UPF);
+    assert_eq!(pairs.len(), 1);
+    assert!(pairs[0].corrected.is_none());
+    assert_eq!(near.len(), 2);
+    assert!(near.iter().all(|h| h.design.is_empty() && (h.dia_in - 2.375).abs() < 1e-9));
+}
+
+#[test]
+fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() {
+    let est = super::super::printcond::CIRCUIT_SYSTEM;
+    let run = |id: &str, level: &str| {
+        let mut r = super::super::printcond::run(est, level, "E-601", vec![[0.0, 0.0], [120.0, 0.0]], 0.75, 9.0);
+        r.id = format!("{id}#1");
+        r
+    };
+    let mut sp = BuildingSpec {
+        rooms: ["1101", "1102"]
+            .iter()
+            .map(|n| cadaddy_walk3d::SpecRoom { name: "GUEST".into(), number: Some((*n).into()), ..Default::default() })
+            .collect(),
+        ..Default::default()
+    };
+    sp.mep.runs = vec![
+        // The enlarged plan's tag of a circuit the plan's tag routed.
+        run("circuit:L1:E-601:LP1-7", "L1"),
+        // A typical room's view (no room of the spec) of a circuit each room routed.
+        run("circuit:L1:room-SUITE TYPE 2:U-3", "L1"),
+        // A real room whose own circuit was not routed: its only route.
+        run("circuit:L1:room-1102:U-3", "L1"),
+        // A circuit not routed, and the same label on another level.
+        run("circuit:L1:E-601:LP1-9", "L1"),
+        run("circuit:L2:E-601:LP1-7", "L2"),
+    ];
+    let tag = |id: &str| ElementTag { id: id.into(), kind: "circuit".into(), level: "L1".into(), ..Default::default() };
+    let routed = Routed {
+        runs: Vec::new(),
+        tags: vec![tag("circuit:L1:E-101:LP1-7"), tag("circuit:L1:room-1101:U-3"), tag("circuit:L1:room-1101:U-3~sw3"), tag("circuit:L1:home:LP1:0")],
+        report: Value::Null,
+        feeders: BTreeSet::new(),
+        cable: Vec::new(),
+        minimum: None,
+    };
+    let gone = estimates_routed_elsewhere(&sp, &routed);
+    assert_eq!(gone.iter().map(String::as_str).collect::<Vec<_>>(), ["circuit:L1:E-601:LP1-7", "circuit:L1:room-SUITE TYPE 2:U-3"], "{gone:?}");
+    assert_eq!(circuit_key("circuit:Level 1:E-101:LP1-3@P2~sw3"), Some(("level 1".into(), "E-101".into(), "LP1-3".into())));
+    assert_eq!(circuit_key("device:L1:3"), None);
+    assert_eq!(circuit_key("circuit:L1:E-101:"), None);
+}
+
+#[test]
+fn a_homeruns_numbers_are_each_circuits_once_in_order() {
+    // Two rooms' circuits of one label and a two-pole circuit: one readable list.
+    let labels: Vec<String> = ["RP-2", "RP-2", "RP-7,9"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(homerun_numbers(&labels), vec!["2", "7", "9"]);
+    let labels: Vec<String> = ["LP1-1", "LP1-3,5", "LP1-7"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(homerun_numbers(&labels), vec!["1", "3", "5", "7"]);
+    assert!(homerun_numbers(&["not a circuit".to_string()]).is_empty());
+}
+
+/// Q6247: a receptacle its keynote puts under its unit: every way over its box is blocked by the
+/// unit, so its raceway leaves the box's side under the unit and rises beside it; another box
+/// there (not the unit's) stays blocked.
+#[test]
+fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
+    // A unit 42" long, 4" to 20" over the floor, its receptacle's box under its middle (top 4").
+    let unit = Obs {
+        handle: Handle(0x55),
+        lo: Vec3::new(-21.0, 0.0, 4.0),
+        hi: Vec3::new(21.0, 12.0, 20.0),
+        category: "equipment".into(),
+        system: "M-DUCT".into(),
+        trade: "mechanical",
+    };
+    let field = Field::new(vec![unit], UPF);
+    let (at, face, z0) = (Vec2::new(0.0, 1.0), Some(Vec2::new(0.0, 1.0)), 111.0);
+    let (_, _, blocked) = rise_point(at, 4.0, face, z0, 0.375, &field, UPF, &[], rules());
+    assert_eq!(blocked, Some(0), "the unit is over the box and along its wall");
+    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], rules());
+    assert_eq!(blocked, None);
+    assert!(q.x.abs() > 21.0 + 3.0 && (q.y - 1.0).abs() < 1e-9, "beside the unit, along its wall: {q:?}");
+    assert!((z - 2.5).abs() < 1e-9, "out of the box's side, 1-1/2 in under its top: {z}");
+    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
+    assert_eq!(blocked, Some(0));
 }

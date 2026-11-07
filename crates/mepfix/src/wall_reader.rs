@@ -921,11 +921,8 @@ fn guess(
     let pool: Vec<&ReadType> = if cands.is_empty() { types.iter().collect() } else { cands };
     // What the rooms either side are: corridors get the corridor type, toilets the plumbing wall,
     // conference rooms the acoustic one.
-    for (rooms, words) in [
-        (&["CORRIDOR"][..], &["CORRIDOR"][..]),
-        (&["MEN", "WOMEN", "TOILET", "RESTROOM"][..], &["PLUMBING", "CHASE", "WET"][..]),
-        (&["CONFERENCE", "TRAINING"][..], &["ACOUSTIC", "SOUND"][..]),
-    ] {
+    for (side, rooms) in crate::wordrules::groups("walls.room_side_words") {
+        let words = crate::wordrules::group("walls.type_name_words", side);
         if w.rooms.iter().any(|n| room_names.get(n).is_some_and(|name| rooms.iter().any(|r| name.contains(r))))
             && let Some(t) = pool.iter().find(|t| words.iter().any(|x| t.name.to_ascii_uppercase().contains(x)))
         {

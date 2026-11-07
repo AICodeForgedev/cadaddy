@@ -50,5 +50,5 @@ Project rules: `custom/ground_connection` (`exothermic`, `compression`, `mechani
 `model.build` builds the conductors along their routes (an inch thick, to be seen), rods, the Ufer in
 its footing, rings and busbars on the `3D-GROUNDING` layer.
 
-Tests: `crates/engine/tests/grounding.rs` (a made-up hotel corner), `crates/mepfix/tests/grounding_hotel.rs`
+Tests: `crates/engine/tests/suite/jobs/grounding.rs` (a made-up hotel corner), `crates/mepfix/tests/grounding_hotel.rs`
 (the synthetic hotel's own cold water piping and IDF).

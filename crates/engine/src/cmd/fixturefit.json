@@ -1,0 +1,74 @@
+{
+  "_what": "Plumbing fixtures onto the fixtures the architectural plans draw (fixturefit.rs). Sizes are the outline as drawn in plan, inches: part = [short side min, short side max, long side min, long side max].",
+  "_basis": "A plumbing plan tags a fixture with a balloon set beside it, clear of the fixture's own linework: the architectural plan the plumbing plan is drawn over places the fixture. Sizes are the common catalog and drafting sizes of each fixture as drawn in plan.",
+  "reach_ft": 8.0,
+  "_reach_ft": "How far from its tag a fixture may be drawn. A tag balloon sits a balloon or two off its fixture, out of its linework, often across a tub or a door swing from it.",
+  "join_in": 3.0,
+  "_join_in": "Outlines this close are one fixture's pieces (a water closet's tank drawn against its bowl).",
+  "outline_gap_in": 3.0,
+  "_outline_gap_in": "An outline left open by this much or less is still the fixture's outline (a basin's line broken at its faucet).",
+  "largest_in": 96.0,
+  "_largest_in": "Nothing larger is one fixture's outline (a room, a wall run).",
+  "drain_in": [0.5, 4.0],
+  "_drain_in": "A drain or faucet hole drawn in a basin: a small round mark this wide (a circle, or a short closed line, often a square turned on its corner). Anything larger inside a basin-sized outline (a cooktop's burners) makes it no basin.",
+  "counter_in": [12.0, 36.0],
+  "inside_in": 2.0,
+  "_inside_in": "A device symbol at least this far inside a fixture's outline is drawn in the fixture, not on the wall the fixture is set against (a receptacle drawn on that wall sits on the wall line, at the outline's edge).",
+  "_counter_in": "A counter a basin is drawn in: the smallest outline round it with its short side (its depth) in this range.",
+  "families": [
+    {
+      "fixture": "water closet",
+      "words": ["WATER CLOSET", "TOILET", "WC"],
+      "drawn": [
+        {"part": [12.0, 19.0, 14.0, 25.0], "beside": [5.0, 12.0, 15.0, 27.0], "what": "its bowl and tank"},
+        {"part": [12.0, 19.0, 14.0, 25.0], "rounded": true, "weak": true, "what": "its bowl, no tank drawn as an outline"}
+      ],
+      "_drawn": "An elongated or round bowl (14-15 in wide, 16-22 in deep) with its tank (about 20 in by 8-10 in) against it; where the tank isn't drawn as an outline, the curved bowl alone (a weaker likeness, taken only when no bowl and tank is near)."
+    },
+    {
+      "fixture": "urinal",
+      "words": ["URINAL"],
+      "drawn": [{"part": [10.0, 20.0, 12.0, 26.0], "what": "its outline"}]
+    },
+    {
+      "fixture": "tub",
+      "words": ["TUB", "BATHTUB", "BATH"],
+      "drawn": [{"part": [24.0, 44.0, 50.0, 76.0], "what": "its outline"}],
+      "holds_no_receptacle": true,
+      "holds_no_receptacle_rule": "NEC 406.9(C): no receptacle within or above the tub space",
+      "_drawn": "A bathtub: 30-36 in by 60 in (54-72 in); where only its basin is drawn, that inner line (about 26 by 55 in). The outer line wins where both are drawn.",
+      "_holds_no_receptacle": "A tub or shower holds no receptacle (NEC 406.9(C)); what is drawn inside it (a drain, an overflow, a grab bar's ends) are its own marks. A circuit label printed over it (a luminaire's tag set on the tub with its leader to the light) never makes one of them a receptacle."
+    },
+    {
+      "fixture": "shower",
+      "words": ["SHOWER"],
+      "drawn": [{"part": [30.0, 72.0, 30.0, 84.0], "what": "its outline"}],
+      "holds_no_receptacle": true,
+      "holds_no_receptacle_rule": "NEC 406.9(C): no receptacle within or above the shower stall",
+      "_drawn": "A shower base or roll-in shower: 32-36 in square up to 36 by 60 in, a roll-in pan up to 60 by 72 in. Listed after the tub: a tub shower is its tub."
+    },
+    {
+      "fixture": "lavatory",
+      "words": ["LAVATORY", "LAV", "VANITY"],
+      "drawn": [
+        {"part": [10.0, 24.0, 10.0, 26.0], "basin": true, "counter_depth_in": [16.0, 23.0], "what": "its basin"},
+        {"counter": [16.0, 23.0, 18.0, 96.0], "what": "the drain in its vanity"}
+      ],
+      "_drawn": "A basin (oval, round or rectangular, 13-22 in) in a vanity 18-22 in deep, or wall-hung with no counter (a weaker likeness); else the drain drawn in its vanity top."
+    },
+    {
+      "fixture": "service sink",
+      "words": ["MOP", "SERVICE SINK", "JANITOR", "MOP SINK", "SLOP SINK"],
+      "drawn": [{"part": [16.0, 36.0, 16.0, 48.0], "basin": true, "weak": true, "what": "its basin"}],
+      "_drawn": "A mop or service sink: a floor basin 24 in square up to 24 by 36 in, in no counter. Listed before the sink."
+    },
+    {
+      "fixture": "sink",
+      "words": ["SINK"],
+      "drawn": [
+        {"part": [12.0, 25.0, 12.0, 36.0], "basin": true, "counter_depth_in": [22.0, 32.0], "counter_required": true, "what": "its basin"}
+      ],
+      "_drawn": "A sink basin (single bowl 13-25 in, double bowl up to 33-36 in) in its counter 24-25 in deep (a kitchen, bar or laundry counter): a rounded box of a basin's size in no counter is a seat or a stool, no sink."
+    }
+  ]
+}

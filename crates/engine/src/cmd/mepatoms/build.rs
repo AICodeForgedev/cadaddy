@@ -7,12 +7,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
 use cadaddy_doc::{Common, Drawing, EntityKind, Handle, Mesh, MeshFace, RawTag, Space};
 use cadaddy_geom::{Bounds2, Vec2, Vec3};
-use cadaddy_walk3d::{BuildingSpec, MepKind, MepRun};
+use cadaddy_walk3d::{BuildingSpec, Made, MepKind, MepRun};
 use serde_json::{Value, json};
 
 use super::super::propfill::WithNote;
 use super::{
-    Atom, BoxRule, Pieces, WireOpts, X3, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
+    Atom, BoxRule, Pieces, WireOpts, X3, bury, cable_pieces, large_conductors, raceway_pieces, raceway_pieces_ending, rule_source, rules, trade_size,
     wires, wires_with,
 };
 
@@ -24,6 +24,25 @@ const MAX_ATOMS: usize = 1_500_000;
 const SIDES: u32 = 8;
 
 /// A device's box in the making: where it is, which way its face looks, and its device.
+/// A device the build gives no box: where a run enters it.
+struct Bare {
+    device: Handle,
+    level: String,
+    circuit: String,
+    entry: Vec3,
+}
+
+/// The boxless device a run's end at `p` is at: within `touch` of its entry, on its level, of the
+/// run's circuit (`circuit`; `None`: any circuit, a routed run's end), the nearest.
+fn touched_bare(bare: &[Bare], level: &str, p: Vec3, touch: f64, circuit: Option<&str>) -> Option<Handle> {
+    bare.iter()
+        .filter(|b| b.level.eq_ignore_ascii_case(level) && circuit.is_none_or(|c| !c.is_empty() && on_circuit(&b.circuit, c)))
+        .map(|b| (b.device, super::dist(b.entry, p)))
+        .filter(|(_, d)| *d <= touch)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| h)
+}
+
 struct DevBox {
     device: Handle,
     level: String,
@@ -31,6 +50,25 @@ struct DevBox {
     /// The point a run enters it at (its top centre; a floor box's: its centre).
     entry: Vec3,
     atom: usize,
+    /// The device's own top centre: where the router ends the device's runs (a gang box sits
+    /// at its first device; the others' runs end at their own device).
+    at: Vec3,
+}
+
+/// A device's pigtail (Q6243): its size and count, the circuit conductor it is spliced to, why.
+struct Pigtail {
+    size: String,
+    landing: String,
+    count: u32,
+    why: String,
+}
+
+/// Equipment fed in its own wiring compartment (no box of ours): where its runs end in it.
+struct DirectDev {
+    device: Handle,
+    level: String,
+    circuit: String,
+    at: Vec3,
 }
 
 /// A gear element (a panel) a home run can end at.
@@ -41,9 +79,12 @@ struct Gear {
     plan: Bounds2,
     /// Its can's height, feet (a conductor's makeup down it to the breaker).
     height_ft: Option<f64>,
+    /// Its can's bottom and top (sheet units), when its body is a mesh.
+    z: Option<(f64, f64)>,
 }
 
 /// A run's 3D path (sheet units) and what it is.
+#[derive(Clone, Debug)]
 struct Path3 {
     pts: Vec<Vec3>,
     run: usize,
@@ -63,6 +104,14 @@ struct GroupKey {
     level: String,
     circuit_tag: String,
     cable: bool,
+    /// Below the slab or in the earth: its own raceway (the underground method), not the one
+    /// above the floor.
+    buried: bool,
+    /// Its callout asks for steel elbows and risers.
+    steel: bool,
+    /// Buried work called for as several conduits on one route (`TWO (2) …`): each copy is its
+    /// own raceway, not runs meeting in a box.
+    copy: usize,
 }
 
 /// What a group's runs are: raceway material or cable kind, circuit, conductors, and sources.
@@ -84,6 +133,8 @@ struct Method {
     devices: Vec<Handle>,
     /// A feeder's run (`mep.feeders` index): its conductors are the feeder's, landing on gear.
     feeder: Option<usize>,
+    /// Below the slab or in the earth ([`GroupKey::buried`]).
+    buried: bool,
 }
 
 /// Whether a box on circuit `boxc` is on a run's `circuit`: the same, or one of a homerun's list
@@ -103,6 +154,168 @@ fn on_circuit(boxc: &str, circuit: &str) -> bool {
     }
 }
 
+/// A wall device that may share a box with its neighbours (rules `gang`): its level, its
+/// family, its wall face's direction, its plan centre and its height (sheet units).
+pub(crate) struct GangSpot {
+    pub level: String,
+    pub family: String,
+    pub normal: Vec2,
+    pub at: Vec2,
+    pub z: f64,
+}
+
+/// Most neighbour pairs looked at when ganging (hostile specs).
+const MAX_GANG_PAIRS: usize = 4_000_000;
+
+/// The union-find root of `i` (path halving, bounded).
+fn gang_root(parent: &mut [usize], mut i: usize) -> usize {
+    for _ in 0..64 {
+        let Some(&p) = parent.get(i) else { break };
+        if p == i {
+            break;
+        }
+        let gp = parent.get(p).copied().unwrap_or(p);
+        if let Some(x) = parent.get_mut(i) {
+            *x = gp;
+        }
+        i = gp;
+    }
+    i
+}
+
+/// The devices that share a box: groups (indices into `spots`) of two or more of one family on
+/// one level and one wall face, each within `reach` along the wall of a neighbour, `height` of
+/// its mounting height and `face` across the face; a group longer than `max` is cut into boxes
+/// of `max` in order along the wall.
+pub(crate) fn gang_groups(spots: &[GangSpot], reach: f64, height: f64, face: f64, max: usize) -> Vec<Vec<usize>> {
+    if max < 2 || !(reach.is_finite() && reach > 0.0) {
+        return Vec::new();
+    }
+    let mut parent: Vec<usize> = (0..spots.len()).collect();
+    let mut buckets: BTreeMap<(String, &str), Vec<usize>> = BTreeMap::new();
+    for (i, sp) in spots.iter().enumerate() {
+        if sp.at.x.is_finite() && sp.at.y.is_finite() && sp.z.is_finite() && sp.normal.len() > 1e-9 {
+            buckets.entry((sp.level.to_ascii_lowercase(), sp.family.as_str())).or_default().push(i);
+        }
+    }
+    let x_of = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.x);
+    let mut pairs = 0usize;
+    for list in buckets.values_mut() {
+        list.sort_by(|a, b| x_of(a).total_cmp(&x_of(b)));
+        for (k, &i) in list.iter().enumerate() {
+            let Some(a) = spots.get(i) else { continue };
+            for &j in list.iter().skip(k + 1) {
+                let Some(b) = spots.get(j) else { continue };
+                if b.at.x - a.at.x > reach || pairs >= MAX_GANG_PAIRS {
+                    break;
+                }
+                pairs += 1;
+                let (na, nb) = (a.normal * (1.0 / a.normal.len()), b.normal * (1.0 / b.normal.len()));
+                let d = b.at - a.at;
+                if na.dot(nb) > 0.9 && (b.z - a.z).abs() <= height && d.dot(na.perp()).abs() <= reach && d.dot(na).abs() <= face {
+                    let (ra, rb) = (gang_root(&mut parent, i), gang_root(&mut parent, j));
+                    if ra != rb
+                        && let Some(x) = parent.get_mut(ra.max(rb))
+                    {
+                        *x = ra.min(rb);
+                    }
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        let r = gang_root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    let mut out = Vec::new();
+    for (_, mut g) in groups.into_iter().filter(|(_, g)| g.len() >= 2) {
+        let along = g.first().and_then(|i| spots.get(*i)).map_or(Vec2::new(1.0, 0.0), |s| (s.normal * (1.0 / s.normal.len())).perp());
+        let at = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.dot(along));
+        g.sort_by(|a, b| at(a).total_cmp(&at(b)));
+        out.extend(g.chunks(max).filter(|c| c.len() >= 2).map(<[usize]>::to_vec));
+    }
+    out
+}
+
+/// The groups of [`gang_groups`] joined by the keynotes that say to gang devices: devices of one
+/// level sharing a key (`keys`, parallel to `spots`; empty: none) are one box however far apart,
+/// when their families may share one (the same family, or both of `power`: power and low voltage
+/// never share one); cut into boxes of `max` along the wall as before. Each group with the key
+/// that joined it (none: ganged by distance alone).
+pub(crate) fn keyed_groups(
+    spots: &[GangSpot],
+    keys: &[String],
+    groups: Vec<Vec<usize>>,
+    power: &[String],
+    max: usize,
+) -> Vec<(Vec<usize>, Option<String>)> {
+    let keyed = |i: usize| keys.get(i).filter(|k| !k.trim().is_empty());
+    if max < 2 || !(0..spots.len()).any(|i| keyed(i).is_some()) {
+        return groups.into_iter().map(|g| (g, None)).collect();
+    }
+    let mut parent: Vec<usize> = (0..spots.len()).collect();
+    let join = |parent: &mut [usize], a: usize, b: usize| {
+        let (ra, rb) = (gang_root(parent, a), gang_root(parent, b));
+        if ra != rb
+            && let Some(x) = parent.get_mut(ra.max(rb))
+        {
+            *x = ra.min(rb);
+        }
+    };
+    for g in &groups {
+        for w in g.windows(2) {
+            if let [a, b] = w {
+                join(&mut parent, *a, *b);
+            }
+        }
+    }
+    let mixes = |a: &str, b: &str| a == b || (power.iter().any(|p| p == a) && power.iter().any(|p| p == b));
+    let mut by_key: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        if let (Some(k), Some(sp)) = (keyed(i), spots.get(i)) {
+            by_key.entry((sp.level.to_ascii_lowercase(), k.clone())).or_default().push(i);
+        }
+    }
+    let mut joined_by: BTreeMap<usize, String> = BTreeMap::new();
+    for ((_, k), list) in by_key.iter().take(MAX_GANG_PAIRS) {
+        let Some(&first) = list.first() else { continue };
+        for &j in list.iter().skip(1).take(max * 4) {
+            let (Some(a), Some(b)) = (spots.get(first), spots.get(j)) else { continue };
+            if mixes(&a.family, &b.family) {
+                join(&mut parent, first, j);
+                joined_by.insert(first, k.clone());
+            }
+        }
+    }
+    let mut out_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        let r = gang_root(&mut parent, i);
+        out_groups.entry(r).or_default().push(i);
+    }
+    let mut out = Vec::new();
+    for (_, mut g) in out_groups.into_iter().filter(|(_, g)| g.len() >= 2) {
+        let key = g.iter().find_map(|i| joined_by.get(i)).cloned();
+        let along = g.first().and_then(|i| spots.get(*i)).map_or(Vec2::new(1.0, 0.0), |s| (s.normal * (1.0 / s.normal.len().max(1e-9))).perp());
+        let at = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.dot(along));
+        g.sort_by(|a, b| at(a).total_cmp(&at(b)));
+        out.extend(g.chunks(max).filter(|c| c.len() >= 2).map(|c| (c.to_vec(), key.clone())));
+    }
+    out
+}
+
+/// A wall device's face direction (`face_normal`, older models' `host_face`), unit length.
+fn face_of(ps: &Props) -> Option<Vec2> {
+    ["face_normal", "host_face"].iter().find_map(|k| {
+        let t = ps.get(k).map(Prop::text)?;
+        let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(Vec2::new(x, y) * (1.0 / x.hypot(y))),
+            _ => None,
+        }
+    })
+}
+
 /// The 3D path of a run: its plan points at their segments' heights (a change of height is a
 /// vertical leg at the corner); a riser straight up from its bottom to its top.
 pub(crate) fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
@@ -119,11 +332,13 @@ pub(crate) fn run_path(r: &MepRun, base_z: f64, upf: f64) -> Vec<Vec3> {
     for (i, w) in r.points.windows(2).enumerate().take(super::MAX_PIECES) {
         if let [a, b] = w {
             let zi = z(i);
-            let pa = Vec3::new(a[0], a[1], zi);
-            if out.last().is_none_or(|q| super::dist(*q, pa) > 1e-9) {
-                out.push(pa);
+            // A zero-length segment (a riser between the heights around it) adds no point of
+            // its own: the path's end is the box's top, not that point twice.
+            for q in [Vec3::new(a[0], a[1], zi), Vec3::new(b[0], b[1], zi)] {
+                if out.last().is_none_or(|l| super::dist(*l, q) > 1e-9) {
+                    out.push(q);
+                }
             }
-            out.push(Vec3::new(b[0], b[1], zi));
         }
     }
     out.retain(|p| p.is_finite());
@@ -176,6 +391,265 @@ impl Nodes {
     fn degree(&self, n: usize) -> usize {
         self.members.get(n).map_or(0, Vec::len)
     }
+}
+
+/// Most segment pairs one group's raceway is compared over when it is laid once (hostile specs).
+const MAX_ONCE_PAIRS: usize = 4_000_000;
+/// Two pieces of raceway this close to parallel (the sine of the angle between them) lie on one
+/// line when they are also within the joint tolerance of it.
+const ONCE_PARALLEL: f64 = 0.01;
+
+/// What laying a group's raceway once took out: the stretches another of its runs already ran,
+/// their length (sheet units), and the runs split where another leaves them (a junction there).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Once {
+    stretches: usize,
+    removed: f64,
+    tees: usize,
+}
+
+/// What laying one group's raceway once left: its pieces, what went, and where its cut runs
+/// ended as routed (another group's run ending at one of them still meets this group there).
+struct Laid {
+    paths: Vec<Path3>,
+    once: Once,
+    cut_ends: Vec<Vec3>,
+}
+
+/// The distance from `p` to the piece `a`–`b`, and where along it (0 at `a`, its length at `b`).
+fn along(p: Vec3, a: Vec3, b: Vec3) -> (f64, f64) {
+    let l = super::dist(a, b);
+    if !(l.is_finite() && l > 1e-12) {
+        return (super::dist(p, a), 0.0);
+    }
+    let d = (b - a) * (1.0 / l);
+    let t = (p - a).dot(d).clamp(0.0, l);
+    (super::dist(p, a + d * t), t)
+}
+
+/// One circuit's raceway laid once along each route (Q6245): the conductors of a circuit that
+/// run one way together are in one raceway (NEC 300.3(B)), so where a later run of the group
+/// runs a stretch an earlier one already runs (two legs of the circuit's tree leaving one box the
+/// same way, the same leg routed twice) that stretch goes from the later run, and the runs are
+/// split where one leaves another (three ends meet there: the junction box [`stitch`] finds).
+/// The paths in order (each cut into the pieces left of it), what went, and the cut runs' ends.
+fn lay_once(paths: Vec<Path3>, tol: f64) -> Laid {
+    let tol = if tol.is_finite() && tol > 0.0 { tol } else { 1e-6 };
+    let mut kept: Vec<(Vec3, Vec3)> = Vec::new();
+    let mut out: Vec<Path3> = Vec::new();
+    let mut once = Once::default();
+    // Where the cut runs end (as drawn, and their new ends): another run passing one is split.
+    let mut ends: Vec<Vec3> = Vec::new();
+    let mut cut_ends: Vec<Vec3> = Vec::new();
+    let mut pairs = 0usize;
+    for p in paths {
+        // Each piece of it: what of it no earlier run runs (its free stretches, along it), and
+        // what went.
+        let mut segs: Vec<(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)> = Vec::new();
+        for w in p.pts.windows(2) {
+            let &[a, b] = w else { continue };
+            let l = super::dist(a, b);
+            if !(l.is_finite() && l > 1e-9) {
+                // (A point twice: kept as the run has it.)
+                segs.push((a, b, 0.0, Vec::new(), 0));
+                continue;
+            }
+            let d = (b - a) * (1.0 / l);
+            // The stretches of this piece an earlier run runs.
+            let mut cover: Vec<(f64, f64)> = Vec::new();
+            for &(ka, kb) in &kept {
+                pairs += 1;
+                if pairs > MAX_ONCE_PAIRS {
+                    break;
+                }
+                let kl = super::dist(ka, kb);
+                if !(kl.is_finite() && kl > 1e-9) {
+                    continue;
+                }
+                let e = (kb - ka) * (1.0 / kl);
+                if d.cross(e).len() > ONCE_PARALLEL {
+                    continue;
+                }
+                // On one line: both ends of the earlier piece within the tolerance of this one's line.
+                let off = |q: Vec3| {
+                    let t = (q - a).dot(d);
+                    (super::dist(q, a + d * t), t)
+                };
+                let ((da, ta), (db, tb)) = (off(ka), off(kb));
+                if da > tol || db > tol {
+                    continue;
+                }
+                let (lo, hi) = (ta.min(tb).max(0.0), ta.max(tb).min(l));
+                if hi - lo > tol {
+                    cover.push((lo, hi));
+                }
+            }
+            cover.sort_by(|x, y| x.0.total_cmp(&y.0));
+            let mut merged: Vec<(f64, f64)> = Vec::new();
+            for (lo, hi) in cover {
+                match merged.last_mut() {
+                    Some(m) if lo <= m.1 + tol => m.1 = m.1.max(hi),
+                    _ => merged.push((lo, hi)),
+                }
+            }
+            // What is left of it: the stretches between, longer than the tolerance (no stub).
+            let mut free: Vec<(f64, f64)> = Vec::new();
+            let mut at = 0.0;
+            for &(lo, hi) in &merged {
+                if lo - at > tol {
+                    free.push((at, lo));
+                }
+                at = at.max(hi);
+            }
+            if l - at > tol {
+                free.push((at, l));
+            }
+            segs.push((a, b, l, free, merged.len()));
+        }
+        // A rise out of a box or a drop into one is each raceway's own (one conduit in, one out
+        // of a box, each in its own knockout), unless the run goes on along the other beyond it:
+        // then the two leave the box as one.
+        let vertical = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.y - b.y).len() <= tol && (a.z - b.z).abs() > tol;
+        let whole =
+            |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.3.len() == 1 && seg.3.first().is_some_and(|f| f.0 <= tol && f.1 >= seg.2 - tol);
+        let starts_covered = |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.2 > 0.0 && seg.3.first().is_none_or(|f| f.0 > tol);
+        let ends_covered = |seg: &(Vec3, Vec3, f64, Vec<(f64, f64)>, usize)| seg.2 > 0.0 && seg.3.last().is_none_or(|f| f.1 < seg.2 - tol);
+        let carried: Vec<bool> = (0..segs.len())
+            .map(|i| {
+                let Some(seg) = segs.get(i) else { return true };
+                if seg.2 <= 0.0 || whole(seg) || !vertical(seg.0, seg.1) {
+                    return true;
+                }
+                // The next piece of length after it, and the one before it.
+                let next = segs.iter().skip(i + 1).find(|x| x.2 > 0.0);
+                let prev = segs.iter().take(i).rev().find(|x| x.2 > 0.0);
+                next.is_some_and(|x| !vertical(x.0, x.1) && starts_covered(x)) || prev.is_some_and(|x| !vertical(x.0, x.1) && ends_covered(x))
+            })
+            .collect();
+        for (seg, keep_cut) in segs.iter_mut().zip(&carried) {
+            if !keep_cut {
+                seg.3 = vec![(0.0, seg.2)];
+            }
+        }
+        let mut cut = false;
+        let mut cur: Vec<Vec3> = p.pts.first().copied().into_iter().collect();
+        let mut pieces: Vec<Vec<Vec3>> = Vec::new();
+        for (a, b, l, free, stretches) in segs {
+            if l <= 0.0 {
+                if cur.last().is_some_and(|q| super::dist(*q, a) <= 1e-9) {
+                    cur.push(b);
+                }
+                continue;
+            }
+            let d = (b - a) * (1.0 / l);
+            let gone = l - free.iter().map(|(x, y)| y - x).sum::<f64>();
+            if gone > tol {
+                once.stretches += stretches.max(1);
+                once.removed += gone;
+                cut = true;
+            }
+            let mut free_to = 0.0;
+            for (n, (lo, hi)) in free.iter().copied().enumerate() {
+                let (pa, pb) = if lo <= 0.0 && hi >= l { (a, b) } else { (a + d * lo, a + d * hi) };
+                if n > 0 || lo > tol || cur.is_empty() {
+                    // A stretch went before this one: the piece so far ends, a new one starts.
+                    if cur.len() >= 2 {
+                        pieces.push(std::mem::take(&mut cur));
+                    }
+                    cur = vec![pa];
+                }
+                cur.push(pb);
+                kept.push((pa, pb));
+                free_to = hi;
+            }
+            if free.is_empty() || l - free_to > tol {
+                // It ends in a stretch another run runs: the next piece starts at its end.
+                if cur.len() >= 2 {
+                    pieces.push(std::mem::take(&mut cur));
+                }
+                cur = vec![b];
+            }
+        }
+        if !cut {
+            // Nothing of it run twice: the run as it is, point for point.
+            out.push(p);
+            continue;
+        }
+        if cur.len() >= 2 {
+            pieces.push(cur);
+        }
+        ends.extend(p.pts.first().copied());
+        ends.extend(p.pts.last().copied());
+        cut_ends.extend(p.pts.first().copied());
+        cut_ends.extend(p.pts.last().copied());
+        for pc in &pieces {
+            ends.extend(pc.first().copied());
+            ends.extend(pc.last().copied());
+        }
+        out.extend(pieces.into_iter().map(|pts| Path3 { pts, run: p.run }));
+    }
+    if ends.is_empty() {
+        return Laid { paths: out, once, cut_ends };
+    }
+    // A run another's cut end lies on (not at its own ends) is split there.
+    let mut split: Vec<Path3> = Vec::with_capacity(out.len());
+    for p in out {
+        let last = p.pts.len().saturating_sub(1);
+        let (first_pt, last_pt) = (p.pts.first().copied(), p.pts.last().copied());
+        // At one of its own ends (a point twice there included): no split.
+        let own_end = |q: Vec3| [first_pt, last_pt].iter().flatten().any(|e| super::dist(*e, q) <= tol);
+        // Where a cut run's end lies on it (inside a piece, or on a corner that isn't its end).
+        let splits_at = |i: usize, a: Vec3, b: Vec3| -> Vec<f64> {
+            let l = super::dist(a, b);
+            if !(l.is_finite() && l > tol) {
+                return Vec::new();
+            }
+            let mut at: Vec<f64> = ends
+                .iter()
+                .filter(|q| !own_end(**q))
+                .filter_map(|q| {
+                    let (dd, t) = along(*q, a, b);
+                    let inner = t > tol && t < l - tol || t >= l - tol && i + 1 < last;
+                    (dd <= tol && inner).then_some(t)
+                })
+                .collect();
+            at.sort_by(f64::total_cmp);
+            at.dedup_by(|x, y| (*x - *y).abs() <= tol);
+            at
+        };
+        if !p.pts.windows(2).enumerate().any(|(i, w)| matches!(w, &[a, b] if !splits_at(i, a, b).is_empty())) {
+            split.push(p);
+            continue;
+        }
+        let mut cur: Vec<Vec3> = Vec::new();
+        let mut parts: Vec<Vec<Vec3>> = Vec::new();
+        for (i, w) in p.pts.windows(2).enumerate() {
+            let &[a, b] = w else { continue };
+            if cur.is_empty() {
+                cur.push(a);
+            }
+            let l = super::dist(a, b);
+            let at = splits_at(i, a, b);
+            let d = if l > 1e-9 { (b - a) * (1.0 / l) } else { Vec3::new(0.0, 0.0, 0.0) };
+            for &t in &at {
+                let q = if t >= l - tol { b } else { a + d * t };
+                cur.push(q);
+                if cur.len() >= 2 {
+                    parts.push(std::mem::take(&mut cur));
+                    once.tees += 1;
+                }
+                cur.push(q);
+            }
+            if at.is_empty() || cur.last().is_none_or(|q| super::dist(*q, b) > 1e-9) {
+                cur.push(b);
+            }
+        }
+        if cur.len() >= 2 {
+            parts.push(cur);
+        }
+        split.extend(parts.into_iter().map(|pts| Path3 { pts, run: p.run }));
+    }
+    Laid { paths: split, once, cut_ends }
 }
 
 /// Runs joined where exactly two ends meet: each chain goes from a free end, a junction (three
@@ -381,7 +855,12 @@ pub(crate) fn box_kind(kind: &str, layer: &str) -> Option<&'static str> {
         "thermostat"
     } else if k.contains("data") || k.contains("voltage") || k.contains("tel") || k.contains("tv") || k.contains("catv") {
         "low voltage outlet"
-    } else if k.contains("connection") || k.contains("junction") || k.contains("disconnect") {
+    } else if k.contains("junction") {
+        "junction box"
+    } else if k.contains("disconnect") {
+        // A disconnect is its own enclosure: no outlet box.
+        "disconnect"
+    } else if k.contains("connection") {
         "equipment connection"
     } else if k == "device" {
         "device"
@@ -464,9 +943,22 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     };
 
     // -- What each run is: raceway or cable, its material, circuit and conductors. --
+    // Below the slab or in the earth: the spec's underground method (its wiring-methods table),
+    // else the rules' underground raceway; never the method above the floor.
+    let below_doc = super::super::ugplan::below_app(d).and_then(|a| {
+        let (k, _) = a.methods.iter().find_map(|m| rl.raceway_named(m))?;
+        let what = format!("spec {} {}: {}: {}", a.section.trim(), a.item.trim(), a.application.trim(), a.methods.join(", "));
+        Some((k.to_string(), Source::from_doc(SourceKind::Print, &what)))
+    });
+    let below_rule = rl
+        .raceways
+        .get_key_value(rl.underground_raceway.as_str())
+        .map(|(k, _)| (k.clone(), Source::from_doc(SourceKind::Default, &rl.underground_raceway_source)));
     let ve_feeders = super::super::valueeng::approved_feeders(d);
     let mut paths: BTreeMap<GroupKey, (Method, Vec<Path3>)> = BTreeMap::new();
     let mut cable_circuits: BTreeSet<String> = BTreeSet::new();
+    // The buried runs seen so far by their route: the next identical one is another conduit.
+    let mut copies: HashMap<String, usize> = HashMap::new();
     for (i, r) in sp.mep.runs.iter().enumerate().take(MAX_RUNS) {
         let Some(sy) = sp.mep.systems.iter().find(|s| s.name == r.system).filter(|s| s.show) else { continue };
         if !matches!(sy.kind, MepKind::Conduit | MepKind::Cable) {
@@ -543,7 +1035,38 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             rl.raceway_named(v).map(|(k, _)| (false, k.to_string(), s.clone()))
         };
-        let (cable, name, source) = from_named
+        let buried = matches!(sy.kind, MepKind::Conduit) && (super::super::ugplan::ug_system(&r.system) || super::super::ugplan::below_slab(sp, r));
+        let steel = buried && r.height_source.contains(super::super::ugplan::STEEL_ELLS);
+        let copy = if buried && feeder.is_none() && copies.len() < MAX_RUNS {
+            let n = copies.entry(format!("{}|{}|{:?}|{:?}|{:?}|{:?}", r.system, r.level, r.points, r.bottoms_ft, r.top_ft, r.size_in)).or_default();
+            *n += 1;
+            *n - 1
+        } else {
+            0
+        };
+        // Buried: the spec's underground method, else the raceway its buried system's own name
+        // or layer says, else the rules'. A circuit's label names its raceway above the floor:
+        // where it differs it is kept beside the material built, with the reason.
+        let below = buried
+            .then(|| {
+                let (k, s) =
+                    below_doc.clone().or_else(|| from_system().filter(|(c, _, _)| !c).map(|(_, k, s)| (k, s))).or_else(|| below_rule.clone())?;
+                let s = match from_named.as_ref().filter(|(c, n, _)| *c || *n != k) {
+                    Some((_, n, ns)) => Source::from_doc(
+                        s.kind,
+                        &format!(
+                            "{} (below the slab; the circuit names {n}: {}, kept for above the floor)",
+                            s.doc.clone().unwrap_or_default(),
+                            ns.doc.clone().unwrap_or_default()
+                        ),
+                    ),
+                    None => s,
+                };
+                Some((false, k, s))
+            })
+            .flatten();
+        let (cable, name, source) = below
+            .or(from_named)
             .or_else(from_system)
             .or_else(from_rule)
             .unwrap_or_else(|| (false, rl.default_raceway.clone(), Source::from_doc(SourceKind::Default, &rl.default_raceway_source)));
@@ -572,7 +1095,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some(f) => f.from.clone(),
             None => panel,
         };
-        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable };
+        let key = GroupKey { system: r.system.clone(), level: level.name.clone(), circuit_tag: ctag, cable, buried, steel, copy };
         let devices: Vec<Handle> = pathway
             .map(|t| {
                 ["device", "joins"]
@@ -581,8 +1104,42 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .collect()
             })
             .unwrap_or_default();
-        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder };
+        let m = Method { cable, name, source, circuit, panel, conductors, conductors_source: csrc, estimated, routed, devices, feeder, buried };
         paths.entry(key).or_insert_with(|| (m, Vec::new())).1.push(Path3 { pts, run: i });
+    }
+    // The raceway the model lays for a circuit (routed or estimated), laid once along each route
+    // (Q6245). Drawn conduit stays as drawn; buried copies of one route, a feeder's sets, cable
+    // (each cable its own) and a low-voltage outlet's pathway are each their own.
+    let joint = rl.joint_tol_in.max(0.01) / 12.0 * upf;
+    let mut laid = Once::default();
+    // Where a shared raceway's runs end, by level (Q6206: the homeruns' open ends meet it there
+    // in a junction box).
+    let mut shared_ends: BTreeMap<String, Vec<(Vec3, usize)>> = BTreeMap::new();
+    for (gi, (key, (_, ps))) in paths.iter().enumerate() {
+        for p in ps.iter().take(MAX_RUNS).filter(|p| sp.mep.runs.get(p.run).is_some_and(|r| r.id.contains(":shared-"))) {
+            let at = shared_ends.entry(key.level.clone()).or_default();
+            at.extend(p.pts.first().map(|q| (*q, gi)));
+            at.extend(p.pts.last().map(|q| (*q, gi)));
+        }
+    }
+    // Where a group's cut run ended at a shared raceway's end: the group's chain still ends
+    // there, so it meets the shared raceway in its junction as it did.
+    let mut meets: BTreeMap<GroupKey, Vec<Vec3>> = BTreeMap::new();
+    for (gi, (key, (m, ps))) in paths.iter_mut().enumerate() {
+        if key.cable || key.buried || key.copy > 0 || m.feeder.is_some() || !m.devices.is_empty() || !(m.routed || m.estimated) {
+            continue;
+        }
+        let got = lay_once(std::mem::take(ps), joint);
+        *ps = got.paths;
+        laid.stretches += got.once.stretches;
+        laid.removed += got.once.removed;
+        laid.tees += got.once.tees;
+        let others = shared_ends.get(key.level.as_str());
+        let at: Vec<Vec3> =
+            got.cut_ends.into_iter().filter(|q| others.is_some_and(|o| o.iter().any(|(p, g)| *g != gi && super::dist(*p, *q) <= joint))).collect();
+        if !at.is_empty() {
+            meets.insert(key.clone(), at);
+        }
     }
 
     // -- The gear (panels) home runs end at. --
@@ -592,7 +1149,7 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .filter(|e| super::super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment")))
         .filter_map(|e| {
             let b = cadaddy_doc::entity_bounds(d, e, 0);
-            let height_ft = match &e.kind {
+            let z = match &e.kind {
                 EntityKind::Mesh(m) => {
                     let (lo, hi) = m
                         .vertices
@@ -600,16 +1157,18 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         .take(100_000)
                         .filter(|p| p.z.is_finite())
                         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
-                    Some((hi - lo) / upf).filter(|h| h.is_finite() && *h > 0.0)
+                    (lo.is_finite() && hi.is_finite() && hi > lo).then_some((lo, hi))
                 }
                 _ => None,
             };
+            let height_ft = z.map(|(lo, hi)| (hi - lo) / upf);
             (!b.is_empty()).then(|| Gear {
                 handle: e.handle,
                 level: super::super::bspec::made_level(e).unwrap_or_default(),
                 tag: super::super::bimlook::made_tag(e, "tag").unwrap_or_default().to_string(),
                 plan: Bounds2::from_points([b.min, b.max]),
                 height_ft,
+                z,
             })
         })
         .take(MAX_DEVICES)
@@ -642,7 +1201,25 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             Some((h, super::super::conduitroute::box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl)))
         })
         .collect();
+    // The devices whose circuit conductors are larger than their terminals take: the pigtail
+    // the routing gave each (Q6243).
+    let pigtails: HashMap<Handle, Pigtail> = super::super::conduitroute::stored_report(d)
+        .and_then(|r| r["box_fill"]["pending"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .take(MAX_DEVICES)
+        .filter_map(|p| {
+            let h = Handle(u64::from_str_radix(p["device"].as_str()?, 16).ok()?);
+            let pg = p.get("pigtail")?;
+            let text = |k: &str| pg[k].as_str().map(str::to_string);
+            let count = pg["count"].as_u64().and_then(|n| u32::try_from(n).ok()).unwrap_or(1);
+            Some((h, Pigtail { size: text("size")?, landing: text("landing")?, count, why: text("why").unwrap_or_default() }))
+        })
+        .collect();
     let mut boxes_upsized = 0usize;
+    // Each box atom's stock (its knockouts), and the largest raceway landing in it (Q6243).
+    let mut box_rule_at: HashMap<usize, BoxRule> = HashMap::new();
+    let mut box_raceway: HashMap<usize, f64> = HashMap::new();
     let devices: Vec<(Handle, String, Props, String, Bounds2, f64, f64)> = d
         .model
         .iter()
@@ -692,13 +1269,84 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         .collect();
     // Luminaires by type: (with a box, without, why).
     let mut lum_boxes: BTreeMap<String, (usize, usize, BTreeSet<String>)> = BTreeMap::new();
+    // The devices that take no box (a luminaire wired in its own compartment): where a run enters
+    // one (its top), its level and circuit. A run ends in it as in a box.
+    let mut bare: Vec<Bare> = Vec::new();
     // A switch's or sensor's box with no circuit of its own is on the circuit of what it
     // controls (the router joins it to that circuit: its switch leg lands in it).
     let circuit_of: HashMap<Handle, String> =
         devices.iter().filter_map(|(h, _, ps, ..)| Some((*h, ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty())?))).collect();
+    // Devices side by side in one wall share a box (rules `gang`): by device, its group.
+    let ceiling_of = |level: &str| sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
+    let mut spot_devs: Vec<Handle> = Vec::new();
+    let mut spots: Vec<GangSpot> = Vec::new();
+    // The key a keynote saying to gang them gives the devices it points at.
+    let mut spot_keys: Vec<String> = Vec::new();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
-        let Some(bk) = box_kind(&kind, layer) else { continue };
+        let Some(family) = box_kind(&kind, layer).and_then(|bk| rl.gang_family(bk)) else { continue };
+        let theirs_no_box =
+            sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).is_some_and(|x| {
+                let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
+                !x.ours_for(&kind, &fa).iter().any(|i| i.item == "box")
+            });
+        let at_ceiling = ceiling_of(level).is_some_and(|c| *z1 >= c - upf);
+        let wall = face_of(ps).filter(|_| !theirs_no_box && !at_ceiling && ps.get("misplaced").is_none() && !brackets.contains_key(h));
+        let Some(normal) = wall else { continue };
+        spot_devs.push(*h);
+        spot_keys.push(ps.get("gang_with").map(Prop::text).unwrap_or_default());
+        spots.push(GangSpot { level: level.clone(), family: family.to_string(), normal, at: plan.center(), z: (z0 + z1) / 2.0 });
+    }
+    let inch = upf / 12.0;
+    let mut gang_of: HashMap<Handle, usize> = HashMap::new();
+    let mut gangs: Vec<Vec<Handle>> = Vec::new();
+    // The keynote that ganged a group, by group (none: its devices' distance did).
+    let mut gang_note: HashMap<usize, String> = HashMap::new();
+    let by_distance = gang_groups(&spots, rl.gang.reach_in * inch, rl.gang.height_in * inch, rl.gang.face_in * inch, rl.gang.max);
+    for (g, key) in keyed_groups(&spots, &spot_keys, by_distance, &rl.gang.power_families, rl.gang.max) {
+        let hs: Vec<Handle> = g.iter().filter_map(|i| spot_devs.get(*i).copied()).collect();
+        if let Some(k) = key {
+            // The keynote by the devices (their `keynotes`), else the key's own words.
+            let note = g
+                .iter()
+                .filter_map(|i| spot_devs.get(*i))
+                .filter_map(|h| devices.iter().find(|(dh, ..)| dh == h))
+                .filter_map(|(_, _, ps, ..)| ps.get("keynotes").map(Prop::text))
+                .flat_map(|t| t.split(" | ").map(str::to_string).collect::<Vec<_>>())
+                .find(|c| super::super::keynotes::device_requirements(super::super::keynotes::cited_text(c)).is_some_and(|q| q.ganged))
+                .unwrap_or(k);
+            gang_note.insert(gangs.len(), note);
+        }
+        for h in &hs {
+            gang_of.insert(*h, gangs.len());
+        }
+        gangs.push(hs);
+    }
+    // Each ganged group's box once made: its atom and the point its runs enter it.
+    let mut gang_box: HashMap<usize, (usize, Vec3)> = HashMap::new();
+    let centre_of: HashMap<Handle, (Vec2, f64)> = devices.iter().map(|(h, _, _, _, plan, z0, z1)| (*h, (plan.center(), (z0 + z1) / 2.0))).collect();
+    // The boxes made, by why (the device's kind, ganged or alone), and the devices in a shared one.
+    let mut box_reasons: BTreeMap<String, usize> = BTreeMap::new();
+    let mut no_box: BTreeMap<String, usize> = BTreeMap::new();
+    let mut direct: Vec<DirectDev> = Vec::new();
+    let mut ganged_devices = 0usize;
+    // Each device's provenance: its box's (Q6216).
+    let device_made: HashMap<Handle, (Made, String)> =
+        devices.iter().filter_map(|(h, ..)| Some((*h, d.entity(*h).and_then(|e| super::super::provenance::of_element(e))?))).collect();
+    for (h, level, ps, layer, plan, z0, z1) in &devices {
+        let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
+        let Some(bk) = box_kind(&kind, layer) else {
+            // A device of a kind that takes no box, on a circuit: its run ends in it.
+            let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty());
+            if let Some(circuit) = circuit
+                && ps.get("misplaced").is_none()
+                && bare.len() < MAX_DEVICES
+            {
+                let c = plan.center();
+                bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+            }
+            continue;
+        };
         let theirs = sr.class_of(&kind, "").and_then(|c| scope.iter().find(|x| x.class == c.class)).filter(|x| x.by_others()).map(|x| {
             let fa = ps.get("fa_kind").map(Prop::text).unwrap_or_default();
             let ours = x.ours_for(&kind, &fa);
@@ -724,12 +1372,17 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             row.2.insert(why_box(dec));
             if !dec.takes_box {
+                *no_box.entry("luminaire: its type carries its own junction box".into()).or_default() += 1;
+                let circuit = ps.get("circuit").map(Prop::text).filter(|c| !c.trim().is_empty()).unwrap_or_default();
+                let c = plan.center();
+                if bare.len() < MAX_DEVICES {
+                    bare.push(Bare { device: *h, level: level.clone(), circuit, entry: Vec3::new(c.x, c.y, *z1) });
+                }
                 continue;
             }
         }
         // A device of no known kind at the ceiling takes a ceiling box.
-        let ceiling = sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
-        let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling.is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
+        let bk = if matches!(bk, "device" | "low voltage outlet") && ceiling_of(level).is_some_and(|c| *z1 >= c - upf) { "luminaire" } else { bk };
         let circuit = ps
             .get("circuit")
             .map(Prop::text)
@@ -737,25 +1390,45 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             .or_else(|| super::super::conduitroute::controlled_circuit(&super::super::conduitroute::controls_of(ps), &circuit_of))
             .unwrap_or_default();
         let on_cable = cable_circuits.contains(&circuit);
-        let Some((br, ring)) = rl.box_for(bk, on_cable) else { continue };
+        // A device of no known kind that no circuit feeds isn't known to be wired: no box.
+        if bk == "device" && circuit.trim().is_empty() {
+            *no_box.entry("device of no known kind on no circuit (a review question)".into()).or_default() += 1;
+            continue;
+        }
+        let Some((br, ring)) = rl.box_for(bk, on_cable) else {
+            // Equipment fed in its own wiring compartment: its runs end in it, no box of ours.
+            if rl.box_choice(bk).is_some() {
+                let c = plan.center();
+                direct.push(DirectDev { device: *h, level: level.clone(), circuit: circuit.clone(), at: Vec3::new(c.x, c.y, *z1) });
+                *no_box.entry(format!("{bk}: fed in its own wiring compartment")).or_default() += 1;
+            } else {
+                *no_box.entry(format!("{bk}: its own enclosure")).or_default() += 1;
+            }
+            continue;
+        };
+        let ring_size = rl.box_choice(bk).map(|c| c.ring_size.trim().to_string()).filter(|r| !r.is_empty());
+        // A device ganged with its neighbours: in their one box, once it is made.
+        let gang = gang_of.get(h).copied();
+        let members: &[Handle] = gang.and_then(|g| gangs.get(g)).map_or(&[], Vec::as_slice);
+        if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
+            external.push((bi, *h));
+            let c = plan.center();
+            boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
+            ganged_devices += 1;
+            continue;
+        }
+        let n_gang = members.len().max(1);
+        let br = if n_gang > 1 { rl.gang_box(n_gang, on_cable).unwrap_or(br) } else { br };
         // A box that holds what the routing brings into it (NEC 314.16, Q6206): the smallest
         // steel box of the trade's table that does, else the largest with a review item.
-        let need = box_need.get(h).copied().unwrap_or(0.0);
+        let need = if n_gang > 1 {
+            members.iter().map(|m| box_need.get(m).copied().unwrap_or(0.0)).sum::<f64>()
+        } else {
+            box_need.get(h).copied().unwrap_or(0.0)
+        };
         let mut fill_note: Option<(&'static str, String, String)> = None;
         let br = if need > br.cubic_in + 1e-9 && br.material == "steel" {
-            let mut bigger: Vec<&super::BoxRule> = rl
-                .boxes
-                .iter()
-                .filter(|(k, b)| {
-                    b.material == "steel"
-                        && b.cubic_in > br.cubic_in + 1e-9
-                        && (k.starts_with("sq") || k.starts_with("oct"))
-                        && !b.item.contains("fan")
-                })
-                .map(|(_, b)| b)
-                .collect();
-            bigger.sort_by(|a, b| a.cubic_in.total_cmp(&b.cubic_in));
-            match bigger.iter().copied().find(|b| b.cubic_in + 1e-9 >= need).or_else(|| bigger.last().copied()) {
+            match rl.bigger_box(br, need, n_gang) {
                 Some(b) => {
                     boxes_upsized += 1;
                     fill_note = Some(if b.cubic_in + 1e-9 >= need {
@@ -787,21 +1460,24 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             dims_in: [2.25, 3.75, 0.5],
             cubic_in: 0.0,
             material: "steel".into(),
+            gangs: 1,
+            // A bracket (a mud ring): no knockouts, the raceway ends at it.
+            max_raceway_in: 0.0,
             source: src.clone(),
         });
         let (br, ring) = match &lv_bracket {
             Some(b) => (b, false),
             None => (br, ring),
         };
-        let c = plan.center();
-        let out = ["face_normal", "host_face"].iter().find_map(|k| {
-            let t = ps.get(k).map(Prop::text)?;
-            let v: Vec<f64> = t.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-            match v[..] {
-                [x, y] if x.is_finite() && y.is_finite() && x.hypot(y) > 1e-9 => Some(Vec2::new(x, y) * (1.0 / x.hypot(y))),
-                _ => None,
-            }
-        });
+        // A ganged box stands at the middle of its devices.
+        let (c, zmid) = if n_gang > 1 {
+            let pts: Vec<(Vec2, f64)> = members.iter().filter_map(|m| centre_of.get(m).copied()).collect();
+            let k = pts.len().max(1) as f64;
+            (pts.iter().fold(Vec2::new(0.0, 0.0), |a, (p, _)| a + *p) * (1.0 / k), pts.iter().map(|(_, z)| *z).sum::<f64>() / k)
+        } else {
+            (plan.center(), (z0 + z1) / 2.0)
+        };
+        let out = face_of(ps);
         let [bw, bh, bd] = br.dims_in.map(|v| v.max(0.5) / 12.0 * upf);
         let floor = sp.level(level).map_or(0.0, |l| l.elevation_ft * upf);
         let (centre, entry, along, across) = match (bk, out) {
@@ -818,13 +1494,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     .filter(|f| f.out.dot(o) > 0.5)
                     .map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
                 let mid = face - o * (bd / 2.0);
-                let zc = (z0 + z1) / 2.0;
-                (Vec3::new(mid.x, mid.y, zc), Vec3::new(mid.x, mid.y, zc + bh / 2.0), o.perp(), bd)
+                (Vec3::new(mid.x, mid.y, zmid), Vec3::new(mid.x, mid.y, zmid + bh / 2.0), o.perp(), bd)
             }
-            _ => {
-                let zc = (z0 + z1) / 2.0;
-                (Vec3::new(c.x, c.y, zc), Vec3::new(c.x, c.y, zc + bh / 2.0), Vec2::new(1.0, 0.0), bd)
-            }
+            _ => (Vec3::new(c.x, c.y, zmid), Vec3::new(c.x, c.y, zmid + bh / 2.0), Vec2::new(1.0, 0.0), bd),
+        };
+        let keynoted = gang.and_then(|g| gang_note.get(&g));
+        let gang_words = match keynoted {
+            Some(note) if n_gang > 1 => format!(" — ganged by its keynote ({note}): {}", super::super::keynotes::device_rules().gang_source),
+            _ if n_gang > 1 => format!(" — {}", rl.gang.source),
+            _ => String::new(),
         };
         let ctx = AtomCtx {
             level: level.clone(),
@@ -835,7 +1513,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             estimated: false,
             source: *h,
             body: Some((centre, along, bw, across, bh)),
-            src: rule_source(&format!("{} — {}", rl.box_source, br.source)),
+            src: rule_source(&format!("{} — {}{gang_words}", rl.box_source, br.source)),
+            made: device_made.get(h).map_or(Made::Drawn, |m| m.0),
+            basis: device_made.get(h).map(|m| m.1.clone()).unwrap_or_default(),
         };
         let mut a = Atom { kind: "box", item: br.item.clone(), ty: br.size.clone(), size: br.size.clone(), a: centre, b: centre, ..Atom::default() };
         a.extra.push(("cubic_in", format!("{}", br.cubic_in), br.source.clone()));
@@ -848,23 +1528,48 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if let Some(dec) = &lum_box {
             a.extra.push(("box_needed", why_box(dec), dec.source.clone()));
         }
+        if n_gang > 1 {
+            let why =
+                keynoted.map_or_else(|| rl.gang.source.clone(), |note| format!("{note}: {}", super::super::keynotes::device_rules().gang_source));
+            a.extra.push(("gang", n_gang.to_string(), why));
+            a.extra.push(("devices", members.iter().map(|m| m.hex()).collect::<Vec<_>>().join(","), "computed".into()));
+        }
         let bi = atoms.len();
+        box_rule_at.insert(bi, br.clone());
         atoms.push((a, ctx.clone()));
         external.push((bi, *h));
+        if let Some(g) = gang {
+            gang_box.insert(g, (bi, entry));
+            ganged_devices += 1;
+        }
+        let why = if lv_bracket.is_some() {
+            "low voltage bracket".to_string()
+        } else if n_gang > 1 {
+            format!("{bk}, {n_gang} gang")
+        } else {
+            bk.to_string()
+        };
+        *box_reasons.entry(why).or_default() += 1;
+        // A wall box's ring on its face; a ceiling box's (a luminaire's) under it.
+        let ceiling_box = matches!(bk, "luminaire" | "fan");
+        let ring_face = if ceiling_box { Some(Vec3::new(0.0, 0.0, -1.0)) } else { out.map(|o| Vec3::new(o.x, o.y, 0.0)) };
         if ring
             && !on_cable
-            && let Some(o) = out
+            && let Some(dir) = ring_face
         {
             let depth = ps.get("mud_ring").map(Prop::text).and_then(|t| t.parse::<f64>().ok()).filter(|v| v.is_finite() && *v > 0.0 && *v < 6.0);
             let (depth, src) = depth.map_or((rl.ring.depth_in, rl.ring.source.clone()), |v| {
                 (v, "the box's wall type: the board on its face (partition legend)".to_string())
             });
-            let face = Vec3::new(centre.x, centre.y, centre.z) + Vec3::new(o.x, o.y, 0.0) * (bd / 2.0 + depth / 24.0 * upf);
+            let src = if ceiling_box { format!("{src} — {}", rl.box_source) } else { src };
+            let reach_out = if ceiling_box { bh / 2.0 } else { bd / 2.0 };
+            let face = Vec3::new(centre.x, centre.y, centre.z) + dir * (reach_out + depth / 24.0 * upf);
+            let ring_size = if n_gang > 1 { format!("{n_gang} gang") } else { ring_size.clone().unwrap_or_else(|| rl.ring.size.clone()) };
             let mut rg = Atom {
                 kind: "ring",
                 item: rl.ring.item.clone(),
-                ty: rl.ring.size.clone(),
-                size: format!("{}, {} deep", rl.ring.size, super::super::walltypes::frac(depth)),
+                ty: ring_size.clone(),
+                size: format!("{ring_size}, {} deep", super::super::walltypes::frac(depth)),
                 a: face,
                 b: face,
                 connects: vec![bi],
@@ -872,7 +1577,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             };
             rg.extra.push(("depth_in", format!("{depth}"), src.clone()));
             let mut rctx = ctx.clone();
-            rctx.body = Some((face, o.perp(), bw * 0.9, depth / 12.0 * upf, bh * 0.9));
+            rctx.body = Some(if ceiling_box {
+                (face, Vec2::new(1.0, 0.0), bw * 0.9, bw * 0.9, depth / 12.0 * upf)
+            } else {
+                (face, Vec2::new(dir.x, dir.y).perp(), bw * 0.9, depth / 12.0 * upf, bh * 0.9)
+            });
             rctx.src = rule_source(&src);
             let ri = atoms.len();
             atoms.push((rg, rctx));
@@ -880,16 +1589,90 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 b.0.connects.push(ri);
             }
         }
-        boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi });
+        boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
+    }
+
+    // -- A pigtail where a circuit's conductor is larger than its device's terminals take
+    // (Q6243): spliced in the device's box, its design size kept beside the one it lands. --
+    let terms = &super::super::conduitroute::rules().terminals;
+    let mut pigtailed = 0usize;
+    for bx in &boxes {
+        let Some(pg) = pigtails.get(&bx.device) else { continue };
+        let Some((at, mut ctx)) = atoms.get(bx.atom).map(|(a, c)| (a.a, c.clone())) else { continue };
+        pigtailed += 1;
+        if let Some(b) = atoms.get_mut(bx.atom) {
+            let rule = terms.source.clone();
+            b.0.extra.push(("design_value", format!("#{} on the device's terminals", pg.landing), "computed: the circuit's conductors".into()));
+            b.0.extra.push((
+                "corrected_value",
+                format!("{} #{} pigtail(s) to the device, spliced to the #{} in its box", pg.count, pg.size, pg.landing),
+                rule.clone(),
+            ));
+            b.0.extra.push(("correction_reason", pg.why.clone(), rule.clone()));
+            b.0.extra.push(("correction_rule", rule.clone(), rule));
+        }
+        ctx.body = None;
+        ctx.src = rule_source(&terms.source);
+        let ft = terms.pigtail_in.clamp(6.0, 36.0) / 12.0;
+        let up = Vec3::new(0.0, 0.0, ft * upf);
+        // Each conductor the device lands, and its ground.
+        for (i, ground) in (0..pg.count.clamp(1, 6)).map(|_| false).chain([true]).enumerate() {
+            let (item, ty) = if ground {
+                ("Copper ground, green".to_string(), "bare or green".to_string())
+            } else {
+                ("THHN copper".to_string(), rl.insulation.clone())
+            };
+            let mut w = Atom {
+                kind: "wire",
+                item,
+                ty,
+                size: super::wire_size(&pg.size),
+                body_in: 0.1,
+                length_ft: ft,
+                a: at,
+                b: at + up,
+                connects: vec![bx.atom],
+                ..Atom::default()
+            };
+            w.path = vec![w.a, w.b];
+            w.extra.push(("conductor", if ground { "ground pigtail".into() } else { "pigtail".into() }, "computed".into()));
+            w.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
+            w.source = terms.source.clone();
+            atoms.push((w, ctx.clone()));
+            let mut c = Atom::fitting(
+                "connector",
+                terms.connector.clone(),
+                "",
+                &format!("#{} to {}", pg.landing, super::wire_size(&pg.size)),
+                at,
+                Vec3::new(0.0, 0.0, 0.01 * upf * (i as f64 + 1.0)),
+                0.4,
+                &terms.source,
+            );
+            c.connects = vec![bx.atom];
+            c.extra.push(("pigtail_of", bx.device.hex(), "computed".into()));
+            atoms.push((c, ctx.clone()));
+        }
     }
 
     // -- Each group's runs stitched end to end, then cut into their pieces. --
     let tol = rl.joint_tol_in.max(0.01) / 12.0 * upf;
     let reach = rl.box_reach_ft.max(0.0) * upf;
+    // Each level's stacking move: a riser's end on another storey's panel.
+    let moves = super::super::conduitroute::level_moves(d, sp);
+    let routed_touch = if rl.routed_touch_in.is_finite() { rl.routed_touch_in.max(0.01) } else { 6.0 } / 12.0 * upf;
+    // Routed run ends: on a panel, in a box, on neither (left to the nearness search).
+    let (mut routed_on_gear, mut routed_on_box, mut routed_on_device, mut routed_off) = (0usize, 0usize, 0usize, 0usize);
     let panel_reach = rl.panel_reach_ft.max(0.0) * upf;
     let mut taken: BTreeSet<usize> = BTreeSet::new();
+    let mut taken_direct: BTreeSet<usize> = BTreeSet::new();
     let (mut chains_n, mut junctions, mut to_boxes, mut to_gear, mut open_ends, mut entry_gaps) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut over_bends = 0usize;
+    // Buried raceway that comes up into the raceway above the floor: the project's wiring method
+    // there, else the default.
+    let mut transitions = 0usize;
+    let above = wiring.as_ref().and_then(|(v, _)| rl.raceway_named(v)).map_or_else(|| rl.default_raceway.clone(), |(k, _)| k.to_string());
+    let mut to_equipment = 0usize;
     let (mut feeder_chains, mut feeder_wire_ft) = (0usize, 0.0_f64);
     // Run ends that land in nothing: where two or more meet (a homerun joining a raceway shared
     // with others, Q6206) they meet in a junction box.
@@ -900,27 +1683,67 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     // of its own circuit first, else the nearest one no other circuit took.
     // `own_only`: a box of its own circuit at any height under or over it (a route the readers
     // gave no drop to it).
-    let box_near = |boxes: &[DevBox], taken: &BTreeSet<usize>, level: &str, circuit: &str, p: Vec3, own_only: bool| -> Option<usize> {
+    // `not`: the box the chain's other end landed in (a run never comes back into the box it left).
+    let box_near =
+        |boxes: &[DevBox], taken: &BTreeSet<usize>, level: &str, circuit: &str, p: Vec3, own_only: bool, not: Option<usize>| -> Option<usize> {
+            let pp = Vec2::new(p.x, p.y);
+            boxes
+                .iter()
+                .enumerate()
+                .filter(|(bi, _)| Some(*bi) != not)
+                .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
+                .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
+                .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
+                .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(bi, _, _, _)| bi)
+        };
+    // The box a routed run's end at `p` was routed to: on its level, the nearest in plan within
+    // the rules' landing distance (a box of its own circuit wins a tie within an inch), never
+    // `other` (the box its other end is in).
+    let land_reach = rl.routed_land_ft.max(0.0) * upf;
+    let box_at = |boxes: &[DevBox], level: &str, circuit: &str, p: Vec3, other: Option<usize>| -> Option<usize> {
         let pp = Vec2::new(p.x, p.y);
         boxes
             .iter()
             .enumerate()
-            .filter(|(bi, b)| b.level.eq_ignore_ascii_case(level) && (on_circuit(&b.circuit, circuit) || !own_only && !taken.contains(bi)))
-            .map(|(bi, b)| (bi, on_circuit(&b.circuit, circuit), Vec2::new(b.entry.x, b.entry.y).dist(pp), (b.entry.z - p.z).abs()))
-            .filter(|(_, own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || own_only && *own))
-            .min_by(|a, b| (!a.1, a.2 + a.3).partial_cmp(&(!b.1, b.2 + b.3)).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(bi, _, _, _)| bi)
+            .filter(|(bi, b)| Some(*bi) != other && b.level.eq_ignore_ascii_case(level))
+            .map(|(bi, b)| {
+                (
+                    bi,
+                    Vec2::new(b.entry.x, b.entry.y).dist(pp) + if on_circuit(&b.circuit, circuit) { 0.0 } else { upf / 12.0 },
+                    (b.entry.z - p.z).abs(),
+                )
+            })
+            .filter(|(_, dp, dz)| *dp <= land_reach + upf / 12.0 && *dz <= 3.0 * upf)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(bi, _, _)| bi)
     };
     for (key, (m, ps)) in &paths {
         // A run passing a box of its own circuit ends in it (and the next leaves it).
         // A run passing a box of its own circuit ends in it (and the next leaves it): one at its
         // height, or one under or over it when no drop leaves the node for it.
+        // So does one passing equipment of its own circuit fed in its own compartment, and one
+        // that dips into a device the build gives no box.
+        let meet = meets.get(key).map_or(&[][..], Vec::as_slice);
         let breaks = |p: Vec3, degree: usize, drop_here: bool| {
+            let pp = Vec2::new(p.x, p.y);
+            if degree >= 2 && meet.iter().any(|q| super::dist(*q, p) <= tol) {
+                return true;
+            }
             degree >= 2
                 && !m.circuit.is_empty()
-                && box_near(&boxes, &taken, &key.level, &m.circuit, p, true)
+                && (box_near(&boxes, &taken, &key.level, &m.circuit, p, true, None)
                     .and_then(|bi| boxes.get(bi))
                     .is_some_and(|b| (b.entry.z - p.z).abs() <= 3.0 * upf || !drop_here)
+                    || m.feeder.is_none()
+                        && m.devices.is_empty()
+                        && direct.iter().any(|x| {
+                            x.level.eq_ignore_ascii_case(&key.level)
+                                && on_circuit(&x.circuit, &m.circuit)
+                                && Vec2::new(x.at.x, x.at.y).dist(pp) <= reach
+                                && ((x.at.z - p.z).abs() <= 3.0 * upf || !drop_here)
+                        })
+                    || touched_bare(&bare, &key.level, p, routed_touch, Some(&m.circuit)).is_some())
         };
         let (mut chains, nodes, brk) = stitch(ps, tol, &breaks);
         // Junction boxes where three or more runs meet.
@@ -950,8 +1773,11 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         source: Handle(0),
                         body: Some((at, Vec2::new(1.0, 0.0), bw, bh, bd)),
                         src: rule_source(&br.source),
+                        made: chain_made(sp, &c.runs).0,
+                        basis: chain_made(sp, &c.runs).1,
                     };
                     junction_at.insert(n, atoms.len());
+                    box_rule_at.insert(atoms.len(), br.clone());
                     atoms.push((a, ctx));
                     junctions += 1;
                 }
@@ -967,6 +1793,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // What each free end lands in: a device's box (an estimated route moves onto it), a
             // panel, else nothing (an open end).
             let mut lands: [Option<Land>; 2] = [None, None];
+            // The box each end landed in: the other end never lands in the same one (that
+            // would close the run on itself with a chord back to its start).
+            let mut landed: [Option<usize>; 2] = [None, None];
             for (end, land) in lands.iter_mut().enumerate() {
                 let n = c.ends.get(end).copied().unwrap_or(usize::MAX);
                 if let Some(&j) = junction_at.get(&n) {
@@ -991,10 +1820,73 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         .min_by(|a, b| (a.1 + a.2).total_cmp(&(b.1 + b.2)))
                         .map(|(bi, _, _)| bi)
                 };
-                let near = if m.devices.is_empty() { box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box) } else { own_outlet() };
-                let near_box = near.filter(|_| m.feeder.is_none()).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
+                let other = landed.get(1 - end).copied().flatten();
+                // A routed branch run (Q6152) ends on what its route serves: the panel its end is
+                // on (the top of its can), else the box whose entry it is at, whatever circuit
+                // that box is on (a homerun group's taps meet in its lead's box). Never a nearer
+                // box of its own circuit label elsewhere (its own start, the next unit's).
+                if m.routed && m.devices.is_empty() && m.feeder.is_none() {
+                    if let Some(g) = touched_gear(&gear, &key.level, &m.panel, p, routed_touch, &moves) {
+                        *land = Some(Land::Gear(g));
+                        routed_on_gear += 1;
+                        continue;
+                    }
+                    if let Some(bi) = touched_box(&boxes, &key.level, p, routed_touch, other)
+                        && let Some(b) = boxes.get(bi)
+                    {
+                        taken.insert(bi);
+                        let before = super::path_ft(&c.pts, upf);
+                        land_on(&mut c.pts, end, b.entry, upf);
+                        landing_ft += super::path_ft(&c.pts, upf) - before;
+                        if let Some(l) = landed.get_mut(end) {
+                            *l = Some(bi);
+                        }
+                        *land = Some(Land::Atom(b.atom));
+                        routed_on_box += 1;
+                        continue;
+                    }
+                    let at_equipment = direct
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, x)| x.level.eq_ignore_ascii_case(&key.level))
+                        .map(|(xi, x)| (xi, x.device, super::dist(x.at, p)))
+                        .filter(|(.., d)| *d <= routed_touch)
+                        .min_by(|a, b| a.2.total_cmp(&b.2));
+                    if let Some((xi, dv, _)) = at_equipment {
+                        taken_direct.insert(xi);
+                        *land = Some(Land::Device(dv));
+                        routed_on_device += 1;
+                        continue;
+                    }
+                    if let Some(h) = touched_bare(&bare, &key.level, p, routed_touch, None) {
+                        *land = Some(Land::Device(h));
+                        routed_on_device += 1;
+                        continue;
+                    }
+                    routed_off += 1;
+                } else if m.devices.is_empty()
+                    && m.feeder.is_none()
+                    && let Some(h) = touched_bare(&bare, &key.level, p, routed_touch, Some(&m.circuit))
+                {
+                    *land = Some(Land::Device(h));
+                    continue;
+                }
+                // Else a routed run ends in the box it was routed to (the nearest within the
+                // rules' landing distance), never a box of its circuit farther off; an estimated
+                // or unrouted one by nearness.
+                let near = if !m.devices.is_empty() {
+                    own_outlet()
+                } else if m.routed && !m.estimated {
+                    box_at(&boxes, &key.level, &m.circuit, p, other)
+                } else {
+                    box_near(&boxes, &taken, &key.level, &m.circuit, p, at_box, other)
+                };
+                let near_box = near.filter(|bi| m.feeder.is_none() && Some(*bi) != other).and_then(|bi| boxes.get(bi).map(|b| (bi, b.entry, b.atom)));
                 if let Some((bi, entry, atom)) = near_box {
                     taken.insert(bi);
+                    if let Some(l) = landed.get_mut(end) {
+                        *l = Some(bi);
+                    }
                     let gap = (entry.z - p.z).abs();
                     if gap > 3.0 * upf {
                         // Not moved: the route gives no drop to it; the gap is said for review.
@@ -1005,6 +1897,28 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                         landing_ft += super::path_ft(&c.pts, upf) - before;
                     }
                     *land = Some(Land::Atom(atom));
+                    continue;
+                }
+                // Equipment fed in its own wiring compartment, as a box is found: of its own
+                // circuit first, else the nearest one no other run took; the run ends in it.
+                let equipment = direct
+                    .iter()
+                    .enumerate()
+                    .filter(|_| m.feeder.is_none() && m.devices.is_empty())
+                    .filter(|(xi, x)| {
+                        x.level.eq_ignore_ascii_case(&key.level) && (on_circuit(&x.circuit, &m.circuit) || !at_box && !taken_direct.contains(xi))
+                    })
+                    .map(|(xi, x)| (xi, x.device, x.at, on_circuit(&x.circuit, &m.circuit), Vec2::new(x.at.x, x.at.y).dist(pp), (x.at.z - p.z).abs()))
+                    .filter(|(.., own, dp, dz)| *dp <= reach && (*dz <= 3.0 * upf || at_box && *own))
+                    .min_by(|a, b| (!a.3, a.4 + a.5).partial_cmp(&(!b.3, b.4 + b.5)).unwrap_or(std::cmp::Ordering::Equal));
+                if let Some((xi, dv, at, ..)) = equipment {
+                    taken_direct.insert(xi);
+                    if (at.z - p.z).abs() <= 3.0 * upf && (m.estimated || m.routed) {
+                        let before = super::path_ft(&c.pts, upf);
+                        land_on(&mut c.pts, end, at, upf);
+                        landing_ft += super::path_ft(&c.pts, upf) - before;
+                    }
+                    *land = Some(Land::Device(dv));
                     continue;
                 }
                 // A low-voltage pathway ends only in a telecom room's gear (its rack), never a panel.
@@ -1033,13 +1947,19 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             // A low-voltage pathway's end in no box (a stub into the ceiling space) takes a bushing.
             let lv_run = key.system == super::super::conduitroute::lv::LV_SYSTEM;
             let open = [lv_run && lands[0].is_none(), lv_run && lands[1].is_none()];
-            let pieces: Pieces = if m.cable {
+            let mut pieces: Pieces = if m.cable {
                 let Some(cr) = rl.cables.get(&m.name) else { continue };
                 cable_pieces(&c.pts, upf, &m.name, cr, &m.conductors, rl)
             } else {
                 let Some(rw) = rl.raceways.get(&m.name) else { continue };
                 raceway_pieces_ending(&c.pts, upf, size_in, &m.name, rw, large_conductors(&m.conductors, rl.bushing_min_awg), open, rl)
             };
+            // Buried: no straps in the ground, the callout's steel elbows, and a transition where
+            // it comes up into the raceway above the floor.
+            if m.buried && !m.cable {
+                let floor = sp.level(&key.level).map_or(0.0, |l| l.elevation_ft * upf);
+                transitions += bury(&mut pieces, floor, tol, key.steel, [lands[0].is_none(), lands[1].is_none()], &above, &m.name, rl);
+            }
             // More bends between its ends than the code allows between pull points.
             let max_bends = if m.cable { 0.0 } else { rl.raceways.get(&m.name).map_or(0.0, |r| r.max_bends_deg) };
             let over = max_bends > 0.0 && pieces.bend_deg > max_bends + 1.0;
@@ -1059,6 +1979,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 source,
                 body: None,
                 src: m.source.clone(),
+                made: chain_made(sp, &c.runs).0,
+                basis: chain_made(sp, &c.runs).1,
             };
             // Its conductors' makeup at a panel it ends in: to the breaker, not a box's.
             let at_panel: Vec<Option<f64>> = lands
@@ -1068,6 +1990,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     _ => None,
                 })
                 .collect();
+            // A buried run's steel elbows and risers are the callout's material, not the group's.
+            let called = c.runs.first().and_then(|i| sp.mep.runs.get(*i)).map(|r| r.height_source.clone()).unwrap_or_default();
             for mut a in pieces.atoms {
                 for x in &mut a.connects {
                     *x += base;
@@ -1075,11 +1999,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 if a.kind == "cable" {
                     panel_makeup(&mut a, &at_panel, rl);
                 }
-                atoms.push((a, ctx.clone()));
+                let mut actx = ctx.clone();
+                if key.steel && !m.cable && a.ty != m.name {
+                    actx.src = Source::from_doc(SourceKind::Print, &format!("{} ({called})", rl.steel_elbow_source));
+                }
+                atoms.push((a, actx));
             }
             // Wires in a raceway with a circuit.
             if !m.cable && !m.circuit.is_empty() {
-                let nums: Vec<u32> = super::super::printcond::parse_circuit(&m.circuit)
+                let nums: Vec<u32> = super::super::printcond::parse_circuit_list(&m.circuit)
                     .map(|(_, n)| n.split(',').filter_map(|x| x.trim().parse().ok()).collect())
                     .unwrap_or_default();
                 let voltage = gear_voltage(sp, &m.panel).unwrap_or_else(|| rl.default_voltage.clone());
@@ -1155,6 +2083,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 let Some(e) = pieces.ends.get(end).copied().flatten().map(|e| e + base) else { continue };
                 match land {
                     Some(Land::Atom(j)) => {
+                        if !m.cable && size_in.is_finite() {
+                            let at = box_raceway.entry(*j).or_insert(0.0);
+                            *at = at.max(size_in);
+                        }
                         if let Some(a) = atoms.get_mut(e) {
                             a.0.connects.push(*j);
                         }
@@ -1168,6 +2100,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     Some(Land::Gear(g)) => {
                         external.push((e, *g));
                         to_gear += 1;
+                    }
+                    Some(Land::Device(dv)) => {
+                        external.push((e, *dv));
+                        to_equipment += 1;
                     }
                     None => {
                         open_ends += 1;
@@ -1272,6 +2208,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                     rl.default_raceway_source
                 ),
             ),
+            // The feeder's own: its way into the gear's entry plate goes with the feeder's route.
+            made: Made::Drawn,
+            basis: String::new(),
         };
         for mut a in pieces.atoms {
             for x in &mut a.connects {
@@ -1299,6 +2238,42 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         feeder_stubs += 1;
     }
 
+    // -- A box takes the raceways that land in it (Q6243): where its knockouts don't take the
+    // largest, a box whose do, the design's box kept beside it. --
+    let mut boxes_for_raceway = 0usize;
+    let mut raceway_reviews = 0usize;
+    let inch = super::super::walltypes::frac;
+    for (j, size_in) in &box_raceway {
+        let (Some(br), Some(b)) = (box_rule_at.get(j), atoms.get_mut(*j)) else { continue };
+        if br.max_raceway_in <= 0.0 || *size_in <= br.max_raceway_in + 1e-9 {
+            continue;
+        }
+        let why = format!("a {} raceway lands in it; a {} takes {} at most", inch(*size_in), br.size, inch(br.max_raceway_in));
+        // A correction already on it (a pigtail): this one beside it.
+        let mut put = |k: &'static str, v: String, src: &str| match b.0.extra.iter_mut().find(|x| x.0 == k) {
+            Some(x) => x.1 = format!("{}; {v}", x.1),
+            None => b.0.extra.push((k, v, src.to_string())),
+        };
+        match rl.box_for_raceway(br, *size_in) {
+            Some(nb) => {
+                boxes_for_raceway += 1;
+                put("design_value", br.item.clone(), "computed: the trade's box for the device");
+                put("corrected_value", nb.item.clone(), &rl.box_raceway_source);
+                put("correction_reason", why, &rl.box_raceway_source);
+                put("correction_rule", rl.box_raceway_source.clone(), &rl.box_raceway_source);
+                b.0.item = nb.item.clone();
+                b.0.ty = nb.size.clone();
+                b.0.size = nb.size.clone();
+                b.0.extra.push(("cubic_in", format!("{}", nb.cubic_in), nb.source.clone()));
+                b.0.extra.push(("depth_in", format!("{}", nb.depth_in), nb.source.clone()));
+            }
+            None => {
+                raceway_reviews += 1;
+                put("review", format!("{why}, and no box of the table does: a pull box (NEC 314.28)"), &rl.box_raceway_source);
+            }
+        }
+    }
+
     // -- Into the model: each atom an element; then what it connects to, by handle. --
     let mut handles: Vec<Option<Handle>> = Vec::with_capacity(atoms.len());
     let mut by_kind: BTreeMap<&'static str, usize> = BTreeMap::new();
@@ -1324,7 +2299,14 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 ..cadaddy_doc::Layer::default()
             });
         }
-        let xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
+        let mut xdata = mep_tags(&ctx.level, ctx.source, &system, a.kind, &a.size, &a.item, &format!("{}/{}{}", ctx.run, a.kind, handles.len()));
+        // Its provenance (Q6216): its run's or its device's; a piece on an estimated route is inferred.
+        let (made, basis) = if ctx.estimated && ctx.made.is_drawn() {
+            (Made::Inferred, super::super::provenance::rule("E-ESTIMATED").basis_for(""))
+        } else {
+            (ctx.made, ctx.basis.clone())
+        };
+        xdata.extend(super::super::provenance::tags(made, &basis));
         match d.add(&Space::Model, Common { layer: layer.into(), xdata: xdata.into(), ..Common::default() }, EntityKind::Mesh(mesh)) {
             Ok(h) => {
                 *by_kind.entry(a.kind).or_default() += 1;
@@ -1492,8 +2474,30 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     }
     let rows = super::reindex(d);
     let total: usize = by_kind.values().sum();
+    for (why, n) in &no_box {
+        let src = if why.starts_with("device of no known kind") {
+            rl.no_circuit_source.clone()
+        } else {
+            why.split_once(':').and_then(|(bk, _)| rl.box_choice(bk)).map(|c| c.source.clone()).unwrap_or_default()
+        };
+        if !src.is_empty() && notes.len() < 200 {
+            notes.push(format!("{n} without a box ({why}): {src}"));
+        }
+    }
     if open_ends > 0 {
         notes.push(format!("{open_ends} run end(s) land in no box or panel (an open end): see bim.chain"));
+    }
+    if junctions > 0 {
+        box_reasons.insert("junction (three or more runs meet)".into(), junctions);
+    }
+    if laid.stretches > 0 && notes.len() < 200 {
+        notes.push(format!(
+            "{} stretch(es) of a circuit's raceway the routing laid twice laid once ({:.1} ft; {} run(s) split where another leaves them): {}",
+            laid.stretches,
+            laid.removed / upf,
+            laid.tees,
+            rl.one_raceway_source
+        ));
     }
     json!({
         "atoms": total,
@@ -1501,14 +2505,26 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "atomChains": chains_n,
         "junctionBoxes": junctions,
         "deviceBoxes": boxes.len(),
+        "boxesMade": box_reasons.values().sum::<usize>(),
+        "boxesByReason": box_reasons,
+        "gangedDevices": ganged_devices,
+        "gangBoxes": gang_box.len(),
         "devicesFed": fed_devices,
         "endsAtBoxes": to_boxes,
         "endsAtPanels": to_gear,
+        "endsAtEquipment": to_equipment,
+        "routedEnds": {"onPanel": routed_on_gear, "inBox": routed_on_box, "onDevice": routed_on_device, "byNearness": routed_off},
+        "noBox": no_box,
         "openEnds": open_ends,
         "boxesSizedForFill": boxes_upsized,
+        "devicesPigtailed": pigtailed,
+        "boxesSizedForRaceway": boxes_for_raceway,
+        "boxesRacewayReview": raceway_reviews,
         "endsWithNoDrop": entry_gaps,
         "runsOverBendLimit": over_bends,
+        "buriedTransitions": transitions,
         "landingFt": (landing_ft * 10.0).round() / 10.0,
+        "racewayLaidOnce": {"stretches": laid.stretches, "ft": (laid.removed / upf * 10.0).round() / 10.0, "tees": laid.tees, "source": rl.one_raceway_source},
         "feedersLinked": feeders,
         "feederRaceways": feeder_stubs,
         "feederRunsWired": feeder_chains,
@@ -1550,7 +2566,9 @@ pub(crate) fn sync_rings(d: &mut Drawing) -> usize {
         let rl = rules();
         let mut ps2 = ps.clone();
         ps2.set("depth_in", Prop::new(format!("{depth}"), ring.source.clone()).with_unit("in"));
-        ps2.set("size", Prop::new(format!("{}, {} deep", rl.ring.size, super::super::walltypes::frac(depth)), ring.source.clone()));
+        // Its gangs as made (`2 gang`), else the rules' ring.
+        let gangs = ps.get("type").map(Prop::text).filter(|t| t.ends_with("gang")).unwrap_or_else(|| rl.ring.size.clone());
+        ps2.set("size", Prop::new(format!("{gangs}, {} deep", super::super::walltypes::frac(depth)), ring.source.clone()));
         changes.push((e.handle, ps2));
     }
     let n = changes.len();
@@ -1566,6 +2584,9 @@ enum Land {
     Atom(usize),
     /// A gear element.
     Gear(Handle),
+    /// Equipment fed in its own wiring compartment, or a device the build gives no box (a
+    /// luminaire whose type carries its own junction box).
+    Device(Handle),
 }
 
 /// Where an atom is in the model and what it is part of.
@@ -1583,29 +2604,93 @@ struct AtomCtx {
     body: Option<(Vec3, Vec2, f64, f64, f64)>,
     /// Where what it is came from.
     src: Source,
+    /// What it is by the documents (its run's, its device's), and why (Q6216).
+    made: Made,
+    basis: String,
 }
 
-/// Move a run's end onto a box's entry: a short jog at the run's height, then into the box.
+/// What the pieces of runs `runs` are by the documents: the least documented of them (inferred,
+/// then derived, then drawn) and its basis.
+fn chain_made(sp: &BuildingSpec, runs: &[usize]) -> (Made, String) {
+    runs.iter()
+        .filter_map(|i| sp.mep.runs.get(*i))
+        .map(super::super::provenance::of_run)
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .unwrap_or((Made::Drawn, String::new()))
+}
+
+/// Whether a piece of gear is the panel `panel` or a typical room's copy of it (`P-1A` of `P`).
+fn is_panel(tag: &str, panel: &str) -> bool {
+    let (t, p) = (tag.trim().to_ascii_uppercase(), panel.trim().to_ascii_uppercase());
+    !p.is_empty() && (t == p || t.starts_with(&format!("{p}-")))
+}
+
+/// The panel a routed run's end at `p` (on `level`'s plan) is on: a piece of gear whose can holds
+/// `p` within `touch` (in plan, and in height when its body gives one), the run's own panel
+/// first, then the nearest. Gear on another storey is where the stacked building has it (a
+/// riser drops or rises to it): its plan carried by the levels' stacking moves.
+fn touched_gear(gear: &[Gear], level: &str, panel: &str, p: Vec3, touch: f64, moves: &HashMap<String, Vec2>) -> Option<Handle> {
+    let mv = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
+    // `p` on each gear's own plan.
+    let on = |g: &Gear| {
+        let q = if g.level.eq_ignore_ascii_case(level) { Vec2::new(p.x, p.y) } else { Vec2::new(p.x, p.y) + mv(level) - mv(&g.level) };
+        q.is_finite().then_some(q)
+    };
+    gear.iter()
+        .filter_map(|g| on(g).map(|q| (g, q)))
+        .filter(|(g, q)| g.plan.expand(touch).contains(*q))
+        .filter(|(g, _)| g.level.eq_ignore_ascii_case(level) || g.z.is_some())
+        .filter(|(g, _)| g.z.is_none_or(|(lo, hi)| p.z >= lo - touch && p.z <= hi + touch))
+        .map(|(g, q)| (g.handle, !is_panel(&g.tag, panel), g.plan.center().dist(q)))
+        .min_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(h, _, _)| h)
+}
+
+/// The box a routed run's end at `p` is at: the box of its level whose entry, or whose device
+/// (where the router ends the device's runs; a gang box holds several), is nearest it, within
+/// `touch`, whatever its circuit, never `not` (the box the run's other end is in).
+fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<usize>) -> Option<usize> {
+    boxes
+        .iter()
+        .enumerate()
+        .filter(|(bi, b)| Some(*bi) != not && b.level.eq_ignore_ascii_case(level))
+        .map(|(bi, b)| (bi, super::dist(b.entry, p).min(super::dist(b.at, p))))
+        .filter(|(_, d)| *d <= touch)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(bi, _)| bi)
+}
+
+/// Move a run's end onto a box's entry as the field runs it: the drop the route ends in (the
+/// points straight over or under its end) is taken back to where the run arrives at its height,
+/// the run goes on square at that height (along the way it arrived, then across) to over or
+/// under the entry, and plumb into it. A run arriving level at the box's own height (no drop)
+/// jogs square at that height. Never a chord across the room at the box's height.
 fn land_on(pts: &mut Vec<Vec3>, end: usize, entry: Vec3, upf: f64) {
     if end == 0 {
         pts.reverse();
     }
     let tiny = upf / 192.0;
-    let n = pts.len();
-    if let (Some(&last), Some(&prev)) = (pts.get(n.wrapping_sub(1)), pts.get(n.wrapping_sub(2))) {
-        let vertical = Vec2::new(last.x - prev.x, last.y - prev.y).len() <= tiny;
-        let plan_off = Vec2::new(entry.x - last.x, entry.y - last.y).len();
-        if vertical {
-            pts.pop();
-            if plan_off > tiny {
-                pts.push(Vec3::new(entry.x, entry.y, prev.z));
+    let plan = |p: Vec3| Vec2::new(p.x, p.y);
+    if let Some(&last) = pts.last() {
+        // The drop at the end: the trailing points over or under the last.
+        let mut k = pts.len() - 1;
+        while k > 0 && pts.get(k - 1).is_some_and(|q| plan(*q).dist(plan(last)) <= tiny) {
+            k -= 1;
+        }
+        pts.truncate(k + 1);
+        if let Some(&top) = pts.last() {
+            let (p, q) = (plan(top), plan(entry));
+            let came = k.checked_sub(1).and_then(|j| pts.get(j)).map(|a| p - plan(*a));
+            if p.dist(q) > tiny {
+                if (q.x - p.x).abs() > tiny && (q.y - p.y).abs() > tiny {
+                    // Along the way it arrived first, then across.
+                    let along_x = came.is_none_or(|d| d.x.abs() >= d.y.abs());
+                    let corner = if along_x { Vec2::new(q.x, p.y) } else { Vec2::new(p.x, q.y) };
+                    pts.push(Vec3::new(corner.x, corner.y, top.z));
+                }
+                pts.push(Vec3::new(q.x, q.y, top.z));
             }
-            pts.push(entry);
-        } else {
-            if plan_off > tiny {
-                pts.push(Vec3::new(entry.x, entry.y, last.z));
-            }
-            if (entry.z - last.z).abs() > tiny {
+            if (entry.z - top.z).abs() > tiny || p.dist(q) > tiny {
                 pts.push(entry);
             }
         }
@@ -1677,10 +2762,19 @@ pub(crate) fn sync_luminaire_boxes(d: &mut Drawing) -> (usize, usize) {
     if gone.is_empty() {
         return (0, missing);
     }
+    // The ring on a box that goes goes with it.
+    let rings: BTreeSet<Handle> = d
+        .model
+        .iter()
+        .take(super::MAX_ELEMENTS)
+        .filter(|e| props::read(&e.common.xdata).get(super::ATOM_KEY).map(Prop::text).as_deref() == Some("ring"))
+        .filter(|e| super::connects_of(e).iter().any(|h| gone.contains_key(h)))
+        .map(|e| e.handle)
+        .collect();
     // Whatever names a box that goes names its luminaire instead; the luminaire loses its box.
     let mut changes: Vec<(Handle, Props)> = Vec::new();
     for e in d.model.iter().take(super::MAX_ELEMENTS) {
-        if gone.contains_key(&e.handle) {
+        if gone.contains_key(&e.handle) || rings.contains(&e.handle) {
             continue;
         }
         let ps = props::read(&e.common.xdata);
@@ -1709,7 +2803,7 @@ pub(crate) fn sync_luminaire_boxes(d: &mut Drawing) -> (usize, usize) {
         let _ = d.modify_entity(h, |e| e.common.xdata = props::write(&e.common.xdata, &ps).into());
     }
     let n = gone.len();
-    for b in gone.into_keys() {
+    for b in gone.into_keys().chain(rings) {
         d.remove_entity(b);
     }
     super::reindex(d);
@@ -1792,5 +2886,202 @@ pub(crate) fn gear_voltage(sp: &BuildingSpec, panel: &str) -> Option<String> {
         Some("120/208".into())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(run: usize, pts: &[[f64; 3]]) -> Path3 {
+        Path3 { pts: pts.iter().map(|p| Vec3::new(p[0], p[1], p[2])).collect(), run }
+    }
+
+    fn length(ps: &[Path3]) -> f64 {
+        ps.iter().map(|p| p.pts.windows(2).map(|w| if let [a, b] = w { super::super::dist(*a, *b) } else { 0.0 }).sum::<f64>()).sum()
+    }
+
+    #[test]
+    fn a_stretch_two_legs_of_one_circuit_run_is_laid_once_and_they_part_in_a_box() {
+        // Two legs leave one box (0,0) up to the ceiling (z 0 → 96) and east 20' together, then
+        // one turns north and the other south: the shared rise and run are laid once.
+        let a = path(0, &[[0.0, 0.0, 0.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, 120.0, 96.0]]);
+        let b = path(1, &[[0.0, 0.0, 0.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, -120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, b], 1.0);
+        assert!((length(&laid) - (96.0 + 240.0 + 120.0 + 120.0)).abs() < 1e-6, "{once:?} {}", length(&laid));
+        assert!((once.removed - 336.0).abs() < 1e-6, "{once:?}");
+        // The second leg is what is left of it: from where they part.
+        let second: Vec<&Path3> = laid.iter().filter(|p| p.run == 1).collect();
+        assert_eq!(second.len(), 1);
+        assert!(second.first().is_some_and(|p| p.pts.first().is_some_and(|q| super::super::dist(*q, Vec3::new(240.0, 0.0, 96.0)) < 1e-6)));
+        // The same leg routed twice is one raceway.
+        let c = path(2, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![c.clone(), Path3 { pts: c.pts.iter().rev().copied().collect(), run: 3 }], 1.0);
+        assert!((length(&laid) - 120.0).abs() < 1e-6 && once.stretches == 1, "{once:?}");
+    }
+
+    #[test]
+    fn a_leg_that_leaves_another_midway_splits_it_there_for_the_junction() {
+        // The second leg runs the first one's last 10' then turns off: the first is split where
+        // the second leaves it, so three ends meet there.
+        let a = path(0, &[[0.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let b = path(1, &[[240.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, b], 1.0);
+        assert_eq!(once.tees, 1, "{once:?}");
+        let at = Vec3::new(120.0, 0.0, 96.0);
+        let ends =
+            laid.iter().flat_map(|p| [p.pts.first().copied(), p.pts.last().copied()]).flatten().filter(|q| super::super::dist(*q, at) < 1.0).count();
+        assert_eq!(ends, 3, "{:?}", laid.iter().map(|p| &p.pts).collect::<Vec<_>>());
+        assert!((length(&laid) - 360.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_conduit_into_a_box_and_the_next_out_of_it_are_two() {
+        // Device to device: one run drops into the box at (120, 0), the next rises out of it
+        // and goes on the other way. Two conduits at the box (one in, one out), nothing taken.
+        let into = path(0, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 0.0, 20.0]]);
+        let out = path(1, &[[120.0, 0.0, 20.0], [120.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![into, out], 1.0);
+        assert_eq!(once, Once::default());
+        assert_eq!(laid.len(), 2);
+        // The same, but the second goes back the way the first came: that stretch (and its rise
+        // with it) was laid twice.
+        let into = path(0, &[[0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 0.0, 20.0]]);
+        let back = path(1, &[[120.0, 0.0, 20.0], [120.0, 0.0, 96.0], [60.0, 0.0, 96.0], [60.0, 60.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![into, back], 1.0);
+        assert!((once.removed - (76.0 + 60.0)).abs() < 1e-6, "{once:?}");
+        assert!((length(&laid) - (120.0 + 76.0 + 60.0)).abs() < 1e-6, "{laid:?}");
+    }
+
+    #[test]
+    fn a_run_is_never_split_at_its_own_end_or_on_a_point_it_has_twice() {
+        // A routed run starts with its box's point twice (then rises): another run cut there
+        // makes no zero-length piece of it.
+        let a = path(0, &[[0.0, 0.0, 20.0], [0.0, 0.0, 20.0], [0.0, 0.0, 96.0], [240.0, 0.0, 96.0], [240.0, 0.0, 20.0]]);
+        let b = path(1, &[[0.0, 0.0, 20.0], [0.0, 0.0, 96.0], [120.0, 0.0, 96.0], [120.0, 120.0, 96.0]]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a.clone(), b], 1.0);
+        assert!(laid.iter().all(|p| length(std::slice::from_ref(p)) > 1.0), "{laid:?}");
+        // The first is split only where the second leaves it (120, 0): two pieces, its points kept.
+        let first: Vec<&Path3> = laid.iter().filter(|p| p.run == 0).collect();
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert_eq!(once.tees, 1);
+        assert_eq!(first.first().map(|p| p.pts.len()), Some(4), "{first:?}");
+        assert!((length(&laid) - (length(std::slice::from_ref(&a)) + 120.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn legs_side_by_side_or_crossing_or_at_another_height_stay_as_they_are() {
+        // Parallel 6" apart (two raceways), crossing at a point, one a tier higher: nothing laid
+        // twice, nothing taken.
+        let a = path(0, &[[0.0, 0.0, 96.0], [240.0, 0.0, 96.0]]);
+        let side = path(1, &[[0.0, 6.0, 96.0], [240.0, 6.0, 96.0]]);
+        let cross = path(2, &[[120.0, -60.0, 96.0], [120.0, 60.0, 96.0]]);
+        let high = path(3, &[[0.0, 0.0, 108.0], [240.0, 0.0, 108.0]]);
+        let before = length(&[a.clone(), side.clone(), cross.clone(), high.clone()]);
+        let Laid { paths: laid, once, .. } = lay_once(vec![a, side, cross, high], 1.0);
+        assert_eq!(once, Once::default());
+        assert_eq!(laid.len(), 4);
+        assert!((length(&laid) - before).abs() < 1e-9);
+    }
+
+    #[test]
+    fn hostile_paths_are_laid_once_without_panicking() {
+        let nan = path(0, &[[f64::NAN, 0.0, 0.0], [1.0, f64::INFINITY, 0.0]]);
+        let one = path(1, &[[0.0, 0.0, 0.0]]);
+        let zero = path(2, &[[5.0, 5.0, 5.0], [5.0, 5.0, 5.0]]);
+        let laid = lay_once(vec![nan, one, zero, path(3, &[])], f64::NAN).paths;
+        assert!(laid.len() <= 4);
+        let Laid { paths: laid, once, .. } = lay_once(Vec::new(), 1.0);
+        assert!(laid.is_empty() && once == Once::default());
+    }
+
+    /// A switch leg that starts where a run of its circuit ended, that run all along another of
+    /// the circuit's runs: laid once it is as if routed once (the leg leaves the raceway there);
+    /// and a homerun run that ended at a shared raceway's end still meets it in its junction box.
+    #[test]
+    fn a_run_another_raceway_met_still_meets_it_when_its_stretch_is_laid_once() {
+        let run = |id: &str, pts: serde_json::Value| json!({"system": "E-BRANCH", "level": "Level 1", "id": id, "points": pts, "size_in": [0.5, 0], "bottoms_ft": [8.0, 8.0], "height_source": "routed"});
+        let tag = |id: &str| json!({"id": id, "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {"circuit": {"value": "Q-1", "source": "plan"}, "panel": {"value": "Q", "source": "plan"}}});
+        let spec = |runs: Vec<serde_json::Value>| {
+            let sp = json!({
+                "version": 1, "units_per_foot": 12,
+                "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+                "mep": {"systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}], "runs": runs},
+                "tags": [tag("circuit:Level 1:room-1:Q-1"), tag("circuit:Level 1:room-1:Q-1~sw1")]
+            });
+            cadaddy_walk3d::BuildingSpec::from_json(&sp.to_string()).expect("spec")
+        };
+        let leg = run("circuit:Level 1:room-1:Q-1~sw1#3", json!([[240, 0], [240, 120]]));
+        // Run 2 is all along run 1: it goes, and its end at (240, 0) is inside run 1.
+        let twice = spec(vec![
+            run("circuit:Level 1:room-1:Q-1#1", json!([[0, 0], [480, 0]])),
+            run("circuit:Level 1:room-1:Q-1#2", json!([[0, 0], [240, 0]])),
+            leg.clone(),
+        ]);
+        // As the field runs it: one raceway, the leg leaving it at (240, 0).
+        let once = spec(vec![
+            run("circuit:Level 1:room-1:Q-1#1", json!([[0, 0], [240, 0]])),
+            run("circuit:Level 1:room-1:Q-1#2", json!([[240, 0], [480, 0]])),
+            leg,
+        ]);
+        let (mut d1, mut d2) = (Drawing::default(), Drawing::default());
+        let (r1, r2) = (build(&mut d1, &twice), build(&mut d2, &once));
+        assert_eq!(r1["racewayLaidOnce"]["ft"], json!(20.0), "{r1}");
+        for k in ["openEnds", "junctionBoxes", "atomChains"] {
+            assert_eq!(r1[k], r2[k], "{k}: {r1} vs {r2}");
+        }
+        // A homerun's two runs, the second all along the first, its end where a shared
+        // raceway starts: the shared raceway still meets the homerun there.
+        let home = |id: &str| run(id, json!([[0, 0], [480, 0]]));
+        let mut sp = spec(vec![
+            home("circuit:Level 1:home:Q:1#home"),
+            run("circuit:Level 1:home:Q:1#home2", json!([[0, 0], [240, 0]])),
+            run("circuit:Level 1:home:Q:shared-0#shared", json!([[240, 0], [240, 120]])),
+        ]);
+        sp.tags.push(cadaddy_walk3d::tags::ElementTag {
+            id: "circuit:Level 1:home:Q:1".into(),
+            kind: "circuit".into(),
+            level: "Level 1".into(),
+            ..Default::default()
+        });
+        sp.tags.push(cadaddy_walk3d::tags::ElementTag {
+            id: "circuit:Level 1:home:Q:shared-0".into(),
+            kind: "circuit".into(),
+            level: "Level 1".into(),
+            ..Default::default()
+        });
+        let mut d3 = Drawing::default();
+        let r3 = build(&mut d3, &sp);
+        assert_eq!(r3["racewayLaidOnce"]["ft"], json!(20.0), "{r3}");
+        assert_eq!(r3["junctionBoxes"], json!(1), "the shared raceway meets the homerun: {r3}");
+    }
+
+    /// Two routed runs of one circuit leaving a box the same way: the circuit's shared stretch is
+    /// one raceway, with its junction box where they part.
+    #[test]
+    fn the_atoms_lay_one_circuits_shared_stretch_once() {
+        let routed = |id: &str, end: f64| json!({"system": "E-BRANCH", "level": "Level 1", "id": id, "points": [[0, 0], [240, 0], [240, end]], "size_in": [0.5, 0], "bottoms_ft": [8.0, 8.0], "height_source": "routed"});
+        let sp = json!({
+            "version": 1, "units_per_foot": 12,
+            "levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 10}],
+            "mep": {
+                "systems": [{"name": "E-BRANCH", "layer": "E-BRANCH", "kind": "conduit", "size_in": [0.5, 0], "bottom_ft": 8, "show": true}],
+                "runs": [routed("circuit:Level 1:room-1:Q-1#1", 120.0), routed("circuit:Level 1:room-1:Q-1#2", -120.0)]
+            },
+            "tags": [{"id": "circuit:Level 1:room-1:Q-1", "kind": "circuit", "level": "Level 1", "at_ft": [0, 0], "fields": {"circuit": {"value": "Q-1", "source": "plan"}, "panel": {"value": "Q", "source": "plan"}}}]
+        });
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(&sp.to_string()).expect("spec");
+        let mut d = Drawing::default();
+        let r = build(&mut d, &sp);
+        // 20' shared and two 10' legs: 40' of conduit, not 60'.
+        let conduit_ft: f64 = d
+            .model
+            .iter()
+            .filter(|e| props::read(&e.common.xdata).get(super::super::ATOM_KEY).map(Prop::text).as_deref() == Some("conduit"))
+            .filter_map(|e| props::read(&e.common.xdata).get("length_ft").map(Prop::text).and_then(|t| t.parse::<f64>().ok()))
+            .sum();
+        assert!((conduit_ft - 40.0).abs() < 0.5, "{conduit_ft} ft {r}");
+        assert_eq!(r["racewayLaidOnce"]["ft"], json!(20.0), "{r}");
+        assert_eq!(r["junctionBoxes"], json!(1), "{r}");
     }
 }

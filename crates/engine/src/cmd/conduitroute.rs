@@ -57,6 +57,12 @@ pub(crate) const METHODS_FILE: &str = "route/methods.json";
 const RULES: &str = include_str!("conduitroute.json");
 /// What marks a homerun's own tag (the circuits it carries): `circuit:<level>:home:<panel>:<n>`.
 const HOME_PART: &str = ":home:";
+/// A circuit tag's design conductors where the routing upsized them for voltage drop, and why
+/// (Q6216: the correction keeps the design value beside the installed one).
+pub(crate) const DESIGN_CONDUCTORS: &str = "design:conductors";
+pub(crate) const CORRECTION_CONDUCTORS: &str = "correction:conductors";
+/// The field of a circuit tag the routing inferred for devices no document circuits (Q6216): its basis.
+pub(crate) const INFERRED_CIRCUIT: &str = "inferred_circuit";
 /// What an in-wall joint's run says it is (it follows its wall, not the plan's axes).
 const IN_WALL: &str = "in the wall";
 /// The obstacle category of a gear's working space (NEC 110.26(A)).
@@ -93,6 +99,7 @@ pub(crate) struct RouteRules {
     pub fill: Fill,
     pub derate: Derate,
     pub box_fill: BoxFill,
+    pub terminals: Terminals,
     pub vdrop: VDrop,
     pub methods: MethodRules,
     pub firestop: Firestop,
@@ -142,6 +149,11 @@ pub(crate) struct RouteGeom {
     pub corridor_min_ft: f64,
     pub in_wall_max_ft: f64,
     pub in_wall_above_box_in: f64,
+    /// Where a box's raceway leaves its side when every way over it is blocked (a unit over its
+    /// receptacle): this far under the box's top.
+    pub box_side_under_top_in: f64,
+    /// How far along its wall such a side run may go to rise clear (feet).
+    pub box_side_reach_ft: f64,
     pub drop_reach_ft: f64,
     pub drop_step_in: f64,
     pub bend_penalty_ft: f64,
@@ -177,6 +189,9 @@ pub(crate) struct Derate {
     pub amp_90c: BTreeMap<String, f64>,
     pub small_conductor_max_a: BTreeMap<String, f64>,
     pub small_conductor_source: String,
+    /// NEC 240.6(A) standard breaker ratings, amps (240.4(B): the next one over a conductor's
+    /// allowed current may protect it).
+    pub standard_ratings: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -187,6 +202,19 @@ pub(crate) struct BoxFill {
     pub yoke: f64,
     pub grounds: f64,
     pub bigger: Vec<(String, String, f64)>,
+    /// Where the next box (and past the largest, the extension ring) comes from.
+    pub bigger_source: String,
+}
+
+/// What a device's terminals take (Q6243): the largest conductor, and the pigtail a larger
+/// circuit conductor is spliced to in the device's box.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct Terminals {
+    pub max_size: String,
+    pub pigtail_in: f64,
+    pub connector: String,
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -197,9 +225,19 @@ pub(crate) struct VDrop {
     pub load_pct: f64,
     pub breaker_a: f64,
     pub voltage: f64,
+    /// A multi-pole circuit's line-to-line voltage when its panel's is not read.
+    pub voltage_ll: f64,
+    pub voltage_source: String,
     pub cmil: BTreeMap<String, f64>,
     pub sizes: Vec<String>,
     pub source: String,
+    /// How the load is placed along the circuit (each device's share at its own distance).
+    pub moment_source: String,
+    /// Upsize the homerun before the legs when that alone holds the drop (Q6234).
+    pub homerun_first: bool,
+    /// Most sizes a homerun goes over its circuit's legs.
+    pub homerun_steps: usize,
+    pub homerun_first_source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -1311,6 +1349,9 @@ struct Dev {
     /// A switch (its box takes the switch loop) and its travelers: 0 single-pole, 1 3-way, 2 4-way.
     switch: bool,
     ways: u8,
+    /// A unit's own connection (`receptacle_for`: a receptacle its keynote puts under the unit):
+    /// that unit is no obstacle to its raceway at it.
+    unit_connection: bool,
 }
 
 /// The devices a switch or sensor controls: its `controls` (their handles).
@@ -1488,6 +1529,107 @@ fn face_of(ps: &props::Props) -> Option<Vec2> {
     })
 }
 
+/// The segment of run `r` through the clash at `at` (plan) and `z_ft` (feet above its floor):
+/// its index, when one passes within a foot of it at about that height.
+fn offset_at(r: &MepRun, at: Vec2, z_ft: f64, upf: f64) -> Option<usize> {
+    r.points.windows(2).enumerate().find_map(|(k, w)| {
+        let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+        let bottom = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+        let ab = b - a;
+        let l2 = ab.dot(ab);
+        let t = if l2 > 1e-12 { ((at - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        ((a + ab * t).dist(at) <= upf && (bottom - z_ft).abs() <= 1.0).then_some(k)
+    })
+}
+
+/// Offset run `r` across an obstacle (`bx`: its plan box with the clearance, sheet units) where its
+/// segment passes the clash at `at` / `z_ft`: the stretch inside the box at `bottom` (feet above
+/// the floor), the rest as it was; a change of height is an offset at each side. The stretch's
+/// ends, or `None` when no segment crosses the box there.
+fn offset_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], bottom: f64, upf: f64) -> Option<(Vec2, Vec2)> {
+    let k = offset_at(r, at, z_ft, upf)?;
+    let (a, b) = (r.points.get(k).copied()?, r.points.get(k + 1).copied()?);
+    let design = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+    // Where the segment is inside the box (slabs).
+    let (mut t0, mut t1) = (0.0_f64, 1.0_f64);
+    for (p, d, lo, hi) in [(a[0], b[0] - a[0], bx[0], bx[2]), (a[1], b[1] - a[1], bx[1], bx[3])] {
+        if d.abs() < 1e-12 {
+            if p < lo || p > hi {
+                return None;
+            }
+        } else {
+            let (u, v) = ((lo - p) / d, (hi - p) / d);
+            t0 = t0.max(u.min(v));
+            t1 = t1.min(u.max(v));
+        }
+    }
+    if !(t0.is_finite() && t1.is_finite()) || t1 - t0 <= 1e-6 {
+        return None;
+    }
+    let at_t = |t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    let (p0, p1) = (at_t(t0), at_t(t1));
+    // The pieces of the segment: before the box, in it (offset), after it.
+    let mut pts: Vec<[f64; 2]> = Vec::with_capacity(4);
+    let mut bots: Vec<f64> = Vec::with_capacity(3);
+    pts.push(a);
+    if t0 > 1e-6 {
+        pts.push(p0);
+        bots.push(design);
+    }
+    bots.push(bottom);
+    if t1 < 1.0 - 1e-6 {
+        pts.push(p1);
+        bots.push(design);
+    }
+    pts.push(b);
+    if r.bottoms_ft.len() < r.points.len().saturating_sub(1) {
+        let last = r.bottoms_ft.last().copied().unwrap_or(design);
+        r.bottoms_ft.resize(r.points.len().saturating_sub(1), last);
+    }
+    r.points.splice(k..=k + 1, pts);
+    r.bottoms_ft.splice(k..=k, bots);
+    Some((Vec2::new(p0[0], p0[1]), Vec2::new(p1[0], p1[1])))
+}
+
+/// Run `r` around an obstacle in plan (`bx`: its box with the clearance, sheet units) where its
+/// square segment passes the clash at `at` / `z_ft`: out to the box's nearer side, along it and
+/// back, at the segment's height. The detour's path and how much longer it is (feet), or `None`
+/// when no square segment crosses the box there.
+fn detour_run(r: &mut MepRun, at: Vec2, z_ft: f64, bx: [f64; 4], upf: f64) -> Option<(Vec<Vec2>, f64)> {
+    let k = offset_at(r, at, z_ft, upf)?;
+    let (a, b) = (r.points.get(k).copied()?, r.points.get(k + 1).copied()?);
+    let design = r.bottoms_ft.get(k).or(r.bottoms_ft.last()).copied()?;
+    let along_x = (a[1] - b[1]).abs() < 1e-6 && (a[0] - b[0]).abs() > 1e-6;
+    let along_y = (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() > 1e-6;
+    // The segment's axis (u), the box's span on it, and the side across (v) it goes round by.
+    let (u0, u1, v, lo, hi, side_lo, side_hi) = if along_x {
+        (a[0], b[0], a[1], bx[0], bx[2], bx[1], bx[3])
+    } else if along_y {
+        (a[1], b[1], a[0], bx[1], bx[3], bx[0], bx[2])
+    } else {
+        return None;
+    };
+    let (smin, smax) = (u0.min(u1), u0.max(u1));
+    if !(v > side_lo && v < side_hi) || lo <= smin + 1e-6 || hi >= smax - 1e-6 {
+        return None;
+    }
+    let out = if (v - side_lo) <= (side_hi - v) { side_lo } else { side_hi };
+    let (e0, e1) = if u0 <= u1 { (lo, hi) } else { (hi, lo) };
+    let pt = |u: f64, w: f64| if along_x { [u, w] } else { [w, u] };
+    let pts = [pt(e0, v), pt(e0, out), pt(e1, out), pt(e1, v)];
+    let extra_ft = 2.0 * (out - v).abs() / upf;
+    if r.bottoms_ft.len() < r.points.len().saturating_sub(1) {
+        let last = r.bottoms_ft.last().copied().unwrap_or(design);
+        r.bottoms_ft.resize(r.points.len().saturating_sub(1), last);
+    }
+    let mut new_pts = vec![a];
+    new_pts.extend(pts);
+    new_pts.push(b);
+    r.points.splice(k..=k + 1, new_pts);
+    r.bottoms_ft.splice(k..=k, [design; 5]);
+    Some((pts.iter().map(|p| Vec2::new(p[0], p[1])).collect(), extra_ft))
+}
+
 fn same_level(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
@@ -1530,6 +1672,9 @@ pub(crate) struct Routed {
     pub feeders: BTreeSet<String>,
     /// Each leg's path as a cable runs it where that is not the raceway's ([`CABLE_FILE`]).
     pub cable: Vec<MepRun>,
+    /// The raceway's minimum trade size the routing used, and where it came from (the
+    /// specification's, else the rules'): an estimated route left takes it (Q6235).
+    pub minimum: Option<(f64, String)>,
 }
 
 /// The feeder a circuit's breaker serves, when it is one: its panel's schedule row for the
@@ -1711,6 +1856,45 @@ struct Circ {
     part: String,
 }
 
+/// Each level's stacking move (lower-case level name → the move its plan takes into the stacked
+/// building): what its built objects were moved by once the build stacked them (a level's
+/// objects all by the same); before that (`model.build` routes and cuts the pieces before it
+/// stacks) the move the stack will make. A point on one level's plan is on another's at
+/// `p + move(from) − move(to)`.
+pub(crate) fn level_moves(d: &Drawing, sp: &BuildingSpec) -> HashMap<String, Vec2> {
+    let mut level_off: HashMap<String, Vec2> = HashMap::new();
+    for e in d.model.iter() {
+        if super::wallgen::made_as(e).is_some()
+            && let Some(l) = super::bspec::made_level(e)
+        {
+            level_off.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
+        }
+    }
+    let stacked_now = level_off.values().any(|v| v.len() > 1e-9);
+    if !stacked_now && sp.stack {
+        let planned: HashMap<String, Vec2> = super::bspec::stack_offsets(d, sp).into_iter().map(|(n, v)| (n.to_ascii_lowercase(), v)).collect();
+        if !planned.is_empty() {
+            return planned;
+        }
+    }
+    level_off
+}
+
+/// A homerun's circuit numbers from its members' labels (`LP1-1`, `LP1-3,5`): each once, in
+/// order (two rooms' circuits of one label share no raceway, but a repeat must not make the list
+/// unreadable).
+fn homerun_numbers(labels: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, nums) in labels.iter().filter_map(|l| super::printcond::parse_circuit_list(l)) {
+        for n in nums.split(',') {
+            if !out.iter().any(|x| x == n) {
+                out.push(n.to_string());
+            }
+        }
+    }
+    out
+}
+
 fn field_of<'a>(t: &'a ElementTag, k: &str) -> Option<&'a str> {
     t.fields.get(k).map(|f| f.value.trim()).filter(|v| !v.is_empty())
 }
@@ -1753,6 +1937,69 @@ pub(crate) fn rise_point(
         }
     }
     (at, zj, Some(first))
+}
+
+/// The units a device is the connection of and stands under (`unit_connection`: a receptacle
+/// its keynote puts under one): the equipment obstacles over its spot, within their clearance.
+fn units_over(m: &Dev, field: &Field, upf: f64, rl: &RouteRules) -> Vec<Handle> {
+    if !m.unit_connection {
+        return Vec::new();
+    }
+    let pad = rl.clearance_in("equipment").max(0.0) / 12.0 * upf + upf / 2.0;
+    field
+        .obs
+        .iter()
+        .filter(|o| o.category == "equipment")
+        .filter(|o| m.at.x >= o.lo.x - pad && m.at.x <= o.hi.x + pad && m.at.y >= o.lo.y - pad && m.at.y <= o.hi.y + pad)
+        .map(|o| o.handle)
+        .take(4)
+        .collect()
+}
+
+/// [`rise_point`] for a box under a unit it is the connection of (`under`: that unit): where
+/// every way over it is blocked, out of the box's side at its own height and along the wall
+/// under the unit (its sub-base: no obstacle to its own receptacle's raceway), rising beside the
+/// unit where the column is clear of it and everything else.
+#[allow(clippy::too_many_arguments)]
+fn rise_point_under(
+    at: Vec2,
+    top: f64,
+    face: Option<Vec2>,
+    z0: f64,
+    r: f64,
+    field: &Field,
+    upf: f64,
+    skip: &[Handle],
+    under: &[Handle],
+    rl: &RouteRules,
+) -> (Vec2, f64, Option<usize>) {
+    let found = rise_point(at, top, face, z0, r, field, upf, skip, rl);
+    if found.2.is_none() || under.is_empty() {
+        return found;
+    }
+    let side = rl.route.box_side_under_top_in;
+    if side <= 0.0 {
+        return found;
+    }
+    let both: Vec<Handle> = skip.iter().chain(under).copied().collect();
+    let dirs: Vec<Vec2> = match face {
+        Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+        Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
+        Some(_) => Vec::new(),
+        None => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+    };
+    let zs = top - side / 12.0 * upf;
+    let step = rl.route.drop_step_in.max(1.0) / 12.0 * upf;
+    let n = ((rl.route.box_side_reach_ft.max(rl.route.drop_reach_ft).max(0.0) * upf) / step).floor().clamp(0.0, 48.0) as usize;
+    for k in 1..=n {
+        for dir in &dirs {
+            let q = at + *dir * (step * k as f64);
+            if field.hit_unworked(q, q, zs, z0, r, upf, skip, rl).is_none() && field.hit_unworked(at, q, zs, zs, r, upf, &both, rl).is_none() {
+                return (q, zs, None);
+            }
+        }
+    }
+    found
 }
 
 /// A run's start at box `a` (its top `top`): the box, the jog in the wall to its rise point when
@@ -1845,6 +2092,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 switch,
                 ways,
                 controls: controls_of(&ps),
+                unit_connection: ps.get("receptacle_for").is_some_and(|p| !p.text().trim().is_empty()),
             });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
@@ -1904,28 +2152,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             trade: "electrical",
         });
     }
-    // Each level's stacking move (a level's built objects all moved by the same): a riser to a
-    // panel on another level stands where the stacked building has that panel.
-    let mut level_off: HashMap<String, Vec2> = HashMap::new();
-    for e in d.model.iter() {
-        if super::wallgen::made_as(e).is_some()
-            && let Some(l) = super::bspec::made_level(e)
-        {
-            level_off.entry(l.to_ascii_lowercase()).or_insert_with(|| super::bspec::stacked_by(e));
-        }
-    }
-    // Each level's stacking move between plans: recorded on its objects once the build stacked
-    // them; before that (model.build routes before it stacks) the move the stack will make.
-    let stacked_now = level_off.values().any(|v| v.len() > 1e-9);
-    let planned: HashMap<String, Vec2> = if !stacked_now && sp.stack {
-        super::bspec::stack_offsets(d, sp).into_iter().map(|(n, v)| (n.to_ascii_lowercase(), v)).collect()
-    } else {
-        HashMap::new()
-    };
-    let move_of = |l: &str| {
-        let k = l.to_ascii_lowercase();
-        planned.get(&k).or_else(|| level_off.get(&k)).copied().unwrap_or(Vec2::new(0.0, 0.0))
-    };
+    // Each level's stacking move: a riser to a panel on another level stands where the stacked
+    // building has that panel.
+    let moves = level_moves(d, sp);
+    let move_of = |l: &str| moves.get(&l.to_ascii_lowercase()).copied().unwrap_or(Vec2::new(0.0, 0.0));
     // The framing over each level (the floor joists above it, the roof's trusses), as the trades'
     // layout makes them from the joist and truss documents: each member over the level's space,
     // on its plan.
@@ -1994,6 +2224,24 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             let f = face?;
             ceiling_at(level, at + f * (0.75 * upf)).or_else(|| ceiling_at(level, at - f * (0.75 * upf)))
         })
+    };
+    // The highest ceiling a square route from `a` to `b` may pass under (either L between them,
+    // looked at every 2 ft): a leg between two boxes runs over every room it crosses, not just
+    // its boxes' rooms.
+    let way_ceiling = |level: &str, a: Vec2, b: Vec2| -> Option<f64> {
+        let step = 2.0 * upf;
+        let mut hi: Option<f64> = None;
+        for corner in [Vec2::new(b.x, a.y), Vec2::new(a.x, b.y)] {
+            for (p, q) in [(a, corner), (corner, b)] {
+                let n = (p.dist(q) / step).ceil().clamp(1.0, 32.0) as usize;
+                for k in 0..=n {
+                    if let Some(z) = ceiling_at(level, p + (q - p) * (k as f64 / n as f64)) {
+                        hi = Some(hi.map_or(z, |h: f64| h.max(z)));
+                    }
+                }
+            }
+        }
+        hi
     };
     let empty = Field::default();
     // A point of `from`'s own plan on `to`'s.
@@ -2178,6 +2426,66 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         }
     }
     no_tag = no_tag.saturating_sub(resolved_devices);
+    // -- A power device the documents put on no circuit (Q6216, trade practice `E-UNCIRCUITED`):
+    // the field puts it on a spare of the nearest panel of its level (the schedule's spares, then
+    // its spaces, else a new breaker), a room's such devices sharing one circuit; routed like the
+    // rest, its pieces inferred with the rule's basis, never drawn. --
+    let mut inferred_rows: Vec<Value> = Vec::new();
+    let mut inferred_devs: BTreeSet<usize> = BTreeSet::new();
+    {
+        let rule = super::provenance::rule("E-UNCIRCUITED");
+        let reach = rule.reach_ft.max(0.0) * upf;
+        // A unit's copy (`P-1A`) has its typical panel's schedule (`P`).
+        let sched_of = |t: &str| {
+            let (a, b) = gap::spare_circuits(sp, t);
+            if a.is_empty() && b.is_empty() { t.split_once('-').map(|(p, _)| gap::spare_circuits(sp, p)).unwrap_or((a, b)) } else { (a, b) }
+        };
+        let mut groups: BTreeMap<(String, String, String), Vec<usize>> = BTreeMap::new();
+        for di in &uncircuited {
+            let Some(dv) = devs.get(*di) else { continue };
+            if !gap::is_power_device(&dv.kind) {
+                continue;
+            }
+            let near = gear
+                .iter()
+                .filter(|g| same_level(&g.level, &dv.level) && electrical(g))
+                .map(|g| (manhattan(gear_ctr(g), dv.at), g))
+                .filter(|(dd, _)| *dd <= reach)
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, g)) = near {
+                groups.entry((dv.level.clone(), g.tag.clone(), dv.room.trim().to_string())).or_default().push(*di);
+            }
+        }
+        let mut next: HashMap<String, (Vec<String>, usize)> = HashMap::new();
+        for ((level, panel, room), ds) in groups.into_iter().take(MAX_CIRCUITS) {
+            let e = next.entry(panel.clone()).or_insert_with(|| {
+                let (a, b) = sched_of(&panel);
+                (a.into_iter().chain(b).collect(), 0)
+            });
+            let (number, breaker) = match e.0.get(e.1) {
+                Some(n) => (n.clone(), format!("spare {n}")),
+                None => (format!("X{}", e.1.saturating_sub(e.0.len()) + 1), "no spare listed: a new breaker".to_string()),
+            };
+            e.1 += 1;
+            let label = format!("{panel}-{number}");
+            let at = ds.first().and_then(|i| devs.get(*i)).map_or(Vec2::new(0.0, 0.0), |d| d.at);
+            let kinds: BTreeMap<&str, usize> = ds.iter().filter_map(|i| devs.get(*i)).fold(BTreeMap::new(), |mut m, d| {
+                *m.entry(d.kind.as_str()).or_default() += 1;
+                m
+            });
+            let basis = rule.basis_for(&format!("{} on {level}: panel {panel}, {breaker}", if room.is_empty() { "no room" } else { room.as_str() }));
+            let r = gap::Resolved { by: "rule", source: basis.clone(), conductors: None, other_tag: None };
+            let mut t = gap::resolved_tag(&label, &level, None, [at.x / upf, at.y / upf], &r, ds.len());
+            t.set("panel", panel.clone(), "rule");
+            t.set(INFERRED_CIRCUIT, basis.clone(), "rule");
+            if inferred_rows.len() < MAX_ITEMS {
+                inferred_rows.push(json!({"level": level, "room": room, "panel": panel, "breaker": breaker, "circuit": label, "devices": ds.len(), "kinds": kinds, "basis": basis, "made": "inferred"}));
+            }
+            inferred_devs.extend(ds.iter().copied());
+            circs.push(Circ { tag: base_n + extra_tags.len(), label, panel, level, devs: ds, gear: None, part: String::new() });
+            extra_tags.push(t);
+        }
+    }
     let tag_at = |i: usize| -> Option<&ElementTag> { if i < base_n { sp.tags.get(i) } else { extra_tags.get(i - base_n) } };
     // -- A switch or sensor the prints give no circuit to is on the circuit of what it controls
     // (its switch leg): with the circuit most of its luminaires are on, the nearest of them
@@ -2219,19 +2527,23 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
 
     // -- A circuit of a panel there is one of per unit (`P` → P-1A, P-1B …): its devices split
-    // by the nearest copy on their level, each part to its own panel, unless the circuit says
-    // whose it is. --
+    // by the nearest copy on their level, each part to its own panel. A typical room's own
+    // circuit (stamped from its plan) is never split: the whole of it goes to that room's copy
+    // (`P-<room>`), even where a device sits nearer the next unit's copy across the party wall
+    // (Q6241); with no copy named for the room, to the copy nearest its devices. --
     let mut split: Vec<Circ> = Vec::new();
+    let mut room_own_panel = 0usize;
     for mut c in circs.drain(..) {
         let up = c.panel.to_ascii_uppercase();
-        // A stamped room's circuit is that room's own: its panel's copy for the room, however near
-        // a neighbour's stands to some of its devices.
-        let own = sp.tags.get(c.tag).filter(|t| t.id.contains(":room-")).and_then(|t| field_of(t, "room")).and_then(|room| {
-            let want = format!("{up}-{}", room.trim().to_ascii_uppercase());
-            gear.iter().position(|g| same_level(&g.level, &c.level) && !up.is_empty() && g.tag.eq_ignore_ascii_case(&want))
-        });
-        if own.is_some() {
-            c.gear = own;
+        let room = tag_at(c.tag)
+            .filter(|t| t.id.contains(":room-"))
+            .and_then(|t| field_of(t, "room"))
+            .map(|r| r.trim().to_ascii_uppercase())
+            .filter(|r| !r.is_empty() && !up.is_empty());
+        if let Some(room) = room {
+            let own = format!("{up}-{room}");
+            c.gear = gear.iter().position(|g| same_level(&g.level, &c.level) && g.tag.trim().to_ascii_uppercase() == own);
+            room_own_panel += usize::from(c.gear.is_some());
             split.push(c);
             continue;
         }
@@ -2365,6 +2677,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     };
     let min_in = methods.min_size_in.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(rl.methods.minimum_size_in.max(0.5));
     let min_src = if methods.min_size_in.is_some() { methods.min_size_source.clone() } else { rl.methods.minimum_source.clone() };
+    out.minimum = Some((min_in, min_src.clone()));
     let max_group = methods.max_circuits.unwrap_or(rl.grouping.max_circuits).clamp(1, 12);
     let group_src = if methods.max_circuits.is_some() { methods.max_circuits_source.clone() } else { rl.grouping.source.clone() };
     let texts = drawing_texts(d);
@@ -2385,6 +2698,75 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
         s.circuits.iter().find(|c| c.number.trim() == first)?.load_va.filter(|v| v.is_finite() && *v > 0.0 && *v < 1.0e6)
     };
+    // The circuit's schedule row, its poles (the row's, else the label's numbers) and its
+    // panel's `volts/phase` (Q6234: the voltage drop at the circuit's own voltage).
+    let row_of = |panel: &str, label: &str| {
+        let num = super::printcond::parse_circuit(label)?.1;
+        let first = num.split(',').next()?.trim().to_string();
+        let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
+        Some((s, s.circuits.iter().find(|c| c.number.trim() == first)?))
+    };
+    let poles_of = |panel: &str, label: &str| -> u32 {
+        let by_label =
+            || super::printcond::parse_circuit(label).map_or(1, |(_, n)| n.split(',').filter(|x| !x.trim().is_empty()).count().min(3) as u32);
+        row_of(panel, label).map(|(_, r)| r.poles).filter(|p| *p > 0).unwrap_or_else(by_label).clamp(1, 3)
+    };
+    let volts_of = |panel: &str| -> Option<String> {
+        let s = sp.mep.panel_schedules.iter().find(|p| p.panel.trim().eq_ignore_ascii_case(panel.trim()))?;
+        s.header.iter().find(|(k, _)| k.to_ascii_lowercase().contains("volt")).map(|(_, v)| v.clone())
+    };
+    let order_sz = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
+    // A circuit's given conductors: the plan's, else its schedule row's wire column, else the
+    // default; then never under what its breaker allows. The reason, why and source when the
+    // sizing set them (the reason empty: the schedule's, no larger than the default).
+    let base_conductors = |tag: &ElementTag, panel: &str, label: &str| -> (String, Option<(&'static str, String, &'static str)>) {
+        let given = tag.fields.get("conductors").filter(|f| f.source != "default").map(|f| f.value.clone());
+        // A label read as a note before the reader knew better (`PUMP #2`): no size (Q6243).
+        let label_note = given.clone().filter(|g| g.contains('#') && super::printcond::conductor_note(g).is_none());
+        let given = given.filter(|_| label_note.is_none());
+        let mut why: Option<(&'static str, String, &'static str)> =
+            label_note.map(|l| ("", format!("`{l}` is a label, not a conductor note: no size read from it"), "rule"));
+        let mk = match given {
+            Some(v) => v,
+            None => match row_of(panel, label).and_then(|(s, r)| gap::schedule_conductors(&r.wire, r.poles.max(1)).map(|m| (m, s, r))) {
+                Some((m, s, r)) => {
+                    let hot = super::mepatoms::conductor_parts(&m).into_iter().find(|p| !p.2).map(|p| p.1).unwrap_or_default();
+                    let bigger = order_sz(&hot) > order_sz("12");
+                    let w = format!(
+                        "{}: panel {} circuit {} wire #{}{}",
+                        size::SCHEDULE,
+                        s.panel.trim(),
+                        r.number.trim(),
+                        hot,
+                        if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }
+                    );
+                    // The label set aside said beside it.
+                    let w = match &why {
+                        Some((_, label, _)) => format!("{label}; {w}"),
+                        None => w,
+                    };
+                    why = Some((if bigger { size::SCHEDULE } else { "" }, w, "schedule"));
+                    m
+                }
+                None => super::printcond::DEFAULT_CONDUCTORS.to_string(),
+            },
+        };
+        let mut parts = super::mepatoms::conductor_parts(&mk);
+        let ccc: u32 = parts.iter().filter(|p| !p.2).fold(0u32, |n, p| n.saturating_add(p.0));
+        let hot = parts.iter().find(|p| !p.2).map(|p| p.1.clone());
+        if let Some((need, w)) = hot.and_then(|h| size::breaker_minimum(&h, ccc, trip_of(panel, label), rl)) {
+            for p in &mut parts {
+                if order_sz(&p.1) < order_sz(&need) {
+                    p.1 = need.clone();
+                }
+            }
+            return (makeup_text(&parts), Some((size::BREAKER, w, "rule")));
+        }
+        (mk, why)
+    };
+    let mut upsized: Vec<Value> = Vec::new();
+    // What drove each upsizing, counted (Q6234).
+    let mut sizing: BTreeMap<&'static str, usize> = BTreeMap::new();
 
     // -- Route each circuit. --
     struct Home {
@@ -2393,6 +2775,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         gear: Option<usize>,
         level: String,
         len_tree_ft: f64,
+        /// Its length past the first box at its whole current: the load moment (Q6234).
+        moment_ft: f64,
         cable: bool,
         method: String,
     }
@@ -2455,6 +2839,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             "level": level,
             "at": [r2(b.at.x), r2(b.at.y), r2((b.z - floor) / upf)],
             "clearance_in": if o.category == FRAMING { 0.0 } else { need },
+            // Where the obstacle stands (plan, sheet units, the clearance and the raceway's half
+            // around it) and the heights an offset clears it at: what the field's offset takes.
+            "obstacle_box": [r2(o.lo.x - (need + size_in / 2.0) / 12.0 * upf), r2(o.lo.y - (need + size_in / 2.0) / 12.0 * upf), r2(o.hi.x + (need + size_in / 2.0) / 12.0 * upf), r2(o.hi.y + (need + size_in / 2.0) / 12.0 * upf)],
+            "offset_ft": {"under": r2(under), "over": r2(over)},
             "fix": if o.category == FRAMING {
                 if matches!(what, "drop" | "vertical conduit" | "riser") {
                     format!(
@@ -2528,8 +2916,13 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     let t = g.tag.to_ascii_uppercase();
                     same_level(&g.level, &c.level) && !panel_up.is_empty() && (t == panel_up || t.starts_with(&format!("{panel_up}-")))
                 })
-                .map(|(i, g)| (i, Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre)))
-                .filter(|(_, dd)| !room_circuit || *dd <= ROOM_PANEL_FT * upf)
+                .map(|(i, g)| {
+                    (i, g.tag.trim().eq_ignore_ascii_case(&panel_up), Vec2::new((g.lo.x + g.hi.x) / 2.0, (g.lo.y + g.hi.y) / 2.0).dist(centre))
+                })
+                // A typical room's copy of its panel is its own only when near it; the building's
+                // panel itself (no copy per room) feeds the room's circuit from wherever it is.
+                .filter(|(_, itself, dd)| !room_circuit || *itself || *dd <= ROOM_PANEL_FT * upf)
+                .map(|(i, _, dd)| (i, dd))
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .map(|(i, _)| i)
         });
@@ -2600,7 +2993,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut tree_len = 0.0;
         let mut edge_ft: Vec<(usize, usize, f64)> = Vec::new();
         // The circuit's own makeup per leg (two conductors and a ground, or what the tag says).
-        let makeup = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS).to_string();
+        // Its given size (the plan's, else the panel schedule's wire column), never under what
+        // its breaker allows (Q6234).
+        let (makeup, base_why) = base_conductors(tag, &c.panel, &c.label);
         let parts = super::mepatoms::conductor_parts(&makeup);
         let hots: Vec<(u32, String)> = parts.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone())).collect();
         for (u, v) in &tree {
@@ -2632,20 +3027,36 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 // Along the wall between the boxes: through the bored studs above them.
                 in_wall_legs += 1;
                 let zw = a.top.max(b.top) + rl.route.in_wall_above_box_in / 12.0 * upf;
-                r.points = vec![[a.at.x, a.at.y], [a.at.x, a.at.y], [b.at.x, b.at.y], [b.at.x, b.at.y]];
-                // Along its wall, whichever way the wall runs.
+                // Along its wall, whichever way the wall runs, then square across to the other
+                // box where the two faces are a little apart (a jog in the wall), never a
+                // diagonal through the studs.
+                let jog = a.face.map(|f| a.at + Vec2::new(-f.y, f.x) * (b.at - a.at).dot(Vec2::new(-f.y, f.x)));
+                let mut plan = vec![[a.at.x, a.at.y], [a.at.x, a.at.y]];
+                let mut bot = vec![(a.top - floor) / upf, (zw - floor) / upf];
+                if let Some(c) = jog.filter(|c| c.dist(a.at) > upf / 96.0 && c.dist(b.at) > upf / 96.0) {
+                    plan.push([c.x, c.y]);
+                    bot.push((zw - floor) / upf);
+                }
+                plan.extend([[b.at.x, b.at.y], [b.at.x, b.at.y]]);
+                bot.push((b.top - floor) / upf);
+                r.points = plan;
                 r.source_sheet = IN_WALL.into();
-                r.bottoms_ft = vec![(a.top - floor) / upf, (zw - floor) / upf, (b.top - floor) / upf];
-                tree_len += a.at.dist(b.at) / upf + 2.0 * (zw - a.top.min(b.top)).abs() / upf;
+                r.bottoms_ft = bot;
+                tree_len += run_ft(&r, upf);
             } else {
                 ceiling_legs += 1;
+                // Over the highest ceiling on its way (a room it crosses may be higher than its
+                // boxes' rooms): never exposed under a finished ceiling.
+                let way = way_ceiling(&c.level, a.at, b.at).filter(|z| over.is_none_or(|o| *z > o + upf / 96.0));
+                let leg_tiers = way.map(|z| tiers_of(&c.level, Some(z)).1);
+                let tiers = leg_tiers.as_deref().unwrap_or(&tiers);
                 // Each end rises over its box, or along its wall where that is blocked.
                 let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
                 let own: Vec<Handle> = gi.and_then(|i| gear.get(i)).map(|g| g.handle).into_iter().collect();
-                let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, rl);
-                let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, rl);
+                let (qa, ja, ba) = rise_point_under(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, &units_over(a, field, upf, rl), rl);
+                let (qb, jb, bb) = rise_point_under(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, &units_over(b, field, upf, rl), rl);
                 drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
-                let leg = route_leg(qa, qb, &tiers, r_of(size), field, upf, &[], rl);
+                let leg = route_leg(qa, qb, tiers, r_of(size), field, upf, &[], rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "branch conduit", &c.label, &c.level, size);
                 }
@@ -2734,6 +3145,17 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             t.set("split_of", tag.id.clone(), "computed");
             t.set("panel_copy", c.part.clone(), "computed");
         }
+        if let Some((reason, why, src)) = &base_why {
+            t.set("conductors", makeup.clone(), src);
+            t.set("conductor_size", why.clone(), src);
+            if !reason.is_empty() {
+                *sizing.entry(*reason).or_default() += 1;
+            }
+            if upsized.len() < MAX_ITEMS && *reason == size::BREAKER {
+                let given = field_of(tag, "conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS);
+                upsized.push(json!({"circuit": c.label, "level": c.level, "from": given, "to": makeup, "reason": reason, "why": why}));
+            }
+        }
         t.set("route", ROUTED, "computed");
         t.set(
             "conduit",
@@ -2792,7 +3214,10 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             }
         }
         let farthest = far.iter().copied().filter(|v| v.is_finite()).fold(0.0, f64::max);
-        homes.push(Home { circ: ci, root, gear: gi, level: c.level.clone(), len_tree_ft: farthest, cable, method });
+        // Each device's share of the load (a switch carries none of it).
+        let shares: Vec<f64> = members.iter().map(|m| if m.switch { 0.0 } else { 1.0 }).collect();
+        let moment = size::moment_ft(members.len(), root, &edge_ft, &shares).min(farthest);
+        homes.push(Home { circ: ci, root, gear: gi, level: c.level.clone(), len_tree_ft: farthest, moment_ft: moment, cable, method });
         // Each switch loop's own tag: the circuit's, its conductors the loop's (a part of the
         // circuit as read, like a split circuit's).
         for (id, w) in std::mem::take(&mut switch_tags) {
@@ -2855,7 +3280,6 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
     let mut grouped_circuits = 0usize;
     let mut home_segs: Vec<gap::HomeSeg> = Vec::new();
-    let mut upsized: Vec<Value> = Vec::new();
     let mut fill_rows: Vec<Value> = Vec::new();
     let mut derated: Vec<Value> = Vec::new();
     let mut corridor_homes = 0usize;
@@ -2901,6 +3325,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Over the highest ceiling along its way: its box's room's, the corridor's, the panel's room's.
         let over = std::iter::once(box_ceiling(&lead_h.level, lead_dev.at, lead_dev.face))
             .chain(plan.iter().skip(1).map(|p| ceiling_at(&lead_h.level, *p)))
+            .chain(plan.windows(2).map(|w| if let [a, b] = w { way_ceiling(&lead_h.level, *a, *b) } else { None }))
             .flatten()
             .fold(None, |a: Option<f64>, z| Some(a.map_or(z, |a| a.max(z))));
         let (_, tiers) = tiers_of(&lead_h.level, over);
@@ -2908,7 +3333,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Each square piece of the plan path seated clear of the obstacles (the gear itself is
         // the target, not an obstacle).
         let z0 = tiers.first().copied().unwrap_or(lead_dev.top);
-        let (qa, ja, ba) = rise_point(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], rl);
+        let under = units_over(lead_dev, field, upf, rl);
+        let (qa, ja, ba) =
+            rise_point_under(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], &under, rl);
         drops_moved += usize::from(qa.dist(lead_dev.at) > upf / 96.0);
         let mut home_pts: Vec<Vec2> = vec![qa];
         let mut home_z: Vec<f64> = Vec::new();
@@ -2963,7 +3390,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             if *i != g.first().copied().unwrap_or(usize::MAX)
                 && let Some(md) = c.devs.get(h.root).and_then(|d| devs.get(*d))
             {
-                let leg = route_leg(md.at, lead_dev.at, &tiers, r_of(min_in), field, upf, &[], rl);
+                // Over the highest ceiling on the tap's own way too.
+                let way = way_ceiling(&c.level, md.at, lead_dev.at).filter(|z| over.is_none_or(|o| *z > o + upf / 96.0));
+                let tap_tiers = way.map(|z| tiers_of(&c.level, Some(z)).1);
+                let tiers = tap_tiers.as_deref().unwrap_or(&tiers);
+                let leg = route_leg(md.at, lead_dev.at, tiers, r_of(min_in), field, upf, &[], rl);
                 for bl in &leg.blocked {
                     add_clash(&mut clashes, field, bl, "homerun tap", &c.label, &c.level, min_in);
                 }
@@ -2995,33 +3426,75 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 box_in.entry(c.devs.get(h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots.iter().cloned());
                 box_in.entry(lead_c.devs.get(lead_h.root).copied().unwrap_or(usize::MAX)).or_default().extend(hots);
             }
-            // Its conductors by the homerun's length (the legend's bands, else the drop).
+            // Its conductors by the homerun's length: the legend's bands (the whole circuit),
+            // else the voltage drop at the circuit's own voltage with the load where it is, the
+            // homerun upsized first (Q6234).
             let ft = path_len_ft + tap_ft + h.len_tree_ft;
             longest = longest.max(ft);
             let mut parts = super::mepatoms::conductor_parts(&mk);
-            let volts = rl.vdrop.voltage;
+            let sup = size::supply(poles_of(&c.panel, &c.label), volts_of(&c.panel).as_deref(), &c.panel, rl);
             // The schedule's load, else most of the breaker (a default).
             let (amps, load_src) = match load_of(&c.panel, &c.label) {
-                Some(va) => (va / volts.max(1.0), format!("panel {} schedule: {va:.0} VA", c.panel)),
+                Some(va) => (sup.amps(va), format!("panel {} schedule: {va:.0} VA", c.panel)),
                 None => (trip.unwrap_or(rl.vdrop.breaker_a) * rl.vdrop.load_pct / 100.0, format!("default: {}% of the breaker", rl.vdrop.load_pct)),
             };
-            if let Some((need, why)) = size_for_length(ft, amps, volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}"))) {
-                let order = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s).unwrap_or(0);
+            let up_to = |parts: &mut Vec<Part>, need: &str| {
                 let mut changed = false;
-                for p in &mut parts {
-                    if order(&p.1) < order(&need) {
-                        p.1 = need.clone();
+                for p in parts.iter_mut() {
+                    if order_sz(&p.1) < order_sz(need) {
+                        p.1 = need.to_string();
                         changed = true;
                     }
                 }
-                if changed {
+                changed
+            };
+            let base_hot = parts.iter().find(|p| !p.2).map(|p| p.1.clone()).unwrap_or_else(|| "12".into());
+            if !len_table.is_empty() {
+                if let Some((need, why)) = size_for_length(ft, amps, sup.volts, &len_table, rl).map(|(n, w)| (n, format!("{w}; load {load_src}")))
+                    && up_to(&mut parts, &need)
+                {
                     let now = makeup_text(&parts);
+                    *sizing.entry(size::LEGEND).or_default() += 1;
                     if upsized.len() < MAX_ITEMS {
-                        upsized.push(json!({"circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": now, "why": why}));
+                        upsized.push(
+                            json!({"circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": now, "reason": size::LEGEND, "why": why}),
+                        );
                     }
                     if let Some(t) = tags.get_mut(*i) {
+                        // Corrected for the field (Q6216): the design conductors kept beside them.
+                        if !t.fields.contains_key(DESIGN_CONDUCTORS) {
+                            let src = t.fields.get("conductors").map_or_else(|| "plan".to_string(), |f| f.source.clone());
+                            t.set(DESIGN_CONDUCTORS, mk.clone(), &src);
+                        }
+                        t.set(CORRECTION_CONDUCTORS, format!("E-VOLTAGE-DROP: {why}"), "rule");
                         t.set("conductors", now, "computed");
-                        t.set("conductor_size", why.clone(), if why.starts_with("legend") { "legend" } else { "rule" });
+                        t.set("conductor_size", why.clone(), "legend");
+                    }
+                }
+            } else if let Some(ds) = size::for_drop(&base_hot, path_len_ft, tap_ft + h.moment_ft, amps, &sup, rl) {
+                let why = format!("{}; load {load_src}", ds.why);
+                if let Some(t) = tags.get_mut(*i) {
+                    t.set("voltage_drop_pct", format!("{:.2}", ds.after_pct), "computed");
+                }
+                if !ds.reason.is_empty() {
+                    // The legs (and the tag) at the legs' size, the homerun at its own.
+                    let mut legs = parts.clone();
+                    up_to(&mut legs, &ds.legs);
+                    up_to(&mut parts, &ds.home);
+                    let (legs_mk, home_mk) = (makeup_text(&legs), makeup_text(&parts));
+                    *sizing.entry(ds.reason).or_default() += 1;
+                    if upsized.len() < MAX_ITEMS {
+                        upsized.push(json!({
+                            "circuit": c.label, "level": c.level, "feet": r1(ft), "from": mk, "to": legs_mk, "homerun": home_mk,
+                            "reason": ds.reason, "drop_pct_before": r2(ds.before_pct), "drop_pct": r2(ds.after_pct), "why": why,
+                        }));
+                    }
+                    if let Some(t) = tags.get_mut(*i) {
+                        if ds.legs != base_hot {
+                            t.set("conductors", legs_mk, "computed");
+                        }
+                        t.set("homerun_conductors", home_mk, "computed");
+                        t.set("conductor_size", why.clone(), "rule");
                     }
                 }
             }
@@ -3049,13 +3522,16 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let ccc: u32 = group_parts.iter().fold(0u32, |s, p| s.saturating_add(p.0));
         let trip = trips.iter().copied().fold(0.0, f64::max).max(1.0);
         let mut steps = 0;
-        while group_parts.iter().any(|p| allowed_a(&p.1, ccc, rl) + 1e-9 < trip) && steps < 3 {
+        while group_parts.iter().any(|p| !size::carries(&p.1, ccc, trip, rl)) && steps < 3 {
             for p in &mut group_parts {
-                if allowed_a(&p.1, ccc, rl) + 1e-9 < trip {
+                if !size::carries(&p.1, ccc, trip, rl) {
                     p.1 = larger(&p.1, rl);
                 }
             }
             steps += 1;
+        }
+        if steps > 0 {
+            *sizing.entry(size::DERATE).or_default() += g.len();
         }
         // One ground, the largest size of the group after the adjustment upsized it (NEC 250.122:
         // the circuit's largest; (B) up in proportion when the ungrounded conductors go up).
@@ -3349,7 +3825,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
             .or_default()
             .extend(combined.iter().filter(|p| !p.2).map(|p| (p.0, p.1.clone(), None)));
         // The homerun's own tag: its circuits (one list: panel and numbers), conductors, raceway.
-        let numbers: Vec<String> = labels.iter().filter_map(|l| super::printcond::parse_circuit(l).map(|(_, n)| n)).collect();
+        let numbers: Vec<String> = homerun_numbers(&labels);
         let panel_name = circs.get(lead_h.circ).map(|c| c.panel.clone()).unwrap_or_default();
         let mut t = ElementTag { id: gid, kind: "circuit".into(), level: lead_h.level.clone(), ..ElementTag::default() };
         t.at_ft = [lead_dev.at.x / upf, lead_dev.at.y / upf];
@@ -3493,7 +3969,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let lead_tag = tags.iter().find(|t| super::printcond::circuit_of_run(&lead) == Some(t.id.as_str()));
         let mut t = ElementTag { id: gid, kind: "circuit".into(), level: level.clone(), ..ElementTag::default() };
         t.at_ft = [st.a[0] / upf, st.a[1] / upf];
-        let numbers: Vec<String> = labels.iter().filter_map(|l| super::printcond::parse_circuit(l).map(|(_, n)| n)).collect();
+        let numbers: Vec<String> = homerun_numbers(&labels);
         let panel_name = lead_tag.and_then(|x| field_of(x, "panel")).unwrap_or_default().to_string();
         t.set("circuit", format!("{panel_name}-{}", numbers.join(",")), "computed");
         t.set("circuits", labels.join(", "), "computed");
@@ -3572,7 +4048,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         let mut next_spare: HashMap<String, (Vec<String>, usize)> = HashMap::new();
         for di in &uncircuited {
             let Some(dv) = devs.get(*di) else { continue };
-            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS {
+            if !gap::is_power_device(&dv.kind) || proposed.len() >= MAX_ITEMS || inferred_devs.contains(di) {
                 continue;
             }
             let near_gear = gear
@@ -3651,48 +4127,76 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     json!([n, up.unwrap_or_else(|| sz.clone())])
                 })
                 .collect();
-            Some(json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": sized}))
+            let mut b = json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": sized});
+            // A conductor larger than the device's terminals take is spliced in its box to a
+            // pigtail of the size its breaker needs (Q6243): the design's size beside the one built.
+            let entering: Vec<(u64, String)> =
+                sized.iter().filter_map(|c| Some((c.get(0)?.as_u64()?, c.get(1)?.as_str()?.to_string()))).collect();
+            if let Some(landing) = entering.iter().map(|(_, s)| s.clone()).max_by_key(|s| order_sz(s)) {
+                let panel = super::printcond::parse_circuit(&dv.circuit).map(|(p, _)| p).unwrap_or_default();
+                if let Some(pig) = size::pigtail(&landing, trip_of(&panel, &dv.circuit), rl) {
+                    // What the device lands: a hot and the neutral on one pole, each hot on more.
+                    let lands = match poles_of(&panel, &dv.circuit) {
+                        1 => 2,
+                        p => u64::from(p),
+                    };
+                    let count = entering
+                        .iter()
+                        .filter(|(_, s)| order_sz(s) > order_sz(&rl.terminals.max_size))
+                        .map(|(n, _)| *n)
+                        .max()
+                        .unwrap_or(1)
+                        .min(lands);
+                    b["pigtail"] = json!({
+                        "size": pig, "count": count, "landing": landing, "inches": rl.terminals.pigtail_in,
+                        "why": format!(
+                            "#{landing} enters the box; the device's terminals take #{} at most: {count} #{pig} pigtail(s) spliced to it in the box ({})",
+                            rl.terminals.max_size, rl.terminals.source
+                        ),
+                    });
+                }
+            }
+            Some(b)
         })
         .take(MAX_DEVICES)
         .collect();
+    let pigtailed: Vec<&Value> = box_conductors.iter().filter(|b| b.get("pigtail").is_some()).collect();
+    let mut pigtails_by_landing: BTreeMap<String, usize> = BTreeMap::new();
+    for b in &pigtailed {
+        *pigtails_by_landing.entry(format!("#{}", b["pigtail"]["landing"].as_str().unwrap_or_default())).or_default() += 1;
+    }
+    let terminals = json!({
+        "devices_pigtailed": pigtailed.len(), "by_landing_size": pigtails_by_landing, "max_size": format!("#{}", rl.terminals.max_size),
+        "source": rl.terminals.source,
+    });
 
     // -- The holes through the framing: each member's holes apart by the rule (edge to edge, in
     // the web's plane); the closer ones are review items. --
-    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
-    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
-        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
-    }
-    let mut too_close = 0usize;
-    for ids in per_member.values_mut() {
-        ids.sort_by(|a, b| {
-            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
-            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        for w in ids.windows(2) {
-            let (Some(p), Some(q)) = (w.first().and_then(|i| bored.get(*i)), w.get(1).and_then(|i| bored.get(*i))) else { continue };
-            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
-            let need_in = rl.framing.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
-            if apart_in + 1e-6 >= need_in {
-                continue;
-            }
-            too_close += 1;
-            if clashes.len() < MAX_ITEMS {
-                let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
-                clashes.push(json!({
-                    "kind": "clash",
-                    "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
-                    "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
-                    "pair": "electrical × framing",
-                    "level": p.level,
-                    "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
-                    "clearance_in": r2(need_in),
-                    "fix": format!(
-                        "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
-                        p.member, apart_in.max(0.0), need_in, rl.framing.apart_x
-                    ),
-                }));
-            }
+    let pairs = close_holes(&mut bored, &rl.framing, upf);
+    let too_close = pairs.len();
+    for c in pairs {
+        let (p, q) = (&c.p, &c.q);
+        if clashes.len() >= MAX_ITEMS {
+            break;
         }
+        let floor = sp.level(&p.level).map_or(0.0, |l| l.elevation_ft * upf);
+        let mut item = json!({
+            "kind": "clash",
+            "a": {"what": "bored hole", "circuit": p.circuit, "trade": "electrical", "system": BRANCH_SYSTEM},
+            "b": {"handle": p.host.hex(), "category": FRAMING, "system": p.member, "trade": "framing", "circuit": q.circuit},
+            "pair": "electrical × framing",
+            "level": p.level,
+            "at": [r2(q.at.x), r2(q.at.y), r2((q.z - floor) / upf)],
+            "clearance_in": r2(c.need_in),
+            "fix": format!(
+                "two holes in one {} are {:.1} in apart edge to edge, the hole rule asks {:.1} in ({}× the larger): bore them farther apart, run both raceways through one hole sized for them, or cross in the next bay",
+                p.member, c.apart_in.max(0.0), c.need_in, rl.framing.apart_x
+            ),
+        });
+        if let Some(k) = c.corrected {
+            item["corrected"] = k;
+        }
+        clashes.push(item);
     }
     let mut holes_by_level: BTreeMap<String, BTreeMap<String, usize>> = BTreeMap::new();
     for h in &bored {
@@ -3723,6 +4227,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 "hole_in": r3(h.dia_in), "raceway_in": h.raceway_in, "end_ft": r2(h.end_ft),
                 "at": [r2(h.at.x), r2(h.at.y), r2((h.z - floor) / upf)],
                 "item": if h.dia_in > 0.0 { rl.framing.bored_item.clone() } else { rl.framing.truss_item.clone() },
+                "design": if h.design.is_empty() { Value::Null } else { json!(h.design) },
             })
         })
         .collect();
@@ -3811,6 +4316,74 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         rows.push((c.level.clone(), room, *l, cable_sizes.get(&ci).cloned().unwrap_or_default()));
     }
     let lengths = lengths_report(sp, &rows);
+    // -- A clash the routing could not route around (Q6216, `E-CLASH-OFFSET`): the field offsets
+    // the raceway under the other trade's duct, pipe or raceway (over it where under would drop
+    // into the ceiling), the clearance kept; the run takes the offset across the obstacle and the
+    // clash keeps the design height beside the installed one. One the space can't take stays. --
+    let offset_rule = super::provenance::rule("E-CLASH-OFFSET");
+    let mut clash_offsets: Vec<Value> = Vec::new();
+    for c in clashes.iter_mut().take(MAX_ITEMS) {
+        let what = c["a"]["what"].as_str().unwrap_or_default().to_string();
+        if matches!(what.as_str(), "drop" | "vertical conduit" | "riser" | "gear dedicated space") || c["b"]["category"] == json!(FRAMING) {
+            continue;
+        }
+        let level = c["level"].as_str().unwrap_or_default().to_string();
+        let num = |v: &Value| v.as_f64().filter(|x| x.is_finite());
+        let (Some(bx), Some(at), Some(z_ft)) =
+            ((0..4).map(|i| num(&c["obstacle_box"][i])).collect::<Option<Vec<f64>>>(), num(&c["at"][0]).zip(num(&c["at"][1])), num(&c["at"][2]))
+        else {
+            continue;
+        };
+        let (Some(under), Some(over), Some(l)) = (num(&c["offset_ft"]["under"]), num(&c["offset_ft"]["over"]), sp.level(&level)) else { continue };
+        let ceiling = if l.ceiling_ft > 0.0 { l.ceiling_ft } else { rl.route.default_ceiling_ft };
+        let top = l.height_ft.max(ceiling + 1.0) - rl.route.structure_depth_in / 12.0;
+        // Under, else over: where the ceiling space takes it; else around it in plan at the same
+        // height (the shorter side).
+        let vertical = if under >= ceiling + rl.route.above_ceiling_in / 12.0 - 1e-6 {
+            Some(("under", under))
+        } else if over <= top + 1e-6 {
+            Some(("over", over))
+        } else {
+            None
+        };
+        let label = c["a"]["circuit"].as_str().unwrap_or_default().to_string();
+        let at = Vec2::new(at.0, at.1);
+        let fits = |r: &MepRun| same_level(&r.level, &level) && r.top_ft.is_none() && r.system == BRANCH_SYSTEM;
+        let own = runs.iter().position(|r| fits(r) && !label.is_empty() && r.id.contains(&label) && offset_at(r, at, z_ft, upf).is_some());
+        let Some(ri) = own.or_else(|| runs.iter().position(|r| fits(r) && offset_at(r, at, z_ft, upf).is_some())) else { continue };
+        let Some(r) = runs.get_mut(ri) else { continue };
+        let obstacle = format!("{} {}", c["b"]["category"].as_str().unwrap_or_default(), c["b"]["system"].as_str().unwrap_or_default());
+        let (path, key, design, installed, reason) = match vertical {
+            Some((side, bottom)) => {
+                let Some(st) = offset_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], bottom, upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle}: offset {side} it at {bottom:.2} ft AFF, {} in clear",
+                    c["clearance_in"]
+                );
+                (vec![st.0, st.1], "bottom_ft", format!("{z_ft:.2}"), format!("{bottom:.2}"), reason)
+            }
+            None => {
+                let Some((pts, extra_ft)) = detour_run(r, at, z_ft, [bx[0], bx[1], bx[2], bx[3]], upf) else { continue };
+                let reason = format!(
+                    "the {what} at {z_ft:.2} ft AFF runs through the {obstacle} and the ceiling space takes no offset under or over it: run around it in plan, {extra_ft:.1} ft longer, {} in clear",
+                    c["clearance_in"]
+                );
+                (pts, "route", format!("straight through the {obstacle}"), format!("around the {obstacle} ({extra_ft:.1} ft longer)"), reason)
+            }
+        };
+        c["corrected"] = json!({"key": key, "design": design, "installed": installed, "rule": offset_rule.id, "reason": reason});
+        if clash_offsets.len() < MAX_ITEMS {
+            clash_offsets.push(json!({
+                "level": level, "circuit": label, "run": r.id, "path": path.iter().map(|p| [r2(p.x), r2(p.y)]).collect::<Vec<_>>(),
+                "key": key, "design": design, "installed": installed, "reason": reason, "rule": offset_rule.id,
+            }));
+        }
+    }
+    let conductor_sizing = json!({
+        "upsized_by_reason": sizing.iter().map(|(k, v)| ((*k).to_string(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        "rule": "a branch circuit's conductors are the smallest its breaker allows unless the documents give a size or a voltage-drop or derating calculation needs more",
+        "voltage_drop": rl.vdrop.source, "load": rl.vdrop.moment_source, "homerun_first": rl.vdrop.homerun_first_source,
+    });
     out.report = json!({
         "circuits": circs.len(),
         "routed_circuits": homes.len(),
@@ -3853,7 +4426,14 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         "fed_as_feeders": fed_as_feeders,
         "clearance_source": rl.clearance_source(),
         "route_source": rl.route.source,
-    });
+    }); // What the build filled in and corrected for the field (Q6216).
+    out.report["inferred_circuits"] = json!({"total": inferred_rows.len(), "devices": inferred_devs.len(), "items": inferred_rows});
+    out.report["clashes_corrected"] = json!(clash_offsets.len());
+    out.report["clash_offsets"] = json!(clash_offsets);
+    if let Some(o) = out.report.as_object_mut() {
+        o.insert("conductor_sizing".into(), conductor_sizing);
+        o.insert("terminals".into(), terminals);
+    }
     // What Q6206 adds: the labels resolved, the switch loops, the shared raceway, the proposed
     // circuits, each circuit's own lengths.
     // The devices on the routed circuits, by kind (what became routed).
@@ -3883,6 +4463,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // What Q6200 adds: the switch legs, the cable's paths, the makeup, the lengths by room.
     let more = json!({
         "switch_legs": switch_legs,
+        "room_circuits_on_own_panel": room_own_panel,
         "switch_legs_source": rl.switch_legs.source,
         "cable_stud_legs": stud_legs,
         "cable_paths": cable_paths.len(),
@@ -3940,6 +4521,74 @@ struct Bored {
     dia_in: f64,
     raceway_in: f64,
     end_ft: f64,
+    /// A hole bored for two raceways (Q6216): the design's two holes it stands for.
+    design: String,
+}
+
+/// Two holes of one member closer than the hole rule allows (edge to edge, in the web's plane).
+#[derive(Clone, Debug)]
+struct ClosePair {
+    p: Bored,
+    q: Bored,
+    apart_in: f64,
+    need_in: f64,
+    /// The field's correction (Q6216, `E-BORE-SHARE`), when it settles them.
+    corrected: Option<Value>,
+}
+
+/// Each member's holes apart by the hole rule; each pair closer is listed. Where the hole rule
+/// takes one hole sized for both raceways at both holes' distance from the bearing, the field
+/// bores that one instead (`E-BORE-SHARE`): the first hole is bored for both, its design (the two
+/// holes) kept, and the second is gone. A hole shares once.
+fn close_holes(bored: &mut Vec<Bored>, fr: &FramingRules, upf: f64) -> Vec<ClosePair> {
+    let mut per_member: BTreeMap<(String, usize), Vec<usize>> = BTreeMap::new();
+    for (i, h) in bored.iter().enumerate().filter(|(_, h)| h.dia_in > 0.0) {
+        per_member.entry((h.level.to_ascii_lowercase(), h.obstacle)).or_default().push(i);
+    }
+    let rule = super::provenance::rule("E-BORE-SHARE");
+    let mut out = Vec::new();
+    let mut shared: Vec<(usize, usize, f64, String)> = Vec::new();
+    let mut in_shared: BTreeSet<usize> = BTreeSet::new();
+    for ids in per_member.values_mut() {
+        ids.sort_by(|a, b| {
+            let k = |i: &usize| bored.get(*i).map_or((0.0, 0.0), |h| (h.along, h.z));
+            k(a).partial_cmp(&k(b)).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        for w in ids.windows(2) {
+            let [pi, qi] = w else { continue };
+            let (Some(p), Some(q)) = (bored.get(*pi), bored.get(*qi)) else { continue };
+            let apart_in = (q.along - p.along).hypot(q.z - p.z) / upf * 12.0 - (p.dia_in + q.dia_in) / 2.0;
+            let need_in = fr.apart_x.max(0.0) * p.dia_in.max(q.dia_in);
+            if apart_in + 1e-6 >= need_in {
+                continue;
+            }
+            let one_in = p.raceway_in + q.raceway_in + fr.hole_over_in.max(0.0);
+            let share = !in_shared.contains(pi) && !in_shared.contains(qi) && fr.min_end(one_in).is_some_and(|m| m <= p.end_ft.min(q.end_ft) + 1e-9);
+            let corrected = share.then(|| {
+                let design = format!("two holes ({:.3} in, {:.3} in) {:.1} in apart edge to edge", p.dia_in, q.dia_in, apart_in.max(0.0));
+                let installed = format!("one {one_in:.3} in hole for both raceways");
+                let reason = format!(
+                    "the hole rule asks {need_in:.1} in between holes ({}× the larger); one hole sized for both raceways is bored instead",
+                    fr.apart_x
+                );
+                shared.push((*pi, *qi, one_in, design.clone()));
+                in_shared.extend([*pi, *qi]);
+                json!({"key": "bored_holes", "design": design, "installed": installed, "rule": rule.id, "reason": reason})
+            });
+            out.push(ClosePair { p: p.clone(), q: q.clone(), apart_in, need_in, corrected });
+        }
+    }
+    for (pi, qi, one_in, design) in &shared {
+        if let Some(h) = bored.get_mut(*pi) {
+            h.dia_in = *one_in;
+            h.design = design.clone();
+        }
+        if let Some(h) = bored.get_mut(*qi) {
+            h.dia_in = -1.0;
+        }
+    }
+    bored.retain(|h| h.dia_in >= 0.0);
+    out
 }
 
 /// The holes a seated leg bores through the framing over its level, into `out`; the pieces the
@@ -3973,6 +4622,7 @@ fn bore(out: &mut Vec<Bored>, field: &Field, leg: &Leg, circuit: &str, level: &s
                         along: h.along,
                         dia_in: h.dia_in,
                         raceway_in: size_in,
+                        design: String::new(),
                         end_ft: h.end_ft,
                     });
                 }
@@ -4019,10 +4669,10 @@ fn r3(v: f64) -> f64 {
 
 /// Box fill (NEC 314.16) at each device box the routing put conductors in, against the box its
 /// pieces gave it (its `cubic_in`): the report's `box_fill` filled in.
-pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
+pub(crate) fn check_box_fill(d: &mut Drawing, report: &mut Value) {
     let rl = rules();
     let Some(pending) = report["box_fill"]["pending"].as_array().cloned() else { return };
-    let mut boxes: HashMap<String, (String, f64)> = HashMap::new();
+    let mut boxes: HashMap<String, (String, f64, Handle)> = HashMap::new();
     for e in d.model.iter().filter(|e| mep_piece(e)) {
         let ps = props::read(&e.common.xdata);
         if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("box") {
@@ -4031,11 +4681,20 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
         let (Some(of), Some(cu)) = (ps.get("box_of").map(Prop::text), ps.get("cubic_in").and_then(|p| p.text().parse::<f64>().ok())) else {
             continue;
         };
-        boxes.insert(of.to_ascii_uppercase(), (ps.get("size").map(Prop::text).unwrap_or_default(), cu));
+        // A box corrected before is checked as designed (its design volume), so a second check
+        // finds and corrects it the same way.
+        let (size, cu) = match (ps.get("design:size"), ps.get("design:cubic_in").and_then(|p| p.text().parse::<f64>().ok())) {
+            (Some(s), Some(c)) => (s.text(), c),
+            _ => (ps.get("size").map(Prop::text).unwrap_or_default(), cu),
+        };
+        boxes.insert(of.to_ascii_uppercase(), (size, cu, e.handle));
     }
     let (mut checked, mut over) = (0usize, Vec::new());
+    // The boxes the field installs bigger (Q6216, `E-BOX-FILL`): the box, the next box that holds
+    // what enters it, and why.
+    let mut fixes: Vec<(Handle, String, String, f64, f64, f64)> = Vec::new();
     for p in &pending {
-        let Some((size, cu)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
+        let Some((size, cu, bh)) = p["device"].as_str().and_then(|h| boxes.get(&h.to_ascii_uppercase())) else { continue };
         checked += 1;
         let conds: Vec<(u32, String)> = p["conductors"]
             .as_array()
@@ -4044,19 +4703,115 @@ pub(crate) fn check_box_fill(d: &Drawing, report: &mut Value) {
             .filter_map(|c| Some((u32::try_from(c.get(0)?.as_u64()?).ok()?, c.get(1)?.as_str()?.to_string())))
             .collect();
         let need = box_volume(&conds, true, p["yoke"].as_bool().unwrap_or(false), rl);
-        if need > cu + 1e-9 && over.len() < MAX_ITEMS {
+        if need > *cu + 1e-9 && over.len() < MAX_ITEMS {
             let bigger =
-                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, _)| to.clone());
+                rl.box_fill.bigger.iter().find(|(from, _, v)| size.contains(from.as_str()) && *v + 1e-9 >= need).map(|(_, to, v)| (to.clone(), *v));
+            if let Some((to, v)) = &bigger {
+                fixes.push((*bh, size.clone(), to.clone(), *cu, *v, need));
+            }
             over.push(json!({
                 "kind": "box_fill", "device": p["device"], "device_kind": p["kind"], "level": p["level"], "circuit": p["circuit"],
                 "box": size, "cubic_in": cu, "needed_cu_in": r2(need),
                 "conductors": conds.iter().map(|(n, s)| format!("{n}#{s}")).collect::<Vec<_>>(),
-                "fix": bigger.unwrap_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".into()),
+                "fix": bigger.as_ref().map_or_else(|| "a deeper box or an extension ring, or fewer raceways into it (a junction box above)".to_string(), |b| b.0.clone()),
+                "corrected": bigger.is_some(),
                 "source": rl.box_fill.source,
             }));
         }
     }
-    report["box_fill"] = json!({"checked": checked, "over": over});
+    // Each one the next box holds: built with it, the design box kept beside it.
+    let rule = super::provenance::rule("E-BOX-FILL");
+    let mut corrected = 0usize;
+    for (h, from, to, cu, v, need) in &fixes {
+        let mut why = format!("{need:.1} cu in of conductors and devices in a {from} of {cu} cu in");
+        if to.contains("ring") && !rl.box_fill.bigger_source.is_empty() {
+            why = format!("{why}: {}", rl.box_fill.bigger_source);
+        }
+        let size = super::provenance::Correction {
+            key: "size".into(),
+            design: from.clone(),
+            corrected: to.clone(),
+            reason: why.clone(),
+            rule: rule.id.clone(),
+        };
+        let vol = super::provenance::Correction {
+            key: "cubic_in".into(),
+            design: format!("{cu}"),
+            corrected: format!("{v}"),
+            reason: why,
+            rule: rule.id.clone(),
+        };
+        let a = super::provenance::correct_element(d, *h, &size);
+        let b = super::provenance::correct_element(d, *h, &vol);
+        corrected += usize::from(a || b);
+    }
+    // The raceway pieces the clash offsets moved (Q6216): each keeps its design height.
+    let marked = mark_offsets(d, report);
+    if corrected > 0 || marked > 0 {
+        super::mepatoms::reindex(d);
+    }
+    report["box_fill"] = json!({"checked": checked, "over": over, "corrected": fixes.len(), "rule": rule.basis_for("")});
+    report["clash_pieces_corrected"] = json!(marked);
+}
+
+/// The conduit pieces in each clash offset's stretch (the routing's `clash_offsets`): their bottom
+/// corrected to the offset's, the design height beside it. How many.
+fn mark_offsets(d: &mut Drawing, report: &Value) -> usize {
+    let Some(list) = report["clash_offsets"].as_array().filter(|l| !l.is_empty()) else { return 0 };
+    let upf = d
+        .building_spec
+        .as_deref()
+        .and_then(|t| BuildingSpec::from_json(t).ok())
+        .map(|sp| sp.units_per_foot)
+        .filter(|u| u.is_finite() && *u > 0.0)
+        .unwrap_or(12.0);
+    let tol = 0.5 * upf;
+    let pt = |v: &Value| Some(Vec2::new(v.get(0)?.as_f64()?, v.get(1)?.as_f64()?));
+    let near = |p: Vec2, a: Vec2, b: Vec2| {
+        let ab = b - a;
+        let l2 = ab.dot(ab);
+        let t = if l2 > 1e-12 { ((p - a).dot(ab) / l2).clamp(0.0, 1.0) } else { 0.0 };
+        (a + ab * t).dist(p) <= tol
+    };
+    let mut todo: Vec<(Handle, super::provenance::Correction)> = Vec::new();
+    for e in d.model.iter().filter(|e| mep_piece(e)) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get(super::mepatoms::ATOM_KEY).map(Prop::text).as_deref() != Some("conduit")
+            || ps.get("design:bottom_ft").is_some()
+            || ps.get("design:route").is_some()
+        {
+            continue;
+        }
+        let ends: Vec<Vec2> = ["start", "end"]
+            .iter()
+            .filter_map(|k| {
+                let v: Vec<f64> = ps.get(k)?.text().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                Some(Vec2::new(*v.first()?, *v.get(1)?))
+            })
+            .collect();
+        let level = super::bspec::made_level(e).unwrap_or_default();
+        let [p, q] = ends.as_slice() else { continue };
+        for o in list {
+            let path: Vec<Vec2> = o["path"].as_array().into_iter().flatten().filter_map(pt).collect();
+            let on = |q: Vec2| path.windows(2).any(|w| near(q, w[0], w[1]));
+            if !same_level(o["level"].as_str().unwrap_or_default(), &level) || path.len() < 2 || !(on(*p) && on(*q)) {
+                continue;
+            }
+            let txt = |k: &str| o[k].as_str().unwrap_or_default().to_string();
+            todo.push((
+                e.handle,
+                super::provenance::Correction {
+                    key: txt("key"),
+                    design: txt("design"),
+                    corrected: txt("installed"),
+                    reason: txt("reason"),
+                    rule: txt("rule"),
+                },
+            ));
+            break;
+        }
+    }
+    todo.into_iter().filter(|(h, c)| super::provenance::correct_element(d, *h, c)).count()
 }
 
 /// What a routing took out of the spec it went into: the circuits' tags as read (the routed ones
@@ -4070,6 +4825,57 @@ pub(crate) struct Replaced {
 /// Where the stored spec's [`Replaced`] is kept (among the drawing's embedded files).
 const BASE_FILE: &str = "route/base.json";
 
+/// A circuit tag id's level, scope (a sheet, or `room-<room>`) and label, a part's `@…` and a
+/// switch loop's `~…` aside: `circuit:Level 1:E-101:LP1-3@P2~sw3` → (`level 1`, `E-101`, `LP1-3`).
+fn circuit_key(id: &str) -> Option<(String, String, String)> {
+    let rest = id.strip_prefix(super::printcond::CIRCUIT_TAG)?;
+    let (head, label) = rest.rsplit_once(':')?;
+    let (level, scope) = head.split_once(':')?;
+    let label = label.split(['@', '~']).next().unwrap_or_default().trim();
+    (!label.is_empty()).then(|| (level.trim().to_ascii_lowercase(), scope.trim().to_string(), label.to_ascii_uppercase()))
+}
+
+/// The estimated routes' circuit tags the routing routed under another tag (Q6235: one route a
+/// run). A circuit read on two sheets (a plan and its enlargement) has a tag on each, and a
+/// typical room's view stamps its circuits as the view's: the routing routes the one circuit
+/// (or each real room's own), so a route estimated for another tag of it on that level is the same
+/// conduit twice. An estimate in a real room (a room of the spec) stays unless that room's own
+/// circuit is routed: another room's circuit of the label is not its.
+pub(crate) fn estimates_routed_elsewhere(sp: &BuildingSpec, routed: &Routed) -> BTreeSet<String> {
+    let room_part = super::printcond::ROOM_PART;
+    let mut done: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut done_in_room: BTreeSet<(String, String, String)> = BTreeSet::new();
+    for t in routed.tags.iter().filter(|t| !t.id.contains(HOME_PART)) {
+        let Some((level, scope, label)) = circuit_key(&t.id) else { continue };
+        if let Some(room) = scope.strip_prefix(&room_part[1..]) {
+            done_in_room.insert((level.clone(), room.to_ascii_uppercase(), label.clone()));
+        }
+        done.insert((level, label));
+    }
+    let real_room = |room: &str| sp.rooms.iter().any(|r| r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(room.trim())));
+    sp.mep
+        .runs
+        .iter()
+        .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM)
+        .filter_map(|r| super::printcond::circuit_of_run(r))
+        .filter(|id| {
+            let Some((level, scope, label)) = circuit_key(id) else { return false };
+            if !done.contains(&(level.clone(), label.clone())) {
+                return false;
+            }
+            match scope.strip_prefix(&room_part[1..]) {
+                Some(room) if real_room(room) => done_in_room.contains(&(level, room.to_ascii_uppercase(), label)),
+                _ => true,
+            }
+        })
+        .map(str::to_string)
+        .take(MAX_RUNS)
+        .collect()
+}
+
+/// How an estimated route left is sized (its `size_source`), so a later routing sizes it again.
+const EST_FILL: &str = "rule: an estimated route's conductors' fill at the routing's minimum: ";
+
 /// The spec with its circuits routed: the estimated runs of the circuits routed go, the routed
 /// runs and the routed tags come in (the drawn conduit stays as it is). What went: the tags and
 /// estimated runs as read (a routing's own earlier output is not among them).
@@ -4081,19 +4887,66 @@ pub(crate) fn apply(sp: &mut BuildingSpec, routed: &Routed) -> Replaced {
     let mut routed_tags: BTreeSet<&str> = routed.tags.iter().map(|t| t.id.as_str()).collect();
     // A split circuit's own tag gives way to its parts'.
     routed_tags.extend(routed.tags.iter().filter_map(|t| t.fields.get("split_of").map(|f| f.value.as_str())));
-    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it.
+    // A feeder's circuit tag keeps no estimated branch route: the feeder's routing carries it; nor
+    // does another tag of a circuit routed (Q6235).
+    let elsewhere = estimates_routed_elsewhere(sp, routed);
     let gone = |r: &MepRun| {
         let c = super::printcond::circuit_of_run(r);
         r.system == BRANCH_SYSTEM
             || r.system == lv::LV_SYSTEM
-            || (r.system == super::printcond::CIRCUIT_SYSTEM && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c)))
+            || (r.system == super::printcond::CIRCUIT_SYSTEM
+                && c.is_some_and(|c| routed_tags.contains(c) || routed.feeders.contains(c) || elsewhere.contains(c)))
     };
     replaced.runs =
         sp.mep.runs.iter().filter(|r| r.system != BRANCH_SYSTEM && r.system != lv::LV_SYSTEM && gone(r)).take(MAX_RUNS).cloned().collect();
     sp.mep.runs.retain(|r| !gone(r));
+    // An estimated route left (its circuit not routed) is the raceway its conductors fill, at
+    // the routing's minimum, not the reader's default size (Q6235).
+    if let Some((min_in, min_src)) = &routed.minimum {
+        let rl = rules();
+        let of: HashMap<&str, (&str, &str)> = sp
+            .tags
+            .iter()
+            .map(|t| {
+                let f = |k: &str| t.fields.get(k).map(|f| f.value.as_str());
+                (t.id.as_str(), (f("conductors").unwrap_or(super::printcond::DEFAULT_CONDUCTORS), f("conduit").unwrap_or_default()))
+            })
+            .collect();
+        for r in sp
+            .mep
+            .runs
+            .iter_mut()
+            .filter(|r| r.system == super::printcond::CIRCUIT_SYSTEM && (r.size_source == "default" || r.size_source.starts_with(EST_FILL)))
+        {
+            let (mk, named) =
+                super::printcond::circuit_of_run(r).and_then(|c| of.get(c)).copied().unwrap_or((super::printcond::DEFAULT_CONDUCTORS, ""));
+            let method = super::mepatoms::rules().raceway_named(named).map_or_else(|| rl.methods.raceway.clone(), |(k, _)| k.to_string());
+            if let Some((t, area, allowed)) = fill_size(&super::mepatoms::conductor_parts(mk), &method, *min_in, rl) {
+                r.size_in[0] = t;
+                r.size_source = format!(
+                    "{EST_FILL}{mk}: {} sq in of conductors in {} sq in allowed ({}); not under the minimum: {min_src}",
+                    r3(area),
+                    r3(allowed),
+                    rl.fill.source
+                );
+            }
+        }
+    }
     // An earlier routing's pathway tags give way to this one's.
     sp.tags.retain(|t| t.kind != lv::TAG_KIND);
-    sp.mep.runs.extend(routed.runs.iter().cloned());
+    // A routed path is the router's, by trade practice: the drawings show its circuit's devices
+    // and a homerun arrow, not the path (Q6216: inferred, with its basis).
+    let inferred_circuits: HashMap<&str, &str> =
+        routed.tags.iter().filter_map(|t| Some((t.id.as_str(), t.fields.get(INFERRED_CIRCUIT).map(|f| f.value.as_str())?))).collect();
+    sp.mep.runs.extend(routed.runs.iter().cloned().map(|mut r| {
+        if let Some(basis) = super::printcond::circuit_of_run(&r).and_then(|c| inferred_circuits.get(c)) {
+            super::provenance::set_run(&mut r, cadaddy_walk3d::Made::Inferred, *basis);
+        } else if r.made.is_drawn() {
+            let (made, basis) = super::provenance::of_run(&r);
+            super::provenance::set_run(&mut r, made, basis);
+        }
+        r
+    }));
     let routing_made = |t: &ElementTag| t.id.contains(HOME_PART) || t.fields.contains_key("split_of") || t.fields.contains_key(gap::RESOLVED);
     replaced.tags = sp.tags.iter().filter(|t| routed_tags.contains(t.id.as_str()) && !routing_made(t)).take(MAX_CIRCUITS).cloned().collect();
     // Each circuit's routed tag (or its parts) where its tag was read, so the spec keeps its order
@@ -4288,8 +5141,9 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     // The pieces there are now, and their systems: only those are cut again (runs the job built
     // as whole runs stay whole).
     let mut systems: BTreeSet<String> = BTreeSet::from([BRANCH_SYSTEM.to_string(), lv::LV_SYSTEM.to_string()]);
-    // A feeder's pieces don't make their system's other runs pieces (the underground plan's
-    // runs on the feeders' buried system stay whole): feeder runs are cut on their own.
+    // A feeder's pieces don't make their system's other runs pieces: feeder runs are cut on
+    // their own. The buried work (the underground plan's runs) is cut with the rest once the
+    // model has pieces: a takeoff counts it like any raceway.
     let feeder_bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
     let of_feeder =
         |e: &Entity| super::bimlook::made_tag(e, "mepid").and_then(|id| id.split_once('#')).is_some_and(|(base, _)| feeder_bases.contains(base));
@@ -4306,9 +5160,12 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
         })
         .map(|e| e.handle)
         .collect();
+    if !old.is_empty() {
+        systems.insert(super::ugplan::E_UG.to_string());
+    }
     // The feeders' routed runs are cut into their pieces too (a job routes them after the build,
-    // as whole runs): those whole runs go.
-    let feeder_whole = feeder_whole_runs(d, &sp);
+    // as whole runs), and the buried work: those whole runs go.
+    let feeder_whole = feeder_whole_runs(d, &sp, systems.contains(super::ugplan::E_UG));
     let mut shifted = sp.clone();
     shifted.mep.runs.retain(|r| systems.contains(&r.system) || super::ugplan::is_feeder_run(r));
     // A feeder's entry stubs are cut again only where they were pieces already; a routed feeder
@@ -4361,6 +5218,8 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     s.touch();
     Ok(json!({
         "routed": true, "removed": old.len(), "atoms": atoms["atoms"], "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,
+        "boxes": {"made": atoms["boxesMade"], "by_reason": atoms["boxesByReason"], "no_box": atoms["noBox"], "gang_boxes": atoms["gangBoxes"],
+            "ganged_devices": atoms["gangedDevices"], "ends_at_equipment": atoms["endsAtEquipment"], "open_ends": atoms["openEnds"]},
         "circuits": routed.report["routed_circuits"], "homeruns": routed.report["homeruns"], "routed_ft": routed.report["routed_ft"],
         "clashes": routed.report["clashes"].as_array().map_or(0, Vec::len), "unrouted": routed.report["unrouted"].as_array().map_or(0, Vec::len),
     }))
@@ -4383,11 +5242,11 @@ fn is_obstacle(el: &super::bimwork::El) -> bool {
     }
 }
 
-/// The whole-run objects (not pieces) of the spec's feeder runs: on the feeder system, or a run's
-/// own (its id begins with the run's).
-fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
+/// The whole-run objects (not pieces) of the spec's feeder runs (on the feeder system, or a run's
+/// own: its id begins with the run's) and, `buried`, of the buried work's raceway.
+fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec, buried: bool) -> Vec<Handle> {
     let bases: BTreeSet<String> = sp.mep.runs.iter().filter(|r| super::ugplan::is_feeder_run(r)).map(super::mep::run_base).collect();
-    if bases.is_empty() {
+    if bases.is_empty() && !buried {
         return Vec::new();
     }
     d.model
@@ -4396,6 +5255,7 @@ fn feeder_whole_runs(d: &Drawing, sp: &BuildingSpec) -> Vec<Handle> {
         .filter(|e| {
             let Some(sy) = super::bimlook::made_tag(e, "system") else { return false };
             sy == super::gearbuild::FEEDER_SYSTEM
+                || (buried && sy == super::ugplan::E_UG && super::bimlook::made_tag(e, "kind") == Some("conduit"))
                 || super::bimlook::made_tag(e, "mepid").and_then(|id| id.rsplit_once('/')).is_some_and(|(base, _)| bases.contains(base))
         })
         .map(|e| e.handle)
@@ -4408,14 +5268,21 @@ fn run_reroute(s: &mut Session, _p: &Value) -> Result<Value> {
 
 /// After `moved` devices were set in their walls again (a merge removed the walls they were in):
 /// their boxes, rings and the raceways' drops are pieces built where the devices stood, so the
-/// circuits are routed again and the pieces cut again where the devices are now. Nothing to do
-/// when none moved or the model has no pieces yet (the build makes them where the devices are).
+/// circuits are routed again and the pieces cut again where the devices are now. The same when
+/// buried work was built as whole runs since the last cut (the underground plan's): it is cut
+/// into its pieces with the rest. Nothing to do when neither, or the model has no pieces yet
+/// (the build makes them where the devices are).
 pub(crate) fn follow_reseated(s: &mut Session, moved: usize) -> Option<Result<Value>> {
-    if moved == 0 {
-        return None;
-    }
-    let has_atoms = s.doc().ok()?.model.iter().any(|e| mep_piece(e));
-    has_atoms.then(|| reroute(s))
+    let d = s.doc().ok()?;
+    let whole_buried = || {
+        d.model.iter().any(|e| {
+            !super::mepatoms::is_atom(e)
+                && super::bimlook::made_tag(e, "system") == Some(super::ugplan::E_UG)
+                && super::bimlook::made_tag(e, "kind") == Some("conduit")
+        })
+    };
+    let has_atoms = d.model.iter().any(|e| mep_piece(e));
+    (has_atoms && (moved > 0 || whole_buried())).then(|| reroute(s))
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -4424,11 +5291,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("conduit.route", "Conduit Routing Report", run_report)
             .menu(&["Draw", "BIM", "Conduit Routing Report"])
-            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
+            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, terminals (the devices whose circuit conductors are larger than their terminals take, each spliced to a pigtail in its box: {devices_pigtailed, by_landing_size, max_size, source}), conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])
-            .params("{} → {routed, removed, atoms, seconds, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
+            .params("{} → {routed, removed, atoms, seconds, boxes: {made, by_reason, no_box, gang_boxes, ganged_devices, ends_at_equipment, open_ends}, circuits, homeruns, routed_ft, clashes, unrouted}: the circuits routed again over the model as it stands (gear and feeders placed since the build), the pieces cut again, the report and the spec's routed runs stored"),
         CommandSpec::new("conduit.takeoff", "Conduit Takeoff", run_takeoff)
             .menu(&["Draw", "BIM", "Conduit Takeoff"])
             .params("{group_by?: [\"level\",\"area\",\"circuit\"] (any of them; default level), file?: path (.csv; the table, each line with its elements' handles), force?: bool (replace an existing file), cost_db?: path (.csv: item, size?, unit, material_unit, labor_unit — labor_unit in DOLLARS per unit), labor_rate?: $/hour (turns labor dollars into hours; default the cost DB's manpower rate, else the estimate's rate), price?: bool (default true), scenario?: a value engineering scenario id (ve.scenario: its pieces in place of the design's it replaces)} → {lines: [{level?, area?, circuit?, kind, item, size, type, qty, unit, material, labor_dollars, labor_hours, labor_basis, via, handles, elements}], totals: {material, labor_dollars, labor_hours, cost}, firestop, unpriced, file}")
@@ -4804,10 +5671,12 @@ fn run_takeoff(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[path = "conduitroute_gap.rs"]
-mod gap;
+pub(crate) mod gap;
 pub(crate) use gap::panel_end_makeup_ft;
 #[path = "conduitroute_lv.rs"]
 pub(crate) mod lv;
+#[path = "conduitroute_size.rs"]
+mod size;
 
 #[cfg(test)]
 #[path = "conduitroute_tests.rs"]

@@ -21,5 +21,55 @@
         }
       ]
     }
-  ]
+    ],
+  "unpowered_boxes": {
+    "roles": ["antenna"],
+    "source": "trade practice: a system's antenna box holds its antenna's mount and cable, low-voltage only; no branch circuit lands in it (the system's power is its head-end's, on its own circuit)"
+  },
+  "equipment_receptacle": {
+    "_about": "A keynote that calls for a receptacle for a piece of equipment (`30A/2P RECEPTACLE FOR <unit>, SET HORIZONTALLY IN ITS SUB-BASE`): the receptacle at its marker takes the note's rating, poles, orientation and place, and it is that equipment's connection, its only one (keynotes.rs `equipment_receptacle`, the guided job's typical rooms). The equipment's names are the rules data's own (`equipment.room_unit_tags`, `equipment.typical_load_words` in wordrules.json).",
+    "source": "the documents' keynote first; trade practice for what the note leaves out",
+    "receptacle_words": ["RECEPTACLE", "RECEPTACLES", "RCPT", "RECEPT", "OUTLET"],
+    "horizontal_words": ["HORIZONTALLY", "HORIZONTAL", "HORIZ", "HOR"],
+    "under_unit_words": ["UNDER UNIT", "UNDER THE UNIT", "BELOW UNIT", "BELOW THE UNIT", "SUB-BASE", "SUBBASE", "SUB BASE"],
+    "sub_base_words": ["SUB-BASE", "SUBBASE", "SUB BASE"],
+    "sub_base_in": 4.0,
+    "sub_base_source": "trade practice: a packaged unit's electrical sub-base is a few inches high (makers' sub-bases are about 3-1/2 to 4 in); the unit sits on it and its receptacle is set in it, under the unit",
+    "nema_source": "NEMA WD 6 (straight-blade configurations): a 2-pole 3-wire grounding receptacle, no neutral, is the 6- family (250 V); a 1-pole one with its neutral the 5- family (125 V)",
+    "nema": [
+      {"poles": 2, "volts": 250, "by_amps": [[15, "6-15R"], [20, "6-20R"], [30, "6-30R"], [50, "6-50R"]]},
+      {"poles": 1, "volts": 125, "by_amps": [[15, "5-15R"], [20, "5-20R"], [30, "5-30R"], [50, "5-50R"]]}
+    ]
+  },
+  "device_requirements": {
+    "_about": "A keynote that sets a device's type, features, ganging, mounting or pathway is answered at its marker: the device its marker points at takes what it asks, the keynote its source (keynotes.rs `device_requirements`, the guided job's typical rooms and keynote step). A note that names a kind of device in some rooms (`ALL <rooms> RECEPTACLES SHALL BE …`) applies to every such device in rooms so named, building-wide. Each list below is the words the trades write it with.",
+    "source": "the documents' keynote at its marker; the words as the trades write them",
+    "features": [
+      {"say": "tamper-resistant", "words": ["TAMPER-RESISTANT", "TAMPER RESISTANT", "TAMPERPROOF", "TAMPER-PROOF", "TAMPER PROOF"], "kinds": ["receptacle"]},
+      {"say": "weather-resistant", "words": ["WEATHER-RESISTANT", "WEATHER RESISTANT"], "kinds": ["receptacle"]},
+      {"say": "USB", "words": ["USB-A", "USB A", "USB"], "kinds": ["receptacle"]},
+      {"say": "USB-C", "words": ["USB-C", "USB C", "USBC", "USB TYPE-C", "USB TYPE C"], "kinds": ["receptacle"]},
+      {"say": "isolated ground", "words": ["ISOLATED GROUND", "ISOLATED-GROUND"], "kinds": ["receptacle"]},
+      {"say": "hospital grade", "words": ["HOSPITAL GRADE", "HOSPITAL-GRADE"], "kinds": ["receptacle"]},
+      {"say": "specification grade", "words": ["SPECIFICATION GRADE", "SPECIFICATION-GRADE", "SPEC GRADE"], "kinds": ["receptacle", "switch"]}
+    ],
+    "features_why": "a feature's words are taken longest first and once (USB-C is not also a plain USB port)",
+    "gang_words": ["GANGED TOGETHER", "GANG TOGETHER", "TO BE GANGED", "GANGED", "IN A COMMON BOX", "IN ONE BOX", "IN THE SAME BOX", "UNDER ONE PLATE", "UNDER A COMMON PLATE"],
+    "gang_kinds": ["switch", "receptacle", "dimmer", "sensor"],
+    "gang_source": "the keynote at its marker: the devices it points at share one box and one plate, however far apart the plan draws their symbols (power and low-voltage still never share one: NEC 800.133(A))",
+    "mounts": [
+      {"mount": "ceiling", "words": ["CEILING MOUNTED", "CEILING-MOUNTED", "MOUNTED IN CEILING", "MOUNTED IN THE CEILING", "MOUNT IN CEILING", "CEILING MOUNT", "IN THE CEILING"], "kinds": [], "device_type": ""},
+      {"mount": "floor", "words": ["FLOOR BOX", "FLOORBOX", "FLUSH FLOOR", "FLOOR MOUNTED", "FLOOR-MOUNTED", "FLOOR RECEPTACLE", "POKE-THROUGH", "POKE THROUGH"], "kinds": ["receptacle", "low voltage", "data", "outlet"], "device_type": "floor box"}
+    ],
+    "lv_words": ["LOW-VOLTAGE", "LOW VOLTAGE", "LV", "DATA", "TELEPHONE", "TELECOM", "TELECOMMUNICATIONS", "COMMUNICATIONS", "CATV", "VOICE", "WIRELESS ACCESS POINT", "WAP"],
+    "lv_kinds": ["low voltage", "data", "telephone", "voice", "tv", "catv", "access point", "wap", "communication"],
+    "lv_source": "the keynote at its marker gives that outlet's low-voltage conduit size: it governs over a general pathway note for the outlet it points at",
+    "scope_words": ["ALL", "EVERY", "EACH"],
+    "scope_kinds": [
+      {"kind": "receptacle", "words": ["RECEPTACLES", "RECEPTACLE", "RECEPTS", "OUTLETS", "CONVENIENCE OUTLETS"]},
+      {"kind": "switch", "words": ["SWITCHES", "SWITCH"]}
+    ],
+    "scope_skip": ["AND", "OR", "THE", "OF", "IN", "AT", "NEW", "OTHER", "TYPICAL", "VOLT", "VOLTS", "AMP", "AMPS", "DUPLEX", "CONVENIENCE", "GENERAL", "PURPOSE", "SINGLE", "PHASE", "NEMA", "AREAS", "AREA", "ROOMS", "ROOM", "SPACES", "SPACE"],
+    "scope_reach_words": 12
+  }
 }

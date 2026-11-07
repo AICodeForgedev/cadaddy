@@ -1,0 +1,3641 @@
+{
+ "about": "Building knowledge as rule data (Q6210): the words the readers tell a room, a sheet, a unit, equipment and devices by. Shapes and job additions: crates/mepfix/src/wordrules.rs.",
+ "lists": {
+  "asbuilt.kind_words": {
+   "source": "(trade practice: the words a field markup names an element by, and its kind; moved from asbuilt.rs `NAMES`)",
+   "pairs": [
+    [
+     "receptacle",
+     "elec_device"
+    ],
+    [
+     "receptacles",
+     "elec_device"
+    ],
+    [
+     "outlet",
+     "elec_device"
+    ],
+    [
+     "switch",
+     "elec_device"
+    ],
+    [
+     "switches",
+     "elec_device"
+    ],
+    [
+     "device",
+     "elec_device"
+    ],
+    [
+     "light",
+     "elec_device"
+    ],
+    [
+     "luminaire",
+     "elec_device"
+    ],
+    [
+     "jbox",
+     "elec_device"
+    ],
+    [
+     "junction",
+     "elec_device"
+    ],
+    [
+     "disconnect",
+     "elec_device"
+    ],
+    [
+     "duct",
+     "segment:duct"
+    ],
+    [
+     "ductwork",
+     "segment:duct"
+    ],
+    [
+     "pipe",
+     "segment:pipe"
+    ],
+    [
+     "piping",
+     "segment:pipe"
+    ],
+    [
+     "conduit",
+     "elec_conduit"
+    ],
+    [
+     "raceway",
+     "elec_conduit"
+    ],
+    [
+     "diffuser",
+     "terminal"
+    ],
+    [
+     "grille",
+     "terminal"
+    ],
+    [
+     "register",
+     "terminal"
+    ],
+    [
+     "louver",
+     "terminal"
+    ],
+    [
+     "sprinkler",
+     "terminal"
+    ],
+    [
+     "head",
+     "terminal"
+    ],
+    [
+     "ahu",
+     "equipment"
+    ],
+    [
+     "vav",
+     "equipment"
+    ],
+    [
+     "fan",
+     "equipment"
+    ],
+    [
+     "pump",
+     "equipment"
+    ],
+    [
+     "heater",
+     "equipment"
+    ],
+    [
+     "unit",
+     "equipment"
+    ],
+    [
+     "equipment",
+     "equipment"
+    ],
+    [
+     "lavatory",
+     "fixture"
+    ],
+    [
+     "lav",
+     "fixture"
+    ],
+    [
+     "sink",
+     "fixture"
+    ],
+    [
+     "toilet",
+     "fixture"
+    ],
+    [
+     "wc",
+     "fixture"
+    ],
+    [
+     "urinal",
+     "fixture"
+    ],
+    [
+     "shower",
+     "fixture"
+    ],
+    [
+     "drain",
+     "fixture"
+    ],
+    [
+     "wall",
+     "wall"
+    ],
+    [
+     "partition",
+     "wall"
+    ],
+    [
+     "stud",
+     "wall"
+    ]
+   ]
+  },
+  "breakers.arc_fault_codes": {
+   "source": "trade practice: a panel schedule breaker code with arc-fault protection (moved from panelsched.rs)",
+   "words": [
+    "AF",
+    "AFCI",
+    "AFI",
+    "DF",
+    "DFCI"
+   ]
+  },
+  "breakers.ground_fault_codes": {
+   "source": "trade practice: a panel schedule breaker code with ground-fault protection (moved from panelsched.rs)",
+   "words": [
+    "GF",
+    "GFI",
+    "GFCI",
+    "GFP",
+    "GFEP",
+    "DF",
+    "DFCI"
+   ]
+  },
+  "conduit.below_slab_words": {
+   "source": "trade practice: a wiring method applies below the slab when its application has one of these (moved from ugplan.rs)",
+   "words": [
+    "UNDERGROUND",
+    "BELOW SLAB",
+    "UNDER SLAB",
+    "BELOW GRADE",
+    "IN SLAB",
+    "BELOW GROUND"
+   ]
+  },
+  "conduit.size_follow_words": {
+   "source": "drafting convention: a size followed by a word starting with one of these is a conduit's (moved from ugplan.rs)",
+   "words": [
+    "CONDUIT",
+    "PVC",
+    "SCH",
+    "RGS",
+    "RMC",
+    "PIPE",
+    "EMT",
+    "CONT"
+   ]
+  },
+  "conduit.steel_elbow_words": {
+   "source": "trade practice: a note with one of these calls for steel elbows (moved from ugplan.rs)",
+   "words": [
+    "STEEL ELL",
+    "STEEL ELBOW",
+    "RGS ELBOW",
+    "RGS ELL",
+    "RIGID ELBOW"
+   ]
+  },
+  "devices.ceiling_kinds": {
+   "source": "trade practice: the device kinds hung from or set in the ceiling (a plan's AFF note is a wall device's height, never theirs); a kind is matched in lower case with spaces as underscores (Q6244, guided.rs `ceiling_kind`)",
+   "words": [
+    "luminaire",
+    "smoke_detector",
+    "heat_detector",
+    "ceiling_receptacle",
+    "exhaust_fan",
+    "ceiling_fan"
+   ]
+  },
+  "devices.color_words": {
+   "source": "trade practice: a device's colour as a product record words it; the first found is the colour (moved from products.rs)",
+   "words": [
+    "white",
+    "ivory",
+    "light almond",
+    "almond",
+    "gray",
+    "grey",
+    "black",
+    "brown",
+    "red",
+    "stainless"
+   ]
+  },
+  "devices.designation_words": {
+   "source": "trade practice: designations printed beside a device symbol (GFCI, weather-resistant, tamper-resistant...); a text of only these is a subscript (moved from elec_reader.rs)",
+   "words": [
+    "GFCI",
+    "GFI",
+    "WR",
+    "WP",
+    "USB",
+    "IG",
+    "DED",
+    "TV",
+    "CH",
+    "AFCI",
+    "TR",
+    "DATA"
+   ]
+  },
+  "devices.device_heading_words": {
+   "source": "drafting convention: a schedule heading with one of these lists device types (moved from device_types.rs)",
+   "words": [
+    "FIXTURE",
+    "LUMINAIRE",
+    "LIGHTING",
+    "LIGHT",
+    "DEVICE",
+    "EQUIPMENT",
+    "FAN"
+   ]
+  },
+  "devices.kind_by_mark": {
+   "source": "trade practice: the kind of device a type mark names (a mark not listed: `device`) (moved from readers.rs `device_kind` and propfill.rs `kind_of`, which had the same list)",
+   "pairs": [
+    [
+     "OS",
+     "occupancy sensor"
+    ],
+    [
+     "OS1",
+     "occupancy sensor"
+    ],
+    [
+     "OS2",
+     "occupancy sensor"
+    ],
+    [
+     "OC",
+     "occupancy sensor"
+    ],
+    [
+     "VS",
+     "occupancy sensor"
+    ],
+    [
+     "PS",
+     "occupancy sensor"
+    ],
+    [
+     "DH",
+     "door holder"
+    ],
+    [
+     "MH",
+     "door holder"
+    ],
+    [
+     "J",
+     "junction box"
+    ],
+    [
+     "JB",
+     "junction box"
+    ],
+    [
+     "S",
+     "switch"
+    ],
+    [
+     "S2",
+     "switch"
+    ],
+    [
+     "S3",
+     "switch"
+    ],
+    [
+     "S4",
+     "switch"
+    ],
+    [
+     "SD",
+     "switch"
+    ],
+    [
+     "S2D",
+     "switch"
+    ],
+    [
+     "S3D",
+     "switch"
+    ],
+    [
+     "S4D",
+     "switch"
+    ],
+    [
+     "DS",
+     "switch"
+    ],
+    [
+     "LV",
+     "switch"
+    ],
+    [
+     "SP",
+     "switch"
+    ],
+    [
+     "SM",
+     "switch"
+    ],
+    [
+     "SH",
+     "switch"
+    ],
+    [
+     "SK",
+     "switch"
+    ],
+    [
+     "SOR",
+     "switch"
+    ],
+    [
+     "SWT",
+     "switch"
+    ],
+    [
+     "FA",
+     "fire alarm device"
+    ],
+    [
+     "HS",
+     "fire alarm device"
+    ],
+    [
+     "SS",
+     "fire alarm device"
+    ],
+    [
+     "FS",
+     "fire alarm device"
+    ],
+    [
+     "ST",
+     "fire alarm device"
+    ],
+    [
+     "CM",
+     "fire alarm device"
+    ],
+    [
+     "TV",
+     "low voltage outlet"
+    ],
+    [
+     "DA",
+     "low voltage outlet"
+    ],
+    [
+     "TEL",
+     "low voltage outlet"
+    ],
+    [
+     "WAP",
+     "low voltage outlet"
+    ],
+    [
+     "CR",
+     "low voltage outlet"
+    ],
+    [
+     "CAM",
+     "low voltage outlet"
+    ],
+    [
+     "EF",
+     "equipment connection"
+    ],
+    [
+     "FCU",
+     "equipment connection"
+    ],
+    [
+     "WH",
+     "equipment connection"
+    ],
+    [
+     "PTAC",
+     "equipment connection"
+    ],
+    [
+     "T",
+     "thermostat"
+    ],
+    [
+     "TSTAT",
+     "thermostat"
+    ],
+    [
+     "TH",
+     "thermostat"
+    ]
+   ]
+  },
+  "devices.known_marks": {
+   "source": "Marks electrical sets use with or without a legend: switches, sensors, fans, boxes, thermostats, fire-alarm and security devices. (trade practice; moved from device_types.rs `KNOWN_MARKS`)",
+   "words": [
+    "S",
+    "S2",
+    "S3",
+    "S4",
+    "SD",
+    "SK",
+    "SM",
+    "OS",
+    "VS",
+    "PC",
+    "EF",
+    "J",
+    "JB",
+    "T",
+    "TV",
+    "F",
+    "FA",
+    "FS",
+    "HS",
+    "CR",
+    "DS",
+    "EM",
+    "WAP",
+    "PB"
+   ]
+  },
+  "devices.legend_kind": {
+   "source": "trade practice: the device a legend row's description names (value) and its IFC class (also); the first row that matches decides, a row matching when the description contains one of `any`, all of `all` and none of `none` (moved from guided.rs `legend_kind`)",
+   "rules": [
+    {
+     "value": "gfci_receptacle",
+     "also": "IfcOutlet",
+     "any": [
+      "GFCI",
+      "GROUND FAULT",
+      "GFI "
+     ]
+    },
+    {
+     "value": "ceiling_receptacle",
+     "also": "IfcOutlet",
+     "all": [
+      "CEILING MOUNTED",
+      "RECEPTACLE"
+     ]
+    },
+    {
+     "value": "quad_receptacle",
+     "also": "IfcOutlet",
+     "all": [
+      "QUAD",
+      "RECEPTACLE"
+     ]
+    },
+    {
+     "value": "receptacle",
+     "also": "IfcOutlet",
+     "any": [
+      "RECEPTACLE"
+     ]
+    },
+    {
+     "value": "floor_box",
+     "also": "IfcOutlet",
+     "any": [
+      "FLOOR BOX"
+     ]
+    },
+    {
+     "value": "3way_switch",
+     "also": "IfcSwitchingDevice",
+     "any": [
+      "3-WAY",
+      "THREE WAY"
+     ]
+    },
+    {
+     "value": "occupancy_sensor",
+     "also": "IfcSensor",
+     "any": [
+      "OCCUPANCY",
+      "VACANCY"
+     ]
+    },
+    {
+     "value": "switch",
+     "also": "IfcSwitchingDevice",
+     "any": [
+      "SWITCH"
+     ],
+     "none": [
+      "DISCONNECT"
+     ]
+    },
+    {
+     "value": "disconnect",
+     "also": "IfcSwitchingDevice",
+     "any": [
+      "DISCONNECT"
+     ]
+    },
+    {
+     "value": "smoke_detector",
+     "also": "IfcSensor",
+     "any": [
+      "SMOKE"
+     ]
+    },
+    {
+     "value": "heat_detector",
+     "also": "IfcSensor",
+     "any": [
+      "HEAT SENSOR",
+      "HEAT DETECTOR"
+     ]
+    },
+    {
+     "value": "pull_station",
+     "also": "IfcAlarm",
+     "any": [
+      "PULL STATION"
+     ]
+    },
+    {
+     "value": "fire_alarm_notification",
+     "also": "IfcAlarm",
+     "any": [
+      "HORN",
+      "STROBE"
+     ]
+    },
+    {
+     "value": "tv_outlet",
+     "also": "IfcOutlet",
+     "any": [
+      "TELEVISION",
+      "TV OUTLET",
+      "CATV"
+     ]
+    },
+    {
+     "value": "data_outlet",
+     "also": "IfcOutlet",
+     "any": [
+      "DATA",
+      "TELEPHONE"
+     ]
+    },
+    {
+     "value": "av_outlet",
+     "also": "IfcOutlet",
+     "any": [
+      "AUDIO"
+     ]
+    },
+    {
+     "value": "wireless_access_point",
+     "also": "IfcCommunicationsAppliance",
+     "any": [
+      "WIRELESS ACCESS"
+     ]
+    },
+    {
+     "value": "camera",
+     "also": "IfcCommunicationsAppliance",
+     "any": [
+      "CAMERA"
+     ]
+    },
+    {
+     "value": "speaker",
+     "also": "IfcAudioVisualAppliance",
+     "any": [
+      "SPEAKER"
+     ]
+    },
+    {
+     "value": "thermostat",
+     "also": "IfcUnitaryControlElement",
+     "any": [
+      "THERMOSTAT"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "also": "IfcFan",
+     "any": [
+      "EXHAUST FAN"
+     ]
+    },
+    {
+     "value": "junction_box",
+     "also": "IfcJunctionBox",
+     "any": [
+      "JUNCTION BOX"
+     ]
+    },
+    {
+     "value": "panel",
+     "also": "IfcElectricDistributionBoard",
+     "any": [
+      "PANELBOARD",
+      "PANEL BOARD"
+     ]
+    },
+    {
+     "value": "exit_sign",
+     "also": "IfcLightFixture",
+     "any": [
+      "EXIT SIGN"
+     ]
+    },
+    {
+     "value": "motorized_damper",
+     "also": "IfcDamper",
+     "any": [
+      "DAMPER"
+     ]
+    },
+    {
+     "value": "door_holder",
+     "also": "IfcElectricAppliance",
+     "any": [
+      "DOOR HOLD"
+     ]
+    },
+    {
+     "value": "low_voltage_device",
+     "also": "IfcCommunicationsAppliance",
+     "any": [
+      "CARD READER",
+      "INTERCOM",
+      "BELL",
+      "PUSH BUTTON",
+      "VOLUME CONTROL",
+      "DOOR CONTACT",
+      "DOOR POWER",
+      "POWER PACK"
+     ]
+    }
+   ]
+  },
+  "devices.legend_not_device_words": {
+   "source": "drafting convention: a legend row whose description has one of these names no device (a mounting height note, a circuit designation, a fixture the luminaire schedule types) (moved from guided.rs `legend_kind`)",
+   "words": [
+    "INSTALL DEVICE AT",
+    "DESIGNATION",
+    "MOUNT 6",
+    "LOWER CASE",
+    "INDICATES",
+    "LIGHTING FIXTURE",
+    "CIRCUITING"
+   ]
+  },
+  "devices.legend_row_words": {
+   "source": "trade practice: the words a legend row describing a device of a kind (value) has; a kind not listed takes any row (moved from propfill.rs `row_fits`)",
+   "groups": [
+    {
+     "value": "switch",
+     "words": [
+      "SWITCH",
+      "DIMMER"
+     ]
+    },
+    {
+     "value": "occupancy sensor",
+     "words": [
+      "SENSOR",
+      "OCCUPANCY",
+      "VACANCY"
+     ]
+    },
+    {
+     "value": "fire alarm device",
+     "words": [
+      "FIRE",
+      "STROBE",
+      "HORN",
+      "SMOKE",
+      "PULL",
+      "DETECTOR",
+      "SPEAKER",
+      "ALARM"
+     ]
+    }
+   ]
+  },
+  "devices.mount_topics": {
+   "source": "The items a list names, by the words it uses: (topic, words). A device's own words (its kind, its type, its mark) name its topics the same way. (trade practice: the items a mounting-height list names (value) and its words; moved from mountlist.rs `TOPICS`)",
+   "groups": [
+    {
+     "value": "receptacle",
+     "words": [
+      "RECEPTACLE",
+      "OUTLET",
+      "REC",
+      "GFCI",
+      "DUPLEX",
+      "QUAD"
+     ]
+    },
+    {
+     "value": "switch",
+     "words": [
+      "SWITCH",
+      "DIMMER",
+      "TOGGLE"
+     ]
+    },
+    {
+     "value": "data",
+     "words": [
+      "DATA",
+      "VOICE",
+      "TELEPHONE",
+      "TEL",
+      "LOW VOLTAGE",
+      "TV",
+      "CATV",
+      "LOW_VOLTAGE"
+     ]
+    },
+    {
+     "value": "card_reader",
+     "words": [
+      "CARD READER",
+      "CR"
+     ]
+    },
+    {
+     "value": "thermostat",
+     "words": [
+      "THERMOSTAT",
+      "TSTAT"
+     ]
+    },
+    {
+     "value": "panel",
+     "words": [
+      "PANELBOARD",
+      "PANEL"
+     ]
+    },
+    {
+     "value": "emergency_light",
+     "words": [
+      "EMERGENCY LIGHT",
+      "EMERGENCY LIGHTS",
+      "EMERGENCY"
+     ]
+    },
+    {
+     "value": "exit",
+     "words": [
+      "EXIT"
+     ]
+    },
+    {
+     "value": "pull_station",
+     "words": [
+      "PULL STATION",
+      "PULL"
+     ]
+    },
+    {
+     "value": "notification",
+     "words": [
+      "HORN",
+      "STROBE",
+      "SPEAKER",
+      "VISUAL",
+      "SIGNAL"
+     ]
+    },
+    {
+     "value": "detector",
+     "words": [
+      "SMOKE",
+      "DETECTOR",
+      "HEAT DETECTOR"
+     ]
+    },
+    {
+     "value": "water_closet",
+     "words": [
+      "WATER CLOSET",
+      "TOILET",
+      "WC"
+     ]
+    },
+    {
+     "value": "urinal",
+     "words": [
+      "URINAL"
+     ]
+    },
+    {
+     "value": "lavatory",
+     "words": [
+      "LAVATORY",
+      "LAV",
+      "VANITY"
+     ]
+    },
+    {
+     "value": "sink",
+     "words": [
+      "SINK",
+      "COUNTERTOP",
+      "COUNTER"
+     ]
+    },
+    {
+     "value": "drinking_fountain",
+     "words": [
+      "DRINKING FOUNTAIN",
+      "EWC"
+     ]
+    },
+    {
+     "value": "shower",
+     "words": [
+      "SHOWER HEAD",
+      "SHOWERHEAD"
+     ]
+    },
+    {
+     "value": "extinguisher",
+     "words": [
+      "EXTINGUISHER"
+     ]
+    },
+    {
+     "value": "door_holder",
+     "words": [
+      "DOOR HOLD",
+      "HOLD OPEN",
+      "MAGNETIC"
+     ]
+    }
+   ]
+  },
+  "devices.not_device_heading_words": {
+   "source": "drafting convention: a table heading with one of these is a panel, door, room or wall table, not a device schedule (moved from device_types.rs)",
+   "words": [
+    "PANEL",
+    "DOOR",
+    "WINDOW",
+    "ROOM",
+    "FINISH",
+    "WALL",
+    "PARTITION",
+    "SEE ",
+    "REFER"
+   ]
+  },
+  "devices.not_device_table_words": {
+   "source": "Words of a heading whose table, a legend or a schedule all the same, lists no device types: the site, planting, material, code and structural tables (`PLANT LEGEND`, `OCCUPANT LOAD FACTOR LEGEND`, `COLUMN FOUNDATION SCHEDULE`), whose marks a device's mark can share. (drafting convention; moved from device_types.rs `NOT_DEVICE_TYPES`)",
+   "words": [
+    "PLANT",
+    "EROSION",
+    "MATERIAL",
+    "OCCUPAN",
+    "PAVING",
+    "GRADING",
+    "HATCH",
+    "COLUMN",
+    "FOUNDATION",
+    "FOOTING",
+    "SHEAR",
+    "ANCHOR",
+    "PEDESTAL",
+    "HOLD DOWN",
+    "LINTEL"
+   ]
+  },
+  "devices.receptacle_designations": {
+   "source": "(trade practice: a receptacle's designations (value) and the words printed for them; moved from guided.rs `DESIGNATIONS`)",
+   "groups": [
+    {
+     "value": "GFCI",
+     "words": [
+      "GFCI",
+      "GFI"
+     ]
+    },
+    {
+     "value": "WP",
+     "words": [
+      "WP"
+     ]
+    },
+    {
+     "value": "WR",
+     "words": [
+      "WR"
+     ]
+    },
+    {
+     "value": "TR",
+     "words": [
+      "TR"
+     ]
+    },
+    {
+     "value": "USB",
+     "words": [
+      "USB"
+     ]
+    }
+   ]
+  },
+  "devices.typical_height_kind": {
+   "source": "trade practice: the kind a typical-height note's item names; the first row whose word the item contains decides (moved from guided.rs `typical_kind`)",
+   "rules": [
+    {
+     "value": "panel",
+     "any": [
+      "PANEL"
+     ]
+    },
+    {
+     "value": "emergency light",
+     "any": [
+      "EMERGENCY"
+     ]
+    },
+    {
+     "value": "switch",
+     "any": [
+      "SWITCH"
+     ]
+    },
+    {
+     "value": "receptacle",
+     "any": [
+      "RECEPT"
+     ]
+    },
+    {
+     "value": "low_voltage_outlet",
+     "any": [
+      "VOICE",
+      "DATA",
+      "TELEPHONE",
+      "TEL/",
+      "TV",
+      "CATV"
+     ]
+    },
+    {
+     "value": "thermostat",
+     "any": [
+      "THERMOSTAT"
+     ]
+    }
+   ]
+  },
+  "equipment.air_device_system": {
+   "source": "trade practice: an air device mark's letters and the air system it serves (CD-1: supply) (moved from equip_reader.rs)",
+   "pairs": [
+    [
+     "CD",
+     "SA"
+    ],
+    [
+     "SD",
+     "SA"
+    ],
+    [
+     "LD",
+     "SA"
+    ],
+    [
+     "SR",
+     "SA"
+    ],
+    [
+     "RG",
+     "RA"
+    ],
+    [
+     "RR",
+     "RA"
+    ],
+    [
+     "EG",
+     "EA"
+    ],
+    [
+     "ER",
+     "EA"
+    ],
+    [
+     "L",
+     "OA"
+    ],
+    [
+     "OAL",
+     "OA"
+    ],
+    [
+     "IL",
+     "OA"
+    ]
+   ]
+  },
+  "equipment.control_marks": {
+   "source": "drafting practice: the marks of the controls and sensors a unit's tag labels when printed beside them (a thermostat, a humidistat, a sensor, a switch: `FCU-1 T` is the thermostat of FCU-1, not the unit) (fix-symbol-misread)",
+   "words": [
+    "T",
+    "TS",
+    "TSTAT",
+    "T-STAT",
+    "THERMOSTAT",
+    "H",
+    "HS",
+    "HUMIDISTAT",
+    "S",
+    "SS",
+    "SENSOR",
+    "CO2",
+    "TH"
+   ]
+  },
+  "equipment.floor_mounting_words": {
+   "source": "trade practice: a mounting with one of these stands on the floor (moved from concrete.rs `needs_pad`)",
+   "words": [
+    "floor",
+    "pad",
+    "grade",
+    "free",
+    "slab"
+   ]
+  },
+  "equipment.gear_submittal_words": {
+   "source": "The gear words a submittal's file name carries when it is a gear submittal. (trade practice; moved from guided.rs `GEAR_SUBMITTAL_WORDS`)",
+   "words": [
+    "GEAR",
+    "SWITCHGEAR",
+    "PANELBOARD",
+    "SWITCHBOARD"
+   ]
+  },
+  "equipment.kind_by_tag_prefix": {
+   "source": "trade practice: an equipment tag's letters and the kind they name (AHU-1: ahu) (moved from equip_reader.rs `kind_from_tag`)",
+   "pairs": [
+    [
+     "AHU",
+     "ahu"
+    ],
+    [
+     "RTU",
+     "rtu"
+    ],
+    [
+     "VAV",
+     "vav"
+    ],
+    [
+     "FPB",
+     "vav"
+    ],
+    [
+     "VVT",
+     "vav"
+    ],
+    [
+     "FPVAV",
+     "vav"
+    ],
+    [
+     "EF",
+     "exhaust_fan"
+    ],
+    [
+     "SF",
+     "fan"
+    ],
+    [
+     "RF",
+     "fan"
+    ],
+    [
+     "F",
+     "fan"
+    ],
+    [
+     "TF",
+     "fan"
+    ],
+    [
+     "IF",
+     "fan"
+    ],
+    [
+     "CF",
+     "fan"
+    ],
+    [
+     "P",
+     "pump"
+    ],
+    [
+     "CP",
+     "pump"
+    ],
+    [
+     "HWP",
+     "pump"
+    ],
+    [
+     "CHWP",
+     "pump"
+    ],
+    [
+     "CWP",
+     "pump"
+    ],
+    [
+     "RP",
+     "pump"
+    ],
+    [
+     "WH",
+     "water_heater"
+    ],
+    [
+     "EWH",
+     "water_heater"
+    ],
+    [
+     "GWH",
+     "water_heater"
+    ],
+    [
+     "DWH",
+     "water_heater"
+    ],
+    [
+     "CU",
+     "condensing_unit"
+    ],
+    [
+     "ACCU",
+     "condensing_unit"
+    ],
+    [
+     "GM",
+     "gas_meter"
+    ]
+   ]
+  },
+  "equipment.load_words": {
+   "source": "trade practice: a panel schedule load whose description has one of these is a piece of equipment (its connection is the device) (moved from guided.rs `equipment_load`)",
+   "words": [
+    "HEAT PUMP",
+    "HP-",
+    "AHU",
+    "RTU",
+    "CONDENS",
+    "WATER HEATER",
+    "PUMP",
+    "FAN",
+    "UNIT",
+    "MOTOR",
+    "SIGN",
+    "GATE",
+    "OPERATOR",
+    "COMPRESSOR",
+    "HEATER",
+    "ELEVATOR",
+    "DOOR"
+   ]
+  },
+  "equipment.marks": {
+   "source": "Equipment marks, which are not air devices' tags. (trade practice; moved from duct_reader.rs `EQUIPMENT_MARKS`)",
+   "words": [
+    "AHU",
+    "RTU",
+    "VAV",
+    "EF",
+    "FCU",
+    "CU",
+    "HP",
+    "ERV",
+    "MAU",
+    "UH",
+    "CUH",
+    "FPB",
+    "SF",
+    "RF",
+    "WH",
+    "P"
+   ]
+  },
+  "equipment.maybe_pad_kinds": {
+   "source": "Equipment set on the floor or grade only when its mounting or elevation says so. (trade practice: equipment that stands on a pad when it is on the floor; moved from concrete.rs `MAYBE_KINDS`)",
+   "words": [
+    "panel",
+    "panelboard",
+    "ats",
+    "transfer_switch",
+    "rtu",
+    "condensing_unit",
+    "ahu",
+    "water_heater",
+    "pump",
+    "tank",
+    "air_compressor",
+    "disconnect",
+    "fire_pump"
+   ]
+  },
+  "equipment.names": {
+   "source": "Words of equipment and device tags, never a room's name (`PNLBD 'D'`, `XFMR T1`, `DISC`). (trade practice: words of an equipment label; moved from geometry.rs `EQUIPMENT_WORDS`)",
+   "words": [
+    "PNLBD",
+    "PNL",
+    "PANEL",
+    "PANELBOARD",
+    "XFMR",
+    "TRANSFORMER",
+    "DISC",
+    "DISCONNECT",
+    "MCC",
+    "SWBD",
+    "SWITCHBOARD",
+    "RTU",
+    "AHU",
+    "FCU",
+    "VFD",
+    "ATS",
+    "GEN",
+    "GENERATOR",
+    "JBOX",
+    "J-BOX",
+    "CKT",
+    "CIRCUIT",
+    "HOMERUN",
+    "CONDUIT",
+    "TYP",
+    "NIC",
+    "SEE",
+    "NOTE",
+    "NOTES",
+    "DETAIL",
+    "SHEET",
+    "MOUNT",
+    "MTD",
+    "AFF",
+    "EXISTING",
+    "RELOCATE",
+    "PTAC",
+    "EWC",
+    "WH",
+    "EF"
+   ]
+  },
+  "equipment.off_floor_mounting_words": {
+   "source": "trade practice: a mounting with one of these is off the floor: no pad (moved from concrete.rs `needs_pad`)",
+   "words": [
+    "wall",
+    "surface",
+    "recess",
+    "flush",
+    "pole",
+    "ceiling",
+    "roof",
+    "curb",
+    "suspend",
+    "hung",
+    "rack",
+    "stand"
+   ]
+  },
+  "equipment.pad_kinds": {
+   "source": "Equipment always set on the floor or grade (unless its mounting says otherwise). (trade practice: equipment that stands on a housekeeping pad; moved from concrete.rs `FLOOR_KINDS`)",
+   "words": [
+    "switchboard",
+    "switchgear",
+    "transformer",
+    "generator",
+    "ups",
+    "mdp",
+    "chiller",
+    "boiler",
+    "unit_substation",
+    "battery"
+   ]
+  },
+  "equipment.room_unit_tags": {
+   "source": "trade practice: the printed tags of a room's own equipment (a tag alone or with -n) and its kind: EF an exhaust fan, PTAC a packaged terminal unit; a typical panel's load and a device so tagged are its connection (moved from guided.rs)",
+   "pairs": [
+    [
+     "EF",
+     "exhaust_fan"
+    ],
+    [
+     "PTAC",
+     "ptac"
+    ]
+   ]
+  },
+  "equipment.submittal_package_words": {
+   "source": "The submittals at `paths`: each PDF (or a submittal's text, `.txt`) given, and those in each folder given (not its subfolders), in name order. Words of a submittal package's name that say it holds products the model's elements are. (trade practice: the words a product submittal's package name carries; moved from submittals.rs `PRODUCT_PACKAGE_WORDS`)",
+   "words": [
+    "PTAC",
+    "EXHAUST FAN",
+    "AIR DEVICE",
+    "PLUMBING FIXTURE",
+    "TOILET ACCESSOR",
+    "FIRE ALARM",
+    "LIGHTING",
+    "GEAR",
+    "SWITCHGEAR",
+    "WIRING DEVICE",
+    "APPLIANCE",
+    "WATER HEATER",
+    "MIRROR",
+    "DOAS",
+    "UNIT HEATER",
+    "SPLIT SYSTEM"
+   ]
+  },
+  "equipment.tag_kind": {
+   "source": "trade practice: the kind of equipment a tag beside a duct-plan box names; the first row whose word the tag has decides (`word:EF` a whole word, else a part of the tag) (moved from duct_reader.rs)",
+   "rules": [
+    {
+     "value": "ahu",
+     "any": [
+      "AHU"
+     ]
+    },
+    {
+     "value": "rtu",
+     "any": [
+      "RTU"
+     ]
+    },
+    {
+     "value": "ptac",
+     "any": [
+      "PTAC"
+     ]
+    },
+    {
+     "value": "vav",
+     "any": [
+      "VAV",
+      "VB"
+     ]
+    },
+    {
+     "value": "fan_coil_unit",
+     "any": [
+      "FCU",
+      "FAN COIL"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "any": [
+      "word:EF",
+      "EXHAUST FAN"
+     ]
+    },
+    {
+     "value": "water_heater",
+     "any": [
+      "word:WH",
+      "WATER HEATER"
+     ]
+    },
+    {
+     "value": "ventilation_unit",
+     "any": [
+      "ERV",
+      "HRV",
+      "MAU"
+     ]
+    }
+   ]
+  },
+  "equipment.tag_prefix_kind": {
+   "source": "trade practice: the kind of equipment a schedule tag starting so names (FCU-1: fan coil unit); the first row whose word the tag starts with decides (moved from duct_reader.rs)",
+   "rules": [
+    {
+     "value": "ahu",
+     "any": [
+      "AHU",
+      "AH-"
+     ]
+    },
+    {
+     "value": "rtu",
+     "any": [
+      "RTU",
+      "RT-"
+     ]
+    },
+    {
+     "value": "ptac",
+     "any": [
+      "PTAC"
+     ]
+    },
+    {
+     "value": "vav",
+     "any": [
+      "VAV"
+     ]
+    },
+    {
+     "value": "fan_coil_unit",
+     "any": [
+      "FCU",
+      "FC-"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "any": [
+      "EF-",
+      "EF "
+     ]
+    },
+    {
+     "value": "ventilation_unit",
+     "any": [
+      "ERV",
+      "HRV",
+      "MAU"
+     ]
+    }
+   ]
+  },
+  "equipment.tags": {
+   "source": "Marks that tag mechanical equipment (`HP` over its number: heat pump 3). A device so marked is that equipment's electrical connection. (trade practice; moved from guided.rs `EQUIPMENT_TAGS`)",
+   "words": [
+    "HP",
+    "AHU",
+    "RTU",
+    "CU",
+    "ACU",
+    "ERV",
+    "HRV",
+    "MAU",
+    "MUA",
+    "UH",
+    "EUH",
+    "CUH",
+    "EWH",
+    "VAV",
+    "VRF",
+    "KEF",
+    "TEF",
+    "GEF"
+   ]
+  },
+  "equipment.typical_load_words": {
+   "source": "trade practice: the words a typical panel's load names a room's equipment by, per equipment kind (value) (moved from guided.rs)",
+   "groups": [
+    {
+     "value": "ptac",
+     "words": [
+      "PTAC"
+     ]
+    },
+    {
+     "value": "exhaust_fan",
+     "words": [
+      "EXHAUST FAN",
+      "BATH FAN"
+     ]
+    }
+   ]
+  },
+  "finishes.floor_patterns": {
+   "source": "trade practice: the patterned layouts a floor code names (moved from finishes.rs `pattern_of`)",
+   "words": [
+    "HERRINGBONE",
+    "CHEVRON",
+    "DIAGONAL",
+    "BASKETWEAVE",
+    "PATTERN"
+   ]
+  },
+  "finishes.paint_sheens": {
+   "source": "trade practice: the paint sheens a finish legend names; the first the description contains is taken (SEMIGLOSS reads as SEMI-GLOSS) (moved from finishes.rs `parse_sheen`)",
+   "words": [
+    "SEMI-GLOSS",
+    "SEMIGLOSS",
+    "HIGH GLOSS",
+    "GLOSS",
+    "EGGSHELL",
+    "SATIN",
+    "LOW SHEEN",
+    "FLAT",
+    "MATTE"
+   ]
+  },
+  "fixtures.emergency_words": {
+   "source": "trade practice: a fixture type whose description or lamp has one of these is emergency or exit lighting; the first found is the reason given (moved from lighting.rs)",
+   "words": [
+    "EXIT",
+    "EMERGENCY",
+    "BATTERY",
+    "EGRESS",
+    "NIGHT LIGHT",
+    "NIGHTLIGHT"
+   ]
+  },
+  "fixtures.exterior_words": {
+   "source": "trade practice: a luminaire whose description has one of these is not interior lighting (moved from lighting.rs)",
+   "words": [
+    "EXTERIOR",
+    "SITE",
+    "WALL PACK",
+    "EXIT",
+    "PARKING",
+    "POLE"
+   ]
+  },
+  "fixtures.finish_words": {
+   "source": "(trade practice: a luminaire finish as printed, and its name; moved from lighting.rs `FINISHES`)",
+   "pairs": [
+    [
+     "DARK BRONZE",
+     "dark bronze"
+    ],
+    [
+     "OIL RUBBED BRONZE",
+     "oil rubbed bronze"
+    ],
+    [
+     "BRONZE",
+     "bronze"
+    ],
+    [
+     "BRUSHED NICKEL",
+     "brushed nickel"
+    ],
+    [
+     "SATIN NICKEL",
+     "satin nickel"
+    ],
+    [
+     "NICKEL",
+     "nickel"
+    ],
+    [
+     "CHROME",
+     "chrome"
+    ],
+    [
+     "BRASS",
+     "brass"
+    ],
+    [
+     "MATTE BLACK",
+     "black"
+    ],
+    [
+     "BLACK",
+     "black"
+    ],
+    [
+     "WHITE",
+     "white"
+    ],
+    [
+     "SILVER",
+     "silver"
+    ],
+    [
+     "GRAPHITE",
+     "graphite"
+    ],
+    [
+     "ALUMINUM",
+     "aluminum"
+    ]
+   ]
+  },
+  "fixtures.generic_maker_words": {
+   "source": "(trade practice; moved from lightsched.rs `GENERIC`)",
+   "words": [
+    "LIGHTING",
+    "LIGHT",
+    "ELECTRIC",
+    "SOLUTIONS",
+    "PRODUCTS",
+    "COMPANY",
+    "CORP",
+    "GROUP",
+    "INTERNATIONAL",
+    "INDUSTRIES"
+   ]
+  },
+  "fixtures.kind_by_description": {
+   "source": "(trade practice: a schedule description's words and the fixture kind; the first word a description contains decides; moved from casework_reader.rs `WORDS`)",
+   "pairs": [
+    [
+     "MOP SINK",
+     "mop_sink"
+    ],
+    [
+     "SERVICE SINK",
+     "mop_sink"
+    ],
+    [
+     "WATER CLOSET",
+     "water_closet"
+    ],
+    [
+     "URINAL",
+     "urinal"
+    ],
+    [
+     "SHOWER",
+     "shower"
+    ],
+    [
+     "BATHTUB",
+     "bathtub"
+    ],
+    [
+     "WATER HEATER",
+     "water_heater"
+    ],
+    [
+     "FLOOR DRAIN",
+     "floor_drain"
+    ],
+    [
+     "BASE CABINET",
+     "base_cabinet"
+    ],
+    [
+     "UPPER CABINET",
+     "upper_cabinet"
+    ],
+    [
+     "WALL CABINET",
+     "upper_cabinet"
+    ],
+    [
+     "COUNTER",
+     "counter"
+    ],
+    [
+     "VANITY",
+     "vanity"
+    ],
+    [
+     "BACKSPLASH",
+     "backsplash"
+    ],
+    [
+     "WARDROBE",
+     "wardrobe"
+    ],
+    [
+     "REFRIGERATOR",
+     "appliance"
+    ],
+    [
+     "DISHWASHER",
+     "appliance"
+    ],
+    [
+     "MICROWAVE",
+     "appliance"
+    ],
+    [
+     "APPLIANCE",
+     "appliance"
+    ],
+    [
+     "CREDENZA",
+     "base_cabinet"
+    ],
+    [
+     "LAVATORY",
+     "lavatory"
+    ],
+    [
+     "SINK",
+     "sink"
+    ]
+   ]
+  },
+  "fixtures.lighting_words": {
+   "source": "Each product's dimming (`dimming_of`) from its catalog number and its pages, and whether it is a luminaire (its pages speak of lumens, LEDs, CCT…). A product whose pages name several controls with nothing saying which was ordered is a question. Words a lighting cut sheet uses of its product; a product whose pages use two of them is a luminaire. (trade practice; moved from spec_import.rs `LIGHTING_WORDS`)",
+   "words": [
+    "LUMEN",
+    "LUMINAIRE",
+    "LED",
+    "CCT",
+    "CRI",
+    "FOOTCANDLE",
+    "PHOTOMETRIC",
+    "EXIT"
+   ]
+  },
+  "fixtures.luminaire_words": {
+   "source": "trade practice: a schedule row whose description has one of these is a luminaire (moved from guided.rs `schedule_row_kind`)",
+   "words": [
+    "LUMINAIRE",
+    "DOWNLIGHT",
+    "TROFFER",
+    "SCONCE",
+    "PENDANT",
+    "LIGHT FIXTURE",
+    "LED FIXTURE"
+   ]
+  },
+  "fixtures.wall_mount_words": {
+   "source": "A luminaire whose cut sheet says it goes on a wall (not the wall-wash trims of a downlight). (trade practice; moved from spec_import.rs `WALL_MOUNT_WORDS`)",
+   "words": [
+    "WALL MOUNT",
+    "WALL-MOUNT",
+    "WALL BRACKET",
+    "SCONCE",
+    "WALL PACK",
+    "WALLPACK",
+    "EXIT SIGN",
+    "EXIT LIGHT"
+   ]
+  },
+  "keynotes.box_words": {
+   "source": "trade practice: a keynote with one of these names a box (its size is read) (moved from keynotes.rs)",
+   "words": [
+    "JUNCTION BOX",
+    "PULL BOX",
+    "J-BOX",
+    "BACK BOX",
+    "BACKBOX"
+   ]
+  },
+  "keynotes.buried_words": {
+   "source": "The words a note uses for work in the ground or under the slab. (trade practice; moved from keynotes.rs `BURIED_WORDS`)",
+   "words": [
+    "UNDER SLAB",
+    "UNDERSLAB",
+    "UNDER-SLAB",
+    "BELOW SLAB",
+    "BELOW GRADE",
+    "BELOW GROUND",
+    "UNDERGROUND",
+    "UNDER GROUND",
+    "BURIED",
+    "BURRIED",
+    "IN GRADE"
+   ]
+  },
+  "keynotes.hard_lid_words": {
+   "source": "The words that put a run over a hard (gypsum board) ceiling. (trade practice; moved from keynotes.rs `HARD_LID_WORDS`)",
+   "words": [
+    "HARD LID",
+    "HARD-LID",
+    "HARDLID",
+    "GYP"
+   ]
+  },
+  "keynotes.pull_words": {
+   "source": "The words a note gives a conduit's pull line with. (trade practice; moved from keynotes.rs `PULL_WORDS`)",
+   "words": [
+    "PULL TAPE",
+    "PULL STRING",
+    "PULL LINE",
+    "PULL ROPE",
+    "PULLWIRE",
+    "PULL WIRE"
+   ]
+  },
+  "keys.building_words": {
+   "source": "trade practice: a key count stated about these is the building's (moved from guided.rs `stated_keys`)",
+   "words": [
+    "HOTEL",
+    "MOTEL",
+    "INN",
+    "RESORT",
+    "LODGING",
+    "SCOPE",
+    "PROJECT",
+    "BUILDING"
+   ]
+  },
+  "keys.not_building_words": {
+   "source": "trade practice: a key count stated with one of these is a lock's, a panel's or a door's, not the building's (moved from guided.rs `stated_keys`)",
+   "words": [
+    "PER",
+    "LOCK",
+    "LOCKS",
+    "CYLINDER",
+    "PANEL",
+    "PANELS",
+    "PANELBOARD",
+    "PANELBOARDS",
+    "CABINET",
+    "DOOR",
+    "DOORS"
+   ]
+  },
+  "layers.stair_words": {
+   "source": "drafting convention: layer-name parts of a stair or ramp layer (moved from stairs.rs)",
+   "words": [
+    "STAIR",
+    "STRS",
+    "RAMP"
+   ]
+  },
+  "levels.first_floor_words": {
+   "source": "trade practice: a level named with one of these is the first floor (moved from sheet_reader.rs `is_first_floor_word`)",
+   "words": [
+    "GROUND",
+    "GRADE",
+    "MAIN",
+    "STREET"
+   ]
+  },
+  "notes.appliance_words": {
+   "source": "trade practice: an appliance a mounting-height note names (`MICROWAVE 65\" AFF` on a leader): the note gives the height of the receptacle or connection that feeds it, never a switch's (Q6244, guided.rs `typical_heights`)",
+   "words": [
+    "MICROWAVE",
+    "COOKTOP",
+    "RANGE",
+    "OVEN",
+    "REFRIGERATOR",
+    "FRIDGE",
+    "DISHWASHER",
+    "DISPOSAL",
+    "WASHER",
+    "DRYER",
+    "WATER HEATER",
+    "ICE MAKER",
+    "COFFEE"
+   ]
+  },
+  "notes.defer_to_architecture": {
+   "source": "drafting convention: an electrical sheet's numbered note that sends its devices' locations or mounting heights to the architecture's drawings (`SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND HEIGHTS`, `MOUNT AT THE HEIGHT SHOWN ON THE ARCHITECTURAL ELEVATIONS`): value is what it sends there (both, heights, locations); the first row that matches decides, a row matching when the note contains one of `any` and all of `all` (Q6244, archauthority.rs)",
+   "rules": [
+    {
+     "value": "both",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "LOCATION",
+      "HEIGHT"
+     ]
+    },
+    {
+     "value": "heights",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "HEIGHT"
+     ]
+    },
+    {
+     "value": "locations",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "LOCATION"
+     ]
+    }
+   ]
+  },
+  "pipes.drain_systems": {
+   "source": "The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to. (trade practice; moved from ugplan.rs `DRAINS`)",
+   "words": [
+    "SAN",
+    "W",
+    "ST",
+    "SS",
+    "SD",
+    "RD"
+   ]
+  },
+  "pipes.plan_title_system_words": {
+   "source": "drafting convention: a plan title with one of these names a piping system (moved from printmep.rs)",
+   "words": [
+    "SANITARY",
+    "WASTE",
+    "SOIL",
+    "DRAINAGE",
+    "DWV",
+    "STORM",
+    "GAS",
+    "VENT",
+    "WATER",
+    "DOMESTIC"
+   ]
+  },
+  "pipes.sanitary_title_words": {
+   "source": "drafting convention: a plan title with one of these words draws the sanitary system (moved from mep.rs)",
+   "words": [
+    "SANITARY",
+    "WASTE",
+    "SOIL",
+    "DWV"
+   ]
+  },
+  "pipes.system_letters": {
+   "source": "Printed pipe system letters → our codes. (trade practice; moved from equip_reader.rs `PIPE_ABBR`)",
+   "pairs": [
+    [
+     "CW",
+     "CW"
+    ],
+    [
+     "DCW",
+     "CW"
+    ],
+    [
+     "HW",
+     "HW"
+    ],
+    [
+     "DHW",
+     "HW"
+    ],
+    [
+     "HWR",
+     "HWR"
+    ],
+    [
+     "HWC",
+     "HWR"
+    ],
+    [
+     "HRW",
+     "HWR"
+    ],
+    [
+     "DHWR",
+     "HWR"
+    ],
+    [
+     "SAN",
+     "SAN"
+    ],
+    [
+     "SS",
+     "SAN"
+    ],
+    [
+     "W",
+     "SAN"
+    ],
+    [
+     "V",
+     "V"
+    ],
+    [
+     "G",
+     "G"
+    ],
+    [
+     "GAS",
+     "G"
+    ],
+    [
+     "NG",
+     "G"
+    ],
+    [
+     "FP",
+     "FP"
+    ],
+    [
+     "SP",
+     "FP"
+    ],
+    [
+     "F",
+     "FP"
+    ],
+    [
+     "CHW",
+     "CHW"
+    ],
+    [
+     "CHWR",
+     "CHWR"
+    ],
+    [
+     "ST",
+     "ST"
+    ]
+   ]
+  },
+  "pipes.water_systems": {
+   "source": "(trade practice: the water systems a floor's plumbing plan draws; moved from guided.rs `WATER`)",
+   "words": [
+    "CW",
+    "HW",
+    "HWR"
+   ]
+  },
+  "roof.curb_words": {
+   "source": "Curbs and openings on a roof that aren't units: their notes give a curb or a height. (trade practice; moved from exterior.rs `CURB_WORDS`)",
+   "words": [
+    "HATCH",
+    "OVERRUN",
+    "SKYLIGHT",
+    "CURB",
+    "PENTHOUSE",
+    "SMOKE"
+   ]
+  },
+  "roof.drain_words": {
+   "source": "Notes a roof plan writes on its roof (the seeds for finding it; not its title's `ROOF`). (trade practice; moved from exterior.rs `ROOF_WORDS`)",
+   "words": [
+    "RD",
+    "DRAIN",
+    "PARAPET",
+    "CRICKET",
+    "SCUPPER"
+   ]
+  },
+  "roof.equipment_words": {
+   "source": "Words naming what stands on a roof. (trade practice; moved from exterior.rs `EQUIPMENT_WORDS`)",
+   "words": [
+    "RTU",
+    "AHU",
+    "EF",
+    "MAU",
+    "CU",
+    "ACCU",
+    "UNIT",
+    "EQUIP",
+    "EQUIPMENT",
+    "HVAC"
+   ]
+  },
+  "rooms.corridor_words": {
+   "source": "trade practice: a route named with one of these runs along any corridor of the level (moved from guided.rs)",
+   "words": [
+    "CORRIDOR",
+    "HALL",
+    "CORR"
+   ]
+  },
+  "rooms.equipment_label_words": {
+   "source": "trade practice: electrical gear abbreviations; a room label with one looks like equipment, not a room name (asked) (moved from guided.rs `run_rooms`)",
+   "words": [
+    "PNLBD",
+    "PANEL",
+    "XFMR",
+    "TRANS",
+    "MCC",
+    "SWG",
+    "ATS",
+    "GEN",
+    "MDP",
+    "CDP"
+   ]
+  },
+  "rooms.equipment_room_names": {
+   "source": "trade practice: an equipment room's names (the trades' plans call it MEP, the architect MECH); a view title naming one names the same room (moved from guided.rs `room_of_view`)",
+   "words": [
+    "MEP",
+    "MECH",
+    "MECHANICAL",
+    "ELEC",
+    "EQUIPMENT"
+   ]
+  },
+  "rooms.finish_codes": {
+   "source": "Run the rooms stage: detect rooms from labels (MUST 1, 4). Uses the same readers (rooms.list) that work directly on the job's sheets. Finish and material codes of the finish legend (gypsum board, carpet, vinyl and ceramic tile, acoustic tile, paint, rubber base, wood, epoxy, sealed concrete): a tag of one is no room. (drafting convention: finish legend codes; moved from guided.rs `FINISH_CODES`)",
+   "words": [
+    "GYP",
+    "GWB",
+    "CPT",
+    "VCT",
+    "LVT",
+    "LVP",
+    "ACT",
+    "PT",
+    "RB",
+    "WD",
+    "CT",
+    "QT",
+    "EPX",
+    "SC"
+   ]
+  },
+  "rooms.habitable": {
+   "source": "Words of a room to sleep or live in (a unit type, a bedroom), for [`HABITABLE_MIN_SF`]. (trade practice; moved from geometry.rs `HABITABLE_WORDS`)",
+   "words": [
+    "Q",
+    "K",
+    "QUEEN",
+    "KING",
+    "SUITE",
+    "STUDIO",
+    "UNIT",
+    "BEDROOM",
+    "BED",
+    "LIVING",
+    "APT",
+    "APARTMENT",
+    "DWELLING"
+   ]
+  },
+  "rooms.names": {
+   "source": "Words of a room's tag: unit types and the rooms a plan names. (trade practice: words of a room's name; moved from geometry.rs `ROOM_WORDS`)",
+   "words": [
+    "SINGLE",
+    "DOUBLE",
+    "QUEEN",
+    "KING",
+    "ADA",
+    "SUITE",
+    "UNIT",
+    "STUDIO",
+    "GUEST",
+    "BEDROOM",
+    "BED",
+    "LIVING",
+    "CORRIDOR",
+    "CORR",
+    "HALL",
+    "HALLWAY",
+    "STAIR",
+    "STAIRS",
+    "LOBBY",
+    "ELEV",
+    "ELEVATOR",
+    "MECH",
+    "MECHANICAL",
+    "ELEC",
+    "ELECTRICAL",
+    "STORAGE",
+    "STOR",
+    "LAUNDRY",
+    "LINEN",
+    "OFFICE",
+    "TOILET",
+    "RESTROOM",
+    "WOMEN",
+    "MEN",
+    "BATH",
+    "BATHROOM",
+    "KITCHEN",
+    "BREAK",
+    "VESTIBULE",
+    "VEST",
+    "CLOSET",
+    "CLO",
+    "JANITOR",
+    "JAN",
+    "FITNESS",
+    "POOL",
+    "LOUNGE",
+    "DINING",
+    "MEETING",
+    "CONFERENCE",
+    "CONF",
+    "ROOM",
+    "UTILITY",
+    "IDF",
+    "MDF",
+    "TRASH",
+    "VENDING",
+    "ICE",
+    "PANTRY",
+    "RECEPTION",
+    "MAINTENANCE",
+    "ENTRY",
+    "WORK",
+    "SHAFT",
+    "CHASE",
+    "SPRINKLER",
+    "RISER",
+    "MARKET",
+    "DESK",
+    "LIBRARY",
+    "CLASSROOM",
+    "BOH",
+    "MEP"
+   ]
+  },
+  "rooms.not_room_words": {
+   "source": "Words that put a label in a title block, a stamp or the notes, never on a room: the firm and its address, the review and issue stamps, the sheet's and views' titles. (drafting convention; moved from autospec.rs `NOT_ROOM_WORDS`)",
+   "words": [
+    "1 HOUR FIRE RATED PARTITION",
+    "PARTITION",
+    "SCALE",
+    "SHEET",
+    "DRAWN",
+    "CHECKED",
+    "DATE",
+    "REVISION",
+    "REVISIONS",
+    "ISSUE",
+    "ISSUED",
+    "PROJECT",
+    "SEAL",
+    "ARCHITECT",
+    "ARCHITECTS",
+    "ARCHITECTURE",
+    "ENGINEER",
+    "ENGINEERS",
+    "ENGINEERING",
+    "CONSULTANT",
+    "CONSULTANTS",
+    "LLC",
+    "INC",
+    "CORP",
+    "LTD",
+    "PLLC",
+    "AIA",
+    "COPYRIGHT",
+    "PLAN",
+    "PLANS",
+    "NOTES",
+    "KEYNOTES",
+    "LEGEND",
+    "CONSTRUCTION",
+    "PERMIT",
+    "REVIEW",
+    "REVIEWED",
+    "APPROVED",
+    "STREET",
+    "AVENUE",
+    "AVE",
+    "BLVD",
+    "PARKWAY",
+    "HIGHWAY",
+    "SCHEDULE",
+    "DETAIL",
+    "DETAILS",
+    "SECTION",
+    "ELEVATION",
+    "ELEVATIONS",
+    "TYP",
+    "SEE",
+    "PHONE",
+    "FAX",
+    "AFF",
+    "UNO",
+    "NTS",
+    "equal",
+    "similar",
+    "EQ",
+    "SIM",
+    "DN",
+    "SIZE"
+   ]
+  },
+  "rooms.not_rooms": {
+   "source": "(drafting convention: names that are clearly not rooms (building materials, notes, structural and finish labels); moved from guided.rs `NOT_ROOMS`)",
+   "words": [
+    "WALL",
+    "ROOF",
+    "ROOFING",
+    "CEILING",
+    "FLOOR",
+    "SLAB",
+    "HEIGHT",
+    "APPLICABLE",
+    "TYP",
+    "TYPICAL",
+    "NIC",
+    "N.I.C",
+    "EXIST",
+    "EXISTING",
+    "SIM",
+    "SIMILAR",
+    "ABV",
+    "ABOVE",
+    "BLW",
+    "BELOW",
+    "TPO",
+    "EPDM",
+    "CMU",
+    "GYP",
+    "ACT",
+    "VCT",
+    "CPT",
+    "CONC",
+    "CLG",
+    "FLR",
+    "DEMO",
+    "NEW",
+    "FINISH",
+    "PAINT",
+    "BASE"
+   ]
+  },
+  "rooms.sleeping": {
+   "source": "(trade practice: the type words of a room to sleep in, a hotel's guest room (QUEEN, KING, SUITE) or a dwelling unit; moved from guided.rs `SLEEPING`)",
+   "words": [
+    "Q",
+    "KING",
+    "K",
+    "SUITE",
+    "STUDIO",
+    "GUEST",
+    "BEDROOM",
+    "BED",
+    "UNIT",
+    "APT",
+    "APARTMENT",
+    "DWELLING"
+   ]
+  },
+  "rooms.space_kind_words": {
+   "source": "trade practice: the first word of a space's name that makes it a corridor, a stair or a hoistway (value: corridor, stair, hoistway) (moved from wallgen.rs)",
+   "groups": [
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR",
+      "CORR",
+      "HALL",
+      "HALLWAY"
+     ]
+    },
+    {
+     "value": "stair",
+     "words": [
+      "STAIR",
+      "STAIRS",
+      "STAIRWAY",
+      "STAIRWELL"
+     ]
+    },
+    {
+     "value": "hoistway",
+     "words": [
+      "ELEV",
+      "ELEVATOR"
+     ]
+    }
+   ]
+  },
+  "rooms.specialty_rooms": {
+   "source": "trade practice: the room names whose specialties (bath accessories, wardrobe rod, toilet accessories, corner guards, extinguisher cabinet) the company standard places until the documents show them, per room use (value); the rule text and items stay in finishes.rs (moved from finishes.rs `room_rules`)",
+   "groups": [
+    {
+     "value": "guest_bath",
+     "words": [
+      "GUEST BATH",
+      "GUEST BATHROOM",
+      "UNIT BATH"
+     ]
+    },
+    {
+     "value": "guest_room",
+     "words": [
+      "GUEST ROOM",
+      "GUESTROOM",
+      "KING",
+      "QUEEN",
+      "DOUBLE QUEEN"
+     ]
+    },
+    {
+     "value": "womens_restroom",
+     "words": [
+      "WOMEN",
+      "WOMENS",
+      "LADIES"
+     ]
+    },
+    {
+     "value": "mens_restroom",
+     "words": [
+      "MEN",
+      "MENS"
+     ]
+    },
+    {
+     "value": "restroom",
+     "words": [
+      "RESTROOM",
+      "TOILET",
+      "UNISEX",
+      "ALL GENDER"
+     ]
+    },
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR",
+      "HALL",
+      "HALLWAY"
+     ]
+    },
+    {
+     "value": "mechanical_room",
+     "words": [
+      "MECH",
+      "MECHANICAL"
+     ]
+    },
+    {
+     "value": "high_traffic_room",
+     "words": [
+      "BREAK ROOM",
+      "WORK ROOM",
+      "COPY"
+     ]
+    }
+   ]
+  },
+  "schedules.equipment_table_words": {
+   "source": "drafting convention: a table whose heading has one of these schedules equipment (an electrical connection each) (moved from guided.rs `schedule_row_kind`)",
+   "words": [
+    "EQUIPMENT",
+    "FAN",
+    "PUMP",
+    "HEATER",
+    "UNIT SCHEDULE"
+   ]
+  },
+  "schedules.luminaire_table_words": {
+   "source": "drafting convention: a table whose heading has one of these schedules luminaires (moved from guided.rs `schedule_row_kind`)",
+   "words": [
+    "LUMINAIRE",
+    "LIGHT FIXTURE",
+    "LIGHTING FIXTURE",
+    "LIGHTING SCHEDULE",
+    "FIXTURE SCHEDULE"
+   ]
+  },
+  "schedules.luminaire_titles": {
+   "source": "drafting convention: the titles of a luminaire schedule (moved from guided.rs)",
+   "words": [
+    "LIGHT FIXTURE SCHEDULE",
+    "LIGHTING FIXTURE SCHEDULE",
+    "LUMINAIRE SCHEDULE"
+   ]
+  },
+  "schedules.mark_headings": {
+   "source": "format vocabulary of construction schedules: the headings of a schedule's column of marks; the marks under one are that schedule's items (fix-symbol-misread)",
+   "words": [
+    "MARK",
+    "TAG",
+    "UNIT TAG",
+    "UNIT MARK",
+    "EQUIPMENT TAG",
+    "EQUIPMENT MARK"
+   ]
+  },
+  "sheets.device_disciplines": {
+   "source": "The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection and alarm, technology). (drafting convention; moved from guided.rs `DEVICE_DISCIPLINES`)",
+   "words": [
+    "E",
+    "M",
+    "P",
+    "FP",
+    "FA",
+    "F",
+    "T",
+    "LV",
+    "EL",
+    "ME",
+    "MEP"
+   ]
+  },
+  "sheets.discipline_letters": {
+   "source": "Sheet-number letters that name a discipline. A sheet found only by its largest sheet-number lettering counts when it is one of these: equipment marks look like sheet numbers too (`RTU-1`, `EF-2`). (drafting convention; moved from readers.rs `DISCIPLINES`)",
+   "words": [
+    "G",
+    "C",
+    "L",
+    "A",
+    "I",
+    "ID",
+    "S",
+    "M",
+    "P",
+    "FP",
+    "E",
+    "FA",
+    "T",
+    "LV",
+    "Q"
+   ]
+  },
+  "sheets.discipline_prefix": {
+   "source": "Known discipline prefixes: sheet number prefix → discipline code. (drafting convention: the sheet-number letters of a discipline; moved from sheet_reader.rs `DISCIPLINE_PREFIX`)",
+   "pairs": [
+    [
+     "FP",
+     "FP"
+    ],
+    [
+     "FA",
+     "FA"
+    ],
+    [
+     "SL",
+     "SL"
+    ],
+    [
+     "M",
+     "M"
+    ],
+    [
+     "P",
+     "P"
+    ],
+    [
+     "S",
+     "S"
+    ],
+    [
+     "A",
+     "A"
+    ],
+    [
+     "G",
+     "G"
+    ],
+    [
+     "E",
+     "E"
+    ],
+    [
+     "C",
+     "C"
+    ],
+    [
+     "T",
+     "T"
+    ]
+   ]
+  },
+  "sheets.discipline_words": {
+   "source": "drafting convention: a word that names a discipline, and its letter (moved from printlinks.rs `discipline_word`)",
+   "pairs": [
+    [
+     "ARCHITECTURAL",
+     "A"
+    ],
+    [
+     "ARCH",
+     "A"
+    ],
+    [
+     "STRUCTURAL",
+     "S"
+    ],
+    [
+     "STRUCT",
+     "S"
+    ],
+    [
+     "MECHANICAL",
+     "M"
+    ],
+    [
+     "MECH",
+     "M"
+    ],
+    [
+     "HVAC",
+     "M"
+    ],
+    [
+     "ELECTRICAL",
+     "E"
+    ],
+    [
+     "ELEC",
+     "E"
+    ],
+    [
+     "PLUMBING",
+     "P"
+    ],
+    [
+     "PLBG",
+     "P"
+    ],
+    [
+     "CIVIL",
+     "C"
+    ],
+    [
+     "LANDSCAPE",
+     "L"
+    ],
+    [
+     "FIRE",
+     "FP"
+    ]
+   ]
+  },
+  "sheets.import_discipline_prefix": {
+   "source": "Known discipline prefixes: sheet number prefix → discipline code. (drafting convention: the sheet-number letters of a discipline, as the import check reads them; moved from import_check.rs `DISCIPLINE_PREFIX`)",
+   "pairs": [
+    [
+     "FP",
+     "FP"
+    ],
+    [
+     "FA",
+     "FA"
+    ],
+    [
+     "M",
+     "M"
+    ],
+    [
+     "P",
+     "P"
+    ],
+    [
+     "S",
+     "S"
+    ],
+    [
+     "A",
+     "A"
+    ],
+    [
+     "G",
+     "G"
+    ],
+    [
+     "E",
+     "E"
+    ],
+    [
+     "C",
+     "C"
+    ],
+    [
+     "T",
+     "T"
+    ]
+   ]
+  },
+  "sheets.mechanical_title_words": {
+   "source": "drafting convention: a view title with one of these is a mechanical view (moved from guided.rs)",
+   "words": [
+    "MECH",
+    "HVAC"
+   ]
+  },
+  "sheets.mount_note_disciplines": {
+   "source": "The disciplines whose sheets that aren't plans may list mounting heights in their notes: the general (accessibility) sheets, the architecture's, the trades'. (drafting convention; moved from guided.rs `MOUNT_NOTE_DISCIPLINES`)",
+   "words": [
+    "G",
+    "A",
+    "E",
+    "FA",
+    "P",
+    "M"
+   ]
+  },
+  "sheets.non_building_disciplines": {
+   "source": "(drafting convention: the disciplines that don't carry building walls and doors (life safety, fire protection, fire alarm, general/civil, structural, telecom); moved from guided.rs `NON_BUILDING`)",
+   "words": [
+    "SL",
+    "FP",
+    "FA",
+    "G",
+    "C",
+    "S",
+    "T"
+   ]
+  },
+  "sheets.not_plan_view_words": {
+   "source": "View-title words that never name a plan. (drafting convention; moved from printlinks.rs `NOT_PLAN_WORDS`)",
+   "words": [
+    "SCHEDULE",
+    "DIAGRAM",
+    "RISER",
+    "SECTION",
+    "ELEVATION",
+    "NOTES",
+    "LEGEND",
+    "DETAIL",
+    "ONE-LINE",
+    "ONE LINE",
+    "KEY PLAN"
+   ]
+  },
+  "sheets.reference_words": {
+   "source": "Words of a title that make a sheet or view a reference one (not a plan to read runs off). (drafting convention; moved from printmep.rs `REFERENCE_WORDS`)",
+   "pairs": [
+    [
+     "SCHEDULE",
+     "schedule"
+    ],
+    [
+     "DETAIL",
+     "detail"
+    ],
+    [
+     "LEGEND",
+     "legend"
+    ],
+    [
+     "DIAGRAM",
+     "diagram"
+    ],
+    [
+     "RISER",
+     "riser"
+    ],
+    [
+     "SECTION",
+     "section"
+    ],
+    [
+     "ELEVATION",
+     "elevation"
+    ],
+    [
+     "NOTES",
+     "notes"
+    ]
+   ]
+  },
+  "sheets.site_disciplines": {
+   "source": "drafting convention: the sheet-number disciplines of civil, landscape and site sheets (moved from sheet_facts.rs)",
+   "words": [
+    "C",
+    "CS",
+    "CG",
+    "CU",
+    "L",
+    "LS",
+    "LP",
+    "LI",
+    "V",
+    "SV"
+   ]
+  },
+  "sheets.site_title_words": {
+   "source": "(drafting convention: the words of a site or civil sheet's title; moved from sheet_facts.rs `SITE_WORDS`)",
+   "words": [
+    "SITE",
+    "CIVIL",
+    "GRADING",
+    "EARTHWORK",
+    "PAVING",
+    "LANDSCAPE",
+    "LANDSCAPING",
+    "PLANTING",
+    "IRRIGATION",
+    "HARDSCAPE",
+    "EROSION",
+    "SURVEY",
+    "TOPOGRAPHIC",
+    "STORMWATER",
+    "SWPPP"
+   ]
+  },
+  "sheets.title_discipline": {
+   "source": "drafting convention: the words of a sheet title or keynote header that name its discipline (value); the first group whose word the title contains decides (moved from guided.rs `infer_discipline_from_title`)",
+   "groups": [
+    {
+     "value": "E",
+     "words": [
+      "ELECTRICAL",
+      "ELEC PLAN",
+      "ELEC. PLAN",
+      "ELECTRICAL KEYNOTES",
+      "POWER PLAN",
+      "LIGHTING PLAN"
+     ]
+    },
+    {
+     "value": "M",
+     "words": [
+      "MECHANICAL",
+      "MECH PLAN",
+      "MECH. PLAN",
+      "HVAC",
+      "MECHANICAL KEYNOTES"
+     ]
+    },
+    {
+     "value": "P",
+     "words": [
+      "PLUMBING",
+      "PLUMB PLAN",
+      "PLUMB. PLAN",
+      "PLUMBING KEYNOTES"
+     ]
+    },
+    {
+     "value": "A",
+     "words": [
+      "ARCHITECTURAL",
+      "ARCH PLAN",
+      "FLOOR PLAN",
+      "REFLECTED CEILING"
+     ]
+    },
+    {
+     "value": "S",
+     "words": [
+      "STRUCTURAL",
+      "STRUCT PLAN",
+      "FOUNDATION"
+     ]
+    },
+    {
+     "value": "FP",
+     "words": [
+      "FIRE PROTECTION",
+      "FIRE ALARM",
+      "SPRINKLER"
+     ]
+    },
+    {
+     "value": "G",
+     "words": [
+      "CIVIL",
+      "SITE PLAN",
+      "GRADING",
+      "PAVING"
+     ]
+    },
+    {
+     "value": "T",
+     "words": [
+      "TELECOM",
+      "TECHNOLOGY",
+      "LOW VOLTAGE"
+     ]
+    }
+   ]
+  },
+  "sheets.trade_heading_words": {
+   "source": "drafting convention: the words a table heading names a trade by, per discipline letter (value) (moved from guided.rs `trade_names`)",
+   "groups": [
+    {
+     "value": "P",
+     "words": [
+      "PLUMBING"
+     ]
+    },
+    {
+     "value": "M",
+     "words": [
+      "MECHANICAL",
+      "HVAC"
+     ]
+    },
+    {
+     "value": "FP",
+     "words": [
+      "FIRE PROTECTION",
+      "SPRINKLER"
+     ]
+    },
+    {
+     "value": "F",
+     "words": [
+      "FIRE PROTECTION",
+      "SPRINKLER"
+     ]
+    },
+    {
+     "value": "L",
+     "words": [
+      "LOW VOLTAGE",
+      "TECHNOLOGY",
+      "TELECOM",
+      "SECURITY"
+     ]
+    },
+    {
+     "value": "T",
+     "words": [
+      "LOW VOLTAGE",
+      "TECHNOLOGY",
+      "TELECOM",
+      "SECURITY"
+     ]
+    }
+   ]
+  },
+  "sheets.underground_trade_prefix": {
+   "source": "drafting convention: a callout's sheet-number letters and the trade whose underground work it is (E, P) (moved from ugplan.rs)",
+   "pairs": [
+    [
+     "E",
+     "E"
+    ],
+    [
+     "ES",
+     "E"
+    ],
+    [
+     "ED",
+     "E"
+    ],
+    [
+     "EP",
+     "E"
+    ],
+    [
+     "EL",
+     "E"
+    ],
+    [
+     "T",
+     "E"
+    ],
+    [
+     "TN",
+     "E"
+    ],
+    [
+     "P",
+     "P"
+    ],
+    [
+     "PL",
+     "P"
+    ]
+   ]
+  },
+  "sheets.valid_prefixes": {
+   "source": "drafting convention: the discipline letters a sheet number starts with (moved from printset.rs)",
+   "words": [
+    "G",
+    "A",
+    "S",
+    "M",
+    "P",
+    "FP",
+    "E",
+    "FA",
+    "T",
+    "C",
+    "SL"
+   ]
+  },
+  "sheets.view_title_words": {
+   "source": "(drafting convention: the words of a view title that are the view's own (ENLARGED, PLAN, the trade, the floor), not a room's name; moved from guided.rs `VIEW_WORDS`)",
+   "words": [
+    "ENLARGED",
+    "PLAN",
+    "PLANS",
+    "ELECTRICAL",
+    "MECHANICAL",
+    "PLUMBING",
+    "LIGHTING",
+    "POWER",
+    "FLOOR",
+    "LEVEL",
+    "ROOM",
+    "SCALE"
+   ]
+  },
+  "site.asphalt_words": {
+   "source": "trade practice: a paving label with one of these is asphalt (moved from sitetakeoff.rs)",
+   "words": [
+    "ASPHALT",
+    "ASPH",
+    "AC",
+    "HMA",
+    "BITUMINOUS"
+   ]
+  },
+  "site.concrete_words": {
+   "source": "trade practice: a paving label with one of these is concrete (moved from sitetakeoff.rs)",
+   "words": [
+    "CONCRETE",
+    "CONC",
+    "PCC",
+    "WALK",
+    "SIDEWALK",
+    "WALKWAY"
+   ]
+  },
+  "site.contour_layer_words": {
+   "source": "(drafting convention: civil layer-name parts; moved from sitetakeoff.rs `CONTOUR_LAYER`)",
+   "words": [
+    "TOPO",
+    "GRAD",
+    "GRADE",
+    "GRADING",
+    "CONT",
+    "CNTR",
+    "CONTOUR",
+    "CONTOURS",
+    "EG",
+    "FG"
+   ]
+  },
+  "site.existing_words": {
+   "source": "(drafting convention: civil layer-name parts; moved from sitetakeoff.rs `EXISTING_WORDS`)",
+   "words": [
+    "EX",
+    "EXST",
+    "EXIST",
+    "EXISTING",
+    "EG",
+    "ORIG",
+    "OG"
+   ]
+  },
+  "site.fence_layer_words": {
+   "source": "(drafting convention: civil layer-name parts; moved from sitetakeoff.rs `FENCE_LAYER`)",
+   "words": [
+    "FNCE",
+    "FENC",
+    "FENCE",
+    "FENCING"
+   ]
+  },
+  "site.frame_layer_words": {
+   "source": "The sheet's frame and title block: never site work. (drafting convention: layer-name parts of a sheet's frame and title block; moved from sitetakeoff.rs `FRAME_LAYER`)",
+   "words": [
+    "BORDER",
+    "BRDR",
+    "TTLB",
+    "TITLE",
+    "TBLK",
+    "TBLOCK",
+    "FRAME",
+    "VPORT",
+    "VIEWPORT",
+    "DEFPOINTS"
+   ]
+  },
+  "site.paving_words": {
+   "source": "trade practice: a site text with one of these labels paving (moved from sitetakeoff.rs)",
+   "words": [
+    "ASPHALT",
+    "ASPH",
+    "AC",
+    "HMA",
+    "BITUMINOUS",
+    "CONCRETE",
+    "CONC",
+    "PCC",
+    "WALK",
+    "SIDEWALK",
+    "WALKWAY",
+    "CURB",
+    "GUTTER",
+    "PAD",
+    "PAVING",
+    "PAVEMENT"
+   ]
+  },
+  "site.pipe_materials": {
+   "source": "(trade practice; moved from sitetakeoff.rs `MATERIALS`)",
+   "words": [
+    "PVC",
+    "RCP",
+    "DIP",
+    "DI",
+    "HDPE",
+    "CPVC",
+    "CU",
+    "COPPER",
+    "PE",
+    "CMP",
+    "VCP",
+    "ABS",
+    "STEEL",
+    "CI",
+    "SDR35",
+    "C900"
+   ]
+  },
+  "site.structure_layer_words": {
+   "source": "(drafting convention: civil layer-name parts; moved from sitetakeoff.rs `STRUCTURE_LAYER`)",
+   "words": [
+    "STRC",
+    "STRUC",
+    "STRUCT",
+    "STRUCTURE",
+    "STRUCTURES",
+    "MH",
+    "MANH",
+    "INLET",
+    "INLETS",
+    "CB"
+   ]
+  },
+  "site.utility_layer_words": {
+   "source": "(drafting convention: civil layer-name parts; moved from sitetakeoff.rs `UTILITY_LAYER`)",
+   "words": [
+    "UNDR",
+    "UTIL",
+    "UTILITY",
+    "UG",
+    "STRM",
+    "STORM",
+    "SSWR",
+    "SANI",
+    "SAN",
+    "SEWR",
+    "SEWER",
+    "WATR",
+    "WATER",
+    "WTR",
+    "SD",
+    "SS",
+    "PIPE"
+   ]
+  },
+  "site.utility_system_words": {
+   "source": "trade practice: a civil text's word and the utility system it names (moved from sitetakeoff.rs `system_of`)",
+   "pairs": [
+    [
+     "STORM",
+     "storm"
+    ],
+    [
+     "SD",
+     "storm"
+    ],
+    [
+     "STM",
+     "storm"
+    ],
+    [
+     "STMH",
+     "storm"
+    ],
+    [
+     "SDMH",
+     "storm"
+    ],
+    [
+     "DRAIN",
+     "storm"
+    ],
+    [
+     "DRAINAGE",
+     "storm"
+    ],
+    [
+     "SEWER",
+     "sanitary"
+    ],
+    [
+     "SANITARY",
+     "sanitary"
+    ],
+    [
+     "SAN",
+     "sanitary"
+    ],
+    [
+     "SS",
+     "sanitary"
+    ],
+    [
+     "SSWR",
+     "sanitary"
+    ],
+    [
+     "SSMH",
+     "sanitary"
+    ],
+    [
+     "SMH",
+     "sanitary"
+    ],
+    [
+     "SSCO",
+     "sanitary"
+    ],
+    [
+     "WATER",
+     "water"
+    ],
+    [
+     "WTR",
+     "water"
+    ],
+    [
+     "DW",
+     "water"
+    ],
+    [
+     "DOMESTIC",
+     "water"
+    ],
+    [
+     "WM",
+     "water"
+    ],
+    [
+     "BFP",
+     "water"
+    ],
+    [
+     "RPZ",
+     "water"
+    ],
+    [
+     "VB",
+     "water"
+    ],
+    [
+     "WV",
+     "water"
+    ],
+    [
+     "GAS",
+     "gas"
+    ],
+    [
+     "GV",
+     "gas"
+    ],
+    [
+     "ELECTRIC",
+     "electric"
+    ],
+    [
+     "ELEC",
+     "electric"
+    ],
+    [
+     "UGE",
+     "electric"
+    ],
+    [
+     "JB",
+     "electric"
+    ],
+    [
+     "PB",
+     "electric"
+    ],
+    [
+     "TELECOM",
+     "telecom"
+    ],
+    [
+     "COMM",
+     "telecom"
+    ],
+    [
+     "TEL",
+     "telecom"
+    ],
+    [
+     "FO",
+     "telecom"
+    ],
+    [
+     "HH",
+     "telecom"
+    ]
+   ]
+  },
+  "specs.location_words": {
+   "source": "trade practice: location words of a specification or general note's location rule (moved from spec_import.rs `extract_location_rule`)",
+   "words": [
+    "concealed",
+    "exposed",
+    "below slab",
+    "above ceiling",
+    "in walls",
+    "wet location",
+    "damp location",
+    "underground",
+    "exterior",
+    "above accessible ceiling",
+    "in concrete",
+    "direct burial"
+   ]
+  },
+  "specs.product_divisions": {
+   "source": "The CSI divisions whose sections speak for the model's devices, fixtures and equipment. (MasterFormat divisions; moved from products.rs `PRODUCT_DIVISIONS`)",
+   "words": [
+    "22",
+    "23",
+    "26",
+    "27",
+    "28"
+   ]
+  },
+  "specs.raceway_words": {
+   "source": "trade practice: wiring-method words of a specification or general note's location rule (moved from spec_import.rs `extract_location_rule`)",
+   "words": [
+    "mc cable",
+    "mc ",
+    "emt ",
+    "emt,",
+    "rigid conduit",
+    "rigid metallic",
+    "imc ",
+    "pvc ",
+    "pvc conduit",
+    "rnmc",
+    "lfmc",
+    "lfnc",
+    "fmc ",
+    "wiremold",
+    "surface raceway"
+   ]
+  },
+  "tags.not_panel_words": {
+   "source": "Words lettered before a dash that are no panel's name (`NOTE-1`, `TYPE-2`). (drafting convention; moved from printcond.rs `NOT_PANELS`)",
+   "words": [
+    "PANEL",
+    "NOTE",
+    "NOTES",
+    "SHEET",
+    "TYPE",
+    "LEVEL",
+    "ROOM",
+    "DETAIL",
+    "SEE",
+    "KEY",
+    "PLAN",
+    "AREA",
+    "ZONE",
+    "UNIT",
+    "DWG"
+   ]
+  },
+  "tags.not_type_tags": {
+   "source": "Words a submittal's form prints where a type tag goes that are no type. (drafting convention: a submittal form's words; moved from guided.rs `NOT_TYPE_TAGS`)",
+   "words": [
+    "QTY",
+    "TYP",
+    "REF",
+    "NO",
+    "EA",
+    "PCS",
+    "ITEM",
+    "NOTE",
+    "N/A",
+    "TBD"
+   ]
+  },
+  "tags.conductor_note_words": {
+   "source": "drafting convention: the words a conductor note prints after a size (`3#10 THHN`, `1#10G`, `1#10 EG`, `1/0 AL`): a role, an insulation, a metal, a unit. Any other word after a size, or before the `#` where a count goes (`PUMP #2`), makes the text a label, not a conductor note",
+   "words": [
+    "G",
+    "GND",
+    "GRD",
+    "GROUND",
+    "EG",
+    "EGC",
+    "IG",
+    "N",
+    "NEUT",
+    "NEUTRAL",
+    "THHN",
+    "THWN",
+    "THWN-2",
+    "THHN/THWN",
+    "THHN/THWN-2",
+    "XHHW",
+    "XHHW-2",
+    "CU",
+    "AL",
+    "COPPER",
+    "ALUMINUM",
+    "AWG",
+    "KCMIL",
+    "MCM",
+    "ISO",
+    "ISOLATED",
+    "STR",
+    "SOL",
+    "SOLID",
+    "STRANDED"
+   ]
+  },
+  "tags.note_words": {
+   "source": "Words that are short and capitalised but are notes, not type tags. (drafting convention: plan-note abbreviations; moved from sheet_facts.rs `NOT_TAGS`)",
+   "words": [
+    "TYP",
+    "EQ",
+    "AFF",
+    "UP",
+    "DN",
+    "NIC",
+    "RR",
+    "GFI",
+    "GFCI",
+    "AND",
+    "OR",
+    "TO",
+    "AT",
+    "ON",
+    "IN",
+    "OF",
+    "THE",
+    "FOR",
+    "NO",
+    "W",
+    "X",
+    "BY"
+   ]
+  },
+  "tags.panel_prefix_words": {
+   "source": "drafting convention: the words a panel's lettering starts with (`PANEL LA`); the first that the lettering starts with is taken off (moved from printcond.rs)",
+   "words": [
+    "PANELBOARD",
+    "PANEL",
+    "PNLBD",
+    "PNL"
+   ]
+  },
+  "units.dropped_type_words": {
+   "source": "trade practice: words a room type's name carries that don't tell its types apart (moved from guided.rs `type_words`)",
+   "words": [
+    "SINGLE"
+   ]
+  },
+  "units.not_unit_words": {
+   "source": "trade practice: equipment named like a unit (UNIT HEATER, UNIT VENTILATOR) and notes: a tag with one of these names no unit type (moved from unittypes.rs)",
+   "words": [
+    "HEATER",
+    "HEATERS",
+    "VENTILATOR",
+    "VENTILATORS",
+    "SUBSTATION",
+    "PRICE",
+    "PRICES",
+    "WEIGHT"
+   ]
+  },
+  "units.packaged_unit_words": {
+   "source": "trade practice: a unit legend item with one of these words is a packaged terminal unit (kind ptac) (moved from unit_reader.rs `kind_of`)",
+   "words": [
+    "PTAC",
+    "VTAC"
+   ]
+  },
+  "units.type_word_aliases": {
+   "source": "trade practice: a room type's word and the word it is written as (QUEEN as Q, ACCESSIBLE as ADA) (moved from guided.rs `type_words`)",
+   "pairs": [
+    [
+     "QUEEN",
+     "Q"
+    ],
+    [
+     "ACC",
+     "ADA"
+    ],
+    [
+     "ACCESSIBLE",
+     "ADA"
+    ]
+   ]
+  },
+  "units.type_words": {
+   "source": "Words that start a unit type's tag (`ADA KING`, `UNIT B`, `TYPE A1`). (trade practice: the words of a typical unit's type; moved from unittypes.rs `UNIT_WORDS`)",
+   "words": [
+    "SINGLE",
+    "DOUBLE",
+    "KING",
+    "QUEEN",
+    "ADA",
+    "SUITE",
+    "STUDIO",
+    "UNIT",
+    "TYPE",
+    "1BR",
+    "2BR",
+    "3BR",
+    "EFFICIENCY"
+   ]
+  },
+  "units.typical_view_words": {
+   "source": "drafting convention: a view title that has one of these is a unit's, a typical one or a room's (moved from guided.rs `room_view`)",
+   "words": [
+    "UNIT",
+    "TYPICAL",
+    "TYP.",
+    "ROOM"
+   ]
+  },
+  "units.unit_plan_title_words": {
+   "source": "trade practice: an enlarged plan whose title has one of these draws a typical unit (moved from guided.rs)",
+   "words": [
+    "GUESTROOM",
+    "GUEST ROOM"
+   ]
+  },
+  "walls.room_side_words": {
+   "source": "trade practice: the room names either side of an untagged wall that pick its type, per wall use (value: corridor, wet, acoustic) (moved from wall_reader.rs)",
+   "groups": [
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR"
+     ]
+    },
+    {
+     "value": "wet",
+     "words": [
+      "MEN",
+      "WOMEN",
+      "TOILET",
+      "RESTROOM"
+     ]
+    },
+    {
+     "value": "acoustic",
+     "words": [
+      "CONFERENCE",
+      "TRAINING"
+     ]
+    }
+   ]
+  },
+  "walls.type_name_words": {
+   "source": "trade practice: the words of the wall type's name each wall use (value) takes: the corridor type, the plumbing wall, the acoustic one (moved from wall_reader.rs)",
+   "groups": [
+    {
+     "value": "corridor",
+     "words": [
+      "CORRIDOR"
+     ]
+    },
+    {
+     "value": "wet",
+     "words": [
+      "PLUMBING",
+      "CHASE",
+      "WET"
+     ]
+    },
+    {
+     "value": "acoustic",
+     "words": [
+      "ACOUSTIC",
+      "SOUND"
+     ]
+    }
+   ]
+  }
+ }
+}

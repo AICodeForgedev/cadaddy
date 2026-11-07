@@ -336,6 +336,62 @@ pub fn uses_serial_lock(text: &str) -> bool {
     })
 }
 
+/// Tests that run one at a time, as they did inside one `cargo test` process: a whole test binary,
+/// or (a suite program: `tests/suite/<program>/main.rs` with one module per former test file) only
+/// the tests of the modules that take turns on a lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SerialGroup {
+    /// `package::binary`, as nextest's `binary_id`.
+    pub binary: String,
+    /// The suite program's serialized modules; empty for the whole binary.
+    pub modules: Vec<String>,
+}
+
+impl SerialGroup {
+    /// The nextest filterset of the group's tests.
+    pub fn filter(&self) -> String {
+        let bin = format!("binary_id(={})", filter_escape(&self.binary));
+        if self.modules.is_empty() {
+            return bin;
+        }
+        // Module names are Rust identifiers: nothing to escape in the regex.
+        format!("{bin} & test(/^({})::/)", self.modules.join("|"))
+    }
+}
+
+impl std::fmt::Display for SerialGroup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.modules.is_empty() { write!(f, "{}", self.binary) } else { write!(f, "{} ({})", self.binary, self.modules.join(", ")) }
+    }
+}
+
+/// Does a suite module take turns on a lock: one of its own, or the suite helper's `serial()`?
+pub fn module_serializes(text: &str) -> bool {
+    uses_serial_lock(text) || text.contains("helper::serial") || text.lines().any(|l| l.starts_with("use crate::helper::{") && l.contains("serial"))
+}
+
+/// The serial group of one test target from its source file, `read` giving a file's text by its
+/// path relative to the workspace (`None`: unreadable). A suite program's modules are the `.rs`
+/// files beside its `main.rs` that it declares (`mod name;`).
+pub fn serial_group(binary: &str, src: &str, read: &dyn Fn(&str) -> Option<String>) -> Option<SerialGroup> {
+    let text = read(src)?;
+    if uses_serial_lock(&text) {
+        return Some(SerialGroup { binary: binary.to_string(), modules: Vec::new() });
+    }
+    let dir = src.strip_suffix("/main.rs")?;
+    if !dir.contains("/tests/suite/") {
+        return None;
+    }
+    let mut modules: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("mod ")?.strip_suffix(';').map(str::to_string))
+        .filter(|m| !m.is_empty() && m.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|m| read(&format!("{dir}/{m}.rs")).is_some_and(|t| module_serializes(&t)))
+        .collect();
+    modules.sort();
+    (!modules.is_empty()).then(|| SerialGroup { binary: binary.to_string(), modules })
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Affected {
     /// Every package (a workspace file changed, or `--all`).
@@ -596,8 +652,8 @@ pub fn slow_filter(slow: &[(String, String)]) -> Option<String> {
 
 /// The nextest configuration this tool runs with: its profile (JUnit report for the timing data,
 /// failures printed as they happen and again at the end) and one-at-a-time groups for the test
-/// binaries that serialize their tests with a lock.
-pub fn nextest_config(store: &Path, serial_binaries: &[String]) -> String {
+/// binaries (or suite modules) that serialize their tests with a lock.
+pub fn nextest_config(store: &Path, serial_binaries: &[SerialGroup]) -> String {
     let mut s = String::new();
     s.push_str("# Written by `cargo xtask merge-check`; regenerated each run.\n");
     // nextest's default store is relative to the workspace, not $CARGO_TARGET_DIR: keep the
@@ -613,7 +669,7 @@ pub fn nextest_config(store: &Path, serial_binaries: &[String]) -> String {
         }
         s.push('\n');
         for (i, b) in serial_binaries.iter().enumerate() {
-            let filter = format!("binary_id(={})", filter_escape(b));
+            let filter = b.filter();
             s.push_str(&format!("[[profile.{PROFILE}.overrides]]\nfilter = {}\ntest-group = \"serial-{i}\"\n\n", toml_str(&filter)));
         }
     }
@@ -1043,13 +1099,12 @@ fn package_tokens(root: &Path, ws: &Workspace) -> BTreeMap<String, BTreeSet<Stri
     out
 }
 
-fn serial_binaries(root: &Path, ws: &Workspace, a: &Affected) -> Vec<String> {
+fn serial_binaries(root: &Path, ws: &Workspace, a: &Affected) -> Vec<SerialGroup> {
+    let read = |rel: &str| std::fs::read_to_string(root.join(rel)).ok();
     let mut out = Vec::new();
     for p in ws.packages.iter().filter(|p| a.packages.contains(&p.name)) {
         for (t, src) in &p.test_targets {
-            if std::fs::read_to_string(root.join(src)).is_ok_and(|s| uses_serial_lock(&s)) {
-                out.push(format!("{}::{t}", p.name));
-            }
+            out.extend(serial_group(&format!("{}::{t}", p.name), src, &read));
         }
     }
     out
@@ -1287,7 +1342,8 @@ pub fn run(default_root: &Path, args: &[&str]) -> Result<(), String> {
             eprintln!("$ {}", shell_line(&cargo_test_args(&a)));
         }
         if !serial.is_empty() {
-            eprintln!("one test at a time in: {}", serial.join(", "));
+            let names: Vec<String> = serial.iter().map(SerialGroup::to_string).collect();
+            eprintln!("one test at a time in: {}", names.join(", "));
         }
         return Ok(());
     }
@@ -1705,12 +1761,47 @@ mod tests {
         assert!(uses_serial_lock("use std::sync::Mutex;\nstatic SERIAL: Mutex<()> = Mutex::new(());\n#[test] fn a() {}"));
         assert!(uses_serial_lock("    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());"));
         assert!(!uses_serial_lock("let m: Mutex<()> = Mutex::new(());\nstatic N: AtomicUsize = AtomicUsize::new(0);"));
-        let cfg = nextest_config(Path::new(r"/c/t\x/nextest"), &["pkg-a::slowbin".to_string(), "pkg-b::x".to_string()]);
+        let whole = |b: &str| SerialGroup { binary: b.to_string(), modules: Vec::new() };
+        let cfg = nextest_config(Path::new(r"/c/t\x/nextest"), &[whole("pkg-a::slowbin"), whole("pkg-b::x")]);
         assert!(cfg.contains("[store]\ndir = \"/c/t\\\\x/nextest\"\n"), "{cfg}");
         assert!(cfg.contains("[profile.merge-check]") && cfg.contains("[profile.merge-check.junit]"));
         assert!(cfg.contains("serial-0 = { max-threads = 1 }") && cfg.contains("serial-1 = { max-threads = 1 }"));
         assert!(cfg.contains("filter = \"binary_id(=pkg-a::slowbin)\"\ntest-group = \"serial-0\""));
         assert!(!nextest_config(Path::new("t"), &[]).contains("[test-groups]"));
+    }
+
+    #[test]
+    fn a_suite_program_serializes_only_its_modules_that_take_turns() {
+        let files: BTreeMap<&str, &str> = [
+            (
+                "crates/e/tests/suite/jobs/main.rs",
+                "//! Jobs.\n#[path = \"../helper.rs\"]\nmod helper;\n\nmod heavy;\nmod light;\nmod own_lock;\nmod gone;\n",
+            ),
+            ("crates/e/tests/suite/jobs/heavy.rs", "use crate::helper::serial;\n#[test] fn a() { let _t = serial(); }"),
+            ("crates/e/tests/suite/jobs/light.rs", "#[test] fn b() {}"),
+            ("crates/e/tests/suite/jobs/own_lock.rs", "static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());"),
+            ("crates/e/tests/suite/draw/main.rs", "mod a;\n"),
+            ("crates/e/tests/suite/draw/a.rs", "use crate::helper::{run, session};"),
+            ("crates/e/tests/locked.rs", "static SERIAL: Mutex<()> = Mutex::new(());"),
+            ("crates/e/tests/free.rs", "#[test] fn c() {}"),
+            ("crates/e/tests/other/main.rs", "mod x;"),
+            ("crates/e/tests/other/x.rs", "static SERIAL: Mutex<()> = Mutex::new(());"),
+        ]
+        .into_iter()
+        .collect();
+        let read = |p: &str| files.get(p).map(|s| s.to_string());
+        let g = serial_group("e::suite_jobs", "crates/e/tests/suite/jobs/main.rs", &read).unwrap();
+        assert_eq!(g.modules, ["heavy", "own_lock"], "the helper's serial() and a lock of its own; not the light or missing module");
+        assert_eq!(g.filter(), "binary_id(=e::suite_jobs) & test(/^(heavy|own_lock)::/)");
+        assert_eq!(g.to_string(), "e::suite_jobs (heavy, own_lock)");
+        assert_eq!(serial_group("e::suite_draw", "crates/e/tests/suite/draw/main.rs", &read), None, "run and session are no lock");
+        let whole = serial_group("e::locked", "crates/e/tests/locked.rs", &read).unwrap();
+        assert_eq!((whole.modules.len(), whole.filter()), (0, "binary_id(=e::locked)".to_string()));
+        assert_eq!(serial_group("e::free", "crates/e/tests/free.rs", &read), None);
+        assert_eq!(serial_group("e::other", "crates/e/tests/other/main.rs", &read), None, "only suite programs are looked into");
+        assert_eq!(serial_group("e::gone", "crates/e/tests/gone.rs", &read), None);
+        let cfg = nextest_config(Path::new("t"), &[g]);
+        assert!(cfg.contains("filter = \"binary_id(=e::suite_jobs) & test(/^(heavy|own_lock)::/)\"\ntest-group = \"serial-0\""), "{cfg}");
     }
 
     #[test]

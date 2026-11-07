@@ -114,6 +114,23 @@ struct Line {
     waste_qty: Option<f64>,
     /// What its items are as a product (Q6164); lines of different products never merge.
     product: Product,
+    /// What its items are by the documents (Q6216): empty for drawn, `derived` or `inferred`;
+    /// lines of different provenance never merge.
+    made: &'static str,
+}
+
+/// A line's provenance by name.
+fn made_name(m: &str) -> &str {
+    if m.is_empty() { "drawn" } else { m }
+}
+
+/// A provenance as a line keeps it.
+fn made_of(m: &str) -> &'static str {
+    match cadaddy_walk3d::Made::parse(m) {
+        Some(cadaddy_walk3d::Made::Derived) => "derived",
+        Some(cadaddy_walk3d::Made::Inferred) => "inferred",
+        _ => "",
+    }
 }
 
 impl Line {
@@ -397,6 +414,7 @@ fn rough_in_lines(
                 waste_qty: None,
                 circuit: circuit.to_string(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -460,6 +478,8 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     let label_of = |t: &cadaddy_walk3d::tags::ElementTag| t.fields.get("circuit").map_or_else(String::new, |f| f.value.clone());
     // The plaster ring each built wall box takes (its wall type's finish on the box's face).
     let rings = s.doc().map(super::propfill::ring_depths).unwrap_or_default();
+    // The devices that share a box (the model's gangs): one plate per box.
+    let plates = s.doc().map(super::propfill::gang_plates).unwrap_or_default();
     // How each built dimmer dims (its leg's fixtures, its own product or a person), by its tag:
     // dimmers are bought by it.
     let protocols: BTreeMap<String, super::dimcheck::DimmerProtocol> =
@@ -536,6 +556,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: String::new(),
                         product,
+                        made: "",
                     },
                 );
             }
@@ -569,21 +590,31 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: on.clone(),
                         product,
+                        made: "",
                     },
                 );
                 if matches!(kind, "receptacle" | "switch" | "data_outlet") {
                     let rule = "one box, plaster ring and plate per wall device (company default)".to_string();
                     // The ring its wall needs (the built box's mud_ring), else the default.
                     let ring = rings.get(&t.id).map(|v| format!("1 gang, {} deep", super::walltypes::frac(*v)));
+                    // A device sharing its box with others (the model's gangs): the box's one
+                    // plate, of its gangs, on the first of them.
+                    let gang = if by_atoms { plates.get(&t.id).copied() } else { None };
+                    let plate = gang.filter(|n| *n > 1).map_or_else(|| "1 gang".to_string(), |n| format!("{n} gang"));
                     for (item, size) in [
                         ("Box, 4\" square", "2-1/8\" deep".to_string()),
                         ("Plaster ring", ring.clone().unwrap_or_else(|| "1 gang".into())),
-                        ("Device plate", "1 gang".into()),
+                        ("Device plate", plate),
                     ]
                     .into_iter()
-                    .filter(|(item, _)| !by_atoms || *item == "Device plate")
+                    .filter(|(item, _)| !by_atoms || *item == "Device plate" && gang != Some(0))
                     {
                         let by_wall = item == "Plaster ring" && ring.is_some();
+                        let rule = if gang.is_some() && item == "Device plate" {
+                            format!("one plate per box: its {} ganged devices share it (the model's box)", gang.unwrap_or(1))
+                        } else {
+                            rule.clone()
+                        };
                         add(
                             lines,
                             Line {
@@ -597,34 +628,40 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 rule: Some(if by_wall {
                                     "the box's wall type: the board and channels on its face (partition legend)".into()
                                 } else {
-                                    rule.clone()
+                                    rule
                                 }),
                                 level: t.level.clone(),
                                 elements: vec![t.id.clone()],
                                 waste_qty: None,
                                 circuit: on.clone(),
                                 product: Product::default(),
+                                made: "",
                             },
                         );
                     }
-                } else if !on.is_empty() && !by_atoms {
-                    // Any other device wired on a circuit: its outlet box.
+                } else if !on.is_empty()
+                    && !by_atoms
+                    && let Some((b, _)) = super::mepatoms::build::box_kind(kind, "").and_then(|k| super::mepatoms::rules().box_for(k, false))
+                {
+                    // Any other device wired on a circuit: its outlet box, as the model's pieces
+                    // would give it on raceway (none for equipment fed in its own compartment).
                     add(
                         lines,
                         Line {
                             trade: "electrical",
                             category: "boxes".into(),
-                            item: "Box, 4\" octagon".into(),
-                            size: "1-1/2\" deep".into(),
+                            item: b.item.clone(),
+                            size: format!("{} deep", super::walltypes::frac(b.depth_in).replace(' ', "-")),
                             unit: "each",
                             net: 1.0,
                             status: "rule",
-                            rule: Some("one outlet box per device wired on a circuit (company default)".into()),
+                            rule: Some(format!("one outlet box per device wired on a circuit: {}", super::mepatoms::rules().box_source)),
                             level: t.level.clone(),
                             elements: vec![t.id.clone()],
                             waste_qty: None,
                             circuit: on.clone(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                 }
@@ -656,12 +693,18 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     e.1 += 1;
                 }
                 let estimated = r.height_source == super::printcond::ESTIMATED;
+                // Below the slab or in the earth: the underground raceway (the rules'), unstrapped.
+                let rl = super::mepatoms::rules();
+                let buried = (super::ugplan::ug_system(&r.system) || super::ugplan::below_slab(&sp, r))
+                    .then(|| rl.raceways.get(&rl.underground_raceway))
+                    .flatten();
+                let named = |emt: &str, of: fn(&super::mepatoms::Raceway) -> &String| buried.map_or_else(|| emt.to_string(), |w| of(w).clone());
                 add(
                     lines,
                     Line {
                         trade: "electrical",
                         category: "conduit".into(),
-                        item: "EMT conduit".into(),
+                        item: named("EMT conduit", |w| &w.stick),
                         size: size.clone(),
                         unit: "ft",
                         net: len,
@@ -675,24 +718,25 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                         waste_qty: None,
                         circuit: label.clone(),
                         product: Product::default(),
+                        made: "",
                     },
                 );
                 let sticks = (len / STICK_FT).ceil();
-                let straps = (len / STRAP_SPACING_FT).ceil() + 1.0;
+                let straps = if buried.is_some() && !rl.underground_strapped { 0.0 } else { (len / STRAP_SPACING_FT).ceil() + 1.0 };
                 let elbows = r.points.len().saturating_sub(2) as f64 + if rise > 0.0 { 1.0 } else { 0.0 };
-                let parts: [(&str, f64, String); 4] = [
-                    ("EMT coupling", (sticks - 1.0).max(0.0), format!("one per joint between {STICK_FT}' sticks")),
-                    ("EMT connector", 2.0, "one at each conduit end".into()),
-                    ("Conduit strap", straps, format!("within 3' of each end and every {STRAP_SPACING_FT}' (NEC 358.30)")),
-                    ("EMT 90° elbow", elbows, "one at each turn of the routed run".into()),
+                let parts: [(String, f64, String); 4] = [
+                    (named("EMT coupling", |w| &w.coupling), (sticks - 1.0).max(0.0), format!("one per joint between {STICK_FT}' sticks")),
+                    (named("EMT connector", |w| &w.connector), 2.0, "one at each conduit end".into()),
+                    ("Conduit strap".into(), straps, format!("within 3' of each end and every {STRAP_SPACING_FT}' (NEC 358.30)")),
+                    (named("EMT 90° elbow", |w| &w.elbow).replace("{angle}", "90"), elbows, "one at each turn of the routed run".into()),
                 ];
-                for (item, n, rule) in parts {
+                for (item, n, rule) in parts.into_iter().filter(|p| p.1 > 0.0 || buried.is_none()) {
                     add(
                         lines,
                         Line {
                             trade: "electrical",
                             category: "conduit fittings".into(),
-                            item: item.into(),
+                            item,
                             size: size.clone(),
                             unit: "each",
                             net: n,
@@ -703,6 +747,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             waste_qty: None,
                             circuit: label.clone(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                 }
@@ -736,6 +781,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                             waste_qty: None,
                             circuit: String::new(),
                             product: Product::default(),
+                            made: "",
                         },
                     );
                     if large_conductor(&size) && !ground {
@@ -755,6 +801,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                                 waste_qty: None,
                                 circuit: String::new(),
                                 product: Product::default(),
+                                made: "",
                             },
                         );
                     }
@@ -766,7 +813,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     // Each circuit's wire: its conductors over all its conduit, with makeup at each box.
     for (c, (ft, pulls)) in on_circuit {
         let Some(t) = circuits.get(c) else { continue };
-        let makeup = t.fields.get("conductors").map_or_else(|| super::printcond::DEFAULT_CONDUCTORS.to_string(), |f| f.value.clone());
+        let makeup = super::printcond::tag_conductors(t).to_string();
         let each = ft + 2.0 * MAKEUP_FT * pulls as f64;
         for (n, size, ground) in conductor_parts(&makeup) {
             add(
@@ -785,6 +832,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
                     waste_qty: None,
                     circuit: label_of(t),
                     product: Product::default(),
+                    made: "",
                 },
             );
         }
@@ -821,6 +869,7 @@ fn breaker_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 waste_qty: None,
                 circuit: String::new(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -856,6 +905,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                     waste_qty: None,
                     circuit: String::new(),
                     product: Product::default(),
+                    made: "",
                 },
             );
         }
@@ -882,6 +932,7 @@ fn lv_pathway_lines(s: &Session, lines: &mut Vec<Line>) {
                 waste_qty: None,
                 circuit: String::new(),
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -929,6 +980,7 @@ fn atom_lines(lines: &mut Vec<Line>, ix: &super::mepatoms::Index) {
                 waste_qty: None,
                 circuit: k.circuit.clone(),
                 product: Product::default(),
+                made: made_of(&k.made),
             },
         );
     }
@@ -957,6 +1009,7 @@ fn zero_ten_pairs(s: &Session, lines: &mut Vec<Line>) {
                 circuit: p.circuit,
                 waste_qty: None,
                 product: Product::default(),
+                made: "",
             },
         );
     }
@@ -1814,6 +1867,12 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
     let arr = |k: &str| q[k].as_array().cloned().unwrap_or_default();
     let st = |v: &Value, k: &str| v[k].as_str().unwrap_or_default().to_string();
     let num = |v: &Value, k: &str| v[k].as_f64().unwrap_or(0.0);
+    // A takeoff row of work no plan draws says so after its system (`CW (inferred)`, Q6216).
+    let made = |v: &Value| {
+        let sys = v["system"].as_str().unwrap_or_default().trim_end();
+        let tail = sys.rsplit_once('(').map(|(_, t)| t.trim_end_matches(')')).unwrap_or_default();
+        made_of(tail)
+    };
     for d in arr("ducts") {
         let size = format!("{} {}", st(&d, "size"), st(&d, "shape"));
         let lv = st(&d, "level");
@@ -1828,6 +1887,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "length_ft"),
                 status: "model",
                 level: lv.clone(),
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1842,6 +1902,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&d, "weight_lb"),
                 status: "model",
                 level: lv,
+                made: made(&d),
                 ..Line::default()
             },
         );
@@ -1859,6 +1920,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&p, "length_ft"),
                 status: "model",
                 level: st(&p, "level"),
+                made: made(&p),
                 ..Line::default()
             },
         );
@@ -1875,6 +1937,7 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                 net: num(&f, "count"),
                 status: "model",
                 level: st(&f, "level"),
+                made: made(&f),
                 ..Line::default()
             },
         );
@@ -2000,6 +2063,8 @@ fn mechanical(s: &mut Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) {
                         (p, c) if !p.is_empty() && !c.is_empty() && c != "not named" => format!("{p}-{c}"),
                         _ => String::new(),
                     },
+                    // A rule's or a note's object is inferred work: counted, apart (Q6216).
+                    made: if proposed { "inferred" } else { "" },
                     ..Line::default()
                 },
             );
@@ -2434,6 +2499,7 @@ fn concrete(s: &Session, lines: &mut Vec<Line>) -> Vec<Value> {
                     waste_qty,
                     circuit: String::new(),
                     product: Product::default(),
+                    made: "",
                 },
             );
         };
@@ -2581,7 +2647,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     // common one when all lines share a level).
     let mut grouped: Vec<Line> = Vec::new();
     for l in lines {
-        match grouped.iter_mut().find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule) {
+        match grouped
+            .iter_mut()
+            .find(|x| x.key(by_level, by_circuit) == l.key(by_level, by_circuit) && x.status == l.status && x.rule == l.rule && x.made == l.made)
+        {
             Some(x) => {
                 // When merging, keep the existing level (first wins); mark mixed if they differ.
                 if !by_level && !l.level.is_empty() && x.level.is_empty() {
@@ -2621,7 +2690,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let mut v = json!({
                 "trade": l.trade, "category": l.category, "item": l.item, "size": l.size, "unit": l.unit,
                 "net": round(l.net), "waste_pct": round(pct), "waste": round(waste), "total": round(l.net + waste),
-                "status": l.status, "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
+                "status": l.status, "made": made_name(l.made), "elements": l.elements.iter().take(if all_elements { usize::MAX } else { 500 }).collect::<Vec<_>>(),
             });
             if let Some(r) = &l.rule {
                 v["rule"] = json!(r);

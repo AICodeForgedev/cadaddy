@@ -296,7 +296,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
         if p.size_in.is_none()
             && next
                 .iter()
-                .any(|n| ["CONDUIT", "PVC", "SCH", "RGS", "RMC", "PIPE", "EMT", "CONT"].iter().any(|k| n.trim_start_matches('(').starts_with(k)))
+                .any(|n| cadaddy_mepfix::wordrules::words("conduit.size_follow_words").iter().any(|k| n.trim_start_matches('(').starts_with(k)))
         {
             p.size_in = Some(v);
             if p.count.is_none() {
@@ -318,7 +318,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
     } else {
         String::new()
     };
-    p.steel_ells = ["STEEL ELL", "STEEL ELBOW", "RGS ELBOW", "RGS ELL", "RIGID ELBOW"].iter().any(|k| up.contains(k));
+    p.steel_ells = cadaddy_mepfix::wordrules::words("conduit.steel_elbow_words").iter().any(|k| up.contains(k));
     // `… TO DATA ROOM …`: the word(s) between TO and ROOM.
     if let Some(i) = words.iter().position(|w| w.trim_end_matches([',', '.']) == "ROOM").filter(|i| *i > 0) {
         let to = words.iter().take(i).rposition(|w| *w == "TO");
@@ -365,11 +365,7 @@ pub(crate) fn sheet_trade(sheet: &str) -> Option<&'static str> {
     if !t.get(disc.len()..).unwrap_or_default().trim_start_matches(['-', '.', ' ']).starts_with(|c: char| c.is_ascii_digit()) {
         return None;
     }
-    match disc.to_ascii_uppercase().as_str() {
-        "E" | "ES" | "ED" | "EP" | "EL" | "T" | "TN" => Some("E"),
-        "P" | "PL" => Some("P"),
-        _ => None,
-    }
+    cadaddy_mepfix::wordrules::pair_value("sheets.underground_trade_prefix", disc.to_ascii_uppercase().as_str())
 }
 
 /// The trade of a callout: its kind's, else its words', else its sheet's.
@@ -645,6 +641,8 @@ fn ug_riser(level: &str, src: &str, at: [f64; 2], size: f64, bottom: f64, top: f
 /// How a called run's height source starts (`called: E-101 note (service_primary)`): the runs
 /// [`place`] makes, so a rerun replaces them.
 pub(crate) const CALLED_PREFIX: &str = "called: ";
+/// What a called run's height source says when its callout asks for steel elbows and risers.
+pub(crate) const STEEL_ELLS: &str = "steel elbows and risers";
 /// How a proposal's runs' source starts (`ug feeder 7 SB1→P2`).
 pub(crate) const PROPOSAL_PREFIX: &str = "ug ";
 
@@ -757,7 +755,7 @@ pub(crate) fn place(sp: &BuildingSpec, rooms: &[Room], called: &[Callout], alrea
             fates.push(fate("placed_elsewhere", 0, "built by the keynotes step from its tag".into()));
             continue;
         }
-        let why = format!("{CALLED_PREFIX}{} ({}{})", c.cite(), c.what, if c.steel_ells { ", steel elbows and risers" } else { "" });
+        let why = format!("{CALLED_PREFIX}{} ({}{})", c.cite(), c.what, if c.steel_ells { format!(", {STEEL_ELLS}") } else { String::new() });
         let (size, size_from) = match c.size_in {
             Some(v) => (v, "note".to_string()),
             None => (super::keynotes::BURIED_MIN_IN, "rule: smallest trade size (the note gives none)".to_string()),
@@ -957,12 +955,9 @@ pub(crate) fn unplaced_rfis(sp: &BuildingSpec, called: &[Callout], fates: &[Fate
     out
 }
 
-/// The drainage services (sanitary, waste, storm) a stack base or a slab drain belongs to.
-const DRAINS: [&str; 6] = ["SAN", "W", "ST", "SS", "SD", "RD"];
-
 /// Whether a run's system is a drainage service (sanitary, waste, storm).
 pub(crate) fn is_drainage(system: &str) -> bool {
-    DRAINS.iter().any(|d| d.eq_ignore_ascii_case(system.trim()))
+    cadaddy_mepfix::wordrules::words("pipes.drain_systems").iter().any(|d| d.eq_ignore_ascii_case(system.trim()))
 }
 
 /// How a slab drain's height source starts: a run [`slab_drains`] put under the floor.
@@ -989,7 +984,7 @@ pub(crate) fn slab_drains(sp: &mut BuildingSpec) -> (usize, f64) {
         }
         let sys = run.system.to_ascii_uppercase();
         let untagged = matches!(run.height_source.trim().replace(' ', "-").as_str(), "" | "default" | "estimated-route");
-        if !DRAINS.contains(&sys.as_str())
+        if !cadaddy_mepfix::wordrules::words("pipes.drain_systems").contains(&sys.as_str())
             || !run.level.eq_ignore_ascii_case(&slab)
             || !untagged
             || run.top_ft.is_some()
@@ -1491,7 +1486,7 @@ pub(crate) fn stack_bases(sp: &BuildingSpec, vent_below: bool) -> Vec<MepRun> {
             break;
         }
         let sys = run.system.to_ascii_uppercase();
-        let drainage = DRAINS.contains(&sys.as_str()) || (vent_below && sys == "V");
+        let drainage = cadaddy_mepfix::wordrules::words("pipes.drain_systems").contains(&sys.as_str()) || (vent_below && sys == "V");
         if !drainage || !run.level.eq_ignore_ascii_case(&slab) || ug_system(&run.system) {
             continue;
         }
@@ -1833,9 +1828,7 @@ pub(crate) fn proposal_runs(sp: &BuildingSpec, p: &Proposal) -> Vec<MepRun> {
 /// The spec's below-slab wiring method, as the job read its wiring-methods table: the first
 /// application naming work below the slab or in the ground, with its methods and section.
 pub(crate) fn below_method(d: &cadaddy_doc::Drawing) -> Option<String> {
-    let m = super::conduitroute::Methods::stored(d);
-    let words = ["UNDERGROUND", "BELOW SLAB", "UNDER SLAB", "BELOW GRADE", "IN SLAB", "BELOW GROUND"];
-    m.applications.iter().find(|a| words.iter().any(|w| a.application.to_ascii_uppercase().contains(w))).map(|a| {
+    below_app(d).map(|a| {
         format!(
             "{} ({}{}): {}",
             a.application.trim(),
@@ -1844,6 +1837,14 @@ pub(crate) fn below_method(d: &cadaddy_doc::Drawing) -> Option<String> {
             a.methods.join(", ")
         )
     })
+}
+
+/// The application of the spec's wiring-methods table that names work below the slab or in the
+/// ground (its first), as the job read it.
+pub(crate) fn below_app(d: &cadaddy_doc::Drawing) -> Option<super::conduitroute::MethodApp> {
+    let m = super::conduitroute::Methods::stored(d);
+    let words = cadaddy_mepfix::wordrules::words("conduit.below_slab_words");
+    m.applications.into_iter().find(|a| words.iter().any(|w| a.application.to_ascii_uppercase().contains(w)))
 }
 
 /// The framing over the slab level (the joists or trusses of the floor above it), when the
@@ -2185,6 +2186,37 @@ mod tests {
         assert_eq!(bases.len(), 1);
         assert_eq!((bases[0].system.as_str(), bases[0].top_ft, bases[0].bottoms_ft[0]), ("P-UG-SAN", Some(0.0), -2.0));
         assert!(ug_system(&bases[0].system) && ug_system("E-UG") && !ug_system("E-FEEDER"));
+    }
+
+    #[test]
+    fn a_stack_the_plumbing_joins_through_the_floors_still_gets_its_base_once() {
+        // Each floor's plan draws the waste stack; the plumbing makes them one riser from the
+        // slab level's floor. The underground plan then carries it down to the building drain:
+        // one base per stack, its length below the floor counted once (the stack's own bottom is
+        // the floor, the base's top).
+        let mut sp = spec();
+        let riser = |level: &str, at: [f64; 2]| {
+            let mut r = super::super::printcond::run("SAN", level, "P-101", vec![at], 4.0, 0.0);
+            r.top_ft = Some(10.0);
+            r
+        };
+        // Both floors' plans in one place (their bases).
+        for l in &mut sp.levels {
+            l.base = Some([0.0, 0.0]);
+        }
+        sp.mep.runs = vec![riser("Level 1", [600.0, 300.0]), riser("Level 2", [600.0, 300.0])];
+        sp.mep.systems.push(
+            serde_json::from_value(json!({"name": "SAN", "kind": "pipe", "layer": "P-SAN", "size_in": [4.0, 0.0], "bottom_ft": 0.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let joined = super::super::plumbing::continuous_risers(&mut sp);
+        assert_eq!(joined["stacks"], 1, "{joined}");
+        let stack = sp.mep.runs.iter().find(|r| r.system == "SAN").expect("the stack");
+        assert_eq!(stack.bottoms_ft.first().copied(), Some(0.0), "{}", stack.height_source);
+        let bases = stack_bases(&sp, false);
+        assert_eq!(bases.len(), 1, "{:?}", sp.mep.runs);
+        assert_eq!((bases[0].system.as_str(), bases[0].top_ft), ("P-UG-SAN", Some(0.0)));
+        assert!(bases[0].bottoms_ft[0] < 0.0);
     }
 
     #[test]
