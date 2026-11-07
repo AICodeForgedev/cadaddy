@@ -321,8 +321,8 @@ fn read_ckt(
     } else {
         let lefts: Vec<usize> = (0..line.len()).filter(|i| line.get(*i).is_some_and(|t| faces_right(t.at.x) == Some(true))).collect();
         let start = lefts.iter().copied().rfind(|i| line.get(*i).is_some_and(|t| t.at.x <= title.at.x + 2.0 * h)).or_else(|| lefts.first().copied());
-        let Some(start) = start else { return None };
-        let Some(l) = line.get(start).copied() else { return None };
+        let start = start?;
+        let l = line.get(start).copied()?;
         let r = line
             .iter()
             .skip(start + 1)
@@ -524,7 +524,8 @@ fn read_centred(
     }
     let xs: Vec<f64> = descs.iter().filter(|t| (t.at.y - top).abs() <= 0.6 * row_h).map(|t| t.at.x).collect();
     let (lx, rx) = (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
-    if !(rx - lx > 20.0 * row_h) {
+    // A description column on each side, well apart.
+    if rx - lx <= 20.0 * row_h {
         return None;
     }
     let (x0, x1) = (lx - 12.0 * row_h, rx + 12.0 * row_h);
