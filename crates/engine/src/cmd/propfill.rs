@@ -992,6 +992,16 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     }
                 })
             }
+            // A floor box is flush in the floor (a wall height the general notes give a
+            // receptacle is not its own); its keynote, else its words, say so.
+            Mount::Floor if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Chosen {
+                inches: 0.0,
+                from: "floor",
+                source: if t.fields.get("mount").is_some_and(|f| f.source == "note") { SourceKind::Note } else { SourceKind::Print },
+                doc: field(t, "keynote")
+                    .map_or_else(|| "a floor box: flush in the floor".to_string(), |k| format!("a floor box, flush in the floor: {k}")),
+                datum: Datum::Bottom,
+            },
             Mount::Floor => documented().filter(|c| c.inches <= 48.0).unwrap_or_else(|| Chosen {
                 inches: 0.0,
                 from: "floor",

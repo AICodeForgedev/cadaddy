@@ -217,7 +217,7 @@ pub(crate) fn device_requirements(text: &str) -> Option<DeviceReq> {
     // Features, each phrase taken once and longest first (`USB-C` is not also a `USB`).
     let mut phrases: Vec<(usize, String, &FeatureRule)> =
         r.features.iter().flat_map(|f| f.words.iter().map(move |w| (norm(w).len(), norm(w), f))).filter(|(n, _, _)| *n > 2).collect();
-    phrases.sort_by(|a, b| b.0.cmp(&a.0));
+    phrases.sort_by_key(|a| std::cmp::Reverse(a.0));
     for (_, p, f) in &phrases {
         if rest.contains(p.as_str()) {
             rest = rest.replace(p.as_str(), " | ");

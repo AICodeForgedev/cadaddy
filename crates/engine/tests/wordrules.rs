@@ -538,6 +538,17 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/propfill.rs",
+        "[keynote receptacle_for]",
+        "our own output: the property keys a keynote gives a unit's receptacle (Q6247), copied from its tag, not words read off a document",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
+        "[keynotes keynote_features]",
+        "our own output: the property keys a keynote's device requirements give a device (Q6249), copied from its tag, not words read off a document",
+    ),
+    ("crates/engine/src/cmd/keynotes.rs", "[AMP AMPS]", "units: the written forms of the ampere beside a number (20 AMP), not trade words"),
+    (
+        "crates/engine/src/cmd/propfill.rs",
         "[design_value corrected_value]",
         "our own output: the property keys of a corrected value (design value, corrected value, its reason and rule), not words read off a document",
     ),

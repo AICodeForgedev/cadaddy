@@ -24720,7 +24720,7 @@ mod tests {
         let has = |k: &str, v: &str| sp.tags.iter().filter(|t| t.fields.get(k).is_some_and(|f| f.value == v && f.source == "note")).count();
         assert_eq!(has("keynote_features", "USB, USB-C"), 2);
         assert_eq!(has("lv_conduit_in", "1"), 2);
-        assert_eq!(sp.tags.iter().filter(|t| t.fields.get("gang_with").is_some()).count(), 4);
+        assert_eq!(sp.tags.iter().filter(|t| t.fields.contains_key("gang_with")).count(), 4);
     }
 
     /// Q6249: the plans' keynotes by devices read off a floor plan (each its symbol): a floor
@@ -24801,6 +24801,25 @@ mod tests {
         assert_eq!(f(&s1, "gang_with"), f(&s2, "gang_with"));
         assert!(f(&s1, "gang_with").is_some());
         assert_eq!(f(&far, "keynotes"), None);
+        // The elements: the floor box flush in the floor, the antenna box at the ceiling on no
+        // circuit, each saying its keynote (the note the source).
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
+        let els = got["elements"].as_array().cloned().unwrap_or_default();
+        let by_note =
+            |n: &str| els.iter().find(|e| e["props"]["keynotes"]["value"].as_str().is_some_and(|k| k.contains(n))).cloned().unwrap_or_default();
+        let floor = by_note("FLOOR BOX");
+        assert_eq!(floor["props"]["mount"]["value"], "floor", "{floor:#}");
+        assert_eq!(floor["props"]["mount"]["source"]["kind"], "note", "{floor:#}");
+        assert!(floor["props"]["mount_height"]["value"].as_f64().is_some_and(|h| h.abs() < 1e-6), "flush in the floor: {floor:#}");
+        let jbox = by_note("ANTENNA");
+        assert_eq!(jbox["props"]["mount"]["value"], "ceiling", "{jbox:#}");
+        assert!(jbox["props"].get("circuit").is_none_or(|c| c["value"].as_str().is_none_or(str::is_empty)), "{jbox:#}");
+        assert_eq!(jbox["props"]["circuit_read"]["value"], "Q-3", "{jbox:#}");
+        assert!(jbox["props"]["mount_height"]["value"].as_f64().is_some_and(|h| h > 96.0), "at the ceiling (9 ft): {jbox:#}");
+        let sw = by_note("GANGED");
+        assert_eq!(sw["props"]["gang_with"]["source"]["kind"], "note", "{sw:#}");
     }
 
     /// A water closet in no room but inside a unit's footprint (its bath: the unit's label's room
