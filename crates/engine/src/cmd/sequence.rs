@@ -1391,7 +1391,7 @@ fn stored_settings(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingSp
 
 fn store_settings(s: &mut Session, mut sp: cadaddy_walk3d::BuildingSpec, st: &Settings) -> Result<()> {
     sp.sequence = st.to_value();
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -1409,7 +1409,7 @@ fn run_build(s: &mut Session, p: &Value) -> Result<Value> {
     keep.start = Some(seq.start);
     store_settings(s, sp, &keep)?;
     if bool_or(p, "apply4d", true) {
-        s.doc_mut()?.schedule4d = seq.to_schedule().to_json();
+        s.doc_mut()?.schedule4d = seq.to_schedule().to_json().into();
     }
     let mut out = seq.summary();
     out["list"] = seq.ordered().into_iter().take(MAX_LISTED).map(|a| seq.activity_json(a, false)).collect();
@@ -1479,7 +1479,7 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     // A 4D schedule this sequence wrote follows the edit.
     let ours = fourd_from_sequence(s.doc()?, &before);
     if ours {
-        s.doc_mut()?.schedule4d = after.to_schedule().to_json();
+        s.doc_mut()?.schedule4d = after.to_schedule().to_json().into();
     }
     let act = after.acts.iter().find(|a| a.id == id).map(|a| after.activity_json(a, false)).unwrap_or(Value::Null);
     Ok(json!({"activity": act, "span": after.span().map(|(a, b)| json!([iso(a), iso(b)])), "changed": changed, "applied4d": ours}))

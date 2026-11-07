@@ -449,7 +449,7 @@ pub(crate) fn draft_rfis(
     sp.rfis.retain(|r| r.kind != Some(RfiKind::MethodChoice) || live.contains(&r.id) || r.status != RfiStatus::Open);
     changed |= sp.rfis.len() != before;
     if changed {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let _ = rules;
     Ok(out)
@@ -618,7 +618,7 @@ pub(crate) fn decide(s: &mut Session, id: &str, decision: &str, by: &str, note: 
             r.answer = Some(answer);
         }
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({"id": out_sc["id"], "decision": decision, "adopted": adopted, "rfi": rfi, "scenario": out_sc}))
 }
 

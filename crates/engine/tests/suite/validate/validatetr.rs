@@ -173,7 +173,7 @@ fn job() -> Job {
     let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["unit_types"] = json!([{"id": "ut-a", "tag": "A", "name": "TYPE A", "width_ft": 39.0, "depth_ft": 11.0, "items": []}]);
     sp["unit_instances"] = json!([{"type": "ut-a", "room": "104", "number": "104", "level": "L1", "hand": "normal", "at_ft": [60.0, 0.5]}]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     // The GFCI's product record, as the job's spec and submittal reading stores it (a property
     // holds a scalar: the record's JSON text).
     let record = json!({"resolved": {"maker": "Acme", "features": ["GFCI", "duplex"], "sources": {"features": "submittal 26 27 26-1 p. 4"}}});

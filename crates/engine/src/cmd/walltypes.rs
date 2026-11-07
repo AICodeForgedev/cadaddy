@@ -74,7 +74,7 @@ fn run_legend(s: &mut Session, p: &Value) -> Result<Value> {
         let (mut sp, _) = super::bspec::current(s, "walls.legend")?;
         sp.wall_types.retain(|w| !lg.types.iter().any(|t| t.name.eq_ignore_ascii_case(&w.name)));
         sp.wall_types.extend(lg.types.iter().cloned());
-        s.doc_mut().map_err(|e| bad("walls.legend", e.to_string()))?.building_spec = Some(sp.to_json());
+        s.doc_mut().map_err(|e| bad("walls.legend", e.to_string()))?.building_spec = Some(sp.to_json()).into();
         applied = true;
     }
     Ok(json!({"types": types, "report": lg.report, "applied": applied}))

@@ -313,7 +313,7 @@ fn set_job(s: &mut Session, subs: &Path, pages: Option<&Path>) {
             {"number": "X-602", "title": "ELECTRICAL SCHEDULES", "discipline": "E", "type": "schedule", "file": p.to_string_lossy(), "page": 1}
         ]});
     }
-    s.doc_mut().unwrap().agent = Some(json!({"guided_job": job}).to_string());
+    s.doc_mut().unwrap().agent = Some(json!({"guided_job": job}).to_string()).into();
 }
 
 struct Job {

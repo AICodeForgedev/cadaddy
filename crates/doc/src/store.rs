@@ -2,7 +2,8 @@
 //!
 //! Entities live in chunks (`Arc<Vec<Arc<Entity>>>`) in draw order, and a sharded handle index
 //! maps each handle to the stable id of its chunk. Cloning a store (an undo snapshot) copies
-//! only the chunk and shard pointers; an edit copies one chunk and one shard.
+//! only the chunk and shard pointers; an edit copies one chunk and one shard. The shards grow in
+//! number with the store, so the shard an edit copies stays small however large the drawing.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
@@ -10,7 +11,14 @@ use std::sync::{Arc, OnceLock};
 use crate::{Entity, EntityKind, Handle};
 
 const CHUNK_MAX: usize = 1024;
+/// Shards of a store's handle index: at least this many (a power of two)…
 const SHARDS: usize = 64;
+/// …and more as the store grows, about this many handles a shard: an edit copies the shard of
+/// each handle it adds or removes, so a fixed count made one new line in a 1.1 M-object drawing
+/// copy 17,000 index entries (0.7 MB an undo step).
+const SHARD_TARGET: usize = 1024;
+/// The most shards a store's index is split into.
+const SHARDS_MAX: usize = 1 << 16;
 
 #[derive(Clone, Default)]
 struct Chunk {
@@ -112,9 +120,14 @@ fn item_pos(items: &[Arc<Entity>], h: Handle) -> Option<usize> {
     items.iter().position(|e| e.handle == h)
 }
 
-fn shard_of(h: Handle) -> usize {
-    // Fibonacci hashing spreads sequential handles across shards.
-    ((h.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 58) as usize) % SHARDS
+/// The shard of `h` among `n` (a power of two).
+fn shard_of(h: Handle, n: usize) -> usize {
+    // Fibonacci hashing spreads sequential handles across shards: the top bits of the product.
+    let bits = n.trailing_zeros();
+    if bits == 0 {
+        return 0;
+    }
+    (h.0.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> (64 - bits.min(63))) as usize
 }
 
 impl EntityStore {
@@ -160,13 +173,21 @@ impl EntityStore {
                 }
             }
         }
-        // The handle index: a shard an edit copied is kept whole (about 48 bytes an entry).
-        for (mine, theirs) in self.shards.iter().zip(&newer.shards) {
-            if !Arc::ptr_eq(mine, theirs) {
+        // The handle index: a shard an edit copied is kept whole (about 48 bytes an entry); when
+        // the index was split anew, every shard.
+        let resplit = self.shards.len() != newer.shards.len();
+        for (i, mine) in self.shards.iter().enumerate() {
+            if resplit || newer.shards.get(i).is_none_or(|theirs| !Arc::ptr_eq(mine, theirs)) {
                 bytes = bytes.saturating_add(mine.len().saturating_mul(48).saturating_add(64));
             }
         }
         bytes
+    }
+    /// What every copy of this store holds by itself, however little changed: its lists of
+    /// chunk and shard pointers.
+    pub fn shell_bytes(&self) -> usize {
+        let ptr = std::mem::size_of::<Arc<Chunk>>();
+        self.chunks.len().saturating_add(self.shards.len()).saturating_mul(ptr).saturating_add(std::mem::size_of::<Self>())
     }
     /// What changed from this store to `newer`: (added, modified, erased) handles. Chunks both
     /// share are skipped whole, so the cost follows the change, not the store's size.
@@ -210,7 +231,7 @@ impl EntityStore {
         self.chunk_id(h).is_some()
     }
     fn chunk_id(&self, h: Handle) -> Option<u32> {
-        self.shards.get(shard_of(h)).and_then(|s| s.get(&h).copied())
+        self.shards.get(shard_of(h, self.shards.len())).and_then(|s| s.get(&h).copied())
     }
     /// The position of chunk `id`. Chunks are made in draw order, so their ids usually rise
     /// along it: a binary search finds the chunk without walking them all (a store of 500 000
@@ -229,7 +250,8 @@ impl EntityStore {
         items.get(item_pos(items, h)?)
     }
     fn set_index(&mut self, h: Handle, chunk: Option<u32>) {
-        if let Some(shard) = self.shards.get_mut(shard_of(h)) {
+        let n = self.shards.len();
+        if let Some(shard) = self.shards.get_mut(shard_of(h, n)) {
             let m = Arc::make_mut(shard);
             match chunk {
                 Some(c) => {
@@ -264,6 +286,7 @@ impl EntityStore {
         let id = chunk.id;
         self.set_index(h, Some(id));
         self.len += 1;
+        self.split_index();
     }
     /// [`EntityStore::push`] of an object another store holds, shared rather than copied (a view
     /// made of some of a drawing's objects).
@@ -283,6 +306,7 @@ impl EntityStore {
         let id = chunk.id;
         self.set_index(h, Some(id));
         self.len += 1;
+        self.split_index();
     }
     /// Append many new objects on top of the draw order, in order: the same result as
     /// [`EntityStore::push`] one at a time (chunks filled the same way), with the handle index
@@ -295,7 +319,8 @@ impl EntityStore {
             }
             return;
         }
-        let mut index: Vec<Vec<(Handle, u32)>> = (0..SHARDS).map(|_| Vec::new()).collect();
+        let n = self.shards.len();
+        let mut index: Vec<Vec<(Handle, u32)>> = (0..n).map(|_| Vec::new()).collect();
         for e in items {
             if self.chunks.last().is_none_or(|c| c.items.len() >= CHUNK_MAX) {
                 let c = self.new_chunk();
@@ -305,7 +330,7 @@ impl EntityStore {
             let chunk = chunk_mut(last);
             let h = e.handle;
             chunk.items.push(Arc::new(e));
-            if let Some(list) = index.get_mut(shard_of(h)) {
+            if let Some(list) = index.get_mut(shard_of(h, n)) {
                 list.push((h, chunk.id));
             }
             self.len += 1;
@@ -318,6 +343,27 @@ impl EntityStore {
             m.reserve(list.len());
             m.extend(list);
         }
+        self.split_index();
+    }
+    /// Split the handle index into more shards when the store has outgrown them (about
+    /// [`SHARD_TARGET`] handles a shard). Each split doubles the count at least, so the work
+    /// it takes is paid once per doubling of the store.
+    fn split_index(&mut self) {
+        if self.len <= self.shards.len().saturating_mul(SHARD_TARGET) || self.shards.len() >= SHARDS_MAX {
+            return;
+        }
+        let want = (self.len / SHARD_TARGET).saturating_add(1).next_power_of_two().clamp(SHARDS, SHARDS_MAX);
+        if want <= self.shards.len() {
+            return;
+        }
+        let per = self.len / want + 1;
+        let mut split: Vec<HashMap<Handle, u32>> = (0..want).map(|_| HashMap::with_capacity(per)).collect();
+        for (h, c) in self.shards.iter().flat_map(|s| s.iter()) {
+            if let Some(m) = split.get_mut(shard_of(*h, want)) {
+                m.insert(*h, *c);
+            }
+        }
+        self.shards = split.into_iter().map(Arc::new).collect();
     }
     /// Insert at the bottom of the draw order.
     pub fn push_front(&mut self, e: Entity) {
@@ -337,6 +383,7 @@ impl EntityStore {
         let id = chunk.id;
         self.set_index(h, Some(id));
         self.len += 1;
+        self.split_index();
     }
     /// Replace the entity with the same handle, keeping its draw position. Returns false if absent.
     pub fn replace(&mut self, e: Entity) -> bool {
@@ -469,6 +516,7 @@ impl EntityStore {
             self.set_index(h, Some(id));
             self.len += 1;
         }
+        self.split_index();
     }
     /// The store's chunks in draw order, as handles that compare by identity (a saved file's
     /// incremental save rewrites only the chunks that are no longer the same).
@@ -502,6 +550,7 @@ impl EntityStore {
         if let Some(done) = fresh {
             self.chunks.push(done);
         }
+        self.split_index();
     }
     /// True when `other` shares every chunk with `self` (same draw order, same entities). Holding
     /// a clone of a store makes this exact: any edit to the original copies the touched chunk.
@@ -580,6 +629,55 @@ mod tests {
 
     fn ent(h: u64) -> Entity {
         Entity::new(Handle(h), EntityKind::Point(Point { p: Vec2::new(h as f64, 0.0).to3(0.0), angle: 0.0 }))
+    }
+
+    #[test]
+    fn the_index_splits_as_the_store_grows_and_finds_every_handle() {
+        // Grown each way a store grows: one at a time, in bulk, chunk by chunk, at the bottom.
+        let mut s = EntityStore::new();
+        for h in 1..=20_000 {
+            s.push(ent(h));
+        }
+        s.push_many((20_001..=120_000).map(ent).collect());
+        s.push_chunk((120_001..=200_000).map(ent).collect());
+        s.push_front(ent(500_000));
+        assert!(s.shards.len() > SHARDS && s.shards.len().is_power_of_two(), "{} shards", s.shards.len());
+        assert!(s.shards.iter().all(|m| m.len() <= 2 * SHARD_TARGET), "a shard outgrew its share");
+        assert_eq!(s.len(), 200_001);
+        assert!((1..=200_000).chain([500_000]).all(|h| s.get(Handle(h)).is_some_and(|e| e.handle == Handle(h))));
+        assert!(!s.contains(Handle(200_001)));
+        // Edits after the split find what they change.
+        assert!(s.remove(Handle(77_777)).is_some() && !s.contains(Handle(77_777)));
+        assert!(s.modify(Handle(150_000), |e| e.kind = ent(1).kind));
+        assert!(s.bring_to_front(Handle(3)) && s.iter().last().is_some_and(|e| e.handle == Handle(3)));
+        s.sort_by_key(|e| std::cmp::Reverse(e.handle));
+        assert_eq!(s.iter().next().map(|e| e.handle), Some(Handle(500_000)));
+        assert!((1..=200_000).filter(|h| *h != 77_777).all(|h| s.contains(Handle(h))));
+    }
+
+    #[test]
+    fn a_one_object_edit_of_a_large_store_holds_little() {
+        // Q6278: with a fixed 64 shards, one new object in a store of a million copied a shard of
+        // 17,000 entries for the undo step to keep; the count follows the edit now.
+        let mut s = EntityStore::new();
+        s.push_chunk((1..=500_000).map(ent).collect());
+        for edit in 0..3 {
+            let held = s.clone();
+            match edit {
+                0 => s.push(ent(600_000)),
+                1 => drop(s.remove(Handle(250_000))),
+                _ => drop(s.modify(Handle(9), |e| e.kind = ent(1).kind)),
+            }
+            let kept = held.unique_bytes(&s);
+            assert!(kept <= 96 * 1024, "edit {edit}: a step of a 500,000-object store holds {kept} bytes");
+        }
+        // A split of the index counts the whole old index: the step holds all of it.
+        let mut small = EntityStore::new();
+        small.push_chunk((1..=(SHARDS * SHARD_TARGET) as u64).map(ent).collect());
+        let held = small.clone();
+        small.push(ent(10_000_000));
+        assert!(held.shards.len() < small.shards.len());
+        assert!(held.unique_bytes(&small) >= SHARDS * SHARD_TARGET * 16);
     }
 
     #[test]

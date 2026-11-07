@@ -709,7 +709,7 @@ fn tags_follow_decisions(s: &mut Session) -> Result<()> {
         }
     }
     if changed {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(())
 }

@@ -81,7 +81,7 @@ fn session(set: &Set, pdfs: &Path, edit: impl FnOnce(&mut Drawing, [f64; 4])) ->
         "sheets": {"sheets": [{"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "file": "Sample Set.pdf", "page": 1, "type": "plan"}]},
         "sheet_regions": [{"number": "A-101", "level": "L1", "rect": set.region}]
     }});
-    d.agent = Some(job.to_string());
+    d.agent = Some(job.to_string()).into();
     let mut s = Session::empty();
     s.open_drawing(d, "Sample Job", None);
     let r = set.region;

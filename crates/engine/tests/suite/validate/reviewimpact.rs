@@ -208,7 +208,7 @@ fn job(run_size_in: f64) -> Job {
         {"system": "XFEED", "level": "L1", "points": [at([40.0, 2.0]), at([40.0, 10.0]), at([70.0, 10.0])], "size_in": [run_size_in, run_size_in],
          "bottoms_ft": [8.5, 8.5], "height_source": "proposed", "size_source": "feeder schedule"}
     ]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let mut agent: Value = s.doc().unwrap().agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or_else(|| json!({}));
     agent["guided_job"] = json!({
         "findings": [
@@ -223,7 +223,7 @@ fn job(run_size_in: f64) -> Job {
             {"id": "Q-rooms-2", "kind": "question", "stage": "rooms", "summary": "is 903 a corridor or a lobby?", "status": "pending"}
         ]
     });
-    s.doc_mut().unwrap().agent = Some(agent.to_string());
+    s.doc_mut().unwrap().agent = Some(agent.to_string()).into();
     Job { s, on_wall: recs[0].clone(), off_wall: recs[1].clone(), switch: sws[0].clone() }
 }
 

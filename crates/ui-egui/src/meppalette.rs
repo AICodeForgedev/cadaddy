@@ -348,7 +348,7 @@ mod tests {
                 ]
             }
         });
-        app.session.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap_or_default());
+        app.session.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap_or_default()).into();
         app
     }
 

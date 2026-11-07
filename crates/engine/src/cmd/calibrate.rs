@@ -73,7 +73,7 @@ fn run_project(s: &mut Session, p: &Value) -> Result<Value> {
         .filter(|x| !x.is_empty() && x.len() <= 40)
         .ok_or_else(|| bad(cmd, "id required: an anonymous project id (never the project's name)"))?;
     let q = if bool_or(p, "from_wholejob", false) {
-        let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec"))?;
+        let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec"))?;
         let sp = cadaddy_walk3d::BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))?;
         let w: super::wholejob::WholeJob = serde_json::from_value(sp.wholejob).unwrap_or_default();
         let mut out: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();

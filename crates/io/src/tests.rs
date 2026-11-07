@@ -1384,18 +1384,18 @@ fn building_spec_roundtrips_in_dxf_and_dwg() {
         r#"{{"version":1,"levels":[{{"name":"Erdgeschoß","elevation_ft":0,"height_ft":10}}],"layers":[{{"layer":"A-WALL","role":"wall"}}],"note":"a \\ b {}"}}"#,
         "x".repeat(600)
     );
-    d.building_spec = Some(spec.clone());
+    d.building_spec = Some(spec.clone()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_BSPEC"));
     let back = read_dxf(text.as_bytes()).unwrap();
-    assert_eq!(same(back.building_spec.clone()), same(Some(spec.clone())));
-    assert_eq!(same(roundtrip(&back).building_spec), same(Some(spec.clone())));
+    assert_eq!(same(back.building_spec.as_ref().cloned()), same(Some(spec.clone())));
+    assert_eq!(same(roundtrip(&back).building_spec.into_inner()), same(Some(spec.clone())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().building_spec), same(Some(spec)));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().building_spec.into_inner()), same(Some(spec)));
     // No spec, no record; a record that isn't a JSON object is dropped.
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_BSPEC"));
-    d.building_spec = Some("[1, 2".into());
+    d.building_spec = Some("[1, 2".into()).into();
     assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().building_spec, None);
 }
 
@@ -1457,17 +1457,17 @@ fn bim_spec_xdata_survives_dxf_roundtrip() {
 fn tours_roundtrip_in_dxf_dwg_and_cdy() {
     let mut d = Drawing::new_imperial();
     let tours = r#"{"version":1,"views":[{"name":"Lobby","room":"Lobby","level":0,"eye":[10.5,20,5.5],"yaw":90,"pitch":-5}],"tours":[{"name":"In","stops":["Lobby"],"speed":4.5,"look":"path","pause":1}]}"#;
-    d.tours = Some(tours.into());
-    d.building_spec = Some(r#"{"version":1,"levels":[]}"#.into());
+    d.tours = Some(tours.into()).into();
+    d.building_spec = Some(r#"{"version":1,"levels":[]}"#.into()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_TOURS"));
-    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().tours), same(Some(tours.into())));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().tours.into_inner()), same(Some(tours.into())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().tours), same(Some(tours.into())));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().tours.into_inner()), same(Some(tours.into())));
     let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
-    assert_eq!(same(cdy.tours), same(Some(tours.into())));
-    assert_eq!(same(cdy.building_spec), same(d.building_spec.clone()), "the building spec is kept in .cdy too");
+    assert_eq!(same(cdy.tours.into_inner()), same(Some(tours.into())));
+    assert_eq!(same(cdy.building_spec.into_inner()), same(d.building_spec.as_ref().cloned()), "the building spec is kept in .cdy too");
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_TOURS"));
 }
 
@@ -1475,18 +1475,18 @@ fn tours_roundtrip_in_dxf_dwg_and_cdy() {
 fn schedule4d_roundtrips_in_dxf_dwg_and_cdy() {
     let mut d = Drawing::new_imperial();
     let sched = r#"{"version":1,"tasks":[{"id":"A10","name":"Level 1 supply duct","start":"2026-03-02","finish":"2026-03-06","filter":{"level":"Level 1","class":"Duct*"},"add":["2F"]}]}"#;
-    d.schedule4d = Some(sched.into());
+    d.schedule4d = Some(sched.into()).into();
     let same = |text: Option<String>| text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
     let text = write_dxf(&d);
     assert!(text.contains("CADADDY_4D"));
-    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().schedule4d), same(Some(sched.into())));
+    assert_eq!(same(read_dxf(text.as_bytes()).unwrap().schedule4d.into_inner()), same(Some(sched.into())));
     #[cfg(not(target_arch = "wasm32"))]
-    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().schedule4d), same(Some(sched.into())));
+    assert_eq!(same(read(&write(&d, "x.dwg").unwrap(), "x.dwg").unwrap().schedule4d.into_inner()), same(Some(sched.into())));
     let cdy = read(&write(&d, "x.cdy").unwrap(), "x.cdy").unwrap();
-    assert_eq!(same(cdy.schedule4d), same(Some(sched.into())));
+    assert_eq!(same(cdy.schedule4d.into_inner()), same(Some(sched.into())));
     assert!(!write_dxf(&Drawing::new_imperial()).contains("CADADDY_4D"));
     // A schedule from a newer CADaddy, or a broken one, is left out rather than failing the file.
-    d.schedule4d = Some(r#"{"version":99,"tasks":[]}"#.into());
+    d.schedule4d = Some(r#"{"version":99,"tasks":[]}"#.into()).into();
     assert_eq!(read_dxf(write_dxf(&d).as_bytes()).unwrap().schedule4d, None);
 }
 
@@ -2797,7 +2797,7 @@ fn stroke_font_text_plots_with_a_hidden_searchable_copy() {
 fn walkthrough_packages_open_as_their_drawing() {
     let mut d = Drawing::new_imperial();
     d.model.push(Entity::new(Handle(0x200), EntityKind::Line(Line { a: Vec3::default(), b: Vec3 { x: 10.0, y: 0.0, z: 0.0 } })));
-    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into()).into();
     let bytes = write(&d, "tour.cdywalk").unwrap();
     assert!(cadaddy_walk3d::package::is_package(&bytes));
     let p = cadaddy_walk3d::package::Package::decode(&bytes).unwrap();
@@ -2894,7 +2894,7 @@ fn bim_spec_ifc_psets() {
     use cadaddy_doc::bimspec::{self, BimType, Confidence, SpecField};
     let mut d = Drawing::new_imperial();
     // Set building spec so IFC export can write.
-    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"Level 1","elevation":0}]}"#.into());
+    d.building_spec = Some(r#"{"version":1,"levels":[{"name":"Level 1","elevation":0}]}"#.into()).into();
     // Create a type with manufacturer + catalog + sourced field.
     let mut h = BimType::new("H");
     h.category = "luminaire".into();

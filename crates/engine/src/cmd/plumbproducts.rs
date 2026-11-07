@@ -1326,7 +1326,7 @@ pub(crate) fn apply(s: &mut Session, docs: &Docs, reqs: &[Requirement]) -> crate
                 None => {}
             }
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         by_basis.insert("review_items".into(), ids.len());
     }
     if changed > 0 || typed > 0 {
@@ -1568,7 +1568,7 @@ mod tests {
     fn each_fixture_gets_its_product_the_submittal_over_the_schedule() {
         let mut s = Session::new();
         let spec = cadaddy_walk3d::BuildingSpec::from_json("{}").expect("spec");
-        s.doc_mut().expect("doc").building_spec = Some(spec.to_json());
+        s.doc_mut().expect("doc").building_spec = Some(spec.to_json()).into();
         let proposed = Prop::new("A1", Source::computed()).with_note("the nearest CW pipe (derived: no plan draws it)");
         let wc = fixture_el(&mut s, "WC-1", 0.0, &[("cold_water", proposed)]);
         let lv = fixture_el(&mut s, "LV-1", 40.0, &[]);

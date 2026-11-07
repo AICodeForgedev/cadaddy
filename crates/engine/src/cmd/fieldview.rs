@@ -609,7 +609,7 @@ mod tests {
         ]);
         spec["unit_types"] = json!([{"id": "ut-king", "name": "King"}]);
         spec["unit_instances"] = json!([{"type": "ut-king", "room": "rm-2-1", "number": "214", "level": "L2", "hand": "mirrored"}]);
-        s.doc_mut().unwrap().building_spec = Some(spec.to_string());
+        s.doc_mut().unwrap().building_spec = Some(spec.to_string()).into();
         let r = s.execute(CMD_EXPORT, &json!({"inline": true})).unwrap();
         let pkg: FieldPackage = serde_json::from_value(r["package"].clone()).unwrap();
         let room = pkg.rooms.first().unwrap();

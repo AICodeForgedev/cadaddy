@@ -251,7 +251,7 @@ fn the_job_builds_the_roof_from_the_printed_roof_plan() {
     assert_eq!(st["done"], json!(true), "{st}");
     let _ = std::fs::remove_dir_all(&dir);
     // The job's own takeoff stage has the roof.
-    let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).unwrap();
+    let job: Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).unwrap();
     let takeoff =
         job["guided_job"]["stages"].as_array().and_then(|a| a.iter().find(|x| x["name"] == "takeoff")).map(|x| x["result"]["csv"].to_string());
     assert!(takeoff.as_deref().is_some_and(|c| c.contains("Roof,architecture,roofs,roofs,Roof area")), "{takeoff:?}");
