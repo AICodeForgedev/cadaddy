@@ -5617,7 +5617,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // Equipment in a unit room no plan connects (its feed only a keynote): its
                 // connection on the circuit the room's panel schedule names it on.
                 // (The panel schedules are read into the spec later in the build: read here too.)
-                let schedules = if sp.mep.panel_schedules.is_empty() { panel_schedules(&e_pages) } else { sp.mep.panel_schedules.clone() };
+                let schedules =
+                    if sp.mep.panel_schedules.is_empty() { panel_schedules(&panel_pages(s.doc()?, job)) } else { sp.mep.panel_schedules.clone() };
                 drop(e_pages);
                 let scheduled = scheduled_connections(&schedules, &sp.mep.equipment, &stamped);
                 if !scheduled.is_empty() {
@@ -6559,7 +6560,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The panel schedules (each circuit's breaker and its type), for the devices' props.
     let t = web_time::Instant::now();
     let pages = s.doc().map(|d| electrical_pages(d, job)).unwrap_or_default();
-    let schedules = panel_schedules(&pages);
+    let sched_pages = s.doc().map(|d| panel_pages(d, job)).unwrap_or_default();
+    let schedules = panel_schedules(&sched_pages);
+    result["panel_schedule_sheets"] = json!(sched_pages.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>());
+    if schedules.is_empty() {
+        no_panel_schedules(job, &sched_pages, &mut result);
+    }
     if !schedules.is_empty()
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
@@ -6575,7 +6581,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         // The load summaries and demand calculations beside them (the load calculation's check).
         let lc = super::loadcalc::rules();
         let mut summaries: Vec<cadaddy_walk3d::LoadSummary> = Vec::new();
-        for (number, sub) in &pages {
+        for (number, sub) in &sched_pages {
             summaries.extend(super::loadcalc::read_summaries(&cadaddy_mepfix::sheet_facts::texts(sub), number, &lc));
         }
         if !summaries.is_empty() {
@@ -19544,6 +19550,141 @@ fn discipline_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob, discipline: &str)
     pages
 }
 
+/// Most sheets looked at for the set's panel schedules: in the job's drawing, and read again.
+const MAX_PANEL_SHEETS: usize = 24;
+
+/// The sheets that may print the set's panel schedules (`panelsched::schedule_sheet_rank`), each
+/// once, the likeliest first: those in the job's drawing, then the others read again from the
+/// PDFs. A set's schedules can be on any of its electrical sheets (past the few its legends are
+/// looked for on), on a combined `MEP` sheet, or on a sheet whose number was read under another
+/// code.
+fn panel_pages(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let base = |n: &str| n.split('/').next().unwrap_or("").trim().to_string();
+    let title_of = |n: &str| {
+        classified
+            .iter()
+            .find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| base(x).eq_ignore_ascii_case(n)))
+            .and_then(|c| c.get("title").and_then(Value::as_str))
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut refs: Vec<(u8, super::printmep::SheetRef)> = job_sheet_refs(job)
+        .into_iter()
+        .filter_map(|r| super::panelsched::schedule_sheet_rank(&r.discipline, &r.kind, &title_of(&base(&r.number))).map(|k| (k, r)))
+        .collect();
+    refs.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.number.cmp(&b.1.number)));
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut pages: Vec<(String, cadaddy_doc::Drawing)> = refs
+        .iter()
+        .filter(|(_, r)| seen.insert(base(&r.number)))
+        .take(MAX_PANEL_SHEETS)
+        .map(|(_, sh)| (base(&sh.number), super::printmep::sheet_drawing(d, &super::printmep::SheetRef { view: None, ..sh.clone() })))
+        .collect();
+    let rank = |disc: &str, kind: &str, title: &str| super::panelsched::schedule_sheet_rank(disc, kind, title);
+    pages.extend(sheet_pages_ranked(job, &rank, true, MAX_PANEL_SHEETS, &seen));
+    pages
+}
+
+/// Most sheets read again with their raster images, looking for a schedule printed as one.
+const MAX_RASTER_SHEETS: usize = 8;
+/// A raster image this share of its sheet or more can be a table pasted as a picture.
+const RASTER_TABLE_SHARE: f64 = 0.02;
+
+/// No panel schedule read off the set: a job finding, never a silent zero. It names the sheets
+/// looked at, the devices whose circuit then has no panel, and the sheets where a raster image
+/// (a schedule pasted as a picture, no text to read) sits.
+fn no_panel_schedules(job: &mut GuidedJob, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) {
+    let on_circuits = job.devices.iter().filter(|d| !d.circuit.trim().is_empty()).count();
+    if pages.is_empty() && on_circuits == 0 {
+        return;
+    }
+    let numbers: Vec<&str> = pages.iter().map(|(n, _)| n.as_str()).collect();
+    let rasters = raster_sheets(job, &numbers);
+    result["panel_schedules_missing"] = json!({"sheets_searched": numbers, "devices_on_circuits": on_circuits,
+        "raster_sheets": rasters.iter().map(|(n, k)| json!({"sheet": n, "share": (k * 1000.0).round() / 1000.0})).collect::<Vec<_>>()});
+    let searched = if numbers.is_empty() {
+        "no sheet of the set is electrical or titled for panel schedules".to_string()
+    } else {
+        format!(
+            "{} sheets searched ({}{})",
+            numbers.len(),
+            numbers.iter().take(12).copied().collect::<Vec<_>>().join(", "),
+            if numbers.len() > 12 { ", …" } else { "" }
+        )
+    };
+    let raster = if rasters.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; raster images that may be schedules printed as pictures (no text to read): {}",
+            rasters.iter().map(|(n, k)| format!("{n} ({:.0}% of the sheet)", k * 100.0)).collect::<Vec<_>>().join(", ")
+        )
+    };
+    progress_line(&format!("  panel schedules: none read: {searched}{raster}"));
+    let mut actions = vec![
+        "Find the panel schedules in the set and check their sheet's number and discipline in the sheet index (printset.classify)".to_string(),
+        "Panels, breakers, circuits and home runs stay unbuilt until a schedule is read".to_string(),
+    ];
+    if !rasters.is_empty() {
+        actions.push("A schedule printed as an image needs OCR of that image, or its rows typed into a table on the sheet".into());
+    }
+    job.add_finding(
+        StageName::BimBuild,
+        &format!("No panel schedule read: {searched}; {on_circuits} devices name a circuit with no panel to put it on{raster}"),
+        "Panel schedules give each panel its breakers, each circuit its load and each device its breaker; without them no circuit or home run is routed and the load calculation is empty",
+        2,
+        actions,
+        None,
+        false,
+    );
+}
+
+/// The sheets (of `numbers`, the likeliest first) a raster image covers a good part of, read
+/// again with their images: each with the largest image's share of the sheet.
+fn raster_sheets(job: &GuidedJob, numbers: &[&str]) -> Vec<(String, f64)> {
+    let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else { return Vec::new() };
+    let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut out = Vec::new();
+    for n in numbers.iter().take(MAX_RASTER_SHEETS) {
+        let Some(c) = classified.iter().find(|c| c.get("number").and_then(Value::as_str).is_some_and(|x| x.trim().eq_ignore_ascii_case(n))) else {
+            continue;
+        };
+        let (Some(file), Some(page)) = (c.get("file").and_then(Value::as_str), c.get("page").and_then(Value::as_u64)) else { continue };
+        if !files.contains_key(file) {
+            let Ok(bytes) = crate::readfile::read(set_file_path(&job.pdfs_path, file)) else { continue };
+            files.insert(file.to_string(), bytes);
+        }
+        let Some(bytes) = files.get(file) else { continue };
+        let Ok((d, _)) = read_pdf(bytes, &json!({"page": page, "text": false, "images": true})) else { continue };
+        let sheet = d.extents(&cadaddy_doc::Space::Model);
+        let area = (sheet.max.x - sheet.min.x) * (sheet.max.y - sheet.min.y);
+        if !(area.is_finite() && area > 0.0) {
+            continue;
+        }
+        let largest = d
+            .model
+            .iter()
+            .filter_map(|e| match &e.kind {
+                cadaddy_doc::EntityKind::Image(i) => Some(i.u.len() * i.size.x * i.v.len() * i.size.y),
+                _ => None,
+            })
+            .filter(|a| a.is_finite())
+            .fold(0.0, f64::max);
+        if largest / area >= RASTER_TABLE_SHARE {
+            out.push(((*n).to_string(), (largest / area).min(1.0)));
+        }
+    }
+    out
+}
+
+/// The job's panel schedules read off its sheets ([`panel_pages`]), and the sheets looked at.
+pub(crate) fn job_panel_schedules(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> (Vec<cadaddy_walk3d::PanelSchedule>, Vec<String>) {
+    let pages = panel_pages(d, job);
+    (panel_schedules(&pages), pages.into_iter().map(|(n, _)| n).collect())
+}
+
 /// The panel schedules on the electrical sheets, each panel once (a panel named twice: the
 /// schedule with more breakers read).
 fn panel_schedules(pages: &[(String, cadaddy_doc::Drawing)]) -> Vec<cadaddy_walk3d::PanelSchedule> {
@@ -20548,6 +20689,20 @@ fn unimported_designations(job: &GuidedJob) -> BTreeMap<String, String> {
 /// The pages of a discipline's sheets that aren't plans (legends, schedules, diagrams: the job's
 /// drawing keeps the plans), each read again from its file, numbered sheets in sheet order.
 fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc::Drawing)> {
+    let rank = |d: &str, _: &str, _: &str| d.eq_ignore_ascii_case(discipline).then_some(0);
+    sheet_pages_ranked(job, &rank, false, MAX_LEGEND_SHEETS, &BTreeSet::new())
+}
+
+/// The set's sheets `rank` keeps (by discipline, type and title; lower ranks first, then by
+/// number), read again from the PDFs: those that aren't plans (`plans`: plans too), at most
+/// `cap`, none of `skip`.
+fn sheet_pages_ranked(
+    job: &GuidedJob,
+    rank: &dyn Fn(&str, &str, &str) -> Option<u8>,
+    plans: bool,
+    cap: usize,
+    skip: &BTreeSet<String>,
+) -> Vec<(String, cadaddy_doc::Drawing)> {
     let mut out = Vec::new();
     let Some(read_pdf) = super::file::io().and_then(|h| h.read_pdf) else {
         progress_line("  the sheets' legends and schedules: no PDF reader in this build");
@@ -20556,19 +20711,22 @@ fn non_plan_pages(job: &GuidedJob, discipline: &str) -> Vec<(String, cadaddy_doc
     let classified: Vec<Value> = job.sheets.as_ref().and_then(|v| v.get("sheets")).and_then(Value::as_array).cloned().unwrap_or_default();
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     // The numbered ones (a page known only by its file isn't a sheet of the set), in sheet order.
-    let mut sheets: Vec<(String, &Value)> = classified
+    let mut sheets: Vec<(u8, String, &Value)> = classified
         .iter()
         .filter_map(|c| {
             let text = |k: &str| c.get(k).and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
             let kind = if text("type").is_empty() { text("sheet_type") } else { text("type") };
             let number = c.get("number").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            (text("discipline").eq_ignore_ascii_case(discipline) && !kind.contains("plan") && cadaddy_mepfix::sheet_facts::is_sheet_number(&number))
-                .then_some((number, c))
+            if (kind.contains("plan") && !plans) || !cadaddy_mepfix::sheet_facts::is_sheet_number(&number) || skip.contains(&number) {
+                return None;
+            }
+            let title = c.get("title").and_then(Value::as_str).unwrap_or("");
+            rank(&text("discipline"), &kind, title).map(|k| (k, number, c))
         })
         .collect();
-    sheets.sort_by(|a, b| a.0.cmp(&b.0));
+    sheets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
     let mut missed: Vec<String> = Vec::new();
-    for (number, c) in sheets.into_iter().take(MAX_LEGEND_SHEETS) {
+    for (_, number, c) in sheets.into_iter().take(cap) {
         // Its current copy's file and page (`printset.sheets`).
         if c.get("file").and_then(Value::as_str).is_none() || c.get("page").and_then(Value::as_u64).is_none() {
             continue;
@@ -25041,6 +25199,34 @@ mod ckpt_tests {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn no_panel_schedule_read_is_a_finding_and_gear_read_says_where_it_looked() {
+        use super::*;
+        let mut s = Session::new();
+        s.open_drawing(cadaddy_doc::Drawing::default(), "Sample Building", None);
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [
+            {"number": "E-501", "discipline": "E", "type": "schedule", "title": "PANEL SCHEDULES", "file": "sample.pdf", "page": 9},
+            {"number": "A-101", "discipline": "A", "type": "plan", "title": "FLOOR PLAN", "file": "sample.pdf", "page": 1}
+        ]}));
+        save_job(&mut s, &job).unwrap();
+        // gear.read reads the job's sheets: what it found and where it looked, never an unwired
+        // path reported as "0 tables".
+        let g = s.execute("gear.read", &json!({})).unwrap();
+        assert_eq!((g["tables_found"].as_u64(), g["source"].as_str()), (Some(0), Some("the job's sheets")), "{g}");
+        assert!(!g.to_string().contains("integration pending"), "{g}");
+        assert!(g["warnings"][0].as_str().is_some_and(|w| w.contains("none read")), "{g}");
+        // No schedule read while devices name circuits: a job finding.
+        let mut result = json!({});
+        no_panel_schedules(&mut job, &[], &mut result);
+        assert!(job.findings.is_empty(), "nothing electrical: no finding");
+        job.devices.push(super::super::readers::ReadDevice { tag: "a".into(), circuit: "L1-3".into(), ..Default::default() });
+        no_panel_schedules(&mut job, &[], &mut result);
+        let f = job.findings.iter().find(|f| f.description.starts_with("No panel schedule read")).unwrap_or_else(|| panic!("{:#?}", job.findings));
+        assert!(f.description.contains("1 devices name a circuit"), "{}", f.description);
+        assert_eq!(result["panel_schedules_missing"]["devices_on_circuits"], 1, "{result}");
+    }
 
     #[test]
     fn the_documents_key_count_is_read_and_gates_the_guest_rooms() {
