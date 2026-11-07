@@ -2287,7 +2287,7 @@ mod classify_tests {
 
     #[test]
     fn a_sheet_also_printing_the_floor_plan_is_a_plan_not_a_ceiling_plan() {
-        assert_eq!(classify_sheet_type("A220", "DIMENSIONED FLOOR PLAN, ROOF PLAN, & RCP"), "plan");
+        assert_eq!(classify_sheet_type("A-301", "SECOND FLOOR PLAN, ROOF PLAN AND RCP"), "plan");
         assert_eq!(classify_sheet_type("A221", "FIRST FLOOR REFLECTED CEILING PLAN"), "rcp", "a floor's ceiling plan isn't a floor plan");
         assert_eq!(classify_sheet_type("A222", "RCP"), "rcp");
         assert_eq!(classify_sheet_type("A223", "REFLECTED CEILING PLAN"), "rcp");
