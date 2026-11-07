@@ -1867,7 +1867,10 @@ impl Scores {
             self.pairs_by_trade.entry(trade).or_default().add(&verdict, 1);
             self.pairs_by_rule.entry(rule).or_default().add(&verdict, 1);
         }
-        for (r, x) in &a.pairs {
+        // The pairs asked, by the one table over the packet when it is read (an area reported
+        // before Q6263 kept the count its packet asked then), else as counted at report time.
+        let recount = packet.map(|pk| area_coverage(&a.findings, &pk.expected(&a.rules, all), Some(pk), all));
+        for (r, x) in recount.as_ref().unwrap_or(&a.pairs) {
             let e = self.asked.entry(r.clone()).or_default();
             e[0] = e[0].saturating_add(x[0]);
             e[1] = e[1].saturating_add(x[1]);
@@ -2490,9 +2493,9 @@ mod tests {
     fn packet_json() -> Value {
         json!({
             "elements": [
-                {"handle": "A1", "kind": "receptacle", "category": "IfcOutlet", "mark": "REC", "source": {"print": {"sheet": "E-1", "at": [10.0, 20.0]}}},
+                {"handle": "A1", "kind": "receptacle", "category": "IfcOutlet", "mark": "REC", "source": {"print": {"sheet": "E-101", "at": [10.0, 20.0]}}},
                 {"handle": "B2", "kind": "conduit_fitting", "category": "IfcCableCarrierFitting", "source": {"print": {"sheet": "circuit 1: EMT", "at": null}}},
-                {"handle": "C3", "kind": "junction_box", "category": "IfcJunctionBox", "mark": "J", "source": {"print": {"sheet": "E-1", "at": [4.0, 5.0]}}},
+                {"handle": "C3", "kind": "junction_box", "category": "IfcJunctionBox", "mark": "J", "source": {"print": {"sheet": "E-101", "at": [4.0, 5.0]}}},
                 {"handle": "D4", "kind": "conduit", "category": "IfcCableCarrierSegment", "source": {"built_from": "A1"}},
             ],
             "walls": [{"handle": "W1"}],
@@ -2556,6 +2559,7 @@ mod tests {
                 pair("G-COVERAGE", "B2", "fail", 6),
                 pair("G-KEYNOTE", "D4", "pass", 7),
             ],
+            rules: vec!["G-PLACE".into(), "G-KEYNOTE".into()],
             ..RunArea::default()
         };
         let mut sc = Scores::default();
@@ -2566,6 +2570,11 @@ mod tests {
         assert_eq!(acc["subject_free"]["pairs"], 3, "{acc}");
         assert_eq!(acc["subject_free"]["by_rule"]["G-VE-COST"], 1, "{acc}");
         assert_eq!(acc["packets_read"], 1, "{acc}");
+        // The pairs asked are recounted by the same table: G-PLACE of all four elements,
+        // G-KEYNOTE of the receptacle, the drawn box and the named stick; judged G-PLACE A1, B2
+        // and G-KEYNOTE D4.
+        assert_eq!(acc["pairs_asked"], 7, "{acc}");
+        assert_eq!(acc["coverage"], json!(r3(3.0 / 7.0)), "{acc}");
         // An area whose packet can't be read keeps every pair.
         let mut sc = Scores::default();
         sc.add(&area, None, &all);

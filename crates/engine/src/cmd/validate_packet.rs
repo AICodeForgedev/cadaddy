@@ -1406,6 +1406,31 @@ impl<'a> Membership<'a> {
     }
 }
 
+/// The room of one of the area's own elements at `at` and what said it (Q6263): the area's when
+/// the point is inside its outline (`outline`) or, for a room's area, within [`EDGE_FT`] of it and
+/// in no other room (`wall_line`: [`Membership::whose`] made it the area's; with how far outside
+/// the outline it is, feet), else the element's own record (`record`).
+fn own_room(area: &Area, at: [f64; 2], record: Option<String>) -> (Option<String>, Value) {
+    let label = area.number.clone().or_else(|| area.name.clone());
+    match (label, point_in(&area.outline, at), area.room.is_some()) {
+        (Some(r), true, _) => (Some(r), json!("outline")),
+        (Some(r), false, true) => {
+            let off = area
+                .outline
+                .iter()
+                .zip(area.outline.iter().cycle().skip(1))
+                .take(MAX_EDGES)
+                .map(|(x, y)| seg_dist(at, *x, *y).0)
+                .fold(f64::INFINITY, f64::min);
+            (Some(r), json!({"wall_line": true, "outside_outline_ft": if off.is_finite() { json!(r2(off)) } else { Value::Null }}))
+        }
+        _ => match record {
+            Some(r) => (Some(r), json!("record")),
+            None => (None, Value::Null),
+        },
+    }
+}
+
 /// An element beside the area, for `objects.json` `nearby`.
 fn nearby_json(handle: &str, r: &Resolved, mark: Option<&str>, at: [f64; 2], whose: &Whose) -> Value {
     let (area, room) = match whose {
@@ -1590,8 +1615,7 @@ fn in_area(
         } else {
             None
         };
-        let room = if point_in(&area.outline, e.at) { area.number.clone().or_else(|| area.name.clone()) } else { None }
-            .or_else(|| field(&props, &e.fields, &["room", "room_number"]));
+        let (room, room_by) = own_room(area, e.at, field(&props, &e.fields, &["room", "room_number"]));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&e.id))).map(fail_json).collect();
         elements.push(json!({
@@ -1606,6 +1630,7 @@ fn in_area(
             "name": field(&props, &e.fields, &["name", "description"]),
             "level": e.level,
             "room": room,
+            "room_by": room_by,
             "at_ft": pt(e.at),
             "height_aff_in": e.z_in.map(r2),
             "mounting": mounting,
@@ -1624,9 +1649,13 @@ fn in_area(
     }
     // What the build made for the MEP trades: on the element it was built from, else listed.
     let mut built_listed = 0usize;
+    // A built part made from one of the plan's elements is that element's (its `built_as`); one
+    // made from another built part (a box built for a built device) is listed itself, whatever
+    // order the kinds sort in (Q6263).
+    let plan_listed = elements.len();
     for b in built.iter().filter(|b| intersect(b.rect, reach).is_some() || inside(reach, [b.rect[0], b.rect[1]])) {
         if let Some(from) = &b.from
-            && let Some(el) = elements.iter_mut().find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
+            && let Some(el) = elements.iter_mut().take(plan_listed).find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
         {
             if let Some(list) = el.get_mut("built_as").and_then(Value::as_array_mut) {
                 list.push(json!(b.handle));
@@ -1676,6 +1705,7 @@ fn in_area(
         products.push((b.kind.clone(), mark.clone(), sub.clone()));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
+        let (room, room_by) = own_room(area, c, field(&props, &none, &["room"]));
         elements.push(json!({
             "handle": b.handle,
             "kind": b.kind,
@@ -1687,7 +1717,8 @@ fn in_area(
             "mark": mark,
             "name": field(&props, &none, &["name", "description"]),
             "level": area.level,
-            "room": if point_in(&area.outline, c) { area.number.clone().or_else(|| area.name.clone()) } else { field(&props, &none, &["room"]) },
+            "room": room,
+            "room_by": room_by,
             "at_ft": pt(c),
             "plan_box_ft": rect_json(b.rect),
             "height_aff_in": b.z_in.map(|z| z[0]),

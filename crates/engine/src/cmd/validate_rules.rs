@@ -171,9 +171,17 @@ impl Subject {
     pub fn of_json(o: &Value, element: bool, named: &HashMap<String, BTreeSet<String>>) -> Subject {
         let s = |k: &str| o.get(k).and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
         let handle = s("handle").map(|h| h.to_ascii_uppercase()).unwrap_or_default();
+        let category = s("category");
+        // A packet written before raceway pieces had kinds of their own lists every piece as
+        // `conduit`: its IFC class says which piece it is.
+        let kind = s("kind").unwrap_or_default();
+        let kind = match category.as_deref().filter(|_| kind.eq_ignore_ascii_case("conduit")).and_then(|c| validate_kinds::piece_kind(c, "")) {
+            Some(k) => k.to_string(),
+            None => kind,
+        };
         Subject {
-            kind: s("kind").unwrap_or_default(),
-            category: s("category"),
+            kind,
+            category,
             mark: s("mark"),
             element,
             drawn: o.pointer("/source/print/at").is_some_and(Value::is_array),
@@ -939,8 +947,8 @@ mod tests {
             assert!(!product(k), "{k} is no product G-PRODUCT checks");
         }
         let set = |ids: &[&'static str]| -> BTreeSet<&'static str> { ids.iter().copied().collect() };
-        // A plumbing fixture: its own rule, and its host wall (Q6263: a wall-hung fixture).
-        assert_eq!(got("plumbing_fixture"), set(&["G-HOST", "P-FIXTURE"]));
+        // A plumbing fixture: its own rule (its place is P-FIXTURE's: its point is no wall-face item).
+        assert_eq!(got("plumbing_fixture"), set(&["P-FIXTURE"]));
         assert!(!got("light_fixture").contains("P-FIXTURE"), "a light fixture is no plumbing fixture");
         for k in ["return_grille", "exhaust_grille", "diffuser", "supply_diffuser"] {
             assert_eq!(got(k), set(&["M-TERMINAL"]), "{k}");
@@ -950,10 +958,10 @@ mod tests {
         assert_eq!(got("horn_strobe"), set(&["G-HOST", "E-FA"]));
         assert_eq!(got("smoke_detector"), set(&["G-HOST", "E-FA"]));
         // Through-wall units: present, in an exterior wall.
-        assert_eq!(got("ptac"), set(&["G-HOST", "M-PTAC", "E-CIRCUIT"]));
-        assert_eq!(got("through_wall_unit"), set(&["G-HOST", "M-PTAC", "E-CIRCUIT"]));
+        assert_eq!(got("ptac"), set(&["G-HOST", "M-PTAC"]));
+        assert_eq!(got("through_wall_unit"), set(&["G-HOST", "M-PTAC"]));
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
-        assert_eq!(got("exhaust_fan"), set(&["M-EF", "E-CIRCUIT"]));
+        assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
         assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN", "E-EQUIP-ELEC"]));
         // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
         // one's drivers and the room's count (Q6145).
@@ -1062,11 +1070,17 @@ mod tests {
             assert!(asks("E-CONDUIT-CONTINUITY", k) && asks("E-TAKEOFF", k), "{k}");
         }
         // The kinds round 3 found refused.
-        assert!(asks("E-CIRCUIT", "occupancy_sensor") && asks("E-CIRCUIT", "exhaust_fan") && asks("E-CIRCUIT", "wire"));
+        assert!(asks("E-CIRCUIT", "occupancy_sensor") && asks("E-CIRCUIT", "wire"));
+        // A fan's or a PTAC's circuit is judged on its equipment connection: E-CIRCUIT naming
+        // them would make them electrical (an element takes the trade of the first trade rule for it).
+        assert!(!asks("E-CIRCUIT", "exhaust_fan") && !asks("E-CIRCUIT", "ptac") && asks("E-CIRCUIT", "equipment_connection"));
+        assert_eq!(super::super::validate_packet::trade_of_kind("exhaust_fan", &effective(&ProjectRules::default()).unwrap().0), "mechanical");
+        assert_eq!(super::super::validate_packet::trade_of_kind("ptac", &effective(&ProjectRules::default()).unwrap().0), "mechanical");
         assert!(asks("E-FA", "fa_control_module") && asks("E-FA", "door_holder"));
-        for k in ["wall_luminaire", "ptac", "plumbing_fixture"] {
+        for k in ["wall_luminaire", "ptac"] {
             assert!(asks("G-HOST", k), "{k}");
         }
+        assert!(!asks("G-HOST", "plumbing_fixture"), "a fixture's point is not on its wall's face");
         assert!(!asks("G-HOST", "junction_box") && rule("G-HOST").asks(&subject("junction_box", true, &[])), "a box a print draws");
         // A wall or an opening gets no rule for every element.
         assert!(!rule("G-KEYNOTE").asks(&Subject { kind: "wall".into(), ..Subject::default() }));
@@ -1078,12 +1092,16 @@ mod tests {
         let n = named_by(f.iter());
         assert_eq!(n.get("1A").map(|s| s.len()), Some(2));
         assert!(n.get("2B").is_some_and(|s| s.contains("E-TAKEOFF")) && !n.contains_key("3C"));
-        let o =
-            json!({"handle": "1a", "kind": "conduit", "category": "IfcCableCarrierSegment", "source": {"print": {"sheet": "E-1", "at": [1.0, 2.0]}}});
+        let o = json!({"handle": "1a", "kind": "conduit", "category": "IfcCableCarrierSegment", "source": {"print": {"sheet": "E-101", "at": [1.0, 2.0]}}});
         let s = Subject::of_json(&o, true, &n);
         assert!(s.drawn && s.element && s.named.contains("G-KEYNOTE") && s.kind == "conduit");
         let o = json!({"handle": "2b", "kind": "wire", "source": {"print": {"sheet": "circuit 1: EMT", "at": null}}});
         assert!(!Subject::of_json(&o, true, &n).drawn);
+        // An older packet's lumped `conduit` is read by its class.
+        for (class, kind) in [("IfcCableCarrierFitting", "conduit_fitting"), ("IfcCableSegment", "wire"), ("IfcJunctionBox", "junction_box")] {
+            let o = json!({"handle": "4d", "kind": "conduit", "category": class});
+            assert_eq!(Subject::of_json(&o, true, &n).kind, kind);
+        }
     }
 
     #[test]
