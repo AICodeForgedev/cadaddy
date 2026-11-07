@@ -36,10 +36,10 @@ const MAX_TABLES: usize = 200;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("mep.qty", "MEP Quantities", run_qty).params(
+        CommandSpec::new("mep.qty", "MEP Quantities", run_qty).long().params(
             "{level?: name, system?: name, group_by?: \"level_system\" (default) | \"system\" | \"level\" | \"none\", gauges?: [{max_in, gauge, lb_per_sqft}] (rectangular by the longer side, round by the diameter), round_gauges?: [...], allowance_pct?: percent added to duct area and weight for seams (0), hanger_spacing_ft?: {duct?, round_duct?, pipe?, conduit?}, file?: path (.csv/.xlsx; an existing file only with force: true), format?: csv|xlsx, force?: bool, table?: {at: [x,y], part?: all|ducts|pipes|fittings|terminals|equipment|hangers|lug_kits|labels|grounding|concrete} (a linked table model.build refreshes)} → {ducts: [{level, system, shape, size, gauge, length_ft, area_sqft, weight_lb, runs}], pipes: [{level, system, kind, size, length_ft, runs}], fittings: [{level, system, type, size, count}], terminals: [{level, system, kind, size, count}], equipment: [{tag, kind, level, systems, size, title}], hangers: [{level, system, kind, size, spacing_ft, count, rod_ft}], lug_kits: [{gear, point, lugs, lug, bolts, bolt, nuts, flat_washers, belleville_washers}] (lugs ordered separately from their gear: required items), labor_conditions: [{gear, conditions, factor}], labels: [{item, unit, qty, note}] (what the labels need: labels.bom), grounding: [{item, unit, qty, note}] (grounding.takeoff), concrete: [{category, level, element, item, size, quantity, unit}] (pads, bases, encasement: Concrete when ours, Concrete, by others (owner) otherwise), totals, rows, csv, path?, table?}",
         ),
-        CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).params("{} → {tables}: rebuild every linked takeoff table from the model now"),
+        CommandSpec::new("mep.qty.refresh", "Refresh MEP Quantities", run_refresh).long().params("{} → {tables}: rebuild every linked takeoff table from the model now"),
     ]
 }
 

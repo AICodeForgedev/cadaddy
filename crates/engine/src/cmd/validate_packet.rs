@@ -159,7 +159,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CMD_AREAS, "Validation Areas", run_areas)
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
-        CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
+        CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet).long()
             .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered|keynote|gear (a gear_riser, panel_schedule or feeder_schedule sheet shown whole for the gear in the area), unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true, registration?: {status: ok|refitted|misregistered|not_checked, residual_ft, rotation_deg, scale, shift_ft, fit_ft, coverage, coverage_before, walls_ft, lines, threshold_ft, why?, read?} (a placed crop's registration against the model's walls: refitted crops are placed again from the sheet's wall lines)}], registration: {about, threshold_ft (1, project rule validate.registration.residual_ft), threshold_from, counts, by_residual: [{file, sheet, view?, status, residual_ft}] (worst first)}, similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
@@ -870,14 +870,34 @@ fn turn_deg(rad: f64) -> f64 {
     if d >= 360.0 || !d.is_finite() { 0.0 } else { r2(d) }
 }
 
-/// How a crop reads against the plan, in words, when it is turned or mirrored.
+/// A layout fit matched by fewer of the type's items than this is no certain turn.
+const MIN_FIT_ITEMS: u64 = 3;
+
+/// Why a crop's turn and mirror against the room are not certain: no turn known (only the
+/// unit's hand), or a layout fit that matched too few items. None when they are.
+fn turn_doubt(o: &Value) -> Option<String> {
+    if o.get("rotation_deg").is_none_or(Value::is_null) {
+        return Some(if o.get("mirrored").and_then(Value::as_bool).unwrap_or(false) {
+            "only the unit's hand says it is mirrored; its turn is not known".into()
+        } else {
+            "its turn against the room is not known".into()
+        });
+    }
+    let n = o.get("matched").and_then(Value::as_u64)?;
+    (n < MIN_FIT_ITEMS).then(|| format!("its turn was fitted by {n} of {} items only", o.get("of").and_then(Value::as_u64).unwrap_or(0)))
+}
+
+/// How a crop reads against the plan, in words, when it is turned or mirrored; a turn that is
+/// not certain says so (positions read off it are unsure).
 fn turn_words(o: &Value) -> Option<String> {
     let deg = o.get("rotation_deg").and_then(Value::as_f64);
     let mirrored = o.get("mirrored").and_then(Value::as_bool).unwrap_or(false);
     let turned = deg.filter(|d| d.abs() > 0.05 && (d - 360.0).abs() > 0.05);
+    if let Some(why) = turn_doubt(o) {
+        return Some(format!("{why}: match it to the room by the walls and doors; a position read off it is unsure"));
+    }
     match (turned, mirrored) {
-        (None, false) if deg.is_some() => None,
-        (None, false) => Some("its turn against the room is not known: match it by the walls and doors".into()),
+        (None, false) => None,
         (Some(d), false) => Some(format!("drawn turned {d}° from the room as the plan shows it")),
         (None, true) => Some("drawn mirrored (the room is the opposite hand)".into()),
         (Some(d), true) => Some(format!("drawn mirrored and turned {d}° from the room as the plan shows it")),
@@ -1406,6 +1426,31 @@ impl<'a> Membership<'a> {
     }
 }
 
+/// The room of one of the area's own elements at `at` and what said it (Q6263): the area's when
+/// the point is inside its outline (`outline`) or, for a room's area, within [`EDGE_FT`] of it and
+/// in no other room (`wall_line`: [`Membership::whose`] made it the area's; with how far outside
+/// the outline it is, feet), else the element's own record (`record`).
+fn own_room(area: &Area, at: [f64; 2], record: Option<String>) -> (Option<String>, Value) {
+    let label = area.number.clone().or_else(|| area.name.clone());
+    match (label, point_in(&area.outline, at), area.room.is_some()) {
+        (Some(r), true, _) => (Some(r), json!("outline")),
+        (Some(r), false, true) => {
+            let off = area
+                .outline
+                .iter()
+                .zip(area.outline.iter().cycle().skip(1))
+                .take(MAX_EDGES)
+                .map(|(x, y)| seg_dist(at, *x, *y).0)
+                .fold(f64::INFINITY, f64::min);
+            (Some(r), json!({"wall_line": true, "outside_outline_ft": if off.is_finite() { json!(r2(off)) } else { Value::Null }}))
+        }
+        _ => match record {
+            Some(r) => (Some(r), json!("record")),
+            None => (None, Value::Null),
+        },
+    }
+}
+
 /// An element beside the area, for `objects.json` `nearby`.
 fn nearby_json(handle: &str, r: &Resolved, mark: Option<&str>, at: [f64; 2], whose: &Whose) -> Value {
     let (area, room) = match whose {
@@ -1590,8 +1635,7 @@ fn in_area(
         } else {
             None
         };
-        let room = if point_in(&area.outline, e.at) { area.number.clone().or_else(|| area.name.clone()) } else { None }
-            .or_else(|| field(&props, &e.fields, &["room", "room_number"]));
+        let (room, room_by) = own_room(area, e.at, field(&props, &e.fields, &["room", "room_number"]));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&e.id))).map(fail_json).collect();
         elements.push(json!({
@@ -1606,6 +1650,7 @@ fn in_area(
             "name": field(&props, &e.fields, &["name", "description"]),
             "level": e.level,
             "room": room,
+            "room_by": room_by,
             "at_ft": pt(e.at),
             "height_aff_in": e.z_in.map(r2),
             "mounting": mounting,
@@ -1624,9 +1669,13 @@ fn in_area(
     }
     // What the build made for the MEP trades: on the element it was built from, else listed.
     let mut built_listed = 0usize;
+    // A built part made from one of the plan's elements is that element's (its `built_as`); one
+    // made from another built part (a box built for a built device) is listed itself, whatever
+    // order the kinds sort in (Q6263).
+    let plan_listed = elements.len();
     for b in built.iter().filter(|b| intersect(b.rect, reach).is_some() || inside(reach, [b.rect[0], b.rect[1]])) {
         if let Some(from) = &b.from
-            && let Some(el) = elements.iter_mut().find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
+            && let Some(el) = elements.iter_mut().take(plan_listed).find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
         {
             if let Some(list) = el.get_mut("built_as").and_then(Value::as_array_mut) {
                 list.push(json!(b.handle));
@@ -1676,6 +1725,7 @@ fn in_area(
         products.push((b.kind.clone(), mark.clone(), sub.clone()));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
+        let (room, room_by) = own_room(area, c, field(&props, &none, &["room"]));
         elements.push(json!({
             "handle": b.handle,
             "kind": b.kind,
@@ -1687,7 +1737,8 @@ fn in_area(
             "mark": mark,
             "name": field(&props, &none, &["name", "description"]),
             "level": area.level,
-            "room": if point_in(&area.outline, c) { area.number.clone().or_else(|| area.name.clone()) } else { field(&props, &none, &["room"]) },
+            "room": room,
+            "room_by": room_by,
             "at_ft": pt(c),
             "plan_box_ft": rect_json(b.rect),
             "height_aff_in": b.z_in.map(|z| z[0]),
@@ -1831,6 +1882,34 @@ fn rules_for<'a>(here: &InArea, all: &'a [Effective]) -> (Vec<&'a Effective>, Ve
     (on, off)
 }
 
+/// Write each element's and run's `rules` in `objects` (the rules of `rules` that ask about it,
+/// [`vr::Rule::asks`], with the prescreen's findings naming it) and count the pairs per rule.
+pub(crate) fn ask_rules(objects: &mut Value, rules: &[&Effective]) -> BTreeMap<String, usize> {
+    let named = vr::named_by(objects.pointer("/prescreen/findings").and_then(Value::as_array).into_iter().flatten());
+    let mut asked: BTreeMap<String, usize> = rules.iter().map(|r| (r.rule.id.clone(), 0)).collect();
+    for k in ["elements", "runs"] {
+        let Some(list) = objects.get_mut(k).and_then(Value::as_array_mut) else { continue };
+        for e in list.iter_mut() {
+            let subject = vr::Subject::of_json(e, true, &named);
+            let ids: Vec<&str> = rules.iter().filter(|r| r.rule.asks(&subject)).map(|r| r.rule.id.as_str()).collect();
+            for id in &ids {
+                if let Some(n) = asked.get_mut(*id) {
+                    *n += 1;
+                }
+            }
+            e["rules"] = json!(ids);
+        }
+    }
+    asked
+}
+
+/// Does a packet keep a rule: any rule but one asked only where its prescreen names an element
+/// (`only_if` over every kind) that asks about none here.
+fn vr_keeps(r: &Effective, asked: &BTreeMap<String, usize>) -> bool {
+    let everywhere = r.rule.applies_to.only_if.as_ref().is_some_and(|o| o.kinds.iter().any(|k| k == "*"));
+    !everywhere || asked.get(&r.rule.id).is_some_and(|n| *n > 0)
+}
+
 /// The kind of document a crop is, as the rules name the documents they need (a gear's panel
 /// schedule is a schedule, a keynote list notes, a unit type's wall a room's interior elevation).
 fn doc_kind(kind: &str) -> &str {
@@ -1891,6 +1970,7 @@ fn prompt_md(
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
+    s.push_str("- `objects.json` elements and runs: each one's `rules` are the rules asked of it; report only those pairs (a rule for every element asks about a raceway piece only where a print draws it or a marker names it, a value-engineering rule only where an option does; `rules.json` `pairs_asked` counts them).\n");
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
@@ -2866,6 +2946,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }
@@ -2876,7 +2957,12 @@ fn plan_crops(
                 break;
             }
             let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
-            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || (!source.is_empty() && l.number.eq_ignore_ascii_case(&source))) {
+            // A view of the type's own sheet is the type's when its title names the type, or the
+            // sheet has no titled views: another titled view there (a core area's, a corridor's)
+            // is not the room's.
+            let titled = l.view.as_ref().is_some_and(|v| !v.title.trim().is_empty());
+            let its_sheet = !titled && !source.is_empty() && l.number.eq_ignore_ascii_case(&source);
+            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || its_sheet) {
                 continue;
             }
             let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
@@ -2914,6 +3000,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }
@@ -3917,9 +4004,19 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         rules_off.extend(rules_on.iter().filter(|r| !only.contains(&r.rule.id)).map(|r| r.rule.id.clone()));
         rules_on.retain(|r| only.contains(&r.rule.id));
     }
+    // Each element's and run's `rules` (Q6263): the element × rule pairs this packet asks the
+    // judge for, by the one applicability table (`Rule::asks`) the report and the status use. A
+    // rule asked of no element only where its prescreen names one (value engineering with no
+    // option here) is left out of the packet.
+    let mut asked = ask_rules(&mut here.objects, &rules_on);
+    let not_asked: Vec<String> = rules_on.iter().filter(|r| !vr_keeps(r, &asked)).map(|r| r.rule.id.clone()).collect();
+    rules_on.retain(|r| vr_keeps(r, &asked));
+    asked.retain(|id, _| !not_asked.contains(id));
     let rules_json = json!({
         "area": area.id,
         "kinds": here.kinds.iter().collect::<Vec<_>>(),
+        "pairs_asked": asked,
+        "not_asked": not_asked,
         "rules": rules_on.iter().map(|r| r.to_json(true)).collect::<Vec<_>>(),
         "disabled": rules_off,
         "rejected_overrides": rejected.iter().map(|r| json!({"key": r.key, "value": r.value, "why": r.why})).collect::<Vec<_>>(),

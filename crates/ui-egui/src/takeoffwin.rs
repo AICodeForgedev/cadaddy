@@ -15,14 +15,25 @@ const ROW_H: f32 = 20.0;
 /// The widest a column is drawn, points.
 const COL_MAX: f32 = 260.0;
 
-/// TAKEOFF from the ribbon: runs the takeoff and shows its table.
+/// TAKEOFF from the ribbon: runs the takeoff (off the UI thread: a whole model's takeoff takes
+/// a while, Q6269) and shows its table when it ends.
 pub fn run(app: &mut CadApp) -> Result<Value, String> {
-    let r = app.run(COMMAND, json!({}));
-    if let Ok(v) = &r {
-        app.takeoff_table = Some(v.clone());
+    let done: std::rc::Rc<std::cell::RefCell<Option<Result<Value, String>>>> = std::rc::Rc::default();
+    let out = std::rc::Rc::clone(&done);
+    app.run_background(COMMAND, json!({}), move |app, r| {
+        match &r {
+            Ok(v) => app.takeoff_table = Some(v.clone()),
+            Err(e) => app.set_status(e.clone()),
+        }
+        app.ui.dialog = Some(DIALOG.into());
+        *out.borrow_mut() = Some(r);
+    });
+    let finished = done.borrow_mut().take();
+    match finished {
+        Some(r) => r.map(|v| json!({"source": v["source"], "rows": v["total_rows"], "dialog": DIALOG})),
+        // Still running: the window opens with the table when it ends.
+        None => Ok(json!({"running": COMMAND, "background": true, "dialog": DIALOG})),
     }
-    app.ui.dialog = Some(DIALOG.into());
-    r.map(|v| json!({"source": v["source"], "rows": v["total_rows"], "dialog": DIALOG}))
 }
 
 fn format_id() -> egui::Id {
@@ -133,11 +144,10 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     });
     ctx.data_mut(|d| d.insert_temp(format_id(), format.clone()));
     if refresh {
-        let r = app.run(COMMAND, json!({}));
-        match r {
+        app.run_background(COMMAND, json!({}), |app, r| match r {
             Ok(v) => app.takeoff_table = Some(v),
             Err(e) => app.set_status(e),
-        }
+        });
     }
     if save {
         export(app, &format);

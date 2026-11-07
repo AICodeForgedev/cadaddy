@@ -882,3 +882,82 @@ fn a_device_its_documents_mount_low_in_a_wall_is_measured() {
     assert!(of(&fs, "G-HEIGHT", &bare).is_none(), "no document height: a floor item's: {r}");
     assert!(of(&fs, "G-HEIGHT", &assumed).is_none(), "an assumed height: a floor item's: {r}");
 }
+
+/// Q6262: a record that cites `4'-0" AFF TO TOP` but holds a number the job turned to the
+/// device's middle (45.75) is read by its words: 48" to its top, compared at the top of the
+/// switch's built part. Before, the prescreen echoed 45.75 and compared the plan element's middle.
+#[test]
+fn a_height_to_the_top_is_read_as_written_and_compared_at_the_built_parts_top() {
+    use cadaddy_engine::doc::props::{self, Prop, Source, SourceKind};
+    let j = job();
+    let (mut s, _twin) = built_device(j.s, &j.switch, [14.5, 6.0], true, 44.0);
+    let h = cadaddy_engine::doc::Handle::parse_hex(&j.switch).unwrap();
+    assert!(s.doc_mut().unwrap().model.modify(h, |e| {
+        let mut store = props::read(&e.common.xdata);
+        let src = Source::from_doc(SourceKind::Note, "E-1 general note: TOGGLE SWITCH 4'-0\" AFF TO TOP");
+        store.set("mount_height", Prop::new(45.75, src.clone()).with_unit("in"));
+        store.set("mount_datum", Prop::new("top", src));
+        e.common.xdata = props::write(&e.common.xdata, &store).into();
+    }));
+    let (r, fs) = heights(&mut s);
+    let sw = of(&fs, "G-HEIGHT", &j.switch).unwrap_or_else(|| panic!("{r}"));
+    assert!((sw["measured"]["expected_in"].as_f64().unwrap() - 48.0).abs() < 1e-6, "48\" as written, not 45.75: {sw}");
+    assert_eq!(sw["measured"]["to"], "top", "{sw}");
+    assert!((sw["measured"]["aff_in"].as_f64().unwrap() - 48.0).abs() < 0.05, "the built part's top: {sw}");
+    assert_eq!(sw["verdict"], "pass", "{sw}");
+    assert!(sw["measured"].get("compared_at").is_none(), "{sw}");
+}
+
+/// Q6262: a plan AFF note about as near a switch as a receptacle beside it says nothing certain
+/// of either: it ties to neither (before, it went to whichever was a hair nearer). A note clearly
+/// beside one still ties to it.
+#[test]
+fn an_aff_note_between_two_kinds_of_device_ties_to_neither() {
+    let (mut j, more) = job_with(&[[14.5, 4.5]]);
+    let rec = more[0].clone();
+    let p = at([14.5, 5.25]);
+    layer(&mut j.s, "E-ANNO");
+    text(&mut j.s, [p[0] + 1.0, p[1]], "+48\" AFF");
+    let (r, fs) = heights(&mut j.s);
+    let tied = |h: &str| of(&fs, "G-HEIGHT", h).is_some_and(|f| f["measured"]["expected_source"]["text"] == "+48\" AFF");
+    assert!(!tied(&j.switch) && !tied(&rec), "an ambiguous note tied to a device: {r}");
+    // Clearly beside the switch (a sixth of the distance to the receptacle): the switch's.
+    let (mut j, more) = job_with(&[[14.5, 4.5]]);
+    let rec = more[0].clone();
+    let q = at([14.5, 6.0]);
+    layer(&mut j.s, "E-ANNO");
+    text(&mut j.s, [q[0] + 3.0, q[1]], "+48\" AFF");
+    let (r, fs) = heights(&mut j.s);
+    let tied = |h: &str| of(&fs, "G-HEIGHT", h).is_some_and(|f| f["measured"]["expected_source"]["text"] == "+48\" AFF");
+    assert!(tied(&j.switch) && !tied(&rec), "{r}");
+}
+
+/// Q6262: the manifest's labels. Another titled view on the unit type's own sheet (a core
+/// area's enlarged plan) is not labelled the room's; a turn only the unit's hand gives is not
+/// stated as fact (`certain: false`, and the prompt says a position read off it is unsure).
+#[test]
+fn a_packet_labels_only_the_types_own_views_and_an_unknown_turn_as_uncertain() {
+    let mut j = job();
+    let a102 = area_of(&mut j.s, "102");
+    let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    let core = json!({"number": "M-401", "title": "MECHANICAL ENLARGED PLANS", "discipline": "M", "source": "model", "rect": [M401, 0.0, M401 + SW, SH],
+        "view": {"title": "ENLARGED PLAN - CORE AREA", "rect": [M401 + 2000.0, 200.0, M401 + 3300.0, 1400.0]}});
+    sp["sheets"].as_array_mut().unwrap().push(core);
+    sp["unit_instances"][0]["hand"] = json!("mirrored");
+    sp["unit_types"][0]["items"] = json!([]);
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    let out = dir("p102core");
+    j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let prints = m["prints"].as_array().unwrap();
+    assert!(
+        !prints.iter().any(|c| c["placed_by"] == "unit_type" && c["view"].as_str().is_some_and(|v| v.contains("CORE"))),
+        "a core area's view labelled the room's: {m}"
+    );
+    let mech = prints.iter().find(|c| c["sheet"] == "M-401" && c["placed_by"] == "unit_type").unwrap_or_else(|| panic!("{m}"));
+    assert_eq!(mech["orientation"]["certain"], false, "{mech}");
+    assert!(mech["orientation"]["read"].as_str().unwrap().contains("unsure"), "{mech}");
+    let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    assert!(prompt.contains("only the unit's hand says it is mirrored"), "{prompt}");
+    let _ = std::fs::remove_dir_all(&out);
+}

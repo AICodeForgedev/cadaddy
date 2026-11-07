@@ -185,6 +185,15 @@ A refused line still replies `"ok": true`, because the text was typed. Check `er
 
 `app.open` without a string `path` fails with `"missing path"` before any command runs.
 
+## Long commands (jobs, builds, takeoffs)
+
+Commands that can run for seconds to minutes (`engine.commands` lists them with `"long": true`: `job.start`, `job.next`, `job.answer`, `job.set_mode`, `model.build`, `bim.from_pdf`, `automation.takeoff`, `validate`…) never run on the window's thread. The window stays live and shows the command with the job's stage, progress and a Cancel. The drawings are read-only until it ends.
+
+- `engine.execute` of a long command replies when the command ends, with its own answer. A run longer than the server's reply timeout (60 s) gets `"error": "timeout", "state": "may-have-run"`; the command keeps running. Follow it with `cmdline.state` or `job.status`.
+- `cmdline.input` of a long command (as `job.start {...}`) replies at once; `busy` is `true` and `running` names it.
+- While it runs, these answer: `ping`, `cmdline.state` (`busy: true`, `running`), `engine.execute` of `job.status` (`busy`, `running`, `elapsed_ms`, and for a job `current_stage`, `progress`, `line`), `control.cancel` and `cmdline.key` Escape (a job stops at its next sheet or stage), `control.methods`, `engine.commands`, `ui.inspect`, `ui.elements`, `ui.menu.list` and `ui.screenshot`.
+- Every other request is refused: `"ok": false`, `"error": "busy: …"`, `"state": "not-run"`, and `busy` holds the same status as `job.status`. Send it again when `cmdline.state` says `busy: false`.
+
 ## Interface language
 
 Select a language with `engine.execute` and the UI command `ui.language`:

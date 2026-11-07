@@ -19,7 +19,7 @@ const ROWS_SHOWN: usize = 2_000;
 const MAX_ROWS: usize = 100_000;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new(CMD_TAKEOFF, "Automation Takeoff", run_takeoff).params(
+    vec![CommandSpec::new(CMD_TAKEOFF, "Automation Takeoff", run_takeoff).long().params(
         "{format?: csv|xlsx (the file's kind; default: the path's extension, else csv), path?: file to write (.csv or .xlsx; added when the name has none), force?: bool (replace an existing file; otherwise it is refused)} → {source: model|drawing, command: bim.takeoff|takeoff, title, columns, rows: [[cell]], total_rows, shown, totals, levels?, by_trade?, note?, path?, format?}: the quantities the drawing holds as one table — with a built BIM model the model's takeoff per level, trade and type (bim.takeoff), otherwise the 2D takeoff by layer (takeoff)",
     )]
 }

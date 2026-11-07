@@ -334,10 +334,21 @@ pub fn show(app: &mut CadApp, ui: &mut egui::Ui) {
                 app.set_status(e);
             }
         }
-        Some(Act::Build) => match app.run("model.build", json!({})) {
-            Ok(_) => check(app, ui),
-            Err(e) => app.set_status(e),
-        },
+        // A model build takes a while: off the UI thread (Q6269); the model check follows it.
+        Some(Act::Build) => {
+            let c = ui.ctx().clone();
+            app.run_background("model.build", json!({}), move |app, r| match r {
+                Ok(_) => match app.run("model.issues", json!({ "limit": 1000 })) {
+                    Ok(r) => {
+                        let items = r["issues"].as_array().cloned().unwrap_or_default();
+                        let k = key(app);
+                        c.data_mut(|d| d.insert_temp(issues_id, Issues { key: k, items }));
+                    }
+                    Err(e) => app.set_status(e),
+                },
+                Err(e) => app.set_status(e),
+            });
+        }
         Some(Act::Walk) => {
             if let Err(e) = app.run("ui.walk", Value::Null) {
                 app.set_status(e);
