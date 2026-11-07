@@ -24,7 +24,7 @@ const LEGEND_WIDTH: f64 = 120.0;
 const COLUMN_REACH: f64 = 5.0;
 
 /// The panel a schedule's title names: `PANELBOARD G (TYPICAL OF 124 REQUIRED)`,
-/// `PANEL 'DP1'`, `PANEL SCHEDULE - P1`, `PANELBOARD P1 SCHEDULE`, `PANEL [HP] SCHEDULE`,
+/// `PANEL 'DP1'`, `PANEL SCHEDULE - P1`, `PANELBOARD P1 SCHEDULE`, `PANEL [L4] SCHEDULE`,
 /// `PANEL: L1`, `PANEL NAME: L1`; and the number it is typical of.
 pub(crate) fn title_panel(title: &str) -> Option<(String, Option<u32>)> {
     let u = title.trim().to_ascii_uppercase();
