@@ -453,6 +453,14 @@ pub(crate) struct Placed {
     pub space_max: [f64; 2],
 }
 
+/// A panel's room's outline on the plans (a stacked level's less the move that stacked it): the
+/// room it names, else the one holding `at`, a place on the plans.
+pub(crate) fn room_outline_on_plan(rooms: &[RoomBox], level: &str, named: Option<&str>, at: Vec2) -> Option<Vec<Vec2>> {
+    let on_plan = |r: &RoomBox| -> Vec<Vec2> { r.outline.iter().map(|p| *p - r.offset).collect() };
+    let on_level = || rooms.iter().filter(|r| r.level.eq_ignore_ascii_case(level) && r.outline.len() >= 3);
+    named.and_then(|n| on_level().find(|r| r.number.eq_ignore_ascii_case(n))).map(on_plan).or_else(|| on_level().map(on_plan).find(|o| inside(o, at)))
+}
+
 /// Whether a point is inside a room's outline.
 pub(crate) fn inside_outline(poly: &[Vec2], p: Vec2) -> bool {
     inside(poly, p)
@@ -1050,6 +1058,27 @@ pub(crate) fn plan(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_panels_room_above_the_first_floor_is_read_on_the_plans() {
+        // Level 2 built 64,000 along from its plan: the panel's place is on the plan.
+        let off = Vec2::new(64_000.0, 35.0);
+        let plan = [Vec2::new(0.0, 0.0), Vec2::new(144.0, 0.0), Vec2::new(144.0, 96.0), Vec2::new(0.0, 96.0)];
+        let room = RoomBox {
+            level: "Level 2".into(),
+            number: "201".into(),
+            outline: plan.iter().map(|p| *p + off).collect(),
+            offset: off,
+            ..RoomBox::default()
+        };
+        let rooms = [room];
+        let at = Vec2::new(10.0, 10.0);
+        // By the number it names, by where it is, and not on another level or outside it.
+        assert_eq!(room_outline_on_plan(&rooms, "level 2", Some("201"), Vec2::new(-500.0, 0.0)).as_deref(), Some(&plan[..]));
+        assert_eq!(room_outline_on_plan(&rooms, "Level 2", None, at).as_deref(), Some(&plan[..]));
+        assert_eq!(room_outline_on_plan(&rooms, "Level 3", Some("201"), at), None);
+        assert_eq!(room_outline_on_plan(&rooms, "Level 2", None, at + off), None);
+    }
+
     use super::*;
 
     fn t(x: f64, y: f64, v: &str) -> TextItem {

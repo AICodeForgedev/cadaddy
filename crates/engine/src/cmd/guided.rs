@@ -8635,6 +8635,7 @@ fn stamp_typical_rooms(
         let sub = super::printmep::sheet_drawing(d, sh);
         let sheet_hinges = plan_hinges(&sub);
         let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
+        let mut told_fit: BTreeSet<[u64; 4]> = BTreeSet::new();
         // The sheet's devices (where each view draws its own), and each view's linework.
         let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
         let reach = ROOM_WALL_FT * 12.0 * k_in;
@@ -8733,6 +8734,12 @@ fn stamp_typical_rooms(
                     && let turn = turn_of(view, *i, outline)
                     && let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn)
                 {
+                    if told_fit.insert(view.map(f64::to_bits)) {
+                        progress_line(&format!(
+                            "  one-room plan {sheet} {title}: room {number} {level}, its box {:?}, the view {view:?} laid by {turn:?}",
+                            bbox(outline)
+                        ));
+                    }
                     if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
                         authority.push((level.clone(), outline.clone()));
                     }
@@ -19118,14 +19125,18 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
     }
     let pieces = super::propfill::wall_footprints_on_plans(d);
     let doors = built_doors(d, upf);
-    // Every box on the spec, its sides, for what stands in front of a panel.
+    let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
+    // Every box, its sides, for what stands in front of a panel: a panel as the build will set it.
     let boxes: Vec<(String, String, [f64; 2], [f64; 2], [f64; 2])> = sp
         .mep
         .equipment
         .iter()
-        .map(|e| (e.tag.clone(), e.level.to_ascii_lowercase(), e.min, e.max, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0]))
+        .map(|e| {
+            let floor = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)).map_or(0.0, |(_, f)| *f) * upf;
+            let (lo, hi) = super::validate_gear::as_the_build_sets_it(e, &pieces, floor, upf);
+            (e.tag.clone(), e.level.to_ascii_lowercase(), lo, hi, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0])
+        })
         .collect();
-    let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
     let mut moved = Vec::new();
     let need_of: Vec<Option<[f64; 2]>> = sp.mep.equipment.iter().map(|e| gear_need(sp, e, &code)).collect();
     for (e, need_in) in sp.mep.equipment.iter_mut().zip(need_of) {
@@ -19143,21 +19154,14 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             })
             .collect();
         let read_at = cadaddy_geom::Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
-        let named = e.properties.get("ROOM").cloned();
-        let on_level = || rooms.iter().filter(|r| r.level.eq_ignore_ascii_case(&e.level));
-        let room = named
-            .as_deref()
-            .and_then(|n| on_level().find(|r| r.number.eq_ignore_ascii_case(n)))
-            .or_else(|| on_level().find(|r| r.outline.len() >= 3 && super::gearbuild::inside_outline(&r.outline, read_at)))
-            .filter(|r| r.outline.len() >= 3)
-            .map(|r| r.outline.as_slice());
+        let room = super::gearbuild::room_outline_on_plan(rooms, &e.level, e.properties.get("ROOM").map(String::as_str), read_at);
         let need = FaceNeed {
             need_in,
             width_in: code.width_in.unwrap_or(30.0),
             height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
             recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
         };
-        let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room, elevation * upf, &need, upf);
+        let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
         if let Some(f) = found
             && super::gearbuild::onto_clear_face(e, &f, upf)
         {
