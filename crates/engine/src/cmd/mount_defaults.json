@@ -1,6 +1,15 @@
 {
   "floor_fixture_words": ["WATER CLOSET", "TOILET", "TUB", "SHOWER", "FLOOR", "MOP", "SERVICE BASIN", "WATER HEATER", "INTERCEPTOR", "PUMP", " FD ", " FCO ", " GCO ", "CLEANOUT", "CLEAN OUT"],
   "wall_fixture_words": ["WALL", " WCO "],
+  "rcp_light_symbol_in": [3, 24],
+  "ceiling_when_clear_of_walls": {
+    "wall_ft": 2.0,
+    "kinds": ["luminaire", "wall luminaire", "exit sign", "emergency light", "occupancy sensor", "vacancy sensor", "daylight sensor", "smoke detector", "heat detector", "speaker", "antenna", "camera", "wireless access point"],
+    "words": ["SENSOR", "DETECTOR", "EXIT", "SPEAKER", "STROBE", "ANTENNA", "CAMERA", "ACCESS POINT", "DOWNLIGHT"],
+    "ceiling_words": ["CEILING", "CEIL", "CLG", "PENDANT", "SUSPENDED", "RECESSED"],
+    "except_words": ["DUCT", "SWITCH", "RECEPTACLE", "THERMOSTAT", "PULL", "OUTLET"],
+    "why": "trade practice: a device the plan draws clear of every wall (no wall face within 2 ft of its symbol) cannot be on a wall; a luminaire, exit sign, sensor, detector, speaker or antenna there hangs from the ceiling over it (a switch, receptacle, thermostat, outlet, pull station or duct detector never does: it is on a wall or in its duct). One whose documents say wall goes on the ceiling only when its schedule, legend or type also allows a ceiling (CEILING/VARIES)"
+  },
   "defaults": [
     {"kind": "switch", "inches": 48, "to": "centre", "why": "the usual height of a switch (48\" to its middle), no document gives one"},
     {"kind": "thermostat", "inches": 48, "to": "centre", "why": "the usual height of a thermostat (48\" to its middle), no document gives one"},
