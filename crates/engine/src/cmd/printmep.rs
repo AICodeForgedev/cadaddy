@@ -356,37 +356,17 @@ impl Placement {
     }
 }
 
-/// Where `sh`'s reading goes: onto its level's architectural floor plan when that sheet is the
-/// same size (the same title block and plan placement), else where it is; scaled up from paper
-/// size by `k`.
-/// One view of a several-view sheet goes onto the same view of a several-view architectural
-/// sheet laid out alike, else stays where it is.
-fn placement(sh: &SheetRef, all: &[SheetRef], k: f64) -> Placement {
-    let size = |r: &[f64; 4]| (r[2] - r[0], r[3] - r[1]);
+/// Where `sh`'s reading goes: where its sheet draws it, scaled up from paper size by `k` about
+/// the sheet's corner. It stays on its own sheet: the build places it onto its level's plan by
+/// that sheet's registration (its grids, its tags, else its frame), as it does the sheet's
+/// devices and damper tags. Moved onto the architectural sheet here, by the sheets' corners, it
+/// would be read as the architectural sheet's and placed by that sheet's frame alone: a plan
+/// drawn elsewhere on its sheet than the architectural plan is on its own put its ducts and
+/// grilles feet away from its devices.
+fn placement(sh: &SheetRef, k: f64) -> Placement {
     let own = sh.view.unwrap_or(sh.rect);
-    let (w, h) = size(&own);
-    let arch = all.iter().find(|a| {
-        let (aw, ah) = size(&a.view.unwrap_or(a.rect));
-        a.view.is_some() == sh.view.is_some()
-            && a.discipline.eq_ignore_ascii_case("A")
-            && a.kind == "plan"
-            && sh.kind == "plan"
-            && !sh.level.is_empty()
-            && a.level.eq_ignore_ascii_case(&sh.level)
-            && w > 0.0
-            && h > 0.0
-            && ((aw - w * k) / (w * k)).abs() < 0.02
-            && ((ah - h * k) / (h * k)).abs() < 0.02
-    });
     let from = [own[0], own[1]];
-    Placement {
-        from,
-        to: arch.map_or(from, |a| {
-            let r = a.view.unwrap_or(a.rect);
-            [r[0], r[1]]
-        }),
-        k,
-    }
+    Placement { from, to: from, k }
 }
 
 fn path_ft(points: &[[f64; 2]], upf: f64) -> f64 {
@@ -457,7 +437,7 @@ fn untagged_system(sub: &Drawing) -> Option<&'static str> {
 }
 
 /// Read one sheet's trade into spec parts in `d`'s units (`upf` per foot).
-fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf: f64) -> (Mep, SheetRead) {
+fn read_sheet(d: &Drawing, sh: &SheetRef, trade: MepKind, upf: f64) -> (Mep, SheetRead) {
     let level = level_name(&sh.level);
     let mut read = SheetRead {
         sheet: sh.number.clone(),
@@ -569,7 +549,7 @@ fn read_sheet(d: &Drawing, sh: &SheetRef, all: &[SheetRef], trade: MepKind, upf:
     if paper.is_some() {
         read.warnings.push(format!("{}: at paper size; read at {} drawing units per foot", sh.number, sheet_upf));
     }
-    let at = placement(sh, all, k);
+    let at = placement(sh, k);
     for r in &mut mep.runs {
         for p in &mut r.points {
             *p = at.apply(*p);
@@ -624,7 +604,7 @@ pub(crate) fn read_sheets(d: &Drawing, sheets: &[SheetRef], upf: f64, only: Opti
     let mine: Vec<&SheetRef> = sheets.iter().filter(|s| s.trade().is_some_and(|t| only.is_none_or(|o| o == t))).take(MAX_SHEETS).collect();
     for sh in mine {
         let Some(trade) = sh.trade() else { continue };
-        let (mep, read) = read_sheet(d, sh, sheets, trade, upf);
+        let (mep, read) = read_sheet(d, sh, trade, upf);
         out.warnings.extend(read.warnings.iter().cloned());
         // Typical-floor replication: if the sheet covers several levels, clone the MEP
         // for each additional level (the first is the primary, already read).
@@ -1091,18 +1071,16 @@ mod tests {
     }
 
     #[test]
-    fn a_sheets_reading_goes_onto_its_levels_floor_plan() {
-        let all = vec![sheet("A-101", "A", "1", 0.0), sheet("A-102", "A", "2", 200.0), sheet("P-102", "P", "2", 600.0)];
-        let p = placement(&all[2], &all, 1.0);
-        assert_eq!(p.apply([610.0, 5.0]), [210.0, 5.0]);
-        // A sheet of another size stays where it is (no common placement to register by).
-        let mut big = sheet("P-103", "P", "2", 900.0);
-        big.rect = [900.0, 0.0, 1100.0, 160.0];
-        assert_eq!(placement(&big, &all, 1.0).apply([910.0, 5.0]), [910.0, 5.0]);
+    fn a_sheets_reading_stays_on_its_own_sheet_for_the_build_to_place_by_its_registration() {
+        // A plumbing plan the size of its level's architectural plan (A-102): its reading is not moved
+        // onto that sheet by the sheets' corners (the build places it by its own sheet's grids,
+        // tags or frame, as it does the sheet's devices).
+        let plumbing = sheet("P-102", "P", "2", 600.0);
+        assert_eq!(placement(&plumbing, 1.0).apply([610.0, 5.0]), [610.0, 5.0]);
         // Scaled up from paper size about the sheet's corner.
         let mut paper = sheet("P-104", "P", "3", 900.0);
         paper.rect = [900.0, 0.0, 901.0, 0.8];
-        assert_eq!(placement(&paper, &all, 96.0).apply([900.5, 0.5]), [948.0, 48.0]);
+        assert_eq!(placement(&paper, 96.0).apply([900.5, 0.5]), [948.0, 48.0]);
     }
 
     #[test]
@@ -1166,10 +1144,10 @@ mod tests {
         s.execute("text", &json!({"at": [300, 20], "text": "12x12 SA", "height": 4})).expect("tag");
         let d = s.doc().expect("doc").clone();
         let sh = SheetRef { rect: [-10.0, -10.0, 700.0, 100.0], ..sheet("M-001", "M", "1", 0.0) };
-        let (_, plain) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (_, plain) = read_sheet(&d, &sh, MepKind::Duct, 12.0);
         s.execute("text", &json!({"at": [300, 80], "text": "DO NOT SCALE DRAWINGS", "height": 4})).expect("note");
         let d = s.doc().expect("doc").clone();
-        let (mep, notes) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (mep, notes) = read_sheet(&d, &sh, MepKind::Duct, 12.0);
         assert!(plain.runs > 0, "the same sheet without the note reads its duct: {plain:?}");
         assert!(mep.runs.is_empty(), "{notes:?}");
         assert!(notes.warnings.iter().any(|w| w.contains("notes sheet")), "{notes:?}");
@@ -1192,7 +1170,7 @@ mod tests {
         s.execute("line", &json!({"points": [[398, 100], [410, 60]]})).expect("leader");
         let d = s.doc().expect("doc").clone();
         let sh = SheetRef { rect: [-100.0, -10.0, 700.0, 500.0], ..sheet("P-101", "P", "1", 0.0) };
-        let (mep, read) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        let (mep, read) = read_sheet(&d, &sh, MepKind::Pipe, 12.0);
         assert!(mep.runs.iter().any(|r| r.system == "SAN"), "{read:?}");
         let got: Vec<(f64, &str)> = mep.inverts.iter().map(|v| (v.depth_ft, v.text.as_str())).collect();
         assert_eq!(got, vec![(2.0, "24\" INVERT"), (3.0, "36\" INVERT"), (2.5, "30\" INVERT")], "{:?}", mep.inverts);
@@ -1211,7 +1189,7 @@ mod tests {
         t.execute("text", &json!({"at": [500, 100], "text": "42\" INVERT", "height": 6})).expect("bent");
         t.execute("pline", &json!({"vertices": [[498, 100], [492, 100], [470, 50]]})).expect("bent leader");
         let d2 = t.doc().expect("doc").clone();
-        let (pieces, read) = read_sheet(&d2, &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        let (pieces, read) = read_sheet(&d2, &sh, MepKind::Pipe, 12.0);
         let got: Vec<(f64, [f64; 2])> = pieces.inverts.iter().map(|v| (v.depth_ft, v.at)).collect();
         assert_eq!(got.len(), 2, "{read:?} {got:?}");
         assert!(got.iter().any(|(d, at)| *d == 1.5 && (at[0] - 160.0).abs() < 1e-6 && (at[1] - 50.0).abs() < 1e-6), "{got:?}");
@@ -1222,7 +1200,7 @@ mod tests {
         merge_mep(&mut sp, mep.clone(), &["P-101".to_string()]);
         assert_eq!(sp.mep.inverts.len(), 3);
         // A duct read takes none.
-        let (ducts, _) = read_sheet(&d, &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (ducts, _) = read_sheet(&d, &sh, MepKind::Duct, 12.0);
         assert!(ducts.inverts.is_empty());
     }
 
@@ -1244,12 +1222,12 @@ mod tests {
         // Classify had no entry for the sheet (so it counts as a plan on level 1), but its
         // own title block says details and schedules.
         let sh = SheetRef { rect: [-10.0, -10.0, 700.0, 100.0], ..sheet("M-5", "M", "1", 0.0) };
-        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL DETAILS AND SCHEDULES"), &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL DETAILS AND SCHEDULES"), &sh, MepKind::Duct, 12.0);
         assert!(mep.runs.is_empty(), "{read:?}");
         assert!(read.warnings.iter().any(|w| w.contains("schedule sheet, not a plan")), "{read:?}");
-        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL PLAN - LEVEL 1"), &sh, std::slice::from_ref(&sh), MepKind::Duct, 12.0);
+        let (mep, read) = read_sheet(&titled_sheet("MECHANICAL PLAN - LEVEL 1"), &sh, MepKind::Duct, 12.0);
         assert!(!mep.runs.is_empty(), "a plan's title reads its ducts: {read:?}");
-        let (_, read) = read_sheet(&titled_sheet("PLUMBING RISER DIAGRAMS"), &sh, std::slice::from_ref(&sh), MepKind::Pipe, 12.0);
+        let (_, read) = read_sheet(&titled_sheet("PLUMBING RISER DIAGRAMS"), &sh, MepKind::Pipe, 12.0);
         assert!(read.warnings.iter().any(|w| w.contains("diagram sheet") && w.contains("no pipes")), "{read:?}");
     }
 

@@ -626,6 +626,9 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             bottom_ft: terminal_bottom_ft,
             terminal_kind: dt.kind.clone(),
             objects: Vec::new(),
+            source_sheet: sheet.to_string(),
+            made: Default::default(),
+            basis: String::new(),
         });
     }
     for de in &net.equipment {
