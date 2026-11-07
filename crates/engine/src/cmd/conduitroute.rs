@@ -149,6 +149,11 @@ pub(crate) struct RouteGeom {
     pub corridor_min_ft: f64,
     pub in_wall_max_ft: f64,
     pub in_wall_above_box_in: f64,
+    /// Where a box's raceway leaves its side when every way over it is blocked (a unit over its
+    /// receptacle): this far under the box's top.
+    pub box_side_under_top_in: f64,
+    /// How far along its wall such a side run may go to rise clear (feet).
+    pub box_side_reach_ft: f64,
     pub drop_reach_ft: f64,
     pub drop_step_in: f64,
     pub bend_penalty_ft: f64,
@@ -1344,6 +1349,9 @@ struct Dev {
     /// A switch (its box takes the switch loop) and its travelers: 0 single-pole, 1 3-way, 2 4-way.
     switch: bool,
     ways: u8,
+    /// A unit's own connection (`receptacle_for`: a receptacle its keynote puts under the unit):
+    /// that unit is no obstacle to its raceway at it.
+    unit_connection: bool,
 }
 
 /// The devices a switch or sensor controls: its `controls` (their handles).
@@ -1931,6 +1939,69 @@ pub(crate) fn rise_point(
     (at, zj, Some(first))
 }
 
+/// The units a device is the connection of and stands under (`unit_connection`: a receptacle
+/// its keynote puts under one): the equipment obstacles over its spot, within their clearance.
+fn units_over(m: &Dev, field: &Field, upf: f64, rl: &RouteRules) -> Vec<Handle> {
+    if !m.unit_connection {
+        return Vec::new();
+    }
+    let pad = rl.clearance_in("equipment").max(0.0) / 12.0 * upf + upf / 2.0;
+    field
+        .obs
+        .iter()
+        .filter(|o| o.category == "equipment")
+        .filter(|o| m.at.x >= o.lo.x - pad && m.at.x <= o.hi.x + pad && m.at.y >= o.lo.y - pad && m.at.y <= o.hi.y + pad)
+        .map(|o| o.handle)
+        .take(4)
+        .collect()
+}
+
+/// [`rise_point`] for a box under a unit it is the connection of (`under`: that unit): where
+/// every way over it is blocked, out of the box's side at its own height and along the wall
+/// under the unit (its sub-base: no obstacle to its own receptacle's raceway), rising beside the
+/// unit where the column is clear of it and everything else.
+#[allow(clippy::too_many_arguments)]
+fn rise_point_under(
+    at: Vec2,
+    top: f64,
+    face: Option<Vec2>,
+    z0: f64,
+    r: f64,
+    field: &Field,
+    upf: f64,
+    skip: &[Handle],
+    under: &[Handle],
+    rl: &RouteRules,
+) -> (Vec2, f64, Option<usize>) {
+    let found = rise_point(at, top, face, z0, r, field, upf, skip, rl);
+    if found.2.is_none() || under.is_empty() {
+        return found;
+    }
+    let side = rl.route.box_side_under_top_in;
+    if side <= 0.0 {
+        return found;
+    }
+    let both: Vec<Handle> = skip.iter().chain(under).copied().collect();
+    let dirs: Vec<Vec2> = match face {
+        Some(f) if f.x.abs() > 0.99 => vec![Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+        Some(f) if f.y.abs() > 0.99 => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0)],
+        Some(_) => Vec::new(),
+        None => vec![Vec2::new(1.0, 0.0), Vec2::new(-1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(0.0, -1.0)],
+    };
+    let zs = top - side / 12.0 * upf;
+    let step = rl.route.drop_step_in.max(1.0) / 12.0 * upf;
+    let n = ((rl.route.box_side_reach_ft.max(rl.route.drop_reach_ft).max(0.0) * upf) / step).floor().clamp(0.0, 48.0) as usize;
+    for k in 1..=n {
+        for dir in &dirs {
+            let q = at + *dir * (step * k as f64);
+            if field.hit_unworked(q, q, zs, z0, r, upf, skip, rl).is_none() && field.hit_unworked(at, q, zs, zs, r, upf, &both, rl).is_none() {
+                return (q, zs, None);
+            }
+        }
+    }
+    found
+}
+
 /// A run's start at box `a` (its top `top`): the box, the jog in the wall to its rise point when
 /// that is off the box, then the seated path (`leg`, from the rise point); plan points and each
 /// segment's height above `floor` (feet).
@@ -2021,6 +2092,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 switch,
                 ways,
                 controls: controls_of(&ps),
+                unit_connection: ps.get("receptacle_for").is_some_and(|p| !p.text().trim().is_empty()),
             });
         }
         if super::bimlook::made_tag(e, "part").is_some_and(|p| p.to_ascii_lowercase().starts_with("equipment"))
@@ -2981,8 +3053,8 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                 // Each end rises over its box, or along its wall where that is blocked.
                 let z0 = tiers.first().copied().unwrap_or(a.top.max(b.top));
                 let own: Vec<Handle> = gi.and_then(|i| gear.get(i)).map(|g| g.handle).into_iter().collect();
-                let (qa, ja, ba) = rise_point(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, rl);
-                let (qb, jb, bb) = rise_point(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, rl);
+                let (qa, ja, ba) = rise_point_under(a.at, a.top, a.face, z0, r_of(size), field, upf, &own, &units_over(a, field, upf, rl), rl);
+                let (qb, jb, bb) = rise_point_under(b.at, b.top, b.face, z0, r_of(size), field, upf, &own, &units_over(b, field, upf, rl), rl);
                 drops_moved += usize::from(qa.dist(a.at) > upf / 96.0) + usize::from(qb.dist(b.at) > upf / 96.0);
                 let leg = route_leg(qa, qb, tiers, r_of(size), field, upf, &[], rl);
                 for bl in &leg.blocked {
@@ -3261,7 +3333,9 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
         // Each square piece of the plan path seated clear of the obstacles (the gear itself is
         // the target, not an obstacle).
         let z0 = tiers.first().copied().unwrap_or(lead_dev.top);
-        let (qa, ja, ba) = rise_point(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], rl);
+        let under = units_over(lead_dev, field, upf, rl);
+        let (qa, ja, ba) =
+            rise_point_under(lead_dev.at, lead_dev.top, lead_dev.face, z0, r_of(min_in.max(1.0)), field, upf, &[gear_el.handle], &under, rl);
         drops_moved += usize::from(qa.dist(lead_dev.at) > upf / 96.0);
         let mut home_pts: Vec<Vec2> = vec![qa];
         let mut home_z: Vec<f64> = Vec::new();

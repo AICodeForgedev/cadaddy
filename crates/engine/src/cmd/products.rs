@@ -668,6 +668,11 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
     let decided = text("receptacle_type");
     let tr = (text("tamper_resistant") == "YES").then(|| TAMPER_RESISTANT.to_string());
     Some(match k {
+        // A piece of equipment's receptacle its keynote gives (`receptacle_for`: `30A/2P
+        // RECEPTACLE FOR <unit>`): the note's product, not the convenience receptacles' section.
+        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if !text("receptacle_for").is_empty() => {
+            ("equipment_receptacle".into(), None)
+        }
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "GFCI" => ("gfci_receptacle".into(), tr),
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "STANDARD" => ("receptacle".into(), tr),
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" if mark.contains("GFCI") || mark.contains("GFI") || name.contains("GFCI") => {
