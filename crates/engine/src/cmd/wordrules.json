@@ -1065,6 +1065,24 @@
     ]
    ]
   },
+  "equipment.control_marks": {
+   "source": "drafting practice: the marks of the controls and sensors a unit's tag labels when printed beside them (a thermostat, a humidistat, a sensor, a switch: `FCU-1 T` is the thermostat of FCU-1, not the unit) (fix-symbol-misread)",
+   "words": [
+    "T",
+    "TS",
+    "TSTAT",
+    "T-STAT",
+    "THERMOSTAT",
+    "H",
+    "HS",
+    "HUMIDISTAT",
+    "S",
+    "SS",
+    "SENSOR",
+    "CO2",
+    "TH"
+   ]
+  },
   "equipment.floor_mounting_words": {
    "source": "trade practice: a mounting with one of these stands on the floor (moved from concrete.rs `needs_pad`)",
    "words": [
@@ -2432,6 +2450,17 @@
     "LUMINAIRE SCHEDULE"
    ]
   },
+  "schedules.mark_headings": {
+   "source": "format vocabulary of construction schedules: the headings of a schedule's column of marks; the marks under one are that schedule's items (fix-symbol-misread)",
+   "words": [
+    "MARK",
+    "TAG",
+    "UNIT TAG",
+    "UNIT MARK",
+    "EQUIPMENT TAG",
+    "EQUIPMENT MARK"
+   ]
+  },
   "sheets.device_disciplines": {
    "source": "The disciplines whose sheets draw devices (electrical, mechanical, plumbing, fire protection and alarm, technology). (drafting convention; moved from guided.rs `DEVICE_DISCIPLINES`)",
    "words": [
@@ -3322,6 +3351,41 @@
     "NOTE",
     "N/A",
     "TBD"
+   ]
+  },
+  "tags.conductor_note_words": {
+   "source": "drafting convention: the words a conductor note prints after a size (`3#10 THHN`, `1#10G`, `1#10 EG`, `1/0 AL`): a role, an insulation, a metal, a unit. Any other word after a size, or before the `#` where a count goes (`PUMP #2`), makes the text a label, not a conductor note",
+   "words": [
+    "G",
+    "GND",
+    "GRD",
+    "GROUND",
+    "EG",
+    "EGC",
+    "IG",
+    "N",
+    "NEUT",
+    "NEUTRAL",
+    "THHN",
+    "THWN",
+    "THWN-2",
+    "THHN/THWN",
+    "THHN/THWN-2",
+    "XHHW",
+    "XHHW-2",
+    "CU",
+    "AL",
+    "COPPER",
+    "ALUMINUM",
+    "AWG",
+    "KCMIL",
+    "MCM",
+    "ISO",
+    "ISOLATED",
+    "STR",
+    "SOL",
+    "SOLID",
+    "STRANDED"
    ]
   },
   "tags.note_words": {

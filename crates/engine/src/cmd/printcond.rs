@@ -95,6 +95,29 @@ pub(crate) fn mount_height_ft(kind: &str) -> Option<f64> {
 /// number (`E-101`: no panel has circuit 101), a dimension, or a zero-padded number (`S-01`: a
 /// room's tag, circuits are never padded) is not one.
 pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
+    parse_numbers(s, 3)
+}
+
+/// Most circuit numbers one raceway's list holds (a homerun's: its group's circuits, each of up
+/// to three poles).
+const MAX_LIST: usize = 42;
+
+/// A raceway's list of circuits as the router writes a homerun's (`LP1-1,3,5,7`): the panel and
+/// its numbers, more than a plan's three when a homerun carries several circuits; a number
+/// repeated once.
+pub(crate) fn parse_circuit_list(s: &str) -> Option<(String, String)> {
+    let (panel, nums) = parse_numbers(s, MAX_LIST)?;
+    let mut seen: Vec<&str> = Vec::new();
+    for n in nums.split(',') {
+        if !seen.contains(&n) {
+            seen.push(n);
+        }
+    }
+    let nums = seen.join(",");
+    Some((panel, nums))
+}
+
+fn parse_numbers(s: &str, most: usize) -> Option<(String, String)> {
     let s = s.trim();
     let (panel, ckt) = s.split_once('/').or_else(|| s.split_once('-'))?;
     let panel = panel.trim().to_ascii_uppercase();
@@ -104,7 +127,7 @@ pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
         && !cadaddy_mepfix::wordrules::words("tags.not_panel_words").contains(&panel.as_str());
     let nums: Vec<&str> = ckt.split(',').map(str::trim).collect();
     let ok_ckt = !nums.is_empty()
-        && nums.len() <= 3
+        && nums.len() <= most
         && nums.iter().all(|n| {
             (1..=2).contains(&n.len())
                 && !n.starts_with('0')
@@ -114,14 +137,47 @@ pub(crate) fn parse_circuit(s: &str) -> Option<(String, String)> {
     (ok_panel && ok_ckt).then(|| (panel, nums.join(",")))
 }
 
-/// A conductor note as the takeoff reads it: `2#12, 1#12G` → `2#12 + 1#12G`.
-fn conductor_note(s: &str) -> Option<String> {
+/// A conductor note as the takeoff reads it: `2#12, 1#12G` → `2#12 + 1#12G`. Only a make-up:
+/// each `#` part a count (or none), a real conductor size and the words a note prints after one
+/// (rules `tags.conductor_note_words`); the raceway's part (`3/4"C`, `IN 3/4" EMT`) is left off.
+/// A label that carries a `#` (`PUMP #2`, `UNIT #4`) is not one: its number is no size.
+pub(crate) fn conductor_note(s: &str) -> Option<String> {
     let t = s.trim().to_ascii_uppercase();
     if !t.contains('#') || t.len() > 40 || !t.chars().any(|c| c.is_ascii_digit()) {
         return None;
     }
-    let parts: Vec<String> = t.split([',', '+']).map(str::trim).filter(|p| p.contains('#')).map(str::to_string).collect();
+    let wires = t.split(" IN ").next().unwrap_or_default();
+    let words = cadaddy_mepfix::wordrules::words("tags.conductor_note_words");
+    let mut parts: Vec<String> = Vec::new();
+    for p in wires.split([',', '+', '&']).map(str::trim).filter(|p| !p.is_empty()) {
+        let Some((count, rest)) = p.split_once('#') else {
+            // A raceway's size beside the wires (`3/4"C`): a number in it; other words are a label's.
+            if p.chars().any(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            return None;
+        };
+        let count = count.trim().trim_start_matches('(').trim_end_matches(')').trim();
+        if !count.is_empty() && !count.parse::<u32>().is_ok_and(|n| (1..=12).contains(&n)) {
+            return None;
+        }
+        let size: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '/').collect();
+        super::propuse::codes::awg(&size)?;
+        let tail = rest.get(size.len()..).unwrap_or_default();
+        // A ground's `G` may be written onto the size (`1#12G`).
+        let tail = tail.strip_prefix('G').filter(|r| r.is_empty() || r.starts_with([' ', '-'])).unwrap_or(tail);
+        if !tail.split([' ', '-', '.']).filter(|w| !w.is_empty()).all(|w| words.contains(&w)) {
+            return None;
+        }
+        parts.push(p.to_string());
+    }
     (!parts.is_empty()).then(|| parts.join(" + "))
+}
+
+/// A circuit tag's conductors: its make-up, else (none, or a label a reader took for a note
+/// before it knew better: `PUMP #2`) the default.
+pub(crate) fn tag_conductors(t: &ElementTag) -> &str {
+    t.fields.get("conductors").map(|f| f.value.as_str()).filter(|v| !v.contains('#') || conductor_note(v).is_some()).unwrap_or(DEFAULT_CONDUCTORS)
 }
 
 /// A panel named by lettering: `PANEL LA`, `PNL 'D'`, `PANELBOARD LP1`.
@@ -952,6 +1008,19 @@ mod tests {
     use super::*;
     use crate::Session;
 
+    #[test]
+    fn a_homeruns_list_of_circuits_reads_past_three_numbers_and_once_each() {
+        // A plan's label: three numbers at most (a reader guard).
+        assert_eq!(parse_circuit("LP1-1,3,5"), Some(("LP1".into(), "1,3,5".into())));
+        assert_eq!(parse_circuit("LP1-1,3,5,7"), None);
+        // A homerun's list the router writes: three circuits, one of them two-pole, a repeat.
+        assert_eq!(parse_circuit_list("LP1-1,3,5,7"), Some(("LP1".into(), "1,3,5,7".into())));
+        assert_eq!(parse_circuit_list("RP-2,2,7,9"), Some(("RP".into(), "2,7,9".into())));
+        assert_eq!(parse_circuit_list("RP-0,1"), None);
+        let long = format!("A-{}", (1..=60).map(|n| n.to_string()).collect::<Vec<_>>().join(","));
+        assert_eq!(parse_circuit_list(&long), None);
+    }
+
     fn sheet(number: &str, level: &str, x: f64) -> SheetRef {
         SheetRef {
             number: number.into(),
@@ -990,6 +1059,13 @@ mod tests {
         assert_eq!(conductor_note("2#12, 1#12G").as_deref(), Some("2#12 + 1#12G"));
         assert_eq!(conductor_note("3#10 + 1#10G").as_deref(), Some("3#10 + 1#10G"));
         assert_eq!(conductor_note("NOTE 3"), None);
+        // Q6243: only a make-up; a label's number is no size.
+        assert_eq!(conductor_note("2#12 & 1#12 G, 3/4\"C").as_deref(), Some("2#12 + 1#12 G"));
+        assert_eq!(conductor_note("(3)#8 THHN + #10 EG IN 3/4\" EMT").as_deref(), Some("(3)#8 THHN + #10 EG"));
+        assert_eq!(conductor_note("#10").as_deref(), Some("#10"));
+        for label in ["PUMP #2", "UNIT #4", "#1 PUMP", "FAN #3, #12", "3#7", "40#12", "PUMP#3"] {
+            assert_eq!(conductor_note(label), None, "{label}");
+        }
         assert_eq!(panel_lettering("PANEL LA").as_deref(), Some("LA"));
         assert_eq!(panel_lettering("PNL 'D'").as_deref(), Some("D"));
         assert_eq!(panel_lettering("PNLBD 'G'").as_deref(), Some("G"));

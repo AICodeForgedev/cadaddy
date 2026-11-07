@@ -399,6 +399,60 @@ fn a_typical_units_circuit_goes_to_each_units_own_panel() {
 }
 
 #[test]
+fn a_typical_rooms_circuit_stays_on_its_own_rooms_panel_beside_the_party_wall() {
+    // Q6241: rooms A1 and A2 side by side (the party wall at 20'), each with its own copy of
+    // the typical panel RP (RP-A1 at its west wall, RP-A2 just across the party wall). Room A1's
+    // last receptacle sits at 18', nearer RP-A2 than its own panel: the whole of room A1's RP-1
+    // still goes to RP-A1, never across the wall to the next unit's panel.
+    let mut s = Session::empty();
+    s.open_drawing(Drawing::new_imperial(), "Sample Floor Plan", None);
+    let mut tags = vec![
+        receptacle(1, 3.0, 5.0, "RP-1"),
+        receptacle(2, 10.0, 5.0, "RP-1"),
+        receptacle(3, 18.0, 5.0, "RP-1"),
+        receptacle(4, 25.0, 5.0, "RP-1"),
+        receptacle(5, 35.0, 5.0, "RP-1"),
+    ];
+    for room in ["A1", "A2"] {
+        let mut c = circuit("RP-1");
+        c["id"] = json!(format!("circuit:L1:room-{room}:RP-1"));
+        c["fields"]["panel"] = json!({"value": "RP", "source": "plan"});
+        c["fields"]["room"] = json!({"value": room, "source": "computed"});
+        tags.push(c);
+    }
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "base": [0, 0]}],
+        "tags": tags,
+        "mep": {
+            "systems": [{"name": "E-CIRCUIT-EST", "layer": "E-CIRCUIT-EST", "kind": "conduit", "size_in": [0.75, 0], "bottom_ft": 9.25}],
+            "runs": [
+                {"id": "circuit:L1:room-A1:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[36, 60], [120, 60], [216, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25, 9.25], "size_source": "tag", "height_source": "estimated route"},
+                {"id": "circuit:L1:room-A2:RP-1#0", "system": "E-CIRCUIT-EST", "level": "L1", "points": [[300, 60], [420, 60]],
+                 "size_in": [0.75, 0], "bottoms_ft": [9.25], "size_source": "tag", "height_source": "estimated route"}
+            ],
+            "equipment": [
+                {"tag": "RP-A1", "kind": "panel", "level": "L1", "min": [6, 100], "max": [20, 104], "height_ft": 2, "bottom_ft": 4.5},
+                {"tag": "RP-A2", "kind": "panel", "level": "L1", "min": [252, 100], "max": [266, 104], "height_ft": 2, "bottom_ft": 4.5}
+            ]
+        }
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    // Each room's homerun lands on its own copy's top (6'-6"): RP-A1 at 0.5'-1.67', RP-A2 at
+    // 21'-22.17'. No stick crosses the party wall at 20': room A1's receptacle at 18' is on its
+    // own room's chain, never tapped into room A2's homerun.
+    let st = sticks(&s);
+    let on = |x0: f64, x1: f64| st.iter().filter(|(_, a, b)| [a, b].iter().any(|p| (x0..=x1).contains(&p[0]) && (p[2] - 6.5).abs() < 0.05)).count();
+    assert!(on(0.4, 1.8) >= 1 && on(20.9, 22.3) >= 1, "{st:?}");
+    assert!(st.iter().all(|(_, a, b)| (a[0] < 20.0) == (b[0] < 20.0)), "a stick across the party wall: {st:?}");
+    let r = s.execute("conduit.route", &json!({"max": 1000})).expect("report");
+    assert_eq!(r["room_circuits_on_own_panel"], json!(2), "{r}");
+    assert_eq!(r["routed_circuits"], json!(2), "{r}");
+}
+
+#[test]
 fn the_panel_schedules_load_sets_the_voltage_drop() {
     // LP1-5 is 130' long: at 80% of a 20 A breaker it needs #8; its schedule says 500 VA (about
     // 4 A), for which #12 holds the drop under 3%.
@@ -457,6 +511,95 @@ fn a_two_pole_circuits_drop_is_worked_line_to_line_and_its_breaker_sets_its_smal
     let all = s.execute("conduit.route", &json!({})).expect("report");
     let by = &all["conductor_sizing"]["upsized_by_reason"];
     assert_eq!((by["breaker minimum"].clone(), by["voltage drop: homerun"].as_u64().is_some_and(|n| n >= 1)), (json!(1), true), "{by}");
+}
+
+#[test]
+fn a_label_with_a_number_sign_is_no_conductor_size() {
+    // Q6243. A plan's equipment label by a homerun (`PUMP #2`) was read as LP1-3's conductor
+    // note: one #2 into 20 A receptacles. A label is no note: LP1-3 takes its breaker's #12, and
+    // its tag says why. A real note (`3#10, 1#10G`) on LP1-1 is still the plan's size.
+    let (mut s, _) = building(|_| {});
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    for t in spec["tags"].as_array_mut().into_iter().flatten() {
+        let note = match t["id"].as_str() {
+            Some("circuit:L1:E-101:LP1-3") => "PUMP #2",
+            Some("circuit:L1:E-101:LP1-1") => "3#10, 1#10G",
+            _ => continue,
+        };
+        t["fields"]["conductors"] = json!({"value": note, "source": "note"});
+    }
+    spec["mep"]["panel_schedules"] = json!([{"panel": "LP1", "source": "E-101", "header": {"volts/phase": "208Y/120V, 3PH, 4W"}, "circuits": [
+        {"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"},
+        {"number": "3", "description": "PUMP #2", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"}
+    ]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    s.execute("model.build", &json!({})).expect("build");
+    let sizes = |s: &mut Session, c: &str| -> Vec<String> {
+        let w = count(s, json!({"kind": "wire", "circuit": c, "group_by": "size"}));
+        w["rows"].as_array().into_iter().flatten().filter_map(|r| r["size"].as_str().map(str::to_string)).collect()
+    };
+    assert_eq!(sizes(&mut s, "LP1-3"), vec!["#12".to_string()]);
+    assert_eq!(sizes(&mut s, "LP1-1"), vec!["#10".to_string()]);
+    // The routed spec a reroute stores: LP1-3's tag with its size and why.
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let spec = spec.get("spec").cloned().unwrap_or(spec);
+    let three = spec["tags"].as_array().into_iter().flatten().find(|t| t["id"] == json!("circuit:L1:E-101:LP1-3")).cloned().unwrap_or_default();
+    assert_eq!(three["fields"]["conductors"]["value"], json!("2#12 + 1#12G"), "{three}");
+    assert!(three["fields"]["conductor_size"]["value"].as_str().is_some_and(|w| w.contains("PUMP #2") && w.contains("label")), "{three}");
+}
+
+#[test]
+fn a_conductor_larger_than_a_devices_terminals_is_spliced_to_a_pigtail_in_its_box() {
+    // Q6243. The plan gives LP1-1 #8 (a voltage-drop size) on a 20 A breaker: #8 can't land on
+    // a 20 A receptacle's terminals (#14 to #10). The #8 runs box to box as drawn; in each
+    // receptacle's box a #12 pigtail (and a ground pigtail) lands on the device, the box keeping
+    // the design's size beside the one built. LP1-3's #12 lands as it is.
+    let (mut s, _) = building(|_| {});
+    let spec = s.execute("bspec.get", &json!({})).expect("spec");
+    let mut spec = spec.get("spec").cloned().unwrap_or(spec);
+    for t in spec["tags"].as_array_mut().into_iter().flatten().filter(|t| t["id"] == json!("circuit:L1:E-101:LP1-1")) {
+        t["fields"]["conductors"] = json!({"value": "2#8 + 1#8G", "source": "note"});
+    }
+    spec["mep"]["panel_schedules"] = json!([{"panel": "LP1", "source": "E-101", "header": {"volts/phase": "208Y/120V, 3PH, 4W"}, "circuits": [
+        {"number": "1", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"},
+        {"number": "3", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 360.0, "source": "E-101"},
+        {"number": "5", "description": "RECEPTACLES", "breaker": "20", "poles": 1, "load_va": 500.0, "source": "E-101"}
+    ]}]);
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("set");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    let r = s.execute("conduit.route", &json!({})).expect("report");
+    assert_eq!(r["terminals"]["devices_pigtailed"], json!(3), "{}", r["terminals"]);
+    assert!(built.to_string().contains("\"devicesPigtailed\":3"), "{built}");
+    // The boxes: LP1-1's three carry the design's #8 beside the #12 pigtails built.
+    let d = s.doc().expect("doc");
+    let mut corrected = Vec::new();
+    let mut pigtails: Vec<(String, String)> = Vec::new();
+    for e in d.model.iter() {
+        let p = cadaddy_engine::doc::props::read(&e.common.xdata);
+        let t = |k: &str| p.get(k).map(|x| x.text()).unwrap_or_default();
+        if t("atom") == "box" && !t("design_value").is_empty() {
+            corrected.push((t("circuit"), t("design_value"), t("corrected_value"), t("correction_rule")));
+        }
+        if t("atom") == "wire" && !t("pigtail_of").is_empty() {
+            pigtails.push((t("circuit"), t("size")));
+        }
+    }
+    assert_eq!(corrected.len(), 3, "{corrected:?}");
+    for (c, design, built, rule) in &corrected {
+        assert_eq!(c, "LP1-1");
+        assert!(design.contains("#8") && built.contains("#12 pigtail") && rule.contains("110.14"), "{design} / {built} / {rule}");
+    }
+    // Each lands its hot and neutral and its ground on #12: three a box.
+    assert_eq!(pigtails.len(), 9, "{pigtails:?}");
+    assert!(pigtails.iter().all(|(c, sz)| c == "LP1-1" && sz == "#12"), "{pigtails:?}");
+    // The takeoff counts them: LP1-1's wire is the #8 run and the #12 pigtails; LP1-3 is all #12.
+    let w = count(&mut s, json!({"kind": "wire", "circuit": "LP1-1", "group_by": "size"}));
+    let sizes: Vec<&str> = w["rows"].as_array().into_iter().flatten().filter_map(|r| r["size"].as_str()).collect();
+    assert!(sizes.contains(&"#8") && sizes.contains(&"#12"), "{w}");
+    let w3 = count(&mut s, json!({"kind": "wire", "circuit": "LP1-3", "group_by": "size"}));
+    assert!(w3["rows"].as_array().is_some_and(|rows| rows.iter().all(|x| x["size"] == json!("#12"))), "{w3}");
 }
 
 /// Every conduit stick's ends (feet) with its circuit, filtered by circuit.

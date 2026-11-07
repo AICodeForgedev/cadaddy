@@ -813,7 +813,7 @@ fn electrical(s: &Session, lines: &mut Vec<Line>, others: &mut Vec<Value>) -> Re
     // Each circuit's wire: its conductors over all its conduit, with makeup at each box.
     for (c, (ft, pulls)) in on_circuit {
         let Some(t) = circuits.get(c) else { continue };
-        let makeup = t.fields.get("conductors").map_or_else(|| super::printcond::DEFAULT_CONDUCTORS.to_string(), |f| f.value.clone());
+        let makeup = super::printcond::tag_conductors(t).to_string();
         let each = ft + 2.0 * MAKEUP_FT * pulls as f64;
         for (n, size, ground) in conductor_parts(&makeup) {
             add(

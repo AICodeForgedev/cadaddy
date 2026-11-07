@@ -777,3 +777,13 @@ fn an_estimate_for_another_tag_of_a_routed_circuit_goes_and_a_rooms_own_stays() 
     assert_eq!(circuit_key("device:L1:3"), None);
     assert_eq!(circuit_key("circuit:L1:E-101:"), None);
 }
+
+#[test]
+fn a_homeruns_numbers_are_each_circuits_once_in_order() {
+    // Two rooms' circuits of one label and a two-pole circuit: one readable list.
+    let labels: Vec<String> = ["RP-2", "RP-2", "RP-7,9"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(homerun_numbers(&labels), vec!["2", "7", "9"]);
+    let labels: Vec<String> = ["LP1-1", "LP1-3,5", "LP1-7"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(homerun_numbers(&labels), vec!["1", "3", "5", "7"]);
+    assert!(homerun_numbers(&["not a circuit".to_string()]).is_empty());
+}
