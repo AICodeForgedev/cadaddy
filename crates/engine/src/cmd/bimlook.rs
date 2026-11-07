@@ -178,7 +178,7 @@ fn save(s: &mut Session, look: &Look) -> Result<()> {
             o.insert(KEY.into(), val);
         }
     }
-    s.doc_mut()?.building_spec = Some(spec.to_string());
+    s.doc_mut()?.building_spec = Some(spec.to_string()).into();
     Ok(())
 }
 

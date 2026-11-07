@@ -142,7 +142,7 @@ pub(super) fn state(s: &Session, cmd: &str) -> Result<(cadaddy_walk3d::BuildingS
 
 pub(super) fn store(s: &mut Session, mut sp: cadaddy_walk3d::BuildingSpec, st: Map<String, Value>) -> Result<()> {
     sp.estimate = Value::Object(st);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 

@@ -36,7 +36,7 @@ fn job_folder(tag: &str, only: &[&str]) -> std::path::PathBuf {
 }
 
 fn job_state(s: &Session) -> Value {
-    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state")
+    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")
 }
 
 /// The set the tests run: two levels of architecture, mechanical and plumbing plans, and an

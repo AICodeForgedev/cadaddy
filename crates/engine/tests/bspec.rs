@@ -330,7 +330,7 @@ fn model_build_follows_the_spec_and_is_deterministic() {
 fn an_unreadable_stored_spec_can_be_replaced() {
     for broken in [r#"{"version":99}"#, r#"{"levels":"x"}"#] {
         let mut s = plan();
-        s.doc_mut().unwrap().building_spec = Some(broken.to_string());
+        s.doc_mut().unwrap().building_spec = Some(broken.to_string()).into();
         // Every command that reads the stored spec says what is wrong and what to do.
         let get = s.execute("bspec.get", &json!({})).unwrap_err().to_string();
         assert!(get.contains("building spec") && get.contains("replace"), "{broken}: {get}");

@@ -645,7 +645,7 @@ fn update_runs(s: &mut Session, mut sp: BuildingSpec, before: Vec<MepRun>, label
         out.highlighted = d.model.handles().into_iter().filter(|h| !before.contains(h)).collect();
         out.rebuilt = part.mep.runs.len();
     }
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     if !out.highlighted.is_empty() {
         s.set_selection(out.highlighted.clone());
     }
@@ -827,7 +827,7 @@ fn run_compare(s: &mut Session, p: &Value) -> Result<Value> {
         (_, Some(sp)) if apply => {
             // No MEP runs to update, but save the baseline.
             let d = s.doc_mut()?;
-            d.building_spec = Some(sp.to_json());
+            d.building_spec = Some(sp.to_json()).into();
             None
         }
         _ => None,

@@ -419,7 +419,7 @@ fn without_documents_a_type_is_unsure_never_a_pass() {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["prints"]["schedule"] = json!([]);
     sp["prints"]["submittals"] = json!([]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = screen(&mut j.s);
     let a = of(&fs, "E-LUM-TYPE", &j.a);
     assert_eq!(a["verdict"], "unsure", "{a}");
@@ -442,7 +442,7 @@ fn the_jobs_own_conflicts_are_carried_into_the_run() {
         "issue": "the lighting plan and the enlarged plan show type A with different mounting",
         "assumed": "recessed"
     }]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (_, fs) = screen(&mut j.s);
     let c = fs.iter().find(|f| f["source"] == "build").unwrap_or_else(|| panic!("no carried conflict: {fs:#?}"));
     assert_eq!((c["verdict"].as_str(), c["rule"].as_str()), (Some("conflict"), Some("E-LUM-TYPE")), "{c}");
@@ -540,7 +540,7 @@ fn plan_counts_from_the_jobs_symbol_table() {
         tag("switch", "SD", [0.8, 4.0]),
         tag("switch", "S3", [0.8, 5.0])
     ]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = screen(&mut j.s);
     let in101 = |m: &str| {
         fs.iter()

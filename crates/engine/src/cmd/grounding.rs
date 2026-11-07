@@ -191,7 +191,7 @@ pub fn length_ft(path: &[[f64; 3]], upf: f64) -> f64 {
 }
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -246,7 +246,7 @@ fn run_route(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if !routed.is_empty() {
         sp.mep.grounding = Some(g);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({"routed": routed, "failed": failed}))
 }
@@ -490,7 +490,7 @@ fn run_check(s: &mut Session, p: &Value) -> Result<Value> {
             rfis.push(id);
         }
         if !rfis.is_empty() {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     Ok(json!({"ok": errors == 0, "errors": errors, "findings": findings_json(&f), "rfis": rfis}))
@@ -548,7 +548,7 @@ fn run_alternative(s: &mut Session, p: &Value) -> Result<Value> {
     let out = json!({"tag": alt.tag, "kind": alt.kind, "alternative_of": alt.alternative_of});
     g.electrodes.push(alt);
     sp.mep.grounding = Some(g);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(out)
 }
 

@@ -1008,7 +1008,7 @@ impl GuidedJob {
 
 /// Job state is stored in `Drawing.agent` under the key `"guided_job"`.
 pub(crate) fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
-    let agent_text = match &s.doc()?.agent {
+    let agent_text = match &*s.doc()?.agent {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ => return Ok(None),
     };
@@ -1026,7 +1026,7 @@ fn save_job(s: &mut Session, job: &GuidedJob) -> Result<()> {
     let doc = s.doc_mut()?;
     let mut agent: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
     agent["guided_job"] = serde_json::to_value(job).unwrap_or(json!(null));
-    doc.agent = Some(agent.to_string());
+    doc.agent = Some(agent.to_string()).into();
     Ok(())
 }
 
@@ -1756,7 +1756,7 @@ fn levels_from_answer(s: &mut Session, job: &GuidedJob) -> Result<Vec<Value>> {
         out.push(json!({"name": name, "elevation_ft": elevation, "source": "answer"}));
     }
     sp.levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(out)
 }
 
@@ -2344,7 +2344,7 @@ fn checkpoint_agent(path: &str) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
     let text = match cadaddy_io::cdy::agent(&bytes) {
         Ok(text) => text?,
-        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent?,
+        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent.into_inner()?,
     };
     serde_json::from_str(&text).ok()
 }
@@ -4642,7 +4642,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         super::printcond::seat_heights(&mut sp);
         super::mep::seat_in_plenum(&mut sp);
         super::printcond::store_circuits(&mut sp, &cond.circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     job.mep = Some(mep);
     job.circuits = cond.circuits.clone();
@@ -4876,7 +4876,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if seated > 0 {
                     progress_line(&format!("  MEP runs with no height of their own seated in their level's plenum: {seated}"));
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
@@ -4918,7 +4918,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         sp.rooms.push(r);
                     }
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Each level's region is its architectural floor plan's view: the draft guessed the
             // upper floors' regions from stray objects (slivers), so their walls weren't built.
@@ -4960,7 +4960,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     below = level.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8)).or(below);
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Where each sheet of the set sits, so what lies on the other disciplines' sheets
             // is theirs (not "outside every level's region").
@@ -4968,7 +4968,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
             {
                 add_sheet_links(&mut sp, &job.sheet_regions);
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Runs whose size wasn't read: one larger than any size the system's tags give on its
             // level is two unrelated lines measured; it takes the system's usual tagged size. And a
@@ -4980,7 +4980,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf, &ducts);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
-                    s.doc_mut()?.building_spec = Some(sp.to_json());
+                    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 }
             }
             // The MEP plans' runs, terminals and equipment were read in their own sheet's place
@@ -5421,7 +5421,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         false,
                     );
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         Err(e) => {
@@ -5941,7 +5941,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 ));
                 super::printcond::store_room_panels(&mut sp, gear);
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         // A "receptacle" that is only a circuit-like name (a panel's feeder, DP2-11) by a keynote's
@@ -6049,7 +6049,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         {
             let n = stacks_as_risers(&mut sp, &stacks);
             if n > 0 {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
             for st in &stacks {
@@ -6062,7 +6062,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
             if inferred.as_object().is_some_and(|o| !o.is_empty()) {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         // The rest of the fill-in pass (Q6216): each fixture's waste and vent no drain or vent
@@ -6070,7 +6070,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref());
             if filled.get("runs").and_then(Value::as_u64).unwrap_or(0) > 0 {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             progress_line(&format!("  filled in where no plan connects it: {filled}"));
         }
@@ -6079,7 +6079,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let drains = super::plumbing::drainage(&mut sp);
             let stacks = super::plumbing::continuous_risers(&mut sp);
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             progress_line(&format!("  drainage: {drains}; stacks through the floors: {stacks}"));
         }
         // Each unit type: what its views show by kind against what each of its rooms holds.
@@ -6110,7 +6110,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let seated = seat_on_sub_bases(&mut sp.mep.equipment, devices.iter());
             if seated > 0 {
                 progress_line(&format!("  units set on the sub-base their receptacle's keynote puts under them: {seated}"));
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         match placed_now {
@@ -6137,7 +6137,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::readers::legend_onto_devices(&mut sp, &designations);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
                     }
                 }
@@ -6152,7 +6152,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = apply_symbol_list(&mut sp, &rows);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                     progress_line(&format!(
                         "  fire alarm symbol list: {} marks ({}); {n} devices named",
@@ -6167,7 +6167,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = apply_typical_heights(&mut sp, &typical);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                     progress_line(&format!(
                         "  typical mounting heights (general note): {} kinds ({}); {n} devices took theirs",
@@ -6205,7 +6205,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             }
                             sp.unit_types = Value::Array(types);
                             sp.unit_instances = Value::Array(instances);
-                            s.doc_mut()?.building_spec = Some(sp.to_json());
+                            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         }
                     }
                 }
@@ -6215,7 +6215,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::readers::plumbing_onto_fixtures(&mut sp, &sch.rows);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
                     }
                 }
@@ -6225,7 +6225,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::fixturefit::record(&mut sp, &fixture_fits);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                 }
                 // The code's devices the plans don't mark: a guest room's receptacles are
@@ -6235,7 +6235,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let (n, rooms) = super::readers::tamper_resistant_in_rooms(&mut sp, &sleeping);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  tamper-resistant receptacles (NEC 406.12): {n} in {rooms} guest rooms"));
                         job.add_finding(
                             StageName::BimBuild,
@@ -6256,7 +6256,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let (n, sinks) = super::readers::gfci_by_sinks(&mut sp);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  receptacles within 6' of a sink taken off as GFCI (NEC 210.8): {n} by {sinks} sinks"));
                         job.add_finding(
                             StageName::BimBuild,
@@ -6304,7 +6304,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         sp.circulation = std::mem::take(&mut circulation);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // Each storey stacks by its shell's lower-left corner (the building's outline), not by the
     // lower-left of all its wall linework: a stray line or a site note there moved a storey
@@ -6341,7 +6341,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .iter()
             .map(|(n, rects)| (n.clone(), rects.iter().filter(|[a, b]| (b.x - a.x).abs() >= sliver).map(|[a, b]| [a.x, a.y, b.x, b.y]).collect()))
             .collect();
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // How every wall is built: the partition legend's types, the walls the plans' tags type.
     if job.sheet_regions.iter().any(|r| r.kind == "legend")
@@ -6350,7 +6350,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         for line in apply_wall_legend(s, &mut sp, job)? {
             progress_line(&format!("  wall types {line}"));
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The stairs in the circulation's stair spaces, found from their treads on any layer: the
     // build makes their steps, landings and rails. Confirmed stairs stay.
@@ -6386,7 +6386,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     false,
                 );
             }
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
@@ -6397,7 +6397,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         super::printcond::store_circuits(&mut sp, &circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The mounting heights the notes of the sheets it didn't import list (a legend sheet's
     // general notes, an accessibility sheet): the devices' heights after their own notes, the
@@ -6413,7 +6413,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             t_notes.elapsed().as_secs_f64()
         ));
         sp.mount_notes = notes;
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The trades' documents (Q6162): the submittals' and specification sections' facts every
     // trade's pieces are laid out from (concrete mix, PT design, joists, trusses, hardware sets,
@@ -6434,7 +6434,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         };
         progress_line(&format!("  trade documents: {line} ({:.1} s)", t_docs.elapsed().as_secs_f64()));
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // Whose work each element is (Q6167): the notes, specifications and submittals read for who
     // furnishes and installs what another trade may own, the fire alarm devices given their kinds
@@ -6481,7 +6481,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             drain_slope = sloped.json();
         }
         if moved > 0 || sloped.runs > 0 {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
@@ -6561,7 +6561,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         super::printcond::store_circuits(&mut sp, &circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         result["circuits"] = json!(circuits.len());
     }
     // The model's rooms are the job's rooms on the levels it built.
@@ -6621,7 +6621,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             result["load_summaries"] = json!(summaries.len());
         }
         sp.mep.load_summaries = summaries;
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     bim_step(s, job, "panel schedules", t);
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
@@ -7390,7 +7390,7 @@ fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope:
         progress_line(&format!("  fire alarm devices by their legends: {n} given their kind {by:?}; marks left open {open:?}"));
         fa = json!({"resolved": n, "by_kind": by, "unresolved": open});
         if let Ok(d) = s.doc_mut() {
-            d.building_spec = Some(sp.to_json());
+            d.building_spec = Some(sp.to_json()).into();
         }
     }
     let kept = s.doc().map(super::scope::decisions).unwrap_or_default();
@@ -7442,7 +7442,7 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
     let rooms = s.doc().map(super::scope::room_boxes).unwrap_or_default();
     let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
     let Ok(d) = s.doc_mut() else { return };
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     let built = super::scope::build_panels(d, &sp, &placed, &rooms);
     s.touch();
     progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
@@ -8010,7 +8010,7 @@ fn anchor_other_trade_rooms(s: &mut Session, job: &GuidedJob, place: &dyn Fn([f6
         anchored += 1;
     }
     if anchored > 0 {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(anchored)
 }
@@ -14134,7 +14134,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // The new gear built, then moved as the build moved its level to stack it. What took its
     // submittal's box is built again.
     let d = s.doc_mut()?;
@@ -14244,7 +14244,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let wireway_tags: BTreeSet<String> = wireways.iter().map(|w| w.tag.to_ascii_uppercase()).collect();
     sp.mep.equipment.retain(|e| !wireway_tags.contains(&e.tag.to_ascii_uppercase()));
     sp.mep.equipment.extend(wireways);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let d = s.doc_mut()?;
     let offset_of = |l: &str| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(l)).map_or(cadaddy_geom::Vec2::ZERO, |r| r.offset);
     for h in super::mep::build_equipment(d, &sp, Some(&wireway_tags)) {
@@ -14415,7 +14415,7 @@ fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool
     }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(no_subs) };
     sp.mep.fixture_schedule = types;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(no_subs)
 }
 
@@ -14836,7 +14836,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             fixed,
         );
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     s.touch();
     // The report: luminaires and switches per level and per guest-room type against the plans'
     // symbols, and the conflicts by kind.
@@ -17127,7 +17127,7 @@ fn dampers_step(
                 false,
             );
         }
-        s.doc_mut()?.building_spec = Some(sp2.to_json());
+        s.doc_mut()?.building_spec = Some(sp2.to_json()).into();
     }
     s.touch();
     // The takeoff: the dampers by kind and size (whose work), our electrical lines apart.
@@ -18224,7 +18224,7 @@ fn load_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate:
         if let (Some((_, text)), Ok((mut sp, true))) = (groups.first(), super::bspec::current(s, "bim_build")) {
             sp.mep.occupancy = groups.iter().map(|g| g.0.as_str()).collect::<Vec<_>>().join(", ");
             sp.mep.occupancy_source = format!("{number}: {text}");
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
         params["code_texts"] = json!(words);
         params["code_sheet"] = json!(number);
@@ -19180,7 +19180,7 @@ fn build_new_mep(
         }
     }
     sp.mep.runs.extend(runs.iter().cloned());
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let offsets: BTreeMap<String, Vec2> = {
         let d = s.doc()?;
         let mut m = BTreeMap::new();
@@ -19522,7 +19522,7 @@ fn equipment_step(
         conflicts_all.iter().map(|(t, c)| format!("{t} {}", c.check)).collect::<Vec<_>>().join(", ")
     );
     sp.mep.equipment_electrical = rows;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     if !built_extra.is_empty() || !built_silent.is_empty() {
         super::propfill::rebuild_devices(s, "bim_build")?;
     }
@@ -23386,7 +23386,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         );
         let started = web_time::Instant::now();
         if let Ok(d) = s.doc() {
-            job.spec_at_start.insert(stage_name, d.building_spec.clone());
+            job.spec_at_start.insert(stage_name, d.building_spec.as_ref().cloned());
         }
         // What the job held before the stage (a stage a cancel cuts short leaves none of its
         // findings and questions behind).
@@ -23415,7 +23415,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             if let Some(spec) = job.spec_at_start.get(&stage_name).cloned()
                 && let Ok(d) = s.doc_mut()
             {
-                d.building_spec = spec;
+                d.building_spec = spec.into();
             }
             job.findings.truncate(held.0);
             job.worklist.truncate(held.1);
@@ -24113,7 +24113,7 @@ fn rerun_from_stage(
         s.execute("model.build", &json!({"clear": true}))?;
     }
     if let Some(spec) = reset.first().and_then(|(n, _)| job.spec_at_start.get(n)).cloned() {
-        s.doc_mut()?.building_spec = spec;
+        s.doc_mut()?.building_spec = spec.into();
     }
     if !reset.is_empty() {
         let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
@@ -25439,7 +25439,7 @@ mod tests {
             ..Default::default()
         }];
         if let Ok(d) = s.doc_mut() {
-            d.building_spec = Some(sp.to_json());
+            d.building_spec = Some(sp.to_json()).into();
             // The junction box the plan shows, as the build made it (linked to its device).
             let mut x = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "1", cadaddy_doc::Handle(0));
             x.push(cadaddy_doc::RawTag { code: 1000, value: "devid:device:2".into() });
@@ -32355,7 +32355,7 @@ mod tests {
             row("Q5", "X1", "LED 5VA", "SURFACE", "DECORATIVE WALL LIGHT"),
         ];
         sp.unit_instances = json!([{"number": "C1", "type": "TYPE 7A"}]);
-        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
         let sub = [("manufacturer", "Maker One Lighting"), ("catalog_number", "AB12 L48 4000LM MVOLT 40K")];
         let l1 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [0.0, 0.0], &sub);
         let l2 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [10.0, 0.0], &sub);

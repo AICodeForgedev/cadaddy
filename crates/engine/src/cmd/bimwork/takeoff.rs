@@ -791,7 +791,7 @@ fn run_estimate(s: &mut Session, p: &Value) -> Result<Value> {
             s_obj.insert("crew_rate".into(), json!(rate));
         }
         sp.estimate = Value::Object(est);
-        s.doc_mut().map(|d| d.building_spec = Some(sp.to_json())).ok();
+        s.doc_mut().map(|d| d.building_spec = Some(sp.to_json()).into()).ok();
     }
     // Change order against an earlier revision.
     let st = state(s.doc()?);

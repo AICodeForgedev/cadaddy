@@ -137,12 +137,12 @@ fn every_kind_and_table_roundtrips_exactly() {
 fn the_agent_state_reads_without_the_drawing() {
     let mut d = every_kind();
     let state = r#"{"guided_job":{"id":"job-1"}}"#;
-    d.agent = Some(state.to_string());
+    d.agent = Some(state.to_string()).into();
     let bytes = crate::write(&d, "job.cdy").unwrap();
     assert_eq!(agent(&bytes), Ok(Some(state.to_string())));
     // A checkpoint (written without its preview) too.
     assert_eq!(agent(&write_cdy_checkpoint(&d).unwrap()), Ok(Some(state.to_string())));
-    d.agent = None;
+    d.agent = None.into();
     assert_eq!(agent(&crate::write(&d, "plan.cdy").unwrap()), Ok(None), "a drawing without one");
     assert!(agent(b"not a drawing").is_err());
     let mut cut = bytes.clone();
@@ -723,8 +723,8 @@ fn walkthrough() -> Drawing {
     d.embedded.insert(format!("{TEXTURE_PREFIX}textures/floor.png"), std::sync::Arc::new(b"\x89PNG floor pixels".to_vec()));
     d.embedded.insert("lightmap.png".into(), std::sync::Arc::new((0..=255u8).cycle().take(70_000).collect()));
     d.embedded.insert("lightmap.json".into(), std::sync::Arc::new(br#"{"version":1,"width":4,"height":4}"#.to_vec()));
-    d.building_spec = Some(r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
-    d.tours = Some(r#"[{"name":"Lobby","stops":[{"at":[0,0,66],"yaw":0}]}]"#.into());
+    d.building_spec = Some(r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into()).into();
+    d.tours = Some(r#"[{"name":"Lobby","stops":[{"at":[0,0,66],"yaw":0}]}]"#.into()).into();
     d
 }
 
@@ -766,7 +766,7 @@ fn walkthrough_parts_save_incrementally() {
     let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
     assert!(bytes.len() < 600, "{} bytes appended for no change", bytes.len());
     // A new tour and a re-baked lightmap: only those parts are appended, not the meshes.
-    opened.tours = Some("[]".into());
+    opened.tours = Some("[]".into()).into();
     opened.embedded.insert("lightmap.json".into(), std::sync::Arc::new(b"{}".to_vec()));
     let (out, _) = save(&opened, Some(&state2), &no_thumb).unwrap();
     let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
@@ -775,10 +775,10 @@ fn walkthrough_parts_save_incrementally() {
     assert!(rep.notes.is_empty(), "{:?}", rep.notes);
     assert_eq!(back, opened);
     // The same in the session that wrote it.
-    d.building_spec = None;
+    d.building_spec = None.into();
     let (out, _) = save(&d, Some(&state), &no_thumb).unwrap();
     let back = model::read(&stored(&file, &out)).unwrap().0;
-    assert_eq!((back.building_spec, back.embedded.len()), (None, 3));
+    assert_eq!((back.building_spec.into_inner(), back.embedded.len()), (None, 3));
 }
 
 #[test]
@@ -968,8 +968,8 @@ fn damaged_bim_types_and_rules_are_noted_and_left_out() {
 #[test]
 fn bcf_issues_and_parts_save_incrementally_after_open() {
     let mut d = walkthrough();
-    d.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Open"}]}"#.into());
-    d.parts = Some(r#"{"parts":[{"name":"Bracket"}]}"#.into());
+    d.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Open"}]}"#.into()).into();
+    d.parts = Some(r#"{"parts":[{"name":"Bracket"}]}"#.into()).into();
     let (out, _) = save(&d, None, &no_thumb).unwrap();
     let mut file = stored(&[], &out);
     let count = |file: &[u8], tag: &[u8; 4]| container::index(file).unwrap().iter().filter(|e| &e.tag == tag).count();
@@ -981,8 +981,8 @@ fn bcf_issues_and_parts_save_incrementally_after_open() {
     let Output::Append { bytes, .. } = &out else { panic!("expected an append") };
     assert!(bytes.len() < 600, "{} bytes appended for no change", bytes.len());
     // Edited: the new text wins on the next open, and the index holds exactly one of each.
-    opened.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Resolved"}]}"#.into());
-    opened.parts = Some(r#"{"parts":[{"name":"Bracket","parameters":{"width":3}}]}"#.into());
+    opened.bcf = Some(r#"{"topics":[{"title":"Clash","status":"Resolved"}]}"#.into()).into();
+    opened.parts = Some(r#"{"parts":[{"name":"Bracket","parameters":{"width":3}}]}"#.into()).into();
     let (out, next) = save(&opened, Some(&state), &no_thumb).unwrap();
     assert!(matches!(out, Output::Append { .. }));
     file = stored(&file, &out);
@@ -994,13 +994,13 @@ fn bcf_issues_and_parts_save_incrementally_after_open() {
     let (mut again, _) = model::read(&file).unwrap();
     state = seed(&again, &file).expect("seeded from the appended file");
     assert_eq!(state.len, next.len);
-    again.bcf = None;
-    again.parts = None;
+    again.bcf = None.into();
+    again.parts = None.into();
     let (out, _) = save(&again, Some(&state), &no_thumb).unwrap();
     assert!(matches!(out, Output::Append { .. }));
     file = stored(&file, &out);
     let (back, _) = model::read(&file).unwrap();
-    assert_eq!((back.bcf, back.parts), (None, None));
+    assert_eq!((back.bcf.into_inner(), back.parts.into_inner()), (None, None));
     assert_eq!((count(&file, b"BCFI"), count(&file, b"PRTS")), (0, 0));
 }
 
@@ -1008,9 +1008,9 @@ fn bcf_issues_and_parts_save_incrementally_after_open() {
 fn every_field_set() -> Drawing {
     let mut d = every_kind();
     bim_and_rules(&mut d);
-    d.building_spec = Some(r#"{"levels":[]}"#.into());
-    d.tours = Some("[]".into());
-    d.bcf = Some(r#"{"topics":[]}"#.into());
+    d.building_spec = Some(r#"{"levels":[]}"#.into()).into();
+    d.tours = Some("[]".into()).into();
+    d.bcf = Some(r#"{"topics":[]}"#.into()).into();
     d.schedule4d = cadaddy_walk3d::fourd::Schedule4d {
         tasks: vec![cadaddy_walk3d::fourd::Task {
             id: "T1".into(),
@@ -1021,11 +1021,12 @@ fn every_field_set() -> Drawing {
         }],
         ..Default::default()
     }
-    .to_json();
-    d.parts = Some(r#"{"parts":[]}"#.into());
-    d.overrides = cadaddy_doc::overrides::Overrides::default().to_json().ok();
-    d.agent = Some(r#"{"notes":["handoff"]}"#.into());
-    d.import_check = Some(r#"{"checks":[]}"#.into());
+    .to_json()
+    .into();
+    d.parts = Some(r#"{"parts":[]}"#.into()).into();
+    d.overrides = cadaddy_doc::overrides::Overrides::default().to_json().ok().into();
+    d.agent = Some(r#"{"notes":["handoff"]}"#.into()).into();
+    d.import_check = Some(r#"{"checks":[]}"#.into()).into();
     d.embedded.insert("lightmap.json".into(), std::sync::Arc::new(b"{}".to_vec()));
     d.active_layout = d.layouts.last().map(|l| l.name.clone());
     d.shape_files = vec!["complex.shx".into()];

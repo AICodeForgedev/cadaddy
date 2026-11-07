@@ -40,7 +40,7 @@ pub fn package(s: &mut Session) -> Result<(Package, Value)> {
     let spec_from = if d.building_spec.as_deref().is_some_and(|t| BuildingSpec::from_json(t).is_ok()) {
         "drawing"
     } else {
-        d.building_spec = Some(BuildingSpec::from_rules(&super::wallgen::rules_for(s, &json!({}))?).to_json());
+        d.building_spec = Some(BuildingSpec::from_rules(&super::wallgen::rules_for(s, &json!({}))?).to_json()).into();
         "drafted"
     };
     let bytes = (hooks.write)(&d, "walkthrough.cdywalk").map_err(|e| bad(cmd, e))?;

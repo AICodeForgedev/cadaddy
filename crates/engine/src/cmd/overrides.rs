@@ -75,7 +75,8 @@ pub fn load(d: &Drawing) -> std::result::Result<Overrides, String> {
 }
 
 fn save(d: &mut Drawing, o: &Overrides) -> Result<()> {
-    d.overrides = if o.is_empty() && !o.hidden { None } else { Some(o.to_json().map_err(|e| crate::EngineError::Other(format!("overrides: {e}")))?) };
+    d.overrides =
+        (if o.is_empty() && !o.hidden { None } else { Some(o.to_json().map_err(|e| crate::EngineError::Other(format!("overrides: {e}")))?) }).into();
     Ok(())
 }
 
@@ -385,7 +386,7 @@ pub fn reapply(d: &mut Drawing, fresh: bool, touched: &mut Vec<Handle>) -> std::
             Status::Orphaned => out.orphaned.push(o.id),
         }
     }
-    d.overrides = Some(ov.to_json().map_err(|e| format!("overrides: {e}"))?);
+    d.overrides = Some(ov.to_json().map_err(|e| format!("overrides: {e}"))?).into();
     Ok(out)
 }
 

@@ -198,7 +198,7 @@ pub fn is_electrical(trade: &str, division: &str) -> bool {
 }
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -208,7 +208,7 @@ fn load(sp: &BuildingSpec) -> WholeJob {
 
 fn save(s: &mut Session, mut sp: BuildingSpec, w: &WholeJob) -> Result<()> {
     sp.wholejob = serde_json::to_value(w).unwrap_or(Value::Null);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
