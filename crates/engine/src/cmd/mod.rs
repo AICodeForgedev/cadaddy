@@ -206,6 +206,7 @@ pub(crate) mod underlay;
 mod unitmarks;
 mod unittypes;
 pub mod validate;
+pub(crate) mod validate_basis;
 pub mod validate_conduit;
 pub(crate) mod validate_coverage;
 pub mod validate_equip;
