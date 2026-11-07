@@ -10583,12 +10583,12 @@ fn rcp_title(t: &str) -> bool {
 /// light a round symbol of a light's size, dimensioned there), each view laid into every room of
 /// its type by its linework, as the ceiling heights are ([`typical_rcp_areas`]): the lights that
 /// land in a room's outline.
-fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<RcpLight> {
+fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
     let rooms = job_rooms(job);
     let (types, vocabulary) = room_types(&rooms);
-    let mut out: Vec<RcpLight> = Vec::new();
+    let mut read = RcpRead::default();
     if types.is_empty() {
-        return out;
+        return read;
     }
     let k_in = super::perceive::units_per_inch(d);
     let (lo_in, hi_in) = super::propfill::rcp_light_size_in();
@@ -10609,7 +10609,7 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<RcpLight
     let sheets: Vec<super::printmep::SheetRef> =
         job_sheet_refs(job).into_iter().filter(|r| r.view.is_none() && titles.iter().any(|p| inside(&r.rect, *p))).take(MAX_STAMP_SHEETS).collect();
     if sheets.is_empty() {
-        return out;
+        return read;
     }
     let bbox = |o: &[cadaddy_geom::Vec2]| {
         o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
@@ -10655,27 +10655,43 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<RcpLight
             for (ri, (_, _, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 let b = bbox(outline);
                 let margin = ROOM_FIT_MARGIN_FT * 12.0 * k_in;
-                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else { continue };
+                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else {
+                    read.unfitted.push(ri);
+                    continue;
+                };
                 // A light's place to the half inch, not to the fit's six.
                 let fit = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
                 for p in &mine {
                     let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
                     let q = cadaddy_geom::Vec2::new(q[0], q[1]);
                     if cadaddy_geom::point_in_polygon(outline, q) {
-                        out.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number) });
+                        read.lights.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number) });
+                    } else {
+                        *read.outside.entry(ri).or_default() += 1;
                     }
                 }
-                if out.len() >= MAX_STAMPED * 8 {
-                    return out;
+                if read.lights.len() >= MAX_STAMPED * 8 {
+                    return read;
                 }
             }
         }
     }
-    out
+    read
 }
 
-/// Ceiling luminaires one RCP step looks at, at most.
+/// What [`typical_rcp_lights`] read: the lights laid into their rooms; the rooms of an RCP's type
+/// its view could not be laid into (their indexes in the job's rooms); and per room, the lights
+/// that landed outside its outline.
+#[derive(Clone, Debug, Default)]
+struct RcpRead {
+    lights: Vec<RcpLight>,
+    unfitted: Vec<usize>,
+    outside: BTreeMap<usize, usize>,
+}
+
+/// Ceiling luminaires one RCP step looks at, at most; rooms it lists for review, at most.
 const MAX_RCP_LUMINAIRES: usize = 100_000;
+const MAX_RCP_REVIEW: usize = 200;
 
 /// Each ceiling luminaire of a typical room set where its type's reflected ceiling plan draws
 /// and dimensions it (the ceiling's layout governs where its lights go; the electrical plan's
@@ -10686,7 +10702,8 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     use cadaddy_doc::props::{self, Source, SourceKind};
     let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(Value::Null) };
     let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
-    let lights = typical_rcp_lights(s.doc()?, job);
+    let read = typical_rcp_lights(s.doc()?, job);
+    let lights = &read.lights;
     if lights.is_empty() {
         return Ok(json!({"lights": 0}));
     }
@@ -10712,12 +10729,14 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     };
     // Per room: its lights and its luminaires, nearest pairs first.
     let mut by_room: BTreeMap<usize, Vec<&RcpLight>> = BTreeMap::new();
-    for l in &lights {
+    for l in lights {
         by_room.entry(l.room).or_default().push(l);
     }
     let same_level = |a: &str, b: &str| a.eq_ignore_ascii_case(b) || storey_key(a) == storey_key(b);
     let mut moves: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String, f64)> = Vec::new();
     let (mut at_rcp, mut rooms_matched) = (0usize, 0usize);
+    let room_name = |i: usize| rooms.get(i).map(|(n, l, _, num)| format!("{} {} ({l})", n.trim(), num.trim())).unwrap_or_default();
+    let mut unmatched: Vec<Value> = Vec::new();
     let mut taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
     for (ri, ls) in &by_room {
         let Some((_, level, outline, _)) = rooms.get(*ri) else { continue };
@@ -10751,6 +10770,17 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             } else {
                 moves.push((*h, l.at - *p, l.view.clone(), dist / upf));
             }
+        }
+        // A light no luminaire of its room is within reach of: how far the nearest one is, for review.
+        let far: Vec<f64> = ls
+            .iter()
+            .enumerate()
+            .filter(|(li, _)| !used_l.contains(li))
+            .filter_map(|(_, l)| mine.iter().map(|(_, p, _)| l.at.dist(*p) / upf).min_by(f64::total_cmp))
+            .map(|f| (f * 10.0).round() / 10.0)
+            .collect();
+        if !far.is_empty() && unmatched.len() < MAX_RCP_REVIEW {
+            unmatched.push(json!({"room": room_name(*ri), "nearest_luminaire_ft": far}));
         }
     }
     let d = s.doc_mut()?;
@@ -10793,7 +10823,12 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     if moved > 0 {
         s.touch();
     }
-    Ok(json!({"lights": lights.len(), "rooms": rooms_matched, "at_their_rcp_spot": at_rcp, "moved": moved, "luminaires": lums.len()}))
+    Ok(json!({
+        "lights": lights.len(), "rooms": rooms_matched, "at_their_rcp_spot": at_rcp, "moved": moved, "luminaires": lums.len(),
+        "rooms_not_fitted": read.unfitted.iter().take(MAX_RCP_REVIEW).map(|i| room_name(*i)).collect::<Vec<_>>(),
+        "lights_outside_their_room": read.outside.values().sum::<usize>(),
+        "lights_no_luminaire_within_reach": unmatched,
+    }))
 }
 
 /// How far (in its text heights) a ceiling tag's type letter is over its height.
