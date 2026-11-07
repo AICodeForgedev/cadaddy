@@ -1427,6 +1427,16 @@ const MAX_LISTED: usize = 10_000;
 
 /// The built walls' plan footprints (their meshes' outlines), with their levels and handles.
 pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
+    wall_pieces(d, false)
+}
+
+/// The same pieces where the plans draw them: a stacked level's taken back by what the build moved
+/// it, in the frame of the spec's own positions.
+pub(crate) fn wall_footprints_on_plans(d: &Drawing) -> Vec<WallPiece> {
+    wall_pieces(d, true)
+}
+
+fn wall_pieces(d: &Drawing, on_plans: bool) -> Vec<WallPiece> {
     d.model
         .iter()
         .filter(|e| super::wallgen::made_as(e).as_deref() == Some("wall"))
@@ -1436,8 +1446,9 @@ pub(crate) fn wall_footprints(d: &Drawing) -> Vec<WallPiece> {
         })
         .flat_map(|(e, m)| {
             let level = super::bspec::made_level(e);
+            let back = if on_plans { super::bspec::stacked_by(e) } else { Vec2::ZERO };
             mesh_pieces(m).into_iter().filter_map(move |(outline, z)| {
-                let h = super::mep::hull(&outline);
+                let h: Vec<Vec2> = super::mep::hull(&outline).into_iter().map(|p| p - back).collect();
                 (h.len() >= 3).then(|| (level.clone(), e.handle, h, z))
             })
         })

@@ -453,6 +453,11 @@ pub(crate) struct Placed {
     pub space_max: [f64; 2],
 }
 
+/// Whether a point is inside a room's outline.
+pub(crate) fn inside_outline(poly: &[Vec2], p: Vec2) -> bool {
+    inside(poly, p)
+}
+
 fn inside(poly: &[Vec2], p: Vec2) -> bool {
     let mut c = false;
     let n = poly.len();
@@ -660,6 +665,29 @@ pub(crate) fn clear_of_crossing_walls(
     e.properties.insert("CORRECTED_VALUE".into(), format!("{:.1} in along its wall, clear of that wall", by / (upf / 12.0)));
     e.properties.insert("CORRECTION_REASON".into(), "a box can't stand in a wall; its place is lettering, not a located symbol".into());
     e.sources.insert("footprint".into(), "rule: on the wall nearest the lettering, slid clear of a crossing wall".into());
+    true
+}
+
+/// A panel placed by lettering or a proposal, whose place leaves it no working space: on the wall
+/// face near it that has it, in its own room, the place it was read kept beside it. What it moved
+/// from and to go on the object. Whether it moved.
+pub(crate) fn onto_clear_face(e: &mut cadaddy_walk3d::MepEquipment, f: &super::validate_gear::ClearFace, upf: f64) -> bool {
+    if !upf.is_finite() || upf <= 0.0 || (f.min == e.min && f.max == e.max) {
+        return false;
+    }
+    let was = e.properties.get("DESIGN_VALUE").cloned().unwrap_or_else(|| "at its lettering on the plan".to_string());
+    e.min = f.min;
+    e.max = f.max;
+    e.properties.insert("DESIGN_VALUE".into(), format!("{was}: {:.0} in clear in front", f.was_clear_in));
+    e.properties.insert(
+        "CORRECTED_VALUE".into(),
+        format!("{:.0} in from there on wall {}: {:.0} in clear in front", f.moved_in, f.wall.hex(), f.now_clear_in),
+    );
+    e.properties.insert(
+        "CORRECTION_REASON".into(),
+        "no working space where it was read (NEC 110.26(A)); that place is lettering or a proposal, not a located symbol".into(),
+    );
+    e.sources.insert("footprint".into(), "rule: the nearest wall face in its room with its working space".into());
     true
 }
 
