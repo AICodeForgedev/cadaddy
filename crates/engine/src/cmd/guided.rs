@@ -12108,8 +12108,34 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
+    // Gear the plans already locate takes its box from its submittal.
+    let mut resized: BTreeSet<String> = BTreeSet::new();
+    {
+        let work = super::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap_or_default();
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        for e in sp.mep.equipment.iter_mut() {
+            if let Some(g) = gear.get(&e.tag)
+                && super::gearbuild::take_submitted_size(e, g, &work, upf)
+            {
+                resized.insert(e.tag.to_ascii_uppercase());
+            }
+        }
+    }
+    // A panel its lettering put in a crossing wall stands clear of it.
+    let mut slid: BTreeSet<String> = BTreeSet::new();
+    {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let (walls, wall_types) = (sp.walls.clone(), sp.wall_types.clone());
+        for e in sp.mep.equipment.iter_mut() {
+            if super::gearbuild::clear_of_crossing_walls(e, &walls, &wall_types, upf) {
+                slid.insert(e.tag.to_ascii_uppercase());
+            }
+        }
+    }
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
-    let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    new_tags.extend(resized.iter().cloned());
+    new_tags.extend(slid.iter().cloned());
     let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
@@ -12119,8 +12145,25 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
     s.doc_mut()?.building_spec = Some(sp.to_json());
-    // The new gear built, then moved as the build moved its level to stack it.
+    // The new gear built, then moved as the build moved its level to stack it. What took its
+    // submittal's box is built again.
     let d = s.doc_mut()?;
+    let stale: Vec<cadaddy_doc::Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::bimlook::made_tag(e, "kind") == Some("equipment"))
+        .filter(|e| {
+            super::bimlook::made_tag(e, "tag").is_some_and(|t| {
+                let t = t.trim().to_ascii_uppercase();
+                resized.contains(&t) || slid.contains(&t)
+            })
+        })
+        .map(|e| e.handle)
+        .collect();
+    for h in &stale {
+        d.model.remove(*h);
+    }
+    super::tradeatoms::drop_hosted(d, &stale);
     let built = super::mep::build_equipment(d, &sp, Some(&new_tags));
     for h in built {
         let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
@@ -12150,6 +12193,12 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     );
     report_progress(s, json!({"step": "electrical gear"}), &line);
     s.echo(line);
+    if !resized.is_empty() {
+        s.echo(format!("  gear the plans locate, its box from its submittal: {}", resized.iter().cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if !slid.is_empty() {
+        s.echo(format!("  panels slid clear of a crossing wall: {} ({})", slid.len(), slid.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
+    }
     if !planned.room_issues.is_empty() {
         job.add_finding(
             StageName::BimBuild,
