@@ -53,6 +53,9 @@ struct DevBox {
     /// The device's own top centre: where the router ends the device's runs (a gang box sits
     /// at its first device; the others' runs end at their own device).
     at: Vec3,
+    /// Where the documents draw the device when an earlier build moved it for the field (Q6252):
+    /// a route read or laid before the move still ends there.
+    drawn: Option<Vec3>,
 }
 
 /// A device's pigtail (Q6243): its size and count, the circuit conductor it is spliced to, why.
@@ -1420,7 +1423,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         if let Some((bi, entry)) = gang.and_then(|g| gang_box.get(&g)).copied() {
             external.push((bi, *h));
             let c = plan.center();
-            boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
+            boxes.push(DevBox {
+                device: *h,
+                level: level.clone(),
+                circuit,
+                entry,
+                atom: bi,
+                at: Vec3::new(c.x, c.y, *z1),
+                drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+            });
             ganged_devices += 1;
             continue;
         }
@@ -1619,7 +1630,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             rated: false,
         });
         clear_of.push((bi, ring_of_box, if n_gang > 1 { members.to_vec() } else { vec![*h] }));
-        boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
+        boxes.push(DevBox {
+            device: *h,
+            level: level.clone(),
+            circuit,
+            entry,
+            atom: bi,
+            at: Vec3::new(c.x, c.y, *z1),
+            drawn: moved_for_field(ps, upf).map(|m| Vec3::new(c.x - m.x, c.y - m.y, *z1)),
+        });
     }
 
     // -- Boxes never share space (Q6252): a wall box over another moves along its face clear of
@@ -2867,14 +2886,15 @@ fn wall_rated(e: &cadaddy_doc::Entity, sp: &BuildingSpec) -> bool {
 }
 
 /// The box a routed run's end at `p` is at: the box of its level whose entry, or whose device
-/// (where the router ends the device's runs; a gang box holds several), is nearest it, within
-/// `touch`, whatever its circuit, never `not` (the box the run's other end is in).
+/// (where the router ends the device's runs; a gang box holds several; a device moved for the
+/// field also where the documents draw it), is nearest it, within `touch`, whatever its circuit,
+/// never `not` (the box the run's other end is in).
 fn touched_box(boxes: &[DevBox], level: &str, p: Vec3, touch: f64, not: Option<usize>) -> Option<usize> {
     boxes
         .iter()
         .enumerate()
         .filter(|(bi, b)| Some(*bi) != not && b.level.eq_ignore_ascii_case(level))
-        .map(|(bi, b)| (bi, super::dist(b.entry, p).min(super::dist(b.at, p))))
+        .map(|(bi, b)| (bi, super::dist(b.entry, p).min(super::dist(b.at, p)).min(b.drawn.map_or(f64::INFINITY, |q| super::dist(q, p)))))
         .filter(|(_, d)| *d <= touch)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(bi, _)| bi)
@@ -3119,6 +3139,27 @@ mod tests {
 
     fn length(ps: &[Path3]) -> f64 {
         ps.iter().map(|p| p.pts.windows(2).map(|w| if let [a, b] = w { super::super::dist(*a, *b) } else { 0.0 }).sum::<f64>()).sum()
+    }
+
+    #[test]
+    fn a_route_laid_before_its_device_moved_still_lands_in_its_box() {
+        // Test finding (fix-box-collisions): a device moved 2 ft for the field; the router's
+        // route still ended where the documents draw it, found no box within its touch and the
+        // circuit's raceway was cut there.
+        let moved = Vec3::new(24.0, 0.0, 0.0);
+        let drawn = Vec3::new(100.0, 50.0, 20.0);
+        let b = |drawn_at: Option<Vec3>| DevBox {
+            device: Handle(0x10),
+            level: "L1".into(),
+            circuit: "LP1-3".into(),
+            entry: drawn + moved + Vec3::new(0.0, 0.0, 2.0),
+            atom: 0,
+            at: drawn + moved,
+            drawn: drawn_at,
+        };
+        assert_eq!(touched_box(&[b(Some(drawn))], "L1", drawn, 6.0, None), Some(0));
+        assert_eq!(touched_box(&[b(None)], "L1", drawn, 6.0, None), None, "without its drawn spot the route finds nothing");
+        assert_eq!(touched_box(&[b(Some(drawn))], "L2", drawn, 6.0, None), None);
     }
 
     #[test]
