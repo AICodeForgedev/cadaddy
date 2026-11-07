@@ -638,6 +638,51 @@ pub fn mounting_height(text: &str) -> Option<f64> {
     (v > 0.0 && v <= 30.0).then_some(v)
 }
 
+/// The box (`[x0, y0, x1, y1]`, the block's own units) of what a symbol block draws: its lines,
+/// polylines, circles and arcs (the first 64 objects).
+fn symbol_extent(d: &Drawing, block: &str) -> Option<[f64; 4]> {
+    let blk = d.block(block)?;
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut add = |x: f64, y: f64| {
+        if x.is_finite() && y.is_finite() {
+            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        }
+    };
+    for be in blk.entities.iter().take(64) {
+        match &be.kind {
+            EntityKind::Line(l) => {
+                add(l.a.x, l.a.y);
+                add(l.b.x, l.b.y);
+            }
+            EntityKind::LwPolyline(p) => p.vertices.iter().take(256).for_each(|v| add(v.p.x, v.p.y)),
+            EntityKind::Circle(c) => {
+                add(c.center.x - c.radius, c.center.y - c.radius);
+                add(c.center.x + c.radius, c.center.y + c.radius);
+            }
+            EntityKind::Arc(a) => {
+                add(a.center.x - a.radius, a.center.y - a.radius);
+                add(a.center.x + a.radius, a.center.y + a.radius);
+            }
+            _ => {}
+        }
+    }
+    let base = blk.base;
+    (b[0] <= b[2] && b[1] <= b[3]).then(|| [b[0] - base.x, b[1] - base.y, b[2] - base.x, b[3] - base.y])
+}
+
+/// Where an insert puts a box of its block's (`[x0, y0, x1, y1]` from the block's base): the
+/// box round its four corners placed.
+fn placed_box(b: [f64; 4], ins: &cadaddy_doc::Insert) -> Option<[f64; 4]> {
+    let (sn, cs) = ins.rotation.sin_cos();
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])] {
+        let (qx, qy) = (x * ins.scale.x, y * ins.scale.y);
+        let (px, py) = (ins.insert.x + qx * cs - qy * sn, ins.insert.y + qx * sn + qy * cs);
+        out = [out[0].min(px), out[1].min(py), out[2].max(px), out[3].max(py)];
+    }
+    out.iter().all(|v| v.is_finite()).then_some(out)
+}
+
 /// Whether the symbol `block` draws a callout bubble: a round shape split by a line through its
 /// middle (the detail number over the sheet number).
 pub fn split_round_symbol(d: &Drawing, block: &str) -> bool {
@@ -694,17 +739,20 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
     // among them; the symbol draws its first copy's strokes, so its own drawing says nothing).
     // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
-    // among them; the symbol draws its first copy's strokes, so its own drawing says nothing).
-    let symbol_at: Vec<[f64; 2]> = d
-        .model
-        .iter()
-        .filter_map(|e| match &e.kind {
-            EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => Some([ins.insert.x, ins.insert.y]),
-            _ => None,
-        })
-        .filter(|p| p.iter().all(|v| v.is_finite()))
-        .take(MAX_PIECES)
-        .collect();
+    // among them; the symbol draws its first copy's strokes from its first copy's base point, so
+    // only where it reaches says anything): each one's box.
+    let mut block_boxes: BTreeMap<&str, Option<[f64; 4]>> = BTreeMap::new();
+    let mut symbol_boxes: Vec<[f64; 4]> = Vec::new();
+    for e in d.model.iter() {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        if symbol_boxes.len() >= MAX_PIECES || !ins.block.starts_with("PDF-SYM-") {
+            continue;
+        }
+        let local = *block_boxes.entry(ins.block.as_str()).or_insert_with(|| symbol_extent(d, &ins.block));
+        if let Some(b) = local.and_then(|b| placed_box(b, ins)) {
+            symbol_boxes.push(b);
+        }
+    }
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-9);
@@ -951,9 +999,9 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let (kind, shape_kind, boundary, divider, enlarged_word) = shape(c, r);
         // Its divider drawn between the two lines, or the symbol the import made of the bubble
-        // on it (its middle between them): else a mark over a label (a fixture's `E` over its
-        // circuit `A-1`), no callout.
-        if !divider && !symbol_at.iter().any(|p| dist(*p, c) <= 0.5 * r) {
+        // under them: else a mark over a label (a fixture's `E` over its circuit `A-1`), no
+        // callout.
+        if !divider && !symbol_boxes.iter().any(|b| c[0] >= b[0] && c[0] <= b[2] && c[1] >= b[1] && c[1] <= b[3]) {
             continue;
         }
         used_texts.insert(bi);

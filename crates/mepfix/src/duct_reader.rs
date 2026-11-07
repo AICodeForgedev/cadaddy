@@ -818,6 +818,8 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     let pick = |e: &cadaddy_doc::Entity, block: &str| all_layers || is_pdf_symbol(block) || e.common.layer.eq_ignore_ascii_case("DEVICE");
     let (sym_rects, sym_lines) = insert_geometry(d, &pick);
     device_rects.extend(sym_rects.into_iter().map(|(lo, hi, block)| (lo, hi, all_layers || is_pdf_symbol(&block))));
+    // The boxes only their outline drawn in pieces makes (an equipment's frame may be one too).
+    let mut pieced: Vec<(Vec2, Vec2)> = Vec::new();
     if all_layers {
         // Boxes a PDF path draws back to its start without closing it.
         for e in d.model.iter() {
@@ -829,6 +831,9 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             let pts: Vec<Vec2> = p.vertices.iter().map(|v| v.p).collect();
             if let Some((lo, hi)) = as_box(&pts, p.closed) {
                 device_rects.push((lo, hi, true));
+            } else if let Some((lo, hi)) = outline_box(&pts, p.closed) {
+                device_rects.push((lo, hi, true));
+                pieced.push((lo, hi));
             }
         }
     }
@@ -847,11 +852,18 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         // Count internal lines to classify: inside the box, not its own sides (every box
         // would be a grille by them).
         let m = 0.05 * w.min(h);
+        // (A line along a side, just inside it, is a double-drawn frame's, not a bar.)
+        let along_side = |l: &LineSeg| {
+            let d = l.b - l.a;
+            let mid = (l.a + l.b) * 0.5;
+            (d.y.abs() <= 0.02 * h && (mid.y - min.y < FRAME_SHARE * h || max.y - mid.y < FRAME_SHARE * h))
+                || (d.x.abs() <= 0.02 * w && (mid.x - min.x < FRAME_SHARE * w || max.x - mid.x < FRAME_SHARE * w))
+        };
         let internal: Vec<&&LineSeg> = device_lines
             .iter()
             .filter(|l| {
                 let mid = (l.a + l.b) * 0.5;
-                mid.x > min.x + m && mid.x < max.x - m && mid.y > min.y + m && mid.y < max.y - m
+                mid.x > min.x + m && mid.x < max.x - m && mid.y > min.y + m && mid.y < max.y - m && !along_side(l)
             })
             .collect();
 
@@ -865,11 +877,22 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
             d.y.abs() < h * 0.2 && d.x.abs() > w * 0.3
         });
 
-        let kind = if has_diag && internal.len() >= 2 {
+        // A diffuser's face: a frame inside its outline (its corners joined to the outline's by
+        // diagonals or not), no grille's bars across the whole box.
+        let bars = internal
+            .iter()
+            .filter(|l| {
+                let d = l.b - l.a;
+                d.y.abs() < h * 0.05 && d.x.abs() > w * 0.8
+            })
+            .count();
+        let kind = if bars < 2 && inner_frame(&internal, *min, *max) {
+            "supply_diffuser"
+        } else if has_diag && internal.len() >= 2 {
             // Check for inner rectangle (supply diffuser has one).
             let inner_rects =
                 device_rects.iter().filter(|(mi, ma, _)| mi.x > min.x + 0.5 && ma.x < max.x - 0.5 && mi.y > min.y + 0.5 && ma.y < max.y - 0.5);
-            if inner_rects.count() > 0 { "supply_diffuser" } else { "exhaust_grille" }
+            if inner_rects.count() > 0 || inner_frame(&internal, *min, *max) { "supply_diffuser" } else { "exhaust_grille" }
         } else if has_horiz && internal.len() >= 2 {
             "return_grille"
         } else {
@@ -883,10 +906,23 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
     let near = pattern_neighbours(&candidates.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>());
     // On a sheet of any layer (a PDF import), a symbol is an air device only with its tag
     // beside it (`CD-1`, `RG-2`, `150 CFM`, as the air device schedule names them).
-    let tags: Vec<(Vec2, f64)> = if candidates.iter().any(|c| c.3) {
-        pen_texts(d, bg).into_iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (at, h.max(0.0))).collect()
+    // A box drawn in pieces with an equipment mark (`EF` over its number) right by it, nearer
+    // than any air device's tag, is that equipment, whatever tag a grille beside it carries.
+    let (tags, equipment_marks): (Vec<(Vec2, f64)>, Vec<Vec2>) = if candidates.iter().any(|c| c.3) {
+        let texts = pen_texts(d, bg);
+        let marks = crate::wordrules::words("equipment.marks");
+        let equipment_mark = |t: &str| {
+            let up = t.trim().to_ascii_uppercase();
+            let letters: String = up.chars().take_while(char::is_ascii_uppercase).collect();
+            let rest = up.get(letters.len()..).unwrap_or("").trim_start_matches(['-', ' ']);
+            marks.contains(&letters.as_str()) && rest.chars().all(|c| c.is_ascii_digit())
+        };
+        (
+            texts.iter().filter(|(t, ..)| is_terminal_tag(t)).map(|(_, at, _, h)| (*at, h.max(0.0))).collect(),
+            texts.iter().filter(|(t, ..)| equipment_mark(t)).map(|(_, at, ..)| *at).take(MAX_TERMINALS).collect(),
+        )
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     for (i, (min, max, kind, needs_tag)) in candidates.iter().enumerate() {
         if near.get(i).copied().unwrap_or(0) >= 2 {
@@ -901,11 +937,20 @@ fn detect_terminals(d: &Drawing, all_layers: bool, pdf_filter: bool) -> Vec<Dete
         if *needs_tag {
             let size = (max.x - min.x).max(max.y - min.y);
             let tagged = tags.iter().any(|(at, h)| box_gap(*at, *min, *max) <= size * 1.5 + h * 6.0);
-            if !tagged {
+            let nearest_tag = tags.iter().map(|(at, _)| box_gap(*at, *min, *max)).fold(f64::INFINITY, f64::min);
+            let equipment = pieced.iter().any(|(lo, hi)| lo == min && hi == max)
+                && equipment_marks.iter().any(|at| box_gap(*at, *min, *max) < nearest_tag.min(size));
+            if !tagged || equipment {
                 continue;
             }
         }
-        terminals.push(DetectedTerminal { kind: (*kind).into(), at: (*min + *max) * 0.5, confidence: 0.7 });
+        // One device drawn by two paths (a print's box often comes as two overlapping ones).
+        let at = (*min + *max) * 0.5;
+        let size = (max.x - min.x).max(max.y - min.y);
+        if terminals.iter().any(|t: &DetectedTerminal| t.kind == *kind && t.at.dist(at) <= 0.25 * size) {
+            continue;
+        }
+        terminals.push(DetectedTerminal { kind: (*kind).into(), at, confidence: 0.7 });
         if terminals.len() >= MAX_TERMINALS {
             break;
         }
@@ -958,7 +1003,7 @@ fn insert_geometry(d: &Drawing, pick: &dyn Fn(&cadaddy_doc::Entity, &str) -> boo
                     if !pts.iter().all(|q| q.is_finite()) {
                         continue;
                     }
-                    if let Some((lo, hi)) = as_box(&pts, p.closed) {
+                    if let Some((lo, hi)) = as_box(&pts, p.closed).or_else(|| outline_box(&pts, p.closed)) {
                         rects.push((lo, hi, ins.block.clone()));
                     }
                     let n = pts.len();
@@ -1006,6 +1051,99 @@ fn as_box(pts: &[Vec2], closed: bool) -> Option<(Vec2, Vec2)> {
     let lo = Vec2::new(c.iter().map(|q| q.x).fold(f64::INFINITY, f64::min), c.iter().map(|q| q.y).fold(f64::INFINITY, f64::min));
     let hi = Vec2::new(c.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max), c.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max));
     (hi.x - lo.x > tol && hi.y - lo.y > tol).then_some((lo, hi))
+}
+
+/// Lines along a box's side within this share of its size inside it frame it (a double line).
+const FRAME_SHARE: f64 = 0.12;
+/// Least share of its outline a box drawn in pieces must draw, and of each of its sides.
+const OUTLINE_SHARE: f64 = 0.7;
+const OUTLINE_SIDE_SHARE: f64 = 0.25;
+
+/// The box a path draws round its outline, level and plumb strokes only, every one on the box's
+/// sides, going back over itself or leaving gaps (a PDF path drawing a diffuser's frame, its
+/// neck's opening left in one side): most of the outline and some of each side drawn.
+fn outline_box(pts: &[Vec2], closed: bool) -> Option<(Vec2, Vec2)> {
+    if pts.len() < 4 || pts.len() > 64 || !pts.iter().all(|p| p.is_finite()) {
+        return None;
+    }
+    let lo = Vec2::new(pts.iter().map(|q| q.x).fold(f64::INFINITY, f64::min), pts.iter().map(|q| q.y).fold(f64::INFINITY, f64::min));
+    let hi = Vec2::new(pts.iter().map(|q| q.x).fold(f64::NEG_INFINITY, f64::max), pts.iter().map(|q| q.y).fold(f64::NEG_INFINITY, f64::max));
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    let tol = 0.02 * w.max(h);
+    if !(w > 0.0 && h > 0.0) || w.min(h) < 0.2 * w.max(h) {
+        return None;
+    }
+    // Each side's drawn stretches (bottom, top, left, right), along it.
+    let mut sides: [Vec<(f64, f64)>; 4] = Default::default();
+    let n = pts.len();
+    let m = if closed { n } else { n - 1 };
+    for i in 0..m {
+        let (Some(&a), Some(&b)) = (pts.get(i), pts.get((i + 1) % n)) else { continue };
+        if a.dist(b) <= tol {
+            continue;
+        }
+        let side = if (a.y - b.y).abs() <= tol {
+            if (a.y - lo.y).abs() <= tol {
+                0
+            } else if (a.y - hi.y).abs() <= tol {
+                1
+            } else {
+                return None;
+            }
+        } else if (a.x - b.x).abs() <= tol {
+            if (a.x - lo.x).abs() <= tol {
+                2
+            } else if (a.x - hi.x).abs() <= tol {
+                3
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        };
+        let (u, v) = if side < 2 { (a.x.min(b.x), a.x.max(b.x)) } else { (a.y.min(b.y), a.y.max(b.y)) };
+        sides.get_mut(side)?.push((u, v));
+    }
+    let drawn = |spans: &mut Vec<(f64, f64)>| -> f64 {
+        spans.sort_by(|p, q| p.0.total_cmp(&q.0));
+        let (mut total, mut end) = (0.0, f64::NEG_INFINITY);
+        for &(u, v) in spans.iter() {
+            let from = u.max(end);
+            if v > from {
+                total += v - from;
+            }
+            end = end.max(v);
+        }
+        total
+    };
+    let mut total = 0.0;
+    for (k, spans) in sides.iter_mut().enumerate() {
+        let len = if k < 2 { w } else { h };
+        let got = drawn(spans);
+        if got < OUTLINE_SIDE_SHARE * len {
+            return None;
+        }
+        total += got;
+    }
+    (total >= OUTLINE_SHARE * 2.0 * (w + h)).then_some((lo, hi))
+}
+
+/// Whether the strokes inside a box (`lo..hi`) frame a smaller box in it: level strokes at two
+/// heights and plumb ones at two places (pieces of them: a neck's opening may break a side), the
+/// frame a diffuser's face draws inside its outline.
+fn inner_frame(internal: &[&&LineSeg], lo: Vec2, hi: Vec2) -> bool {
+    let (w, h) = (hi.x - lo.x, hi.y - lo.y);
+    let (mut ys, mut xs): (Vec<f64>, Vec<f64>) = (Vec::new(), Vec::new());
+    for l in internal {
+        let d = l.b - l.a;
+        if d.y.abs() <= 0.02 * h && d.x.abs() >= 0.1 * w {
+            ys.push((l.a.y + l.b.y) / 2.0);
+        } else if d.x.abs() <= 0.02 * w && d.y.abs() >= 0.1 * h {
+            xs.push((l.a.x + l.b.x) / 2.0);
+        }
+    }
+    let spread = |v: &[f64]| v.iter().copied().fold(f64::NEG_INFINITY, f64::max) - v.iter().copied().fold(f64::INFINITY, f64::min);
+    xs.len() >= 2 && ys.len() >= 2 && spread(&xs) >= 0.2 * w && spread(&ys) >= 0.2 * h
 }
 
 /// The most air devices read on one sheet.
@@ -2186,6 +2324,78 @@ mod tests {
         one.barred_box(true, [500.0, 500.0], 14.0);
         one.text(true, "TEXT", "RG-5", [520.0, 515.0], 9.0);
         assert_eq!(detect_terminals(&one.d, true, false).len(), 1);
+    }
+
+    /// A ceiling diffuser as a print's paths draw it: its outline one open path that leaves the
+    /// neck's opening in its top side, its face's frame drawn on into the diagonals to the
+    /// outline's corners, and its tag `SD-3` with its size and airflow beside it. It is a supply
+    /// diffuser (once, though a second path draws its outline again), and so is one whose face
+    /// is a plain frame with its round neck in it; an X in a closed box is an exhaust grille
+    /// still, a box with bars across it a return grille; three sides of a box with an X in them
+    /// are no device, nor is an exhaust fan's box by its mark.
+    #[test]
+    fn a_diffuser_whose_outline_a_print_draws_in_pieces_is_read() {
+        let mut p = Print::new().with_both_pens();
+        let path = |p: &mut Print, pts: &[[f64; 2]], closed: bool| {
+            let vertices = pts.iter().map(|q| cadaddy_geom::PolyVertex::new(Vec2::new(q[0], q[1]))).collect();
+            let kind = EntityKind::LwPolyline(cadaddy_doc::LwPolyline { vertices, closed, const_width: 0.0, elevation: 0.0, plinegen: false });
+            p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), kind).expect("path");
+        };
+        let (cx, cy, o, i) = (1000.0, 500.0, 11.6, 5.8);
+        let outline = [[cx - 4.0, cy + o], [cx - o, cy + o], [cx - o, cy - o], [cx + o, cy - o], [cx + o, cy + o], [cx + 4.0, cy + o]];
+        path(&mut p, &outline, false);
+        // The same outline once more, closed by the flag, going back over its top.
+        path(&mut p, &[[cx + o, cy + o], [cx + o, cy - o], [cx - o, cy - o], [cx - o, cy + o], [cx - 4.0, cy + o], [cx - o, cy + o]], true);
+        path(&mut p, &[[cx - o, cy + o], [cx - i, cy + i], [cx - i, cy - i], [cx + i, cy - i], [cx + o, cy - o]], false);
+        path(&mut p, &[[cx + o, cy + o], [cx + i, cy + i], [cx + i, cy - i]], false);
+        path(&mut p, &[[cx - o, cy - o], [cx - i, cy - i]], false);
+        // The face's top in two short pieces either side of the neck.
+        path(&mut p, &[[cx - i, cy + i], [cx - 3.0, cy + i]], false);
+        path(&mut p, &[[cx + 3.0, cy + i], [cx + i, cy + i]], false);
+        p.text(false, "TEXT", "SD-3", [cx - 45.0, cy + 4.0], 4.58);
+        p.text(false, "TEXT", "150", [cx - 45.0, cy - 4.0], 4.58);
+        // A diffuser with a plain frame for its face and its round neck in it, tagged.
+        let (sx, sy) = (1150.0, 500.0);
+        path(&mut p, &[[sx - 8.0, sy - 8.0], [sx + 8.0, sy - 8.0], [sx + 8.0, sy + 8.0], [sx - 8.0, sy + 8.0]], true);
+        path(&mut p, &[[sx - 5.0, sy - 5.0], [sx + 5.0, sy - 5.0], [sx + 5.0, sy + 5.0], [sx - 5.0, sy + 5.0]], true);
+        let neck = EntityKind::Circle(cadaddy_doc::Circle { center: cadaddy_geom::Vec3::new(sx, sy, 0.0), radius: 3.0 });
+        p.d.add(&cadaddy_doc::Space::Model, Print::common(false, "PDF-GEOMETRY"), neck).expect("neck");
+        p.text(false, "TEXT", "SD-2", [sx + 12.0, sy], 4.58);
+        // A return grille: a box with bars across it, tagged.
+        p.barred_box(false, [1450.0, 500.0], 8.0);
+        p.text(false, "TEXT", "RG-1", [1462.0, 500.0], 4.58);
+        // The exhaust grille: a closed box with an X, tagged.
+        let (gx, gy) = (1300.0, 500.0);
+        path(&mut p, &[[gx - 8.0, gy - 8.0], [gx + 8.0, gy - 8.0], [gx + 8.0, gy + 8.0], [gx - 8.0, gy + 8.0]], true);
+        p.line(false, [gx - 8.0, gy - 8.0], [gx + 8.0, gy + 8.0]);
+        p.line(false, [gx - 8.0, gy + 8.0], [gx + 8.0, gy - 8.0]);
+        p.text(false, "TEXT", "EG-1", [gx + 12.0, gy], 4.58);
+        // A duct's box drawn with a double line (a second square just inside the first), a
+        // grille's tag by it: no grille.
+        let (qx, qy) = (1900.0, 500.0);
+        path(&mut p, &[[qx - 7.4, qy - 7.4], [qx + 7.4, qy - 7.4], [qx + 7.4, qy + 7.4], [qx - 7.4, qy + 7.4]], true);
+        path(&mut p, &[[qx + 6.9, qy + 6.6], [qx + 6.9, qy - 6.6], [qx - 6.9, qy - 6.6], [qx - 6.9, qy + 6.6], [qx + 6.9, qy + 6.6]], false);
+        p.text(false, "TEXT", "RG-3", [qx + 12.0, qy], 4.58);
+        // An exhaust fan's box drawn in pieces (a frame in it) by its mark `EF` over its number,
+        // a grille's tag farther off.
+        let (fx, fy) = (1750.0, 500.0);
+        path(&mut p, &[[fx - 2.0, fy + 8.0], [fx - 8.0, fy + 8.0], [fx - 8.0, fy - 8.0], [fx + 8.0, fy - 8.0], [fx + 8.0, fy + 8.0], [fx + 2.0, fy + 8.0]], false);
+        path(&mut p, &[[fx - 4.0, fy - 4.0], [fx + 4.0, fy - 4.0], [fx + 4.0, fy + 4.0], [fx - 4.0, fy + 4.0]], true);
+        p.text(false, "TEXT", "EF", [fx + 14.0, fy + 2.0], 4.58);
+        p.text(false, "TEXT", "5", [fx + 15.0, fy - 5.0], 4.58);
+        p.text(false, "TEXT", "RG-4", [fx - 40.0, fy + 20.0], 4.58);
+        // Three sides of a box with an X in them (casework), tagged all the same.
+        let (ux, uy) = (1600.0, 500.0);
+        path(&mut p, &[[ux - 10.0, uy + 10.0], [ux - 10.0, uy - 10.0], [ux + 10.0, uy - 10.0], [ux + 10.0, uy + 10.0]], false);
+        p.line(false, [ux - 10.0, uy - 10.0], [ux + 10.0, uy + 10.0]);
+        p.line(false, [ux - 10.0, uy + 10.0], [ux + 10.0, uy - 10.0]);
+        p.text(false, "TEXT", "EG-2", [ux + 14.0, uy], 4.58);
+        let got: Vec<(String, [f64; 2])> =
+            detect_terminals(&p.d, true, false).iter().map(|t| (t.kind.clone(), [t.at.x.round(), t.at.y.round()])).collect();
+        let mut got = got;
+        got.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]));
+        let want = [("supply_diffuser", [cx, cy]), ("supply_diffuser", [sx, sy]), ("exhaust_grille", [gx, gy]), ("return_grille", [1450.0, 500.0])];
+        assert_eq!(got, want.map(|(k, at)| (k.to_string(), at)));
     }
 
     #[test]
