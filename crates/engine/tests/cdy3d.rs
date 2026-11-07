@@ -39,8 +39,8 @@ fn room() -> Drawing {
         let m = Mesh { vertices: q.to_vec(), faces: vec![MeshFace { v: vec![0, 1, 2, 3], hidden: 0 }], kind: MeshKind::Polyface };
         d.add(&Space::Model, Common::default(), EntityKind::Mesh(m)).unwrap();
     }
-    d.building_spec = Some(r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into());
-    d.tours = Some(r#"[{"name":"In","stops":[]}]"#.into());
+    d.building_spec = Some(r#"{"levels":[{"name":"L1","elevation_ft":0,"height_ft":10}]}"#.into()).into();
+    d.tours = Some(r#"[{"name":"In","stops":[]}]"#.into()).into();
     d
 }
 

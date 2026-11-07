@@ -63,7 +63,8 @@ fn write(path: &Path, text: &str) {
 }
 
 fn job_state(s: &Session) -> Value {
-    serde_json::from_str::<Value>(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state")["guided_job"].clone()
+    serde_json::from_str::<Value>(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")["guided_job"]
+        .clone()
 }
 
 fn start(pdfs: &Path, more: Value) -> (Session, cadaddy_engine::Result<Value>) {

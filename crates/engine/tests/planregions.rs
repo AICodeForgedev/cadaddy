@@ -83,7 +83,7 @@ fn write_two_view_as(dir: &std::path::Path, lower: &str, upper: &str, number: &s
 }
 
 fn job_state(s: &Session) -> Value {
-    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state")
+    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")
 }
 
 fn run_job(dir: &std::path::Path) -> Session {
@@ -163,7 +163,7 @@ fn a_sheet_with_two_plans_gives_each_level_only_its_own_plan() {
     // The drawn total (filled-in work is counted apart, by_made).
     let model = q["totals"]["by_made"]["drawn"]["duct_length_ft"].as_f64().expect("drawn duct");
     assert!(model <= duct + 1.0 && model >= 0.95 * duct, "{} read {duct}", q["totals"]);
-    let state = s.doc().ok().and_then(|d| d.agent.clone()).unwrap_or_default();
+    let state = s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).unwrap_or_default();
     assert!(model >= duct - 1.0 || state.contains("MEP items not placed"), "runs left out without a finding: {} read {duct}", q["totals"]);
     // levels.list: each level's entry for the sheet names its own view, and no sheet is on two
     // levels untyped.

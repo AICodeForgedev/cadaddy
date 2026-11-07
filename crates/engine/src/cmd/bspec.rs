@@ -439,7 +439,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
     let sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
     let issues = validate(s.doc()?, &sp);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {

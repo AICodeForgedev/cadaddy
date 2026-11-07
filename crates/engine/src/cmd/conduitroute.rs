@@ -5214,7 +5214,7 @@ pub(crate) fn reroute(s: &mut Session) -> Result<Value> {
     store_report(d, &report);
     store_cable(d, &routed);
     store_base(d, &replaced);
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     s.touch();
     Ok(json!({
         "routed": true, "removed": old.len(), "atoms": atoms["atoms"], "seconds": (t0.elapsed().as_secs_f64() * 10.0).round() / 10.0,

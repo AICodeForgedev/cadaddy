@@ -225,7 +225,8 @@ fn a_two_view_sheet_is_one_entry_and_its_page_is_imported_once() {
     let e = &classify["result"]["sheets"][0];
     assert_eq!(e["number"], "E-1A", "{e}");
     assert_eq!(e["levels"], json!(["1", "2"]), "{e}");
-    let agent: serde_json::Value = serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state");
+    let agent: serde_json::Value =
+        serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state");
     let regions = agent["guided_job"]["sheet_regions"].as_array().cloned().unwrap_or_default();
     // The page is imported once: one rectangle, split into its two views (Q6030), each level
     // taking only its own plan.
@@ -265,7 +266,7 @@ fn the_guided_job_puts_its_devices_in_the_model_and_the_bom() {
     assert_eq!(inserted + not_placed, counted + stamped, "{dv:#}");
     assert!(not_placed * 20 <= counted, "most devices land on the architecture: {dv:#}");
     if not_placed > 0 {
-        let state = s.doc().ok().and_then(|d| d.agent.clone()).unwrap_or_default();
+        let state = s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).unwrap_or_default();
         assert!(state.contains("Devices not placed"), "left out with a finding");
     }
     let next = s.execute("job.next", &json!({})).expect("job.next");

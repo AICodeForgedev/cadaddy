@@ -510,7 +510,7 @@ fn a_view_registered_on_another_levels_plan_places_no_marker() {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     let e201 = sp["sheets"].as_array_mut().unwrap().iter_mut().find(|l| l["number"] == "E-201").unwrap();
     e201["registration"]["reference"] = json!("E-101");
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = keynote_findings(&mut j.s, "L2");
     assert!(fs.is_empty(), "{r}");
     assert_eq!(

@@ -338,14 +338,14 @@ fn overrides_are_saved_with_the_drawing_and_apply_once_after_reopening() {
 fn hostile_overrides_never_panic() {
     let mut s = built();
     for text in ["", "{}", "[]", "null", r#"{"version":1,"next_id":4294967295,"items":[]}"#, r#"{"version":1,"next_id":1,"items":[{"id":1}]}"#] {
-        s.doc_mut().unwrap().overrides = Some(text.into());
+        s.doc_mut().unwrap().overrides = Some(text.into()).into();
         let _ = s.execute("override.list", &json!({}));
         let _ = s.execute("override.reapply", &json!({}));
         let _ = s.execute("override.show", &json!({}));
         let _ = s.execute("wallgen", &json!({"rules": rules(9.5)}));
     }
     // A full id counter refuses new overrides instead of wrapping.
-    s.doc_mut().unwrap().overrides = Some(r#"{"version":1,"next_id":4294967295,"items":[]}"#.into());
+    s.doc_mut().unwrap().overrides = Some(r#"{"version":1,"next_id":4294967295,"items":[]}"#.into()).into();
     let w = wall(&s, 0.0, 's').unwrap();
     assert!(s.execute("override.add", &json!({"handle": w.hex(), "kind": "verify"})).is_err());
     for p in [json!({"id": -1}), json!({"id": "OV-"}), json!({"id": [1]}), json!({"all": "yes"})] {

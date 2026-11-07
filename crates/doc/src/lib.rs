@@ -107,8 +107,13 @@ impl Space {
     }
 }
 
-/// What a drawing's header and small tables hold, as far as undo counts it per step.
-const DRAWING_FIXED_BYTES: usize = 16 * 1024;
+/// What a table record holds besides its struct, roughly: its name and other short texts.
+const RECORD_TEXT_BYTES: usize = 64;
+
+/// Roughly what `v` holds: each record's struct and `extra` bytes besides.
+fn table_bytes<T>(v: &[T], extra: impl Fn(&T) -> usize) -> usize {
+    v.iter().fold(v.len().saturating_mul(std::mem::size_of::<T>().saturating_add(RECORD_TEXT_BYTES)), |n, r| n.saturating_add(extra(r)))
+}
 
 /// The name an embedded texture image is kept under in [`Drawing::embedded`]: this, then its path.
 pub const TEXTURE_PREFIX: &str = "texture:";
@@ -177,34 +182,34 @@ pub struct Drawing {
     pub project_rules: projrules::ProjectRules,
     /// The building spec (`cadaddy-walk3d`'s `BuildingSpec` as JSON text, `bspec.set`): what the
     /// plan means as a 3D building. Kept in the named-object dictionary (`CADADDY_BSPEC`).
-    pub building_spec: Option<String>,
+    pub building_spec: shared::Shared<Option<String>>,
     /// Saved viewpoints and camera tours (`cadaddy-walk3d`'s `Tours` as JSON text, `tour.*`).
     /// Kept in the named-object dictionary (`CADADDY_TOURS`).
-    pub tours: Option<String>,
+    pub tours: shared::Shared<Option<String>>,
     /// BCF issues (`cmd::bcf`'s topics as JSON text, `bcf.*`): coordination issues raised on the
     /// model, each with its viewpoint, selection, comments and snapshot. Kept in the named-object
     /// dictionary (`CADADDY_BCF`).
-    pub bcf: Option<String>,
+    pub bcf: shared::Shared<Option<String>>,
     /// The 4D construction schedule and its links to the model (`cadaddy-walk3d`'s `Schedule4d` as
     /// JSON text, `fourd.*`). Kept in the named-object dictionary (`CADADDY_4D`).
-    pub schedule4d: Option<String>,
+    pub schedule4d: shared::Shared<Option<String>>,
     /// Parametric parts (`cmd::part`'s parts as JSON text, `part.*`): each part's parameters and
     /// feature tree (sketches, pads, pockets, revolves, fillets, chamfers); its evaluated solid is
     /// an ordinary 3D solid in the drawing. Kept in the named-object dictionary (`CADADDY_PARTS`).
-    pub parts: Option<String>,
+    pub parts: shared::Shared<Option<String>>,
     /// Overrides of generated elements (`overrides::Overrides` as JSON text, `override.*`): the
     /// edits a person, an agent or an import made to what a build generated, put back after every
     /// re-run. Kept in the named-object dictionary (`CADADDY_OVERRIDES`).
-    pub overrides: Option<String>,
+    pub overrides: shared::Shared<Option<String>>,
     /// What agents (and people) working on the project through its tools keep in it (JSON text,
     /// `project.*` / `review.*`): handoff notes, review decisions with their citations, the
     /// change log and the revision count, so a fresh agent resumes from the file alone. Kept in
     /// the named-object dictionary (`CADADDY_AGENT`).
-    pub agent: Option<String>,
+    pub agent: shared::Shared<Option<String>>,
     /// Import accuracy check results (JSON text, `import.check`): the checks that ran on this
     /// drawing after a PDF import, their pass/fail status and scores, so the BIM pipeline can
     /// gate on import quality. Kept in the .cdy manifest (`importCheck`).
-    pub import_check: Option<String>,
+    pub import_check: shared::Shared<Option<String>>,
     /// Files the drawing carries inside itself, by name: texture images its materials name
     /// (`texture:<path>`, see [`Drawing::embedded_texture`]) and the baked lightmap
     /// (`lightmap.png`, `lightmap.json`). Kept in .cdy files, so a walkthrough model opens on
@@ -252,12 +257,19 @@ impl Drawing {
         // Every step keeps its own copy of the header and the small tables (measured: about 12 KB
         // for the header, the rest is a few hundred bytes a table); the big tables are shared
         // until an edit changes them.
-        let mut bytes = DRAWING_FIXED_BYTES.saturating_add(self.model.unique_bytes(&newer.model));
+        let mut bytes = self.by_value_bytes().saturating_add(self.model.unique_bytes(&newer.model));
         if !self.blocks.same(&newer.blocks) {
             bytes = bytes.saturating_add(self.blocks.keys().map(|k| k.len().saturating_add(96)).fold(0, usize::saturating_add));
         }
         if !self.constraints.same(&newer.constraints) {
             bytes = bytes.saturating_add(self.constraints.len().saturating_mul(256));
+        }
+        // The project's JSON texts (the building spec, the agent's notes…) can run to tens of
+        // megabytes: a step holds its own copy only of those the edit changed.
+        for (mine, theirs) in self.shared_texts().into_iter().zip(newer.shared_texts()) {
+            if !mine.same(theirs) {
+                bytes = bytes.saturating_add(mine.as_ref().map_or(0, |t| t.capacity().saturating_add(32)));
+            }
         }
         if !self.kept_handles.same(&newer.kept_handles) {
             bytes = bytes.saturating_add(self.kept_handles.keys().map(|k| k.len().saturating_add(56)).fold(0, usize::saturating_add));
@@ -276,6 +288,70 @@ impl Drawing {
             });
         }
         bytes
+    }
+
+    /// Roughly what every copy of this drawing holds by itself: the header and the tables held
+    /// by value (layers, styles, views, groups, layer states…) and the entity stores' own lists.
+    /// Every undo step keeps one; how much follows the drawing's tables (a drawing with
+    /// hundreds of layers holds a few hundred KB a step), so it is worked out, not assumed.
+    pub fn by_value_bytes(&self) -> usize {
+        use std::mem::size_of;
+        fn none<T>(_: &T) -> usize {
+            0
+        }
+        let text = |t: &String| t.capacity();
+        // A B-tree entry of the header: its name and value and its share of a node (measured: a
+        // file's header of 300 variables, 72 KB).
+        let header = self.header.vars.iter().fold(0usize, |n, (k, v)| {
+            let value = match v {
+                HVal::Str(t) => t.capacity(),
+                _ => 0,
+            };
+            n.saturating_add(size_of::<(String, HVal)>().saturating_add(k.capacity()).saturating_add(value).saturating_add(64))
+        });
+        let parts = [
+            header,
+            table_bytes(&self.layers, |l: &Layer| {
+                [&l.name, &l.linetype, &l.description, &l.plot_style]
+                    .into_iter()
+                    .map(text)
+                    .sum::<usize>()
+                    .saturating_add(l.material.as_ref().map_or(0, text))
+            }),
+            table_bytes(&self.linetypes, |l: &Linetype| l.pattern.len().saturating_mul(32)),
+            table_bytes(&self.text_styles, none),
+            table_bytes(&self.shape_files, |f: &String| f.capacity()),
+            table_bytes(&self.dim_styles, none),
+            table_bytes(&self.mleader_styles, none),
+            table_bytes(&self.table_styles, none),
+            table_bytes(&self.mline_styles, none),
+            table_bytes(&self.layouts, |l: &Layout| l.entities.shell_bytes()),
+            table_bytes(&self.views, none),
+            table_bytes(&self.vports, none),
+            table_bytes(&self.ucss, none),
+            table_bytes(&self.layer_states, |st: &LayerState| table_bytes(&st.layers, none)),
+            table_bytes(&self.layer_filters, none),
+            table_bytes(&self.groups, |g: &Group| g.members.len().saturating_mul(size_of::<Handle>())),
+            table_bytes(&self.plot_style_tables, |t: &PlotStyleTable| table_bytes(&t.styles, none)),
+            table_bytes(&self.scales, none),
+            table_bytes(&self.materials, none),
+            table_bytes(&self.read_notes, |n: &String| n.capacity()),
+            table_bytes(&self.bim_types.types, |_| 256),
+            // A B-tree entry: the key and its share of a node.
+            self.hidden_objects.len().saturating_mul(size_of::<Handle>().saturating_add(16)),
+            self.field_values.values().fold(0, |n, v| n.saturating_add(table_bytes(v, |t: &String| t.capacity()).saturating_add(32))),
+            self.skipped_records.keys().fold(0, |n, k| n.saturating_add(k.capacity().saturating_add(48))),
+            self.project_rules.rules.len().saturating_mul(256),
+            self.model.shell_bytes(),
+        ];
+        parts.into_iter().fold(0, usize::saturating_add)
+    }
+
+    /// The JSON texts kept with the drawing (the building spec, tours, BCF issues, 4D schedule,
+    /// parts, overrides, agent state and import check), each shared with the drawings an edit
+    /// made from this one until the edit changes it.
+    pub fn shared_texts(&self) -> [&shared::Shared<Option<String>>; 8] {
+        [&self.building_spec, &self.tours, &self.bcf, &self.schedule4d, &self.parts, &self.overrides, &self.agent, &self.import_check]
     }
 
     /// An empty metric drawing (millimetres, ISO-25 dimensions, multileaders and tables to match).
@@ -327,14 +403,14 @@ impl Drawing {
             geo: None,
             bim_types: bimspec::BimTypes::new(),
             project_rules: projrules::ProjectRules::new(),
-            building_spec: None,
-            tours: None,
-            bcf: None,
-            schedule4d: None,
-            parts: None,
-            overrides: None,
-            agent: None,
-            import_check: None,
+            building_spec: Default::default(),
+            tours: Default::default(),
+            bcf: Default::default(),
+            schedule4d: Default::default(),
+            parts: Default::default(),
+            overrides: Default::default(),
+            agent: Default::default(),
+            import_check: Default::default(),
             embedded: BTreeMap::new(),
             plot_stamp: None,
             properties: dwgprops::DwgProps::default(),

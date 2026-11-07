@@ -507,7 +507,7 @@ fn run_draft(s: &mut Session, p: &Value) -> Result<Value> {
     sp.stack = bool_or(p, "stack", false);
     let store = bool_or(p, "store", false);
     if store {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let guesses: Vec<Value> = sp.guess.iter().map(|(k, why)| json!({ "key": k, "why": why })).collect();
     let parts: Vec<Value> = sp.describe().iter().map(part_json).collect();

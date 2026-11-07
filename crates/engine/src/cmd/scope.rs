@@ -2014,12 +2014,12 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if flag("panels") {
             let rooms = room_boxes(s.doc()?);
             let (placed, not) = place_panels(&mut sp, &panel_places(&docs), &rooms);
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             let built = build_panels(s.doc_mut()?, &sp, &placed, &rooms);
             out["panels"] =
                 json!({"placed": placed, "built": built, "not_placed": not.iter().map(|(t, w)| json!({"tag": t, "why": w})).collect::<Vec<_>>()});
         } else {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
         out["elements"] = summary(&kept, &sp);
         out["questions"] = json!(

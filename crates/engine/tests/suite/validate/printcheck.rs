@@ -309,7 +309,7 @@ fn prints_and_provenance_are_saved_with_the_drawing() {
     let d = p.s.doc().unwrap().clone();
     let text = cadaddy_io::write_dxf(&d);
     let back = cadaddy_io::read(text.as_bytes(), "plan.dxf").unwrap();
-    let spec = back.building_spec.clone().unwrap_or_default();
+    let spec = back.building_spec.as_ref().cloned().unwrap_or_default();
     assert!(spec.contains("\"prints\"") && spec.contains("E-601"), "{}", &spec[..spec.len().min(300)]);
     let mut s = Session::empty();
     s.open_drawing(back, "Plan", None);
@@ -578,7 +578,7 @@ fn validate_finds_prints_from_a_guided_job() {
             ]
         }
     });
-    d.agent = Some(job_state.to_string());
+    d.agent = Some(job_state.to_string()).into();
 
     // Now bim.validate should succeed — it finds the job's devices as prints.
     let r = p.s.execute("bim.validate", &json!({})).unwrap();

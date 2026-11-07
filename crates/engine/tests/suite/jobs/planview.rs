@@ -273,7 +273,7 @@ fn plan_views_from_model() {
         d.layers.push(Layer { name: "3D-Doors".into(), ..Layer::default() });
         // Set a building spec with at least one level.
         let spec_json = r#"{"units_per_foot":12,"levels":[{"name":"Level 1","elevation_ft":0,"height_ft":10,"ceiling_ft":9,"base":[0,0]}],"layers":[],"wall_types":[{"name":"6in","thickness_in":6,"height_ft":9}],"rooms":[],"families":[],"materials":{},"devices":{},"stairs":[],"exterior":{},"rcp":{},"mep":{}}"#;
-        d.building_spec = Some(spec_json.into());
+        d.building_spec = Some(spec_json.into()).into();
         // Add a wall mesh.
         let _wh = add_wall_mesh(d, 0.0, 0.0, 240.0, 0.0, 6.0, 108.0, "Level 1");
         let _wh2 = add_wall_mesh(d, 240.0, 0.0, 240.0, 120.0, 6.0, 108.0, "Level 1");

@@ -552,7 +552,7 @@ fn run_rules(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
         }
-        s.doc_mut()?.building_spec = Some(spec.to_string());
+        s.doc_mut()?.building_spec = Some(spec.to_string()).into();
     }
     Ok(rules_json(s.doc()?))
 }

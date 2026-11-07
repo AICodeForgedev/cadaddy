@@ -2500,7 +2500,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     }
     let d = s.doc_mut()?;
     if tags_roomed > 0 {
-        d.building_spec = Some(sp.to_json());
+        d.building_spec = Some(sp.to_json()).into();
     }
     let mut changed = 0usize;
     for (h, store) in changes {

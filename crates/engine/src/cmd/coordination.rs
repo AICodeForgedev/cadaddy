@@ -82,7 +82,7 @@ fn coord_set(s: &mut Session, key: &str, val: &Value) -> Result<()> {
     if let Some(obj) = spec.as_object_mut() {
         obj.insert(key.into(), val.clone());
     }
-    s.doc_mut()?.building_spec = Some(spec.to_string());
+    s.doc_mut()?.building_spec = Some(spec.to_string()).into();
     Ok(())
 }
 
