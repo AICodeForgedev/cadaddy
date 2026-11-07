@@ -211,6 +211,19 @@
     "cable": ["nm1-18", "nm2-32", "nm3-53", "nm4-68"],
     "source": "devices of one kind side by side on one wall face, at one mounting height, within 2 ft of each other (a plan symbol is about that wide at 1/8 in scale: symbols drawn together are ganged) share one box and one ring, up to 4 gangs: 2 gangs in a 4 in square with a 2 gang ring, 3 and 4 in a gang box (company default; power and low voltage never share one: NEC 800.133(A))"
   },
+  "box_clear": {
+    "gap_in": 0.25,
+    "max_move_in": 48.0,
+    "step_in": 0.5,
+    "source": "two boxes never share space: a wall box whose body would overlap another box (two devices drawn at one spot that don't gang, a device at a corner over the next wall's box) moves along its wall face just clear of it, the smallest move that clears every box around it and keeps it on its wall (trade practice: the box beside the other, its device with it)",
+    "back_to_back": {
+      "min_apart_in": 24.0,
+      "rated_only": true,
+      "source": "IBC 714.4.2 exception 1.1 (membrane penetrations of fire-resistance-rated walls): steel boxes on opposite sides of the wall are separated by a horizontal distance of at least 24 in where the stud cavities don't communicate; the trade moves one box to the next stud bays, its device with it (the usual choice; the alternative, listed putty pads on both boxes, exception 1.4)",
+      "putty_item": "Putty pad, listed, for an outlet box",
+      "putty_source": "IBC 714.4.2 exception 1.4: boxes on opposite sides of a fire-resistance-rated wall closer than 24 in, where neither can move that far on its wall, are both protected by listed putty pads"
+    }
+  },
   "ring": { "item": "Plaster ring", "size": "1 gang", "depth_in": 0.5, "source": "the trade's usual ring: 1 gang, 1/2 in raised (the wall's board on the box face decides it)" },
   "default_raceway": "EMT",
   "default_raceway_source": "branch circuits in EMT where the documents name no wiring method (company default)",

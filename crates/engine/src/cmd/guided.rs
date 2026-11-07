@@ -5447,7 +5447,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 plan_diffs = differs;
                 progress_line(&format!("  typical rooms stamped in {:.1} s", stamp_clock.elapsed().as_secs_f64()));
                 // One room's two copies of a tag at one spot are one device (its plan read it twice).
-                let twice = one_per_spot(&mut stamped, upf_dev / 4.0);
+                let twice = one_per_spot(&mut stamped, upf_dev / 4.0, upf_dev * SAME_FIXTURE_FT);
                 if twice > 0 {
                     progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
                 }
@@ -10033,26 +10033,65 @@ fn one_connection_each(stamped: &mut Vec<super::readers::ReadDevice>, placed: &m
     before - stamped.len() - placed.len()
 }
 
-/// Leaves one device per room, tag and spot (within `eps`) of a room's stamped devices, unless
-/// their circuits differ (two counter receptacles side by side on G-5 and G-6 are two); how many
-/// went.
-fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64) -> usize {
-    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], String)>> = BTreeMap::new();
-    let before = devices.len();
-    devices.retain(|dv| {
+/// Leaves one device per room, tag and spot (within `eps`; a luminaire within `fixture_eps`:
+/// two fixtures never stand closer than their own size, so two copies of one fixture's tag that
+/// near are the one fixture read twice) of a room's stamped devices, unless their circuits differ
+/// (two counter receptacles side by side on two circuits are two); the one kept takes a switch
+/// leg only the other carried. A circuit is compared without its leg letter. How many went.
+fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64, fixture_eps: f64) -> usize {
+    let mut kept: BTreeMap<(String, String, String), Vec<([f64; 2], (String, String), usize)>> = BTreeMap::new();
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    for (i, dv) in devices.iter().enumerate() {
         if dv.room.trim().is_empty() {
-            return true;
+            continue;
         }
-        let circuit = dv.circuit.trim().to_ascii_uppercase();
+        let circuit = circuit_and_leg(&dv.circuit);
+        let near = if is_fixture(dv) { eps.max(fixture_eps) } else { eps };
         let spots = kept.entry((dv.level.clone(), dv.room.clone(), dv.tag.trim().to_ascii_uppercase())).or_default();
-        if spots.iter().any(|(p, c)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= eps && (c.is_empty() || circuit.is_empty() || *c == circuit)) {
-            return false;
+        let same = |c: &(String, String)| {
+            (c.0.is_empty() || circuit.0.is_empty() || c.0 == circuit.0) && (c.1.is_empty() || circuit.1.is_empty() || c.1 == circuit.1)
+        };
+        match spots.iter().find(|(p, c, _)| (p[0] - dv.at[0]).hypot(p[1] - dv.at[1]) <= near && same(c)) {
+            Some((_, _, k)) => gone.push((i, *k)),
+            None => spots.push((dv.at, circuit, i)),
         }
-        spots.push((dv.at, circuit));
-        true
+    }
+    for (i, k) in &gone {
+        let leg = devices.get(*i).map(|d| d.leg.trim().to_string()).unwrap_or_default();
+        if let Some(d) = devices.get_mut(*k).filter(|d| d.leg.trim().is_empty() && !leg.is_empty()) {
+            d.leg = leg;
+        }
+    }
+    let drop: BTreeSet<usize> = gone.iter().map(|(i, _)| *i).collect();
+    let mut i = 0usize;
+    devices.retain(|_| {
+        i += 1;
+        !drop.contains(&(i - 1))
     });
-    before - devices.len()
+    drop.len()
 }
+
+/// A circuit label's circuits and its switch leg apart (`G-1,a`: `G-1` and `A`; a trailing single
+/// letter is the leg, never a circuit number), upper case. `G-1` and `G-1,a` are one circuit, the
+/// leg read on one copy only; legs `a` and `b` are two.
+fn circuit_and_leg(label: &str) -> (String, String) {
+    let mut parts: Vec<&str> = label.split(',').map(str::trim).collect();
+    let mut legs: Vec<&str> = Vec::new();
+    while parts.len() > 1 && parts.last().is_some_and(|p| p.len() == 1 && p.chars().all(|c| c.is_ascii_alphabetic())) {
+        legs.extend(parts.pop());
+    }
+    legs.reverse();
+    (parts.join(",").to_ascii_uppercase(), legs.join(",").to_ascii_uppercase())
+}
+
+/// A luminaire: by its kind or its IFC class as read.
+fn is_fixture(dv: &super::readers::ReadDevice) -> bool {
+    dv.kind.to_ascii_lowercase().contains("luminaire") || dv.ifc_class.eq_ignore_ascii_case("IfcLightFixture")
+}
+
+/// Two copies of one luminaire's tag on one circuit in one room this near (feet) are one fixture
+/// read twice: two fixtures never stand closer than their own size.
+const SAME_FIXTURE_FT: f64 = 1.0;
 
 /// A floor plan's device this near where a typical plan's copy of the same tag lands is that
 /// device (feet).
@@ -23887,7 +23926,7 @@ mod tests {
             ..Default::default()
         };
         let mut d = vec![dv("S", "219", 10.0), dv("S", "219", 10.5), dv("S", "219", 22.0), dv("S", "221", 10.0), dv("SD", "219", 10.0)];
-        assert_eq!(one_per_spot(&mut d, 3.0), 1);
+        assert_eq!(one_per_spot(&mut d, 3.0, 12.0), 1);
         assert_eq!(d.len(), 4);
         // Two receptacles side by side on two circuits are two.
         let on = |mut d: super::super::readers::ReadDevice, c: &str| {
@@ -23895,8 +23934,33 @@ mod tests {
             d
         };
         let mut r = vec![on(dv("REC", "219", 10.0), "G-5"), on(dv("REC", "219", 10.2), "G-6"), on(dv("REC", "219", 10.1), "G-5")];
-        assert_eq!(one_per_spot(&mut r, 3.0), 1);
+        assert_eq!(one_per_spot(&mut r, 3.0, 12.0), 1);
         assert_eq!(r.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-5", "G-6"]);
+        // Test finding (fix-box-collisions): one fixture read twice 3.6 in apart (its symbol on
+        // `G-1` and its mark over its circuit label `G-1,a`) got two luminaires with overlapping
+        // boxes. Within a foot it is one (the leg letter is no other circuit), and it keeps the
+        // switch leg the other copy read; two receptacles that near stay two, and two of one
+        // fixture type 3 ft apart are two.
+        let lum = |x: f64, leg: &str| {
+            let mut d = on(dv("H1", "219", x), if leg.is_empty() { "G-1" } else { "G-1,a" });
+            d.kind = "luminaire".into();
+            d.leg = leg.into();
+            d
+        };
+        let mut l = vec![lum(30.0, ""), lum(33.6, "a"), lum(66.0, ""), on(dv("REC", "219", 40.0), "G-5"), on(dv("REC", "219", 43.6), "G-5")];
+        assert_eq!(one_per_spot(&mut l, 3.0, 12.0), 1);
+        assert_eq!(
+            l.iter().map(|d| (d.tag.as_str(), d.at[0], d.leg.as_str())).collect::<Vec<_>>(),
+            vec![("H1", 30.0, "a"), ("H1", 66.0, ""), ("REC", 40.0, ""), ("REC", 43.6, "")]
+        );
+        let cl = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(circuit_and_leg("G-1,a"), cl("G-1", "A"));
+        assert_eq!((circuit_and_leg("g-9,7,9"), circuit_and_leg("A-3, d"), circuit_and_leg("")), (cl("G-9,7,9", ""), cl("A-3", "D"), cl("", "")));
+        // Two switches side by side on legs a and b of one circuit are two.
+        let sw = |x: f64, c: &str| on(dv("S", "219", x), c);
+        let mut w = vec![sw(50.0, "G-1,a"), sw(51.0, "G-1,b"), sw(52.0, "G-1")];
+        assert_eq!(one_per_spot(&mut w, 3.0, 12.0), 1);
+        assert_eq!(w.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-1,a", "G-1,b"]);
     }
 
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection

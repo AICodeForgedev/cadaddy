@@ -539,3 +539,131 @@ fn a_device_of_no_known_kind_on_no_circuit_takes_no_box() {
     let mut s = room_with_circuit(&[("device", 5.0, 0.8, 48.0)], "");
     assert_eq!(count(&mut s, json!({"kind": "box"}))["count"], json!(0), "on no circuit: not known to be wired");
 }
+
+/// Two 19'-6" x 9' rooms side by side (made-up units A and B) with one 6" wall between them,
+/// every wall of type `Partition` (fire-rated when `rated`), the devices given as (kind, x ft,
+/// y ft, mounting height in) on circuit LP1-3. The build's report beside it.
+fn two_rooms_with(devices: &[(&str, f64, f64, f64)], rated: bool) -> (Session, Value) {
+    let mut d = Drawing::new_imperial();
+    let o = [((0., 0.), (40., 0.)), ((40., 0.), (40., 10.)), ((40., 10.), (0., 10.)), ((0., 10.), (0., 0.))];
+    let i = [((0.5, 0.5), (39.5, 0.5)), ((39.5, 0.5), (39.5, 9.5)), ((39.5, 9.5), (0.5, 9.5)), ((0.5, 9.5), (0.5, 0.5))];
+    let mid = [((19.75, 0.5), (19.75, 9.5)), ((20.25, 0.5), (20.25, 9.5))];
+    for (a, b) in o.into_iter().chain(i).chain(mid) {
+        wall_line(&mut d, a, b);
+    }
+    let mut s = Session::empty();
+    s.open_drawing(d, "Sample Floor Plan", None);
+    let tags: Vec<Value> = devices
+        .iter()
+        .map(|(kind, x, y, h)| {
+            json!({"id": format!("device:L1:{x},{y}"), "kind": kind, "level": "L1", "at_ft": [x, y], "fields": {
+                "symbol": {"value": "1F0", "source": "plan"}, "sheet": {"value": "E-101", "source": "plan"},
+                "circuit": {"value": "LP1-3", "source": "plan"}, "mount_height_in": {"value": h.to_string(), "source": "note"}
+            }})
+        })
+        .collect();
+    let assembly = if rated { json!({"tag": "P1", "fire_rating": "1 HR"}) } else { json!({"tag": "P1"}) };
+    let spec = json!({
+        "version": 1, "units_per_foot": 12,
+        "levels": [{"name": "L1", "elevation_ft": 0, "height_ft": 10, "ceiling_ft": 9, "base": [0, 0]}],
+        "layers": [{"layer": "A-WALL", "role": "wall", "wall_type": "Partition"}],
+        "wall_types": [{"name": "Partition", "thickness_in": 6, "assembly": assembly}],
+        "tags": tags
+    });
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    let built = s.execute("model.build", &json!({})).expect("build");
+    (s, built)
+}
+
+/// Every box atom: its handle, its device (`box_of`), its body's extent (min, max) and its props.
+fn box_bodies(s: &mut Session) -> Vec<(String, String, [f64; 3], [f64; 3], cadaddy_engine::doc::props::Props)> {
+    let d = s.doc().expect("doc");
+    d.model
+        .iter()
+        .filter_map(|e| {
+            let ps = cadaddy_engine::doc::props::read(&e.common.xdata);
+            if ps.get("atom").map(|p| p.text()).as_deref() != Some("box") {
+                return None;
+            }
+            let EntityKind::Mesh(m) = &e.kind else { return None };
+            let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+            for v in &m.vertices {
+                for (k, c) in [v.x, v.y, v.z].into_iter().enumerate() {
+                    lo[k] = lo[k].min(c);
+                    hi[k] = hi[k].max(c);
+                }
+            }
+            let of = ps.get("box_of").map(|p| p.text()).unwrap_or_default();
+            Some((e.handle.hex(), of, lo, hi, ps))
+        })
+        .collect()
+}
+
+#[test]
+fn boxes_never_overlap_and_never_stand_back_to_back_in_a_rated_wall() {
+    // Test finding (fix-box-collisions): a receptacle and a data outlet drawn at one spot (they
+    // never gang: power and low voltage) got two coincident boxes, and the two units'
+    // receptacles 2.4" apart on the two faces of the rated wall between them stood back to back
+    // in one stud cavity.
+    let devices = [("receptacle", 5.0, 0.8, 18.0), ("data_outlet", 5.0, 0.8, 18.0), ("receptacle", 19.6, 5.0, 18.0), ("receptacle", 20.4, 5.2, 18.0)];
+    let (mut s, built) = two_rooms_with(&devices, true);
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.len(), 4, "{built}");
+    // No two boxes share space.
+    for (i, a) in boxes.iter().enumerate() {
+        for b in boxes.iter().skip(i + 1) {
+            let apart = (0..3).any(|k| a.3[k] <= b.2[k] + 1e-6 || b.3[k] <= a.2[k] + 1e-6);
+            assert!(apart, "boxes {} and {} overlap: {:?}-{:?} and {:?}-{:?}", a.0, b.0, a.2, a.3, b.2, b.3);
+        }
+    }
+    // The two in the rated wall: at least 24" apart along it, edge to edge (IBC 714.4.2).
+    let in_mid: Vec<&(String, String, [f64; 3], [f64; 3], _)> = boxes.iter().filter(|b| b.2[0] > 19.0 * 12.0 && b.3[0] < 21.0 * 12.0).collect();
+    assert_eq!(in_mid.len(), 2, "{boxes:?}");
+    let (p, q) = (in_mid[0], in_mid[1]);
+    let edge = (q.2[1] - p.3[1]).max(p.2[1] - q.3[1]);
+    assert!(edge >= 24.0 - 1e-6, "back to back {edge} in apart: {:?} {:?}", p.2, q.2);
+    // What moved says so: the design spot beside the one installed, the reason and the rule.
+    let moved: Vec<_> = boxes.iter().filter(|b| b.4.get("design:location").is_some()).collect();
+    assert_eq!(moved.len(), 2, "one box off the coincident pair, one off the back-to-back pair: {boxes:?}");
+    let rules: Vec<String> = moved.iter().map(|b| b.4.get("correction:location").map(|p| p.text()).unwrap_or_default()).collect();
+    assert!(rules.iter().any(|r| r.contains("IBC 714.4.2") && r.contains("back to back")), "{rules:?}");
+    assert!(rules.iter().any(|r| r.contains("overlapped")), "{rules:?}");
+    let clear = &built;
+    // The device moved with its box, its drawn location kept.
+    for b in &moved {
+        let dev = Handle::parse_hex(&b.1).expect("device");
+        let d = s.doc().expect("doc");
+        let ps = cadaddy_engine::doc::props::read(&d.model.get(dev).expect("device").common.xdata);
+        let (design, now) = (ps.get("design:location").map(|p| p.text()), ps.get("location").map(|p| p.text()));
+        assert!(design.is_some() && design != now, "{design:?} {now:?} {clear}");
+        // Its box holds it: the device's plan centre is inside the box's plan extent along the wall.
+        let e = d.model.get(dev).expect("device");
+        let EntityKind::Mesh(m) = &e.kind else { panic!("device mesh") };
+        let n = m.vertices.len().max(1) as f64;
+        let c = m.vertices.iter().fold([0.0; 2], |s, v| [s[0] + v.x / n, s[1] + v.y / n]);
+        let inside = |k: usize| c[k] >= b.2[k] - 3.0 && c[k] <= b.3[k] + 3.0;
+        assert!(inside(0) && inside(1), "device at {c:?}, box {:?}-{:?}", b.2, b.3);
+    }
+    // Not a rated wall: the two receptacles stay where they are drawn (only the overlap moves).
+    let (mut s, _) = two_rooms_with(&devices, false);
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.iter().filter(|b| b.4.get("design:location").is_some()).count(), 1, "{boxes:?}");
+}
+
+#[test]
+fn a_sconces_box_is_in_its_wall_and_two_units_sconces_never_stand_back_to_back() {
+    // Test finding (fix-box-collisions): a wall luminaire's outlet box was set over the fixture
+    // like a ceiling box (out of the wall), so two units' sconces at one spot on the two faces of
+    // their rated wall were never seen back to back.
+    let (mut s, built) = two_rooms_with(&[("wall_luminaire", 19.6, 5.0, 80.0), ("wall_luminaire", 20.4, 5.0, 80.0)], true);
+    let boxes = box_bodies(&mut s);
+    assert_eq!(boxes.len(), 2, "{built}");
+    for b in &boxes {
+        // In the wall between the rooms (its faces at 19'-9" and 20'-3"), at the fixture's height.
+        assert!(b.2[0] >= 19.75 * 12.0 - 1e-6 && b.3[0] <= 20.25 * 12.0 + 1e-6, "box out of its wall: {:?}-{:?}", b.2, b.3);
+        assert!(b.2[2] < 80.0 && b.3[2] > 70.0, "box not behind the fixture: {:?}-{:?}", b.2, b.3);
+    }
+    let (p, q) = (&boxes[0], &boxes[1]);
+    let edge = (q.2[1] - p.3[1]).max(p.2[1] - q.3[1]);
+    assert!(edge >= 24.0 - 1e-6, "back to back {edge} in apart");
+}

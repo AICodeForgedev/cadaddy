@@ -1246,6 +1246,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut no_box: BTreeMap<String, usize> = BTreeMap::new();
     let mut direct: Vec<DirectDev> = Vec::new();
     let mut ganged_devices = 0usize;
+    // Each box as the clearance sees it (Q6252), and what moves with it: its atom, its ring, its
+    // devices.
+    let mut clear_boxes: Vec<super::boxclear::ClearBox> = Vec::new();
+    let mut clear_of: Vec<(usize, Option<usize>, Vec<Handle>)> = Vec::new();
     // Each device's provenance: its box's (Q6216).
     let device_made: HashMap<Handle, (Made, String)> =
         devices.iter().filter_map(|(h, ..)| Some((*h, d.entity(*h).and_then(|e| super::super::provenance::of_element(e))?))).collect();
@@ -1396,8 +1400,13 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let out = face_of(ps);
         let [bw, bh, bd] = br.dims_in.map(|v| v.max(0.5) / 12.0 * upf);
         let floor = sp.level(level).map_or(0.0, |l| l.elevation_ft * upf);
+        let mut wall_of_box: Option<Handle> = None;
+        // A luminaire set in a wall's face (a sconce): its outlet box is in the wall behind it, as
+        // any wall device's (Q6252), not over it.
+        let wall_luminaire =
+            bk == "luminaire" && out.is_some() && ps.get("mounting").map(Prop::text).is_none_or(|m| !m.eq_ignore_ascii_case("ceiling"));
         let (centre, entry, along, across) = match (bk, out) {
-            ("luminaire" | "fan", _) => {
+            ("luminaire" | "fan", _) if !wall_luminaire => {
                 let ctr = Vec3::new(c.x, c.y, z1 + bd / 2.0);
                 (ctr, Vec3::new(c.x, c.y, z1 + bd), Vec2::new(1.0, 0.0), bw)
             }
@@ -1406,9 +1415,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
                 // In its wall, its front on the wall's face (where the device's is: on the face,
                 // or flush in it); with no face found, behind the device.
                 let depth_plan = (plan.max - plan.min).dot(Vec2::new(o.x.abs(), o.y.abs()));
-                let face = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, None)
-                    .filter(|f| f.out.dot(o) > 0.5)
-                    .map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
+                let found = super::super::propfill::wall_face(&walls, level, c, super::super::propfill::HOST_SNAP_FT * upf, None)
+                    .filter(|f| f.out.dot(o) > 0.5);
+                wall_of_box = found.as_ref().map(|f| f.wall);
+                let face = found.map_or_else(|| c - o * (depth_plan / 2.0), |f| c + o * ((f.at - c).dot(o)));
                 let mid = face - o * (bd / 2.0);
                 (Vec3::new(mid.x, mid.y, zmid), Vec3::new(mid.x, mid.y, zmid + bh / 2.0), o.perp(), bd)
             }
@@ -1460,7 +1470,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         };
         *box_reasons.entry(why).or_default() += 1;
         // A wall box's ring on its face; a ceiling box's (a luminaire's) under it.
-        let ceiling_box = matches!(bk, "luminaire" | "fan");
+        let ceiling_box = matches!(bk, "luminaire" | "fan") && !wall_luminaire;
+        let mut ring_of_box: Option<usize> = None;
         let ring_face = if ceiling_box { Some(Vec3::new(0.0, 0.0, -1.0)) } else { out.map(|o| Vec3::new(o.x, o.y, 0.0)) };
         if ring
             && !on_cable
@@ -1497,8 +1508,156 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             if let Some(b) = atoms.get_mut(bi) {
                 b.0.connects.push(ri);
             }
+            ring_of_box = Some(ri);
         }
+        // A wall box may move along its face to clear another; a ceiling or floor box stays.
+        let wall_box = !ceiling_box && bk != "floor" && out.is_some();
+        clear_boxes.push(super::boxclear::ClearBox {
+            level: level.clone(),
+            centre,
+            along: if wall_box { along } else { Vec2::new(1.0, 0.0) },
+            out: if wall_box { out.unwrap_or(Vec2::new(0.0, 1.0)) } else { Vec2::new(0.0, 1.0) },
+            w: bw,
+            t: across,
+            h: bh,
+            wall: wall_of_box.filter(|_| wall_box),
+            movable: wall_box && wall_of_box.is_some(),
+            rated: false,
+        });
+        clear_of.push((bi, ring_of_box, if n_gang > 1 { members.to_vec() } else { vec![*h] }));
         boxes.push(DevBox { device: *h, level: level.clone(), circuit, entry, atom: bi, at: Vec3::new(c.x, c.y, *z1) });
+    }
+
+    // -- Boxes never share space (Q6252): a wall box over another moves along its face clear of
+    // it; boxes back to back in one rated wall end up the code's distance apart (else putty
+    // pads). Its devices move with it; the design spot is kept beside the corrected one. --
+    let cr = &rl.box_clear;
+    let rated_walls: BTreeSet<Handle> = clear_boxes
+        .iter()
+        .filter_map(|b| b.wall)
+        .filter(|w| !cr.back_to_back.rated_only || d.model.get(*w).is_some_and(|e| wall_rated(e, sp)))
+        .collect();
+    for b in &mut clear_boxes {
+        b.rated = b.wall.is_some_and(|w| rated_walls.contains(&w));
+    }
+    let fits = |i: usize, p: Vec3| -> bool {
+        let Some(b) = clear_boxes.get(i) else { return false };
+        let Some(wall) = b.wall else { return false };
+        // Both ends of its front on its own wall's face, at its height.
+        let front = Vec2::new(p.x, p.y) + b.out * (b.t / 2.0);
+        [-1.0, 1.0].iter().all(|k| {
+            let q = front + b.along * (k * b.w / 2.0);
+            super::super::propfill::wall_face(&walls, &b.level, q, 0.75 * inch, Some(p.z)).is_some_and(|f| f.wall == wall && f.out.dot(b.out) > 0.5)
+        })
+    };
+    let cleared = super::boxclear::clear(&clear_boxes, cr, inch, &fits);
+    let mut device_moves: HashMap<Handle, (Vec3, String, String)> = HashMap::new();
+    let mut box_moves: BTreeMap<usize, (Vec3, Vec<String>, String)> = BTreeMap::new();
+    let (mut moved_overlap, mut moved_back) = (0usize, 0usize);
+    let describe = |i: usize| -> String {
+        clear_of
+            .get(i)
+            .and_then(|(_, _, ds)| ds.first())
+            .map(|h| {
+                let kind = devices.iter().find(|x| x.0 == *h).and_then(|x| x.2.get("kind").map(Prop::text)).unwrap_or_else(|| "device".into());
+                format!("the box of {kind} {}", h.hex())
+            })
+            .unwrap_or_else(|| "another box".into())
+    };
+    for m in &cleared.moved {
+        let Some((bi, _, _)) = clear_of.get(m.index) else { continue };
+        let inches = m.shift.len() / inch;
+        let (why, rule) = match m.why {
+            super::boxclear::Why::Overlap => {
+                moved_overlap += 1;
+                (format!("moved {} along its wall: it overlapped {}", super::super::walltypes::frac(inches), describe(m.from)), cr.source.clone())
+            }
+            super::boxclear::Why::BackToBack => {
+                moved_back += 1;
+                (
+                    format!(
+                        "moved {} along its wall: back to back with {} on the other face of its fire-rated wall, closer than {} apart",
+                        super::super::walltypes::frac(inches),
+                        describe(m.from),
+                        super::super::walltypes::frac(cr.back_to_back.min_apart_in)
+                    ),
+                    cr.back_to_back.source.clone(),
+                )
+            }
+        };
+        let e = box_moves.entry(*bi).or_insert_with(|| (Vec3::new(0.0, 0.0, 0.0), Vec::new(), rule.clone()));
+        e.0 = e.0 + Vec3::new(m.shift.x, m.shift.y, 0.0);
+        e.1.push(why);
+        if m.why == super::boxclear::Why::BackToBack {
+            e.2 = rule;
+        }
+    }
+    let loc = |p: Vec3| format!("{:.2}, {:.2}, {:.2}", p.x / upf, p.y / upf, p.z / upf);
+    for (i, (bi, ring, devs)) in clear_of.iter().enumerate() {
+        let Some((shift, why, rule)) = box_moves.get(bi) else { continue };
+        let design = clear_boxes.get(i).map(|b| b.centre).unwrap_or_default();
+        let reason = why.join("; ");
+        if let Some((a, ctx)) = atoms.get_mut(*bi) {
+            a.a = a.a + *shift;
+            a.b = a.b + *shift;
+            if let Some(body) = ctx.body.as_mut() {
+                body.0 = body.0 + *shift;
+            }
+            a.extra.push(("design:location", loc(design), "computed: at its device as the documents place it".into()));
+            a.extra.push(("location", loc(design + *shift), rule.clone()));
+            a.extra.push(("correction:location", format!("{rule}: {reason}"), rule.clone()));
+        }
+        if let Some((a, ctx)) = ring.and_then(|r| atoms.get_mut(r)) {
+            a.a = a.a + *shift;
+            a.b = a.b + *shift;
+            if let Some(body) = ctx.body.as_mut() {
+                body.0 = body.0 + *shift;
+            }
+        }
+        for b in boxes.iter_mut().filter(|b| b.atom == *bi) {
+            // The run lands in the box where it now is; the router's end (at the device as
+            // drawn) still finds it.
+            b.entry = b.entry + *shift;
+        }
+        for h in devs {
+            device_moves.insert(*h, (*shift, reason.clone(), rule.clone()));
+        }
+    }
+    let mut putty_pads = 0usize;
+    for (i, j) in &cleared.putty {
+        for k in [*i, *j] {
+            let Some((bi, _, _)) = clear_of.get(k) else { continue };
+            let Some((at, mut ctx)) = atoms.get(*bi).map(|(a, c)| (a.a, c.clone())) else { continue };
+            let other = describe(if k == *i { *j } else { *i });
+            let why = format!("back to back with {other} on the other face of its fire-rated wall and no spot on its wall clears it");
+            if let Some(b) = atoms.get_mut(*bi) {
+                b.0.extra.push(("design:firestop", "none".into(), "computed: the box as placed".into()));
+                b.0.extra.push(("firestop", cr.back_to_back.putty_item.clone(), cr.back_to_back.putty_source.clone()));
+                b.0.extra.push(("correction:firestop", format!("{}: {why}", cr.back_to_back.putty_source), cr.back_to_back.putty_source.clone()));
+            }
+            ctx.body = None;
+            ctx.src = rule_source(&cr.back_to_back.putty_source);
+            let mut pad = Atom::fitting(
+                "firestop",
+                cr.back_to_back.putty_item.clone(),
+                "putty pad",
+                "",
+                at,
+                Vec3::new(0.0, 0.0, 0.01 * upf),
+                0.4,
+                &cr.back_to_back.putty_source,
+            );
+            pad.connects = vec![*bi];
+            pad.extra.push(("putty_pad_of", clear_of.get(k).and_then(|x| x.2.first()).map(|h| h.hex()).unwrap_or_default(), "computed".into()));
+            atoms.push((pad, ctx));
+            putty_pads += 1;
+        }
+    }
+    if !cleared.stuck.is_empty() && notes.len() < 200 {
+        notes.push(format!(
+            "{} pair(s) of boxes overlap and neither is a wall box that can move (ceiling boxes over each other: two luminaires read at one spot?): a review",
+            cleared.stuck.len()
+        ));
     }
 
     // -- A pigtail where a circuit's conductor is larger than its device's terminals take
@@ -2325,8 +2484,30 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let mut fed_devices = 0usize;
     for (dev, bx, fed) in device_links {
         fed_devices += usize::from(!fed.is_empty());
+        let moved = device_moves.get(&dev);
         let _ = d.modify_entity(dev, |e| {
             let mut ps = props::read(&e.common.xdata);
+            // Its box moved (Q6252): the device with it, its design location kept beside.
+            if let Some((shift, reason, rule)) = moved {
+                if let EntityKind::Mesh(m) = &mut e.kind {
+                    for v in m.vertices.iter_mut().take(100_000) {
+                        *v = *v + *shift;
+                    }
+                }
+                if let Some(old) = ps.get("location").cloned() {
+                    let v: Vec<f64> = old.text().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [x, y, z] = v[..] {
+                        let c = super::super::provenance::Correction {
+                            key: "location".into(),
+                            design: old.text(),
+                            corrected: format!("{:.2}, {:.2}, {:.2}", x + shift.x / upf, y + shift.y / upf, z),
+                            reason: reason.clone(),
+                            rule: rule.clone(),
+                        };
+                        super::super::provenance::correct(&mut ps, &c, old.source.clone());
+                    }
+                }
+            }
             ps.set("box", Prop::new(bx.hex(), Source::computed()).with_note("the box it is set in"));
             ps.set("connects", Prop::new(bx.hex(), Source::computed()));
             if fed.is_empty() {
@@ -2427,6 +2608,15 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         "openEnds": open_ends,
         "boxesSizedForFill": boxes_upsized,
         "devicesPigtailed": pigtailed,
+        "boxClearance": {
+            "movedOffOverlap": moved_overlap,
+            "movedOffBackToBack": moved_back,
+            "devicesMoved": device_moves.len(),
+            "puttyPads": putty_pads,
+            "overlapReview": cleared.stuck.len(),
+            "source": cr.source,
+            "backToBackSource": cr.back_to_back.source,
+        },
         "boxesSizedForRaceway": boxes_for_raceway,
         "boxesRacewayReview": raceway_reviews,
         "endsWithNoDrop": entry_gaps,
@@ -2553,6 +2743,19 @@ fn touched_gear(gear: &[Gear], level: &str, panel: &str, p: Vec3, touch: f64, mo
         .map(|(g, q)| (g.handle, !is_panel(&g.tag, panel), g.plan.center().dist(q)))
         .min_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(h, _, _)| h)
+}
+
+/// Whether a built wall's type (its `type` build tag: a wall type of the spec by name or legend
+/// tag) carries a fire rating (`1 HR`; none, empty or zero hours: not rated).
+fn wall_rated(e: &cadaddy_doc::Entity, sp: &BuildingSpec) -> bool {
+    let Some(name) = super::super::bimlook::made_tag(e, "type").map(str::trim).filter(|t| !t.is_empty()) else { return false };
+    let named = |t: &cadaddy_walk3d::WallType| {
+        t.name.trim().eq_ignore_ascii_case(name) || t.assembly.as_ref().is_some_and(|a| a.tag.trim().eq_ignore_ascii_case(name))
+    };
+    sp.wall_types.iter().filter(|t| named(t)).any(|t| {
+        // Hours of rating: a digit other than 0 (`1 HR`, `3/4 HR`; not `NONE`, `0 HR`).
+        t.assembly.as_ref().and_then(|a| a.fire_rating.as_deref()).is_some_and(|r| r.chars().any(|c| c.is_ascii_digit() && c != '0'))
+    })
 }
 
 /// The box a routed run's end at `p` is at: the box of its level whose entry, or whose device
