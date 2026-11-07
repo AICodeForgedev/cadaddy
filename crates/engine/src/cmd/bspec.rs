@@ -863,6 +863,20 @@ fn trace_rooms(s: &Session, sp: &BuildingSpec, notes: &mut Vec<String>) -> Resul
                 // the plan's room tags.
                 if allowed {
                     o.number = Some(text.trim().to_string());
+                    // The spec's room of that number is this room (a typical room the spec knows
+                    // by its number alone: its unit-type label traced it and named no spec room),
+                    // so its ceiling and finishes are the room's.
+                    if o.room.is_none() {
+                        let level = o.level.clone();
+                        o.room = sp
+                            .rooms
+                            .iter()
+                            .position(|r| {
+                                r.number.as_deref().is_some_and(|n| n.trim().eq_ignore_ascii_case(text.trim()))
+                                    && r.level.as_ref().is_none_or(|l| l.eq_ignore_ascii_case(&level))
+                            })
+                            .filter(|i| claimed.insert(*i));
+                    }
                 }
                 continue;
             }

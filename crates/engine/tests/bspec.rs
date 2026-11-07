@@ -355,3 +355,34 @@ fn an_unreadable_stored_spec_can_be_replaced() {
         assert_eq!(s.execute("bspec.validate", &json!({"spec": spec(), "replace": true})).unwrap()["ok"], json!(true), "{broken}");
     }
 }
+
+/// Q6250: a typical room the spec knows by its number alone (its unit-type label prints in
+/// every room of the type) takes the spec room's ceiling: the number inside the room its label
+/// traced links that room to the spec's. Two made-up units, 201 with a measured 7'-6" ceiling and
+/// 202 with none (the level's 8').
+#[test]
+fn a_typical_room_known_by_its_number_takes_its_spec_ceiling() {
+    let mut s = Session::new();
+    layer(&mut s, "A-WALL");
+    rect(&mut s, [0.0, 0.0], [30.0, 12.0]);
+    rect(&mut s, [0.5, 0.5], [29.5, 11.5]);
+    layer(&mut s, "A-WALL-CL");
+    line(&mut s, [15.0, 0.5], [15.0, 11.5]);
+    layer(&mut s, "A-ROOM-TAG");
+    text(&mut s, [5.0, 7.0], "SUITE");
+    text(&mut s, [5.0, 4.0], "201");
+    text(&mut s, [20.0, 7.0], "SUITE");
+    text(&mut s, [20.0, 4.0], "202");
+    let mut sp = spec();
+    sp["rooms"] = json!([
+        {"name": "", "number": "201", "ceiling_ft": 7.5, "ceiling_source": "7'-6\" measured on a sample elevation"},
+        {"name": "", "number": "202"}
+    ]);
+    sp["families"] = json!([]);
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let r = s.execute("model.build", &json!({})).unwrap();
+    assert_eq!(r["rooms"], json!(2), "{r}");
+    let mut ceilings: Vec<(f64, f64)> = made(&s, "ceiling").into_iter().map(|(m, _)| (x_range(&m).0, z_range(&m).0)).collect();
+    ceilings.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert_eq!(ceilings.iter().map(|c| c.1).collect::<Vec<_>>(), vec![90.0, 96.0], "201 at its 7'-6\", 202 at the level's 8': {ceilings:?}");
+}

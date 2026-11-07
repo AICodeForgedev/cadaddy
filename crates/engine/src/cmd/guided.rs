@@ -6279,8 +6279,8 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     result["typical_plan_diffs"] = json!(plan_diffs.iter().take(MAX_PLAN_DIFFS).collect::<Vec<_>>());
     if let Some(db) = result.get("deviceBuild") {
         let line = format!(
-            "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; outside their level's footprint: {}",
-            db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["misplaced"]
+            "  device heights: {}; defaults (no document) by kind: {}; set in a wall's face: {}, no wall there: {}; drawn clear of the walls, hung from the ceiling: {}; outside their level's footprint: {}",
+            db["heights_from"], db["defaults_by_kind"], db["in_wall"], db["no_wall"], db["hung_from_ceiling"], db["misplaced"]
         );
         progress_line(&line);
         // A plumbing fixture type whose rough-in height no schedule, detail or note gives: one
@@ -6412,6 +6412,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         result["gear_error"] = json!(e.to_string());
     }
     bim_step(s, job, "electrical gear", t);
+    // Each typical room's ceiling lights where its reflected ceiling plan draws and dimensions
+    // them (after the gear, whose step may build the devices again; before the conduit).
+    let t = web_time::Instant::now();
+    match rcp_light_step(s, job) {
+        Ok(v) if !v.is_null() => {
+            progress_line(&format!("  ceiling lights set where the typical rooms' reflected ceiling plans draw them: {v}"));
+            result["rcp_lights"] = v;
+        }
+        Ok(_) => {}
+        Err(e) => result["rcp_lights_error"] = json!(e.to_string()),
+    }
+    bim_step(s, job, "lights at their RCP spots", t);
     // The fire alarm panels where the documents put them (proposed, in their rooms).
     let t = web_time::Instant::now();
     fa_panels_step(s, job, &scope_docs, &mut result);
@@ -8326,6 +8338,39 @@ fn rigid_room_fit(
 /// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
 const FIT_OFFSETS_TRIED: usize = 3;
 
+/// [`rigid_room_fit`]'s offset made finer (it is voted a tolerance apart): across and up apart,
+/// the offset most pairs of the view's samples and the floor's agree on within `tol` of the
+/// fit's, to `fine` (a wall across the view tells its offset up, one up it across).
+fn finer_fit(fit: RoomFit, view_pts: &[cadaddy_geom::Vec2], room: [f64; 4], floor: &FloorLines, margin: f64, tol: f64, fine: f64) -> RoomFit {
+    if !fit.rigid || fine.is_nan() || fine <= 0.0 || tol.is_nan() || tol <= 0.0 {
+        return fit;
+    }
+    let near = floor.in_box([room[0] - margin, room[1] - margin, room[2] + margin, room[3] + margin]);
+    let stride = (view_pts.len() / MAX_FIT_SAMPLES).max(1);
+    let (mut xs, mut ys): (BTreeMap<i64, Vec<f64>>, BTreeMap<i64, Vec<f64>>) = (BTreeMap::new(), BTreeMap::new());
+    for p in view_pts.iter().step_by(stride) {
+        let t = turn_vec(*p - fit.from, fit.k);
+        for f in &near {
+            let o = *f - t;
+            if (o.x - fit.to.x).abs() <= tol && (o.y - fit.to.y).abs() <= tol {
+                xs.entry((o.x / fine).round() as i64).or_default().push(o.x);
+                ys.entry((o.y / fine).round() as i64).or_default().push(o.y);
+            }
+        }
+    }
+    // The cell of the most votes (ties to the smaller key), then the mean of the offsets in it and
+    // its two neighbours; none: the fit as it was.
+    let peak = |m: &BTreeMap<i64, Vec<f64>>| {
+        let (k, _) = m.iter().max_by(|a, b| a.1.len().cmp(&b.1.len()).then_with(|| b.0.cmp(a.0)))?;
+        let near: Vec<f64> = m.range(k - 1..=k + 1).flat_map(|(_, v)| v.iter().copied()).collect();
+        (!near.is_empty()).then(|| near.iter().sum::<f64>() / near.len() as f64)
+    };
+    match (peak(&xs), peak(&ys)) {
+        (Some(x), Some(y)) => RoomFit { to: cadaddy_geom::Vec2::new(x, y), ..fit },
+        _ => fit,
+    }
+}
+
 /// How far round a room its floor's linework is looked at to lay a typical view in it, feet.
 const ROOM_FIT_MARGIN_FT: f64 = 3.0;
 
@@ -9269,6 +9314,242 @@ fn typical_rcp_areas_on(
         }
     }
     (main_areas_only(out), read)
+}
+
+/// A light a typical room's reflected ceiling plan draws, laid into one room of its type: the
+/// room (its index in the job's rooms), where the light is on the floor's plan, and the view.
+#[derive(Clone, Debug, PartialEq)]
+struct RcpLight {
+    room: usize,
+    at: cadaddy_geom::Vec2,
+    view: String,
+}
+
+/// Whether a view title is a reflected ceiling plan's.
+fn rcp_title(t: &str) -> bool {
+    let up = t.to_ascii_uppercase();
+    up.contains("REFLECTED CEILING") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+}
+
+/// The lights the typical rooms' reflected ceiling plans draw ("UNIT RCP - SINGLE QUEEN": each
+/// light a round symbol of a light's size, dimensioned there), each view laid into every room of
+/// its type by its linework, as the ceiling heights are ([`typical_rcp_areas`]): the lights that
+/// land in a room's outline.
+fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<RcpLight> {
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    let mut out: Vec<RcpLight> = Vec::new();
+    if types.is_empty() {
+        return out;
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let (lo_in, hi_in) = super::propfill::rcp_light_size_in();
+    let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    // Only the sheets a reflected ceiling plan's title is on.
+    let titles: Vec<cadaddy_geom::Vec2> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            cadaddy_doc::EntityKind::Text(t) => Some((t.value.as_str(), t.insert)),
+            cadaddy_doc::EntityKind::MText(t) => Some((t.contents.as_str(), t.insert)),
+            _ => None,
+        })
+        .filter(|(v, _)| rcp_title(v))
+        .map(|(_, at)| cadaddy_geom::Vec2::new(at.x, at.y))
+        .take(MAX_TAG_TEXTS)
+        .collect();
+    let sheets: Vec<super::printmep::SheetRef> = job_sheet_refs(job)
+        .into_iter()
+        .filter(|r| r.view.is_none() && titles.iter().any(|p| inside(&r.rect, *p)))
+        .take(MAX_STAMP_SHEETS)
+        .collect();
+    if sheets.is_empty() {
+        return out;
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
+    for sh in &sheets {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        let views: Vec<([f64; 4], BTreeSet<String>, String)> = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts)
+            .into_iter()
+            .filter_map(|v| {
+                let words = type_words(&v.title, Some(&vocabulary));
+                (rcp_title(&v.title) && types.contains(&words)).then_some((v.region?, words, v.title.clone()))
+            })
+            .collect();
+        if views.is_empty() {
+            continue;
+        }
+        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(&sub);
+        let objects = super::bspec::plan_objects(&sub);
+        for (view, words, title) in &views {
+            // A light's round symbol (a downlight's circle, a flush mount's): one per spot (a
+            // circle drawn twice, a ring round a smaller one).
+            let mut mine: Vec<cadaddy_geom::Vec2> = Vec::new();
+            for (c, r) in rounds.iter().filter(|(c, r)| {
+                let dia_in = 2.0 * r / k_in;
+                inside(view, cadaddy_geom::Vec2::new(c[0], c[1])) && dia_in >= lo_in && dia_in <= hi_in
+            }) {
+                let p = cadaddy_geom::Vec2::new(c[0], c[1]);
+                if !mine.iter().any(|q| q.dist(p) < r.max(2.0 * k_in)) {
+                    mine.push(p);
+                }
+            }
+            if mine.is_empty() {
+                continue;
+            }
+            let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, c))).copied().collect();
+            let lines = super::grids::line_samples(&ents, 12.0 * k_in);
+            for (ri, (_, _, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+                let b = bbox(outline);
+                let margin = ROOM_FIT_MARGIN_FT * 12.0 * k_in;
+                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else { continue };
+                // A light's place to the half inch, not to the fit's six.
+                let fit = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
+                for p in &mine {
+                    let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
+                    let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                    if cadaddy_geom::point_in_polygon(outline, q) {
+                        out.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number) });
+                    }
+                }
+                if out.len() >= MAX_STAMPED * 8 {
+                    return out;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Ceiling luminaires one RCP step looks at, at most.
+const MAX_RCP_LUMINAIRES: usize = 100_000;
+
+/// Each ceiling luminaire of a typical room set where its type's reflected ceiling plan draws
+/// and dimensions it (the ceiling's layout governs where its lights go; the electrical plan's
+/// symbols are diagrammatic): moved to the nearest such light in its room within the rule's
+/// reach, each light taking one luminaire; the electrical plan's place kept as the design value
+/// beside it, with the reason and the rule. What was read and moved.
+fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
+    use cadaddy_doc::props::{self, Source, SourceKind};
+    let Ok((sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(Value::Null) };
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let lights = typical_rcp_lights(s.doc()?, job);
+    if lights.is_empty() {
+        return Ok(json!({"lights": 0}));
+    }
+    let rule = super::provenance::rule("E-RCP-LIGHT");
+    let (reach, at_spot) = (rule.reach_ft.max(0.0) * upf, rule.connect_reach_ft.max(0.0) * upf);
+    let rooms = job_rooms(job);
+    // The ceiling luminaires: plan position (its box's middle, the level's plan), z middle, level.
+    let lums: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String)> = {
+        let d = s.doc()?;
+        d.model
+            .iter()
+            .filter(|e| super::wallgen::made_as(e).as_deref() == Some("device"))
+            .filter_map(|e| {
+                let ps = props::read(&e.common.xdata);
+                let text = |k: &str| ps.get(k).map(|p| p.text().to_ascii_lowercase()).unwrap_or_default();
+                let luminaire = (text("kind").contains("luminaire") && !text("kind").contains("wall")) || text("ifc_class") == "ifclightfixture";
+                (luminaire && text("mounting") == "ceiling").then_some(())?;
+                let (b, _, _) = super::propfill::extent(d, e)?;
+                Some((e.handle, b.center() - super::bspec::stacked_by(e), super::bspec::made_level(e)?))
+            })
+            .take(MAX_RCP_LUMINAIRES)
+            .collect()
+    };
+    // Per room: its lights and its luminaires, nearest pairs first.
+    let mut by_room: BTreeMap<usize, Vec<&RcpLight>> = BTreeMap::new();
+    for l in &lights {
+        by_room.entry(l.room).or_default().push(l);
+    }
+    let same_level = |a: &str, b: &str| a.eq_ignore_ascii_case(b) || storey_key(a) == storey_key(b);
+    let mut moves: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String, f64)> = Vec::new();
+    let (mut at_rcp, mut rooms_matched) = (0usize, 0usize);
+    let mut taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
+    for (ri, ls) in &by_room {
+        let Some((_, level, outline, _)) = rooms.get(*ri) else { continue };
+        let mine: Vec<&(cadaddy_doc::Handle, cadaddy_geom::Vec2, String)> =
+            lums.iter().filter(|(h, p, l)| !taken.contains(h) && same_level(l, level) && cadaddy_geom::point_in_polygon(outline, *p)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        rooms_matched += 1;
+        let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+        for (li, l) in ls.iter().enumerate() {
+            for (di, (_, p, _)) in mine.iter().enumerate() {
+                let dist = l.at.dist(*p);
+                if dist <= reach {
+                    pairs.push((dist, li, di));
+                }
+            }
+        }
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (mut used_l, mut used_d) = (BTreeSet::new(), BTreeSet::new());
+        for (dist, li, di) in pairs {
+            if used_l.contains(&li) || used_d.contains(&di) {
+                continue;
+            }
+            used_l.insert(li);
+            used_d.insert(di);
+            let (Some(l), Some((h, p, _))) = (ls.get(li), mine.get(di)) else { continue };
+            taken.insert(*h);
+            if dist <= at_spot {
+                at_rcp += 1;
+            } else {
+                moves.push((*h, l.at - *p, l.view.clone(), dist / upf));
+            }
+        }
+    }
+    let d = s.doc_mut()?;
+    let mut moved = 0usize;
+    for (h, delta, view, ft) in &moves {
+        let Some(e) = d.model.get(*h) else { continue };
+        let mut ps = props::read(&e.common.xdata);
+        let design = ps.get("location").map(|p| p.text()).unwrap_or_default();
+        let design_source = ps.get("location").map_or_else(|| Source::of(SourceKind::Print), |p| p.source.clone());
+        let nums: Vec<f64> = design.split(',').filter_map(|v| v.trim().parse::<f64>().ok()).collect();
+        let corrected = match nums.as_slice() {
+            [x, y, z] => format!("{:.2}, {:.2}, {:.2}", x + delta.x / upf, y + delta.y / upf, z),
+            _ => continue,
+        };
+        let c = super::provenance::Correction {
+            key: "location".into(),
+            design: design.clone(),
+            corrected,
+            reason: format!("{view} draws and dimensions this light {ft:.1} ft from where the electrical plan's symbol puts it"),
+            rule: rule.basis_for(""),
+        };
+        if !super::provenance::correct_with(&mut ps, &c, design_source, Source::from_doc(SourceKind::Print, view)) {
+            continue;
+        }
+        let x = props::write(&e.common.xdata, &ps);
+        if d
+            .modify_entity(*h, |e| {
+                if let cadaddy_doc::EntityKind::Mesh(m) = &mut e.kind {
+                    for v in &mut m.vertices {
+                        v.x += delta.x;
+                        v.y += delta.y;
+                    }
+                }
+                e.common.xdata = x.into();
+            })
+            .is_ok()
+        {
+            moved += 1;
+        }
+    }
+    if moved > 0 {
+        s.touch();
+    }
+    Ok(json!({"lights": lights.len(), "rooms": rooms_matched, "at_their_rcp_spot": at_rcp, "moved": moved, "luminaires": lums.len()}))
 }
 
 /// How far (in its text heights) a ceiling tag's type letter is over its height.
@@ -13284,9 +13565,13 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                 if !size.is_empty() {
                     t.set("box_size", size.clone(), "note");
                 }
-                // The junction box the plan shows is the note's box: its kind is the note's.
+                // The junction box the plan shows is the note's box: its kind is the note's, and a
+                // ceiling box is in the ceiling (not at the plan's wall J height).
                 if kind != "junction_box" {
                     t.kind = kind.clone();
+                    if b.work.box_in.is_some() {
+                        t.set("mount", "ceiling", "note");
+                    }
                 }
                 box_said.insert(format!("device:{}", t.id), said(b, &kind, &size));
                 on_devices += 1;
@@ -13682,6 +13967,8 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     // Build them, and say on each conduit piece what it is from.
     let mep_runs: Vec<cadaddy_walk3d::MepRun> = runs.iter().map(|k| k.run.clone()).collect();
     let run_count = runs.len();
+    // Its levels, for a box raised to its level's ceiling after the spec goes to the build.
+    let levels_of = cadaddy_walk3d::BuildingSpec { units_per_foot: sp.units_per_foot, levels: sp.levels.clone(), ..cadaddy_walk3d::BuildingSpec::default() };
     let made = build_new_mep(s, sp, mep_runs, &new_equipment)?;
     {
         let bases: Vec<String> = runs.iter().map(|k| super::mep::run_base(&k.run)).collect();
@@ -13729,8 +14016,10 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                 stamp.push((e.handle, said));
             }
         }
+        let mut hung = 0usize;
         for (h, said) in stamp {
             let Some(e) = d.model.get(h) else { continue };
+            let device = super::wallgen::made_as(e).as_deref() == Some("device");
             let mut store = props::read(&e.common.xdata);
             let cite = said.iter().find(|(k, _)| *k == "keynote_sheet").map(|(_, v)| v.clone()).unwrap_or_default();
             let num = said.iter().find(|(k, _)| *k == "keynote_number").map(|(_, v)| v.clone()).unwrap_or_default();
@@ -13739,6 +14028,16 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
             }
             let x = props::write(&e.common.xdata, &store);
             let _ = d.modify_entity(h, |e| e.common.xdata = x.into());
+            // The plan's junction box that is a note's ceiling box: up in the ceiling.
+            if device
+                && said.iter().any(|(k, v)| *k == "mounting" && v == "ceiling")
+                && super::propfill::hang_at_ceiling(d, &levels_of, h, &format!("{cite} keynote {num}: a ceiling-mounted box"))
+            {
+                hung += 1;
+            }
+        }
+        if hung > 0 {
+            result["keynotes_ceiling_boxes_raised"] = json!(hung);
         }
     }
     s.touch();
@@ -23190,6 +23489,19 @@ mod tests {
         // The boxes: the junction box the plan shows is the antenna box; the others are added at
         // their markers, each of its kind and size, at the ceiling.
         assert_eq!(sp.tags.iter().find(|t| t.id == "device:2").map(|t| t.kind.as_str()), Some("bda_antenna_box"));
+        // That box is a ceiling box: in the ceiling (the level's 9'), not at the wall height the
+        // plan's junction box was built at (Q6250).
+        assert_eq!(sp.tags.iter().find(|t| t.id == "device:2").and_then(|t| t.fields.get("mount")).map(|f| f.value.as_str()), Some("ceiling"));
+        {
+            let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
+            let jb = d.model.iter().find(|e| super::super::bimlook::made_tag(e, "devid").as_deref() == Some("device:2")).unwrap_or_else(|| panic!("the box"));
+            let cadaddy_doc::EntityKind::Mesh(m) = &jb.kind else { panic!("a mesh") };
+            let top = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
+            assert!((top - 108.0).abs() < 1e-6, "its top at the level's 9' ceiling: {top}");
+            let p = cadaddy_doc::props::read(&jb.common.xdata);
+            assert_eq!(p.get("mounting").map(|v| v.text()), Some("ceiling".to_string()));
+            assert_eq!(p.get("mount_height").and_then(|v| v.value.as_f64()), Some(108.0), "{p:?}");
+        }
         let mut kinds: Vec<(String, String, String)> =
             sp.mep.equipment.iter().map(|e| (e.level.clone(), e.kind.clone(), e.properties.get("size").cloned().unwrap_or_default())).collect();
         kinds.sort();
@@ -24751,6 +25063,111 @@ mod tests {
             .iter()
             .any(|a| a.outline.iter().any(|p| p[0] >= 10_400.0 && p[1] >= 188.0 - 1e-6) && a.outline.iter().all(|p| p[1] >= 188.0 - 1e-6));
         assert!(turned_bath, "the turned room's bath is at its other end: {baths:?}");
+    }
+
+    /// Q6250: each ceiling light of a typical room goes where its type's ceiling plan draws it
+    /// (the view laid into each room by its linework, a turned room's turned), the electrical
+    /// plan's place kept as the design value; one already there, a wall light, one past the
+    /// rule's reach and one in no room of the type stay.
+    #[test]
+    fn a_typical_rooms_ceiling_lights_go_where_its_ceiling_plan_draws_them() {
+        use cadaddy_doc::props::{self, Prop, Source};
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let unit = |s: &mut crate::Session, o: [f64; 2], turned: bool| {
+            let p = |x: f64, y: f64| if turned { [o[0] + 144.0 - x, o[1] + 288.0 - y] } else { [o[0] + x, o[1] + y] };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        // The A-6 sheet: the unit's ceiling plan with a 6" downlight and a 15" flush mount.
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, false);
+        s.execute("circle", &json!({"center": [v[0] + 40.0, v[1] + 150.0], "radius": 3.0})).unwrap();
+        s.execute("circle", &json!({"center": [v[0] + 100.0, v[1] + 240.0], "radius": 7.5})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT RCP - DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0], false);
+        unit(&mut s, [10_400.0, 0.0], true);
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-6".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-6".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1,
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 2", "elevation_ft": 12.0, "height_ft": 10.0, "ceiling_ft": 8.5}]
+        }))
+        .unwrap();
+        // The built luminaires, as the electrical plan placed them (4" boxes at the ceiling).
+        let lum = |s: &mut crate::Session, at: [f64; 2], mounting: &str| -> cadaddy_doc::Handle {
+            let d = s.doc_mut().unwrap();
+            let mut ps = props::Props::default();
+            ps.set("kind", Prop::new("luminaire", Source::computed()));
+            ps.set("mounting", Prop::new(mounting, Source::computed()));
+            ps.set("location", Prop::new(format!("{:.2}, {:.2}, {:.2}", at[0] / 12.0, at[1] / 12.0, 12.0 + 98.0 / 12.0), Source::computed()));
+            let x = props::write(&super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 2", cadaddy_doc::Handle(0)), &ps);
+            let mut m = super::super::wallgen::empty_mesh();
+            super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(at[0] - 2.0, at[1]), cadaddy_geom::Vec2::new(at[0] + 2.0, at[1]), 4.0, 242.0, 246.0);
+            d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
+        };
+        let a = lum(&mut s, [10_052.0, 170.0], "ceiling"); // 23" off 201's downlight
+        let b = lum(&mut s, [10_100.0, 241.0], "ceiling"); // at 201's flush mount
+        let w = lum(&mut s, [10_040.0, 152.0], "wall"); // a wall light by the downlight
+        let c = lum(&mut s, [10_480.0, 120.0], "ceiling"); // 30" off 202's (turned) downlight
+        let far = lum(&mut s, [10_444.0, 150.0], "ceiling"); // 8.5' from 202's flush mount
+        let out = lum(&mut s, [10_300.0, 100.0], "ceiling"); // in no room of the type
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
+            let d = s.doc().unwrap();
+            let (bx, _, _) = super::super::propfill::extent(&d, d.model.get(h).unwrap()).unwrap();
+            [(bx.center().x * 100.0).round() / 100.0, (bx.center().y * 100.0).round() / 100.0]
+        };
+        let before: Vec<[f64; 2]> = [b, w, far, out].iter().map(|h| centre(&s, *h)).collect();
+        let r = rcp_light_step(&mut s, &job).unwrap();
+        assert_eq!((r["lights"].clone(), r["moved"].clone(), r["at_their_rcp_spot"].clone()), (json!(4), json!(2), json!(1)), "{r}");
+        let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 0.25;
+        assert!(near(centre(&s, a), [10_040.0, 150.0]), "201's downlight where its ceiling plan draws it: {:?}", centre(&s, a));
+        assert!(near(centre(&s, c), [10_504.0, 138.0]), "202 is turned: its downlight turned with it: {:?}", centre(&s, c));
+        assert_eq!([b, w, far, out].iter().map(|h| centre(&s, *h)).collect::<Vec<_>>(), before, "the others stay");
+        // The electrical plan's place kept beside the installed one, with the reason and the rule.
+        let d = s.doc().unwrap();
+        let ps = props::read(&d.model.get(a).unwrap().common.xdata);
+        let at: Vec<f64> = ps.get("location").map(Prop::text).unwrap_or_default().split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        assert!(at.len() == 3 && (at[0] - 836.67).abs() < 0.03 && (at[1] - 12.5).abs() < 0.03 && (at[2] - 20.17).abs() < 1e-9, "{ps:?}");
+        assert_eq!(ps.get("design:location").map(Prop::text).as_deref(), Some("837.67, 14.17, 20.17"), "{ps:?}");
+        let why = ps.get("correction:location").map(Prop::text).unwrap_or_default();
+        assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - DOUBLE QUEEN"), "{why}");
     }
 
     #[test]
