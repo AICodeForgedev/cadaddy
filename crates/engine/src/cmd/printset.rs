@@ -52,17 +52,17 @@ fn set_project(s: &mut Session, p: PrintSetProject) {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("printset.open", "Open Print Set", run_open)
+        CommandSpec::new("printset.open", "Open Print Set", run_open).long()
             .files()
             .params("{path: folder, one PDF (its pages only) or .printset.json, name?} → {name, sheets, revision, dashboard}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.classify", "Classify Print Set", run_classify)
+        CommandSpec::new("printset.classify", "Classify Print Set", run_classify).long()
             .files()
             .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level}: one entry per real sheet (copies in several files merged by number, the newer revision date current), from each page's title block")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.run", "Run Print Set Stages", run_stages)
+        CommandSpec::new("printset.run", "Run Print Set Stages", run_stages).long()
             .files()
             .params("{stages?: [name], resume?: bool, force?: bool (run even when the import check failed)} → {stages_run, total_items, elapsed_ms}")
             .enabled(always)
@@ -73,7 +73,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{discipline?, level?, current?: bool (leave out sheets a later copy supersedes)} → {sheets: [{number, title, discipline, type, level, levels, scale, scale_factor, file, page, dirty, superseded_by, stages}], total}")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport)
+        CommandSpec::new("printset.reimport", "Re-import Revised Set", run_reimport).long()
             .files()
             .params("{path: folder, revision?: label, full_set?: bool} → {delta, sheets}")
             .enabled(always)
@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{} → {kept: folder, sheets}: the print set and the drawing (its building spec, model, review and job state) kept in the print folder's .cadaddy folder; the next session's printset.resume {} opens it")
             .enabled(always)
             .noundo(),
-        CommandSpec::new("printset.resume", "Resume Print Set Job", run_resume)
+        CommandSpec::new("printset.resume", "Resume Print Set Job", run_resume).long()
             .files()
             .params("{path?: print folder (default: the last one kept), auto?: bool (only when no print set is open and the drawing is empty)} → {resumed, name?, sheets?, folder?, why?}: the kept print set and its drawing opened again")
             .enabled(always)

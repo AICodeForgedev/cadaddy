@@ -87,10 +87,10 @@ const LOOP: &str =
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new(CMD_START, "Validate Model Against Prints (Agent)", run_start).params(
+        CommandSpec::new(CMD_START, "Validate Model Against Prints (Agent)", run_start).long().params(
             "{scope?: selection|area|room|level|building (default from what is given: area, else room, else level, else building), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level} (scope area), room?: number or name (scope room; with level: on that level), level?: name (scope level), trades?: [architecture|electrical|mechanical|plumbing|fire|general], rules?: [rule id], out_dir?: folder for the packets, each run in a folder of its own named by its id (default: a folder named after the drawing plus \" validate\", beside it), force?: bool (judge unchanged areas again)} → {run, areas: [{id, status}], areas_total, pending, unchanged, prescreen, out_dir, next: \"validate.next\", loop, waiting?}: starts (or resumes) a Validate run. The judge is the connected agent: it loops validate.next → judges the packet by its rules → validate.report, until done; then validate.status",
         ),
-        CommandSpec::new(CMD_NEXT, "Next Validation Packet", run_next).files().params(
+        CommandSpec::new(CMD_NEXT, "Next Validation Packet", run_next).long().files().params(
             "{run?: id (the latest), area?: id (this one again)} → {run, area, packet: {dir, manifest, prompt, objects, rules}, rules, images, prompt?, remaining, report: {call: \"validate.report\", params}} | {run, done: true, next: \"validate.status\"}: writes the next area's evidence packet and hands it to the judge; read prompt.md and the pictures, judge every rule for every element, then validate.report (a large area in parts: {part: 1}, {part: 2}, … {final: true})",
         ),
         CommandSpec::new(CMD_REPORT, "Report Validation Findings", run_report).params(

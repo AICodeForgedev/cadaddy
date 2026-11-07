@@ -24,7 +24,7 @@ const MAX_CLASHES: usize = 5_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("model.clashes.report", "Clash Report", run_report)
+        CommandSpec::new("model.clashes.report", "Clash Report", run_report).long()
             .params("{force?: bool (replace an existing file; otherwise it is refused), path: .pdf, clashes?: [{id, kind, level, systems, message, status, trade, notes, group?}] (default: model.clashes now, all new), tolerance_in?} → {path, clashes, groups, pages, cut}")
             .noundo(),
     ]

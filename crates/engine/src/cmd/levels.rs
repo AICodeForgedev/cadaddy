@@ -42,7 +42,7 @@ const MADE_APP: &str = "CADADDY_WALLGEN";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("levels.read", "Read Levels", run_read)
+        CommandSpec::new("levels.read", "Read Levels", run_read).long()
             .files().params(
             "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, source, matches?, approved?}], conflicts (incl. approved values kept), datum_ft, changes?, kept?, applied, warnings (readings rejected: they break the levels' order), ignored (notes on civil and site sheets: spot elevations)}; approved levels (`levels/<name>`) keep their elevation; a guided job's sheet index (its level table) wins over notes read here",
         ),

@@ -84,7 +84,7 @@ fn default_waste(category: &str) -> f64 {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("bim.bom", "Bill of Materials", run)
+        CommandSpec::new("bim.bom", "Bill of Materials", run).long()
             .alias(&["bom"])
             .params(
                 "{force?: bool (replace an existing file; otherwise it is refused), group_by?: job|level|trade|circuit (each level's lines per branch circuit) | [property key] (by the elements' properties), filter?: {kind?, where?, key: value…} (by the elements' properties), all_elements?: bool (each line's every element, not the first 500), waste?: {category: percent}, waive?: [{item, reason}], compare_to?: {lines} (an earlier BOM), file?: path (.csv/.xlsx), columns?: {trade|category|item|size|unit|net|waste|total|status|rule|level: header}} → {lines: [{trade, category, item, size, unit, net, waste_pct, waste, total, status: firm|rule|model, rule?, level?, circuit?, elements}], by_others: [{trade, element, kind, level, owner, scope: by others (owner)|unassigned, cy, cost_to_us: 0}] (concrete not ours) and [{trade, element, kind, level, owner, furnish, install, scope, reason, source, ours: [item], ours_source, decided: documents|answer|default, cost_to_us: 0}] (another trade's thermostats, fire alarm and low voltage devices and panels: bim.scope), required: [{item, qty, supply: purchase|rental|owned, rule, waived?}], spec_check: [{issue, item, detail}], complete, changes?: {added, removed, changed}, csv, path?}",

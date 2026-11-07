@@ -25,7 +25,7 @@ const MAX_TABLE_ROWS: usize = 1998;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("takeoff", "Quantity Takeoff", run)
+        CommandSpec::new("takeoff", "Quantity Takeoff", run).long()
             .menu(&["Tools", "Inquiry", "Quantity Takeoff"])
             .alias(&["qto"])
             .params(
