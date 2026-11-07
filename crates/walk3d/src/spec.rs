@@ -1979,6 +1979,16 @@ pub struct MepTerminal {
     /// The plan objects it was read from (hex handles).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub objects: Vec<String>,
+    /// The sheet its symbol was read from (empty: none known).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_sheet: String,
+    /// What it is by the documents: drawn, derived or inferred ([`Made`]).
+    #[serde(default, skip_serializing_if = "Made::is_drawn")]
+    pub made: Made,
+    /// Why a terminal no plan draws there is in the model: the source it was derived from, or the
+    /// rule it was inferred by. Empty for a drawn one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub basis: String,
 }
 
 /// One change a revision of the prints made to a run: the revision log.

@@ -164,15 +164,33 @@ pub struct TagFit {
     pub residual: f64,
 }
 
-/// The transform taking the tags `from` onto the same tags in `to`: of every transform two
-/// shared tags give (scale inside `scale_range`), the one most tags agree with (within `tol`, in
-/// `to`'s units), refined by least squares on those tags. None unless at least three distinct
-/// tags agree. Tags only one side prints, and tags printed in several places, are fine: each tag
-/// counts once, at its best place.
-pub fn fit_by_tags(from: &[(String, [f64; 2])], to: &[(String, [f64; 2])], tol: f64, scale_range: (f64, f64)) -> Option<TagFit> {
-    if !(tol.is_finite() && tol > 0.0) {
-        return None;
+/// Under this many matched tags a fit says little on its own: a handful of tags can agree with a
+/// transform none of them is right for.
+pub const FEW_TAGS: usize = 8;
+/// How far (degrees) off square a fit on a few tags may turn: the tags' own scatter.
+pub const FEW_TAGS_TURN_DEG: f64 = 1.5;
+
+/// How far (degrees) `turn_deg` is off the nearest right angle (a view may be drawn turned a
+/// quarter or a half turn on its sheet). Not a number: infinite.
+pub fn off_square_deg(turn_deg: f64) -> f64 {
+    if !turn_deg.is_finite() {
+        return f64::INFINITY;
     }
+    let r = turn_deg.rem_euclid(90.0);
+    r.min(90.0 - r)
+}
+
+/// Whether a fit on `matched` tags turned `turn_deg` is a few tags turned off square: the plans of
+/// one building are drawn square to each other, so a handful of tags that need a turn of a few
+/// degrees matched tags that are not each other's (seven room numbers turned four and a half
+/// degrees put a floor's core ductwork over the next room). Such a fit places nothing.
+pub fn few_tags_off_square(matched: usize, turn_deg: f64) -> bool {
+    matched < FEW_TAGS && off_square_deg(turn_deg) > FEW_TAGS_TURN_DEG
+}
+
+/// Each tag `from` prints with each place `to` prints it: (tag, from, to, how many such pairs the
+/// tag has), the tags printed once on both sides first (the surest), at most [`MAX_FIT_PAIRS`].
+fn tag_pairs<'a>(from: &'a [(String, [f64; 2])], to: &'a [(String, [f64; 2])]) -> Vec<(&'a str, [f64; 2], [f64; 2], usize)> {
     let mut places: BTreeMap<&str, Vec<[f64; 2]>> = BTreeMap::new();
     for (t, p) in to {
         let v = places.entry(t.as_str()).or_default();
@@ -198,6 +216,106 @@ pub fn fit_by_tags(from: &[(String, [f64; 2])], to: &[(String, [f64; 2])], tol: 
     }
     pairs.sort_by_key(|x| x.3);
     pairs.truncate(MAX_FIT_PAIRS);
+    pairs
+}
+
+/// How near one to one (a share) a free fit's scale is taken as one to one when it is held square
+/// (both sheets read at their scale notes).
+pub const SQUARE_ONE_TO_ONE: f64 = 0.05;
+
+/// A free fit (`free`, of the tags `from` onto `to`) as it stands, unless it is a few tags turned
+/// off square ([`few_tags_off_square`]): then the same tags held square ([`fit_by_tags_square`]) at
+/// the nearest right angle and its scale (one to one when within [`SQUARE_ONE_TO_ONE`]), or none.
+pub fn square_fit(free: TagFit, from: &[(String, [f64; 2])], to: &[(String, [f64; 2])], tol: f64) -> Option<TagFit> {
+    let turn = free.sim.rotation_deg();
+    if !few_tags_off_square(free.matched.len(), turn) {
+        return Some(free);
+    }
+    let k = free.sim.scale();
+    let k = if (k - 1.0).abs() <= SQUARE_ONE_TO_ONE { 1.0 } else { k };
+    fit_by_tags_square(from, to, tol, k, (turn / 90.0).round() * 90.0)
+}
+
+/// [`fit_by_tags`] held square: the transform at scale `scale` turned `turn_deg` (a right angle:
+/// the plans of one building are drawn square to each other) that most tags agree with (within
+/// `tol`), its offset the agreeing tags' mean. None unless at least three distinct tags agree.
+/// For a few tags whose free fit needs a turn off square ([`few_tags_off_square`]): the tags that
+/// are each other's still agree with the square fit, the wrong ones drop out.
+pub fn fit_by_tags_square(from: &[(String, [f64; 2])], to: &[(String, [f64; 2])], tol: f64, scale: f64, turn_deg: f64) -> Option<TagFit> {
+    if !(tol.is_finite() && tol > 0.0 && scale.is_finite() && scale > 0.0 && turn_deg.is_finite()) {
+        return None;
+    }
+    let (c, sn) = (scale * turn_deg.to_radians().cos(), scale * turn_deg.to_radians().sin());
+    let turned = |p: [f64; 2]| [c * p[0] - sn * p[1], sn * p[0] + c * p[1]];
+    let pairs = tag_pairs(from, to);
+    if pairs.iter().map(|x| x.0).collect::<BTreeSet<_>>().len() < 3 {
+        return None;
+    }
+    let at = |t: [f64; 2]| Sim { a: c, b: sn, tx: t[0], ty: t[1] };
+    // Per tag its nearest place within `tol` of where the offset `t` puts it.
+    let agree = |t: [f64; 2]| -> Vec<(&str, [f64; 2], [f64; 2], f64)> {
+        let s = at(t);
+        let mut best: BTreeMap<&str, ([f64; 2], [f64; 2], f64)> = BTreeMap::new();
+        for (tag, p, q, _) in &pairs {
+            let d = dist(s.apply(*p), *q);
+            if d <= tol && best.get(tag).is_none_or(|b| d < b.2) {
+                best.insert(tag, (*p, *q, d));
+            }
+        }
+        best.into_iter().map(|(tag, (p, q, d))| (tag, p, q, d)).collect()
+    };
+    let offset = |p: [f64; 2], q: [f64; 2]| {
+        let r = turned(p);
+        [q[0] - r[0], q[1] - r[1]]
+    };
+    let mut best: Option<(usize, f64, [f64; 2])> = None;
+    for (_, p, q, _) in &pairs {
+        let t = offset(*p, *q);
+        let ok = agree(t);
+        let err: f64 = ok.iter().map(|a| a.3 * a.3).sum();
+        if best.as_ref().is_none_or(|(n, e, _)| ok.len() > *n || (ok.len() == *n && err < *e)) {
+            best = Some((ok.len(), err, t));
+        }
+    }
+    let (n, _, mut t) = best?;
+    if n < 3 {
+        return None;
+    }
+    // The offset the agreeing tags give together (twice: it may take in one more).
+    let mut ok = agree(t);
+    for _ in 0..2 {
+        let k = ok.len().max(1) as f64;
+        let mean = ok.iter().fold([0.0, 0.0], |m, a| {
+            let o = offset(a.1, a.2);
+            [m[0] + o[0] / k, m[1] + o[1] / k]
+        });
+        let again = agree(mean);
+        if again.len() < ok.len() {
+            break;
+        }
+        t = mean;
+        ok = again;
+    }
+    if ok.len() < 3 {
+        return None;
+    }
+    let sim = at(t);
+    let residual = (ok.iter().map(|a| dist(sim.apply(a.1), a.2).powi(2)).sum::<f64>() / ok.len() as f64).sqrt();
+    let mut matched: Vec<String> = ok.iter().map(|a| a.0.to_string()).collect();
+    matched.sort();
+    Some(TagFit { sim, matched, residual })
+}
+
+/// The transform taking the tags `from` onto the same tags in `to`: of every transform two
+/// shared tags give (scale inside `scale_range`), the one most tags agree with (within `tol`, in
+/// `to`'s units), refined by least squares on those tags. None unless at least three distinct
+/// tags agree. Tags only one side prints, and tags printed in several places, are fine: each tag
+/// counts once, at its best place.
+pub fn fit_by_tags(from: &[(String, [f64; 2])], to: &[(String, [f64; 2])], tol: f64, scale_range: (f64, f64)) -> Option<TagFit> {
+    if !(tol.is_finite() && tol > 0.0) {
+        return None;
+    }
+    let pairs = tag_pairs(from, to);
     let distinct: BTreeSet<&str> = pairs.iter().map(|x| x.0).collect();
     if distinct.len() < 3 {
         return None;
@@ -479,6 +597,51 @@ pub fn merge_identities(items: &[IdItem], tol: &dyn Fn(&str) -> f64) -> (Vec<IdG
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_few_tags_turned_off_square_are_no_fit() {
+        assert_eq!(off_square_deg(0.0), 0.0);
+        assert!((off_square_deg(-90.4) - 0.4).abs() < 1e-9);
+        assert!((off_square_deg(4.47) - 4.47).abs() < 1e-9);
+        assert!((off_square_deg(-178.0) - 2.0).abs() < 1e-9);
+        assert_eq!(off_square_deg(f64::NAN), f64::INFINITY);
+        // Seven tags turned four and a half degrees: no fit; a quarter turn, or a degree: fine.
+        assert!(few_tags_off_square(7, 4.47));
+        assert!(!few_tags_off_square(7, 90.0));
+        assert!(!few_tags_off_square(5, 1.0));
+        assert!(few_tags_off_square(5, f64::NAN));
+        // Many tags: their own word.
+        assert!(!few_tags_off_square(13, 4.47));
+    }
+
+    #[test]
+    fn a_few_tags_held_square_keep_the_ones_that_are_each_others() {
+        // Six room numbers, the plan 100 right and 50 up on the other sheet; two of them misread
+        // a few feet off (wrong tags a turned fit would bend to).
+        let from: Vec<(String, [f64; 2])> =
+            [("101", [0.0, 0.0]), ("102", [40.0, 0.0]), ("103", [80.0, 0.0]), ("104", [0.0, 60.0]), ("105", [40.0, 60.0]), ("106", [80.0, 60.0])]
+                .iter()
+                .map(|(t, p)| (t.to_string(), *p))
+                .collect();
+        let mut to: Vec<(String, [f64; 2])> = from.iter().map(|(t, p)| (t.clone(), [p[0] + 100.0, p[1] + 50.0])).collect();
+        to[2].1[1] += 4.0;
+        to[5].1[1] += 4.0;
+        let f = fit_by_tags_square(&from, &to, 2.0, 1.0, 0.0).unwrap_or_else(|| panic!("no fit"));
+        assert_eq!(f.matched, vec!["101", "102", "104", "105"]);
+        assert!((f.sim.tx - 100.0).abs() < 1e-9 && (f.sim.ty - 50.0).abs() < 1e-9 && f.sim.b == 0.0, "{:?}", f.sim);
+        // The same at a quarter turn and twice the scale.
+        let to2: Vec<(String, [f64; 2])> = from.iter().map(|(t, p)| (t.clone(), [-2.0 * p[1] + 7.0, 2.0 * p[0] - 3.0])).collect();
+        let g = fit_by_tags_square(&from, &to2, 1.0, 2.0, 90.0).unwrap_or_else(|| panic!("no fit"));
+        assert_eq!(g.matched.len(), 6);
+        assert!((g.sim.apply([40.0, 60.0])[0] + 113.0).abs() < 1e-6, "{:?}", g.sim);
+        // Under three agreeing tags, or hostile numbers: none.
+        assert!(fit_by_tags_square(&from[..2], &to[..2], 2.0, 1.0, 0.0).is_none());
+        assert!(fit_by_tags_square(&from, &to, f64::NAN, 1.0, 0.0).is_none());
+        assert!(fit_by_tags_square(&from, &to, 2.0, 0.0, 0.0).is_none());
+        // A free fit that is not a few tags off square stands as it is.
+        let free = TagFit { sim: Sim::scale_offset(1.0, [100.0, 50.0]), matched: vec!["101".into(); 4], residual: 0.0 };
+        assert_eq!(square_fit(free.clone(), &from, &to, 2.0), Some(free));
+    }
 
     #[test]
     fn one_fit_then_another_is_both_in_turn() {
