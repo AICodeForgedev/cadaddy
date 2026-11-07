@@ -5302,6 +5302,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         mech.report
                     ));
                     sp.mep.equipment.extend(mech.equipment);
+                    let (gone, relabelled) = drop_fan_duct_repeats(&mut sp.mep.runs, &sp.mep.systems, &mech.runs, upf_runs);
+                    if gone > 0 {
+                        progress_line(&format!(
+                            "  ducts already laid along an exhaust fan's drawn duct (the same duct, now on the exhaust system): {gone} left out; on the plans as {relabelled:?}"
+                        ));
+                    }
                     sp.mep.runs.extend(mech.runs);
                 }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
@@ -10696,8 +10702,243 @@ struct MechItem {
     hi: [f64; 2],
     /// Where the exhaust fan's duct ends (its wall cap), view coordinates.
     cap: Option<[f64; 2]>,
+    /// The exhaust fan's duct as the view draws it, fan to wall cap (view coordinates; empty:
+    /// none could be followed), and its size (inches) with where that came from.
+    route: Vec<[f64; 2]>,
+    size_in: Option<(f64, &'static str)>,
     /// How it was found (`tag PTAC`, `symbol: no tag`).
     how: String,
+}
+
+/// A straight piece of a view's linework, from…to (view coordinates).
+type ViewSeg = ([f64; 2], [f64; 2]);
+
+/// A drawn duct's two sides: inches apart (round duct drawn in plan, 3"…14" across).
+const DUCT_WIDTH_IN: (f64, f64) = (2.5, 14.0);
+/// The shortest side (inches) read as a duct's: shorter is an elbow's arc, a hatch or a letter.
+const DUCT_SIDE_MIN_IN: f64 = 3.0;
+/// How far (inches, past the duct's width) a fan's duct may start from its box: a neck,
+/// transition or damper drawn between the fan and the duct's straight sides.
+const DUCT_NECK_IN: f64 = 12.0;
+/// How far (inches) past the last straight piece of a fan's duct its wall cap may be, where
+/// the elbow and the last run to the wall are drawn as curves.
+const DUCT_LAST_RUN_IN: f64 = 36.0;
+/// Most turns a fan's duct takes on its way to the wall cap.
+const DUCT_MAX_TURNS: usize = 4;
+/// Most pieces a fan's duct is followed through, and the longest it may be (feet).
+const DUCT_MAX_PIECES: usize = 16;
+const DUCT_MAX_FT: f64 = 60.0;
+/// Most linework sides looked at for ducts in one view (hostile drawings).
+const DUCT_MAX_SIDES: usize = 3_000;
+
+/// One straight piece of a drawn duct: its centreline from…to and how wide it is drawn.
+#[derive(Clone, Copy, Debug)]
+struct DuctPiece {
+    a: [f64; 2],
+    b: [f64; 2],
+    width: f64,
+}
+
+/// The straight pieces of duct a view draws: two parallel sides (lines, or the edges of a
+/// polyline or of a closed duct outline) a duct's width apart, overlapping along their length.
+/// The centreline of the overlap is the piece. Sizes in inches at `k_in` units.
+fn duct_pieces(segs: &[ViewSeg], k_in: f64) -> Vec<DuctPiece> {
+    let len = |s: &ViewSeg| (s.1[0] - s.0[0]).hypot(s.1[1] - s.0[1]);
+    let sides: Vec<&ViewSeg> = segs
+        .iter()
+        .filter(|s| s.0.iter().chain(s.1.iter()).all(|v| v.is_finite()) && len(s) >= DUCT_SIDE_MIN_IN * k_in)
+        .take(DUCT_MAX_SIDES)
+        .collect();
+    let mut out: Vec<DuctPiece> = Vec::new();
+    for (i, s) in sides.iter().enumerate() {
+        let l = len(s);
+        let u = [(s.1[0] - s.0[0]) / l, (s.1[1] - s.0[1]) / l];
+        let n = [-u[1], u[0]];
+        for t in sides.iter().skip(i + 1) {
+            let lt = len(t);
+            let v = [(t.1[0] - t.0[0]) / lt, (t.1[1] - t.0[1]) / lt];
+            if (u[0] * v[1] - u[1] * v[0]).abs() > 0.03 {
+                continue;
+            }
+            // How far the other side's line is from this one, and where it lies along it.
+            let off = |p: [f64; 2]| (p[0] - s.0[0]) * n[0] + (p[1] - s.0[1]) * n[1];
+            let along = |p: [f64; 2]| (p[0] - s.0[0]) * u[0] + (p[1] - s.0[1]) * u[1];
+            let w = (off(t.0) + off(t.1)) / 2.0;
+            if !(DUCT_WIDTH_IN.0 * k_in..=DUCT_WIDTH_IN.1 * k_in).contains(&w.abs()) || (off(t.0) - off(t.1)).abs() > 0.5 * k_in {
+                continue;
+            }
+            let (t0, t1) = (along(t.0).min(along(t.1)).max(0.0), along(t.0).max(along(t.1)).min(l));
+            if t1 - t0 < DUCT_SIDE_MIN_IN * k_in {
+                continue;
+            }
+            let at = |k: f64| [s.0[0] + u[0] * k + n[0] * w / 2.0, s.0[1] + u[1] * k + n[1] * w / 2.0];
+            let piece = DuctPiece { a: at(t0), b: at(t1), width: w.abs() };
+            // The same side drawn twice (a line over a polyline's edge) is one piece.
+            let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 0.5 * k_in;
+            if !out.iter().any(|o| (near(o.a, piece.a) && near(o.b, piece.b)) || (near(o.a, piece.b) && near(o.b, piece.a))) {
+                out.push(piece);
+            }
+        }
+    }
+    out
+}
+
+/// Where two pieces' centrelines cross (`None`: parallel).
+fn centrelines_cross(p: &DuctPiece, q: &DuctPiece) -> Option<[f64; 2]> {
+    let (d1, d2) = ([p.b[0] - p.a[0], p.b[1] - p.a[1]], [q.b[0] - q.a[0], q.b[1] - q.a[1]]);
+    let den = d1[0] * d2[1] - d1[1] * d2[0];
+    let (l1, l2) = (d1[0].hypot(d1[1]), d2[0].hypot(d2[1]));
+    if l1 <= 0.0 || l2 <= 0.0 || (den / (l1 * l2)).abs() < 0.2 {
+        return None;
+    }
+    let t = ((q.a[0] - p.a[0]) * d2[1] - (q.a[1] - p.a[1]) * d2[0]) / den;
+    let x = [p.a[0] + d1[0] * t, p.a[1] + d1[1] * t];
+    x.iter().all(|v| v.is_finite()).then_some(x)
+}
+
+/// The foot of `c` on a piece's centreline (extended).
+fn onto_centreline(p: &DuctPiece, c: [f64; 2]) -> [f64; 2] {
+    let d = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    if l2 <= 0.0 {
+        return p.a;
+    }
+    let t = ((c[0] - p.a[0]) * d[0] + (c[1] - p.a[1]) * d[1]) / l2;
+    [p.a[0] + d[0] * t, p.a[1] + d[1] * t]
+}
+
+/// The exhaust fan's duct as its view draws it: from the fan's box (`lo`…`hi`) along the drawn
+/// duct (its two sides, one width all the way; an elbow drawn as an arc is the gap between two
+/// pieces) to the wall cap it ends at (`rounds`: the small circles of the views' wall caps).
+/// The route (fan, each turn, the cap), how wide the duct is drawn and the cap; `None` when no
+/// drawn duct leaves the fan or none reaches a cap. Sizes in inches at `k_in` units.
+fn traced_duct(lo: [f64; 2], hi: [f64; 2], pieces: &[DuctPiece], rounds: &[[f64; 2]], k_in: f64) -> Option<(Vec<[f64; 2]>, f64, [f64; 2])> {
+    let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let gap = |p: [f64; 2]| (lo[0] - p[0]).max(0.0).max(p[0] - hi[0]).hypot((lo[1] - p[1]).max(0.0).max(p[1] - hi[1]));
+    let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    // The fan's own symbol (its housing, grille and the round at its middle) is no duct and no
+    // cap: pieces whose middle is in its box, and rounds in it or at it, are left out.
+    let in_fan = |p: &DuctPiece| gap([(p.a[0] + p.b[0]) / 2.0, (p.a[1] + p.b[1]) / 2.0]) <= k_in;
+    let outside: Vec<[f64; 2]> = rounds.iter().copied().filter(|c| gap(*c) > DUCT_SIDE_MIN_IN * k_in).collect();
+    let rounds = outside.as_slice();
+    // Pieces that leave the fan: one end at its box (a neck or damper drawn between leaves a
+    // gap), the other farther out, its centreline through the box. The most central first.
+    let half = ((hi[0] - lo[0]).min(hi[1] - lo[1]) / 2.0).max(k_in);
+    let off_centre = |p: &DuctPiece| {
+        let d = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+        let l = d[0].hypot(d[1]);
+        if l > 0.0 { ((centre[0] - p.a[0]) * d[1] - (centre[1] - p.a[1]) * d[0]).abs() / l } else { f64::INFINITY }
+    };
+    let mut starts: Vec<(f64, f64, usize, bool)> = pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !in_fan(p) && off_centre(p) <= half)
+        .filter_map(|(i, p)| {
+            let (ga, gb) = (gap(p.a), gap(p.b));
+            let reach = p.width + DUCT_NECK_IN * k_in;
+            if ga <= reach && dist(p.b, centre) > dist(p.a, centre) {
+                Some((off_centre(p), ga, i, false))
+            } else if gb <= reach && dist(p.a, centre) > dist(p.b, centre) {
+                Some((off_centre(p), gb, i, true))
+            } else {
+                None
+            }
+        })
+        .collect();
+    starts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    for (_, _, first, flip) in starts.into_iter().take(8) {
+        let Some(p0) = pieces.get(first) else { continue };
+        let orient = |p: &DuctPiece, flip: bool| if flip { DuctPiece { a: p.b, b: p.a, width: p.width } } else { *p };
+        let mut path = vec![orient(p0, flip)];
+        let mut used = vec![first];
+        let width = p0.width;
+        let same_width = |w: f64| (w - width).abs() <= (0.25 * width).max(k_in);
+        let mut cap = None;
+        let mut feet = dist(p0.a, p0.b) / (12.0 * k_in);
+        while let Some(cur) = path.last().copied() {
+            // Its far end at a wall cap: the duct ends there.
+            let cap_reach = cur.width + 12.0 * k_in;
+            if let Some(c) =
+                rounds.iter().copied().filter(|c| dist(*c, cur.b) <= cap_reach).min_by(|a, b| dist(*a, cur.b).total_cmp(&dist(*b, cur.b)))
+            {
+                cap = Some(c);
+                break;
+            }
+            if path.len() >= DUCT_MAX_PIECES || feet > DUCT_MAX_FT {
+                break;
+            }
+            // The next piece of the same duct: one end by this one's far end (across an elbow),
+            // never doubling back.
+            let reach = 2.0 * cur.width + 4.0 * k_in;
+            let dir = [cur.b[0] - cur.a[0], cur.b[1] - cur.a[1]];
+            let next = pieces
+                .iter()
+                .enumerate()
+                .filter(|(i, q)| !used.contains(i) && same_width(q.width) && !in_fan(q))
+                .filter_map(|(i, q)| {
+                    let (da, db) = (dist(q.a, cur.b), dist(q.b, cur.b));
+                    let q = if da <= db { *q } else { orient(q, true) };
+                    let d = da.min(db);
+                    let back = (q.b[0] - q.a[0]) * dir[0] + (q.b[1] - q.a[1]) * dir[1] < -0.2 * dist(q.a, q.b) * dir[0].hypot(dir[1]);
+                    (d <= reach && !back && dist(q.b, cur.b) > d).then_some((d, i, q))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((_, i, q)) = next else {
+                // No more drawn duct (an elbow and the last run to the wall drawn as curves): a cap
+                // within reach of its end ends it, with a square turn into it.
+                cap = rounds
+                    .iter()
+                    .copied()
+                    .filter(|c| dist(*c, cur.b) <= DUCT_LAST_RUN_IN * k_in)
+                    .min_by(|a, b| dist(*a, cur.b).total_cmp(&dist(*b, cur.b)));
+                break;
+            };
+            feet += dist(q.a, q.b) / (12.0 * k_in);
+            used.push(i);
+            path.push(q);
+        }
+        let (Some(cap), Some(head), Some(last)) = (cap, path.first().copied(), path.last().copied()) else { continue };
+        // Fan, each turn (where the centrelines cross; a jog between parallel pieces keeps both
+        // ends), then the cap on the last piece's line.
+        let mut route = vec![onto_centreline(&head, centre)];
+        for w in path.windows(2) {
+            if let [p, q] = w {
+                match centrelines_cross(p, q) {
+                    Some(x) => route.push(x),
+                    None if dist(onto_centreline(p, q.a), q.a) > k_in => {
+                        route.push(p.b);
+                        route.push(q.a);
+                    }
+                    None => {}
+                }
+            }
+        }
+        // The cap on the duct's line ends it there; one beside the line's end takes a square turn.
+        let end = onto_centreline(&last, cap);
+        route.push(end);
+        if dist(end, cap) > last.width + DUCT_SIDE_MIN_IN * k_in {
+            route.push(cap);
+        }
+        route.dedup_by(|a, b| dist(*a, *b) <= 0.25 * k_in);
+        // A duct runs to its cap, it doesn't wander: a few turns, and not much longer than the
+        // way there square (a trace that picked up other linework is not the duct).
+        let length: f64 = route.windows(2).map(|w| if let [a, b] = w { dist(*a, *b) } else { 0.0 }).sum();
+        let square = route.first().map_or(0.0, |s| (cap[0] - s[0]).abs() + (cap[1] - s[1]).abs());
+        if route.len() >= 2 && route.len() <= DUCT_MAX_TURNS + 2 && length <= 2.5 * square + 24.0 * k_in {
+            return Some((route, width, cap));
+        }
+    }
+    None
+}
+
+/// A round duct's size printed in a view (`4"ø`, `6" Ø`): inches.
+fn duct_size_label(v: &str) -> Option<f64> {
+    let t = v.trim();
+    let (n, rest) = t.split_once('"')?;
+    let rest = rest.trim();
+    let round = rest.chars().next().is_some_and(|c| matches!(c, 'ø' | 'Ø' | '⌀')) && rest.chars().count() == 1;
+    let n: f64 = n.trim().parse().ok()?;
+    (round && (3.0..=24.0).contains(&n)).then_some(n)
 }
 
 /// What [`stamp_typical_mech`] made.
@@ -10727,7 +10968,13 @@ const PTAC_GRILLE_FT: f64 = 3.0;
 /// The PTAC and the exhaust fan (with its wall cap) a typical room's mechanical view draws.
 /// `labels`: the view's words (text and block attributes) and where; `shapes`: its polylines'
 /// boxes (and whether closed); `circles`: centre and radius. Sizes in inches at `k_in` units.
-fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool)], circles: &[([f64; 2], f64)], k_in: f64) -> Vec<MechItem> {
+fn mech_items(
+    labels: &[(String, [f64; 2])],
+    shapes: &[([f64; 2], [f64; 2], bool)],
+    circles: &[([f64; 2], f64)],
+    segs: &[ViewSeg],
+    k_in: f64,
+) -> Vec<MechItem> {
     let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let sides = |lo: [f64; 2], hi: [f64; 2]| {
@@ -10760,7 +11007,7 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
         let Some((lo, hi, _)) = body else { continue };
         let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("{unit_tag}-{n}"));
         if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
-            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: format!("tag {unit_tag}") });
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, route: Vec::new(), size_in: None, how: format!("tag {unit_tag}") });
         }
     }
     let squarish = |lo: [f64; 2], hi: [f64; 2]| {
@@ -10790,6 +11037,8 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
                         lo: *lo,
                         hi: *hi,
                         cap: None,
+                        route: Vec::new(),
+                        size_in: None,
                         how: format!("tag {}", v.trim()),
                     },
                     mid(*lo, *hi),
@@ -10806,7 +11055,16 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             closed.iter().filter(|(lo, hi)| nested(mid(*lo, *hi)) >= 2).max_by(|a, b| nested(mid(a.0, a.1)).cmp(&nested(mid(b.0, b.1))))
         {
             fans.push((
-                MechItem { kind: "exhaust_fan", tag: "EF".into(), lo: *lo, hi: *hi, cap: None, how: "symbol (box in a box), no tag".into() },
+                MechItem {
+                    kind: "exhaust_fan",
+                    tag: "EF".into(),
+                    lo: *lo,
+                    hi: *hi,
+                    cap: None,
+                    route: Vec::new(),
+                    size_in: None,
+                    how: "symbol (box in a box), no tag".into(),
+                },
                 mid(*lo, *hi),
             ));
         }
@@ -10823,11 +11081,124 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             })
         })
         .collect();
+    // Its duct: followed along the view's drawn duct to the wall cap it ends at, else (nothing
+    // drawn can be followed) only the cap, nearest cluster of louvre circles.
+    let pieces = if fans.is_empty() { Vec::new() } else { duct_pieces(segs, k_in) };
+    let sizes: Vec<(f64, [f64; 2])> = labels.iter().filter_map(|(v, p)| duct_size_label(v).map(|n| (n, *p))).collect();
     for (mut f, c) in fans {
-        f.cap = clusters.iter().copied().filter(|q| dist(*q, c) <= 2.0 * reach).min_by(|a, b| dist(*a, c).total_cmp(&dist(*b, c)));
+        let in_box = |q: [f64; 2]| q[0] >= f.lo[0] && q[0] <= f.hi[0] && q[1] >= f.lo[1] && q[1] <= f.hi[1];
+        f.cap = clusters.iter().copied().filter(|q| !in_box(*q) && dist(*q, c) <= 2.0 * reach).min_by(|a, b| dist(*a, c).total_cmp(&dist(*b, c)));
+        if let Some((route, width, cap)) = traced_duct(f.lo, f.hi, &pieces, &small, k_in) {
+            // Its size: the round size printed along it, else as wide as it is drawn.
+            let by_route = |p: [f64; 2]| {
+                route.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist_xy(p, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min)
+            };
+            let printed =
+                sizes.iter().filter(|(_, p)| by_route(*p) <= 24.0 * k_in).min_by(|a, b| by_route(a.1).total_cmp(&by_route(b.1))).map(|(n, _)| *n);
+            f.size_in = Some(printed.map_or(((width / k_in).round().max(1.0), "drawn width"), |n| (n, "tag")));
+            f.cap = Some(cap);
+            f.route = route;
+        }
         out.push(f);
     }
     out
+}
+
+/// An exhaust fan's duct in its view (view coordinates), what it is and its basis: the route the
+/// view draws, fan to wall cap ([`traced_duct`]), drawn; where no drawn duct can be followed but
+/// the cap is found, fan to cap with one turn (the shorter leg first), inferred by trade
+/// practice and said so; `None` without a cap.
+fn fan_duct_route(it: &MechItem, k_in: f64, title: &str) -> Option<(Vec<[f64; 2]>, cadaddy_walk3d::Made, String)> {
+    if it.route.len() >= 2 {
+        return Some((it.route.clone(), cadaddy_walk3d::Made::Drawn, String::new()));
+    }
+    let cap = it.cap?;
+    let c = [(it.lo[0] + it.hi[0]) / 2.0, (it.lo[1] + it.hi[1]) / 2.0];
+    let mut points = vec![c];
+    let (dx, dy) = ((cap[0] - c[0]).abs(), (cap[1] - c[1]).abs());
+    if dx > k_in && dy > k_in {
+        points.push(if dx >= dy { [c[0], cap[1]] } else { [cap[0], c[1]] });
+    }
+    points.push(cap);
+    Some((
+        points,
+        cadaddy_walk3d::Made::Inferred,
+        format!(
+            "trade practice: an exhaust fan is ducted to its wall cap; no drawn duct from the fan could be followed on {title}, so fan to cap with one turn"
+        ),
+    ))
+}
+
+/// How far (feet) a duct may lie from an exhaust fan's drawn duct and still be that duct.
+const FAN_DUCT_SAME_FT: f64 = 1.5;
+
+/// The ducts already in `runs` that are an exhaust fan's drawn duct again (`fan_ducts` followed
+/// fan to wall cap on its view: drawn or derived, not laid by rule): a duct run (by its system's kind) on the same level with an end
+/// at the fan and every point along the fan's duct. The fan's duct carries the exhaust system
+/// (where it runs to the wall cap, it is exhaust), so the repeat goes and is counted once. How
+/// many went, and the systems the plans gave them (other than exhaust) with their counts.
+fn drop_fan_duct_repeats(
+    runs: &mut Vec<cadaddy_walk3d::MepRun>,
+    systems: &[cadaddy_walk3d::MepSystem],
+    fan_ducts: &[cadaddy_walk3d::MepRun],
+    upf: f64,
+) -> (usize, BTreeMap<String, usize>) {
+    let reach = FAN_DUCT_SAME_FT * upf;
+    let is_duct = |r: &cadaddy_walk3d::MepRun| systems.iter().any(|y| y.name == r.system && y.kind == cadaddy_walk3d::MepKind::Duct);
+    let along = |f: &cadaddy_walk3d::MepRun, p: [f64; 2]| {
+        f.points.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist_xy(p, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min)
+    };
+    let traced: Vec<&cadaddy_walk3d::MepRun> = fan_ducts.iter().filter(|f| f.made != cadaddy_walk3d::Made::Inferred && f.points.len() >= 2).collect();
+    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+    let before = runs.len();
+    runs.retain(|r| {
+        let repeat = is_duct(r)
+            && !r.points.is_empty()
+            && traced.iter().any(|f| {
+                f.level == r.level
+                    && f.points.first().is_some_and(|fan| {
+                        [r.points.first(), r.points.last()].into_iter().flatten().any(|e| (e[0] - fan[0]).hypot(e[1] - fan[1]) <= reach)
+                    })
+                    && r.points.iter().all(|p| along(f, *p) <= reach)
+            });
+        if repeat && r.system != "EA" {
+            *by.entry(r.system.clone()).or_default() += 1;
+        }
+        !repeat
+    });
+    (before - runs.len(), by)
+}
+
+/// A small round outline drawn as a closed polyline (a wall cap's louvre circle traced as one):
+/// its middle and radius. Round: every vertex about as far from the middle (a short duct
+/// outline with rounded ends is not), 2" to 6" across (a dot is no louvre).
+fn round_outline(vertices: &[cadaddy_geom::PolyVertex], closed: bool, k_in: f64) -> Option<([f64; 2], f64)> {
+    if !closed || vertices.len() < 8 {
+        return None;
+    }
+    let b = vertices.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+        [b[0].min(v.p.x), b[1].min(v.p.y), b[2].max(v.p.x), b[3].max(v.p.y)]
+    });
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let c = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+    let (r_lo, r_hi) = vertices.iter().map(|v| (v.p.x - c[0]).hypot(v.p.y - c[1])).fold((f64::INFINITY, 0.0_f64), |(a, z), r| (a.min(r), z.max(r)));
+    let round = w.is_finite()
+        && h.is_finite()
+        && w.min(h) > 0.0
+        && w.max(h) >= 2.0 * k_in
+        && w.max(h) <= 6.0 * k_in
+        && w.max(h) <= 1.25 * w.min(h)
+        && r_hi > 0.0
+        && r_lo >= 0.85 * r_hi;
+    round.then_some((c, w.max(h) / 2.0))
+}
+
+/// How far `p` is from the segment `a`…`b`.
+fn seg_dist_xy(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - d[0] * t).hypot(p[1] - a[1] - d[1] * t)
 }
 
 /// The typical rooms' mechanical views (MECH ENLARGED DOUBLE QUEEN): each one's PTAC and
@@ -10871,6 +11242,9 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
         let mut labels: Vec<(String, [f64; 2])> = texts.iter().map(|t| (t.value.trim().to_string(), [t.at.x, t.at.y])).collect();
         let mut shapes: Vec<([f64; 2], [f64; 2], bool)> = Vec::new();
         let mut circles: Vec<([f64; 2], f64)> = Vec::new();
+        // Every straight piece of linework (a duct's sides), and small round outlines drawn as
+        // polylines (a wall cap's louvre circles traced as one).
+        let mut segs: Vec<ViewSeg> = Vec::new();
         for e in sub.model.iter().take(MAX_LEADER_PIECES) {
             match &e.kind {
                 cadaddy_doc::EntityKind::Insert(ins) => {
@@ -10887,8 +11261,30 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                     });
                     if b.iter().all(|x| x.is_finite()) {
                         shapes.push(([b[0], b[1]], [b[2], b[3]], pl.closed));
+                        if let Some(round) = round_outline(&pl.vertices, pl.closed, k_in) {
+                            circles.push(round);
+                        }
+                    }
+                    let mut put = |a: cadaddy_geom::Vec2, c: cadaddy_geom::Vec2| {
+                        if segs.len() < MAX_LEADER_PIECES {
+                            segs.push(([a.x, a.y], [c.x, c.y]));
+                        }
+                    };
+                    // An edge with a bulge is an arc (an elbow), not a side.
+                    for w in pl.vertices.windows(2) {
+                        if let [a, c] = w
+                            && a.bulge.abs() < 1e-9
+                        {
+                            put(a.p, c.p);
+                        }
+                    }
+                    if let (true, Some(a), Some(c)) = (pl.closed && pl.vertices.len() > 2, pl.vertices.last(), pl.vertices.first())
+                        && a.bulge.abs() < 1e-9
+                    {
+                        put(a.p, c.p);
                     }
                 }
+                cadaddy_doc::EntityKind::Line(l) if segs.len() < MAX_LEADER_PIECES => segs.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
                 cadaddy_doc::EntityKind::Circle(c) if c.center.is_finite() && c.radius.is_finite() => {
                     circles.push(([c.center.x, c.center.y], c.radius))
                 }
@@ -10901,7 +11297,8 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             let l: Vec<(String, [f64; 2])> = labels.iter().filter(|(_, p)| mine(*p)).cloned().collect();
             let sh_v: Vec<([f64; 2], [f64; 2], bool)> = shapes.iter().filter(|(lo, hi, _)| mine(*lo) && mine(*hi)).copied().collect();
             let c_v: Vec<([f64; 2], f64)> = circles.iter().filter(|(c, _)| mine(*c)).copied().collect();
-            let items = mech_items(&l, &sh_v, &c_v, k_in);
+            let seg_v: Vec<ViewSeg> = segs.iter().filter(|(a, b)| mine(*a) && mine(*b)).copied().collect();
+            let items = mech_items(&l, &sh_v, &c_v, &seg_v, k_in);
             if items.is_empty() {
                 continue;
             }
@@ -10973,27 +11370,32 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         ..Default::default()
                     });
                     any = true;
-                    // The fan's duct, over the ceiling, to its wall cap.
-                    if let (true, Some(cap)) = (fan, it.cap.and_then(|c| place_in_room(c, *view, b, fit))) {
-                        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-                        let mut points = vec![c];
-                        let (dx, dy) = ((cap[0] - c[0]).abs(), (cap[1] - c[1]).abs());
-                        if dx > k_in && dy > k_in {
-                            points.push(if dx >= dy { [c[0], cap[1]] } else { [cap[0], c[1]] });
-                        }
-                        points.push(cap);
+                    // The fan's duct, over the ceiling, to its wall cap: along the route the view
+                    // draws; where no drawn duct can be followed, fan to cap with one turn (laid
+                    // by rule, and said so).
+                    let laid = if fan { fan_duct_route(it, k_in, title) } else { None }.and_then(|(route, made, basis)| {
+                        route.iter().map(|p| place_in_room(*p, *view, b, fit)).collect::<Option<Vec<[f64; 2]>>>().map(|points| (points, made, basis))
+                    });
+                    if let Some((points, made, basis)) = laid {
                         let bottoms = vec![ceiling + 0.25; points.len().saturating_sub(1)];
-                        // The view draws the fan and its wall cap, not the duct between them: its
-                        // route and size are inferred (Q6216).
+                        let (size, size_source) = it.size_in.unwrap_or((4.0, "rule"));
                         if let Ok(mut run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
-                            "system": "EA", "level": lv.name, "points": points, "size_in": [4.0, 0.0], "bottoms_ft": bottoms,
-                            "height_source": "typical room view: over the ceiling", "size_source": "rule", "source_sheet": sh.number,
+                            "system": "EA", "level": lv.name, "points": points, "size_in": [size, 0.0], "bottoms_ft": bottoms,
+                            "height_source": "typical room view: over the ceiling", "size_source": size_source, "source_sheet": sh.number,
                         })) {
-                            let basis = format!(
-                                "{}; the view draws the fan and its wall cap, the duct is run over the ceiling from the fan to the cap, square to the room, at the bath fan's 4\" outlet",
-                                typical_basis(&sh.number, title, &room)
-                            );
-                            super::provenance::set_run(&mut run, cadaddy_walk3d::Made::Inferred, basis);
+                            // Followed on the view: copied from the typical room's drawing
+                            // (derived, Q6216); laid fan to cap where nothing could be followed
+                            // (inferred, its rule said).
+                            let from = typical_basis(&sh.number, title, &room);
+                            let (made, basis) = if made.is_drawn() {
+                                (
+                                    cadaddy_walk3d::Made::Derived,
+                                    format!("{from}; the duct as the view draws it, followed from the fan to its wall cap"),
+                                )
+                            } else {
+                                (made, format!("{from}; {basis}"))
+                            };
+                            super::provenance::set_run(&mut run, made, basis);
                             out.runs.push(run);
                         }
                     }
@@ -27226,6 +27628,209 @@ mod tests {
         assert_eq!(source, "7'-10\" measured on A-8 DOUBLE QUEEN - BED WALL (F.F. to B.O. CEILING)");
     }
 
+    /// A made-up typical room's mechanical view at `k` units per inch (inches given): an exhaust
+    /// fan (12" box) whose 4" duct is drawn north as two lines, an elbow (left as a gap, as an
+    /// arc's short pieces are), then east as a closed duct outline to a wall cap of louvre circles
+    /// (one drawn as a round outline); a wall's two faces leave the fan southward to nothing.
+    fn ducted_fan_view(k: f64) -> (Vec<(String, [f64; 2])>, Vec<([f64; 2], [f64; 2], bool)>, Vec<([f64; 2], f64)>, Vec<ViewSeg>) {
+        let p = |x: f64, y: f64| [x * k, y * k];
+        let labels = vec![("EF".to_string(), p(114.0, 214.0)), ("4\"ø".to_string(), p(111.0, 240.0))];
+        let shapes = vec![(p(100.0, 200.0), p(112.0, 212.0), true), (p(113.0, 265.0), p(128.0, 269.5), true)];
+        let circles = vec![
+            (p(106.0, 206.0), 2.0 * k),
+            (p(136.0, 258.0), 2.0 * k),
+            (p(136.0, 263.0), 2.0 * k),
+            (p(136.0, 268.0), 2.0 * k),
+            (p(136.0, 273.0), 2.2 * k),
+        ];
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        // The fan as a box in a box (housing and grille, sides a duct's width apart) with a
+        // round outline at its middle.
+        let mut segs: Vec<ViewSeg> = rect(p(100.0, 200.0), p(112.0, 212.0));
+        segs.extend(rect(p(100.5, 200.5), p(111.5, 211.5)));
+        segs.extend(rect(p(101.0, 201.0), p(110.5, 210.5)));
+        // The duct north: both sides, the label's break left out of neither.
+        segs.push((p(104.0, 214.5), p(104.0, 262.0)));
+        segs.push((p(108.5, 262.0), p(108.5, 214.5)));
+        // The elbow's arc as short pieces (under a side's length).
+        segs.push((p(108.5, 262.0), p(110.0, 264.5)));
+        segs.push((p(110.0, 264.5), p(113.0, 265.0)));
+        // East to the wall: a closed duct outline.
+        segs.extend(rect(p(113.0, 265.0), p(128.0, 269.5)));
+        // The exterior wall's two faces, and a partition's two faces leaving the fan southward.
+        segs.push((p(130.0, 150.0), p(130.0, 300.0)));
+        segs.push((p(134.0, 150.0), p(134.0, 300.0)));
+        segs.push((p(95.0, 205.0), p(95.0, 100.0)));
+        segs.push((p(99.5, 100.0), p(99.5, 205.0)));
+        (labels, shapes, circles, segs)
+    }
+
+    #[test]
+    fn an_exhaust_fans_duct_follows_the_route_its_view_draws_to_the_wall_cap() {
+        for k in [1.0, 2.0] {
+            let (labels, shapes, circles, segs) = ducted_fan_view(k);
+            let items = mech_items(&labels, &shapes, &circles, &segs, k);
+            let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+            let (route, made, basis) = fan_duct_route(ef, k, "SAMPLE ROOM").unwrap_or_else(|| panic!("{ef:?}"));
+            let near = |a: [f64; 2], x: f64, y: f64| (a[0] - x * k).abs() <= 0.6 * k && (a[1] - y * k).abs() <= 0.6 * k;
+            // Up from the fan along the drawn duct's centreline, the turn where the drawing turns,
+            // then east to the cap: not the shorter leg first along the fan's line.
+            assert_eq!(route.len(), 3, "k {k}: {route:?}");
+            assert!(near(route[0], 106.25, 206.0), "k {k}: starts at the fan on the duct's line: {route:?}");
+            assert!(near(route[1], 106.25, 267.25), "k {k}: turns where the drawn duct turns: {route:?}");
+            assert!(near(route[2], 136.0, 267.25), "k {k}: ends at the wall cap: {route:?}");
+            assert_eq!(made, cadaddy_walk3d::Made::Drawn, "{basis}");
+            assert_eq!(ef.size_in, Some((4.0, "tag")), "the size printed along it");
+        }
+    }
+
+    #[test]
+    fn a_fans_duct_crosses_a_neck_at_the_fan_and_a_curved_last_run_to_its_cap() {
+        // A made-up view: the fan (14" x 12"), a neck drawn as curves for 10" below it, one
+        // straight 4.4" duct south 30", then the elbow and the run west to the wall cap drawn as
+        // curves only (short pieces); the cap 26" west of the duct's end.
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        let mut segs: Vec<ViewSeg> = rect([300.0, 500.0], [314.0, 512.0]);
+        segs.push(([309.0, 490.0], [309.0, 460.0]));
+        segs.push(([313.4, 460.0], [313.4, 490.0]));
+        segs.extend((0..12).map(f64::from).map(|i| ([309.0 - i * 2.0, 460.0 - i * 0.3], [307.0 - i * 2.0, 459.7 - i * 0.3])));
+        let shapes = vec![([300.0, 500.0], [314.0, 512.0], true)];
+        let labels = vec![("EF".to_string(), [318.0, 514.0])];
+        let circles = vec![([285.0, 458.0], 2.0), ([285.0, 464.0], 2.0), ([285.0, 470.0], 2.0)];
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        let near = |a: [f64; 2], x: f64, y: f64| (a[0] - x).abs() <= 0.6 && (a[1] - y).abs() <= 0.6;
+        assert_eq!(ef.route.len(), 3, "{ef:?}");
+        assert!(near(ef.route[0], 311.2, 506.0), "{ef:?}");
+        assert!(near(ef.route[1], 311.2, 458.0), "square turn level with the cap: {ef:?}");
+        assert!(near(ef.route[2], 285.0, 458.0), "{ef:?}");
+        assert_eq!(ef.size_in, Some((4.0, "drawn width")));
+    }
+
+    #[test]
+    fn a_trace_that_wanders_through_other_linework_is_not_the_fans_duct() {
+        // From the fan a 4" pair runs south, then pairs of the same width zigzag east and west
+        // (shelving, a bench) before ending by louvre circles beside the fan: no duct runs so.
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        let mut segs: Vec<ViewSeg> = rect([0.0, 0.0], [12.0, 12.0]);
+        let mut y = -2.0;
+        let mut x = 6.0;
+        for i in 0..6 {
+            // South 20", then 40" east or west, alternating.
+            segs.push(([x - 2.0, y], [x - 2.0, y - 20.0]));
+            segs.push(([x + 2.0, y], [x + 2.0, y - 20.0]));
+            y -= 26.0;
+            let to = if i % 2 == 0 { x + 40.0 } else { x - 40.0 };
+            segs.push(([x.min(to) + 4.0, y + 2.0], [x.max(to) - 4.0, y + 2.0]));
+            segs.push(([x.min(to) + 4.0, y - 2.0], [x.max(to) - 4.0, y - 2.0]));
+            x = to;
+            y -= 6.0;
+        }
+        let circles = vec![([x, y - 4.0], 2.0), ([x + 5.0, y - 4.0], 2.0), ([x - 5.0, y - 4.0], 2.0)];
+        let shapes = vec![([0.0, 0.0], [12.0, 12.0], true)];
+        let labels = vec![("EF".to_string(), [14.0, 14.0])];
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert!(ef.route.is_empty(), "{ef:?}");
+    }
+
+    #[test]
+    fn a_fan_with_no_drawn_duct_to_follow_gets_one_laid_to_its_cap_and_marked_inferred() {
+        let (labels, shapes, circles, _) = ducted_fan_view(1.0);
+        let items = mech_items(&labels, &shapes, &circles, &[], 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        let (route, made, basis) = fan_duct_route(ef, 1.0, "SAMPLE ROOM").unwrap_or_else(|| panic!("{ef:?}"));
+        assert_eq!(made, cadaddy_walk3d::Made::Inferred);
+        assert!(basis.contains("no drawn duct") && basis.contains("SAMPLE ROOM"), "{basis}");
+        assert_eq!(route.len(), 3, "{route:?}");
+        // A drawn duct that never reaches a cap is not followed either.
+        let (labels, shapes, _, segs) = ducted_fan_view(1.0);
+        let items = mech_items(&labels, &shapes, &[], &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert!(ef.route.is_empty() && fan_duct_route(ef, 1.0, "SAMPLE ROOM").is_none(), "{ef:?}");
+    }
+
+    #[test]
+    fn a_wall_cap_drawn_with_round_outlines_still_ends_the_fans_duct() {
+        // Two true circles; the rest of the louvre drawn as round outlines (the caller reads
+        // those as circles), so three make a cap.
+        let (labels, shapes, mut circles, segs) = ducted_fan_view(1.0);
+        circles.truncate(3);
+        circles.push(([136.0, 268.0], 2.2));
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert_eq!(ef.route.len(), 3, "{ef:?}");
+        assert_eq!(duct_size_label("6\" Ø"), Some(6.0));
+        assert_eq!(duct_size_label("4\"ø"), Some(4.0));
+        assert_eq!(duct_size_label("4\"x6\""), None);
+        assert_eq!(duct_size_label("10'"), None);
+    }
+
+    #[test]
+    fn a_louvre_circle_traced_as_a_polyline_is_round_and_a_short_duct_outline_is_not() {
+        let v = |x: f64, y: f64| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(x, y), ..Default::default() };
+        // A 4.4" circle as 16 points, at 2 units per inch.
+        let circle: Vec<cadaddy_geom::PolyVertex> =
+            (0..16).map(|i| f64::from(i) * std::f64::consts::TAU / 16.0).map(|a| v(500.0 + 4.4 * a.cos(), 80.0 + 4.4 * a.sin())).collect();
+        let (c, r) = round_outline(&circle, true, 2.0).unwrap_or_else(|| panic!("round"));
+        assert!((c[0] - 500.0).abs() < 1e-6 && (c[1] - 80.0).abs() < 1e-6 && (r - 4.4).abs() < 0.1, "{c:?} {r}");
+        assert!(round_outline(&circle, false, 2.0).is_none(), "open is no outline");
+        // A 5" x 4.4" duct piece with rounded ends: as wide as it is long, but not round.
+        let mut piece = vec![v(0.0, 0.0), v(5.0, 0.0)];
+        piece.extend(
+            (1..8)
+                .map(|i| f64::from(i) * std::f64::consts::PI / 8.0 - std::f64::consts::FRAC_PI_2)
+                .map(|a| v(5.0 + 0.6 * a.cos(), 2.2 + 2.2 * a.sin())),
+        );
+        piece.extend([v(5.0, 4.4), v(0.0, 4.4)]);
+        assert!(round_outline(&piece, true, 1.0).is_none(), "{piece:?}");
+        // A dot is no louvre.
+        let dot: Vec<cadaddy_geom::PolyVertex> = circle.iter().map(|p| v(p.p.x / 40.0, p.p.y / 40.0)).collect();
+        assert!(round_outline(&dot, true, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_duct_already_laid_along_a_fans_drawn_duct_is_that_duct_and_counted_once() {
+        let systems: Vec<cadaddy_walk3d::MepSystem> = ["EA", "SA", "M-DUCT", "CW"]
+            .iter()
+            .filter_map(|n| {
+                serde_json::from_value(
+                    json!({"name": n, "layer": n, "kind": if *n == "CW" { "pipe" } else { "duct" }, "size_in": [4.0, 0.0], "bottom_ft": 8.0}),
+                )
+                .ok()
+            })
+            .collect();
+        assert_eq!(systems.len(), 4);
+        let run = |system: &str, points: Vec<[f64; 2]>, made: cadaddy_walk3d::Made| {
+            let mut r: cadaddy_walk3d::MepRun =
+                serde_json::from_value(json!({"system": system, "level": "Level 1", "points": points, "size_in": [4.0, 0.0], "bottoms_ft": []}))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            r.made = made;
+            r
+        };
+        let fan = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0], [40.0, 120.0]], cadaddy_walk3d::Made::Drawn)];
+        let mut runs = vec![
+            run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn),
+            run("SA", vec![[1.0, 119.0], [39.0, 121.0], [3.0, 2.0]], cadaddy_walk3d::Made::Drawn),
+            run("SA", vec![[300.0, 0.0], [300.0, 120.0]], cadaddy_walk3d::Made::Drawn),
+            run("CW", vec![[1.0, 1.0], [1.0, 110.0]], cadaddy_walk3d::Made::Drawn),
+            run("M-DUCT", vec![[0.0, 2.0], [0.0, 400.0]], cadaddy_walk3d::Made::Drawn),
+        ];
+        let (gone, by) = drop_fan_duct_repeats(&mut runs, &systems, &fan, 12.0);
+        assert_eq!(gone, 2, "{runs:?}");
+        assert_eq!(by.get("SA"), Some(&1));
+        assert_eq!(by.get("M-DUCT"), Some(&1));
+        assert_eq!(runs.len(), 3);
+        // One followed on a typical room's view and laid into its room (derived) is the same.
+        let copied = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Derived)];
+        let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
+        assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &copied, 12.0).0, 1);
+        // A fan's duct laid by rule (not followed on a drawing) takes nothing away.
+        let laid = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Inferred)];
+        let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
+        assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &laid, 12.0).0, 0);
+    }
+
     #[test]
     fn a_typical_rooms_mechanical_view_gives_its_ptac_and_exhaust_fan() {
         // As M-5's MECH ENLARGED DOUBLE QUEEN draws them (inches): the PTAC tag and its type, the
@@ -27254,7 +27859,7 @@ mod tests {
             ([52329.0, 1111.0], 3.5),
             ([52329.0, 1103.0], 3.5),
         ];
-        let items = mech_items(&labels, &shapes, &circles, 1.0);
+        let items = mech_items(&labels, &shapes, &circles, &[], 1.0);
         assert_eq!(items.len(), 2, "{items:?}");
         let ptac = items.iter().find(|i| i.kind == "ptac").unwrap();
         assert_eq!(ptac.tag, "PTAC-1");
@@ -27267,7 +27872,7 @@ mod tests {
         let mut tagged = labels.clone();
         tagged.push(("EF-3".to_string(), [52320.0, 1080.0]));
         tagged.push(("EF".to_string(), [52296.0, 1050.0]));
-        let items = mech_items(&tagged, &shapes, &circles, 1.0);
+        let items = mech_items(&tagged, &shapes, &circles, &[], 1.0);
         assert!(items.iter().any(|i| i.kind == "exhaust_fan" && i.tag == "EF-3"), "{items:?}");
         assert_eq!(items.iter().filter(|i| i.kind == "exhaust_fan").count(), 1, "one fan tagged twice: {items:?}");
         // A typical room's connection tags go to its equipment.
