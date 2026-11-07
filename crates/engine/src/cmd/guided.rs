@@ -8371,6 +8371,19 @@ fn rigid_room_fit(
     margin: f64,
     tol: f64,
 ) -> Option<(RoomFit, usize)> {
+    rigid_room_fit_turns(view_pts, view, room, floor, margin, tol, &[0, 1, 2, 3, 4, 5, 6, 7])
+}
+
+/// [`rigid_room_fit`] trying only the turns `turns` (of [`turn_vec`]'s eight).
+fn rigid_room_fit_turns(
+    view_pts: &[cadaddy_geom::Vec2],
+    view: [f64; 4],
+    room: [f64; 4],
+    floor: &FloorLines,
+    margin: f64,
+    tol: f64,
+    turns: &[u8],
+) -> Option<(RoomFit, usize)> {
     if view_pts.len() < MIN_FIT_SAMPLES || tol.is_nan() || tol <= 0.0 {
         return None;
     }
@@ -8401,7 +8414,7 @@ fn rigid_room_fit(
     let inside: Vec<cadaddy_geom::Vec2> =
         near.iter().filter(|f| f.x >= room[0] && f.x <= room[2] && f.y >= room[1] && f.y <= room[3]).copied().take(4 * MAX_FIT_SAMPLES).collect();
     let mut best: Option<(RoomFit, usize, usize)> = None;
-    for k in 0..8u8 {
+    for &k in turns.iter().filter(|k| **k < 8) {
         let turned: Vec<cadaddy_geom::Vec2> = few.iter().map(|p| turn_vec(*p - from, k)).collect();
         let mut votes: std::collections::HashMap<(i64, i64), usize> = std::collections::HashMap::new();
         for t in &turned {
@@ -10571,6 +10584,11 @@ struct RcpLight {
     room: usize,
     at: cadaddy_geom::Vec2,
     view: String,
+    /// The turn of the view it was laid in with ([`turn_vec`]), and whether the linework alone
+    /// prefers that turn: every turn the linework allows is read, the luminaires the plans put
+    /// in the room say which is the room's (a ceiling's outline alone reads the same turned).
+    turn: u8,
+    best: bool,
 }
 
 /// Whether a view title is a reflected ceiling plan's.
@@ -10655,19 +10673,27 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
             for (ri, (_, _, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 let b = bbox(outline);
                 let margin = ROOM_FIT_MARGIN_FT * 12.0 * k_in;
-                let Some((fit, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else {
+                let Some((best, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else {
                     read.unfitted.push(ri);
                     continue;
                 };
-                // A light's place to the half inch, not to the fit's six.
-                let fit = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
-                for p in &mine {
-                    let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
-                    let q = cadaddy_geom::Vec2::new(q[0], q[1]);
-                    if cadaddy_geom::point_in_polygon(outline, q) {
-                        read.lights.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number) });
+                for k in 0..8u8 {
+                    let fit = if k == best.k {
+                        Some(best)
                     } else {
-                        *read.outside.entry(ri).or_default() += 1;
+                        rigid_room_fit_turns(&lines, *view, b, &floor_lines, margin, 6.0 * k_in, &[k]).map(|f| f.0)
+                    };
+                    let Some(fit) = fit else { continue };
+                    // A light's place to the half inch, not to the fit's six.
+                    let fit = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
+                    for p in &mine {
+                        let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
+                        let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                        if cadaddy_geom::point_in_polygon(outline, q) {
+                            read.lights.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number), turn: k, best: k == best.k });
+                        } else if k == best.k {
+                            *read.outside.entry(ri).or_default() += 1;
+                        }
                     }
                 }
                 if read.lights.len() >= MAX_STAMPED * 8 {
@@ -10734,7 +10760,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     }
     let same_level = |a: &str, b: &str| a.eq_ignore_ascii_case(b) || storey_key(a) == storey_key(b);
     let mut moves: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String, f64)> = Vec::new();
-    let (mut at_rcp, mut rooms_matched) = (0usize, 0usize);
+    let (mut at_rcp, mut rooms_matched, mut turned_by_luminaires) = (0usize, 0usize, 0usize);
     let room_name = |i: usize| rooms.get(i).map(|(n, l, _, num)| format!("{} {} ({l})", n.trim(), num.trim())).unwrap_or_default();
     let mut unmatched: Vec<Value> = Vec::new();
     let mut taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
@@ -10746,6 +10772,29 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             continue;
         }
         rooms_matched += 1;
+        // The turn the room's luminaires agree with: the most lights with one within reach; among
+        // those, the one the linework prefers, else the nearer (the luminaires only overrule the
+        // linework by agreeing with more of the lights).
+        let turns: BTreeSet<u8> = ls.iter().map(|l| l.turn).collect();
+        let score = |k: u8| -> (usize, f64) {
+            ls.iter().filter(|l| l.turn == k).fold((0usize, 0.0f64), |(n, sum), l| {
+                match mine.iter().map(|(_, p, _)| l.at.dist(*p)).min_by(f64::total_cmp).filter(|d| *d <= reach) {
+                    Some(d) => (n + 1, sum + d),
+                    None => (n, sum),
+                }
+            })
+        };
+        let linework = ls.iter().find(|l| l.best).map(|l| l.turn);
+        let most = turns.iter().map(|k| score(*k).0).max().unwrap_or(0);
+        let agreeing: Vec<u8> = turns.iter().copied().filter(|k| score(*k).0 == most).collect();
+        let turn = match linework.filter(|k| agreeing.contains(k)) {
+            Some(k) => Some(k),
+            None => agreeing.iter().copied().min_by(|a, b| score(*a).1.total_cmp(&score(*b).1)),
+        };
+        if turn != linework {
+            turned_by_luminaires += 1;
+        }
+        let ls: Vec<&RcpLight> = ls.iter().copied().filter(|l| Some(l.turn) == turn).collect();
         let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
         for (li, l) in ls.iter().enumerate() {
             for (di, (_, p, _)) in mine.iter().enumerate() {
@@ -10824,7 +10873,8 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
         s.touch();
     }
     Ok(json!({
-        "lights": lights.len(), "rooms": rooms_matched, "at_their_rcp_spot": at_rcp, "moved": moved, "luminaires": lums.len(),
+        "lights": lights.iter().filter(|l| l.best).count(), "rooms": rooms_matched, "at_their_rcp_spot": at_rcp, "moved": moved, "luminaires": lums.len(),
+        "rooms_turned_by_their_luminaires": turned_by_luminaires,
         "rooms_not_fitted": read.unfitted.iter().take(MAX_RCP_REVIEW).map(|i| room_name(*i)).collect::<Vec<_>>(),
         "lights_outside_their_room": read.outside.values().sum::<usize>(),
         "lights_no_luminaire_within_reach": unmatched,
@@ -27369,6 +27419,98 @@ mod tests {
         assert_eq!(ps.get("design:location").map(Prop::text).as_deref(), Some("837.67, 14.17, 20.17"), "{ps:?}");
         let why = ps.get("correction:location").map(Prop::text).unwrap_or_default();
         assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - STUDIO"), "{why}");
+    }
+
+    /// Q6250: a ceiling plan whose linework reads the same turned half round (a plain room) is
+    /// laid into a turned room the way the luminaires the plans put there agree with.
+    #[test]
+    fn a_symmetric_ceiling_plan_is_turned_the_way_the_rooms_luminaires_are() {
+        use cadaddy_doc::props::{self, Prop, Source};
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // A 12' x 24' room with a line every 4' across: the same turned or mirrored.
+        let unit = |s: &mut crate::Session, o: [f64; 2]| {
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v);
+        s.execute("circle", &json!({"center": [v[0] + 40.0, v[1] + 150.0], "radius": 3.0})).unwrap();
+        s.execute("circle", &json!({"center": [v[0] + 100.0, v[1] + 240.0], "radius": 3.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT RCP - STUDIO", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0]);
+        unit(&mut s, [10_400.0, 0.0]);
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-6".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-6".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "STUDIO", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "Level 2", "elevation_ft": 12.0, "height_ft": 10.0, "ceiling_ft": 8.5}]
+        }))
+        .unwrap();
+        let lum = |s: &mut crate::Session, at: [f64; 2]| -> cadaddy_doc::Handle {
+            let d = s.doc_mut().unwrap();
+            let mut ps = props::Props::default();
+            ps.set("kind", Prop::new("luminaire", Source::computed()));
+            ps.set("mounting", Prop::new("ceiling", Source::computed()));
+            ps.set("location", Prop::new(format!("{:.2}, {:.2}, 20.17", at[0] / 12.0, at[1] / 12.0), Source::computed()));
+            let x = props::write(&super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 2", cadaddy_doc::Handle(0)), &ps);
+            let mut m = super::super::wallgen::empty_mesh();
+            super::super::wallgen::add_box(
+                &mut m,
+                cadaddy_geom::Vec2::new(at[0] - 2.0, at[1]),
+                cadaddy_geom::Vec2::new(at[0] + 2.0, at[1]),
+                4.0,
+                242.0,
+                246.0,
+            );
+            d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
+        };
+        // Room 202's plan is the unit turned half round: its lights 10" from where it puts them.
+        let a = lum(&mut s, [10_498.0, 130.0]);
+        let b = lum(&mut s, [10_450.0, 56.0]);
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        let r = rcp_light_step(&mut s, &job).unwrap();
+        assert_eq!(r["moved"], json!(2), "{r}");
+        let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
+            let d = s.doc().unwrap();
+            let (bx, _, _) = super::super::propfill::extent(d, d.model.get(h).unwrap()).unwrap();
+            [bx.center().x, bx.center().y]
+        };
+        let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 0.25;
+        assert!(near(centre(&s, a), [10_504.0, 138.0]), "{:?}", centre(&s, a));
+        assert!(near(centre(&s, b), [10_444.0, 48.0]), "{:?}", centre(&s, b));
     }
 
     #[test]
