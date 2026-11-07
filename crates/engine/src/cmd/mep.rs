@@ -3619,7 +3619,8 @@ mod tests {
         assert_eq!(slant, 0, "{runs:?}");
         let main: Vec<&str> = runs.iter().filter(|r| r.points.iter().all(|p| p[1].abs() < 1e-6)).map(|r| r.system.as_str()).collect();
         assert_eq!(main, ["CW"], "{runs:?}");
-        let hw = runs.iter().filter(|r| r.system == "HW" && r.points.iter().any(|p| (p[0] - 380.0).abs() < 1e-6 && (p[1] - 60.0).abs() < 1e-6)).count();
+        let hw =
+            runs.iter().filter(|r| r.system == "HW" && r.points.iter().any(|p| (p[0] - 380.0).abs() < 1e-6 && (p[1] - 60.0).abs() < 1e-6)).count();
         assert_eq!(hw, 1, "{runs:?}");
     }
 

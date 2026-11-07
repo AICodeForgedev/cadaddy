@@ -1281,11 +1281,17 @@ mod tests {
         let on = |p: [f64; 2], x: &MepRun| x.points.windows(2).any(|w| to_segment(p, w[0], w[1]).0 < 1e-6);
         let host = |name: &str| -> Option<String> {
             let mine: Vec<&MepRun> = inf.runs.iter().filter(|x| x.size_source.contains(&format!("to fixture {name})"))).collect();
-            let start = mine.iter().map(|x| x.points[0]).find(|p| !mine.iter().any(|y| y.points.last().is_some_and(|e| (e[0] - p[0]).hypot(e[1] - p[1]) < 1e-6)))?;
+            let start = mine
+                .iter()
+                .map(|x| x.points[0])
+                .find(|p| !mine.iter().any(|y| y.points.last().is_some_and(|e| (e[0] - p[0]).hypot(e[1] - p[1]) < 1e-6)))?;
             if on(start, &main) {
                 return Some("main".into());
             }
-            names.iter().find(|o| **o != name && inf.runs.iter().any(|x| x.size_source.contains(&format!("to fixture {o})")) && on(start, x))).map(|o| o.to_string())
+            names
+                .iter()
+                .find(|o| **o != name && inf.runs.iter().any(|x| x.size_source.contains(&format!("to fixture {o})")) && on(start, x)))
+                .map(|o| o.to_string())
         };
         for name in names {
             let h = host(name).unwrap_or_default();

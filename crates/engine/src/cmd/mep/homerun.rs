@@ -220,7 +220,8 @@ pub(crate) fn leader_strokes(
         let r = Vec2::new(0.5 * h, 0.5 * h);
         near(&points, tip - r, tip + r).into_iter().find(|i| {
             let Some(t) = heads.get(*i) else { return false };
-            let (lo, hi) = t.iter().fold((t[0], t[0]), |(lo, hi), p| (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))));
+            let (lo, hi) =
+                t.iter().fold((t[0], t[0]), |(lo, hi), p| (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))));
             let size = (hi.x - lo.x).max(hi.y - lo.y);
             let mid = Vec2::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
             size <= ARROW_MAX_H * h
