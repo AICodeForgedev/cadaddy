@@ -405,26 +405,80 @@ fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2) -> Option<f64> {
         .min_by(f64::total_cmp)
 }
 
+/// A built ceiling (a room's, a reflected ceiling plan's area): its level, plan extent, underside,
+/// and the plan triangles of its faces (what it covers: a room's outline, not its extent's box,
+/// which takes in a corner of the next room).
+struct BuiltCeiling {
+    level: Option<String>,
+    bounds: Bounds2,
+    z: f64,
+    tris: Vec<[Vec2; 3]>,
+    area: f64,
+}
+
+impl BuiltCeiling {
+    fn covers(&self, p: Vec2) -> bool {
+        let side = |a: Vec2, b: Vec2| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        self.bounds.contains(p)
+            && self.tris.iter().any(|[a, b, c]| {
+                let (s1, s2, s3) = (side(*a, *b), side(*b, *c), side(*c, *a));
+                (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0)
+            })
+    }
+}
+
 /// The underside of the smallest built ceiling of `level` over `p` (sheet units), inches over
 /// the floor at `floor` (drawing units): one that low is a soffit's or a cabinet's, not a room's
 /// ceiling, so it is passed over below 6'.
-fn ceiling_over(ceilings: &[(Option<String>, Bounds2, f64)], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
+fn ceiling_over(ceilings: &[BuiltCeiling], level: &str, p: Vec2, floor: f64, upf: f64) -> Option<f64> {
     ceilings
         .iter()
-        .filter(|(l, b, _)| l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && b.contains(p))
-        .min_by(|a, b| (a.1.width() * a.1.height()).total_cmp(&(b.1.width() * b.1.height())))
-        .map(|(_, _, z)| (z - floor) / upf * 12.0)
+        .filter(|c| c.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && c.covers(p))
+        .min_by(|a, b| a.area.total_cmp(&b.area))
+        .map(|c| (c.z - floor) / upf * 12.0)
         .filter(|inches| inches.is_finite() && *inches > 72.0)
 }
 
-/// The built ceilings (rooms', the reflected ceiling plans'): their level, plan extent and
-/// underside.
-fn built_ceilings(d: &Drawing) -> Vec<(Option<String>, Bounds2, f64)> {
+/// Faces of one ceiling looked at, at most.
+const MAX_CEILING_FACES: usize = 20_000;
+
+/// The built ceilings (rooms', the reflected ceiling plans').
+fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
     d.model
         .iter()
         .filter(|e| super::elemprops::element_kind(e).as_deref() == Some("ceiling"))
-        .filter_map(|e| extent(d, e).map(|(b, z0, _)| (super::bspec::made_level(e), b, z0)))
-        .filter(|(_, b, z)| !b.is_empty() && z.is_finite())
+        .filter_map(|e| {
+            let (bounds, z, _) = extent(d, e)?;
+            if bounds.is_empty() || !z.is_finite() {
+                return None;
+            }
+            let EntityKind::Mesh(m) = &e.kind else {
+                // Not a mesh: its extent is what it covers.
+                let [a, c] = [bounds.min, bounds.max];
+                let (b, dd) = (Vec2::new(c.x, a.y), Vec2::new(a.x, c.y));
+                return Some(BuiltCeiling {
+                    level: super::bspec::made_level(e),
+                    bounds,
+                    z,
+                    tris: vec![[a, b, c], [a, c, dd]],
+                    area: bounds.width() * bounds.height(),
+                });
+            };
+            let at = |i: &u32| m.vertices.get(usize::try_from(*i).ok()?).map(|v| Vec2::new(v.x, v.y));
+            let mut tris = Vec::new();
+            for f in m.faces.iter().take(MAX_CEILING_FACES) {
+                let pts: Vec<Vec2> = f.v.iter().filter_map(at).collect();
+                if let Some(first) = pts.first() {
+                    for w in pts.iter().skip(1).collect::<Vec<_>>().windows(2) {
+                        if let [b, c] = w {
+                            tris.push([*first, **b, **c]);
+                        }
+                    }
+                }
+            }
+            let area = tris.iter().map(|[a, b, c]| ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() / 2.0).sum::<f64>();
+            (area > 0.0).then(|| BuiltCeiling { level: super::bspec::made_level(e), bounds, z, tris, area })
+        })
         .take(MAX_ELEMENTS)
         .collect()
 }
@@ -2530,6 +2584,24 @@ mod tests {
 
     fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
         HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }
+    }
+
+    /// Q6250: an L-shaped bath ceiling (8') whose extent's box takes in a corner of the bedroom
+    /// (9') is not over a light in that corner: the ceiling whose outline covers it is.
+    #[test]
+    fn the_ceiling_over_a_device_is_the_one_whose_outline_covers_it() {
+        let ft = |x: f64, y: f64| Vec2::new(x * 12.0, y * 12.0);
+        let ceiling = |pts: Vec<Vec2>, z_ft: f64| {
+            let tris: Vec<[Vec2; 3]> = super::super::bspec::ear_clip(&pts).iter().map(|t| [pts[t[0]], pts[t[1]], pts[t[2]]]).collect();
+            let area = cadaddy_geom::shoelace(&pts).abs();
+            BuiltCeiling { level: Some("L1".into()), bounds: Bounds2::from_points(pts.iter().copied()), z: z_ft * 12.0, tris, area }
+        };
+        let bath = ceiling(vec![ft(0.0, 0.0), ft(8.0, 0.0), ft(8.0, 4.0), ft(4.0, 4.0), ft(4.0, 8.0), ft(0.0, 8.0)], 8.0);
+        let bedroom = ceiling(vec![ft(0.0, 0.0), ft(20.0, 0.0), ft(20.0, 12.0), ft(0.0, 12.0)], 9.0);
+        let both = [bath, bedroom];
+        assert_eq!(ceiling_over(&both, "L1", ft(6.0, 6.0), 0.0, 12.0), Some(108.0), "the corner in the bath's box is the bedroom's");
+        assert_eq!(ceiling_over(&both, "L1", ft(2.0, 2.0), 0.0, 12.0), Some(96.0), "in the bath: the bath's");
+        assert_eq!(ceiling_over(&both, "L2", ft(2.0, 2.0), 0.0, 12.0), None, "another level's ceilings are not over it");
     }
 
     #[test]
