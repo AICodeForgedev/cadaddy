@@ -20302,6 +20302,18 @@ fn arch_placer(
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
     let reg = super::identity::register(d, &sheets, upf);
     lap("sheets registered by tags");
+    // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
+    // the build left to the sheet's grids, background or frame).
+    for t in reg.transforms.iter().filter(|t| t.registered && t.method != "reference").take(MAX_SHEETS_REPORTED) {
+        let (scale, turn) = (t.transform.scale(), t.transform.rotation_deg());
+        progress_line(&format!(
+            "  placer: {} on {} by {} tags: scale {scale:.3}, turned {turn:.2} deg: {}",
+            t.sheet,
+            t.level,
+            t.matched,
+            tag_fit_why_not(t.matched, scale, turn).map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
+        ));
+    }
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
     let level_key0 = |l: &str| {
@@ -20632,26 +20644,46 @@ fn part_of_plan(view: &[cadaddy_geom::Vec2], plan: &[cadaddy_geom::Vec2]) -> boo
 /// Points a job's placer remembers at most.
 const MAX_PLACER_MEMO: usize = 500_000;
 
+/// Sheets whose fit by tags the placer reports at most.
+const MAX_SHEETS_REPORTED: usize = 200;
+
 /// Fewest tags a sheet's fit by its tags is taken on.
 const TAG_FIT_MIN: usize = 4;
 /// The scales a fit on many tags may have (a sheet a little off its printed scale).
 const TAG_FIT_SCALES: std::ops::RangeInclusive<f64> = 0.85..=1.18;
-/// Under this many tags a fit must also be one to one and square to the plan: sheets come in at
-/// their printed scales and plans are drawn square to each other, so a handful of tags that need
-/// a stretch or a turn (11% and 3 degrees on five tags) matched the wrong tags, and placing a
-/// plan by it puts its ducts and grilles feet from where it draws them.
+/// How far turned (degrees) any fit by tags may be: the plans of one building are drawn square
+/// to each other and sheets come in unturned, so a fit that turns a sheet more than its tags'
+/// scatter does (a degree or so) matched tags that are not each other's, however many.
+const TAG_FIT_TURN_DEG: f64 = 2.0;
+/// Under this many tags a fit must also be one to one and squarer: sheets come in at their printed
+/// scales, so a handful of tags that need a stretch or a turn (11% and 3 degrees on five tags)
+/// matched the wrong tags, and placing a plan by it puts its ducts and grilles feet from where it
+/// draws them.
 const TAG_FIT_FEW: usize = 8;
 /// How far off one to one (a share) a fit on a few tags may be.
 const TAG_FIT_FEW_SCALE: f64 = 0.05;
 /// How far turned (degrees) a fit on a few tags may be.
 const TAG_FIT_FEW_TURN_DEG: f64 = 1.5;
 
-/// Whether a sheet's fit by its tags (`matched` tags, at `scale`, turned `turn_deg`) places it.
-fn tag_fit_holds(matched: usize, scale: f64, turn_deg: f64) -> bool {
-    if matched < TAG_FIT_MIN || !TAG_FIT_SCALES.contains(&scale) || !turn_deg.is_finite() {
-        return false;
+/// Whether a sheet's fit by its tags (`matched` tags, at `scale`, turned `turn_deg`) places it,
+/// else why not.
+fn tag_fit_why_not(matched: usize, scale: f64, turn_deg: f64) -> Option<&'static str> {
+    if matched < TAG_FIT_MIN {
+        Some("too few tags")
+    } else if !TAG_FIT_SCALES.contains(&scale) {
+        Some("off its printed scale")
+    } else if !turn_deg.is_finite() || turn_deg.abs() > TAG_FIT_TURN_DEG {
+        Some("turned off the plan")
+    } else if matched < TAG_FIT_FEW && ((scale - 1.0).abs() > TAG_FIT_FEW_SCALE || turn_deg.abs() > TAG_FIT_FEW_TURN_DEG) {
+        Some("a few tags that need a stretch or a turn")
+    } else {
+        None
     }
-    matched >= TAG_FIT_FEW || ((scale - 1.0).abs() <= TAG_FIT_FEW_SCALE && turn_deg.abs() <= TAG_FIT_FEW_TURN_DEG)
+}
+
+/// Whether a sheet's fit by its tags places it ([`tag_fit_why_not`]).
+fn tag_fit_holds(matched: usize, scale: f64, turn_deg: f64) -> bool {
+    tag_fit_why_not(matched, scale, turn_deg).is_none()
 }
 
 /// Each storey's shell ([`super::wallgen::shells`]) the rooms stage's rooms confirm: one holding
@@ -25860,6 +25892,11 @@ mod tests {
         assert!(!tag_fit_holds(5, 1.112, 2.9));
         assert!(!tag_fit_holds(6, 1.0, 2.0));
         assert!(!tag_fit_holds(7, 0.93, 0.0));
+        // Turned off the plan: never, however many tags (they matched tags not each other's).
+        assert!(!tag_fit_holds(12, 1.10, 4.0));
+        assert!(!tag_fit_holds(40, 1.0, -2.5));
+        assert_eq!(tag_fit_why_not(12, 1.10, 4.0), Some("turned off the plan"));
+        assert_eq!(tag_fit_why_not(5, 1.112, 1.0), Some("a few tags that need a stretch or a turn"));
         // Too few, too far off, or not a number: never.
         assert!(!tag_fit_holds(3, 1.0, 0.0));
         assert!(!tag_fit_holds(40, 1.3, 0.0));
