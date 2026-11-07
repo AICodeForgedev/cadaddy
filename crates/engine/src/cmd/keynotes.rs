@@ -803,11 +803,7 @@ pub(crate) fn tags(
             continue;
         }
         // The view it is in: the nearest title under it (a `… PLAN` larger than its notes).
-        let title = texts
-            .iter()
-            .filter(|o| o.at.y < t.at.y && o.height >= 1.2 * h && (o.at.x - t.at.x).abs() < VIEW_REACH * h && t.at.y - o.at.y < VIEW_REACH * h)
-            .filter(|o| o.value.to_ascii_uppercase().contains("PLAN"))
-            .min_by(|a, b| (t.at.y - a.at.y).total_cmp(&(t.at.y - b.at.y)));
+        let title = view_title(texts, t.at, h);
         if title.is_some_and(|ti| {
             let u = ti.value.to_ascii_uppercase();
             others.iter().any(|w| u.contains(w.as_str()))
@@ -846,6 +842,49 @@ pub(crate) fn tags(
         }
     }
     out
+}
+
+/// The sheet's main keynote list: its electrical one, else its first.
+pub(crate) fn main_list(lists: &[List]) -> usize {
+    lists.iter().position(|l| l.heading.to_ascii_uppercase().contains("ELECTRICAL")).unwrap_or(0)
+}
+
+/// The title of the view a point of a sheet is in: the nearest text under it naming a `PLAN`,
+/// larger than `h` (its notes' height), within [`VIEW_REACH`] of it.
+fn view_title(texts: &[TextItem], at: Vec2, h: f64) -> Option<&TextItem> {
+    texts
+        .iter()
+        .filter(|o| o.at.y < at.y && o.height >= 1.2 * h && (o.at.x - at.x).abs() < VIEW_REACH * h && at.y - o.at.y < VIEW_REACH * h)
+        .filter(|o| o.value.to_ascii_uppercase().contains("PLAN"))
+        .min_by(|a, b| (at.y - a.at.y).total_cmp(&(at.y - b.at.y)))
+}
+
+/// The markers of a sheet's list `li` ([`tags`]) that are its own where the sheet has several
+/// lists with the same numbers: the main list's ([`main_list`]) unless its view's title names
+/// another list's subject (`ELEVATOR` of an `ELEVATOR PIT … PLAN`); another list's only in a view
+/// whose title names its subject.
+pub(crate) fn owned_tags(
+    texts: &[TextItem],
+    segs: &[(Vec2, Vec2)],
+    boxes: &[[f64; 4]],
+    rounds: &[(Vec2, f64)],
+    lists: &[List],
+    li: usize,
+) -> Vec<(String, [f64; 2])> {
+    let Some(list) = lists.get(li) else { return Vec::new() };
+    let main = main_list(lists);
+    // The other lists' subjects (the main list's is in most views' titles: `… ELECTRICAL PLAN`).
+    let side: Vec<String> = lists.iter().enumerate().filter(|(i, _)| *i != main).map(|(_, l)| subject(l)).filter(|w| !w.is_empty()).collect();
+    let me = subject(list);
+    let title_of =
+        |at: &[f64; 2]| view_title(texts, Vec2::new(at[0], at[1]), list.number_h).map(|t| t.value.to_ascii_uppercase()).unwrap_or_default();
+    tags(texts, segs, boxes, rounds, &[], list)
+        .into_iter()
+        .filter(|(_, at)| {
+            let title = title_of(at);
+            if li == main { !side.iter().any(|w| title.contains(w.as_str())) } else { !me.is_empty() && title.contains(me.as_str()) }
+        })
+        .collect()
 }
 
 /// Whether straight sides close around `c` a box's width away (a text height or two): one above,
@@ -1283,6 +1322,33 @@ mod tests {
         }
         // Hostile: long text, odd characters.
         assert!(device_requirements(&"ALL \u{0}USB RECEPTACLES GANGED ".repeat(400)).is_some());
+    }
+
+    /// Q6249: a sheet with two lists numbered alike (its electrical keynotes and an elevator's):
+    /// a marker is the electrical list's unless its view's title names the other's subject.
+    #[test]
+    fn a_marker_is_its_own_lists_where_two_lists_share_numbers() {
+        let t = |v: &str, x: f64, y: f64, h: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: h, rotation: 0.0 };
+        let texts = vec![
+            t("ELECTRICAL KEYNOTES:", 1000.0, 800.0, 4.0),
+            t("5.", 1000.0, 790.0, 4.0),
+            t("ALL RECEPTACLES SHALL BE TAMPER-RESISTANT.", 1012.0, 790.0, 4.0),
+            t("ELEVATOR KEYNOTES:", 1400.0, 800.0, 4.0),
+            t("5.", 1400.0, 790.0, 4.0),
+            t("PROVIDE CEILING MOUNTED SMOKE DETECTOR IN THE PIT.", 1412.0, 790.0, 4.0),
+            // A unit's view and its marker 5; the elevator pit's view and its marker 5.
+            t("5", 100.0, 300.0, 4.0),
+            t("ENLARGED UNIT PLAN", 80.0, 200.0, 7.0),
+            t("5", 600.0, 300.0, 4.0),
+            t("ELEVATOR PIT ELECTRICAL PLAN", 580.0, 200.0, 7.0),
+        ];
+        let lists = lists(&texts);
+        assert_eq!(lists.len(), 2);
+        assert_eq!(main_list(&lists), 0);
+        let at = |li: usize| owned_tags(&texts, &[], &[], &[], &lists, li).into_iter().map(|(_, a)| a[0].round()).collect::<Vec<_>>();
+        let (el, ev) = (at(0), at(1));
+        assert!(el.len() == 1 && el[0] < 200.0, "the unit's marker is the electrical list's: {el:?}");
+        assert!(ev.len() == 1 && ev[0] > 500.0, "the pit's marker is the elevator list's: {ev:?}");
     }
 
     /// Q6249: a device's tag takes what its keynotes ask of its kind, each with the keynote as
