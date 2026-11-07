@@ -166,6 +166,13 @@ fn stored(e: &Entity) -> Option<String> {
     (part != "mep" && !is_generic(&part)).then(|| words(&part))
 }
 
+/// The kind of a piece of a routed electrical run (`part:atom:<piece>`) by the IFC class it is
+/// written as ([`validate_kinds::piece_kind`]); none for any other element.
+pub(crate) fn piece_of(e: &Entity) -> Option<&'static str> {
+    let part = super::bimlook::made_tag(e, "part")?.strip_prefix("atom:")?;
+    validate_kinds::piece_kind(&cadaddy_walk3d::fourd::element_of(e).class, part)
+}
+
 /// An element's mark: its build tag, its `type_mark` or `mark` property, else the BIM type it
 /// is assigned.
 pub fn mark_of(e: &Entity) -> Option<String> {
@@ -363,6 +370,11 @@ impl Kinds {
     /// exhaust fan makes it an exhaust fan), else it stays a connection.
     pub fn resolve(&self, kind: &str, mark: Option<&str>, e: Option<&Entity>) -> Resolved {
         let done = |kind: String, from: &'static str| Resolved { category: category(e, &kind), kind, from };
+        // A piece of a routed run (a stick, a fitting, a wire, a box) is its own kind (Q6263),
+        // not the run's `conduit`.
+        if let Some(k) = e.and_then(piece_of) {
+            return done(k.to_string(), "element");
+        }
         if !is_generic(kind) {
             if is_connection(kind)
                 && let Some((k, from)) = self.by_tables(mark, e).filter(|(k, _)| !is_connection(k))
@@ -591,6 +603,36 @@ mod tests {
         assert_eq!(of("SD").kind, "smoke_detector");
         assert_eq!(of("TV").kind, "outlet");
         assert!(of("A").unresolved() && of("F").unresolved(), "{:?} {:?}", of("A"), of("F"));
+    }
+
+    /// A made-up piece of a routed run, tagged the way the raceway build tags its atoms.
+    fn atom(part: &str) -> Entity {
+        let mut x = vec![cadaddy_doc::RawTag { code: 1001, value: "CADADDY_WALLGEN".into() }];
+        for v in ["mep", "L1", "0", "kind:conduit", &format!("part:atom:{part}")] {
+            x.push(cadaddy_doc::RawTag { code: 1000, value: v.to_string() });
+        }
+        let common = cadaddy_doc::Common { xdata: x.into(), ..cadaddy_doc::Common::default() };
+        let p = cadaddy_doc::Point { p: cadaddy_geom::Vec3::new(0.0, 0.0, 0.0), angle: 0.0 };
+        Entity { handle: cadaddy_doc::Handle(7), common, kind: cadaddy_doc::EntityKind::Point(p) }
+    }
+
+    /// Q6263: a run's sticks, fittings, wires and boxes are not all `conduit`.
+    #[test]
+    fn the_pieces_of_a_run_are_kinds_of_their_own() {
+        let k = Kinds::of(&Drawing::new_imperial(), &BuildingSpec::default(), None);
+        let of = |part: &str| {
+            let e = atom(part);
+            let r = k.resolve("conduit", Some("EMT"), Some(&e));
+            (r.kind, r.category)
+        };
+        assert_eq!(of("conduit"), ("conduit".into(), Some("IfcCableCarrierSegment".into())));
+        assert_eq!(of("coupling"), ("conduit_fitting".into(), Some("IfcCableCarrierFitting".into())));
+        assert_eq!(of("elbow").0, "conduit_fitting");
+        assert_eq!(of("box"), ("junction_box".into(), Some("IfcJunctionBox".into())));
+        assert_eq!(of("wire"), ("wire".into(), Some("IfcCableSegment".into())));
+        assert_eq!(of("cable").0, "cable");
+        // An element that is no piece keeps its kind.
+        assert_eq!(k.resolve("conduit", None, None).kind, "conduit");
     }
 
     fn tag(id: &str, kind: &str, fields: &[(&str, &str)]) -> ElementTag {

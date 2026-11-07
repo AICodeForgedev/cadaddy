@@ -326,7 +326,7 @@ fn a_model_product_that_differs_from_the_documents_fails() {
 }
 
 #[test]
-fn fixtures_need_a_control_unless_emergency() {
+fn fixtures_need_a_control_and_an_emergency_one_with_none_is_unsure() {
     let mut j = job();
     let (r, fs) = screen(&mut j.s);
     let a = of(&fs, "E-LUM-CONTROL", &j.a);
@@ -336,10 +336,13 @@ fn fixtures_need_a_control_unless_emergency() {
     let q = of(&fs, "E-LUM-CONTROL", &j.q);
     assert_eq!(q["verdict"], "fail", "{q}");
     assert!(q["issue"].as_str().unwrap().contains("leg c"), "{q}");
-    // The emergency fixture: no control needed, its schedule row cited.
+    // The emergency fixture with no control (Q6262): an emergency marking is no reason to need
+    // none (it is switched with its room unless the documents say unswitched): unsure, its
+    // schedule row cited, never a pass.
     let em = of(&fs, "E-LUM-CONTROL", &j.em);
-    assert_eq!(em["verdict"], "pass", "{em}");
-    assert!(em["issue"].as_str().unwrap().contains("no control needed") && em["issue"].as_str().unwrap().contains("EMERGENCY"), "{em}");
+    assert_eq!(em["verdict"], "unsure", "{em}");
+    assert!(em["issue"].as_str().unwrap().contains("marked emergency") && em["issue"].as_str().unwrap().contains("EMERGENCY"), "{em}");
+    assert!(em["measured"]["emergency"].is_string(), "{em}");
     // The second room's fixture: its 3-way pair controls it.
     assert_eq!(of(&fs, "E-LUM-CONTROL", &j.a2)["verdict"], "pass");
     // Every switch reaches a fixture of its room on its leg.

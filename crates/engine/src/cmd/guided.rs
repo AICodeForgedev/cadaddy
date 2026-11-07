@@ -2040,6 +2040,10 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
 /// them on stderr while the job runs).
 static PROGRESS_SINK: std::sync::RwLock<Option<fn(&str)>> = std::sync::RwLock::new(None);
 
+/// The running job's last progress (its `job.progress` data and line), for an interface that
+/// shows it while the job runs on another thread ([`live_progress`]).
+static LIVE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
 /// A job is running (job.start, job.next, job.answer…): a cancel asked for now stops it.
 static JOB_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// A cancel the running job takes at its next sheet or stage.
@@ -2074,6 +2078,7 @@ impl Running {
     fn start() -> Self {
         use std::sync::atomic::Ordering::Relaxed;
         JOB_CANCEL.store(false, Relaxed);
+        *LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         JOB_RUNNING.store(true, Relaxed);
         Running
     }
@@ -2085,6 +2090,34 @@ impl Drop for Running {
         JOB_RUNNING.store(false, Relaxed);
         JOB_CANCEL.store(false, Relaxed);
     }
+}
+
+/// What the job last reported, from any thread (an app polls it while the job runs on a worker
+/// thread, Q6269): `{stage?, step?, progress?, line, running, cancel_requested}`, the last event's
+/// fields and the last progress line. `None` before a job has reported anything.
+pub fn live_progress() -> Option<Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut v = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert("running".into(), json!(JOB_RUNNING.load(Relaxed)));
+        o.insert("cancel_requested".into(), json!(JOB_CANCEL.load(Relaxed)));
+    }
+    Some(v)
+}
+
+/// Keep `line` (and the event's fields, when given) as the job's live progress.
+fn set_live(data: Option<&Value>, line: &str) {
+    let mut g = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut v = g.take().unwrap_or_else(|| json!({}));
+    if let (Some(o), Some(d)) = (v.as_object_mut(), data.and_then(Value::as_object)) {
+        for (k, x) in d {
+            o.insert(k.clone(), x.clone());
+        }
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("line".into(), json!(crate::clip_input(line.trim())));
+    }
+    *g = Some(v);
 }
 
 /// Send a running job's progress lines (one per stage and per sheet imported) to `sink`.
@@ -2103,6 +2136,7 @@ fn progress_tag(job: &GuidedJob, stage: StageName) -> String {
 
 /// A line to the progress sink only (a step inside a stage, e.g. the model build's).
 pub(crate) fn progress_line(line: &str) {
+    set_live(None, line);
     if let Ok(g) = PROGRESS_SINK.read()
         && let Some(sink) = *g
     {
@@ -2112,6 +2146,7 @@ pub(crate) fn progress_line(line: &str) {
 
 /// A `job.progress` event, and the line to the progress sink.
 fn report_progress(s: &mut Session, data: Value, line: &str) {
+    set_live(Some(&data), line);
     s.event("job.progress", data);
     if let Ok(g) = PROGRESS_SINK.read()
         && let Some(sink) = *g
@@ -12204,6 +12239,7 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
             && !has(t, "mount_height_in")
             && !has(t, "mount")
         {
+            let i = super::mountlist::as_written(&row.doc).map_or(i, |(given, _)| given);
             t.set("mount_height_in", format!("{}", (i * 100.0).round() / 100.0), "legend");
             t.set("mount_height_note", row.doc.clone(), "legend");
         }
@@ -12329,7 +12365,10 @@ fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[Typic
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let kind = if emergency.contains(&mark) { "emergency light" } else { t.kind.as_str() };
         let Some(h) = typical.iter().find(|h| h.kind == kind) else { continue };
-        t.set("mount_height_in", format!("{}", (h.inches * 100.0).round() / 100.0), "note");
+        // As written when its words say what it is measured to (`4'-0" AFF TO TOP`: 48, its top),
+        // else its middle: the build reads the datum off the note.
+        let inches = super::mountlist::as_written(&h.doc).map_or(h.inches, |(given, _)| given);
+        t.set("mount_height_in", format!("{}", (inches * 100.0).round() / 100.0), "note");
         t.set("mount_height_note", h.doc.clone(), "note");
         n += 1;
     }
@@ -24866,15 +24905,15 @@ fn cmd_undo(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("job.start", "Start Guided Job", cmd_start)
+        CommandSpec::new("job.start", "Start Guided Job", cmd_start).long()
             .files()
             .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
-        CommandSpec::new("job.next", "Next Job Question", cmd_next)
+        CommandSpec::new("job.next", "Next Job Question", cmd_next).long()
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
-        CommandSpec::new("job.answer", "Answer Job Question", cmd_answer)
+        CommandSpec::new("job.answer", "Answer Job Question", cmd_answer).long()
             .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first)} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
-        CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode)
+        CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode).long()
             .params("{auto: bool (true: the running job goes on unattended, every open question with a default takes it; false: it stops at each checkpoint again)} → {mode: {from, to}, rerun?, …job.status}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)
             .params("{} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, checkpoint?, open_questions, findings, worklist_pending, rules_learned}")
@@ -26876,7 +26915,9 @@ mod tests {
         sp.tags = vec![tag("device:p", "P"), tag("device:r", "SR"), tag("device:h", "H")];
         assert_eq!(apply_symbol_list(&mut sp, &rows), 2, "H is either of two rows");
         let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
-        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("45.75"));
+        // Stored as written (its note says to its top: the build puts its top there); the row
+        // itself keeps its middle.
+        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("48"));
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
@@ -26909,7 +26950,8 @@ mod tests {
         assert_eq!(xs(0), Some((0.0, 144.0)));
     }
 
-    /// A general note's typical mounting heights, item by item, to each one's centre.
+    /// A general note's typical mounting heights, item by item, to each one's centre; a device takes
+    /// the height as written when the words say what it is measured to (its top, its bottom).
     #[test]
     fn a_general_notes_typical_heights_are_read_item_by_item() {
         assert_eq!(typical_item("TOGGLE SWITCH 4'-0\" AFF TO TOP", "E-1").map(|t| (t.kind, t.inches)), Some(("switch", 45.75)));
@@ -26936,7 +26978,7 @@ mod tests {
         let h = |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("mount_height_in")).map(|f| f.value.clone());
         assert_eq!(
             (h("device:a"), h("device:b"), h("device:c"), h("device:d")),
-            (Some("18".into()), Some("44".into()), Some("45.75".into()), Some("92.25".into()))
+            (Some("18".into()), Some("44".into()), Some("48".into()), Some("90".into()))
         );
     }
 

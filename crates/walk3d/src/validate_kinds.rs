@@ -27,6 +27,9 @@ pub enum Producer {
     Item,
     /// A device or fixture block on the plan (its type attribute or block name).
     Device,
+    /// A piece of a routed electrical run (Q6157: `part:atom:<piece>`), read by the IFC class
+    /// the export writes it as (Q6263): a stick, a fitting, a wire, a box.
+    Piece,
 }
 
 impl Producer {
@@ -39,6 +42,7 @@ impl Producer {
             Producer::Terminal => "terminal",
             Producer::Item => "item",
             Producer::Device => "device",
+            Producer::Piece => "piece",
         }
     }
 }
@@ -98,6 +102,10 @@ pub const MODEL_KINDS: &[(&str, Producer)] = &[
     ("pull_station", Producer::Device),
     ("exit_sign", Producer::Device),
     ("thermostat", Producer::Device),
+    // Pieces of a routed run other than its sticks (`conduit`), boxes (`junction_box`) and
+    // cables (`cable`), each its own kind so a rule asks only about the pieces it judges.
+    ("conduit_fitting", Producer::Piece),
+    ("wire", Producer::Piece),
 ];
 
 /// Is `kind` a kind the model holds?
@@ -133,7 +141,23 @@ pub const KIND_FAMILIES: &[(&str, &[&str])] = &[
             "bidet",
         ],
     ),
-    ("fire_alarm_device", &["smoke_detector", "heat_detector", "duct_detector", "fire_alarm_notification", "pull_station", "fire_alarm_speaker"]),
+    (
+        "fire_alarm_device",
+        &[
+            "smoke_detector",
+            "heat_detector",
+            "duct_detector",
+            "duct_smoke_detector",
+            "fire_alarm_notification",
+            "pull_station",
+            "fire_alarm_speaker",
+            "fire_alarm_module",
+            "fa_control_module",
+            "control_module",
+            "monitor_module",
+            "door_holder",
+        ],
+    ),
     ("fire_alarm_notification", &["horn_strobe", "horn", "strobe", "strobe_wall", "strobe_ceiling", "speaker_strobe"]),
     (
         "receptacle",
@@ -158,6 +182,9 @@ pub const KIND_FAMILIES: &[(&str, &[&str])] = &[
     // A fan coil unit is mechanical equipment (Q6140), not a fan: its words hold `fan`, so it
     // is named here to be read as itself.
     ("fan_coil_unit", &["fan_coil", "fcu", "cassette_fan_coil", "vertical_fan_coil", "horizontal_fan_coil"]),
+    // The pieces a routed run is built of (Q6263): what a rule for every element asks about
+    // only where a print draws the piece or a marker or option names it (`only_if`).
+    ("raceway_piece", &["conduit", "conduit_fitting", "wire", "cable", "junction_box", "tray"]),
 ];
 
 /// The BIM category (IFC class) of a kind the job builds that no producer above tags, when its
@@ -196,6 +223,19 @@ fn in_family_at(kind: &str, family: &str, depth: usize) -> bool {
 /// (`Return Grille` = `return_grille`).
 pub fn in_family(kind: &str, family: &str) -> bool {
     in_family_at(&norm(kind), &norm(family), 0)
+}
+
+/// Every known kind that is `kind` or in its family (through nested families), `kind` itself
+/// first when it is known.
+pub fn members(kind: &str) -> Vec<&'static str> {
+    let k = norm(kind);
+    let mut out: Vec<&'static str> = Vec::new();
+    for x in known_kinds() {
+        if in_family_at(x, &k, 0) && !out.contains(&x) {
+            out.push(x);
+        }
+    }
+    out
 }
 
 /// Is `kind` one the family table names (a family or a member), or one of [`JOB_KINDS`]?
@@ -268,7 +308,32 @@ fn made(kind: &str, by: Producer) -> Option<Entity> {
         Producer::Electrical => tagged("mep", &ex(&[&format!("kind:{kind}"), "part:device"])),
         Producer::Equipment => tagged("mep", &ex(&["kind:equipment", &format!("part:equipment:{kind}"), "tag:X-1"])),
         Producer::Terminal => tagged("mep", &ex(&["kind:duct", &format!("part:terminal:{kind}")])),
+        Producer::Piece => tagged("mep", &ex(&["kind:conduit", &format!("part:atom:{}", piece_atom(kind))])),
         Producer::Item | Producer::Device => return None,
+    })
+}
+
+/// The atom part a piece kind is built as (`conduit_fitting` stands for every fitting: a
+/// coupling, a connector, an elbow, a strap).
+fn piece_atom(kind: &str) -> &str {
+    match kind {
+        "conduit_fitting" => "coupling",
+        k => k,
+    }
+}
+
+/// The kind of a piece of a routed electrical run (`part:atom:<part>`, Q6157) by the IFC class
+/// the export writes it as (Q6263), so sticks, fittings, wires and boxes are told apart: a stick
+/// `conduit`, a box or ring `junction_box`, a wire `wire` (a cable `cable`), anything else a
+/// `conduit_fitting`. None for an element that is no such piece.
+pub fn piece_kind(class: &str, part: &str) -> Option<&'static str> {
+    Some(match class {
+        "IfcCableCarrierSegment" => "conduit",
+        "IfcCableCarrierFitting" => "conduit_fitting",
+        "IfcJunctionBox" => "junction_box",
+        "IfcCableSegment" if part.trim().eq_ignore_ascii_case("cable") => "cable",
+        "IfcCableSegment" => "wire",
+        _ => return None,
     })
 }
 
@@ -381,6 +446,33 @@ mod tests {
         assert!(kind_matches("receptacle", "duplex_receptacle_20a") && kind_matches("fire_alarm_device", "addressable_horn_strobe"));
         assert!(!kind_matches("receptacle", "unicorn") && known_kind("").is_none());
         assert!(kind_matches("*", "unicorn") && !kind_matches("", "receptacle"));
+    }
+
+    /// Q6263: the pieces of a routed run are told apart by the class the export writes them as.
+    #[test]
+    fn run_pieces_get_kinds_of_their_own() {
+        let class = |part: &str| crate::fourd::element_of(&tagged("mep", &["kind:conduit".into(), format!("part:atom:{part}")])).class;
+        let kind = |part: &str| piece_kind(&class(part), part);
+        assert_eq!(kind("conduit"), Some("conduit"));
+        for f in ["coupling", "connector", "elbow", "strap", "locknut", "bushing", "offset"] {
+            assert_eq!(kind(f), Some("conduit_fitting"), "{f}");
+        }
+        assert_eq!(kind("box"), Some("junction_box"));
+        assert_eq!(kind("ring"), Some("junction_box"));
+        assert_eq!(kind("wire"), Some("wire"));
+        assert_eq!(kind("cable"), Some("cable"));
+        assert_eq!(piece_kind("IfcOutlet", ""), None);
+        assert_eq!(category_of("wire").as_deref(), Some("IfcCableSegment"));
+        assert_eq!(category_of("conduit_fitting").as_deref(), Some("IfcCableCarrierFitting"));
+        assert!(model_categories().contains("IfcCableSegment"));
+        for k in ["conduit", "conduit_fitting", "wire", "cable", "junction_box"] {
+            assert!(kind_matches("raceway_piece", k), "{k}");
+        }
+        assert!(!kind_matches("raceway_piece", "receptacle") && !kind_matches("raceway_piece", "pipe"));
+        // Fire alarm modules and door holders are fire alarm devices.
+        for k in ["fa_control_module", "door_holder", "monitor_module", "duct_smoke_detector"] {
+            assert!(kind_matches("fire_alarm_device", k), "{k}");
+        }
     }
 
     #[test]

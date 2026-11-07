@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Agent Work"])
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
-        CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
+        CommandSpec::new("bim.build", "Build BIM Model", run_build).long().params(
             "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings, drafted?}: builds the model from the building spec (the same spec gives the same model); with no spec yet, drafts one from the open print set (or the plan drawing) first",
         ),
     ]
