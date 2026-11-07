@@ -413,8 +413,19 @@ struct Across<'a> {
     side_off: f64,
 }
 
+/// How far `p` is from a wall piece's body, a rectangle (its centreline `len` long, `half` each
+/// side): `t_raw` how far along the centreline its foot is, `side_off` how far it is off it. 0 or
+/// less inside. A wall is square-ended: a piece that dies into another wall reaches no further
+/// than its end, never round its end into the room past the other wall's face.
+fn off_body(t_raw: f64, len: f64, side_off: f64, half: f64) -> f64 {
+    let past_end = (-t_raw).max(t_raw - len).max(0.0);
+    let out = side_off.abs() - half;
+    if past_end <= 0.0 { out } else { out.max(0.0).hypot(past_end) }
+}
+
 /// The wall pieces of `level` there at height `z` (drawing units) within `reach` of `p`'s
-/// nearer face, nearest first: a point inside a wall's thickness is that wall's.
+/// nearer face, nearest first: a point inside a wall's thickness is that wall's. Distances are to
+/// each piece's square-ended body ([`off_body`]).
 fn across<'a>(pieces: &'a [HostPiece], level: &str, p: Vec2, z: f64, reach: f64, slack: f64) -> Option<Across<'a>> {
     let mut best: Option<((u8, f64), Across<'a>)> = None;
     for w in pieces.iter().filter(|w| w.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
@@ -427,16 +438,16 @@ fn across<'a>(pieces: &'a [HostPiece], level: &str, p: Vec2, z: f64, reach: f64,
             continue;
         }
         let u = ab * (1.0 / len);
-        let t = ((p - w.a).x * u.x + (p - w.a).y * u.y).clamp(0.0, len);
+        let t_raw = (p - w.a).x * u.x + (p - w.a).y * u.y;
+        let t = t_raw.clamp(0.0, len);
         let n = Vec2::new(-u.y, u.x);
         let side_off = (p - w.a).x * n.x + (p - w.a).y * n.y;
-        let dist = (w.a + u * t).dist(p);
-        let off_face = dist - w.half;
+        let off_face = off_body(t_raw, len, side_off, w.half);
         if !off_face.is_finite() || off_face > reach {
             continue;
         }
         // Inside a wall first (the one whose centreline is nearest), then the nearest face.
-        let key = if off_face <= 0.0 { (0u8, dist) } else { (1u8, off_face) };
+        let key = if off_face <= 0.0 { (0u8, side_off.abs()) } else { (1u8, off_face) };
         if best.as_ref().is_some_and(|(k, _)| (k.0, k.1) <= (key.0, key.1)) {
             continue;
         }
@@ -519,13 +530,101 @@ fn seat(pieces: &[HostPiece], level: &str, p: Vec2, zc: f64, others: &[Vec2], up
         if votes != 0.0 { (votes.signum(), "circuit") } else { (1.0, "left") }
     };
     let len = a.piece.a.dist(a.piece.b);
-    let t_along = if len >= l { a.t.clamp(l / 2.0, len - l / 2.0) } else { len / 2.0 };
+    // Along the face where it was read, its box within the piece and clear of the stretch of the
+    // face another wall is built into (a wall that dies into this one at a corner or a tee).
+    let t_along = if len >= l {
+        let lines = [side * (a.piece.half - w * 0.05), side * (a.piece.half - w * 0.95)];
+        let blocked = buried(pieces, a.piece, level, zc, slack, &lines, BURIED_EPS_IN / 12.0 * upf);
+        free_spot(a.t, len, l, &blocked)
+    } else {
+        len / 2.0
+    };
     let q = a.piece.a + a.u * t_along;
     let out = a.n * side;
     // The box in the wall, its face on the wall's face.
     let face_at = q + out * a.piece.half;
     let centre = face_at - out * (w / 2.0);
     Some(Seat { wall: a.piece.wall, centre, along: a.u, out, moved: face_at.dist(p), side_why, far })
+}
+
+/// How deep (inches) another wall must reach into a box's place before the box moves off it: walls
+/// that only touch at a face, or meet within drafting noise, don't push it.
+const BURIED_EPS_IN: f64 = 0.5;
+
+/// The stretches along `host` (from its `a`, sheet units) where lines running along it at the
+/// offsets `lines` (left of its centreline; a box's front and back) pass through the body of
+/// another wall's piece of `level` there at height `z`, each more than `eps` inside it.
+fn buried(pieces: &[HostPiece], host: &HostPiece, level: &str, z: f64, slack: f64, lines: &[f64], eps: f64) -> Vec<(f64, f64)> {
+    let ab = host.b - host.a;
+    let len = ab.len();
+    if !(len.is_finite() && len > 1e-9) {
+        return Vec::new();
+    }
+    let u = ab * (1.0 / len);
+    let n = Vec2::new(-u.y, u.x);
+    let dot = |a: Vec2, b: Vec2| a.x * b.x + a.y * b.y;
+    let mut out = Vec::new();
+    for o in pieces.iter().filter(|o| o.wall != host.wall && o.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level))) {
+        if z < o.z0 - slack || z > o.z1 + slack {
+            continue;
+        }
+        let ob = o.b - o.a;
+        let olen = ob.len();
+        if !(olen.is_finite() && olen > 2.0 * eps) || o.half <= eps {
+            continue;
+        }
+        let ou = ob * (1.0 / olen);
+        let on = Vec2::new(-ou.y, ou.x);
+        for off in lines {
+            let p0 = host.a + n * *off;
+            // The line p0 + u·t inside the piece's body, slab by slab.
+            let mut lo = f64::NEG_INFINITY;
+            let mut hi = f64::INFINITY;
+            for (axis, min, max) in [(ou, eps, olen - eps), (on, -(o.half - eps), o.half - eps)] {
+                let b0 = dot(p0 - o.a, axis);
+                let k = dot(u, axis);
+                if k.abs() < 1e-12 {
+                    if b0 < min || b0 > max {
+                        lo = f64::INFINITY;
+                    }
+                    continue;
+                }
+                let (t0, t1) = ((min - b0) / k, (max - b0) / k);
+                lo = lo.max(t0.min(t1));
+                hi = hi.min(t0.max(t1));
+            }
+            if lo < hi && hi > 0.0 && lo < len {
+                out.push((lo.max(0.0), hi.min(len)));
+            }
+        }
+    }
+    out
+}
+
+/// Where along a piece `len` long a box `l` long goes for a point across from `t`: its whole length
+/// on the piece and off every `blocked` stretch, as near `t` as that allows; with no such place,
+/// as near `t` as the piece allows.
+fn free_spot(t: f64, len: f64, l: f64, blocked: &[(f64, f64)]) -> f64 {
+    let (lo, hi) = (l / 2.0, len - l / 2.0);
+    let plain = t.clamp(lo, hi);
+    // The box's middle may not come within half its length of a blocked stretch.
+    let mut cut: Vec<(f64, f64)> = blocked.iter().map(|(a, b)| (a - l / 2.0, b + l / 2.0)).filter(|(a, b)| b > a).collect();
+    cut.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut free: Vec<(f64, f64)> = Vec::new();
+    let mut from = lo;
+    for (a, b) in cut {
+        if a > from {
+            free.push((from, a.min(hi)));
+        }
+        from = from.max(b);
+        if from >= hi {
+            break;
+        }
+    }
+    if from <= hi {
+        free.push((from, hi));
+    }
+    free.into_iter().filter(|(a, b)| b >= a).map(|(a, b)| t.clamp(a, b)).min_by(|x, y| (x - t).abs().total_cmp(&(y - t).abs())).unwrap_or(plain)
 }
 
 /// Each circuit's devices: their levels and where they are on their level's plan (sheet units),
@@ -1474,6 +1573,34 @@ fn room_near<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2, within: f
         .map(|(r, _)| r)
 }
 
+/// The room of `level` whose outline comes within `within` of `p` where that nearest point is on
+/// the `out` side of `c` (a wall device's box and its face's direction), the nearest: a room
+/// behind the wall the box is set in is never it.
+fn room_near_side<'a>(rooms: &'a [RoomShape], level: Option<&str>, p: Vec2, within: f64, c: Vec2, out: Vec2) -> Option<&'a RoomShape> {
+    rooms
+        .iter()
+        .filter(|r| r.level.is_none() || level.is_none() || r.level.as_deref().zip(level).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b)))
+        .filter(|r| dist_to(&r.bounds, p) <= within)
+        .filter_map(|r| nearest_on(&r.outline, p).map(|q| (r, q)))
+        .filter(|(_, q)| q.dist(p) <= within && (q.x - c.x) * out.x + (q.y - c.y) * out.y > 0.0)
+        .min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p)))
+        .map(|(r, _)| r)
+}
+
+/// The point of the closed `outline` nearest `p`.
+fn nearest_on(outline: &[Vec2], p: Vec2) -> Option<Vec2> {
+    let n = outline.len();
+    (0..n)
+        .filter_map(|i| Some((*outline.get(i)?, *outline.get((i + 1) % n)?)))
+        .map(|(a, b)| {
+            let ab = b - a;
+            let len2 = ab.x * ab.x + ab.y * ab.y;
+            let t = if len2 > 0.0 { ((p - a).x * ab.x + (p - a).y * ab.y) / len2 } else { 0.0 };
+            a + ab * t.clamp(0.0, 1.0)
+        })
+        .min_by(|x, y| x.dist(p).total_cmp(&y.dist(p)))
+}
+
 /// How far `p` is from the nearest edge of the closed `outline`.
 fn edge_dist(outline: &[Vec2], p: Vec2) -> f64 {
     let n = outline.len();
@@ -1879,14 +2006,28 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                 // the room on the face it serves, the side of the wall it is drawn on; else a room
                 // within a foot of it.
                 let host_bounds = host.and_then(|(wh, _)| walls.iter().find(|(w, _, _)| w == wh)).map(|(_, _, wb)| *wb);
-                let past_face = face_dir.and_then(|o| room_at(&rooms, lvl, c + o * ((BOX_IN[0] / 12.0 + FACE_PROBE_FT) * upf)));
-                let served = past_face
-                    .map(|r| (r, "the room on the face of the wall it is set in"))
-                    .or_else(|| room_at(&rooms, lvl, c).map(|r| (r, "the room the device stands in")))
-                    .or_else(|| {
-                        host_bounds.and_then(|wb| room_by_face(&rooms, lvl, &wb, c, upf)).map(|r| (r, "the room on the face of the wall it serves"))
-                    })
-                    .or_else(|| room_near(&rooms, lvl, c, ROOM_NEAR_FT * upf).map(|r| (r, "the room within a foot of it")));
+                // A box set in a wall facing one way serves only that side: never the room behind
+                // its wall, whatever is near.
+                let face_probe = (BOX_IN[0] / 12.0 + FACE_PROBE_FT) * upf;
+                // (Its box's own middle is in the wall, where a room traced into the wall from
+                // behind may reach: a point an inch past its face, then further out.)
+                let served = match face_dir {
+                    Some(o) => room_at(&rooms, lvl, c + o * face_probe)
+                        .or_else(|| room_at(&rooms, lvl, c + o * ((BOX_IN[0] / 2.0 + 1.0) / 12.0 * upf)))
+                        .map(|r| (r, "the room on the face of the wall it is set in"))
+                        .or_else(|| {
+                            room_near_side(&rooms, lvl, c + o * face_probe, ROOM_NEAR_FT * upf, c, o)
+                                .map(|r| (r, "the room within a foot of the face it is set in"))
+                        }),
+                    None => room_at(&rooms, lvl, c)
+                        .map(|r| (r, "the room the device stands in"))
+                        .or_else(|| {
+                            host_bounds
+                                .and_then(|wb| room_by_face(&rooms, lvl, &wb, c, upf))
+                                .map(|r| (r, "the room on the face of the wall it serves"))
+                        })
+                        .or_else(|| room_near(&rooms, lvl, c, ROOM_NEAR_FT * upf).map(|r| (r, "the room within a foot of it"))),
+                };
                 // A typical room's device the room it was stamped into (its bath is that room's).
                 let stamped = made(e, DEVID)
                     .and_then(|id| sp.tags.iter().find(|t| t.id == id))
@@ -1913,7 +2054,15 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
                         // levels), else its built place less the stacking.
                         let q = made(e, DEVID).and_then(|id| plan_at.get(id.as_str()).copied()).unwrap_or(c - shift);
                         let reach = ROOM_NEAR_FT * upf;
-                        let probes = [[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]];
+                        // Set in a wall: the space past the face it is set in, not one behind it.
+                        let probes: Vec<[f64; 2]> = match face_dir {
+                            Some(o) => {
+                                let f = c - shift + o * face_probe;
+                                let g = f + o * reach;
+                                vec![[f.x, f.y], [g.x, g.y]]
+                            }
+                            None => vec![[q.x, q.y], [q.x + reach, q.y], [q.x - reach, q.y], [q.x, q.y + reach], [q.x, q.y - reach]],
+                        };
                         let space = sp.circulation.iter().find(|cs| {
                             lvl.is_some_and(|l| cs.level.eq_ignore_ascii_case(l)) && !cs.name.trim().is_empty() && probes.iter().any(|p| cs.holds(*p))
                         });
@@ -2393,6 +2542,75 @@ mod tests {
         // Along the wall where it was read, its box within the piece.
         let st = seat(&pieces, "L1", Vec2::new(239.5, 8.0), 18.0, &[], 12.0, false).expect("at the end");
         assert!((st.centre.x - 238.0).abs() < 1e-9, "{:?}", st.centre);
+    }
+
+    fn thick(wall: u64, a: (f64, f64), b: (f64, f64), half: f64) -> HostPiece {
+        HostPiece { half, ..piece(wall, a, b, (0.0, 120.0)) }
+    }
+
+    #[test]
+    fn a_wall_that_dies_into_another_never_takes_a_device_drawn_past_that_walls_face() {
+        // Inches. Wall 1 runs north-south on x = 0, 6¾" thick (faces at ±3⅜); the room it serves
+        // is east of it. Wall 2, 11" thick, comes from the west and ends inside wall 1, 1.3" short
+        // of its centreline. A thermostat is drawn 10" in front of wall 1's east face, 2" north of
+        // wall 2's line. Measured to wall 2's square end it is 11.3" off; a round cap would put it
+        // 6" off, nearer than wall 1's face (6.6"), and seat it on wall 2 behind wall 1.
+        let pieces = vec![thick(1, (0.0, -120.0), (0.0, 120.0), 3.375), thick(2, (-60.0, 0.0), (-1.3, 0.0), 5.5)];
+        let st = seat(&pieces, "L1", Vec2::new(13.375, 2.0), 42.0, &[], 12.0, true).expect("seated");
+        assert_eq!(st.wall, Handle(1), "in the wall it is drawn on");
+        assert!(st.out.x > 0.99 && (st.centre.x - 2.375).abs() < 1e-9, "on the east face, toward its room: {:?} {:?}", st.centre, st.out);
+        assert!((st.centre.y - 2.0).abs() < 1e-9, "across from where it was drawn: {:?}", st.centre);
+        // A point inside a wall is still that wall's, and past a wall's end it is off by the
+        // distance to the end's corner.
+        assert!(off_body(5.0, 10.0, 1.0, 3.0) < 0.0);
+        assert!((off_body(14.0, 10.0, 6.0, 3.0) - 5.0).abs() < 1e-9);
+        assert!((off_body(-4.0, 10.0, 0.0, 3.0) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_box_at_a_corner_stays_out_of_the_wall_built_into_its_face() {
+        // Inches. An L corner: wall 1 north from the origin, wall 2 east from it, both 6" thick,
+        // the room in the inside corner (x, y > 3). A device read at (3.5, 2) is inside wall 2's
+        // body, so it is wall 2's, on its north face; along the face it may not sit where wall 1
+        // fills the corner (x < 3): its 4" box goes just clear of it, not half inside it.
+        let pieces = vec![thick(1, (0.0, 0.0), (0.0, 120.0), 3.0), thick(2, (0.0, 0.0), (120.0, 0.0), 3.0)];
+        let st = seat(&pieces, "L1", Vec2::new(3.5, 2.0), 18.0, &[], 12.0, false).expect("seated");
+        assert_eq!(st.wall, Handle(2));
+        assert!(st.out.y > 0.99, "{:?}", st.out);
+        let eps = BURIED_EPS_IN;
+        assert!(st.centre.x >= 3.0 - eps + 2.0 - 1e-9 && st.centre.x <= 5.0 + 1e-9, "clear of wall 1, as near as it allows: {:?}", st.centre);
+        // Read further along, nothing moves it.
+        let st = seat(&pieces, "L1", Vec2::new(40.0, 4.0), 18.0, &[], 12.0, false).expect("seated");
+        assert!((st.centre.x - 40.0).abs() < 1e-9, "{:?}", st.centre);
+        // The free place nearest the point; none free: the plain clamp.
+        assert!((free_spot(10.0, 100.0, 4.0, &[(8.0, 12.0)]) - 6.0).abs() < 1e-9);
+        assert!((free_spot(11.0, 100.0, 4.0, &[(8.0, 12.0)]) - 14.0).abs() < 1e-9);
+        assert!((free_spot(50.0, 100.0, 4.0, &[(0.0, 100.0)]) - 50.0).abs() < 1e-9);
+        assert!((free_spot(-5.0, 100.0, 4.0, &[]) - 2.0).abs() < 1e-9);
+        // A wall that only touches the face line, or meets within the noise, blocks nothing.
+        let touching = vec![thick(1, (0.0, 0.0), (120.0, 0.0), 3.0), thick(3, (60.0, 3.0 + 0.2), (60.0, 60.0), 3.0)];
+        let host = touching.first().expect("host");
+        assert!(buried(&touching, host, "L1", 18.0, 1.0, &[2.9, 1.1], eps).is_empty());
+    }
+
+    #[test]
+    fn a_device_set_in_a_wall_is_never_booked_to_the_room_behind_it() {
+        let shape = |label: &str, x0: f64, x1: f64| {
+            let outline = vec![Vec2::new(x0, -60.0), Vec2::new(x1, -60.0), Vec2::new(x1, 60.0), Vec2::new(x0, 60.0)];
+            RoomShape { bounds: Bounds2::from_points(outline.iter().copied()), outline, level: Some("L1".into()), label: label.into() }
+        };
+        // Inches: a 4" wall on x = 0; the room behind it (west) is traced to its face, the space it
+        // faces (east, a corridor or stair) is no traced room. The box is in the east face.
+        let behind = vec![shape("BEHIND", -200.0, -2.0)];
+        let (c, out) = (Vec2::new(1.0, 0.0), Vec2::new(1.0, 0.0));
+        let probe = c + out * 7.0;
+        // Any room within a foot (what booked it before) is the one behind its wall.
+        assert_eq!(room_near(&behind, Some("L1"), probe, 12.0).map(|r| r.label.as_str()), Some("BEHIND"));
+        assert!(room_near_side(&behind, Some("L1"), probe, 12.0, c, out).is_none());
+        // A room on its face's side within a foot is booked.
+        let both = vec![shape("BEHIND", -200.0, -2.0), shape("FRONT", 14.0, 200.0)];
+        assert_eq!(room_near_side(&both, Some("L1"), probe, 12.0, c, out).map(|r| r.label.as_str()), Some("FRONT"));
+        assert_eq!(nearest_on(&[], probe), None);
     }
 
     #[test]
