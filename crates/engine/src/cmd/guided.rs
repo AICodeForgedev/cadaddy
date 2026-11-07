@@ -6415,13 +6415,26 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // Each typical room's ceiling lights where its reflected ceiling plan draws and dimensions
     // them (after the gear, whose step may build the devices again; before the conduit).
     let t = web_time::Instant::now();
+    let mut ceiling_moved = 0usize;
     match rcp_light_step(s, job) {
         Ok(v) if !v.is_null() => {
             progress_line(&format!("  ceiling lights set where the typical rooms' reflected ceiling plans draw them: {v}"));
+            ceiling_moved += v["moved"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
             result["rcp_lights"] = v;
         }
         Ok(_) => {}
         Err(e) => result["rcp_lights_error"] = json!(e.to_string()),
+    }
+    // The ceiling devices no document gives a height at the ceiling over them as the rooms stand
+    // now (rooms numbered since the build take their spec room's ceiling).
+    if let Ok((sp, true)) = super::bspec::current(s, "bim_build") {
+        let n = super::propfill::reseat_ceiling_devices(s.doc_mut()?, &sp);
+        if n > 0 {
+            s.touch();
+            progress_line(&format!("  ceiling devices set at the ceiling over them as the rooms stand now: {n}"));
+            result["ceiling_devices_reseated"] = json!(n);
+            ceiling_moved += n;
+        }
     }
     bim_step(s, job, "lights at their RCP spots", t);
     // The fire alarm panels where the documents put them (proposed, in their rooms).
@@ -6670,7 +6683,10 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // (their boxes and drops with them, else left where the merged wall was), once the model's
     // devices are final; then what the routing found (once, after the last reroute).
     let t = web_time::Instant::now();
-    match super::conduitroute::follow_reseated(s, reseated) {
+    // Devices moved since the build (set in their walls again, up to their ceilings, to their RCP
+    // spots, a keynote's ceiling box raised): their boxes and drops are cut again where they are.
+    let raised = result["keynotes_ceiling_boxes_raised"].as_u64().map_or(0, |n| usize::try_from(n).unwrap_or(0));
+    match super::conduitroute::follow_reseated(s, reseated + ceiling_moved + raised) {
         Some(Ok(v)) => progress_line(&format!("  conduit rerouted to the reseated devices: {v}")),
         Some(Err(e)) => result["conduit_reroute_error"] = json!(e.to_string()),
         None => {}

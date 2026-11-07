@@ -464,6 +464,8 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
         device(25.0, 5.0, "WQ", "luminaire", "1A3", json!({"mount": "wall"})),
         device(5.0, 0.8, "OS2", "occupancy_sensor", "1A4", json!({})),
         device(15.0, 5.0, "OS3", "occupancy_sensor", "1A5", json!({"mount_height_in": "44", "mount_height_note": "OS3 44\" AFF"})),
+        device(35.0, 5.0, "SQ", "switch", "1A6", json!({})),
+        device(5.0, 5.0, "PQ", "fire_alarm_device", "1A7", json!({"device_type": "manual pull station PQ"})),
     ];
     let extra = json!({"mep": {"fixture_schedule": [
         {"tag": "XQ", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
@@ -492,4 +494,8 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
     // the ceiling: the documents come first.
     let os3 = props(&mut s, "OS3");
     assert_eq!((os3["mounting"]["value"].clone(), os3["mount_height"]["value"].clone()), (json!("wall"), json!(44.0)), "{os3:#}");
+    // A switch and a pull station are wall devices wherever they are drawn.
+    for mark in ["SQ", "PQ"] {
+        assert_eq!(props(&mut s, mark)["mounting"]["value"], "wall", "{mark}");
+    }
 }

@@ -483,6 +483,61 @@ fn built_ceilings(d: &Drawing) -> Vec<BuiltCeiling> {
         .collect()
 }
 
+/// The devices the build hung at the ceiling by the rule (no document gives their height: `at the
+/// ceiling over it`, `at its level's ceiling`) set at the ceiling over them as it stands now: a
+/// room numbered after the build (from the same room on another floor, another trade's plan)
+/// takes its spec room's ceiling then, and its lights go up or down to it. How many moved.
+pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usize {
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let ceilings = built_ceilings(d);
+    if ceilings.is_empty() {
+        return 0;
+    }
+    let mut moves: Vec<(Handle, f64, f64, Prop)> = Vec::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).take(MAX_ELEMENTS) {
+        let ps = props::read(&e.common.xdata);
+        if ps.get("mount_height_from").map(Prop::text).as_deref() != Some("ceiling") {
+            continue;
+        }
+        let Some(level) = super::bspec::made_level(e).and_then(|l| sp.level(&l)) else { continue };
+        let Some((b, z0, z1)) = extent(d, e) else { continue };
+        let floor = level.elevation_ft * upf;
+        let Some(inches) = ceiling_over(&ceilings, &level.name, b.center(), floor, upf) else { continue };
+        let dz = floor + inches / 12.0 * upf - z1;
+        if dz.is_finite() && dz.abs() > 0.25 / 12.0 * upf {
+            let c = b.center() - super::bspec::stacked_by(e);
+            moves.push((e.handle, dz, inches, location_prop(c.x, c.y, (z0 + z1) / 2.0 + dz, upf)));
+        }
+    }
+    let mut moved = 0;
+    for (h, dz, inches, location) in moves {
+        let Some(e) = d.model.get(h) else { continue };
+        let mut store = props::read(&e.common.xdata);
+        if let Some(old) = store.get("mount_height").cloned() {
+            let what =
+                old.source.doc.as_deref().and_then(|t| t.split(':').next()).map(str::trim).filter(|w| !w.is_empty()).unwrap_or("a ceiling device");
+            let src = Source::from_doc(old.source.kind, &format!("{what}: at the ceiling over it"));
+            store.set("mount_height", Prop { value: json!(round2(inches)), source: src.clone(), ..old });
+            store.set("offset", Prop::new(round2(inches / 12.0), src).with_unit("ft"));
+        }
+        store.set("location", location);
+        let x = props::write(&e.common.xdata, &store);
+        if d.modify_entity(h, |e| {
+            if let EntityKind::Mesh(m) = &mut e.kind {
+                for v in &mut m.vertices {
+                    v.z += dz;
+                }
+            }
+            e.common.xdata = x.into();
+        })
+        .is_ok()
+        {
+            moved += 1;
+        }
+    }
+    moved
+}
+
 /// A device element a note puts in the ceiling (a keynote's ceiling-mounted box that is the
 /// plan's junction box) moved up there: its top at the underside of the built ceiling over it,
 /// else its level's ceiling; its mounting and height say so, with `why` as the source. Off the
@@ -2586,6 +2641,46 @@ mod tests {
 
     fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
         HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }
+    }
+
+    /// Q6250: a light the build hung at its level's ceiling (its room had no ceiling of its own
+    /// yet) goes to the room's ceiling once the room has one; a light a document sets stays.
+    #[test]
+    fn ceiling_lights_follow_the_ceiling_built_over_them_after_the_build() {
+        let mut d = Drawing::new_imperial();
+        let sp: BuildingSpec = serde_json::from_value(json!({
+            "version": 1, "units_per_foot": 12.0,
+            "levels": [{"name": "L1", "elevation_ft": 10.0, "height_ft": 10.0, "ceiling_ft": 9.0}]
+        }))
+        .unwrap();
+        // The room's ceiling, 7'-10" over the L1 floor (at 10'), over x 0..20', y 0..12'.
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(0.0, 72.0), Vec2::new(240.0, 72.0), 144.0, 214.0, 214.5);
+        let x = super::super::wallgen::tag(cadaddy_walk3d::Part::Ceiling, "L1", Handle(0));
+        d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
+        // Two lights built at the level's 9' ceiling (their tops at 10' + 108"): one by the rule,
+        // one at a schedule's height.
+        let light = |d: &mut Drawing, at: Vec2, from: &str| -> Handle {
+            let mut ps = Props::default();
+            ps.set("mount_height", Prop::new(108.0, Source::from_doc(SourceKind::Rule, "a luminaire: at its level's ceiling")).with_unit("in"));
+            ps.set("mount_height_from", Prop::new(from, Source::computed()));
+            ps.set("location", location_prop(at.x, at.y, 120.0 + 106.0, 12.0));
+            let x = props::write(&super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "L1", Handle(0)), &ps);
+            let mut m = super::super::wallgen::empty_mesh();
+            super::super::wallgen::add_box(&mut m, at - Vec2::new(2.0, 0.0), at + Vec2::new(2.0, 0.0), 4.0, 224.0, 228.0);
+            d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
+        };
+        let rule = light(&mut d, Vec2::new(60.0, 60.0), "ceiling");
+        let scheduled = light(&mut d, Vec2::new(120.0, 60.0), "fixture_schedule");
+        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 1);
+        let top = |d: &Drawing, h: Handle| extent(d, d.model.get(h).unwrap()).unwrap().2;
+        assert!((top(&d, rule) - 214.0).abs() < 1e-9, "its top at the room's ceiling: {}", top(&d, rule));
+        assert!((top(&d, scheduled) - 228.0).abs() < 1e-9, "a document's height stays");
+        let ps = props::read(&d.model.get(rule).unwrap().common.xdata);
+        assert_eq!(ps.get("mount_height").and_then(|p| p.value.as_f64()), Some(94.0), "{ps:?}");
+        assert_eq!(ps.get("mount_height").and_then(|p| p.source.doc.clone()).as_deref(), Some("a luminaire: at the ceiling over it"));
+        assert_eq!(ps.get("location").map(Prop::text).as_deref(), Some("5.00, 5.00, 17.67"), "{ps:?}");
+        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 0, "once");
     }
 
     /// Q6250: an L-shaped bath ceiling (8') whose extent's box takes in a corner of the bedroom
