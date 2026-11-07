@@ -1412,7 +1412,7 @@ pub struct ReadDevice {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub keynote: String,
     /// The keynotes by its symbol that ask something of it (its features, mounting, ganging,
-    /// pathway: [`super::keynotes::device_requirements`]), each `E-9 keynote 4: <the note>`.
+    /// pathway: [`super::keynotes::device_requirements`]), each `Q-9 keynote 4: <the note>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keynotes: Vec<String>,
     /// The devices a keynote says to gang share this key (its note, its marker, its room).

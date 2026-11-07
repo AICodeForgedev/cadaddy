@@ -14284,7 +14284,7 @@ const MAX_SCOPED_NOTES: usize = 40;
 const MAX_SCOPED_ELEMENTS: usize = 500_000;
 
 /// The keynotes that ask something of a kind of device in some rooms
-/// ([`super::keynotes::DeviceReq::scope`]: `ALL GUEST ROOM AND LOBBY 120V RECEPTACLES SHALL BE
+/// ([`super::keynotes::DeviceReq::scope`]: `ALL SUITE AND LIBRARY RECEPTACLES SHALL BE
 /// TAMPER-RESISTANT`), laid on every device of that kind in a room so named, building-wide:
 /// its features (`keynote_features`) and the note (`keynotes`), the keynote their source. A
 /// room matches a word its name holds; a word that names guest rooms (the code rules' guest-room
@@ -24649,7 +24649,7 @@ mod tests {
             (1278.0, 1500.0, "7."),
             (1278.0, 1512.0, "SWITCHES TO BE GANGED TOGETHER."),
             (1266.0, 1500.0, "8."),
-            (1266.0, 1512.0, "PROVIDE 1\" LOW-VOLTAGE CONDUIT FROM THE DATA BOX TO THE HALL."),
+            (1266.0, 1512.0, "1\" LOW VOLTAGE CONDUIT, DATA BOX TO HALL CEILING."),
         ] {
             s.execute("text", &json!({"at": [x0 + x, y], "text": text, "height": 4.0})).unwrap();
         }
@@ -24657,7 +24657,7 @@ mod tests {
         unit(&mut s, [10_000.0, 0.0], false);
         unit(&mut s, [10_400.0, 0.0], true);
         job.sheet_regions = vec![SheetRegion {
-            number: "E-9".into(),
+            number: "Q-9".into(),
             level: "T".into(),
             discipline: "E".into(),
             kind: "enlarged_plan".into(),
@@ -24668,7 +24668,7 @@ mod tests {
             levels: Vec::new(),
             view: None,
         }];
-        job.sheet_spans = vec![SheetSpan { sheet: "E-9".into(), lo, hi }];
+        job.sheet_spans = vec![SheetSpan { sheet: "Q-9".into(), lo, hi }];
         let room = |n: &str, x: f64| json!({"name": "STUDIO K", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
@@ -24677,7 +24677,7 @@ mod tests {
             tag: tag.into(),
             kind: kind.into(),
             at: [v[0] + c[0], v[1] + c[1]],
-            sheet: "E-9".into(),
+            sheet: "Q-9".into(),
             level: "T".into(),
             ..Default::default()
         };
@@ -24698,7 +24698,7 @@ mod tests {
         for room in ["201", "202"] {
             let mine: Vec<&super::super::readers::ReadDevice> = stamped.iter().filter(|d| d.room == room).collect();
             let notes = |kind: &str| -> Vec<String> { mine.iter().filter(|d| d.kind == kind).flat_map(|d| d.keynotes.clone()).collect() };
-            assert_eq!(notes("receptacle"), ["E-9 keynote 6: DESK RECEPTACLE WITH USB AND USB-C PORTS."], "room {room}: one receptacle, its note");
+            assert_eq!(notes("receptacle"), ["Q-9 keynote 6: DESK RECEPTACLE WITH USB AND USB-C PORTS."], "room {room}: one receptacle, its note");
             assert_eq!(notes("data outlet").len(), 1, "room {room}");
             let sw: Vec<&&super::super::readers::ReadDevice> = mine.iter().filter(|d| d.kind == "switch").collect();
             assert_eq!(sw.len(), 2);
@@ -24747,11 +24747,11 @@ mod tests {
         for (y, x, text) in [
             (800.0, 1500.0, "ELECTRICAL KEYNOTES:"),
             (790.0, 1500.0, "2."),
-            (790.0, 1512.0, "PROVIDE UNDER SLAB CONDUIT FOR FLOOR BOX RECEPTACLE."),
+            (790.0, 1512.0, "RUN CONDUIT BELOW THE SLAB TO THIS FLOOR BOX RECEPTACLE."),
             (778.0, 1500.0, "4."),
-            (778.0, 1512.0, "PAGING SYSTEM CEILING MOUNTED ANTENNA LOCATION. PROVIDE 8\"X8\"X6\" JUNCTION BOX."),
+            (778.0, 1512.0, "PAGING SYSTEM ANTENNA IN THE CEILING HERE. PROVIDE 6\"X6\"X4\" JUNCTION BOX."),
             (766.0, 1500.0, "5."),
-            (766.0, 1512.0, "DEVICES TO BE GANGED TOGETHER."),
+            (766.0, 1512.0, "SET THESE SWITCHES GANGED IN A COMMON BOX."),
             (754.0, 1500.0, "9."),
             (754.0, 1512.0, "DESK RECEPTACLE WITH USB PORTS."),
         ] {

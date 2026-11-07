@@ -168,7 +168,7 @@ pub(crate) struct DeviceReq {
     pub mount: Option<(String, Vec<String>, String)>,
     /// The low-voltage conduit the note gives its outlet, trade size inches.
     pub lv_conduit_in: Option<f64>,
-    /// A note over a kind of device in some rooms (`ALL GUEST ROOM AND LOBBY 120V
+    /// A note over a kind of device in some rooms (`ALL SUITE AND LIBRARY 125V
     /// RECEPTACLES …`): the kind and the rooms' words (empty: every room).
     pub scope: Option<(String, Vec<String>)>,
     /// A box note's box ([`work`]: a system's antenna or riser box): its role, and whether no
@@ -293,12 +293,12 @@ pub(crate) struct Applied {
     pub uncircuited: Option<String>,
 }
 
-/// The note's text of a keynote as the job cites it (`E-9 keynote 4: <the note>` → the note).
+/// The note's text of a keynote as the job cites it (`Q-9 keynote 4: <the note>` → the note).
 pub(crate) fn cited_text(cite: &str) -> &str {
     cite.split_once(": ").map_or(cite, |(_, t)| t)
 }
 
-/// Lays what `cites` (keynotes as the job cites them, `E-9 keynote 4: <the note>`) ask of a
+/// Lays what `cites` (keynotes as the job cites them, `Q-9 keynote 4: <the note>`) ask of a
 /// device of `kind` onto its tag, each with the keynote as its source (`note`): its features
 /// (`keynote_features`), mounting (`mount`) and what that makes it (`device_type`), its
 /// low-voltage conduit (`lv_conduit_in`), the devices it is ganged with (`gang_with`, the key
@@ -1294,7 +1294,7 @@ mod tests {
         assert_eq!(q.lv_conduit_in, None, "power in the ground, not a low-voltage pathway");
         // A low-voltage conduit's size, the words between the size and CONDUIT skipped.
         for (t, v) in [
-            ("PROVIDE 1\" LOW-VOLTAGE CONDUIT WITH PULL STRING FROM THE OUTLET BOX TO THE HALL.", 1.0),
+            ("RUN A 1\" LOW-VOLTAGE CONDUIT FROM THIS OUTLET TO THE HALL CEILING.", 1.0),
             ("1-1/4\" LOW VOLTAGE CONDUIT FROM WALL PHONE TO ACCESSIBLE CEILING", 1.25),
             ("Data outlet: 3/4\" conduit stubbed above the ceiling.", 0.75),
         ] {
@@ -1335,7 +1335,7 @@ mod tests {
             t("ALL RECEPTACLES SHALL BE TAMPER-RESISTANT.", 1012.0, 790.0, 4.0),
             t("ELEVATOR KEYNOTES:", 1400.0, 800.0, 4.0),
             t("5.", 1400.0, 790.0, 4.0),
-            t("PROVIDE CEILING MOUNTED SMOKE DETECTOR IN THE PIT.", 1412.0, 790.0, 4.0),
+            t("SMOKE DETECTOR ON THE PIT CEILING.", 1412.0, 790.0, 4.0),
             // A unit's view and its marker 5; the elevator pit's view and its marker 5.
             t("5", 100.0, 300.0, 4.0),
             t("ENLARGED UNIT PLAN", 80.0, 200.0, 7.0),
@@ -1377,17 +1377,13 @@ mod tests {
         assert_eq!((f(&fb, "mount").map(|v| v.0), f(&fb, "device_type").map(|v| v.0)), (Some("floor".into()), Some("floor box".into())));
         let mut jb = ElementTag { kind: "junction_box".into(), ..Default::default() };
         jb.set("circuit", "Q-3", "plan");
-        let got = apply_to_tag(
-            &mut jb,
-            "junction box",
-            &["Q-9 keynote 2: CEILING MOUNTED ANTENNA LOCATION. PROVIDE 8\"X8\"X6\" JUNCTION BOX.".to_string()],
-            "",
-        );
+        let got =
+            apply_to_tag(&mut jb, "junction box", &["Q-9 keynote 2: ANTENNA IN THE CEILING HERE. PROVIDE 6\"X6\"X4\" JUNCTION BOX.".to_string()], "");
         assert_eq!((got.mount.as_deref(), got.uncircuited.as_deref()), (Some("ceiling"), Some("Q-3")));
         assert_eq!((f(&jb, "circuit"), f(&jb, "circuit_read").map(|v| v.0)), (None, Some("Q-3".into())));
         assert!(f(&jb, "correction").is_some_and(|c| c.0.contains("antenna box") && c.0.contains("no branch circuit")), "{:?}", f(&jb, "correction"));
         // A low-voltage outlet's conduit; a receptacle doesn't take it.
-        let lv = ["Q-9 keynote 8: PROVIDE 1\" LOW-VOLTAGE CONDUIT FROM THE DATA BOX TO THE HALL.".to_string()];
+        let lv = ["Q-9 keynote 8: 1\" LOW VOLTAGE CONDUIT, DATA BOX TO HALL CEILING.".to_string()];
         let mut d = ElementTag { kind: "data_outlet".into(), ..Default::default() };
         assert_eq!(apply_to_tag(&mut d, "data outlet", &lv, "").lv_conduit_in, Some(1.0));
         assert_eq!(f(&d, "lv_conduit_in").map(|v| v.0), Some("1".to_string()));
