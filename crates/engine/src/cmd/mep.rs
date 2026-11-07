@@ -2835,7 +2835,13 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let source = source_of(&term.objects);
             // A terminal read from no plan object is known by where it is.
             let id = format!("{}/terminal@{:.2},{:.2}", term.objects.first().map_or("", String::as_str), term.at[0], term.at[1]);
-            let x = tags(&level.name, source, sy, format!("part:terminal:{}", term.terminal_kind), &[term.size_in], id);
+            let mut x = tags(&level.name, source, sy, format!("part:terminal:{}", term.terminal_kind), &[term.size_in], id);
+            // The sheet its symbol was read from, as equipment says it, and its provenance (Q6216):
+            // drawn, else derived or inferred with its basis.
+            if !term.source_sheet.is_empty() {
+                x.push(t(1000, format!("prop:SOURCE sheet={}", term.source_sheet.chars().take(64).collect::<String>())));
+            }
+            x.extend(super::provenance::tags(term.made, &term.basis));
             if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_terminals += 1;
             }
