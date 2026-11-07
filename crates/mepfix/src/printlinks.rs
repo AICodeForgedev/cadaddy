@@ -969,7 +969,7 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             break;
         }
         let v = b.value.trim();
-        if used_texts.contains(&bi) || v.len() > 8 || !sheet_like(v) || b.rotation.sin().abs() > 0.05 {
+        if used_texts.contains(&bi) || v.len() > 8 || !sheet_like(v) || b.rotation.sin().abs() > 0.05 || b.height > MAX_BUBBLE_LETTERING_MEDIAN * median_h {
             continue;
         }
         let bm = text_middle(b);

@@ -251,7 +251,8 @@ pub fn e1_symbol_bubble() -> Drawing {
 /// a keynote number and a receptacle's circuit lettered small inside its outline, a receptacle's
 /// `GFCI` printed right over its circuit label (a word over what reads like a sheet number), and
 /// an emergency light's mark `E` over its circuit `A-7` with no divider between them, each beside
-/// its device.
+/// its device; and giant lettering read from strokes, a letter over what reads like a sheet
+/// number with a symbol between them.
 pub fn e1_with_lookalikes() -> Drawing {
     let mut s = Sheet { d: e1() };
     s.circle([24.0, 10.0], 1.0);
@@ -264,6 +265,10 @@ pub fn e1_with_lookalikes() -> Drawing {
     s.device("E", [28.0, 12.1]);
     s.text_mid("E", [28.5, 12.2], 0.1);
     s.text_mid("A-7", [28.5, 12.0], 0.1);
+    // Strokes the lettering reader took for giant letters, `V` over `A-9`, a symbol between them.
+    s.device("A-9", [29.5, 14.2]);
+    s.text_mid("V", [29.5, 14.6], 0.6);
+    s.text_mid("A-9", [29.5, 13.8], 0.6);
     s.d
 }
 
