@@ -1976,6 +1976,9 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
         }
         findings.extend(lit.findings);
     }
+    // Each finding on an element carries what it is by the documents and what the build
+    // corrected; a fail that is only the correction itself is judged on its basis (Q6259).
+    super::validate_basis::Basis::of(sc.d).screen(&mut findings, &mut checked);
     findings.sort_by(|a, b| {
         let k = |f: &Value| {
             (

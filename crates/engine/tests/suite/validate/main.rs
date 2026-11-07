@@ -17,6 +17,7 @@ mod fidelity;
 mod printcheck;
 mod reviewimpact;
 mod validateagent;
+mod validatebasis;
 mod validateconduit;
 mod validatecoverage;
 mod validateframes;

@@ -311,6 +311,8 @@ pub(crate) struct AtomRules {
     pub phase_source: String,
     pub offset_max_ft: f64,
     pub joint_tol_in: f64,
+    /// Why one circuit's runs along one route are one raceway (Q6245).
+    pub one_raceway_source: String,
     pub box_reach_ft: f64,
     /// How far a routed run's end may be (in plan) from the box it lands in: the router ends
     /// each run on its box, so the box nearest its end is that box (any circuit: a tap into

@@ -49,6 +49,10 @@
 //!     the project say it is ([`super::validate_kind`]; `kind_read` the kind as built,
 //!     `kind_from` where the kind came from), its `category` the IFC class it is written as,
 //!     and its trade that category's (an air terminal and an exhaust fan are mechanical).
+//!     Each element and run carries its `provenance` (drawn, derived or inferred, with its
+//!     basis) and its `corrections` (each value the build corrected for the field: the design
+//!     value, the corrected value, the reason and the rule), and `project_rules` lists the
+//!     project's active rules with tier and source ([`super::validate_basis`], Q6259).
 //!   - `rules.json`: the validation rules (`validate.rules`) that apply to the kinds, BIM
 //!     categories and marks present, with the project's overrides applied.
 //!   - `prompt.md`: the judging agent's instructions, made from those rules.
@@ -75,6 +79,7 @@ use serde_json::{Value, json};
 
 use super::bspec::current;
 use super::validate::{Frame, PROV_APP, model_of, prints_from_job, prints_of};
+use super::validate_basis as vb;
 use super::validate_kind::{Kinds, Resolved};
 use super::validate_prescreen::{self as ps, UnitOf};
 use super::validate_register as vreg;
@@ -123,6 +128,8 @@ const PARTIAL_VIEW: f64 = 0.10;
 const SAME_VIEW: f64 = 0.9;
 /// Tiles a side of a whole view of a sheet that isn't placed on the plan.
 const WHOLE_TILES_SIDE: u32 = 2;
+/// Tiles a side of a whole schedule, legend or notes sheet (a 42" sheet at about 143 dpi).
+const DOC_TILES_SIDE: u32 = 3;
 /// The submittal pages offered for a kind no element of the area carries a submittal for.
 const MAX_KIND_PAGES: usize = 3;
 /// The submittal pages looked at across the building.
@@ -716,6 +723,10 @@ struct Crop {
     whole: [f64; 4],
     /// A placed crop's registration against the model's walls (Q6141).
     registration: Option<Value>,
+    /// Why it decides heights, types or ratings (Q6261): the prescreen cites it, or it is a
+    /// schedule, legend, notes sheet or keynote list of the area's trades. The picture cap never
+    /// drops it.
+    deciding: Option<String>,
 }
 
 impl Crop {
@@ -754,6 +765,9 @@ impl Crop {
             }
             if let Some(r) = &self.registration {
                 m.insert("registration".into(), r.clone());
+            }
+            if let Some(w) = &self.deciding {
+                m.insert("deciding".into(), json!(w));
             }
         }
         o
@@ -1008,6 +1022,43 @@ impl Texts {
         hits.sort_by(|a, b| b.0[1].total_cmp(&a.0[1]).then(a.0[0].total_cmp(&b.0[0])));
         hits
     }
+    /// The block of lettering `seed` starts (a notes or keynote list), whole (Q6261): grown down
+    /// and to the right over the lines that carry on its column (a line starting within it, no
+    /// more than three line heights below it), each line as wide as its letters, within `bound`.
+    /// A reading aid's rectangle, never a measurement.
+    fn block(&self, seed: [f64; 4], bound: [f64; 4]) -> [f64; 4] {
+        let near: Vec<&(String, [f64; 2], f64)> = self.0.iter().filter(|(_, at, h)| *h > 0.0 && inside(bound, *at)).collect();
+        let mut hs: Vec<f64> = near.iter().filter(|(_, at, _)| inside(seed, *at)).map(|t| t.2).collect();
+        hs.sort_by(f64::total_cmp);
+        let Some(h) = hs.get(hs.len() / 2).copied() else { return seed };
+        let mut r = seed;
+        let mut used = vec![false; near.len()];
+        for _ in 0..400 {
+            let mut grew = false;
+            for (i, (t, at, th)) in near.iter().enumerate() {
+                if used.get(i).copied().unwrap_or(true) || *th > 2.0 * h || *th < 0.4 * h {
+                    continue;
+                }
+                let line = [at[0], at[1] - 0.3 * th, at[0] + 0.9 * th * t.chars().count() as f64, at[1] + 1.2 * th];
+                if !(at[0] >= r[0] - h && at[0] <= r[2] && line[3] >= r[1] - 3.0 * h && line[1] <= r[3]) {
+                    continue;
+                }
+                if let Some(u) = used.get_mut(i) {
+                    *u = true;
+                }
+                let g = [r[0].min(line[0]), r[1].min(line[1]), r[2].max(line[2]), r[3].max(line[3])];
+                let g = intersect(g, bound).unwrap_or(r);
+                if g.iter().zip(r).any(|(a, b)| (a - b).abs() > 1e-9) {
+                    r = g;
+                    grew = true;
+                }
+            }
+            if !grew {
+                break;
+            }
+        }
+        r
+    }
 }
 
 // ---------------------------------------------------------------- the model in the area
@@ -1157,7 +1208,9 @@ struct BuiltPart {
     from: Option<String>,
 }
 
-/// The build's MEP parts on `area`'s level within `reach` feet of it.
+/// The build's MEP parts on `area`'s level within `reach` feet of it: the nearest ones when
+/// there are more than [`MAX_BUILT`] (a dense floor's raceway pieces), so a part in the area is
+/// never left out for one farther off that came first in the drawing.
 fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach: f64, kinds: &Kinds) -> Vec<BuiltPart> {
     const MEP_KINDS: [&str; 7] = ["duct", "pipe", "conduit", "equipment", "fixture", "device", "light_fixture"];
     let upf = frame.upf();
@@ -1202,13 +1255,25 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
             z_in,
             from: super::bimlook::made_source(e).map(|h| h.hex()),
         });
-        if out.len() >= MAX_OBJECTS {
+        if out.len() >= MAX_ENTITIES {
             break;
         }
+    }
+    if out.len() > MAX_BUILT {
+        let off = |p: &BuiltPart| {
+            let dx = (area.bbox[0] - p.rect[2]).max(p.rect[0] - area.bbox[2]).max(0.0);
+            let dy = (area.bbox[1] - p.rect[3]).max(p.rect[1] - area.bbox[3]).max(0.0);
+            dx.hypot(dy)
+        };
+        out.sort_by(|a, b| off(a).total_cmp(&off(b)).then(a.handle.cmp(&b.handle)));
+        out.truncate(MAX_BUILT);
     }
     out.sort_by(|a, b| (a.kind.as_str(), a.handle.as_str()).cmp(&(b.kind.as_str(), b.handle.as_str())));
     out
 }
+
+/// The build's parts a packet looks at round its area, at most (the nearest kept).
+const MAX_BUILT: usize = 4 * MAX_OBJECTS;
 
 /// One wall of a packet: a built wall's pieces along one line (its openings split it) as one,
 /// from end to end.
@@ -1766,7 +1831,29 @@ fn rules_for<'a>(here: &InArea, all: &'a [Effective]) -> (Vec<&'a Effective>, Ve
     (on, off)
 }
 
-fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&Effective], counts: &Value) -> String {
+/// The kind of document a crop is, as the rules name the documents they need (a gear's panel
+/// schedule is a schedule, a keynote list notes, a unit type's wall a room's interior elevation).
+fn doc_kind(kind: &str) -> &str {
+    match kind {
+        "panel_schedule" | "feeder_schedule" => "schedule",
+        "keynotes" => "general_notes",
+        "gear_riser" => "riser_diagram",
+        "elevation" => "interior_elevation",
+        k => k,
+    }
+}
+
+/// The pictures a rule's "Look at" names, at most.
+const MAX_LOOK_AT: usize = 24;
+
+fn prompt_md(
+    area: &Area,
+    crops: &[Crop],
+    model_imgs: &[ModelImage],
+    rules: &[&Effective],
+    counts: &Value,
+    pages: &[(String, &'static str)],
+) -> String {
     let mut s = String::new();
     let label = match (&area.number, &area.name) {
         (Some(n), Some(m)) => format!("{n} {m}"),
@@ -1785,8 +1872,11 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
         counts.get("walls").and_then(Value::as_u64).unwrap_or(0),
         counts.get("openings").and_then(Value::as_u64).unwrap_or(0),
     ));
-    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room; G-PRODUCT: each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section, `unsure` when the model has no product data; G-PRODUCT-CODE: each receptacle's code-required features where it is: tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n- `objects.json` elements: a product's `product_record` (what the specification requires, what the submittal approved, what it resolves to) and its `product_checks` (G-PRODUCT, G-PRODUCT-CODE); the specification pages the records cite are among the pictures (`manifest.json` `specs`).\n");
+    s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room; G-PRODUCT: each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section, `unsure` when the model has no product data; G-PRODUCT-CODE: each receptacle's code-required features where it is: tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, or the project's as-built breaker rule where it outranks the schedule, weather-resistant). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n- `objects.json` elements: a product's `product_record` (what the specification requires, what the submittal approved, what it resolves to) and its `product_checks` (G-PRODUCT, G-PRODUCT-CODE); the specification pages the records cite are among the pictures (`manifest.json` `specs`).\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
+    if counts.get("raceways").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `raceways`: the routed raceway runs of this area (circuit, panel, raceway, sticks, length, the conductors pulled in it with each wire's handle); each raceway piece among the elements carries its `raceway` facts: a stick's `ends_ft` and `ends_aff_in`, what each end `touches` (boxes, the next stick or fitting) and its `links`, the `wires` in it; a box's `cubic_in`, `box_of` and the sticks `entering` it; a wire's `in_raceway`; a fitting's `touches`. The conduit rules in `prescreen` (E-CONDUIT-CONTINUITY, E-CONDUIT-FILL, E-BOX-FILL, E-DERATE, E-VDROP, E-METHOD, G-CLASH, E-TAKEOFF) were measured on these pieces; each finding's `handles` lists every piece of this area it covers: report it once with those `handles`, and overturn it only with evidence from the pieces or the prints.\n");
+    }
     if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
@@ -1829,10 +1919,22 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
             s.push_str(&format!("{}. {}\n", i + 1, step));
         }
         let docs: Vec<&str> = r.documents.iter().map(String::as_str).collect();
-        let images: Vec<&str> =
-            crops.iter().filter(|c| docs.contains(&c.kind) || (c.kind == "rcp" && docs.contains(&"plan"))).map(|c| c.file.as_str()).collect();
+        let images: Vec<&str> = crops
+            .iter()
+            .filter(|c| {
+                let k = doc_kind(c.kind);
+                docs.contains(&k) || (k == "rcp" && docs.contains(&"plan"))
+            })
+            .map(|c| c.file.as_str())
+            .chain(pages.iter().filter(|(_, k)| docs.contains(k)).map(|(f, _)| f.as_str()))
+            .collect();
         if !images.is_empty() {
-            s.push_str(&format!("\nLook at: {}\n", images.iter().map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", ")));
+            let more = images.len().saturating_sub(MAX_LOOK_AT);
+            s.push_str(&format!(
+                "\nLook at: {}{}\n",
+                images.iter().take(MAX_LOOK_AT).map(|f| format!("`{f}`")).collect::<Vec<_>>().join(", "),
+                if more > 0 { format!(" and {more} more of its documents (`manifest.json`)") } else { String::new() }
+            ));
         } else {
             s.push_str(&format!(
                 "\nDocuments it needs: {} (none of them is in this packet: say UNSURE for what they would decide)\n",
@@ -1850,7 +1952,7 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     s.push_str("```json\n{\"area\": \"");
     s.push_str(&area.id);
     s.push_str("\", \"findings\": [{\"rule\": \"<rule id>\", \"handle\": \"<model handle, if one>\", \"verdict\": \"pass|fail|missing|extra|unsure\", \"issue\": \"<one sentence>\", \"expected\": \"<what the print says>\", \"found\": \"<what the model has>\", \"evidence\": [{\"image\": \"<packet file>\", \"sheet\": \"<sheet number>\", \"what\": \"<what that image shows>\"}], \"confidence\": 0.0, \"severity\": \"high|medium|low\"}]}\n```\n\n");
-    s.push_str("- Every finding cites at least one print image of this packet and says what it shows there.\n");
+    s.push_str("- Every finding cites at least one picture of this packet's documents (`prints/…`: a plan, schedule, legend, notes, specification or submittal page) and says what it shows there.\n");
     s.push_str("- `missing`: the print shows it, the model has nothing (no handle). `extra`: the model has it, no print shows it.\n");
     s.push_str(
         "- Say UNSURE rather than guess: when the image is unreadable, the document is not in the packet, or the print and the notes disagree.\n",
@@ -2467,6 +2569,33 @@ fn sheet_lines(d: &Drawing, index: &PrintIndex, r: [f64; 4]) -> Vec<vreg::Seg> {
 struct Planned {
     crops: Vec<Crop>,
     left_out: Vec<(String, String)>,
+    /// Deciding documents the packet can't show (a cited sheet the drawing doesn't hold): what, why.
+    not_shown: Vec<(String, String)>,
+}
+
+/// The documents that decide (Q6261, [`super::validate_docs`]) a packet's crops are asked for.
+struct DocInput<'a> {
+    /// The schedule, legend and notes sheets of the area's trades, shown whole.
+    sheets: &'a [super::validate_docs::DocSheet],
+    /// The sheets the area's prescreen cites, with the points it read on them.
+    cites: &'a BTreeMap<String, super::validate_docs::Cites>,
+    /// The job's imported sheets that are no plan link: number, kind, rectangle.
+    regions: &'a [(String, String, [f64; 4])],
+}
+
+/// A sheet as a crop names it when the building spec has no link for it: the job's rectangle.
+fn own_link(number: &str, title: &str, rect: [f64; 4]) -> SheetLink {
+    SheetLink {
+        number: number.to_string(),
+        title: title.to_string(),
+        discipline: None,
+        level: None,
+        source: "job".into(),
+        rect: Some(rect),
+        levels: Vec::new(),
+        registration: None,
+        view: None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2482,11 +2611,13 @@ fn plan_crops(
     unit: Option<&UnitOf>,
     fit: Option<&Value>,
     keynotes: &[super::validate_keynote::CropAsk],
+    docs: &DocInput,
     register: &dyn Fn(&Place, [f64; 4]) -> vreg::Registered,
 ) -> Planned {
     let cited = &keys.cited;
     let mut crops: Vec<Crop> = Vec::new();
     let mut left_out: Vec<(String, String)> = Vec::new();
+    let mut not_shown: Vec<(String, String)> = Vec::new();
     let want = |t: &str| trades.is_empty() || t == "architecture" || t == "general" || trades.iter().any(|x| x == t);
     // The area's box on the reference plan.
     let ft_box = grow(area.bbox, margin);
@@ -2498,7 +2629,7 @@ fn plan_crops(
         })
         .collect();
     let Some(proj_box) = bbox(&proj) else {
-        return Planned { crops, left_out };
+        return Planned { crops, left_out, not_shown };
     };
     let mut links: Vec<&SheetLink> = sp.sheets.iter().filter(|l| l.rect.is_some_and(|r| r.iter().all(|v| v.is_finite()))).collect();
     links.sort_by(|a, b| a.number.cmp(&b.number).then(a.view.as_ref().map(|v| v.title.as_str()).cmp(&b.view.as_ref().map(|v| v.title.as_str()))));
@@ -2528,8 +2659,14 @@ fn plan_crops(
             same.push((format!("sheet {} {what}", l.number), format!("the same view of sheet {} as {}", l.number, k.file)));
             return;
         }
-        // A whole view of a sheet that isn't placed is for finding the area on it: fewer tiles.
-        let (ppu, parts) = tiles_max(rect, ppu, if placed_by == "unregistered" { WHOLE_TILES_SIDE } else { MAX_TILES_SIDE });
+        // A whole view of a sheet that isn't placed is for finding the area on it: fewer tiles; a
+        // whole schedule or notes sheet is read, so at about the packet's dpi.
+        let side = match placed_by {
+            "unregistered" => WHOLE_TILES_SIDE,
+            "document" => DOC_TILES_SIDE,
+            _ => MAX_TILES_SIDE,
+        };
+        let (ppu, parts) = tiles_max(rect, ppu, side);
         let got_dpi = ppu * long / paper_in;
         n += 1;
         let many = parts.len() > 1;
@@ -2560,6 +2697,7 @@ fn plan_crops(
                 cited: false,
                 whole: rect,
                 registration: None,
+                deciding: None,
             });
         }
     };
@@ -2929,9 +3067,23 @@ fn plan_crops(
         if !want(trade) {
             continue;
         }
-        let Some(rect) = l.rect.map(norm_rect).and_then(|sr| intersect(norm_rect(k.rect), sr)) else { continue };
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let Some(mut rect) = intersect(norm_rect(k.rect), sr) else { continue };
+        // A keynote list whole: its reader's rectangle grown over the lines that carry it on.
+        if k.kind == "keynotes" {
+            rect = texts.block(rect, sr);
+        }
         let by = if k.kind.starts_with("keynote") { "keynote" } else { "gear" };
+        let before = crops.len();
         push(&mut crops, l, k.kind, trade, rect, by, None, Some(k.shows.clone()), None);
+        let why = match k.kind {
+            "keynote_marker" => None,
+            "keynotes" => Some("the keynote list of a sheet that marks this area, whole"),
+            _ => Some("the gear's riser or schedule, whole"),
+        };
+        for c in crops.iter_mut().skip(before) {
+            c.deciding = why.map(str::to_string);
+        }
     }
     // 2. Interior elevations naming the room, the partition legend, the schedule and legend rows
     //    of the marks present, general notes.
@@ -3003,11 +3155,35 @@ fn plan_crops(
                 }
             }
         }
-        // General notes: on a notes sheet, and on the plans in the packet.
+        // General notes: on a notes sheet, and on the plans in the packet; the whole block.
         if kind == "general_notes" || plan_sheets.contains(&l.number) {
             for (at, _) in texts.find(sr, "GENERAL NOTES", true).into_iter().take(1) {
-                add(&mut crops, "general_notes", [at[0] - 0.02 * w, at[1] - 0.4 * h, at[0] + 0.33 * w, at[1] + 0.03 * h], "GENERAL NOTES".into());
+                let seed = [at[0] - 0.02 * w, at[1] - 0.4 * h, at[0] + 0.33 * w, at[1] + 0.03 * h];
+                let before = crops.len();
+                add(&mut crops, "general_notes", texts.block(seed, sr), "GENERAL NOTES".into());
+                for c in crops.iter_mut().skip(before) {
+                    c.deciding = Some(format!("the general notes of sheet {}, whole", l.number));
+                }
             }
+        }
+    }
+    // 2b. The schedule, legend and notes sheets of the area's trades, whole (Q6261), after the
+    //     rows and notes read on them.
+    for doc in docs.sheets {
+        let Some(rect) = doc.rect.filter(|_| want(doc.trade)) else { continue };
+        let made;
+        let l: &SheetLink = match links.iter().find(|l| l.number.eq_ignore_ascii_case(&doc.number) && l.view.is_none()) {
+            Some(l) => l,
+            None => {
+                made = own_link(&doc.number, &doc.title, rect);
+                &made
+            }
+        };
+        let before = crops.len();
+        let title = if doc.title.trim().is_empty() { String::new() } else { format!(" {}", doc.title.trim()) };
+        push(&mut crops, l, doc.kind, doc.trade, rect, "document", None, Some(format!("the whole sheet{title}")), None);
+        for c in crops.iter_mut().skip(before) {
+            c.deciding = Some(format!("the {} sheet of this area's trades ({}), whole", doc.kind.replace('_', " "), doc.trade));
         }
     }
     // 3. Riser diagrams: a riser view, else round the text naming the room's unit type or number,
@@ -3053,8 +3229,76 @@ fn plan_crops(
         risers += 1;
         push(&mut crops, l, "riser_diagram", trade, rect, "text", None, Some(shows), None);
     }
+    // 4. The sheets the area's prescreen cites (Q6261): the pictures of them that hold a cited
+    //    point decide; a point no picture holds gets a crop round it; a sheet cited with no point
+    //    is shown whole unless the packet shows it already.
+    for (number, c) in docs.cites {
+        let why = format!("the prescreen cites it ({})", c.rules.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
+        let mine: Vec<usize> = crops.iter().enumerate().filter(|(_, x)| x.sheet.eq_ignore_ascii_case(number)).map(|(i, _)| i).collect();
+        let held = |p: &[f64; 2]| mine.iter().any(|i| crops.get(*i).is_some_and(|x| inside(x.rect, *p)));
+        let open: Vec<[f64; 2]> = c.points.iter().filter(|p| !held(p)).copied().collect();
+        for i in &mine {
+            if let Some(x) = crops.get_mut(*i)
+                && x.deciding.is_none()
+                && (c.points.is_empty() || c.points.iter().any(|p| inside(x.rect, *p)))
+            {
+                x.deciding = Some(why.clone());
+            }
+        }
+        if !mine.is_empty() && open.is_empty() {
+            continue;
+        }
+        // The sheet: the view holding the points, else the whole sheet, else the job's rectangle.
+        let of_sheet: Vec<&SheetLink> = links.iter().filter(|l| l.number.eq_ignore_ascii_case(number)).copied().collect();
+        let region = docs.regions.iter().find(|r| r.0.eq_ignore_ascii_case(number));
+        let made;
+        let l: &SheetLink = match of_sheet
+            .iter()
+            .find(|l| l.view.as_ref().is_some_and(|v| open.iter().any(|p| inside(norm_rect(v.rect), *p))))
+            .or_else(|| of_sheet.iter().find(|l| l.view.is_none()))
+            .or(of_sheet.first())
+        {
+            Some(l) => l,
+            None => match region {
+                Some(r) => {
+                    made = own_link(&r.0, &r.1.replace('_', " "), norm_rect(r.2));
+                    &made
+                }
+                None => {
+                    not_shown.push((format!("sheet {number}"), format!("{why}, but the drawing holds no such sheet")));
+                    continue;
+                }
+            },
+        };
+        let Some(sr) = l.rect.map(norm_rect) else { continue };
+        let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
+        let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
+        let kind = sheet_kind(&title, l.level.is_some() || !l.levels.is_empty());
+        let before = crops.len();
+        match bbox(&open) {
+            Some(b) => {
+                let long = (sr[2] - sr[0]).max(sr[3] - sr[1]);
+                let r = intersect(grow(b, 0.06 * long), sr).unwrap_or(sr);
+                push(
+                    &mut crops,
+                    l,
+                    kind,
+                    trade,
+                    r,
+                    "cited_point",
+                    None,
+                    Some(format!("round the {} point(s) the prescreen read on it", open.len())),
+                    None,
+                );
+            }
+            None => push(&mut crops, l, kind, trade, sr, "document", None, Some("the whole sheet: the prescreen cites it".into()), None),
+        }
+        for x in crops.iter_mut().skip(before) {
+            x.deciding = Some(why.clone());
+        }
+    }
     left_out.extend(same);
-    Planned { crops, left_out }
+    Planned { crops, left_out, not_shown }
 }
 
 /// A sheet and its view, as `left_out` names it.
@@ -3294,6 +3538,89 @@ fn spec_png(path: &std::path::Path, page: u32, product: &str) -> std::result::Re
     Ok((png, at.is_some()))
 }
 
+/// Whether a packet asked for `trades` shows a sheet of `t` (the architecture and the general
+/// sheets always).
+fn want_trade(trades: &[String], t: &str) -> bool {
+    trades.is_empty() || t == "architecture" || t == "general" || trades.iter().any(|x| x == t)
+}
+
+/// PDF pages of deciding sheets one packet shows, at most.
+const MAX_PDF_SHEETS: usize = 16;
+
+/// A deciding sheet the drawing doesn't hold, shown as its PDF page (Q6261): the page read once,
+/// cut in tiles at the packet's dpi.
+struct PdfDoc {
+    number: String,
+    kind: &'static str,
+    trade: &'static str,
+    /// `<file> p.<n>`, as the job's index gives it.
+    page: String,
+    why: String,
+    pd: Drawing,
+    ppu: f64,
+    dpi: f64,
+    paper: &'static str,
+    parts: Vec<([f64; 4], [u32; 2], [u32; 2])>,
+}
+
+/// The PDF pages of `asks` (sheet number, kind, trade, why), found among `search` (the job's
+/// prints folder, the packet's `prints`) by the file the job's index names; what can't be shown
+/// goes in `not_shown` with why. Each file is read once.
+fn pdf_pages(
+    asks: &[(String, &'static str, &'static str, String)],
+    job_pages: &[super::validate_gear::JobPage],
+    search: &[String],
+    dpi: f64,
+    not_shown: &mut Vec<(String, String)>,
+) -> Vec<PdfDoc> {
+    let mut out: Vec<PdfDoc> = Vec::new();
+    let Some(hook) = super::file::io().and_then(|h| h.read_pdf) else {
+        not_shown.extend(asks.iter().map(|a| (format!("sheet {}", a.0), format!("{}: PDF pages can't be read in this build", a.3))));
+        return out;
+    };
+    let mut files: BTreeMap<std::path::PathBuf, Option<Vec<u8>>> = BTreeMap::new();
+    for (number, kind, trade, why) in asks {
+        let what = format!("sheet {number}");
+        if out.len() >= MAX_PDF_SHEETS {
+            not_shown.push((what, format!("{why}: over the packet's {MAX_PDF_SHEETS} PDF pages")));
+            continue;
+        }
+        let Some(p) = job_pages.iter().find(|p| p.number.eq_ignore_ascii_case(number)) else {
+            not_shown.push((what, format!("{why}: the drawing doesn't hold it and the job's sheet index has no page for it")));
+            continue;
+        };
+        let name = last_part(&p.file);
+        let page = format!("{name} p.{}", p.page);
+        let Some(path) = find_submittal(search, &name) else {
+            not_shown.push((what, format!("{why}: its PDF page ({page}) is not on this machine (give the prints folder as `prints`)")));
+            continue;
+        };
+        let bytes = files.entry(path.clone()).or_insert_with(|| crate::readfile::read(&path).ok().filter(|b| b.len() <= 200 * 1024 * 1024));
+        let Some(bytes) = bytes.as_ref() else {
+            not_shown.push((what, format!("{why}: {page} can't be read (or is over 200 MB)")));
+            continue;
+        };
+        let pd = match hook(bytes, &json!({"page": p.page})) {
+            Ok((pd, _)) => pd,
+            Err(e) => {
+                not_shown.push((what, format!("{why}: {page}: {e}")));
+                continue;
+            }
+        };
+        let ext = pd.extents(&Space::Model);
+        let rect = [ext.min.x, ext.min.y, ext.max.x, ext.max.y];
+        if ext.is_empty() || !rect.iter().all(|v| v.is_finite()) || ext.width() <= 0.0 || ext.height() <= 0.0 {
+            not_shown.push((what, format!("{why}: {page} is empty")));
+            continue;
+        }
+        let (paper_in, paper) = paper_of(rect);
+        let long = ext.width().max(ext.height());
+        let (ppu, parts) = tiles_max(rect, dpi * paper_in / long, DOC_TILES_SIDE);
+        out.push(PdfDoc { number: number.clone(), kind, trade, page, why: why.clone(), pd, ppu, dpi: ppu * long / paper_in, paper, parts });
+    }
+    out
+}
+
 // ---------------------------------------------------------------- the packet
 
 fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
@@ -3429,6 +3756,73 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         equip_docs: None,
         fixture_docs: None,
     });
+    // The routed raceway (the conduit rules), measured on the model's own pieces over the area's
+    // level: each finding names the area's pieces it covers (`handles`), so a run's, a circuit's
+    // or a box's verdict reaches each of its sticks, fittings and wires; each piece carries its
+    // run geometry (`raceway`).
+    let raceway = {
+        use super::validate_conduit as vc;
+        let wanted = |id: &str| only_rules.as_ref().is_none_or(|o| o.contains(id));
+        let which = vc::On::of(|id| all_rules.iter().find(|r| r.enabled && r.rule.id == id && wanted(id)));
+        let own: BTreeSet<cadaddy_doc::Handle> = here.objects["elements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex))
+            .collect();
+        let net = vc::Net::of(d, &sp);
+        let only: Vec<String> = only_rules.iter().flatten().cloned().collect();
+        let takeoff = vc::read_takeoff(s, &all_rules, &only);
+        let cx = vc::Ctx { d, sp: &sp, frame: &frame, areas: std::slice::from_ref(&area), whole_levels: true, takeoff: takeoff.as_ref() };
+        let got = vc::check_net(&cx, which, &net);
+        let facts = vc::packet_raceways(&net, &sp, &frame, &own, vc::touch_in(which.continuity));
+        // The findings about the area's own pieces, each naming only those (the rest are judged
+        // in their own areas' packets).
+        let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+        for id in vc::ALL.iter().filter(|id| all_rules.iter().any(|r| r.enabled && r.rule.id == **id && wanted(id))) {
+            checked.insert(id.to_string(), vc::VERDICTS.iter().map(|v| (v.to_string(), 0)).collect());
+        }
+        let mut findings: Vec<Value> = Vec::new();
+        for (_, rule, verdict, mut f) in got.findings {
+            let named: Vec<String> = f["handles"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            let mine: Vec<String> = named.iter().filter(|h| cadaddy_doc::Handle::parse_hex(h).is_some_and(|x| own.contains(&x))).cloned().collect();
+            let lead = f["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex).filter(|h| own.contains(h));
+            if mine.is_empty() && lead.is_none() {
+                continue;
+            }
+            let elsewhere = named.len().saturating_sub(mine.len()) + f["handles_more"].as_u64().unwrap_or(0) as usize;
+            if lead.is_none()
+                && let Some(first) = mine.first()
+            {
+                f["measured_at"] = f["handle"].clone();
+                f["handle"] = json!(first);
+            }
+            f["handles"] = json!(mine);
+            if let Some(o) = f.as_object_mut() {
+                o.remove("handles_more");
+            }
+            if elsewhere > 0 {
+                f["handles_elsewhere"] = json!(elsewhere);
+            }
+            *checked.entry(rule.to_string()).or_default().entry(verdict.to_string()).or_default() += 1;
+            if findings.len() < MAX_OBJECTS {
+                findings.push(f);
+            }
+        }
+        (checked, got.unmeasured, findings, facts)
+    };
+    let (raceway_checked, raceway_unmeasured, raceway_findings, raceway_facts) = raceway;
+    if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
+        for el in list.iter_mut() {
+            if let Some(f) = el["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex).and_then(|h| raceway_facts.facts.get(&h)) {
+                el["raceway"] = f.clone();
+            }
+        }
+    }
+    let n_raceways = raceway_facts.runs.len();
+    here.objects["raceways"] = json!(raceway_facts.runs);
+    here.objects["counts"]["raceways"] = json!(n_raceways);
+    here.counts["raceways"] = json!(n_raceways);
     // Each element's expected height and where the documents give it (G-HEIGHT's reading).
     if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
         for el in list.iter_mut() {
@@ -3448,17 +3842,24 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => Vec::new(),
     };
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line, E-GEAR-SPACE each piece of gear's working space (depth by its voltage to ground and condition, width, height, door swings), headroom and dedicated space, E-GEAR-FILL its raceways on each side's conduit area, gutter fill, bending space and lugs against the feeders that land on it (missing gutter or bending dimensions: unsure), E-GEAR-SIZE its built box against the submittal's. A `conflict` verdict: the documents disagree (both are cited in `documents`)",
-        "checked": pre.checked,
-        "unmeasured": pre.unmeasured,
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row or the project's as-built breaker rule that outranks it, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line, E-GEAR-SPACE each piece of gear's working space (depth by its voltage to ground and condition, width, height, door swings), headroom and dedicated space, E-GEAR-FILL its raceways on each side's conduit area, gutter fill, bending space and lugs against the feeders that land on it (missing gutter or bending dimensions: unsure), E-GEAR-SIZE its built box against the submittal's; the routed raceway on the model's own pieces (each piece's `raceway`: a stick's ends and heights, what each end touches, the wires in it; a box's volume and the sticks entering it), E-CONDUIT-CONTINUITY each device joined end to end to its panel, E-CONDUIT-FILL and E-DERATE each run's conductors, E-BOX-FILL each box's conductors against its volume, E-VDROP each circuit's length and conductor, E-METHOD each run's wiring method, G-CLASH each stick's clearances, E-TAKEOFF the takeoff against a recount; each of these names in `handles` every piece of this area it covers (`handles_elsewhere`: the pieces of other areas it covers). A `conflict` verdict: the documents disagree (both are cited in `documents`). A finding on an element carries its `provenance` (when not drawn) and `corrections`; `judge_on_basis`: a fail that was only the correction itself (the documents' design value against the corrected one), made unsure, to be judged on the correction's basis",
+        "checked": pre.checked.iter().chain(raceway_checked.iter()).collect::<BTreeMap<_, _>>(),
+        "unmeasured": pre.unmeasured.iter().chain(raceway_unmeasured.iter()).collect::<BTreeMap<_, _>>(),
         // The area's own: an element beside it is measured in its own area's packet.
         "findings": pre
             .findings
             .iter()
             .filter(|f| f["handle"].as_str().is_none_or(|h| !here.nearby.contains(&h.to_ascii_uppercase())))
             .take(MAX_OBJECTS)
+            .chain(raceway_findings.iter())
             .collect::<Vec<_>>(),
     });
+    // What each element and run is by the documents and what the build corrected, and the
+    // project's rules with their tiers (Q6259): the judge judges a correction on its basis.
+    let basis_counts = vb::Basis::of(d).annotate(&mut here.objects);
+    let (project_rules, project_rules_total) = vb::project_rules(d);
+    here.objects["project_rules"] = json!(project_rules);
+    here.objects["counts"]["project_rules"] = json!(project_rules_total);
     // The room's unit type, and how its typical layout lies in the room.
     let unit = ps::unit_of(d, &area.level, area.number.as_deref());
     let placed: Vec<(String, [f64; 2])> = here.objects["elements"]
@@ -3524,8 +3925,83 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "rejected_overrides": rejected.iter().map(|r| json!({"key": r.key, "value": r.value, "why": r.why})).collect::<Vec<_>>(),
     });
 
+    // The documents that decide (Q6261): the sheets the area's prescreen cites, the schedule,
+    // legend and notes sheets of its trades, and its ceiling height.
+    let job_pages = super::validate_gear::job_pages(job.as_ref().and_then(|j| j.sheets.as_ref()));
+    let numbers = super::validate_docs::numbers(
+        sp.sheets.iter().map(|l| l.number.as_str()).chain(regions.iter().map(|r| r.0.as_str())).chain(job_pages.iter().map(|p| p.number.as_str())),
+    );
+    let sheet_rects = |n: &str| -> Vec<[f64; 4]> {
+        sp.sheets
+            .iter()
+            .filter(|l| l.number.eq_ignore_ascii_case(n))
+            .filter_map(|l| l.rect.map(norm_rect))
+            .chain(regions.iter().filter(|r| r.0.eq_ignore_ascii_case(n)).map(|r| norm_rect(r.2)))
+            .collect()
+    };
+    let cites = super::validate_docs::cited(here.objects["prescreen"]["findings"].as_array().into_iter().flatten(), &numbers, &sheet_rects);
+    let trades_here: BTreeSet<String> = ["elements", "runs"]
+        .iter()
+        .flat_map(|k| here.objects[*k].as_array().into_iter().flatten())
+        .filter_map(|e| e.get("trade").and_then(Value::as_str).map(str::to_string))
+        .collect();
+    let doc_sheets = {
+        let title_of = |n: &str| job_pages.iter().find(|p| p.number.eq_ignore_ascii_case(n)).map(|p| p.words.clone()).unwrap_or_default();
+        let job_kind = |n: &str| {
+            job.as_ref().and_then(|j| j.sheet_regions.iter().find(|r| r.number.eq_ignore_ascii_case(n))).map(|r| r.kind.clone()).unwrap_or_default()
+        };
+        let mut all: Vec<super::validate_docs::SheetOf> = sp
+            .sheets
+            .iter()
+            .filter(|l| l.view.is_none())
+            .filter_map(|l| {
+                Some(super::validate_docs::SheetOf {
+                    number: l.number.clone(),
+                    title: format!("{} {}", l.title, title_of(&l.number)),
+                    job_kind: job_kind(&l.number),
+                    discipline: l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)),
+                    rect: Some(l.rect?),
+                    has_level: l.level.is_some() || !l.levels.is_empty(),
+                })
+            })
+            .collect();
+        for r in job.as_ref().map(|j| j.sheet_regions.as_slice()).unwrap_or_default().iter().take(MAX_FOLDER_FILES) {
+            if sp.sheets.iter().any(|l| l.number.eq_ignore_ascii_case(&r.number)) {
+                continue;
+            }
+            all.push(super::validate_docs::SheetOf {
+                number: r.number.clone(),
+                title: title_of(&r.number),
+                job_kind: r.kind.clone(),
+                discipline: if r.discipline.trim().is_empty() { cadaddy_mepfix::sheet_facts::discipline_of(&r.number) } else { r.discipline.clone() },
+                rect: Some(r.area.unwrap_or(r.rect)),
+                has_level: matches!(r.kind.as_str(), "plan" | "enlarged_plan" | "rcp"),
+            });
+        }
+        // The sheets only the job's index has (the job imported only its plans): their PDF pages.
+        let held: BTreeSet<String> = all.iter().map(|x| x.number.to_ascii_uppercase()).collect();
+        for p in job_pages.iter().take(MAX_FOLDER_FILES) {
+            if held.contains(&p.number.to_ascii_uppercase()) {
+                continue;
+            }
+            all.push(super::validate_docs::SheetOf {
+                number: p.number.clone(),
+                title: p.words.clone(),
+                job_kind: String::new(),
+                discipline: if p.discipline.trim().is_empty() { cadaddy_mepfix::sheet_facts::discipline_of(&p.number) } else { p.discipline.clone() },
+                rect: None,
+                // The index's type words follow its title: a plan's page is never a schedule.
+                has_level: p.words.split_whitespace().rev().take(2).any(|w| matches!(w, "plan" | "enlarged_plan" | "rcp")),
+            });
+        }
+        super::validate_docs::sheets(&all, &trades_here)
+    };
+    let ceiling = super::validate_docs::ceiling(&sp, &frame, &area);
+    here.objects["ceiling"] = ceiling.clone();
+
     // The print crops.
-    let within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
+    let mut within: Vec<[f64; 4]> = sp.sheets.iter().filter_map(|l| l.rect.map(norm_rect)).collect();
+    within.extend(regions.iter().map(|r| norm_rect(r.2)));
     let texts = Texts::of(d, &within);
     // The keynote lists and markers that mark the area (G-KEYNOTE's reading).
     let keynotes = super::validate_keynote::Keynotes::read(d, &sp, &frame);
@@ -3574,8 +4050,47 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             reg_threshold,
         )
     };
-    let Planned { mut crops, mut left_out } =
-        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &register);
+    let in_drawing: Vec<super::validate_docs::DocSheet> = doc_sheets.0.iter().filter(|x| x.rect.is_some()).cloned().collect();
+    let docs = DocInput { sheets: &in_drawing, cites: &cites, regions: &regions };
+    let Planned { mut crops, mut left_out, mut not_shown } =
+        plan_crops(&sp, &frame, &area, margin, dpi, &trades, &texts, &here, unit.as_ref(), fit.as_ref(), &keynote_crops, &docs, &register);
+    left_out.extend(doc_sheets.1.iter().cloned());
+    // The deciding sheets the drawing doesn't hold (cited, or a schedule, legend or notes sheet
+    // only the job's index has): their PDF pages, whole, at the packet's dpi.
+    let mut pdf_asks: Vec<(String, &'static str, &'static str, String)> = Vec::new();
+    not_shown.retain(|(what, why)| {
+        let n = what.trim_start_matches("sheet ").trim();
+        match job_pages.iter().find(|p| p.number.eq_ignore_ascii_case(n)) {
+            Some(p) => {
+                let trade = trade_of_discipline(&if p.discipline.trim().is_empty() {
+                    cadaddy_mepfix::sheet_facts::discipline_of(n)
+                } else {
+                    p.discipline.clone()
+                });
+                pdf_asks.push((
+                    p.number.clone(),
+                    sheet_kind(&p.words, false),
+                    trade,
+                    why.trim_end_matches(", but the drawing holds no such sheet").to_string(),
+                ));
+                false
+            }
+            None => true,
+        }
+    });
+    for x in doc_sheets.0.iter().filter(|x| x.rect.is_none() && want_trade(&trades, x.trade)) {
+        if !pdf_asks.iter().any(|a| a.0.eq_ignore_ascii_case(&x.number)) {
+            pdf_asks.push((
+                x.number.clone(),
+                x.kind,
+                x.trade,
+                format!("the {} sheet of this area's trades ({}), whole", x.kind.replace('_', " "), x.trade),
+            ));
+        }
+    }
+    let mut pdf_search: Vec<String> = job_prints.iter().cloned().collect();
+    pdf_search.extend(prints_dir.clone());
+    let pdf_docs = pdf_pages(&pdf_asks, &job_pages, &pdf_search, dpi, &mut not_shown);
     // Each picture is labelled by the view it shows on its own sheet (a tile by the view it
     // lies in), not by the link that brought it in.
     let views = sheet_views(d, &sp);
@@ -3856,46 +4371,91 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         left_out.push((format!("spec {} p.{}", x.0, x.1), format!("over the packet's {MAX_SPEC_PAGES} specification pages")));
     }
 
-    // The cap: print crops first (each followed by its overlay), then submittals, then the rest.
+    // The cap (Q6261): the documents that decide (the crops marked `deciding`, the submittal and
+    // specification pages) outrank it, up to MAX_IMAGES pictures in all. Under the cap
+    // (`max_images`): the area's own crops (placed, the unit type's views, the keynote markers),
+    // each followed by its overlay; the model alone, in 3D and its elevations; the other crops;
+    // last, a level's sheet shown whole that no element here was read from.
+    let mut deciding: Vec<(u8, usize)> = Vec::new();
     let mut order: Vec<(u8, usize)> = Vec::new();
-    // A level's sheet not placed on its plan, shown whole, that no element here was read from:
-    // last, after the model's pictures.
     let whole_only = |c: &Crop| c.placed_by == "unregistered" && !c.cited;
-    for (i, c) in crops.iter().enumerate().filter(|(_, c)| !whole_only(c)) {
-        order.push((0, i));
+    let own = |c: &Crop| !matches!(c.placed_by, "unregistered" | "text" | "document" | "cited_point");
+    for (i, c) in crops.iter().enumerate() {
+        if c.deciding.is_some() {
+            deciding.push((0, i));
+        }
+    }
+    for k in 0..subs.len() {
+        deciding.push((2, k));
+    }
+    for k in 0..specs.len() {
+        deciding.push((3, k));
+    }
+    // The PDF pages' tiles: (doc, part, file).
+    let pdf_tiles: Vec<(usize, usize, String)> = pdf_docs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, doc)| {
+            let many = doc.parts.len() > 1;
+            (0..doc.parts.len()).map(move |k| {
+                let t = doc.parts.get(k).map_or(0, |p| p.2[0]);
+                let file = if many {
+                    format!("prints/d{:02}_{}_{}_t{t}.png", i + 1, safe(&doc.number), doc.kind)
+                } else {
+                    format!("prints/d{:02}_{}_{}.png", i + 1, safe(&doc.number), doc.kind)
+                };
+                (i, k, file)
+            })
+        })
+        .collect();
+    for k in 0..pdf_tiles.len() {
+        deciding.push((4, k));
+    }
+    // A deciding crop is kept already; its overlay waits its turn under the cap.
+    let with_overlay = |order: &mut Vec<(u8, usize)>, i: usize, c: &Crop| {
+        if c.deciding.is_none() {
+            order.push((0, i));
+        }
         if c.place.is_some()
             && let Some(j) = model_imgs.iter().position(|m| m.over == Some(i))
         {
             order.push((1, j));
         }
+    };
+    for (i, c) in crops.iter().enumerate().filter(|(_, c)| own(c) && !whole_only(c)) {
+        with_overlay(&mut order, i, c);
     }
-    for (j, m) in model_imgs.iter().enumerate().filter(|(_, m)| m.over.is_none() && m.kind == "plan") {
-        let _ = m;
+    for (j, _) in model_imgs.iter().enumerate().filter(|(_, m)| m.over.is_none() && m.kind == "plan") {
         order.push((1, j));
     }
-    for k in 0..subs.len() {
-        order.push((2, k));
-    }
-    for k in 0..specs.len() {
-        order.push((3, k));
-    }
-    for (j, m) in model_imgs.iter().enumerate().filter(|(_, m)| m.over.is_none() && m.kind != "plan") {
-        let _ = m;
+    for (j, _) in model_imgs.iter().enumerate().filter(|(_, m)| m.over.is_none() && m.kind != "plan") {
         order.push((1, j));
     }
-    for (i, _) in crops.iter().enumerate().filter(|(_, c)| whole_only(c)) {
-        order.push((0, i));
+    for (i, c) in crops.iter().enumerate().filter(|(_, c)| !own(c) && !whole_only(c)) {
+        with_overlay(&mut order, i, c);
     }
-    let kept: BTreeSet<(u8, usize)> = order.iter().take(max_images).copied().collect();
-    for (t, i) in order.iter().skip(max_images) {
-        let f = match t {
-            0 => crops.get(*i).map(|c| c.file.clone()),
-            1 => model_imgs.get(*i).map(|m| m.file.clone()),
-            3 => specs.get(*i).map(|x| x.file.clone()),
-            _ => subs.get(*i).map(|x| x.0.clone()),
-        };
-        if let Some(f) = f {
-            left_out.push((f, format!("over the packet's cap of {max_images} pictures (max_images)")));
+    for (i, c) in crops.iter().enumerate().filter(|(_, c)| whole_only(c)) {
+        with_overlay(&mut order, i, c);
+    }
+    let n_deciding = deciding.len().min(MAX_IMAGES);
+    let room = max_images.min(MAX_IMAGES - n_deciding);
+    let mut kept: BTreeSet<(u8, usize)> = deciding.iter().take(n_deciding).copied().collect();
+    kept.extend(order.iter().filter(|x| !kept.contains(x)).take(room).copied().collect::<Vec<_>>());
+    let file_of = |t: u8, i: usize| match t {
+        0 => crops.get(i).map(|c| c.file.clone()),
+        1 => model_imgs.get(i).map(|m| m.file.clone()),
+        3 => specs.get(i).map(|x| x.file.clone()),
+        4 => pdf_tiles.get(i).map(|x| x.2.clone()),
+        _ => subs.get(i).map(|x| x.0.clone()),
+    };
+    for (t, i) in deciding.iter().skip(n_deciding) {
+        if let Some(f) = file_of(*t, *i) {
+            left_out.push((f, format!("a deciding document over the packet's most of {MAX_IMAGES} pictures")));
+        }
+    }
+    for (t, i) in order.iter().filter(|x| !kept.contains(x)) {
+        if let Some(f) = file_of(*t, *i) {
+            left_out.push((f, format!("over the packet's cap of {max_images} pictures (max_images; the deciding documents are kept beside it)")));
         }
     }
     let crops: Vec<(usize, &Crop)> = crops.iter().enumerate().filter(|(i, _)| kept.contains(&(0, *i))).collect();
@@ -3903,6 +4463,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let subs: Vec<&(String, String, u32, Option<std::path::PathBuf>, Vec<String>)> =
         subs.iter().enumerate().filter(|(k, _)| kept.contains(&(2, *k))).map(|(_, x)| x).collect();
     let specs: Vec<&SpecPage> = specs.iter().enumerate().filter(|(k, _)| kept.contains(&(3, *k))).map(|(_, x)| x).collect();
+    let pdf_tiles: Vec<&(usize, usize, String)> = pdf_tiles.iter().enumerate().filter(|(k, _)| kept.contains(&(4, *k))).map(|(_, x)| x).collect();
 
     // Every file is checked before any is written.
     let dir = std::path::Path::new(&out_dir);
@@ -3912,6 +4473,7 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     files.extend(model_imgs_kept.iter().map(|m| full(&m.file)));
     files.extend(subs.iter().map(|x| full(&x.0)));
     files.extend(specs.iter().map(|x| full(&x.file)));
+    files.extend(pdf_tiles.iter().map(|x| full(&x.2)));
     for f in &files {
         super::exchange::guard_output(s, CMD, p, f)?;
     }
@@ -3981,6 +4543,24 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
                 "sheet_rect": [r4(rect[0]), r4(rect[1]), r4(rect[2]), r4(rect[3])], "px": px, "px_per_unit": r4(ppu), "dpi": r2(ppu),
                 "placed_by": "generated", "generated": true,
             }));
+        }
+    }
+    // The deciding sheets the drawing doesn't hold, as their PDF pages (no page to compare: they
+    // are the page).
+    for (i, k, file) in &pdf_tiles {
+        let (Some(doc), Some(part)) = (pdf_docs.get(*i), pdf_docs.get(*i).and_then(|d| d.parts.get(*k))) else { continue };
+        let (r, px, t) = *part;
+        if write_png(file, render_drawing(&doc.pd, r, px), &mut left_out)? {
+            let mut o = json!({
+                "file": file, "sheet": doc.number, "title": doc.page, "kind": doc.kind, "trade": doc.trade,
+                "sheet_rect": [r4(r[0]), r4(r[1]), r4(r[2]), r4(r[3])], "px": px, "px_per_unit": r4(doc.ppu), "dpi": r2(doc.dpi),
+                "paper": doc.paper, "placed_by": "pdf_page", "page": doc.page, "page_units": true,
+                "shows": "the whole sheet, as its PDF page (sheet_rect in the page's own units)", "deciding": doc.why,
+            });
+            if doc.parts.len() > 1 {
+                o["tile"] = json!(t);
+            }
+            prints_out.push(o);
         }
     }
     // Each crop against its sheet's PDF page read again, at the same rectangle and pixels.
@@ -4105,7 +4685,49 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
     let kept_crops: Vec<Crop> = crops.iter().map(|(_, c)| (*c).clone()).filter(|c| prints_out.iter().any(|j| j["file"] == json!(c.file))).collect();
     let kept_models: Vec<ModelImage> =
         model_imgs_kept.iter().map(|m| (*m).clone()).filter(|m| model_out.iter().any(|j| j["file"] == json!(m.file))).collect();
-    let mut prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts);
+    let pages: Vec<(String, &'static str)> = subs_out
+        .iter()
+        .filter_map(|x| x["file"].as_str().map(|f| (f.to_string(), "submittal")))
+        .chain(specs_out.iter().filter_map(|x| x["file"].as_str().map(|f| (f.to_string(), "spec"))))
+        .chain(
+            pdf_tiles
+                .iter()
+                .filter(|t| prints_out.iter().any(|o| o["file"] == json!(t.2)))
+                .filter_map(|t| pdf_docs.get(t.0).map(|d| (t.2.clone(), d.kind))),
+        )
+        .collect();
+    let mut prompt = prompt_md(&area, &kept_crops, &kept_models, &rules_on, &here.counts, &pages);
+    // The documents that decide, and the ceiling height, before the rules (Q6261).
+    let deciding_list: Vec<(String, String)> = prints_out
+        .iter()
+        .filter_map(|o| {
+            let w = o["deciding"].as_str()?;
+            let page = o["page"].as_str().map(|p| format!(" (PDF page {p})")).unwrap_or_default();
+            Some((o["file"].as_str()?.to_string(), format!("sheet {} {}{page}: {w}", o["sheet"].as_str()?, o["kind"].as_str()?.replace('_', " "))))
+        })
+        .chain(
+            subs_out.iter().map(|x| {
+                (x["file"].as_str().unwrap_or_default().to_string(), format!("submittal page {}", x["submittal"].as_str().unwrap_or_default()))
+            }),
+        )
+        .chain(specs_out.iter().map(|x| {
+            (
+                x["file"].as_str().unwrap_or_default().to_string(),
+                format!(
+                    "specification section {} p.{} ({})",
+                    x["section"].as_str().unwrap_or_default(),
+                    x["page"],
+                    x["product"].as_str().unwrap_or_default()
+                ),
+            )
+        }))
+        .collect();
+    let section = super::validate_docs::prompt_section(&deciding_list, &ceiling, &not_shown);
+    match prompt.find("## Rules to check") {
+        Some(at) => prompt.insert_str(at, &section),
+        None => prompt.push_str(&section),
+    }
+    prompt = vb::with_section(prompt, &vb::prompt_section(&project_rules, project_rules_total, &basis_counts));
     if let Some(low) = similarity_json["low"].as_array().filter(|l| !l.is_empty()) {
         prompt.push_str("\n## Crops that may not look like their PDF page\n\n");
         for l in low {
@@ -4134,6 +4756,24 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         "specs": specs_out,
         "similarity": similarity_json,
         "registration": registration_json,
+        "documents": {
+            "about": "the documents that decide heights, types and ratings (Q6261): every sheet the area's prescreen cites (`cited`: the rules citing it, the points it read, the pictures that show it), every schedule, legend and notes sheet of the area's trades, whole (`sheets`), and the ceiling height with its source; with the keynote lists, the gear's schedules and the submittal and specification pages they are the `deciding` pictures, which the picture cap never drops",
+            "cited": cites.iter().map(|(n, c)| json!({
+                "sheet": n,
+                "rules": c.rules,
+                "findings": c.findings,
+                "points": c.points.len(),
+                "files": prints_out.iter().filter(|x| x["sheet"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(n)) && x.get("deciding").is_some()).filter_map(|x| x["file"].as_str()).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "sheets": doc_sheets.0.iter().map(|d| json!({
+                "sheet": d.number,
+                "kind": d.kind,
+                "trade": d.trade,
+                "files": prints_out.iter().filter(|x| x["sheet"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(&d.number)) && (x["placed_by"] == "document" || x["placed_by"] == "pdf_page")).filter_map(|x| x["file"].as_str()).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+            "not_shown": not_shown.iter().map(|(w, y)| json!({"what": w, "why": y})).collect::<Vec<_>>(),
+            "ceiling": ceiling,
+        },
         "objects": "objects.json",
         "rules": "rules.json",
         "prompt": "prompt.md",
@@ -4143,7 +4783,10 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
             "walls": here.counts.get("walls"),
             "openings": here.counts.get("openings"),
             "rules": rules_on.len(),
+            "provenance": basis_counts,
+            "project_rules": project_rules_total,
             "pictures": prints_out.len() + model_out.len() + subs_out.len() + specs_out.len(),
+            "deciding": deciding_list.len(),
         },
         "left_out": left_out.iter().map(|(w, y)| json!({"what": w, "why": y})).collect::<Vec<_>>(),
     });

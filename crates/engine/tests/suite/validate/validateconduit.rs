@@ -460,3 +460,169 @@ fn hostile_conduit_records_do_not_panic() {
         assert!(r["checked"][id].is_object(), "{id}: {r}");
     }
 }
+
+/// Q6260: a Validate packet carries the routed raceway's run geometry (each stick's ends and
+/// heights, what its ends touch, the wires pulled in it; each box's volume and the sticks
+/// entering it; each wire's raceway) and its prescreen measures the conduit rules on those
+/// pieces, each finding naming every piece of the area it covers. A judge that reports those
+/// findings as they are judges every piece × conduit rule pair the numbers settle.
+#[test]
+fn a_packet_carries_the_raceways_geometry_and_its_measured_conduit_rules() {
+    let mut s = building(Some(20), |_| {});
+    let out = crate::helper::scratch("q6260-packet");
+    let run = s.execute("validate", &json!({"room": "101", "out_dir": out.to_string_lossy()})).expect("validate")["run"]
+        .as_str()
+        .map(str::to_string)
+        .expect("run");
+    let n = s.execute("validate.next", &json!({"run": run})).expect("next");
+    let area = n["area"]["id"].as_str().or_else(|| n["packet"]["area"].as_str()).map(str::to_string).unwrap_or_else(|| panic!("no area: {n}"));
+    let dir = std::path::PathBuf::from(n["packet"]["dir"].as_str().expect("dir"));
+    let o: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("objects.json")).expect("objects")).expect("json");
+    let els: Vec<&Value> = o["elements"].as_array().into_iter().flatten().collect();
+    let cat = |c: &str| els.iter().copied().filter(|e| e["category"] == c).collect::<Vec<_>>();
+    let (sticks, boxes, wires, fittings) =
+        (cat("IfcCableCarrierSegment"), cat("IfcJunctionBox"), cat("IfcCableSegment"), cat("IfcCableCarrierFitting"));
+    assert!(!sticks.is_empty() && !boxes.is_empty() && !wires.is_empty() && !fittings.is_empty(), "{}", o["counts"]);
+
+    // The geometry: every stick's two ends with their heights, what they touch, its wires.
+    for e in &sticks {
+        let r = &e["raceway"];
+        assert_eq!(r["piece"], "stick", "{e}");
+        assert_eq!(r["ends_ft"].as_array().map(Vec::len), Some(2), "{e}");
+        assert_eq!(r["ends_aff_in"].as_array().map(Vec::len), Some(2), "{e}");
+        assert!(r["touches"]["a"].is_array() && r["touches"]["b"].is_array(), "{e}");
+        assert!(r["wires"].as_array().is_some_and(|w| !w.is_empty()) && r["conductors"].as_str().is_some_and(|c| c.contains('#')), "{e}");
+    }
+    // Some end lands on a box, and the sticks join one another.
+    let box_ids: Vec<&str> = boxes.iter().filter_map(|b| b["handle"].as_str()).collect();
+    let touched: Vec<&str> = sticks
+        .iter()
+        .flat_map(|e| ["a", "b"].map(|k| e["raceway"]["touches"][k].clone()))
+        .flat_map(|t| t.as_array().cloned().unwrap_or_default())
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .map(|h| if box_ids.contains(&h.as_str()) { "box" } else { "stick" })
+        .collect();
+    assert!(touched.contains(&"box") && touched.contains(&"stick"), "{touched:?}");
+    // Every box's volume and the sticks entering it; every wire's raceway.
+    for b in &boxes {
+        assert!(b["raceway"]["cubic_in"].as_f64().is_some_and(|v| v > 0.0), "{b}");
+        assert!(b["raceway"]["entering"].as_array().is_some_and(|v| !v.is_empty()), "{b}");
+    }
+    for w in &wires {
+        assert!(w["raceway"]["in_raceway"].as_array().is_some_and(|v| !v.is_empty()), "{w}");
+        assert!(w["raceway"]["size"].as_str().is_some_and(|z| z.starts_with('#')), "{w}");
+    }
+    assert!(o["raceways"].as_array().is_some_and(|r| !r.is_empty()) && o["counts"]["raceways"].as_u64().is_some_and(|n| n > 0), "{}", o["counts"]);
+
+    // The conduit rules measured in the packet, each finding naming the pieces it covers.
+    let pre = &o["prescreen"];
+    for id in ["E-CONDUIT-CONTINUITY", "E-CONDUIT-FILL", "E-BOX-FILL", "E-DERATE", "E-VDROP", "E-TAKEOFF", "G-CLASH"] {
+        let n: u64 = pre["checked"][id].as_object().map_or(0, |m| m.values().filter_map(Value::as_u64).sum());
+        assert!(n > 0, "{id} not measured in the packet: {}", pre["checked"]);
+    }
+    let fs: Vec<&Value> =
+        pre["findings"].as_array().into_iter().flatten().filter(|f| RULES.contains(&f["rule"].as_str().unwrap_or_default())).collect();
+    let covered = |rule: &str| -> std::collections::BTreeSet<String> {
+        fs.iter()
+            .filter(|f| f["rule"] == rule)
+            .flat_map(|f| f["handles"].as_array().cloned().unwrap_or_default())
+            .filter_map(|h| h.as_str().map(str::to_string))
+            .collect()
+    };
+    let ids = |v: &[&Value]| v.iter().filter_map(|e| e["handle"].as_str().map(str::to_string)).collect::<Vec<_>>();
+    let fill = covered("E-CONDUIT-FILL");
+    for h in ids(&sticks).iter().chain(ids(&wires).iter()) {
+        assert!(fill.contains(h), "{h} in no E-CONDUIT-FILL finding: {fill:?}");
+    }
+    let box_fill = covered("E-BOX-FILL");
+    assert!(ids(&boxes).iter().all(|h| box_fill.contains(h)), "{box_fill:?}");
+    let cont = covered("E-CONDUIT-CONTINUITY");
+    assert!(ids(&sticks).iter().all(|h| cont.contains(h)), "{cont:?}");
+    let takeoff = covered("E-TAKEOFF");
+    assert!(ids(&sticks).iter().chain(ids(&boxes).iter()).all(|h| takeoff.contains(h)), "{takeoff:?}");
+
+    // A judge reporting them as measured, citing a picture of the packet: the conduit rules'
+    // pairs are judged.
+    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).expect("manifest")).expect("json");
+    let pic = ["prints", "model"]
+        .iter()
+        .find_map(|k| {
+            manifest[*k]
+                .as_array()
+                .and_then(|a| a.first())
+                .and_then(|x| x["file"].as_str())
+                .map(|f| (f.to_string(), manifest[*k][0]["sheet"].as_str().unwrap_or("model").to_string()))
+        })
+        .unwrap_or_else(|| panic!("no picture: {manifest}"));
+    let report: Vec<Value> = fs
+        .iter()
+        .filter(|f| f["verdict"] != "fail")
+        .map(|f| {
+            json!({"rule": f["rule"], "handles": f["handles"], "verdict": f["verdict"], "issue": f["issue"], "expected": f["expected"],
+                   "found": f["found"], "evidence": [{"image": pic.0, "sheet": pic.1, "what": "the raceway pieces"}], "confidence": f["confidence"]})
+        })
+        .collect();
+    let r = s.execute("validate.report", &json!({"run": run, "area": area, "findings": report})).expect("report");
+    assert!(r["pairs"]["judged"].as_u64().is_some_and(|j| j > 0), "{r}");
+    let st = s.execute("validate.status", &json!({"run": run})).expect("status");
+    // (E-BOX-FILL judges the boxes only: it is asked of every conduit piece until the pieces have
+    // kinds of their own.)
+    for (id, least) in [("E-CONDUIT-FILL", 0.9), ("E-DERATE", 0.9), ("E-CONDUIT-CONTINUITY", 0.9), ("E-VDROP", 0.9), ("E-TAKEOFF", 0.8)] {
+        let c = st["accuracy"]["coverage_by_rule"][id].as_f64().unwrap_or(0.0);
+        assert!(c >= least, "{id} coverage {c}: {}", st["accuracy"]["coverage_by_rule"]);
+    }
+}
+
+/// Q6260: on a dense floor a packet keeps the build's parts nearest its area, never the first
+/// ones in the drawing: thousands of raceway pieces just outside the room, drawn before a stick
+/// inside it, don't push that stick (and its run's findings) out of the packet.
+#[test]
+fn a_packet_keeps_its_own_raceway_on_a_floor_dense_with_pieces_round_it() {
+    use cadaddy_engine::doc::{Entity, EntityKind};
+    let mut s = building(Some(20), |_| {});
+    let areas = s.execute("validate.areas", &json!({})).expect("areas");
+    let area = areas["areas"].as_array().into_iter().flatten().find(|a| a["number"] == "101").cloned().expect("101");
+    let id = area["id"].as_str().expect("id").to_string();
+    let bx: Vec<f64> = area["box"].as_array().expect("box").iter().filter_map(Value::as_f64).collect();
+    let (stick, _) = pieces(&s, "conduit").into_iter().next().expect("a stick");
+    let first: Entity = s.doc().expect("doc").model.get(stick).map(|e| Entity::clone(e)).expect("entity");
+    let centre = match &first.kind {
+        EntityKind::Mesh(m) if !m.vertices.is_empty() => {
+            let n = m.vertices.len() as f64;
+            (m.vertices.iter().map(|v| v.x).sum::<f64>() / n, m.vertices.iter().map(|v| v.y).sum::<f64>() / n)
+        }
+        _ => panic!("a stick is a mesh"),
+    };
+    // A copy of the stick with its middle at (x, y) feet.
+    let at = |x: f64, y: f64| {
+        let mut c = first.clone();
+        if let EntityKind::Mesh(m) = &mut c.kind {
+            for v in &mut m.vertices {
+                v.x += x * 12.0 - centre.0;
+                v.y += y * 12.0 - centre.1;
+            }
+        }
+        c
+    };
+    // 6,000 copies 10 ft below the area (inside the packet's 30 ft look round it), then one in
+    // its middle, last in the drawing.
+    let (x0, x1, y0) = (bx[0], bx[2], bx[1]);
+    let inside = {
+        let d = s.doc_mut().expect("doc");
+        for i in 0..6_000 {
+            let mut c = at(x0 + (x1 - x0) * f64::from(i % 100) / 100.0, y0 - 10.0 - f64::from(i / 100) * 0.05);
+            c.handle = d.new_handle();
+            d.model.push(c);
+        }
+        let mut c = at((bx[0] + bx[2]) / 2.0, (bx[1] + bx[3]) / 2.0);
+        c.handle = d.new_handle();
+        let h = c.handle.hex();
+        d.model.push(c);
+        h
+    };
+    let out = crate::helper::scratch("q6260-dense");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "max_images": 1})).expect("packet");
+    let o: Value = serde_json::from_str(&std::fs::read_to_string(out.join("objects.json")).expect("objects")).expect("json");
+    let own: Vec<&str> = o["elements"].as_array().into_iter().flatten().filter_map(|e| e["handle"].as_str()).collect();
+    assert!(own.contains(&inside.as_str()), "the stick in the area's middle is left out ({} elements)", own.len());
+}

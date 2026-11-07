@@ -39,6 +39,8 @@ rhai = { version = "1.27", default-features = false, features = ["std", "serde",
 cadaddy-rhai-bridge = { path = "../rhai-bridge" }
 # MEP print fixtures and print-set pipeline (printset, reader wiring).
 cadaddy-mepfix = { path = "../mepfix" }
+# A job's checkpoint state read without its drawing (`cdy::agent`); already below mepfix.
+cadaddy-io = { workspace = true }
 
 # The local time-zone offset on Windows (no /etc/localtime there): FIELD dates and the Drawing
 # Recovery times were UTC. MIT OR Apache-2.0; only its clock.
