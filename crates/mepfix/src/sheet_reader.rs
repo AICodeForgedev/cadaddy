@@ -1417,6 +1417,38 @@ pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     titled
 }
 
+/// Whether a title has one of the words of a word list, whole words in order (`RCP` isn't in
+/// `ARCPLAN`); case and punctuation don't count.
+pub fn title_names(title: &str, list: &str) -> bool {
+    let up = title.to_ascii_uppercase();
+    let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let spaced = format!(" {} ", words.join(" "));
+    crate::wordrules::words(list).iter().any(|w| spaced.contains(&format!(" {w} ")))
+}
+
+/// The floor plan of a sheet of one storey that prints it beside other plans of the same outline
+/// (`DIMENSIONED FLOOR PLAN` beside `REFLECTED CEILING PLAN` and `ROOF PLAN`), with its block of
+/// linework: the building is read from that view alone, since a ceiling's or a roof's lines
+/// would be taken for walls. `None` unless the sheet has exactly one titled floor plan, no
+/// typical one, at least one titled other plan, and blocks that keep them apart.
+pub fn floor_plan_view(d: &Drawing) -> Option<(PlanView, [f64; 4])> {
+    let names = title_names;
+    let texts = crate::sheet_facts::texts(d);
+    let mut titles = crate::sheet_facts::view_titles(d, &texts);
+    // The same title read twice (hidden text and its lettering): one view.
+    titles.sort_by(|a, b| a.title.cmp(&b.title));
+    titles.dedup_by(|a, b| a.title == b.title);
+    let other = |t: &str| names(t, "sheets.other_plan_title_words");
+    let mut floors = titles.iter().filter(|v| names(&v.title, "sheets.floor_plan_title_words") && !other(&v.title));
+    let (floor, None) = (floors.next()?, floors.next()) else { return None };
+    let region = floor.region?;
+    let others: Vec<_> = titles.iter().filter(|v| other(&v.title)).collect();
+    if says_typical(&floor.title) || others.is_empty() || others.iter().any(|v| v.region == Some(region)) {
+        return None;
+    }
+    Some((PlanView { title: floor.title.clone(), levels: Vec::new(), at: floor.at, height: 0.0 }, region))
+}
+
 /// The views titled over a `SCALE:` line ([`crate::sheet_facts::view_titles`]) that name a level,
 /// each with its block of linework; several titles under one block (two floor plans whose
 /// linework touches) share it out: stacked, each its title's height up to the next title (a
@@ -1939,6 +1971,66 @@ mod tests {
             valign: cadaddy_doc::VAlign::Baseline,
         };
         d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), EntityKind::Text(t)).unwrap();
+    }
+
+    fn sheet_line(d: &mut Drawing, a: [f64; 2], b: [f64; 2]) {
+        let l = cadaddy_doc::Line { a: cadaddy_doc::geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_doc::geom::Vec3::new(b[0], b[1], 0.0) };
+        d.add(&cadaddy_doc::Space::Model, cadaddy_doc::Common::default(), EntityKind::Line(l)).unwrap();
+    }
+
+    /// A sheet's border: what a view's lines are measured against.
+    fn bordered() -> Drawing {
+        let mut d = Drawing::default();
+        let c = [[0.0, 0.0], [2016.0, 0.0], [2016.0, 1440.0], [0.0, 1440.0], [0.0, 0.0]];
+        for w in c.windows(2) {
+            if let [a, b] = w {
+                sheet_line(&mut d, *a, *b);
+            }
+        }
+        d
+    }
+
+    /// A 300-square view of crossing lines at (x, y), titled below as view titles are.
+    fn titled_block(d: &mut Drawing, x: f64, y: f64, title: &str) {
+        for i in 0..6 {
+            let at = x + f64::from(i) * 60.0;
+            sheet_line(d, [at, y], [at, y + 300.0]);
+            sheet_line(d, [x, y + f64::from(i) * 60.0], [x + 300.0, y + f64::from(i) * 60.0]);
+        }
+        sheet_text(d, [x, y - 20.0], title, 8.0);
+        sheet_text(d, [x, y - 32.0], "SCALE: 1/4\" = 1'-0\"", 4.0);
+    }
+
+    #[test]
+    fn a_storeys_floor_plan_is_told_from_the_other_plans_on_its_sheet() {
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "DIMENSIONED FLOOR PLAN");
+        titled_block(&mut d, 100.0, 100.0, "REFLECTED CEILING PLAN");
+        titled_block(&mut d, 700.0, 600.0, "ROOF PLAN");
+        let (v, r) = floor_plan_view(&d).expect("the floor plan's view");
+        assert_eq!(v.title, "DIMENSIONED FLOOR PLAN");
+        assert!(v.levels.is_empty(), "the sheet keeps its level: {:?}", v.levels);
+        assert!(r[1] >= 500.0 && r[0] < 150.0 && r[2] < 600.0, "only the floor plan's block: {r:?}");
+    }
+
+    #[test]
+    fn a_sheet_not_mixing_a_floor_plan_with_other_plans_is_read_whole() {
+        // Only a floor plan and a detail.
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "WALL DETAIL");
+        assert!(floor_plan_view(&d).is_none());
+        // Two floor plans: which one the storey's is isn't for this reader to say.
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "EAST WING FLOOR PLAN");
+        titled_block(&mut d, 700.0, 600.0, "WEST WING FLOOR PLAN");
+        titled_block(&mut d, 100.0, 100.0, "ROOF PLAN");
+        assert!(floor_plan_view(&d).is_none());
+        // A typical plan stays one view of its levels.
+        let mut d = bordered();
+        titled_block(&mut d, 100.0, 600.0, "TYPICAL FLOOR PLAN");
+        titled_block(&mut d, 100.0, 100.0, "ROOF PLAN");
+        assert!(floor_plan_view(&d).is_none());
     }
 
     /// A sheet of two floor plans whose titles come twice, as an imported PDF gives them: the

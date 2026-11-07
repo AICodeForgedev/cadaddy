@@ -2690,6 +2690,12 @@
     ]
    ]
   },
+  "sheets.floor_plan_title_words": {
+   "source": "A view or sheet title that names a floor plan. (drafting convention: general, no job's title)",
+   "words": [
+    "FLOOR PLAN"
+   ]
+  },
   "sheets.import_discipline_prefix": {
    "source": "Known discipline prefixes: sheet number prefix → discipline code. (drafting convention: the sheet-number letters of a discipline, as the import check reads them; moved from import_check.rs `DISCIPLINE_PREFIX`)",
    "pairs": [
@@ -2779,6 +2785,19 @@
     "ONE-LINE",
     "ONE LINE",
     "KEY PLAN"
+   ]
+  },
+  "sheets.other_plan_title_words": {
+   "source": "A view title that names a plan which is not the floor plan, though it can share the floor plan's sheet and draw the same outline: the ceiling, the roof, the structure or the demolition. (drafting convention: general, no job's title)",
+   "words": [
+    "REFLECTED CEILING",
+    "CEILING PLAN",
+    "RCP",
+    "ROOF PLAN",
+    "FRAMING PLAN",
+    "FOUNDATION PLAN",
+    "DEMOLITION PLAN",
+    "DEMO PLAN"
    ]
   },
   "sheets.reference_words": {
