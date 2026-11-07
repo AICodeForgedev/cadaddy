@@ -1810,6 +1810,9 @@ pub struct PanelCircuit {
     pub wire: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub load_va: Option<f64>,
+    /// What the drawings print where a submittal corrected `load_va`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_load_va: Option<f64>,
     /// The sheet it was read from (`E-601`), empty when entered by hand.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,

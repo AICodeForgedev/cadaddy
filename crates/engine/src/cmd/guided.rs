@@ -8797,6 +8797,7 @@ fn stamp_typical_rooms(
         let sub = super::printmep::sheet_drawing(d, sh);
         let sheet_hinges = plan_hinges(&sub);
         let mut turns: BTreeMap<([u64; 4], usize), RoomFit> = BTreeMap::new();
+        let mut told_fit: BTreeSet<[u64; 4]> = BTreeSet::new();
         // The sheet's devices (where each view draws its own), and each view's linework.
         let drawn: Vec<[f64; 2]> = devices.iter().map(|dv| dv.at).collect();
         let reach = ROOM_WALL_FT * 12.0 * k_in;
@@ -8895,6 +8896,12 @@ fn stamp_typical_rooms(
                     && let turn = turn_of(view, *i, outline)
                     && let Some(at) = place_in_room(dv.at, *view, bbox(outline), turn)
                 {
+                    if told_fit.insert(view.map(f64::to_bits)) {
+                        progress_line(&format!(
+                            "  one-room plan {sheet} {title}: room {number} {level}, its box {:?}, the view {view:?} laid by {turn:?}",
+                            bbox(outline)
+                        ));
+                    }
                     if furnished(level, outline) && !authority.iter().any(|(l, o)| l == level && o == outline) {
                         authority.push((level.clone(), outline.clone()));
                     }
@@ -14598,6 +14605,15 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
     sp.mep.equipment.extend(planned.equipment);
+    // A panel only lettered or proposed, with no working space where that puts it, takes a face
+    // in its room that has it.
+    let refaced = panels_onto_clear_faces(s.doc()?, &mut sp, &rooms);
+    if !refaced.is_empty() {
+        let tags: Vec<String> = refaced.iter().take(12).cloned().collect();
+        s.echo(format!("  panels moved to a wall face with their working space: {} ({})", refaced.len(), tags.join(", ")));
+    }
+    slid.extend(refaced.iter().cloned());
+    new_tags.extend(refaced);
     // The one-line's feeders replace those read the same way before (a rerun).
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
@@ -14694,8 +14710,9 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         let usable = message.split("sq in usable").next().and_then(|t| t.rsplit(',').next()).and_then(|t| t.trim().parse::<f64>().ok());
         let g = sp.mep.equipment.iter().find(|e| e.tag.eq_ignore_ascii_case(gear_tag));
         if let (Some(g), Some(need), Some(usable)) = (g, need, usable)
-            && let Some(w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
+            && let Some(mut w) = super::gearbuild::wireway_for(g, need, usable, upf, &space_rule)
         {
+            super::gearbuild::wireway_clear_of_walls(&mut w, g, &sp.walls, &sp.wall_types, upf);
             job.add_finding(
                 StageName::BimBuild,
                 &format!("Gear {gear_tag}: {} built above it (proposed)", w.properties.get("CORRECTED_VALUE").cloned().unwrap_or_default()),
@@ -19612,6 +19629,69 @@ fn build_new_mep(
 /// What an equipment question begins with (its tag follows).
 const EQUIP_QUESTION: &str = "Equipment electrical data: ";
 
+/// The panels only lettered or proposed whose place fails its working space, each moved to the
+/// nearest face in its room that has it ([`super::validate_gear::clear_face`]). Their tags.
+fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::BuildingSpec, rooms: &[super::gearbuild::RoomBox]) -> Vec<String> {
+    use super::validate_gear::{FaceNeed, Obstacle, built_doors, clear_face, gear_need};
+    let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+    let code = super::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap_or_default();
+    let movable = |e: &cadaddy_walk3d::MepEquipment| {
+        matches!(e.kind.to_ascii_lowercase().as_str(), "panel" | "panelboard" | "load_center")
+            && !e.round
+            && (e.sources.get("position").map(String::as_str) == Some(super::printcond::ROOM_PANEL_POSITION)
+                || e.sources.get("status").is_some_and(|s| s.eq_ignore_ascii_case("proposed")))
+    };
+    if !sp.mep.equipment.iter().any(movable) {
+        return Vec::new();
+    }
+    let pieces = super::propfill::wall_footprints_on_plans(d);
+    let doors = built_doors(d, upf);
+    let levels: Vec<(String, f64)> = sp.levels.iter().map(|l| (l.name.clone(), l.elevation_ft)).collect();
+    // Every box, its sides, for what stands in front of a panel: a panel as the build will set it.
+    let boxes: Vec<(String, String, [f64; 2], [f64; 2], [f64; 2])> = sp
+        .mep
+        .equipment
+        .iter()
+        .map(|e| {
+            let floor = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)).map_or(0.0, |(_, f)| *f) * upf;
+            let (lo, hi) = super::validate_gear::as_the_build_sets_it(e, &pieces, floor, upf);
+            (e.tag.clone(), e.level.to_ascii_lowercase(), lo, hi, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0])
+        })
+        .collect();
+    let mut moved = Vec::new();
+    let need_of: Vec<Option<[f64; 2]>> = sp.mep.equipment.iter().map(|e| gear_need(sp, e, &code)).collect();
+    for (e, need_in) in sp.mep.equipment.iter_mut().zip(need_of) {
+        if !movable(e) {
+            continue;
+        }
+        let Some((_, elevation)) = levels.iter().find(|(n, _)| n.eq_ignore_ascii_case(&e.level)) else { continue };
+        let lv = e.level.to_ascii_lowercase();
+        let others: Vec<Obstacle> = boxes
+            .iter()
+            .filter(|(t, l, ..)| *l == lv && !t.eq_ignore_ascii_case(&e.tag))
+            .flat_map(|(t, _, lo, hi, z)| {
+                let c = [[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]].map(|p| [p[0] / upf, p[1] / upf]);
+                (0..4usize).map(move |k| Obstacle { what: format!("equipment {t}"), a: c[k], b: c[(k + 1) % 4], half_ft: 0.0, z_in: Some(*z) })
+            })
+            .collect();
+        let read_at = cadaddy_geom::Vec2::new((e.min[0] + e.max[0]) / 2.0, (e.min[1] + e.max[1]) / 2.0);
+        let room = super::gearbuild::room_outline_on_plan(rooms, &e.level, e.properties.get("ROOM").map(String::as_str), read_at);
+        let need = FaceNeed {
+            need_in,
+            width_in: code.width_in.unwrap_or(30.0),
+            height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
+            recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+        };
+        let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
+        if let Some(f) = found
+            && super::gearbuild::onto_clear_face(e, &f, upf)
+        {
+            moved.push(e.tag.to_ascii_uppercase());
+        }
+    }
+    moved
+}
+
 /// The loads the one-line feeds (not panels) against their submittals ([`super::equipsub`]):
 /// each one's data from its latest submittal's text, else an agent's reading (a job answer), else
 /// a question; the checks' failures RFIs and findings; the data kept in `mep.equipment_electrical`.
@@ -19749,6 +19829,32 @@ fn equipment_step(
             equipsub::correct(&mut e, conductors, &rule);
         }
         rows.push(e);
+    }
+    // Its load goes on its schedule row too, for the panel's and the feeder's totals after.
+    let sent_back = |e: &cadaddy_walk3d::EquipmentElectrical| {
+        let st = e.status.to_ascii_lowercase();
+        st.contains("resubmit") || st.contains("rejected")
+    };
+    for e in rows.iter().filter(|e| !sent_back(e)) {
+        let Some(va) = equipsub::submitted_va(e) else { continue };
+        let word = equipsub::stem(&e.tag).unwrap_or_else(|| e.tag.to_ascii_uppercase());
+        let row = sp.mep.panel_schedules.iter_mut().find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel)).and_then(|p| {
+            p.circuits.iter_mut().find(|c| {
+                let d = c.description.to_ascii_uppercase();
+                d.contains(&e.tag.to_ascii_uppercase()) || d.contains(&word)
+            })
+        });
+        if let Some(was) = row.and_then(|c| equipsub::take_submitted_load(c, va)) {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Equipment {} load from its submittal: {va:.0} VA, the schedule prints {was:.0} VA", e.tag),
+                &format!("{} ({})", e.tag, e.source),
+                2,
+                vec!["The printed load stays beside it on the schedule row".into()],
+                None,
+                false,
+            );
+        }
     }
     // What is corrected goes on its schedule row (the print beside it), priced.
     for e in rows.iter_mut().filter(|e| !e.correction_reason.is_empty()) {

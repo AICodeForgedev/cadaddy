@@ -383,6 +383,8 @@ pub(crate) struct Door {
     /// The room it swings into, when a door tag says so.
     pub swings_into: Option<String>,
     pub source: Option<String>,
+    /// Its leaf as the plan draws its swing, feet: hinge, open end, shut end.
+    pub leaf: Option<[[f64; 2]; 3]>,
 }
 
 /// The working space's verdict and what was measured.
@@ -468,11 +470,9 @@ pub(crate) fn working_space(
             if o.z_in.is_some_and(|z| z[0] >= height_in || z[1] <= 0.0) || on_host_line(o) {
                 continue;
             }
-            let (a, b) = (local(o.a), local(o.b));
-            let h = o.half_ft.max(0.0);
-            let Some((l0, l1)) = clip(a, b, s0 + EDGE_FT - h, s1 - EDGE_FT + h, -h + EDGE_FT, REACH_FT + h) else { continue };
-            let t = |k: f64| a[1] + (b[1] - a[1]) * k;
-            let near = (t(l0).min(t(l1)) - h).max(0.0);
+            // The obstacle's own rectangle, in this band in front of the face. (Its thickness is
+            // to its sides: a wall meeting the space end-on starts at its end.)
+            let Some(near) = rect_ahead(local(o.a), local(o.b), o.half_ft.max(0.0), s0 + EDGE_FT, s1 - EDGE_FT, EDGE_FT, REACH_FT) else { continue };
             if near < best.0 {
                 best = (near, Some(o.what.clone()));
             }
@@ -503,7 +503,25 @@ pub(crate) fn working_space(
     let quad = space.corners();
     let mut door_verdict = "pass";
     let mut door_json = Vec::new();
+    let mut swept: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for d in doors {
+        // A swing the plan draws and no door tag contradicts: where its leaf really goes.
+        if let (Some([hinge, open, shut]), None) = (d.leaf, &d.swings_into) {
+            if !swept.insert(d.id.as_str()) {
+                continue;
+            }
+            let (to_open, to_shut) = (sub(open, hinge), sub(shut, hinge));
+            let k = std::f64::consts::FRAC_1_SQRT_2;
+            let arc = [hinge[0] + k * (to_open[0] + to_shut[0]), hinge[1] + k * (to_open[1] + to_shut[1])];
+            if overlap(&[hinge, open, arc, shut], &quad) {
+                door_verdict = "fail";
+                door_json.push(json!({
+                    "door": d.id, "swings_into": null, "source": "the swing its plan draws", "verdict": "fail",
+                    "why": "its leaf sweeps the working space",
+                }));
+            }
+            continue;
+        }
         let Some(op) = Obb::aligned(d.min, d.max) else { continue };
         let leaf = 2.0 * op.hw;
         // Its swing, either side of the opening: the leaf's width out from the opening's line.
@@ -570,6 +588,277 @@ pub(crate) fn working_space(
         doors: door_json,
         why,
     }
+}
+
+/// How far ahead (`t`) a segment's rectangle (half its thickness each side) comes into the band
+/// `s0..s1`, `t0..t1`: 0 when it stands at the band's near edge. `None` when it stays out.
+fn rect_ahead(a: [f64; 2], b: [f64; 2], h: f64, s0: f64, s1: f64, t0: f64, t1: f64) -> Option<f64> {
+    let d = sub(b, a);
+    let len = d[0].hypot(d[1]);
+    // Across the segment; a point of a segment has no direction, and no sides.
+    let n = if len > 1e-12 { [-d[1] / len * h, d[0] / len * h] } else { [0.0, 0.0] };
+    let mut poly = vec![[a[0] + n[0], a[1] + n[1]], [b[0] + n[0], b[1] + n[1]], [b[0] - n[0], b[1] - n[1]], [a[0] - n[0], a[1] - n[1]]];
+    for (axis, limit, keep_above) in [(0usize, s0, true), (0, s1, false), (1, t0, true), (1, t1, false)] {
+        let mut out = Vec::with_capacity(poly.len() + 1);
+        let keeps = |p: &[f64; 2]| if keep_above { p[axis] >= limit } else { p[axis] <= limit };
+        for k in 0..poly.len() {
+            let (p, q) = (poly[k], poly[(k + 1) % poly.len()]);
+            if keeps(&p) {
+                out.push(p);
+            }
+            if keeps(&p) != keeps(&q) {
+                let f = (limit - p[axis]) / (q[axis] - p[axis]);
+                out.push([p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f]);
+            }
+        }
+        poly = out;
+        if poly.is_empty() {
+            return None;
+        }
+    }
+    let near = poly.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    Some(if near <= t0 + 1e-9 { 0.0 } else { near })
+}
+
+// ---------------------------------------------------------------- a face that has its space
+
+/// Where a panel can stand instead of a place that fails its working space.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ClearFace {
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    pub wall: cadaddy_doc::Handle,
+    /// How far from where it was read, inches.
+    pub moved_in: f64,
+    pub was_clear_in: f64,
+    pub now_clear_in: f64,
+}
+
+/// What a panel needs in front of it, for [`clear_face`].
+pub(crate) struct FaceNeed {
+    pub need_in: Option<[f64; 2]>,
+    pub width_in: f64,
+    pub height_in: f64,
+    pub recessed: bool,
+}
+
+/// How far along a wall a panel is looked for either way, in steps of [`FACE_STEP_IN`].
+const FACE_STEPS: i32 = 6;
+const FACE_STEP_IN: f64 = 6.0;
+/// How far in front of a face the room must still be, inches.
+const FACE_IN_ROOM_IN: f64 = 18.0;
+
+/// A wall's piece as an obstacle (feet): its middle line, half its thickness and, when it doesn't
+/// fill the height from the floor, the heights it does.
+fn piece_obstacle(handle: cadaddy_doc::Handle, poly: &[Vec2], z: [f64; 2], floor: f64, upf: f64, height_in: f64) -> Option<Obstacle> {
+    let pts: Vec<[f64; 2]> = poly.iter().map(|p| [p.x / upf, p.y / upf]).collect();
+    let o = Obb::round(&pts)?;
+    let inch = upf / 12.0;
+    let (lo, hi) = ((z[0] - floor) / inch, (z[1] - floor) / inch);
+    let full = !z[0].is_finite() || (lo <= 1.0 && hi + 1.0 >= height_in);
+    Some(Obstacle {
+        what: format!("wall {}", handle.hex()),
+        a: o.at(-o.hw, 0.0),
+        b: o.at(o.hw, 0.0),
+        half_ft: o.hd,
+        z_in: if full { None } else { Some([lo, hi]) },
+    })
+}
+
+/// A panel whose place (lettering, a proposal: not a located symbol) leaves it no working space:
+/// the wall face near where it was read, in its own room, that has it. Nearest first, sound over
+/// unsure; `None` when its own place doesn't fail or no other face does better. Plan coordinates
+/// (drawing units): the walls' pieces where the plans draw them, `others` and `doors` in feet.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn clear_face(
+    e: &MepEquipment,
+    pieces: &[super::propfill::WallPiece],
+    others: &[Obstacle],
+    doors: &[Door],
+    room: Option<&[Vec2]>,
+    floor: f64,
+    need: &FaceNeed,
+    upf: f64,
+) -> Option<ClearFace> {
+    if !upf.is_finite() || upf <= 0.0 {
+        return None;
+    }
+    let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+    let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+    if w <= 0.0 || dp <= 0.0 {
+        return None;
+    }
+    let read_at = (lo + hi) * 0.5;
+    let inch = upf / 12.0;
+    let reach = super::propfill::HOST_SNAP_FT * upf;
+    let z_mid = floor + (e.bottom_ft + e.height_ft / 2.0) * upf;
+    // The pieces near enough to matter on this level at its height.
+    let near = reach + (REACH_FT + 4.0) * upf;
+    let here: Vec<&super::propfill::WallPiece> = pieces
+        .iter()
+        .filter(|(l, _, poly, _)| {
+            l.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(&e.level)) && poly.iter().any(|p| p.dist(read_at) <= near + poly_span(poly))
+        })
+        .collect();
+    let mut obstacles: Vec<Obstacle> = others.to_vec();
+    obstacles.extend(here.iter().filter_map(|(_, h, poly, z)| piece_obstacle(*h, poly, *z, floor, upf, need.height_in)));
+    let space = |o: &Obb| working_space(o, need.need_in, need.width_in, need.height_in, &obstacles, doors, None);
+    let box_on = |at: Vec2, along: Vec2, out: Vec2| {
+        let mid = if need.recessed { at - out * (dp / 2.0) } else { at + out * (dp / 2.0) };
+        (mid, Obb { c: [mid.x / upf, mid.y / upf], u: [along.x, along.y], hw: w / upf / 2.0, hd: dp / upf / 2.0 })
+    };
+    // Its place now: as the build would put it.
+    let own: Vec<super::propfill::WallPiece> = here.iter().map(|p| (*p).clone()).collect();
+    let now = super::propfill::wall_face(&own, &e.level, read_at, reach, Some(z_mid))?;
+    let (_, here_box) = box_on(now.at, now.along, now.out);
+    let was = space(&here_box);
+    if was.verdict != "fail" {
+        return None;
+    }
+    let mut best: Option<(u8, f64, ClearFace)> = None;
+    for (_, h, poly, z) in &here {
+        if !(z[0] <= z_mid && z_mid <= z[1]) && z[0].is_finite() {
+            continue;
+        }
+        let n = poly.len();
+        let edges: Vec<(Vec2, Vec2)> = (0..n).filter_map(|i| Some((*poly.get(i)?, *poly.get((i + 1) % n)?))).collect();
+        let longest = edges.iter().map(|(a, b)| a.dist(*b)).fold(0.0, f64::max);
+        if longest <= 1e-9 {
+            continue;
+        }
+        let thick = {
+            let pts: Vec<[f64; 2]> = poly.iter().map(|p| [p.x, p.y]).collect();
+            Obb::round(&pts).map_or(0.0, |o| 2.0 * o.hd)
+        };
+        if need.recessed && dp > thick + inch / 8.0 {
+            continue;
+        }
+        let ccw = cadaddy_geom::shoelace(poly) > 0.0;
+        for (a, b) in edges.iter().filter(|(a, b)| a.dist(*b) >= 0.5 * longest) {
+            let ab = *b - *a;
+            let len = ab.len();
+            if len < w {
+                continue;
+            }
+            let u = ab * (1.0 / len);
+            // Square to the plan: the box is kept as its low and high corners.
+            if u.x.abs() > 0.02 && u.y.abs() > 0.02 {
+                continue;
+            }
+            let out = if ccw { Vec2::new(u.y, -u.x) } else { Vec2::new(-u.y, u.x) };
+            let t0 = (read_at - *a).x * u.x + (read_at - *a).y * u.y;
+            let foot = *a + u * t0.clamp(0.0, len);
+            if foot.dist(read_at) > reach {
+                continue;
+            }
+            for k in -FACE_STEPS..=FACE_STEPS {
+                let t = (t0 + f64::from(k) * FACE_STEP_IN * inch).clamp(w / 2.0, len - w / 2.0);
+                let at = *a + u * t;
+                if let Some(r) = room
+                    && !super::gearbuild::inside_outline(r, at + out * (FACE_IN_ROOM_IN * inch))
+                {
+                    continue;
+                }
+                let (mid, obb) = box_on(at, u, out);
+                // The build must find this same face from its middle.
+                let same = super::propfill::wall_face(&own, &e.level, mid, reach, Some(z_mid))
+                    .is_some_and(|f| f.wall == *h && (f.out - out).len() < 0.01 && f.at.dist(at) < inch);
+                if !same {
+                    continue;
+                }
+                // No box stands in another wall.
+                let slim = Obb { hw: (obb.hw - 0.25 / 12.0).max(1e-6), hd: (obb.hd - 0.25 / 12.0).max(1e-6), ..obb };
+                let in_a_wall =
+                    here.iter().filter(|(_, o, _, zr)| o != h && (!zr[0].is_finite() || (zr[0] <= z_mid && z_mid <= zr[1]))).any(|(_, _, p, _)| {
+                        let pts: Vec<[f64; 2]> = p.iter().map(|v| [v.x / upf, v.y / upf]).collect();
+                        Obb::round(&pts).is_some_and(|w| overlap(&w.corners(), &slim.corners()))
+                    });
+                if in_a_wall {
+                    continue;
+                }
+                let ws = space(&obb);
+                let rank = match ws.verdict {
+                    "pass" => 2u8,
+                    "unsure" => 1,
+                    _ => continue,
+                };
+                let moved = mid.dist(read_at);
+                if best.as_ref().is_none_or(|(r, m, _)| rank > *r || (rank == *r && moved < *m - 1e-6)) {
+                    let half = if u.x.abs() > u.y.abs() { Vec2::new(w / 2.0, dp / 2.0) } else { Vec2::new(dp / 2.0, w / 2.0) };
+                    let (l, g) = (mid - half, mid + half);
+                    best = Some((
+                        rank,
+                        moved,
+                        ClearFace {
+                            min: [l.x, l.y],
+                            max: [g.x, g.y],
+                            wall: *h,
+                            moved_in: moved / inch,
+                            was_clear_in: was.clear_in,
+                            now_clear_in: ws.clear_in,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    best.map(|(_, _, f)| f)
+}
+
+/// A box's low and high corners as the build will set it: a panel on the face of the wall nearest
+/// it (into the wall when recessed, turned with the wall), anything else where the spec has it.
+pub(crate) fn as_the_build_sets_it(e: &MepEquipment, pieces: &[super::propfill::WallPiece], floor: f64, upf: f64) -> ([f64; 2], [f64; 2]) {
+    let kind = e.kind.to_ascii_lowercase();
+    let (lo, hi) = (Vec2::new(e.min[0].min(e.max[0]), e.min[1].min(e.max[1])), Vec2::new(e.min[0].max(e.max[0]), e.min[1].max(e.max[1])));
+    if e.round || !matches!(kind.as_str(), "panel" | "panelboard" | "load_center") {
+        return (e.min, e.max);
+    }
+    let z_mid = floor + (e.bottom_ft + e.height_ft / 2.0) * upf;
+    let Some(f) = super::propfill::wall_face(pieces, &e.level, (lo + hi) * 0.5, super::propfill::HOST_SNAP_FT * upf, Some(z_mid)) else {
+        return (e.min, e.max);
+    };
+    let (w, dp) = ((hi.x - lo.x).max(hi.y - lo.y), (hi.x - lo.x).min(hi.y - lo.y));
+    let recessed = e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess"));
+    let mid = if recessed { f.at - f.out * (dp / 2.0) } else { f.at + f.out * (dp / 2.0) };
+    let half = Vec2::new((f.along.x * w).abs() + (f.out.x * dp).abs(), (f.along.y * w).abs() + (f.out.y * dp).abs()) * 0.5;
+    ([mid.x - half.x, mid.y - half.y], [mid.x + half.x, mid.y + half.y])
+}
+
+fn poly_span(poly: &[Vec2]) -> f64 {
+    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
+    for p in poly {
+        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
+        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
+    }
+    (hi - lo).len()
+}
+
+/// What a piece of gear needs in front of it: conditions 1 and 3 for its voltage to ground.
+pub(crate) fn gear_need(sp: &BuildingSpec, e: &MepEquipment, code: &super::coderules::CodeRule) -> Option<[f64; 2]> {
+    gear_volts(sp, e).map(|(v, _)| {
+        let row = code.depth_in.iter().find(|row| v <= row[0]).or(code.depth_in.last()).copied().unwrap_or([600.0, 36.0, 42.0, 48.0]);
+        [row[1], row[3].max(row[1])]
+    })
+}
+
+/// The doors built on a level where the plans draw them (feet), by their swings.
+pub(crate) fn built_doors(d: &Drawing, upf: f64) -> BTreeMap<String, Vec<Door>> {
+    let mut out: BTreeMap<String, Vec<Door>> = BTreeMap::new();
+    for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("door")).take(MAX_OBSTACLES) {
+        let Some((lo, hi)) = super::fieldview::mesh_box(e) else { continue };
+        let back = super::bspec::stacked_by(e);
+        let ft = |x: f64, y: f64| [(x - back.x) / upf, (y - back.y) / upf];
+        let leaf = super::wallgen::door_swing(e).map(|s| s.map(|p| [p.x / upf, p.y / upf]));
+        out.entry(super::bspec::made_level(e).unwrap_or_default().to_ascii_lowercase()).or_default().push(Door {
+            id: e.handle.hex(),
+            min: ft(lo[0], lo[1]),
+            max: ft(hi[0], hi[1]),
+            swings_into: None,
+            source: None,
+            leaf,
+        });
+    }
+    out
 }
 
 // ---------------------------------------------------------------- fill and lugs (recomputed)
@@ -888,6 +1177,7 @@ fn level_things(cx: &Ctx, gear: &[Placed]) -> (BTreeMap<String, Vec<Obstacle>>, 
             max: o.max,
             swings_into: tag.and_then(|t| t.swings_into.clone()),
             source: tag.map(|t| format!("door tag {}{}", t.mark, t.source.as_ref().map(|s| format!(" on {s}")).unwrap_or_default())),
+            leaf: o.leaf,
         });
     }
     (obs, doors)
@@ -965,10 +1255,7 @@ pub(crate) fn check(cx: &Ctx, space: Option<&Effective>, fill: Option<&Effective
         // ---- E-GEAR-SPACE
         if let Some(r) = space {
             let volts = gear_volts(cx.sp, g.e);
-            let need = volts.as_ref().map(|(v, _)| {
-                let row = code.depth_in.iter().find(|row| *v <= row[0]).or(code.depth_in.last()).copied().unwrap_or([600.0, 36.0, 42.0, 48.0]);
-                [row[1], row[3].max(row[1])]
-            });
+            let need = gear_need(cx.sp, g.e, &code);
             let height_in = code.height_in.unwrap_or(78.0).max(g.z_in[1]);
             let lv = g.level.to_ascii_lowercase();
             let mine: Vec<Obstacle> = obstacles
@@ -1316,6 +1603,59 @@ fn fill_checks(
             continue;
         };
         let (fits, need, have) = pack(pitches, plate);
+        // Raceways the can's top can't take may land on a wireway built over it: judged on its own
+        // box, from the model, the can's shortfall kept beside it.
+        let wireway = (!fits && *side == "top")
+            .then(|| {
+                let want = super::gearbuild::wireway_tag(tag);
+                cx.sp.mep.equipment.iter().find(|e| e.kind == "wireway" && e.tag.trim().eq_ignore_ascii_case(&want))
+            })
+            .flatten();
+        if let Some(w) = wireway {
+            let inch = if cx.sp.units_per_foot.is_finite() && cx.sp.units_per_foot > 0.0 { cx.sp.units_per_foot / 12.0 } else { 1.0 };
+            let long_in = (w.max[0] - w.min[0]).abs().max((w.max[1] - w.min[1]).abs()) / inch;
+            let deep_in = w.height_ft * 12.0;
+            let usable = code.wireway_usable.filter(|v| *v > 0.0 && *v <= 1.0).unwrap_or(0.85);
+            let holds = long_in * deep_in * usable;
+            let proposed = w.sources.get("status").is_some_and(|t| t == "proposed");
+            let v = if holds + 1e-6 >= need { "pass" } else { "fail" };
+            let issue = if v == "pass" {
+                format!(
+                    "{} raceways land on the {}wireway over {tag}: about {} sq in needed, {} sq in usable ({tag}'s own top has {})",
+                    pitches.len(),
+                    if proposed { "proposed " } else { "" },
+                    need.round(),
+                    holds.round(),
+                    have.round()
+                )
+            } else {
+                format!(
+                    "the wireway over {tag} is too small for {} raceways: about {} sq in needed, {} sq in usable",
+                    pitches.len(),
+                    need.round(),
+                    holds.round()
+                )
+            };
+            emit(
+                &check,
+                v,
+                issue,
+                format!(
+                    "{} raceways (each its outside diameter and {} in round it) landed on the wireway over the {side}",
+                    pitches.len(),
+                    tables.spacing_in
+                ),
+                format!(
+                    "{} x {} in wireway, {} sq in usable; {tag}'s top {} sq in ({plate_from})",
+                    r2(long_in),
+                    r2(deep_in),
+                    holds.round(),
+                    have.round()
+                ),
+                json!({"raceways": pitches.len(), "need_sq_in": r2(need), "plate_in": [r2(plate[0]), r2(plate[1])], "plate_sq_in": r2(have), "plate_from": plate_from, "wireway": w.tag, "wireway_in": [r2(long_in), r2(deep_in)], "wireway_sq_in": r2(holds), "wireway_proposed": proposed, "feeders": feeders}),
+            );
+            continue;
+        }
         let derived = plate_from.starts_with("derived");
         let v = if !fits {
             "fail"
@@ -1825,6 +2165,111 @@ mod tests {
         ]
     }
 
+    /// A wall's piece from its corners (inches), full height on the level at 0.
+    fn piece(h: u64, lo: [f64; 2], hi: [f64; 2]) -> super::super::propfill::WallPiece {
+        let p = |x: f64, y: f64| Vec2::new(x, y);
+        (Some("L".to_string()), cadaddy_doc::Handle(h), vec![p(lo[0], lo[1]), p(hi[0], lo[1]), p(hi[0], hi[1]), p(lo[0], hi[1])], [0.0, 120.0])
+    }
+
+    fn lettered(lo: [f64; 2], hi: [f64; 2]) -> MepEquipment {
+        serde_json::from_value(json!({
+            "tag": "G-1", "kind": "panel", "level": "L", "min": lo, "max": hi, "bottom_ft": 4.5, "height_ft": 2.0,
+            "title": "", "systems": [], "sources": {}, "properties": {},
+        }))
+        .unwrap()
+    }
+
+    fn need(recessed: bool) -> FaceNeed {
+        FaceNeed { need_in: Some([36.0, 36.0]), width_in: 30.0, height_in: 78.0, recessed }
+    }
+
+    #[test]
+    fn a_panel_set_in_a_partition_faces_the_side_that_has_its_space() {
+        // A 4" partition at x 100; on its west a box of millwork 5" from it, on its east an open
+        // room. Lettered on the wall line, the panel lands on the west face by a hair.
+        let walls = [piece(1, [100.0, 0.0], [104.2, 200.0]), piece(2, [40.0, 90.0], [95.0, 110.0])];
+        let e = lettered([100.0, 93.0], [104.0, 107.0]);
+        let f = clear_face(&e, &walls, &[], &[], None, 0.0, &need(true), 12.0).expect("the east face is clear");
+        assert_eq!(f.wall, cadaddy_doc::Handle(1), "{f:?}");
+        assert!((f.max[0] - 104.2).abs() < 1e-6 && (f.min[0] - 100.2).abs() < 1e-6, "flush with the east face: {f:?}");
+        assert!(f.was_clear_in < 36.0 && f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_box_is_where_the_build_will_set_it() {
+        // A surface panel read square to the plan, a foot off a wall running north: on its face,
+        // turned with it. What isn't a panel, or has no wall near, stays where the spec has it.
+        let walls = [piece(1, [100.0, 0.0], [104.0, 200.0])];
+        let mut e = lettered([80.0, 100.0], [94.0, 104.0]);
+        e.properties.clear();
+        let (lo, hi) = as_the_build_sets_it(&e, &walls, 0.0, 12.0);
+        assert!((hi[0] - lo[0] - 4.0).abs() < 1e-6 && (hi[1] - lo[1] - 14.0).abs() < 1e-6, "{lo:?} {hi:?}");
+        assert!((hi[0] - 100.0).abs() < 1e-6, "on the west face: {lo:?} {hi:?}");
+        let (lo, hi) = as_the_build_sets_it(&lettered([500.0, 100.0], [514.0, 104.0]), &walls, 0.0, 12.0);
+        assert_eq!((lo, hi), ([500.0, 100.0], [514.0, 104.0]));
+        e.kind = "pull_box".into();
+        assert_eq!(as_the_build_sets_it(&e, &walls, 0.0, 12.0), (e.min, e.max));
+    }
+
+    #[test]
+    fn a_panel_with_its_space_stays_where_it_was_read() {
+        let walls = [piece(1, [100.0, 0.0], [104.2, 200.0])];
+        let e = lettered([100.0, 93.0], [104.0, 107.0]);
+        assert_eq!(clear_face(&e, &walls, &[], &[], None, 0.0, &need(true), 12.0), None);
+    }
+
+    #[test]
+    fn a_panel_does_not_cross_into_the_room_next_door() {
+        // The same partition with the open side outside its room's outline: no face is better.
+        let walls = [piece(1, [100.0, 0.0], [104.2, 200.0]), piece(2, [40.0, 90.0], [95.0, 110.0])];
+        let e = lettered([100.0, 93.0], [104.0, 107.0]);
+        let room = [Vec2::new(0.0, 0.0), Vec2::new(102.0, 0.0), Vec2::new(102.0, 110.0), Vec2::new(0.0, 110.0)];
+        let f = clear_face(&e, &walls, &[], &[], Some(&room), 0.0, &need(true), 12.0);
+        // Along the west face, past the millwork's end, is in the room.
+        let f = f.expect("further along its own side");
+        assert!(f.max[0] <= 100.0 + 1e-6 || f.min[0] >= 100.0 - 1e-6, "{f:?}");
+        assert!(f.max[0] <= 102.0 + 2.2, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_hanging_off_its_walls_end_comes_back_on_it() {
+        // Its middle is read at the wall's end, a wall coming into it from below there.
+        let walls = [piece(1, [100.0, 100.0], [300.0, 105.5]), piece(2, [100.8, 40.0], [105.0, 100.0])];
+        let e = lettered([80.0, 96.0], [94.0, 100.0]);
+        let f = clear_face(&e, &walls, &[], &[], None, 0.0, &need(false), 12.0).expect("a face with its space");
+        let on_wall_1 = f.min[0] >= 100.0 - 1e-6 && f.min[1] >= 100.0 - 1e-6;
+        let on_wall_2 = f.max[0] <= 100.8 + 1e-6 && f.max[1] <= 100.0 + 1e-6;
+        let on_wall_1_south_clear = f.min[0] >= 105.0 - 1e-6 && f.max[1] <= 100.0 + 1e-6;
+        assert!(on_wall_1 || on_wall_2 || on_wall_1_south_clear, "whole on a wall, in no other: {f:?}");
+        assert!(f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_wall_meeting_the_space_end_on_is_measured_to_its_end() {
+        // A 20" thick wall, 5" from the panel's face, its end toward it: 5 in, not less for its thickness.
+        let ws = working_space(
+            &panel(),
+            Some([36.0, 36.0]),
+            30.0,
+            78.0,
+            &[wall("S", [-1.0, -0.25], [11.0, -0.25], 6.0), wall("X", [5.0, 0.5 + 5.0 / 12.0], [5.0, 6.0], 20.0)],
+            &[],
+            None,
+        );
+        assert!((ws.clear_in - 5.0).abs() < 0.01, "{ws:?}");
+        // And behind the panel's face it is nothing in front of it.
+        let ws = working_space(
+            &panel(),
+            Some([36.0, 36.0]),
+            30.0,
+            78.0,
+            &[wall("S", [-1.0, -0.25], [11.0, -0.25], 6.0), wall("X", [5.0, -6.0], [5.0, -0.5], 20.0)],
+            &[],
+            None,
+        );
+        assert_eq!(ws.verdict, "pass", "{ws:?}");
+    }
+
     #[test]
     fn a_box_round_its_corners_turned_or_not() {
         let o = Obb::round(&[[0.0, 0.0], [2.0, 0.0], [2.0, 0.5], [0.0, 0.5]]).unwrap();
@@ -1886,14 +2331,44 @@ mod tests {
     fn a_door_swinging_into_the_room_over_the_space_fails_and_one_that_may_is_unsure() {
         // A 3 ft door in the east wall, 1 to 4 ft north: its leaf sweeps x 7.25..10 in the room.
         let wide = Obb { c: [8.0, 0.25], u: [1.0, 0.0], hw: 1.5, hd: 0.25 };
-        let door =
-            |into: Option<&str>| Door { id: "D1".into(), min: [10.0, 1.0], max: [10.5, 4.0], swings_into: into.map(str::to_string), source: None };
+        let door = |into: Option<&str>| Door {
+            id: "D1".into(),
+            min: [10.0, 1.0],
+            max: [10.5, 4.0],
+            swings_into: into.map(str::to_string),
+            source: None,
+            leaf: None,
+        };
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("11"))], Some("11"));
         assert_eq!(ws.verdict, "fail", "{ws:?}");
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(None)], Some("11"));
         assert_eq!(ws.verdict, "unsure", "{ws:?}");
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("12"))], Some("11"));
         assert_eq!(ws.verdict, "pass", "{ws:?}");
+    }
+
+    #[test]
+    fn a_doors_drawn_swing_says_whether_it_sweeps_the_space() {
+        let wide = Obb { c: [8.0, 0.25], u: [1.0, 0.0], hw: 1.5, hd: 0.25 };
+        let door = |leaf: [[f64; 2]; 3], into: Option<&str>| Door {
+            id: "D1".into(),
+            min: [10.0, 1.0],
+            max: [10.5, 4.0],
+            swings_into: into.map(str::to_string),
+            source: None,
+            leaf: Some(leaf),
+        };
+        let run = |doors: &[Door]| working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), doors, Some("11")).verdict;
+        // Hinged at (10, 4): open west, into the room, its leaf sweeps the space.
+        let into_room = [[10.0, 4.0], [7.0, 4.0], [10.0, 1.0]];
+        assert_eq!(run(&[door(into_room, None)]), "fail");
+        // The same hinge, open east, out of the room: clear, not "may be".
+        let out_of_room = [[10.0, 4.0], [13.0, 4.0], [10.0, 1.0]];
+        assert_eq!(run(&[door(out_of_room, None)]), "pass");
+        // Its jambs are pieces of the one door: counted once, and clear still.
+        assert_eq!(run(&[door(out_of_room, None), door(out_of_room, None)]), "pass");
+        // A door tag saying otherwise is the document: it stands.
+        assert_eq!(run(&[door(out_of_room, Some("11"))]), "fail");
     }
 
     #[test]
