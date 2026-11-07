@@ -2803,6 +2803,39 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                         && cadaddy_mepfix::printlinks::norm_sheet(target) == cadaddy_mepfix::printlinks::norm_sheet(tag)
                         && !matches!(device_types::tag_verdict(detail, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
                 });
+                // A circuit label with a device's type mark printed over it (`F` over `Q-3`: a
+                // luminaire's label, set clear of the light with a leader to it, often over a tub)
+                // is that device's: a symbol it fell by is no receptacle on its circuit
+                // (receptacles carry no type mark; their designations, GFCI or WP, are no type).
+                let mark_over: Option<String> = tag_at.and_then(|(p, lh)| {
+                    let over = |q: cadaddy_geom::Vec2, height: f64, v: &str| {
+                        let dy = q.y - p.y;
+                        dy > 0.3 * lh
+                            && dy <= MARK_OVER_LABEL_H * lh
+                            && (q.x - p.x).abs() <= lh
+                            && height >= TYPE_MARK_MIN_H * lh
+                            && height <= TYPE_MARK_MAX_H * lh
+                            && !circuit_text(v, &sheet_numbers)
+                            && !is_circuit_tag(v)
+                            && receptacle_designations(&[v]).is_empty()
+                            && matches!(device_types::tag_verdict(v, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
+                            // A mark with another circuit label of its own under it (`H` over
+                            // `K-1,a`) is that label's, not this one's.
+                            && !page_texts.iter().any(|u| {
+                                let du = q.y - u.at.y;
+                                (circuit_text(&u.value, &sheet_numbers) || is_circuit_tag(&u.value))
+                                    && du > 0.3 * height
+                                    && du <= MARK_OVER_LABEL_H * height
+                                    && (u.at.x - q.x).abs() <= height
+                                    && u.at.dist(p) > 0.5 * lh
+                            })
+                    };
+                    page_texts.iter().find(|t| t.rotation.abs() < 1e-3 && over(t.at, t.height, &t.value)).map(|t| t.value.clone()).or_else(|| {
+                        syms.iter()
+                            .filter(|(_, _, oh, _)| oh != h)
+                            .find_map(|(ot, _, _, ota)| ota.filter(|(q, qh)| over(*q, *qh, ot)).map(|_| ot.clone()))
+                    })
+                });
                 let fate = if bubble {
                     MarkFate::not_object("a callout bubble: its sheet reference reads like a circuit")
                 } else if !electrical(&sheet) {
@@ -2811,13 +2844,17 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     MarkFate::not_object("a circuit label on a fire alarm plan")
                 } else if !circuit_text(tag, &sheet_numbers) {
                     MarkFate::not_object("a sheet number by a symbol")
+                } else if let Some(m) = &mark_over {
+                    MarkFate::not_object(&format!(
+                        "a circuit label under the type mark {m}: that device's label (its mark over its circuit), not a receptacle's"
+                    ))
                 } else if !building {
                     MarkFate::left_out("receptacle", super::inventory::OUT_OF_SCOPE, "on a sheet of no building level")
                 } else {
                     MarkFate::object("receptacle", "a symbol its circuit labels: a receptacle")
                 };
                 c.fates.push((h.0, fate));
-                if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
+                if electrical(&sheet) && kind.is_empty() && building && !bubble && mark_over.is_none() && circuit_text(tag, &sheet_numbers) {
                     // Its designations printed by it (GFCI, WP, USB…), else a plain one.
                     let near: Vec<&str> = tag_at
                         .map(|(p, h)| {
@@ -5777,6 +5814,32 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         ));
                     }
                     fixture_fits = rep.fits;
+                    // A receptacle read inside a drawn tub or shower is one of the fixture's own
+                    // marks (its drain) that a circuit label printed over the fixture named: no
+                    // receptacle symbol is drawn inside a tub (NEC 406.9(C)).
+                    let inside = super::fixturefit::receptacles_inside(&fixture_fits, &out, upf_dev, rules);
+                    if !inside.is_empty() {
+                        let gone: BTreeSet<usize> = inside.iter().map(|i| i.index).collect();
+                        // A symbol copied into several rooms stays an object while one copy stays.
+                        let kept: BTreeSet<String> =
+                            out.iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, dv)| dv.handle.to_ascii_uppercase()).collect();
+                        for i in &inside {
+                            if let Some(dv) = out.get(i.index).filter(|dv| !kept.contains(&dv.handle.to_ascii_uppercase())) {
+                                let handle = dv.handle.clone();
+                                fate(job, &handle, MarkFate::not_object(&i.reason));
+                            }
+                        }
+                        progress_line(&format!(
+                            "  receptacles read inside a drawn tub or shower (its own marks a circuit label named, no receptacle symbol): {} left out",
+                            gone.len()
+                        ));
+                        let mut k = 0usize;
+                        out.retain(|_| {
+                            let keep = !gone.contains(&k);
+                            k += 1;
+                            keep
+                        });
+                    }
                 }
                 out
             }
@@ -25351,6 +25414,48 @@ mod tests {
         // The `H` over `K-1,a` is a fixture of its own beside the receptacle.
         let by_mark = job.devices.iter().filter(|d| d.tag == "H" && d.at[0] > 1100.0).count();
         assert_eq!(by_mark, 1, "{:?}", job.devices);
+    }
+
+    /// A luminaire's label (its type mark over its circuit, `F` over `Q-3`) set clear of the light,
+    /// over a tub with a leader to the wall light, labels whatever symbol the import found beside
+    /// it (the tub's drain): that symbol is no receptacle on the luminaire's circuit, whether the
+    /// mark is lettering or another symbol's tag. A receptacle by its circuit alone, or with its
+    /// designation over it (`GFCI`), stays one.
+    #[test]
+    fn a_circuit_label_under_a_luminaires_type_mark_is_no_receptacle() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        job.wall_luminaire_types = vec!["F".into()];
+        job.luminaire_types = vec!["XB".into()];
+        // Lettering 2 high. `F` over `Q-3` (the label's circuit is the drain symbol's tag) at
+        // x 300; an exit sign's `XB` over `Q-2`, its mark a symbol's tag, at x 1100; a plain
+        // receptacle `Q-5` at x 700; a GFCI one, `GFCI` over `Q-7`, at x 1500.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![("F", 300.0, 504.5, 2.0), ("GFCI", 1500.0, 504.5, 2.0)];
+        let syms: Vec<(&str, f64, f64)> =
+            vec![("Q-3", 300.0, 502.0), ("Q-5", 700.0, 502.0), ("XB", 1100.0, 504.5), ("Q-2", 1100.0, 502.0), ("Q-7", 1500.0, 502.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut receptacles: Vec<(String, String)> =
+            job.devices.iter().filter(|d| d.kind == "receptacle").map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        receptacles.sort();
+        assert_eq!(receptacles, [("GFCI".to_string(), "Q-7".to_string()), ("REC".to_string(), "Q-5".to_string())], "{r:#}");
     }
 
     /// A lone fixture mark is printed as the schedule prints its type, in its label's lettering: a
