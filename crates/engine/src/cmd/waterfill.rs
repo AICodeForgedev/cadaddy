@@ -84,6 +84,74 @@ pub(crate) struct FillRules {
     /// most [`Self::along_deg`] off its line), is that pipe and is not laid again (feet).
     pub along_ft: f64,
     pub along_deg: f64,
+    /// How far (feet) a filled-in pipe is offset clear of electrical gear's dedicated space it
+    /// would otherwise cross, and why.
+    pub gear_clear_ft: f64,
+    pub gear_clear_basis: String,
+}
+
+/// The dedicated space of a piece of electrical gear (NEC 110.26(E)(1)): its footprint (drawing
+/// units, on its level's plan) from the floor to `top_ft`; no pipe that doesn't serve it may run
+/// there.
+#[derive(Clone, Debug)]
+pub(crate) struct KeepOut {
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    pub top_ft: f64,
+    pub what: String,
+}
+
+/// Whether the segment a-b crosses the box (Liang–Barsky).
+fn crosses_box(a: [f64; 2], b: [f64; 2], min: [f64; 2], max: [f64; 2]) -> bool {
+    let (mut t0, mut t1) = (0.0f64, 1.0f64);
+    for k in 0..2 {
+        let (p, d) = (a[k], b[k] - a[k]);
+        if d.abs() <= 1e-12 {
+            if p < min[k] || p > max[k] {
+                return false;
+            }
+            continue;
+        }
+        let (mut u0, mut u1) = ((min[k] - p) / d, (max[k] - p) / d);
+        if u0 > u1 {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        t0 = t0.max(u0);
+        t1 = t1.min(u1);
+        if t0 > t1 {
+            return false;
+        }
+    }
+    true
+}
+
+/// A filled-in leg a-b at `bottom_ft` that would pass through a gear's dedicated space, offset
+/// to the nearer side clear of it (by `clear`, drawing units) with a jog at each end, as a
+/// plumber carries a pipe past a panel: its points and the gear it clears. `None`: it crosses
+/// none, or no offset to either side clears them all (it is left as laid; the gear check
+/// reports it).
+fn clear_of_gear(a: [f64; 2], b: [f64; 2], bottom_ft: f64, keep: &[KeepOut], clear: f64) -> Option<(Vec<[f64; 2]>, String)> {
+    let hit = |p: [f64; 2], q: [f64; 2]| keep.iter().find(|k| bottom_ft < k.top_ft && crosses_box(p, q, k.min, k.max));
+    let first = hit(a, b)?;
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l = dx.hypot(dy);
+    if !(l.is_finite() && l > 1e-9 && clear.is_finite()) {
+        return None;
+    }
+    let n = [-dy / l, dx / l];
+    // The box's corners across the leg, from its line: the offsets that clear it either side.
+    let across: Vec<f64> = [first.min, [first.min[0], first.max[1]], first.max, [first.max[0], first.min[1]]]
+        .iter()
+        .map(|c| (c[0] - a[0]) * n[0] + (c[1] - a[1]) * n[1])
+        .collect();
+    let (lo, hi) = across.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+    let mut sides = [hi + clear, lo - clear];
+    sides.sort_by(|x, y| x.abs().total_cmp(&y.abs()));
+    sides.into_iter().find_map(|o| {
+        let shift = |p: [f64; 2]| [p[0] + n[0] * o, p[1] + n[1] * o];
+        let path = vec![a, shift(a), shift(b), b];
+        path.windows(2).all(|w| hit(w[0], w[1]).is_none()).then(|| (path, first.what.clone()))
+    })
 }
 
 /// A fixture branch's size by its system and the fixture's words (`plumbing.json` `fill_in.sizes`).
@@ -682,6 +750,8 @@ pub(crate) struct Inferred {
     /// The needs met, and those with no main of their system within the rules' reach.
     pub served: usize,
     pub unserved: Vec<String>,
+    /// Legs offset clear of a gear's dedicated space.
+    pub cleared: usize,
 }
 
 /// One piece of a floor's water network: its ends, the run it is of (the template a run laid off
@@ -706,6 +776,20 @@ struct Piece {
 /// not laid where it would run along a pipe of its system already on the floor (`along`: all its
 /// pipe, drawn or filled in) or laid before it: that stretch is that pipe.
 pub(crate) fn infer(level: &str, mains: &[&MepRun], along: &[&MepRun], needs: Vec<Need>, upf: f64, ru: &FillRules) -> Inferred {
+    infer_clear(level, mains, along, needs, upf, ru, &[])
+}
+
+/// [`infer`], each filled-in leg that would pass through a gear's dedicated space (`keep`, below
+/// its top) offset clear of it ([`FillRules::gear_clear_ft`]), its basis saying so.
+pub(crate) fn infer_clear(
+    level: &str,
+    mains: &[&MepRun],
+    along: &[&MepRun],
+    needs: Vec<Need>,
+    upf: f64,
+    ru: &FillRules,
+    keep: &[KeepOut],
+) -> Inferred {
     let mut out = Inferred::default();
     if !(upf.is_finite() && upf > 0.0) {
         return out;
@@ -812,9 +896,20 @@ pub(crate) fn infer(level: &str, mains: &[&MepRun], along: &[&MepRun], needs: Ve
             if gap(corner, p) {
                 laid.push((lay(vec![corner, p], [size, 0.0], branch(&need.what)), false));
             }
-            for (r, main) in laid {
-                if let [a, b] = r.points.as_slice() {
-                    net.push(Piece { a: *a, b: *b, run: templates.len(), bottom, main });
+            for (mut r, main) in laid {
+                // Not through a panel's dedicated space: offset past it, as the field runs it.
+                if let [a, b] = r.points.as_slice()
+                    && let Some((path, what)) = clear_of_gear(*a, *b, bottom, keep, ru.gear_clear_ft.max(0.0) * upf)
+                {
+                    r.points = path;
+                    r.bottoms_ft = vec![bottom; r.points.len().saturating_sub(1)];
+                    r.size_source = format!("{}; offset clear of {what}'s dedicated space: {}", r.size_source, ru.gear_clear_basis);
+                    out.cleared += 1;
+                }
+                if r.points.len() >= 2 {
+                    for w in r.points.windows(2) {
+                        net.push(Piece { a: w[0], b: w[1], run: templates.len(), bottom, main });
+                    }
                     templates.push(r.clone());
                 }
                 // Only the stretches no pipe of its system already runs along.
@@ -950,6 +1045,40 @@ mod tests {
         let lone = Source { level: "Level 3".into(), rooms: vec![rect("STAIR", 0.0, 0.0, 10.0, 20.0, "S")], runs: Vec::new() };
         assert!(derive(&mine, "Level 2", &[lone], 12.0, &ru()).is_none());
         assert!(derive(&[], "Level 2", &[], 12.0, &ru()).is_none());
+    }
+
+    #[test]
+    fn a_filled_in_branch_is_offset_past_a_panels_dedicated_space_not_through_it() {
+        let r = ru();
+        let main = run("CW", "Level 2", &[[0.0, 2.5], [48.0, 2.5]]);
+        let mains = vec![&main];
+        // The fixture's tee (x 20, from the main at y 2.5 up to y 30) would cross a panel set in
+        // the wall at y 15 (a foot wide, 4 in deep), its top at 6.5 ft: dedicated to 12.5 ft.
+        let fixtures = vec![Fixture { at: [20.0 * 12.0, 30.0 * 12.0], what: "P-91".into(), lines: vec!["CW".into()], words: String::new() }];
+        let panel = KeepOut { min: [19.6 * 12.0, 15.0 * 12.0], max: [20.6 * 12.0, 15.33 * 12.0], top_ft: 12.5, what: "PNL-9".into() };
+        let n = needs(&mains, &fixtures, 15.0, 12.0, &r, true);
+        let inf = infer_clear("Level 2", &mains, &mains, n.clone(), 12.0, &r, std::slice::from_ref(&panel));
+        assert_eq!(inf.cleared, 1, "{:?}", inf.runs);
+        let tee = inf.runs.iter().find(|t| t.size_source.contains("offset clear")).expect("the tee");
+        // Teed off the main beside the panel (its nearer side, 0.4 ft off the tee's line, plus
+        // the clearance: the jog along the main is the main, not laid again), up past it, and
+        // across to the fixture.
+        let pts: Vec<[f64; 2]> = tee.points.iter().map(|p| [p[0] / 12.0, p[1] / 12.0]).collect();
+        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
+        let x = 19.6 - r.gear_clear_ft;
+        assert_eq!(pts.len(), 3, "{pts:?}");
+        assert!(near(pts[0], [x, 2.5]) && near(pts[1], [x, 30.0]) && near(pts[2], [20.0, 30.0]), "{pts:?}");
+        assert!(tee.points.windows(2).all(|w| !crosses_box(w[0], w[1], panel.min, panel.max)));
+        assert_eq!(tee.bottoms_ft.len(), 2);
+        assert!(tee.size_source.contains("offset clear of PNL-9's dedicated space") && tee.size_source.contains("110.26(E)"), "{}", tee.size_source);
+        // Over the dedicated space's top, it runs straight.
+        let high = KeepOut { top_ft: 9.0, ..panel.clone() };
+        let inf = infer_clear("Level 2", &mains, &mains, n, 12.0, &r, &[high]);
+        assert_eq!(inf.cleared, 0);
+        assert!(!inf.runs.is_empty() && inf.runs.iter().all(|t| t.points.len() == 2), "{:?}", inf.runs);
+        // Hostile boxes and legs: nothing to clear.
+        assert!(clear_of_gear([0.0, 0.0], [0.0, 0.0], 1.0, std::slice::from_ref(&panel), 6.0).is_none());
+        assert!(clear_of_gear([f64::NAN, 0.0], [10.0, 0.0], 1.0, &[panel], f64::INFINITY).is_none());
     }
 
     #[test]

@@ -178,6 +178,10 @@ pub struct StageState {
     /// How long the stage's work took (ms), once it has run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
+    /// The build that ran the stage ([`source_stamp`]): a resumed job runs again what another
+    /// build read (none: a stage run before stages were stamped, or not run yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
 }
 
 impl StageState {
@@ -191,6 +195,7 @@ impl StageState {
             result: None,
             error: None,
             elapsed_ms: None,
+            build: None,
         }
     }
 
@@ -2295,21 +2300,134 @@ fn write_checkpoint(s: &mut Session, job: &GuidedJob) {
 /// Whether the file at `path` is a job's checkpoint (a drawing holding a job's state): one the
 /// caller names may be written over; any other file there is the caller's and is never touched.
 fn is_job_checkpoint(path: &str) -> bool {
-    let Some(hooks) = super::file::io() else { return false };
-    let Ok(bytes) = std::fs::read(path) else { return false };
-    let Ok(d) = (hooks.read)(&bytes, path) else { return false };
-    d.agent.as_deref().and_then(|a| serde_json::from_str::<Value>(a).ok()).is_some_and(|a| a.get("guided_job").is_some())
+    checkpoint_agent(path).is_some_and(|a| a.get("guided_job").is_some())
 }
 
-/// The unfinished job of this goal a checkpoint holds, with its drawing (its prints are checked
-/// by the caller: [`check_prints`]).
-fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<(cadaddy_doc::Drawing, GuidedJob)> {
-    let hooks = super::file::io()?;
+/// The agent state of the drawing at `path`: from a .cdy file without reading its drawing (a
+/// hotel's is gigabytes in memory), else from the drawing the io hooks read.
+fn checkpoint_agent(path: &str) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
-    let d = (hooks.read)(&bytes, path).ok()?;
-    let agent: Value = serde_json::from_str(d.agent.as_deref()?).ok()?;
-    let job: GuidedJob = serde_json::from_value(agent.get("guided_job")?.clone()).ok()?;
-    (job.goal == *goal && !job.is_done()).then_some((d, job))
+    let text = match cadaddy_io::cdy::agent(&bytes) {
+        Ok(text) => text?,
+        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent?,
+    };
+    serde_json::from_str(&text).ok()
+}
+
+/// The unfinished job of this goal a checkpoint holds (its prints are checked by the caller:
+/// [`check_prints`]; its drawing is read when the job goes on from it: [`checkpoint_drawing`]).
+fn read_checkpoint(path: &str, goal: &JobGoal) -> Option<GuidedJob> {
+    let job: GuidedJob = serde_json::from_value(checkpoint_agent(path)?.get("guided_job")?.clone()).ok()?;
+    (job.goal == *goal && !job.is_done()).then_some(job)
+}
+
+/// A checkpoint's drawing (its job state inside).
+fn checkpoint_drawing(path: &str) -> Result<cadaddy_doc::Drawing> {
+    let hooks = super::file::io().ok_or_else(|| bad("job.start", "no file reader to read the checkpoint with"))?;
+    let bytes = std::fs::read(path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))?;
+    (hooks.read)(&bytes, path).map_err(|e| bad("job.start", format!("checkpoint {path} couldn't be read: {e}")))
+}
+
+/// The stages' names.
+fn labels(stages: &[StageName]) -> Vec<&'static str> {
+    stages.iter().map(|n| n.label()).collect()
+}
+
+/// This build's reading code: the version and a hash of the engine's sources and the crates
+/// below it (`build.rs`). Two builds of the same sources stamp the same on any machine.
+pub fn source_stamp() -> &'static str {
+    concat!(env!("CARGO_PKG_VERSION"), "+src.", env!("CADADDY_SOURCE_STAMP"))
+}
+
+/// What a resumed job does with the stages its checkpoint holds (`job.start {refresh}`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refresh {
+    /// Run again, from the first of them on, the stages another build read (the default): a
+    /// rebuild from a checkpoint reads the prints as a whole job of this build does.
+    Stale,
+    /// Run again from this stage on, whoever read it; the earlier ones are kept.
+    From(StageName),
+    /// Keep every stage, read by whichever build (said in the note and a finding).
+    Keep,
+}
+
+fn parse_refresh(p: &Value) -> Result<Refresh> {
+    match p.get("refresh") {
+        None | Some(Value::Null | Value::Bool(true)) => Ok(Refresh::Stale),
+        Some(Value::Bool(false)) => Ok(Refresh::Keep),
+        Some(Value::String(v)) => {
+            let v = v.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "stale" => Ok(Refresh::Stale),
+                "none" => Ok(Refresh::Keep),
+                _ => StageName::ALL.iter().find(|n| n.label() == v).map(|n| Refresh::From(*n)).ok_or_else(|| {
+                    let names: Vec<&str> = StageName::ALL.iter().map(|n| n.label()).collect();
+                    bad("job.start", format!("refresh is \"stale\", \"none\" or a stage ({}), not {v:?}", names.join(", ")))
+                }),
+            }
+        }
+        Some(other) => Err(bad("job.start", format!("refresh is \"stale\", \"none\" or a stage name, not {other}"))),
+    }
+}
+
+/// The stages of a job that ran (done or waiting on answers) in another build than this one, or
+/// before stages were stamped.
+fn other_build_stages(job: &GuidedJob) -> Vec<StageName> {
+    job.stages
+        .iter()
+        .filter(|st| matches!(st.status, StageStatus::Done | StageStatus::Paused) && st.build.as_deref() != Some(source_stamp()))
+        .map(|st| st.name)
+        .collect()
+}
+
+/// The stage a resumed job runs again from (with every stage after it), if any: under
+/// `refresh`, of the stages that ran.
+fn refresh_from(job: &GuidedJob, refresh: Refresh) -> Option<StageName> {
+    let from = match refresh {
+        Refresh::Stale => other_build_stages(job).first().copied(),
+        Refresh::From(stage) => Some(stage),
+        Refresh::Keep => None,
+    }?;
+    job.stages.iter().any(|st| st.name >= from && matches!(st.status, StageStatus::Done | StageStatus::Paused | StageStatus::Error)).then_some(from)
+}
+
+/// The rooms stage imports the plans into the job's drawing: a job run again from it, or from
+/// before it, starts from the prints (the drawing is that build's reading too).
+fn refresh_starts_over(from: StageName) -> bool {
+    from <= StageName::Rooms
+}
+
+/// A job started over from the prints of a checkpoint's job: its answers (asked again, the same
+/// questions take them) and what they set carry over.
+fn carry_into(job: &mut GuidedJob, saved: &GuidedJob) {
+    job.id.clone_from(&saved.id);
+    job.created.clone_from(&saved.created);
+    job.carry = saved
+        .stages
+        .iter()
+        .flat_map(|st| st.questions.iter().chain(st.verify.iter()).chain(st.completeness.iter()))
+        .filter(|q| q.answer.is_some())
+        .cloned()
+        .collect();
+    job.rules.clone_from(&saved.rules);
+    job.storey_ft = saved.storey_ft;
+    job.levels_given.clone_from(&saved.levels_given);
+    job.level_answers.clone_from(&saved.level_answers);
+    job.audit.clone_from(&saved.audit);
+    // The documents it was given, when not given again.
+    if job.submittals.is_empty() {
+        job.submittals.clone_from(&saved.submittals);
+    }
+    if job.specs.is_empty() && !job.specs_declined {
+        job.specs.clone_from(&saved.specs);
+        job.specs_declined = saved.specs_declined;
+    }
+    if job.cost_db.is_none() {
+        job.cost_db.clone_from(&saved.cost_db);
+    }
+    // Ids go on from the checkpoint's: one asked again takes its earlier id.
+    job.question_seq = saved.question_seq;
+    job.finding_seq = saved.finding_seq;
 }
 
 /// An unlisted tag printed by several symbols: a question with a crop.
@@ -10839,17 +10957,37 @@ fn infer_missing_water(
         // drainage, which its plans draw) from any of its pipes.
         let mains: Vec<&cadaddy_walk3d::MepRun> =
             on.iter().copied().filter(|r| !*planless || !fill.water.contains(&r.system) || super::waterfill::is_main(r)).collect();
-        let inf = super::waterfill::infer(level, &mains, &on, needs, upf, &fill);
+        // The floor's electrical gear: its dedicated space (NEC 110.26(E)(1)), from the floor to
+        // 6 ft over it or the floor's height, kept clear of the pipe filled in.
+        let storey_ft = sp.level(level).map(|l| l.height_ft).filter(|h| h.is_finite() && *h > 0.0);
+        let keep: Vec<super::waterfill::KeepOut> = sp
+            .mep
+            .equipment
+            .iter()
+            .filter(|e| storey_key(&e.level) == *key && super::validate_gear::is_gear(e))
+            .filter(|e| e.min.iter().chain(&e.max).all(|v| v.is_finite()) && e.bottom_ft.is_finite() && e.height_ft.is_finite())
+            .map(|e| {
+                let top = e.bottom_ft + e.height_ft + 6.0;
+                super::waterfill::KeepOut {
+                    min: [e.min[0].min(e.max[0]), e.min[1].min(e.max[1])],
+                    max: [e.min[0].max(e.max[0]), e.min[1].max(e.max[1])],
+                    top_ft: storey_ft.map_or(top, |h| h.min(top)),
+                    what: e.tag.clone(),
+                }
+            })
+            .collect();
+        let inf = super::waterfill::infer_clear(level, &mains, &on, needs, upf, &fill, &keep);
         let mut ft: BTreeMap<String, f64> = BTreeMap::new();
         for r in &inf.runs {
             *ft.entry(r.system.clone()).or_default() += r.points.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum::<f64>() / upf;
         }
         let ft_s: Vec<String> = ft.iter().map(|(k, v)| format!("{k} {v:.0} ft")).collect();
         progress_line(&format!(
-            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}); left: {:?}",
+            "  {level}: water, waste and vent inferred where no plan draws it: {} of {n_needs} lines run from the nearest pipe ({} runs: {}; {} offset clear of gear's dedicated space); left: {:?}",
             inf.served,
             inf.runs.len(),
             ft_s.join(", "),
+            inf.cleared,
             inf.unserved
         ));
         let where_ = if *planless {
@@ -12007,8 +12145,34 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
         }
     }
     let from_oneline = super::panelsched::fill_from_oneline(&mut sp, &feeds, &types);
+    // Gear the plans already locate takes its box from its submittal.
+    let mut resized: BTreeSet<String> = BTreeSet::new();
+    {
+        let work = super::coderules::rules().into_iter().find(|r| r.id == "E-WORKSPACE").unwrap_or_default();
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        for e in sp.mep.equipment.iter_mut() {
+            if let Some(g) = gear.get(&e.tag)
+                && super::gearbuild::take_submitted_size(e, g, &work, upf)
+            {
+                resized.insert(e.tag.to_ascii_uppercase());
+            }
+        }
+    }
+    // A panel its lettering put in a crossing wall stands clear of it.
+    let mut slid: BTreeSet<String> = BTreeSet::new();
+    {
+        let upf = if sp.units_per_foot.is_finite() && sp.units_per_foot > 0.0 { sp.units_per_foot } else { 12.0 };
+        let (walls, wall_types) = (sp.walls.clone(), sp.wall_types.clone());
+        for e in sp.mep.equipment.iter_mut() {
+            if super::gearbuild::clear_of_crossing_walls(e, &walls, &wall_types, upf) {
+                slid.insert(e.tag.to_ascii_uppercase());
+            }
+        }
+    }
     let planned = super::gearbuild::plan(&sp, &types, &incoming, &gear, &rooms);
-    let new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    let mut new_tags: BTreeSet<String> = planned.equipment.iter().map(|e| e.tag.to_ascii_uppercase()).collect();
+    new_tags.extend(resized.iter().cloned());
+    new_tags.extend(slid.iter().cloned());
     let zones = planned.zones.clone();
     let placed: Vec<String> =
         planned.equipment.iter().map(|e| format!("{} ({})", e.tag, e.sources.get("position").cloned().unwrap_or_default())).collect();
@@ -12018,8 +12182,25 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
     s.doc_mut()?.building_spec = Some(sp.to_json());
-    // The new gear built, then moved as the build moved its level to stack it.
+    // The new gear built, then moved as the build moved its level to stack it. What took its
+    // submittal's box is built again.
     let d = s.doc_mut()?;
+    let stale: Vec<cadaddy_doc::Handle> = d
+        .model
+        .iter()
+        .filter(|e| super::bimlook::made_tag(e, "kind") == Some("equipment"))
+        .filter(|e| {
+            super::bimlook::made_tag(e, "tag").is_some_and(|t| {
+                let t = t.trim().to_ascii_uppercase();
+                resized.contains(&t) || slid.contains(&t)
+            })
+        })
+        .map(|e| e.handle)
+        .collect();
+    for h in &stale {
+        d.model.remove(*h);
+    }
+    super::tradeatoms::drop_hosted(d, &stale);
     let built = super::mep::build_equipment(d, &sp, Some(&new_tags));
     for h in built {
         let level = d.model.iter().find(|e| e.handle == h).and_then(|e| super::bspec::made_level(e));
@@ -12049,6 +12230,12 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     );
     report_progress(s, json!({"step": "electrical gear"}), &line);
     s.echo(line);
+    if !resized.is_empty() {
+        s.echo(format!("  gear the plans locate, its box from its submittal: {}", resized.iter().cloned().collect::<Vec<_>>().join(", ")));
+    }
+    if !slid.is_empty() {
+        s.echo(format!("  panels slid clear of a crossing wall: {} ({})", slid.len(), slid.iter().take(12).cloned().collect::<Vec<_>>().join(", ")));
+    }
     if !planned.room_issues.is_empty() {
         job.add_finding(
             StageName::BimBuild,
@@ -20441,6 +20628,7 @@ fn reset_from(job: &mut GuidedJob, from: StageName) -> Vec<(StageName, BTreeMap<
         st.status = StageStatus::Pending;
         st.result = None;
         st.error = None;
+        st.build = None;
     }
     let names: BTreeSet<StageName> = reset.iter().map(|(n, _)| *n).collect();
     let dropped: BTreeSet<String> = job.findings.iter().filter(|f| names.contains(&f.stage)).map(|f| f.id.clone()).collect();
@@ -20883,6 +21071,7 @@ fn stop_cancelled(s: &mut Session, job: &mut GuidedJob, stage: StageName) {
     if let Some(st) = job.stage_mut(stage) {
         st.status = StageStatus::Pending;
         st.result = None;
+        st.build = None;
     }
     job.cancelled = Some(stage);
     job.audit("job_cancelled", "agent", None, Some(stage), None);
@@ -20959,6 +21148,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         if let Some(st) = job.stage_mut(stage_name) {
             st.elapsed_ms = Some(ms);
+            st.build = Some(source_stamp().to_string());
         }
         // Cut short by a cancel (classify stops at its next sheet, the sheet import at its next
         // page): the stage runs again in full when the job goes on. A stage the cancel didn't
@@ -21234,9 +21424,12 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(v)) if v.trim().eq_ignore_ascii_case("any") => Some(true),
         Some(other) => return Err(bad("job.start", format!("resume is true, false or \"any\", not {other}"))),
     };
+    let refresh = parse_refresh(p)?;
+    // A checkpoint whose drawing another build read: the job starts again from the prints.
+    let mut started_over: Option<Value> = None;
     if let Some(any) = any
         && let Some(path) = job.checkpoint.clone()
-        && let Some((d, mut saved)) = read_checkpoint(&path, &job.goal)
+        && let Some(mut saved) = read_checkpoint(&path, &job.goal)
     {
         let check = check_prints(&saved, pdfs, &job.prints_files);
         let note = match &check {
@@ -21268,77 +21461,135 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
                 ));
             }
         };
-        *s.doc_mut()? = d;
-        // The print set's project lives in the session, not the drawing.
-        s.execute("printset.open", &json!({"path": pdfs}))?;
-        for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
-            st.status = StageStatus::Pending;
-        }
-        let moved_from = (saved.pdfs_path != pdfs).then(|| saved.pdfs_path.clone());
-        // From here the job's prints are these: the rest of it reads them, and the next resume
-        // checks against them.
-        saved.pdfs_path = pdfs.to_string();
-        saved.prints_files = job.prints_files.clone();
-        saved.prints_stamp = job.prints_stamp.clone();
-        saved.checkpoint = Some(path.clone());
-        saved.checkpoint_given = job.checkpoint_given;
-        saved.auto = job.auto;
-        if !job.submittals.is_empty() {
-            // The same submittal files somewhere else keep what was read from them.
-            let same_files = saved.submittals.len() == job.submittals.len()
-                && saved.submittals.iter().zip(&job.submittals).all(|(a, b)| path_leaf(a) == path_leaf(b));
-            if !same_files {
-                saved.submittal_types.clear();
-                saved.luminaire_types.clear();
-                saved.wall_luminaire_types.clear();
+        let other = other_build_stages(&saved);
+        let from = refresh_from(&saved, refresh);
+        let why = |from: StageName| match refresh {
+            Refresh::From(_) => format!("runs again from {} on, as asked (refresh: \"{}\")", from.label(), from.label()),
+            _ => format!(
+                "holds stages another build read ({}; this build is {}): they run again, from {} on",
+                labels(&other).join(", "),
+                source_stamp(),
+                from.label()
+            ),
+        };
+        if let Some(from) = from.filter(|f| refresh_starts_over(*f)) {
+            // Its drawing is that build's reading of the plans too: this build reads the prints
+            // again, as a whole job does, and the answers carry over.
+            let why = why(from);
+            carry_into(&mut job, &saved);
+            let line = format!(
+                "job: the checkpoint {path} {why}: the job starts again from the prints, keeping its answers (writing over the checkpoint){}",
+                note.as_deref().map_or_else(String::new, |n| format!("; {n}"))
+            );
+            let data = json!({"step": "refreshed", "checkpoint": path, "from": from.label(), "other_build": labels(&other), "note": note});
+            report_progress(s, data, &line);
+            s.echo(line);
+            job.audit("job_refreshed", "pipeline", None, Some(from), Some(json!({"checkpoint": path, "other_build": labels(&other), "why": why})));
+            started_over = Some(json!({"from": from.label(), "other_build": labels(&other), "started_over": true, "why": why, "prints_note": note}));
+        } else {
+            *s.doc_mut()? = checkpoint_drawing(&path)?;
+            // The print set's project lives in the session, not the drawing.
+            s.execute("printset.open", &json!({"path": pdfs}))?;
+            for st in saved.stages.iter_mut().filter(|st| st.status == StageStatus::Running) {
+                st.status = StageStatus::Pending;
             }
-            saved.submittals = job.submittals.clone();
-        } else if let Some(gone) = saved.submittals.iter().find(|p| !std::path::Path::new(p).exists()) {
-            s.echo(format!("job: the checkpoint's submittals ({gone}) aren't on this machine: job.start {{submittals}} gives them"));
+            let moved_from = (saved.pdfs_path != pdfs).then(|| saved.pdfs_path.clone());
+            // From here the job's prints are these: the rest of it reads them, and the next resume
+            // checks against them.
+            saved.pdfs_path = pdfs.to_string();
+            saved.prints_files = job.prints_files.clone();
+            saved.prints_stamp = job.prints_stamp.clone();
+            saved.checkpoint = Some(path.clone());
+            saved.checkpoint_given = job.checkpoint_given;
+            saved.auto = job.auto;
+            if !job.submittals.is_empty() {
+                // The same submittal files somewhere else keep what was read from them.
+                let same_files = saved.submittals.len() == job.submittals.len()
+                    && saved.submittals.iter().zip(&job.submittals).all(|(a, b)| path_leaf(a) == path_leaf(b));
+                if !same_files {
+                    saved.submittal_types.clear();
+                    saved.luminaire_types.clear();
+                    saved.wall_luminaire_types.clear();
+                }
+                saved.submittals = job.submittals.clone();
+            } else if let Some(gone) = saved.submittals.iter().find(|p| !std::path::Path::new(p).exists()) {
+                s.echo(format!("job: the checkpoint's submittals ({gone}) aren't on this machine: job.start {{submittals}} gives them"));
+            }
+            // The specifications: given now, else looked for when the checkpoint is from before the
+            // search or what it found isn't on this machine (the build reads them; past classify,
+            // none found is a finding, not a question).
+            if !job.specs.is_empty() {
+                saved.specs = job.specs.clone();
+            }
+            if job.specs_declined {
+                saved.specs = Vec::new();
+                saved.specs_declined = true;
+            }
+            let again = saved.specs_found.as_ref().is_none_or(|f| f.is_empty() || f.iter().any(|p| !std::path::Path::new(p).exists()));
+            let built = saved.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
+            if !built && !saved.specs_declined && (again || !job.specs.is_empty()) {
+                look_for_specs(s, &mut saved, false);
+            }
+            // Stages another build read run again (with the ones after them); any kept is said.
+            let mut refreshed = None;
+            let mut notes: Vec<String> = note.iter().cloned().collect();
+            if let Some(from) = from {
+                let why = why(from);
+                let reset = rerun_from_stage(s, &mut saved, from, &json!({"refresh": why}), None)?;
+                let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
+                notes.push(format!("the checkpoint {why}"));
+                refreshed = Some(json!({"from": from.label(), "stages": names, "other_build": labels(&other), "started_over": false, "why": why}));
+            }
+            let kept: Vec<StageName> = other.iter().copied().filter(|n| from.is_none_or(|f| *n < f)).collect();
+            if let Some(first) = kept.first() {
+                let what = format!("{} stage(s) kept from a checkpoint another build read: {}", kept.len(), labels(&kept).join(", "));
+                notes.push(format!("{what} (refresh: \"stale\" reads them again)"));
+                saved.add_finding(
+                *first,
+                &what,
+                &format!(
+                    "what they read is that build's reading of the prints, not this build's ({}): a measure of this build reads them again (job.start {{refresh: \"stale\"}})",
+                    source_stamp()
+                ),
+                2,
+                vec!["Resume with refresh: \"stale\" (the default) to read them again".into()],
+                None,
+                false,
+            );
+            }
+            let note = (!notes.is_empty()).then(|| notes.join("; "));
+            let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
+            let line = format!(
+                "job: resumed from {path} ({} stage(s) done: {}){}",
+                done.len(),
+                done.join(", "),
+                note.as_deref().map_or_else(String::new, |n| format!("; {n}"))
+            );
+            let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done, "prints_moved_from": moved_from, "note": note});
+            report_progress(s, data, &line);
+            s.echo(line);
+            saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path, "prints_moved_from": moved_from, "note": note})));
+            advance_pipeline(s, &mut saved)?;
+            save_job(s, &saved)?;
+            let stats = model_stats_from_session(s);
+            let mut status = job_status_value(&saved, stats.as_ref());
+            status["resumed"] = json!(true);
+            status["prints_check"] = json!(match check {
+                PrintsCheck::Same { .. } => "same",
+                PrintsCheck::Differs(_) => "differs",
+                PrintsCheck::Unchecked { .. } => "unchecked",
+            });
+            if let Some(from) = moved_from {
+                status["prints_moved_from"] = json!(from);
+            }
+            if let Some(n) = note {
+                status["resume_note"] = json!(n);
+            }
+            if let Some(r) = refreshed {
+                status["refreshed"] = r;
+            }
+            return Ok(status);
         }
-        // The specifications: given now, else looked for when the checkpoint is from before the
-        // search or what it found isn't on this machine (the build reads them; past classify,
-        // none found is a finding, not a question).
-        if !job.specs.is_empty() {
-            saved.specs = job.specs.clone();
-        }
-        if job.specs_declined {
-            saved.specs = Vec::new();
-            saved.specs_declined = true;
-        }
-        let again = saved.specs_found.as_ref().is_none_or(|f| f.is_empty() || f.iter().any(|p| !std::path::Path::new(p).exists()));
-        let built = saved.stage(StageName::BimBuild).is_some_and(|st| st.status == StageStatus::Done);
-        if !built && !saved.specs_declined && (again || !job.specs.is_empty()) {
-            look_for_specs(s, &mut saved, false);
-        }
-        let done: Vec<&str> = saved.stages.iter().filter(|st| st.status == StageStatus::Done).map(|st| st.name.label()).collect();
-        let line = format!(
-            "job: resumed from {path} ({} stage(s) done: {}){}",
-            done.len(),
-            done.join(", "),
-            note.as_deref().map_or_else(String::new, |n| format!("; {n}"))
-        );
-        let data = json!({"step": "resumed", "checkpoint": path, "stages_done": done, "prints_moved_from": moved_from, "note": note});
-        report_progress(s, data, &line);
-        s.echo(line);
-        saved.audit("job_resumed", "pipeline", None, None, Some(json!({"checkpoint": path, "prints_moved_from": moved_from, "note": note})));
-        advance_pipeline(s, &mut saved)?;
-        save_job(s, &saved)?;
-        let stats = model_stats_from_session(s);
-        let mut status = job_status_value(&saved, stats.as_ref());
-        status["resumed"] = json!(true);
-        status["prints_check"] = json!(match check {
-            PrintsCheck::Same { .. } => "same",
-            PrintsCheck::Differs(_) => "differs",
-            PrintsCheck::Unchecked { .. } => "unchecked",
-        });
-        if let Some(from) = moved_from {
-            status["prints_moved_from"] = json!(from);
-        }
-        if let Some(n) = note {
-            status["resume_note"] = json!(n);
-        }
-        return Ok(status);
     }
     let units_note = prints_units(s)?;
     if let Some(n) = &units_note {
@@ -21354,6 +21605,13 @@ fn cmd_start_inner(s: &mut Session, p: &Value) -> Result<Value> {
     let mut status = job_status_value(&job, stats.as_ref());
     if let Some(n) = units_note {
         status["units_note"] = json!(n);
+    }
+    if let Some(r) = started_over {
+        status["resumed"] = json!(false);
+        if let Some(n) = r.get("why").and_then(Value::as_str) {
+            status["resume_note"] = json!(format!("the checkpoint {n}: the job started again from the prints, keeping its answers"));
+        }
+        status["refreshed"] = r;
     }
     Ok(status)
 }
@@ -22506,7 +22764,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("job.start", "Start Guided Job", cmd_start)
             .files()
-            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
+            .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
         CommandSpec::new("job.next", "Next Job Question", cmd_next)
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
@@ -25737,8 +25995,7 @@ mod tests {
                 "H9 luminaire K-1,a",
                 "LUMINAIRE luminaire K-1,d",
                 "REC receptacle K-13,15",
-                "S3 switch ",
-                "SD switch ",
+                "S3D switch ",
                 "TV low voltage outlet "
             ],
             "{:#?}",
@@ -25754,14 +26011,15 @@ mod tests {
         // The TV where its block's second copy is drawn, by what the first was read as.
         let tv_at = typical.added.iter().find(|dv| dv.tag == "TV").map(|dv| dv.at);
         assert!(tv_at.is_some_and(|p| (p[0] - (vx + 136.5)).abs() < 2.0 && (p[1] - (vy + 220.0)).abs() < 2.0), "{tv_at:?}");
-        // Into each room of the type: all eleven, the same kinds the view shows.
+        // Into each room of the type: all ten, the same kinds the view shows (its 3-way dimmer
+        // one switch).
         let mut all = job.devices.clone();
         all.extend(typical.added.iter().cloned());
         let unplaced: Vec<&super::super::readers::ReadDevice> = all.iter().collect();
         job.devices = all.clone();
         let stamped = stamp_typical_rooms(d, &job, &[], &unplaced);
         for n in ["301", "302"] {
-            assert_eq!(stamped.devices.iter().filter(|dv| dv.room == n).count(), 11, "room {n}: {:?}", stamped.devices);
+            assert_eq!(stamped.devices.iter().filter(|dv| dv.room == n).count(), 10, "room {n}: {:?}", stamped.devices);
         }
         let table = unit_type_table(&job, &typical, &stamped.devices, &[]);
         let line = table.iter().find(|l| l.unit_type == "KING-STUDIO");
@@ -25769,7 +26027,7 @@ mod tests {
             line.is_some_and(|l| l.rooms == 2 && l.kinds.values().all(|k| k.sheets > 0 && k.fewest == k.sheets && k.most == k.sheets)),
             "{table:?}"
         );
-        assert_eq!(line.map(|l| l.kinds.values().map(|k| k.sheets).sum::<usize>()), Some(11));
+        assert_eq!(line.map(|l| l.kinds.values().map(|k| k.sheets).sum::<usize>()), Some(10));
         // A device two trades' plans showed at one place is held once for both: a room whose
         // copy merged with another trade's holds it all the same.
         let mut fewer = stamped.devices.clone();

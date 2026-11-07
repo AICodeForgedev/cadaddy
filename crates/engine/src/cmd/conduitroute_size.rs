@@ -234,6 +234,21 @@ pub(crate) fn breaker_minimum(base: &str, ccc: u32, trip: Option<f64>, rl: &Rout
     })
 }
 
+/// The conductor a device lands on its terminals when what enters its box is `landing` (Q6243):
+/// none when that fits them; else a pigtail of the smallest size a `trip` amp breaker allows
+/// (none known: the rules' breaker), when that fits them (a device on a larger breaker is rated
+/// for its circuit's own conductors).
+pub(crate) fn pigtail(landing: &str, trip: Option<f64>, rl: &RouteRules) -> Option<String> {
+    let order = |s: &str| rl.vdrop.sizes.iter().position(|x| x == s);
+    let (land, max) = (order(landing)?, order(&rl.terminals.max_size)?);
+    if land <= max {
+        return None;
+    }
+    let trip = trip.filter(|t| t.is_finite() && *t > 0.0).unwrap_or(rl.vdrop.breaker_a);
+    let need = rl.vdrop.sizes.iter().find(|s| carries(s, 2, trip, rl))?;
+    (order(need)? <= max).then(|| need.clone())
+}
+
 /// What a voltage-drop check sized a circuit to.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DropSized {
@@ -410,5 +425,20 @@ mod tests {
         let (_, why) = breaker_minimum("12", 2, Some(30.0), rl).expect("sized");
         assert!(why.contains("240.4(D)") && why.contains("30 A"), "{why}");
         assert_eq!(breaker_minimum("12", 2, None, rl), None);
+    }
+
+    #[test]
+    fn a_conductor_larger_than_a_devices_terminals_lands_on_a_pigtail() {
+        let rl = rules();
+        // #8 (a schedule's voltage-drop size) into a 20 A device: a #12 pigtail; on 30 A, #10.
+        assert_eq!(pigtail("8", Some(20.0), rl).as_deref(), Some("12"));
+        assert_eq!(pigtail("4", Some(30.0), rl).as_deref(), Some("10"));
+        assert_eq!(pigtail("6", None, rl).as_deref(), Some("12"));
+        // What the terminals take lands on them.
+        assert_eq!(pigtail("10", Some(20.0), rl), None);
+        assert_eq!(pigtail("12", Some(20.0), rl), None);
+        // A 50 A device is rated for its #6.
+        assert_eq!(pigtail("6", Some(50.0), rl), None);
+        assert_eq!(pigtail("not a size", Some(20.0), rl), None);
     }
 }

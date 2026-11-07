@@ -99,6 +99,7 @@ pub(crate) struct RouteRules {
     pub fill: Fill,
     pub derate: Derate,
     pub box_fill: BoxFill,
+    pub terminals: Terminals,
     pub vdrop: VDrop,
     pub methods: MethodRules,
     pub firestop: Firestop,
@@ -198,6 +199,17 @@ pub(crate) struct BoxFill {
     pub bigger: Vec<(String, String, f64)>,
     /// Where the next box (and past the largest, the extension ring) comes from.
     pub bigger_source: String,
+}
+
+/// What a device's terminals take (Q6243): the largest conductor, and the pigtail a larger
+/// circuit conductor is spliced to in the device's box.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct Terminals {
+    pub max_size: String,
+    pub pigtail_in: f64,
+    pub connector: String,
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -2637,7 +2649,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     // sizing set them (the reason empty: the schedule's, no larger than the default).
     let base_conductors = |tag: &ElementTag, panel: &str, label: &str| -> (String, Option<(&'static str, String, &'static str)>) {
         let given = tag.fields.get("conductors").filter(|f| f.source != "default").map(|f| f.value.clone());
-        let mut why: Option<(&'static str, String, &'static str)> = None;
+        // A label read as a note before the reader knew better (`PUMP #2`): no size (Q6243).
+        let label_note = given.clone().filter(|g| g.contains('#') && super::printcond::conductor_note(g).is_none());
+        let given = given.filter(|_| label_note.is_none());
+        let mut why: Option<(&'static str, String, &'static str)> =
+            label_note.map(|l| ("", format!("`{l}` is a label, not a conductor note: no size read from it"), "rule"));
         let mk = match given {
             Some(v) => v,
             None => match row_of(panel, label).and_then(|(s, r)| gap::schedule_conductors(&r.wire, r.poles.max(1)).map(|m| (m, s, r))) {
@@ -2652,6 +2668,11 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                         hot,
                         if s.source.is_empty() { String::new() } else { format!(" ({})", s.source) }
                     );
+                    // The label set aside said beside it.
+                    let w = match &why {
+                        Some((_, label, _)) => format!("{label}; {w}"),
+                        None => w,
+                    };
                     why = Some((if bigger { size::SCHEDULE } else { "" }, w, "schedule"));
                     m
                 }
@@ -4032,10 +4053,48 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
                     json!([n, up.unwrap_or_else(|| sz.clone())])
                 })
                 .collect();
-            Some(json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": sized}))
+            let mut b = json!({"device": dv.handle.hex(), "kind": dv.kind, "level": dv.level, "circuit": dv.circuit, "yoke": dv.yoke, "conductors": sized});
+            // A conductor larger than the device's terminals take is spliced in its box to a
+            // pigtail of the size its breaker needs (Q6243): the design's size beside the one built.
+            let entering: Vec<(u64, String)> =
+                sized.iter().filter_map(|c| Some((c.get(0)?.as_u64()?, c.get(1)?.as_str()?.to_string()))).collect();
+            if let Some(landing) = entering.iter().map(|(_, s)| s.clone()).max_by_key(|s| order_sz(s)) {
+                let panel = super::printcond::parse_circuit(&dv.circuit).map(|(p, _)| p).unwrap_or_default();
+                if let Some(pig) = size::pigtail(&landing, trip_of(&panel, &dv.circuit), rl) {
+                    // What the device lands: a hot and the neutral on one pole, each hot on more.
+                    let lands = match poles_of(&panel, &dv.circuit) {
+                        1 => 2,
+                        p => u64::from(p),
+                    };
+                    let count = entering
+                        .iter()
+                        .filter(|(_, s)| order_sz(s) > order_sz(&rl.terminals.max_size))
+                        .map(|(n, _)| *n)
+                        .max()
+                        .unwrap_or(1)
+                        .min(lands);
+                    b["pigtail"] = json!({
+                        "size": pig, "count": count, "landing": landing, "inches": rl.terminals.pigtail_in,
+                        "why": format!(
+                            "#{landing} enters the box; the device's terminals take #{} at most: {count} #{pig} pigtail(s) spliced to it in the box ({})",
+                            rl.terminals.max_size, rl.terminals.source
+                        ),
+                    });
+                }
+            }
+            Some(b)
         })
         .take(MAX_DEVICES)
         .collect();
+    let pigtailed: Vec<&Value> = box_conductors.iter().filter(|b| b.get("pigtail").is_some()).collect();
+    let mut pigtails_by_landing: BTreeMap<String, usize> = BTreeMap::new();
+    for b in &pigtailed {
+        *pigtails_by_landing.entry(format!("#{}", b["pigtail"]["landing"].as_str().unwrap_or_default())).or_default() += 1;
+    }
+    let terminals = json!({
+        "devices_pigtailed": pigtailed.len(), "by_landing_size": pigtails_by_landing, "max_size": format!("#{}", rl.terminals.max_size),
+        "source": rl.terminals.source,
+    });
 
     // -- The holes through the framing: each member's holes apart by the rule (edge to edge, in
     // the web's plane); the closer ones are review items. --
@@ -4299,6 +4358,7 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     out.report["clash_offsets"] = json!(clash_offsets);
     if let Some(o) = out.report.as_object_mut() {
         o.insert("conductor_sizing".into(), conductor_sizing);
+        o.insert("terminals".into(), terminals);
     }
     // What Q6206 adds: the labels resolved, the switch loops, the shared raceway, the proposed
     // circuits, each circuit's own lengths.
@@ -5157,7 +5217,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("conduit.route", "Conduit Routing Report", run_report)
             .menu(&["Draw", "BIM", "Conduit Routing Report"])
-            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
+            .params("{section?: \"clashes\"|\"conflicts\"|\"penetrations\"|\"bored_holes\"|\"box_fill\"|\"fill\"|\"derated\"|\"conductors_upsized\"|\"unrouted\"|\"methods\"|\"lv_pathways\", max?: n (items listed, default 200)} → the last model.build's routing: {circuits, routed_circuits, runs, homeruns, routed_ft, estimated_ft_before, ft_by_method_size, methods, wire_size_table, clashes, clashes_by_pair_level, conflicts, entry_unknown, penetrations, framing (the joists and trusses over each level: holes bored, passes, holes too close, the hole rules), bored_holes, box_fill, terminals (the devices whose circuit conductors are larger than their terminals take, each spliced to a pigtail in its box: {devices_pigtailed, by_landing_size, max_size, source}), conductors_upsized, fill, derated, unrouted, lv_pathways (each low-voltage outlet's pathway: {outlets, built, by_others, ft, by_method_size, ends, levels, unit_types, typical_rooms, common_areas, fittings, brackets, sleeves, penetrations, firestop, jhooks, raceway_scope, unrouted, conflicts, documents, outlet_list: [{outlet, level, room, area, method, size_in, to, ends, ft, bracket, each with its source}]})}")
             .noundo(),
         CommandSpec::new("conduit.reroute", "Reroute Conduit", run_reroute)
             .menu(&["Draw", "BIM", "Reroute Conduit"])

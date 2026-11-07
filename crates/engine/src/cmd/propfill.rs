@@ -1483,6 +1483,9 @@ fn edge_dist(outline: &[Vec2], p: Vec2) -> f64 {
 pub(crate) struct AsBuiltBreakers {
     pub codes: Vec<String>,
     pub source: String,
+    /// The rule's tier (`field_verified` where the breakers were read on site), and its key.
+    pub tier: cadaddy_doc::projrules::SourceTier,
+    pub key: String,
 }
 
 const AS_BUILT_RULE: &str = "breaker_protection.";
@@ -1505,7 +1508,7 @@ pub(crate) fn as_built_breakers(d: &Drawing, panel: &str, description: &str) -> 
     }
     let codes: Vec<String> = codes.split(['/', ',']).map(|c| c.trim().to_string()).filter(|c| !c.is_empty()).collect();
     let source = if rule.active.source.is_empty() { format!("project rule {}", rule.key) } else { rule.active.source.clone() };
-    (!codes.is_empty()).then_some(AsBuiltBreakers { codes, source })
+    (!codes.is_empty()).then(|| AsBuiltBreakers { codes, source, tier: rule.active.tier, key: rule.key.to_string() })
 }
 
 /// Where a panel's breakers as built aren't what its schedule prints: one line a panel, for a
