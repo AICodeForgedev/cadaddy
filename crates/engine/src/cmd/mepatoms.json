@@ -209,6 +209,7 @@
     "max": 4,
     "raceway": ["sq4-2.125", "sq4-2.125", "gang3-steel", "gang4-steel"],
     "cable": ["nm1-18", "nm2-32", "nm3-53", "nm4-68"],
+    "power_families": ["switch", "receptacle"],
     "source": "devices of one kind side by side on one wall face, at one mounting height, within 2 ft of each other (a plan symbol is about that wide at 1/8 in scale: symbols drawn together are ganged) share one box and one ring, up to 4 gangs: 2 gangs in a 4 in square with a 2 gang ring, 3 and 4 in a gang box (company default; power and low voltage never share one: NEC 800.133(A))"
   },
   "ring": { "item": "Plaster ring", "size": "1 gang", "depth_in": 0.5, "source": "the trade's usual ring: 1 gang, 1/2 in raised (the wall's board on the box face decides it)" },

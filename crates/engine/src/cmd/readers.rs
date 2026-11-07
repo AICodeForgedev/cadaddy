@@ -206,6 +206,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 near: String::new(),
                 derived: String::new(),
                 keynote: f("keynote"),
+                keynotes: Vec::new(),
+                gang: f("gang_with"),
             }
         })
         .collect();
@@ -1409,6 +1411,13 @@ pub struct ReadDevice {
     /// symbol and asks something of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub keynote: String,
+    /// The keynotes by its symbol that ask something of it (its features, mounting, ganging,
+    /// pathway: [`super::keynotes::device_requirements`]), each `E-9 keynote 4: <the note>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keynotes: Vec<String>,
+    /// The devices a keynote says to gang share this key (its note, its marker, its room).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gang: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1622,6 +1631,11 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
                     "rule",
                 );
             }
+        }
+        // What the keynotes by its symbol ask of it (features, mounting, ganging, its
+        // low-voltage conduit), each with the keynote as its source.
+        if !dv.keynotes.is_empty() {
+            super::keynotes::apply_to_tag(&mut e, kind, &dv.keynotes, &dv.gang);
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

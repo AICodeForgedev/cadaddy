@@ -238,6 +238,72 @@ pub(crate) fn gang_groups(spots: &[GangSpot], reach: f64, height: f64, face: f64
     out
 }
 
+/// The groups of [`gang_groups`] joined by the keynotes that say to gang devices: devices of one
+/// level sharing a key (`keys`, parallel to `spots`; empty: none) are one box however far apart,
+/// when their families may share one (the same family, or both of `power`: power and low voltage
+/// never share one); cut into boxes of `max` along the wall as before. Each group with the key
+/// that joined it (none: ganged by distance alone).
+pub(crate) fn keyed_groups(
+    spots: &[GangSpot],
+    keys: &[String],
+    groups: Vec<Vec<usize>>,
+    power: &[String],
+    max: usize,
+) -> Vec<(Vec<usize>, Option<String>)> {
+    let keyed = |i: usize| keys.get(i).filter(|k| !k.trim().is_empty());
+    if max < 2 || !(0..spots.len()).any(|i| keyed(i).is_some()) {
+        return groups.into_iter().map(|g| (g, None)).collect();
+    }
+    let mut parent: Vec<usize> = (0..spots.len()).collect();
+    let join = |parent: &mut [usize], a: usize, b: usize| {
+        let (ra, rb) = (gang_root(parent, a), gang_root(parent, b));
+        if ra != rb
+            && let Some(x) = parent.get_mut(ra.max(rb))
+        {
+            *x = ra.min(rb);
+        }
+    };
+    for g in &groups {
+        for w in g.windows(2) {
+            if let [a, b] = w {
+                join(&mut parent, *a, *b);
+            }
+        }
+    }
+    let mixes = |a: &str, b: &str| a == b || (power.iter().any(|p| p == a) && power.iter().any(|p| p == b));
+    let mut by_key: BTreeMap<(String, String), Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        if let (Some(k), Some(sp)) = (keyed(i), spots.get(i)) {
+            by_key.entry((sp.level.to_ascii_lowercase(), k.clone())).or_default().push(i);
+        }
+    }
+    let mut joined_by: BTreeMap<usize, String> = BTreeMap::new();
+    for ((_, k), list) in by_key.iter().take(MAX_GANG_PAIRS) {
+        let Some(&first) = list.first() else { continue };
+        for &j in list.iter().skip(1).take(max * 4) {
+            let (Some(a), Some(b)) = (spots.get(first), spots.get(j)) else { continue };
+            if mixes(&a.family, &b.family) {
+                join(&mut parent, first, j);
+                joined_by.insert(first, k.clone());
+            }
+        }
+    }
+    let mut out_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..spots.len() {
+        let r = gang_root(&mut parent, i);
+        out_groups.entry(r).or_default().push(i);
+    }
+    let mut out = Vec::new();
+    for (_, mut g) in out_groups.into_iter().filter(|(_, g)| g.len() >= 2) {
+        let key = g.iter().find_map(|i| joined_by.get(i)).cloned();
+        let along = g.first().and_then(|i| spots.get(*i)).map_or(Vec2::new(1.0, 0.0), |s| (s.normal * (1.0 / s.normal.len().max(1e-9))).perp());
+        let at = |i: &usize| spots.get(*i).map_or(0.0, |s| s.at.dot(along));
+        g.sort_by(|a, b| at(a).total_cmp(&at(b)));
+        out.extend(g.chunks(max).filter(|c| c.len() >= 2).map(|c| (c.to_vec(), key.clone())));
+    }
+    out
+}
+
 /// A wall device's face direction (`face_normal`, older models' `host_face`), unit length.
 fn face_of(ps: &Props) -> Option<Vec2> {
     ["face_normal", "host_face"].iter().find_map(|k| {
@@ -1214,6 +1280,8 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
     let ceiling_of = |level: &str| sp.level(level).map(|l| (l.elevation_ft + if l.ceiling_ft > 0.0 { l.ceiling_ft } else { l.height_ft }) * upf);
     let mut spot_devs: Vec<Handle> = Vec::new();
     let mut spots: Vec<GangSpot> = Vec::new();
+    // The key a keynote saying to gang them gives the devices it points at.
+    let mut spot_keys: Vec<String> = Vec::new();
     for (h, level, ps, layer, plan, z0, z1) in &devices {
         let kind = ps.get("kind").map(Prop::text).unwrap_or_default();
         let Some(family) = box_kind(&kind, layer).and_then(|bk| rl.gang_family(bk)) else { continue };
@@ -1226,13 +1294,29 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let wall = face_of(ps).filter(|_| !theirs_no_box && !at_ceiling && ps.get("misplaced").is_none() && !brackets.contains_key(h));
         let Some(normal) = wall else { continue };
         spot_devs.push(*h);
+        spot_keys.push(ps.get("gang_with").map(Prop::text).unwrap_or_default());
         spots.push(GangSpot { level: level.clone(), family: family.to_string(), normal, at: plan.center(), z: (z0 + z1) / 2.0 });
     }
     let inch = upf / 12.0;
     let mut gang_of: HashMap<Handle, usize> = HashMap::new();
     let mut gangs: Vec<Vec<Handle>> = Vec::new();
-    for g in gang_groups(&spots, rl.gang.reach_in * inch, rl.gang.height_in * inch, rl.gang.face_in * inch, rl.gang.max) {
+    // The keynote that ganged a group, by group (none: its devices' distance did).
+    let mut gang_note: HashMap<usize, String> = HashMap::new();
+    let by_distance = gang_groups(&spots, rl.gang.reach_in * inch, rl.gang.height_in * inch, rl.gang.face_in * inch, rl.gang.max);
+    for (g, key) in keyed_groups(&spots, &spot_keys, by_distance, &rl.gang.power_families, rl.gang.max) {
         let hs: Vec<Handle> = g.iter().filter_map(|i| spot_devs.get(*i).copied()).collect();
+        if let Some(k) = key {
+            // The keynote by the devices (their `keynotes`), else the key's own words.
+            let note = g
+                .iter()
+                .filter_map(|i| spot_devs.get(*i))
+                .filter_map(|h| devices.iter().find(|(dh, ..)| dh == h))
+                .filter_map(|(_, _, ps, ..)| ps.get("keynotes").map(Prop::text))
+                .flat_map(|t| t.split(" | ").map(str::to_string).collect::<Vec<_>>())
+                .find(|c| super::super::keynotes::device_requirements(super::super::keynotes::cited_text(c)).is_some_and(|q| q.ganged))
+                .unwrap_or(k);
+            gang_note.insert(gangs.len(), note);
+        }
         for h in &hs {
             gang_of.insert(*h, gangs.len());
         }
@@ -1414,7 +1498,12 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             }
             _ => (Vec3::new(c.x, c.y, zmid), Vec3::new(c.x, c.y, zmid + bh / 2.0), Vec2::new(1.0, 0.0), bd),
         };
-        let gang_words = if n_gang > 1 { format!(" — {}", rl.gang.source) } else { String::new() };
+        let keynoted = gang.and_then(|g| gang_note.get(&g));
+        let gang_words = match keynoted {
+            Some(note) if n_gang > 1 => format!(" — ganged by its keynote ({note}): {}", super::super::keynotes::device_rules().gang_source),
+            _ if n_gang > 1 => format!(" — {}", rl.gang.source),
+            _ => String::new(),
+        };
         let ctx = AtomCtx {
             level: level.clone(),
             system: String::new(),
@@ -1440,7 +1529,9 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
             a.extra.push(("box_needed", why_box(dec), dec.source.clone()));
         }
         if n_gang > 1 {
-            a.extra.push(("gang", n_gang.to_string(), rl.gang.source.clone()));
+            let why =
+                keynoted.map_or_else(|| rl.gang.source.clone(), |note| format!("{note}: {}", super::super::keynotes::device_rules().gang_source));
+            a.extra.push(("gang", n_gang.to_string(), why));
             a.extra.push(("devices", members.iter().map(|m| m.hex()).collect::<Vec<_>>().join(","), "computed".into()));
         }
         let bi = atoms.len();

@@ -797,6 +797,26 @@ pub(crate) fn choose(docs: &LvDocs, kinds: &[String], area: &str, at_ceiling: bo
     c
 }
 
+/// The size the keynote at an outlet gives its low-voltage conduit (`lv_conduit_in`, from
+/// [`super::super::keynotes::device_requirements`]): it governs over the general statements for
+/// that outlet (the note is answered at its marker); the size they gave is kept as a conflict.
+pub(crate) fn keynote_size(c: &mut Choice, ps: Option<&props::Props>) {
+    let Some(p) = ps.and_then(|ps| ps.get("lv_conduit_in")).filter(|p| p.has_value()) else { return };
+    let Some(v) = p.text().trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0 && *v <= 4.0) else { return };
+    let cite = p.source.doc.clone().unwrap_or_else(|| "its keynote".into());
+    if (v - c.size_in).abs() > 1e-6 && c.size_in > 0.0 && c.conflicts.len() < 8 {
+        c.conflicts.push(format!(
+            "size: {} said {}, its keynote at the outlet says {} ({})",
+            c.size_source,
+            super::super::mepatoms::trade_size(c.size_in),
+            super::super::mepatoms::trade_size(v),
+            super::super::keynotes::device_rules().lv_source
+        ));
+    }
+    c.size_in = v;
+    c.size_source = format!("note: {}", cite.split(" | ").next().unwrap_or(&cite));
+}
+
 // ─── Routing ─────────────────────────────────────────────────────────────────
 
 /// What the router gives the pathways: the model, its levels' obstacles and ceilings, its
@@ -1006,7 +1026,8 @@ pub(super) fn route(cx: &Ctx) -> Out {
         let (floor, _) = (cx.tiers_of)(&dv.level, ceil);
         let ceiling_z = ceil.unwrap_or_else(|| level_ceiling(&dv.level, floor));
         let at_ceiling = ceiling_z - dv.top <= lr.geometry.at_ceiling_in.max(0.0) / 12.0 * upf;
-        let choice = choose(&docs, &kinds, area, at_ceiling);
+        let mut choice = choose(&docs, &kinds, area, at_ceiling);
+        keynote_size(&mut choice, d.model.get(dv.handle).map(|e| props::read(&e.common.xdata)).as_ref());
         paths.push(Path {
             dev: *di,
             level: dv.level.clone(),
@@ -1577,6 +1598,26 @@ mod tests {
                 .map(|(i, t)| Para { at: format!("note {}", i + 1), heading: String::new(), text: (*t).into(), cells: Vec::new() })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn an_outlets_keynote_size_governs_its_conduit() {
+        use cadaddy_doc::props::{Prop, Props, Source, SourceKind};
+        let general = Choice { method: "ENT".into(), size_in: 0.75, size_source: "Q-1 note 4".into(), ..Choice::default() };
+        let mut ps = Props::default();
+        ps.set("lv_conduit_in", Prop::new("1", Source::from_doc(SourceKind::Note, "Q-9 keynote 6: PROVIDE 1\" LOW-VOLTAGE CONDUIT")));
+        let mut c = general.clone();
+        keynote_size(&mut c, Some(&ps));
+        assert_eq!((c.method.as_str(), c.size_in), ("ENT", 1.0), "the size the keynote's, the method the general note's");
+        assert!(c.size_source.starts_with("note: Q-9 keynote 6"), "{}", c.size_source);
+        assert!(c.conflicts.iter().any(|x| x.contains("Q-1 note 4") && x.contains("3/4")), "{:?}", c.conflicts);
+        // No keynote, a bad value: as chosen.
+        let mut c = general.clone();
+        keynote_size(&mut c, None);
+        assert_eq!(c.size_in, 0.75);
+        ps.set("lv_conduit_in", Prop::new("99", Source::computed()));
+        keynote_size(&mut c, Some(&ps));
+        assert_eq!((c.size_in, c.conflicts.len()), (0.75, 0));
     }
 
     #[test]

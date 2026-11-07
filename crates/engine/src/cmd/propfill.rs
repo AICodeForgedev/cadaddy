@@ -869,6 +869,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let mount = match field(t, "mount").as_deref() {
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
             _ if kind == "equipment connection" && mark.to_ascii_uppercase().starts_with("EF") => Mount::Ceiling,
@@ -1085,6 +1086,19 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 if let Some(v) = field(t, k) {
                     store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &note)));
                 }
+            }
+            // What the keynotes by it ask of it (its features, mounting, ganging, low-voltage
+            // conduit), all its keynotes their source.
+            let notes = field(t, "keynotes").unwrap_or_else(|| note.clone());
+            for k in ["keynotes", "keynote_features", "mount", "lv_conduit_in", "gang_with"] {
+                if let Some(v) = field(t, k).filter(|_| t.fields.get(k).is_some_and(|f| f.source == "note")) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &notes)));
+                }
+            }
+            // A circuit read by it that its keynote's box can't take: the read value and why.
+            if let (Some(c), Some(why)) = (field(t, "circuit_read"), field(t, "correction")) {
+                store.set("circuit_read", Prop::new(c, Source::from_doc(SourceKind::Print, "the circuit label read by its symbol")));
+                store.set("correction", Prop::new(why, Source::from_doc(SourceKind::Rule, "keynote rules")));
             }
             if let Some(v) = field(t, "review") {
                 store.set("review", Prop::new(v, Source::from_doc(SourceKind::Rule, "keynote rules")));
