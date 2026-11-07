@@ -466,13 +466,16 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
         device(15.0, 5.0, "OS3", "occupancy_sensor", "1A5", json!({"mount_height_in": "44", "mount_height_note": "OS3 44\" AFF"})),
         device(35.0, 5.0, "SQ", "switch", "1A6", json!({})),
         device(5.0, 5.0, "PQ", "fire_alarm_device", "1A7", json!({"device_type": "manual pull station PQ"})),
+        // An exit sign read as a wall light (its submittal), only its schedule saying what it is.
+        device(37.0, 5.0, "XW", "wall_luminaire", "1A8", json!({"mount": "wall", "device_type": "luminaire XW"})),
     ];
     let extra = json!({"mep": {"fixture_schedule": [
         {"tag": "XQ", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
-        {"tag": "WQ", "installation": "WALL", "description": "WALL LIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"}
+        {"tag": "WQ", "installation": "WALL", "description": "WALL LIGHT", "source": "E-9 LIGHT FIXTURE SCHEDULE"},
+        {"tag": "XW", "installation": "CEILING/VARIES", "description": "EXIT SIGN", "source": "E-9 LIGHT FIXTURE SCHEDULE"}
     ]}});
     build(&mut s, spec(tags, extra));
-    for mark in ["OS1", "XQ"] {
+    for mark in ["OS1", "XQ", "XW"] {
         let p = props(&mut s, mark);
         assert_eq!(p["mounting"]["value"], "ceiling", "{mark}: {p:#}");
         assert_eq!(p["mounting"]["source"]["kind"], "rule", "{mark}: {p:#}");

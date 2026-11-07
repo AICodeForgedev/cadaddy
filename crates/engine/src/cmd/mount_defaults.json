@@ -4,7 +4,7 @@
   "rcp_light_symbol_in": [3, 24],
   "ceiling_when_clear_of_walls": {
     "wall_ft": 2.0,
-    "kinds": ["luminaire", "exit sign", "emergency light", "occupancy sensor", "vacancy sensor", "daylight sensor", "smoke detector", "heat detector", "speaker", "antenna", "camera", "wireless access point"],
+    "kinds": ["luminaire", "wall luminaire", "exit sign", "emergency light", "occupancy sensor", "vacancy sensor", "daylight sensor", "smoke detector", "heat detector", "speaker", "antenna", "camera", "wireless access point"],
     "words": ["SENSOR", "DETECTOR", "EXIT", "SPEAKER", "STROBE", "ANTENNA", "CAMERA", "ACCESS POINT", "DOWNLIGHT"],
     "ceiling_words": ["CEILING", "CEIL", "CLG", "PENDANT", "SUSPENDED", "RECESSED"],
     "except_words": ["DUCT", "SWITCH", "RECEPTACLE", "THERMOSTAT", "PULL", "OUTLET"],
