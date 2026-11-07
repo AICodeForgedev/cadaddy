@@ -235,7 +235,24 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
     if let Some(body) = bytes.strip_prefix(BINARY_SENTINEL) {
         return parse_binary_with_limit(body, max_tags);
     }
-    // Count nonblank group-code/value pairs, stopping at EOF just as the parser does.
+    let tags = count_ascii_tags(bytes);
+    if tags > max_tags {
+        return Err(DxfError::TooLarge { tags, limit: max_tags });
+    }
+    // Room for them at once, but never more than six bytes a group could fill (a file of blank
+    // lines reserves nothing it doesn't hold).
+    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags, tags.min(bytes.len() / 6))
+}
+
+/// How many group codes [`parse`] reads from an ASCII DXF (the count its limit is checked
+/// against), without decoding the text or allocating any; `None` for binary DXF, whose groups
+/// can't be counted without reading them.
+pub fn count_tags(bytes: &[u8]) -> Option<usize> {
+    (!bytes.starts_with(BINARY_SENTINEL)).then(|| count_ascii_tags(bytes))
+}
+
+/// Nonblank group-code/value pairs of an ASCII DXF, stopping at EOF just as the parser does.
+fn count_ascii_tags(bytes: &[u8]) -> usize {
     let mut lines = bytes.split(|&b| b == b'\n');
     let mut tags = 0;
     while let Some(code) = lines.next() {
@@ -249,12 +266,7 @@ pub fn parse_with_limit(bytes: &[u8], max_tags: usize) -> Result<Vec<Tag>> {
             break;
         }
     }
-    if tags > max_tags {
-        return Err(DxfError::TooLarge { tags, limit: max_tags });
-    }
-    // Room for them at once, but never more than six bytes a group could fill (a file of blank
-    // lines reserves nothing it doesn't hold).
-    parse_ascii_with_limit(&codepage::decode_ascii_file(bytes), max_tags, tags.min(bytes.len() / 6))
+    tags
 }
 
 /// The four hex digits of a `\U+XXXX` escape starting at `chars[i]`, if there is one.
