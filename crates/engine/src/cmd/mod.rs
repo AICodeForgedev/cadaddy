@@ -300,6 +300,9 @@ pub struct CommandSpec {
     pub help: &'static str,
     /// What it reaches beyond the drawing, when its parameters don't say ([`CommandSpec::reach`]).
     pub access: Option<Access>,
+    /// It can run for seconds to minutes (a job, a stage, a model build, a takeoff): an interface
+    /// runs it off its UI thread ([`CommandSpec::long`]).
+    pub long: bool,
 }
 
 /// What a command reaches beyond the drawing: plug-ins need a grant for files or the network
@@ -370,7 +373,14 @@ impl CommandSpec {
             transparent: false,
             help: "",
             access: None,
+            long: false,
         }
+    }
+    /// It can run for seconds to minutes: an interface runs it on a worker thread, keeps its
+    /// window live and shows the job's progress with a Cancel (Q6269).
+    pub const fn long(mut self) -> Self {
+        self.long = true;
+        self
     }
     /// It reads or writes files though no parameter names one (QSAVE: the drawing's own file).
     pub const fn files(mut self) -> Self {
@@ -461,6 +471,7 @@ impl CommandSpec {
             interactive: self.interactive.is_some(),
             enabled: e.is_ok(),
             disabled_reason: e.err(),
+            long: self.long,
         }
     }
 }
@@ -478,6 +489,9 @@ pub struct CommandInfo {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+    /// It can run long; the app runs it off its UI thread (listed only when true).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub long: bool,
 }
 
 /// A generated help page for a command.
@@ -772,6 +786,11 @@ pub fn first_prompt(spec: &CommandSpec) -> Option<crate::Prompt> {
 pub fn find_by_id_or_alias(name: &str) -> Option<&'static CommandSpec> {
     let l = name.to_ascii_lowercase();
     command_specs().iter().find(|c| c.id == l || c.aliases.contains(&l.as_str()))
+}
+
+/// Whether `name` (an id or an alias) is a command that can run long ([`CommandSpec::long`]).
+pub fn is_long(name: &str) -> bool {
+    find_by_id_or_alias(name).is_some_and(|c| c.long)
 }
 
 /// Return all command ids that have no hand-written help text.

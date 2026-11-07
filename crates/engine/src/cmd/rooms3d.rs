@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("rooms.get", "Room", run_get).params("{name? | number? | label?} → the room (as rooms.list's)").noundo(),
         CommandSpec::new("rooms.goto", "Go to Room", run_goto).params("{name? | number? | label?} → {name, window}: the view shows the room").noundo(),
-        CommandSpec::new("rooms.build", "Build Room Volumes", run_build)
+        CommandSpec::new("rooms.build", "Build Room Volumes", run_build).long()
             .menu(&["Tools", "Building", "Build Room Volumes"])
             .params("{clear?: true (remove them), regions?: [[x0,y0,x1,y1]] (read the rooms only inside these sheet rectangles: a guided job's floor plans)} → {built, removed}: a see-through mesh per room on 3D-Rooms, tagged with its name and number"),
     ]

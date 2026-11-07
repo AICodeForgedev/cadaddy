@@ -35,6 +35,24 @@ enum Act {
     Save(String, [String; 4]),
 }
 
+/// LEVELS READ's answer as the palette's report lines.
+fn read_report(r: Result<Value, String>) -> Vec<String> {
+    match r {
+        Ok(v) => {
+            let mut out: Vec<String> = v["changes"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
+            out.extend(v["conflicts"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from));
+            if let Some(m) = v["message"].as_str() {
+                out.push(m.to_string());
+            }
+            if out.is_empty() {
+                out.push(crate::tl!("The levels already match the prints.").to_string());
+            }
+            out
+        }
+        Err(e) => vec![e],
+    }
+}
+
 pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
     let t = crate::theme::Tokens::get();
     let id = egui::Id::new("levels-palette-state");
@@ -150,20 +168,21 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         });
     match act {
         Some(Act::Read) => {
-            st.report = match app.run("levels.read", json!({ "apply": true })) {
-                Ok(v) => {
-                    let mut out: Vec<String> = v["changes"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from).collect();
-                    out.extend(v["conflicts"].as_array().into_iter().flatten().filter_map(Value::as_str).map(String::from));
-                    if let Some(m) = v["message"].as_str() {
-                        out.push(m.to_string());
-                    }
-                    if out.is_empty() {
-                        out.push(crate::tl!("The levels already match the prints.").to_string());
-                    }
-                    out
-                }
-                Err(e) => vec![e.to_string()],
-            };
+            // Reading every sheet's levels takes a while: off the UI thread (Q6269); the report
+            // lands in the palette's state when it ends.
+            let c = ctx.clone();
+            app.run_background("levels.read", json!({ "apply": true }), move |_, r| {
+                let report = read_report(r);
+                c.data_mut(|d| {
+                    let mut st: State = d.get_temp(id).unwrap_or_default();
+                    st.report = report;
+                    d.insert_temp(id, st);
+                });
+            });
+            // A read that ended at once has put its report there already.
+            if let Some(stored) = ctx.data(|d| d.get_temp::<State>(id)) {
+                st.report = stored.report;
+            }
         }
         Some(Act::Sheets) => {
             let folder = app.services.pick_folder.as_ref().and_then(|f| f());

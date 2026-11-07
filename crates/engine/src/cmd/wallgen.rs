@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(
             "{rules?: walk rules (as in <drawing>.walk.json), rulesFile?: path, layers?: wall layers (wildcards, comma-separated; default the rules' wall layers), slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), clear?: true (remove what WALLGEN made)} → {walls, doors, windows, floors, ceilings, levels, removed, notes: [why walls were or weren't found]}",
         ),
-        CommandSpec::new("model.update", "Update Model from Plans", run_update)
+        CommandSpec::new("model.update", "Update Model from Plans", run_update).long()
             .params("{} → {behind: bool (the plan had changed since the associative model was last built), rebuilt: bool}: build the model again now when edits to the plan have left it behind (it is built again anyway before the next command that reads it, and when editing stops for a moment)")
             .noundo(),
         CommandSpec::new("wallgen.plan", "Planned Walls", run_plan)

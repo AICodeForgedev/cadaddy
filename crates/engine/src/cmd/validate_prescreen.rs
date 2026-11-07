@@ -157,6 +157,8 @@ pub const RULES: [&str; 34] = [
     super::validate_equip::RULE,
     super::validate_fixtures::RULE,
 ];
+/// An element this close to a symbol (inches) was placed from it: no independent measure.
+const OWN_SOURCE_IN: f64 = 1e-3;
 /// How far a wall is looked for round an element, feet.
 pub const HOST_SEARCH_FT: f64 = 10.0;
 /// A built part whose top is this close under its level's ceiling, inches, is at the ceiling.
@@ -177,7 +179,7 @@ const MAX_WRITTEN: usize = 200_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new(CMD, "Validation Prescreen", run_prescreen)
+        CommandSpec::new(CMD, "Validation Prescreen", run_prescreen).long()
             .params("{scope?: area|room|level|building|selection (from what is given; building when nothing is), area?: id from validate.areas | {area: [x0,y0,x1,y1] (feet), level}, room?: number or name, level?: name, rules?: [G-HOST|G-HEIGHT|G-LAYOUT|G-PRESENT|E-RECEPT-TR|E-LUM-TYPE|E-LUM-CONTROL|E-SWITCH-LEG|E-SWITCH-DIM|E-SWITCH-3WAY|E-LUM-COUNT|G-KEYNOTE|G-PRODUCT|G-PRODUCT-CODE|G-UNDERGROUND|E-GEAR-SPACE|E-GEAR-FILL|E-GEAR-SIZE|E-CONDUIT-CONTINUITY|E-CONDUIT-FILL|E-BOX-FILL|E-DERATE|E-VDROP|E-METHOD|G-CLASH|E-TAKEOFF|G-COVERAGE|G-VE-TIER|G-VE-AREA|G-VE-COST|G-VE-RFI|G-VE-DESIGN|E-EQUIP-ELEC|E-LUM-SCHEDULE], all?: bool (list the passes too), cursor?: n, limit?: n (20, at most 50), path?: JSON file for every finding, value_engineering?: path (a ve.study answer as JSON, or a job result holding value_engineering; default the job's BIM stage), price_book?: path (the cost DB or private price book, .csv or .json, labor in dollars, that G-VE-COST prices again from; default the study's price book, else the job's cost DB), force?: bool} → {scope, areas, rooms, elements, checked: {rule: {pass, fail, missing, extra, unsure, conflict}} (every rule run, 0 when it found nothing to check), unmatched: {elements, kinds: {kind: n}, marks: {mark: n}, handles, why} (elements no rule naming kinds applies to), unmeasured: {rule: {why: n}} (G-HEIGHT: kind by kind), total, problems, findings: [{id, rule, handle?, kind?, kind_from?, mark?, verdict (G-HEIGHT: pass|fail|default; E-RECEPT-TR: pass|fail|unsure; lighting: pass|fail|unsure|conflict; G-KEYNOTE: pass|fail|missing|unsure; G-PRODUCT, G-PRODUCT-CODE: pass|fail|unsure, with `check` the field or feature; G-UNDERGROUND: pass|fail|missing|extra|proposed|unsure; E-GEAR-*: pass|fail|unsure|conflict, the gear's `tag` and `measured.check`; the conduit rules: pass|fail|unsure with `measured.check`; G-COVERAGE: pass|fail|unsure, `kind` the kind's words; G-VE-*: pass|fail|unsure with the `scenario` and its `tier`; E-EQUIP-ELEC: pass|fail|unsure|missing|extra, the connection's `tag` and `measured.check` protection|conductors|conduit_fill|disconnect|sccr|revision with `measured.submittal` (values, cite, page, status, revision), `measured.model` (panel, circuit, disconnect) and `measured.recomputed`; E-LUM-SCHEDULE: pass|fail|unsure|missing|extra with `measured.check` row (a luminaire: `measured.row` its type's row as read, `measured.fields` each field with the model's value and where it came from)|scheduled|on_plan|submittal|submitted|fields|quantity (a type: `tag`, `measured.row`, `measured.submittal` with its page, stamp and revision, `measured.working`), an RFI's `measured.rfi`), issue, expected, found, measured (G-HEIGHT: aff_in, to: centre|top|bottom (the point of the element compared: a height to its top at its top), expected_in, off_in, expected_from, expected_source: {in, from: plan_note|elevation|legend|schedule|general_note|project_rule, what, sheet, at, text}, model_height_from: document|default|rule|user|computed|model), expected_source?, documents? (a conflict's two sides), confidence, severity, area?, level, at?, source: \"prescreen\" | \"build\"}], next?, walls: {elements, pieces, over_openings, unmeasured: {walls, why: {why: n}, first}} (the walls G-HOST measures against: pieces on the floor, pieces over an opening, walls whose footprint gives no centreline), outside_floors: {count, flagged, by_part: {part: n}, elements?: [{handle, part, level, at_ft, outside_ft, flagged}] (in the path file)} (every built element more than 2 ft outside its level's footprint, its floor and its shell inside the exterior walls, and whether the build flagged it misplaced), rooms_without_set, no_room: {elements, first: [{handle, kind, level, at, nearest_area, off_ft}]} (elements in no area of their level, outside every room and more than a foot off any room's wall line; all of them in the `path` file), present: {by_room_type: {type: {rooms, pass, missing, extra}}, by_level: {level: {…}}, rooms_by_basis: {enlarged_plan, trade_plan, project_rule}}, products?: {by_kind: {kind: {elements, with_product_data, no_product_data, by_field: {field: {pass, fail, unsure, accuracy}}, accuracy}}, by_field} (G-PRODUCT and G-PRODUCT-CODE), coverage?: {kinds_defined, by_verdict, zero_in_model, unexplained_groups, kinds: [{kind, name, plan_marks, by_sheet, model, verdict}]} (G-COVERAGE; the whole table, with each kind's sources, levels, typical plans and elements, in the `path` file), fixtures?: {types: [{type, plan, model, row, submittal, verdicts, luminaires}], schedule: {tables, types, pages_read, no_substitutions}, submittals: {files, types}, rfis: {confirmed, disputed, not_recomputed}} (E-LUM-SCHEDULE), disabled, ms}: the deterministic checks that need no agent — each wall-hosted element's distance to its wall face (G-HOST: its stored host wall first, else the nearest wall there at its height; under a wall piece over an opening it is in the opening), each element's height above its floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, project rules validate.height.<mark|kind>) (G-HEIGHT), and each room against what the prints show in it — its unit type's enlarged plans turned as its layout fit says, else its level's trade plans: each symbol matched to an element of the same kind within plan_in, else missing (sheet, sheet point, place in the room); elements no symbol stands for extra — and each room type's project-rule set (`prescreen.expect.<room type>`) (G-PRESENT), and each receptacle in a guest room, dwelling unit or other room the code lists against its tamper-resistance fact from its product record, type tag, legend row or a blanket note (E-RECEPT-TR: unsure when nothing says), and the lighting: each luminaire's type against the fixture schedule and the submittal (E-LUM-TYPE: a conflict, citing both, where the documents disagree), its control (E-LUM-CONTROL: none needed when emergency or unswitched), each control's switch leg (E-SWITCH-LEG), each dimmer's drivers (E-SWITCH-DIM), each 3-way switch's mate (E-SWITCH-3WAY) and the plan's luminaire and control symbols per room against the model's (E-LUM-COUNT); the job's own conflict review items about lighting come in as conflicts (source build); and each plan keynote marker whose note calls for a box of a size, a device, conduit of a size and route or a sleeve against the model within route_ft of the marker (G-KEYNOTE: pass, fail for a wrong size or route, missing, unsure when a size or route can't be measured; rated walls and floors the conduit passes listed with the rating to keep); and each product's record field by field against its submittal and specification — maker in the approved list (submittal first, else the spec's makers), the submitted catalog number, colour/finish, configuration, rating, required features (G-PRODUCT: unsure \"no product data\" when the model doesn't know a field, counted per kind) — and each receptacle's code-required features by location from the code rules data: tamper-resistant in guest rooms and dwellings, GFCI judged on its whole circuit with the breaker read from the panel schedule (a GFCI receptacle on a GFCI breaker fails as double protection; where GFCI is needed on a standard breaker it must be a GFCI device or on the load side of one, named), weather-resistant outdoors (G-PRODUCT-CODE: unsure \"breaker type unknown\" when the circuit or its breaker isn't known); and each callout of the documents for buried work against the model's runs below the slab and the underground sheets (G-UNDERGROUND: pass, fail for another size, count or material or too shallow, missing when no run or no underground sheet has it, unsure; each run CADaddy proposes `proposed`, never a pass, with its review item; a buried run nothing accounts for `extra`; each stub-up two dimensions from a slab edge or a grid line, else fail); and each piece of electrical gear against NEC 110.26 and its documents, recomputed from the schedules, the one-line and the gear submittals (re-read when the job's are on this machine), never from the build's own gear review: E-GEAR-SPACE its working space (depth by its voltage to ground — unsure where only condition 1 holds or the voltage isn't known — width, height, clear of walls, equipment and door swings; a door whose swing nothing gives is unsure), headroom and dedicated space (no duct or pipe over it to 6 ft above); E-GEAR-FILL the raceways each side takes on its conduit area (drawn in the submittal; else the box less the rule's margins, a pass only with half to spare), the gutter fill (NEC 312.8), the bending space (NEC 312.6) and the lugs against each feeder's parallel sets, size and metal (gutter or bending dimensions the documents don't give: unsure, never a pass), and the feeders its schedule names without a record; E-GEAR-SIZE its built box against the submittal's; the build's conflict review items about gear come in as conflicts (source build); and the routed branch circuits recounted from the model's own pieces, never from the router's report: E-CONDUIT-CONTINUITY each device joined end to end to its panel by its circuit's raceway, every drop ending on its box (within touch_in); E-CONDUIT-FILL each raceway's wires against NEC Chapter 9 (40% over two conductors); E-BOX-FILL each box's entering conductors, grounds and yoke (314.16) against its volume; E-DERATE each raceway's current-carrying conductors and the 310.15(C)(1) factor against the schedule's breakers; E-VDROP each circuit's length along its raceway from its panel to its farthest device against the drawing's length table, else 3%; E-METHOD each run's wiring method against the specification's table for its area; G-CLASH each stick against ducts, pipes, structure, equipment, other conduit and the gear's working space by the rules' clearances, the router's clash items carried in (source build); E-TAKEOFF the stored count index and conduit.takeoff against a recount within takeoff_pct (1%); and, kind by kind, every kind the documents define (legend and schedule rows, abbreviation lists, keynotes, the print inventory's kinds) against the model, independently of the build's counts: its tags, sample symbols and keynote markers on the plans (per sheet and level, a floor plan and an enlarged plan deduped by registration, a typical unit plan once per room of its type) against the model's elements of that kind (G-COVERAGE: fail, ranked first, for marks and zero elements, and for a kind the electrical, fire alarm or low-voltage sheets connect to (power, a circuit, a module, a data drop) with zero elements, even when its trade is by others; fail for a count off by more than count_abs / count_share; unsure for the print inventory's unexplained marks repeated on several plan sheets, a likely missing kind); and the value-engineering recommendations (the job's study, the drawing's scenarios): G-VE-TIER an ALLOWED NOW option permitted by both the specification's paragraph for every area its pieces are in and a code rule it cites (rules data: construction types, concealed, thermal barrier, areas never allowed), all conditions met; one the specification contradicts must be NEEDS RFI; G-VE-AREA no NM or other cable option where its method is never used (rules data: NM never in common, exposed, plenum or below-slab areas), each cable piece placed by its room, the design piece beside it, its circuit's area, its ceiling and its height; G-VE-COST the savings recomputed from a recount of the model's pieces and the price book within cost_pct (1%), man-hours = labor $ ÷ the stated rate; G-VE-RFI each NEEDS RFI option's method-choice RFI with its citations and the design's intent; G-VE-DESIGN the as-designed model unchanged by any scenario not approved (RFI) or chosen (allowed now); and each equipment connection against its latest approved submittal (re-read; a scanned one through an agent's `equip:<TAG>` answer citing its page) and the code rules data, never the build's own checks (E-EQUIP-ELEC: protection no larger than the maker's maximum and of its fuse class, conductors at least its MCA or 125% of its full-load amps, conduit fill, the disconnect's rating and type, its SCCR against its source's available fault current, the revision the model follows; a value nothing gives is unsure; a failure the build raised no `equipment_electrical` RFI for is `missing`, an RFI with no failure `extra`); and the light fixture schedule read again from the sheets by its grid (any column order, one or two sides; the drawing's sheets and the job's pages it doesn't hold) and the lighting submittals read again from the job's folders (the latest revision not sent back), never the build's stored copy (E-LUM-SCHEDULE: each luminaire's basis of design, lamp, VA, voltage and installation against its type's row, a field that differs fails citing the row, a type with no row or a field the model doesn't record unsure; each scheduled type's approved product against its basis of design, the same maker (brands of one maker are one) and series (other options are one product); the schedule's voltage and VA against the submittal's; scheduled types no plan shows, plan types the schedule lacks, submitted types the schedule lacks, the schedule's quantities; a type-level failure the build raised no lighting RFI for is `missing`, a lighting RFI with no failure `extra`, one about a field Validate doesn't recompute `unsure`). Data the model or documents don't give is unsure, never a pass")
             .noundo()
             .files(),
@@ -658,8 +660,9 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
         })
         .collect();
     let plan: BTreeSet<String> = model.elements.iter().map(|e| e.id.to_ascii_uppercase()).collect();
-    // A plan element's built twin may hold its host wall.
+    // A plan element's built twin may hold its host wall, and its bottom and top.
     let mut twin_host: HashMap<String, String> = HashMap::new();
+    let mut twin_span: HashMap<String, (f64, f64)> = HashMap::new();
     const MEP_KINDS: [&str; 5] = ["equipment", "fixture", "device", "light_fixture", "terminal"];
     let upf = frame.upf();
     for e in d.model.iter().take(MAX_ENTITIES) {
@@ -671,7 +674,17 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
         }
         if let Some(src) = super::bimlook::made_source(e).map(|h| h.hex().to_ascii_uppercase()).filter(|h| plan.contains(h)) {
             if let Some(h) = stored_host(e) {
-                twin_host.insert(src, h);
+                twin_host.insert(src.clone(), h);
+            }
+            let floor = super::elemprops::level_of(e).and_then(|l| sp.level(&l).map(|l| l.elevation_ft));
+            if let (EntityKind::Mesh(m), Some(floor)) = (&e.kind, floor)
+                && !m.vertices.is_empty()
+            {
+                let (z0, z1) = m.vertices.iter().take(1_000_000).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| (a.min(p.z), b.max(p.z)));
+                let (lo, hi) = ((z0 / upf - floor) * 12.0, (z1 / upf - floor) * 12.0);
+                if lo.is_finite() && hi.is_finite() && hi >= lo {
+                    twin_span.insert(src, (lo, hi));
+                }
             }
             continue;
         }
@@ -739,8 +752,12 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             rule_only: rule_only_work(e),
         });
     }
-    for it in out.iter_mut().filter(|it| !it.built && it.host.is_none()) {
-        it.host = twin_host.get(&it.handle.to_ascii_uppercase()).cloned();
+    for it in out.iter_mut().filter(|it| !it.built) {
+        let key = it.handle.to_ascii_uppercase();
+        if it.host.is_none() {
+            it.host = twin_host.get(&key).cloned();
+        }
+        it.z_span_in = twin_span.get(&key).copied();
     }
     out
 }
@@ -808,7 +825,7 @@ impl Present {
     const MAX_ROWS: usize = 60;
 
     fn empty() -> BTreeMap<&'static str, u64> {
-        [("rooms", 0), ("pass", 0), ("missing", 0), ("extra", 0)].into_iter().collect()
+        [("rooms", 0), ("pass", 0), ("missing", 0), ("extra", 0), ("unsure", 0)].into_iter().collect()
     }
     /// A room checked, once, and what gave its set (each source once).
     fn room(&mut self, room_type: &str, level: &str, basis: &'static str, first: bool) {
@@ -985,7 +1002,7 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
     for (id, verdicts) in [
         ("G-HOST", &["pass", "fail"][..]),
         ("G-HEIGHT", &["pass", "fail", "default"][..]),
-        ("G-PRESENT", &["pass", "missing", "extra"][..]),
+        ("G-PRESENT", &["pass", "missing", "extra", "unsure"][..]),
         (super::validate_tr::RULE, &["pass", "fail", "unsure"][..]),
         (super::walllayout::RULE, &["pass", "fail", "unsure"][..]),
         (super::validate_keynote::RULE, &super::validate_keynote::VERDICTS[..]),
@@ -1214,11 +1231,14 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 }
                 continue;
             };
-            // A height to its top (or bottom) is compared at its top (bottom).
-            let z = match (want.datum, it.z_span_in) {
-                (vh::Datum::Top, Some((_, hi))) => hi,
-                (vh::Datum::Bottom, Some((lo, _))) => lo,
-                _ => z,
+            // A height to its top (or bottom) is compared at its top (bottom): a plan element's
+            // built part's. With no built part the model holds only its middle: compared there,
+            // and said so.
+            let (z, at_middle) = match (want.datum, it.z_span_in) {
+                (vh::Datum::Top, Some((_, hi))) => (hi, false),
+                (vh::Datum::Bottom, Some((lo, _))) => (lo, false),
+                (vh::Datum::Centre, _) => (z, false),
+                (_, None) => (z, true),
             };
             let off = z - want.inches;
             let verdict = if off.abs() <= t { "pass" } else { "fail" };
@@ -1239,6 +1259,11 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 "expected_source": want.to_json(),
                 "model_height_from": origin.unwrap_or("model"),
             });
+            let mut measured = measured;
+            if at_middle {
+                measured["compared_at"] =
+                    json!(format!("its middle: the height is measured {}, and the model holds no built part of it", want.datum.words()));
+            }
             let mut f = base(r, it, *a, verdict, issue, format!("{:.1} in AFF (±{t} in)", want.inches), format!("{z:.1} in AFF"), measured);
             f["tolerance_in"] = json!(t);
             f["expected_source"] = want.to_json();
@@ -1309,10 +1334,16 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                     vt::required_in(code, a, units.get(&a.level, a.number.as_deref()), pu.copied())
                 })
                 .clone();
-            // A room the code doesn't list: the rule doesn't apply.
-            let Some(why_room) = why_room else { continue };
             let el = by_id.get(&it.handle.to_ascii_uppercase()).copied();
             let ent = cadaddy_doc::Handle::parse_hex(&it.handle).and_then(|h| sc.d.model.get(h)).map(|x| x.as_ref());
+            // The code's rooms, and the documents' own ask: its keynote. Neither: the rule
+            // doesn't apply.
+            let why_room = match (why_room, vt::asked_by_keynote(sc.d, ent)) {
+                (Some(w), Some(k)) => format!("{w}; {k}"),
+                (Some(w), None) => w,
+                (None, Some(k)) => k,
+                (None, None) => continue,
+            };
             let subject = Subject {
                 mark: it.mark.as_deref(),
                 tag: el.and_then(|e| e.tag.as_deref()),
@@ -1526,20 +1557,25 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 let held_trade: Vec<&'static str> = held.iter().map(|it| super::validate_packet::trade_of_kind(&it.kind, sc.rules)).collect();
                 // Each expected symbol to its nearest element of the same kind within the
                 // tolerance, nearest pairs first.
-                let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+                // A symbol of a sheet whose spots are reference only is the room's element of
+                // its kind wherever it is in the room (after the pairs within the tolerance).
+                let mut pairs: Vec<(bool, f64, usize, usize)> = Vec::new();
                 for (i, ex) in set.items.iter().enumerate() {
                     let Some(sym) = symbols.syms.get(ex.sym) else { continue };
                     for (j, it) in held.iter().enumerate() {
                         let dd = (it.at[0] - ex.at[0]).hypot(it.at[1] - ex.at[1]);
-                        if dd <= tol_ft && vp::same_kind(&sym.kind, sym.mark.as_deref(), &it.kind, it.mark.as_deref()) {
-                            pairs.push((dd, i, j));
+                        if (dd <= tol_ft || ex.reference_only.is_some())
+                            && vp::same_kind(&sym.kind, sym.mark.as_deref(), &it.kind, it.mark.as_deref())
+                        {
+                            pairs.push((dd > tol_ft, dd, i, j));
                         }
                     }
                 }
-                pairs.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)).then(x.2.cmp(&y.2)));
+                pairs.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)).then(x.2.cmp(&y.2)).then(x.3.cmp(&y.3)));
                 let mut got: HashMap<usize, (usize, f64)> = HashMap::new();
                 let mut taken: BTreeSet<usize> = BTreeSet::new();
-                for (dd, i, j) in pairs {
+                let (mut doubted, mut not_judged, mut own_source) = (0u64, 0u64, 0u64);
+                for (_, dd, i, j) in pairs {
                     if got.contains_key(&i) || taken.contains(&j) {
                         continue;
                     }
@@ -1558,7 +1594,13 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                     let sheet_at = sym.sheet_at.map(|p| pt([r2(p[0]), r2(p[1])]));
                     let source = json!({"sheet": ex.sheet, "view": ex.view, "at": sheet_at, "from": set.basis});
                     let matched = got.get(&i).and_then(|(j, dd)| held.get(*j).map(|it| (*it, *dd)));
-                    let verdict = if matched.is_some() { "pass" } else { "missing" };
+                    // Where an unregistered (or loosely fitted) sheet puts a symbol is no measure:
+                    // unsure, found or not.
+                    let verdict = match (&ex.doubt, matched.is_some()) {
+                        (Some(_), _) => "unsure",
+                        (None, true) => "pass",
+                        (None, false) => "missing",
+                    };
                     tally(&r.rule.id, verdict);
                     present.add(&room_type, &a.level, verdict);
                     let key = sym.sheet_at.or(sym.plan.as_ref().map(|p| p.1)).unwrap_or(ex.at);
@@ -1571,7 +1613,62 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                     if !sym.sheet.trim().is_empty() && !sym.sheet.eq_ignore_ascii_case(&ex.sheet) {
                         measured["read_as_sheet"] = json!(sym.sheet);
                     }
+                    // The element read from this very symbol (its sheet point is the symbol's), or
+                    // placed straight from it (on the symbol's point to a thousandth of an inch, a
+                    // built part with no sheet point of its own): its distance to it is no measure.
+                    let own = matched.is_some_and(|(it, dd)| {
+                        dd * 12.0 < OWN_SOURCE_IN
+                            || sym.sheet_at.zip(it.sheet_at).is_some_and(|(p, q)| {
+                                let scale = 1.0 + p[0].abs().max(p[1].abs());
+                                (p[0] - q.x).hypot(p[1] - q.y) <= 1e-9 * scale
+                            })
+                    });
                     let (issue, found, handle) = match matched {
+                        _ if ex.doubt.is_some() => {
+                            doubted += 1;
+                            let why = ex.doubt.clone().unwrap_or_default();
+                            measured["position_doubt"] = json!(why);
+                            if let Some((it, dd)) = matched {
+                                measured["nearest_in"] = json!(r2(dd * 12.0));
+                                measured["nearest"] = json!(it.handle);
+                            }
+                            (
+                                format!("{shown_on} shows a {what} in {room_label}, but {why}: not judged on its place"),
+                                matched.map_or_else(
+                                    || "nothing of that kind near where the sheet is laid".to_string(),
+                                    |(it, _)| format!("a {} near it", it.kind),
+                                ),
+                                matched.map(|(it, _)| it.handle.clone()),
+                            )
+                        }
+                        Some((it, dd)) if ex.reference_only.is_some() => {
+                            not_judged += 1;
+                            measured["position_not_judged"] = json!(format!(
+                                "{} says its spots are reference only: \"{}\"",
+                                ex.sheet,
+                                ex.reference_only.clone().unwrap_or_default()
+                            ));
+                            measured["off_in_not_judged"] = json!(r2(dd * 12.0));
+                            (
+                                format!(
+                                    "{room_label} has the {what} {shown_on} shows (its place is not judged: the sheet's spots are reference only)"
+                                ),
+                                format!("a {} in the room", it.kind),
+                                Some(it.handle.clone()),
+                            )
+                        }
+                        Some((it, _)) if own => {
+                            own_source += 1;
+                            measured["compared_to"] =
+                                json!("its own source: the element was read from this symbol, so its place is not measured here");
+                            (
+                                format!(
+                                    "{room_label} has the {what} {shown_on} shows (the element read from it; its place is not measured against its own source)"
+                                ),
+                                format!("the {} read from this symbol", it.kind),
+                                Some(it.handle.clone()),
+                            )
+                        }
                         Some((it, dd)) => {
                             measured["off_in"] = json!(r2(dd * 12.0));
                             (
@@ -1710,6 +1807,15 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
                 }
                 if set.doubled > 0 {
                     *notes.entry("symbols two views or sheets show, counted once".into()).or_default() += set.doubled as u64;
+                }
+                for (n, why) in [
+                    (doubted, "symbols of a sheet not registered on its level's plan, or loosely fitted: unsure, their place not measured"),
+                    (not_judged, "symbols of a sheet whose notes make its spots reference only: present judged, place not"),
+                    (own_source, "symbols matched to the element read from them: present judged, place not measured against its own source"),
+                ] {
+                    if n > 0 {
+                        *notes.entry(why.into()).or_default() += n;
+                    }
                 }
                 if set.foreign > 0 {
                     *notes.entry("symbols whose tag reads as another trade's kind than their sheet's, not expected".into()).or_default() +=
