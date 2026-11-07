@@ -4052,7 +4052,7 @@ pub fn circuit_text(t: &str, sheet_numbers: &BTreeSet<String>) -> bool {
 }
 
 /// A circuit label as the fixture it names carries it: its panel and circuit numbers with the
-/// switch leg printed after them (`G-1,a`, `C-23,25`), the leg written as the typical-room reader
+/// switch leg printed after them (`K-1,a`, `M-23,25`), the leg written as the typical-room reader
 /// writes it. Cutting the leg off loses the switch that controls the fixture, and the room's
 /// label is then left for another fixture.
 pub(crate) fn label_circuit(label: &str) -> String {
@@ -25811,8 +25811,8 @@ mod tests {
     }
 
     /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
-    /// leg after the circuit (`G-1,a`, a two-letter panel's `RP-14,c`) and every circuit number
-    /// (`C-23,25`), never only the part before the first comma. The typical-room reader then finds
+    /// leg after the circuit (`K-1,a`, a two-letter panel's `RP-14,c`) and every circuit number
+    /// (`M-23,25`), never only the part before the first comma. The typical-room reader then finds
     /// the label taken by it and adds no second fixture there.
     #[test]
     fn a_lone_fixture_mark_keeps_its_labels_switch_leg() {
@@ -25820,17 +25820,17 @@ mod tests {
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
         job.sheets = Some(json!({"sheets": [{"number": "E-2", "sheet_type": "plan"}]}));
         job.sheets_loaded = true;
-        job.luminaire_types = vec!["A".into(), "B1".into()];
+        job.luminaire_types = vec!["W3".into(), "Y2".into()];
         // Lettering 4 high; each mark over its label, no symbol made of the fixture.
         let texts: Vec<(&str, f64, f64, f64)> = vec![
-            ("A", 100.0, 506.0, 4.0),
-            ("G-1,a", 100.0, 494.0, 4.0),
-            ("A", 300.0, 506.0, 4.0),
+            ("W3", 100.0, 506.0, 4.0),
+            ("K-1,a", 100.0, 494.0, 4.0),
+            ("W3", 300.0, 506.0, 4.0),
             ("RP-14,c", 300.0, 494.0, 4.0),
-            ("B1", 500.0, 506.0, 4.0),
-            ("C-23,25", 500.0, 494.0, 4.0),
-            ("B1", 700.0, 506.0, 4.0),
-            ("B-5", 700.0, 494.0, 4.0),
+            ("Y2", 500.0, 506.0, 4.0),
+            ("M-23,25", 500.0, 494.0, 4.0),
+            ("Y2", 700.0, 506.0, 4.0),
+            ("N-5", 700.0, 494.0, 4.0),
         ];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &[]);
@@ -25852,12 +25852,12 @@ mod tests {
         let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
         got.sort();
         let want: Vec<(String, String)> =
-            [("A", "G-1,a"), ("A", "RP-14,c"), ("B1", "B-5"), ("B1", "C-23,25")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+            [("W3", "K-1,a"), ("W3", "RP-14,c"), ("Y2", "M-23,25"), ("Y2", "N-5")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
         assert_eq!(got, want, "{r:#}");
         assert_eq!(r["luminaires_by_mark_alone"], json!(4), "{r:#}");
         // As the build fills the fixture's properties: its circuit, and its leg apart.
         let legs: Vec<(String, Option<String>)> = job.devices.iter().map(|d| super::super::propfill::split_switch_leg(&d.circuit)).collect();
-        assert!(legs.contains(&("G-1".to_string(), Some("a".to_string()))), "{legs:?}");
+        assert!(legs.contains(&("K-1".to_string(), Some("a".to_string()))), "{legs:?}");
         assert!(legs.contains(&("RP-14".to_string(), Some("c".to_string()))), "{legs:?}");
         // The same marks in a typical room's view: each label is the read fixture's, no second one.
         let items: Vec<cadaddy_mepfix::sheet_facts::TextItem> = texts
@@ -25877,7 +25877,7 @@ mod tests {
             read: job.devices.iter().collect(),
         };
         let marks = super::super::unitmarks::Marks {
-            luminaires: ["A".to_string(), "B1".to_string()].into(),
+            luminaires: ["W3".to_string(), "Y2".to_string()].into(),
             wall_luminaires: BTreeSet::new(),
             leg_rule: None,
             sheet_numbers: BTreeSet::new(),
