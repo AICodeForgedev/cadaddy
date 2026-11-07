@@ -555,6 +555,36 @@ fn a_luminaire_hangs_at_the_ceiling_over_it() {
 }
 
 #[test]
+fn a_sconces_height_measured_for_it_stands_and_a_receptacles_note_by_it_does_not() {
+    let mut s = plan();
+    // Two wall luminaires by their submittals: one with the height its room type's elevations
+    // draw the wall luminaires at (5'-0"), one with a 44" note its typical plan prints by it (a
+    // receptacle's beside it).
+    let mut spec = s.execute("bspec.get", &json!({})).expect("spec")["spec"].clone();
+    if let Some(t) = spec["tags"].as_array_mut() {
+        let mut w1 = device(15.0, 9.2, "W1", "", "1FD");
+        w1["fields"]["mount"] = json!({"value": "wall", "source": "submittal"});
+        w1["fields"]["mount_height_in"] = json!({"value": "60", "source": "note"});
+        w1["fields"]["mount_height_note"] = json!({
+            "value": "60\" AFF to its middle: the type's interior elevations draw its wall luminaires there (A-2 SUITE - BED WALL)",
+            "source": "note"
+        });
+        t.push(w1);
+        let mut w2 = device(20.0, 9.2, "W2", "", "1FE");
+        w2["fields"]["mount"] = json!({"value": "wall", "source": "submittal"});
+        w2["fields"]["mount_height_in"] = json!({"value": "44", "source": "note"});
+        w2["fields"]["mount_height_note"] = json!({"value": "44\" AFF on A-2", "source": "note"});
+        t.push(w2);
+    }
+    s.execute("bspec.set", &json!({"replace": true, "spec": spec})).expect("spec");
+    s.execute("model.build", &json!({})).expect("build");
+    let w1 = device_of(&mut s, "W1");
+    assert_eq!(w1["mount_height"]["value"], json!(60.0), "{w1:#}");
+    let w2 = device_of(&mut s, "W2");
+    assert_eq!(w2["mount_height"]["value"], json!(90.0), "the wall luminaire rule, not the receptacle's note: {w2:#}");
+}
+
+#[test]
 fn a_switch_is_on_the_wall_it_stands_by() {
     let mut s = plan();
     // A dimmer read 2.5' off office 101's north wall (at its designation, beside the symbol), and

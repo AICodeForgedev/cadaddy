@@ -2845,6 +2845,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                         near: String::new(),
                         derived: String::new(),
                         keynote: String::new(),
+                        located: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -5489,10 +5490,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     progress_line(&format!("  typical-room devices read twice at one spot, one kept: {twice}"));
                 }
                 // The heights the typical rooms' plans print by their devices.
-                let (notes, heights) = typical_heights(s.doc()?, job, &mut stamped);
-                if notes > 0 {
+                let heights = typical_heights(s.doc()?, job, &mut stamped);
+                if heights.notes + heights.elevations > 0 {
                     progress_line(&format!(
-                        "  typical rooms' height notes: {notes} read, {heights} stamped devices took theirs (at {:.1} s)",
+                        "  typical rooms' height notes: {} read, {} stamped devices took theirs ({} from the architecture's plans first: {} sheets send locations or heights there {:?}; {} moved to the architecture's symbols); interior elevations: {} read, {} devices took their heights (at {:.1} s)",
+                        heights.notes,
+                        heights.set,
+                        heights.from_architecture,
+                        heights.deferring_sheets.len(),
+                        heights.deferring_sheets,
+                        heights.moved,
+                        heights.elevations,
+                        heights.from_elevations,
                         stamp_clock.elapsed().as_secs_f64()
                     ));
                 }
@@ -9062,19 +9071,69 @@ fn unit_type_table(
 /// The mounting heights the typical rooms' plans print by their devices ("44\" AFF",
 /// "MICROWAVE 65\" AFF" on a leader, "10\" AFF HORIZ") onto the devices stamped into the rooms
 /// of each type: each note's device (where its leader ends, else the round symbol beside it, else
-/// the note's own place) laid into every room of the view's type as the view goes into it, the
-/// device stamped into that room nearest it (within [`AFF_DEVICE_FT`]) takes the height. The notes
-/// read and the devices that took one.
-fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> (usize, usize) {
+/// the note's own place) laid into every room of the view's type as the view goes into it; in
+/// each room the notes and the devices on the same wall are paired one to one, the nearest pairs
+/// first (within [`AFF_DEVICE_FT`]), a device ganged with a paired one (at its spot) taking the
+/// same note.
+///
+/// Where an electrical sheet's notes send its devices' locations or heights to the architecture's
+/// drawings ([`super::archauthority`]), the architecture's enlarged plans go first for that sheet's
+/// devices, with a wider reach ([`AFF_DEFERRED_FT`]: the electrical spots are reference only): a
+/// paired device takes the architecture's height, and when locations are sent there too it moves
+/// to the architecture's symbol, its electrical spot kept in its record. The other sheets' notes
+/// then go onto the devices still without a height, as before. What was read and done.
+fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> TypicalNotes {
+    let mut out = TypicalNotes::default();
+    let rooms = job_rooms(job);
+    let (types, vocabulary) = room_types(&rooms);
+    if types.is_empty() || devices.is_empty() {
+        return out;
+    }
     let k_in = super::perceive::units_per_inch(d);
-    let height = |t: &cadaddy_mepfix::sheet_facts::TextItem| super::propfill::mount_height_in(&t.value).filter(|h| *h > 0.0 && *h < 240.0);
-    let marks = |sub: &cadaddy_doc::Drawing, texts: &[cadaddy_mepfix::sheet_facts::TextItem]| -> Vec<ViewMark<(f64, String)>> {
-        let notes: Vec<(&cadaddy_mepfix::sheet_facts::TextItem, f64)> =
-            texts.iter().filter_map(|t| Some((t, height(t)?))).take(MAX_STAMPED).collect();
-        if notes.is_empty() {
-            return Vec::new();
+    let ft = 12.0 * k_in;
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
+    };
+    let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
+    let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * ft, ft);
+    let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    // Each sheet's height notes by its typical-room views, and what an electrical sheet's notes
+    // send to the architecture's drawings.
+    let mut sheets: Vec<NotedSheet> = Vec::new();
+    let mut defers: BTreeMap<String, super::archauthority::Deferral> = BTreeMap::new();
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none()).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        if sh.discipline.eq_ignore_ascii_case("E") {
+            let said = super::archauthority::read(&texts);
+            if said.any() {
+                defers.entry(sheet_key(&sh.number)).or_insert(said);
+            }
         }
-        // Every straight piece (a leader ends on its symbol: no reader of linework keeps those).
+        let mut notes: Vec<(&cadaddy_mepfix::sheet_facts::TextItem, f64)> = texts
+            .iter()
+            .filter_map(|t| Some((t, super::propfill::mount_height_in(&t.value)?)))
+            .filter(|(_, h)| *h > 0.0 && *h < 240.0)
+            .take(MAX_STAMPED)
+            .collect();
+        // Lettered like the sheet's other height notes: a reading of strokes many times their
+        // size (lettering read off a symbol's linework) is no note.
+        let mut sizes: Vec<f64> = notes.iter().map(|(t, _)| t.height).collect();
+        sizes.sort_by(f64::total_cmp);
+        if let Some(&mid) = sizes.get(sizes.len() / 2) {
+            notes.retain(|(t, _)| t.height <= NOTE_SIZE_RATIO * mid && t.height * NOTE_SIZE_RATIO >= mid);
+        }
+        if notes.is_empty() {
+            continue;
+        }
+        let (views, _) = room_views(&sub, &texts, &types, &vocabulary, &rooms);
+        if views.is_empty() {
+            continue;
+        }
+        // Every straight piece, and each short open polyline end to end (a leader ends on its
+        // symbol: no reader of linework keeps those; a leader with a tick by its note is one).
         let mut segs: Vec<[[f64; 2]; 2]> = Vec::new();
         for e in sub.model.iter() {
             if segs.len() >= MAX_LEADER_PIECES {
@@ -9084,70 +9143,897 @@ fn typical_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [sup
                 cadaddy_doc::EntityKind::Line(l) => segs.push([[l.a.x, l.a.y], [l.b.x, l.b.y]]),
                 cadaddy_doc::EntityKind::LwPolyline(pl) if !pl.closed && pl.vertices.len() <= 8 => {
                     segs.extend(pl.vertices.windows(2).filter_map(|w| Some([[w.first()?.p.x, w.first()?.p.y], [w.get(1)?.p.x, w.get(1)?.p.y]])));
+                    if pl.vertices.len() > 2
+                        && let (Some(a), Some(b)) = (pl.vertices.first(), pl.vertices.last())
+                    {
+                        segs.push([[a.p.x, a.p.y], [b.p.x, b.p.y]]);
+                    }
                 }
                 _ => {}
             }
         }
-        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(sub);
-        notes
+        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(&sub);
+        let mut noted: Vec<NotedView> = Vec::new();
+        // The round symbols the notes are on.
+        let mut noted_rounds: BTreeSet<usize> = BTreeSet::new();
+        for (t, h) in &notes {
+            let Some((vi, (title, view, words))) = views
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, r, _))| inside(r, t.at))
+                .min_by(|a, b| ((a.1.1[2] - a.1.1[0]) * (a.1.1[3] - a.1.1[1])).total_cmp(&((b.1.1[2] - b.1.1[0]) * (b.1.1[3] - b.1.1[1]))))
+            else {
+                continue;
+            };
+            out.notes += 1;
+            // The note's box (its lettering along its direction).
+            let th = t.height.max(1e-9);
+            let dir = cadaddy_geom::Vec2::from_angle(t.rotation);
+            let end = t.at + dir * (NOTE_CHAR_W * th * t.value.chars().count() as f64);
+            let near_note = |p: cadaddy_geom::Vec2| {
+                let ab = end - t.at;
+                let len2 = ab.x * ab.x + ab.y * ab.y;
+                let u = if len2 > 0.0 { (((p - t.at).x * ab.x + (p - t.at).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                p.dist(t.at + ab * u) <= 1.5 * th
+            };
+            // A leader from the note (or from its label's line just over it: `MICROWAVE` over
+            // `65" AFF`): its far end. Else the round symbol nearest the note.
+            let label = texts
+                .iter()
+                .filter(|o| {
+                    let dy = o.at.y - t.at.y;
+                    dy > 0.5 * th && dy <= NOTE_BLOCK_GAP * th && (o.at.x - t.at.x).abs() <= 1.5 * th && (o.height - th).abs() <= 0.25 * th
+                })
+                .min_by(|a, b| (a.at.y - t.at.y).total_cmp(&(b.at.y - t.at.y)));
+            let label_box =
+                label.map(|o| (o.at, o.at + cadaddy_geom::Vec2::from_angle(o.rotation) * (NOTE_CHAR_W * th * o.value.chars().count() as f64)));
+            let near_label = |p: cadaddy_geom::Vec2| {
+                label_box.is_some_and(|(s0, s1)| {
+                    let ab = s1 - s0;
+                    let len2 = ab.x * ab.x + ab.y * ab.y;
+                    let u = if len2 > 0.0 { (((p - s0).x * ab.x + (p - s0).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    p.dist(s0 + ab * u) <= 1.5 * th
+                })
+            };
+            let near_note = |p: cadaddy_geom::Vec2| near_note(p) || near_label(p);
+            let leader = segs
+                .iter()
+                .filter_map(|sg| {
+                    let (a, b) = (cadaddy_geom::Vec2::new(sg[0][0], sg[0][1]), cadaddy_geom::Vec2::new(sg[1][0], sg[1][1]));
+                    if a.dist(b) < 2.0 * th {
+                        return None;
+                    }
+                    if near_note(a) && !near_note(b) {
+                        Some(b)
+                    } else if near_note(b) && !near_note(a) {
+                        Some(a)
+                    } else {
+                        None
+                    }
+                })
+                .max_by(|x, y| x.dist(t.at).total_cmp(&y.dist(t.at)));
+            let reach = AFF_SYMBOL_FT * ft;
+            let symbol = |p: cadaddy_geom::Vec2, r: f64| {
+                rounds
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (c, _))| (i, cadaddy_geom::Vec2::new(c[0], c[1])))
+                    .filter(|(_, c)| c.dist(p) <= r)
+                    .min_by(|a, b| a.1.dist(p).total_cmp(&b.1.dist(p)))
+            };
+            let found = match leader {
+                Some(tip) => symbol(tip, 0.5 * reach),
+                None => symbol(t.at, reach),
+            };
+            if let Some((i, _)) = found {
+                noted_rounds.insert(i);
+            }
+            let at = found.map_or_else(|| leader.unwrap_or(t.at), |f| f.1);
+            let note = format!("{} on {}", t.value.trim(), sh.number);
+            // Its words and its label's naming an appliance: the height of the appliance's
+            // receptacle (or connection), no switch's.
+            let words_of = |v: &str| -> String {
+                let w: String = v.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+                format!(" {} ", w.split_whitespace().collect::<Vec<_>>().join(" "))
+            };
+            let named = words_of(&format!("{} {}", label.map_or("", |o| o.value.as_str()), t.value));
+            let appliance = cadaddy_mepfix::wordrules::words("notes.appliance_words").iter().any(|w| named.contains(&words_of(w)));
+            match noted.iter_mut().find(|v| v.index == vi) {
+                Some(v) => v.notes.push((at, *h, note, appliance)),
+                None => noted.push(NotedView {
+                    index: vi,
+                    title: title.clone(),
+                    view: *view,
+                    words: words.clone(),
+                    notes: vec![(at, *h, note, appliance)],
+                    others: Vec::new(),
+                }),
+            }
+        }
+        if noted.is_empty() {
+            continue;
+        }
+        // On the architecture's plans, the other symbols drawn like the noted ones (their size)
+        // are devices too: each takes its own device, so a note doesn't go to the device beside its
+        // own (a switch's note onto the receptacle under it).
+        if sh.discipline.eq_ignore_ascii_case("A") {
+            let sizes: Vec<f64> = noted_rounds.iter().filter_map(|i| rounds.get(*i).map(|r| r.1)).filter(|r| r.is_finite() && *r > 0.0).collect();
+            let lo = sizes.iter().copied().fold(f64::INFINITY, f64::min) * 0.8;
+            let hi = sizes.iter().copied().fold(0.0, f64::max) * 1.25;
+            for v in &mut noted {
+                let mine: Vec<(cadaddy_geom::Vec2, f64)> = rounds
+                    .iter()
+                    .map(|(c, r)| (cadaddy_geom::Vec2::new(c[0], c[1]), *r))
+                    .filter(|(c, _)| inside(&v.view, *c))
+                    .take(MAX_STAMPED)
+                    .collect();
+                // Not a ring of a burner or a drain (another round about the same middle), not a
+                // link of a coil or a row of studs (another of its size beside it).
+                let lone = |c: cadaddy_geom::Vec2, r: f64| {
+                    !mine.iter().any(|(o, s)| {
+                        let d = o.dist(c);
+                        d > 1e-9 && (d <= 0.3 * r.max(*s) || ((s - r).abs() <= 0.2 * r && d <= 2.5 * r))
+                    })
+                };
+                v.others = rounds
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, (c, r))| {
+                        let c = cadaddy_geom::Vec2::new(c[0], c[1]);
+                        !noted_rounds.contains(i) && *r >= lo && *r <= hi && inside(&v.view, c) && lone(c, *r)
+                    })
+                    .map(|(_, (c, _))| cadaddy_geom::Vec2::new(c[0], c[1]))
+                    .take(MAX_STAMPED)
+                    .collect();
+            }
+        }
+        let objects = super::bspec::plan_objects(&sub);
+        let mut lines: Vec<Vec<cadaddy_geom::Vec2>> = Vec::new();
+        for v in &noted {
+            let mine: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
+                objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(&v.view, c))).copied().collect();
+            lines.push(super::grids::line_samples(&mine, ft));
+        }
+        sheets.push(NotedSheet { number: sh.number.clone(), architecture: sh.discipline.eq_ignore_ascii_case("A"), views: noted, lines });
+    }
+    let deferral = |dv: &super::readers::ReadDevice| defers.get(&sheet_key(&dv.sheet));
+    let elevations = typical_elevations(d, job, &types, &vocabulary);
+    out.elevations = elevations.len();
+    // Where each device's own sheet drew it: another sheet's notes are matched to that spot even
+    // after the architecture's plan moved it.
+    let drawn: Vec<cadaddy_geom::Vec2> = devices.iter().map(|dv| cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])).collect();
+    out.deferring_sheets = defers.keys().cloned().collect();
+    // Which notes went onto a device already, by (sheet, view, note, room).
+    let mut used: BTreeSet<(usize, usize, usize, usize)> = BTreeSet::new();
+    let mut fits: BTreeMap<(usize, usize, usize), Option<RoomFit>> = BTreeMap::new();
+    for first in [true, false] {
+        if first && defers.is_empty() {
+            continue;
+        }
+        for (si, sheet) in sheets.iter().enumerate() {
+            if first && !sheet.architecture {
+                continue;
+            }
+            let reach = if first { AFF_DEFERRED_FT * ft } else { AFF_DEVICE_FT * ft };
+            for (vi, (v, lines)) in sheet.views.iter().zip(&sheet.lines).enumerate() {
+                for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == v.words) {
+                    let b = bbox(outline);
+                    // Only where the view lies on the room by its lines: a share of its box is no
+                    // place to tell one device from the next.
+                    let fit = *fits
+                        .entry((si, vi, ri))
+                        .or_insert_with(|| rigid_room_fit(lines, v.view, b, &floor_lines, ROOM_FIT_MARGIN_FT * ft, 6.0 * k_in).map(|f| f.0));
+                    let Some(fit) = fit else { continue };
+                    let label = stamped_room(name, number, ri);
+                    // The devices given a spot here (a ganged one with its partner's).
+                    let mut done: BTreeSet<usize> = BTreeSet::new();
+                    // The notes first; then, on the architecture's plan for a sheet sending its
+                    // locations there, its un-noted symbols for the devices still without one
+                    // (index `notes.len() + i`; near a wall only, and nearer: a device on a wall).
+                    for unnoted in [false, true] {
+                        if unnoted && !first {
+                            continue;
+                        }
+                        let on_wall = |q: cadaddy_geom::Vec2| super::archauthority::wall_dist(q, outline).is_some_and(|w| w <= ROOM_WALL_FT * ft);
+                        let from = if unnoted { v.notes.len() } else { 0 };
+                        let spots: Vec<(usize, cadaddy_geom::Vec2)> = if unnoted { v.others.as_slice() } else { &[] }
+                            .iter()
+                            .copied()
+                            .chain(v.notes.iter().filter(|_| !unnoted).map(|n| n.0))
+                            .enumerate()
+                            .map(|(i, at)| (i + from, at))
+                            .filter(|(ni, _)| !used.contains(&(si, vi, *ni, ri)))
+                            .filter_map(|(ni, at)| {
+                                let q = place_in_room([at.x, at.y], v.view, b, fit)?;
+                                let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                                (!unnoted || on_wall(q)).then_some((ni, q))
+                            })
+                            .collect();
+                        if spots.is_empty() {
+                            continue;
+                        }
+                        let reach = if unnoted { reach.min(UNNOTED_FT * ft) } else { reach };
+                        let mine: Vec<usize> = devices
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, dv)| dv.room == label && dv.level == *level && !ceiling_kind(device_kind_of(dv)) && !done.contains(j))
+                            .filter(|(_, dv)| {
+                                if first {
+                                    deferral(dv).is_some() && !dv.aff_note.contains(AFF_ARCH_MARK) && dv.located.is_empty()
+                                } else {
+                                    // (A device whose sheet sends its spots there had the architecture's turn.)
+                                    dv.aff_in.is_none() && !(sheet.architecture && deferral(dv).is_some())
+                                }
+                            })
+                            .map(|(j, _)| j)
+                            .collect();
+                        if mine.is_empty() {
+                            continue;
+                        }
+                        let at_of = |j: usize| {
+                            let now =
+                                devices.get(j).map_or(cadaddy_geom::Vec2::new(f64::NAN, f64::NAN), |dv| cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]));
+                            if sheet.architecture { now } else { drawn.get(j).copied().unwrap_or(now) }
+                        };
+                        let points: Vec<cadaddy_geom::Vec2> = mine.iter().map(|j| at_of(*j)).collect();
+                        let note_points: Vec<cadaddy_geom::Vec2> = spots.iter().map(|s| s.1).collect();
+                        let wall = |i: usize, j: usize| match (note_points.get(i), points.get(j)) {
+                            (Some(p), Some(q)) => super::archauthority::same_wall(*p, *q, outline, ROOM_WALL_FT * ft, ft),
+                            _ => false,
+                        };
+                        // Paired nearest first; when a gang takes a device another pair wanted, the
+                        // rest are paired again without it.
+                        let mut spot_free = vec![true; spots.len()];
+                        for _ in 0..MAX_PAIR_ROUNDS {
+                            let fits_kind = |i: usize, j: usize| {
+                                let appliance = spots.get(i).and_then(|(ni, _)| v.notes.get(*ni)).is_some_and(|n| n.3);
+                                !appliance || mine.get(j).and_then(|k| devices.get(*k)).is_some_and(feeds_appliance)
+                            };
+                            let free = |i: usize, j: usize| {
+                                spot_free.get(i).copied().unwrap_or(false)
+                                    && mine.get(j).is_some_and(|k| !done.contains(k))
+                                    && wall(i, j)
+                                    && fits_kind(i, j)
+                            };
+                            let pairs = super::archauthority::pair(&note_points, &points, reach, free);
+                            if pairs.is_empty() {
+                                break;
+                            }
+                            let mut stale = false;
+                            for (i, j) in pairs {
+                                let (Some((ni, q)), Some(&dj)) = (spots.get(i), mine.get(j)) else { continue };
+                                if done.contains(&dj) {
+                                    stale = true;
+                                    break;
+                                }
+                                if let Some(f) = spot_free.get_mut(i) {
+                                    *f = false;
+                                }
+                                used.insert((si, vi, *ni, ri));
+                                // A symbol with no note: only a spot (on the architecture's plan, for a
+                                // sheet sending its locations there).
+                                let noted = v.notes.get(*ni);
+                                if noted.is_none() && !first {
+                                    continue;
+                                }
+                                let Some(&was) = points.get(j) else { continue };
+                                // The devices ganged with it (its spot) take the same note.
+                                let gang: Vec<usize> = mine
+                                    .iter()
+                                    .zip(&points)
+                                    .filter(|(k, p)| {
+                                        **k == dj
+                                            || (p.dist(was) <= GANG_FT * ft
+                                                && super::archauthority::same_wall(**p, was, outline, ROOM_WALL_FT * ft, ft))
+                                    })
+                                    .map(|(k, _)| *k)
+                                    .filter(|k| !done.contains(k))
+                                    .collect();
+                                done.extend(gang.iter().copied());
+                                for k in gang {
+                                    let Some(dv) = devices.get_mut(k) else { continue };
+                                    if !first && dv.aff_in.is_some() {
+                                        continue;
+                                    }
+                                    let said = defers.get(&sheet_key(&dv.sheet));
+                                    if first {
+                                        let Some(said) = said else { continue };
+                                        let why = format!("{AFF_ARCH_MARK} {}: {}", sheet_key(&dv.sheet), said.note);
+                                        if let Some((_, h, note, _)) = noted
+                                            && (said.heights || dv.aff_in.is_none())
+                                        {
+                                            dv.aff_in = Some(*h);
+                                            dv.aff_note = format!("{note} ({why})");
+                                            out.set += 1;
+                                            out.from_architecture += 1;
+                                        }
+                                        if said.locations {
+                                            let moved = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]).dist(*q) / ft;
+                                            if moved > 0.05 {
+                                                dv.located = format!(
+                                                    "at its symbol on {} ({}) ({why}); the electrical plan's spot was {:.1} ft away at [{:.2}, {:.2}] ft",
+                                                    sheet.number,
+                                                    v.title,
+                                                    moved,
+                                                    dv.at[0] / ft,
+                                                    dv.at[1] / ft
+                                                );
+                                                let off = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]) - was;
+                                                dv.at = [q.x + off.x, q.y + off.y];
+                                                out.moved += 1;
+                                            }
+                                        }
+                                    } else if let Some((_, h, note, _)) = noted {
+                                        dv.aff_in = Some(*h);
+                                        dv.aff_note.clone_from(note);
+                                        out.set += 1;
+                                    }
+                                }
+                            }
+                            if !stale {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Then the architecture's interior elevations, for the devices whose sheets send their
+        // heights there and still have none.
+        if first {
+            out.from_elevations +=
+                elevation_heights(devices, &rooms, &elevations, &sheets, &mut fits, &floor_lines, k_in, |dv| deferral(dv).is_some_and(|w| w.heights));
+            out.from_elevations += elevation_luminaires(devices, &rooms, &elevations, |dv| deferral(dv).is_some_and(|w| w.heights));
+        }
+    }
+    // Last, the elevations' heights onto every typical-room device still without one.
+    out.from_elevations += elevation_heights(devices, &rooms, &elevations, &sheets, &mut fits, &floor_lines, k_in, |_| true);
+    out.from_elevations += elevation_luminaires(devices, &rooms, &elevations, |_| true);
+    out
+}
+
+/// A typical room type's interior elevation on an architecture's sheet ("TWIN SUITE - BED
+/// WALL"): the type's words, its sheet and title, and the devices it draws.
+struct TypeElevation {
+    words: BTreeSet<String>,
+    sheet: String,
+    title: String,
+    items: Vec<super::archauthority::ElevItem>,
+    /// How long its wall is (inches, its floor line end to end); 0 when its floor line wasn't found.
+    width: f64,
+}
+
+/// The scale a view prints (`1/2" = 1'-0"`), as the scale reader gives it.
+fn view_scale(v: &cadaddy_mepfix::sheet_facts::ViewTitle) -> Option<f64> {
+    v.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0)
+}
+
+/// The scale a sheet came in at (its typical plans lie on the floor one to one): the scale most of
+/// its plan views print, else the one the set's classification gives the sheet. A view at another
+/// is that much bigger or smaller.
+fn sheet_plan_scale(
+    sh: &super::printmep::SheetRef,
+    views: &[cadaddy_mepfix::sheet_facts::ViewTitle],
+    types: &BTreeSet<BTreeSet<String>>,
+    vocabulary: &BTreeSet<String>,
+) -> Option<f64> {
+    let mut plan_scales: BTreeMap<u64, usize> = BTreeMap::new();
+    // (A title wrapped onto two lines reads as its second, "TWIN SUITE - ADA (TUB)": a view
+    // naming a room type that isn't an elevation, section or detail is one of its plans too.)
+    for v in views.iter().filter(|v| {
+        let up = v.title.to_ascii_uppercase();
+        let side_view = [" WALL", "ELEVATION", "SECTION", "DETAIL"].iter().any(|w| up.contains(w));
+        up.contains("PLAN")
+            || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+            || (!side_view && types.contains(&type_words(&v.title, Some(vocabulary))))
+    }) {
+        if let Some(x) = view_scale(v) {
+            *plan_scales.entry(x.to_bits()).or_default() += 1;
+        }
+    }
+    plan_scales
+        .iter()
+        .max_by_key(|(_, n)| **n)
+        .map(|(b, _)| f64::from_bits(*b))
+        .or_else(|| sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0))
+}
+
+/// Whether a text is a finished-floor level marker's label (`F.F.`, `FIN. FLOOR`).
+fn floor_marker(v: &str) -> bool {
+    let u: String = v.to_ascii_uppercase().chars().filter(|c| !c.is_whitespace()).collect();
+    u == "F.F." || u == "FF" || u.starts_with("FIN.FLOOR") || u.starts_with("FINISHFLOOR")
+}
+
+/// Whether a text reads like an item's tag on an elevation (`L-12`, `W2`): one short word with
+/// a letter and a digit.
+fn elevation_tag(v: &str) -> bool {
+    let t = v.trim();
+    !t.is_empty()
+        && t.len() <= 10
+        && !t.contains(char::is_whitespace)
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// A closed outline of four corners whose sides run square to the sheet: its box.
+fn square_box(pl: &cadaddy_doc::LwPolyline) -> Option<[f64; 4]> {
+    let mut pts: Vec<cadaddy_geom::Vec2> = pl.vertices.iter().map(|v| cadaddy_geom::Vec2::new(v.p.x, v.p.y)).collect();
+    if pts.len() == 5 && pts.first().zip(pts.last()).is_some_and(|(a, b)| a.dist(*b) < 1e-6) {
+        pts.pop();
+    } else if !pl.closed {
+        return None;
+    }
+    if pts.len() != 4 {
+        return None;
+    }
+    let b = pts.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+        [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+    });
+    let eps = 1e-3 * ((b[2] - b[0]) + (b[3] - b[1])).max(1e-9);
+    let square = (0..4).all(|i| match (pts.get(i), pts.get((i + 1) % 4)) {
+        (Some(a), Some(c)) => (a.x - c.x).abs() <= eps || (a.y - c.y).abs() <= eps,
+        _ => false,
+    });
+    (square && b.iter().all(|v| v.is_finite())).then_some(b)
+}
+
+/// The typical room types' interior elevations on the job's architecture sheets: each view's
+/// faceplates and tagged wall luminaires ([`super::archauthority::elevation_items`]), measured over
+/// its floor line (the middle of its F.F. level marker) at its printed scale.
+fn typical_elevations(
+    d: &cadaddy_doc::Drawing,
+    job: &GuidedJob,
+    types: &BTreeSet<BTreeSet<String>>,
+    vocabulary: &BTreeSet<String>,
+) -> Vec<TypeElevation> {
+    let mut out = Vec::new();
+    if types.is_empty() {
+        return out;
+    }
+    let k_in = super::perceive::units_per_inch(d);
+    let upf = 12.0 * k_in;
+    let inside = |r: &[f64; 4], p: cadaddy_geom::Vec2| p.x >= r[0] && p.x <= r[2] && p.y >= r[1] && p.y <= r[3];
+    for sh in job_sheet_refs(job).iter().filter(|r| r.view.is_none() && r.discipline.eq_ignore_ascii_case("A")).take(MAX_STAMP_SHEETS) {
+        let sub = super::printmep::sheet_drawing(d, sh);
+        let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
+        if !texts.iter().any(|t| floor_marker(&t.value)) {
+            continue;
+        }
+        let views = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts);
+        let elevations: Vec<&cadaddy_mepfix::sheet_facts::ViewTitle> = views
             .iter()
-            .map(|(t, h)| {
-                // The note's box (its lettering along its direction).
-                let th = t.height.max(1e-9);
-                let dir = cadaddy_geom::Vec2::from_angle(t.rotation);
-                let end = t.at + dir * (NOTE_CHAR_W * th * t.value.chars().count() as f64);
-                let near_note = |p: cadaddy_geom::Vec2| {
+            .filter(|v| {
+                let up = v.title.to_ascii_uppercase();
+                (up.contains(" WALL") || up.contains("ELEVATION"))
+                    && !up.contains("RCP")
+                    && v.region.is_some()
+                    && types.contains(&type_words(&v.title, Some(vocabulary)))
+            })
+            .collect();
+        if elevations.is_empty() {
+            continue;
+        }
+        let sheet_scale = sheet_plan_scale(sh, &views, types, vocabulary);
+        let rounds = cadaddy_mepfix::sheet_reader::round_shapes(&sub);
+        // Its square boxes, its other small closed shapes (an outlet's face in a faceplate), and its
+        // straight pieces (a leader end to end too).
+        let mut boxes: Vec<[f64; 4]> = Vec::new();
+        let mut faces: Vec<[f64; 4]> = Vec::new();
+        let mut segs: Vec<(cadaddy_geom::Vec2, cadaddy_geom::Vec2)> = Vec::new();
+        for e in sub.model.iter().take(MAX_ELEVATION_OBJECTS) {
+            match &e.kind {
+                cadaddy_doc::EntityKind::Line(l) => segs.push((cadaddy_geom::Vec2::new(l.a.x, l.a.y), cadaddy_geom::Vec2::new(l.b.x, l.b.y))),
+                cadaddy_doc::EntityKind::LwPolyline(pl) => {
+                    if let Some(b) = square_box(pl) {
+                        boxes.push(b);
+                    } else if pl.closed && pl.vertices.len() >= 4 && faces.len() < MAX_ELEVATION_OBJECTS {
+                        let b = pl.vertices.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+                            [b[0].min(v.p.x), b[1].min(v.p.y), b[2].max(v.p.x), b[3].max(v.p.y)]
+                        });
+                        if b.iter().all(|v| v.is_finite()) {
+                            faces.push(b);
+                        }
+                    } else if !pl.closed && pl.vertices.len() <= 8 {
+                        let pts: Vec<cadaddy_geom::Vec2> = pl.vertices.iter().map(|v| cadaddy_geom::Vec2::new(v.p.x, v.p.y)).collect();
+                        segs.extend(pts.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))));
+                        if let (Some(a), Some(b)) = (pts.first(), pts.last())
+                            && pts.len() > 2
+                        {
+                            segs.push((*a, *b));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for v in elevations {
+            let Some(r) = v.region else { continue };
+            let factor = match (sheet_scale, view_scale(v)) {
+                (Some(a), Some(b)) => a / b,
+                _ => 1.0,
+            };
+            if !(factor.is_finite() && factor > 0.0) {
+                continue;
+            }
+            // Its level markers stand past its linework.
+            let m = ELEVATION_MARKER_FT * upf;
+            let around = [r[0] - m, r[1] - m, r[2] + m, r[3] + m];
+            // The floor line: through the middle of the F.F. marker by its label.
+            let floor = texts.iter().filter(|t| inside(&around, t.at) && floor_marker(&t.value)).find_map(|t| {
+                rounds
+                    .iter()
+                    .map(|(c, _)| cadaddy_geom::Vec2::new(c[0], c[1]))
+                    .filter(|c| c.dist(t.at) <= ELEVATION_MARKER_TEXTS * t.height)
+                    .min_by(|a, b| a.dist(t.at).total_cmp(&b.dist(t.at)))
+                    .map(|c| c.y)
+            });
+            let Some(floor) = floor else { continue };
+            let inch = k_in / factor;
+            // Its wall end to end: the floor line's pieces (lines, and boxes standing on it).
+            let flat = |a: cadaddy_geom::Vec2, b: cadaddy_geom::Vec2| (a.y - b.y).abs() <= 0.25 * inch && (a.y - floor).abs() <= inch;
+            let ends = segs
+                .iter()
+                .filter(|(a, b)| flat(*a, *b) && inside(&around, *a) && inside(&around, *b))
+                .flat_map(|(a, b)| [a.x, b.x])
+                .chain(
+                    boxes
+                        .iter()
+                        .filter(|q| {
+                            (q[1] - floor).abs() <= inch
+                                && inside(&around, cadaddy_geom::Vec2::new(q[0], q[1]))
+                                && inside(&around, cadaddy_geom::Vec2::new(q[2], q[1]))
+                        })
+                        .flat_map(|q| [q[0], q[2]]),
+                )
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), x| (lo.min(x), hi.max(x)));
+            let (left, width) = if ends.1 - ends.0 >= ELEVATION_MIN_WALL_IN * inch { (ends.0, (ends.1 - ends.0) / inch) } else { (r[0], 0.0) };
+            let mine: Vec<[f64; 4]> = boxes
+                .iter()
+                .filter(|b| inside(&r, cadaddy_geom::Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)))
+                .take(MAX_STAMPED)
+                .copied()
+                .collect();
+            let tags: Vec<&cadaddy_mepfix::sheet_facts::TextItem> =
+                texts.iter().filter(|t| inside(&around, t.at) && elevation_tag(&t.value)).collect();
+            let by_tag = |p: cadaddy_geom::Vec2| {
+                tags.iter().any(|t| {
+                    let end = t.at + cadaddy_geom::Vec2::from_angle(t.rotation) * (NOTE_CHAR_W * t.height * t.value.chars().count() as f64);
                     let ab = end - t.at;
                     let len2 = ab.x * ab.x + ab.y * ab.y;
                     let u = if len2 > 0.0 { (((p - t.at).x * ab.x + (p - t.at).y * ab.y) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                    p.dist(t.at + ab * u) <= 1.5 * th
-                };
-                // A leader from the note: its far end. Else the round symbol nearest the note.
-                let leader = segs
-                    .iter()
-                    .filter_map(|sg| {
-                        let (a, b) = (cadaddy_geom::Vec2::new(sg[0][0], sg[0][1]), cadaddy_geom::Vec2::new(sg[1][0], sg[1][1]));
-                        if a.dist(b) < 2.0 * th {
-                            return None;
-                        }
-                        if near_note(a) && !near_note(b) {
-                            Some(b)
-                        } else if near_note(b) && !near_note(a) {
-                            Some(a)
-                        } else {
-                            None
-                        }
-                    })
-                    .max_by(|x, y| x.dist(t.at).total_cmp(&y.dist(t.at)));
-                let reach = AFF_SYMBOL_FT * 12.0 * k_in;
-                let symbol = |p: cadaddy_geom::Vec2, r: f64| {
-                    rounds
-                        .iter()
-                        .map(|(c, _)| cadaddy_geom::Vec2::new(c[0], c[1]))
-                        .filter(|c| c.dist(p) <= r)
-                        .min_by(|a, b| a.dist(p).total_cmp(&b.dist(p)))
-                };
-                let at = match leader {
-                    Some(tip) => symbol(tip, 0.5 * reach).unwrap_or(tip),
-                    None => symbol(t.at, reach).unwrap_or(t.at),
-                };
-                ViewMark { view_at: t.at, at, what: (*h, t.value.trim().to_string()) }
-            })
-            .collect()
+                    p.dist(t.at + ab * u) <= 1.5 * t.height
+                })
+            };
+            // A bar a leader from a tag ends on.
+            let tagged = |b: &[f64; 4]| {
+                let g = [b[0] - inch, b[1] - inch, b[2] + inch, b[3] + inch];
+                segs.iter().any(|(a, c)| match (inside(&g, *a), inside(&g, *c)) {
+                    (true, false) => by_tag(*c),
+                    (false, true) => by_tag(*a),
+                    _ => false,
+                })
+            };
+            let mine_faces: Vec<[f64; 4]> = faces
+                .iter()
+                .filter(|b| inside(&r, cadaddy_geom::Vec2::new((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)))
+                .take(MAX_STAMPED)
+                .copied()
+                .collect();
+            let items = super::archauthority::elevation_items(&mine, &mine_faces, tagged, floor, inch, left);
+            if !items.is_empty() {
+                out.push(TypeElevation {
+                    words: type_words(&v.title, Some(vocabulary)),
+                    sheet: sh.number.clone(),
+                    title: v.title.clone(),
+                    items,
+                    width,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// The height a typical room type's interior elevations draw its wall luminaires at (their
+/// tagged bars, all at one height within [`ELEVATION_LUMINAIRE_SPREAD_IN`]), onto the wall
+/// luminaires of its rooms an electrical sheet draws with no height yet that `may` allows. A type
+/// whose elevations draw them at several heights gives none (which is which can't be told). The
+/// devices that took one.
+fn elevation_luminaires(
+    devices: &mut [super::readers::ReadDevice],
+    rooms: &[JobRoom],
+    elevations: &[TypeElevation],
+    may: impl Fn(&super::readers::ReadDevice) -> bool,
+) -> usize {
+    let mut set = 0usize;
+    let mut by_type: BTreeMap<&BTreeSet<String>, Vec<(f64, &TypeElevation)>> = BTreeMap::new();
+    for e in elevations {
+        for bar in e.items.iter().filter(|i| i.luminaire) {
+            by_type.entry(&e.words).or_default().push((bar.aff, e));
+        }
+    }
+    for (words, bars) in by_type {
+        let lo = bars.iter().map(|b| b.0).fold(f64::INFINITY, f64::min);
+        let hi = bars.iter().map(|b| b.0).fold(f64::NEG_INFINITY, f64::max);
+        // (None at all, or more than one height: no height for the type.)
+        let spread = hi - lo;
+        if !spread.is_finite() || spread > ELEVATION_LUMINAIRE_SPREAD_IN {
+            continue;
+        }
+        let aff = ((lo + hi) / 2.0 * 4.0).round() / 4.0;
+        let mut seen: Vec<String> = Vec::new();
+        for (_, e) in &bars {
+            let v = format!("{} {}", e.sheet, e.title);
+            if !seen.contains(&v) {
+                seen.push(v);
+            }
+        }
+        let note = format!(
+            "{aff:.0}\" AFF to its middle: the type's interior elevations draw its wall luminaires there ({})",
+            seen.iter().take(4).cloned().collect::<Vec<_>>().join(", ")
+        );
+        let labels: BTreeSet<(String, String)> = rooms
+            .iter()
+            .enumerate()
+            .filter(|(_, (n, _, _, _))| type_words(n, None) == *words)
+            .map(|(ri, (name, level, _, number))| (stamped_room(name, number, ri), level.clone()))
+            .collect();
+        for dv in devices.iter_mut() {
+            let wall_luminaire = device_kind_of(dv).to_ascii_lowercase().replace('_', " ").contains("wall luminaire");
+            let electrical = cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&dv.sheet)).eq_ignore_ascii_case("E");
+            if wall_luminaire && electrical && dv.aff_in.is_none() && labels.contains(&(dv.room.clone(), dv.level.clone())) && may(dv) {
+                dv.aff_in = Some(aff);
+                dv.aff_note.clone_from(&note);
+                set += 1;
+            }
+        }
+    }
+    set
+}
+
+/// The heights the typical rooms' interior elevations draw, onto their devices with none yet
+/// that `may` allows. Each elevation is laid on the row of the architecture's plan symbols (in the
+/// same type's plan view on its sheet) its faceplates match ([`super::archauthority::register_way`]: at
+/// least two, better than on any other row, the view as long that way as the elevation is wide);
+/// then in every room of the type the view lies on, the device at each matched symbol takes its
+/// faceplate's height, and the wall luminaire by each of its bars the bar's. The devices that
+/// took one.
+#[allow(clippy::too_many_arguments)]
+fn elevation_heights(
+    devices: &mut [super::readers::ReadDevice],
+    rooms: &[JobRoom],
+    elevations: &[TypeElevation],
+    sheets: &[NotedSheet],
+    fits: &mut BTreeMap<(usize, usize, usize), Option<RoomFit>>,
+    floor_lines: &FloorLines,
+    k_in: f64,
+    may: impl Fn(&super::readers::ReadDevice) -> bool,
+) -> usize {
+    let mut set = 0usize;
+    let ft = 12.0 * k_in;
+    if elevations.is_empty() || !(k_in.is_finite() && k_in > 0.0) {
+        return set;
+    }
+    let bbox = |o: &[cadaddy_geom::Vec2]| {
+        o.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, q| {
+            [b[0].min(q.x), b[1].min(q.y), b[2].max(q.x), b[3].max(q.y)]
+        })
     };
-    into_typical_rooms(
-        d,
-        job,
-        devices,
-        AFF_DEVICE_FT,
-        &|texts: &[cadaddy_mepfix::sheet_facts::TextItem]| texts.iter().any(|t| height(t).is_some()),
-        &marks,
-        &|dv: &super::readers::ReadDevice| dv.aff_in.is_none(),
-        &mut |dv: &mut super::readers::ReadDevice, (h, note): &(f64, String), sheet: &str| {
-            dv.aff_in = Some(*h);
-            dv.aff_note = format!("{note} on {sheet}");
-        },
-    )
+    for e in elevations {
+        for (si, sheet) in sheets.iter().enumerate().filter(|(_, sh)| sh.architecture && sheet_key(&sh.number) == sheet_key(&e.sheet)) {
+            for (vi, (v, lines)) in sheet.views.iter().zip(&sheet.lines).enumerate().filter(|(_, (v, _))| v.words == e.words) {
+                let symbols: Vec<cadaddy_geom::Vec2> = v.notes.iter().map(|n| n.0).chain(v.others.iter().copied()).collect();
+                // The heights the plan's notes give its symbols (none for an un-noted one).
+                let noted_h: Vec<Option<f64>> = v.notes.iter().map(|n| Some(n.1)).chain(v.others.iter().map(|_| None)).collect();
+                let plates: Vec<f64> = e.items.iter().filter(|i| !i.luminaire).map(|i| i.along).collect();
+                let plate_items: Vec<&super::archauthority::ElevItem> = e.items.iter().filter(|i| !i.luminaire).collect();
+                // The view's rows of symbols (along x, then along y): the row and way the faceplates
+                // lie on: the most faceplates on symbols, then the most heights agreeing with the
+                // symbols' notes (two faceplates fit either way: their heights tell), then the
+                // view's ends nearest the wall's. (axis, the row's line across, its symbols, the
+                // registration, its rank)
+                type Ranked = (usize, f64, Vec<usize>, super::archauthority::Registration, (usize, i64, f64, i64, i64));
+                let mut best: Option<Ranked> = None;
+                let mut tie = false;
+                for axis in [0usize, 1] {
+                    let along_of = |p: &cadaddy_geom::Vec2| if axis == 0 { p.x } else { p.y };
+                    let across_of = |p: &cadaddy_geom::Vec2| if axis == 0 { p.y } else { p.x };
+                    let (lo, hi) = if axis == 0 { (v.view[0], v.view[2]) } else { (v.view[1], v.view[3]) };
+                    let length = (hi - lo) / k_in;
+                    if e.width > 0.0 && (length - e.width).abs() > ELEVATION_LENGTH_TOL_IN.max(0.2 * e.width) {
+                        continue;
+                    }
+                    let mut order: Vec<(usize, f64)> = symbols.iter().enumerate().map(|(i, p)| (i, across_of(p))).collect();
+                    order.sort_by(|a, b| a.1.total_cmp(&b.1));
+                    let mut rows: Vec<Vec<usize>> = Vec::new();
+                    for (i, _) in order {
+                        let Some(p) = symbols.get(i) else { continue };
+                        // (Within a foot of the row's first: a row never creeps across the room.)
+                        match rows.last_mut() {
+                            Some(r)
+                                if r.first().and_then(|l| symbols.get(*l)).is_some_and(|q| across_of(p) - across_of(q) <= ELEVATION_ROW_FT * ft) =>
+                            {
+                                r.push(i)
+                            }
+                            _ => rows.push(vec![i]),
+                        }
+                    }
+                    for row in rows.into_iter().filter(|r| r.len() >= ELEVATION_MIN_PAIRS) {
+                        let alongs: Vec<f64> = row.iter().filter_map(|i| symbols.get(*i)).map(|p| (along_of(p) - lo) / k_in).collect();
+                        let across = row.iter().filter_map(|i| symbols.get(*i)).map(across_of).sum::<f64>() / row.len() as f64;
+                        for reversed in [false, true] {
+                            let Some(reg) =
+                                super::archauthority::register_way(&plates, &alongs, length, ELEVATION_TOL_IN, ELEVATION_MIN_PAIRS, reversed)
+                            else {
+                                continue;
+                            };
+                            let (mut agree, mut disagree) = (0i64, 0i64);
+                            for (i, k) in &reg.pairs {
+                                if let (Some(p), Some(h)) = (plate_items.get(*i), row.get(*k).and_then(|s| noted_h.get(*s)).copied().flatten()) {
+                                    if (p.aff - h).abs() <= ELEVATION_AGREE_IN {
+                                        agree += 1;
+                                    } else {
+                                        disagree += 1;
+                                    }
+                                }
+                            }
+                            let off = (reg.shift - if reversed { length } else { 0.0 }).abs();
+                            let rank = (reg.pairs.len(), agree - disagree, off, agree, disagree);
+                            match &best {
+                                Some((.., b)) if rank.0 == b.0 && rank.1 == b.1 && (rank.2 - b.2).abs() < 1e-6 => tie = true,
+                                Some((.., b)) if rank.0 < b.0 || (rank.0 == b.0 && (rank.1 < b.1 || (rank.1 == b.1 && rank.2 > b.2))) => {}
+                                _ => {
+                                    tie = false;
+                                    best = Some((axis, across, row.clone(), reg, rank));
+                                }
+                            }
+                        }
+                    }
+                }
+                // Taken only on evidence: no faceplate's height against its symbol's note, and three
+                // faceplates on symbols or one height agreeing with its note.
+                let (Some((_, _, row, reg, rank)), false) = (best, tie) else { continue };
+                if rank.4 > 0 || (rank.0 < 3 && rank.3 < 1) {
+                    continue;
+                }
+                // The view's spots and the heights there: each matched symbol's.
+                let spots: Vec<(cadaddy_geom::Vec2, f64, &str)> = reg
+                    .pairs
+                    .iter()
+                    .filter_map(|(i, k)| {
+                        let item = plate_items.get(*i)?;
+                        Some((*symbols.get(*row.get(*k)?)?, item.aff, if item.receptacle { "receptacle's faceplate" } else { "faceplate" }))
+                    })
+                    .collect();
+                for (ri, (name, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == v.words) {
+                    let b = bbox(outline);
+                    let fit = *fits
+                        .entry((si, vi, ri))
+                        .or_insert_with(|| rigid_room_fit(lines, v.view, b, floor_lines, ROOM_FIT_MARGIN_FT * ft, 6.0 * k_in).map(|f| f.0));
+                    let Some(fit) = fit else { continue };
+                    let label = stamped_room(name, number, ri);
+                    for (p, aff, what) in &spots {
+                        let Some(q) = place_in_room([p.x, p.y], v.view, b, fit) else { continue };
+                        let q = cadaddy_geom::Vec2::new(q[0], q[1]);
+                        // On the room's perimeter (an elevation shows a wall of the room, not a
+                        // counter or a partition in it): by its box, a traced outline being rough.
+                        let edge = (q.x - b[0]).abs().min((q.x - b[2]).abs()).min((q.y - b[1]).abs()).min((q.y - b[3]).abs());
+                        if edge > ROOM_WALL_FT * ft {
+                            continue;
+                        }
+                        let luminaire = false;
+                        let reach = ELEVATION_DEVICE_FT * ft;
+                        // The room's electrical device there (the plan's symbols are its devices); it
+                        // takes the height only if nothing gave it one (no passing it to the next).
+                        let found = devices
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, dv)| dv.room == label && dv.level == *level && !ceiling_kind(device_kind_of(dv)))
+                            .filter(|(_, dv)| cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&dv.sheet)).eq_ignore_ascii_case("E"))
+                            .filter(|(_, dv)| device_kind_of(dv).contains("luminaire") == luminaire)
+                            // A faceplate with outlets in it is a receptacle's (or an outlet's);
+                            // a plain one never a receptacle's.
+                            .filter(|(_, dv)| {
+                                let k = device_kind_of(dv).to_ascii_lowercase();
+                                let socket = k.contains("receptacle") || k.contains("outlet");
+                                match *what {
+                                    "receptacle's faceplate" => socket,
+                                    "faceplate" => !k.contains("receptacle"),
+                                    _ => true,
+                                }
+                            })
+                            .map(|(j, dv)| (j, q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]))))
+                            .filter(|(_, dd)| *dd <= reach)
+                            .min_by(|a, b| a.1.total_cmp(&b.1));
+                        if let Some(dv) = found.and_then(|(j, _)| devices.get_mut(j)).filter(|dv| dv.aff_in.is_none() && may(dv)) {
+                            dv.aff_in = Some((aff * 4.0).round() / 4.0);
+                            dv.aff_note = format!(
+                                "{aff:.0}\" AFF to its middle, its {what} measured on {} {} (the interior elevation, at its printed scale)",
+                                e.sheet, e.title
+                            );
+                            set += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Objects of a sheet looked at for its elevations' faceplates and leaders, at most.
+const MAX_ELEVATION_OBJECTS: usize = 600_000;
+/// A level marker's round is within this many of its label's text heights.
+const ELEVATION_MARKER_TEXTS: f64 = 6.0;
+/// An elevation's faceplate lands on a plan symbol within this (inches along the wall).
+const ELEVATION_TOL_IN: f64 = 10.0;
+/// A faceplate's height agrees with its symbol's note within this (inches).
+const ELEVATION_AGREE_IN: f64 = 3.0;
+/// A plan view's symbols within this (feet) across of a row's first are on that row (a wall).
+const ELEVATION_ROW_FT: f64 = 1.0;
+/// A matched symbol's height goes to the room's device this near its place (feet).
+const ELEVATION_DEVICE_FT: f64 = 1.5;
+/// A type's elevations draw its wall luminaires at one height when their bars are this close
+/// (inches).
+const ELEVATION_LUMINAIRE_SPREAD_IN: f64 = 3.0;
+/// Faceplates an elevation must land on devices to be laid on a wall.
+const ELEVATION_MIN_PAIRS: usize = 2;
+/// An elevation's floor line this long (inches) at least is its wall end to end; a view as long
+/// that way as the elevation is wide within this (inches, or 20%: its margins) may show it.
+const ELEVATION_MIN_WALL_IN: f64 = 24.0;
+const ELEVATION_LENGTH_TOL_IN: f64 = 48.0;
+
+/// Whether a device of `kind` hangs from the ceiling (a ceiling luminaire, a detector): an AFF
+/// note on a plan is a wall device's height, never its.
+fn ceiling_kind(kind: &str) -> bool {
+    let k = kind.trim().to_ascii_lowercase().replace(' ', "_");
+    cadaddy_mepfix::wordrules::words("devices.ceiling_kinds").iter().any(|w| *w == k)
+}
+
+/// Whether a device can feed an appliance a note names: a receptacle or a connection an
+/// electrical sheet draws (a mechanical sheet's mark is its equipment, no feed).
+fn feeds_appliance(dv: &super::readers::ReadDevice) -> bool {
+    let k = device_kind_of(dv).to_ascii_lowercase();
+    let electrical = cadaddy_mepfix::sheet_facts::discipline_of(&sheet_key(&dv.sheet)).eq_ignore_ascii_case("E");
+    electrical && (k.contains("receptacle") || k.contains("connection") || k.contains("outlet"))
+}
+
+/// What [`typical_heights`] read and did.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct TypicalNotes {
+    /// Height notes read in typical-room views.
+    notes: usize,
+    /// Devices that took a height, and of them from the architecture's plans first.
+    set: usize,
+    from_architecture: usize,
+    /// Devices moved to the architecture's symbol.
+    moved: usize,
+    /// Typical rooms' interior elevations read, and the devices that took a height from one.
+    elevations: usize,
+    from_elevations: usize,
+    /// The electrical sheets whose notes send locations or heights to the architecture.
+    deferring_sheets: Vec<String>,
+}
+
+/// A sheet's height notes by its typical-room views, and each view's linework samples.
+struct NotedSheet {
+    number: String,
+    architecture: bool,
+    views: Vec<NotedView>,
+    lines: Vec<Vec<cadaddy_geom::Vec2>>,
+}
+
+/// A typical-room view's height notes.
+struct NotedView {
+    index: usize,
+    title: String,
+    view: [f64; 4],
+    words: BTreeSet<String>,
+    /// Each: its device's spot, inches, the note and sheet, and whether it names an appliance
+    /// (`MICROWAVE 65" AFF`: a receptacle's height).
+    notes: Vec<(cadaddy_geom::Vec2, f64, String, bool)>,
+    /// The architecture's other symbols in it drawn like the noted ones (no note: a spot only).
+    others: Vec<cadaddy_geom::Vec2>,
 }
 
 /// A point a typical room's view marks on its sheet, and what it gives a device: `view_at` is
@@ -9304,6 +10190,22 @@ fn receptacle_read(dv: &super::readers::ReadDevice) -> bool {
 /// leader's end); a stamped device within [`AFF_DEVICE_FT`] of where that lands in a room takes it.
 const AFF_SYMBOL_FT: f64 = 2.5;
 const AFF_DEVICE_FT: f64 = 2.5;
+/// How far (feet) an electrical sheet's device may be from the architecture's symbol it is paired
+/// with when the sheet sends its locations there (its spots are reference only).
+const AFF_DEFERRED_FT: f64 = 4.5;
+/// Devices this close (feet) to a paired one, on its wall, are ganged with it: they take its
+/// note too.
+const GANG_FT: f64 = 0.8;
+/// Rounds of pairing one room's notes and devices, at most.
+const MAX_PAIR_ROUNDS: usize = 16;
+/// A height note is lettered within this ratio of the middle size of its sheet's height notes.
+const NOTE_SIZE_RATIO: f64 = 2.5;
+/// An un-noted symbol of the architecture's plan takes a device this near it at most (feet).
+const UNNOTED_FT: f64 = 2.0;
+/// A note's label line (`MICROWAVE` over `65" AFF`) is at most this many text heights over it.
+const NOTE_BLOCK_GAP: f64 = 1.9;
+/// The words a height or a location from the architecture's plans carries in its note.
+const AFF_ARCH_MARK: &str = "the architecture's plan governs: a note on";
 /// A capital's width, in text heights (a note's box along its line).
 const NOTE_CHAR_W: f64 = 0.8;
 /// Straight pieces of a sheet looked at for height notes' leaders, at most.
@@ -9467,34 +10369,10 @@ fn typical_elevation_heights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<(
         if !texts.iter().any(|t| is_ceiling(&t.value)) {
             continue;
         }
-        // The sheet came in at its plans' scale (its typical plans lie on the floor one to one): a
-        // view at another is that much bigger or smaller. The scale most of its plan views print,
-        // else the one the set's classification gives the sheet.
-        let scale_of = |v: &cadaddy_mepfix::sheet_facts::ViewTitle| {
-            v.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0)
-        };
         let views = cadaddy_mepfix::sheet_facts::view_titles(&sub, &texts);
-        let mut plan_scales: BTreeMap<u64, usize> = BTreeMap::new();
-        // (A title wrapped onto two lines reads as its second, "DOUBLE QUEEN - ADA (TUB)": a view
-        // naming a room type that isn't an elevation, section or detail is one of its plans too.)
-        for v in views.iter().filter(|v| {
-            let up = v.title.to_ascii_uppercase();
-            let side_view = [" WALL", "ELEVATION", "SECTION", "DETAIL"].iter().any(|w| up.contains(w));
-            up.contains("PLAN")
-                || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
-                || (!side_view && types.contains(&type_words(&v.title, Some(&vocabulary))))
-        }) {
-            if let Some(x) = scale_of(v) {
-                *plan_scales.entry(x.to_bits()).or_default() += 1;
-            }
-        }
-        let sheet_scale = plan_scales
-            .iter()
-            .max_by_key(|(_, n)| **n)
-            .map(|(b, _)| f64::from_bits(*b))
-            .or_else(|| sh.scale_text.as_deref().and_then(cadaddy_mepfix::sheet_reader::parse_scale).filter(|x| x.is_finite() && *x > 0.0));
+        let sheet_scale = sheet_plan_scale(sh, &views, &types, &vocabulary);
         for v in views {
-            let view_scale = scale_of(&v);
+            let view_scale = view_scale(&v);
             let factor = match (sheet_scale, view_scale) {
                 (Some(a), Some(b)) => a / b,
                 _ => 1.0,
@@ -26195,7 +27073,7 @@ mod tests {
             }
         };
         // The E-6 sheet: its border, the view, a receptacle's circle with "44\" AFF" beside it, a
-        // switch's circle with a leader from "MICROWAVE 65\" AFF".
+        // switch's circle with a leader from "SHELF 65\" AFF".
         let x0 = 4234.0;
         let lo = s.doc().unwrap().handseed;
         for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
@@ -26207,7 +27085,7 @@ mod tests {
         s.execute("circle", &json!({"center": [v[0] + 20.0, v[1] + 20.0], "radius": 4.0})).unwrap();
         s.execute("text", &json!({"at": [v[0] + 27.0, v[1] + 18.0], "text": "44\" AFF", "height": 4.0})).unwrap();
         s.execute("circle", &json!({"center": [v[0] + 130.0, v[1] + 120.0], "radius": 4.0})).unwrap();
-        s.execute("text", &json!({"at": [v[0] + 40.0, v[1] + 150.0], "text": "MICROWAVE 65\" AFF", "height": 4.0})).unwrap();
+        s.execute("text", &json!({"at": [v[0] + 40.0, v[1] + 150.0], "text": "SHELF 65\" AFF", "height": 4.0})).unwrap();
         line(&mut s, [v[0] + 86.0, v[1] + 152.0], [v[0] + 130.0, v[1] + 124.0]);
         s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "ENLARGED DOUBLE QUEEN", "height": 7.4})).unwrap();
         s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
@@ -26243,8 +27121,8 @@ mod tests {
         let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
         let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
         assert_eq!(stamped.len(), 6, "{stamped:?}");
-        let (notes, set) = typical_heights(s.doc().unwrap(), &job, &mut stamped);
-        assert_eq!((notes, set), (2, 4), "{stamped:?}");
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        assert_eq!((heights.notes, heights.set, heights.moved), (2, 4, 0), "{stamped:?}");
         for room in ["201", "202"] {
             let h = |tag: &str| -> Vec<Option<f64>> { stamped.iter().filter(|d| d.room == room && d.tag == tag).map(|d| d.aff_in).collect() };
             assert_eq!(h("S"), [Some(65.0)], "room {room}: {stamped:?}");
@@ -26252,6 +27130,236 @@ mod tests {
             a.sort_by(|x, y| x.unwrap_or(0.0).total_cmp(&y.unwrap_or(0.0)));
             assert_eq!(a, [None, Some(44.0)], "room {room}: the other receptacle has no note");
         }
+    }
+
+    #[test]
+    fn an_electrical_plan_that_sends_locations_and_heights_to_the_architecture_takes_the_architectures_symbols() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        // The unit's linework (12' x 24', a cross wall every 4', stubs that tell its ends apart).
+        let unit = |s: &mut crate::Session, o: [f64; 2]| {
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, [o[0] + ax, o[1] + ay], [o[0] + bx, o[1] + by]);
+            }
+        };
+        let sheet = |s: &mut crate::Session, x0: f64| {
+            for (a, b) in
+                [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+            {
+                line(s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+            }
+        };
+        let text = |s: &mut crate::Session, at: [f64; 2], t: &str, h: f64| {
+            s.execute("text", &json!({"at": at, "text": t, "height": h})).unwrap();
+        };
+        // The electrical sheet: the unit with a receptacle by the west wall (its own "18\" AFF"
+        // by it) and a switch by the east wall, and a general note sending locations and heights
+        // to the architecture's drawings.
+        let (xe, xa) = (4234.0, 7000.0);
+        let lo_e = s.doc().unwrap().handseed;
+        sheet(&mut s, xe);
+        let v = [xe + 300.0, 200.0];
+        unit(&mut s, v);
+        s.execute("circle", &json!({"center": [v[0] + 8.0, v[1] + 20.0], "radius": 4.0})).unwrap();
+        text(&mut s, [v[0] + 15.0, v[1] + 18.0], "18\" AFF", 4.0);
+        text(&mut s, [v[0], v[1] - 19.0], "ENLARGED TWIN SUITE", 7.4);
+        text(&mut s, [v[0], v[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        text(&mut s, [xe + 1200.0, 900.0], "GENERAL NOTES", 6.0);
+        text(&mut s, [xe + 1200.0, 880.0], "1. SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND", 4.0);
+        text(&mut s, [xe + 1205.0, 872.0], "MOUNTING HEIGHTS.", 4.0);
+        let hi_e = s.doc().unwrap().handseed;
+        // The architecture's enlarged plan of the unit: the receptacle 40 in further north on its
+        // wall ("44\" AFF"), the switch 20 in further north on its wall ("38\" AFF"), and a noted
+        // symbol on the south wall nearer the receptacle than its own symbol is (another wall's).
+        let lo_a = s.doc().unwrap().handseed;
+        sheet(&mut s, xa);
+        let w = [xa + 300.0, 200.0];
+        unit(&mut s, w);
+        for (c, note, at) in
+            [([8.0, 60.0], "44\" AFF", [15.0, 58.0]), ([136.0, 150.0], "38\" AFF", [112.0, 148.0]), ([40.0, 8.0], "60\" AFF", [48.0, 10.0])]
+        {
+            s.execute("circle", &json!({"center": [w[0] + c[0], w[1] + c[1]], "radius": 4.0})).unwrap();
+            text(&mut s, [w[0] + at[0], w[1] + at[1]], note, 4.0);
+        }
+        // A microwave's receptacle symbol right by the switch, its note a label line over the
+        // height with the leader from the label (a tick by the label, then down to the symbol):
+        // an appliance's height, never the switch's.
+        s.execute("circle", &json!({"center": [w[0] + 136.0, w[1] + 125.0], "radius": 4.0})).unwrap();
+        text(&mut s, [w[0] + 60.0, w[1] + 140.0], "MICROWAVE", 4.0);
+        text(&mut s, [w[0] + 60.0, w[1] + 133.6], "65\" AFF", 4.0);
+        s.execute("pline", &json!({"vertices": [[w[0] + 132.0, w[1] + 125.0], [w[0] + 52.0, w[1] + 142.0], [w[0] + 59.6, w[1] + 142.0]]})).unwrap();
+        // A reading of strokes as a giant "44\" AFF" by the north wall: no note.
+        text(&mut s, [w[0] + 70.0, w[1] + 270.0], "44\" AFF", 40.0);
+        text(&mut s, [w[0], w[1] - 19.0], "UNIT PLAN - TWIN SUITE", 7.4);
+        text(&mut s, [w[0], w[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        // Its interior elevation of the east wall (seen from inside: the north end at its left):
+        // the faceplates of the switch and of the microwave's receptacle, and the wall luminaire's
+        // bar 60 in up, 88 in from the north end, its tag's leader on it.
+        let el = [xa + 1000.0, 200.0];
+        for (a, b) in [
+            ((0.0, 0.0), (288.0, 0.0)),
+            ((288.0, 0.0), (288.0, 96.0)),
+            ((288.0, 96.0), (0.0, 96.0)),
+            ((0.0, 96.0), (0.0, 0.0)),
+            ((20.0, 30.0), (60.0, 30.0)),
+        ] {
+            line(&mut s, [el[0] + a.0, el[1] + a.1], [el[0] + b.0, el[1] + b.1]);
+        }
+        s.execute("circle", &json!({"center": [el[0] - 12.0, el[1]], "radius": 3.0})).unwrap();
+        text(&mut s, [el[0] - 20.0, el[1] + 4.0], "F.F.", 2.5);
+        let boxed = |s: &mut crate::Session, c: [f64; 2], w: f64, h: f64| {
+            let (x0, y0, x1, y1) = (c[0] - w / 2.0, c[1] - h / 2.0, c[0] + w / 2.0, c[1] + h / 2.0);
+            s.execute("pline", &json!({"vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "closed": true})).unwrap();
+        };
+        boxed(&mut s, [el[0] + 138.0, el[1] + 38.0], 2.75, 4.5);
+        boxed(&mut s, [el[0] + 163.0, el[1] + 65.0], 2.75, 4.5);
+        boxed(&mut s, [el[0] + 88.0, el[1] + 60.0], 30.0, 2.0);
+        text(&mut s, [el[0] + 120.0, el[1] + 80.0], "X-1", 2.5);
+        line(&mut s, [el[0] + 119.0, el[1] + 80.5], [el[0] + 103.5, el[1] + 60.5]);
+        text(&mut s, [el[0], el[1] - 19.0], "TWIN SUITE - EAST WALL", 7.4);
+        text(&mut s, [el[0], el[1] - 28.0], "SCALE: 1/4\" = 1'-0\"", 4.6);
+        let hi_a = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0]);
+        let region = |number: &str, discipline: &str, x0: f64| SheetRegion {
+            number: number.into(),
+            level: "T".into(),
+            discipline: discipline.into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        };
+        // The electrical sheet first: its own note must not win.
+        job.sheet_regions = vec![region("E-41", "E", xe), region("A-77", "A", xa)];
+        job.sheet_spans = vec![SheetSpan { sheet: "E-41".into(), lo: lo_e, hi: hi_e }, SheetSpan { sheet: "A-77".into(), lo: lo_a, hi: hi_a }];
+        let room = |n: &str, x: f64| json!({"name": "TWIN SUITE", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 20_000.0)]}));
+        }
+        // (A second room of the type, not drawn on the floor: no fit there, nothing stamped.)
+        let device = |tag: &str, at: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            at,
+            sheet: "E-41".into(),
+            level: "T".into(),
+            ..Default::default()
+        };
+        // (And a data outlet the notes don't speak of, by the north wall, and a wall luminaire by
+        // the east wall.)
+        let mut sconce = device("F1", [v[0] + 140.0, v[1] + 205.0]);
+        sconce.kind = "wall luminaire".into();
+        let read =
+            [device("A", [v[0] + 8.0, v[1] + 20.0]), device("S", [v[0] + 136.0, v[1] + 130.0]), device("D", [v[0] + 72.0, v[1] + 280.0]), sconce];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+        stamped.retain(|d| d.room == "201");
+        assert_eq!(stamped.len(), 4, "{stamped:?}");
+        let heights = typical_heights(s.doc().unwrap(), &job, &mut stamped);
+        assert_eq!(heights.deferring_sheets, ["E-41"], "{heights:?}");
+        let get = |tag: &str| stamped.iter().find(|d| d.tag == tag).unwrap_or_else(|| panic!("{tag}: {stamped:?}"));
+        // The receptacle: the architecture's 44 in (not its own sheet's 18 in), at the
+        // architecture's symbol, its electrical spot kept.
+        let a = get("A");
+        assert_eq!(a.aff_in, Some(44.0), "{a:?}");
+        assert!(a.aff_note.contains("A-77") && a.aff_note.contains("SEE ARCHITECTURAL PLANS"), "{a:?}");
+        assert!((a.at[0] - 10_008.0).abs() < 4.0 && (a.at[1] - 60.0).abs() < 4.0, "{a:?}");
+        assert!(a.located.contains("A-77") && a.located.contains("3.3 ft away"), "{a:?}");
+        // The switch: 38 in at its symbol; the south wall's note has no device on its wall.
+        let sw = get("S");
+        assert_eq!(sw.aff_in, Some(38.0), "{sw:?}");
+        assert!((sw.at[0] - 10_136.0).abs() < 4.0 && (sw.at[1] - 150.0).abs() < 4.0, "{sw:?}");
+        assert_eq!(get("D").aff_in, None, "{stamped:?}");
+        // The wall luminaire: the height its bar is drawn at on the east wall's elevation.
+        let f1 = get("F1");
+        assert_eq!(f1.aff_in, Some(60.0), "{f1:?} {heights:?}");
+        assert!(f1.aff_note.contains("A-77 TWIN SUITE - EAST WALL"), "{f1:?}");
+        assert_eq!((heights.elevations, heights.from_elevations), (1, 1), "{heights:?}");
+        assert!(get("D").located.is_empty(), "{stamped:?}");
+        assert_eq!((heights.from_architecture, heights.moved), (2, 2), "{heights:?}");
+    }
+
+    #[test]
+    fn a_typical_rooms_interior_elevation_reads_its_faceplates_and_luminaires_over_the_floor() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let boxed = |s: &mut crate::Session, c: [f64; 2], w: f64, h: f64| {
+            let (x0, y0, x1, y1) = (c[0] - w / 2.0, c[1] - h / 2.0, c[0] + w / 2.0, c[1] + h / 2.0);
+            s.execute("pline", &json!({"vertices": [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], "closed": true})).unwrap();
+        };
+        // The architecture's sheet: one wall's interior elevation (12' long, 8' high, at the plans'
+        // scale), its F.F. level marker at the floor line's left end, two faceplates, a wall
+        // luminaire's bar its tag's leader points at, and a shelf (a bar no tag points at).
+        let x0 = 7000.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let e = [x0 + 300.0, 200.0];
+        for (a, b) in [
+            ((0.0, 0.0), (144.0, 0.0)),
+            ((144.0, 0.0), (144.0, 96.0)),
+            ((144.0, 96.0), (0.0, 96.0)),
+            ((0.0, 96.0), (0.0, 0.0)),
+            ((20.0, 30.0), (60.0, 30.0)),
+        ] {
+            line(&mut s, [e[0] + a.0, e[1] + a.1], [e[0] + b.0, e[1] + b.1]);
+        }
+        s.execute("circle", &json!({"center": [e[0] - 12.0, e[1]], "radius": 3.0})).unwrap();
+        s.execute("text", &json!({"at": [e[0] - 20.0, e[1] + 4.0], "text": "F.F.", "height": 2.5})).unwrap();
+        boxed(&mut s, [e[0] + 30.0, e[1] + 18.0], 2.75, 4.5);
+        boxed(&mut s, [e[0] + 100.0, e[1] + 44.0], 2.75, 4.5);
+        boxed(&mut s, [e[0] + 72.0, e[1] + 60.0], 30.0, 2.0);
+        boxed(&mut s, [e[0] + 120.0, e[1] + 70.0], 30.0, 2.0);
+        s.execute("text", &json!({"at": [e[0] + 100.0, e[1] + 80.0], "text": "X-1", "height": 2.5})).unwrap();
+        line(&mut s, [e[0] + 99.0, e[1] + 80.5], [e[0] + 87.5, e[1] + 60.5]);
+        s.execute("text", &json!({"at": [e[0], e[1] - 19.0], "text": "TWIN SUITE - BED WALL", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [e[0], e[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        let hi = s.doc().unwrap().handseed;
+        job.sheet_regions = vec![SheetRegion {
+            number: "A-77".into(),
+            level: "T".into(),
+            discipline: "A".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "A-77".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "TWIN SUITE", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let rooms = job_rooms(&job);
+        let (types, vocabulary) = room_types(&rooms);
+        let elevations = typical_elevations(s.doc().unwrap(), &job, &types, &vocabulary);
+        assert_eq!(elevations.len(), 1, "{:?}", elevations.iter().map(|e| (&e.title, &e.items)).collect::<Vec<_>>());
+        let e = &elevations[0];
+        assert_eq!((e.sheet.as_str(), e.title.as_str()), ("A-77", "TWIN SUITE - BED WALL"));
+        // Its wall end to end on the floor line; the two faceplates and the tagged bar (not the
+        // shelf), each along from the wall's left end and its middle over the floor.
+        assert!((e.width - 144.0).abs() < 1.0, "{}", e.width);
+        let got: Vec<(i64, i64, bool)> = e.items.iter().map(|i| (i.along.round() as i64, i.aff.round() as i64, i.luminaire)).collect();
+        assert_eq!(got, [(30, 18, false), (100, 44, false), (72, 60, true)], "{:?}", e.items);
     }
 
     #[test]
