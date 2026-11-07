@@ -640,6 +640,9 @@ pub(crate) struct FaceNeed {
     pub width_in: f64,
     pub height_in: f64,
     pub recessed: bool,
+    /// The ducts' and pipes' paths (feet) low enough to pass through its dedicated space (its
+    /// footprint to 6 ft over it): a face with none over it is taken before one with one.
+    pub overhead: Vec<Vec<[f64; 2]>>,
 }
 
 /// How far along a wall a panel is looked for either way, in steps of [`FACE_STEP_IN`].
@@ -703,6 +706,15 @@ pub(crate) fn clear_face(
     let mut obstacles: Vec<Obstacle> = others.to_vec();
     obstacles.extend(here.iter().filter_map(|(_, h, poly, z)| piece_obstacle(*h, poly, *z, floor, upf, need.height_in)));
     let space = |o: &Obb| working_space(o, need.need_in, need.width_in, need.height_in, &obstacles, doors, None);
+    let ducted = |o: &Obb| {
+        need.overhead.iter().any(|path| match path.as_slice() {
+            [one] => o.contains(*one),
+            more => more.windows(2).any(|w| match w {
+                [a, b] => clip(o.local(*a), o.local(*b), -o.hw, o.hw, -o.hd, o.hd).is_some(),
+                _ => false,
+            }),
+        })
+    };
     let box_on = |at: Vec2, along: Vec2, out: Vec2| {
         let mid = if need.recessed { at - out * (dp / 2.0) } else { at + out * (dp / 2.0) };
         (mid, Obb { c: [mid.x / upf, mid.y / upf], u: [along.x, along.y], hw: w / upf / 2.0, hd: dp / upf / 2.0 })
@@ -781,7 +793,8 @@ pub(crate) fn clear_face(
                     "pass" => 2u8,
                     "unsure" => 1,
                     _ => continue,
-                };
+                } * 2
+                    + u8::from(!ducted(&obb));
                 let moved = mid.dist(read_at);
                 if best.as_ref().is_none_or(|(r, m, _)| rank > *r || (rank == *r && moved < *m - 1e-6)) {
                     let half = if u.x.abs() > u.y.abs() { Vec2::new(w / 2.0, dp / 2.0) } else { Vec2::new(dp / 2.0, w / 2.0) };
@@ -2180,7 +2193,7 @@ mod tests {
     }
 
     fn need(recessed: bool) -> FaceNeed {
-        FaceNeed { need_in: Some([36.0, 36.0]), width_in: 30.0, height_in: 78.0, recessed }
+        FaceNeed { need_in: Some([36.0, 36.0]), width_in: 30.0, height_in: 78.0, recessed, overhead: Vec::new() }
     }
 
     #[test]
@@ -2193,6 +2206,19 @@ mod tests {
         assert_eq!(f.wall, cadaddy_doc::Handle(1), "{f:?}");
         assert!((f.max[0] - 104.2).abs() < 1e-6 && (f.min[0] - 100.2).abs() < 1e-6, "flush with the east face: {f:?}");
         assert!(f.was_clear_in < 36.0 && f.now_clear_in >= 36.0, "{f:?}");
+    }
+
+    #[test]
+    fn a_panel_moved_for_its_space_keeps_clear_of_a_duct_over_it() {
+        // As above, a duct crossing the east face where the panel would land: further along it.
+        let walls = [piece(1, [100.0, 0.0], [104.2, 200.0]), piece(2, [40.0, 90.0], [95.0, 110.0])];
+        let e = lettered([100.0, 93.0], [104.0, 107.0]);
+        let mut n = need(true);
+        n.overhead = vec![vec![[90.0 / 12.0, 100.0 / 12.0], [120.0 / 12.0, 100.0 / 12.0]]];
+        let f = clear_face(&e, &walls, &[], &[], None, 0.0, &n, 12.0).expect("the east face is clear");
+        assert!((f.min[0] - 100.2).abs() < 1e-6, "still the east face: {f:?}");
+        assert!(f.min[1] > 100.0 || f.max[1] < 100.0, "clear of the duct: {f:?}");
+        assert!(f.now_clear_in >= 36.0, "{f:?}");
     }
 
     #[test]

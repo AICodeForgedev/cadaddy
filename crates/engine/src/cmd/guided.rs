@@ -19214,6 +19214,24 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             (e.tag.clone(), e.level.to_ascii_lowercase(), lo, hi, [e.bottom_ft * 12.0, (e.bottom_ft + e.height_ft) * 12.0])
         })
         .collect();
+    // The ducts and pipes of a level (feet) whose bottoms are under 6 ft over a panel's top (and
+    // the level's height): what passes through its dedicated space (NEC 110.26(E)).
+    let systems: BTreeMap<String, cadaddy_walk3d::MepKind> = sp.mep.systems.iter().map(|s| (s.name.to_ascii_lowercase(), s.kind)).collect();
+    let heights: BTreeMap<String, f64> = sp.levels.iter().map(|l| (l.name.to_ascii_lowercase(), l.height_ft * 12.0)).collect();
+    let mut low: BTreeMap<String, Vec<(f64, Vec<[f64; 2]>)>> = BTreeMap::new();
+    for r in &sp.mep.runs {
+        if !matches!(systems.get(&r.system.to_ascii_lowercase()), Some(cadaddy_walk3d::MepKind::Duct | cadaddy_walk3d::MepKind::Pipe)) {
+            continue;
+        }
+        let Some(bottom) = r.bottoms_ft.iter().copied().filter(|b| b.is_finite()).reduce(f64::min) else { continue };
+        low.entry(r.level.to_ascii_lowercase())
+            .or_default()
+            .push((bottom * 12.0, r.points.iter().take(10_000).map(|p| [p[0] / upf, p[1] / upf]).collect()));
+    }
+    let overhead = |lv: &str, top_in: f64| -> Vec<Vec<[f64; 2]>> {
+        let top = heights.get(lv).copied().filter(|h| h.is_finite() && *h > 0.0).map_or(top_in + 72.0, |h| h.min(top_in + 72.0));
+        low.get(lv).into_iter().flatten().filter(|(b, _)| *b < top).map(|(_, p)| p.clone()).collect()
+    };
     let mut moved = Vec::new();
     let need_of: Vec<Option<[f64; 2]>> = sp.mep.equipment.iter().map(|e| gear_need(sp, e, &code)).collect();
     for (e, need_in) in sp.mep.equipment.iter_mut().zip(need_of) {
@@ -19237,6 +19255,7 @@ fn panels_onto_clear_faces(d: &cadaddy_doc::Drawing, sp: &mut cadaddy_walk3d::Bu
             width_in: code.width_in.unwrap_or(30.0),
             height_in: code.height_in.unwrap_or(78.0).max((e.bottom_ft + e.height_ft) * 12.0),
             recessed: e.properties.get("MOUNTING").is_some_and(|m| m.to_ascii_lowercase().contains("recess")),
+            overhead: overhead(&lv, (e.bottom_ft + e.height_ft) * 12.0),
         };
         let found = clear_face(e, &pieces, &others, doors.get(&lv).map_or(&[][..], Vec::as_slice), room.as_deref(), elevation * upf, &need, upf);
         if let Some(f) = found
