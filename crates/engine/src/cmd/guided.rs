@@ -28291,7 +28291,7 @@ mod tests {
         let c = lum(&mut s, [10_480.0, 120.0], "ceiling"); // 30" off 202's (turned) downlight
         let far = lum(&mut s, [10_444.0, 150.0], "ceiling"); // 8.5' from 202's flush mount
         let out = lum(&mut s, [10_300.0, 100.0], "ceiling"); // in no room of the type
-        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
         let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
             let d = s.doc().unwrap();
             let (bx, _, _) = super::super::propfill::extent(d, d.model.get(h).unwrap()).unwrap();
@@ -28467,7 +28467,7 @@ mod tests {
         let b = lum(&mut s, [10_450.0, 56.0], "");
         // 201's flush mount is in the corner its stage outline lost; its luminaire, by it, is 201's.
         let c = lum(&mut s, [10_104.0, 230.0], "201");
-        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
         let r = rcp_light_step(&mut s, &job).unwrap();
         assert_eq!(r["moved"], json!(3), "{r}");
         let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
