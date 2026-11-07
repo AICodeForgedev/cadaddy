@@ -939,11 +939,7 @@ fn run_next(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.execute(vp::CMD_PACKET, &q).map_err(|e| bad(CMD, format!("the packet of {}: {e}", area.id)))?;
     let manifest = read_json(&dir.join("manifest.json")).ok_or_else(|| bad(CMD, format!("the packet of {} has no manifest.json", area.id)))?;
-    let files =
-        |k: &str| -> Vec<String> { manifest[k].as_array().into_iter().flatten().filter_map(|x| x["file"].as_str().map(str::to_string)).collect() };
-    let mut images = files("prints");
-    images.extend(files("model"));
-    images.extend(files("submittals"));
+    let images = listed_images(&manifest);
     let prints: Vec<(String, String, Option<String>)> = manifest["prints"]
         .as_array()
         .into_iter()
@@ -1053,6 +1049,16 @@ fn text_of(v: Option<&Value>) -> String {
 }
 
 /// The packet picture a finding cites, as the packet names it (a full path to it is accepted).
+/// The pictures a packet's manifest lists, which a finding may cite: its prints, model pictures,
+/// submittal pages and specification pages (Q6261: a judge citing a specification page was
+/// refused).
+fn listed_images(manifest: &Value) -> Vec<String> {
+    ["prints", "model", "submittals", "specs"]
+        .iter()
+        .flat_map(|k| manifest[*k].as_array().into_iter().flatten().filter_map(|x| x["file"].as_str().map(str::to_string)))
+        .collect()
+}
+
 fn packet_image(images: &[String], dir: &std::path::Path, given: &str) -> Option<String> {
     let g = given.trim().replace('\\', "/");
     if let Some(f) = images.iter().find(|f| **f == g) {
@@ -2400,6 +2406,23 @@ fn run_plant(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_specification_page_of_the_packet_is_a_picture_a_finding_may_cite() {
+        let m = json!({
+            "prints": [{"file": "prints/01_E-1_plan.png"}],
+            "model": [{"file": "model/3d.png"}],
+            "submittals": [{"file": "prints/s01_submittal_Sample_p2.png"}],
+            "specs": [{"file": "prints/p01_spec_26_27_26_WIRING_DEVICES_p2.png"}],
+        });
+        let images = listed_images(&m);
+        assert_eq!(images.len(), 4, "{images:?}");
+        let dir = std::path::Path::new("packet");
+        assert_eq!(
+            packet_image(&images, dir, "prints/p01_spec_26_27_26_WIRING_DEVICES_p2.png").as_deref(),
+            Some("prints/p01_spec_26_27_26_WIRING_DEVICES_p2.png")
+        );
+    }
 
     #[test]
     fn sizes_grow_and_gfci_words_drop() {
