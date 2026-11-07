@@ -857,7 +857,8 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             .unwrap_or_default();
         for f in keyed {
             let tamper = f.to_ascii_uppercase().contains("TAMPER");
-            if !(tamper && features.iter().any(|x| x == "TR")) && !features.iter().any(|x| x.eq_ignore_ascii_case(&f)) {
+            let has_tr = tamper && features.iter().any(|x| x == "TR");
+            if !has_tr && !features.iter().any(|x| x.eq_ignore_ascii_case(&f)) {
                 features.push(f);
             }
         }
