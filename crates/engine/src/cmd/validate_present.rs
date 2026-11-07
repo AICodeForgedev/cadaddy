@@ -85,6 +85,12 @@ pub(crate) struct Expected {
     pub from: String,
     /// The sheet it lies on (the job's label may differ: [`Sym::sheet`]).
     pub sheet: String,
+    /// Why where its sheet puts it is not known well enough to judge (the sheet is not
+    /// registered on the level's plan, or its fit is loose): its verdict is `unsure`.
+    pub doubt: Option<String>,
+    /// Its sheet's note that makes its spots reference only: present or not is judged, where it
+    /// is not.
+    pub reference_only: Option<String>,
 }
 
 /// A room's expected set off the prints.
@@ -112,6 +118,9 @@ impl RoomSet {
         sheet.is_none_or(|s| self.compared.contains(&sheet_base(s)))
     }
 }
+
+/// A registration fitted by fewer shared numbers than this (door and room tags) is loose.
+const MIN_FIT_MATCHED: usize = 3;
 
 /// A model element as the matching sees it.
 pub(crate) struct Held<'a> {
@@ -212,6 +221,42 @@ pub(crate) struct Symbols<'a> {
     links: Vec<(&'a SheetLink, [f64; 4], Vec<usize>)>,
     frame: &'a Frame,
     upf: f64,
+    /// The sheets (numbers, upper case, no view suffix) whose notes make their spots reference
+    /// only, with the note.
+    reference: std::collections::BTreeMap<String, String>,
+}
+
+/// The sheets holding read symbols whose notes make their spots reference only
+/// ([`super::archauthority::reference_only`]): number (upper case, no view suffix) → the note.
+fn reference_only_sheets(d: &Drawing, links: &[(&SheetLink, [f64; 4], Vec<usize>)]) -> std::collections::BTreeMap<String, String> {
+    let mut sheets: Vec<(String, [f64; 4])> = Vec::new();
+    for (l, _, ids) in links.iter().filter(|(_, _, ids)| !ids.is_empty()) {
+        let key = sheet_base(&l.number);
+        if let Some(r) = l.rect.filter(|r| r.iter().all(|v| v.is_finite())).map(norm_rect)
+            && !sheets.iter().any(|(k, _)| *k == key)
+            && ids.len() <= MAX_SYMBOLS
+        {
+            sheets.push((key, r));
+        }
+    }
+    let mut out = std::collections::BTreeMap::new();
+    if sheets.is_empty() {
+        return out;
+    }
+    let mut texts: Vec<Vec<cadaddy_mepfix::sheet_facts::TextItem>> = vec![Vec::new(); sheets.len()];
+    for t in super::validate_height::texts(d) {
+        if let Some(i) = sheets.iter().position(|(_, r)| inside(*r, [t.at.x, t.at.y]))
+            && let Some(list) = texts.get_mut(i)
+        {
+            list.push(t);
+        }
+    }
+    for ((key, _), list) in sheets.into_iter().zip(texts) {
+        if let Some(note) = super::archauthority::reference_only(&list) {
+            out.insert(key, note);
+        }
+    }
+    out
 }
 
 /// What the job read off its sheets, as it stored it: its devices (`job.devices`) and its
@@ -292,7 +337,29 @@ impl<'a> Symbols<'a> {
             links.push((l, clip, ids));
         }
         let upf = frame.upf();
-        Symbols { syms, links, frame, upf: if upf.is_finite() && upf > 1e-9 { upf } else { 12.0 } }
+        let reference = reference_only_sheets(d, &links);
+        Symbols { syms, links, frame, upf: if upf.is_finite() && upf > 1e-9 { upf } else { 12.0 }, reference }
+    }
+
+    /// The note of `sheet` that makes its spots reference only.
+    fn reference_note(&self, sheet: &str) -> Option<String> {
+        self.reference.get(&sheet_base(sheet)).cloned()
+    }
+
+    /// Why a sheet's registration doesn't place its spots well enough to judge them: fitted by
+    /// fewer than [`MIN_FIT_MATCHED`] shared numbers, or its numbers miss by more than `tol` (feet).
+    fn loose(&self, number: &str, r: &SheetRegistration, tol: f64) -> Option<String> {
+        if r.method.eq_ignore_ascii_case("reference") {
+            return None;
+        }
+        if r.method.eq_ignore_ascii_case("tags") && r.matched < MIN_FIT_MATCHED {
+            return Some(format!(
+                "{number} is registered on its level's plan by {} shared numbers only: where it puts things is not certain",
+                r.matched
+            ));
+        }
+        let miss = r.residual.map(|x| x / self.upf).filter(|x| x.is_finite() && *x > tol)?;
+        Some(format!("{number}'s registration on its level's plan misses its own numbers by {miss:.1} ft: where it puts things is not certain"))
     }
 
     /// The sheets placed on `level`'s plan (by a registration, or the plan itself).
@@ -341,21 +408,24 @@ impl<'a> Symbols<'a> {
             .collect();
         let proj_box = bbox(&on_plan)?;
         let mut out = RoomSet { basis: "trade_plan", compared: self.placed(level), ..RoomSet::default() };
-        let mut found: Vec<(usize, [f64; 2], &'static str, String, String)> = Vec::new();
+        let mut found: Vec<(usize, [f64; 2], &'static str, String, String, Option<String>, Option<String>)> = Vec::new();
         for (l, clip, ids) in self.links.iter().filter(|(l, _, ids)| !ids.is_empty() && shows_level(l, level)) {
             let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
             if !matches!(sheet_kind(&title, true), "plan" | "rcp" | "enlarged_plan") {
                 continue;
             }
-            let place = match &l.registration {
-                Some(r) if r.method.eq_ignore_ascii_case("reference") => Place::Same,
-                Some(r) => Place::Fit(r),
-                None if intersect(proj_box, *clip).is_some() => {
-                    out.compared.insert(sheet_base(&l.number));
-                    Place::Same
-                }
+            // A sheet not registered on the level's plan is laid as drawn: its spots are no
+            // measure (unsure), and what was read from it is not compared.
+            let (place, doubt) = match &l.registration {
+                Some(r) if r.method.eq_ignore_ascii_case("reference") => (Place::Same, None),
+                Some(r) => (Place::Fit(r), self.loose(&l.number, r, tol)),
+                None if intersect(proj_box, *clip).is_some() => (
+                    Place::Same,
+                    Some(format!("{} is not registered on {level}'s plan (laid as drawn): where it puts things is not measured", l.number)),
+                ),
                 None => continue,
             };
+            let reference_only = self.reference_note(&l.number);
             // The plan covers the room when the room's middle lands inside its part.
             let covers = {
                 let p = self.frame.to_sheet(level, centre);
@@ -382,14 +452,21 @@ impl<'a> Symbols<'a> {
                         out.foreign += 1;
                         continue;
                     }
-                    found.push((i, ft, trade, name.clone(), l.number.clone()));
+                    found.push((i, ft, trade, name.clone(), l.number.clone(), doubt.clone(), reference_only.clone()));
                     n += 1;
                 }
             }
             if covers || n > 0 {
                 out.trades.insert(trade);
                 if out.sources.len() < MAX_VIEWS {
-                    out.sources.push(json!({"sheet": name, "symbols": n, "placed_by": match place { Place::Same => "same_plan", Place::Fit(_) => "registration" }}));
+                    let mut src = json!({"sheet": name, "symbols": n, "placed_by": match (&place, l.registration.is_some()) { (_, false) => "as_drawn", (Place::Same, _) => "same_plan", (Place::Fit(_), _) => "registration" }});
+                    if let Some(why) = &doubt {
+                        src["doubt"] = json!(why);
+                    }
+                    if let Some(note) = &reference_only {
+                        src["reference_only"] = json!(note);
+                    }
+                    out.sources.push(src);
                 }
             }
         }
@@ -403,15 +480,15 @@ impl<'a> Symbols<'a> {
                     out.foreign += 1;
                     continue;
                 }
-                found.push((i, *at, self.trade_of(i), s.sheet.clone(), s.sheet.clone()));
+                found.push((i, *at, self.trade_of(i), s.sheet.clone(), s.sheet.clone(), None, self.reference_note(&s.sheet)));
             }
         }
         if out.trades.is_empty() && found.is_empty() {
             return None;
         }
-        for (i, at, trade, from, sheet) in found {
+        for (i, at, trade, from, sheet, doubt, reference_only) in found {
             out.trades.insert(trade);
-            self.add(&mut out, Expected { sym: i, at, view: None, from, sheet }, tol);
+            self.add(&mut out, Expected { sym: i, at, view: None, from, sheet, doubt, reference_only }, tol);
         }
         Some(out)
     }
@@ -525,7 +602,16 @@ impl<'a> Symbols<'a> {
                     outside += 1;
                     continue;
                 }
-                self.add(&mut out, Expected { sym: *i, at, view: Some(view.clone()), from: view.clone(), sheet: sheet.clone() }, tol);
+                let expected = Expected {
+                    sym: *i,
+                    at,
+                    view: Some(view.clone()),
+                    from: view.clone(),
+                    sheet: sheet.clone(),
+                    doubt: None,
+                    reference_only: self.reference_note(sheet),
+                };
+                self.add(&mut out, expected, tol);
             }
             if out.sources.len() < MAX_VIEWS {
                 out.sources.push(json!({

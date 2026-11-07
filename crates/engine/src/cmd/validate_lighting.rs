@@ -6,7 +6,9 @@
 //!   fixture schedule doesn't list, a scheduled type the submittal leaves out, a schedule field
 //!   the submittal's cut sheet says otherwise — the finding is a `conflict` citing both.
 //! - **E-LUM-CONTROL**: each luminaire has a control (a switch, dimmer or sensor of its room on
-//!   its switch leg, or one linked to it) unless it is marked emergency or unswitched.
+//!   its switch leg, or one linked to it) unless it is marked unswitched (an exit sign, a night
+//!   light, 24-hour); one marked emergency with no control is `unsure` (an emergency luminaire is
+//!   switched with its room unless the documents say it is unswitched).
 //! - **E-SWITCH-LEG**: each switch, dimmer and sensor reaches luminaires of its own room by its
 //!   switch leg (or its link).
 //! - **E-SWITCH-DIM**: a dimmer controls only dimmable drivers of its own protocol (0-10 V, ELV,
@@ -619,19 +621,34 @@ fn says_dimmer(texts: &[String]) -> bool {
     })
 }
 
-/// Why a luminaire needs no control: its emergency or unswitched marking, if its words say so.
+/// Why a luminaire needs no control: an exit sign, or its words mark it unswitched or always lit
+/// (`UNSWITCHED`, `NIGHT LIGHT`, `24HR`, `ALWAYS ON`). An emergency marking alone is not one
+/// ([`emergency_marked`]): a normal/emergency luminaire is switched with its room's lights and its
+/// battery or transfer device keeps it lit when the normal power fails.
 fn no_control_needed(kind: &str, texts: &[(String, String)]) -> Option<String> {
     if cadaddy_walk3d::validate_kinds::in_family(kind, "exit_sign") {
         return Some("an exit sign: always lit".into());
     }
+    said(texts, |w, i, x| {
+        matches!(x, "unswitched" | "nightlight" | "24hr")
+            || (x == "night" && w.get(i + 1).is_some_and(|n| n == "light"))
+            || (x == "always" && w.get(i + 1).is_some_and(|n| n == "on"))
+            || (x == "24" && w.get(i + 1).is_some_and(|n| n == "hr" || n == "hour"))
+    })
+}
+
+/// Its words mark it an emergency luminaire (`EMERGENCY`, `EM`, `BATTERY`), if they do.
+fn emergency_marked(texts: &[(String, String)]) -> Option<String> {
+    said(texts, |_, _, x| matches!(x, "emergency" | "emer" | "emerg" | "em" | "battery"))
+}
+
+/// The first text whose words `hit` (not after `NON`, `NOT` or `NO`): where, and the words.
+fn said(texts: &[(String, String)], hit: impl Fn(&[String], usize, &str) -> bool) -> Option<String> {
     for (place, t) in texts {
         let w = tokens(t);
         for (i, x) in w.iter().enumerate() {
-            let hit = matches!(x.as_str(), "emergency" | "emer" | "emerg" | "em" | "unswitched" | "nightlight" | "24hr" | "battery")
-                || (x == "night" && w.get(i + 1).is_some_and(|n| n == "light"))
-                || (x == "always" && w.get(i + 1).is_some_and(|n| n == "on"));
             let denied = i > 0 && w.get(i - 1).is_some_and(|p| p == "non" || p == "not" || p == "no");
-            if hit && !denied {
+            if hit(&w, i, x) && !denied {
                 return Some(format!("{place} says \"{}\"", cite(t)));
             }
         }
@@ -879,12 +896,22 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
                 texts.extend(inp.kinds.said_of(Some(&m), f.it.entity).into_iter().map(|s| (s.source.clone(), s.text.clone())));
             }
             let free = no_control_needed(f.it.kind, &texts);
+            let emergency = emergency_marked(&texts);
             let room = f.it.room;
             let leg = f.leg.as_deref();
             let (verdict, issue) = if let Some(why) = &free {
                 ("pass", format!("no control needed: {why}"))
             } else if !by.is_empty() {
                 ("pass", format!("controlled by {}", list(&by).join(", ")))
+            } else if let Some(em) = &emergency {
+                // Marked emergency, nothing controls it: an emergency luminaire is switched with
+                // its room unless the documents say it is unswitched; that is not said.
+                (
+                    "unsure",
+                    format!(
+                        "marked emergency ({em}) and no switch, dimmer or sensor controls it: an emergency luminaire is switched with its room's lights unless the documents say it is unswitched (night light, 24-hour), and nothing says so"
+                    ),
+                )
             } else if room.is_none() {
                 ("unsure", "not in a room: its control is not known".to_string())
             } else if leg.is_none()
@@ -897,9 +924,9 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
                     "fail",
                     match leg {
                         Some(l) => format!(
-                            "no switch, dimmer or sensor in {place} is on its switch leg {l}: nothing controls it, and nothing marks it emergency or unswitched"
+                            "no switch, dimmer or sensor in {place} is on its switch leg {l}: nothing controls it, and nothing marks it unswitched"
                         ),
-                        None => format!("no switch, dimmer or sensor in {place} controls it, and nothing marks it emergency or unswitched"),
+                        None => format!("no switch, dimmer or sensor in {place} controls it, and nothing marks it unswitched"),
                     },
                 )
             };
@@ -907,14 +934,14 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
                 out.skip(CONTROL, &issue);
             }
             out.tally(CONTROL, verdict);
-            let measured = json!({"switch_leg": leg, "controlled_by": list(&by), "no_control_needed": free, "room": room.map(|a| a.id.clone())});
+            let measured = json!({"switch_leg": leg, "controlled_by": list(&by), "no_control_needed": free, "emergency": emergency, "room": room.map(|a| a.id.clone())});
             let found = if by.is_empty() { "no control".to_string() } else { format!("{} control(s)", by.len()) };
             out.findings.push(finding(
                 r,
                 f.it,
                 verdict,
                 issue,
-                "a control (switch, dimmer or sensor) of its room, unless emergency or unswitched".into(),
+                "a control (switch, dimmer or sensor) of its room, unless unswitched (an exit sign, a night light, 24-hour)".into(),
                 found,
                 measured,
             ));
@@ -1753,15 +1780,20 @@ mod tests {
     }
 
     #[test]
-    fn emergency_and_unswitched_fixtures_need_no_control() {
+    fn unswitched_fixtures_need_no_control_and_an_emergency_one_still_does() {
         let t = |s: &str| vec![("its type".to_string(), s.to_string())];
-        assert!(no_control_needed("luminaire", &t("DOWNLIGHT, EMERGENCY BATTERY PACK")).is_some());
-        assert!(no_control_needed("luminaire", &t("A-EM")).is_some());
         assert!(no_control_needed("luminaire", &t("NIGHT LIGHT")).is_some());
         assert!(no_control_needed("luminaire", &t("UNSWITCHED")).is_some());
+        assert!(no_control_needed("luminaire", &t("STAIR LIGHT, 24 HR")).is_some());
         assert!(no_control_needed("exit_sign", &t("")).is_some());
-        assert!(no_control_needed("luminaire", &t("NON-EMERGENCY DOWNLIGHT")).is_none());
         assert!(no_control_needed("luminaire", &t("2X4 TROFFER")).is_none());
+        // An emergency marking is no reason to need no control: the luminaire is switched with
+        // its room, its battery keeps it lit on loss of normal power.
+        assert!(no_control_needed("luminaire", &t("DOWNLIGHT, EMERGENCY BATTERY PACK")).is_none());
+        assert!(no_control_needed("luminaire", &t("A-EM")).is_none());
+        assert!(emergency_marked(&t("DOWNLIGHT, EMERGENCY BATTERY PACK")).is_some());
+        assert!(emergency_marked(&t("A-EM")).is_some());
+        assert!(emergency_marked(&t("NON-EMERGENCY DOWNLIGHT")).is_none());
     }
 
     #[test]

@@ -12183,6 +12183,7 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
             && !has(t, "mount_height_in")
             && !has(t, "mount")
         {
+            let i = super::mountlist::as_written(&row.doc).map_or(i, |(given, _)| given);
             t.set("mount_height_in", format!("{}", (i * 100.0).round() / 100.0), "legend");
             t.set("mount_height_note", row.doc.clone(), "legend");
         }
@@ -12308,7 +12309,10 @@ fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[Typic
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let kind = if emergency.contains(&mark) { "emergency light" } else { t.kind.as_str() };
         let Some(h) = typical.iter().find(|h| h.kind == kind) else { continue };
-        t.set("mount_height_in", format!("{}", (h.inches * 100.0).round() / 100.0), "note");
+        // As written when its words say what it is measured to (`4'-0" AFF TO TOP`: 48, its top),
+        // else its middle: the build reads the datum off the note.
+        let inches = super::mountlist::as_written(&h.doc).map_or(h.inches, |(given, _)| given);
+        t.set("mount_height_in", format!("{}", (inches * 100.0).round() / 100.0), "note");
         t.set("mount_height_note", h.doc.clone(), "note");
         n += 1;
     }
@@ -26779,7 +26783,9 @@ mod tests {
         sp.tags = vec![tag("device:p", "P"), tag("device:r", "SR"), tag("device:h", "H")];
         assert_eq!(apply_symbol_list(&mut sp, &rows), 2, "H is either of two rows");
         let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
-        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("45.75"));
+        // Stored as written (its note says to its top: the build puts its top there); the row
+        // itself keeps its middle.
+        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("48"));
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
@@ -26812,7 +26818,8 @@ mod tests {
         assert_eq!(xs(0), Some((0.0, 144.0)));
     }
 
-    /// A general note's typical mounting heights, item by item, to each one's centre.
+    /// A general note's typical mounting heights, item by item, to each one's centre; a device takes
+    /// the height as written when the words say what it is measured to (its top, its bottom).
     #[test]
     fn a_general_notes_typical_heights_are_read_item_by_item() {
         assert_eq!(typical_item("TOGGLE SWITCH 4'-0\" AFF TO TOP", "E-1").map(|t| (t.kind, t.inches)), Some(("switch", 45.75)));
@@ -26839,7 +26846,7 @@ mod tests {
         let h = |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("mount_height_in")).map(|f| f.value.clone());
         assert_eq!(
             (h("device:a"), h("device:b"), h("device:c"), h("device:d")),
-            (Some("18".into()), Some("44".into()), Some("45.75".into()), Some("92.25".into()))
+            (Some("18".into()), Some("44".into()), Some("48".into()), Some("90".into()))
         );
     }
 
