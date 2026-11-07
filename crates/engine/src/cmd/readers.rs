@@ -207,6 +207,10 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 derived: String::new(),
                 keynote: f("keynote"),
                 located: String::new(),
+                keynotes: Vec::new(),
+                gang: f("gang_with"),
+                drawn_at: None,
+                moved: String::new(),
             }
         })
         .collect();
@@ -1417,6 +1421,19 @@ pub struct ReadDevice {
     /// sheet's notes send locations there), with the spot its sheet drew. Empty: its sheet's.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub located: String,
+    /// The keynotes by its symbol that ask something of it (its features, mounting, ganging,
+    /// pathway: [`super::keynotes::device_requirements`]), each `Q-9 keynote 4: <the note>`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keynotes: Vec<String>,
+    /// The devices a keynote says to gang share this key (its note, its marker, its room).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub gang: String,
+    /// Set beside the others of its gang (a keynote ganged them): where its plan drew it (its
+    /// design place, drawing units) and why it moved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawn_at: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub moved: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1634,6 +1651,16 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         // Its spot when another document's gives it (the electrical plan's spot kept in the note).
         if !dv.located.is_empty() {
             e.set("location_note", dv.located.clone(), "note");
+        }
+        // What the keynotes by its symbol ask of it (features, mounting, ganging, its
+        // low-voltage conduit), each with the keynote as its source.
+        if !dv.keynotes.is_empty() {
+            super::keynotes::apply_to_tag(&mut e, kind, &dv.keynotes, &dv.gang);
+        }
+        // Set beside its gang: where its plan drew it kept beside, with why.
+        if let Some(p) = dv.drawn_at.filter(|_| !dv.moved.is_empty()) {
+            e.set("design_at", format!("{:.2},{:.2}", p[0] / upf, p[1] / upf), "plan");
+            e.set("correction", dv.moved.clone(), "rule");
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

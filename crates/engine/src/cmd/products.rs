@@ -849,6 +849,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         if tr && !features.iter().any(|f| f == "TR") {
             features.push("TR".into());
         }
+        // What its keynote asks of it besides (`USB`, `USB-C`): the product must have it too.
+        let keyed: Vec<String> = store
+            .get("keynote_features")
+            .filter(|p| p.has_value())
+            .map(|p| p.text().split(", ").map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect())
+            .unwrap_or_default();
+        for f in keyed {
+            let tamper = f.to_ascii_uppercase().contains("TAMPER");
+            let has_tr = tamper && features.iter().any(|x| x == "TR");
+            if !has_tr && !features.iter().any(|x| x.eq_ignore_ascii_case(&f)) {
+                features.push(f);
+            }
+        }
         let resolved = json!({
             "maker": resolved_maker, "catalog": catalog,
             "color": req.and_then(|r| r.color.clone()), "configuration": config.clone().or_else(|| req.and_then(|r| r.config.clone())),
