@@ -2991,6 +2991,11 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     .any(|l| l.trim().eq_ignore_ascii_case(v) && !v.chars().any(|c| c.is_ascii_lowercase()))
             };
             let sheet_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
+            // The labels the read symbols carry as their tags: each is its own device's (one label
+            // names one device), never a mark's beside it.
+            let read_handles: BTreeSet<String> = c.placed.iter().filter(|dv| dv.sheet == sheet).map(|dv| dv.handle.clone()).collect();
+            let taken_labels: Vec<cadaddy_geom::Vec2> =
+                syms.iter().filter(|(_, _, h, _)| read_handles.contains(&h.hex())).filter_map(|(_, _, _, at)| at.map(|(p, _)| p)).collect();
             let mut lone: Vec<super::readers::ReadDevice> = Vec::new();
             for t in sheet_texts.iter().filter(|t| luminaire(t.value.trim()) && !legend.covers(t.at)) {
                 let reach = LONE_MARK_REACH_H * t.height;
@@ -2998,7 +3003,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     continue;
                 }
                 // Its circuit: a label under it, within reach, lettered as it is (a mark of another
-                // size is no fixture's: a glyph misread from linework, a title).
+                // size is no fixture's: a glyph misread from linework, a title), and no read
+                // symbol's own tag.
                 let Some(label) = sheet_texts
                     .iter()
                     .filter(|o| {
@@ -3007,6 +3013,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                             && o.at.dist(t.at) <= reach
                             && t.height <= LONE_MARK_SIZE * o.height
                             && o.height <= LONE_MARK_SIZE * t.height
+                            && !taken_labels.iter().any(|p| p.dist(o.at) <= TAKEN_LABEL_EPS * o.height)
                     })
                     .min_by(|a, b| a.at.dist(t.at).total_cmp(&b.at.dist(t.at)))
                 else {
@@ -3026,7 +3033,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     continue;
                 }
                 let tag = t.value.trim().to_ascii_uppercase();
-                let circuit = label.value.split(',').next().unwrap_or(&label.value).trim().to_string();
+                // The whole label: its circuit numbers and the switch leg printed after them.
+                let circuit = label_circuit(&label.value);
                 lone.push(super::readers::ReadDevice {
                     tag: tag.clone(),
                     // Between the mark and its circuit label: where the symbol is drawn.
@@ -4043,6 +4051,17 @@ pub fn circuit_text(t: &str, sheet_numbers: &BTreeSet<String>) -> bool {
         && n.chars().all(|c| c.is_ascii_digit())
 }
 
+/// A circuit label as the fixture it names carries it: its panel and circuit numbers with the
+/// switch leg printed after them (`G-1,a`, `C-23,25`), the leg written as the typical-room reader
+/// writes it. Cutting the leg off loses the switch that controls the fixture, and the room's
+/// label is then left for another fixture.
+pub(crate) fn label_circuit(label: &str) -> String {
+    match super::propfill::split_switch_leg(label) {
+        (c, Some(leg)) => format!("{c},{leg}"),
+        (c, None) => c,
+    }
+}
+
 pub(crate) fn is_circuit_tag(tag: &str) -> bool {
     tag.rsplit_once('-').is_some_and(|(head, n)| !head.is_empty() && !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -4073,6 +4092,8 @@ const LONE_MARK_REACH_H: f64 = 4.0;
 /// A device read within this of where a lone mark's symbol would be drawn (in its text heights)
 /// is that symbol.
 const LONE_SYMBOL_H: f64 = 2.0;
+/// A label printed where a read symbol's tag is (within this share of its height) is that tag.
+const TAKEN_LABEL_EPS: f64 = 0.05;
 /// Most luminaires one sheet's lone marks add.
 const MAX_LONE_MARKS: usize = 2_000;
 
@@ -25778,7 +25799,7 @@ mod tests {
             on("E-1"),
             vec![
                 ("H".to_string(), "G-1".to_string()),
-                ("H".to_string(), "G-1".to_string()),
+                ("H".to_string(), "G-1,a".to_string()),
                 ("REC".into(), "G-9".into()),
                 ("REC".into(), "G-9".into())
             ],
@@ -25787,6 +25808,82 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// A luminaire read from its mark alone carries its whole circuit label (Q6256): the switch
+    /// leg after the circuit (`G-1,a`, a two-letter panel's `RP-14,c`) and every circuit number
+    /// (`C-23,25`), never only the part before the first comma. The typical-room reader then finds
+    /// the label taken by it and adds no second fixture there.
+    #[test]
+    fn a_lone_fixture_mark_keeps_its_labels_switch_leg() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-2", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        job.luminaire_types = vec!["A".into(), "B1".into()];
+        // Lettering 4 high; each mark over its label, no symbol made of the fixture.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("A", 100.0, 506.0, 4.0),
+            ("G-1,a", 100.0, 494.0, 4.0),
+            ("A", 300.0, 506.0, 4.0),
+            ("RP-14,c", 300.0, 494.0, 4.0),
+            ("B1", 500.0, 506.0, 4.0),
+            ("C-23,25", 500.0, 494.0, 4.0),
+            ("B1", 700.0, 506.0, 4.0),
+            ("B-5", 700.0, 494.0, 4.0),
+        ];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &[]);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-2".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-2".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        got.sort();
+        let want: Vec<(String, String)> =
+            [("A", "G-1,a"), ("A", "RP-14,c"), ("B1", "B-5"), ("B1", "C-23,25")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+        assert_eq!(got, want, "{r:#}");
+        assert_eq!(r["luminaires_by_mark_alone"], json!(4), "{r:#}");
+        // As the build fills the fixture's properties: its circuit, and its leg apart.
+        let legs: Vec<(String, Option<String>)> = job.devices.iter().map(|d| super::super::propfill::split_switch_leg(&d.circuit)).collect();
+        assert!(legs.contains(&("G-1".to_string(), Some("a".to_string()))), "{legs:?}");
+        assert!(legs.contains(&("RP-14".to_string(), Some("c".to_string()))), "{legs:?}");
+        // The same marks in a typical room's view: each label is the read fixture's, no second one.
+        let items: Vec<cadaddy_mepfix::sheet_facts::TextItem> = texts
+            .iter()
+            .map(|(v, x, y, h)| cadaddy_mepfix::sheet_facts::TextItem {
+                value: (*v).into(),
+                at: cadaddy_geom::Vec2::new(*x, *y),
+                height: *h,
+                rotation: 0.0,
+            })
+            .collect();
+        let view = super::super::unitmarks::View {
+            sheet: "E-2",
+            level: "1",
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            texts: items.iter().collect(),
+            read: job.devices.iter().collect(),
+        };
+        let marks = super::super::unitmarks::Marks {
+            luminaires: ["A".to_string(), "B1".to_string()].into(),
+            wall_luminaires: BTreeSet::new(),
+            leg_rule: None,
+            sheet_numbers: BTreeSet::new(),
+        };
+        let again = super::super::unitmarks::read_view(&view, &[], &marks);
+        assert!(again.is_empty(), "a second fixture on a label the mark's fixture took: {again:?}");
     }
 
     /// Every receptacle drawn on a plan is read, whatever lettering lies near it (Q6246): one in a
@@ -25887,7 +25984,7 @@ mod tests {
         let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
         let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
         got.sort();
-        let want: Vec<(String, String)> = [("H", "K-1"), ("H", "K-1"), ("REC", "K-1"), ("REC", "K-3"), ("REC", "K-5"), ("REC", "K-9")]
+        let want: Vec<(String, String)> = [("H", "K-1"), ("H", "K-1,a"), ("REC", "K-1"), ("REC", "K-3"), ("REC", "K-5"), ("REC", "K-9")]
             .iter()
             .map(|(t, c)| (t.to_string(), c.to_string()))
             .collect();
