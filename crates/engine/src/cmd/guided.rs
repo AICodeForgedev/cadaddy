@@ -2803,6 +2803,39 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                         && cadaddy_mepfix::printlinks::norm_sheet(target) == cadaddy_mepfix::printlinks::norm_sheet(tag)
                         && !matches!(device_types::tag_verdict(detail, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
                 });
+                // A circuit label with a device's type mark printed over it (`F` over `Q-3`: a
+                // luminaire's label, set clear of the light with a leader to it, often over a tub)
+                // is that device's: a symbol it fell by is no receptacle on its circuit
+                // (receptacles carry no type mark; their designations, GFCI or WP, are no type).
+                let mark_over: Option<String> = tag_at.and_then(|(p, lh)| {
+                    let over = |q: cadaddy_geom::Vec2, height: f64, v: &str| {
+                        let dy = q.y - p.y;
+                        dy > 0.3 * lh
+                            && dy <= MARK_OVER_LABEL_H * lh
+                            && (q.x - p.x).abs() <= lh
+                            && height >= TYPE_MARK_MIN_H * lh
+                            && height <= TYPE_MARK_MAX_H * lh
+                            && !circuit_text(v, &sheet_numbers)
+                            && !is_circuit_tag(v)
+                            && receptacle_designations(&[v]).is_empty()
+                            && matches!(device_types::tag_verdict(v, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
+                            // A mark with another circuit label of its own under it (`H` over
+                            // `K-1,a`) is that label's, not this one's.
+                            && !page_texts.iter().any(|u| {
+                                let du = q.y - u.at.y;
+                                (circuit_text(&u.value, &sheet_numbers) || is_circuit_tag(&u.value))
+                                    && du > 0.3 * height
+                                    && du <= MARK_OVER_LABEL_H * height
+                                    && (u.at.x - q.x).abs() <= height
+                                    && u.at.dist(p) > 0.5 * lh
+                            })
+                    };
+                    page_texts.iter().find(|t| t.rotation.abs() < 1e-3 && over(t.at, t.height, &t.value)).map(|t| t.value.clone()).or_else(|| {
+                        syms.iter()
+                            .filter(|(_, _, oh, _)| oh != h)
+                            .find_map(|(ot, _, _, ota)| ota.filter(|(q, qh)| over(*q, *qh, ot)).map(|_| ot.clone()))
+                    })
+                });
                 let fate = if bubble {
                     MarkFate::not_object("a callout bubble: its sheet reference reads like a circuit")
                 } else if !electrical(&sheet) {
@@ -2811,13 +2844,17 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                     MarkFate::not_object("a circuit label on a fire alarm plan")
                 } else if !circuit_text(tag, &sheet_numbers) {
                     MarkFate::not_object("a sheet number by a symbol")
+                } else if let Some(m) = &mark_over {
+                    MarkFate::not_object(&format!(
+                        "a circuit label under the type mark {m}: that device's label (its mark over its circuit), not a receptacle's"
+                    ))
                 } else if !building {
                     MarkFate::left_out("receptacle", super::inventory::OUT_OF_SCOPE, "on a sheet of no building level")
                 } else {
                     MarkFate::object("receptacle", "a symbol its circuit labels: a receptacle")
                 };
                 c.fates.push((h.0, fate));
-                if electrical(&sheet) && kind.is_empty() && building && !bubble && circuit_text(tag, &sheet_numbers) {
+                if electrical(&sheet) && kind.is_empty() && building && !bubble && mark_over.is_none() && circuit_text(tag, &sheet_numbers) {
                     // Its designations printed by it (GFCI, WP, USB…), else a plain one.
                     let near: Vec<&str> = tag_at
                         .map(|(p, h)| {
@@ -5026,25 +5063,31 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     dropped.1,
                     dropped.2
                 ));
-                // A pipe both an enlarged plan and the floor's plan draw (or two views of one
-                // floor, or one sheet's line read twice) is one pipe: the enlarged plan's stays.
+                // A pipe or duct both an enlarged plan and the floor's plan draw (or two views of
+                // one floor, or one sheet's line read twice) is one: the enlarged plan's stays.
+                // Each sheet's reading is placed by its own registration, so this is where two
+                // sheets' lines of one run first lie together.
                 let enlarged: BTreeSet<String> =
                     job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
                 let pipes: BTreeSet<String> =
                     sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
-                let (twice, twice_cut, twice_ft) =
-                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
-                        u8::from(!enlarged.contains(&sheet_key(sheet)))
-                    });
+                let ducts: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let (twice, twice_cut, twice_ft) = super::runtidy::drop_drawn_twice(
+                    &mut sp.mep.runs,
+                    upf_runs,
+                    &|r| pipes.contains(&r.system) || ducts.contains(&r.system),
+                    &|sheet| u8::from(!enlarged.contains(&sheet_key(sheet))),
+                );
                 if twice + twice_cut > 0 {
                     progress_line(&format!(
-                        "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
+                        "  pipe and duct runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
                     ));
                     job.add_finding(
                         StageName::BimBuild,
                         "Pipe drawn twice, one kept",
                         &format!(
-                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                            "{twice} pipe and duct runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
                         ),
                         1,
                         vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
@@ -5783,6 +5826,32 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         ));
                     }
                     fixture_fits = rep.fits;
+                    // A receptacle read inside a drawn tub or shower is one of the fixture's own
+                    // marks (its drain) that a circuit label printed over the fixture named: no
+                    // receptacle symbol is drawn inside a tub (NEC 406.9(C)).
+                    let inside = super::fixturefit::receptacles_inside(&fixture_fits, &out, upf_dev, rules);
+                    if !inside.is_empty() {
+                        let gone: BTreeSet<usize> = inside.iter().map(|i| i.index).collect();
+                        // A symbol copied into several rooms stays an object while one copy stays.
+                        let kept: BTreeSet<String> =
+                            out.iter().enumerate().filter(|(i, _)| !gone.contains(i)).map(|(_, dv)| dv.handle.to_ascii_uppercase()).collect();
+                        for i in &inside {
+                            if let Some(dv) = out.get(i.index).filter(|dv| !kept.contains(&dv.handle.to_ascii_uppercase())) {
+                                let handle = dv.handle.clone();
+                                fate(job, &handle, MarkFate::not_object(&i.reason));
+                            }
+                        }
+                        progress_line(&format!(
+                            "  receptacles read inside a drawn tub or shower (its own marks a circuit label named, no receptacle symbol): {} left out",
+                            gone.len()
+                        ));
+                        let mut k = 0usize;
+                        out.retain(|_| {
+                            let keep = !gone.contains(&k);
+                            k += 1;
+                            keep
+                        });
+                    }
                 }
                 out
             }
@@ -11063,8 +11132,8 @@ fn fan_duct_route(it: &MechItem, k_in: f64, title: &str) -> Option<(Vec<[f64; 2]
 /// How far (feet) a duct may lie from an exhaust fan's drawn duct and still be that duct.
 const FAN_DUCT_SAME_FT: f64 = 1.5;
 
-/// The ducts already in `runs` that are an exhaust fan's drawn duct again (`fan_ducts`, followed
-/// fan to wall cap on its view): a duct run (by its system's kind) on the same level with an end
+/// The ducts already in `runs` that are an exhaust fan's drawn duct again (`fan_ducts` followed
+/// fan to wall cap on its view: drawn or derived, not laid by rule): a duct run (by its system's kind) on the same level with an end
 /// at the fan and every point along the fan's duct. The fan's duct carries the exhaust system
 /// (where it runs to the wall cap, it is exhaust), so the repeat goes and is counted once. How
 /// many went, and the systems the plans gave them (other than exhaust) with their counts.
@@ -11079,7 +11148,7 @@ fn drop_fan_duct_repeats(
     let along = |f: &cadaddy_walk3d::MepRun, p: [f64; 2]| {
         f.points.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist_xy(p, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min)
     };
-    let traced: Vec<&cadaddy_walk3d::MepRun> = fan_ducts.iter().filter(|f| f.made.is_drawn() && f.points.len() >= 2).collect();
+    let traced: Vec<&cadaddy_walk3d::MepRun> = fan_ducts.iter().filter(|f| f.made != cadaddy_walk3d::Made::Inferred && f.points.len() >= 2).collect();
     let mut by: BTreeMap<String, usize> = BTreeMap::new();
     let before = runs.len();
     runs.retain(|r| {
@@ -11282,6 +11351,9 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                     );
                     let mut properties = BTreeMap::new();
                     properties.insert("room".to_string(), room.clone());
+                    // No plan draws it in this room: the typical room's, laid in (Q6216).
+                    properties.insert("STATUS".to_string(), "derived".to_string());
+                    properties.insert("BASIS".to_string(), typical_basis(&sh.number, title, &room));
                     out.equipment.push(cadaddy_walk3d::MepEquipment {
                         tag: it.tag.clone(),
                         kind: it.kind.to_string(),
@@ -11311,6 +11383,18 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                             "system": "EA", "level": lv.name, "points": points, "size_in": [size, 0.0], "bottoms_ft": bottoms,
                             "height_source": "typical room view: over the ceiling", "size_source": size_source, "source_sheet": sh.number,
                         })) {
+                            // Followed on the view: copied from the typical room's drawing
+                            // (derived, Q6216); laid fan to cap where nothing could be followed
+                            // (inferred, its rule said).
+                            let from = typical_basis(&sh.number, title, &room);
+                            let (made, basis) = if made.is_drawn() {
+                                (
+                                    cadaddy_walk3d::Made::Derived,
+                                    format!("{from}; the duct as the view draws it, followed from the fan to its wall cap"),
+                                )
+                            } else {
+                                (made, format!("{from}; {basis}"))
+                            };
                             super::provenance::set_run(&mut run, made, basis);
                             out.runs.push(run);
                         }
@@ -17645,6 +17729,12 @@ fn doc_objects_step(
         if f.how == How::Note {
             props.insert("STATUS".into(), "proposed".into());
         }
+        // A note calls for it in every room of a type and no plan draws it there: derived from the
+        // note, its place in the room not drawn (Q6216).
+        if f.how == How::Rooms {
+            props.insert("STATUS".into(), "derived".into());
+            props.insert("BASIS".into(), format!("derived: {position}"));
+        }
         let mut sources = BTreeMap::new();
         sources.insert("kind".to_string(), format!("{} ({})", f.source, class.source));
         sources.insert("position".to_string(), position.clone());
@@ -20019,6 +20109,14 @@ struct StampedRuns {
     report: BTreeMap<String, usize>,
 }
 
+/// The basis of what a typical room's view (`title` on `sheet`) gives a room of its type (`room`):
+/// derived from that view, not drawn in the room.
+fn typical_basis(sheet: &str, title: &str, room: &str) -> String {
+    let room = room.trim();
+    let into = if room.is_empty() { "a room of its type".to_string() } else { format!("room {room}") };
+    format!("derived: the typical room view {} on {sheet}, laid into {into} at the same place in the room", title.trim())
+}
+
 /// The pipes and ducts of the typical-room plans (ENLARGED GUESTROOM - SANITARY's DOUBLE QUEEN
 /// view) that no registration placed (`lost`): each, when all of it lies in a view whose title
 /// names a room type, into every room of that type at the same place in the room, as their devices
@@ -20078,7 +20176,7 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
             if let Some(t) = out.taken.get_mut(i) {
                 *t = true;
             }
-            for (ri, (_, level, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+            for (ri, (_, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 if out.runs.len() >= MAX_STAMPED {
                     break;
                 }
@@ -20110,6 +20208,10 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
                 copy.level.clone_from(level);
                 copy.id = String::new();
                 copy.objects = Vec::new();
+                // No plan draws it in this room: it is the typical room's, laid in (Q6216).
+                if copy.made.is_drawn() {
+                    super::provenance::set_run(&mut copy, cadaddy_walk3d::Made::Derived, typical_basis(&r.source_sheet, title, number));
+                }
                 out.runs.push(copy);
                 *out.report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
@@ -21009,6 +21111,18 @@ fn arch_placer(
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
     let reg = super::identity::register(d, &sheets, upf);
     lap("sheets registered by tags");
+    // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
+    // the build left to the sheet's grids, background or frame).
+    for t in reg.transforms.iter().filter(|t| t.registered && t.method != "reference").take(MAX_SHEETS_REPORTED) {
+        let (scale, turn) = (t.transform.scale(), t.transform.rotation_deg());
+        progress_line(&format!(
+            "  placer: {} on {} by {} tags: scale {scale:.3}, turned {turn:.2} deg: {}",
+            t.sheet,
+            t.level,
+            t.matched,
+            tag_fit_why_not(t.matched, scale, turn).map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
+        ));
+    }
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
     let level_key0 = |l: &str| {
@@ -21080,7 +21194,7 @@ fn arch_placer(
             return Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t));
         }
         // Else the sheet's fit by its tags; one on a few tags or off 1:1 is no fit.
-        if let Some(t) = fit.filter(|t| t.matched >= 4 && (0.85..=1.18).contains(&t.transform.scale())) {
+        if let Some(t) = fit.filter(|t| tag_fit_holds(t.matched, t.transform.scale(), t.transform.rotation_deg())) {
             // The fit puts the sheet onto its reference plan, which for a several-level sheet
             // may be another level's: from there onto this level's own plan, by their frames.
             let mut m = t.transform;
@@ -21338,6 +21452,40 @@ fn part_of_plan(view: &[cadaddy_geom::Vec2], plan: &[cadaddy_geom::Vec2]) -> boo
 
 /// Points a job's placer remembers at most.
 const MAX_PLACER_MEMO: usize = 500_000;
+
+/// Sheets whose fit by tags the placer reports at most.
+const MAX_SHEETS_REPORTED: usize = 200;
+
+/// Fewest tags a sheet's fit by its tags is taken on.
+const TAG_FIT_MIN: usize = 4;
+/// The scales a fit on many tags may have (a sheet a little off its printed scale).
+const TAG_FIT_SCALES: std::ops::RangeInclusive<f64> = 0.85..=1.18;
+/// How far off one to one (a share) a fit on a few tags ([`cadaddy_mepfix::tagid::FEW_TAGS`]) may
+/// be: sheets come in at their printed scales, so a handful of tags that need a stretch (11% on
+/// five tags) matched the wrong tags, and placing a plan by it puts its ducts and grilles feet
+/// from where it draws them. A few tags turned off square are no fit either
+/// ([`cadaddy_mepfix::tagid::few_tags_off_square`]).
+const TAG_FIT_FEW_SCALE: f64 = 0.05;
+
+/// Whether a sheet's fit by its tags (`matched` tags, at `scale`, turned `turn_deg`) places it,
+/// else why not.
+fn tag_fit_why_not(matched: usize, scale: f64, turn_deg: f64) -> Option<&'static str> {
+    use cadaddy_mepfix::tagid;
+    if matched < TAG_FIT_MIN {
+        Some("too few tags")
+    } else if !TAG_FIT_SCALES.contains(&scale) {
+        Some("off its printed scale")
+    } else if tagid::few_tags_off_square(matched, turn_deg) || (matched < tagid::FEW_TAGS && (scale - 1.0).abs() > TAG_FIT_FEW_SCALE) {
+        Some("a few tags that need a stretch or a turn")
+    } else {
+        None
+    }
+}
+
+/// Whether a sheet's fit by its tags places it ([`tag_fit_why_not`]).
+fn tag_fit_holds(matched: usize, scale: f64, turn_deg: f64) -> bool {
+    tag_fit_why_not(matched, scale, turn_deg).is_none()
+}
 
 /// Each storey's shell ([`super::wallgen::shells`]) the rooms stage's rooms confirm: one holding
 /// fewer than [`SHELL_ROOMS`] of its level's rooms is walls the plan didn't close round the
@@ -25750,6 +25898,48 @@ mod tests {
         assert_eq!(by_mark, 1, "{:?}", job.devices);
     }
 
+    /// A luminaire's label (its type mark over its circuit, `F` over `Q-3`) set clear of the light,
+    /// over a tub with a leader to the wall light, labels whatever symbol the import found beside
+    /// it (the tub's drain): that symbol is no receptacle on the luminaire's circuit, whether the
+    /// mark is lettering or another symbol's tag. A receptacle by its circuit alone, or with its
+    /// designation over it (`GFCI`), stays one.
+    #[test]
+    fn a_circuit_label_under_a_luminaires_type_mark_is_no_receptacle() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
+        job.sheets_loaded = true;
+        job.wall_luminaire_types = vec!["F".into()];
+        job.luminaire_types = vec!["XB".into()];
+        // Lettering 2 high. `F` over `Q-3` (the label's circuit is the drain symbol's tag) at
+        // x 300; an exit sign's `XB` over `Q-2`, its mark a symbol's tag, at x 1100; a plain
+        // receptacle `Q-5` at x 700; a GFCI one, `GFCI` over `Q-7`, at x 1500.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![("F", 300.0, 504.5, 2.0), ("GFCI", 1500.0, 504.5, 2.0)];
+        let syms: Vec<(&str, f64, f64)> =
+            vec![("Q-3", 300.0, 502.0), ("Q-5", 700.0, 502.0), ("XB", 1100.0, 504.5), ("Q-2", 1100.0, 502.0), ("Q-7", 1500.0, 502.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut receptacles: Vec<(String, String)> =
+            job.devices.iter().filter(|d| d.kind == "receptacle").map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        receptacles.sort();
+        assert_eq!(receptacles, [("GFCI".to_string(), "Q-7".to_string()), ("REC".to_string(), "Q-5".to_string())], "{r:#}");
+    }
+
     /// A lone fixture mark is printed as the schedule prints its type, in its label's lettering: a
     /// lower-case leg letter over a circuit (`d` over `Q-11`) is a switch leg, and a letter read
     /// from linework at another size is no mark: neither is a luminaire of type D.
@@ -26743,6 +26933,70 @@ mod tests {
     /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
     /// each (estimated), and the takeoff has their conduit, wire and boxes by level and circuit.
     #[test]
+    fn a_mechanical_plans_reading_is_placed_by_its_own_sheets_fit_and_a_few_stretched_tags_are_no_fit() {
+        // Three sheets of one size on one level. M-101 draws its plan 60 units right of and 30 up
+        // from where A-101 draws it on its page; both print ten room numbers. M-102 prints five of
+        // them stretched 11% and turned 3 degrees (five tags matched wrongly).
+        let mut s = crate::Session::new();
+        let rooms: Vec<(String, [f64; 2])> =
+            (0..10_u32).map(|i| ((101 + i).to_string(), [100.0 + 160.0 * f64::from(i % 5), 200.0 + 300.0 * f64::from(i / 5)])).collect();
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let (k, turn) = (1.11_f64, 3.0_f64.to_radians());
+            for (i, (n, p)) in rooms.iter().enumerate() {
+                d.add(&Space::Model, common(), EntityKind::Text(text(n, p[0], p[1], 6.0))).ok();
+                d.add(&Space::Model, common(), EntityKind::Text(text(n, p[0] + 2060.0, p[1] + 30.0, 6.0))).ok();
+                if i < 5 {
+                    let q = [4000.0 + k * (p[0] * turn.cos() - p[1] * turn.sin()), k * (p[0] * turn.sin() + p[1] * turn.cos())];
+                    d.add(&Space::Model, common(), EntityKind::Text(text(n, q[0], q[1], 6.0))).ok();
+                }
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [0, 0, 1000, 800]}],
+            "sheets": [
+                {"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 1000, 800]},
+                {"number": "M-101", "discipline": "M", "level": "Level 1", "rect": [2000, 0, 3000, 800]},
+                {"number": "M-102", "discipline": "M", "level": "Level 1", "rect": [4000, 0, 5000, 800]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let place = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new());
+        let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
+        // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
+        assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
+        // Moved onto A-101 by the sheets' corners first (as the reading was before), A-101's own
+        // frame placed it: 60 and 30 units off, away from M-101's devices.
+        assert_eq!(at([560.0, 430.0]), Some([560.0, 430.0]));
+        // M-102's five stretched, turned tags are no fit: its frame places it, not them.
+        assert_eq!(at([4500.0, 400.0]), Some([500.0, 400.0]));
+    }
+
+    #[test]
+    fn a_fit_on_a_few_tags_must_be_one_to_one_and_square() {
+        // Many tags: a sheet a little off its printed scale or turned a little.
+        assert!(tag_fit_holds(26, 1.0, 0.5));
+        assert!(tag_fit_holds(10, 0.975, 0.6));
+        assert!(tag_fit_holds(16, 0.996, -1.2));
+        // A few: only one to one and square.
+        assert!(tag_fit_holds(5, 1.01, 0.4));
+        assert!(!tag_fit_holds(5, 1.112, 2.9));
+        assert!(!tag_fit_holds(6, 1.0, 2.0));
+        assert!(!tag_fit_holds(7, 0.93, 0.0));
+        assert_eq!(tag_fit_why_not(5, 1.112, 1.0), Some("a few tags that need a stretch or a turn"));
+        // A quarter turn is square (a sheet drawn turned); many tags are their own word.
+        assert!(tag_fit_holds(5, 1.0, 90.2));
+        assert!(tag_fit_holds(12, 1.0, 4.0));
+        // Too few, too far off, or not a number: never.
+        assert!(!tag_fit_holds(3, 1.0, 0.0));
+        assert!(!tag_fit_holds(40, 1.3, 0.0));
+        assert!(!tag_fit_holds(40, f64::NAN, 0.0));
+        assert!(!tag_fit_holds(5, 1.0, f64::NAN));
+    }
+
+    #[test]
     fn circuits_come_out_of_the_job_as_conduit_and_wire() {
         let mut s = crate::Session::new();
         let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
@@ -27567,6 +27821,10 @@ mod tests {
         assert_eq!(by.get("SA"), Some(&1));
         assert_eq!(by.get("M-DUCT"), Some(&1));
         assert_eq!(runs.len(), 3);
+        // One followed on a typical room's view and laid into its room (derived) is the same.
+        let copied = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Derived)];
+        let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
+        assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &copied, 12.0).0, 1);
         // A fan's duct laid by rule (not followed on a drawing) takes nothing away.
         let laid = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Inferred)];
         let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
@@ -29039,6 +29297,11 @@ mod tests {
         assert_eq!((r.level.as_str(), r.system.as_str(), r.id.as_str()), ("Level 2", "SAN", ""));
         assert!(r.points.iter().all(|p| p[0] >= 10_000.0 && p[0] <= 10_144.0 && p[1] >= 0.0 && p[1] <= 288.0), "{:?}", r.points);
         assert!((r.points[1][1] - r.points[0][1]).abs() > 100.0, "it runs along the room: {:?}", r.points);
+        // No plan draws it in room 201: derived from the typical room's view, with its basis
+        // (drawn, it would pass for the engineer's line in that room).
+        assert_eq!(r.made, cadaddy_walk3d::Made::Derived);
+        assert!(r.basis.starts_with("derived: the typical room view") && r.basis.contains("room 201"), "{}", r.basis);
+        assert!(lost.iter().all(|l| l.made.is_drawn()), "the view's own run stays drawn");
     }
 
     /// The pipes an enlarged plan draws in one room of a type go into the other rooms of the type

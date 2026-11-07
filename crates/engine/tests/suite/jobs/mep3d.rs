@@ -231,7 +231,9 @@ fn terminals_build_as_simple_shapes() {
         "layers": [{"layer": "A-WALL", "role": "wall"}],
         "mep": {
             "terminals": [
-                {"system": "M-DUCT-SUPP", "level": "L1", "at": [144.0, 60.0], "size_in": [24.0, 24.0], "bottom_ft": 9.0, "terminal_kind": "diffuser"}
+                {"system": "M-DUCT-SUPP", "level": "L1", "at": [144.0, 60.0], "size_in": [24.0, 24.0], "bottom_ft": 9.0, "terminal_kind": "diffuser", "source_sheet": "M-101"},
+                {"system": "M-DUCT-SUPP", "level": "L1", "at": [400.0, 300.0], "size_in": [12.0, 12.0], "bottom_ft": 9.0, "terminal_kind": "grille",
+                 "made": "derived", "basis": "derived: the typical room view on M-102, laid into room 1"}
             ]
         }
     }})).unwrap();
@@ -243,6 +245,22 @@ fn terminals_build_as_simple_shapes() {
     let parts = xdata_tag(&s, "part:terminal:");
     assert!(!parts.is_empty(), "terminal xdata present: {parts:?}");
     assert!(parts.iter().any(|p| p == "part:terminal:diffuser"), "diffuser: {parts:?}");
+    // Each says where it is from (Q6251): the read diffuser its sheet and drawn; the one no plan
+    // draws there derived, with its basis.
+    let marks = |kind: &str| -> Vec<String> {
+        s.doc()
+            .unwrap()
+            .model
+            .iter()
+            .filter(|e| e.common.xdata.iter().any(|t| t.value == format!("part:terminal:{kind}")))
+            .flat_map(|e| e.common.xdata.iter().map(|t| t.value.clone()).collect::<Vec<_>>())
+            .collect()
+    };
+    let diffuser = marks("diffuser");
+    assert!(diffuser.iter().any(|v| v == "prop:SOURCE sheet=M-101") && diffuser.iter().any(|v| v == "status:drawn"), "{diffuser:?}");
+    let grille = marks("grille");
+    assert!(grille.iter().any(|v| v == "status:derived"), "{grille:?}");
+    assert!(grille.iter().any(|v| v == "basis:derived: the typical room view on M-102, laid into room 1"), "{grille:?}");
 
     // The terminal mesh geometry: it should be at x~144, z starts at 9' = 108 inches.
     let m = meshes(&s);
