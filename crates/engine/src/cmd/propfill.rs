@@ -1010,8 +1010,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
                     datum: Datum::Centre,
                 });
+                // (A lower printed height is a receptacle's or a switch's by it, unless the documents
+                // measure it for the luminaire itself: an elevation's sconce.)
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
-                documented().filter(|c| c.inches >= lowest).or(wall_light).unwrap_or_else(|| {
+                let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
                     let (inches, datum, why) = rules_default(kind, &fixture_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })

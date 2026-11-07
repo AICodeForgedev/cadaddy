@@ -205,6 +205,7 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                located: String::new(),
             }
         })
         .collect();
@@ -1404,6 +1405,10 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// Where its spot came from when not its own sheet's (the architecture's symbol, when its
+    /// sheet's notes send locations there), with the spot its sheet drew. Empty: its sheet's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub located: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1579,6 +1584,10 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.derived.is_empty() {
             e.set("status", super::waterfill::DERIVED, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        // Its spot when another document's gives it (the electrical plan's spot kept in the note).
+        if !dv.located.is_empty() {
+            e.set("location_note", dv.located.clone(), "note");
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

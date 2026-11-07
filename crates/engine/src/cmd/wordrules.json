@@ -226,6 +226,17 @@
     "RIGID ELBOW"
    ]
   },
+  "devices.ceiling_kinds": {
+   "source": "trade practice: the device kinds hung from or set in the ceiling (a plan's AFF note is a wall device's height, never theirs); a kind is matched in lower case with spaces as underscores (Q6244, guided.rs `ceiling_kind`)",
+   "words": [
+    "luminaire",
+    "smoke_detector",
+    "heat_detector",
+    "ceiling_receptacle",
+    "exhaust_fan",
+    "ceiling_fan"
+   ]
+  },
   "devices.color_words": {
    "source": "trade practice: a device's colour as a product record words it; the first found is the colour (moved from products.rs)",
    "words": [
@@ -1867,6 +1878,78 @@
     "GRADE",
     "MAIN",
     "STREET"
+   ]
+  },
+  "notes.appliance_words": {
+   "source": "trade practice: an appliance a mounting-height note names (`MICROWAVE 65\" AFF` on a leader): the note gives the height of the receptacle or connection that feeds it, never a switch's (Q6244, guided.rs `typical_heights`)",
+   "words": [
+    "MICROWAVE",
+    "COOKTOP",
+    "RANGE",
+    "OVEN",
+    "REFRIGERATOR",
+    "FRIDGE",
+    "DISHWASHER",
+    "DISPOSAL",
+    "WASHER",
+    "DRYER",
+    "WATER HEATER",
+    "ICE MAKER",
+    "COFFEE"
+   ]
+  },
+  "notes.defer_to_architecture": {
+   "source": "drafting convention: an electrical sheet's numbered note that sends its devices' locations or mounting heights to the architecture's drawings (`SEE ARCHITECTURAL PLANS FOR DEVICE LOCATIONS AND HEIGHTS`, `MOUNT AT THE HEIGHT SHOWN ON THE ARCHITECTURAL ELEVATIONS`): value is what it sends there (both, heights, locations); the first row that matches decides, a row matching when the note contains one of `any` and all of `all` (Q6244, archauthority.rs)",
+   "rules": [
+    {
+     "value": "both",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "LOCATION",
+      "HEIGHT"
+     ]
+    },
+    {
+     "value": "heights",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "HEIGHT"
+     ]
+    },
+    {
+     "value": "locations",
+     "any": [
+      "REFER",
+      "SEE",
+      "INDICATED",
+      "SHOWN",
+      "AS NOTED",
+      "RE:",
+      "PER ARCH"
+     ],
+     "all": [
+      "ARCHITECT",
+      "LOCATION"
+     ]
+    }
    ]
   },
   "pipes.drain_systems": {
