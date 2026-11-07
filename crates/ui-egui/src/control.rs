@@ -273,6 +273,14 @@ fn ok(v: Value) -> Outcome {
 fn err(e: impl std::fmt::Display) -> Outcome {
     Outcome::Done(json!({"ok": false, "error": e.to_string()}))
 }
+/// A command's result as a control reply (`{ok, result}` or `{ok: false, error}`).
+pub(crate) fn reply(r: Result<Value, String>) -> Value {
+    match r {
+        Ok(v) => json!({"ok": true, "result": v}),
+        Err(e) => json!({"ok": false, "error": e}),
+    }
+}
+
 fn wrap(r: Result<Value, String>) -> Outcome {
     match r {
         Ok(v) => ok(v),
@@ -289,7 +297,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     (
         "cmdline.state",
         "",
-        "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening), closePrompt and history tail.",
+        "Current prompt (text and bare message), keywords, default, accepted input kinds, busy (a drawing still opening, or a long command such as a job running in the background: running names it), closePrompt and history tail.",
     ),
     ("engine.execute", "{command, params}", "Run any command with JSON parameters. Never opens a dialog."),
     ("events.subscribe", "{on?}", "Start (or stop) recording events for events.poll."),
@@ -401,13 +409,15 @@ pub fn cmdline_state(app: &CadApp) -> Value {
     let p = app.session.current_prompt();
     json!({
         "prompt": app.session.prompt_text(),
-        "running": app.session.running.as_ref().map(|r| r.id.clone()),
+        // A long command running in the background is what runs.
+        "running": crate::busy::running(app).map(str::to_string).or_else(|| app.session.running.as_ref().map(|r| r.id.clone())),
         "message": p.as_ref().map(|p| p.message.clone()),
         "keywords": p.as_ref().map(|p| p.keywords.clone()).unwrap_or_default(),
         "default": p.as_ref().and_then(|p| p.default.clone()),
         "accept": p.as_ref().map(|p| p.accept),
-        // A drawing is being read in the background (OPEN returned before it was there).
-        "busy": app.opening.busy(),
+        // A drawing is being read in the background (OPEN returned before it was there), or a
+        // long command runs in the background (a job, a build, a takeoff).
+        "busy": app.opening.busy() || app.busy.is_some(),
         "closePrompt": app.close_prompt(),
         "buffer": app.cmd.buffer,
         "history": app.session.log.iter().rev().take(20).rev().cloned().collect::<Vec<_>>(),

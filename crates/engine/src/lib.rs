@@ -2295,6 +2295,24 @@ impl Session {
         s.new_drawing(false);
         s
     }
+    /// A copy to show while this session works on another thread (a long command, Q6269): the
+    /// same drawings (shared, copied only if the copy is changed), the active one, the settings
+    /// and the history; no running command, no scripts or routines. Not for editing: what is done
+    /// to it is dropped when the session comes back.
+    pub fn view_copy(&self) -> Session {
+        let mut v = Session::empty();
+        v.docs = self.docs.clone();
+        v.active = self.active;
+        v.settings = self.settings.clone();
+        v.log = self.log.clone();
+        v.last_command = self.last_command.clone();
+        v.viewport_px = self.viewport_px;
+        v.viewport_inset_px = self.viewport_inset_px;
+        v.cursor = self.cursor;
+        v.project = self.project.clone();
+        v
+    }
+
     /// A session with no open drawing (the Start tab).
     pub fn empty() -> Self {
         Session {
