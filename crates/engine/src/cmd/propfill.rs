@@ -385,12 +385,13 @@ pub(crate) fn rcp_light_size_in() -> (f64, f64) {
     (v(0).unwrap_or(3.0), v(1).unwrap_or(24.0))
 }
 
-/// How far `p` is from the nearest face of its level's walls at any height (sheet units); none
-/// when its level has no wall built.
-fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2) -> Option<f64> {
+/// How far `p` is from the nearest face of its level's walls that reach `min_top` (drawing
+/// units: a wall under a window or a half wall holds no ceiling-height device), sheet units;
+/// none when its level has no such wall built.
+fn wall_face_gap(pieces: &[HostPiece], level: &str, p: Vec2, min_top: f64) -> Option<f64> {
     pieces
         .iter()
-        .filter(|w| w.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)))
+        .filter(|w| w.level.as_deref().is_none_or(|l| l.eq_ignore_ascii_case(level)) && w.z1 >= min_top)
         .filter_map(|w| {
             let ab = w.b - w.a;
             let len = ab.len();
@@ -1240,7 +1241,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             sp.mep.fixture_schedule.iter().find(|r| !ty.is_empty() && r.tag == ty).map(|r| r.installation.clone()).unwrap_or_default()
         };
         let stated_wall = field(t, "mount").as_deref() == Some("wall");
-        let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y)).map(|g| g / upf);
+        let gap_ft = wall_face_gap(&pieces, &level.name, Vec2::new(x, y), (level.elevation_ft + WALL_BOX_FT) * upf).map(|g| g / upf);
         let hung = (mount == Mount::Wall
             && gap_ft.is_some_and(|g| g > clear_rule.wall_ft)
             && clear_rule.can_hang(&[kind, vkind.as_str()], &format!("{fixture_words} {legend_words}"))
@@ -2712,6 +2713,18 @@ mod tests {
 
     fn piece(wall: u64, a: (f64, f64), b: (f64, f64), z: (f64, f64)) -> HostPiece {
         HostPiece { wall: Handle(wall), level: Some("L1".into()), a: Vec2::new(a.0, a.1), b: Vec2::new(b.0, b.1), half: 3.0, z0: z.0, z1: z.1 }
+    }
+
+    /// Q6250: a wall under a window (to its 3' sill) is no wall a ceiling-height device could be
+    /// on: how far a device is from the walls counts only those reaching 7'.
+    #[test]
+    fn a_wall_under_a_window_does_not_hold_a_device_off_the_ceiling() {
+        // Inches: a sill wall 1' from the device, a full-height wall 3' away.
+        let pieces = vec![piece(1, (0.0, 12.0), (120.0, 12.0), (0.0, 36.0)), piece(2, (0.0, -36.0), (120.0, -36.0), (0.0, 120.0))];
+        let p = Vec2::new(60.0, 0.0);
+        assert_eq!(wall_face_gap(&pieces, "L1", p, 0.0), Some(9.0), "any wall: the sill's face, 9\" off");
+        assert_eq!(wall_face_gap(&pieces, "L1", p, 84.0), Some(33.0), "walls reaching 7': the full wall's face");
+        assert_eq!(wall_face_gap(&pieces, "L2", p, 84.0), None);
     }
 
     /// Q6250: a light the build hung at its level's ceiling (its room had no ceiling of its own
