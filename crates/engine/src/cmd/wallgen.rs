@@ -2297,7 +2297,7 @@ fn drop_dimension_strings(found: &mut Vec<super::perceive::geometry::Pair>, figu
     }
     let between = |p: &super::perceive::geometry::Pair, at: Vec2| {
         let len = p.c0.dist(p.c1);
-        if !(len > 0.0) {
+        if len.is_nan() || len <= 0.0 {
             return false;
         }
         let u = (p.c1 - p.c0) * (1.0 / len);

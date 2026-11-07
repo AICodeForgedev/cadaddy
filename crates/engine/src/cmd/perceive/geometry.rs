@@ -334,8 +334,8 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
     runs.sort_by_key(|r| r.first().copied());
     for run in &runs {
         let (Some(&first), Some(&last)) = (run.first(), run.last()) else { continue };
-        let Some(end) = segs.get(last).map(|l| l.clone()) else { continue };
-        let Some(head) = segs.get(first).map(|f| f.clone()) else { continue };
+        let Some(end) = segs.get(last).cloned() else { continue };
+        let Some(head) = segs.get(first).cloned() else { continue };
         // The far ends of the first and last pieces, as they run along the line.
         let u = (end.a.mid(end.b)) - (head.a.mid(head.b));
         let along = |p: Vec2| u.dot(p);
