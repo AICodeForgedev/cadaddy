@@ -783,6 +783,44 @@ pub(crate) fn is_outline(pts: &[Vec2], upf: f64) -> bool {
     false
 }
 
+/// Whether a chain goes round three sides of a box: it turns one way only (left, or right), by
+/// [`OPEN_BOX_TURN_DEG`] or more in all, inside a box [`OPEN_BOX_MIN_FT`] to [`OPEN_BOX_MAX_FT`]
+/// across both ways. A pipe's jog or offset turns back the other way; a return bend is a loop
+/// joined at both ends ([`read_pipes_from_tags`] keeps a box that meets another pipe).
+pub(crate) fn open_box(pts: &[[f64; 2]], upf: f64) -> bool {
+    let mut dirs: Vec<[f64; 2]> = Vec::new();
+    for w in pts.windows(2).take(MAX_OUTLINE_POINTS) {
+        let d = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+        if d[0].hypot(d[1]) > 1e-6 * upf.max(1e-9) {
+            dirs.push(d);
+        }
+    }
+    if dirs.len() < 3 || !pts.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
+        return false;
+    }
+    let (mut left, mut right) = (0.0f64, 0.0f64);
+    for w in dirs.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let t = (a[0] * b[1] - a[1] * b[0]).atan2(a[0] * b[0] + a[1] * b[1]).to_degrees();
+        if t > 1.0 {
+            left += t;
+        } else if t < -1.0 {
+            right -= t;
+        }
+    }
+    let (lo, hi) = pts
+        .iter()
+        .fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])]));
+    let (w, h) = ((hi[0] - lo[0]) / upf, (hi[1] - lo[1]) / upf);
+    let one_way = left.min(right) <= 1e-9 && left.max(right) >= OPEN_BOX_TURN_DEG;
+    one_way && w.min(h) >= OPEN_BOX_MIN_FT && w.max(h) <= OPEN_BOX_MAX_FT
+}
+
+/// [`open_box`]: the turn (degrees) and the box (feet).
+const OPEN_BOX_TURN_DEG: f64 = 170.0;
+const OPEN_BOX_MIN_FT: f64 = 0.5;
+const OPEN_BOX_MAX_FT: f64 = 10.0;
+
 /// How near (feet) a branch's end comes to the line of the pipe it comes off (its tee drawn between).
 const TEE_REACH_FT: f64 = 1.0;
 /// How near (feet) a callout's bubble its box's linework (its leader) comes.
@@ -1442,6 +1480,25 @@ fn read_pipes_from_tags(
             basis: String::new(),
         });
     }
+
+    // A run that turns one way only round three sides of a small box, meeting no other pipe at
+    // either end, is a shape's outline under a tag (a tub's or a box's edges), not a pipe.
+    let ends_free = |i: usize, r: &MepRun| {
+        let reach = TEE_REACH_FT * upf;
+        [r.points.first(), r.points.last()].into_iter().flatten().all(|e| {
+            let e = Vec2::new(e[0], e[1]);
+            !runs
+                .iter()
+                .enumerate()
+                .any(|(j, o)| j != i && o.points.windows(2).any(|w| seg_dist(e, Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1])) <= reach))
+        })
+    };
+    let lone: Vec<bool> = runs.iter().enumerate().map(|(i, r)| open_box(&r.points, upf) && ends_free(i, r)).collect();
+    let mut k = 0;
+    runs.retain(|_| {
+        k += 1;
+        !lone.get(k - 1).copied().unwrap_or(false)
+    });
 
     // Build system entries for the seen codes.
     let systems: Vec<MepSystem> = systems_seen
@@ -3597,6 +3654,12 @@ mod tests {
         add(text((300.0, 102.0), "1\" HW"), &mut ents);
         add(poly(&[(296.0, 100.0), (380.0, 100.0), (380.0, 60.0)], false), &mut ents);
         add(poly(&[(377.0, 57.0), (383.0, 57.0), (383.0, 63.0), (377.0, 63.0)], true), &mut ents);
+        // A tub's three edges by a cold water tag, 4' off the line: an outline, not a 2-1/2" main;
+        // the same box with the line run on from it is a pipe (an offset round a column).
+        add(text((140.0, 70.0), "2 1/2\" CW"), &mut ents);
+        add(poly(&[(130.0, 50.0), (170.0, 50.0), (172.0, 52.0), (172.0, 78.0), (130.0, 78.0)], false), &mut ents);
+        add(text((500.0, 30.0), "2\" CW"), &mut ents);
+        add(poly(&[(450.0, 0.0), (480.0, 0.0), (480.0, 24.0), (520.0, 24.0), (520.0, 0.0), (560.0, 0.0)], false), &mut ents);
         let refs: Vec<&Arc<Entity>> = ents.iter().collect();
         let notes = texts(&refs);
         let sp = BuildingSpec {
@@ -3614,6 +3677,12 @@ mod tests {
             ..BuildingSpec::default()
         };
         let (_, runs) = read_pipes_from_tags(&refs, &notes, &sp, 12.0, None, None);
+        assert!(!runs.iter().any(|r| r.points.iter().any(|p| (p[1] - 78.0).abs() < 1e-6)), "{runs:?}");
+        assert!(runs.iter().any(|r| r.points.iter().any(|p| (p[0] - 480.0).abs() < 1e-6 && (p[1] - 24.0).abs() < 1e-6)), "{runs:?}");
+        assert!(open_box(&[[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0]], 12.0));
+        assert!(!open_box(&[[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [80.0, 30.0]], 12.0), "a jog turns back");
+        assert!(!open_box(&[[0.0, 0.0], [400.0, 0.0], [400.0, 300.0], [0.0, 300.0]], 12.0), "too big for a shape");
+        assert!(!open_box(&[[0.0, 0.0], [f64::NAN, 0.0], [40.0, 30.0], [0.0, 30.0]], 12.0));
         // No run on the leader's slant; the line it points at is the note's cold water.
         let slant = runs.iter().filter(|r| r.points.windows(2).any(|w| (w[1][0] - w[0][0]).abs() > 1.0 && (w[1][1] - w[0][1]).abs() > 1.0)).count();
         assert_eq!(slant, 0, "{runs:?}");
