@@ -847,6 +847,7 @@ pub fn failed_checks(d: &Drawing) -> Vec<(String, String)> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("import.check", "Check Import Accuracy", run_check)
+            .long()
             .params(
                 "{path? | current} → {pass, score: 0-100, hard_fails, checks: [{id, pass, expected, found, severity, hint, hard_fail, evidence}]}",
             )

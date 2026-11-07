@@ -71,7 +71,7 @@ const LAYER_PREFIX: &str = "3D-Atoms-";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("bim.atoms.build", "Lay Out Trade Pieces", run_build)
+        CommandSpec::new("bim.atoms.build", "Lay Out Trade Pieces", run_build).long()
             .params("{trades?: [concrete|framing|masonry|drywall|insulation|firestopping|finishes|openings|specialties] (default all)} → {pieces, byTrade: {trade: {kind: n}}, ms, notes, indexRows}: the built model's walls, floors, ceilings, rooms, doors and windows laid out again as their trades' pieces (model.build does this itself); the pieces of the trades named are replaced, the count index rebuilt"),
         CommandSpec::new("bim.atoms.report", "Trade Pieces Report", run_report)
             .params("{level?, trade?, group_by?: kind|item (default kind)} → {levels: [{level, trades: [{trade, rows: [{kind, item?, count, pieces?, length_ft, area_sf?, volume_cf?, volume_cy?, weight_lb?}], waste_factor?}]}], totals: {trade: {kind: {count, pieces?, length_ft, area_sf?, volume_cy?, weight_lb?, with_waste?: {pieces, area_sf?, volume_cy?}}}}, compare: [{what, documents, source, model, model_query, difference_pct?}], answer_ms: {query: ms}, rules_from: {documents, defaults, project}}: per level and trade the pieces and their totals from the count index, beside the quantities the documents give")

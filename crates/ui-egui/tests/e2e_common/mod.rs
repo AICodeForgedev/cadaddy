@@ -80,6 +80,9 @@ impl E2e {
             app.ui(ui);
         });
         out.textures_delta.clear();
+        // A long command a frame started (Takeoff, a model build) runs on a worker thread; the
+        // tests read its result, so the next frame waits for it.
+        assert!(self.app.wait_for_work(std::time::Duration::from_secs(300)), "a background command still runs after 300 s");
     }
 
     /// A few frames, so layouts settle (windows size themselves, palettes open).

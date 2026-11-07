@@ -165,10 +165,10 @@ pub(crate) fn seat_in_plenum_under(sp: &mut BuildingSpec, more: &[cadaddy_walk3d
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("mep.read", "Read MEP Runs", run_read).params(
+        CommandSpec::new("mep.read", "Read MEP Runs", run_read).long().params(
             "{level?: name (default every level), apply?: bool (systems and runs into the spec, replacing those levels' runs)} → {systems: [{name, layer, kind, size_in, bottom_ft}], runs: [{system, level, points, size_in, bottoms_ft, objects}]}",
         ),
-        CommandSpec::new("model.clashes", "Model Clashes", run_clashes)
+        CommandSpec::new("model.clashes", "Model Clashes", run_clashes).long()
             .params("{tolerance_in?: inches (0), references?: bool (clash with attached IFC models; default true), ignore_classes?: [IFC class] (default Space, Zone, SpatialZone, Annotation, Grid, Site), previous?: [earlier clashes with id/status/trade/notes/author] (a re-run: each clash that is still there keeps them, matched by kind, level, systems and plan position), match_ft?: feet (2), same_trade?: bool (built walls overlapping each other; default true), max_clashes?: count of clashes listed (5000, at most 50000)} → {clashes: [{kind: below_ceiling|into_structure|crossing|column|hoistway (through an elevator shaft)|reference|walls_overlap (category same_trade), message, systems, level, at, by_in, handles, reference?: {ref, class, guid, name, level}, id?, status?, trade?, notes?, author?}], total (all found, even past the cap), truncated (the list was cut at max_clashes), gone?: [earlier clashes no longer found]}")
             .noundo(),
         CommandSpec::new("mep.list", "List MEP Items", run_list)
@@ -2973,7 +2973,13 @@ pub(crate) fn build_with(d: &mut Drawing, sp: &BuildingSpec, atoms: bool) -> Val
             let source = source_of(&term.objects);
             // A terminal read from no plan object is known by where it is.
             let id = format!("{}/terminal@{:.2},{:.2}", term.objects.first().map_or("", String::as_str), term.at[0], term.at[1]);
-            let x = tags(&level.name, source, sy, format!("part:terminal:{}", term.terminal_kind), &[term.size_in], id);
+            let mut x = tags(&level.name, source, sy, format!("part:terminal:{}", term.terminal_kind), &[term.size_in], id);
+            // The sheet its symbol was read from, as equipment says it, and its provenance (Q6216):
+            // drawn, else derived or inferred with its basis.
+            if !term.source_sheet.is_empty() {
+                x.push(t(1000, format!("prop:SOURCE sheet={}", term.source_sheet.chars().take(64).collect::<String>())));
+            }
+            x.extend(super::provenance::tags(term.made, &term.basis));
             if d.add(&Space::Model, Common { layer: layer.into(), xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).is_ok() {
                 total_terminals += 1;
             }

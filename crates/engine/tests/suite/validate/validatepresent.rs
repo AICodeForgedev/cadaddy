@@ -444,3 +444,88 @@ fn a_kind_tagged_on_one_rooms_plan_is_shown_there_only_and_a_proposed_element_is
     let notes = r["unmeasured"]["G-PRESENT"].as_object().cloned().unwrap_or_default();
     assert!(notes.keys().any(|k| k.contains("proposed")), "the proposed element is said not counted: {r}");
 }
+
+/// The office's case (Q6262) with the job's sheets replaced by `sheets` and its read symbols by
+/// `devices`: what G-PRESENT says of room 103.
+fn office(j: &mut Job, sheets: Value, devices: Value) -> (Value, Vec<Value>) {
+    let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+    sp["sheets"] = sheets;
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    set_job(&mut j.s, devices);
+    let (r, fs) = present(&mut j.s, json!({"room": "103"}));
+    let r103: Vec<Value> = in_area(&fs, "103").into_iter().cloned().collect();
+    (r, r103)
+}
+
+fn plan_sheet() -> Value {
+    json!({"number": "A-101", "title": "FLOOR PLAN - LEVEL 1", "discipline": "A", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH],
+           "registration": {"reference": "A-101", "method": "reference", "a": 1.0, "b": 0.0, "tx": 0.0, "ty": 0.0, "matched": 4}})
+}
+
+/// The power plan's symbols in the office: two receptacles and a switch.
+fn office_symbols(on: impl Fn([f64; 2]) -> [f64; 2], rec: [f64; 2]) -> Value {
+    json!([
+        {"tag": "REC", "kind": "receptacle", "at": on(rec), "sheet": "E-101", "level": "L1"},
+        {"tag": "REC", "kind": "receptacle", "at": on([55.0, 13.3]), "sheet": "E-101", "level": "L1"},
+        {"tag": "SW", "kind": "switch", "at": on([40.3, 7.0]), "sheet": "E-101", "level": "L1"}
+    ])
+}
+
+/// Q6262: a trade sheet not registered on the level's plan (laid where it is drawn) or fitted
+/// by too few shared numbers puts its symbols nowhere certain: every one of them is `unsure`,
+/// never a pass or a missing, and why is said.
+#[test]
+fn an_unregistered_or_loosely_fitted_sheet_gives_unsure_never_a_pass_or_a_fail() {
+    // Drawn over the plan, no registration.
+    let mut j = job();
+    let unreg = json!([{"number": "E-101", "title": "POWER PLAN - LEVEL 1", "discipline": "E", "level": "L1", "source": "model", "rect": [0.0, 0.0, SW, SH]}]);
+    let (r, r103) = office(&mut j, unreg, office_symbols(at, [45.0, 0.7]));
+    let shown: Vec<&Value> = r103.iter().filter(|f| f["measured"]["sheet"] == "E-101").collect();
+    assert_eq!(shown.len(), 3, "{r}");
+    assert!(shown.iter().all(|f| f["verdict"] == "unsure"), "{r}");
+    assert!(shown[0]["measured"]["position_doubt"].as_str().unwrap().contains("not registered"), "{}", shown[0]);
+    assert!(r["checked"]["G-PRESENT"]["unsure"].as_u64().unwrap() >= 3, "{r}");
+    assert!(r["unmeasured"]["G-PRESENT"].to_string().contains("not registered"), "{r}");
+    // Registered by one shared number only.
+    let mut j = job();
+    let loose = json!([plan_sheet(), {"number": "E-101", "title": "POWER PLAN - LEVEL 1", "discipline": "E", "level": "L1", "source": "model",
+        "rect": [E101, 0.0, E101 + SW, SH], "registration": {"reference": "A-101", "method": "tags", "a": 1.0, "b": 0.0, "tx": -E101, "ty": 0.0, "matched": 1}}]);
+    let (r, r103) = office(&mut j, loose, office_symbols(on_power_plan, [45.0, 0.7]));
+    let shown: Vec<&Value> = r103.iter().filter(|f| f["measured"]["sheet"] == "E-101").collect();
+    assert_eq!(shown.len(), 3, "{r}");
+    assert!(shown.iter().all(|f| f["verdict"] == "unsure"), "{r}");
+    assert!(shown[0]["measured"]["position_doubt"].as_str().unwrap().contains("1 shared numbers"), "{}", shown[0]);
+}
+
+/// Q6262: a sheet whose notes say its layout is for reference only is not measured for place:
+/// a symbol drawn 6 ft from the room's receptacle still finds it (present), its distance not
+/// judged; the receptacle it has no element for is still missing.
+#[test]
+fn a_sheet_that_calls_its_layout_reference_only_is_not_measured_for_place() {
+    let mut j = job();
+    layer(&mut j.s, "E-ANNO");
+    text(&mut j.s, [E101 + 200.0, 300.0], "3. DEVICE LAYOUT IS FOR REFERENCE ONLY. COORDINATE IN THE FIELD.");
+    let reg = json!([plan_sheet(), {"number": "E-101", "title": "POWER PLAN - LEVEL 1", "discipline": "E", "level": "L1", "source": "model",
+        "rect": [E101, 0.0, E101 + SW, SH], "registration": {"reference": "A-101", "method": "tags", "a": 1.0, "b": 0.0, "tx": -E101, "ty": 0.0, "matched": 4}}]);
+    let (r, r103) = office(&mut j, reg, office_symbols(on_power_plan, [48.0, 6.0]));
+    let refs: Vec<&Value> = r103.iter().collect();
+    assert_eq!(verdicts(&refs), (2, 1, 1), "{r}");
+    let far = r103.iter().find(|f| f["verdict"] == "pass" && f["kind"] == "receptacle").unwrap_or_else(|| panic!("{r}"));
+    assert!(far["measured"]["position_not_judged"].as_str().unwrap().contains("REFERENCE ONLY"), "{far}");
+    assert!(far["measured"].get("off_in").is_none(), "{far}");
+    assert!(r["present"]["by_room_type"]["office"]["rooms"] == 1, "{r}");
+}
+
+/// Q6262: an element compared with the very symbol it was read from (0.0 in off) proves the
+/// symbol was read, not where the element is: present, its place not measured, and said so.
+#[test]
+fn an_element_matched_to_its_own_source_symbol_is_not_measured_for_place() {
+    let mut j = job();
+    let reg = json!([plan_sheet()]);
+    let devices = json!([{"tag": "SW", "kind": "switch", "at": at([40.3, 7.0]), "sheet": "A-101", "level": "L1"}]);
+    let (r, r103) = office(&mut j, reg, devices);
+    let own = r103.iter().find(|f| f["verdict"] == "pass" && f["kind"] == "switch").unwrap_or_else(|| panic!("{r}"));
+    assert!(own["measured"]["compared_to"].as_str().unwrap().contains("its own source"), "{own}");
+    assert!(own["measured"].get("off_in").is_none(), "{own}");
+    assert!(!own["found"].as_str().unwrap().contains("0.0 in off"), "{own}");
+}

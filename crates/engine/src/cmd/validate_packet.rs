@@ -159,7 +159,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new(CMD_AREAS, "Validation Areas", run_areas)
             .params("{level?: name, kind?: room|zone|equipment_room|corridor, area?: [x0,y0,x1,y1] (building feet: a custom window, listed as a zone; needs `level` when the building has several), cursor?: n, limit?: n (100, at most 500)} → {total, cursor, areas: [{id, kind, level, number?, name?, room?, stretch?: [i, n], outline: [[x,y]] (feet), box: [x0,y0,x1,y1] (feet)}], next?, levels}: the areas to check, one room, corridor stretch (≤ 40 ft) or equipment room each; ids are stable")
             .noundo(),
-        CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet)
+        CommandSpec::new(CMD_PACKET, "Validation Evidence Packet", run_packet).long()
             .params("{area?: id from validate.areas | {area: [x0,y0,x1,y1] (building feet), level?} | [x0,y0,x1,y1] (with level), room?: number or name (its one area; with level?: on that level), out_dir: folder, trades?: [architecture|electrical|mechanical|plumbing|fire|general] (default all), rules?: [rule id] (only these of the rules that apply; default all), force?: bool (replace files of an earlier packet; otherwise they are refused), margin_ft?: 0–50 (5), dpi?: 150–600 (150), max_images?: 1–200 (40), compare?: bool (true: each crop against its PDF page), prints?: folder of the job's PDFs (when the job's isn't on this machine), specs?: [path] (specification section PDFs or folders, besides the job's)} → the manifest: {packet, area, prints: [{file, sheet, title, view?, kind, trade, sheet_rect, px, px_per_unit, dpi, paper, tile?, placed_by: reference|registration|view_placement|same_sheet|unit_type|text|source_point|room_tag|unregistered|keynote|gear (a gear_riser, panel_schedule or feeder_schedule sheet shown whole for the gear in the area), unregistered?: true (not placed on the plan: no overlay), cited?: true (an element here was read from it), page?, similarity?: 0–1 (to its PDF page), similarity_low?: true, registration?: {status: ok|refitted|misregistered|not_checked, residual_ft, rotation_deg, scale, shift_ft, fit_ft, coverage, coverage_before, walls_ft, lines, threshold_ft, why?, read?} (a placed crop's registration against the model's walls: refitted crops are placed again from the sheet's wall lines)}], registration: {about, threshold_ft (1, project rule validate.registration.residual_ft), threshold_from, counts, by_residual: [{file, sheet, view?, status, residual_ft}] (worst first)}, similarity: {about, low_under, compared, low: [{file, similarity}], not_compared: [{sheet, why}]}, model: [{file, kind, of?, sheet_rect?, px?, wall?}], submittals: [{file, submittal, page, for}], submittals_unlisted: [{submittal, pages, for, applied_to, marks}] (applied by the job, its file not among the job's submittals), specs: [{file, section, page, product, for, cropped_to_product}] (the specification pages the area's product records cite, cut to the product's paragraph when a line on the page names it), objects, rules, prompt, counts, left_out: [{what, why}]}; every sheet an element of the area was read from is in it (placed, else round the source points, else round the room's tag, else the whole view in tiles), and every sheet of the level (by its tag or its title) unless it doesn't show the area (said in left_out); one wall elevation per side direction, from inside the area: writes prints/, model/, objects.json, rules.json, prompt.md and manifest.json into out_dir")
             .noundo()
             .files(),
@@ -870,14 +870,34 @@ fn turn_deg(rad: f64) -> f64 {
     if d >= 360.0 || !d.is_finite() { 0.0 } else { r2(d) }
 }
 
-/// How a crop reads against the plan, in words, when it is turned or mirrored.
+/// A layout fit matched by fewer of the type's items than this is no certain turn.
+const MIN_FIT_ITEMS: u64 = 3;
+
+/// Why a crop's turn and mirror against the room are not certain: no turn known (only the
+/// unit's hand), or a layout fit that matched too few items. None when they are.
+fn turn_doubt(o: &Value) -> Option<String> {
+    if o.get("rotation_deg").is_none_or(Value::is_null) {
+        return Some(if o.get("mirrored").and_then(Value::as_bool).unwrap_or(false) {
+            "only the unit's hand says it is mirrored; its turn is not known".into()
+        } else {
+            "its turn against the room is not known".into()
+        });
+    }
+    let n = o.get("matched").and_then(Value::as_u64)?;
+    (n < MIN_FIT_ITEMS).then(|| format!("its turn was fitted by {n} of {} items only", o.get("of").and_then(Value::as_u64).unwrap_or(0)))
+}
+
+/// How a crop reads against the plan, in words, when it is turned or mirrored; a turn that is
+/// not certain says so (positions read off it are unsure).
 fn turn_words(o: &Value) -> Option<String> {
     let deg = o.get("rotation_deg").and_then(Value::as_f64);
     let mirrored = o.get("mirrored").and_then(Value::as_bool).unwrap_or(false);
     let turned = deg.filter(|d| d.abs() > 0.05 && (d - 360.0).abs() > 0.05);
+    if let Some(why) = turn_doubt(o) {
+        return Some(format!("{why}: match it to the room by the walls and doors; a position read off it is unsure"));
+    }
     match (turned, mirrored) {
-        (None, false) if deg.is_some() => None,
-        (None, false) => Some("its turn against the room is not known: match it by the walls and doors".into()),
+        (None, false) => None,
         (Some(d), false) => Some(format!("drawn turned {d}° from the room as the plan shows it")),
         (None, true) => Some("drawn mirrored (the room is the opposite hand)".into()),
         (Some(d), true) => Some(format!("drawn mirrored and turned {d}° from the room as the plan shows it")),
@@ -2866,6 +2886,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }
@@ -2876,7 +2897,12 @@ fn plan_crops(
                 break;
             }
             let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
-            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || (!source.is_empty() && l.number.eq_ignore_ascii_case(&source))) {
+            // A view of the type's own sheet is the type's when its title names the type, or the
+            // sheet has no titled views: another titled view there (a core area's, a corridor's)
+            // is not the room's.
+            let titled = l.view.as_ref().is_some_and(|v| !v.title.trim().is_empty());
+            let its_sheet = !titled && !source.is_empty() && l.number.eq_ignore_ascii_case(&source);
+            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || its_sheet) {
                 continue;
             }
             let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
@@ -2914,6 +2940,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }

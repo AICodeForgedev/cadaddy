@@ -35,7 +35,7 @@ const PAGE_MAX: usize = 500;
 const MAX_ROOM_PAGES: usize = 100;
 
 pub fn specs() -> Vec<CommandSpec> {
-    vec![CommandSpec::new("model.revise", "Revise Model from Plans", run)
+    vec![CommandSpec::new("model.revise", "Revise Model from Plans", run).long()
         .menu(&["Draw", "Modeling", "Revise Model from Plans"])
         .params("{against?: path (an earlier or later version of the plan to compare with, rooms included; default the plan the model was last built from), rebuild?: bool (default true), tolerance? (drawing units: how far an object may move and still count as moved rather than removed and added; default 5 % of the larger side of the box around both plans' objects), last?: bool (return the last revision that found changes, e.g. the one an associative model made when the plan was edited, instead of comparing again), offset?, limit? (default 100, at most 500: each list is paged alike)} → {added, removed, moved: [{kind, handle, layer, name?, at, from?}], unchanged, rebuilt, auto, kept: [handles], conflicts: [{handle?, part, source, change}], changed: [handles of rebuilt objects of changed plan objects], totals: {added, removed, moved, kept, conflicts, changed}, offset, limit, next?: offset of the next page, last?: the last revision's totals when this one found nothing}")]
 }

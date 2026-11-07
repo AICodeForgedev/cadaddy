@@ -163,11 +163,19 @@ struct Job {
     lum: String,
     /// The duplex a rule placed.
     by_rule: String,
+    /// The GFCI receptacle on the duplex's circuit, when there is one.
+    gfci: Option<String>,
 }
 
 /// The job; `corrected`: the luminaire's catalog number corrected for the field (the build's
 /// mark: the design value kept, the rule and the reason).
 fn job(corrected: bool, schedule_codes: bool) -> Job {
+    job_with(corrected, schedule_codes, None)
+}
+
+/// The job, with a GFCI receptacle at `gfci_at` (feet) on the duplex's circuit LP1-3 when given:
+/// the duplex's own record says the build put it on that GFCI's load side (its rule).
+fn job_with(corrected: bool, schedule_codes: bool, gfci_at: Option<[f64; 2]>) -> Job {
     let mut s = Session::new();
     // A 40' × 12' shell; a partition at 20'.
     layer(&mut s, "A-WALL");
@@ -178,16 +186,17 @@ fn job(corrected: bool, schedule_codes: bool) -> Job {
     layer(&mut s, "A-ROOM-TAG");
     text(&mut s, at([10.0, 6.0]), "101");
     text(&mut s, at([30.0, 6.0]), "102");
-    let (s, h) = place(
-        s,
-        &[
-            ([7.0, 10.5], "LAV"),    // 0 lavatory
-            ([8.5, 11.5], "DUPLEX"), // 1 at the sink
-            ([1.0, 6.0], "LP1"),     // 2 panel
-            ([10.0, 6.0], "F9"),     // 3 luminaire
-            ([15.0, 0.5], "DUPLEX"), // 4 placed by a rule
-        ],
-    );
+    let mut items = vec![
+        ([7.0, 10.5], "LAV"),    // 0 lavatory
+        ([8.5, 11.5], "DUPLEX"), // 1 at the sink
+        ([1.0, 6.0], "LP1"),     // 2 panel
+        ([10.0, 6.0], "F9"),     // 3 luminaire
+        ([15.0, 0.5], "DUPLEX"), // 4 placed by a rule
+    ];
+    if let Some(p) = gfci_at {
+        items.push((p, "DUPLEX")); // 5 the GFCI on LP1-3
+    }
+    let (s, h) = place(s, &items);
     let mut s = s;
     s.execute("bspec.set", &json!({"spec": spec(schedule_codes), "replace": true})).unwrap();
     s.execute("model.build", &json!({})).unwrap();
@@ -199,10 +208,18 @@ fn job(corrected: bool, schedule_codes: bool) -> Job {
     kind(&mut s, &[&h[3]], "luminaire", "fixed", "E-201");
     kind(&mut s, &[&h[0]], "lavatory", "fixed", "P-101");
     kind(&mut s, &[&h[2]], "panel", "fixed", "E-101");
+    let gfci = h.get(5).cloned();
+    let at_sink_type = match &gfci {
+        Some(g) => Prop::new(
+            json!("standard"),
+            Source::from_doc(SourceKind::Rule, &format!("NEC 210.8: on the load side of the circuit's first GFCI receptacle ({g})")),
+        ),
+        None => val(json!("standard")),
+    };
     let mut sets: Vec<(&str, &str, Prop)> = vec![
         (&h[1], "panel", val(json!("LP1"))),
         (&h[1], "circuit", val(json!("LP1-3"))),
-        (&h[1], "receptacle_type", val(json!("standard"))),
+        (&h[1], "receptacle_type", at_sink_type),
         (&h[4], "panel", val(json!("LP1"))),
         (&h[4], "circuit", val(json!("LP1-1"))),
         (&h[3], "manufacturer", val(json!("Acme Lighting"))),
@@ -216,8 +233,14 @@ fn job(corrected: bool, schedule_codes: bool) -> Job {
             Prop::new(json!("G-DOC-ORDER: the approved resubmittal replaces LX-100 with LX-200"), Source::from_doc(SourceKind::Rule, "G-DOC-ORDER")),
         ));
     }
+    if let Some(g) = &gfci {
+        kind(&mut s, &[g], "receptacle", "fixed", "E-101");
+        sets.push((g, "panel", val(json!("LP1"))));
+        sets.push((g, "circuit", val(json!("LP1-3"))));
+        sets.push((g, "receptacle_type", val(json!("GFCI"))));
+    }
     let s = set_props(s, &sets);
-    Job { s, at_sink: h[1].clone(), lum: h[3].clone(), by_rule: h[4].clone() }
+    Job { s, at_sink: h[1].clone(), lum: h[3].clone(), by_rule: h[4].clone(), gfci }
 }
 
 /// The field-verified rule: LP1's breakers are AF/GF as built.
@@ -270,6 +293,34 @@ fn a_field_verified_breaker_rule_outranks_the_schedule_and_without_it_the_same_m
     as_built(&mut j.s, "field_verified");
     let (_, fs) = screen(&mut j.s);
     assert_eq!(of(&fs, &j.at_sink, "G-PRODUCT-CODE", "gfci")["verdict"], "pass");
+}
+
+/// Q6262: a standard receptacle the build put on the load side of a GFCI receptacle of its
+/// circuit (its own record names it) is protected, wherever that GFCI is along the run; the
+/// prescreen no longer fails it as "no GFCI upstream". In another room it is protected but its
+/// reset is not at hand: unsure, for the judge, never a fail on the wrong reason.
+#[test]
+fn a_receptacle_on_the_load_side_of_its_circuits_gfci_is_judged_by_the_whole_circuit() {
+    // Same room, farther from the panel than the duplex: the build's own rule names it.
+    let mut j = job_with(false, true, Some([12.0, 11.5]));
+    let (_, fs) = screen(&mut j.s);
+    let f = of(&fs, &j.at_sink, "G-PRODUCT-CODE", "gfci");
+    assert_eq!(f["verdict"], "pass", "{f}");
+    let g = j.gfci.clone().unwrap();
+    assert!(f["measured"]["protected_by"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(&g)), "{f}");
+    // In another room (the corridor): protected, but its reset is not in the guest room.
+    let mut j = job_with(false, true, Some([30.0, 0.5]));
+    let (r, fs) = screen(&mut j.s);
+    let f = of(&fs, &j.at_sink, "G-PRODUCT-CODE", "gfci");
+    assert_eq!(f["verdict"], "unsure", "{f}");
+    let issue = f["issue"].as_str().unwrap();
+    assert!(issue.contains("load side of GFCI receptacle") && issue.contains("reset"), "{issue}");
+    assert!(!issue.contains("no GFCI receptacle upstream"), "{issue}");
+    assert!(r["unmeasured"]["G-PRODUCT-CODE"].to_string().contains("another room"), "{}", r["unmeasured"]);
+    // No GFCI on the circuit at all: still a fail.
+    let mut j = job_with(false, true, None);
+    let (_, fs) = screen(&mut j.s);
+    assert_eq!(of(&fs, &j.at_sink, "G-PRODUCT-CODE", "gfci")["verdict"], "fail");
 }
 
 #[test]
