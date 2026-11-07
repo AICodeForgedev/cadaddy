@@ -11570,8 +11570,8 @@ fn one_per_spot(devices: &mut Vec<super::readers::ReadDevice>, eps: f64, fixture
     drop.len()
 }
 
-/// A circuit label's circuits and its switch leg apart (`G-1,a`: `G-1` and `A`; a trailing single
-/// letter is the leg, never a circuit number), upper case. `G-1` and `G-1,a` are one circuit, the
+/// A circuit label's circuits and its switch leg apart (`LP1-3,a`: `LP1-3` and `A`; a trailing
+/// single letter is the leg, never a circuit number), upper case. `LP1-3` and `LP1-3,a` are one circuit, the
 /// leg read on one copy only; legs `a` and `b` are two.
 fn circuit_and_leg(label: &str) -> (String, String) {
     let mut parts: Vec<&str> = label.split(',').map(str::trim).collect();
@@ -26188,30 +26188,33 @@ mod tests {
         assert_eq!(one_per_spot(&mut r, 3.0, 12.0), 1);
         assert_eq!(r.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-5", "G-6"]);
         // Test finding (fix-box-collisions): one fixture read twice 3.6 in apart (its symbol on
-        // `G-1` and its mark over its circuit label `G-1,a`) got two luminaires with overlapping
+        // `LP1-3` and its mark over its circuit label `LP1-3,a`) got two luminaires with overlapping
         // boxes. Within a foot it is one (the leg letter is no other circuit), and it keeps the
         // switch leg the other copy read; two receptacles that near stay two, and two of one
         // fixture type 3 ft apart are two.
         let lum = |x: f64, leg: &str| {
-            let mut d = on(dv("H1", "219", x), if leg.is_empty() { "G-1" } else { "G-1,a" });
+            let mut d = on(dv("F7", "A1", x), if leg.is_empty() { "LP1-3" } else { "LP1-3,a" });
             d.kind = "luminaire".into();
             d.leg = leg.into();
             d
         };
-        let mut l = vec![lum(30.0, ""), lum(33.6, "a"), lum(66.0, ""), on(dv("REC", "219", 40.0), "G-5"), on(dv("REC", "219", 43.6), "G-5")];
+        let mut l = vec![lum(30.0, ""), lum(33.6, "a"), lum(66.0, ""), on(dv("REC", "A1", 40.0), "LP1-5"), on(dv("REC", "A1", 43.6), "LP1-5")];
         assert_eq!(one_per_spot(&mut l, 3.0, 12.0), 1);
         assert_eq!(
             l.iter().map(|d| (d.tag.as_str(), d.at[0], d.leg.as_str())).collect::<Vec<_>>(),
-            vec![("H1", 30.0, "a"), ("H1", 66.0, ""), ("REC", 40.0, ""), ("REC", 43.6, "")]
+            vec![("F7", 30.0, "a"), ("F7", 66.0, ""), ("REC", 40.0, ""), ("REC", 43.6, "")]
         );
         let cl = |a: &str, b: &str| (a.to_string(), b.to_string());
-        assert_eq!(circuit_and_leg("G-1,a"), cl("G-1", "A"));
-        assert_eq!((circuit_and_leg("g-9,7,9"), circuit_and_leg("A-3, d"), circuit_and_leg("")), (cl("G-9,7,9", ""), cl("A-3", "D"), cl("", "")));
+        assert_eq!(circuit_and_leg("LP1-3,a"), cl("LP1-3", "A"));
+        assert_eq!(
+            (circuit_and_leg("lp2-9,11,13"), circuit_and_leg("LP1-7, d"), circuit_and_leg("")),
+            (cl("LP2-9,11,13", ""), cl("LP1-7", "D"), cl("", ""))
+        );
         // Two switches side by side on legs a and b of one circuit are two.
-        let sw = |x: f64, c: &str| on(dv("S", "219", x), c);
-        let mut w = vec![sw(50.0, "G-1,a"), sw(51.0, "G-1,b"), sw(52.0, "G-1")];
+        let sw = |x: f64, c: &str| on(dv("S", "A1", x), c);
+        let mut w = vec![sw(50.0, "LP1-3,a"), sw(51.0, "LP1-3,b"), sw(52.0, "LP1-3")];
         assert_eq!(one_per_spot(&mut w, 3.0, 12.0), 1);
-        assert_eq!(w.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["G-1,a", "G-1,b"]);
+        assert_eq!(w.iter().map(|d| d.circuit.as_str()).collect::<Vec<_>>(), vec!["LP1-3,a", "LP1-3,b"]);
     }
 
     /// A fan two plans tag (the electrical plan's EF and the mechanical plan's) is one connection
