@@ -9347,7 +9347,7 @@ fn rcp_title(t: &str) -> bool {
     up.contains("REFLECTED CEILING") || up.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
 }
 
-/// The lights the typical rooms' reflected ceiling plans draw ("UNIT RCP - SINGLE QUEEN": each
+/// The lights the typical rooms' reflected ceiling plans draw ("UNIT RCP - STUDIO": each
 /// light a round symbol of a light's size, dimensioned there), each view laid into every room of
 /// its type by its linework, as the ceiling heights are ([`typical_rcp_areas`]): the lights that
 /// land in a room's outline.
@@ -25114,7 +25114,7 @@ mod tests {
         unit(&mut s, v, false);
         s.execute("circle", &json!({"center": [v[0] + 40.0, v[1] + 150.0], "radius": 3.0})).unwrap();
         s.execute("circle", &json!({"center": [v[0] + 100.0, v[1] + 240.0], "radius": 7.5})).unwrap();
-        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT RCP - DOUBLE QUEEN", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "UNIT RCP - STUDIO", "height": 7.4})).unwrap();
         s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
         let hi = s.doc().unwrap().handseed;
         unit(&mut s, [10_000.0, 0.0], false);
@@ -25132,7 +25132,7 @@ mod tests {
             view: None,
         }];
         job.sheet_spans = vec![SheetSpan { sheet: "A-6".into(), lo, hi }];
-        let room = |n: &str, x: f64| json!({"name": "DOUBLE QUEEN", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        let room = |n: &str, x: f64| json!({"name": "STUDIO", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
             st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
         }
@@ -25187,7 +25187,7 @@ mod tests {
         assert!(at.len() == 3 && (at[0] - 836.67).abs() < 0.03 && (at[1] - 12.5).abs() < 0.03 && (at[2] - 20.17).abs() < 1e-9, "{ps:?}");
         assert_eq!(ps.get("design:location").map(Prop::text).as_deref(), Some("837.67, 14.17, 20.17"), "{ps:?}");
         let why = ps.get("correction:location").map(Prop::text).unwrap_or_default();
-        assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - DOUBLE QUEEN"), "{why}");
+        assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - STUDIO"), "{why}");
     }
 
     #[test]
