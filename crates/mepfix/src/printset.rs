@@ -403,8 +403,10 @@ fn content_hash(data: &[u8]) -> String {
 
 // ─── Sheet classification ───────────────────────────────────────────────────
 
-/// The word list that names a floor plan in a title.
-const FLOOR_PLAN_WORDS: &str = "sheets.floor_plan_title_words";
+/// The words that name a floor plan in a title.
+fn floor_plan_words() -> &'static [&'static str] {
+    crate::wordrules::words("sheets.floor_plan_title_words")
+}
 
 /// Classify a sheet's type from its title and number.
 fn classify_sheet_type(number: &str, title: &str) -> String {
@@ -431,7 +433,7 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
         return "enlarged_plan".into();
     }
     // A sheet that also prints the floor plan is that floor's plan first.
-    if (up.contains("REFLECTED CEILING") || up.contains("RCP")) && !sheet_reader::title_names(title, FLOOR_PLAN_WORDS) {
+    if (up.contains("REFLECTED CEILING") || up.contains("RCP")) && !sheet_reader::title_names(title, floor_plan_words()) {
         return "rcp".into();
     }
     // Number-based: 1xx, 2xx, 3xx, 4xx are plan sheets for levels.
@@ -1007,7 +1009,7 @@ pub fn run_classify_prints(
                 // A sheet printing the floor plan beside the roof plan is the floor's plan: its
                 // title naming the roof doesn't put it on the roof.
                 if e.level == "R"
-                    && std::iter::once(&e.title).chain(&facts.view_titles).any(|t| sheet_reader::title_names(t, FLOOR_PLAN_WORDS))
+                    && std::iter::once(&e.title).chain(&facts.view_titles).any(|t| sheet_reader::title_names(t, floor_plan_words()))
                 {
                     e.level.clear();
                     e.levels.clear();
