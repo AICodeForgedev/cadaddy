@@ -10715,6 +10715,32 @@ struct RcpRead {
     outside: BTreeMap<usize, usize>,
 }
 
+/// Which turn of a typical ceiling plan is a room's, from the lights each turn lays inside the
+/// room (`lights`: turn, where): the most lights inside it (the plan draws them all in it), then
+/// the most with one of the room's luminaires (`luminaires`) within `reach`, then the turn the
+/// linework prefers (`linework`), else the one whose lights are nearer their luminaires. The
+/// luminaires only overrule the linework by agreeing with more of the lights.
+fn pick_rcp_turn(lights: &[(u8, cadaddy_geom::Vec2)], luminaires: &[cadaddy_geom::Vec2], reach: f64, linework: Option<u8>) -> Option<u8> {
+    let turns: BTreeSet<u8> = lights.iter().map(|(k, _)| *k).collect();
+    let inside = |k: u8| lights.iter().filter(|(t, _)| *t == k).count();
+    let agree = |k: u8| -> (usize, f64) {
+        lights.iter().filter(|(t, _)| *t == k).fold((0usize, 0.0f64), |(n, sum), (_, p)| {
+            match luminaires.iter().map(|q| p.dist(*q)).min_by(f64::total_cmp).filter(|d| *d <= reach) {
+                Some(d) => (n + 1, sum + d),
+                None => (n, sum),
+            }
+        })
+    };
+    let most_inside = turns.iter().map(|k| inside(*k)).max()?;
+    let turns: Vec<u8> = turns.into_iter().filter(|k| inside(*k) == most_inside).collect();
+    let most = turns.iter().map(|k| agree(*k).0).max()?;
+    let agreeing: Vec<u8> = turns.into_iter().filter(|k| agree(*k).0 == most).collect();
+    match linework.filter(|k| agreeing.contains(k)) {
+        Some(k) => Some(k),
+        None => agreeing.into_iter().min_by(|a, b| agree(*a).1.total_cmp(&agree(*b).1)),
+    }
+}
+
 /// Ceiling luminaires one RCP step looks at, at most; rooms it lists for review, at most.
 const MAX_RCP_LUMINAIRES: usize = 100_000;
 const MAX_RCP_REVIEW: usize = 200;
@@ -10772,25 +10798,10 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             continue;
         }
         rooms_matched += 1;
-        // The turn the room's luminaires agree with: the most lights with one within reach; among
-        // those, the one the linework prefers, else the nearer (the luminaires only overrule the
-        // linework by agreeing with more of the lights).
-        let turns: BTreeSet<u8> = ls.iter().map(|l| l.turn).collect();
-        let score = |k: u8| -> (usize, f64) {
-            ls.iter().filter(|l| l.turn == k).fold((0usize, 0.0f64), |(n, sum), l| {
-                match mine.iter().map(|(_, p, _)| l.at.dist(*p)).min_by(f64::total_cmp).filter(|d| *d <= reach) {
-                    Some(d) => (n + 1, sum + d),
-                    None => (n, sum),
-                }
-            })
-        };
+        let at: Vec<(u8, cadaddy_geom::Vec2)> = ls.iter().map(|l| (l.turn, l.at)).collect();
+        let near: Vec<cadaddy_geom::Vec2> = mine.iter().map(|(_, p, _)| *p).collect();
         let linework = ls.iter().find(|l| l.best).map(|l| l.turn);
-        let most = turns.iter().map(|k| score(*k).0).max().unwrap_or(0);
-        let agreeing: Vec<u8> = turns.iter().copied().filter(|k| score(*k).0 == most).collect();
-        let turn = match linework.filter(|k| agreeing.contains(k)) {
-            Some(k) => Some(k),
-            None => agreeing.iter().copied().min_by(|a, b| score(*a).1.total_cmp(&score(*b).1)),
-        };
+        let turn = pick_rcp_turn(&at, &near, reach, linework);
         if turn != linework {
             turned_by_luminaires += 1;
         }
@@ -27419,6 +27430,25 @@ mod tests {
         assert_eq!(ps.get("design:location").map(Prop::text).as_deref(), Some("837.67, 14.17, 20.17"), "{ps:?}");
         let why = ps.get("correction:location").map(Prop::text).unwrap_or_default();
         assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - STUDIO"), "{why}");
+    }
+
+    /// Q6250: the turn of a typical ceiling plan a room takes.
+    #[test]
+    fn a_rooms_ceiling_plan_turn_is_the_one_its_lights_and_luminaires_agree_with() {
+        use cadaddy_geom::Vec2;
+        let p = Vec2::new;
+        // Turn 2 lays both lights in the room, turn 0 only one: turn 2, though the linework
+        // prefers 0 and turn 0's light is right by a luminaire.
+        let lights = [(0, p(10.0, 10.0)), (2, p(50.0, 50.0)), (2, p(90.0, 20.0))];
+        assert_eq!(pick_rcp_turn(&lights, &[p(10.0, 11.0)], 36.0, Some(0)), Some(2));
+        // Both lay both lights inside: the luminaires agree with more of turn 2's.
+        let lights = [(0, p(10.0, 10.0)), (0, p(200.0, 10.0)), (2, p(50.0, 50.0)), (2, p(90.0, 20.0))];
+        assert_eq!(pick_rcp_turn(&lights, &[p(52.0, 50.0), p(91.0, 22.0), p(11.0, 10.0)], 36.0, Some(0)), Some(2));
+        // As many agree either way: the linework's turn, though turn 2's are nearer.
+        assert_eq!(pick_rcp_turn(&lights, &[p(30.0, 10.0), p(51.0, 50.0)], 36.0, Some(0)), Some(0));
+        // No linework preference: the nearer.
+        assert_eq!(pick_rcp_turn(&lights, &[p(30.0, 10.0), p(51.0, 50.0)], 36.0, None), Some(2));
+        assert_eq!(pick_rcp_turn(&[], &[], 36.0, Some(0)), None);
     }
 
     /// Q6250: a ceiling plan whose linework reads the same turned half round (a plain room) is
