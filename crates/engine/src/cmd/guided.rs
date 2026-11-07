@@ -16248,6 +16248,32 @@ fn equipment_step(
         }
         rows.push(e);
     }
+    // Its load goes on its schedule row too, for the panel's and the feeder's totals after.
+    let sent_back = |e: &cadaddy_walk3d::EquipmentElectrical| {
+        let st = e.status.to_ascii_lowercase();
+        st.contains("resubmit") || st.contains("rejected")
+    };
+    for e in rows.iter().filter(|e| !sent_back(e)) {
+        let Some(va) = equipsub::submitted_va(e) else { continue };
+        let word = equipsub::stem(&e.tag).unwrap_or_else(|| e.tag.to_ascii_uppercase());
+        let row = sp.mep.panel_schedules.iter_mut().find(|p| p.panel.eq_ignore_ascii_case(&e.source_panel)).and_then(|p| {
+            p.circuits.iter_mut().find(|c| {
+                let d = c.description.to_ascii_uppercase();
+                d.contains(&e.tag.to_ascii_uppercase()) || d.contains(&word)
+            })
+        });
+        if let Some(was) = row.and_then(|c| equipsub::take_submitted_load(c, va)) {
+            job.add_finding(
+                StageName::BimBuild,
+                &format!("Equipment {} load from its submittal: {va:.0} VA, the schedule prints {was:.0} VA", e.tag),
+                &format!("{} ({})", e.tag, e.source),
+                2,
+                vec!["The printed load stays beside it on the schedule row".into()],
+                None,
+                false,
+            );
+        }
+    }
     // What is corrected goes on its schedule row (the print beside it), priced.
     for e in rows.iter_mut().filter(|e| !e.correction_reason.is_empty()) {
         // (A protection corrected: the conductors alone change no row's breaker.)
