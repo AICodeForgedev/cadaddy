@@ -452,7 +452,7 @@ fn run_detect(s: &mut Session, p: &Value) -> Result<Value> {
             }
             sp.stairs.push(st);
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "stairs": list, "stored": store }))
 }
@@ -497,7 +497,7 @@ fn run_confirm(s: &mut Session, p: &Value) -> Result<Value> {
             done.push(st.name.clone());
         }
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({ "confirmed": done }))
 }
 

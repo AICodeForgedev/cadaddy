@@ -203,7 +203,7 @@ fn run_create(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn save(s: &mut Session, t: &bcf::Topics) -> Result<()> {
     let text = serde_json::to_string(t).map_err(|e| crate::EngineError::Other(e.to_string()))?;
-    s.doc_mut()?.bcf = if t.topics.is_empty() { None } else { Some(text) };
+    s.doc_mut()?.bcf = (if t.topics.is_empty() { None } else { Some(text) }).into();
     Ok(())
 }
 

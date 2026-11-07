@@ -138,7 +138,8 @@ mod tests {
             r#"{"version":1,"views":[{"name":"A","eye":[0,0,5.5]},{"name":"B","eye":[9,0,5.5],"yaw":90}],
                 "tours":[{"name":"T","stops":["A","B"],"speed":3,"look":"views"}]}"#
                 .into(),
-        );
+        )
+        .into();
         let b = Building::load(Arc::new(d), None).unwrap();
         let dir = std::env::temp_dir().join(format!("cadaddy_tour_export_{}", std::process::id()));
         let mut eyes = Vec::new();
@@ -171,7 +172,8 @@ mod tests {
         d.tours = Some(
             r#"{"version":1,"views":[{"name":"A","eye":[0,0,5.5]},{"name":"B","eye":[9,0,5.5]}],"tours":[{"name":"T","stops":["A","B"],"speed":3}]}"#
                 .into(),
-        );
+        )
+        .into();
         let b = Building::load(Arc::new(d), None).unwrap();
         let dir = std::env::temp_dir().join(format!("cadaddy_tour_4d_{}", std::process::id()));
         let mut seen = Vec::new();

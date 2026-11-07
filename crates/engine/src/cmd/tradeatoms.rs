@@ -1043,7 +1043,7 @@ fn run_docs(s: &mut Session, p: &Value) -> Result<Value> {
     if store {
         let (mut sp, _) = super::bspec::current(s, CMD)?;
         docs::store(&mut sp, &read);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         s.touch();
     }
     let mut by_trade = BTreeMap::<&str, usize>::new();

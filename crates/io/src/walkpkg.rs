@@ -15,7 +15,7 @@ pub fn read(bytes: &[u8]) -> Result<Drawing> {
         && let Some(spec) = p.get(package::SPEC).and_then(|s| std::str::from_utf8(s).ok())
         && serde_json::from_str::<serde_json::Value>(spec).is_ok_and(|v| v.is_object())
     {
-        d.building_spec = Some(spec.to_string());
+        d.building_spec = Some(spec.to_string()).into();
     }
     Ok(d)
 }

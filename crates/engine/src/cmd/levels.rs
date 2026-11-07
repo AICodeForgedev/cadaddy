@@ -412,7 +412,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     conflicts.extend(kept.iter().cloned());
     // Sources and cleared guesses are stored even when no elevation moved.
     if sp != before {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({
         "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": true, "changes": changes, "kept": kept,
@@ -630,7 +630,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -836,7 +836,7 @@ mod tests {
             "sheets": {"sheets": sheets},
             "index": {"sheets": sheets, "levels": index_levels},
         }});
-        s.doc_mut().unwrap().agent = Some(job.to_string());
+        s.doc_mut().unwrap().agent = Some(job.to_string()).into();
     }
 
     fn four_levels(s: &mut Session) {

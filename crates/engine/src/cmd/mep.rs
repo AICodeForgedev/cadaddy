@@ -1647,7 +1647,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         sp.mep.runs.extend(runs);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         // Re-apply resolved review decisions so that cited answers survive the re-read.
         super::agentready::reapply_decisions(s);
     }
@@ -1712,7 +1712,7 @@ fn run_list(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     if assigned_ids {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
 
     let only_level = str_param(p, "level").map(str::to_string);
@@ -1861,7 +1861,7 @@ fn run_edit(s: &mut Session, p: &Value) -> Result<Value> {
     let item = item_json(run, sy, &sp);
 
     let do_rebuild = bool_or(p, "rebuild", false);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
 
     if do_rebuild {
         match s.execute("model.build", &json!({})) {

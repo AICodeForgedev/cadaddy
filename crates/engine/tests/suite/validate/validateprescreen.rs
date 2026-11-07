@@ -192,7 +192,7 @@ fn job_with(extra: &[[f64; 2]]) -> (Job, Vec<String>) {
         "items": [{"category": "devices", "kind": "receptacle", "u": 0.2, "v": 0.0}, {"category": "equipment", "kind": "ptac", "u": 0.8, "v": 1.0}],
         "source": {"sheet": "M-401"}}]);
     sp["unit_instances"] = json!([{"type": "ut-king", "room": "102", "number": "102", "level": "L1", "hand": "normal", "at_ft": [15.0, 0.5]}]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let more = recs.get(3..).map(<[String]>::to_vec).unwrap_or_default();
     (Job { s, on_wall: recs[0].clone(), off_wall: recs[1].clone(), switch: sws[0].clone(), ptac: ptacs[0].clone() }, more)
 }
@@ -453,7 +453,7 @@ fn a_typical_rooms_packet_has_its_types_views_turned_as_the_room_is() {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["unit_instances"][0]["hand"] = json!("mirrored");
     sp["unit_types"][0]["items"] = json!([]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let out2 = dir("p102m");
     j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out2.to_string_lossy()})).unwrap();
     let m = read_json(&out2.join("manifest.json"));
@@ -480,7 +480,7 @@ fn a_typical_rooms_packet_takes_every_view_its_type_lists_even_on_a_sheet_of_no_
         {"sheet": "A-821", "title": "KING - BED WALL", "rect": [x821 + 300.0, 300.0, x821 + 1300.0, 900.0], "sheet_rect": [x821, 0.0, x821 + SW, SH]}
     ]);
     sp["unit_instances"][0]["fit"] = json!({"rotation_deg": 90.0, "mirrored": false, "by": "linework (as the stamping)"});
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let out = dir("p102v");
     j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out.to_string_lossy()})).unwrap();
     let m = read_json(&out.join("manifest.json"));
@@ -945,7 +945,7 @@ fn a_packet_labels_only_the_types_own_views_and_an_unknown_turn_as_uncertain() {
     sp["sheets"].as_array_mut().unwrap().push(core);
     sp["unit_instances"][0]["hand"] = json!("mirrored");
     sp["unit_types"][0]["items"] = json!([]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let out = dir("p102core");
     j.s.execute("validate.packet", &json!({"area": a102, "out_dir": out.to_string_lossy()})).unwrap();
     let m = read_json(&out.join("manifest.json"));

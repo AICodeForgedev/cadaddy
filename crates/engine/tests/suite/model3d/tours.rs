@@ -85,8 +85,8 @@ fn tours_survive_a_save_and_bad_params_are_refused() {
     assert!(s.execute("tour.timing", &json!({"name": "nope"})).is_err());
     assert_eq!(s.execute("tour.timing", &json!({"name": "T"})).unwrap()["frames"], 1);
     // Hostile stored text: the commands say so instead of crashing.
-    s.doc_mut().unwrap().tours = Some("{\"version\": 99}".into());
+    s.doc_mut().unwrap().tours = Some("{\"version\": 99}".into()).into();
     assert!(s.execute("tour.list", &json!({})).is_err());
-    s.doc_mut().unwrap().tours = Some("not json".into());
+    s.doc_mut().unwrap().tours = Some("not json".into()).into();
     assert!(s.execute("tour.view", &json!({"name": "B", "eye": [0, 0, 0]})).is_err());
 }

@@ -137,7 +137,7 @@ fn run_prints(s: &mut Session, p: &Value) -> Result<Value> {
         "rules": prints.rules.heights.len() + prints.rules.spec.len(), "gate": serde_json::to_value(prints.settings.gate).unwrap_or(Value::Null),
     });
     sp.prints = (!prints.is_empty() || prints.settings.gate != GateMode::default()).then(|| Box::new(prints));
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(out)
 }
 

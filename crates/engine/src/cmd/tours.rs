@@ -37,7 +37,7 @@ fn load(s: &Session, cmd: &str) -> Result<Tours> {
 }
 
 fn store(s: &mut Session, t: &Tours) -> Result<()> {
-    s.doc_mut()?.tours = t.to_json();
+    s.doc_mut()?.tours = t.to_json().into();
     Ok(())
 }
 

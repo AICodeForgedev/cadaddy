@@ -97,7 +97,7 @@ fn unit_types_from_the_building_spec_group_the_takeoff() {
         {"id": "u-1-105", "type": "OFFICE-A", "level": "1", "number": "105"},
         {"id": "u-2-205", "type": "OFFICE-A", "level": "2", "number": "205"},
     ]});
-    s.doc_mut().unwrap().building_spec = Some(spec.to_string());
+    s.doc_mut().unwrap().building_spec = Some(spec.to_string()).into();
     let r = s.execute("finishes.takeoff", &json!({"dir": dir.display().to_string(), "unit_type": "OFFICE-A", "trade": "flooring"})).expect("takeoff");
     let rooms: std::collections::BTreeSet<&str> = r["lines"].as_array().unwrap().iter().map(|l| l["room"].as_str().unwrap()).collect();
     assert_eq!(rooms, ["105", "205"].into_iter().collect());

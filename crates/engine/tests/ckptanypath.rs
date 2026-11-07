@@ -95,7 +95,7 @@ fn run_cut(pdfs: &Path, checkpoint: &Path, cut: &Path, at: &'static str) -> (Ses
 }
 
 fn job_state(s: &Session) -> Value {
-    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.clone()).as_deref().unwrap_or("{}")).expect("job state")
+    serde_json::from_str(s.doc().ok().and_then(|d| d.agent.as_ref().cloned()).as_deref().unwrap_or("{}")).expect("job state")
 }
 
 fn rooms_of(s: &mut Session) -> usize {
@@ -197,7 +197,7 @@ fn edit_checkpoint(path: &Path, edit: impl Fn(&mut Value)) {
     let mut d = cadaddy_io::read(&std::fs::read(path).expect("checkpoint"), &name).expect("read checkpoint");
     let mut agent: Value = serde_json::from_str(d.agent.as_deref().unwrap_or("{}")).expect("job state");
     edit(&mut agent);
-    d.agent = Some(agent.to_string());
+    d.agent = Some(agent.to_string()).into();
     std::fs::write(path, cadaddy_io::write(&d, &name).expect("write checkpoint")).expect("save checkpoint");
 }
 
