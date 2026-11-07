@@ -2363,7 +2363,7 @@ const MAX_TAG_HANDLES: usize = 20;
 
 /// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
 /// which symbols are samples; all of them together say which tags are device types.
-fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> DeviceCensus {
+fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String)]) -> DeviceCensus {
     use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
     use cadaddy_mepfix::sheet_facts::{self, TextItem};
     let mut c = DeviceCensus::default();
@@ -2676,7 +2676,13 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 // On an electrical plan a symbol only its circuit labels is a receptacle on that
                 // circuit (a GFCI one when GFCI is printed by it): receptacles carry no type mark.
                 let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
-                let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
+                // (A "bubble" whose number is a device's type mark, `E` over `A-1`, is that
+                // device's mark over its circuit.)
+                let bubble = bubbles.iter().any(|(mid, r, detail)| {
+                    r.is_finite()
+                        && (at.x - mid[0]).hypot(at.y - mid[1]) <= 1.5 * r.max(0.0)
+                        && !matches!(device_types::tag_verdict(detail, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
+                });
                 let fate = if bubble {
                     MarkFate::not_object("a callout bubble: its sheet reference reads like a circuit")
                 } else if !electrical(&sheet) {
@@ -3947,7 +3953,7 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Its bubbles
     // are no devices (a bubble's sheet reference reads like a circuit).
     let links = job_links(s, job);
-    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let bubbles: Vec<([f64; 2], f64, String)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone())).collect();
     let mut census = device_census(s, job, &bubbles);
     // Inside a registered enlarged plan's boundary its sheet is the authority: its devices move
     // onto the overall plan there, and the overall plan's own copies there are left out.
@@ -6807,7 +6813,7 @@ fn mark_fates(s: &Session, job: &GuidedJob) -> (std::collections::HashMap<u64, M
     let mut fates: std::collections::HashMap<u64, MarkFate> = std::collections::HashMap::new();
     let pages = job_link_pages(s, job);
     let links = pages.as_ref().map(|(sheets, pages, _)| cadaddy_mepfix::printlinks::link_set(sheets, pages));
-    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let bubbles: Vec<([f64; 2], f64, String)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone())).collect();
     let mut census = device_census(s, job, &bubbles);
     if let Some(links) = &links {
         enlarged_authority(job, links, &mut census);
@@ -23452,7 +23458,8 @@ mod tests {
         job.index = Some(json!({"sheets": [
             {"number": "E-1", "title": "FIRST FLOOR POWER PLAN", "discipline": "E", "type": "plan", "level": "1"},
             {"number": "G-1", "title": "COVER SHEET", "discipline": "G", "type": "general", "level": ""},
-            {"number": "G-3", "title": "CODE PLAN", "discipline": "G", "type": "general", "level": ""}
+            {"number": "G-3", "title": "CODE PLAN", "discipline": "G", "type": "general", "level": ""},
+            {"number": "A-1", "title": "FIRST FLOOR PLAN", "discipline": "A", "type": "plan", "level": "1"}
         ]}));
         job.sheets_loaded = true;
         job.luminaire_types = vec!["H".into()];
@@ -23467,8 +23474,13 @@ mod tests {
             ("H", 899.0, 504.0, 2.0),
             ("H", 1202.0, 505.0, 2.0),
             ("G-1,a", 1202.0, 502.0, 2.0),
+            ("E", 1500.0, 506.0, 2.0),
+            ("A-1", 1500.0, 502.0, 2.0),
         ];
-        let syms: Vec<(&str, f64, f64)> = vec![("G-3", 185.0, 490.0), ("G-9", 600.0, 500.0), ("G-1", 900.0, 500.0), ("G-1", 1200.0, 500.0)];
+        // And a receptacle at (1504, 503) beside an emergency light's `E` over `A-1` (no
+        // divider between them: no bubble to sheet A-1).
+        let syms: Vec<(&str, f64, f64)> =
+            vec![("G-3", 185.0, 490.0), ("G-9", 600.0, 500.0), ("G-1", 900.0, 500.0), ("G-1", 1200.0, 500.0), ("G-5", 1504.0, 503.0)];
         let lo = s.doc().map_or(0, |d| d.handseed);
         add_sheet(&mut s, &texts, &syms);
         if let Ok(d) = s.doc_mut() {
@@ -23493,7 +23505,7 @@ mod tests {
         let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
         got.sort();
         let want: Vec<(String, String)> =
-            [("H", "G-1"), ("H", "G-1"), ("REC", "G-1"), ("REC", "G-3"), ("REC", "G-9")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
+            [("H", "G-1"), ("H", "G-1"), ("REC", "G-1"), ("REC", "G-3"), ("REC", "G-5"), ("REC", "G-9")].iter().map(|(t, c)| (t.to_string(), c.to_string())).collect();
         assert_eq!(got, want, "{r:#}");
         // The `H` over `G-1,a` is a fixture of its own where its mark is printed, not the receptacle.
         let by_mark: Vec<[f64; 2]> = job.devices.iter().filter(|d| d.tag == "H" && d.at[0] > 1100.0).map(|d| d.at).collect();

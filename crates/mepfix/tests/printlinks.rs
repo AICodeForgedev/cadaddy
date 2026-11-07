@@ -52,10 +52,11 @@ fn every_callout_resolves_but_the_broken_one() {
     assert_eq!(l.sheets.len(), 6);
 }
 
-/// A round table holding a keynote number and a circuit lettered small, and `GFCI` over a
-/// circuit label, are no bubbles: E-1 reads the same callouts with them as without.
+/// A round table holding a keynote number and a circuit lettered small, `GFCI` over a circuit
+/// label, and a fixture's mark over its circuit with no divider drawn between them are no
+/// bubbles: E-1 reads the same callouts with them as without.
 #[test]
-fn lettering_in_a_round_table_or_a_word_over_a_circuit_is_no_bubble() {
+fn lettering_in_a_round_table_or_a_mark_over_a_circuit_is_no_bubble() {
     let bubbles = |d: &cadaddy_doc::Drawing| -> Vec<(String, String, String)> {
         let mut v: Vec<(String, String, String)> =
             printlinks::read_page(d, "E-1").callouts.iter().map(|c| (c.kind.clone(), c.detail.clone(), c.target_sheet.clone())).collect();

@@ -52,6 +52,9 @@ const MAX_SEG_CELLS: usize = 4_000_000;
 /// lettering beside or over some other round shape (a table, a rug, a receptacle's circle with
 /// its circuit printed across it), not a callout's numbers.
 const MIN_BUBBLE_LETTERING_R: f64 = 0.2;
+/// A bubble's numbers are lettered about as high as the page's other lettering: lettering this
+/// many times its middle height is strokes the lettering reader took for letters.
+const MAX_BUBBLE_LETTERING_MEDIAN: f64 = 4.0;
 /// Most texts read for references per page.
 const MAX_REF_TEXTS: usize = 50_000;
 /// Most callouts in a set's answer.
@@ -635,31 +638,32 @@ pub fn mounting_height(text: &str) -> Option<f64> {
     (v > 0.0 && v <= 30.0).then_some(v)
 }
 
-/// The attribute lettering of symbols that are callout bubbles: a round shape split by a line
-/// through its middle (the detail number over the sheet number). A device symbol's tag is its
-/// own, read with the symbol.
+/// Whether the symbol `block` draws a callout bubble: a round shape split by a line through its
+/// middle (the detail number over the sheet number).
+pub fn split_round_symbol(d: &Drawing, block: &str) -> bool {
+    let Some(blk) = d.block(block) else { return false };
+    let ents = || blk.entities.iter().take(64);
+    ents().filter_map(|be| sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
+        ents().any(|be| match &be.kind {
+            EntityKind::Line(l) => {
+                let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
+                (a[1] - b[1]).abs() < 0.1 * r
+                    && ((a[1] + b[1]) / 2.0 - c[1]).abs() < 0.3 * r
+                    && (a[0] - b[0]).abs() > 1.6 * r
+                    && ((a[0] + b[0]) / 2.0 - c[0]).abs() < 0.3 * r
+            }
+            _ => false,
+        })
+    })
+}
+
+/// The attribute lettering of symbols that are callout bubbles ([`split_round_symbol`]). A
+/// device symbol's tag is its own, read with the symbol.
 fn bubble_symbol_texts(d: &Drawing) -> Vec<TextItem> {
     let mut out = Vec::new();
     for e in d.model.iter() {
         let EntityKind::Insert(ins) = &e.kind else { continue };
-        if ins.attribs.is_empty() || !ins.block.starts_with("PDF-SYM-") {
-            continue;
-        }
-        let Some(blk) = d.block(&ins.block) else { continue };
-        let ents = || blk.entities.iter().take(64);
-        let split = ents().filter_map(|be| sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
-            ents().any(|be| match &be.kind {
-                EntityKind::Line(l) => {
-                    let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
-                    (a[1] - b[1]).abs() < 0.1 * r
-                        && ((a[1] + b[1]) / 2.0 - c[1]).abs() < 0.3 * r
-                        && (a[0] - b[0]).abs() > 1.6 * r
-                        && ((a[0] + b[0]) / 2.0 - c[0]).abs() < 0.3 * r
-                }
-                _ => false,
-            })
-        });
-        if !split {
+        if ins.attribs.is_empty() || !ins.block.starts_with("PDF-SYM-") || !split_round_symbol(d, &ins.block) {
             continue;
         }
         for a in ins.attribs.iter().filter(|a| !a.invisible) {
@@ -687,6 +691,20 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     let mut raw = sheet_facts::texts(d);
     raw.extend(bubble_symbol_texts(d));
     let texts = one_copy(raw);
+    // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
+    // among them; the symbol draws its first copy's strokes, so its own drawing says nothing).
+    // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
+    // among them; the symbol draws its first copy's strokes, so its own drawing says nothing).
+    let symbol_at: Vec<[f64; 2]> = d
+        .model
+        .iter()
+        .filter_map(|e| match &e.kind {
+            EntityKind::Insert(ins) if ins.block.starts_with("PDF-SYM-") => Some([ins.insert.x, ins.insert.y]),
+            _ => None,
+        })
+        .filter(|p| p.iter().all(|v| v.is_finite()))
+        .take(MAX_PIECES)
+        .collect();
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-9);
@@ -844,7 +862,12 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let inner: Vec<usize> = near_texts(c, r)
             .into_iter()
             .filter(|&i| {
-                texts.get(i).is_some_and(|t| dist(text_middle(t), c) <= 0.98 * r && t.height < 1.4 * r && t.height >= MIN_BUBBLE_LETTERING_R * r)
+                texts.get(i).is_some_and(|t| {
+                    dist(text_middle(t), c) <= 0.98 * r
+                        && t.height < 1.4 * r
+                        && t.height >= MIN_BUBBLE_LETTERING_R * r
+                        && t.height <= MAX_BUBBLE_LETTERING_MEDIAN * median_h
+                })
             })
             .collect();
         if inner.is_empty() || inner.len() > 12 {
@@ -920,13 +943,21 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let tm = text_middle(t);
         let c = [(tm[0] + bm[0]) / 2.0, (tm[1] + bm[1]) / 2.0];
         let r = (tm[1] - bm[1]) * 1.1;
-        used_texts.insert(bi);
-        used_texts.insert(ti);
         if view_mark(v, c, r) {
+            used_texts.insert(bi);
+            used_texts.insert(ti);
             view_marks.push((t.value.trim().to_string(), c));
             continue;
         }
-        let (kind, shape_kind, boundary, _, enlarged_word) = shape(c, r);
+        let (kind, shape_kind, boundary, divider, enlarged_word) = shape(c, r);
+        // Its divider drawn between the two lines, or the symbol the import made of the bubble
+        // on it (its middle between them): else a mark over a label (a fixture's `E` over its
+        // circuit `A-1`), no callout.
+        if !divider && !symbol_at.iter().any(|p| dist(*p, c) <= 0.5 * r) {
+            continue;
+        }
+        used_texts.insert(bi);
+        used_texts.insert(ti);
         out.callouts.push(Callout {
             kind: kind.into(),
             detail: t.value.trim().to_string(),
