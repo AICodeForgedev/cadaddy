@@ -863,8 +863,11 @@ enum Breaker {
     Unknown(String),
 }
 
-/// The schedule row of a circuit: its breaker, and its description.
-fn breaker_of(sp: &BuildingSpec, panel: Option<&str>, circuit: Option<&str>) -> (Breaker, Option<String>) {
+/// The schedule row of a circuit: its breaker, and its description. A project rule for the
+/// panel's breakers as built (`breaker_protection.<panel>`, read on site) outranks the printed
+/// row, as it does in the build (Q6259): the finding cites the rule with its tier and source, and
+/// the row it overrides.
+fn breaker_of(d: &Drawing, sp: &BuildingSpec, panel: Option<&str>, circuit: Option<&str>) -> (Breaker, Option<String>) {
     let (Some(panel), Some(circuit)) = (panel.map(str::trim).filter(|p| !p.is_empty()), circuit.map(str::trim).filter(|c| !c.is_empty())) else {
         return (Breaker::Unknown("the model gives it no panel and circuit".into()), None);
     };
@@ -877,16 +880,35 @@ fn breaker_of(sp: &BuildingSpec, panel: Option<&str>, circuit: Option<&str>) -> 
         return (Breaker::Unknown(format!("circuit {number} is not on panel {panel}'s schedule")), None);
     };
     let desc = Some(row.description.clone()).filter(|d| !d.trim().is_empty());
+    let built = super::propfill::as_built_breakers(d, panel, &row.description);
     // A schedule that marks breaker types and none on this row says a standard breaker; one that
-    // marks none says nothing.
-    if !ps.circuits.iter().take(2_000).any(|c| !c.protection.is_empty()) {
+    // marks none says nothing (unless the project says what was built).
+    if built.is_none() && !ps.circuits.iter().take(2_000).any(|c| !c.protection.is_empty()) {
         return (Breaker::Unknown(format!("panel {panel}'s schedule marks no breaker types")), desc);
     }
-    let (gf, _) = super::panelsched::protection(row, &ps.legend);
     let codes = if row.protection.is_empty() { "no type code".to_string() } else { row.protection.join("/") };
     let on = if ps.source.trim().is_empty() { String::new() } else { format!(" on {}", cite(&ps.source)) };
-    let what = if gf { "a GFCI breaker" } else { "not a GFCI breaker" };
-    (Breaker::Known(gf, format!("panel {panel} schedule{on}, circuit {} ({codes}: {what})", row.number.trim())), desc)
+    let row_at = format!("panel {panel} schedule{on}, circuit {}", row.number.trim());
+    let what = |gf: bool| if gf { "a GFCI breaker" } else { "not a GFCI breaker" };
+    if let Some(b) = built {
+        let (gf, _) = super::panelsched::protection_of(&b.codes, &ps.legend);
+        return (
+            Breaker::Known(
+                gf,
+                format!(
+                    "{} as built ({}: {}): the {} project rule {} outranks {row_at} ({codes})",
+                    b.codes.join("/"),
+                    what(gf),
+                    cite(&b.source),
+                    b.tier.as_str(),
+                    b.key
+                ),
+            ),
+            desc,
+        );
+    }
+    let (gf, _) = super::panelsched::protection(row, &ps.legend);
+    (Breaker::Known(gf, format!("{row_at} ({codes}: {})", what(gf))), desc)
 }
 
 // ---------------------------------------------------------------- the screen
@@ -1230,7 +1252,7 @@ fn code_checks(
     if let Some(wr) = &code.wr {
         for it in items.iter().filter(|it| receptacle(it) && rule_kind(wr, it.kind)) {
             let own = Own::of(inp.d, it);
-            let (_, desc) = breaker_of(inp.sp, own.text("panel").as_deref(), own.text("circuit").as_deref());
+            let (_, desc) = breaker_of(inp.d, inp.sp, own.text("panel").as_deref(), own.text("circuit").as_deref());
             let why = if outdoors(it.room) {
                 it.room.map(|a| format!("{} is an exterior room on the prints", room_label(a)))
             } else {
@@ -1305,7 +1327,7 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
         let device = own.gfci(&gf.tags);
         let panel = own.text("panel");
         let number = own.text("circuit");
-        let (breaker, desc) = breaker_of(inp.sp, panel.as_deref(), number.as_deref());
+        let (breaker, desc) = breaker_of(inp.d, inp.sp, panel.as_deref(), number.as_deref());
         // Why the location needs GFCI: the plan tags it so, a sink is within reach, its circuit
         // or its room is a place the rules list.
         let tagged = own.words().into_iter().find(|(_, t)| {
