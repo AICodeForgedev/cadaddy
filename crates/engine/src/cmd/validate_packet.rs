@@ -1162,7 +1162,9 @@ struct BuiltPart {
     from: Option<String>,
 }
 
-/// The build's MEP parts on `area`'s level within `reach` feet of it.
+/// The build's MEP parts on `area`'s level within `reach` feet of it: the nearest ones when
+/// there are more than [`MAX_BUILT`] (a dense floor's raceway pieces), so a part in the area is
+/// never left out for one farther off that came first in the drawing.
 fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach: f64, kinds: &Kinds) -> Vec<BuiltPart> {
     const MEP_KINDS: [&str; 7] = ["duct", "pipe", "conduit", "equipment", "fixture", "device", "light_fixture"];
     let upf = frame.upf();
@@ -1207,13 +1209,25 @@ fn built_parts(d: &Drawing, sp: &BuildingSpec, frame: &Frame, area: &Area, reach
             z_in,
             from: super::bimlook::made_source(e).map(|h| h.hex()),
         });
-        if out.len() >= MAX_OBJECTS {
+        if out.len() >= MAX_ENTITIES {
             break;
         }
+    }
+    if out.len() > MAX_BUILT {
+        let off = |p: &BuiltPart| {
+            let dx = (area.bbox[0] - p.rect[2]).max(p.rect[0] - area.bbox[2]).max(0.0);
+            let dy = (area.bbox[1] - p.rect[3]).max(p.rect[1] - area.bbox[3]).max(0.0);
+            dx.hypot(dy)
+        };
+        out.sort_by(|a, b| off(a).total_cmp(&off(b)).then(a.handle.cmp(&b.handle)));
+        out.truncate(MAX_BUILT);
     }
     out.sort_by(|a, b| (a.kind.as_str(), a.handle.as_str()).cmp(&(b.kind.as_str(), b.handle.as_str())));
     out
 }
+
+/// The build's parts a packet looks at round its area, at most (the nearest kept).
+const MAX_BUILT: usize = 4 * MAX_OBJECTS;
 
 /// One wall of a packet: a built wall's pieces along one line (its openings split it) as one,
 /// from end to end.
@@ -1792,6 +1806,9 @@ fn prompt_md(area: &Area, crops: &[Crop], model_imgs: &[ModelImage], rules: &[&E
     ));
     s.push_str("- `objects.json` `prescreen`: what was measured without you (G-HOST: each wall item's distance to its wall face; G-HEIGHT: its height above the floor against the documents, each element's `height_expected` naming the sheet, point and words that gave it, `default` when its model height is a default no document gives; G-PRESENT: each symbol the room's enlarged plans, else its level's trade plans, show in it against the model's elements of the same kind (`missing` names the sheet and the point), elements no symbol stands for `extra`, and the room type's project-rule set; E-RECEPT-TR: each receptacle's tamper-resistance fact and its source where the code wants tamper-resistant receptacles, `unsure` when nothing says; E-LUM-TYPE, E-LUM-CONTROL, E-SWITCH-LEG, E-SWITCH-DIM, E-SWITCH-3WAY, E-LUM-COUNT: the luminaires' types against the fixture schedule and submittal, their controls by switch leg, dimmers against their drivers, 3-way pairs, and the plan's symbol counts per room; G-PRODUCT: each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section, `unsure` when the model has no product data; G-PRODUCT-CODE: each receptacle's code-required features where it is: tamper-resistant, GFCI judged on its circuit with the breaker's schedule row, or the project's as-built breaker rule where it outranks the schedule, weather-resistant). Start from these numbers; overturn one only with a print image that shows otherwise. A `conflict` finding means the documents disagree (both are cited): report that element `unsure`, citing both documents, unless a print image settles it.\n- `objects.json` `lighting`: each luminaire type present with its fixture schedule rows and submittal product (its cut-sheet pages are among the submittal pictures), and the legend rows of the controls present; each luminaire and control carries its `lighting` facts (switch leg, dimming, dimmer, 3-way).\n- `objects.json` elements: a product's `product_record` (what the specification requires, what the submittal approved, what it resolves to) and its `product_checks` (G-PRODUCT, G-PRODUCT-CODE); the specification pages the records cite are among the pictures (`manifest.json` `specs`).\n");
     s.push_str("- `objects.json` `wall_spans`: wall pieces over an opening (a door's header), with the heights they span above the floor; the plan shows a gap there, and an item below one is in the opening. `walls_unmeasured`: walls whose footprint gives no centreline, with why.\n");
+    if counts.get("raceways").and_then(Value::as_u64).unwrap_or(0) > 0 {
+        s.push_str("- `objects.json` `raceways`: the routed raceway runs of this area (circuit, panel, raceway, sticks, length, the conductors pulled in it with each wire's handle); each raceway piece among the elements carries its `raceway` facts: a stick's `ends_ft` and `ends_aff_in`, what each end `touches` (boxes, the next stick or fitting) and its `links`, the `wires` in it; a box's `cubic_in`, `box_of` and the sticks `entering` it; a wire's `in_raceway`; a fitting's `touches`. The conduit rules in `prescreen` (E-CONDUIT-CONTINUITY, E-CONDUIT-FILL, E-BOX-FILL, E-DERATE, E-VDROP, E-METHOD, G-CLASH, E-TAKEOFF) were measured on these pieces; each finding's `handles` lists every piece of this area it covers: report it once with those `handles`, and overturn it only with evidence from the pieces or the prints.\n");
+    }
     if counts.get("keynote_markers").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `keynotes`: the keynote lists of the sheets that mark this area (number → note, and what each note calls for: a box of a size, a device, conduit of a size and route, a sleeve, a fire rating) and each keynote marker in or by it, with its crop (`keynote_marker` crops; the `keynotes` crops are the lists). G-KEYNOTE in `prescreen` matched each call to the model at its marker; check what it could not measure on the crops.\n");
     }
@@ -3434,6 +3451,73 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         equip_docs: None,
         fixture_docs: None,
     });
+    // The routed raceway (the conduit rules), measured on the model's own pieces over the area's
+    // level: each finding names the area's pieces it covers (`handles`), so a run's, a circuit's
+    // or a box's verdict reaches each of its sticks, fittings and wires; each piece carries its
+    // run geometry (`raceway`).
+    let raceway = {
+        use super::validate_conduit as vc;
+        let wanted = |id: &str| only_rules.as_ref().is_none_or(|o| o.contains(id));
+        let which = vc::On::of(|id| all_rules.iter().find(|r| r.enabled && r.rule.id == id && wanted(id)));
+        let own: BTreeSet<cadaddy_doc::Handle> = here.objects["elements"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex))
+            .collect();
+        let net = vc::Net::of(d, &sp);
+        let only: Vec<String> = only_rules.iter().flatten().cloned().collect();
+        let takeoff = vc::read_takeoff(s, &all_rules, &only);
+        let cx = vc::Ctx { d, sp: &sp, frame: &frame, areas: std::slice::from_ref(&area), whole_levels: true, takeoff: takeoff.as_ref() };
+        let got = vc::check_net(&cx, which, &net);
+        let facts = vc::packet_raceways(&net, &sp, &frame, &own, vc::touch_in(which.continuity));
+        // The findings about the area's own pieces, each naming only those (the rest are judged
+        // in their own areas' packets).
+        let mut checked: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
+        for id in vc::ALL.iter().filter(|id| all_rules.iter().any(|r| r.enabled && r.rule.id == **id && wanted(id))) {
+            checked.insert(id.to_string(), vc::VERDICTS.iter().map(|v| (v.to_string(), 0)).collect());
+        }
+        let mut findings: Vec<Value> = Vec::new();
+        for (_, rule, verdict, mut f) in got.findings {
+            let named: Vec<String> = f["handles"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+            let mine: Vec<String> = named.iter().filter(|h| cadaddy_doc::Handle::parse_hex(h).is_some_and(|x| own.contains(&x))).cloned().collect();
+            let lead = f["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex).filter(|h| own.contains(h));
+            if mine.is_empty() && lead.is_none() {
+                continue;
+            }
+            let elsewhere = named.len().saturating_sub(mine.len()) + f["handles_more"].as_u64().unwrap_or(0) as usize;
+            if lead.is_none()
+                && let Some(first) = mine.first()
+            {
+                f["measured_at"] = f["handle"].clone();
+                f["handle"] = json!(first);
+            }
+            f["handles"] = json!(mine);
+            if let Some(o) = f.as_object_mut() {
+                o.remove("handles_more");
+            }
+            if elsewhere > 0 {
+                f["handles_elsewhere"] = json!(elsewhere);
+            }
+            *checked.entry(rule.to_string()).or_default().entry(verdict.to_string()).or_default() += 1;
+            if findings.len() < MAX_OBJECTS {
+                findings.push(f);
+            }
+        }
+        (checked, got.unmeasured, findings, facts)
+    };
+    let (raceway_checked, raceway_unmeasured, raceway_findings, raceway_facts) = raceway;
+    if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
+        for el in list.iter_mut() {
+            if let Some(f) = el["handle"].as_str().and_then(cadaddy_doc::Handle::parse_hex).and_then(|h| raceway_facts.facts.get(&h)) {
+                el["raceway"] = f.clone();
+            }
+        }
+    }
+    let n_raceways = raceway_facts.runs.len();
+    here.objects["raceways"] = json!(raceway_facts.runs);
+    here.objects["counts"]["raceways"] = json!(n_raceways);
+    here.counts["raceways"] = json!(n_raceways);
     // Each element's expected height and where the documents give it (G-HEIGHT's reading).
     if let Some(list) = here.objects.get_mut("elements").and_then(Value::as_array_mut) {
         for el in list.iter_mut() {
@@ -3453,15 +3537,16 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         _ => Vec::new(),
     };
     here.objects["prescreen"] = json!({
-        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row or the project's as-built breaker rule that outranks it, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line, E-GEAR-SPACE each piece of gear's working space (depth by its voltage to ground and condition, width, height, door swings), headroom and dedicated space, E-GEAR-FILL its raceways on each side's conduit area, gutter fill, bending space and lugs against the feeders that land on it (missing gutter or bending dimensions: unsure), E-GEAR-SIZE its built box against the submittal's. A `conflict` verdict: the documents disagree (both are cited in `documents`). A finding on an element carries its `provenance` (when not drawn) and `corrections`; `judge_on_basis`: a fail that was only the correction itself (the documents' design value against the corrected one), made unsure, to be judged on the correction's basis",
-        "checked": pre.checked,
-        "unmeasured": pre.unmeasured,
+        "about": "measured without an agent: G-HOST the distance to the nearest wall face (inches, negative inside the wall), G-HEIGHT the height above the floor against the height the documents give (an AFF note by it, the interior elevation, the legend, a schedule, the general notes, then a project rule validate.height.<kind|mark>; `expected_source` says the sheet, the point and the words; `default`: a model height no document gives), G-PRESENT each symbol the room's enlarged plans (else its level's trade plans) show against the elements of the same kind within plan_in (missing: sheet and point), elements no symbol stands for (extra), and the room type's project-rule set, E-RECEPT-TR each receptacle's tamper-resistance where the code wants it (its fact and source are on the element too, `tamper_resistant`); the lighting rules: E-LUM-TYPE each luminaire's type against the fixture schedule and the submittal, E-LUM-CONTROL its control, E-SWITCH-LEG each control's switch leg, E-SWITCH-DIM a dimmer's drivers, E-SWITCH-3WAY a 3-way switch's mate, E-LUM-COUNT the plan's symbols per room and type against the model's, G-KEYNOTE each keynote marker's called box, device, conduit or sleeve against the model at the marker (its note, size, route and the rated walls and floors keynote conduit passes), G-PRODUCT each product's record field by field (maker, catalog, colour, configuration, rating, features) against its submittal and specification section (`check` the field; unsure: no product data), G-PRODUCT-CODE each receptacle's code-required features where it is (tamper-resistant, GFCI judged on its circuit with the breaker's schedule row or the project's as-built breaker rule that outranks it, weather-resistant); each element's `product_record` and `product_checks` are on it too; G-UNDERGROUND each callout for buried work against the model's runs below the slab and the underground sheets (size, count, material, least depth; `proposed`: a run CADaddy proposes, never a pass, with its review item; `extra`: a buried run nothing accounts for) and each stub-up's two dimensions from a slab edge or a grid line, E-GEAR-SPACE each piece of gear's working space (depth by its voltage to ground and condition, width, height, door swings), headroom and dedicated space, E-GEAR-FILL its raceways on each side's conduit area, gutter fill, bending space and lugs against the feeders that land on it (missing gutter or bending dimensions: unsure), E-GEAR-SIZE its built box against the submittal's; the routed raceway on the model's own pieces (each piece's `raceway`: a stick's ends and heights, what each end touches, the wires in it; a box's volume and the sticks entering it), E-CONDUIT-CONTINUITY each device joined end to end to its panel, E-CONDUIT-FILL and E-DERATE each run's conductors, E-BOX-FILL each box's conductors against its volume, E-VDROP each circuit's length and conductor, E-METHOD each run's wiring method, G-CLASH each stick's clearances, E-TAKEOFF the takeoff against a recount; each of these names in `handles` every piece of this area it covers (`handles_elsewhere`: the pieces of other areas it covers). A `conflict` verdict: the documents disagree (both are cited in `documents`). A finding on an element carries its `provenance` (when not drawn) and `corrections`; `judge_on_basis`: a fail that was only the correction itself (the documents' design value against the corrected one), made unsure, to be judged on the correction's basis",
+        "checked": pre.checked.iter().chain(raceway_checked.iter()).collect::<BTreeMap<_, _>>(),
+        "unmeasured": pre.unmeasured.iter().chain(raceway_unmeasured.iter()).collect::<BTreeMap<_, _>>(),
         // The area's own: an element beside it is measured in its own area's packet.
         "findings": pre
             .findings
             .iter()
             .filter(|f| f["handle"].as_str().is_none_or(|h| !here.nearby.contains(&h.to_ascii_uppercase())))
             .take(MAX_OBJECTS)
+            .chain(raceway_findings.iter())
             .collect::<Vec<_>>(),
     });
     // What each element and run is by the documents and what the build corrected, and the
