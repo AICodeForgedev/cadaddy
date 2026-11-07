@@ -44,12 +44,215 @@ pub(crate) struct PartRule {
 #[serde(default)]
 struct Rules {
     systems: Vec<SystemRules>,
+    equipment_receptacle: ReceptacleRules,
+}
+
+/// How an equipment receptacle's keynote is read ([`equipment_receptacle`]): its words, the
+/// sub-base's height when the note puts it there, and the NEMA configuration of a rating.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ReceptacleRules {
+    pub receptacle_words: Vec<String>,
+    pub horizontal_words: Vec<String>,
+    pub under_unit_words: Vec<String>,
+    pub sub_base_words: Vec<String>,
+    pub sub_base_in: f64,
+    pub sub_base_source: String,
+    pub nema_source: String,
+    pub nema: Vec<NemaFamily>,
+}
+
+/// A receptacle family by its poles: its voltage and its configuration by amperes.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct NemaFamily {
+    pub poles: u32,
+    pub volts: u32,
+    pub by_amps: Vec<(u32, String)>,
+}
+
+fn rules() -> &'static Rules {
+    static R: OnceLock<Rules> = OnceLock::new();
+    R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default())
 }
 
 /// The rules data's systems.
 pub(crate) fn systems() -> &'static [SystemRules] {
-    static R: OnceLock<Rules> = OnceLock::new();
-    &R.get_or_init(|| serde_json::from_str(RULES).unwrap_or_default()).systems
+    &rules().systems
+}
+
+/// The rules data for equipment receptacles' keynotes.
+pub(crate) fn receptacle_rules() -> &'static ReceptacleRules {
+    &rules().equipment_receptacle
+}
+
+/// What a keynote asks of a receptacle for a piece of equipment (`30A/2P RECEPTACLE FOR <unit>,
+/// SET HORIZONTALLY IN ITS SUB-BASE`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct EquipmentReceptacle {
+    /// The equipment's kind (`equipment.room_unit_tags` / `equipment.typical_load_words`) and the
+    /// words the note names it by.
+    pub kind: String,
+    pub named: String,
+    /// Its rating as the note gives it: amperes, poles, volts (`30A/2P`, `208V`).
+    pub amps: Option<u32>,
+    pub poles: Option<u32>,
+    pub volts: Option<u32>,
+    /// A NEMA configuration the note prints (`6-20R`).
+    pub nema: Option<String>,
+    /// Set horizontally; under the unit; in its sub-base.
+    pub horizontal: bool,
+    pub under_unit: bool,
+    pub sub_base: bool,
+}
+
+impl EquipmentReceptacle {
+    /// Its configuration: the note's, else the family its poles and amperes make (rules data).
+    pub fn configuration(&self) -> Option<String> {
+        if self.nema.is_some() {
+            return self.nema.clone();
+        }
+        let (poles, amps) = (self.poles?, self.amps?);
+        let fam = receptacle_rules().nema.iter().find(|f| f.poles == poles)?;
+        fam.by_amps.iter().find(|(a, _)| *a == amps).map(|(_, c)| c.clone())
+    }
+
+    /// Its voltage: the note's, else its family's.
+    pub fn voltage(&self) -> Option<u32> {
+        if self.volts.is_some() {
+            return self.volts;
+        }
+        let from_nema = self.nema.as_deref().and_then(|n| match n.split('-').next() {
+            Some("5") => Some(1),
+            Some("6") => Some(2),
+            _ => None,
+        });
+        let poles = self.poles.or(from_nema)?;
+        receptacle_rules().nema.iter().find(|f| f.poles == poles).map(|f| f.volts).filter(|v| *v > 0)
+    }
+
+    /// Its rating as a record says it (`20 A, 250 V, 2-pole (NEMA 6-20R)`); none when the note
+    /// gives no rating.
+    pub fn rating(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        if let Some(a) = self.amps {
+            parts.push(format!("{a} A"));
+        }
+        if let Some(v) = self.voltage() {
+            parts.push(format!("{v} V"));
+        }
+        if let Some(p) = self.poles {
+            parts.push(format!("{p}-pole"));
+        }
+        if parts.is_empty() && self.nema.is_none() {
+            return None;
+        }
+        let mut s = parts.join(", ");
+        if let Some(c) = self.configuration() {
+            s = if s.is_empty() { format!("NEMA {c}") } else { format!("{s} (NEMA {c})") };
+        }
+        Some(s)
+    }
+
+    /// What it is, in words (`receptacle 20 A, 250 V, 2-pole (NEMA 6-20R), horizontal, under
+    /// the unit in its sub-base, for <tag>`).
+    pub fn describe(&self, unit: &str) -> String {
+        let mut s = String::from("receptacle");
+        if let Some(r) = self.rating() {
+            s.push_str(&format!(" {r}"));
+        }
+        if self.horizontal {
+            s.push_str(", horizontal");
+        }
+        if self.sub_base {
+            s.push_str(", under the unit in its sub-base");
+        } else if self.under_unit {
+            s.push_str(", under the unit");
+        }
+        s.push_str(&format!(", for {}", if unit.trim().is_empty() { self.named.as_str() } else { unit.trim() }));
+        s
+    }
+}
+
+/// A keynote calling for a receptacle for a piece of equipment the rules data names: what it
+/// asks of that receptacle. None: no receptacle, or no equipment the data knows.
+pub(crate) fn equipment_receptacle(text: &str) -> Option<EquipmentReceptacle> {
+    let r = receptacle_rules();
+    let text: String = text.chars().take(MAX_NOTE_CHARS).collect();
+    if !r.receptacle_words.iter().any(|w| has_phrase(&text, w)) {
+        return None;
+    }
+    // The equipment: a room unit's printed tag (`PTAC`, `EF`), else a load's words.
+    let tags = cadaddy_mepfix::wordrules::pairs("equipment.room_unit_tags");
+    let loads = cadaddy_mepfix::wordrules::groups("equipment.typical_load_words");
+    let (kind, named) = tags.iter().find(|(t, _)| has_phrase(&text, t)).map(|(t, k)| (k.to_string(), t.to_string())).or_else(|| {
+        loads.iter().find_map(|(value, words)| words.iter().find(|w| has_phrase(&text, w)).map(|w| (value.to_string(), w.to_string())))
+    })?;
+    let up = text.to_ascii_uppercase();
+    let (amps, poles) = amps_poles(&up);
+    let has = |words: &[String]| words.iter().any(|w| has_phrase(&text, w));
+    Some(EquipmentReceptacle {
+        kind,
+        named,
+        amps,
+        poles,
+        volts: volts(&up),
+        nema: nema(&up),
+        horizontal: has(&r.horizontal_words),
+        under_unit: has(&r.under_unit_words),
+        sub_base: has(&r.sub_base_words),
+    })
+}
+
+/// A note's characters read at most (hostile text).
+const MAX_NOTE_CHARS: usize = 2000;
+
+/// `30A/2P`, `30A-2P`, `20 AMP 2 POLE`, `15A 1P`: amperes and poles (each when printed; poles
+/// only beside amperes: a `2P` alone may be anything).
+fn amps_poles(up: &str) -> (Option<u32>, Option<u32>) {
+    let toks: Vec<&str> = up
+        .split(|c: char| c.is_whitespace() || c == '/' || c == ',' || c == '-')
+        .map(|t| t.trim_matches(|c: char| !c.is_ascii_alphanumeric()))
+        .filter(|t| !t.is_empty())
+        .collect();
+    // A number with its unit on it (`20A`), or the unit's word next (`20 AMP`).
+    let read = |i: usize, attached: &[&str], apart: &[&str]| -> Option<u32> {
+        let t = toks.get(i)?;
+        let d: String = t.chars().take_while(char::is_ascii_digit).collect();
+        if d.is_empty() || d.len() > 3 {
+            return None;
+        }
+        let rest = t.get(d.len()..).unwrap_or("");
+        let unit = if rest.is_empty() { toks.get(i + 1).copied().filter(|n| apart.contains(n))? } else { rest };
+        (attached.contains(&unit) || apart.contains(&unit)).then(|| d.parse().ok()).flatten()
+    };
+    let amps = (0..toks.len()).find_map(|i| read(i, &["A"], &["AMP", "AMPS", "AMPERE", "AMPERES"]).filter(|a| (1..=400).contains(a)));
+    let poles = (0..toks.len()).find_map(|i| read(i, &["P"], &["POLE", "POLES"]).filter(|p| (1..=3).contains(p)));
+    (amps, if amps.is_some() { poles } else { None })
+}
+
+/// `208V`, `250 V`: the volts a note prints.
+fn volts(up: &str) -> Option<u32> {
+    let toks: Vec<&str> = up.split(|c: char| c.is_whitespace() || c == '/' || c == ',').filter(|t| !t.is_empty()).collect();
+    toks.iter().enumerate().find_map(|(i, t)| {
+        let t = t.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        let d: String = t.chars().take_while(char::is_ascii_digit).collect();
+        let rest = t.get(d.len()..).unwrap_or("");
+        let unit = if rest.is_empty() { toks.get(i + 1).map(|n| n.trim_matches(|c: char| !c.is_ascii_alphanumeric())).unwrap_or("") } else { rest };
+        (d.len() == 3 && matches!(unit, "V" | "VOLT" | "VOLTS")).then(|| d.parse().ok()).flatten()
+    })
+}
+
+/// `6-20R`, `NEMA 5-20R`: a configuration the note prints.
+fn nema(up: &str) -> Option<String> {
+    up.split(|c: char| c.is_whitespace() || c == ',' || c == '(' || c == ')').find_map(|t| {
+        let t = t.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+        let (a, b) = t.split_once('-')?;
+        let n = b.strip_suffix('R')?;
+        let a_ok = !a.is_empty() && a.len() <= 2 && a.chars().all(|c| c.is_ascii_digit());
+        let n_ok = (2..=3).contains(&n.len()) && n.chars().all(|c| c.is_ascii_digit());
+        (a_ok && n_ok).then(|| t.to_string())
+    })
 }
 
 /// The rules for a system a note names (`BDA`); a system the data doesn't know has no parts.
@@ -181,6 +384,21 @@ pub(crate) fn lists_under(texts: &[TextItem], heading: impl Fn(&str) -> bool) ->
                     notes.push(Note { number: n, text: rest });
                 }
                 None => {
+                    // The next note's number run into its text (`7.30A/2P …` after note 6).
+                    let next = notes.last().and_then(|n| n.number.parse::<u32>().ok()).map(|k| (k + 1).to_string());
+                    let run_in = next
+                        .as_deref()
+                        .filter(|_| (t.at.x - col).abs() < 1.5 * nh)
+                        .and_then(|k| t.value.trim().strip_prefix(k)?.strip_prefix('.').filter(|r| r.starts_with(|c: char| c.is_ascii_digit())));
+                    if let (Some(k), Some(rest)) = (next.as_deref(), run_in) {
+                        if notes.len() >= MAX_NOTES {
+                            break;
+                        }
+                        notes.push(Note { number: k.to_string(), text: rest.trim().to_string() });
+                        last_y = t.at.y;
+                        y_min = y_min.min(t.at.y);
+                        continue;
+                    }
                     let Some(n) = notes.last_mut() else { continue };
                     if !n.text.is_empty() {
                         n.text.push(' ');
@@ -667,6 +885,64 @@ pub(crate) fn work(text: &str) -> Option<Work> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6247: a keynote calling for a unit's receptacle gives its rating, poles, orientation and
+    /// place, the unit's kind from the rules data; a note with no receptacle or no unit the data
+    /// knows is none.
+    #[test]
+    fn an_equipment_receptacles_keynote_gives_its_rating_place_and_unit() {
+        let r = equipment_receptacle("PROVIDE 30A/2P RECEPTACLE FOR PTAC. SET IT HORIZONTALLY UNDER THE UNIT, IN ITS SUB BASE.").unwrap();
+        assert_eq!((r.kind.as_str(), r.amps, r.poles, r.horizontal, r.under_unit, r.sub_base), ("ptac", Some(30), Some(2), true, true, true));
+        assert_eq!((r.configuration().as_deref(), r.voltage()), (Some("6-30R"), Some(250)));
+        assert_eq!(r.rating().as_deref(), Some("30 A, 250 V, 2-pole (NEMA 6-30R)"));
+        assert_eq!(r.describe("PTAC-2"), "receptacle 30 A, 250 V, 2-pole (NEMA 6-30R), horizontal, under the unit in its sub-base, for PTAC-2");
+        // A load's words, one pole spelt out, the volts and configuration printed.
+        let r = equipment_receptacle("20 AMP 1 POLE RECEPTACLE (NEMA 5-20R) 120V FOR BATH FAN ABOVE CEILING").unwrap();
+        assert_eq!((r.kind.as_str(), r.amps, r.poles, r.volts, r.under_unit), ("exhaust_fan", Some(20), Some(1), Some(120), false));
+        assert_eq!((r.configuration().as_deref(), r.voltage()), (Some("5-20R"), Some(120)));
+        // No rating: the unit's receptacle all the same, its rating the documents' elsewhere.
+        let r = equipment_receptacle("RECEPTACLE FOR EF-3").unwrap();
+        assert_eq!((r.kind.as_str(), r.rating()), ("exhaust_fan", None));
+        // Not one: no receptacle; a rule over all receptacles; a tag's letters inside a word; no
+        // unit the data knows.
+        for t in [
+            "PROVIDE CONDENSATE PIPING FOR PTAC",
+            "ALL 120V RECEPTACLES SHALL BE TAMPER-RESISTANT",
+            "RECEPTACLE, REFER TO DETAIL 3",
+            "QUAD RECEPTACLE FOR TV",
+        ] {
+            assert!(equipment_receptacle(t).is_none(), "{t}");
+        }
+        // Poles alone are no rating; a note's article is no ampere.
+        assert_eq!(amps_poles("SEE 2P DETAIL"), (None, None));
+        assert_eq!(amps_poles("PROVIDE 1 A RECEPTACLE"), (None, None));
+        // Hostile text: long, odd characters.
+        assert!(equipment_receptacle(&"RECEPTACLE FOR PTAC 9999A/9P ".repeat(500)).is_some());
+    }
+
+    /// Q6247: a note's number printed against its text (`7.30A/2P …` under note 6) starts the
+    /// next note; a line that isn't the next number stays the note's.
+    #[test]
+    fn a_notes_number_run_into_its_text_starts_the_next_note() {
+        let texts = vec![
+            t(0.0, 100.0, "ELECTRICAL KEYNOTES:", 4.0),
+            t(0.0, 94.0, "1.", 3.0),
+            t(5.0, 94.0, "PROVIDE A BLANK PLATE AT EACH SPARE BOX.", 3.0),
+            t(0.0, 90.0, "2.30A/2P RECEPTACLE FOR PTAC BY ITS SLEEVE.", 3.0),
+            t(5.0, 86.0, "SET IT HORIZONTALLY BELOW THE UNIT.", 3.0),
+            t(0.0, 82.0, "4.5 FT ABOVE THE FLOOR", 3.0),
+        ];
+        let l = lists(&texts);
+        let notes: Vec<(&str, &str)> = l[0].notes.iter().map(|n| (n.number.as_str(), n.text.as_str())).collect();
+        assert_eq!(
+            notes,
+            [
+                ("1", "PROVIDE A BLANK PLATE AT EACH SPARE BOX."),
+                ("2", "30A/2P RECEPTACLE FOR PTAC BY ITS SLEEVE. SET IT HORIZONTALLY BELOW THE UNIT. 4.5 FT ABOVE THE FLOOR")
+            ]
+        );
+        assert!(equipment_receptacle(&l[0].notes[1].text).is_some() && equipment_receptacle(&l[0].notes[0].text).is_none());
+    }
 
     fn t(x: f64, y: f64, v: &str, h: f64) -> TextItem {
         TextItem { value: v.to_string(), at: Vec2::new(x, y), height: h, rotation: 0.0 }

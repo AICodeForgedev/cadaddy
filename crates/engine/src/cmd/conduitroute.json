@@ -8,12 +8,14 @@
     "corridor_min_ft": 20.0,
     "in_wall_max_ft": 12.0,
     "in_wall_above_box_in": 6,
+    "box_side_under_top_in": 1.5,
+    "box_side_reach_ft": 4.0,
     "drop_spacing_in": 1.5,
     "drop_reach_ft": 2.0,
     "drop_step_in": 6,
     "bend_penalty_ft": 3.0,
     "max_detour_ft": 8.0,
-    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear"
+    "source": "company default: conduit 3 in above the ceiling, tiers 4 in apart up to the structure (12 in deep where the documents give none); homeruns by the corridor when the panel is 20 ft or more away; branches in the wall between boxes of one wall up to 12 ft apart; a drop blocked over its box rises in the wall up to 2 ft along it (6 in steps) where it is clear; trade practice: a unit's own receptacle under it (its keynote's), every way over its box blocked by the unit: the raceway leaves the box's side (1-1/2 in under its top, a side knockout) and runs along the wall under the unit, up to 4 ft, to rise clear of it"
   },
   "clearance_in": {
     "duct": 1.0,

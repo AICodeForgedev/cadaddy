@@ -787,3 +787,29 @@ fn a_homeruns_numbers_are_each_circuits_once_in_order() {
     assert_eq!(homerun_numbers(&labels), vec!["1", "3", "5", "7"]);
     assert!(homerun_numbers(&["not a circuit".to_string()]).is_empty());
 }
+
+/// Q6247: a receptacle its keynote puts under its unit: every way over its box is blocked by the
+/// unit, so its raceway leaves the box's side under the unit and rises beside it; another box
+/// there (not the unit's) stays blocked.
+#[test]
+fn a_units_receptacle_runs_out_under_the_unit_and_rises_beside_it() {
+    // A unit 42" long, 4" to 20" over the floor, its receptacle's box under its middle (top 4").
+    let unit = Obs {
+        handle: Handle(0x55),
+        lo: Vec3::new(-21.0, 0.0, 4.0),
+        hi: Vec3::new(21.0, 12.0, 20.0),
+        category: "equipment".into(),
+        system: "M-DUCT".into(),
+        trade: "mechanical",
+    };
+    let field = Field::new(vec![unit], UPF);
+    let (at, face, z0) = (Vec2::new(0.0, 1.0), Some(Vec2::new(0.0, 1.0)), 111.0);
+    let (_, _, blocked) = rise_point(at, 4.0, face, z0, 0.375, &field, UPF, &[], rules());
+    assert_eq!(blocked, Some(0), "the unit is over the box and along its wall");
+    let (q, z, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[Handle(0x55)], rules());
+    assert_eq!(blocked, None);
+    assert!(q.x.abs() > 21.0 + 3.0 && (q.y - 1.0).abs() < 1e-9, "beside the unit, along its wall: {q:?}");
+    assert!((z - 2.5).abs() < 1e-9, "out of the box's side, 1-1/2 in under its top: {z}");
+    let (_, _, blocked) = rise_point_under(at, 4.0, face, z0, 0.375, &field, UPF, &[], &[], rules());
+    assert_eq!(blocked, Some(0));
+}

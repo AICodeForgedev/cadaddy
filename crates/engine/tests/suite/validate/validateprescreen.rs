@@ -862,3 +862,23 @@ fn a_part_its_schedule_mounts_a_foot_under_the_ceiling_is_measured_though_its_to
     assert!(of(&fs, "G-HEIGHT", &high).is_none(), "a height in the ceiling's band is a ceiling item's: {r}");
     assert!(of(&fs, "G-HEIGHT", &bare).is_none(), "no document puts it on a wall: {r}");
 }
+
+/// Q6247: a device its documents mount low in a wall (a unit's receptacle in its sub-base: its
+/// 4 in box from the floor up) is measured at its middle against that document; one as low with
+/// no document height, or an assumed one, is a floor item's.
+#[test]
+fn a_device_its_documents_mount_low_in_a_wall_is_measured() {
+    use cadaddy_engine::doc::props::SourceKind;
+    let j = job();
+    let (s, keyed) = built_device(j.s, "FFFF3", [40.0, 11.5], false, 0.0);
+    let (s, bare) = built_device(s, "FFFF4", [50.0, 11.5], false, 0.0);
+    let (mut s, assumed) = built_device(s, "FFFF5", [60.0, 11.5], false, 0.0);
+    height_record(&mut s, &keyed, 2.0, SourceKind::Note, "Q-9 keynote 4: 30A/2P RECEPTACLE FOR THE UNIT, IN ITS SUB-BASE");
+    height_record(&mut s, &assumed, 2.0, SourceKind::Note, "rule: on the floor");
+    let (r, fs) = heights(&mut s);
+    let f = of(&fs, "G-HEIGHT", &keyed).unwrap_or_else(|| panic!("its keynote's height is measured: {r}"));
+    assert_eq!(f["verdict"], "pass", "{f}");
+    assert!((f["measured"]["aff_in"].as_f64().unwrap() - 2.0).abs() < 0.05, "its middle: {f}");
+    assert!(of(&fs, "G-HEIGHT", &bare).is_none(), "no document height: a floor item's: {r}");
+    assert!(of(&fs, "G-HEIGHT", &assumed).is_none(), "an assumed height: a floor item's: {r}");
+}
