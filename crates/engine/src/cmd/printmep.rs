@@ -1072,11 +1072,11 @@ mod tests {
 
     #[test]
     fn a_sheets_reading_stays_on_its_own_sheet_for_the_build_to_place_by_its_registration() {
-        // A plumbing plan the size of its level's architectural plan: its reading is not moved
+        // A plumbing plan the size of its level's architectural plan (A-102): its reading is not moved
         // onto that sheet by the sheets' corners (the build places it by its own sheet's grids,
         // tags or frame, as it does the sheet's devices).
-        let all = vec![sheet("A-101", "A", "1", 0.0), sheet("A-102", "A", "2", 200.0), sheet("P-102", "P", "2", 600.0)];
-        assert_eq!(placement(&all[2], 1.0).apply([610.0, 5.0]), [610.0, 5.0]);
+        let plumbing = sheet("P-102", "P", "2", 600.0);
+        assert_eq!(placement(&plumbing, 1.0).apply([610.0, 5.0]), [610.0, 5.0]);
         // Scaled up from paper size about the sheet's corner.
         let mut paper = sheet("P-104", "P", "3", 900.0);
         paper.rect = [900.0, 0.0, 901.0, 0.8];

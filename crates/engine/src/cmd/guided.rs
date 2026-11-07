@@ -4990,17 +4990,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // sheets' lines of one run first lie together.
                 let enlarged: BTreeSet<String> =
                     job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
-                let pipes: BTreeSet<String> = sp
-                    .mep
-                    .systems
-                    .iter()
-                    .filter(|y| matches!(y.kind, cadaddy_walk3d::MepKind::Pipe | cadaddy_walk3d::MepKind::Duct))
-                    .map(|y| y.name.clone())
-                    .collect();
-                let (twice, twice_cut, twice_ft) =
-                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
-                        u8::from(!enlarged.contains(&sheet_key(sheet)))
-                    });
+                let pipes: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
+                let ducts: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let (twice, twice_cut, twice_ft) = super::runtidy::drop_drawn_twice(
+                    &mut sp.mep.runs,
+                    upf_runs,
+                    &|r| pipes.contains(&r.system) || ducts.contains(&r.system),
+                    &|sheet| u8::from(!enlarged.contains(&sheet_key(sheet))),
+                );
                 if twice + twice_cut > 0 {
                     progress_line(&format!(
                         "  pipe and duct runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
@@ -5009,7 +5008,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         StageName::BimBuild,
                         "Pipe drawn twice, one kept",
                         &format!(
-                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                            "{twice} pipe and duct runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
                         ),
                         1,
                         vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
