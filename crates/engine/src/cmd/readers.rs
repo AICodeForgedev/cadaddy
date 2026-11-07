@@ -81,7 +81,7 @@ fn read_print_set(s: &mut Session, trade: MepKind, level: Option<&str>, apply: b
         let (mut sp, _) = super::bspec::current(s, "print-set read")?;
         let sheets: Vec<String> = read.sheets.iter().map(|r| r.sheet.clone()).collect();
         super::printmep::merge_mep(&mut sp, read.mep.clone(), &sheets);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let trade_key = if trade == MepKind::Duct { "duct" } else { "pipe" };
     let mut out = read.to_json();
@@ -143,7 +143,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{level?: name, apply?: bool} → {trays: {by_size: {}}, banks: count, risers: count, unmatched: [{tag, text, position}]}")
             .noundo(),
         // ── Wall reader ──────────────────────────────────────────────────
-        CommandSpec::new("walls.read", "Read Wall Types from Plans", run_wall_read)
+        CommandSpec::new("walls.read", "Read Wall Types from Plans", run_wall_read).long()
             .params("{level?: name, apply?: bool} → {types: [{tag, layers, height_rule, fire, stc, source}], counts: {typed, guessed, unknown}, guesses: [{wall, type, why}], unknown_tags, message?}")
             .noundo(),
         // ── Ceiling assemblies ───────────────────────────────────────────
@@ -155,11 +155,11 @@ pub fn specs() -> Vec<CommandSpec> {
             .params("{apply?: bool} → {counts: {by_kind: {}, by_severity: {}}, items: first 20}")
             .noundo(),
         // ── Equipment reader ─────────────────────────────────────────────
-        CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read)
+        CommandSpec::new("mep.equipment.read", "Read MEP Equipment", run_equip_read).long()
             .params("{level?: name, apply?: bool} → {placed: [{tag, kind, level, sources, confidence, flags}], unplaced: [{tag, why}], tables_found}")
             .noundo(),
         // ── Electrical devices ───────────────────────────────────────────
-        CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices)
+        CommandSpec::new("mep.read_devices", "Read Electrical Devices", run_elec_devices).long()
             .params("{sheets?: [name], preview?: bool (default true: read only; false puts the devices in the model), save?: bool (default true: preview:false saves the drawing to its file), limit?: devices listed (500)} → {devices: [{tag, kind, level, height_source, source: symbol|tag|text, placement, handle}], count, by_type, print_set: project|current drawing, sheets_read, model: {inserted, replaced, by_type, by_level, elements, elements_replaced, filled?: {key: n}, saved?, not_saved?, save_error?, not_inserted: {reason: count}, why_not?}}: works on any open drawing (the current sheet is the print set); preview:false needs a building model (bspec.draft {store: true} or bim.build first), makes each device an element (kind device, on its sheet's level, moved onto the architectural plan) replacing the device elements an earlier read made (nothing else in the model changes), and never inserts legend samples, circuit numbers, sheet numbers or lettering"),
         // ── Envelope reader ────────────────────────────────────────────────
         CommandSpec::new("envelope.read", "Read Roof and Wall Envelope", run_envelope_read)
@@ -270,7 +270,7 @@ fn run_conduit_read(s: &mut Session, p: &Value) -> Result<Value> {
                 super::printmep::merge_mep(&mut sp, read.mep.clone(), &sheets);
                 super::printcond::seat_heights(&mut sp);
                 super::printcond::store_circuits(&mut sp, &read.circuits);
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 applied = true;
             }
             (_, false) => warnings.push("no building spec to put the runs in: run bspec.draft {store: true} (or bim.build) first".into()),
@@ -555,7 +555,7 @@ fn apply_duct_network(s: &mut Session, net: &DuctNetwork, level_filter: Option<&
     super::printmep::merge_mep(&mut sp, mep, &[]);
 
     // Store the updated spec.
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -626,6 +626,9 @@ pub(crate) fn duct_mep(net: &DuctNetwork, level: &str, sheet: &str, sp: &cadaddy
             bottom_ft: terminal_bottom_ft,
             terminal_kind: dt.kind.clone(),
             objects: Vec::new(),
+            source_sheet: sheet.to_string(),
+            made: Default::default(),
+            basis: String::new(),
         });
     }
     for de in &net.equipment {
@@ -706,7 +709,7 @@ fn run_pipe_read(s: &mut Session, p: &Value) -> Result<Value> {
         sp.mep.runs.retain(|r| !(old_pipes.contains(&r.system) && levels.iter().any(|l| l.eq_ignore_ascii_case(&r.level))));
         let mep = cadaddy_walk3d::Mep { systems: systems.into_iter().filter(|x| x.kind == MepKind::Pipe).collect(), runs, ..Default::default() };
         super::printmep::merge_mep(&mut sp, mep, &[]);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({
         "runs": count,
@@ -1671,7 +1674,7 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         *by_level.entry(level).or_default() += 1;
         inserted += 1;
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({"inserted": inserted, "replaced": replaced, "by_type": by_type, "by_level": by_level}))
 }
 

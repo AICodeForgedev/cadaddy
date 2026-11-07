@@ -326,7 +326,7 @@ fn a_model_product_that_differs_from_the_documents_fails() {
 }
 
 #[test]
-fn fixtures_need_a_control_unless_emergency() {
+fn fixtures_need_a_control_and_an_emergency_one_with_none_is_unsure() {
     let mut j = job();
     let (r, fs) = screen(&mut j.s);
     let a = of(&fs, "E-LUM-CONTROL", &j.a);
@@ -336,10 +336,13 @@ fn fixtures_need_a_control_unless_emergency() {
     let q = of(&fs, "E-LUM-CONTROL", &j.q);
     assert_eq!(q["verdict"], "fail", "{q}");
     assert!(q["issue"].as_str().unwrap().contains("leg c"), "{q}");
-    // The emergency fixture: no control needed, its schedule row cited.
+    // The emergency fixture with no control (Q6262): an emergency marking is no reason to need
+    // none (it is switched with its room unless the documents say unswitched): unsure, its
+    // schedule row cited, never a pass.
     let em = of(&fs, "E-LUM-CONTROL", &j.em);
-    assert_eq!(em["verdict"], "pass", "{em}");
-    assert!(em["issue"].as_str().unwrap().contains("no control needed") && em["issue"].as_str().unwrap().contains("EMERGENCY"), "{em}");
+    assert_eq!(em["verdict"], "unsure", "{em}");
+    assert!(em["issue"].as_str().unwrap().contains("marked emergency") && em["issue"].as_str().unwrap().contains("EMERGENCY"), "{em}");
+    assert!(em["measured"]["emergency"].is_string(), "{em}");
     // The second room's fixture: its 3-way pair controls it.
     assert_eq!(of(&fs, "E-LUM-CONTROL", &j.a2)["verdict"], "pass");
     // Every switch reaches a fixture of its room on its leg.
@@ -416,7 +419,7 @@ fn without_documents_a_type_is_unsure_never_a_pass() {
     let mut sp: Value = serde_json::from_str(j.s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["prints"]["schedule"] = json!([]);
     sp["prints"]["submittals"] = json!([]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = screen(&mut j.s);
     let a = of(&fs, "E-LUM-TYPE", &j.a);
     assert_eq!(a["verdict"], "unsure", "{a}");
@@ -439,7 +442,7 @@ fn the_jobs_own_conflicts_are_carried_into_the_run() {
         "issue": "the lighting plan and the enlarged plan show type A with different mounting",
         "assumed": "recessed"
     }]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (_, fs) = screen(&mut j.s);
     let c = fs.iter().find(|f| f["source"] == "build").unwrap_or_else(|| panic!("no carried conflict: {fs:#?}"));
     assert_eq!((c["verdict"].as_str(), c["rule"].as_str()), (Some("conflict"), Some("E-LUM-TYPE")), "{c}");
@@ -537,7 +540,7 @@ fn plan_counts_from_the_jobs_symbol_table() {
         tag("switch", "SD", [0.8, 4.0]),
         tag("switch", "S3", [0.8, 5.0])
     ]);
-    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    j.s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     let (r, fs) = screen(&mut j.s);
     let in101 = |m: &str| {
         fs.iter()

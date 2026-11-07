@@ -1083,6 +1083,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             .filter(|_| !note.starts_with("connection at"))
             .map(|inches| {
                 let equipment = note.starts_with("connection to");
+                // Its note's own words when they give one height to its top or bottom (a value
+                // already turned to its middle is not measured to its top a second time).
+                let inches = super::mountlist::as_written(&note).map_or(inches, |(h, _)| h);
                 Chosen {
                     inches,
                     from: if equipment { "equipment" } else { "enlarged_plan_note" },
@@ -2497,7 +2500,7 @@ pub(crate) fn fill(s: &mut Session, built_only: bool) -> Result<Value> {
     }
     let d = s.doc_mut()?;
     if tags_roomed > 0 {
-        d.building_spec = Some(sp.to_json());
+        d.building_spec = Some(sp.to_json()).into();
     }
     let mut changed = 0usize;
     for (h, store) in changes {

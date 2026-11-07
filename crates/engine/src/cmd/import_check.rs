@@ -817,7 +817,7 @@ fn truncate(s: &str, max: usize) -> &str {
 
 /// Store the check result into the drawing's `import_check` field.
 pub fn store_result(d: &mut Drawing, result: &ImportCheckResult) {
-    d.import_check = Some(result.to_json());
+    d.import_check = Some(result.to_json()).into();
 }
 
 /// Read the stored check result from a drawing.
@@ -847,6 +847,7 @@ pub fn failed_checks(d: &Drawing) -> Vec<(String, String)> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("import.check", "Check Import Accuracy", run_check)
+            .long()
             .params(
                 "{path? | current} → {pass, score: 0-100, hard_fails, checks: [{id, pass, expected, found, severity, hint, hard_fail, evidence}]}",
             )

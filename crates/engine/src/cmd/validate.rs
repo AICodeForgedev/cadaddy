@@ -58,7 +58,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bim.prints", "Print Validator Documents", run_prints).params(
             "{prints?: {sheets, symbols: [{sheet, level, kind, mark?, tag?, at: [x,y] feet, mountingIn?}], schedule: [{sheet, schedule, mark, kind?, qty?, mounting_in?, fields}], dimensions: [{sheet, level, a, b, value_ft, text, to?: center|face}], rooms: [{level, number, name, outline, unit_type?, exterior?, ceiling_ft?, sheet}], submittals: [{mark, section, fields}], terminations: [{tag, sheet, lugs: {per_phase, min, max, material}}], rules: {heights: [{kind?, mark?, mounting_in, source}], spec: [{section, kind?, category?, outdoors?, field, allowed?, forbidden?, text}], source_order?, tolerances?}, settings: {gate: off|warn|refuse}} (what the documents say; points in building feet on each level's plan), merge?: bool (add to the stored prints instead of replacing them), fromPlan?: bool (add the plan's device and fixture blocks as symbols of sheet `sheet`, default \"PLAN\"), sheet?, gate?: off|warn|refuse, clear?: true} → {symbols, schedule, dimensions, rooms, submittals, terminations, rules, gate}",
         ),
-        CommandSpec::new("bim.validate", "Validate Model Against Prints", run_validate)
+        CommandSpec::new("bim.validate", "Validate Model Against Prints", run_validate).long()
             .params(
                 "{checks?: [overlay|counts|dimensions|tags|connectivity|physical|provenance|spec|termination], level?: name, handles?: [hex] (only round these: a fast re-check), area?: [x0,y0,x1,y1] drawing units, severity?: high|medium|low, limit?: n (500)} → {pass, score (0–100), total, failures: [{id, check, rule, element?, level, at?, sheetAt?, expected, found, source: {sheet?, at?, row?, section?}, severity, fix}], byCheck, bySeverity, checked, scoped, ms}",
             )
@@ -137,7 +137,7 @@ fn run_prints(s: &mut Session, p: &Value) -> Result<Value> {
         "rules": prints.rules.heights.len() + prints.rules.spec.len(), "gate": serde_json::to_value(prints.settings.gate).unwrap_or(Value::Null),
     });
     sp.prints = (!prints.is_empty() || prints.settings.gate != GateMode::default()).then(|| Box::new(prints));
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(out)
 }
 

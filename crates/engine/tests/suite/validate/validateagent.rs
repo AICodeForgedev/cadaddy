@@ -765,7 +765,9 @@ fn next_hands_out_the_pending_areas_before_a_repeat() {
 fn a_finding_must_fit_its_element_and_its_area() {
     let j = job();
     // A device just inside the storage room, by the wall it shares with the office.
-    let (mut s, beside) = place(j.s, "RECEP", "E-POWR", [15.6, 6.0], "DUPLEX");
+    let (s, beside) = place(j.s, "RECEP", "E-POWR", [15.6, 6.0], "DUPLEX");
+    // One in the office's outside wall: past its outline, on its wall line, no other room's.
+    let (mut s, on_wall) = place(s, "RECEP", "E-POWR", [5.0, 0.25], "DUPLEX");
     let out = dir("fit");
     let run = start(&mut s, &out)["run"].as_str().unwrap().to_string();
     let n = s.execute("validate.next", &json!({"run": run, "area": "L1/101"})).unwrap();
@@ -780,6 +782,14 @@ fn a_finding_must_fit_its_element_and_its_area() {
     assert!(it["room"].as_str().unwrap().contains("102"), "{it}");
     assert!(it["why"].as_str().unwrap().contains("not here"), "{it}");
     assert!(std::fs::read_to_string(packet.join("prompt.md")).unwrap().contains("`nearby`"));
+    // The one in the office's wall is the office's, in its room (Q6263: never in no room).
+    let w = objects["elements"].as_array().unwrap().iter().find(|e| e["handle"].as_str().is_some_and(|h| up(h) == up(&on_wall)));
+    let w = w.unwrap_or_else(|| panic!("{own:?}"));
+    assert_eq!(w["room"].as_str(), Some("101"), "{w}");
+    assert_eq!(w["room_by"]["wall_line"], true, "{w}");
+    assert!(w["room_by"]["outside_outline_ft"].as_f64().is_some_and(|d| d > 0.0 && d < 1.0), "{w}");
+    // Every element names the rules it is asked (Q6263).
+    assert!(objects["elements"].as_array().unwrap().iter().all(|e| e["rules"].is_array()));
     // Nothing of the storage room is judged here: none of the office packet's rules came from it alone.
     let manifest = read_json(&packet.join("manifest.json"));
     let print = manifest["prints"][0].clone();

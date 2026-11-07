@@ -42,7 +42,7 @@ const MADE_APP: &str = "CADADDY_WALLGEN";
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("levels.read", "Read Levels", run_read)
+        CommandSpec::new("levels.read", "Read Levels", run_read).long()
             .files().params(
             "{apply?: bool (elevations into the spec's levels; others become datums), datum_ft?: feet subtracted from every elevation (default 100 when LEVEL 1 is at 100'-0\", else 0)} → {levels: [{name, kind, elevation_ft, source, matches?, approved?}], conflicts (incl. approved values kept), datum_ft, changes?, kept?, applied, warnings (readings rejected: they break the levels' order), ignored (notes on civil and site sheets: spot elevations)}; approved levels (`levels/<name>`) keep their elevation; a guided job's sheet index (its level table) wins over notes read here",
         ),
@@ -412,7 +412,7 @@ fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
     conflicts.extend(kept.iter().cloned());
     // Sources and cleared guesses are stored even when no elevation moved.
     if sp != before {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({
         "levels": rows, "conflicts": conflicts, "datum_ft": datum, "applied": true, "changes": changes, "kept": kept,
@@ -630,7 +630,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn store(s: &mut Session, sp: &BuildingSpec) -> Result<()> {
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -836,7 +836,7 @@ mod tests {
             "sheets": {"sheets": sheets},
             "index": {"sheets": sheets, "levels": index_levels},
         }});
-        s.doc_mut().unwrap().agent = Some(job.to_string());
+        s.doc_mut().unwrap().agent = Some(job.to_string()).into();
     }
 
     fn four_levels(s: &mut Session) {

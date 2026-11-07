@@ -86,6 +86,7 @@ pub mod agentdlg;
 pub mod agentpalette;
 pub mod authorpalette;
 pub mod bimpalette;
+pub mod busy;
 pub mod clashpalette;
 pub mod convertdlg;
 pub mod countpalette;
@@ -453,6 +454,8 @@ pub struct CadApp {
     pub placing: Option<(blockspalette::BlockRef, usize)>,
     /// Drawings being read on worker threads ([`opening`]).
     pub opening: opening::Opening,
+    /// A long command running on a worker thread with the session ([`busy`], Q6269).
+    pub(crate) busy: Option<busy::Busy>,
     pub integrated_titlebar: bool,
     /// The window title last sent to the OS ("CADaddy - name*"), so it is only sent on a change.
     os_title: String,
@@ -606,6 +609,7 @@ impl CadApp {
             direction_override: None,
             placing: None,
             opening: opening::Opening::default(),
+            busy: None,
             integrated_titlebar: false,
             os_title: String::new(),
             agent_port_held: false,
@@ -757,24 +761,48 @@ impl CadApp {
         // A check a person's save left running that finished since the last frame is theirs: it
         // opens its dialog now, before this run's own `take(false)` could discard it.
         exchangeloss::poll_background(self);
-        let background = std::mem::replace(&mut self.session.background_checks, false);
-        let r = self.session.execute(id, &params);
-        self.session.background_checks = background;
-        if let Ok(v) = &r
-            && let Some(m) = v.get("message").and_then(Value::as_str)
-        {
-            for l in m.lines() {
-                self.session.echo(l.to_string());
-            }
-        }
-        if let Err(e) = &r {
-            self.session.echo(e.user_message());
-        }
+        let r = execute_echoing(&mut self.session, id, &params);
         // A programmatic save reports what the file didn't keep in its reply, not in a dialog;
         // a programmatic load gets the refusal in its reply.
         exchangeloss::take(self, false);
         secureloaddlg::take(self, false);
-        r.map_err(|e| e.to_string())
+        r
+    }
+
+    /// [`Self::run`], off the UI thread when `id` is a long command (a job, a build, a takeoff:
+    /// [`busy`]); `then` gets the result on the UI thread, at once for any other command. The
+    /// window stays live meanwhile and shows the progress with a Cancel.
+    pub fn run_background(&mut self, id: &str, params: Value, then: impl FnOnce(&mut CadApp, Result<Value, String>) + 'static) {
+        if params.is_null() || !busy::backgrounds(id) {
+            let r = self.run(id, params);
+            then(self, r);
+            return;
+        }
+        diag::note(&format!("command {id}"));
+        clipboard::before_paste(self, id);
+        exchangeloss::poll_background(self);
+        let command = id.to_string();
+        busy::start(
+            self,
+            id,
+            Box::new(move |s| execute_echoing(s, &command, &params)),
+            Box::new(move |app, r| {
+                exchangeloss::take(app, false);
+                secureloaddlg::take(app, false);
+                then(app, r);
+            }),
+        );
+    }
+
+    /// Wait up to `timeout` for a long command running in the background to end (its follow-up
+    /// runs). True when none is left running.
+    pub fn wait_for_work(&mut self, timeout: std::time::Duration) -> bool {
+        busy::wait(self, timeout)
+    }
+
+    /// The long command running in the background, if any.
+    pub fn work_running(&self) -> Option<&str> {
+        busy::running(self)
     }
 
     /// Start a command as if typed (interactive when it has prompts).
@@ -786,6 +814,27 @@ impl CadApp {
         if menus::run_ui_command(self, name, &Value::Null).is_some() {
             exchangeloss::take(self, true);
             secureloaddlg::take(self, true);
+            return;
+        }
+        if let Some(msg) = busy::refusal(self) {
+            self.set_status(msg);
+            return;
+        }
+        // A long command without prompts runs at once: off the UI thread.
+        if let Some(spec) = cadaddy_engine::find_by_id_or_alias(name).filter(|c| c.interactive.is_none() && busy::backgrounds(c.id)) {
+            let n = name.to_string();
+            busy::start(
+                self,
+                spec.id,
+                Box::new(move |s| s.start(&n).map(|()| Value::Null).map_err(|e| e.user_message())),
+                Box::new(|app, r| {
+                    if let Err(e) = r {
+                        app.session.echo(e);
+                    }
+                    exchangeloss::take(app, true);
+                    secureloaddlg::take(app, true);
+                }),
+            );
             return;
         }
         if let Err(e) = self.session.start(name) {
@@ -808,6 +857,10 @@ impl CadApp {
         if menus::help_line(self, text, true) {
             return None;
         }
+        if let Some(msg) = busy::refusal(self) {
+            self.set_status(msg.clone());
+            return Some(msg);
+        }
         if !self.session.prompting() {
             let first = text.split_whitespace().next().unwrap_or("");
             clipboard::before_paste(self, first);
@@ -825,6 +878,26 @@ impl CadApp {
             {
                 exchangeloss::take(self, true);
                 secureloaddlg::take(self, true);
+                return None;
+            }
+            // A long command (`job.start {...}`, or alone when it has no prompts) runs off the UI
+            // thread; the window shows its progress with a Cancel (Q6269).
+            if let Some(spec) =
+                cadaddy_engine::find_by_id_or_alias(&word).filter(|c| busy::backgrounds(c.id) && (json_form || (!more && c.interactive.is_none())))
+            {
+                let line = text.to_string();
+                busy::start(
+                    self,
+                    spec.id,
+                    Box::new(move |s| s.cmdline(&line).map(|()| Value::Null).map_err(|e| e.to_string())),
+                    Box::new(|app, r| {
+                        exchangeloss::take(app, true);
+                        secureloaddlg::take(app, true);
+                        if let Err(e) = r {
+                            app.session.echo(e);
+                        }
+                    }),
+                );
                 return None;
             }
         }
@@ -1202,24 +1275,35 @@ impl CadApp {
             self.note_time("betweenFrames", t0 - last);
         }
         self.last_frame_start = Some(t0);
+        // A long command that ended on its worker thread gives the session back here.
+        busy::poll(self, ctx);
+        // While one runs, the window shows a read-only copy: nothing here may change it.
+        let idle = self.busy.is_none();
         self.track_documents();
-        walk::open_walkthrough(self);
+        if idle {
+            walk::open_walkthrough(self);
+        }
         cadaddy_engine::cmd::file::set_default_ext(self.ui.save_format.as_str());
         // A long LISP routine runs a slice per frame, so the window stays live (and Esc stops it).
-        self.session.lisp_tick();
+        if idle {
+            self.session.lisp_tick();
+        }
         if self.session.lisp_busy() {
             ctx.request_repaint();
         }
         // A 3D model the plan's edits left behind is built once editing stops for a moment (not
         // while a command or a LISP routine runs); a frame is asked for when it falls due.
-        if self.session.running.is_none()
+        if idle
+            && self.session.running.is_none()
             && !self.session.lisp_busy()
             && let Some(wait) = self.session.update_model_when_idle(cadaddy_engine::cmd::wallgen::IDLE_REBUILD)
         {
             ctx.request_repaint_after(wait);
         }
         // Esc in a LISP routine's dialog is its Cancel, not the end of the routine.
-        crate::lispdlg::escape(self, ctx);
+        if idle {
+            crate::lispdlg::escape(self, ctx);
+        }
         // Esc in a dialog is Cancel: it closes the dialog, and the command line doesn't also
         // get it (cancelling a command waiting behind the dialog).
         if self.ui.dialog.is_some() && self.closing.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
@@ -1321,7 +1405,10 @@ impl CadApp {
         if t2 < self.control_active_until {
             ctx.request_repaint_after(std::time::Duration::from_millis(5));
         }
-        self.finish_opening();
+        // A drawing read meanwhile is added when the session is back.
+        if self.busy.is_none() {
+            self.finish_opening();
+        }
         cadaddy_engine::cmd::file::sync_image_folder(&self.session);
         self.opening.show(ctx);
         if !self.synthetic.is_empty() {
@@ -1330,13 +1417,20 @@ impl CadApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         self.gpu_fault_tick(ctx);
-        managers::plot_window_resume(self, ctx);
-        hatchdlg::resume(self);
-        hyperlinks::resume(self);
+        let idle = self.busy.is_none();
+        if idle {
+            managers::plot_window_resume(self, ctx);
+            hatchdlg::resume(self);
+            hyperlinks::resume(self);
+        }
         let t3 = now_ms();
-        self.autosave_tick(ctx);
+        if idle {
+            self.autosave_tick(ctx);
+        }
         self.note_time("autosave", now_ms() - t3);
-        menus::shortcuts(self, ctx);
+        if idle {
+            menus::shortcuts(self, ctx);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         for f in ctx.input(|i| i.raw.dropped_files.clone()) {
             let p = f.path().to_string_lossy().to_string();
@@ -1419,6 +1513,7 @@ impl CadApp {
         matchpropdlg::show(self, ui.ctx());
         renderwin::show(self, ui.ctx());
         closing::prompt(self, ui.ctx());
+        busy::show(self, ui.ctx());
         save_loss::prompt(self, ui.ctx());
         autosave::show(self, ui.ctx());
         autosave::gpu_notice(self, ui.ctx());
@@ -1489,6 +1584,30 @@ impl CadApp {
         self.control_active_until = now_ms() + 2000.0;
         // Timed out while queued: the client was told it did not run (#345).
         if !req.begin() {
+            return;
+        }
+        // While a long command runs, what would change the session is refused as busy; ping,
+        // cmdline.state, job.status and control.cancel answer (Q6269).
+        if let Some(v) = busy::control(self, &req.method, &req.params) {
+            let _ = req.reply.send(v);
+            ctx.request_repaint();
+            return;
+        }
+        // An agent's long command runs off the UI thread too: its reply goes when it ends, and the
+        // window answers other requests meanwhile.
+        if matches!(req.method.as_str(), "engine.execute" | "command")
+            && let Some(id) = req.params.get("command").or(req.params.get("id")).and_then(Value::as_str).filter(|id| busy::backgrounds(id))
+        {
+            let params = req.params.get("params").cloned().filter(|p| !p.is_null()).unwrap_or_else(|| json!({}));
+            let reply = req.reply.clone();
+            let id = id.to_string();
+            // An agent's call: dry run, request journal and the user's confirmation apply.
+            let was = std::mem::replace(&mut self.session.agent.from_agent, true);
+            self.run_background(&id, params, move |_, r| {
+                let _ = reply.send(control::reply(r));
+            });
+            self.session.agent.from_agent = was;
+            ctx.request_repaint();
             return;
         }
         let reply = req.reply.clone();
@@ -1573,6 +1692,25 @@ impl CadApp {
 /// How long a control-channel screenshot waits for a background rebuild before it is taken
 /// anyway (the reply itself times out after 8 s).
 const SHOT_REBUILD_WAIT_MS: f64 = 6000.0;
+
+/// Run a command programmatically on `s` and echo its message (or error) to the history: the
+/// engine side of [`CadApp::run`], also run on the worker thread for a long command.
+fn execute_echoing(s: &mut Session, id: &str, params: &Value) -> Result<Value, String> {
+    let background = std::mem::replace(&mut s.background_checks, false);
+    let r = s.execute(id, params);
+    s.background_checks = background;
+    if let Ok(v) = &r
+        && let Some(m) = v.get("message").and_then(Value::as_str)
+    {
+        for l in m.lines() {
+            s.echo(l.to_string());
+        }
+    }
+    if let Err(e) = &r {
+        s.echo(e.user_message());
+    }
+    r.map_err(|e| e.to_string())
+}
 
 pub fn now_ms() -> f64 {
     #[cfg(not(target_arch = "wasm32"))]

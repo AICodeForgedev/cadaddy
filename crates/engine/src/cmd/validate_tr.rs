@@ -16,6 +16,10 @@
 //! NEC 406.12 take-off) is no document's fact: an element it marked TR that way gets its fact
 //! from its plan tag and the documents only.
 //!
+//! A receptacle the code's rooms leave out is still checked when its plan keynote asks for it
+//! tamper-resistant (its `keynotes`, `keynote_features`): the documents' requirement, beside the
+//! code's.
+//!
 //! Known not TR is a `fail`; no fact is `unsure` ("tamper-resistance not stated in the model or
 //! documents"), never a pass.
 
@@ -108,6 +112,29 @@ fn flag(text: &str) -> Option<bool> {
         "false" | "no" | "n" | "0" | "none" => Some(false),
         other => says_tr(other, true),
     }
+}
+
+/// The keynote properties a receptacle's plan keynote leaves on it (Q6216 keynotes): what is
+/// asked of it there.
+const KEYNOTE_PROPS: [&str; 4] = ["keynotes", "keynote", "keynote_features", "receptacle_for"];
+
+/// Whether the keynote by a receptacle asks for it tamper-resistant, wherever it is (a
+/// requirement of the documents beyond the code's rooms): why, citing the keynote. A built part
+/// reads the keynotes of the plan element it was built from too.
+pub(crate) fn asked_by_keynote(d: &Drawing, e: Option<&Entity>) -> Option<String> {
+    let e = e?;
+    let source = super::bimlook::made_source(e).and_then(|h| d.model.get(h)).map(|x| x.as_ref());
+    for x in std::iter::once(e).chain(source) {
+        let props = cadaddy_doc::props::read(&x.common.xdata);
+        for k in KEYNOTE_PROPS {
+            let Some(p) = props.get(k).filter(|p| p.has_value()) else { continue };
+            let text = p.text();
+            if says_tr(&text, k == "keynote_features") == Some(true) {
+                return Some(format!("its keynote asks for it tamper-resistant ({k}: \"{}\")", cite(&text)));
+            }
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------- the product record

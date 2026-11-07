@@ -1008,7 +1008,7 @@ impl GuidedJob {
 
 /// Job state is stored in `Drawing.agent` under the key `"guided_job"`.
 pub(crate) fn load_job(s: &Session) -> Result<Option<GuidedJob>> {
-    let agent_text = match &s.doc()?.agent {
+    let agent_text = match &*s.doc()?.agent {
         Some(t) if !t.trim().is_empty() => t.clone(),
         _ => return Ok(None),
     };
@@ -1026,7 +1026,7 @@ fn save_job(s: &mut Session, job: &GuidedJob) -> Result<()> {
     let doc = s.doc_mut()?;
     let mut agent: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
     agent["guided_job"] = serde_json::to_value(job).unwrap_or(json!(null));
-    doc.agent = Some(agent.to_string());
+    doc.agent = Some(agent.to_string()).into();
     Ok(())
 }
 
@@ -1756,7 +1756,7 @@ fn levels_from_answer(s: &mut Session, job: &GuidedJob) -> Result<Vec<Value>> {
         out.push(json!({"name": name, "elevation_ft": elevation, "source": "answer"}));
     }
     sp.levels.sort_by(|a, b| a.elevation_ft.total_cmp(&b.elevation_ft));
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(out)
 }
 
@@ -2040,6 +2040,10 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
 /// them on stderr while the job runs).
 static PROGRESS_SINK: std::sync::RwLock<Option<fn(&str)>> = std::sync::RwLock::new(None);
 
+/// The running job's last progress (its `job.progress` data and line), for an interface that
+/// shows it while the job runs on another thread ([`live_progress`]).
+static LIVE: std::sync::Mutex<Option<Value>> = std::sync::Mutex::new(None);
+
 /// A job is running (job.start, job.next, job.answer…): a cancel asked for now stops it.
 static JOB_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// A cancel the running job takes at its next sheet or stage.
@@ -2074,6 +2078,7 @@ impl Running {
     fn start() -> Self {
         use std::sync::atomic::Ordering::Relaxed;
         JOB_CANCEL.store(false, Relaxed);
+        *LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         JOB_RUNNING.store(true, Relaxed);
         Running
     }
@@ -2085,6 +2090,34 @@ impl Drop for Running {
         JOB_RUNNING.store(false, Relaxed);
         JOB_CANCEL.store(false, Relaxed);
     }
+}
+
+/// What the job last reported, from any thread (an app polls it while the job runs on a worker
+/// thread, Q6269): `{stage?, step?, progress?, line, running, cancel_requested}`, the last event's
+/// fields and the last progress line. `None` before a job has reported anything.
+pub fn live_progress() -> Option<Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut v = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()?;
+    if let Some(o) = v.as_object_mut() {
+        o.insert("running".into(), json!(JOB_RUNNING.load(Relaxed)));
+        o.insert("cancel_requested".into(), json!(JOB_CANCEL.load(Relaxed)));
+    }
+    Some(v)
+}
+
+/// Keep `line` (and the event's fields, when given) as the job's live progress.
+fn set_live(data: Option<&Value>, line: &str) {
+    let mut g = LIVE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut v = g.take().unwrap_or_else(|| json!({}));
+    if let (Some(o), Some(d)) = (v.as_object_mut(), data.and_then(Value::as_object)) {
+        for (k, x) in d {
+            o.insert(k.clone(), x.clone());
+        }
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("line".into(), json!(crate::clip_input(line.trim())));
+    }
+    *g = Some(v);
 }
 
 /// Send a running job's progress lines (one per stage and per sheet imported) to `sink`.
@@ -2103,6 +2136,7 @@ fn progress_tag(job: &GuidedJob, stage: StageName) -> String {
 
 /// A line to the progress sink only (a step inside a stage, e.g. the model build's).
 pub(crate) fn progress_line(line: &str) {
+    set_live(None, line);
     if let Ok(g) = PROGRESS_SINK.read()
         && let Some(sink) = *g
     {
@@ -2112,6 +2146,7 @@ pub(crate) fn progress_line(line: &str) {
 
 /// A `job.progress` event, and the line to the progress sink.
 fn report_progress(s: &mut Session, data: Value, line: &str) {
+    set_live(Some(&data), line);
     s.event("job.progress", data);
     if let Ok(g) = PROGRESS_SINK.read()
         && let Some(sink) = *g
@@ -2309,7 +2344,7 @@ fn checkpoint_agent(path: &str) -> Option<Value> {
     let bytes = std::fs::read(path).ok()?;
     let text = match cadaddy_io::cdy::agent(&bytes) {
         Ok(text) => text?,
-        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent?,
+        Err(_) => (super::file::io()?.read)(&bytes, path).ok()?.agent.into_inner()?,
     };
     serde_json::from_str(&text).ok()
 }
@@ -4573,7 +4608,7 @@ fn run_mep_read_stage(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         super::printcond::seat_heights(&mut sp);
         super::mep::seat_in_plenum(&mut sp);
         super::printcond::store_circuits(&mut sp, &cond.circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     job.mep = Some(mep);
     job.circuits = cond.circuits.clone();
@@ -4807,7 +4842,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if seated > 0 {
                     progress_line(&format!("  MEP runs with no height of their own seated in their level's plenum: {seated}"));
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 job.audit("mep_merged", "pipeline", None, Some(StageName::BimBuild), Some(json!({"runs": runs})));
             }
             // The rooms stage's rooms go in too: the drafted spec had none, so the build made no
@@ -4849,7 +4884,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         sp.rooms.push(r);
                     }
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Each level's region is its architectural floor plan's view: the draft guessed the
             // upper floors' regions from stray objects (slivers), so their walls weren't built.
@@ -4891,7 +4926,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     }
                     below = level.region.filter(|r| r.iter().all(|v| v.is_finite() && v.abs() <= 1.0e8)).or(below);
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Where each sheet of the set sits, so what lies on the other disciplines' sheets
             // is theirs (not "outside every level's region").
@@ -4899,7 +4934,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
             {
                 add_sheet_links(&mut sp, &job.sheet_regions);
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             // Runs whose size wasn't read: one larger than any size the system's tags give on its
             // level is two unrelated lines measured; it takes the system's usual tagged size. And a
@@ -4911,7 +4946,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 let (sized, dropped) = tidy_runs(&mut sp.mep.runs, upf, &ducts);
                 if sized + dropped > 0 {
                     progress_line(&format!("  MEP runs tidied: {sized} unread sizes set from the tags, {dropped} repeated runs dropped"));
-                    s.doc_mut()?.building_spec = Some(sp.to_json());
+                    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                 }
             }
             // The MEP plans' runs, terminals and equipment were read in their own sheet's place
@@ -5063,25 +5098,31 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     dropped.1,
                     dropped.2
                 ));
-                // A pipe both an enlarged plan and the floor's plan draw (or two views of one
-                // floor, or one sheet's line read twice) is one pipe: the enlarged plan's stays.
+                // A pipe or duct both an enlarged plan and the floor's plan draw (or two views of
+                // one floor, or one sheet's line read twice) is one: the enlarged plan's stays.
+                // Each sheet's reading is placed by its own registration, so this is where two
+                // sheets' lines of one run first lie together.
                 let enlarged: BTreeSet<String> =
                     job_sheet_refs(job).iter().filter(|r| r.kind == "enlarged_plan").map(|r| sheet_key(&r.number)).collect();
                 let pipes: BTreeSet<String> =
                     sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Pipe).map(|y| y.name.clone()).collect();
-                let (twice, twice_cut, twice_ft) =
-                    super::runtidy::drop_drawn_twice(&mut sp.mep.runs, upf_runs, &|r| pipes.contains(&r.system), &|sheet| {
-                        u8::from(!enlarged.contains(&sheet_key(sheet)))
-                    });
+                let ducts: BTreeSet<String> =
+                    sp.mep.systems.iter().filter(|y| y.kind == cadaddy_walk3d::MepKind::Duct).map(|y| y.name.clone()).collect();
+                let (twice, twice_cut, twice_ft) = super::runtidy::drop_drawn_twice(
+                    &mut sp.mep.runs,
+                    upf_runs,
+                    &|r| pipes.contains(&r.system) || ducts.contains(&r.system),
+                    &|sheet| u8::from(!enlarged.contains(&sheet_key(sheet))),
+                );
                 if twice + twice_cut > 0 {
                     progress_line(&format!(
-                        "  pipe runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
+                        "  pipe and duct runs drawn twice, one kept: {twice} dropped, {twice_cut} cut where a stretch is drawn again ({twice_ft:.0} ft)"
                     ));
                     job.add_finding(
                         StageName::BimBuild,
                         "Pipe drawn twice, one kept",
                         &format!(
-                            "{twice} pipe runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
+                            "{twice} pipe and duct runs lie along another sheet's run of their system (or their own sheet's, traced again) over most of their length and are dropped; {twice_cut} more are drawn again over a stretch, which is cut out, the rest kept: {twice_ft:.1} ft taken out of the takeoff in all. The enlarged plans' runs stay over the floor plans'"
                         ),
                         1,
                         vec!["Check the pipe drawn twice on the plans where the takeoff differs from the plans' own length".into()],
@@ -5296,6 +5337,12 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         mech.report
                     ));
                     sp.mep.equipment.extend(mech.equipment);
+                    let (gone, relabelled) = drop_fan_duct_repeats(&mut sp.mep.runs, &sp.mep.systems, &mech.runs, upf_runs);
+                    if gone > 0 {
+                        progress_line(&format!(
+                            "  ducts already laid along an exhaust fan's drawn duct (the same duct, now on the exhaust system): {gone} left out; on the plans as {relabelled:?}"
+                        ));
+                    }
                     sp.mep.runs.extend(mech.runs);
                 }
                 // Nothing more than 5' outside its storey's shell: past it, it isn't in the
@@ -5340,7 +5387,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                         false,
                     );
                 }
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         Err(e) => {
@@ -5860,7 +5907,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 ));
                 super::printcond::store_room_panels(&mut sp, gear);
                 super::printcond::store_room_circuits(&mut sp, runs, &circuits);
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         // A "receptacle" that is only a circuit-like name (a panel's feeder, DP2-11) by a keynote's
@@ -5968,7 +6015,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         {
             let n = stacks_as_risers(&mut sp, &stacks);
             if n > 0 {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             let mut by: BTreeMap<(String, String), usize> = BTreeMap::new();
             for st in &stacks {
@@ -5981,7 +6028,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let inferred = infer_missing_water(job, &mut sp, &no_water_levels, &devices, schedule.as_ref());
             if inferred.as_object().is_some_and(|o| !o.is_empty()) {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         // The rest of the fill-in pass (Q6216): each fixture's waste and vent no drain or vent
@@ -5989,7 +6036,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let filled = fill_in_rest(job, &mut sp, &devices, schedule.as_ref());
             if filled.get("runs").and_then(Value::as_u64).unwrap_or(0) > 0 {
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
             progress_line(&format!("  filled in where no plan connects it: {filled}"));
         }
@@ -5998,7 +6045,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         if let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") {
             let drains = super::plumbing::drainage(&mut sp);
             let stacks = super::plumbing::continuous_risers(&mut sp);
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             progress_line(&format!("  drainage: {drains}; stacks through the floors: {stacks}"));
         }
         // Each unit type: what its views show by kind against what each of its rooms holds.
@@ -6029,7 +6076,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             let seated = seat_on_sub_bases(&mut sp.mep.equipment, devices.iter());
             if seated > 0 {
                 progress_line(&format!("  units set on the sub-base their receptacle's keynote puts under them: {seated}"));
-                s.doc_mut()?.building_spec = Some(sp.to_json());
+                s.doc_mut()?.building_spec = Some(sp.to_json()).into();
             }
         }
         match placed_now {
@@ -6056,7 +6103,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::readers::legend_onto_devices(&mut sp, &designations);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  switches and sensors named by the legend's designations: {n}"));
                     }
                 }
@@ -6071,7 +6118,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = apply_symbol_list(&mut sp, &rows);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                     progress_line(&format!(
                         "  fire alarm symbol list: {} marks ({}); {n} devices named",
@@ -6086,7 +6133,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = apply_typical_heights(&mut sp, &typical);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                     progress_line(&format!(
                         "  typical mounting heights (general note): {} kinds ({}); {n} devices took theirs",
@@ -6124,7 +6171,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                             }
                             sp.unit_types = Value::Array(types);
                             sp.unit_instances = Value::Array(instances);
-                            s.doc_mut()?.building_spec = Some(sp.to_json());
+                            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         }
                     }
                 }
@@ -6134,7 +6181,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::readers::plumbing_onto_fixtures(&mut sp, &sch.rows);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  plumbing fixtures named by the schedule: {n}"));
                     }
                 }
@@ -6144,7 +6191,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let n = super::fixturefit::record(&mut sp, &fixture_fits);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                     }
                 }
                 // The code's devices the plans don't mark: a guest room's receptacles are
@@ -6154,7 +6201,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let (n, rooms) = super::readers::tamper_resistant_in_rooms(&mut sp, &sleeping);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  tamper-resistant receptacles (NEC 406.12): {n} in {rooms} guest rooms"));
                         job.add_finding(
                             StageName::BimBuild,
@@ -6175,7 +6222,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 {
                     let (n, sinks) = super::readers::gfci_by_sinks(&mut sp);
                     if n > 0 {
-                        s.doc_mut()?.building_spec = Some(sp.to_json());
+                        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
                         progress_line(&format!("  receptacles within 6' of a sink taken off as GFCI (NEC 210.8): {n} by {sinks} sinks"));
                         job.add_finding(
                             StageName::BimBuild,
@@ -6223,7 +6270,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         sp.circulation = std::mem::take(&mut circulation);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // Each storey stacks by its shell's lower-left corner (the building's outline), not by the
     // lower-left of all its wall linework: a stray line or a site note there moved a storey
@@ -6260,7 +6307,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             .iter()
             .map(|(n, rects)| (n.clone(), rects.iter().filter(|[a, b]| (b.x - a.x).abs() >= sliver).map(|[a, b]| [a.x, a.y, b.x, b.y]).collect()))
             .collect();
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // How every wall is built: the partition legend's types, the walls the plans' tags type.
     if job.sheet_regions.iter().any(|r| r.kind == "legend")
@@ -6269,7 +6316,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         for line in apply_wall_legend(s, &mut sp, job)? {
             progress_line(&format!("  wall types {line}"));
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The stairs in the circulation's stair spaces, found from their treads on any layer: the
     // build makes their steps, landings and rails. Confirmed stairs stay.
@@ -6305,7 +6352,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                     false,
                 );
             }
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     // The branch circuits (their runs went in with the MEP parts): one tag each, for the takeoff;
@@ -6316,7 +6363,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         super::printcond::store_circuits(&mut sp, &circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The mounting heights the notes of the sheets it didn't import list (a legend sheet's
     // general notes, an accessibility sheet): the devices' heights after their own notes, the
@@ -6332,7 +6379,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             t_notes.elapsed().as_secs_f64()
         ));
         sp.mount_notes = notes;
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // The trades' documents (Q6162): the submittals' and specification sections' facts every
     // trade's pieces are laid out from (concrete mix, PT design, joists, trusses, hardware sets,
@@ -6353,7 +6400,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             }
         };
         progress_line(&format!("  trade documents: {line} ({:.1} s)", t_docs.elapsed().as_secs_f64()));
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     // Whose work each element is (Q6167): the notes, specifications and submittals read for who
     // furnishes and installs what another trade may own, the fire alarm devices given their kinds
@@ -6400,7 +6447,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             drain_slope = sloped.json();
         }
         if moved > 0 || sloped.runs > 0 {
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
     }
     let mut result = s.execute("model.build", &json!({"budget_s": budget_s, "echo": false}))?;
@@ -6480,7 +6527,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         && let Ok((mut sp, true)) = super::bspec::current(s, "bim_build")
     {
         super::printcond::store_circuits(&mut sp, &circuits);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         result["circuits"] = json!(circuits.len());
     }
     // The model's rooms are the job's rooms on the levels it built.
@@ -6540,7 +6587,7 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
             result["load_summaries"] = json!(summaries.len());
         }
         sp.mep.load_summaries = summaries;
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     bim_step(s, job, "panel schedules", t);
     // The electrical gear the plans don't place, from the schedules, the one-line and the gear
@@ -7309,7 +7356,7 @@ fn scope_step(s: &mut Session, job: &mut GuidedJob) -> (Value, Vec<super::scope:
         progress_line(&format!("  fire alarm devices by their legends: {n} given their kind {by:?}; marks left open {open:?}"));
         fa = json!({"resolved": n, "by_kind": by, "unresolved": open});
         if let Ok(d) = s.doc_mut() {
-            d.building_spec = Some(sp.to_json());
+            d.building_spec = Some(sp.to_json()).into();
         }
     }
     let kept = s.doc().map(super::scope::decisions).unwrap_or_default();
@@ -7361,7 +7408,7 @@ fn fa_panels_step(s: &mut Session, job: &mut GuidedJob, docs: &[super::scope::Do
     let rooms = s.doc().map(super::scope::room_boxes).unwrap_or_default();
     let (placed, not) = super::scope::place_panels(&mut sp, &places, &rooms);
     let Ok(d) = s.doc_mut() else { return };
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     let built = super::scope::build_panels(d, &sp, &placed, &rooms);
     s.touch();
     progress_line(&format!("  fire alarm panels: {} placed ({}), {built} built; not placed {:?}", placed.len(), placed.join(", "), not));
@@ -7929,7 +7976,7 @@ fn anchor_other_trade_rooms(s: &mut Session, job: &GuidedJob, place: &dyn Fn([f6
         anchored += 1;
     }
     if anchored > 0 {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(anchored)
 }
@@ -10690,8 +10737,243 @@ struct MechItem {
     hi: [f64; 2],
     /// Where the exhaust fan's duct ends (its wall cap), view coordinates.
     cap: Option<[f64; 2]>,
+    /// The exhaust fan's duct as the view draws it, fan to wall cap (view coordinates; empty:
+    /// none could be followed), and its size (inches) with where that came from.
+    route: Vec<[f64; 2]>,
+    size_in: Option<(f64, &'static str)>,
     /// How it was found (`tag PTAC`, `symbol: no tag`).
     how: String,
+}
+
+/// A straight piece of a view's linework, from…to (view coordinates).
+type ViewSeg = ([f64; 2], [f64; 2]);
+
+/// A drawn duct's two sides: inches apart (round duct drawn in plan, 3"…14" across).
+const DUCT_WIDTH_IN: (f64, f64) = (2.5, 14.0);
+/// The shortest side (inches) read as a duct's: shorter is an elbow's arc, a hatch or a letter.
+const DUCT_SIDE_MIN_IN: f64 = 3.0;
+/// How far (inches, past the duct's width) a fan's duct may start from its box: a neck,
+/// transition or damper drawn between the fan and the duct's straight sides.
+const DUCT_NECK_IN: f64 = 12.0;
+/// How far (inches) past the last straight piece of a fan's duct its wall cap may be, where
+/// the elbow and the last run to the wall are drawn as curves.
+const DUCT_LAST_RUN_IN: f64 = 36.0;
+/// Most turns a fan's duct takes on its way to the wall cap.
+const DUCT_MAX_TURNS: usize = 4;
+/// Most pieces a fan's duct is followed through, and the longest it may be (feet).
+const DUCT_MAX_PIECES: usize = 16;
+const DUCT_MAX_FT: f64 = 60.0;
+/// Most linework sides looked at for ducts in one view (hostile drawings).
+const DUCT_MAX_SIDES: usize = 3_000;
+
+/// One straight piece of a drawn duct: its centreline from…to and how wide it is drawn.
+#[derive(Clone, Copy, Debug)]
+struct DuctPiece {
+    a: [f64; 2],
+    b: [f64; 2],
+    width: f64,
+}
+
+/// The straight pieces of duct a view draws: two parallel sides (lines, or the edges of a
+/// polyline or of a closed duct outline) a duct's width apart, overlapping along their length.
+/// The centreline of the overlap is the piece. Sizes in inches at `k_in` units.
+fn duct_pieces(segs: &[ViewSeg], k_in: f64) -> Vec<DuctPiece> {
+    let len = |s: &ViewSeg| (s.1[0] - s.0[0]).hypot(s.1[1] - s.0[1]);
+    let sides: Vec<&ViewSeg> = segs
+        .iter()
+        .filter(|s| s.0.iter().chain(s.1.iter()).all(|v| v.is_finite()) && len(s) >= DUCT_SIDE_MIN_IN * k_in)
+        .take(DUCT_MAX_SIDES)
+        .collect();
+    let mut out: Vec<DuctPiece> = Vec::new();
+    for (i, s) in sides.iter().enumerate() {
+        let l = len(s);
+        let u = [(s.1[0] - s.0[0]) / l, (s.1[1] - s.0[1]) / l];
+        let n = [-u[1], u[0]];
+        for t in sides.iter().skip(i + 1) {
+            let lt = len(t);
+            let v = [(t.1[0] - t.0[0]) / lt, (t.1[1] - t.0[1]) / lt];
+            if (u[0] * v[1] - u[1] * v[0]).abs() > 0.03 {
+                continue;
+            }
+            // How far the other side's line is from this one, and where it lies along it.
+            let off = |p: [f64; 2]| (p[0] - s.0[0]) * n[0] + (p[1] - s.0[1]) * n[1];
+            let along = |p: [f64; 2]| (p[0] - s.0[0]) * u[0] + (p[1] - s.0[1]) * u[1];
+            let w = (off(t.0) + off(t.1)) / 2.0;
+            if !(DUCT_WIDTH_IN.0 * k_in..=DUCT_WIDTH_IN.1 * k_in).contains(&w.abs()) || (off(t.0) - off(t.1)).abs() > 0.5 * k_in {
+                continue;
+            }
+            let (t0, t1) = (along(t.0).min(along(t.1)).max(0.0), along(t.0).max(along(t.1)).min(l));
+            if t1 - t0 < DUCT_SIDE_MIN_IN * k_in {
+                continue;
+            }
+            let at = |k: f64| [s.0[0] + u[0] * k + n[0] * w / 2.0, s.0[1] + u[1] * k + n[1] * w / 2.0];
+            let piece = DuctPiece { a: at(t0), b: at(t1), width: w.abs() };
+            // The same side drawn twice (a line over a polyline's edge) is one piece.
+            let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 0.5 * k_in;
+            if !out.iter().any(|o| (near(o.a, piece.a) && near(o.b, piece.b)) || (near(o.a, piece.b) && near(o.b, piece.a))) {
+                out.push(piece);
+            }
+        }
+    }
+    out
+}
+
+/// Where two pieces' centrelines cross (`None`: parallel).
+fn centrelines_cross(p: &DuctPiece, q: &DuctPiece) -> Option<[f64; 2]> {
+    let (d1, d2) = ([p.b[0] - p.a[0], p.b[1] - p.a[1]], [q.b[0] - q.a[0], q.b[1] - q.a[1]]);
+    let den = d1[0] * d2[1] - d1[1] * d2[0];
+    let (l1, l2) = (d1[0].hypot(d1[1]), d2[0].hypot(d2[1]));
+    if l1 <= 0.0 || l2 <= 0.0 || (den / (l1 * l2)).abs() < 0.2 {
+        return None;
+    }
+    let t = ((q.a[0] - p.a[0]) * d2[1] - (q.a[1] - p.a[1]) * d2[0]) / den;
+    let x = [p.a[0] + d1[0] * t, p.a[1] + d1[1] * t];
+    x.iter().all(|v| v.is_finite()).then_some(x)
+}
+
+/// The foot of `c` on a piece's centreline (extended).
+fn onto_centreline(p: &DuctPiece, c: [f64; 2]) -> [f64; 2] {
+    let d = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    if l2 <= 0.0 {
+        return p.a;
+    }
+    let t = ((c[0] - p.a[0]) * d[0] + (c[1] - p.a[1]) * d[1]) / l2;
+    [p.a[0] + d[0] * t, p.a[1] + d[1] * t]
+}
+
+/// The exhaust fan's duct as its view draws it: from the fan's box (`lo`…`hi`) along the drawn
+/// duct (its two sides, one width all the way; an elbow drawn as an arc is the gap between two
+/// pieces) to the wall cap it ends at (`rounds`: the small circles of the views' wall caps).
+/// The route (fan, each turn, the cap), how wide the duct is drawn and the cap; `None` when no
+/// drawn duct leaves the fan or none reaches a cap. Sizes in inches at `k_in` units.
+fn traced_duct(lo: [f64; 2], hi: [f64; 2], pieces: &[DuctPiece], rounds: &[[f64; 2]], k_in: f64) -> Option<(Vec<[f64; 2]>, f64, [f64; 2])> {
+    let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
+    let gap = |p: [f64; 2]| (lo[0] - p[0]).max(0.0).max(p[0] - hi[0]).hypot((lo[1] - p[1]).max(0.0).max(p[1] - hi[1]));
+    let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    // The fan's own symbol (its housing, grille and the round at its middle) is no duct and no
+    // cap: pieces whose middle is in its box, and rounds in it or at it, are left out.
+    let in_fan = |p: &DuctPiece| gap([(p.a[0] + p.b[0]) / 2.0, (p.a[1] + p.b[1]) / 2.0]) <= k_in;
+    let outside: Vec<[f64; 2]> = rounds.iter().copied().filter(|c| gap(*c) > DUCT_SIDE_MIN_IN * k_in).collect();
+    let rounds = outside.as_slice();
+    // Pieces that leave the fan: one end at its box (a neck or damper drawn between leaves a
+    // gap), the other farther out, its centreline through the box. The most central first.
+    let half = ((hi[0] - lo[0]).min(hi[1] - lo[1]) / 2.0).max(k_in);
+    let off_centre = |p: &DuctPiece| {
+        let d = [p.b[0] - p.a[0], p.b[1] - p.a[1]];
+        let l = d[0].hypot(d[1]);
+        if l > 0.0 { ((centre[0] - p.a[0]) * d[1] - (centre[1] - p.a[1]) * d[0]).abs() / l } else { f64::INFINITY }
+    };
+    let mut starts: Vec<(f64, f64, usize, bool)> = pieces
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !in_fan(p) && off_centre(p) <= half)
+        .filter_map(|(i, p)| {
+            let (ga, gb) = (gap(p.a), gap(p.b));
+            let reach = p.width + DUCT_NECK_IN * k_in;
+            if ga <= reach && dist(p.b, centre) > dist(p.a, centre) {
+                Some((off_centre(p), ga, i, false))
+            } else if gb <= reach && dist(p.a, centre) > dist(p.b, centre) {
+                Some((off_centre(p), gb, i, true))
+            } else {
+                None
+            }
+        })
+        .collect();
+    starts.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    for (_, _, first, flip) in starts.into_iter().take(8) {
+        let Some(p0) = pieces.get(first) else { continue };
+        let orient = |p: &DuctPiece, flip: bool| if flip { DuctPiece { a: p.b, b: p.a, width: p.width } } else { *p };
+        let mut path = vec![orient(p0, flip)];
+        let mut used = vec![first];
+        let width = p0.width;
+        let same_width = |w: f64| (w - width).abs() <= (0.25 * width).max(k_in);
+        let mut cap = None;
+        let mut feet = dist(p0.a, p0.b) / (12.0 * k_in);
+        while let Some(cur) = path.last().copied() {
+            // Its far end at a wall cap: the duct ends there.
+            let cap_reach = cur.width + 12.0 * k_in;
+            if let Some(c) =
+                rounds.iter().copied().filter(|c| dist(*c, cur.b) <= cap_reach).min_by(|a, b| dist(*a, cur.b).total_cmp(&dist(*b, cur.b)))
+            {
+                cap = Some(c);
+                break;
+            }
+            if path.len() >= DUCT_MAX_PIECES || feet > DUCT_MAX_FT {
+                break;
+            }
+            // The next piece of the same duct: one end by this one's far end (across an elbow),
+            // never doubling back.
+            let reach = 2.0 * cur.width + 4.0 * k_in;
+            let dir = [cur.b[0] - cur.a[0], cur.b[1] - cur.a[1]];
+            let next = pieces
+                .iter()
+                .enumerate()
+                .filter(|(i, q)| !used.contains(i) && same_width(q.width) && !in_fan(q))
+                .filter_map(|(i, q)| {
+                    let (da, db) = (dist(q.a, cur.b), dist(q.b, cur.b));
+                    let q = if da <= db { *q } else { orient(q, true) };
+                    let d = da.min(db);
+                    let back = (q.b[0] - q.a[0]) * dir[0] + (q.b[1] - q.a[1]) * dir[1] < -0.2 * dist(q.a, q.b) * dir[0].hypot(dir[1]);
+                    (d <= reach && !back && dist(q.b, cur.b) > d).then_some((d, i, q))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            let Some((_, i, q)) = next else {
+                // No more drawn duct (an elbow and the last run to the wall drawn as curves): a cap
+                // within reach of its end ends it, with a square turn into it.
+                cap = rounds
+                    .iter()
+                    .copied()
+                    .filter(|c| dist(*c, cur.b) <= DUCT_LAST_RUN_IN * k_in)
+                    .min_by(|a, b| dist(*a, cur.b).total_cmp(&dist(*b, cur.b)));
+                break;
+            };
+            feet += dist(q.a, q.b) / (12.0 * k_in);
+            used.push(i);
+            path.push(q);
+        }
+        let (Some(cap), Some(head), Some(last)) = (cap, path.first().copied(), path.last().copied()) else { continue };
+        // Fan, each turn (where the centrelines cross; a jog between parallel pieces keeps both
+        // ends), then the cap on the last piece's line.
+        let mut route = vec![onto_centreline(&head, centre)];
+        for w in path.windows(2) {
+            if let [p, q] = w {
+                match centrelines_cross(p, q) {
+                    Some(x) => route.push(x),
+                    None if dist(onto_centreline(p, q.a), q.a) > k_in => {
+                        route.push(p.b);
+                        route.push(q.a);
+                    }
+                    None => {}
+                }
+            }
+        }
+        // The cap on the duct's line ends it there; one beside the line's end takes a square turn.
+        let end = onto_centreline(&last, cap);
+        route.push(end);
+        if dist(end, cap) > last.width + DUCT_SIDE_MIN_IN * k_in {
+            route.push(cap);
+        }
+        route.dedup_by(|a, b| dist(*a, *b) <= 0.25 * k_in);
+        // A duct runs to its cap, it doesn't wander: a few turns, and not much longer than the
+        // way there square (a trace that picked up other linework is not the duct).
+        let length: f64 = route.windows(2).map(|w| if let [a, b] = w { dist(*a, *b) } else { 0.0 }).sum();
+        let square = route.first().map_or(0.0, |s| (cap[0] - s[0]).abs() + (cap[1] - s[1]).abs());
+        if route.len() >= 2 && route.len() <= DUCT_MAX_TURNS + 2 && length <= 2.5 * square + 24.0 * k_in {
+            return Some((route, width, cap));
+        }
+    }
+    None
+}
+
+/// A round duct's size printed in a view (`4"ø`, `6" Ø`): inches.
+fn duct_size_label(v: &str) -> Option<f64> {
+    let t = v.trim();
+    let (n, rest) = t.split_once('"')?;
+    let rest = rest.trim();
+    let round = rest.chars().next().is_some_and(|c| matches!(c, 'ø' | 'Ø' | '⌀')) && rest.chars().count() == 1;
+    let n: f64 = n.trim().parse().ok()?;
+    (round && (3.0..=24.0).contains(&n)).then_some(n)
 }
 
 /// What [`stamp_typical_mech`] made.
@@ -10721,7 +11003,13 @@ const PTAC_GRILLE_FT: f64 = 3.0;
 /// The PTAC and the exhaust fan (with its wall cap) a typical room's mechanical view draws.
 /// `labels`: the view's words (text and block attributes) and where; `shapes`: its polylines'
 /// boxes (and whether closed); `circles`: centre and radius. Sizes in inches at `k_in` units.
-fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool)], circles: &[([f64; 2], f64)], k_in: f64) -> Vec<MechItem> {
+fn mech_items(
+    labels: &[(String, [f64; 2])],
+    shapes: &[([f64; 2], [f64; 2], bool)],
+    circles: &[([f64; 2], f64)],
+    segs: &[ViewSeg],
+    k_in: f64,
+) -> Vec<MechItem> {
     let mid = |lo: [f64; 2], hi: [f64; 2]| [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
     let dist = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
     let sides = |lo: [f64; 2], hi: [f64; 2]| {
@@ -10754,7 +11042,7 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
         let Some((lo, hi, _)) = body else { continue };
         let tag = type_of(*at).map_or_else(|| v.trim().to_ascii_uppercase(), |n| format!("{unit_tag}-{n}"));
         if !out.iter().any(|m| m.kind == "ptac" && m.lo == *lo) {
-            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, how: format!("tag {unit_tag}") });
+            out.push(MechItem { kind: "ptac", tag, lo: *lo, hi: *hi, cap: None, route: Vec::new(), size_in: None, how: format!("tag {unit_tag}") });
         }
     }
     let squarish = |lo: [f64; 2], hi: [f64; 2]| {
@@ -10784,6 +11072,8 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
                         lo: *lo,
                         hi: *hi,
                         cap: None,
+                        route: Vec::new(),
+                        size_in: None,
                         how: format!("tag {}", v.trim()),
                     },
                     mid(*lo, *hi),
@@ -10800,7 +11090,16 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             closed.iter().filter(|(lo, hi)| nested(mid(*lo, *hi)) >= 2).max_by(|a, b| nested(mid(a.0, a.1)).cmp(&nested(mid(b.0, b.1))))
         {
             fans.push((
-                MechItem { kind: "exhaust_fan", tag: "EF".into(), lo: *lo, hi: *hi, cap: None, how: "symbol (box in a box), no tag".into() },
+                MechItem {
+                    kind: "exhaust_fan",
+                    tag: "EF".into(),
+                    lo: *lo,
+                    hi: *hi,
+                    cap: None,
+                    route: Vec::new(),
+                    size_in: None,
+                    how: "symbol (box in a box), no tag".into(),
+                },
                 mid(*lo, *hi),
             ));
         }
@@ -10817,11 +11116,124 @@ fn mech_items(labels: &[(String, [f64; 2])], shapes: &[([f64; 2], [f64; 2], bool
             })
         })
         .collect();
+    // Its duct: followed along the view's drawn duct to the wall cap it ends at, else (nothing
+    // drawn can be followed) only the cap, nearest cluster of louvre circles.
+    let pieces = if fans.is_empty() { Vec::new() } else { duct_pieces(segs, k_in) };
+    let sizes: Vec<(f64, [f64; 2])> = labels.iter().filter_map(|(v, p)| duct_size_label(v).map(|n| (n, *p))).collect();
     for (mut f, c) in fans {
-        f.cap = clusters.iter().copied().filter(|q| dist(*q, c) <= 2.0 * reach).min_by(|a, b| dist(*a, c).total_cmp(&dist(*b, c)));
+        let in_box = |q: [f64; 2]| q[0] >= f.lo[0] && q[0] <= f.hi[0] && q[1] >= f.lo[1] && q[1] <= f.hi[1];
+        f.cap = clusters.iter().copied().filter(|q| !in_box(*q) && dist(*q, c) <= 2.0 * reach).min_by(|a, b| dist(*a, c).total_cmp(&dist(*b, c)));
+        if let Some((route, width, cap)) = traced_duct(f.lo, f.hi, &pieces, &small, k_in) {
+            // Its size: the round size printed along it, else as wide as it is drawn.
+            let by_route = |p: [f64; 2]| {
+                route.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist_xy(p, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min)
+            };
+            let printed =
+                sizes.iter().filter(|(_, p)| by_route(*p) <= 24.0 * k_in).min_by(|a, b| by_route(a.1).total_cmp(&by_route(b.1))).map(|(n, _)| *n);
+            f.size_in = Some(printed.map_or(((width / k_in).round().max(1.0), "drawn width"), |n| (n, "tag")));
+            f.cap = Some(cap);
+            f.route = route;
+        }
         out.push(f);
     }
     out
+}
+
+/// An exhaust fan's duct in its view (view coordinates), what it is and its basis: the route the
+/// view draws, fan to wall cap ([`traced_duct`]), drawn; where no drawn duct can be followed but
+/// the cap is found, fan to cap with one turn (the shorter leg first), inferred by trade
+/// practice and said so; `None` without a cap.
+fn fan_duct_route(it: &MechItem, k_in: f64, title: &str) -> Option<(Vec<[f64; 2]>, cadaddy_walk3d::Made, String)> {
+    if it.route.len() >= 2 {
+        return Some((it.route.clone(), cadaddy_walk3d::Made::Drawn, String::new()));
+    }
+    let cap = it.cap?;
+    let c = [(it.lo[0] + it.hi[0]) / 2.0, (it.lo[1] + it.hi[1]) / 2.0];
+    let mut points = vec![c];
+    let (dx, dy) = ((cap[0] - c[0]).abs(), (cap[1] - c[1]).abs());
+    if dx > k_in && dy > k_in {
+        points.push(if dx >= dy { [c[0], cap[1]] } else { [cap[0], c[1]] });
+    }
+    points.push(cap);
+    Some((
+        points,
+        cadaddy_walk3d::Made::Inferred,
+        format!(
+            "trade practice: an exhaust fan is ducted to its wall cap; no drawn duct from the fan could be followed on {title}, so fan to cap with one turn"
+        ),
+    ))
+}
+
+/// How far (feet) a duct may lie from an exhaust fan's drawn duct and still be that duct.
+const FAN_DUCT_SAME_FT: f64 = 1.5;
+
+/// The ducts already in `runs` that are an exhaust fan's drawn duct again (`fan_ducts` followed
+/// fan to wall cap on its view: drawn or derived, not laid by rule): a duct run (by its system's kind) on the same level with an end
+/// at the fan and every point along the fan's duct. The fan's duct carries the exhaust system
+/// (where it runs to the wall cap, it is exhaust), so the repeat goes and is counted once. How
+/// many went, and the systems the plans gave them (other than exhaust) with their counts.
+fn drop_fan_duct_repeats(
+    runs: &mut Vec<cadaddy_walk3d::MepRun>,
+    systems: &[cadaddy_walk3d::MepSystem],
+    fan_ducts: &[cadaddy_walk3d::MepRun],
+    upf: f64,
+) -> (usize, BTreeMap<String, usize>) {
+    let reach = FAN_DUCT_SAME_FT * upf;
+    let is_duct = |r: &cadaddy_walk3d::MepRun| systems.iter().any(|y| y.name == r.system && y.kind == cadaddy_walk3d::MepKind::Duct);
+    let along = |f: &cadaddy_walk3d::MepRun, p: [f64; 2]| {
+        f.points.windows(2).filter_map(|w| if let [a, b] = w { Some(seg_dist_xy(p, *a, *b)) } else { None }).fold(f64::INFINITY, f64::min)
+    };
+    let traced: Vec<&cadaddy_walk3d::MepRun> = fan_ducts.iter().filter(|f| f.made != cadaddy_walk3d::Made::Inferred && f.points.len() >= 2).collect();
+    let mut by: BTreeMap<String, usize> = BTreeMap::new();
+    let before = runs.len();
+    runs.retain(|r| {
+        let repeat = is_duct(r)
+            && !r.points.is_empty()
+            && traced.iter().any(|f| {
+                f.level == r.level
+                    && f.points.first().is_some_and(|fan| {
+                        [r.points.first(), r.points.last()].into_iter().flatten().any(|e| (e[0] - fan[0]).hypot(e[1] - fan[1]) <= reach)
+                    })
+                    && r.points.iter().all(|p| along(f, *p) <= reach)
+            });
+        if repeat && r.system != "EA" {
+            *by.entry(r.system.clone()).or_default() += 1;
+        }
+        !repeat
+    });
+    (before - runs.len(), by)
+}
+
+/// A small round outline drawn as a closed polyline (a wall cap's louvre circle traced as one):
+/// its middle and radius. Round: every vertex about as far from the middle (a short duct
+/// outline with rounded ends is not), 2" to 6" across (a dot is no louvre).
+fn round_outline(vertices: &[cadaddy_geom::PolyVertex], closed: bool, k_in: f64) -> Option<([f64; 2], f64)> {
+    if !closed || vertices.len() < 8 {
+        return None;
+    }
+    let b = vertices.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, v| {
+        [b[0].min(v.p.x), b[1].min(v.p.y), b[2].max(v.p.x), b[3].max(v.p.y)]
+    });
+    let (w, h) = (b[2] - b[0], b[3] - b[1]);
+    let c = [(b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0];
+    let (r_lo, r_hi) = vertices.iter().map(|v| (v.p.x - c[0]).hypot(v.p.y - c[1])).fold((f64::INFINITY, 0.0_f64), |(a, z), r| (a.min(r), z.max(r)));
+    let round = w.is_finite()
+        && h.is_finite()
+        && w.min(h) > 0.0
+        && w.max(h) >= 2.0 * k_in
+        && w.max(h) <= 6.0 * k_in
+        && w.max(h) <= 1.25 * w.min(h)
+        && r_hi > 0.0
+        && r_lo >= 0.85 * r_hi;
+    round.then_some((c, w.max(h) / 2.0))
+}
+
+/// How far `p` is from the segment `a`…`b`.
+fn seg_dist_xy(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let l2 = d[0] * d[0] + d[1] * d[1];
+    let t = if l2 > 0.0 { (((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    (p[0] - a[0] - d[0] * t).hypot(p[1] - a[1] - d[1] * t)
 }
 
 /// The typical rooms' mechanical views (MECH ENLARGED DOUBLE QUEEN): each one's PTAC and
@@ -10865,6 +11277,9 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
         let mut labels: Vec<(String, [f64; 2])> = texts.iter().map(|t| (t.value.trim().to_string(), [t.at.x, t.at.y])).collect();
         let mut shapes: Vec<([f64; 2], [f64; 2], bool)> = Vec::new();
         let mut circles: Vec<([f64; 2], f64)> = Vec::new();
+        // Every straight piece of linework (a duct's sides), and small round outlines drawn as
+        // polylines (a wall cap's louvre circles traced as one).
+        let mut segs: Vec<ViewSeg> = Vec::new();
         for e in sub.model.iter().take(MAX_LEADER_PIECES) {
             match &e.kind {
                 cadaddy_doc::EntityKind::Insert(ins) => {
@@ -10881,8 +11296,30 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                     });
                     if b.iter().all(|x| x.is_finite()) {
                         shapes.push(([b[0], b[1]], [b[2], b[3]], pl.closed));
+                        if let Some(round) = round_outline(&pl.vertices, pl.closed, k_in) {
+                            circles.push(round);
+                        }
+                    }
+                    let mut put = |a: cadaddy_geom::Vec2, c: cadaddy_geom::Vec2| {
+                        if segs.len() < MAX_LEADER_PIECES {
+                            segs.push(([a.x, a.y], [c.x, c.y]));
+                        }
+                    };
+                    // An edge with a bulge is an arc (an elbow), not a side.
+                    for w in pl.vertices.windows(2) {
+                        if let [a, c] = w
+                            && a.bulge.abs() < 1e-9
+                        {
+                            put(a.p, c.p);
+                        }
+                    }
+                    if let (true, Some(a), Some(c)) = (pl.closed && pl.vertices.len() > 2, pl.vertices.last(), pl.vertices.first())
+                        && a.bulge.abs() < 1e-9
+                    {
+                        put(a.p, c.p);
                     }
                 }
+                cadaddy_doc::EntityKind::Line(l) if segs.len() < MAX_LEADER_PIECES => segs.push(([l.a.x, l.a.y], [l.b.x, l.b.y])),
                 cadaddy_doc::EntityKind::Circle(c) if c.center.is_finite() && c.radius.is_finite() => {
                     circles.push(([c.center.x, c.center.y], c.radius))
                 }
@@ -10895,7 +11332,8 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
             let l: Vec<(String, [f64; 2])> = labels.iter().filter(|(_, p)| mine(*p)).cloned().collect();
             let sh_v: Vec<([f64; 2], [f64; 2], bool)> = shapes.iter().filter(|(lo, hi, _)| mine(*lo) && mine(*hi)).copied().collect();
             let c_v: Vec<([f64; 2], f64)> = circles.iter().filter(|(c, _)| mine(*c)).copied().collect();
-            let items = mech_items(&l, &sh_v, &c_v, k_in);
+            let seg_v: Vec<ViewSeg> = segs.iter().filter(|(a, b)| mine(*a) && mine(*b)).copied().collect();
+            let items = mech_items(&l, &sh_v, &c_v, &seg_v, k_in);
             if items.is_empty() {
                 continue;
             }
@@ -10948,6 +11386,9 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                     );
                     let mut properties = BTreeMap::new();
                     properties.insert("room".to_string(), room.clone());
+                    // No plan draws it in this room: the typical room's, laid in (Q6216).
+                    properties.insert("STATUS".to_string(), "derived".to_string());
+                    properties.insert("BASIS".to_string(), typical_basis(&sh.number, title, &room));
                     out.equipment.push(cadaddy_walk3d::MepEquipment {
                         tag: it.tag.clone(),
                         kind: it.kind.to_string(),
@@ -10964,20 +11405,32 @@ fn stamp_typical_mech(d: &cadaddy_doc::Drawing, sp: &cadaddy_walk3d::BuildingSpe
                         ..Default::default()
                     });
                     any = true;
-                    // The fan's duct, over the ceiling, to its wall cap.
-                    if let (true, Some(cap)) = (fan, it.cap.and_then(|c| place_in_room(c, *view, b, fit))) {
-                        let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
-                        let mut points = vec![c];
-                        let (dx, dy) = ((cap[0] - c[0]).abs(), (cap[1] - c[1]).abs());
-                        if dx > k_in && dy > k_in {
-                            points.push(if dx >= dy { [c[0], cap[1]] } else { [cap[0], c[1]] });
-                        }
-                        points.push(cap);
+                    // The fan's duct, over the ceiling, to its wall cap: along the route the view
+                    // draws; where no drawn duct can be followed, fan to cap with one turn (laid
+                    // by rule, and said so).
+                    let laid = if fan { fan_duct_route(it, k_in, title) } else { None }.and_then(|(route, made, basis)| {
+                        route.iter().map(|p| place_in_room(*p, *view, b, fit)).collect::<Option<Vec<[f64; 2]>>>().map(|points| (points, made, basis))
+                    });
+                    if let Some((points, made, basis)) = laid {
                         let bottoms = vec![ceiling + 0.25; points.len().saturating_sub(1)];
-                        if let Ok(run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
-                            "system": "EA", "level": lv.name, "points": points, "size_in": [4.0, 0.0], "bottoms_ft": bottoms,
-                            "height_source": "typical room view: over the ceiling", "size_source": "rule", "source_sheet": sh.number,
+                        let (size, size_source) = it.size_in.unwrap_or((4.0, "rule"));
+                        if let Ok(mut run) = serde_json::from_value::<cadaddy_walk3d::MepRun>(json!({
+                            "system": "EA", "level": lv.name, "points": points, "size_in": [size, 0.0], "bottoms_ft": bottoms,
+                            "height_source": "typical room view: over the ceiling", "size_source": size_source, "source_sheet": sh.number,
                         })) {
+                            // Followed on the view: copied from the typical room's drawing
+                            // (derived, Q6216); laid fan to cap where nothing could be followed
+                            // (inferred, its rule said).
+                            let from = typical_basis(&sh.number, title, &room);
+                            let (made, basis) = if made.is_drawn() {
+                                (
+                                    cadaddy_walk3d::Made::Derived,
+                                    format!("{from}; the duct as the view draws it, followed from the fan to its wall cap"),
+                                )
+                            } else {
+                                (made, format!("{from}; {basis}"))
+                            };
+                            super::provenance::set_run(&mut run, made, basis);
                             out.runs.push(run);
                         }
                     }
@@ -11804,6 +12257,7 @@ fn apply_symbol_list(sp: &mut cadaddy_walk3d::BuildingSpec, rows: &[SymbolRow]) 
             && !has(t, "mount_height_in")
             && !has(t, "mount")
         {
+            let i = super::mountlist::as_written(&row.doc).map_or(i, |(given, _)| given);
             t.set("mount_height_in", format!("{}", (i * 100.0).round() / 100.0), "legend");
             t.set("mount_height_note", row.doc.clone(), "legend");
         }
@@ -11929,7 +12383,10 @@ fn apply_typical_heights(sp: &mut cadaddy_walk3d::BuildingSpec, typical: &[Typic
         let mark = t.fields.get("type").map(|f| f.value.trim().to_ascii_uppercase()).unwrap_or_default();
         let kind = if emergency.contains(&mark) { "emergency light" } else { t.kind.as_str() };
         let Some(h) = typical.iter().find(|h| h.kind == kind) else { continue };
-        t.set("mount_height_in", format!("{}", (h.inches * 100.0).round() / 100.0), "note");
+        // As written when its words say what it is measured to (`4'-0" AFF TO TOP`: 48, its top),
+        // else its middle: the build reads the datum off the note.
+        let inches = super::mountlist::as_written(&h.doc).map_or(h.inches, |(given, _)| given);
+        t.set("mount_height_in", format!("{}", (inches * 100.0).round() / 100.0), "note");
         t.set("mount_height_note", h.doc.clone(), "note");
         n += 1;
     }
@@ -13682,7 +14139,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     sp.mep.feeders.retain(|f| !f.source.contains("one-line tag"));
     let feeders = planned.feeders.len();
     sp.mep.feeders.extend(planned.feeders);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     // The new gear built, then moved as the build moved its level to stack it. What took its
     // submittal's box is built again.
     let d = s.doc_mut()?;
@@ -13792,7 +14249,7 @@ fn gear_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_doc
     let wireway_tags: BTreeSet<String> = wireways.iter().map(|w| w.tag.to_ascii_uppercase()).collect();
     sp.mep.equipment.retain(|e| !wireway_tags.contains(&e.tag.to_ascii_uppercase()));
     sp.mep.equipment.extend(wireways);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let d = s.doc_mut()?;
     let offset_of = |l: &str| rooms.iter().find(|r| r.level.eq_ignore_ascii_case(l)).map_or(cadaddy_geom::Vec2::ZERO, |r| r.offset);
     for h in super::mep::build_equipment(d, &sp, Some(&wireway_tags)) {
@@ -13868,7 +14325,7 @@ fn fixture_schedule_step(s: &mut Session, job: &GuidedJob) -> crate::Result<bool
     }
     let Ok((mut sp, true)) = super::bspec::current(s, "bim_build") else { return Ok(no_subs) };
     sp.mep.fixture_schedule = types;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(no_subs)
 }
 
@@ -14289,7 +14746,7 @@ fn lighting_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy
             fixed,
         );
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     s.touch();
     // The report: luminaires and switches per level and per guest-room type against the plans'
     // symbols, and the conflicts by kind.
@@ -16580,7 +17037,7 @@ fn dampers_step(
                 false,
             );
         }
-        s.doc_mut()?.building_spec = Some(sp2.to_json());
+        s.doc_mut()?.building_spec = Some(sp2.to_json()).into();
     }
     s.touch();
     // The takeoff: the dampers by kind and size (whose work), our electrical lines apart.
@@ -17350,6 +17807,12 @@ fn doc_objects_step(
         if f.how == How::Note {
             props.insert("STATUS".into(), "proposed".into());
         }
+        // A note calls for it in every room of a type and no plan draws it there: derived from the
+        // note, its place in the room not drawn (Q6216).
+        if f.how == How::Rooms {
+            props.insert("STATUS".into(), "derived".into());
+            props.insert("BASIS".into(), format!("derived: {position}"));
+        }
         let mut sources = BTreeMap::new();
         sources.insert("kind".to_string(), format!("{} ({})", f.source, class.source));
         sources.insert("position".to_string(), position.clone());
@@ -17671,7 +18134,7 @@ fn load_step(s: &mut Session, job: &mut GuidedJob, result: &mut Value) -> crate:
         if let (Some((_, text)), Ok((mut sp, true))) = (groups.first(), super::bspec::current(s, "bim_build")) {
             sp.mep.occupancy = groups.iter().map(|g| g.0.as_str()).collect::<Vec<_>>().join(", ");
             sp.mep.occupancy_source = format!("{number}: {text}");
-            s.doc_mut()?.building_spec = Some(sp.to_json());
+            s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         }
         params["code_texts"] = json!(words);
         params["code_sheet"] = json!(number);
@@ -18627,7 +19090,7 @@ fn build_new_mep(
         }
     }
     sp.mep.runs.extend(runs.iter().cloned());
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let offsets: BTreeMap<String, Vec2> = {
         let d = s.doc()?;
         let mut m = BTreeMap::new();
@@ -18969,7 +19432,7 @@ fn equipment_step(
         conflicts_all.iter().map(|(t, c)| format!("{t} {}", c.check)).collect::<Vec<_>>().join(", ")
     );
     sp.mep.equipment_electrical = rows;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     if !built_extra.is_empty() || !built_silent.is_empty() {
         super::propfill::rebuild_devices(s, "bim_build")?;
     }
@@ -19724,6 +20187,14 @@ struct StampedRuns {
     report: BTreeMap<String, usize>,
 }
 
+/// The basis of what a typical room's view (`title` on `sheet`) gives a room of its type (`room`):
+/// derived from that view, not drawn in the room.
+fn typical_basis(sheet: &str, title: &str, room: &str) -> String {
+    let room = room.trim();
+    let into = if room.is_empty() { "a room of its type".to_string() } else { format!("room {room}") };
+    format!("derived: the typical room view {} on {sheet}, laid into {into} at the same place in the room", title.trim())
+}
+
 /// The pipes and ducts of the typical-room plans (ENLARGED GUESTROOM - SANITARY's DOUBLE QUEEN
 /// view) that no registration placed (`lost`): each, when all of it lies in a view whose title
 /// names a room type, into every room of that type at the same place in the room, as their devices
@@ -19783,7 +20254,7 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
             if let Some(t) = out.taken.get_mut(i) {
                 *t = true;
             }
-            for (ri, (_, level, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+            for (ri, (_, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 if out.runs.len() >= MAX_STAMPED {
                     break;
                 }
@@ -19815,6 +20286,10 @@ fn stamp_typical_runs(d: &cadaddy_doc::Drawing, job: &GuidedJob, placed: &[cadad
                 copy.level.clone_from(level);
                 copy.id = String::new();
                 copy.objects = Vec::new();
+                // No plan draws it in this room: it is the typical room's, laid in (Q6216).
+                if copy.made.is_drawn() {
+                    super::provenance::set_run(&mut copy, cadaddy_walk3d::Made::Derived, typical_basis(&r.source_sheet, title, number));
+                }
                 out.runs.push(copy);
                 *out.report.entry(format!("{sheet} {title}")).or_default() += 1;
             }
@@ -20714,6 +21189,18 @@ fn arch_placer(
     let lap = |what: &str| progress_line(&format!("  placer: {what} at {:.1} s", clock.elapsed().as_secs_f64()));
     let reg = super::identity::register(d, &sheets, upf);
     lap("sheets registered by tags");
+    // Each sheet's fit by its tags, and whether it places the sheet (the report says which fits
+    // the build left to the sheet's grids, background or frame).
+    for t in reg.transforms.iter().filter(|t| t.registered && t.method != "reference").take(MAX_SHEETS_REPORTED) {
+        let (scale, turn) = (t.transform.scale(), t.transform.rotation_deg());
+        progress_line(&format!(
+            "  placer: {} on {} by {} tags: scale {scale:.3}, turned {turn:.2} deg: {}",
+            t.sheet,
+            t.level,
+            t.matched,
+            tag_fit_why_not(t.matched, scale, turn).map_or_else(|| "used".to_string(), |w| format!("not used ({w})"))
+        ));
+    }
     // Each level's architectural plan (the sheet the registration takes as its reference) and
     // the other sheets: their grid intersections, for views no tag fit reaches.
     let level_key0 = |l: &str| {
@@ -20785,7 +21272,7 @@ fn arch_placer(
             return Some(cadaddy_mepfix::tagid::Sim::scale_offset(k, t));
         }
         // Else the sheet's fit by its tags; one on a few tags or off 1:1 is no fit.
-        if let Some(t) = fit.filter(|t| t.matched >= 4 && (0.85..=1.18).contains(&t.transform.scale())) {
+        if let Some(t) = fit.filter(|t| tag_fit_holds(t.matched, t.transform.scale(), t.transform.rotation_deg())) {
             // The fit puts the sheet onto its reference plan, which for a several-level sheet
             // may be another level's: from there onto this level's own plan, by their frames.
             let mut m = t.transform;
@@ -21043,6 +21530,40 @@ fn part_of_plan(view: &[cadaddy_geom::Vec2], plan: &[cadaddy_geom::Vec2]) -> boo
 
 /// Points a job's placer remembers at most.
 const MAX_PLACER_MEMO: usize = 500_000;
+
+/// Sheets whose fit by tags the placer reports at most.
+const MAX_SHEETS_REPORTED: usize = 200;
+
+/// Fewest tags a sheet's fit by its tags is taken on.
+const TAG_FIT_MIN: usize = 4;
+/// The scales a fit on many tags may have (a sheet a little off its printed scale).
+const TAG_FIT_SCALES: std::ops::RangeInclusive<f64> = 0.85..=1.18;
+/// How far off one to one (a share) a fit on a few tags ([`cadaddy_mepfix::tagid::FEW_TAGS`]) may
+/// be: sheets come in at their printed scales, so a handful of tags that need a stretch (11% on
+/// five tags) matched the wrong tags, and placing a plan by it puts its ducts and grilles feet
+/// from where it draws them. A few tags turned off square are no fit either
+/// ([`cadaddy_mepfix::tagid::few_tags_off_square`]).
+const TAG_FIT_FEW_SCALE: f64 = 0.05;
+
+/// Whether a sheet's fit by its tags (`matched` tags, at `scale`, turned `turn_deg`) places it,
+/// else why not.
+fn tag_fit_why_not(matched: usize, scale: f64, turn_deg: f64) -> Option<&'static str> {
+    use cadaddy_mepfix::tagid;
+    if matched < TAG_FIT_MIN {
+        Some("too few tags")
+    } else if !TAG_FIT_SCALES.contains(&scale) {
+        Some("off its printed scale")
+    } else if tagid::few_tags_off_square(matched, turn_deg) || (matched < tagid::FEW_TAGS && (scale - 1.0).abs() > TAG_FIT_FEW_SCALE) {
+        Some("a few tags that need a stretch or a turn")
+    } else {
+        None
+    }
+}
+
+/// Whether a sheet's fit by its tags places it ([`tag_fit_why_not`]).
+fn tag_fit_holds(matched: usize, scale: f64, turn_deg: f64) -> bool {
+    tag_fit_why_not(matched, scale, turn_deg).is_none()
+}
 
 /// Each storey's shell ([`super::wallgen::shells`]) the rooms stage's rooms confirm: one holding
 /// fewer than [`SHELL_ROOMS`] of its level's rooms is walls the plan didn't close round the
@@ -22768,7 +23289,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
         );
         let started = web_time::Instant::now();
         if let Ok(d) = s.doc() {
-            job.spec_at_start.insert(stage_name, d.building_spec.clone());
+            job.spec_at_start.insert(stage_name, d.building_spec.as_ref().cloned());
         }
         // What the job held before the stage (a stage a cancel cuts short leaves none of its
         // findings and questions behind).
@@ -22797,7 +23318,7 @@ fn advance_stages(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
             if let Some(spec) = job.spec_at_start.get(&stage_name).cloned()
                 && let Ok(d) = s.doc_mut()
             {
-                d.building_spec = spec;
+                d.building_spec = spec.into();
             }
             job.findings.truncate(held.0);
             job.worklist.truncate(held.1);
@@ -23495,7 +24016,7 @@ fn rerun_from_stage(
         s.execute("model.build", &json!({"clear": true}))?;
     }
     if let Some(spec) = reset.first().and_then(|(n, _)| job.spec_at_start.get(n)).cloned() {
-        s.doc_mut()?.building_spec = spec;
+        s.doc_mut()?.building_spec = spec.into();
     }
     if !reset.is_empty() {
         let names: Vec<&str> = reset.iter().map(|(n, _)| n.label()).collect();
@@ -24402,15 +24923,15 @@ fn cmd_undo(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("job.start", "Start Guided Job", cmd_start)
+        CommandSpec::new("job.start", "Start Guided Job", cmd_start).long()
             .files()
             .params("{pdfs: path (folder of PDFs or DWGs), goal?: \"cdy\"|\"bim\"|\"takeoff\"|\"estimate\" (default)|\"clash\"|\"sequence\" (clash, then the construction sequence), auto?: bool (default false: the job stops at each checkpoint — a low-confidence reading, a count to confirm, a spot check — until job.answer; true: every question with a default takes it and the job runs to the end, except a stage that found nothing where it should, which is always asked), resume?: true | false | \"any\" (default true: a job of the same goal cut off before it finished goes on from its checkpoint when its prints are these by content — names, sizes, contents; another folder or machine is fine, the job's print path is remapped and the result says prints_moved_from; other prints are refused naming the files that differ; \"any\": goes on from it whatever the prints, saying how they differ; false: starts over, writing over the checkpoint), refresh?: \"stale\" (default) | \"none\" | a stage (what a resumed job does with the stages its checkpoint holds: \"stale\" runs again, from the first of them on, every stage another build read (each stage records the build that ran it; a checkpoint from before that counts as another build), so a rebuild from a checkpoint reads the prints as a whole job of this build does; from the rooms stage or before, the job starts again from the prints, keeping its answers; \"none\" keeps them all, said in resume_note and a finding; a stage name runs again from it on), submittals?: path | [path] (submittal PDFs, or folders of them: the types they give products for are device types on the electrical sheets, and after the build each device, fixture and equipment element gets its type's product — maker, catalog number, dimming — with the submittal page as the source), specs?: path | [path] | false (specification section PDFs, a project manual, or folders of them; default: the job looks in the prints folder, the folders beside it and beside the submittals' for a folder or file named like a specification or project manual, else a PDF whose pages carry CSI section headers (as SECTION 26 05 19), and says where; none found: it asks at classify for the path or \"none\" (auto mode: goes on with a high finding); false or \"none\": on without one (a high finding); the build reads Divisions 22, 23, 26, 27 and 28: each element's product record — the section's makers, rating, configuration, colour, features — with section and page as the source; job.report's specifications lists the sections read), cost_db?: path (the company's cost DB as .csv or .json — item, size, unit, material_unit, labor_unit, labor in DOLLARS, `# manpower_rate:` — a private file: value engineering prices both ways from it and writes the rows the job needs beside the drawing), checkpoint?: path | false (the job's drawing, saved after each stage; default a .cdy in the temporary folder, removed when the job is done; a path you give stays, with the finished model, and must be new or a job's checkpoint: an existing drawing is refused, never written over)} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, open_questions, rules_learned, answers: {mode, automatic, by_you, open, note}, question?: the question the job waits on, resumed?, resume_note?, refreshed?: {from, stages?, other_build, started_over, why}}; progress: job.progress events (and lines on the CLI's stderr) per stage and per sheet imported"),
-        CommandSpec::new("job.next", "Next Job Question", cmd_next)
+        CommandSpec::new("job.next", "Next Job Question", cmd_next).long()
             .params("{} → {question?: {id (e.g. Q-classify-1, Q-levels-4, Q-rooms-23), stage, question, why, choices, evidence, sheet?, crop?, default, kind, always_asked, if_changed: {reruns, about_s, note} | {applies_to} | null (what an answer other than the default runs again, and about how long)}, answers, done?, progress, stage?, rerun?: {stages, changed} (answers held with rerun: false ran now)}")
             .noundo(),
-        CommandSpec::new("job.answer", "Answer Job Question", cmd_answer)
+        CommandSpec::new("job.answer", "Answer Job Question", cmd_answer).long()
             .params("{id: \"Q-rooms-23\" (the question id job.next gives: Q-stage-number, as Q-levels-3; not needed with answers), answer: \"Correct\" | text | object (a choice, the default, your own value; a level question takes an elevation in feet — 12.5, or feet and inches — and a name: {elevation_ft: 12.5, name: \"Mezzanine\"}; \"Correct\" confirms it as yours), answers?: [{id, answer}] (many at once: each stands alone — an unknown or merged id is a warning and the rest are kept — and the stages they change run again once), rerun?: bool (default true; false holds the re-run until the next job.answer or job.next, to answer several questions of one stage first)} → {answered: id | [ids], effect: what the answer changes | [{id, effect}], rerun: [stages run again], changed: [{stage, what, before, after}], applies_to?: a stage still to run that will read it, rerun_held?: {from, note}, levels_changed?, warnings?: [{id, warning}], next?: question, done?, progress, answers}"),
-        CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode)
+        CommandSpec::new("job.set_mode", "Set Job Mode", cmd_set_mode).long()
             .params("{auto: bool (true: the running job goes on unattended, every open question with a default takes it; false: it stops at each checkpoint again)} → {mode: {from, to}, rerun?, …job.status}"),
         CommandSpec::new("job.status", "Job Status", cmd_status)
             .params("{} → {job_id, goal, progress, done, current_stage, stages: [{stage, status, questions, unanswered, elapsed_ms?}], elapsed_ms, checkpoint?, open_questions, findings, worklist_pending, rules_learned}")
@@ -24821,7 +25342,7 @@ mod tests {
             ..Default::default()
         }];
         if let Ok(d) = s.doc_mut() {
-            d.building_spec = Some(sp.to_json());
+            d.building_spec = Some(sp.to_json()).into();
             // The junction box the plan shows, as the build made it (linked to its device).
             let mut x = super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "1", cadaddy_doc::Handle(0));
             x.push(cadaddy_doc::RawTag { code: 1000, value: "devid:device:2".into() });
@@ -26364,7 +26885,9 @@ mod tests {
         sp.tags = vec![tag("device:p", "P"), tag("device:r", "SR"), tag("device:h", "H")];
         assert_eq!(apply_symbol_list(&mut sp, &rows), 2, "H is either of two rows");
         let f = |id: &str, k: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get(k)).map(|f| f.value.clone());
-        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("45.75"));
+        // Stored as written (its note says to its top: the build puts its top there); the row
+        // itself keeps its middle.
+        assert_eq!(f("device:p", "mount_height_in").as_deref(), Some("48"));
         assert_eq!(f("device:r", "mount").as_deref(), Some("ceiling"));
         assert_eq!(f("device:r", "device_type").as_deref(), Some("resident room smoke detector and sounder base SR"));
         assert!(f("device:h", "device_type").is_none());
@@ -26397,7 +26920,8 @@ mod tests {
         assert_eq!(xs(0), Some((0.0, 144.0)));
     }
 
-    /// A general note's typical mounting heights, item by item, to each one's centre.
+    /// A general note's typical mounting heights, item by item, to each one's centre; a device takes
+    /// the height as written when the words say what it is measured to (its top, its bottom).
     #[test]
     fn a_general_notes_typical_heights_are_read_item_by_item() {
         assert_eq!(typical_item("TOGGLE SWITCH 4'-0\" AFF TO TOP", "E-1").map(|t| (t.kind, t.inches)), Some(("switch", 45.75)));
@@ -26424,7 +26948,7 @@ mod tests {
         let h = |id: &str| sp.tags.iter().find(|t| t.id == id).and_then(|t| t.fields.get("mount_height_in")).map(|f| f.value.clone());
         assert_eq!(
             (h("device:a"), h("device:b"), h("device:c"), h("device:d")),
-            (Some("18".into()), Some("44".into()), Some("45.75".into()), Some("92.25".into()))
+            (Some("18".into()), Some("44".into()), Some("48".into()), Some("90".into()))
         );
     }
 
@@ -26517,6 +27041,70 @@ mod tests {
     /// fixtures on circuit D-7 (a homerun arrow at the last one), two B fixtures on D-9 (no
     /// homerun), and panel D drawn as a box lettered D. The job reads the circuits, routes
     /// each (estimated), and the takeoff has their conduit, wire and boxes by level and circuit.
+    #[test]
+    fn a_mechanical_plans_reading_is_placed_by_its_own_sheets_fit_and_a_few_stretched_tags_are_no_fit() {
+        // Three sheets of one size on one level. M-101 draws its plan 60 units right of and 30 up
+        // from where A-101 draws it on its page; both print ten room numbers. M-102 prints five of
+        // them stretched 11% and turned 3 degrees (five tags matched wrongly).
+        let mut s = crate::Session::new();
+        let rooms: Vec<(String, [f64; 2])> =
+            (0..10_u32).map(|i| ((101 + i).to_string(), [100.0 + 160.0 * f64::from(i % 5), 200.0 + 300.0 * f64::from(i / 5)])).collect();
+        {
+            let d = s.doc_mut().unwrap_or_else(|e| panic!("{e}"));
+            let common = || Common { layer: "PDF".into(), ..Common::default() };
+            let (k, turn) = (1.11_f64, 3.0_f64.to_radians());
+            for (i, (n, p)) in rooms.iter().enumerate() {
+                d.add(&Space::Model, common(), EntityKind::Text(text(n, p[0], p[1], 6.0))).ok();
+                d.add(&Space::Model, common(), EntityKind::Text(text(n, p[0] + 2060.0, p[1] + 30.0, 6.0))).ok();
+                if i < 5 {
+                    let q = [4000.0 + k * (p[0] * turn.cos() - p[1] * turn.sin()), k * (p[0] * turn.sin() + p[1] * turn.cos())];
+                    d.add(&Space::Model, common(), EntityKind::Text(text(n, q[0], q[1], 6.0))).ok();
+                }
+            }
+        }
+        let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
+            "units_per_foot": 12.0,
+            "levels": [{"name": "Level 1", "elevation_ft": 0.0, "height_ft": 12.0, "ceiling_ft": 9.0, "region": [0, 0, 1000, 800]}],
+            "sheets": [
+                {"number": "A-101", "discipline": "A", "level": "Level 1", "rect": [0, 0, 1000, 800]},
+                {"number": "M-101", "discipline": "M", "level": "Level 1", "rect": [2000, 0, 3000, 800]},
+                {"number": "M-102", "discipline": "M", "level": "Level 1", "rect": [4000, 0, 5000, 800]}
+            ]
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let place = arch_placer(s.doc().unwrap_or_else(|e| panic!("{e}")), &sp, &[], Vec::new());
+        let at = |p: [f64; 2]| place(p, "Level 1").map(|m| m.apply(p)).map(|q| [q[0].round(), q[1].round()]);
+        // A duct's point where M-101 draws it lands where A-101 has that spot, by M-101's tags.
+        assert_eq!(at([2560.0, 430.0]), Some([500.0, 400.0]));
+        // Moved onto A-101 by the sheets' corners first (as the reading was before), A-101's own
+        // frame placed it: 60 and 30 units off, away from M-101's devices.
+        assert_eq!(at([560.0, 430.0]), Some([560.0, 430.0]));
+        // M-102's five stretched, turned tags are no fit: its frame places it, not them.
+        assert_eq!(at([4500.0, 400.0]), Some([500.0, 400.0]));
+    }
+
+    #[test]
+    fn a_fit_on_a_few_tags_must_be_one_to_one_and_square() {
+        // Many tags: a sheet a little off its printed scale or turned a little.
+        assert!(tag_fit_holds(26, 1.0, 0.5));
+        assert!(tag_fit_holds(10, 0.975, 0.6));
+        assert!(tag_fit_holds(16, 0.996, -1.2));
+        // A few: only one to one and square.
+        assert!(tag_fit_holds(5, 1.01, 0.4));
+        assert!(!tag_fit_holds(5, 1.112, 2.9));
+        assert!(!tag_fit_holds(6, 1.0, 2.0));
+        assert!(!tag_fit_holds(7, 0.93, 0.0));
+        assert_eq!(tag_fit_why_not(5, 1.112, 1.0), Some("a few tags that need a stretch or a turn"));
+        // A quarter turn is square (a sheet drawn turned); many tags are their own word.
+        assert!(tag_fit_holds(5, 1.0, 90.2));
+        assert!(tag_fit_holds(12, 1.0, 4.0));
+        // Too few, too far off, or not a number: never.
+        assert!(!tag_fit_holds(3, 1.0, 0.0));
+        assert!(!tag_fit_holds(40, 1.3, 0.0));
+        assert!(!tag_fit_holds(40, f64::NAN, 0.0));
+        assert!(!tag_fit_holds(5, 1.0, f64::NAN));
+    }
+
     #[test]
     fn circuits_come_out_of_the_job_as_conduit_and_wire() {
         let mut s = crate::Session::new();
@@ -27149,6 +27737,209 @@ mod tests {
         assert_eq!(source, "7'-10\" measured on A-8 DOUBLE QUEEN - BED WALL (F.F. to B.O. CEILING)");
     }
 
+    /// A made-up typical room's mechanical view at `k` units per inch (inches given): an exhaust
+    /// fan (12" box) whose 4" duct is drawn north as two lines, an elbow (left as a gap, as an
+    /// arc's short pieces are), then east as a closed duct outline to a wall cap of louvre circles
+    /// (one drawn as a round outline); a wall's two faces leave the fan southward to nothing.
+    fn ducted_fan_view(k: f64) -> (Vec<(String, [f64; 2])>, Vec<([f64; 2], [f64; 2], bool)>, Vec<([f64; 2], f64)>, Vec<ViewSeg>) {
+        let p = |x: f64, y: f64| [x * k, y * k];
+        let labels = vec![("EF".to_string(), p(114.0, 214.0)), ("4\"ø".to_string(), p(111.0, 240.0))];
+        let shapes = vec![(p(100.0, 200.0), p(112.0, 212.0), true), (p(113.0, 265.0), p(128.0, 269.5), true)];
+        let circles = vec![
+            (p(106.0, 206.0), 2.0 * k),
+            (p(136.0, 258.0), 2.0 * k),
+            (p(136.0, 263.0), 2.0 * k),
+            (p(136.0, 268.0), 2.0 * k),
+            (p(136.0, 273.0), 2.2 * k),
+        ];
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        // The fan as a box in a box (housing and grille, sides a duct's width apart) with a
+        // round outline at its middle.
+        let mut segs: Vec<ViewSeg> = rect(p(100.0, 200.0), p(112.0, 212.0));
+        segs.extend(rect(p(100.5, 200.5), p(111.5, 211.5)));
+        segs.extend(rect(p(101.0, 201.0), p(110.5, 210.5)));
+        // The duct north: both sides, the label's break left out of neither.
+        segs.push((p(104.0, 214.5), p(104.0, 262.0)));
+        segs.push((p(108.5, 262.0), p(108.5, 214.5)));
+        // The elbow's arc as short pieces (under a side's length).
+        segs.push((p(108.5, 262.0), p(110.0, 264.5)));
+        segs.push((p(110.0, 264.5), p(113.0, 265.0)));
+        // East to the wall: a closed duct outline.
+        segs.extend(rect(p(113.0, 265.0), p(128.0, 269.5)));
+        // The exterior wall's two faces, and a partition's two faces leaving the fan southward.
+        segs.push((p(130.0, 150.0), p(130.0, 300.0)));
+        segs.push((p(134.0, 150.0), p(134.0, 300.0)));
+        segs.push((p(95.0, 205.0), p(95.0, 100.0)));
+        segs.push((p(99.5, 100.0), p(99.5, 205.0)));
+        (labels, shapes, circles, segs)
+    }
+
+    #[test]
+    fn an_exhaust_fans_duct_follows_the_route_its_view_draws_to_the_wall_cap() {
+        for k in [1.0, 2.0] {
+            let (labels, shapes, circles, segs) = ducted_fan_view(k);
+            let items = mech_items(&labels, &shapes, &circles, &segs, k);
+            let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+            let (route, made, basis) = fan_duct_route(ef, k, "SAMPLE ROOM").unwrap_or_else(|| panic!("{ef:?}"));
+            let near = |a: [f64; 2], x: f64, y: f64| (a[0] - x * k).abs() <= 0.6 * k && (a[1] - y * k).abs() <= 0.6 * k;
+            // Up from the fan along the drawn duct's centreline, the turn where the drawing turns,
+            // then east to the cap: not the shorter leg first along the fan's line.
+            assert_eq!(route.len(), 3, "k {k}: {route:?}");
+            assert!(near(route[0], 106.25, 206.0), "k {k}: starts at the fan on the duct's line: {route:?}");
+            assert!(near(route[1], 106.25, 267.25), "k {k}: turns where the drawn duct turns: {route:?}");
+            assert!(near(route[2], 136.0, 267.25), "k {k}: ends at the wall cap: {route:?}");
+            assert_eq!(made, cadaddy_walk3d::Made::Drawn, "{basis}");
+            assert_eq!(ef.size_in, Some((4.0, "tag")), "the size printed along it");
+        }
+    }
+
+    #[test]
+    fn a_fans_duct_crosses_a_neck_at_the_fan_and_a_curved_last_run_to_its_cap() {
+        // A made-up view: the fan (14" x 12"), a neck drawn as curves for 10" below it, one
+        // straight 4.4" duct south 30", then the elbow and the run west to the wall cap drawn as
+        // curves only (short pieces); the cap 26" west of the duct's end.
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        let mut segs: Vec<ViewSeg> = rect([300.0, 500.0], [314.0, 512.0]);
+        segs.push(([309.0, 490.0], [309.0, 460.0]));
+        segs.push(([313.4, 460.0], [313.4, 490.0]));
+        segs.extend((0..12).map(f64::from).map(|i| ([309.0 - i * 2.0, 460.0 - i * 0.3], [307.0 - i * 2.0, 459.7 - i * 0.3])));
+        let shapes = vec![([300.0, 500.0], [314.0, 512.0], true)];
+        let labels = vec![("EF".to_string(), [318.0, 514.0])];
+        let circles = vec![([285.0, 458.0], 2.0), ([285.0, 464.0], 2.0), ([285.0, 470.0], 2.0)];
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        let near = |a: [f64; 2], x: f64, y: f64| (a[0] - x).abs() <= 0.6 && (a[1] - y).abs() <= 0.6;
+        assert_eq!(ef.route.len(), 3, "{ef:?}");
+        assert!(near(ef.route[0], 311.2, 506.0), "{ef:?}");
+        assert!(near(ef.route[1], 311.2, 458.0), "square turn level with the cap: {ef:?}");
+        assert!(near(ef.route[2], 285.0, 458.0), "{ef:?}");
+        assert_eq!(ef.size_in, Some((4.0, "drawn width")));
+    }
+
+    #[test]
+    fn a_trace_that_wanders_through_other_linework_is_not_the_fans_duct() {
+        // From the fan a 4" pair runs south, then pairs of the same width zigzag east and west
+        // (shelving, a bench) before ending by louvre circles beside the fan: no duct runs so.
+        let rect = |a: [f64; 2], b: [f64; 2]| vec![(a, [b[0], a[1]]), ([b[0], a[1]], b), (b, [a[0], b[1]]), ([a[0], b[1]], a)];
+        let mut segs: Vec<ViewSeg> = rect([0.0, 0.0], [12.0, 12.0]);
+        let mut y = -2.0;
+        let mut x = 6.0;
+        for i in 0..6 {
+            // South 20", then 40" east or west, alternating.
+            segs.push(([x - 2.0, y], [x - 2.0, y - 20.0]));
+            segs.push(([x + 2.0, y], [x + 2.0, y - 20.0]));
+            y -= 26.0;
+            let to = if i % 2 == 0 { x + 40.0 } else { x - 40.0 };
+            segs.push(([x.min(to) + 4.0, y + 2.0], [x.max(to) - 4.0, y + 2.0]));
+            segs.push(([x.min(to) + 4.0, y - 2.0], [x.max(to) - 4.0, y - 2.0]));
+            x = to;
+            y -= 6.0;
+        }
+        let circles = vec![([x, y - 4.0], 2.0), ([x + 5.0, y - 4.0], 2.0), ([x - 5.0, y - 4.0], 2.0)];
+        let shapes = vec![([0.0, 0.0], [12.0, 12.0], true)];
+        let labels = vec![("EF".to_string(), [14.0, 14.0])];
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert!(ef.route.is_empty(), "{ef:?}");
+    }
+
+    #[test]
+    fn a_fan_with_no_drawn_duct_to_follow_gets_one_laid_to_its_cap_and_marked_inferred() {
+        let (labels, shapes, circles, _) = ducted_fan_view(1.0);
+        let items = mech_items(&labels, &shapes, &circles, &[], 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        let (route, made, basis) = fan_duct_route(ef, 1.0, "SAMPLE ROOM").unwrap_or_else(|| panic!("{ef:?}"));
+        assert_eq!(made, cadaddy_walk3d::Made::Inferred);
+        assert!(basis.contains("no drawn duct") && basis.contains("SAMPLE ROOM"), "{basis}");
+        assert_eq!(route.len(), 3, "{route:?}");
+        // A drawn duct that never reaches a cap is not followed either.
+        let (labels, shapes, _, segs) = ducted_fan_view(1.0);
+        let items = mech_items(&labels, &shapes, &[], &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert!(ef.route.is_empty() && fan_duct_route(ef, 1.0, "SAMPLE ROOM").is_none(), "{ef:?}");
+    }
+
+    #[test]
+    fn a_wall_cap_drawn_with_round_outlines_still_ends_the_fans_duct() {
+        // Two true circles; the rest of the louvre drawn as round outlines (the caller reads
+        // those as circles), so three make a cap.
+        let (labels, shapes, mut circles, segs) = ducted_fan_view(1.0);
+        circles.truncate(3);
+        circles.push(([136.0, 268.0], 2.2));
+        let items = mech_items(&labels, &shapes, &circles, &segs, 1.0);
+        let ef = items.iter().find(|i| i.kind == "exhaust_fan").unwrap_or_else(|| panic!("{items:?}"));
+        assert_eq!(ef.route.len(), 3, "{ef:?}");
+        assert_eq!(duct_size_label("6\" Ø"), Some(6.0));
+        assert_eq!(duct_size_label("4\"ø"), Some(4.0));
+        assert_eq!(duct_size_label("4\"x6\""), None);
+        assert_eq!(duct_size_label("10'"), None);
+    }
+
+    #[test]
+    fn a_louvre_circle_traced_as_a_polyline_is_round_and_a_short_duct_outline_is_not() {
+        let v = |x: f64, y: f64| cadaddy_geom::PolyVertex { p: cadaddy_geom::Vec2::new(x, y), ..Default::default() };
+        // A 4.4" circle as 16 points, at 2 units per inch.
+        let circle: Vec<cadaddy_geom::PolyVertex> =
+            (0..16).map(|i| f64::from(i) * std::f64::consts::TAU / 16.0).map(|a| v(500.0 + 4.4 * a.cos(), 80.0 + 4.4 * a.sin())).collect();
+        let (c, r) = round_outline(&circle, true, 2.0).unwrap_or_else(|| panic!("round"));
+        assert!((c[0] - 500.0).abs() < 1e-6 && (c[1] - 80.0).abs() < 1e-6 && (r - 4.4).abs() < 0.1, "{c:?} {r}");
+        assert!(round_outline(&circle, false, 2.0).is_none(), "open is no outline");
+        // A 5" x 4.4" duct piece with rounded ends: as wide as it is long, but not round.
+        let mut piece = vec![v(0.0, 0.0), v(5.0, 0.0)];
+        piece.extend(
+            (1..8)
+                .map(|i| f64::from(i) * std::f64::consts::PI / 8.0 - std::f64::consts::FRAC_PI_2)
+                .map(|a| v(5.0 + 0.6 * a.cos(), 2.2 + 2.2 * a.sin())),
+        );
+        piece.extend([v(5.0, 4.4), v(0.0, 4.4)]);
+        assert!(round_outline(&piece, true, 1.0).is_none(), "{piece:?}");
+        // A dot is no louvre.
+        let dot: Vec<cadaddy_geom::PolyVertex> = circle.iter().map(|p| v(p.p.x / 40.0, p.p.y / 40.0)).collect();
+        assert!(round_outline(&dot, true, 1.0).is_none());
+    }
+
+    #[test]
+    fn a_duct_already_laid_along_a_fans_drawn_duct_is_that_duct_and_counted_once() {
+        let systems: Vec<cadaddy_walk3d::MepSystem> = ["EA", "SA", "M-DUCT", "CW"]
+            .iter()
+            .filter_map(|n| {
+                serde_json::from_value(
+                    json!({"name": n, "layer": n, "kind": if *n == "CW" { "pipe" } else { "duct" }, "size_in": [4.0, 0.0], "bottom_ft": 8.0}),
+                )
+                .ok()
+            })
+            .collect();
+        assert_eq!(systems.len(), 4);
+        let run = |system: &str, points: Vec<[f64; 2]>, made: cadaddy_walk3d::Made| {
+            let mut r: cadaddy_walk3d::MepRun =
+                serde_json::from_value(json!({"system": system, "level": "Level 1", "points": points, "size_in": [4.0, 0.0], "bottoms_ft": []}))
+                    .unwrap_or_else(|e| panic!("{e}"));
+            r.made = made;
+            r
+        };
+        let fan = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0], [40.0, 120.0]], cadaddy_walk3d::Made::Drawn)];
+        let mut runs = vec![
+            run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn),
+            run("SA", vec![[1.0, 119.0], [39.0, 121.0], [3.0, 2.0]], cadaddy_walk3d::Made::Drawn),
+            run("SA", vec![[300.0, 0.0], [300.0, 120.0]], cadaddy_walk3d::Made::Drawn),
+            run("CW", vec![[1.0, 1.0], [1.0, 110.0]], cadaddy_walk3d::Made::Drawn),
+            run("M-DUCT", vec![[0.0, 2.0], [0.0, 400.0]], cadaddy_walk3d::Made::Drawn),
+        ];
+        let (gone, by) = drop_fan_duct_repeats(&mut runs, &systems, &fan, 12.0);
+        assert_eq!(gone, 2, "{runs:?}");
+        assert_eq!(by.get("SA"), Some(&1));
+        assert_eq!(by.get("M-DUCT"), Some(&1));
+        assert_eq!(runs.len(), 3);
+        // One followed on a typical room's view and laid into its room (derived) is the same.
+        let copied = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Derived)];
+        let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
+        assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &copied, 12.0).0, 1);
+        // A fan's duct laid by rule (not followed on a drawing) takes nothing away.
+        let laid = vec![run("EA", vec![[0.0, 0.0], [0.0, 120.0]], cadaddy_walk3d::Made::Inferred)];
+        let mut runs = vec![run("M-DUCT", vec![[2.0, 3.0], [2.0, 118.0]], cadaddy_walk3d::Made::Drawn)];
+        assert_eq!(drop_fan_duct_repeats(&mut runs, &systems, &laid, 12.0).0, 0);
+    }
+
     #[test]
     fn a_typical_rooms_mechanical_view_gives_its_ptac_and_exhaust_fan() {
         // As M-5's MECH ENLARGED DOUBLE QUEEN draws them (inches): the PTAC tag and its type, the
@@ -27177,7 +27968,7 @@ mod tests {
             ([52329.0, 1111.0], 3.5),
             ([52329.0, 1103.0], 3.5),
         ];
-        let items = mech_items(&labels, &shapes, &circles, 1.0);
+        let items = mech_items(&labels, &shapes, &circles, &[], 1.0);
         assert_eq!(items.len(), 2, "{items:?}");
         let ptac = items.iter().find(|i| i.kind == "ptac").unwrap();
         assert_eq!(ptac.tag, "PTAC-1");
@@ -27190,7 +27981,7 @@ mod tests {
         let mut tagged = labels.clone();
         tagged.push(("EF-3".to_string(), [52320.0, 1080.0]));
         tagged.push(("EF".to_string(), [52296.0, 1050.0]));
-        let items = mech_items(&tagged, &shapes, &circles, 1.0);
+        let items = mech_items(&tagged, &shapes, &circles, &[], 1.0);
         assert!(items.iter().any(|i| i.kind == "exhaust_fan" && i.tag == "EF-3"), "{items:?}");
         assert_eq!(items.iter().filter(|i| i.kind == "exhaust_fan").count(), 1, "one fan tagged twice: {items:?}");
         // A typical room's connection tags go to its equipment.
@@ -28615,6 +29406,11 @@ mod tests {
         assert_eq!((r.level.as_str(), r.system.as_str(), r.id.as_str()), ("Level 2", "SAN", ""));
         assert!(r.points.iter().all(|p| p[0] >= 10_000.0 && p[0] <= 10_144.0 && p[1] >= 0.0 && p[1] <= 288.0), "{:?}", r.points);
         assert!((r.points[1][1] - r.points[0][1]).abs() > 100.0, "it runs along the room: {:?}", r.points);
+        // No plan draws it in room 201: derived from the typical room's view, with its basis
+        // (drawn, it would pass for the engineer's line in that room).
+        assert_eq!(r.made, cadaddy_walk3d::Made::Derived);
+        assert!(r.basis.starts_with("derived: the typical room view") && r.basis.contains("room 201"), "{}", r.basis);
+        assert!(lost.iter().all(|l| l.made.is_drawn()), "the view's own run stays drawn");
     }
 
     /// The pipes an enlarged plan draws in one room of a type go into the other rooms of the type
@@ -31405,7 +32201,7 @@ mod tests {
             row("Q5", "X1", "LED 5VA", "SURFACE", "DECORATIVE WALL LIGHT"),
         ];
         sp.unit_instances = json!([{"number": "C1", "type": "TYPE 7A"}]);
-        s.doc_mut().unwrap().building_spec = Some(sp.to_json());
+        s.doc_mut().unwrap().building_spec = Some(sp.to_json()).into();
         let sub = [("manufacturer", "Maker One Lighting"), ("catalog_number", "AB12 L48 4000LM MVOLT 40K")];
         let l1 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [0.0, 0.0], &sub);
         let l2 = lit_device(&mut s, "luminaire", "Q1", "A1", "a", [10.0, 0.0], &sub);

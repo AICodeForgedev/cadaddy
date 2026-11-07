@@ -567,7 +567,7 @@ fn write_registrations(s: &mut Session, transforms: &[SheetTransform]) -> Result
             residual: t.residual,
         });
     }
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -663,7 +663,7 @@ fn write_identities(
                 t.set("seen_on", seen.clone(), "plan");
             }
         }
-        d.building_spec = Some(sp.to_json());
+        d.building_spec = Some(sp.to_json()).into();
     }
     Ok(())
 }

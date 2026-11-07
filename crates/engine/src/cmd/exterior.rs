@@ -455,7 +455,7 @@ fn run_elev(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     if apply {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({
         "facade": side.map(|s| s.name()),
@@ -660,7 +660,7 @@ fn run_roof(s: &mut Session, p: &Value) -> Result<Value> {
         sp.exterior.crickets.extend(crickets);
         sp.exterior.equipment.extend(equipment);
         sp.exterior.drains.extend(drains);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(result)
 }

@@ -741,7 +741,7 @@ pub fn lug_kits(sp: &BuildingSpec) -> Vec<Value> {
 // ---------------- commands ----------------
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -819,7 +819,7 @@ fn run_review(s: &mut Session, p: &Value) -> Result<Value> {
         added.push(id);
     }
     if !added.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let errors = findings.iter().filter(|f| f.severity == "error").count();
     Ok(json!({
@@ -853,7 +853,7 @@ fn run_accept(s: &mut Session, p: &Value) -> Result<Value> {
     let accepted = g.accepted.clone();
     let changed = had == undo;
     if changed {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "tag": tag, "accepted": accepted, "changed": changed, "labor": labor(&sp) }))
 }

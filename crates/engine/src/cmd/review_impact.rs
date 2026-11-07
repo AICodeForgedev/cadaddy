@@ -1152,7 +1152,7 @@ fn save(s: &mut Session, st: &mut State) -> Result<()> {
     if let Some(o) = root.as_object_mut() {
         o.insert(STATE_KEY.into(), serde_json::to_value(&*st).unwrap_or(Value::Null));
     }
-    doc.agent = serde_json::to_string(&root).ok();
+    doc.agent = serde_json::to_string(&root).ok().into();
     Ok(())
 }
 

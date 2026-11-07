@@ -173,7 +173,7 @@ fn job() -> Job {
     let mut sp: Value = serde_json::from_str(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
     sp["unit_types"] = json!([{"id": "ut-a", "tag": "A", "name": "TYPE A", "width_ft": 39.0, "depth_ft": 11.0, "items": []}]);
     sp["unit_instances"] = json!([{"type": "ut-a", "room": "104", "number": "104", "level": "L1", "hand": "normal", "at_ft": [60.0, 0.5]}]);
-    s.doc_mut().unwrap().building_spec = Some(sp.to_string());
+    s.doc_mut().unwrap().building_spec = Some(sp.to_string()).into();
     // The GFCI's product record, as the job's spec and submittal reading stores it (a property
     // holds a scalar: the record's JSON text).
     let record = json!({"resolved": {"maker": "Acme", "features": ["GFCI", "duplex"], "sources": {"features": "submittal 26 27 26-1 p. 4"}}});
@@ -260,6 +260,25 @@ fn guest_room_receptacles_pass_fail_or_are_unsure_and_a_corridor_is_not_checked(
     // The GFCI is checked for its type too: the rules for it hold both.
     let rules = j.s.execute("validate.rules", &json!({"kind": "gfci_receptacle", "detail": false, "limit": 50})).unwrap();
     assert!(rules.to_string().contains("E-RECEPT-TYPE"), "{rules}");
+}
+
+/// Q6262: the code's rooms are not the only ask. A corridor receptacle whose plan keynote asks
+/// for it tamper-resistant is checked too (unsure here: nothing says what it is); one whose
+/// keynote asks something else is not.
+#[test]
+fn a_keynote_that_asks_for_tamper_resistance_brings_a_receptacle_in_wherever_it_is() {
+    let j = job();
+    let s = set_prop(j.s, &j.corridor, "keynotes", json!("4. PROVIDE TAMPER-RESISTANT RECEPTACLE AT THE DISPLAY NICHE (MADE-UP NOTE)."));
+    let mut s = set_prop(s, &j.plain, "keynotes", json!("2. MOUNT ABOVE THE COUNTER."));
+    let (r, fs) = tr_findings(&mut s);
+    let c = of(&fs, &j.corridor).unwrap_or_else(|| panic!("the keynote's ask is not checked: {r}"));
+    assert_eq!(c["verdict"], "unsure", "{c}");
+    let why = c["measured"]["required_because"].as_str().unwrap();
+    assert!(why.contains("keynote") && why.contains("TAMPER-RESISTANT"), "{why}");
+    // The guest room's plain duplex still for its room, its keynote asking nothing of TR.
+    let p = of(&fs, &j.plain).unwrap();
+    let why = p["measured"]["required_because"].as_str().unwrap();
+    assert!(why.contains("guest room") && !why.contains("keynote"), "{why}");
 }
 
 #[test]

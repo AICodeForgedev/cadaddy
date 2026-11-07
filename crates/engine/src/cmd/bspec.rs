@@ -38,10 +38,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("bspec.validate", "Validate Building Spec", run_validate)
             .params("{spec?: object (merged into the drawing's, not stored), replace?: bool (the given spec alone)} → {ok, errors: [{path, message, handles}], warnings: [...]}")
             .noundo(),
-        CommandSpec::new("model.build", "Build Model from Spec", run_build).params(
+        CommandSpec::new("model.build", "Build Model from Spec", run_build).long().params(
             "{spec?: object (merged into the drawing's, not stored), replace?: bool, slabThickness?: feet (0.5), auto?: bool (default true: build again when the plan changes), stack?: bool (default the spec's `stack`: move each level's 3D onto the lowest level's plan, one stacked building from plans drawn side by side), clear?: true, budget_s?: seconds (1200: stop with an error naming the step when the build runs longer), echo?: bool (default true: the counts on the command line; a caller that changes the model after the build says its own), route?: bool (default true, kept with the drawing: route the circuits through the model, Q6152; conduit.route reports it)} → {walls, doors, windows, floors, ceilings, columns, curtainWalls, rooms (room elements built), roomsByLevel: {level: n}, ground, stairs, ramps, railings, guards, roofs, parapets, crickets, equipment, facadeGlass, rcpCeilings, grids, soffits, lights, diffusers, mepRuns, elbows, drops, fittings, terminals, mepEquipment, gridColumns, conduitRoute: {circuits, runs, homeruns, routed_ft, clashes, conflicts, penetrations}, levels, stacked?: levels moved, removed, notes, warnings}",
         ),
-        CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).params(
+        CommandSpec::new("bim.from_pdf", "PDF to BIM", run_bim_from_pdf).long().params(
             "{path: string (PDF file of any number of pages, or a folder: one print set), out?: string (.cdy to save; default a temp folder — nothing is written next to the PDFs), force?: bool (save the model even when the run failed)} → {cdy_paths: [string], pages: [{sheet, level, discipline, type}] (the plan sheets the job built from), pages_note, spec_guesses, check_results: [{file, pass (false on any hard fail), score, hard_fails, checks}], built_counts: {wall, door, window, ...} (elements built), built: {level: {part: n}}, levels, job: {job_id, status, done, findings} (the guided job that ran: job.status / job.report say more), ok, failed: [why the run failed: the job didn't finish, a hard import-check fail, a storey that came out empty], warnings: [string], next_steps: [string (exact calls to make next)]}",
         ),
     ]
@@ -439,7 +439,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(patch) = p.get("spec").filter(|v| !v.is_null()) else { return Err(bad("bspec.set", "`spec` is required")) };
     let sp = merged(s, "bspec.set", Some(patch), bool_or(p, "replace", false))?;
     let issues = validate(s.doc()?, &sp);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     let mut r = report(&issues);
     r["spec"] = serde_json::to_value(&sp).unwrap_or(Value::Null);
     if let Some(o) = r.as_object_mut() {

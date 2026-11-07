@@ -70,7 +70,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .menu(&["Tools", "Agent Work"])
             .params("{author?: agent|user, approved?: bool, cursor?, limit?} → {total, entries: [{rev, author, action, item, summary, citation, approved}], next_cursor?}")
             .noundo(),
-        CommandSpec::new("bim.build", "Build BIM Model", run_build).params(
+        CommandSpec::new("bim.build", "Build BIM Model", run_build).long().params(
             "{level?: name, discipline?: architecture|structure|mep|all, force?: bool (build even when the import check failed)} → {level, built: {discipline: count}, unchanged, warnings, drafted?}: builds the model from the building spec (the same spec gives the same model); with no spec yet, drafts one from the open print set (or the plan drawing) first",
         ),
     ]
@@ -165,7 +165,7 @@ fn save(s: &mut Session, st: &mut State) -> Result<()> {
     if let (Some(o), Ok(Value::Object(ours))) = (root.as_object_mut(), serde_json::to_value(&*st)) {
         o.extend(ours);
     }
-    doc.agent = serde_json::to_string(&root).ok();
+    doc.agent = serde_json::to_string(&root).ok().into();
     Ok(())
 }
 
@@ -798,7 +798,7 @@ fn answer_question(s: &mut Session, item: &Item, answer: &Value, cite: Option<&C
             t.fields.remove("unresolved");
         }
     }
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(())
 }
 
@@ -1376,7 +1376,7 @@ fn run_rfi_draft(s: &mut Session, p: &Value) -> Result<Value> {
     // the weak agent got its own RFIs back as new items and handled them twice).
     r.status = cadaddy_walk3d::RfiStatus::Sent;
     sp.rfis.push(r);
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     st.revision += 1;
     st.decisions.insert(
         item.id.clone(),

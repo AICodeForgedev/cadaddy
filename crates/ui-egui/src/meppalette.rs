@@ -298,13 +298,27 @@ pub fn dialog(app: &mut CadApp, ctx: &egui::Context, open: &mut bool) {
         }
     }
     if do_rebuild {
-        st.status = match app.run("model.build", json!({})) {
-            Ok(r) => {
-                let runs = r["mepRuns"].as_u64().unwrap_or(0);
-                crate::tf!("Rebuilt: {n} MEP runs.", n = runs)
-            }
-            Err(e) => e,
-        };
+        // A model build takes a while: off the UI thread (Q6269); the status lands in the
+        // palette's state when it ends.
+        let c = ctx.clone();
+        app.run_background("model.build", json!({}), move |_, r| {
+            let status = match r {
+                Ok(r) => {
+                    let runs = r["mepRuns"].as_u64().unwrap_or(0);
+                    crate::tf!("Rebuilt: {n} MEP runs.", n = runs)
+                }
+                Err(e) => e,
+            };
+            c.data_mut(|d| {
+                let mut st: State = d.get_temp(state_id()).unwrap_or_default();
+                st.status = status;
+                d.insert_temp(state_id(), st);
+            });
+        });
+        // A build that ended at once has put its status there already.
+        if let Some(stored) = ctx.data(|d| d.get_temp::<State>(state_id())) {
+            st.status = stored.status;
+        }
     }
     ctx.data_mut(|d| d.insert_temp(state_id(), st));
 }
@@ -334,7 +348,7 @@ mod tests {
                 ]
             }
         });
-        app.session.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap_or_default());
+        app.session.doc_mut().unwrap().building_spec = Some(serde_json::to_string(&spec).unwrap_or_default()).into();
         app
     }
 
