@@ -599,8 +599,16 @@ pub(crate) fn read_view(view: &View, symbols: &[Symbol], marks: &Marks) -> Vec<R
     // A drawing with a bare number printed in it is a keynote's marker (`1` in its box), though
     // a legend symbol is drawn the same: no device.
     let numbered = |f: &Symbol| texts.iter().any(|t| keynote_number(t) && middle_of(t).dist(f.at) <= 0.5 * f.size);
-    let fresh: Vec<&Symbol> =
-        symbols.iter().filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size) && !numbered(f)).collect();
+    // A read device stands on a symbol of its own kind (or of no kind it knows): another kind's
+    // symbol drawn against it (a receptacle under a junction box) is a device of its own.
+    let same_kind = |dv: &ReadDevice, f: &Symbol| {
+        let k = kind_of(dv).replace('_', " ").to_ascii_lowercase();
+        k.is_empty() || k == "device" || k == f.kind.replace('_', " ").to_ascii_lowercase()
+    };
+    let fresh: Vec<&Symbol> = symbols
+        .iter()
+        .filter(|f| inside(f.at) && !view.read.iter().any(|dv| at_of(dv).dist(f.at) <= f.size && same_kind(dv, f)) && !numbered(f))
+        .collect();
     let mut by_label: Vec<(f64, usize, usize)> = Vec::new();
     for (j, f) in fresh.iter().enumerate().filter(|(_, f)| f.powered) {
         for (i, (t, _, _)) in circuits.iter().enumerate().filter(|(i, _)| !taken.get(*i).copied().unwrap_or(true)) {
@@ -1128,6 +1136,27 @@ mod tests {
         let plain = Marks { leg_rule: None, ..marks };
         let view = View { read: have.iter().collect(), ..again };
         assert!(read_view(&view, &legend_symbols(&tps, &found), &plain).iter().any(|d| d.circuit == "Q-1,d" && d.kind == "receptacle"));
+    }
+
+    /// A receptacle drawn right under a junction box the device reading read (a microwave's
+    /// below a range hood's box) is a device of its own and takes the label by it; under a read
+    /// receptacle it is that receptacle.
+    #[test]
+    fn a_symbol_against_a_read_device_of_another_kind_is_its_own_device() {
+        let tps = templates();
+        let texts = [text("Q-4", [88.0, 92.0])];
+        let sc = Scene::new(duplex([100.0, 94.0], 1.0, 0), 10.0);
+        let marks = Marks { luminaires: BTreeSet::new(), wall_luminaires: BTreeSet::new(), leg_rule: None, sheet_numbers: BTreeSet::new() };
+        let found = find_symbols(&tps, &sc, [0.0, 0.0, 200.0, 200.0], 4.0);
+        let read_as = |kind: &str| ReadDevice { kind: kind.into(), ..read("J", [100.0, 95.5], "", "") };
+        let junction = [read_as("junction_box")];
+        let view = View { sheet: "E-9", level: "1", rect: [0.0, 0.0, 200.0, 200.0], texts: texts.iter().collect(), read: junction.iter().collect() };
+        let got = read_view(&view, &legend_symbols(&tps, &found), &marks);
+        let line: Vec<(&str, &str, bool)> = got.iter().map(|d| (d.kind.as_str(), d.circuit.as_str(), (d.at[0] - 100.0).hypot(d.at[1] - 94.0) < 2.0)).collect();
+        assert_eq!(line, [("receptacle", "Q-4", true)], "{got:?}");
+        let receptacle = [read_as("receptacle")];
+        let view = View { read: receptacle.iter().collect(), ..view };
+        assert!(read_view(&view, &legend_symbols(&tps, &found), &marks).is_empty());
     }
 
     #[test]
