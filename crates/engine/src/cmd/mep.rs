@@ -816,10 +816,11 @@ pub(crate) fn open_box(pts: &[[f64; 2]], upf: f64) -> bool {
     one_way && w.min(h) >= OPEN_BOX_MIN_FT && w.max(h) <= OPEN_BOX_MAX_FT
 }
 
-/// [`open_box`]: the turn (degrees) and the box (feet).
+/// [`open_box`]: the turn (degrees) and the box (feet: up to a tub's length; a drain run round
+/// three sides of a larger space between two fixtures is kept).
 const OPEN_BOX_TURN_DEG: f64 = 170.0;
 const OPEN_BOX_MIN_FT: f64 = 0.5;
-const OPEN_BOX_MAX_FT: f64 = 10.0;
+const OPEN_BOX_MAX_FT: f64 = 6.0;
 
 /// How near (feet) a branch's end comes to the line of the pipe it comes off (its tee drawn between).
 const TEE_REACH_FT: f64 = 1.0;
@@ -3689,6 +3690,7 @@ mod tests {
         assert!(open_box(&[[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0]], 12.0));
         assert!(!open_box(&[[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [80.0, 30.0]], 12.0), "a jog turns back");
         assert!(!open_box(&[[0.0, 0.0], [400.0, 0.0], [400.0, 300.0], [0.0, 300.0]], 12.0), "too big for a shape");
+        assert!(!open_box(&[[54.0, 112.0], [0.0, 112.0], [0.0, 0.0], [60.0, 0.0]], 12.0), "a drain round a 9' space");
         assert!(!open_box(&[[0.0, 0.0], [f64::NAN, 0.0], [40.0, 30.0], [0.0, 30.0]], 12.0));
         // No run on the leader's slant; the line it points at is the note's cold water.
         let slant = runs.iter().filter(|r| r.points.windows(2).any(|w| (w[1][0] - w[0][0]).abs() > 1.0 && (w[1][1] - w[0][1]).abs() > 1.0)).count();
