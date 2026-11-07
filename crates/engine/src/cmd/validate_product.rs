@@ -999,6 +999,9 @@ struct Gf<'a> {
     circuit: Option<(String, String)>,
     /// Its panel's place on the plan, when the model has the panel.
     panel_at: Option<[f64; 2]>,
+    /// Its panel tag and circuit number (upper case), when both are known: the whole circuit,
+    /// whatever room each of its devices is in.
+    wire: Option<(String, String)>,
 }
 
 /// Run the product rules over `items` (every element in scope, with its room).
@@ -1394,13 +1397,19 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
                 .min_by(|a, b| a.0.total_cmp(&b.0))
                 .map(|(_, at)| at)
         });
-        facts.push(Gf { it, device, breaker, needs, circuit, panel_at });
+        let wire = panel
+            .as_deref()
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| !p.is_empty())
+            .zip(number.as_deref().map(|n| n.trim().to_ascii_uppercase()).filter(|n| !n.is_empty()));
+        facts.push(Gf { it, device, breaker, needs, circuit, panel_at, wire });
     }
     for (i, f) in facts.iter().enumerate() {
         let it = f.it;
         let kind_words = it.kind.replace('_', " ");
         let (dev, dev_from) = (&f.device.0, &f.device.1);
         let mut protector: Option<String> = None;
+        let mut skip_why: Option<String> = None;
         let (verdict, issue, expected) = match &f.breaker {
             Breaker::Known(true, row) => match dev {
                 Some(true) => (
@@ -1447,7 +1456,54 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
                                 .map(|(_, g)| *g),
                             _ => None,
                         };
+                        // The whole circuit (its panel and number, whatever room each device is
+                        // in): the GFCI receptacle its own record names as its protector (the
+                        // build's rule), else the one nearer its panel.
+                        let wide = || -> Option<&Gf> {
+                            let on_wire: Vec<&Gf> = facts
+                                .iter()
+                                .enumerate()
+                                .filter(|(j, g)| *j != i && f.wire.is_some() && g.wire == f.wire && g.device.0 == Some(true))
+                                .map(|(_, g)| g)
+                                .collect();
+                            let said: Vec<String> = tokens(dev_from).into_iter().collect();
+                            on_wire.iter().copied().find(|g| said.iter().any(|w| w.eq_ignore_ascii_case(g.it.handle))).or_else(|| {
+                                let (d0, p) = (mine?, f.panel_at?);
+                                on_wire
+                                    .iter()
+                                    .map(|g| ((g.it.at[0] - p[0]).hypot(g.it.at[1] - p[1]), *g))
+                                    .filter(|(dd, _)| dd.is_finite() && *dd < d0)
+                                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                                    .map(|(_, g)| g)
+                            })
+                        };
+                        let across = if up.is_none() { wide() } else { None };
+                        let room_of = |g: &Gf| g.it.room.map(|a| a.id.clone());
                         match (up, same.is_empty(), mine) {
+                            (None, _, _) if across.is_some_and(|g| room_of(g) == room_of(f)) => {
+                                let g = across.map_or("", |g| g.it.handle);
+                                protector = Some(g.to_string());
+                                (
+                                    "pass",
+                                    format!(
+                                        "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit; GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
+                                    ),
+                                    format!("GFCI protection ({needs})"),
+                                )
+                            }
+                            (None, _, _) if across.is_some() => {
+                                let (g, room) = across.map_or(("", None), |g| (g.it.handle, g.it.room.map(room_label)));
+                                protector = Some(g.to_string());
+                                let room = room.unwrap_or_else(|| "no room".into());
+                                skip_why = Some("gfci: protected from a GFCI receptacle in another room".into());
+                                (
+                                    "unsure",
+                                    format!(
+                                        "{kind_words} is a standard device ({dev_from}) on the load side of GFCI receptacle {g} on its circuit, which is in {room}: protected, but whether its reset is readily accessible from here is for the judge (NEC 210.8); GFCI is needed ({needs}); its breaker isn't GFCI ({row})"
+                                    ),
+                                    format!("GFCI protection with its reset at hand ({needs})"),
+                                )
+                            }
                             (Some(g), _, _) => {
                                 protector = Some(g.it.handle.to_string());
                                 (
@@ -1505,7 +1561,7 @@ fn gfci_checks(inp: &Input, r: &Effective, gf: &CodeRule, items: &[Lit], out: &m
         };
         if verdict == "unsure" {
             let why = if matches!(f.breaker, Breaker::Unknown(_)) { BREAKER_UNKNOWN.to_string() } else { format!("{}: {NO_DATA} (gfci)", it.kind) };
-            out.skip(&r.rule.id, &format!("gfci: {why}"));
+            out.skip(&r.rule.id, &skip_why.unwrap_or_else(|| format!("gfci: {why}")));
         }
         out.tally(&r.rule.id, verdict);
         out.tally.add(it.kind, "gfci", verdict);

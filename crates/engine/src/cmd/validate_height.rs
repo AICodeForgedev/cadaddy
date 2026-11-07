@@ -65,6 +65,9 @@ const VIEW_UP: f64 = 80.0;
 const LABEL_REACH: f64 = 30.0;
 /// A plan height note is a symbol's when the symbol is within this many text heights.
 const NOTE_REACH: f64 = 8.0;
+/// A plan height note whose next symbol of another kind is within this many times the distance
+/// of its nearest is about as near both: it is tied to neither.
+const AMBIGUOUS_NOTE: f64 = 1.25;
 /// A plan height note is a short note: at most this many characters.
 const MAX_NOTE: usize = 40;
 /// Kinds listed in `unmeasured` one by one, at most.
@@ -145,6 +148,12 @@ pub fn record_of(e: &Entity) -> Option<Record> {
         SourceKind::Print | SourceKind::Legend | SourceKind::Schedule | SourceKind::Spec | SourceKind::Submittal | SourceKind::Note
     ) || says_assumed(p.source.doc.as_deref().unwrap_or_default());
     let datum = props.get("mount_datum").map_or(Datum::Centre, |d| Datum::parse(&d.text()));
+    // A document's words that give one height to the item's top or bottom are the height (a
+    // record of `4'-0" AFF TO TOP` holding a number turned to the middle is read as 48" to top).
+    let (z, datum) = match mountlist::as_written(&doc).filter(|_| !assumed) {
+        Some((h, d)) => (h, d),
+        None => (z, datum),
+    };
     Some(Record { inches: z, kind: p.source.kind, doc: p.source.doc.clone().unwrap_or(doc), assumed, datum })
 }
 
@@ -281,7 +290,7 @@ fn mtext_lines(s: &str) -> Vec<String> {
 }
 
 /// The drawing's text lines (TEXT, each MText line), with where and how tall.
-fn texts(d: &Drawing) -> Vec<TextItem> {
+pub(crate) fn texts(d: &Drawing) -> Vec<TextItem> {
     let mut out = Vec::new();
     let mut push = |value: &str, at: Vec2, height: f64| {
         let value = value.trim();
@@ -419,6 +428,8 @@ pub struct DocHeights {
     project: Vec<(String, f64, String)>,
     /// Each legend row's mark and its words (a row with no height too).
     legend_rows: Vec<(String, String)>,
+    /// Plan height notes about as near symbols of two kinds, tied to neither.
+    ambiguous_notes: usize,
 }
 
 impl DocHeights {
@@ -761,11 +772,13 @@ impl DocHeights {
         }
         // Each note's nearest symbol.
         let mut best_for: HashMap<usize, (f64, usize)> = HashMap::new();
+        let mut ambiguous_notes = 0usize;
         for (ni, n) in self.plan_notes.iter().enumerate() {
             let reach = NOTE_REACH * n.height;
             let r = ((reach / cell).ceil() as i64).clamp(1, 4);
             let (cx, cy) = key(n.at);
             let mut near: Option<(f64, usize)> = None;
+            let mut all: Vec<(f64, usize)> = Vec::new();
             for gx in cx - r..=cx + r {
                 for gy in cy - r..=cy + r {
                     for &pi in grid.get(&(gx, gy)).into_iter().flatten() {
@@ -774,11 +787,26 @@ impl DocHeights {
                             continue;
                         }
                         let dist = (*p - n.at).len();
+                        if dist <= reach {
+                            all.push((dist, pi));
+                        }
                         if dist <= reach && near.is_none_or(|(b, bi)| dist < b || (dist == b && pi < bi)) {
                             near = Some((dist, pi));
                         }
                     }
                 }
+            }
+            // A note about as near a symbol of another kind (a switch and a receptacle side by
+            // side) says nothing certain of either: it ties to none.
+            let kind_of = |pi: usize| points.get(pi).map(|(_, k, _)| k.as_str()).unwrap_or_default();
+            let ambiguous = near.is_some_and(|(b, bi)| {
+                all.iter().any(|(d, pi)| {
+                    *pi != bi && *d <= b * AMBIGUOUS_NOTE + 1e-9 && !cadaddy_walk3d::validate_kinds::kind_matches(kind_of(*pi), kind_of(bi))
+                })
+            });
+            if ambiguous {
+                ambiguous_notes += 1;
+                continue;
             }
             if let Some((dist, pi)) = near
                 && best_for.get(&pi).is_none_or(|(b, _)| dist < *b)
@@ -786,6 +814,7 @@ impl DocHeights {
                 best_for.insert(pi, (dist, ni));
             }
         }
+        self.ambiguous_notes += ambiguous_notes;
         let mut tied_notes = vec![false; self.plan_notes.len()];
         for (pi, (_, ni)) in best_for {
             let (Some((h, _, _)), Some(n)) = (points.get(pi), self.plan_notes.get(ni)) else { continue };
@@ -835,6 +864,7 @@ impl DocHeights {
         json!({
             "plan_notes": self.plan_notes.len(),
             "tied_plan_notes": self.tied.len(),
+            "ambiguous_plan_notes": self.ambiguous_notes,
             "elevation": self.elevation.len(),
             "legend": self.legend.len(),
             "general_notes": self.notes.len(),
