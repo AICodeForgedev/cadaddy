@@ -254,6 +254,20 @@ fn a_wireway_built_over_a_can_takes_the_raceways_its_top_cant() {
 }
 
 #[test]
+fn a_built_door_says_which_way_it_swings_with_no_door_tag() {
+    let mut sp = spec();
+    sp["schedule"] = json!({"tags": []});
+    let mut s = job_on(sp);
+    let (_, fs) = screen(&mut s, &["E-GEAR-SPACE"]);
+    let doors: Vec<&Value> = fs
+        .iter()
+        .filter(|f| f["rule"] == "E-GEAR-SPACE" && f["measured"]["check"] == "working space")
+        .flat_map(|f| f["measured"]["doors"].as_array().into_iter().flatten())
+        .collect();
+    assert!(doors.iter().all(|d| d["verdict"] != "unsure"), "the build knows its swing: {doors:?}");
+}
+
+#[test]
 fn an_enclosure_built_another_size_than_the_submittal_fails() {
     let mut s = job();
     let (_, fs) = screen(&mut s, &["E-GEAR-SIZE"]);

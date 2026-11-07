@@ -170,12 +170,34 @@ impl WallGrid {
 }
 
 /// A wall's tag with its wall type (`type:<name>`, after the source), for IFC's materials.
+const SWING_TAG: &str = "swing:";
+
 fn wall_tag(level: &str, source: Handle, wall_type: Option<&str>) -> Vec<RawTag> {
     let mut x = tag(Part::Wall, level, source);
     if let Some(n) = wall_type {
         x.push(RawTag { code: 1000, value: format!("type:{}", n.chars().take(250).collect::<String>()) });
     }
     x
+}
+
+/// A built door's tags, with its swing when the plan draws one (`hinge, open end, shut end`, x and
+/// y of each, on its level's plan).
+fn door_tag(level: &str, source: Handle, swing: Option<&str>) -> Vec<RawTag> {
+    let mut x = tag(Part::Door, level, source);
+    if let Some(sw) = swing {
+        x.push(RawTag { code: 1000, value: format!("{SWING_TAG}{sw}") });
+    }
+    x
+}
+
+/// A built door's swing: hinge, open end, shut end, on its level's plan.
+pub(crate) fn door_swing(e: &Entity) -> Option<[Vec2; 3]> {
+    let v = e.common.xdata.iter().find_map(|t| t.value.strip_prefix(SWING_TAG))?;
+    let n: Vec<f64> = v.split(',').filter_map(|p| p.parse().ok()).collect();
+    match n.as_slice() {
+        [a, b, c, d, e, f] if n.iter().all(|x| x.is_finite()) => Some([Vec2::new(*a, *b), Vec2::new(*c, *d), Vec2::new(*e, *f)]),
+        _ => None,
+    }
 }
 
 /// The rules: given, from a file, beside the drawing, from the last WALLGEN, else Walk mode's
@@ -477,7 +499,11 @@ pub(crate) fn build_with_progress(s: &mut Session, g: &WallGen, deadline: &web_t
     for (si, pl) in &planned {
         let Some(level) = scene.levels.get(*si) else { continue };
         for (part, m, source, wall_type) in pl.meshes() {
-            let xdata = if part == Part::Wall { wall_tag(&level.name, source, wall_type.as_deref()) } else { tag(part, &level.name, source) };
+            let xdata = match part {
+                Part::Wall => wall_tag(&level.name, source, wall_type.as_deref()),
+                Part::Door => door_tag(&level.name, source, wall_type.as_deref()),
+                _ => tag(part, &level.name, source),
+            };
             let common = Common { layer: layer_of(part).into(), xdata: xdata.into(), ..Common::default() };
             if d.add(&cadaddy_doc::Space::Model, common, EntityKind::Mesh(m)).is_ok() {
                 *counts.entry(part_name(part)).or_insert(0) += 1;
@@ -1266,7 +1292,12 @@ impl PlanLevel {
             if let Some((a, b)) = l.frame {
                 self.add_frame(&mut m, a, b, l.thickness, lo, hi, l.window);
             }
-            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, None));
+            // A single door's swing as drawn, for what must keep clear of it.
+            let swing = l.along.filter(|_| !l.window && l.pair.is_none()).map(|along| {
+                let shut = l.a + along * l.a.dist(l.b);
+                format!("{},{},{},{},{},{}", l.a.x, l.a.y, l.b.x, l.b.y, shut.x, shut.y)
+            });
+            out.push((if l.window { Part::Glass } else { Part::Door }, m, l.source, swing));
         }
         out
     }

@@ -383,6 +383,8 @@ pub(crate) struct Door {
     /// The room it swings into, when a door tag says so.
     pub swings_into: Option<String>,
     pub source: Option<String>,
+    /// Its leaf as the plan draws its swing, feet: hinge, open end, shut end.
+    pub leaf: Option<[[f64; 2]; 3]>,
 }
 
 /// The working space's verdict and what was measured.
@@ -503,7 +505,25 @@ pub(crate) fn working_space(
     let quad = space.corners();
     let mut door_verdict = "pass";
     let mut door_json = Vec::new();
+    let mut swept: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for d in doors {
+        // A swing the plan draws and no door tag contradicts: where its leaf really goes.
+        if let (Some([hinge, open, shut]), None) = (d.leaf, &d.swings_into) {
+            if !swept.insert(d.id.as_str()) {
+                continue;
+            }
+            let (to_open, to_shut) = (sub(open, hinge), sub(shut, hinge));
+            let k = std::f64::consts::FRAC_1_SQRT_2;
+            let arc = [hinge[0] + k * (to_open[0] + to_shut[0]), hinge[1] + k * (to_open[1] + to_shut[1])];
+            if overlap(&[hinge, open, arc, shut], &quad) {
+                door_verdict = "fail";
+                door_json.push(json!({
+                    "door": d.id, "swings_into": null, "source": "the swing its plan draws", "verdict": "fail",
+                    "why": "its leaf sweeps the working space",
+                }));
+            }
+            continue;
+        }
         let Some(op) = Obb::aligned(d.min, d.max) else { continue };
         let leaf = 2.0 * op.hw;
         // Its swing, either side of the opening: the leaf's width out from the opening's line.
@@ -888,6 +908,7 @@ fn level_things(cx: &Ctx, gear: &[Placed]) -> (BTreeMap<String, Vec<Obstacle>>, 
             max: o.max,
             swings_into: tag.and_then(|t| t.swings_into.clone()),
             source: tag.map(|t| format!("door tag {}{}", t.mark, t.source.as_ref().map(|s| format!(" on {s}")).unwrap_or_default())),
+            leaf: o.leaf,
         });
     }
     (obs, doors)
@@ -1939,14 +1960,44 @@ mod tests {
     fn a_door_swinging_into_the_room_over_the_space_fails_and_one_that_may_is_unsure() {
         // A 3 ft door in the east wall, 1 to 4 ft north: its leaf sweeps x 7.25..10 in the room.
         let wide = Obb { c: [8.0, 0.25], u: [1.0, 0.0], hw: 1.5, hd: 0.25 };
-        let door =
-            |into: Option<&str>| Door { id: "D1".into(), min: [10.0, 1.0], max: [10.5, 4.0], swings_into: into.map(str::to_string), source: None };
+        let door = |into: Option<&str>| Door {
+            id: "D1".into(),
+            min: [10.0, 1.0],
+            max: [10.5, 4.0],
+            swings_into: into.map(str::to_string),
+            source: None,
+            leaf: None,
+        };
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("11"))], Some("11"));
         assert_eq!(ws.verdict, "fail", "{ws:?}");
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(None)], Some("11"));
         assert_eq!(ws.verdict, "unsure", "{ws:?}");
         let ws = working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), &[door(Some("12"))], Some("11"));
         assert_eq!(ws.verdict, "pass", "{ws:?}");
+    }
+
+    #[test]
+    fn a_doors_drawn_swing_says_whether_it_sweeps_the_space() {
+        let wide = Obb { c: [8.0, 0.25], u: [1.0, 0.0], hw: 1.5, hd: 0.25 };
+        let door = |leaf: [[f64; 2]; 3], into: Option<&str>| Door {
+            id: "D1".into(),
+            min: [10.0, 1.0],
+            max: [10.5, 4.0],
+            swings_into: into.map(str::to_string),
+            source: None,
+            leaf: Some(leaf),
+        };
+        let run = |doors: &[Door]| working_space(&wide, Some([36.0, 36.0]), 30.0, 78.0, &room(8.0), doors, Some("11")).verdict;
+        // Hinged at (10, 4): open west, into the room, its leaf sweeps the space.
+        let into_room = [[10.0, 4.0], [7.0, 4.0], [10.0, 1.0]];
+        assert_eq!(run(&[door(into_room, None)]), "fail");
+        // The same hinge, open east, out of the room: clear, not "may be".
+        let out_of_room = [[10.0, 4.0], [13.0, 4.0], [10.0, 1.0]];
+        assert_eq!(run(&[door(out_of_room, None)]), "pass");
+        // Its jambs are pieces of the one door: counted once, and clear still.
+        assert_eq!(run(&[door(out_of_room, None), door(out_of_room, None)]), "pass");
+        // A door tag saying otherwise is the document: it stands.
+        assert_eq!(run(&[door(out_of_room, Some("11"))]), "fail");
     }
 
     #[test]
