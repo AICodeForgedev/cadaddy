@@ -19,6 +19,14 @@
 //! points are never taken. What each kind looks like drawn (its outline's sizes, a water closet's
 //! tank beside its bowl, the depth of the counter a basin sits in) and how far a tag may be from
 //! its fixture are rules data (`fixturefit.json`), with the drafting practice they come from.
+//!
+//! A fixture the rules say holds no receptacle (a tub, a shower: NEC 406.9(C) keeps receptacles
+//! out of the tub and shower space) is drawn with marks of its own inside it, a drain, an
+//! overflow, whose small round shape reads like a device symbol. Where a circuit label printed
+//! over the fixture (a luminaire's tag set on the tub, its leader running to the light) labels
+//! such a mark, the device reading takes it for a receptacle: [`receptacles_inside`] finds the
+//! receptacles whose symbol lies inside a drawn fixture of such a family, so the build leaves
+//! them out (a circuit label inside a fixture's outline is not a receptacle symbol).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
@@ -62,6 +70,9 @@ pub(crate) struct Rules {
     pub drain_in: [f64; 2],
     /// A counter's depth, inches: `[min, max]`.
     pub counter_in: [f64; 2],
+    /// A symbol this far inside a fixture's outline (inches) is inside it: drawn in the fixture,
+    /// not on the wall the fixture is set against.
+    pub inside_in: f64,
     pub families: Vec<Family>,
 }
 
@@ -74,6 +85,7 @@ impl Default for Rules {
             largest_in: 96.0,
             drain_in: [0.5, 4.0],
             counter_in: [12.0, 36.0],
+            inside_in: 2.0,
             families: Vec::new(),
         }
     }
@@ -86,6 +98,11 @@ pub(crate) struct Family {
     pub fixture: String,
     pub words: Vec<String>,
     pub drawn: Vec<Drawn>,
+    /// No receptacle is ever inside it (a tub, a shower: NEC 406.9(C)); a device symbol read
+    /// inside its drawn outline is one of its own marks.
+    pub holds_no_receptacle: bool,
+    /// The code or practice that says so, for the basis.
+    pub holds_no_receptacle_rule: String,
 }
 
 /// One way a kind of fixture is drawn. Sizes are `[short min, short max, long min, long max]`,
@@ -354,6 +371,11 @@ pub(crate) struct Fit {
     /// `drawn` (on a drawn fixture) or `inferred` (at its tag: none drawn near).
     pub provenance: &'static str,
     pub basis: String,
+    /// The drawn fixture's box, `[x0, y0, x1, y1]` model units (a drawn fit only).
+    pub outline: Option<[f64; 4]>,
+    /// Its level (as the device reading gave it) and its family's name (`tub`).
+    pub level: String,
+    pub family: String,
 }
 
 /// What [`fit_fixtures`] did: by family, how many went onto a drawn fixture and how many stayed at
@@ -593,10 +615,16 @@ pub(crate) fn fit_fixtures(
                 dv.at = [s.at.x, s.at.y];
                 let pieces: Vec<String> = s.parts.iter().filter_map(|p| outlines.get(*p)).map(|o| cadaddy_doc::Handle(o.handle).hex()).collect();
                 let sheet = s.parts.first().and_then(|p| sheets.get(*p)).map_or("the architectural plan", String::as_str);
+                let outline = s.parts.iter().filter_map(|p| outlines.get(*p)).fold(None::<[f64; 4]>, |acc, o| {
+                    Some(acc.map_or([o.lo.x, o.lo.y, o.hi.x, o.hi.y], |b| [b[0].min(o.lo.x), b[1].min(o.lo.y), b[2].max(o.hi.x), b[3].max(o.hi.y)]))
+                });
                 report.fits.push(Fit {
                     handle: dv.handle.clone(),
                     tag_at,
                     at: dv.at,
+                    outline,
+                    level: dv.level.clone(),
+                    family: name.clone(),
                     provenance: "drawn",
                     basis: format!(
                         "on the {name} {sheet} draws ({}; outline {}), {moved:.1} ft from its {} tag: a tag is set beside its fixture",
@@ -613,6 +641,9 @@ pub(crate) fn fit_fixtures(
                     handle: dv.handle.clone(),
                     tag_at,
                     at: tag_at,
+                    outline: None,
+                    level: dv.level.clone(),
+                    family: name.clone(),
                     provenance: "inferred",
                     basis: format!(
                         "at its {} tag: the architectural plan draws no {name} within {} ft of it that a nearer tag didn't take",
@@ -628,6 +659,68 @@ pub(crate) fn fit_fixtures(
     report.largest_move_ft = moves.last().copied().unwrap_or(0.0);
     report.median_move_ft = moves.get(moves.len() / 2).copied().unwrap_or(0.0);
     report
+}
+
+/// A receptacle read inside a drawn fixture that holds none: which device, and why it is none.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Inside {
+    /// Its index in the devices.
+    pub index: usize,
+    pub reason: String,
+}
+
+/// The receptacles of `devices` (model units) whose symbol lies inside the drawn outline of a
+/// fitted fixture whose family holds no receptacle (`holds_no_receptacle`: a tub, a shower), at
+/// least the rules' `inside_in` in from its every side, on the same level. Such a symbol is one of
+/// the fixture's own marks (its drain) that a circuit label printed over the fixture labelled: no
+/// receptacle symbol is drawn inside a tub. A symbol on the wall the fixture is set against, or
+/// near the fixture but outside it, is not taken. `upf`: drawing units per foot.
+pub(crate) fn receptacles_inside(fits: &[Fit], devices: &[ReadDevice], upf: f64, rules: &Rules) -> Vec<Inside> {
+    let upf = if upf.is_finite() && upf > 0.0 { upf } else { 12.0 };
+    let inset = if rules.inside_in.is_finite() { rules.inside_in.max(0.0) } else { 2.0 } * upf / 12.0;
+    let holds_none = |family: &str| rules.families.iter().find(|f| f.fixture == family).filter(|f| f.holds_no_receptacle);
+    let boxes: Vec<(&Fit, [f64; 4], &Family)> = fits
+        .iter()
+        .take(MAX_FIXTURES)
+        .filter_map(|f| {
+            let b = f.outline.filter(|b| b.iter().all(|v| v.is_finite()))?;
+            Some((f, b, holds_none(&f.family)?))
+        })
+        .collect();
+    if boxes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (index, dv) in devices.iter().enumerate() {
+        if dv.kind != "receptacle" || !dv.at.iter().all(|v| v.is_finite()) {
+            continue;
+        }
+        let [x, y] = dv.at;
+        let hit = boxes.iter().find(|(f, b, _)| {
+            (f.level.is_empty() || dv.level.is_empty() || f.level == dv.level)
+                && b[2] - b[0] > 2.0 * inset
+                && b[3] - b[1] > 2.0 * inset
+                && x >= b[0] + inset
+                && x <= b[2] - inset
+                && y >= b[1] + inset
+                && y <= b[3] - inset
+        });
+        if let Some((f, b, fam)) = hit {
+            let rule = if fam.holds_no_receptacle_rule.is_empty() { String::new() } else { format!(" ({})", fam.holds_no_receptacle_rule) };
+            out.push(Inside {
+                index,
+                reason: format!(
+                    "inside the {} drawn there ({:.1} by {:.1} ft): a {} holds no receptacle{rule}, so a mark inside its outline that the circuit label {} names is one of its own marks, not a receptacle symbol",
+                    f.family,
+                    (b[2] - b[0]) / upf,
+                    (b[3] - b[1]) / upf,
+                    f.family,
+                    if dv.circuit.trim().is_empty() { "printed by it" } else { dv.circuit.trim() },
+                ),
+            });
+        }
+    }
+    out
 }
 
 /// Each fit onto the model's plumbing fixture it is (its symbol, where it is): where its tag put
@@ -874,13 +967,70 @@ mod tests {
         };
         t.set("symbol", "1A", "plan");
         sp.tags.push(t);
-        let fit =
-            Fit { handle: "1A".into(), tag_at: [24.0, 60.0], at: [22.0, 14.5], provenance: "drawn", basis: "on the water closet A-1 draws".into() };
+        let fit = Fit {
+            handle: "1A".into(),
+            tag_at: [24.0, 60.0],
+            at: [22.0, 14.5],
+            provenance: "drawn",
+            basis: "on the water closet A-1 draws".into(),
+            outline: None,
+            level: String::new(),
+            family: "water closet".into(),
+        };
         assert_eq!(record(&mut sp, &[fit]), 1);
         let f = |k: &str| sp.tags.first().and_then(|t| t.fields.get(k)).map(|f| (f.value.clone(), f.source.clone()));
         assert_eq!(f("tag_at_ft"), Some(("2.00, 5.00".to_string(), "plan".to_string())));
         assert_eq!(f("position_provenance"), Some(("drawn".to_string(), "plan".to_string())));
         assert_eq!(f("position_basis").map(|v| v.0), Some("on the water closet A-1 draws".to_string()));
+    }
+
+    fn receptacle(circuit: &str, x: f64, y: f64, level: &str) -> ReadDevice {
+        ReadDevice {
+            tag: "REC".into(),
+            at: [x, y],
+            kind: "receptacle".into(),
+            circuit: circuit.into(),
+            level: level.into(),
+            handle: format!("R{x}"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_circuit_label_inside_a_drawn_tub_is_no_receptacle_but_one_on_its_wall_or_beside_it_stays() {
+        // Two baths (the tub 60 x 32 across each top, its drain a small circle at one end), each
+        // tagged by the plumbing plan; a luminaire's circuit label printed over the tub labelled
+        // the drain, which the device reading took for a receptacle.
+        let mut d = Drawing::default();
+        bath(&mut d, 0.0, 0.0);
+        bath(&mut d, 400.0, 0.0);
+        circle(&mut d, 11.0, 82.0, 1.0);
+        let mut devs = vec![dev("T-3", 32.0, 76.0), dev("T-3", 432.0, 76.0)];
+        for dv in &mut devs {
+            dv.level = "Level 1".into();
+        }
+        devs.extend([
+            receptacle("Q-3", 11.0, 82.0, "Level 1"),  // the drain, inside the tub
+            receptacle("Q-3", 435.0, 80.0, "Level 1"), // the second tub's middle
+            receptacle("Q-11", 35.0, 97.0, "Level 1"), // on the wall the tub is set against (at its edge)
+            receptacle("Q-12", 80.0, 80.0, "Level 1"), // beside the tub, outside it
+            receptacle("Q-13", 11.0, 82.0, "Level 2"), // another level's, at the same point
+        ]);
+        let rep = fit_fixtures(&d, &spans_all(&d), &schedule(), &mut devs, 12.0, rules());
+        let tubs: Vec<&Fit> = rep.fits.iter().filter(|f| f.family == "tub").collect();
+        assert_eq!(tubs.len(), 2, "{rep:?}");
+        assert!(tubs.iter().all(|f| f.outline.is_some() && f.level == "Level 1"), "{tubs:?}");
+        let inside = receptacles_inside(&rep.fits, &devs, 12.0, rules());
+        let taken: Vec<&str> = inside.iter().filter_map(|i| devs.get(i.index)).map(|d| d.circuit.as_str()).collect();
+        assert_eq!(taken, ["Q-3", "Q-3"], "{inside:?}");
+        let why = inside.first().map(|i| i.reason.as_str()).unwrap_or_default();
+        assert!(why.contains("tub") && why.contains("406.9(C)") && why.contains("Q-3"), "{why}");
+        // No tub fitted (no plumbing tags): nothing taken.
+        assert!(receptacles_inside(&[], &devs, 12.0, rules()).is_empty());
+        // A water closet holds no such rule: a receptacle read on one stays.
+        let mut wc = tubs.first().map(|f| (*f).clone()).expect("a tub fit");
+        wc.family = "water closet".into();
+        assert!(receptacles_inside(&[wc], &devs, 12.0, rules()).is_empty());
     }
 
     #[test]
@@ -890,6 +1040,19 @@ mod tests {
         circle(&mut d, 0.0, 0.0, f64::NAN);
         rect(&mut d, -1e300, -1e300, 1e300, 1e300, true);
         let mut devs = vec![dev("T-1", f64::NAN, 0.0), dev("T-2", 1e300, -1e300), dev("T-3", 0.0, 0.0)];
-        let _ = fit_fixtures(&d, &spans_all(&d), &schedule(), &mut devs, f64::NAN, rules());
+        let rep = fit_fixtures(&d, &spans_all(&d), &schedule(), &mut devs, f64::NAN, rules());
+        devs.push(receptacle("Q-1", f64::NAN, 0.0, ""));
+        let mut fits = rep.fits;
+        fits.push(Fit {
+            handle: "X".into(),
+            tag_at: [0.0, 0.0],
+            at: [0.0, 0.0],
+            provenance: "drawn",
+            basis: String::new(),
+            outline: Some([f64::NAN, -1e300, 1e300, f64::INFINITY]),
+            level: String::new(),
+            family: "tub".into(),
+        });
+        let _ = receptacles_inside(&fits, &devs, f64::NAN, rules());
     }
 }

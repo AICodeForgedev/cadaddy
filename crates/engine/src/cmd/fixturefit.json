@@ -12,6 +12,8 @@
   "drain_in": [0.5, 4.0],
   "_drain_in": "A drain or faucet hole drawn in a basin: a small round mark this wide (a circle, or a short closed line, often a square turned on its corner). Anything larger inside a basin-sized outline (a cooktop's burners) makes it no basin.",
   "counter_in": [12.0, 36.0],
+  "inside_in": 2.0,
+  "_inside_in": "A device symbol at least this far inside a fixture's outline is drawn in the fixture, not on the wall the fixture is set against (a receptacle drawn on that wall sits on the wall line, at the outline's edge).",
   "_counter_in": "A counter a basin is drawn in: the smallest outline round it with its short side (its depth) in this range.",
   "families": [
     {
@@ -32,12 +34,17 @@
       "fixture": "tub",
       "words": ["TUB", "BATHTUB", "BATH"],
       "drawn": [{"part": [24.0, 44.0, 50.0, 76.0], "what": "its outline"}],
-      "_drawn": "A bathtub: 30-36 in by 60 in (54-72 in); where only its basin is drawn, that inner line (about 26 by 55 in). The outer line wins where both are drawn."
+      "holds_no_receptacle": true,
+      "holds_no_receptacle_rule": "NEC 406.9(C): no receptacle within or above the tub space",
+      "_drawn": "A bathtub: 30-36 in by 60 in (54-72 in); where only its basin is drawn, that inner line (about 26 by 55 in). The outer line wins where both are drawn.",
+      "_holds_no_receptacle": "A tub or shower holds no receptacle (NEC 406.9(C)); what is drawn inside it (a drain, an overflow, a grab bar's ends) are its own marks. A circuit label printed over it (a luminaire's tag set on the tub with its leader to the light) never makes one of them a receptacle."
     },
     {
       "fixture": "shower",
       "words": ["SHOWER"],
       "drawn": [{"part": [30.0, 72.0, 30.0, 84.0], "what": "its outline"}],
+      "holds_no_receptacle": true,
+      "holds_no_receptacle_rule": "NEC 406.9(C): no receptacle within or above the shower stall",
       "_drawn": "A shower base or roll-in shower: 32-36 in square up to 36 by 60 in, a roll-in pan up to 60 by 72 in. Listed after the tub: a tub shower is its tub."
     },
     {
