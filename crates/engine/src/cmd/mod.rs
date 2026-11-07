@@ -64,6 +64,7 @@ pub mod help_texts;
 pub mod history;
 pub mod hyperlink;
 pub mod identity;
+pub(crate) mod sheetreg;
 mod imageattach;
 mod imageclip;
 pub mod import_check;

@@ -263,6 +263,12 @@ pub(crate) struct Registration {
 
 /// Register `sheets` (see the module docs): `upf` drawing units per foot.
 pub(crate) fn register(d: &Drawing, sheets: &[SheetBox], upf: f64) -> Registration {
+    register_onto(d, sheets, upf, "A", &|_| false)
+}
+
+/// [`register`] onto `discipline`'s plans, a sheet `level_plan` names first
+/// ([`tagid::register_sheets_onto`]).
+pub(crate) fn register_onto(d: &Drawing, sheets: &[SheetBox], upf: f64, discipline: &str, level_plan: &dyn Fn(&SheetTags) -> bool) -> Registration {
     let texts = number_texts(d);
     // Each sheet's numbers, for the registration and the doors' numbers.
     let mut on_sheet: Vec<Vec<(String, [f64; 2])>> = sheets.iter().map(|_| Vec::new()).collect();
@@ -280,7 +286,7 @@ pub(crate) fn register(d: &Drawing, sheets: &[SheetBox], upf: f64) -> Registrati
         .map(|(s, t)| SheetTags { number: s.number.clone(), level: s.level.clone(), discipline: s.discipline.clone(), tags: t.clone(), rect: s.rect })
         .collect();
     // A tag sits within a couple of feet of its copy on another discipline's background.
-    let transforms = tagid::register_sheets(&tags, 2.0 * upf);
+    let transforms = tagid::register_sheets_onto(&tags, 2.0 * upf, discipline, level_plan);
     Registration { texts, on_sheet, transforms }
 }
 

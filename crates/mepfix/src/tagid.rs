@@ -430,6 +430,14 @@ impl SheetTransform {
 /// sit where its frame puts them, by its frame. A sheet with neither
 /// is left unregistered (its elements are never merged with another sheet's).
 pub fn register_sheets(sheets: &[SheetTags], tol: f64) -> Vec<SheetTransform> {
+    register_sheets_onto(sheets, tol, "A", &|_| false)
+}
+
+/// [`register_sheets`] onto the plans of `discipline` (the discipline whose plans give the
+/// building its levels: architecture, else the trade whose plans were taken for the floors),
+/// a sheet `level_plan` says is its level's plan first (the sheet the level's outline was taken
+/// from), then that discipline's sheet with the most tags.
+pub fn register_sheets_onto(sheets: &[SheetTags], tol: f64, discipline: &str, level_plan: &dyn Fn(&SheetTags) -> bool) -> Vec<SheetTransform> {
     let mut by_level: BTreeMap<&str, Vec<&SheetTags>> = BTreeMap::new();
     for s in sheets {
         by_level.entry(s.level.as_str()).or_default().push(s);
@@ -437,8 +445,10 @@ pub fn register_sheets(sheets: &[SheetTags], tol: f64) -> Vec<SheetTransform> {
     let mut out = Vec::new();
     for (level, list) in by_level {
         let distinct = |s: &SheetTags| s.tags.iter().map(|t| t.0.as_str()).collect::<BTreeSet<_>>().len();
-        let Some(reference) =
-            list.iter().copied().max_by_key(|s| (s.discipline.eq_ignore_ascii_case("A"), distinct(s), std::cmp::Reverse(s.number.clone())))
+        let Some(reference) = list
+            .iter()
+            .copied()
+            .max_by_key(|s| (level_plan(s), s.discipline.eq_ignore_ascii_case(discipline), distinct(s), std::cmp::Reverse(s.number.clone())))
         else {
             continue;
         };
