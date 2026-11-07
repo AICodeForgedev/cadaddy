@@ -10699,6 +10699,16 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
     };
     let room_boxes: Vec<[f64; 4]> = rooms.iter().map(|(_, _, o, _)| bbox(o)).collect();
     let floor_lines = FloorLines::new(d, &room_boxes, ROOM_FIT_MARGIN_FT * 12.0 * k_in, 12.0 * k_in);
+    // The built rooms' outlines on their level's plan, by storey and number: a light in the built
+    // room is in it though the rooms stage's outline of it left that corner out.
+    let built: Vec<(String, String, Vec<cadaddy_geom::Vec2>)> = super::bspec::room_elements(d)
+        .into_iter()
+        .filter_map(|r| {
+            let number = r.number?.trim().to_ascii_uppercase();
+            let off = d.model.get(r.handle).map_or(cadaddy_geom::Vec2::ZERO, |e| super::bspec::stacked_by(e));
+            Some((storey_key(&r.level), number, r.outline.iter().map(|p| *p - off).collect()))
+        })
+        .collect();
     for sh in &sheets {
         let sub = super::printmep::sheet_drawing(d, sh);
         let texts = cadaddy_mepfix::sheet_facts::texts(&sub);
@@ -10733,8 +10743,13 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
             let ents: Vec<&std::sync::Arc<cadaddy_doc::Entity>> =
                 objects.iter().filter(|e| super::bspec::centre(&sub, e).is_some_and(|c| inside(view, c))).copied().collect();
             let lines = super::grids::line_samples(&ents, 12.0 * k_in);
-            for (ri, (_, _, outline, _)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
+            for (ri, (_, level, outline, number)) in rooms.iter().enumerate().filter(|(_, (n, _, _, _))| type_words(n, None) == *words) {
                 let b = bbox(outline);
+                let (key, num) = (storey_key(level), number.trim().to_ascii_uppercase());
+                let built_outline = built.iter().find(|(l, n, _)| !num.is_empty() && *l == key && *n == num).map(|(_, _, o)| o);
+                let in_room = |q: cadaddy_geom::Vec2| {
+                    cadaddy_geom::point_in_polygon(outline, q) || built_outline.is_some_and(|o| cadaddy_geom::point_in_polygon(o, q))
+                };
                 let margin = ROOM_FIT_MARGIN_FT * 12.0 * k_in;
                 let Some((best, _)) = rigid_room_fit(&lines, *view, b, &floor_lines, margin, 6.0 * k_in) else {
                     read.unfitted.push(ri);
@@ -10752,7 +10767,7 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
                     for p in &mine {
                         let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
                         let q = cadaddy_geom::Vec2::new(q[0], q[1]);
-                        if cadaddy_geom::point_in_polygon(outline, q) {
+                        if in_room(q) {
                             read.lights.push(RcpLight { room: ri, at: q, view: format!("{} {title}", sh.number), turn: k, best: k == best.k });
                         } else if k == best.k {
                             *read.outside.entry(ri).or_default() += 1;
@@ -10826,7 +10841,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     let (reach, at_spot) = (rule.reach_ft.max(0.0) * upf, rule.connect_reach_ft.max(0.0) * upf);
     let rooms = job_rooms(job);
     // The ceiling luminaires: plan position (its box's middle, the level's plan), z middle, level.
-    let lums: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String)> = {
+    let lums: Vec<(cadaddy_doc::Handle, cadaddy_geom::Vec2, String, String)> = {
         let d = s.doc()?;
         d.model
             .iter()
@@ -10837,7 +10852,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
                 let luminaire = (text("kind").contains("luminaire") && !text("kind").contains("wall")) || text("ifc_class") == "ifclightfixture";
                 (luminaire && text("mounting") == "ceiling").then_some(())?;
                 let (b, _, _) = super::propfill::extent(d, e)?;
-                Some((e.handle, b.center() - super::bspec::stacked_by(e), super::bspec::made_level(e)?))
+                Some((e.handle, b.center() - super::bspec::stacked_by(e), super::bspec::made_level(e)?, text("room").trim().to_ascii_uppercase()))
             })
             .take(MAX_RCP_LUMINAIRES)
             .collect()
@@ -10854,15 +10869,23 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
     let mut unmatched: Vec<Value> = Vec::new();
     let mut taken: BTreeSet<cadaddy_doc::Handle> = BTreeSet::new();
     for (ri, ls) in &by_room {
-        let Some((_, level, outline, _)) = rooms.get(*ri) else { continue };
-        let mine: Vec<&(cadaddy_doc::Handle, cadaddy_geom::Vec2, String)> =
-            lums.iter().filter(|(h, p, l)| !taken.contains(h) && same_level(l, level) && cadaddy_geom::point_in_polygon(outline, *p)).collect();
+        let Some((_, level, outline, number)) = rooms.get(*ri) else { continue };
+        // The room's luminaires: those the model puts in it (their room), else in its outline.
+        let number = number.trim().to_ascii_uppercase();
+        let mine: Vec<&(cadaddy_doc::Handle, cadaddy_geom::Vec2, String, String)> = lums
+            .iter()
+            .filter(|(h, p, l, r)| {
+                !taken.contains(h)
+                    && same_level(l, level)
+                    && ((!number.is_empty() && *r == number) || (r.is_empty() && cadaddy_geom::point_in_polygon(outline, *p)))
+            })
+            .collect();
         if mine.is_empty() {
             continue;
         }
         rooms_matched += 1;
         let at: Vec<(u8, cadaddy_geom::Vec2)> = ls.iter().map(|l| (l.turn, l.at)).collect();
-        let near: Vec<cadaddy_geom::Vec2> = mine.iter().map(|(_, p, _)| *p).collect();
+        let near: Vec<cadaddy_geom::Vec2> = mine.iter().map(|(_, p, _, _)| *p).collect();
         let linework = ls.iter().find(|l| l.best).map(|l| l.turn);
         let turn = pick_rcp_turn(&at, &near, reach, linework);
         if turn != linework {
@@ -10871,7 +10894,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
         let ls: Vec<&RcpLight> = ls.iter().copied().filter(|l| Some(l.turn) == turn).collect();
         let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
         for (li, l) in ls.iter().enumerate() {
-            for (di, (_, p, _)) in mine.iter().enumerate() {
+            for (di, (_, p, _, _)) in mine.iter().enumerate() {
                 let dist = l.at.dist(*p);
                 if dist <= reach {
                     pairs.push((dist, li, di));
@@ -10886,7 +10909,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             }
             used_l.insert(li);
             used_d.insert(di);
-            let (Some(l), Some((h, p, _))) = (ls.get(li), mine.get(di)) else { continue };
+            let (Some(l), Some((h, p, _, _))) = (ls.get(li), mine.get(di)) else { continue };
             taken.insert(*h);
             if dist <= at_spot {
                 at_rcp += 1;
@@ -10899,7 +10922,7 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             .iter()
             .enumerate()
             .filter(|(li, _)| !used_l.contains(li))
-            .filter_map(|(_, l)| mine.iter().map(|(_, p, _)| l.at.dist(*p) / upf).min_by(f64::total_cmp))
+            .filter_map(|(_, l)| mine.iter().map(|(_, p, _, _)| l.at.dist(*p) / upf).min_by(f64::total_cmp))
             .map(|f| (f * 10.0).round() / 10.0)
             .collect();
         if !far.is_empty() && unmatched.len() < MAX_RCP_REVIEW {
@@ -27606,17 +27629,40 @@ mod tests {
         }];
         job.sheet_spans = vec![SheetSpan { sheet: "A-6".into(), lo, hi }];
         let room = |n: &str, x: f64| json!({"name": "STUDIO", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        // The rooms stage traced 201 without its north-east corner; the built room has it.
+        let r201 = json!({"name": "STUDIO", "number": "201", "level": "Level 2", "outline": [[10_000, 0], [10_144, 0], [10_144, 144], [10_072, 144], [10_072, 288], [10_000, 288]]});
         if let Some(st) = job.stage_mut(StageName::Rooms) {
-            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+            st.result = Some(json!({"rooms": [r201, room("202", 10_400.0)]}));
+        }
+        {
+            let v3 = |x: f64, y: f64| cadaddy_geom::Vec3::new(x, y, 144.0);
+            let m = cadaddy_doc::Mesh {
+                vertices: vec![v3(10_000.0, 0.0), v3(10_144.0, 0.0), v3(10_144.0, 288.0), v3(10_000.0, 288.0)],
+                faces: vec![cadaddy_doc::MeshFace { v: vec![0, 1, 2], hidden: 0 }, cadaddy_doc::MeshFace { v: vec![0, 2, 3], hidden: 0 }],
+                kind: cadaddy_doc::MeshKind::Polyface,
+            };
+            let t = |v: &str| cadaddy_doc::RawTag { code: 1000, value: v.into() };
+            let x = vec![
+                cadaddy_doc::RawTag { code: 1001, value: super::super::wallgen::APP.into() },
+                t("room"),
+                t("Level 2"),
+                t("0"),
+                t("number:201"),
+                t("ceiling_ft:8.50"),
+            ];
+            s.doc_mut().unwrap().add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
         }
         let sp: cadaddy_walk3d::BuildingSpec = serde_json::from_value(json!({
             "version": 1, "units_per_foot": 12.0,
             "levels": [{"name": "Level 2", "elevation_ft": 12.0, "height_ft": 10.0, "ceiling_ft": 8.5}]
         }))
         .unwrap();
-        let lum = |s: &mut crate::Session, at: [f64; 2]| -> cadaddy_doc::Handle {
+        let lum = |s: &mut crate::Session, at: [f64; 2], room: &str| -> cadaddy_doc::Handle {
             let d = s.doc_mut().unwrap();
             let mut ps = props::Props::default();
+            if !room.is_empty() {
+                ps.set("room", Prop::new(room, Source::computed()));
+            }
             ps.set("kind", Prop::new("luminaire", Source::computed()));
             ps.set("mounting", Prop::new("ceiling", Source::computed()));
             ps.set("location", Prop::new(format!("{:.2}, {:.2}, 20.17", at[0] / 12.0, at[1] / 12.0), Source::computed()));
@@ -27633,11 +27679,13 @@ mod tests {
             d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
         };
         // Room 202's plan is the unit turned half round: its lights 10" from where it puts them.
-        let a = lum(&mut s, [10_498.0, 130.0]);
-        let b = lum(&mut s, [10_450.0, 56.0]);
+        let a = lum(&mut s, [10_498.0, 130.0], "");
+        let b = lum(&mut s, [10_450.0, 56.0], "");
+        // 201's flush mount is in the corner its stage outline lost; its luminaire, by it, is 201's.
+        let c = lum(&mut s, [10_104.0, 230.0], "201");
         s.doc_mut().unwrap().building_spec = Some(sp.to_json());
         let r = rcp_light_step(&mut s, &job).unwrap();
-        assert_eq!(r["moved"], json!(2), "{r}");
+        assert_eq!(r["moved"], json!(3), "{r}");
         let centre = |s: &crate::Session, h: cadaddy_doc::Handle| -> [f64; 2] {
             let d = s.doc().unwrap();
             let (bx, _, _) = super::super::propfill::extent(d, d.model.get(h).unwrap()).unwrap();
@@ -27646,6 +27694,7 @@ mod tests {
         let near = |p: [f64; 2], q: [f64; 2]| (p[0] - q[0]).hypot(p[1] - q[1]) <= 0.25;
         assert!(near(centre(&s, a), [10_504.0, 138.0]), "{:?}", centre(&s, a));
         assert!(near(centre(&s, b), [10_444.0, 48.0]), "{:?}", centre(&s, b));
+        assert!(near(centre(&s, c), [10_100.0, 240.0]), "{:?}", centre(&s, c));
     }
 
     #[test]
