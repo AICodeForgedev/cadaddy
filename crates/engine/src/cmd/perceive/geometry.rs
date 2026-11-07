@@ -1188,8 +1188,7 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
             };
             let specks = objects.iter().filter(|e| speck(e)).count();
             let stippled = specks as f64 >= STIPPLED_SHARE * objects.len() as f64;
-            let keep: std::collections::HashSet<cadaddy_doc::Handle> =
-                objects.iter().filter(|e| !(stippled && speck(e))).map(|e| e.handle).collect();
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> = objects.iter().filter(|e| !(stippled && speck(e))).map(|e| e.handle).collect();
             crate::cmd::bspec::room_plan_of(s, &keep)?
         }
         None => crate::cmd::bspec::room_plan(s)?,
