@@ -2105,13 +2105,25 @@ enum ContentClass {
 }
 
 /// Classify a stroke by its visual characteristics and position on the sheet.
-fn classify_stroke(s: &Stroke, sheet: (f64, f64), grid_lines: &HashSet<usize>) -> ContentClass {
+///
+/// `to_sheet`: page points to displayed sheet inches. A stroke's points are the page's, unrotated;
+/// `sheet` is the sheet as displayed, so on a rotated page only the displayed points can be held
+/// against it (the raw ones put a third of the drawing past the sheet's edge, in the title block).
+fn classify_stroke(s: &Stroke, sheet: (f64, f64), grid_lines: &HashSet<usize>, to_sheet: &dyn Fn(f64, f64) -> (f64, f64)) -> ContentClass {
     if grid_lines.contains(&s.order) {
         return ContentClass::Grid;
     }
     let (sw, sh) = (sheet.0 * 72.0, sheet.1 * 72.0);
     // title block: near the border of the sheet
-    if let Some(b) = bbox(std::slice::from_ref(&s.pts)) {
+    let shown: Vec<(f64, f64)> = s
+        .pts
+        .iter()
+        .map(|(x, y)| {
+            let (dx, dy) = to_sheet(*x, *y);
+            (dx * 72.0, dy * 72.0)
+        })
+        .collect();
+    if let Some(b) = bbox(std::slice::from_ref(&shown)) {
         let near_right = b[2] > sw * 0.95;
         let near_bottom = b[1] < sh * 0.05;
         let near_border = near_right || near_bottom || b[0] < sw * 0.02 || b[3] > sh * 0.98;
@@ -4810,7 +4822,8 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
     }
 
     // Fix 2: detect grid lines for content-class layer assignment
-    let grid_lines = if opts.recover_text { detect_grid_lines(&strokes, sheet) } else { HashSet::new() };
+    // Held against the page's own size: the strokes' points aren't turned yet.
+    let grid_lines = if opts.recover_text { detect_grid_lines(&strokes, (pw / 72.0, ph / 72.0)) } else { HashSet::new() };
     if !grid_lines.is_empty() {
         stats.insert("grid lines detected".into(), grid_lines.len());
     }
@@ -5354,7 +5367,7 @@ pub fn read(bytes: &[u8], opts: &PdfOptions) -> Result<PdfImport> {
                 let kind_hint = if shx_stroke_indices.contains(&i) && !protected_shx_indices.contains(&i) {
                     "shx_source"
                 } else if mode == LayerMode::Content {
-                    let class = classify_stroke(s, sheet, &grid_lines);
+                    let class = classify_stroke(s, sheet, &grid_lines, &to_sheet);
                     match class {
                         ContentClass::Grid => "grid",
                         ContentClass::Wall => "wall",
@@ -6340,6 +6353,28 @@ pub fn read_json(bytes: &[u8], p: &serde_json::Value) -> std::result::Result<(Dr
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_rotated_pages_drawing_is_held_against_the_sheet_as_displayed() {
+        // A 36 x 24 sheet stored upright at 24 x 36 and turned 270: raw (x, y) shows at (2592 - y, x).
+        let to_sheet = |x: f64, y: f64| ((2592.0 - y) / 72.0, x / 72.0);
+        let stroke = |pts: Vec<(f64, f64)>| Stroke {
+            pts,
+            closed: false,
+            pen: Pen { rgb: [0, 0, 0], lw: 17, transp: 0 },
+            layer: None,
+            curve_loop: false,
+            curved_loop: false,
+            order: 0,
+        };
+        let none = HashSet::new();
+        // In the left third as displayed, its raw y past the displayed sheet's height: the plan.
+        let plan = stroke(vec![(800.0, 2000.0), (800.0, 2100.0)]);
+        assert_ne!(classify_stroke(&plan, (36.0, 24.0), &none, &to_sheet), ContentClass::TitleBlock);
+        // By the right edge as displayed: the title block.
+        let title = stroke(vec![(800.0, 20.0), (800.0, 60.0)]);
+        assert_eq!(classify_stroke(&title, (36.0, 24.0), &none, &to_sheet), ContentClass::TitleBlock);
+    }
+
     use super::*;
 
     #[test]

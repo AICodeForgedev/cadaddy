@@ -659,8 +659,17 @@ pub(crate) fn split_view_regions(d: &cadaddy_doc::Drawing, regions: Vec<SheetReg
     let mut out = Vec::with_capacity(regions.len());
     for (i, r) in regions.into_iter().enumerate() {
         let found = views.get_mut(i).map(std::mem::take).unwrap_or_default();
-        if found.is_empty() {
+        // A floor plan beside the storey's other plans comes with no level of its own: it stays
+        // the sheet's, and only a floor plan sheet is narrowed to it (an enlarged plan sheet's
+        // views are read by their room types).
+        let own_storey = found.first().is_some_and(|v| v.level.is_empty());
+        if found.is_empty() || (own_storey && (r.kind != "plan" || typical.get(i).copied().unwrap_or(false))) {
             out.push(r);
+            continue;
+        }
+        if own_storey {
+            let view = found.into_iter().next().map(|v| SheetView { title: v.title, rect: v.rect });
+            out.push(SheetRegion { view, ..r });
             continue;
         }
         for v in found {
@@ -1838,7 +1847,9 @@ fn ensure_sheets_loaded(s: &mut Session, job: &mut GuidedJob) -> Result<()> {
     // ceilings are set per area from them before the MEP goes in.
     let rcp_title = |sh: &Value| {
         let t = sh.get("title").and_then(Value::as_str).unwrap_or("").to_ascii_uppercase();
-        t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP")
+        let ceiling = t.contains("REFLECTED CEILING") || t.split(|c: char| !c.is_ascii_alphanumeric()).any(|w| w == "RCP");
+        // A sheet that also prints the floor plan is that floor's plan first.
+        ceiling && !cadaddy_mepfix::wordrules::words("sheets.floor_plan_title_words").iter().any(|w| t.contains(w))
     };
     let legend_title = |sh: &Value| wall_legend_title(sh.get("title").and_then(Value::as_str).unwrap_or(""));
     // And the partition (wall type) legend: how each wall the plans tag is built.

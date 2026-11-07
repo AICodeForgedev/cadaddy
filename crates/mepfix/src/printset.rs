@@ -403,6 +403,9 @@ fn content_hash(data: &[u8]) -> String {
 
 // ─── Sheet classification ───────────────────────────────────────────────────
 
+/// The word list that names a floor plan in a title.
+const FLOOR_PLAN_WORDS: &str = "sheets.floor_plan_title_words";
+
 /// Classify a sheet's type from its title and number.
 fn classify_sheet_type(number: &str, title: &str) -> String {
     let up = title.to_ascii_uppercase();
@@ -427,7 +430,8 @@ fn classify_sheet_type(number: &str, title: &str) -> String {
     if up.contains("ENLARGED") {
         return "enlarged_plan".into();
     }
-    if up.contains("REFLECTED CEILING") || up.contains("RCP") {
+    // A sheet that also prints the floor plan is that floor's plan first.
+    if (up.contains("REFLECTED CEILING") || up.contains("RCP")) && !sheet_reader::title_names(title, FLOOR_PLAN_WORDS) {
         return "rcp".into();
     }
     // Number-based: 1xx, 2xx, 3xx, 4xx are plan sheets for levels.
@@ -1000,6 +1004,14 @@ pub fn run_classify_prints(
                 }
                 e.level = levels.first().cloned().or_else(|| rec.level.clone()).unwrap_or_else(|| infer_level(&type_text));
                 e.levels = levels;
+                // A sheet printing the floor plan beside the roof plan is the floor's plan: its
+                // title naming the roof doesn't put it on the roof.
+                if e.level == "R"
+                    && std::iter::once(&e.title).chain(&facts.view_titles).any(|t| sheet_reader::title_names(t, FLOOR_PLAN_WORDS))
+                {
+                    e.level.clear();
+                    e.levels.clear();
+                }
             }
             // Reference sheets (life safety, occupancy load, code analysis) mention a floor
             // in their title but should not be on a building level.
@@ -2264,5 +2276,18 @@ impl PrintSetProject {
                 })
                 .collect::<Vec<_>>()
         )
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::classify_sheet_type;
+
+    #[test]
+    fn a_sheet_also_printing_the_floor_plan_is_a_plan_not_a_ceiling_plan() {
+        assert_eq!(classify_sheet_type("A220", "DIMENSIONED FLOOR PLAN, ROOF PLAN, & RCP"), "plan");
+        assert_eq!(classify_sheet_type("A221", "FIRST FLOOR REFLECTED CEILING PLAN"), "rcp", "a floor's ceiling plan isn't a floor plan");
+        assert_eq!(classify_sheet_type("A222", "RCP"), "rcp");
+        assert_eq!(classify_sheet_type("A223", "REFLECTED CEILING PLAN"), "rcp");
     }
 }
