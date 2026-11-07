@@ -6,7 +6,7 @@
 //! - every sheet the area's prescreen findings cite ([`cited`]): a finding names a sheet in a
 //!   `sheet` / `source_sheet` / `document` field (with the point it read, `at` / `sheet_at`, when
 //!   it has one), as the keys of `by_sheet`, or in its words after "on", "sheet", "note", "see",
-//!   "from", "per" ("note E-1 general note", "44\" AFF on A823"). The crop is round the cited
+//!   "from", "per" ("note E-001 general note", "44\" AFF on A-501"). The crop is round the cited
 //!   points; a sheet cited with no point is shown whole (or, when the packet already shows it,
 //!   those pictures are marked);
 //! - every schedule, legend and notes sheet of the area's trades ([`sheets`]), whole: the set's
@@ -43,7 +43,7 @@ const MAX_SHEETS: usize = 40;
 pub(crate) const DECIDING_KINDS: [&str; 5] = ["schedule", "legend", "general_notes", "spec", "partition_legend"];
 
 /// The words that, just before a sheet number in a finding's text, make it a citation of that
-/// sheet ("note E-1 general note", "on A823", "see P-1").
+/// sheet ("note E-001 general note", "on A-501", "see P-001").
 const CITE_WORDS: [&str; 9] = ["ON", "SHEET", "SHEETS", "NOTE", "NOTES", "SEE", "FROM", "PER", "OF"];
 
 /// A sheet the area's prescreen cites: the rules citing it and the sheet points they read.
@@ -379,27 +379,27 @@ mod tests {
     use super::*;
 
     fn nums() -> BTreeMap<String, String> {
-        numbers(["E-1", "E-3", "A501", "P-1", "G002", "M-2"].into_iter())
+        numbers(["E-001", "E-101", "A-501", "P-001", "G-002", "M-201"].into_iter())
     }
 
     #[test]
     fn a_finding_cites_sheets_by_field_by_key_and_by_its_words() {
         let f = [
-            json!({"rule": "G-HEIGHT", "expected_source": {"sheet": "E-3", "at": [5.0, 6.0], "what": "its record: note E-1 general note: RECEPTACLES 1'-6\" CENTERLINE"}}),
-            json!({"rule": "G-PRESENT", "measured": {"by_sheet": {"M-2": 4}, "text": "44\" AFF on A501; lavatory height on G002"}}),
+            json!({"rule": "G-HEIGHT", "expected_source": {"sheet": "E-101", "at": [5.0, 6.0], "what": "its record: note E-001 general note: MOUNT OUTLETS AT 18 IN"}}),
+            json!({"rule": "G-PRESENT", "measured": {"by_sheet": {"M-201": 4}, "text": "44\" AFF on A-501; sink height on G-002"}}),
             // A circuit tag is no citation; nor is a sheet number with no word before it.
-            json!({"rule": "E-SWITCH-LEG", "measured": {"circuit": "E-3", "tag": "P-1 E-3"}}),
+            json!({"rule": "E-SWITCH-LEG", "measured": {"circuit": "E-101", "tag": "P-001 E-101"}}),
             // A point off its sheet is no sheet point.
-            json!({"rule": "G-HOST", "measured": {"sheet": "A501", "sheet_at": [999.0, 999.0]}}),
+            json!({"rule": "G-HOST", "measured": {"sheet": "A-501", "sheet_at": [999.0, 999.0]}}),
         ];
-        let rects = |n: &str| if n == "E-3" { vec![[0.0, 0.0, 10.0, 10.0]] } else { vec![[0.0, 0.0, 100.0, 100.0]] };
+        let rects = |n: &str| if n == "E-101" { vec![[0.0, 0.0, 10.0, 10.0]] } else { vec![[0.0, 0.0, 100.0, 100.0]] };
         let c = cited(f.iter(), &nums(), &rects);
-        assert_eq!(c.keys().cloned().collect::<Vec<_>>(), vec!["A501", "E-1", "E-3", "G002", "M-2"], "{c:?}");
-        assert_eq!(c["E-3"].points, vec![[5.0, 6.0]]);
-        assert_eq!(c["E-3"].rules.iter().cloned().collect::<Vec<_>>(), vec!["G-HEIGHT"]);
-        assert!(c["E-1"].points.is_empty() && c["E-1"].rules.contains("G-HEIGHT"));
-        assert!(c["A501"].points.is_empty() && c["A501"].rules.contains("G-HOST") && c["A501"].rules.contains("G-PRESENT"), "{c:?}");
-        assert!(!c.contains_key("P-1"), "a tag is no citation: {c:?}");
+        assert_eq!(c.keys().cloned().collect::<Vec<_>>(), vec!["A-501", "E-001", "E-101", "G-002", "M-201"], "{c:?}");
+        assert_eq!(c["E-101"].points, vec![[5.0, 6.0]]);
+        assert_eq!(c["E-101"].rules.iter().cloned().collect::<Vec<_>>(), vec!["G-HEIGHT"]);
+        assert!(c["E-001"].points.is_empty() && c["E-001"].rules.contains("G-HEIGHT"));
+        assert!(c["A-501"].points.is_empty() && c["A-501"].rules.contains("G-HOST") && c["A-501"].rules.contains("G-PRESENT"), "{c:?}");
+        assert!(!c.contains_key("P-001"), "a tag is no citation: {c:?}");
     }
 
     #[test]
@@ -413,24 +413,24 @@ mod tests {
             has_level: lv,
         };
         let all = vec![
-            s("E-1", "ELECTRICAL SYMBOLS LEGEND AND GENERAL NOTES", "cover", "E", false),
-            s("E-9", "PANEL SCHEDULES", "schedule", "E", false),
-            s("M-1", "MECHANICAL SCHEDULES", "schedule", "M", false),
-            s("FP-1", "FIRE PROTECTION NOTES", "", "FP", false),
-            s("A601", "", "schedule", "A", false),
-            s("E-3", "FIRST FLOOR POWER PLAN AND GENERAL NOTES", "plan", "E", true),
-            s("A700", "DETAILS", "detail", "A", false),
-            s("G002", "GENERAL NOTES", "", "G", false),
-            s("S001", "STRUCTURAL SCHEDULES", "schedule", "S", false),
+            s("E-001", "ELECTRICAL SYMBOLS LEGEND AND GENERAL NOTES", "cover", "E", false),
+            s("E-901", "PANEL SCHEDULES", "schedule", "E", false),
+            s("M-601", "MECHANICAL SCHEDULES", "schedule", "M", false),
+            s("FP-001", "FIRE PROTECTION NOTES", "", "FP", false),
+            s("A-601", "", "schedule", "A", false),
+            s("E-101", "FIRST FLOOR POWER PLAN AND GENERAL NOTES", "plan", "E", true),
+            s("A-700", "DETAILS", "detail", "A", false),
+            s("G-002", "GENERAL NOTES", "", "G", false),
+            s("S-001", "STRUCTURAL SCHEDULES", "schedule", "S", false),
             // Only in the job's sheet index: shown as its PDF page.
-            SheetOf { rect: None, ..s("A000", "SYMBOLS AND ABBREVIATIONS", "", "A", false) },
+            SheetOf { rect: None, ..s("A-000", "SYMBOLS AND ABBREVIATIONS", "", "A", false) },
         ];
         // An element of no trade (`general`) brings in no structural sheet.
         let trades: BTreeSet<String> = ["electrical", "architecture", "general"].into_iter().map(str::to_string).collect();
         let (got, over) = sheets(&all, &trades);
-        assert!(got.iter().find(|d| d.number == "A000").is_some_and(|d| d.rect.is_none()), "{got:?}");
+        assert!(got.iter().find(|d| d.number == "A-000").is_some_and(|d| d.rect.is_none()), "{got:?}");
         let got: Vec<(&str, &str)> = got.iter().map(|d| (d.number.as_str(), d.kind)).collect();
-        assert_eq!(got, vec![("A000", "legend"), ("A601", "schedule"), ("E-1", "legend"), ("E-9", "schedule"), ("G002", "general_notes")]);
+        assert_eq!(got, vec![("A-000", "legend"), ("A-601", "schedule"), ("E-001", "legend"), ("E-901", "schedule"), ("G-002", "general_notes")]);
         assert!(over.is_empty());
     }
 
