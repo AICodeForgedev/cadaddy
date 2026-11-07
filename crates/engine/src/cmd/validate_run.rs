@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         CommandSpec::new(CMD_STATUS, "Validation Run Status", run_status)
             .params(
-                "{run?: id (the latest)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged, in_parts}, findings: {total (per handle), by_verdict, by_trade, by_rule}, accuracy: {overall, judged_pairs, unsure_pairs, pairs_asked, coverage, by_trade, by_rule, coverage_by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra) over the element × rule pairs judged, a pair judged twice by its worse verdict; coverage: the pairs the packets asked for that a pass, fail or extra judged), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, registration: {threshold_ft, threshold_from, sheets: [{sheet, view?, status (the worst crop's: misregistered|refitted|ok|not_checked), residual_ft, rotation_deg, scale, worst: {area, file}, crops, areas, ok, refitted, misregistered, not_checked}] (the sheets by their print crops' registration against the model's walls, worst first: misregistered, then the largest residual), more?}, runs, per_run: [{run, scope, areas, findings, accuracy, judged_pairs, pairs_asked, coverage}], totals: {runs, areas_judged, findings, accuracy} (every run of the drawing, an area judged in several runs once, from the latest), next}: how far the run is and how the model scores, and the totals over every run",
+                "{run?: id (the latest), packets?: folder (the packet folders, when the run's out_dir isn't on this machine)} → {run, scope, trades, rules, cancelled?, areas: {total, done, issued, pending, unchanged, in_parts}, findings: {total (per handle), by_verdict, by_trade, by_rule}, accuracy: {overall (the headline: the pairs with a subject), judged_pairs, unsure_pairs, all_rows: {pass, fail, missing, extra, unsure, accuracy} (every judged pair), subject_free: {pairs, by_verdict, by_rule} (passes and unsures on elements the rule does not ask about, by the packet's applicability: left out of overall), packets_read, pairs_asked, coverage, by_trade, by_rule, coverage_by_rule, products?: {by_kind: {kind: accuracy}, by_field: {field: accuracy}} (G-PRODUCT and G-PRODUCT-CODE as the run's prescreen measured them)} (pass / (pass+fail+missing+extra) over the element × rule pairs judged, a pair judged twice by its worse verdict; coverage: the pairs the packets asked for that a pass, fail or extra judged), products?: {by_kind, by_field} (the counts), review: {accepted, rejected, open, deferred, false_alarm_rate}, prescreen, planted?: {total, caught, missed, recall, errors}, registration: {threshold_ft, threshold_from, sheets: [{sheet, view?, status (the worst crop's: misregistered|refitted|ok|not_checked), residual_ft, rotation_deg, scale, worst: {area, file}, crops, areas, ok, refitted, misregistered, not_checked}] (the sheets by their print crops' registration against the model's walls, worst first: misregistered, then the largest residual), more?}, runs, per_run: [{run, scope, areas, findings, accuracy, accuracy_all_rows, subject_free_pairs, judged_pairs, pairs_asked, coverage}], totals: {runs, areas_judged, findings, accuracy} (every run of the drawing, an area judged in several runs once, from the latest), next}: how far the run is and how the model scores, and the totals over every run",
             )
             .noundo(),
         CommandSpec::new(CMD_PLANT, "Plant Validation Errors", run_plant)
@@ -1068,13 +1068,10 @@ fn packet_image(images: &[String], dir: &std::path::Path, given: &str) -> Option
     images.iter().find(|f| g == format!("{}/{}", full.trim_end_matches('/'), f) || g.ends_with(&format!("/{f}"))).cloned()
 }
 
-/// A packet object as `validate.report` checks a finding against it.
+/// A packet object as `validate.report` checks a finding against it: what the one
+/// applicability table ([`vr::Rule::asks`], Q6263) reads of it.
 struct PacketObject {
-    kind: String,
-    category: Option<String>,
-    mark: Option<String>,
-    /// Listed among the packet's elements or runs (not a wall or an opening).
-    element: bool,
+    subject: vr::Subject,
 }
 
 enum Held<'a> {
@@ -1093,13 +1090,17 @@ struct PacketObjects {
 impl PacketObjects {
     fn of(o: &Value) -> PacketObjects {
         let s = |v: &Value, k: &str| v[k].as_str().map(str::to_string).filter(|x| !x.trim().is_empty());
+        // Who the area's prescreen names (a keynote marker's call, a callout, an option).
+        let named = vr::named_by(o.pointer("/prescreen/findings").and_then(Value::as_array).into_iter().flatten().take(MAX_PACKET_OBJECTS));
         let mut own = BTreeMap::new();
         for k in ["elements", "runs", "walls", "openings"] {
             for e in o[k].as_array().into_iter().flatten().take(MAX_PACKET_OBJECTS) {
                 let Some(h) = e["handle"].as_str() else { continue };
-                let kind = s(e, "kind").unwrap_or_else(|| if k == "walls" { "wall".into() } else { String::new() });
-                let element = matches!(k, "elements" | "runs");
-                own.insert(h.trim().to_ascii_uppercase(), PacketObject { kind, category: s(e, "category"), mark: s(e, "mark"), element });
+                let mut subject = vr::Subject::of_json(e, matches!(k, "elements" | "runs"), &named);
+                if subject.kind.is_empty() && k == "walls" {
+                    subject.kind = "wall".into();
+                }
+                own.insert(h.trim().to_ascii_uppercase(), PacketObject { subject });
             }
         }
         let nearby = o["nearby"]
@@ -1119,10 +1120,10 @@ impl PacketObjects {
     }
 
     /// Does the packet ask the judge for `rule` on this object? An element or run gets every
-    /// rule that applies to it (a rule for every element too); a wall or an opening only a rule
-    /// that names its kind.
+    /// rule that applies to it (a rule for every element too, where its `only_if` finds a
+    /// subject); a wall or an opening only a rule that names its kind ([`vr::Rule::asks`]).
     fn asks(o: &PacketObject, rule: &vr::Rule) -> bool {
-        if rule.names_kinds() { rule.applies_to_element(&o.kind, o.category.as_deref(), o.mark.as_deref()) } else { o.element }
+        rule.asks(&o.subject)
     }
 
     /// Per rule of the packet, the element × rule pairs it asks for.
@@ -1360,16 +1361,21 @@ fn run_report(s: &mut Session, p: &Value) -> Result<Value> {
             {
                 match po.what(&h) {
                     Some(Held::Own(obj)) => {
+                        let o = &obj.subject;
                         if let Some(r) = all.iter().find(|e| e.rule.id == rule)
-                            && r.rule.names_kinds()
-                            && !r.rule.applies_to_element(&obj.kind, obj.category.as_deref(), obj.mark.as_deref())
+                            && !PacketObjects::asks(obj, &r.rule)
                         {
-                            problems.push(format!(
-                                "finding {n}: rule {rule} does not apply to {h}, a {}{} (it applies to {})",
-                                obj.kind.replace('_', " "),
-                                obj.category.as_deref().map(|c| format!(", {c}")).unwrap_or_default(),
-                                applies_words(&r.rule)
-                            ));
+                            let what =
+                                format!("{h}, a {}{}", o.kind.replace('_', " "), o.category.as_deref().map(|c| format!(", {c}")).unwrap_or_default());
+                            let said = if r.rule.has_subject(o) {
+                                format!("does not apply to {what} (it applies to {}", applies_words(&r.rule))
+                            } else {
+                                format!(
+                                    "has no subject in {what} (it asks about {}; nothing does for this one",
+                                    r.rule.only_if_words().unwrap_or_default()
+                                )
+                            };
+                            problems.push(format!("finding {n}: rule {rule} {said}; objects.json lists each element's `rules`)"));
                         }
                     }
                     Some(Held::Nearby(room)) => problems.push(format!(
@@ -1800,44 +1806,84 @@ impl Tally {
 /// The scores of a set of judged areas: the findings counted per handle, and the accuracy over
 /// the element × rule pairs they judged (a pair judged twice counts once, by its worse verdict;
 /// an `unsure` pair is not judged), with the coverage of the pairs the packets asked for.
+///
+/// The headline (Q6263) leaves out the pairs with no subject: a pass or unsure on an element the
+/// rule does not ask about by the one applicability table ([`vr::Rule::asks`] over the area's
+/// packet objects), e.g. G-KEYNOTE on a conduit fitting no print draws and no marker names. A
+/// judged problem (fail, missing, extra) always has a subject; a pair whose packet can't be read
+/// is kept. Every row is still counted in `all_rows`.
 #[derive(Default)]
 struct Scores {
     findings: Tally,
     findings_by_trade: BTreeMap<String, Tally>,
     findings_by_rule: BTreeMap<String, Tally>,
+    /// The pairs with a subject (the headline).
     pairs: Tally,
     pairs_by_trade: BTreeMap<String, Tally>,
     pairs_by_rule: BTreeMap<String, Tally>,
+    /// Every judged pair, with a subject or not.
+    all_rows: Tally,
+    /// The pairs with no subject, per rule.
+    subject_free: Tally,
+    subject_free_by_rule: BTreeMap<String, usize>,
     /// Per rule: the pairs the packets asked for, and how many were judged.
     asked: BTreeMap<String, [usize; 2]>,
     areas: usize,
+    /// Areas whose packet objects were read (the others' pairs are all kept).
+    packets_read: usize,
+}
+
+/// Does a judged pair have a subject (see [`Scores`])?
+fn has_subject(packet: Option<&PacketObjects>, all: &[Effective], rule: &str, key: &str, verdict: &str) -> bool {
+    if key.starts_with('#') || !matches!(verdict, "pass" | "unsure") {
+        return true;
+    }
+    match (packet.and_then(|p| p.own.get(key)), all.iter().find(|e| e.rule.id == rule)) {
+        (Some(o), Some(r)) => PacketObjects::asks(o, &r.rule),
+        _ => true,
+    }
 }
 
 impl Scores {
-    fn add(&mut self, a: &RunArea) {
+    fn add(&mut self, a: &RunArea, packet: Option<&PacketObjects>, all: &[Effective]) {
         self.areas += 1;
+        if packet.is_some() {
+            self.packets_read += 1;
+        }
         for f in &a.findings {
             let w = f.weight();
             self.findings.add(&f.verdict, w);
             self.findings_by_trade.entry(f.trade.clone()).or_default().add(&f.verdict, w);
             self.findings_by_rule.entry(f.rule.clone()).or_default().add(&f.verdict, w);
         }
-        for ((rule, _), (trade, verdict)) in area_pairs(&a.findings) {
+        for ((rule, key), (trade, verdict)) in area_pairs(&a.findings) {
+            self.all_rows.add(&verdict, 1);
+            if !has_subject(packet, all, &rule, &key, &verdict) {
+                self.subject_free.add(&verdict, 1);
+                *self.subject_free_by_rule.entry(rule).or_default() += 1;
+                continue;
+            }
             self.pairs.add(&verdict, 1);
             self.pairs_by_trade.entry(trade).or_default().add(&verdict, 1);
             self.pairs_by_rule.entry(rule).or_default().add(&verdict, 1);
         }
-        for (r, x) in &a.pairs {
+        // The pairs asked, by the one table over the packet when it is read (an area reported
+        // before Q6263 kept the count its packet asked then), else as counted at report time.
+        let recount = packet.map(|pk| area_coverage(&a.findings, &pk.expected(&a.rules, all), Some(pk), all));
+        for (r, x) in recount.as_ref().unwrap_or(&a.pairs) {
             let e = self.asked.entry(r.clone()).or_default();
             e[0] = e[0].saturating_add(x[0]);
             e[1] = e[1].saturating_add(x[1]);
         }
     }
 
-    fn of<'a>(areas: impl IntoIterator<Item = &'a RunArea>) -> Scores {
+    /// The scores of `areas` (each of a run), reading each area's packet objects (from its
+    /// run's folder, else from `packets`).
+    fn of<'a>(areas: impl IntoIterator<Item = (&'a Run, &'a RunArea)>, all: &[Effective], packets: Option<&std::path::Path>) -> Scores {
         let mut s = Scores::default();
-        for a in areas {
-            s.add(a);
+        for (r, a) in areas {
+            let packet = packet_objects(r, a, packets);
+            s.add(a, packet.as_ref(), all);
         }
         s
     }
@@ -1864,6 +1910,14 @@ impl Scores {
             "overall": self.pairs.score(),
             "judged_pairs": self.pairs.judged(),
             "unsure_pairs": self.pairs.unsure,
+            "all_rows": self.all_rows.to_json(self.all_rows.score()),
+            "subject_free": {
+                "pairs": self.subject_free.total(),
+                "by_verdict": self.subject_free.to_json(Value::Null),
+                "by_rule": self.subject_free_by_rule,
+                "about": "passes and unsures on elements the rule does not ask about (no marker, symbol or option gives it a subject): left out of `overall`, kept in `all_rows`",
+            },
+            "packets_read": self.packets_read,
             "pairs_asked": asked,
             "coverage": ratio(judged, asked),
             "by_trade": self.pairs_by_trade.iter().map(|(k, t)| (k.clone(), t.score())).collect::<serde_json::Map<_, _>>(),
@@ -1873,18 +1927,42 @@ impl Scores {
     }
 }
 
-/// Every area of the drawing's runs judged (done, or with parts in) once: an area judged in
-/// more than one run counts from the latest of them.
-fn latest_areas(st: &Store) -> Vec<&RunArea> {
+/// Every area of the drawing's runs judged (done, or with parts in) once, with its run: an area
+/// judged in more than one run counts from the latest of them.
+fn latest_areas(st: &Store) -> Vec<(&Run, &RunArea)> {
     let mut runs: Vec<&Run> = st.runs.iter().collect();
     runs.sort_by_key(|r| r.started);
-    let mut by_id: BTreeMap<&str, &RunArea> = BTreeMap::new();
+    let mut by_id: BTreeMap<&str, (&Run, &RunArea)> = BTreeMap::new();
     for r in runs {
         for a in r.areas.iter().filter(|a| a.status == "done" || !a.findings.is_empty()) {
-            by_id.insert(a.id.as_str(), a);
+            by_id.insert(a.id.as_str(), (r, a));
         }
     }
     by_id.into_values().collect()
+}
+
+/// Largest packet `objects.json` the status reads.
+const MAX_OBJECTS_FILE: u64 = 512 << 20;
+
+/// An area's packet objects: its folder under the run's `out_dir`, else under `packets` (a
+/// folder holding the packets when the run's isn't on this machine: `packets/<dir>` or
+/// `packets/<the run folder's name>/<dir>`).
+fn packet_objects(run: &Run, a: &RunArea, packets: Option<&std::path::Path>) -> Option<PacketObjects> {
+    if a.dir.trim().is_empty() {
+        return None;
+    }
+    let out = std::path::Path::new(&run.out_dir);
+    let mut tries = vec![out.join(&a.dir)];
+    if let Some(p) = packets {
+        tries.push(p.join(&a.dir));
+        if let Some(name) = out.file_name() {
+            tries.push(p.join(name).join(&a.dir));
+        }
+    }
+    tries.into_iter().map(|d| d.join("objects.json")).find_map(|f| {
+        let small = std::fs::metadata(&f).ok().is_some_and(|m| m.is_file() && m.len() <= MAX_OBJECTS_FILE);
+        small.then(|| read_json(&f)).flatten().map(|o| PacketObjects::of(&o))
+    })
 }
 
 fn planted_report(plant: &Plant, run: &Run, all: &[Effective], reveal: bool) -> Value {
@@ -1965,7 +2043,8 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     let run = run_param(CMD, &st, p)?;
     let (all, _) = vr::effective(&d.project_rules).map_err(|e| bad(CMD, e))?;
     let answers = super::agentready::decisions(d);
-    let scores = Scores::of(&run.areas);
+    let packets = str_param(p, "packets").map(str::trim).filter(|x| !x.is_empty()).map(std::path::PathBuf::from);
+    let scores = Scores::of(run.areas.iter().map(|a| (run, a)), &all, packets.as_deref());
     let (mut accepted, mut rejected, mut open, mut deferred) = (0usize, 0usize, 0usize, 0usize);
     for a in &run.areas {
         for f in &a.findings {
@@ -2024,16 +2103,17 @@ fn run_status(s: &mut Session, p: &Value) -> Result<Value> {
     out["per_run"] = json!(
         runs.iter()
             .map(|r| {
-                let sc = Scores::of(&r.areas);
+                let sc = Scores::of(r.areas.iter().map(|a| (*r, a)), &all, packets.as_deref());
                 let (asked, judged) = sc.asked_judged();
                 json!({
                     "run": r.id, "scope": r.scope, "by": r.by, "areas": area_counts(r), "findings": sc.findings.total(),
-                    "accuracy": sc.pairs.score(), "judged_pairs": sc.pairs.judged(), "pairs_asked": asked, "coverage": ratio(judged, asked),
+                    "accuracy": sc.pairs.score(), "accuracy_all_rows": sc.all_rows.score(), "subject_free_pairs": sc.subject_free.total(),
+                    "judged_pairs": sc.pairs.judged(), "pairs_asked": asked, "coverage": ratio(judged, asked),
                 })
             })
             .collect::<Vec<_>>()
     );
-    let every = Scores::of(latest_areas(&st));
+    let every = Scores::of(latest_areas(&st), &all, packets.as_deref());
     out["totals"] = json!({
         "runs": st.runs.len(),
         "areas_judged": every.areas,
@@ -2406,6 +2486,116 @@ fn run_plant(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A made-up packet's objects: a receptacle drawn on a plan, a conduit fitting the raceway
+    /// build derived (no print point), a box a print draws, and a stick a keynote marker's call
+    /// names in the prescreen.
+    fn packet_json() -> Value {
+        json!({
+            "elements": [
+                {"handle": "A1", "kind": "receptacle", "category": "IfcOutlet", "mark": "REC", "source": {"print": {"sheet": "E-101", "at": [10.0, 20.0]}}},
+                {"handle": "B2", "kind": "conduit_fitting", "category": "IfcCableCarrierFitting", "source": {"print": {"sheet": "circuit 1: EMT", "at": null}}},
+                {"handle": "C3", "kind": "junction_box", "category": "IfcJunctionBox", "mark": "J", "source": {"print": {"sheet": "E-101", "at": [4.0, 5.0]}}},
+                {"handle": "D4", "kind": "conduit", "category": "IfcCableCarrierSegment", "source": {"built_from": "A1"}},
+            ],
+            "walls": [{"handle": "W1"}],
+            "prescreen": {"findings": [{"rule": "G-KEYNOTE", "handle": null, "handles": ["d4"], "verdict": "pass"}]},
+        })
+    }
+
+    /// Q6263: the report and the status ask the same pairs, by the one applicability table.
+    #[test]
+    fn a_rule_for_every_element_asks_about_a_raceway_piece_only_where_something_names_it() {
+        let (all, _) = vr::effective(&cadaddy_doc::projrules::ProjectRules::default()).unwrap();
+        let rule = |id: &str| &all.iter().find(|e| e.rule.id == id).unwrap().rule;
+        let pk = PacketObjects::of(&packet_json());
+        let asks = |h: &str, id: &str| PacketObjects::asks(pk.own.get(h).unwrap(), rule(id));
+        for id in ["G-KEYNOTE", "G-LAYOUT", "G-PRESENT", "G-COVERAGE", "G-UNDERGROUND"] {
+            assert!(asks("A1", id), "{id}: a drawn receptacle");
+            assert!(!asks("B2", id), "{id}: a derived fitting nothing draws or names");
+            assert!(asks("C3", id), "{id}: a box a print draws");
+        }
+        assert!(asks("D4", "G-KEYNOTE") && !asks("D4", "G-LAYOUT"), "the stick a keynote call names gets G-KEYNOTE only");
+        // The general rules every placed object answers still ask about every piece.
+        for id in ["G-SOURCED", "G-PLACE"] {
+            assert!(asks("B2", id) && asks("D4", id), "{id}");
+        }
+        // Each conduit rule asks about the pieces its prescreen covers.
+        assert!(asks("C3", "E-BOX-FILL") && !asks("B2", "E-BOX-FILL") && !asks("D4", "E-BOX-FILL"));
+        assert!(asks("D4", "E-CONDUIT-FILL") && asks("B2", "E-CONDUIT-FILL") && !asks("C3", "E-CONDUIT-FILL"));
+        // No value-engineering option names any of them.
+        assert!(!asks("D4", "G-VE-COST") && !asks("A1", "G-VE-COST"));
+        // A wall gets only the rules that name walls.
+        assert!(!asks("W1", "G-KEYNOTE"));
+    }
+
+    fn pair(rule: &str, h: &str, verdict: &str, n: usize) -> Finding {
+        Finding {
+            id: format!("F{n}"),
+            rule: rule.into(),
+            trade: "electrical".into(),
+            handle: Some(h.into()),
+            verdict: verdict.into(),
+            ..Finding::default()
+        }
+    }
+
+    /// Q6263: `validate.status` scores the pairs with a subject as its headline; the passes on
+    /// pairs no marker, symbol or option gives a subject are counted aside, and a judged problem
+    /// always counts.
+    #[test]
+    fn the_status_headline_leaves_out_pairs_with_no_subject() {
+        let (all, _) = vr::effective(&cadaddy_doc::projrules::ProjectRules::default()).unwrap();
+        let pk = PacketObjects::of(&packet_json());
+        let area = RunArea {
+            findings: vec![
+                pair("G-PLACE", "A1", "pass", 1),
+                pair("G-PLACE", "B2", "fail", 2),
+                // No subject: a fitting nothing draws or names.
+                pair("G-KEYNOTE", "B2", "pass", 3),
+                pair("G-LAYOUT", "B2", "pass", 4),
+                pair("G-VE-COST", "D4", "pass", 5),
+                // A problem a judge found keeps its pair.
+                pair("G-COVERAGE", "B2", "fail", 6),
+                pair("G-KEYNOTE", "D4", "pass", 7),
+            ],
+            rules: vec!["G-PLACE".into(), "G-KEYNOTE".into()],
+            ..RunArea::default()
+        };
+        let mut sc = Scores::default();
+        sc.add(&area, Some(&pk), &all);
+        let acc = sc.accuracy_json();
+        assert_eq!(acc["all_rows"]["accuracy"], json!(r3(5.0 / 7.0)), "{acc}");
+        assert_eq!(acc["overall"], json!(0.5), "pass, fail, fail, pass: {acc}");
+        assert_eq!(acc["subject_free"]["pairs"], 3, "{acc}");
+        assert_eq!(acc["subject_free"]["by_rule"]["G-VE-COST"], 1, "{acc}");
+        assert_eq!(acc["packets_read"], 1, "{acc}");
+        // The pairs asked are recounted by the same table: G-PLACE of all four elements,
+        // G-KEYNOTE of the receptacle, the drawn box and the named stick; judged G-PLACE A1, B2
+        // and G-KEYNOTE D4.
+        assert_eq!(acc["pairs_asked"], 7, "{acc}");
+        assert_eq!(acc["coverage"], json!(r3(3.0 / 7.0)), "{acc}");
+        // An area whose packet can't be read keeps every pair.
+        let mut sc = Scores::default();
+        sc.add(&area, None, &all);
+        assert_eq!(sc.accuracy_json()["overall"], json!(r3(5.0 / 7.0)));
+    }
+
+    /// The status reads a packet from the run's folder, else from `packets`.
+    #[test]
+    fn the_status_finds_a_packet_where_it_was_moved() {
+        let root = std::env::temp_dir().join(format!("cadaddy-vra-{}", std::process::id()));
+        let moved = root.join("moved");
+        let dir = moved.join("VR-1").join("Area_1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("objects.json"), packet_json().to_string()).unwrap();
+        let run = Run { out_dir: root.join("gone").join("VR-1").to_string_lossy().into_owned(), ..Run::default() };
+        let area = RunArea { dir: "Area_1".into(), ..RunArea::default() };
+        assert!(packet_objects(&run, &area, None).is_none());
+        let pk = packet_objects(&run, &area, Some(&moved)).unwrap();
+        assert!(pk.own.contains_key("B2"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn a_specification_page_of_the_packet_is_a_picture_a_finding_may_cite() {

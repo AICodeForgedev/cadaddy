@@ -1426,6 +1426,31 @@ impl<'a> Membership<'a> {
     }
 }
 
+/// The room of one of the area's own elements at `at` and what said it (Q6263): the area's when
+/// the point is inside its outline (`outline`) or, for a room's area, within [`EDGE_FT`] of it and
+/// in no other room (`wall_line`: [`Membership::whose`] made it the area's; with how far outside
+/// the outline it is, feet), else the element's own record (`record`).
+fn own_room(area: &Area, at: [f64; 2], record: Option<String>) -> (Option<String>, Value) {
+    let label = area.number.clone().or_else(|| area.name.clone());
+    match (label, point_in(&area.outline, at), area.room.is_some()) {
+        (Some(r), true, _) => (Some(r), json!("outline")),
+        (Some(r), false, true) => {
+            let off = area
+                .outline
+                .iter()
+                .zip(area.outline.iter().cycle().skip(1))
+                .take(MAX_EDGES)
+                .map(|(x, y)| seg_dist(at, *x, *y).0)
+                .fold(f64::INFINITY, f64::min);
+            (Some(r), json!({"wall_line": true, "outside_outline_ft": if off.is_finite() { json!(r2(off)) } else { Value::Null }}))
+        }
+        _ => match record {
+            Some(r) => (Some(r), json!("record")),
+            None => (None, Value::Null),
+        },
+    }
+}
+
 /// An element beside the area, for `objects.json` `nearby`.
 fn nearby_json(handle: &str, r: &Resolved, mark: Option<&str>, at: [f64; 2], whose: &Whose) -> Value {
     let (area, room) = match whose {
@@ -1610,8 +1635,7 @@ fn in_area(
         } else {
             None
         };
-        let room = if point_in(&area.outline, e.at) { area.number.clone().or_else(|| area.name.clone()) } else { None }
-            .or_else(|| field(&props, &e.fields, &["room", "room_number"]));
+        let (room, room_by) = own_room(area, e.at, field(&props, &e.fields, &["room", "room_number"]));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&e.id))).map(fail_json).collect();
         elements.push(json!({
@@ -1626,6 +1650,7 @@ fn in_area(
             "name": field(&props, &e.fields, &["name", "description"]),
             "level": e.level,
             "room": room,
+            "room_by": room_by,
             "at_ft": pt(e.at),
             "height_aff_in": e.z_in.map(r2),
             "mounting": mounting,
@@ -1644,9 +1669,13 @@ fn in_area(
     }
     // What the build made for the MEP trades: on the element it was built from, else listed.
     let mut built_listed = 0usize;
+    // A built part made from one of the plan's elements is that element's (its `built_as`); one
+    // made from another built part (a box built for a built device) is listed itself, whatever
+    // order the kinds sort in (Q6263).
+    let plan_listed = elements.len();
     for b in built.iter().filter(|b| intersect(b.rect, reach).is_some() || inside(reach, [b.rect[0], b.rect[1]])) {
         if let Some(from) = &b.from
-            && let Some(el) = elements.iter_mut().find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
+            && let Some(el) = elements.iter_mut().take(plan_listed).find(|x| x["handle"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(from)))
         {
             if let Some(list) = el.get_mut("built_as").and_then(Value::as_array_mut) {
                 list.push(json!(b.handle));
@@ -1696,6 +1725,7 @@ fn in_area(
         products.push((b.kind.clone(), mark.clone(), sub.clone()));
         let mine: Vec<Value> =
             failures.iter().filter(|f| f.element.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&b.handle))).map(fail_json).collect();
+        let (room, room_by) = own_room(area, c, field(&props, &none, &["room"]));
         elements.push(json!({
             "handle": b.handle,
             "kind": b.kind,
@@ -1707,7 +1737,8 @@ fn in_area(
             "mark": mark,
             "name": field(&props, &none, &["name", "description"]),
             "level": area.level,
-            "room": if point_in(&area.outline, c) { area.number.clone().or_else(|| area.name.clone()) } else { field(&props, &none, &["room"]) },
+            "room": room,
+            "room_by": room_by,
             "at_ft": pt(c),
             "plan_box_ft": rect_json(b.rect),
             "height_aff_in": b.z_in.map(|z| z[0]),
@@ -1851,6 +1882,34 @@ fn rules_for<'a>(here: &InArea, all: &'a [Effective]) -> (Vec<&'a Effective>, Ve
     (on, off)
 }
 
+/// Write each element's and run's `rules` in `objects` (the rules of `rules` that ask about it,
+/// [`vr::Rule::asks`], with the prescreen's findings naming it) and count the pairs per rule.
+pub(crate) fn ask_rules(objects: &mut Value, rules: &[&Effective]) -> BTreeMap<String, usize> {
+    let named = vr::named_by(objects.pointer("/prescreen/findings").and_then(Value::as_array).into_iter().flatten());
+    let mut asked: BTreeMap<String, usize> = rules.iter().map(|r| (r.rule.id.clone(), 0)).collect();
+    for k in ["elements", "runs"] {
+        let Some(list) = objects.get_mut(k).and_then(Value::as_array_mut) else { continue };
+        for e in list.iter_mut() {
+            let subject = vr::Subject::of_json(e, true, &named);
+            let ids: Vec<&str> = rules.iter().filter(|r| r.rule.asks(&subject)).map(|r| r.rule.id.as_str()).collect();
+            for id in &ids {
+                if let Some(n) = asked.get_mut(*id) {
+                    *n += 1;
+                }
+            }
+            e["rules"] = json!(ids);
+        }
+    }
+    asked
+}
+
+/// Does a packet keep a rule: any rule but one asked only where its prescreen names an element
+/// (`only_if` over every kind) that asks about none here.
+fn vr_keeps(r: &Effective, asked: &BTreeMap<String, usize>) -> bool {
+    let everywhere = r.rule.applies_to.only_if.as_ref().is_some_and(|o| o.kinds.iter().any(|k| k == "*"));
+    !everywhere || asked.get(&r.rule.id).is_some_and(|n| *n > 0)
+}
+
 /// The kind of document a crop is, as the rules name the documents they need (a gear's panel
 /// schedule is a schedule, a keynote list notes, a unit type's wall a room's interior elevation).
 fn doc_kind(kind: &str) -> &str {
@@ -1911,6 +1970,7 @@ fn prompt_md(
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
+    s.push_str("- `objects.json` elements and runs: each one's `rules` are the rules asked of it; report only those pairs (a rule for every element asks about a raceway piece only where a print draws it or a marker names it, a value-engineering rule only where an option does; `rules.json` `pairs_asked` counts them).\n");
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
@@ -3944,9 +4004,19 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         rules_off.extend(rules_on.iter().filter(|r| !only.contains(&r.rule.id)).map(|r| r.rule.id.clone()));
         rules_on.retain(|r| only.contains(&r.rule.id));
     }
+    // Each element's and run's `rules` (Q6263): the element × rule pairs this packet asks the
+    // judge for, by the one applicability table (`Rule::asks`) the report and the status use. A
+    // rule asked of no element only where its prescreen names one (value engineering with no
+    // option here) is left out of the packet.
+    let mut asked = ask_rules(&mut here.objects, &rules_on);
+    let not_asked: Vec<String> = rules_on.iter().filter(|r| !vr_keeps(r, &asked)).map(|r| r.rule.id.clone()).collect();
+    rules_on.retain(|r| vr_keeps(r, &asked));
+    asked.retain(|id, _| !not_asked.contains(id));
     let rules_json = json!({
         "area": area.id,
         "kinds": here.kinds.iter().collect::<Vec<_>>(),
+        "pairs_asked": asked,
+        "not_asked": not_asked,
         "rules": rules_on.iter().map(|r| r.to_json(true)).collect::<Vec<_>>(),
         "disabled": rules_off,
         "rejected_overrides": rejected.iter().map(|r| json!({"key": r.key, "value": r.value, "why": r.why})).collect::<Vec<_>>(),

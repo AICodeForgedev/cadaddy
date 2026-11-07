@@ -18,7 +18,7 @@
 //! - `validate.rules.set {id, tolerance?, severity?, enabled?, reset?, reason}` — change a rule
 //!   for this project.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::OnceLock;
 
 use cadaddy_doc::projrules::{ProjectRules, RuleDomain, RuleValue, SourceTier};
@@ -90,6 +90,104 @@ pub struct AppliesTo {
     pub kinds: Vec<String>,
     pub categories: Vec<String>,
     pub marks: Vec<String>,
+    /// Kinds the rule asks about only where something gives it a subject there (Q6263).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_if: Option<OnlyIf>,
+}
+
+/// A rule's subject condition (Q6263): an element of one of `kinds` (`*`: every kind the rule
+/// applies to) gets the rule only when one of `by` holds for it. A rule for every element
+/// (G-KEYNOTE, G-LAYOUT…) has no subject in a conduit fitting no print draws and no marker
+/// names, and a value-engineering rule none where no option touches the piece.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OnlyIf {
+    pub kinds: Vec<String>,
+    pub by: Vec<SubjectBy>,
+}
+
+/// What gives a rule a subject in an element.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubjectBy {
+    /// A print draws it: it was read from a sheet at a point (its symbol).
+    Drawn,
+    /// The rule's prescreen names it: a keynote marker's call, a callout, a value-engineering
+    /// option, a symbol it matched.
+    Named,
+}
+
+impl SubjectBy {
+    fn words(self) -> &'static str {
+        match self {
+            SubjectBy::Drawn => "a print draws it",
+            SubjectBy::Named => "the rule's prescreen names it (a marker, a callout or an option)",
+        }
+    }
+}
+
+/// What decides whether a rule asks about an element (Q6263): the one applicability table the
+/// packet (each element's `rules`), `validate.report` (which pairs it takes), the prescreen and
+/// `validate.status` (which judged pairs have a subject) all use, through [`Rule::asks`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Subject {
+    pub kind: String,
+    pub category: Option<String>,
+    pub mark: Option<String>,
+    /// An element or a run (not a wall or an opening): a rule for every element asks about it.
+    pub element: bool,
+    /// Read from a print at a point.
+    pub drawn: bool,
+    /// The rules whose prescreen names it.
+    pub named: BTreeSet<String>,
+}
+
+/// Findings a prescreen lists, read for who they name, at most.
+const MAX_NAMING_FINDINGS: usize = 1_000_000;
+/// Handles one finding names, at most.
+const MAX_NAMED_HANDLES: usize = 10_000;
+
+/// Who the prescreen's findings name: handle (upper case) → the rules naming it (`handle` and
+/// `handles` of each finding).
+pub fn named_by(findings: impl IntoIterator<Item = impl std::borrow::Borrow<Value>>) -> HashMap<String, BTreeSet<String>> {
+    let mut out: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for f in findings.into_iter().take(MAX_NAMING_FINDINGS) {
+        let f = f.borrow();
+        let Some(rule) = f.get("rule").and_then(Value::as_str).map(|r| r.trim().to_ascii_uppercase()).filter(|r| !r.is_empty()) else {
+            continue;
+        };
+        let one = f.get("handle").and_then(Value::as_str);
+        let many = f.get("handles").and_then(Value::as_array).into_iter().flatten().take(MAX_NAMED_HANDLES).filter_map(Value::as_str);
+        for h in one.into_iter().chain(many).map(|h| h.trim().to_ascii_uppercase()).filter(|h| !h.is_empty()) {
+            out.entry(h).or_default().insert(rule.clone());
+        }
+    }
+    out
+}
+
+impl Subject {
+    /// An object of a packet's `objects.json` (`element`: one of its elements or runs, not a
+    /// wall or an opening), with who its prescreen names.
+    pub fn of_json(o: &Value, element: bool, named: &HashMap<String, BTreeSet<String>>) -> Subject {
+        let s = |k: &str| o.get(k).and_then(Value::as_str).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+        let handle = s("handle").map(|h| h.to_ascii_uppercase()).unwrap_or_default();
+        let category = s("category");
+        // A packet written before raceway pieces had kinds of their own lists every piece as
+        // `conduit`: its IFC class says which piece it is.
+        let kind = s("kind").unwrap_or_default();
+        let kind = match category.as_deref().filter(|_| kind.eq_ignore_ascii_case("conduit")).and_then(|c| validate_kinds::piece_kind(c, "")) {
+            Some(k) => k.to_string(),
+            None => kind,
+        };
+        Subject {
+            kind,
+            category,
+            mark: s("mark"),
+            element,
+            drawn: o.pointer("/source/print/at").is_some_and(Value::is_array),
+            named: named.get(&handle).cloned().unwrap_or_default(),
+        }
+    }
 }
 
 /// One generic passing and one failing case.
@@ -165,6 +263,36 @@ impl Rule {
             || mark.is_some_and(|m| self.applies_to.marks.iter().any(|p| mark_matches(p, m)))
     }
 
+    /// Does this rule ask about this element (Q6263)? It applies to it (by kind, category or
+    /// mark; a rule for every element to every element or run) and, where its `only_if` names
+    /// the element's kind, something gives it a subject there. The one test of the packet, the
+    /// report, the prescreen and the status.
+    pub fn asks(&self, s: &Subject) -> bool {
+        let applies = if self.names_kinds() { self.applies_to_element(&s.kind, s.category.as_deref(), s.mark.as_deref()) } else { s.element };
+        applies && self.has_subject(s)
+    }
+
+    /// Does the rule's `only_if` let it ask about this element (true when it has none, or none
+    /// for the element's kind)?
+    pub fn has_subject(&self, s: &Subject) -> bool {
+        let Some(o) = &self.applies_to.only_if else { return true };
+        if !o.kinds.iter().any(|k| validate_kinds::kind_matches(k, &s.kind)) {
+            return true;
+        }
+        o.by.iter().any(|b| match b {
+            SubjectBy::Drawn => s.drawn,
+            SubjectBy::Named => s.named.contains(&self.id),
+        })
+    }
+
+    /// The `only_if` condition in words, when the rule has one.
+    pub fn only_if_words(&self) -> Option<String> {
+        let o = self.applies_to.only_if.as_ref()?;
+        let kinds = if o.kinds.iter().any(|k| k == "*") { "every element".to_string() } else { o.kinds.join(", ").replace('_', " ") };
+        let by: Vec<&str> = o.by.iter().map(|b| b.words()).collect();
+        Some(format!("{kinds}: only where {}", by.join(" or ")))
+    }
+
     /// Does this rule name kinds of element (not every element, `*`)?
     pub fn names_kinds(&self) -> bool {
         !self.applies_to.kinds.iter().any(|k| k == "*")
@@ -198,6 +326,16 @@ impl Rule {
         for m in &self.applies_to.marks {
             if m.trim().is_empty() {
                 out.push(format!("{id}: an empty type mark pattern"));
+            }
+        }
+        if let Some(o) = &self.applies_to.only_if {
+            if o.kinds.is_empty() || o.by.is_empty() {
+                out.push(format!("{id}: only_if needs its kinds and what gives a subject (`by`)"));
+            }
+            for k in &o.kinds {
+                if k != "*" && !validate_kinds::is_rule_kind(k) {
+                    out.push(format!("{id}: only_if kind `{k}` is not a kind the model holds or a kind family"));
+                }
             }
         }
         if self.check.trim().is_empty() {
@@ -438,6 +576,15 @@ impl Effective {
             "source": self.source(),
         });
         if let Some(o) = v.as_object_mut() {
+            // Every kind a named kind family holds (Q6263: `fixture` covers `plumbing_fixture`),
+            // and the subject condition in words.
+            if r.names_kinds() {
+                let covers: BTreeSet<&str> = r.applies_to.kinds.iter().flat_map(|k| validate_kinds::members(k)).collect();
+                o.insert("kinds_covered".into(), json!(covers));
+            }
+            if let Some(w) = r.only_if_words() {
+                o.insert("subject".into(), json!(w));
+            }
             if detail {
                 o.insert("how".into(), json!(r.how));
                 o.insert("examples".into(), json!(r.examples));
@@ -800,6 +947,7 @@ mod tests {
             assert!(!product(k), "{k} is no product G-PRODUCT checks");
         }
         let set = |ids: &[&'static str]| -> BTreeSet<&'static str> { ids.iter().copied().collect() };
+        // A plumbing fixture: its own rule (its place is P-FIXTURE's: its point is no wall-face item).
         assert_eq!(got("plumbing_fixture"), set(&["P-FIXTURE"]));
         assert!(!got("light_fixture").contains("P-FIXTURE"), "a light fixture is no plumbing fixture");
         for k in ["return_grille", "exhaust_grille", "diffuser", "supply_diffuser"] {
@@ -810,14 +958,14 @@ mod tests {
         assert_eq!(got("horn_strobe"), set(&["G-HOST", "E-FA"]));
         assert_eq!(got("smoke_detector"), set(&["G-HOST", "E-FA"]));
         // Through-wall units: present, in an exterior wall.
-        assert_eq!(got("ptac"), set(&["M-PTAC"]));
-        assert_eq!(got("through_wall_unit"), set(&["M-PTAC"]));
+        assert_eq!(got("ptac"), set(&["G-HOST", "M-PTAC"]));
+        assert_eq!(got("through_wall_unit"), set(&["G-HOST", "M-PTAC"]));
         // Exhaust fans: present, in a ceiling; and the connection of a fan the tables don't name.
         assert_eq!(got("exhaust_fan"), set(&["M-EF"]));
         assert_eq!(got("equipment_connection"), set(&["E-CIRCUIT", "E-EQUIP-CONN", "E-EQUIP-ELEC"]));
         // Occupancy sensors: present, host; and as lighting controls, their switch leg, a dimming
         // one's drivers and the room's count (Q6145).
-        let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT"]);
+        let sensor = set(&["G-HOST", "E-OCC", "E-SWITCH-LEG", "E-SWITCH-DIM", "E-LUM-COUNT", "E-CIRCUIT"]);
         assert_eq!(got("occupancy_sensor"), sensor);
         assert_eq!(got("vacancy_sensor"), sensor);
         // A conduit is hosted by nothing; G-HOST is not its rule.
@@ -883,6 +1031,92 @@ mod tests {
         ef.applies_to.marks = vec!["EF-*".into()];
         assert!(ef.applies_to_element("device", None, Some("ef-2")) && !ef.applies_to_element("device", None, Some("REF-2")));
         assert!(host.names_kinds() && !rule("G-HEIGHT").names_kinds());
+    }
+
+    fn subject(kind: &str, drawn: bool, named: &[&str]) -> Subject {
+        Subject { kind: kind.into(), element: true, drawn, named: named.iter().map(|s| s.to_string()).collect(), ..Subject::default() }
+    }
+
+    /// Q6263: a rule for every element and the value-engineering rules ask about a raceway piece
+    /// only where something gives them a subject there; each conduit rule asks about its pieces.
+    #[test]
+    fn rules_ask_about_a_raceway_piece_only_where_it_has_a_subject() {
+        let rules = builtin().unwrap();
+        let rule = |id: &str| rules.iter().find(|r| r.id == id).unwrap();
+        let fitting = subject("conduit_fitting", false, &[]);
+        let wire = subject("wire", false, &[]);
+        let recep = subject("receptacle", false, &[]);
+        for id in ["G-PRESENT", "G-KEYNOTE", "G-UNDERGROUND", "G-COVERAGE", "G-LAYOUT"] {
+            assert!(!rule(id).asks(&fitting) && !rule(id).asks(&wire), "{id}: no marker, symbol or option");
+            assert!(rule(id).asks(&recep), "{id}: a device always");
+            assert!(rule(id).asks(&subject("conduit_fitting", true, &[])), "{id}: a piece a print draws");
+            assert!(rule(id).asks(&subject("wire", false, &[id])), "{id}: a piece its prescreen names");
+            assert!(!rule(id).asks(&subject("wire", false, &["G-OTHER"])), "{id}: named by another rule");
+        }
+        for id in ["G-SOURCED", "G-PLACE", "G-TYPE", "G-ROOM", "G-HEIGHT"] {
+            assert!(rule(id).asks(&fitting), "{id} asks about every placed object");
+        }
+        for id in ["G-VE-TIER", "G-VE-AREA", "G-VE-COST", "G-VE-RFI", "G-VE-DESIGN"] {
+            assert!(!rule(id).asks(&subject("conduit", true, &[])), "{id}: no option names it");
+            assert!(rule(id).asks(&subject("cable", false, &[id])), "{id}: an option names it");
+            assert!(!rule(id).asks(&subject("receptacle", false, &[id])), "{id} is no device rule");
+        }
+        let asks = |id: &str, k: &str| rule(id).asks(&subject(k, false, &[]));
+        assert!(asks("E-BOX-FILL", "junction_box") && !asks("E-BOX-FILL", "wire") && !asks("E-BOX-FILL", "conduit_fitting"));
+        for id in ["E-CONDUIT-FILL", "E-DERATE", "E-VDROP", "E-METHOD", "G-CLASH"] {
+            assert!(asks(id, "conduit") && asks(id, "wire") && asks(id, "conduit_fitting") && !asks(id, "junction_box"), "{id}");
+        }
+        for k in ["conduit", "conduit_fitting", "wire", "cable", "junction_box"] {
+            assert!(asks("E-CONDUIT-CONTINUITY", k) && asks("E-TAKEOFF", k), "{k}");
+        }
+        // The kinds round 3 found refused.
+        assert!(asks("E-CIRCUIT", "occupancy_sensor") && asks("E-CIRCUIT", "wire"));
+        // A fan's or a PTAC's circuit is judged on its equipment connection: E-CIRCUIT naming
+        // them would make them electrical (an element takes the trade of the first trade rule for it).
+        assert!(!asks("E-CIRCUIT", "exhaust_fan") && !asks("E-CIRCUIT", "ptac") && asks("E-CIRCUIT", "equipment_connection"));
+        assert_eq!(super::super::validate_packet::trade_of_kind("exhaust_fan", &effective(&ProjectRules::default()).unwrap().0), "mechanical");
+        assert_eq!(super::super::validate_packet::trade_of_kind("ptac", &effective(&ProjectRules::default()).unwrap().0), "mechanical");
+        assert!(asks("E-FA", "fa_control_module") && asks("E-FA", "door_holder"));
+        for k in ["wall_luminaire", "ptac"] {
+            assert!(asks("G-HOST", k), "{k}");
+        }
+        assert!(!asks("G-HOST", "plumbing_fixture"), "a fixture's point is not on its wall's face");
+        assert!(!asks("G-HOST", "junction_box") && rule("G-HOST").asks(&subject("junction_box", true, &[])), "a box a print draws");
+        // A wall or an opening gets no rule for every element.
+        assert!(!rule("G-KEYNOTE").asks(&Subject { kind: "wall".into(), ..Subject::default() }));
+    }
+
+    #[test]
+    fn the_prescreen_names_by_handle_and_handles_and_a_packet_object_reads() {
+        let f = [json!({"rule": "g-keynote", "handle": "1a"}), json!({"rule": "E-TAKEOFF", "handles": ["1A", "2B"]}), json!({"handle": "3C"})];
+        let n = named_by(f.iter());
+        assert_eq!(n.get("1A").map(|s| s.len()), Some(2));
+        assert!(n.get("2B").is_some_and(|s| s.contains("E-TAKEOFF")) && !n.contains_key("3C"));
+        let o = json!({"handle": "1a", "kind": "conduit", "category": "IfcCableCarrierSegment", "source": {"print": {"sheet": "E-101", "at": [1.0, 2.0]}}});
+        let s = Subject::of_json(&o, true, &n);
+        assert!(s.drawn && s.element && s.named.contains("G-KEYNOTE") && s.kind == "conduit");
+        let o = json!({"handle": "2b", "kind": "wire", "source": {"print": {"sheet": "circuit 1: EMT", "at": null}}});
+        assert!(!Subject::of_json(&o, true, &n).drawn);
+        // An older packet's lumped `conduit` is read by its class.
+        for (class, kind) in [("IfcCableCarrierFitting", "conduit_fitting"), ("IfcCableSegment", "wire"), ("IfcJunctionBox", "junction_box")] {
+            let o = json!({"handle": "4d", "kind": "conduit", "category": class});
+            assert_eq!(Subject::of_json(&o, true, &n).kind, kind);
+        }
+    }
+
+    #[test]
+    fn a_rule_lists_the_kinds_its_families_cover_and_its_subject() {
+        let mut s = session();
+        let r = run_rules(&mut s, &json!({"id": "P-FIXTURE"})).unwrap();
+        let covers = r["rules"][0]["kinds_covered"].as_array().unwrap();
+        assert!(covers.iter().any(|k| k == "plumbing_fixture"), "{r}");
+        let r = run_rules(&mut s, &json!({"id": "G-KEYNOTE"})).unwrap();
+        assert!(r["rules"][0]["subject"].as_str().unwrap().contains("raceway piece"), "{r}");
+        let mut bad: Value = serde_json::from_str(RULES_JSON).unwrap();
+        bad["rules"][0]["applies_to"]["only_if"] = json!({"kinds": ["unicorn"], "by": ["drawn"]});
+        assert!(parse_rules(&bad.to_string()).unwrap_err().contains("only_if kind `unicorn`"));
+        bad["rules"][0]["applies_to"]["only_if"] = json!({"kinds": ["wire"], "by": ["guessed"]});
+        assert!(parse_rules(&bad.to_string()).is_err());
     }
 
     #[test]

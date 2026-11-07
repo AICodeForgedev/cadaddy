@@ -1039,7 +1039,20 @@ pub(crate) fn screen(sc: &Scope) -> Screened {
             unmatched.add(&it.kind, it.mark.as_deref(), &it.handle);
         }
     }
-    let applies = |r: &Effective, it: &Item| r.rule.applies_to_element(&it.kind, it.category.as_deref(), it.mark.as_deref());
+    // The one applicability table (Q6263) the packet, the report and the status use: here an
+    // item is drawn when its symbol's point on a sheet is known (the prescreen is what names
+    // the others).
+    let applies = |r: &Effective, it: &Item| {
+        let subject = super::validate_rules::Subject {
+            kind: it.kind.clone(),
+            category: it.category.clone(),
+            mark: it.mark.clone(),
+            element: true,
+            drawn: it.sheet_at.is_some(),
+            named: BTreeSet::new(),
+        };
+        r.rule.asks(&subject)
+    };
     let mut tally = |rule: &str, verdict: &str| *checked.entry(rule.to_string()).or_default().entry(verdict.to_string()).or_default() += 1;
     let sev_rank = |s: &str| match s {
         "high" => 0u8,
