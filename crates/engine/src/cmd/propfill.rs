@@ -366,7 +366,8 @@ impl ClearOfWalls {
         if self.except_words.iter().any(|w| words.contains(w) || kinds_up.contains(w)) {
             return false;
         }
-        kinds.iter().any(|k| self.kinds.iter().any(|x| x.eq_ignore_ascii_case(k.replace('_', " ").trim()))) || self.words.iter().any(|w| words.contains(w))
+        kinds.iter().any(|k| self.kinds.iter().any(|x| x.eq_ignore_ascii_case(k.replace('_', " ").trim())))
+            || self.words.iter().any(|w| words.contains(w))
     }
 
     /// Whether these documents' words allow a ceiling (`CEILING/VARIES`).
@@ -1033,7 +1034,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
             format!(
                 "drawn {:.1} ft from the nearest wall face{}: hung from the ceiling ({})",
                 gap_ft.unwrap_or_default(),
-                if stated_wall && !installation.trim().is_empty() { format!(", its schedule's installation {}", installation.trim()) } else { String::new() },
+                if stated_wall && !installation.trim().is_empty() {
+                    format!(", its schedule's installation {}", installation.trim())
+                } else {
+                    String::new()
+                },
                 clear_rule.why
             )
         });

@@ -486,5 +486,5 @@ fn a_device_drawn_clear_of_the_walls_hangs_from_the_ceiling() {
     assert_eq!(props(&mut s, "WQ")["mounting"]["value"], "wall");
     let os2 = props(&mut s, "OS2");
     assert_eq!(os2["mounting"]["value"], "wall", "{os2:#}");
-    assert!(os2["host_wall"]["value"].as_str().is_some_and(|h| !h.is_empty()), "in its wall: {os2:#}");
+    assert_eq!(os2["mount_height_from"]["value"], "default", "{os2:#}");
 }

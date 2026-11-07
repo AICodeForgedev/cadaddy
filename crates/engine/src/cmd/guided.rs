@@ -9358,11 +9358,8 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> Vec<RcpLight
         .map(|(_, at)| cadaddy_geom::Vec2::new(at.x, at.y))
         .take(MAX_TAG_TEXTS)
         .collect();
-    let sheets: Vec<super::printmep::SheetRef> = job_sheet_refs(job)
-        .into_iter()
-        .filter(|r| r.view.is_none() && titles.iter().any(|p| inside(&r.rect, *p)))
-        .take(MAX_STAMP_SHEETS)
-        .collect();
+    let sheets: Vec<super::printmep::SheetRef> =
+        job_sheet_refs(job).into_iter().filter(|r| r.view.is_none() && titles.iter().any(|p| inside(&r.rect, *p))).take(MAX_STAMP_SHEETS).collect();
     if sheets.is_empty() {
         return out;
     }
@@ -9531,17 +9528,16 @@ fn rcp_light_step(s: &mut Session, job: &GuidedJob) -> crate::Result<Value> {
             continue;
         }
         let x = props::write(&e.common.xdata, &ps);
-        if d
-            .modify_entity(*h, |e| {
-                if let cadaddy_doc::EntityKind::Mesh(m) = &mut e.kind {
-                    for v in &mut m.vertices {
-                        v.x += delta.x;
-                        v.y += delta.y;
-                    }
+        if d.modify_entity(*h, |e| {
+            if let cadaddy_doc::EntityKind::Mesh(m) = &mut e.kind {
+                for v in &mut m.vertices {
+                    v.x += delta.x;
+                    v.y += delta.y;
                 }
-                e.common.xdata = x.into();
-            })
-            .is_ok()
+            }
+            e.common.xdata = x.into();
+        })
+        .is_ok()
         {
             moved += 1;
         }
@@ -13968,7 +13964,8 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
     let mep_runs: Vec<cadaddy_walk3d::MepRun> = runs.iter().map(|k| k.run.clone()).collect();
     let run_count = runs.len();
     // Its levels, for a box raised to its level's ceiling after the spec goes to the build.
-    let levels_of = cadaddy_walk3d::BuildingSpec { units_per_foot: sp.units_per_foot, levels: sp.levels.clone(), ..cadaddy_walk3d::BuildingSpec::default() };
+    let levels_of =
+        cadaddy_walk3d::BuildingSpec { units_per_foot: sp.units_per_foot, levels: sp.levels.clone(), ..cadaddy_walk3d::BuildingSpec::default() };
     let made = build_new_mep(s, sp, mep_runs, &new_equipment)?;
     {
         let bases: Vec<String> = runs.iter().map(|k| super::mep::run_base(&k.run)).collect();
@@ -23494,7 +23491,11 @@ mod tests {
         assert_eq!(sp.tags.iter().find(|t| t.id == "device:2").and_then(|t| t.fields.get("mount")).map(|f| f.value.as_str()), Some("ceiling"));
         {
             let d = s.doc().unwrap_or_else(|e| panic!("{e}"));
-            let jb = d.model.iter().find(|e| super::super::bimlook::made_tag(e, "devid").as_deref() == Some("device:2")).unwrap_or_else(|| panic!("the box"));
+            let jb = d
+                .model
+                .iter()
+                .find(|e| super::super::bimlook::made_tag(e, "devid").as_deref() == Some("device:2"))
+                .unwrap_or_else(|| panic!("the box"));
             let cadaddy_doc::EntityKind::Mesh(m) = &jb.kind else { panic!("a mesh") };
             let top = m.vertices.iter().map(|v| v.z).fold(f64::NEG_INFINITY, f64::max);
             assert!((top - 108.0).abs() < 1e-6, "its top at the level's 9' ceiling: {top}");
@@ -25138,7 +25139,14 @@ mod tests {
             ps.set("location", Prop::new(format!("{:.2}, {:.2}, {:.2}", at[0] / 12.0, at[1] / 12.0, 12.0 + 98.0 / 12.0), Source::computed()));
             let x = props::write(&super::super::wallgen::tag(cadaddy_walk3d::Part::Device, "Level 2", cadaddy_doc::Handle(0)), &ps);
             let mut m = super::super::wallgen::empty_mesh();
-            super::super::wallgen::add_box(&mut m, cadaddy_geom::Vec2::new(at[0] - 2.0, at[1]), cadaddy_geom::Vec2::new(at[0] + 2.0, at[1]), 4.0, 242.0, 246.0);
+            super::super::wallgen::add_box(
+                &mut m,
+                cadaddy_geom::Vec2::new(at[0] - 2.0, at[1]),
+                cadaddy_geom::Vec2::new(at[0] + 2.0, at[1]),
+                4.0,
+                242.0,
+                246.0,
+            );
             d.add(&Space::Model, Common { xdata: x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap()
         };
         let a = lum(&mut s, [10_052.0, 170.0], "ceiling"); // 23" off 201's downlight
