@@ -493,7 +493,21 @@ pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usiz
     if ceilings.is_empty() {
         return 0;
     }
-    let mut moves: Vec<(Handle, f64, f64, Prop)> = Vec::new();
+    // Each room element's ceiling, by its level and number, for a device in a part of its room no
+    // built ceiling covers (a closet or alcove the trace left out).
+    let room_ceiling: HashMap<(String, String), f64> = d
+        .model
+        .iter()
+        .filter(|e| super::wallgen::made_as(e).as_deref() == Some("room"))
+        .filter_map(|e| {
+            let level = super::bspec::made_level(e)?.trim().to_ascii_uppercase();
+            let number = super::bimlook::made_tag(e, "number")?.trim().to_ascii_uppercase();
+            let ft = super::bimlook::made_tag(e, "ceiling_ft")?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+            Some(((level, number), ft))
+        })
+        .take(MAX_ELEMENTS)
+        .collect();
+    let mut moves: Vec<(Handle, f64, f64, Prop, &'static str)> = Vec::new();
     for e in d.model.iter().filter(|e| super::wallgen::made_as(e).as_deref() == Some("device")).take(MAX_ELEMENTS) {
         let ps = props::read(&e.common.xdata);
         if ps.get("mount_height_from").map(Prop::text).as_deref() != Some("ceiling") {
@@ -502,21 +516,30 @@ pub(crate) fn reseat_ceiling_devices(d: &mut Drawing, sp: &BuildingSpec) -> usiz
         let Some(level) = super::bspec::made_level(e).and_then(|l| sp.level(&l)) else { continue };
         let Some((b, z0, z1)) = extent(d, e) else { continue };
         let floor = level.elevation_ft * upf;
-        let Some(inches) = ceiling_over(&ceilings, &level.name, b.center(), floor, upf) else { continue };
+        let in_room = || {
+            let room = ps.get("room").map(Prop::text)?.trim().to_ascii_uppercase();
+            room_ceiling.get(&(level.name.trim().to_ascii_uppercase(), room)).map(|ft| ft * 12.0).filter(|i| *i > 72.0)
+        };
+        let Some((inches, over)) = ceiling_over(&ceilings, &level.name, b.center(), floor, upf)
+            .map(|i| (i, "at the ceiling over it"))
+            .or_else(|| in_room().map(|i| (i, "at its room's ceiling")))
+        else {
+            continue;
+        };
         let dz = floor + inches / 12.0 * upf - z1;
         if dz.is_finite() && dz.abs() > 0.25 / 12.0 * upf {
             let c = b.center() - super::bspec::stacked_by(e);
-            moves.push((e.handle, dz, inches, location_prop(c.x, c.y, (z0 + z1) / 2.0 + dz, upf)));
+            moves.push((e.handle, dz, inches, location_prop(c.x, c.y, (z0 + z1) / 2.0 + dz, upf), over));
         }
     }
     let mut moved = 0;
-    for (h, dz, inches, location) in moves {
+    for (h, dz, inches, location, over) in moves {
         let Some(e) = d.model.get(h) else { continue };
         let mut store = props::read(&e.common.xdata);
         if let Some(old) = store.get("mount_height").cloned() {
             let what =
                 old.source.doc.as_deref().and_then(|t| t.split(':').next()).map(str::trim).filter(|w| !w.is_empty()).unwrap_or("a ceiling device");
-            let src = Source::from_doc(old.source.kind, &format!("{what}: at the ceiling over it"));
+            let src = Source::from_doc(old.source.kind, &format!("{what}: {over}"));
             store.set("mount_height", Prop { value: json!(round2(inches)), source: src.clone(), ..old });
             store.set("offset", Prop::new(round2(inches / 12.0), src).with_unit("ft"));
         }
@@ -2720,7 +2743,23 @@ mod tests {
         };
         let rule = light(&mut d, Vec2::new(60.0, 60.0), "ceiling");
         let scheduled = light(&mut d, Vec2::new(120.0, 60.0), "fixture_schedule");
-        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 1);
+        // A light in its room's closet, which no ceiling covers: its room's ceiling (8').
+        let closet = light(&mut d, Vec2::new(300.0, 60.0), "ceiling");
+        let _ = d.modify_entity(closet, |e| {
+            let mut ps = props::read(&e.common.xdata);
+            ps.set("room", Prop::new("1A", Source::computed()));
+            e.common.xdata = props::write(&e.common.xdata, &ps).into();
+        });
+        let t = |v: &str| RawTag { code: 1000, value: v.into() };
+        let room_x =
+            vec![RawTag { code: 1001, value: super::super::wallgen::APP.into() }, t("room"), t("L1"), t("0"), t("number:1A"), t("ceiling_ft:8.00")];
+        let mut m = super::super::wallgen::empty_mesh();
+        super::super::wallgen::add_box(&mut m, Vec2::new(250.0, 60.0), Vec2::new(330.0, 60.0), 40.0, 120.0, 120.0);
+        d.add(&Space::Model, Common { xdata: room_x.into(), ..Common::default() }, EntityKind::Mesh(m)).unwrap();
+        assert_eq!(reseat_ceiling_devices(&mut d, &sp), 2);
+        let ps = props::read(&d.model.get(closet).unwrap().common.xdata);
+        assert_eq!(ps.get("mount_height").and_then(|p| p.source.doc.clone()).as_deref(), Some("a luminaire: at its room's ceiling"));
+        assert!((extent(&d, d.model.get(closet).unwrap()).unwrap().2 - 216.0).abs() < 1e-9, "its top at its room's 8'");
         let top = |d: &Drawing, h: Handle| extent(d, d.model.get(h).unwrap()).unwrap().2;
         assert!((top(&d, rule) - 214.0).abs() < 1e-9, "its top at the room's ceiling: {}", top(&d, rule));
         assert!((top(&d, scheduled) - 228.0).abs() < 1e-9, "a document's height stays");
