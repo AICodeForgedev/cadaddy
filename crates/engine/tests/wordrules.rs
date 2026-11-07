@@ -443,6 +443,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ("crates/engine/src/cmd/keynotes.rs", "INTO | TO", "grammar: ordinal, number, joining and markup words of the language"),
     ("crates/engine/src/cmd/keynotes.rs", "THE | A", "grammar: ordinal, number, joining and markup words of the language"),
     (
+        "crates/engine/src/cmd/keynotes.rs",
+        "[AMP AMPS]",
+        "drafting notation: the ampere unit's spellings (A, AMP, AMPS, AMPERE), the same on every set",
+    ),
+    (
         "crates/engine/src/cmd/panelsched.rs",
         "[SCHEDULE SCHEDULES]",
         "drafting convention: view, reference and table types (ELEVATION, SECTION, DETAIL, SEE SHEET, SCHEDULE), how any set is organised",
@@ -538,8 +543,18 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/propfill.rs",
+        "[keynotes keynote_features]",
+        "our own output: the property keys a keynote's device requirements give a device (Q6249), copied from its tag, not words read off a document",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
         "[design_value corrected_value]",
         "our own output: the property keys of a corrected value (design value, corrected value, its reason and rule), not words read off a document",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
+        "[keynote receptacle_for]",
+        "our own output: the property keys a keynoted equipment receptacle carries (keynote, rating, configuration, poles, placement...), not words read off a document",
     ),
     (
         "crates/engine/src/cmd/mep.rs",

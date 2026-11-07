@@ -247,6 +247,31 @@ pub fn e1_symbol_bubble() -> Drawing {
     s.d
 }
 
+/// E-1 with lettering that reads like callouts and is none: a round table drawn in the plan with
+/// a keynote number and a receptacle's circuit lettered small inside its outline, a receptacle's
+/// `GFCI` printed right over its circuit label (a word over what reads like a sheet number), and
+/// an emergency light's mark `E` over its circuit `N-7` with no divider between them, each beside
+/// its device; and giant lettering read from strokes, a letter over what reads like a sheet
+/// number with a symbol between them.
+pub fn e1_with_lookalikes() -> Drawing {
+    let mut s = Sheet { d: e1() };
+    s.circle([24.0, 10.0], 1.0);
+    s.text_mid("12", [23.8, 10.3], 0.1);
+    s.device("N-3", [23.4, 9.5]);
+    s.text_mid("N-3", [24.0, 9.6], 0.1);
+    s.device("N-5", [26.5, 12.0]);
+    s.text_mid("GFCI", [27.1, 12.2], 0.1);
+    s.text_mid("N-5", [27.1, 12.0], 0.1);
+    s.device("E", [28.0, 12.1]);
+    s.text_mid("E", [28.5, 12.2], 0.1);
+    s.text_mid("N-7", [28.5, 12.0], 0.1);
+    // Strokes the lettering reader took for giant letters, `V` over `N-9`, a symbol between them.
+    s.device("N-9", [29.5, 14.2]);
+    s.text_mid("V", [29.5, 14.6], 0.6);
+    s.text_mid("N-9", [29.5, 13.8], 0.6);
+    s.d
+}
+
 /// E-2: the east half, 14 units to the left of where E-1 would draw it.
 fn e2() -> Drawing {
     let mut s = Sheet::new();

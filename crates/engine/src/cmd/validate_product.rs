@@ -527,7 +527,7 @@ impl<'a> Own<'a> {
 pub struct Want {
     pub any_of: Vec<String>,
     pub not: Vec<String>,
-    /// `submittal`, `spec` or `spec_rule`.
+    /// `submittal`, `spec`, `spec_rule` or `keynote`.
     pub from: &'static str,
     pub source: String,
     pub note: Option<String>,
@@ -1041,8 +1041,28 @@ pub(crate) fn screen(inp: &Input, items: &[Lit]) -> Found {
             let has = own.any();
             out.tally.element(it.kind, has);
             let mark = own.mark.clone();
-            let wants: Vec<(&str, Option<Want>)> =
-                FIELDS.iter().map(|f| (*f, docs.want(f, it.kind, it.category, mark.as_deref(), own.record.as_ref(), outdoors(it.room)))).collect();
+            // A piece of equipment's receptacle its keynote gives (`receptacle_for`): the note is
+            // the document for its rating and configuration, not the convenience receptacles'
+            // section.
+            let keyed = own.text("receptacle_for").is_some();
+            let wants: Vec<(&str, Option<Want>)> = FIELDS
+                .iter()
+                .map(|f| {
+                    let by_note = (keyed && matches!(*f, "rating" | "configuration")).then(|| own.text(f)).flatten().map(|v| Want {
+                        any_of: vec![v],
+                        not: Vec::new(),
+                        from: "keynote",
+                        source: own.text("keynote").map(|k| cite(&k)).unwrap_or_default(),
+                        note: None,
+                    });
+                    let want = if keyed && matches!(*f, "rating" | "configuration") {
+                        by_note
+                    } else {
+                        docs.want(f, it.kind, it.category, mark.as_deref(), own.record.as_ref(), outdoors(it.room))
+                    };
+                    (*f, want)
+                })
+                .collect();
             let kind_words = it.kind.replace('_', " ");
             if !has {
                 // Nothing of its product in the model: one finding, every required field unsure.

@@ -555,7 +555,8 @@ pub(crate) fn hang_at_ceiling(d: &mut Drawing, sp: &BuildingSpec, h: Handle, why
         None => return false,
     };
     let dz = floor + inches / 12.0 * upf - z1;
-    if !dz.is_finite() || (z1 - z0) <= 0.0 {
+    // Already there (its note made it a ceiling device when it was placed): nothing moves.
+    if !dz.is_finite() || dz.abs() <= 0.25 / 12.0 * upf || (z1 - z0) <= 0.0 {
         return false;
     }
     let mut store = props::read(&e.common.xdata);
@@ -1119,6 +1120,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let mount = match field(t, "mount").as_deref() {
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
             _ if kind == "equipment connection" && mark.to_ascii_uppercase().starts_with("EF") => Mount::Ceiling,
@@ -1274,6 +1276,16 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     }
                 })
             }
+            // A floor box is flush in the floor (a wall height the general notes give a
+            // receptacle is not its own); its keynote, else its words, say so.
+            Mount::Floor if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Chosen {
+                inches: 0.0,
+                from: "floor",
+                source: if t.fields.get("mount").is_some_and(|f| f.source == "note") { SourceKind::Note } else { SourceKind::Print },
+                doc: field(t, "keynote")
+                    .map_or_else(|| "a floor box: flush in the floor".to_string(), |k| format!("a floor box, flush in the floor: {k}")),
+                datum: Datum::Bottom,
+            },
             Mount::Floor => documented().filter(|c| c.inches <= 48.0).unwrap_or_else(|| Chosen {
                 inches: 0.0,
                 from: "floor",
@@ -1293,8 +1305,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
                     datum: Datum::Centre,
                 });
+                // (A lower printed height is a receptacle's or a switch's by it, unless the documents
+                // measure it for the luminaire itself: an elevation's sconce.)
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
-                documented().filter(|c| c.inches >= lowest).or(wall_light).unwrap_or_else(|| {
+                let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
                     let (inches, datum, why) = rules_default(kind, &fixture_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
@@ -1326,7 +1341,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let documented_height = !matches!(height.source, SourceKind::Default | SourceKind::Rule);
         let storey_in = level.height_ft * 12.0 - BOX_IN[2];
         let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
-        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < highest;
+        // (A box its keynote puts low in the wall under a unit is still in the wall.)
+        let low_in_wall = documented_height && field(t, "placement").is_some();
+        let on_wall = wall_kind && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
@@ -1357,6 +1374,37 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
             if let Some(v) = field(t, k) {
                 store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, "code rules")));
+            }
+        }
+        // What its sheet's keynote asks of it (a unit's receptacle: its rating, poles, orientation
+        // and place), the keynote its source; what is asked about it, a rule's.
+        if let Some(note) = field(t, "keynote") {
+            for k in ["keynote", "receptacle_for", "rating", "configuration", "poles", "orientation", "placement", "description"] {
+                if let Some(v) = field(t, k) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &note)));
+                }
+            }
+            // What the keynotes by it ask of it (its features, mounting, ganging, low-voltage
+            // conduit), all its keynotes their source.
+            let notes = field(t, "keynotes").unwrap_or_else(|| note.clone());
+            for k in ["keynotes", "keynote_features", "mount", "lv_conduit_in", "gang_with"] {
+                if let Some(v) = field(t, k).filter(|_| t.fields.get(k).is_some_and(|f| f.source == "note")) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &notes)));
+                }
+            }
+            // What its keynote corrected (a circuit its box can't take, its place beside its
+            // gang): the design value kept beside, and why.
+            if let Some(c) = field(t, "circuit_read") {
+                store.set("circuit_read", Prop::new(c, Source::from_doc(SourceKind::Print, "the circuit label read by its symbol")));
+            }
+            if let Some(p) = field(t, "design_at") {
+                store.set("design_at", Prop::new(p, Source::from_doc(SourceKind::Print, "where its plan draws it (feet)")));
+            }
+            if let Some(why) = field(t, "correction") {
+                store.set("correction", Prop::new(why, Source::from_doc(SourceKind::Rule, "keynote rules")));
+            }
+            if let Some(v) = field(t, "review") {
+                store.set("review", Prop::new(v, Source::from_doc(SourceKind::Rule, "keynote rules")));
             }
         }
         // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.
