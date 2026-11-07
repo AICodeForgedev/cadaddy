@@ -2822,6 +2822,8 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                         keynote: String::new(),
                         keynotes: Vec::new(),
                         gang: String::new(),
+                        drawn_at: None,
+                        moved: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -5469,11 +5471,16 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 if keyed > 0 {
                     progress_line(&format!("  typical rooms' devices by their keynotes: {markers} markers read, {keyed} devices took theirs"));
                 }
+                let side_by_side = gang_together(&mut stamped, upf_dev);
                 let e_pages = electrical_pages(s.doc()?, job);
                 let mut out = out;
                 let noted = keynoted_devices(s.doc()?, &e_pages, &mut [&mut out[..]]);
                 if !noted.is_empty() {
                     progress_line(&format!("  plans' devices by their keynotes: {} ({noted:?})", noted.values().sum::<usize>()));
+                }
+                let side_by_side = side_by_side + gang_together(&mut out, upf_dev);
+                if side_by_side > 0 {
+                    progress_line(&format!("  devices a keynote gangs set side by side in their box: {side_by_side}"));
                 }
                 // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
                 // the equipment the room's mechanical plan puts there, not a device of its own.
@@ -9277,6 +9284,70 @@ fn gang_family(kind: &str) -> &'static str {
         "switch"
     }
 }
+
+/// The devices one gang keynote points at (sharing a `gang` key), drawn apart, set side by side
+/// as the field gangs them in one box: in a line along the way they were drawn, the box's
+/// per-gang width apart (rules data `box.per_gang_in`), the one nearest their middle where it
+/// was; each moved one keeps where it was drawn (`drawn_at`) and why (`moved`). How many moved.
+fn gang_together(devices: &mut [super::readers::ReadDevice], upf: f64) -> usize {
+    use cadaddy_geom::Vec2;
+    let step = super::walllayout::box_per_gang_in() / 12.0 * upf;
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, d) in devices.iter().enumerate() {
+        if !d.gang.is_empty() && d.at.iter().all(|v| v.is_finite()) {
+            groups.entry(d.gang.clone()).or_default().push(i);
+        }
+    }
+    let mut moved = 0usize;
+    for ix in groups.values().filter(|ix| ix.len() >= 2 && ix.len() <= MAX_GANG) {
+        let at = |i: &usize| devices.get(*i).map_or(Vec2::ZERO, |d| Vec2::new(d.at[0], d.at[1]));
+        let pts: Vec<Vec2> = ix.iter().map(at).collect();
+        let n = pts.len() as f64;
+        let mid = pts.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / n);
+        // The way they were drawn: the two farthest apart.
+        let (mut a, mut b, mut far) = (mid, mid, 0.0);
+        for p in &pts {
+            for q in &pts {
+                if (*q - *p).len() > far {
+                    (a, b, far) = (*p, *q, (*q - *p).len());
+                }
+            }
+        }
+        if far <= step * (n - 1.0) + 1e-6 || far > MAX_GANG_SPREAD_FT * upf {
+            continue;
+        }
+        let dir = (b - a) * (1.0 / far);
+        let mut order: Vec<(f64, usize)> = ix.iter().map(|i| ((at(i) - a).dot(dir), *i)).collect();
+        order.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let Some(anchor_rank) = order.iter().enumerate().min_by(|x, y| (at(&x.1.1) - mid).len().total_cmp(&(at(&y.1.1) - mid).len())).map(|(r, _)| r)
+        else {
+            continue;
+        };
+        let anchor = order.get(anchor_rank).map_or(mid, |(_, i)| at(i));
+        for (rank, (_, i)) in order.iter().enumerate() {
+            let to = anchor + dir * ((rank as f64 - anchor_rank as f64) * step);
+            let Some(d) = devices.get_mut(*i) else { continue };
+            let from = Vec2::new(d.at[0], d.at[1]);
+            if (to - from).len() < 1e-6 {
+                continue;
+            }
+            d.drawn_at = Some(d.at);
+            d.moved = format!(
+                "set beside the {} others of its gang in one box, {:.1} in from where its plan draws it: its keynote gangs them ({})",
+                ix.len() - 1,
+                (to - from).len() / upf * 12.0,
+                super::keynotes::device_rules().gang_source
+            );
+            d.at = [to.x, to.y];
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// Most devices one gang keynote sets side by side; farthest apart (feet) they may be drawn.
+const MAX_GANG: usize = 8;
+const MAX_GANG_SPREAD_FT: f64 = 8.0;
 
 /// The key the devices one gang keynote's marker points at share (its sheet, note, marker, and
 /// the room and level it is laid into).
@@ -24706,6 +24777,16 @@ mod tests {
             keys.insert(sw[0].gang.clone());
         }
         assert_eq!(keys.len(), 2, "one gang a room: {keys:?}");
+        // Drawn 6.5" apart, set side by side in their box (the per-gang width apart), one where
+        // it was; the moved one keeps where it was drawn.
+        assert_eq!(gang_together(&mut stamped, 12.0), 2);
+        for room in ["201", "202"] {
+            let sw: Vec<&super::super::readers::ReadDevice> = stamped.iter().filter(|d| d.room == room && d.kind == "switch").collect();
+            let gap = ((sw[0].at[0] - sw[1].at[0]).powi(2) + (sw[0].at[1] - sw[1].at[1]).powi(2)).sqrt();
+            assert!((gap - super::super::walllayout::box_per_gang_in()).abs() < 1e-6, "room {room}: {gap}");
+            assert_eq!(sw.iter().filter(|d| d.drawn_at.is_some() && d.moved.contains("its keynote gangs them")).count(), 1, "{sw:?}");
+        }
+        assert_eq!(gang_together(&mut stamped, 12.0), 0, "side by side already");
         // Into the model: what each note asks, the keynote its source.
         s.execute(
             "bspec.set",
@@ -24784,6 +24865,7 @@ mod tests {
         assert!(j.keynotes.first().is_some_and(|k| k.starts_with("Q-9 keynote 4:")), "{j:?}");
         assert!(!a.gang.is_empty() && a.gang == b.gang && a.keynotes == b.keynotes, "{a:?} {b:?}");
         assert!(f.keynotes.is_empty(), "the marker 9 reaches no device");
+        assert_eq!(gang_together(&mut out, 12.0), 1);
         s.execute(
             "bspec.set",
             &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
@@ -24800,6 +24882,7 @@ mod tests {
         assert!(f(&jb, "correction").is_some_and(|c| c.contains("antenna box")), "{:?}", f(&jb, "correction"));
         assert_eq!(f(&s1, "gang_with"), f(&s2, "gang_with"));
         assert!(f(&s1, "gang_with").is_some());
+        assert!(f(&s1, "design_at").or(f(&s2, "design_at")).is_some(), "the moved switch keeps where it was drawn");
         assert_eq!(f(&far, "keynotes"), None);
         // The elements: the floor box flush in the floor, the antenna box at the ceiling on no
         // circuit, each saying its keynote (the note the source).

@@ -1105,9 +1105,15 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &notes)));
                 }
             }
-            // A circuit read by it that its keynote's box can't take: the read value and why.
-            if let (Some(c), Some(why)) = (field(t, "circuit_read"), field(t, "correction")) {
+            // What its keynote corrected (a circuit its box can't take, its place beside its
+            // gang): the design value kept beside, and why.
+            if let Some(c) = field(t, "circuit_read") {
                 store.set("circuit_read", Prop::new(c, Source::from_doc(SourceKind::Print, "the circuit label read by its symbol")));
+            }
+            if let Some(p) = field(t, "design_at") {
+                store.set("design_at", Prop::new(p, Source::from_doc(SourceKind::Print, "where its plan draws it (feet)")));
+            }
+            if let Some(why) = field(t, "correction") {
                 store.set("correction", Prop::new(why, Source::from_doc(SourceKind::Rule, "keynote rules")));
             }
             if let Some(v) = field(t, "review") {

@@ -34,6 +34,12 @@ mod drawn;
 mod faces;
 mod solve;
 
+/// The added width of a box per gang (`layout_rules.json` `box.per_gang_in`): devices ganged in
+/// one box stand this far apart along the wall.
+pub(crate) fn box_per_gang_in() -> f64 {
+    solve::rules()["box"]["per_gang_in"].as_f64().filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.81)
+}
+
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use cadaddy_doc::props::{self, Prop, Props, Source, SourceKind};
