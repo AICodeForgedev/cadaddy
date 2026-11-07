@@ -2219,10 +2219,22 @@ pub(crate) fn route(d: &Drawing, sp: &BuildingSpec) -> Routed {
     }
 
     // -- A circuit of a panel there is one of per unit (`P` → P-1A, P-1B …): its devices split
-    // by the nearest copy on their level, each part to its own panel. --
+    // by the nearest copy on their level, each part to its own panel, unless the circuit says
+    // whose it is. --
     let mut split: Vec<Circ> = Vec::new();
-    for c in circs.drain(..) {
+    for mut c in circs.drain(..) {
         let up = c.panel.to_ascii_uppercase();
+        // A stamped room's circuit is that room's own: its panel's copy for the room, however near
+        // a neighbour's stands to some of its devices.
+        let own = sp.tags.get(c.tag).filter(|t| t.id.contains(":room-")).and_then(|t| field_of(t, "room")).and_then(|room| {
+            let want = format!("{up}-{}", room.trim().to_ascii_uppercase());
+            gear.iter().position(|g| same_level(&g.level, &c.level) && !up.is_empty() && g.tag.eq_ignore_ascii_case(&want))
+        });
+        if own.is_some() {
+            c.gear = own;
+            split.push(c);
+            continue;
+        }
         let copies: Vec<usize> = gear
             .iter()
             .enumerate()
