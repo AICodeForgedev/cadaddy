@@ -205,6 +205,8 @@ fn current_plan(s: &Session, level: Option<&str>) -> Result<Option<(super::print
                 equipment: f("equipment"),
                 near: String::new(),
                 derived: String::new(),
+                keynote: f("keynote"),
+                located: String::new(),
             }
         })
         .collect();
@@ -1407,6 +1409,14 @@ pub struct ReadDevice {
     /// Why (the room and floor it came from, and the rule). Empty: its own floor's plans show it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub derived: String,
+    /// The keynote its sheet tags it with (`E-9 keynote 4: <the note>`), when one is by its
+    /// symbol and asks something of it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keynote: String,
+    /// Where its spot came from when not its own sheet's (the architecture's symbol, when its
+    /// sheet's notes send locations there), with the spot its sheet drew. Empty: its sheet's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub located: String,
 }
 
 /// A switch designation printed by a switch symbol, as (tag, leg): `D,b` a dimmer (`SD`) on leg
@@ -1582,6 +1592,48 @@ pub(crate) fn place_devices(s: &mut Session, devices: &[ReadDevice], cmd: &str) 
         if !dv.derived.is_empty() {
             e.set("status", super::waterfill::DERIVED, "rule");
             e.set("basis", dv.derived.clone(), "rule");
+        }
+        // The keynote its sheet tags it with; a piece of equipment's receptacle takes what the
+        // note asks of it (its rating, poles, orientation and place), the note its source.
+        if !dv.keynote.is_empty() {
+            e.set("keynote", dv.keynote.clone(), "note");
+        }
+        if let Some(r) = super::keynotes::equipment_receptacle(&dv.keynote).filter(|_| kind.contains("receptacle")) {
+            let unit = if dv.equipment.is_empty() { r.named.clone() } else { dv.equipment.clone() };
+            e.set("device_type", r.describe(&unit), "note");
+            e.set("description", r.describe(&unit), "note");
+            e.set("receptacle_for", unit, "note");
+            if let Some(v) = r.rating() {
+                e.set("rating", v, "note");
+            }
+            if let Some(c) = r.configuration() {
+                e.set("configuration", format!("NEMA {c}"), "note");
+            }
+            if let Some(p) = r.poles {
+                e.set("poles", p.to_string(), "note");
+            }
+            if r.horizontal {
+                e.set("orientation", "horizontal", "note");
+            }
+            if r.under_unit && !dv.equipment.is_empty() {
+                e.set("placement", if r.sub_base { "under the unit, in its sub-base" } else { "under the unit" }, "note");
+            }
+            // The note makes it a unit's, and no such unit in its room is by where its plan puts
+            // it (none there, or one farther off than it is long): asked, left as drawn.
+            if dv.equipment.is_empty() {
+                e.set(
+                    "review",
+                    format!(
+                        "its keynote makes it the receptacle of a {}; no such unit in its room by where its plan puts it (none, or one farther off than the unit is long): left as drawn, which is right is asked",
+                        r.named
+                    ),
+                    "rule",
+                );
+            }
+        }
+        // Its spot when another document's gives it (the electrical plan's spot kept in the note).
+        if !dv.located.is_empty() {
+            e.set("location_note", dv.located.clone(), "note");
         }
         // Its height as printed by it on its typical room's plan.
         if let Some(h) = dv.aff_in.filter(|h| h.is_finite() && *h > 0.0 && *h < 240.0) {

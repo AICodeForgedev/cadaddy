@@ -1010,8 +1010,11 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     doc: "a wall luminaire (exit sign, sconce): 7'-6\" over the floor".into(),
                     datum: Datum::Centre,
                 });
+                // (A lower printed height is a receptacle's or a switch's by it, unless the documents
+                // measure it for the luminaire itself: an elevation's sconce.)
                 let lowest = if wall_light.is_some() { 72.0 } else { 0.0 };
-                documented().filter(|c| c.inches >= lowest).or(wall_light).unwrap_or_else(|| {
+                let its_own = |c: &Chosen| wall_light.is_some() && c.doc.to_ascii_lowercase().contains("luminaire");
+                documented().filter(|c| c.inches >= lowest || its_own(c)).or(wall_light).unwrap_or_else(|| {
                     let (inches, datum, why) = rules_default(kind, &fixture_words);
                     Chosen { inches, from: "default", source: SourceKind::Default, doc: format!("rules data: {why}"), datum }
                 })
@@ -1043,7 +1046,9 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let documented_height = !matches!(height.source, SourceKind::Default | SourceKind::Rule);
         let storey_in = level.height_ft * 12.0 - BOX_IN[2];
         let highest = if documented_height && storey_in.is_finite() { storey_in.max(WALL_BOX_FT * 12.0 + 12.0) } else { WALL_BOX_FT * 12.0 + 12.0 };
-        let on_wall = wall_kind && mount == Mount::Wall && height.inches > FLOOR_BOX_IN && height.inches < highest;
+        // (A box its keynote puts low in the wall under a unit is still in the wall.)
+        let low_in_wall = documented_height && field(t, "placement").is_some();
+        let on_wall = wall_kind && mount == Mount::Wall && (height.inches > FLOOR_BOX_IN || low_in_wall) && height.inches < highest;
         let p = Vec2::new(x, y);
         let circuit = field(t, "circuit").map(|c| split_switch_leg(&c).0);
         let others = circuit_near(&by_circuit, circuit.as_deref(), &t.level, p, upf);
@@ -1074,6 +1079,18 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         for k in ["design_value", "corrected_value", "correction_reason", "correction_rule"] {
             if let Some(v) = field(t, k) {
                 store.set(k, Prop::new(v, Source::from_doc(SourceKind::Rule, "code rules")));
+            }
+        }
+        // What its sheet's keynote asks of it (a unit's receptacle: its rating, poles, orientation
+        // and place), the keynote its source; what is asked about it, a rule's.
+        if let Some(note) = field(t, "keynote") {
+            for k in ["keynote", "receptacle_for", "rating", "configuration", "poles", "orientation", "placement", "description"] {
+                if let Some(v) = field(t, k) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &note)));
+                }
+            }
+            if let Some(v) = field(t, "review") {
+                store.set("review", Prop::new(v, Source::from_doc(SourceKind::Rule, "keynote rules")));
             }
         }
         // A switch's or sensor's own leg (its designation), else the fixture's after its circuit.

@@ -44,6 +44,8 @@
     ],
     "along_ft": 0.5,
     "along_deg": 15.0,
+    "square_deg": 5.0,
+    "square_basis": "trade practice: pipe is run square to the building, along and across its walls, never on a slant through them; a filled-in leg that would run off the building's lines is laid as two legs along them, the longer first",
     "gear_clear_ft": 0.5,
     "gear_clear_basis": "NEC 110.26(E)(1)(a): the space over electrical gear (its footprint, from the floor to 6 ft above it or the structural ceiling) is dedicated to it and no foreign piping may run there; a filled-in pipe that would is offset past the gear's side, as the field runs it",
     "reach_ft": 150.0,

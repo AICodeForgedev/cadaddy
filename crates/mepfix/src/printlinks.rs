@@ -48,6 +48,13 @@ const MAX_BOXES: usize = 5_000;
 const MAX_PIECES: usize = 400_000;
 /// Most cells the straight pieces are filed under per page (past it, by their ends only).
 const MAX_SEG_CELLS: usize = 4_000_000;
+/// A bubble's lettering fills it: lettering lower than this share of the round's radius is
+/// lettering beside or over some other round shape (a table, a rug, a receptacle's circle with
+/// its circuit printed across it), not a callout's numbers.
+const MIN_BUBBLE_LETTERING_R: f64 = 0.2;
+/// A bubble's numbers are lettered about as high as the page's other lettering: lettering this
+/// many times its middle height is strokes the lettering reader took for letters.
+const MAX_BUBBLE_LETTERING_MEDIAN: f64 = 4.0;
 /// Most texts read for references per page.
 const MAX_REF_TEXTS: usize = 50_000;
 /// Most callouts in a set's answer.
@@ -631,31 +638,77 @@ pub fn mounting_height(text: &str) -> Option<f64> {
     (v > 0.0 && v <= 30.0).then_some(v)
 }
 
-/// The attribute lettering of symbols that are callout bubbles: a round shape split by a line
-/// through its middle (the detail number over the sheet number). A device symbol's tag is its
-/// own, read with the symbol.
+/// The box (`[x0, y0, x1, y1]`, the block's own units) of what a symbol block draws: its lines,
+/// polylines, circles and arcs (the first 64 objects).
+fn symbol_extent(d: &Drawing, block: &str) -> Option<[f64; 4]> {
+    let blk = d.block(block)?;
+    let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    let mut add = |x: f64, y: f64| {
+        if x.is_finite() && y.is_finite() {
+            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+        }
+    };
+    for be in blk.entities.iter().take(64) {
+        match &be.kind {
+            EntityKind::Line(l) => {
+                add(l.a.x, l.a.y);
+                add(l.b.x, l.b.y);
+            }
+            EntityKind::LwPolyline(p) => p.vertices.iter().take(256).for_each(|v| add(v.p.x, v.p.y)),
+            EntityKind::Circle(c) => {
+                add(c.center.x - c.radius, c.center.y - c.radius);
+                add(c.center.x + c.radius, c.center.y + c.radius);
+            }
+            EntityKind::Arc(a) => {
+                add(a.center.x - a.radius, a.center.y - a.radius);
+                add(a.center.x + a.radius, a.center.y + a.radius);
+            }
+            _ => {}
+        }
+    }
+    let base = blk.base;
+    (b[0] <= b[2] && b[1] <= b[3]).then(|| [b[0] - base.x, b[1] - base.y, b[2] - base.x, b[3] - base.y])
+}
+
+/// Where an insert puts a box of its block's (`[x0, y0, x1, y1]` from the block's base): the
+/// box round its four corners placed.
+fn placed_box(b: [f64; 4], ins: &cadaddy_doc::Insert) -> Option<[f64; 4]> {
+    let (sn, cs) = ins.rotation.sin_cos();
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (x, y) in [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])] {
+        let (qx, qy) = (x * ins.scale.x, y * ins.scale.y);
+        let (px, py) = (ins.insert.x + qx * cs - qy * sn, ins.insert.y + qx * sn + qy * cs);
+        out = [out[0].min(px), out[1].min(py), out[2].max(px), out[3].max(py)];
+    }
+    out.iter().all(|v| v.is_finite()).then_some(out)
+}
+
+/// Whether the symbol `block` draws a callout bubble: a round shape split by a line through its
+/// middle (the detail number over the sheet number).
+pub fn split_round_symbol(d: &Drawing, block: &str) -> bool {
+    let Some(blk) = d.block(block) else { return false };
+    let ents = || blk.entities.iter().take(64);
+    ents().filter_map(|be| sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
+        ents().any(|be| match &be.kind {
+            EntityKind::Line(l) => {
+                let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
+                (a[1] - b[1]).abs() < 0.1 * r
+                    && ((a[1] + b[1]) / 2.0 - c[1]).abs() < 0.3 * r
+                    && (a[0] - b[0]).abs() > 1.6 * r
+                    && ((a[0] + b[0]) / 2.0 - c[0]).abs() < 0.3 * r
+            }
+            _ => false,
+        })
+    })
+}
+
+/// The attribute lettering of symbols that are callout bubbles ([`split_round_symbol`]). A
+/// device symbol's tag is its own, read with the symbol.
 fn bubble_symbol_texts(d: &Drawing) -> Vec<TextItem> {
     let mut out = Vec::new();
     for e in d.model.iter() {
         let EntityKind::Insert(ins) = &e.kind else { continue };
-        if ins.attribs.is_empty() || !ins.block.starts_with("PDF-SYM-") {
-            continue;
-        }
-        let Some(blk) = d.block(&ins.block) else { continue };
-        let ents = || blk.entities.iter().take(64);
-        let split = ents().filter_map(|be| sheet_reader::round_shape(&be.kind)).any(|(c, r)| {
-            ents().any(|be| match &be.kind {
-                EntityKind::Line(l) => {
-                    let (a, b) = ([l.a.x, l.a.y], [l.b.x, l.b.y]);
-                    (a[1] - b[1]).abs() < 0.1 * r
-                        && ((a[1] + b[1]) / 2.0 - c[1]).abs() < 0.3 * r
-                        && (a[0] - b[0]).abs() > 1.6 * r
-                        && ((a[0] + b[0]) / 2.0 - c[0]).abs() < 0.3 * r
-                }
-                _ => false,
-            })
-        });
-        if !split {
+        if ins.attribs.is_empty() || !ins.block.starts_with("PDF-SYM-") || !split_round_symbol(d, &ins.block) {
             continue;
         }
         for a in ins.attribs.iter().filter(|a| !a.invisible) {
@@ -683,6 +736,23 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
     let mut raw = sheet_facts::texts(d);
     raw.extend(bubble_symbol_texts(d));
     let texts = one_copy(raw);
+    // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
+    // among them; the symbol draws its first copy's strokes, so its own drawing says nothing).
+    // Where the import made shapes drawn again and again symbols (a bubble's circle and divider
+    // among them; the symbol draws its first copy's strokes from its first copy's base point, so
+    // only where it reaches says anything): each one's box.
+    let mut block_boxes: BTreeMap<&str, Option<[f64; 4]>> = BTreeMap::new();
+    let mut symbol_boxes: Vec<[f64; 4]> = Vec::new();
+    for e in d.model.iter() {
+        let EntityKind::Insert(ins) = &e.kind else { continue };
+        if symbol_boxes.len() >= MAX_PIECES || !ins.block.starts_with("PDF-SYM-") {
+            continue;
+        }
+        let local = *block_boxes.entry(ins.block.as_str()).or_insert_with(|| symbol_extent(d, &ins.block));
+        if let Some(b) = local.and_then(|b| placed_box(b, ins)) {
+            symbol_boxes.push(b);
+        }
+    }
     let mut heights: Vec<f64> = texts.iter().map(|t| t.height).collect();
     heights.sort_by(f64::total_cmp);
     let median_h = heights.get(heights.len() / 2).copied().unwrap_or(1.0).max(1e-9);
@@ -815,7 +885,14 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let kind = if boundary.is_some() || enlarged_word { "enlarged_plan" } else { shape_kind };
         (kind, shape_kind, boundary, divider, enlarged_word)
     };
-    let detail_like = |v: &str| !v.is_empty() && v.len() <= 4 && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.');
+    // A detail or view number: `3`, `12`, `A`, `A1`, `3.1`; a word (`GFCI` over a receptacle's
+    // circuit) is no number.
+    let detail_like = |v: &str| {
+        !v.is_empty()
+            && v.len() <= 4
+            && v.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '.')
+            && (v.chars().any(|ch| ch.is_ascii_digit()) || v.chars().count() == 1)
+    };
     // A bubble naming its own sheet beside a view title numbers that view.
     let level_titles = sheet_reader::plan_views(d);
     let view_mark = |target: &str, c: [f64; 2], r: f64| {
@@ -832,7 +909,14 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         }
         let inner: Vec<usize> = near_texts(c, r)
             .into_iter()
-            .filter(|&i| texts.get(i).is_some_and(|t| dist(text_middle(t), c) <= 0.98 * r && t.height < 1.4 * r))
+            .filter(|&i| {
+                texts.get(i).is_some_and(|t| {
+                    dist(text_middle(t), c) <= 0.98 * r
+                        && t.height < 1.4 * r
+                        && t.height >= MIN_BUBBLE_LETTERING_R * r
+                        && t.height <= MAX_BUBBLE_LETTERING_MEDIAN * median_h
+                })
+            })
             .collect();
         if inner.is_empty() || inner.len() > 12 {
             continue;
@@ -885,7 +969,12 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
             break;
         }
         let v = b.value.trim();
-        if used_texts.contains(&bi) || v.len() > 8 || !sheet_like(v) || b.rotation.sin().abs() > 0.05 {
+        if used_texts.contains(&bi)
+            || v.len() > 8
+            || !sheet_like(v)
+            || b.rotation.sin().abs() > 0.05
+            || b.height > MAX_BUBBLE_LETTERING_MEDIAN * median_h
+        {
             continue;
         }
         let bm = text_middle(b);
@@ -907,13 +996,21 @@ pub fn read_page(d: &Drawing, own: &str) -> PageRead {
         let tm = text_middle(t);
         let c = [(tm[0] + bm[0]) / 2.0, (tm[1] + bm[1]) / 2.0];
         let r = (tm[1] - bm[1]) * 1.1;
-        used_texts.insert(bi);
-        used_texts.insert(ti);
         if view_mark(v, c, r) {
+            used_texts.insert(bi);
+            used_texts.insert(ti);
             view_marks.push((t.value.trim().to_string(), c));
             continue;
         }
-        let (kind, shape_kind, boundary, _, enlarged_word) = shape(c, r);
+        let (kind, shape_kind, boundary, divider, enlarged_word) = shape(c, r);
+        // Its divider drawn between the two lines, or the symbol the import made of the bubble
+        // under them: else a mark over a label (a fixture's `E` over its circuit `A-1`), no
+        // callout.
+        if !divider && !symbol_boxes.iter().any(|b| c[0] >= b[0] && c[0] <= b[2] && c[1] >= b[1] && c[1] <= b[3]) {
+            continue;
+        }
+        used_texts.insert(bi);
+        used_texts.insert(ti);
         out.callouts.push(Callout {
             kind: kind.into(),
             detail: t.value.trim().to_string(),
