@@ -1417,13 +1417,13 @@ pub fn level_views(d: &Drawing) -> Vec<(PlanView, [f64; 4])> {
     titled
 }
 
-/// Whether a title has one of the words of a word list, whole words in order (`RCP` isn't in
+/// Whether a title has one of a word list's words, whole words in order (`RCP` isn't in
 /// `ARCPLAN`); case and punctuation don't count.
-pub fn title_names(title: &str, list: &str) -> bool {
+pub fn title_names(title: &str, list: &[&str]) -> bool {
     let up = title.to_ascii_uppercase();
     let words: Vec<&str> = up.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
     let spaced = format!(" {} ", words.join(" "));
-    crate::wordrules::words(list).iter().any(|w| spaced.contains(&format!(" {w} ")))
+    list.iter().any(|w| spaced.contains(&format!(" {w} ")))
 }
 
 /// The floor plan of a sheet of one storey that prints it beside other plans of the same outline
@@ -1438,8 +1438,8 @@ pub fn floor_plan_view(d: &Drawing) -> Option<(PlanView, [f64; 4])> {
     // The same title read twice (hidden text and its lettering): one view.
     titles.sort_by(|a, b| a.title.cmp(&b.title));
     titles.dedup_by(|a, b| a.title == b.title);
-    let other = |t: &str| names(t, "sheets.other_plan_title_words");
-    let mut floors = titles.iter().filter(|v| names(&v.title, "sheets.floor_plan_title_words") && !other(&v.title));
+    let other = |t: &str| names(t, crate::wordrules::words("sheets.other_plan_title_words"));
+    let mut floors = titles.iter().filter(|v| names(&v.title, crate::wordrules::words("sheets.floor_plan_title_words")) && !other(&v.title));
     let (floor, None) = (floors.next()?, floors.next()) else { return None };
     let region = floor.region?;
     let others: Vec<_> = titles.iter().filter(|v| other(&v.title)).collect();
