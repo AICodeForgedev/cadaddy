@@ -1831,6 +1831,34 @@ fn rules_for<'a>(here: &InArea, all: &'a [Effective]) -> (Vec<&'a Effective>, Ve
     (on, off)
 }
 
+/// Write each element's and run's `rules` in `objects` (the rules of `rules` that ask about it,
+/// [`vr::Rule::asks`], with the prescreen's findings naming it) and count the pairs per rule.
+pub(crate) fn ask_rules(objects: &mut Value, rules: &[&Effective]) -> BTreeMap<String, usize> {
+    let named = vr::named_by(objects.pointer("/prescreen/findings").and_then(Value::as_array).into_iter().flatten());
+    let mut asked: BTreeMap<String, usize> = rules.iter().map(|r| (r.rule.id.clone(), 0)).collect();
+    for k in ["elements", "runs"] {
+        let Some(list) = objects.get_mut(k).and_then(Value::as_array_mut) else { continue };
+        for e in list.iter_mut() {
+            let subject = vr::Subject::of_json(e, true, &named);
+            let ids: Vec<&str> = rules.iter().filter(|r| r.rule.asks(&subject)).map(|r| r.rule.id.as_str()).collect();
+            for id in &ids {
+                if let Some(n) = asked.get_mut(*id) {
+                    *n += 1;
+                }
+            }
+            e["rules"] = json!(ids);
+        }
+    }
+    asked
+}
+
+/// Does a packet keep a rule: any rule but one asked only where its prescreen names an element
+/// (`only_if` over every kind) that asks about none here.
+fn vr_keeps(r: &Effective, asked: &BTreeMap<String, usize>) -> bool {
+    let everywhere = r.rule.applies_to.only_if.as_ref().is_some_and(|o| o.kinds.iter().any(|k| k == "*"));
+    !everywhere || asked.get(&r.rule.id).is_some_and(|n| *n > 0)
+}
+
 /// The kind of document a crop is, as the rules name the documents they need (a gear's panel
 /// schedule is a schedule, a keynote list notes, a unit type's wall a room's interior elevation).
 fn doc_kind(kind: &str) -> &str {
@@ -1891,6 +1919,7 @@ fn prompt_md(
     if counts.get("nearby").and_then(Value::as_u64).unwrap_or(0) > 0 {
         s.push_str("- `objects.json` `nearby`: elements just outside this area's outline (the next room's, each with its room). They are not this area's: don't judge them here; a report naming one is refused.\n");
     }
+    s.push_str("- `objects.json` elements and runs: each one's `rules` are the rules asked of it; report only those pairs (a rule for every element asks about a raceway piece only where a print draws it or a marker names it, a value-engineering rule only where an option does; `rules.json` `pairs_asked` counts them).\n");
     s.push_str("- `rules.json`: the rules below, in full.\n");
     s.push_str("- `manifest.json`: every picture with its sheet, view, and the sheet rectangle it shows.\n");
     s.push_str("- Print crops (what the documents say):\n");
@@ -3917,9 +3946,19 @@ fn run_packet(s: &mut Session, p: &Value) -> Result<Value> {
         rules_off.extend(rules_on.iter().filter(|r| !only.contains(&r.rule.id)).map(|r| r.rule.id.clone()));
         rules_on.retain(|r| only.contains(&r.rule.id));
     }
+    // Each element's and run's `rules` (Q6263): the element × rule pairs this packet asks the
+    // judge for, by the one applicability table (`Rule::asks`) the report and the status use. A
+    // rule asked of no element only where its prescreen names one (value engineering with no
+    // option here) is left out of the packet.
+    let mut asked = ask_rules(&mut here.objects, &rules_on);
+    let not_asked: Vec<String> = rules_on.iter().filter(|r| !vr_keeps(r, &asked)).map(|r| r.rule.id.clone()).collect();
+    rules_on.retain(|r| vr_keeps(r, &asked));
+    asked.retain(|id, _| !not_asked.contains(id));
     let rules_json = json!({
         "area": area.id,
         "kinds": here.kinds.iter().collect::<Vec<_>>(),
+        "pairs_asked": asked,
+        "not_asked": not_asked,
         "rules": rules_on.iter().map(|r| r.to_json(true)).collect::<Vec<_>>(),
         "disabled": rules_off,
         "rejected_overrides": rejected.iter().map(|r| json!({"key": r.key, "value": r.value, "why": r.why})).collect::<Vec<_>>(),
