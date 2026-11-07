@@ -2189,6 +2189,37 @@ mod tests {
     }
 
     #[test]
+    fn a_stack_the_plumbing_joins_through_the_floors_still_gets_its_base_once() {
+        // Each floor's plan draws the waste stack; the plumbing makes them one riser from the
+        // slab level's floor. The underground plan then carries it down to the building drain:
+        // one base per stack, its length below the floor counted once (the stack's own bottom is
+        // the floor, the base's top).
+        let mut sp = spec();
+        let riser = |level: &str, at: [f64; 2]| {
+            let mut r = super::super::printcond::run("SAN", level, "P-101", vec![at], 4.0, 0.0);
+            r.top_ft = Some(10.0);
+            r
+        };
+        // Both floors' plans in one place (their bases).
+        for l in &mut sp.levels {
+            l.base = Some([0.0, 0.0]);
+        }
+        sp.mep.runs = vec![riser("Level 1", [600.0, 300.0]), riser("Level 2", [600.0, 300.0])];
+        sp.mep.systems.push(
+            serde_json::from_value(json!({"name": "SAN", "kind": "pipe", "layer": "P-SAN", "size_in": [4.0, 0.0], "bottom_ft": 0.0}))
+                .unwrap_or_else(|e| panic!("{e}")),
+        );
+        let joined = super::super::plumbing::continuous_risers(&mut sp);
+        assert_eq!(joined["stacks"], 1, "{joined}");
+        let stack = sp.mep.runs.iter().find(|r| r.system == "SAN").expect("the stack");
+        assert_eq!(stack.bottoms_ft.first().copied(), Some(0.0), "{}", stack.height_source);
+        let bases = stack_bases(&sp, false);
+        assert_eq!(bases.len(), 1, "{:?}", sp.mep.runs);
+        assert_eq!((bases[0].system.as_str(), bases[0].top_ft), ("P-UG-SAN", Some(0.0)));
+        assert!(bases[0].bottoms_ft[0] < 0.0);
+    }
+
+    #[test]
     fn the_slab_levels_untagged_drains_go_under_its_floor_and_the_rest_keep_their_height() {
         let mut sp = spec();
         let run = |system: &str, level: &str, pts: Vec<[f64; 2]>, bottom: f64, source: &str, top: Option<f64>| -> MepRun {

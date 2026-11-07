@@ -63,6 +63,12 @@
     "grounds": 1,
     "bigger_source": "the next box of NEC Table 314.16(A); past the largest (4-11/16 in square, 2-1/8 in deep, 42 cu in) the field adds an extension ring, whose marked volume NEC 314.16(A) adds to the box: 21 cu in is taken for a 4-11/16 in square, 1-1/2 in deep ring, below what such rings are marked (check the marking of the ring installed)", "bigger": [["4\" square", "4-11/16\" square, 2-1/8\" deep", 42.0], ["device", "4\" square, 2-1/8\" deep, with a device ring", 30.3], ["4\" octagon", "4\" square, 2-1/8\" deep", 30.3], ["4-11/16\" square", "4-11/16\" square, 2-1/8\" deep, with a 4-11/16\" square, 1-1/2\" deep extension ring", 63.0], ["4\" square", "4-11/16\" square, 2-1/8\" deep, with a 4-11/16\" square, 1-1/2\" deep extension ring", 63.0]]
   },
+  "terminals": {
+    "max_size": "10",
+    "pigtail_in": 8,
+    "connector": "Wire connector, twist-on",
+    "source": "NEC 110.14(A) and UL 498: a 15, 20 or 30 A wiring device's terminals take #14 to #10 copper; a larger circuit conductor (a voltage-drop or schedule size) is spliced in the device's box to a pigtail of the size the circuit's breaker needs (NEC 240.4), one per conductor the device lands, at least 6 in free (NEC 300.14); a pigtail that starts and ends in the box adds no fill (NEC 314.16(B)(1))"
+  },
   "vdrop": {
     "max_pct": 3.0,
     "k_copper": 12.9,

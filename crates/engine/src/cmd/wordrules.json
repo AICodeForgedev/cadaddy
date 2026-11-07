@@ -3341,6 +3341,41 @@
     "TBD"
    ]
   },
+  "tags.conductor_note_words": {
+   "source": "drafting convention: the words a conductor note prints after a size (`3#10 THHN`, `1#10G`, `1#10 EG`, `1/0 AL`): a role, an insulation, a metal, a unit. Any other word after a size, or before the `#` where a count goes (`PUMP #2`), makes the text a label, not a conductor note",
+   "words": [
+    "G",
+    "GND",
+    "GRD",
+    "GROUND",
+    "EG",
+    "EGC",
+    "IG",
+    "N",
+    "NEUT",
+    "NEUTRAL",
+    "THHN",
+    "THWN",
+    "THWN-2",
+    "THHN/THWN",
+    "THHN/THWN-2",
+    "XHHW",
+    "XHHW-2",
+    "CU",
+    "AL",
+    "COPPER",
+    "ALUMINUM",
+    "AWG",
+    "KCMIL",
+    "MCM",
+    "ISO",
+    "ISOLATED",
+    "STR",
+    "SOL",
+    "SOLID",
+    "STRANDED"
+   ]
+  },
   "tags.note_words": {
    "source": "Words that are short and capitalised but are notes, not type tags. (drafting convention: plan-note abbreviations; moved from sheet_facts.rs `NOT_TAGS`)",
    "words": [

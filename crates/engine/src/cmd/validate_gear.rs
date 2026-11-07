@@ -102,7 +102,7 @@ pub(crate) fn wanted(rules: &[Effective], only: &[String]) -> bool {
 }
 
 /// Electrical gear: an equipment kind that is one, or anything with terminations.
-fn is_gear(e: &MepEquipment) -> bool {
+pub(crate) fn is_gear(e: &MepEquipment) -> bool {
     super::gear::is_gear(e)
         || matches!(e.kind.to_ascii_lowercase().as_str(), "load_center" | "mdp" | "distribution_panel" | "panel_board" | "mcc" | "meter_center")
 }
