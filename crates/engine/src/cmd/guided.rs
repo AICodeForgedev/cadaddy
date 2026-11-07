@@ -2846,6 +2846,10 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String
                         derived: String::new(),
                         keynote: String::new(),
                         located: String::new(),
+                        keynotes: Vec::new(),
+                        gang: String::new(),
+                        drawn_at: None,
+                        moved: String::new(),
                     });
                     *c.by_type.entry(mark.to_string()).or_default() += 1;
                 }
@@ -5510,15 +5514,18 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
                 // copy of it alike.
                 let (markers, keyed) = typical_keynotes(s.doc()?, job, &mut stamped);
                 if keyed > 0 {
-                    progress_line(&format!(
-                        "  typical rooms' equipment receptacles by their keynotes: {markers} markers read, {keyed} receptacles took theirs"
-                    ));
+                    progress_line(&format!("  typical rooms' devices by their keynotes: {markers} markers read, {keyed} devices took theirs"));
                 }
+                let side_by_side = gang_together(&mut stamped, upf_dev);
                 let e_pages = electrical_pages(s.doc()?, job);
                 let mut out = out;
-                let noted = keynoted_receptacles(s.doc()?, &e_pages, &mut [&mut out[..]]);
+                let noted = keynoted_devices(s.doc()?, &e_pages, &mut [&mut out[..]]);
                 if !noted.is_empty() {
-                    progress_line(&format!("  plans' equipment receptacles by their keynotes: {} ({noted:?})", noted.values().sum::<usize>()));
+                    progress_line(&format!("  plans' devices by their keynotes: {} ({noted:?})", noted.values().sum::<usize>()));
+                }
+                let side_by_side = side_by_side + gang_together(&mut out, upf_dev);
+                if side_by_side > 0 {
+                    progress_line(&format!("  devices a keynote gangs set side by side in their box: {side_by_side}"));
                 }
                 // An electrical tag naming mechanical equipment (EF, PTAC) is its connection: at
                 // the equipment the room's mechanical plan puts there, not a device of its own.
@@ -6599,6 +6606,13 @@ fn run_bim_build(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
         submittals_step(s, job, &mut result);
         bim_step(s, job, "submittals applied", t);
     }
+    // The keynotes over a kind of device in some rooms (`ALL … RECEPTACLES SHALL BE …`), onto
+    // every such device there, before the code rules read what the documents say of them.
+    let t = web_time::Instant::now();
+    if let Err(e) = scoped_keynotes_step(s, &pages, &mut result) {
+        result["keynote_scopes_error"] = json!(e.to_string());
+    }
+    bim_step(s, job, "room-wide keynotes", t);
     // The code rules on the devices first (their product follows the decision: a GFCI built standard is a receptacle,
     // a guest room's is the tamper-resistant one; tamper-resistant in guest rooms, GFCI by circuit), the
     // decisions the documents can't make left `undecided` and asked.
@@ -10063,7 +10077,8 @@ fn into_typical_rooms<T>(
     reach_ft: f64,
     has: SheetHas,
     marks: SheetMarks<T>,
-    wanted: &dyn Fn(&super::readers::ReadDevice) -> bool,
+    wanted: &dyn Fn(&super::readers::ReadDevice, &T) -> bool,
+    with: &dyn Fn(&T, &super::readers::ReadDevice, &super::readers::ReadDevice) -> bool,
     take: &mut dyn FnMut(&mut super::readers::ReadDevice, &T, &str),
 ) -> (usize, usize) {
     let rooms = job_rooms(job);
@@ -10121,13 +10136,21 @@ fn into_typical_rooms<T>(
                 let Some(q) = place_in_room([m.at.x, m.at.y], *view, b, fit) else { continue };
                 let q = cadaddy_geom::Vec2::new(q[0], q[1]);
                 let label = stamped_room(name, number, ri);
-                let best = devices
+                let mut near: Vec<(f64, &mut super::readers::ReadDevice)> = devices
                     .iter_mut()
-                    .filter(|dv| dv.room == label && dv.level == *level && wanted(dv))
+                    .filter(|dv| dv.room == label && dv.level == *level && wanted(dv, &m.what))
                     .map(|dv| (q.dist(cadaddy_geom::Vec2::new(dv.at[0], dv.at[1])), dv))
                     .filter(|(dd, _)| *dd <= reach_ft * 12.0 * k_in)
-                    .min_by(|a, b| a.0.total_cmp(&b.0));
-                if let Some((_, dv)) = best {
+                    .collect();
+                near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                // The nearest takes it; with it, each other one within reach `with` says goes
+                // with the nearest (a gang note's devices of its family).
+                let mut near = near.into_iter();
+                let Some((_, first)) = near.next() else { continue };
+                let along: Vec<&mut super::readers::ReadDevice> = near.map(|(_, dv)| dv).filter(|dv| with(&m.what, first, dv)).collect();
+                take(first, &m.what, &sh.number);
+                set += 1;
+                for dv in along {
                     take(dv, &m.what, &sh.number);
                     set += 1;
                 }
@@ -10137,27 +10160,157 @@ fn into_typical_rooms<T>(
     (read, set)
 }
 
-/// The keynotes the typical rooms' views put by a receptacle that make it a piece of
-/// equipment's ([`super::keynotes::equipment_receptacle`]: `30A/2P RECEPTACLE FOR <unit> …`):
-/// each marker laid into every room of the view's type, the receptacle stamped there nearest it
-/// (within [`KEYNOTE_DEVICE_FT`]) takes the note (`keynote`). The markers read and the devices
-/// that took one.
+/// A keynote marker a typical room's view prints, and what its note asks
+/// ([`typical_keynotes`]): something of the device at it (`req`: its features, mounting,
+/// ganging, low-voltage conduit), else (none) a piece of equipment's receptacle.
+struct KeyMark {
+    num: String,
+    text: String,
+    at: cadaddy_geom::Vec2,
+    req: Option<super::keynotes::DeviceReq>,
+}
+
+/// Whether a keynote asks something of the device at its marker ([`super::keynotes::DeviceReq`]).
+fn device_note(text: &str) -> Option<super::keynotes::DeviceReq> {
+    super::keynotes::device_requirements(text).filter(super::keynotes::DeviceReq::at_marker)
+}
+
+/// A read device's kind: its read kind, else its mark's.
+fn read_kind(dv: &super::readers::ReadDevice) -> String {
+    if dv.kind.trim().is_empty() { super::readers::device_kind(&dv.tag).to_string() } else { dv.kind.clone() }
+}
+
+/// Whether a keynote's requirement is one a device of this kind takes: a gang note any device
+/// that shares a box (rules `gang_kinds`); else a feature, mounting or conduit of its kind.
+fn takes_note(req: &super::keynotes::DeviceReq, kind: &str) -> bool {
+    let k = kind.replace('_', " ").to_ascii_lowercase();
+    // A box note's box: the junction box its marker points at (as the keynote step takes it).
+    if req.box_role.is_some() {
+        return k.contains("junction");
+    }
+    if req.ganged {
+        return super::keynotes::device_rules().gang_kinds.iter().any(|g| k.contains(g.as_str()));
+    }
+    !req.features_for(kind).is_empty() || req.mount_for(kind).is_some() || (req.lv_conduit_in.is_some() && super::keynotes::lv_kind(kind))
+}
+
+/// A device kind's gang family: `receptacle`, `low voltage`, else `switch` (switches, dimmers,
+/// sensors): a gang note's devices are the nearest one's family.
+fn gang_family(kind: &str) -> &'static str {
+    let k = kind.replace('_', " ").to_ascii_lowercase();
+    if k.contains("receptacle") {
+        "receptacle"
+    } else if super::keynotes::lv_kind(&k) {
+        "low voltage"
+    } else {
+        "switch"
+    }
+}
+
+/// The devices one gang keynote points at (sharing a `gang` key), drawn apart, set side by side
+/// as the field gangs them in one box: in a line along the way they were drawn, the box's
+/// per-gang width apart (rules data `box.per_gang_in`), the one nearest their middle where it
+/// was; each moved one keeps where it was drawn (`drawn_at`) and why (`moved`). How many moved.
+fn gang_together(devices: &mut [super::readers::ReadDevice], upf: f64) -> usize {
+    use cadaddy_geom::Vec2;
+    let step = super::walllayout::box_per_gang_in() / 12.0 * upf;
+    let mut groups: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (i, d) in devices.iter().enumerate() {
+        if !d.gang.is_empty() && d.at.iter().all(|v| v.is_finite()) {
+            groups.entry(d.gang.clone()).or_default().push(i);
+        }
+    }
+    let mut moved = 0usize;
+    for ix in groups.values().filter(|ix| ix.len() >= 2 && ix.len() <= MAX_GANG) {
+        let at = |i: &usize| devices.get(*i).map_or(Vec2::ZERO, |d| Vec2::new(d.at[0], d.at[1]));
+        let pts: Vec<Vec2> = ix.iter().map(at).collect();
+        let n = pts.len() as f64;
+        let mid = pts.iter().fold(Vec2::ZERO, |a, p| a + *p) * (1.0 / n);
+        // The way they were drawn: the two farthest apart.
+        let (mut a, mut b, mut far) = (mid, mid, 0.0);
+        for p in &pts {
+            for q in &pts {
+                if (*q - *p).len() > far {
+                    (a, b, far) = (*p, *q, (*q - *p).len());
+                }
+            }
+        }
+        if far <= step * (n - 1.0) + 1e-6 || far > MAX_GANG_SPREAD_FT * upf {
+            continue;
+        }
+        let dir = (b - a) * (1.0 / far);
+        let mut order: Vec<(f64, usize)> = ix.iter().map(|i| ((at(i) - a).dot(dir), *i)).collect();
+        order.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let Some(anchor_rank) = order.iter().enumerate().min_by(|x, y| (at(&x.1.1) - mid).len().total_cmp(&(at(&y.1.1) - mid).len())).map(|(r, _)| r)
+        else {
+            continue;
+        };
+        let anchor = order.get(anchor_rank).map_or(mid, |(_, i)| at(i));
+        for (rank, (_, i)) in order.iter().enumerate() {
+            let to = anchor + dir * ((rank as f64 - anchor_rank as f64) * step);
+            let Some(d) = devices.get_mut(*i) else { continue };
+            let from = Vec2::new(d.at[0], d.at[1]);
+            if (to - from).len() < 1e-6 {
+                continue;
+            }
+            d.drawn_at = Some(d.at);
+            d.moved = format!(
+                "set beside the {} others of its gang in one box, {:.1} in from where its plan draws it: its keynote gangs them ({})",
+                ix.len() - 1,
+                (to - from).len() / upf * 12.0,
+                super::keynotes::device_rules().gang_source
+            );
+            d.at = [to.x, to.y];
+            moved += 1;
+        }
+    }
+    moved
+}
+
+/// Most devices one gang keynote sets side by side; farthest apart (feet) they may be drawn.
+const MAX_GANG: usize = 8;
+const MAX_GANG_SPREAD_FT: f64 = 8.0;
+
+/// The key the devices one gang keynote's marker points at share (its sheet, note, marker, and
+/// the room and level it is laid into).
+fn gang_key(sheet: &str, num: &str, at: cadaddy_geom::Vec2, room: &str, level: &str) -> String {
+    format!("{sheet} keynote {num} at {:.1},{:.1} {room} {level}", at.x, at.y)
+}
+
+/// The keynotes the typical rooms' views put by their devices: each marker laid into every room
+/// of the view's type, and the device stamped there nearest it (within [`KEYNOTE_DEVICE_FT`])
+/// takes the note:
+/// - a note that makes a receptacle a piece of equipment's
+///   ([`super::keynotes::equipment_receptacle`]: `30A/2P RECEPTACLE FOR <unit> …`) onto the
+///   receptacle (`keynote`);
+/// - a note that asks something of the device at it ([`super::keynotes::device_requirements`]:
+///   its features, mounting, low-voltage conduit) onto the nearest device of a kind it speaks of
+///   (`keynotes`); a gang note onto every device within reach that shares a box, with one key
+///   per room (`gang`).
+///
+/// The markers read and the devices that took one.
 fn typical_keynotes(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [super::readers::ReadDevice]) -> (usize, usize) {
     use super::keynotes;
     let any = |texts: &[cadaddy_mepfix::sheet_facts::TextItem]| {
-        keynotes::lists(texts).iter().any(|l| l.notes.iter().any(|n| keynotes::equipment_receptacle(&n.text).is_some()))
+        keynotes::lists(texts)
+            .iter()
+            .any(|l| l.notes.iter().any(|n| keynotes::equipment_receptacle(&n.text).is_some() || device_note(&n.text).is_some()))
     };
-    let marks = |sub: &cadaddy_doc::Drawing, texts: &[cadaddy_mepfix::sheet_facts::TextItem]| -> Vec<ViewMark<(String, String)>> {
+    let marks = |sub: &cadaddy_doc::Drawing, texts: &[cadaddy_mepfix::sheet_facts::TextItem]| -> Vec<ViewMark<KeyMark>> {
         let lists = keynotes::lists(texts);
         let (segs, boxes, rounds) = keynote_marker_shapes(sub, texts);
         let mut out = Vec::new();
-        for list in &lists {
-            let me = keynotes::subject(list);
-            let others: Vec<String> = lists.iter().map(keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
-            for (num, at) in keynotes::tags(texts, &segs, &boxes, &rounds, &others, list) {
-                let Some(n) = list.notes.iter().find(|n| n.number == num && keynotes::equipment_receptacle(&n.text).is_some()) else { continue };
+        for (li, list) in lists.iter().enumerate() {
+            for (num, at) in keynotes::owned_tags(texts, &segs, &boxes, &rounds, &lists, li) {
+                let Some(n) = list.notes.iter().find(|n| n.number == num) else { continue };
+                let equipment = keynotes::equipment_receptacle(&n.text).is_some();
+                let req = if equipment { None } else { device_note(&n.text) };
+                if !equipment && req.is_none() {
+                    continue;
+                }
                 let at = cadaddy_geom::Vec2::new(at[0], at[1]);
-                out.push(ViewMark { view_at: at, at, what: (num, n.text.chars().take(KEYNOTE_TEXT_CHARS).collect()) });
+                let text = n.text.chars().take(KEYNOTE_TEXT_CHARS).collect();
+                out.push(ViewMark { view_at: at, at, what: KeyMark { num, text, at, req } });
             }
         }
         out
@@ -10169,9 +10322,26 @@ fn typical_keynotes(d: &cadaddy_doc::Drawing, job: &GuidedJob, devices: &mut [su
         KEYNOTE_DEVICE_FT,
         &any,
         &marks,
-        &|dv: &super::readers::ReadDevice| dv.keynote.is_empty() && receptacle_read(dv),
-        &mut |dv: &mut super::readers::ReadDevice, (num, text): &(String, String), sheet: &str| {
-            dv.keynote = format!("{sheet} keynote {num}: {text}");
+        &|dv: &super::readers::ReadDevice, m: &KeyMark| match &m.req {
+            None => dv.keynote.is_empty() && receptacle_read(dv),
+            Some(req) => takes_note(req, &read_kind(dv)),
+        },
+        &|m: &KeyMark, first: &super::readers::ReadDevice, dv: &super::readers::ReadDevice| {
+            m.req.as_ref().is_some_and(|r| r.ganged) && gang_family(&read_kind(dv)) == gang_family(&read_kind(first))
+        },
+        &mut |dv: &mut super::readers::ReadDevice, m: &KeyMark, sheet: &str| {
+            let cite = format!("{sheet} keynote {}: {}", m.num, m.text);
+            match &m.req {
+                None => dv.keynote = cite,
+                Some(req) => {
+                    if req.ganged {
+                        dv.gang = gang_key(sheet, &m.num, m.at, &dv.room, &dv.level);
+                    }
+                    if !dv.keynotes.contains(&cite) {
+                        dv.keynotes.push(cite);
+                    }
+                }
+            }
         },
     )
 }
@@ -10921,12 +11091,17 @@ fn seat_on_sub_bases<'a>(equipment: &mut [cadaddy_walk3d::MepEquipment], devices
     n
 }
 
-/// Each receptacle a keynote on its sheet makes a piece of equipment's
-/// ([`super::keynotes::equipment_receptacle`]: `30A/2P RECEPTACLE FOR <unit>, SET UNDER IT`): the
-/// note onto it (`keynote`). The receptacle symbol nearest each of the note's markers within
-/// [`KEYNOTE_REACH`] of its numbers' height is its; every device read off that symbol (a typical
-/// room's view, stamped into each room of its type) takes it alike. How many devices, by note.
-fn keynoted_receptacles(
+/// The keynotes the plans print by devices placed off the floor plans (each by its symbol): the
+/// symbol nearest each marker on its sheet (within [`KEYNOTE_REACH`] of the list's numbers'
+/// height) of a kind the note speaks of takes it:
+/// - a note that makes a receptacle a piece of equipment's
+///   ([`super::keynotes::equipment_receptacle`]) onto the receptacle (`keynote`);
+/// - a note that asks something of the device at it ([`super::keynotes::device_requirements`])
+///   onto the device (`keynotes`); a gang note onto every device within reach that shares a box,
+///   with the key they share (`gang`).
+///
+/// How many devices took one, by sheet and note.
+fn keynoted_devices(
     d: &cadaddy_doc::Drawing,
     pages: &[(String, cadaddy_doc::Drawing)],
     lists: &mut [&mut [super::readers::ReadDevice]],
@@ -10934,61 +11109,100 @@ fn keynoted_receptacles(
     use super::keynotes;
     use cadaddy_geom::Vec2;
     let norm = |v: &str| cadaddy_mepfix::printlinks::norm_sheet(v.split('/').next().unwrap_or(v));
-    // Each receptacle symbol: its sheet, and its middle on the drawing (the sheets' own place).
-    let mut symbols: BTreeMap<String, (String, Vec2)> = BTreeMap::new();
-    for dv in lists.iter().flat_map(|l| l.iter()).filter(|dv| receptacle_read(dv)).take(MAX_STAMPED * 4) {
+    // Each device's symbol: its sheet, its middle on the drawing (the sheets' own place), its kind.
+    let mut symbols: BTreeMap<String, (String, Vec2, String)> = BTreeMap::new();
+    for dv in lists.iter().flat_map(|l| l.iter()).take(MAX_STAMPED * 4) {
         if dv.handle.is_empty() || symbols.contains_key(&dv.handle) {
             continue;
         }
         let Some(e) = cadaddy_doc::Handle::parse_hex(&dv.handle).and_then(|h| d.model.get(h)) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);
         if !b.is_empty() {
-            symbols.insert(dv.handle.clone(), (norm(&dv.sheet), b.center()));
+            symbols.insert(dv.handle.clone(), (norm(&dv.sheet), b.center(), read_kind(dv)));
         }
     }
     let mut noted: BTreeMap<String, String> = BTreeMap::new();
+    let mut asked: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut gangs: BTreeMap<String, String> = BTreeMap::new();
+    let mut by: BTreeMap<String, usize> = BTreeMap::new();
     for (number, sub) in pages.iter().take(MAX_LEGEND_SHEETS * 2) {
         if symbols.is_empty() {
             break;
         }
         let texts = cadaddy_mepfix::sheet_facts::texts(sub);
         let lists_k = keynotes::lists(&texts);
-        if !lists_k.iter().any(|l| l.notes.iter().any(|n| keynotes::equipment_receptacle(&n.text).is_some())) {
+        let speaks = |n: &keynotes::Note| keynotes::equipment_receptacle(&n.text).is_some() || device_note(&n.text).is_some();
+        if !lists_k.iter().any(|l| l.notes.iter().any(speaks)) {
             continue;
         }
         let sheet = norm(number);
-        let mine: Vec<(&String, Vec2)> = symbols.iter().filter(|(_, (s, _))| *s == sheet).map(|(h, (_, c))| (h, *c)).collect();
+        let mine: Vec<(&String, Vec2, &String)> = symbols.iter().filter(|(_, (s, _, _))| *s == sheet).map(|(h, (_, c, k))| (h, *c, k)).collect();
         if mine.is_empty() {
             continue;
         }
         let (segs, boxes, rounds) = keynote_marker_shapes(sub, &texts);
-        for list in &lists_k {
-            let notes: Vec<&keynotes::Note> = list.notes.iter().filter(|n| keynotes::equipment_receptacle(&n.text).is_some()).collect();
-            if notes.is_empty() {
+        for (li, list) in lists_k.iter().enumerate() {
+            if !list.notes.iter().any(speaks) {
                 continue;
             }
-            let me = keynotes::subject(list);
-            let others: Vec<String> = lists_k.iter().map(keynotes::subject).filter(|w| *w != me && !w.is_empty()).collect();
             let reach = KEYNOTE_REACH * list.number_h;
-            for (num, at) in keynotes::tags(&texts, &segs, &boxes, &rounds, &others, list) {
-                let Some(n) = notes.iter().find(|n| n.number == num) else { continue };
+            for (num, at) in keynotes::owned_tags(&texts, &segs, &boxes, &rounds, &lists_k, li) {
+                let Some(n) = list.notes.iter().find(|n| n.number == num) else { continue };
                 let at = Vec2::new(at[0], at[1]);
-                let Some((h, _)) = mine.iter().map(|(h, c)| (*h, (*c - at).len())).filter(|(_, dd)| *dd <= reach).min_by(|a, b| a.1.total_cmp(&b.1))
-                else {
+                let cite = format!("{number} keynote {num}: {}", n.text.chars().take(KEYNOTE_TEXT_CHARS).collect::<String>());
+                let mut near: Vec<(&String, f64, &String)> =
+                    mine.iter().map(|(h, c, k)| (*h, (*c - at).len(), *k)).filter(|(_, dd, _)| *dd <= reach).collect();
+                near.sort_by(|a, b| a.1.total_cmp(&b.1));
+                if keynotes::equipment_receptacle(&n.text).is_some() {
+                    if let Some((h, _, _)) = near.iter().find(|(_, _, k)| k.contains("receptacle")) {
+                        noted.entry((*h).clone()).or_insert_with(|| cite.clone());
+                    }
                     continue;
-                };
-                noted
-                    .entry(h.clone())
-                    .or_insert_with(|| format!("{number} keynote {num}: {}", n.text.chars().take(KEYNOTE_TEXT_CHARS).collect::<String>()));
+                }
+                let Some(req) = device_note(&n.text) else { continue };
+                let mut takers: Vec<(&String, &String)> = near.iter().filter(|(_, _, k)| takes_note(&req, k)).map(|(h, _, k)| (*h, *k)).collect();
+                // A gang note gangs the devices of the nearest one's family (switches with
+                // switches): devices at another height are no box of theirs.
+                if req.ganged
+                    && let Some(fam) = takers.first().map(|(_, k)| gang_family(k))
+                {
+                    takers.retain(|(_, k)| gang_family(k) == fam);
+                }
+                let takers: Vec<&String> = takers.into_iter().map(|(h, _)| h).collect();
+                let n_take = if req.ganged { takers.len() } else { takers.len().min(1) };
+                // A gang note speaks of two devices or more.
+                if req.ganged && n_take < 2 {
+                    continue;
+                }
+                for h in takers.into_iter().take(n_take) {
+                    let v = asked.entry(h.clone()).or_default();
+                    if !v.contains(&cite) {
+                        v.push(cite.clone());
+                    }
+                    if req.ganged {
+                        gangs.insert(h.clone(), gang_key(number, &num, at, "", &sheet));
+                    }
+                }
             }
         }
     }
-    let mut by: BTreeMap<String, usize> = BTreeMap::new();
     for dv in lists.iter_mut().flat_map(|l| l.iter_mut()) {
-        let Some(k) = noted.get(&dv.handle) else { continue };
-        if dv.keynote.is_empty() {
+        if let Some(k) = noted.get(&dv.handle)
+            && dv.keynote.is_empty()
+        {
             dv.keynote.clone_from(k);
             *by.entry(k.split(':').next().unwrap_or_default().to_string()).or_default() += 1;
+        }
+        if let Some(v) = asked.get(&dv.handle) {
+            for c in v {
+                if !dv.keynotes.contains(c) {
+                    dv.keynotes.push(c.clone());
+                    *by.entry(c.split(':').next().unwrap_or_default().to_string()).or_default() += 1;
+                }
+            }
+        }
+        if let Some(g) = gangs.get(&dv.handle) {
+            dv.gang.clone_from(g);
         }
     }
     by
@@ -14515,7 +14729,9 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
                 if !size.is_empty() {
                     t.set("box_size", size.clone(), "note");
                 }
-                // The junction box the plan shows is the note's box: its kind is the note's.
+                // The junction box the plan shows is the note's box: its kind is the note's (its
+                // mounting and circuit were the note's when the devices were placed:
+                // [`super::keynotes::apply_to_tag`]).
                 if kind != "junction_box" {
                     t.kind = kind.clone();
                 }
@@ -15033,6 +15249,134 @@ fn keynote_step(s: &mut Session, job: &mut GuidedJob, pages: &[(String, cadaddy_
         "conduit_ft_by_size": ft_by_size.iter().map(|(k, v)| (k.clone(), json!((v * 10.0).round() / 10.0))).collect::<serde_json::Map<_, _>>(),
         "hard_lid_ft": {"hard_lid": (hard_lid[0] * 10.0).round() / 10.0, "grid": (hard_lid[1] * 10.0).round() / 10.0, "type_unknown": (hard_lid[2] * 10.0).round() / 10.0},
         "penetrations": penetrations, "rated_penetrations": rated_count, "by_level": by_level, "systems": systems_out, "undecided": undecided,
+    });
+    Ok(())
+}
+
+/// Whether a room (its number, its name upper-case) is one a room-wide keynote's words name
+/// ([`scoped_keynotes_step`]): no words, every room; else a word its name holds, or a word that
+/// names guest rooms (holds one of `guest_words`) and the room is one a typical unit was fitted
+/// into (`units`).
+fn room_in_scope(words: &[String], room: &str, name: &str, units: &BTreeSet<String>, guest_words: &[String]) -> bool {
+    let guestish = |w: &str| guest_words.iter().any(|g| !g.is_empty() && w.contains(g.as_str()));
+    words.is_empty()
+        || (!room.is_empty() && words.iter().any(|w| (!name.is_empty() && name.contains(w.as_str())) || (guestish(w) && units.contains(room))))
+}
+
+/// Most room-wide keynotes the job lays on the model's devices, elements it looks through
+/// (hostile sets).
+const MAX_SCOPED_NOTES: usize = 40;
+const MAX_SCOPED_ELEMENTS: usize = 500_000;
+
+/// The keynotes that ask something of a kind of device in some rooms
+/// ([`super::keynotes::DeviceReq::scope`]: `ALL SUITE AND LIBRARY RECEPTACLES SHALL BE
+/// TAMPER-RESISTANT`), laid on every device of that kind in a room so named, building-wide:
+/// its features (`keynote_features`) and the note (`keynotes`), the keynote their source. A
+/// room matches a word its name holds; a word that names guest rooms (the code rules' guest-room
+/// words, `E-RECEPT-TR`) also matches the rooms a typical unit was fitted into; a note naming no
+/// rooms is every room. A piece of equipment's receptacle (`receptacle_for`) is its own keynote's.
+/// How many devices took each note.
+fn scoped_keynotes_step(s: &mut Session, pages: &[(String, cadaddy_doc::Drawing)], result: &mut Value) -> crate::Result<()> {
+    use super::keynotes;
+    use cadaddy_doc::props::{self, Prop, Source, SourceKind};
+    // The notes: (cite, kind, room words).
+    let mut notes: Vec<(String, String, Vec<String>, keynotes::DeviceReq)> = Vec::new();
+    for (number, sub) in pages {
+        let texts = cadaddy_mepfix::sheet_facts::texts(sub);
+        for list in keynotes::lists(&texts) {
+            for n in &list.notes {
+                let Some(q) = keynotes::device_requirements(&n.text) else { continue };
+                let Some((kind, rooms)) = q.scope.clone() else { continue };
+                if q.features_for(&kind).is_empty() || notes.len() >= MAX_SCOPED_NOTES {
+                    continue;
+                }
+                let cite = format!("{number} keynote {}: {}", n.number, n.text.chars().take(KEYNOTE_TEXT_CHARS).collect::<String>());
+                if !notes.iter().any(|x| x.0 == cite) {
+                    notes.push((cite, kind, rooms, q));
+                }
+            }
+        }
+    }
+    if notes.is_empty() {
+        return Ok(());
+    }
+    let sp = super::bspec::current(s, "bim_build").ok().filter(|(_, stored)| *stored).map(|(sp, _)| sp);
+    let mut names: BTreeMap<String, String> = BTreeMap::new();
+    let mut units: BTreeSet<String> = BTreeSet::new();
+    if let Some(sp) = &sp {
+        for r in &sp.rooms {
+            if let Some(n) = &r.number {
+                names.insert(n.trim().to_ascii_uppercase(), r.name.to_ascii_uppercase());
+            }
+        }
+        for i in sp.unit_instances.as_array().into_iter().flatten() {
+            if let Some(n) = i.get("number").and_then(Value::as_str) {
+                units.insert(n.trim().to_ascii_uppercase());
+            }
+        }
+    }
+    let guest_words: Vec<String> =
+        super::coderules::rules().into_iter().find(|r| r.sets == "tamper_resistant").map(|r| r.rooms.name_words).unwrap_or_default();
+    let mut changes: Vec<(cadaddy_doc::Handle, props::Props)> = Vec::new();
+    let mut took: BTreeMap<String, usize> = BTreeMap::new();
+    {
+        let d = s.doc()?;
+        for (e, base) in super::elemprops::elements(d).take(MAX_SCOPED_ELEMENTS) {
+            if base != "device" {
+                continue;
+            }
+            let kind = super::elemprops::reported_kind(e, base.clone());
+            let mut store = props::read(&e.common.xdata);
+            let text = |st: &props::Props, k: &str| st.get(k).filter(|p| p.has_value()).map(|p| p.text().trim().to_string()).unwrap_or_default();
+            if !text(&store, "receptacle_for").is_empty() {
+                continue;
+            }
+            let room = text(&store, "room").to_ascii_uppercase();
+            let name = names.get(&room).cloned().unwrap_or_default();
+            let before = store.clone();
+            for (cite, k, rooms, q) in &notes {
+                if !kind.replace('_', " ").contains(k.as_str()) {
+                    continue;
+                }
+                if !room_in_scope(rooms, &room, &name, &units, &guest_words) {
+                    continue;
+                }
+                let feats = q.features_for(&kind);
+                if feats.is_empty() {
+                    continue;
+                }
+                let src = Source::from_doc(SourceKind::Note, cite);
+                let mut f: Vec<String> = text(&store, "keynote_features").split(", ").filter(|x| !x.is_empty()).map(str::to_string).collect();
+                for x in feats {
+                    if !f.contains(&x) {
+                        f.push(x);
+                    }
+                }
+                store.set("keynote_features", Prop::new(f.join(", "), src.clone()));
+                let mut all: Vec<String> = text(&store, "keynotes").split(" | ").filter(|x| !x.is_empty()).map(str::to_string).collect();
+                if !all.contains(cite) {
+                    all.push(cite.clone());
+                }
+                store.set("keynotes", Prop::new(all.join(" | "), src));
+                *took.entry(cite.split(':').next().unwrap_or_default().to_string()).or_default() += 1;
+            }
+            if store != before {
+                changes.push((e.handle, store));
+            }
+        }
+    }
+    let d = s.doc_mut()?;
+    for (h, store) in changes {
+        let x = props::write(&d.entity(h).map(|e| e.common.xdata.clone()).unwrap_or_default(), &store);
+        let _ = d.modify_entity(h, |e| e.common.xdata = x.into());
+    }
+    s.touch();
+    if !took.is_empty() {
+        progress_line(&format!("  room-wide keynotes onto their devices: {took:?}"));
+    }
+    result["keynote_scopes"] = json!({
+        "notes": notes.iter().map(|(c, k, r, _)| json!({"keynote": c.chars().take(120).collect::<String>(), "kind": k, "rooms": r})).collect::<Vec<_>>(),
+        "devices": took,
     });
     Ok(())
 }
@@ -25332,6 +25676,256 @@ mod tests {
                 notes[1]
             );
         }
+    }
+
+    /// Q6249: a room-wide keynote's words name rooms by their names, and guest rooms by the
+    /// rooms typical units were fitted into; no words is every room.
+    #[test]
+    fn a_room_wide_keynote_names_its_rooms() {
+        let words: Vec<String> = ["GUESTROOM", "LIBRARY"].iter().map(|w| (*w).to_string()).collect();
+        let units: BTreeSet<String> = ["201".to_string()].into_iter().collect();
+        let guest = vec!["GUEST".to_string()];
+        assert!(room_in_scope(&words, "105", "LIBRARY / READING", &units, &guest));
+        assert!(room_in_scope(&words, "201", "STUDIO K", &units, &guest), "a typical unit's room is a guest room");
+        assert!(!room_in_scope(&words, "202", "STUDIO K", &units, &guest), "no unit fitted there, its name no word's");
+        assert!(!room_in_scope(&words, "110", "STORAGE", &units, &guest));
+        assert!(!room_in_scope(&words, "", "", &units, &guest), "a device in no room is not in one named");
+        assert!(room_in_scope(&[], "110", "STORAGE", &units, &guest), "no words: every room");
+    }
+
+    /// Q6249: a typical room's view puts keynotes by its devices that ask something of them (a
+    /// receptacle's USB ports, the switches ganged, a data outlet's 1" conduit): in each room of
+    /// the view's type the device stamped at each marker takes its note (every switch by the gang
+    /// marker, one key a room), and the model's devices carry what the notes ask, the keynote
+    /// their source.
+    #[test]
+    fn a_typical_views_device_keynotes_go_to_their_devices_in_every_room() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        let line = |s: &mut crate::Session, a: [f64; 2], b: [f64; 2]| {
+            s.execute("line", &json!({"points": [a, b]})).unwrap();
+        };
+        let unit = |s: &mut crate::Session, o: [f64; 2], turned: bool| {
+            let p = |x: f64, y: f64| if turned { [o[0] + 144.0 - x, o[1] + 288.0 - y] } else { [o[0] + x, o[1] + y] };
+            let mut segs =
+                vec![((0.0, 0.0), (144.0, 0.0)), ((144.0, 0.0), (144.0, 288.0)), ((144.0, 288.0), (0.0, 288.0)), ((0.0, 288.0), (0.0, 0.0))];
+            for k in 1..6 {
+                segs.push(((0.0, 48.0 * f64::from(k)), (144.0, 48.0 * f64::from(k))));
+            }
+            segs.push(((0.0, 100.0), (60.0, 100.0)));
+            segs.push(((100.0, 210.0), (144.0, 210.0)));
+            for ((ax, ay), (bx, by)) in segs {
+                line(s, p(ax, ay), p(bx, by));
+            }
+        };
+        let x0 = 4234.0;
+        let lo = s.doc().unwrap().handseed;
+        for (a, b) in [([0.0, 0.0], [2000.0, 0.0]), ([2000.0, 0.0], [2000.0, 1400.0]), ([2000.0, 1400.0], [0.0, 1400.0]), ([0.0, 1400.0], [0.0, 0.0])]
+        {
+            line(&mut s, [x0 + a[0], a[1]], [x0 + b[0], b[1]]);
+        }
+        let v = [x0 + 300.0, 200.0];
+        unit(&mut s, v, false);
+        // The devices' symbols; the markers: 6 by the desk receptacle, 7 between the two
+        // switches 6.5" apart, 8 by the data outlet.
+        for c in [[20.0, 20.0], [120.0, 270.0], [130.0, 120.0], [130.0, 126.5], [60.0, 200.0]] {
+            s.execute("circle", &json!({"center": [v[0] + c[0], v[1] + c[1]], "radius": 3.0})).unwrap();
+        }
+        for (x, y, t) in [(27.0, 12.0, "6"), (112.0, 121.0, "7"), (67.0, 190.0, "8")] {
+            s.execute("text", &json!({"at": [v[0] + x, v[1] + y], "text": t, "height": 4.0})).unwrap();
+        }
+        s.execute("text", &json!({"at": [v[0], v[1] - 19.0], "text": "ENLARGED STUDIO K", "height": 7.4})).unwrap();
+        s.execute("text", &json!({"at": [v[0], v[1] - 28.0], "text": "SCALE: 1/4\" = 1'-0\"", "height": 4.6})).unwrap();
+        for (y, x, text) in [
+            (1300.0, 1500.0, "ELECTRICAL KEYNOTES:"),
+            (1290.0, 1500.0, "6."),
+            (1290.0, 1512.0, "DESK RECEPTACLE WITH USB AND USB-C PORTS."),
+            (1278.0, 1500.0, "7."),
+            (1278.0, 1512.0, "SWITCHES TO BE GANGED TOGETHER."),
+            (1266.0, 1500.0, "8."),
+            (1266.0, 1512.0, "1\" LOW VOLTAGE CONDUIT, DATA BOX TO HALL CEILING."),
+        ] {
+            s.execute("text", &json!({"at": [x0 + x, y], "text": text, "height": 4.0})).unwrap();
+        }
+        let hi = s.doc().unwrap().handseed;
+        unit(&mut s, [10_000.0, 0.0], false);
+        unit(&mut s, [10_400.0, 0.0], true);
+        job.sheet_regions = vec![SheetRegion {
+            number: "Q-9".into(),
+            level: "T".into(),
+            discipline: "E".into(),
+            kind: "enlarged_plan".into(),
+            rect: [x0, 0.0, x0 + 2000.0, 1400.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        }];
+        job.sheet_spans = vec![SheetSpan { sheet: "Q-9".into(), lo, hi }];
+        let room = |n: &str, x: f64| json!({"name": "STUDIO K", "number": n, "level": "Level 2", "outline": [[x, 0], [x + 144.0, 0], [x + 144.0, 288], [x, 288]]});
+        if let Some(st) = job.stage_mut(StageName::Rooms) {
+            st.result = Some(json!({"rooms": [room("201", 10_000.0), room("202", 10_400.0)]}));
+        }
+        let device = |tag: &str, kind: &str, c: [f64; 2]| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            at: [v[0] + c[0], v[1] + c[1]],
+            sheet: "Q-9".into(),
+            level: "T".into(),
+            ..Default::default()
+        };
+        let read = [
+            device("REC", "receptacle", [20.0, 20.0]),
+            device("REC", "receptacle", [120.0, 270.0]),
+            device("S", "switch", [130.0, 120.0]),
+            device("S", "switch", [130.0, 126.5]),
+            device("D", "data outlet", [60.0, 200.0]),
+        ];
+        let unplaced: Vec<&super::super::readers::ReadDevice> = read.iter().collect();
+        let mut stamped = stamp_typical_rooms(s.doc().unwrap(), &job, &[], &unplaced).devices;
+        assert_eq!(stamped.len(), 10, "{stamped:?}");
+        let (markers, set) = typical_keynotes(s.doc().unwrap(), &job, &mut stamped);
+        // 3 markers; a room: the receptacle, both switches, the data outlet.
+        assert_eq!((markers, set), (3, 8), "{stamped:?}");
+        let mut keys = BTreeSet::new();
+        for room in ["201", "202"] {
+            let mine: Vec<&super::super::readers::ReadDevice> = stamped.iter().filter(|d| d.room == room).collect();
+            let notes = |kind: &str| -> Vec<String> { mine.iter().filter(|d| d.kind == kind).flat_map(|d| d.keynotes.clone()).collect() };
+            assert_eq!(notes("receptacle"), ["Q-9 keynote 6: DESK RECEPTACLE WITH USB AND USB-C PORTS."], "room {room}: one receptacle, its note");
+            assert_eq!(notes("data outlet").len(), 1, "room {room}");
+            let sw: Vec<&&super::super::readers::ReadDevice> = mine.iter().filter(|d| d.kind == "switch").collect();
+            assert_eq!(sw.len(), 2);
+            assert!(sw.iter().all(|d| !d.gang.is_empty() && d.gang == sw[0].gang), "room {room}: both switches, one key: {sw:?}");
+            keys.insert(sw[0].gang.clone());
+        }
+        assert_eq!(keys.len(), 2, "one gang a room: {keys:?}");
+        // Drawn 6.5" apart, set side by side in their box (the per-gang width apart), one where
+        // it was; the moved one keeps where it was drawn.
+        assert_eq!(gang_together(&mut stamped, 12.0), 2);
+        for room in ["201", "202"] {
+            let sw: Vec<&super::super::readers::ReadDevice> = stamped.iter().filter(|d| d.room == room && d.kind == "switch").collect();
+            let gap = ((sw[0].at[0] - sw[1].at[0]).powi(2) + (sw[0].at[1] - sw[1].at[1]).powi(2)).sqrt();
+            assert!((gap - super::super::walllayout::box_per_gang_in()).abs() < 1e-6, "room {room}: {gap}");
+            assert_eq!(sw.iter().filter(|d| d.drawn_at.is_some() && d.moved.contains("its keynote gangs them")).count(), 1, "{sw:?}");
+        }
+        assert_eq!(gang_together(&mut stamped, 12.0), 0, "side by side already");
+        // Into the model: what each note asks, the keynote its source.
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 2", "elevation_ft": 10, "height_ft": 10, "ceiling_ft": 9, "region": [9000, -100, 12000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        for d in stamped.iter_mut() {
+            d.level = "Level 2".into();
+        }
+        super::super::readers::place_devices(&mut s, &stamped, "test").unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        let has = |k: &str, v: &str| sp.tags.iter().filter(|t| t.fields.get(k).is_some_and(|f| f.value == v && f.source == "note")).count();
+        assert_eq!(has("keynote_features", "USB, USB-C"), 2);
+        assert_eq!(has("lv_conduit_in", "1"), 2);
+        assert_eq!(sp.tags.iter().filter(|t| t.fields.contains_key("gang_with")).count(), 4);
+    }
+
+    /// Q6249: the plans' keynotes by devices read off a floor plan (each its symbol): a floor
+    /// box note's receptacle becomes a floor box, a ceiling antenna box note's junction box goes
+    /// to the ceiling and drops the circuit label read by it (the read value kept, with why),
+    /// a gang note's two switches share a key, a note reaching no device of its kind is none.
+    #[test]
+    fn a_plans_device_keynotes_go_to_the_devices_their_markers_point_at() {
+        let mut s = crate::Session::new();
+        let sym = |s: &mut crate::Session, c: [f64; 2]| -> String {
+            s.execute("circle", &json!({"center": c, "radius": 3.0})).unwrap();
+            s.doc().unwrap().model.iter().last().map(|e| e.handle.hex()).unwrap_or_default()
+        };
+        let rec = sym(&mut s, [100.0, 100.0]);
+        let jb = sym(&mut s, [300.0, 100.0]);
+        let s1 = sym(&mut s, [500.0, 100.0]);
+        let s2 = sym(&mut s, [506.5, 100.0]);
+        let far = sym(&mut s, [900.0, 100.0]);
+        // A receptacle under the switches, by the gang marker: not of their family.
+        let low = sym(&mut s, [503.0, 84.0]);
+        for (x, y, t) in [(108.0, 92.0, "2"), (308.0, 92.0, "4"), (495.0, 108.0, "5"), (1500.0, 100.0, "9")] {
+            s.execute("text", &json!({"at": [x, y], "text": t, "height": 4.0})).unwrap();
+        }
+        for (y, x, text) in [
+            (800.0, 1500.0, "ELECTRICAL KEYNOTES:"),
+            (790.0, 1500.0, "2."),
+            (790.0, 1512.0, "RUN CONDUIT BELOW THE SLAB TO THIS FLOOR BOX RECEPTACLE."),
+            (778.0, 1500.0, "4."),
+            (778.0, 1512.0, "PAGING SYSTEM ANTENNA IN THE CEILING HERE. PROVIDE 6\"X6\"X4\" JUNCTION BOX."),
+            (766.0, 1500.0, "5."),
+            (766.0, 1512.0, "SET THESE SWITCHES GANGED IN A COMMON BOX."),
+            (754.0, 1500.0, "9."),
+            (754.0, 1512.0, "DESK RECEPTACLE WITH USB PORTS."),
+        ] {
+            s.execute("text", &json!({"at": [x, y], "text": text, "height": 4.0})).unwrap();
+        }
+        let d = s.doc().unwrap().clone();
+        let dev = |h: &str, tag: &str, kind: &str, x: f64, circuit: &str| super::super::readers::ReadDevice {
+            tag: tag.into(),
+            kind: kind.into(),
+            at: [x, 100.0],
+            sheet: "Q-9".into(),
+            level: "Level 1".into(),
+            handle: h.into(),
+            circuit: circuit.into(),
+            ..Default::default()
+        };
+        let mut out = vec![
+            dev(&rec, "REC", "receptacle", 100.0, "Q-1"),
+            dev(&jb, "J", "junction box", 300.0, "Q-3"),
+            dev(&s1, "S", "switch", 500.0, "Q-3"),
+            dev(&s2, "S", "switch", 506.5, "Q-3"),
+            dev(&far, "REC", "receptacle", 900.0, "Q-1"),
+            dev(&low, "REC", "receptacle", 503.0, "Q-1"),
+        ];
+        let noted = keynoted_devices(&d, &[("Q-9".to_string(), d.clone())], &mut [&mut out[..]]);
+        assert_eq!(noted.values().sum::<usize>(), 4, "{noted:?} {out:?}");
+        let [r, j, a, b, f, lo] = &out[..] else { panic!() };
+        assert!(lo.keynotes.is_empty() && lo.gang.is_empty(), "a gang note's devices are the nearest one's family: {lo:?}");
+        assert!(r.keynotes.first().is_some_and(|k| k.starts_with("Q-9 keynote 2:")), "{r:?}");
+        assert!(j.keynotes.first().is_some_and(|k| k.starts_with("Q-9 keynote 4:")), "{j:?}");
+        assert!(!a.gang.is_empty() && a.gang == b.gang && a.keynotes == b.keynotes, "{a:?} {b:?}");
+        assert!(f.keynotes.is_empty(), "the marker 9 reaches no device");
+        assert_eq!(gang_together(&mut out, 12.0), 1);
+        s.execute(
+            "bspec.set",
+            &json!({"replace": true, "spec": {"levels": [{"name": "Level 1", "elevation_ft": 0, "height_ft": 12, "ceiling_ft": 9, "region": [-100, -100, 3000, 1000], "base": [0, 0]}]}}),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        super::super::readers::place_devices(&mut s, &out, "test").unwrap_or_else(|e| panic!("{e}"));
+        let sp = cadaddy_walk3d::BuildingSpec::from_json(s.doc().unwrap().building_spec.as_deref().unwrap()).unwrap();
+        let f = |h: &str, k: &str| {
+            sp.tags.iter().find(|t| t.fields.get("symbol").is_some_and(|f| f.value == *h)).and_then(|t| t.fields.get(k)).map(|f| f.value.clone())
+        };
+        assert_eq!((f(&rec, "mount").as_deref(), f(&rec, "circuit").as_deref()), (Some("floor"), Some("Q-1")));
+        assert!(f(&rec, "device_type").is_some_and(|t| t.starts_with("floor box")), "{:?}", f(&rec, "device_type"));
+        assert_eq!((f(&jb, "mount").as_deref(), f(&jb, "circuit"), f(&jb, "circuit_read").as_deref()), (Some("ceiling"), None, Some("Q-3")));
+        assert!(f(&jb, "correction").is_some_and(|c| c.contains("antenna box")), "{:?}", f(&jb, "correction"));
+        assert_eq!(f(&s1, "gang_with"), f(&s2, "gang_with"));
+        assert!(f(&s1, "gang_with").is_some());
+        assert!(f(&s1, "design_at").or(f(&s2, "design_at")).is_some(), "the moved switch keeps where it was drawn");
+        assert_eq!(f(&far, "keynotes"), None);
+        // The elements: the floor box flush in the floor, the antenna box at the ceiling on no
+        // circuit, each saying its keynote (the note the source).
+        super::super::propfill::rebuild_devices(&mut s, "test").unwrap_or_else(|e| panic!("{e}"));
+        let found = s.execute("bim.props.find", &json!({"kind": "device"})).unwrap_or_else(|e| panic!("{e}"));
+        let got = s.execute("bim.props.get", &json!({"handles": found["handles"]})).unwrap_or_else(|e| panic!("{e}"));
+        let els = got["elements"].as_array().cloned().unwrap_or_default();
+        let by_note =
+            |n: &str| els.iter().find(|e| e["props"]["keynotes"]["value"].as_str().is_some_and(|k| k.contains(n))).cloned().unwrap_or_default();
+        let floor = by_note("FLOOR BOX");
+        assert_eq!(floor["props"]["mount"]["value"], "floor", "{floor:#}");
+        assert_eq!(floor["props"]["mount"]["source"]["kind"], "note", "{floor:#}");
+        assert!(floor["props"]["mount_height"]["value"].as_f64().is_some_and(|h| h.abs() < 1e-6), "flush in the floor: {floor:#}");
+        let jbox = by_note("ANTENNA");
+        assert_eq!(jbox["props"]["mount"]["value"], "ceiling", "{jbox:#}");
+        assert!(jbox["props"].get("circuit").is_none_or(|c| c["value"].as_str().is_none_or(str::is_empty)), "{jbox:#}");
+        assert_eq!(jbox["props"]["circuit_read"]["value"], "Q-3", "{jbox:#}");
+        assert!(jbox["props"]["mount_height"]["value"].as_f64().is_some_and(|h| h > 96.0), "at the ceiling (9 ft): {jbox:#}");
+        let sw = by_note("GANGED");
+        assert_eq!(sw["props"]["gang_with"]["source"]["kind"], "note", "{sw:#}");
     }
 
     /// A water closet in no room but inside a unit's footprint (its bath: the unit's label's room

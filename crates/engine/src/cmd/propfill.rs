@@ -869,6 +869,7 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
         let mount = match field(t, "mount").as_deref() {
             Some("ceiling") => Mount::Ceiling,
             Some("wall") => Mount::Wall,
+            Some("floor") => Mount::Floor,
             _ if detector => Mount::Ceiling,
             // An exhaust fan's connection is at the fan, in the ceiling.
             _ if kind == "equipment connection" && mark.to_ascii_uppercase().starts_with("EF") => Mount::Ceiling,
@@ -991,6 +992,16 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                     }
                 })
             }
+            // A floor box is flush in the floor (a wall height the general notes give a
+            // receptacle is not its own); its keynote, else its words, say so.
+            Mount::Floor if fixture_words.to_ascii_uppercase().contains("FLOOR BOX") => Chosen {
+                inches: 0.0,
+                from: "floor",
+                source: if t.fields.get("mount").is_some_and(|f| f.source == "note") { SourceKind::Note } else { SourceKind::Print },
+                doc: field(t, "keynote")
+                    .map_or_else(|| "a floor box: flush in the floor".to_string(), |k| format!("a floor box, flush in the floor: {k}")),
+                datum: Datum::Bottom,
+            },
             Mount::Floor => documented().filter(|c| c.inches <= 48.0).unwrap_or_else(|| Chosen {
                 inches: 0.0,
                 from: "floor",
@@ -1088,6 +1099,25 @@ pub(crate) fn build_devices(d: &mut Drawing, sp: &BuildingSpec) -> DeviceBuild {
                 if let Some(v) = field(t, k) {
                     store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &note)));
                 }
+            }
+            // What the keynotes by it ask of it (its features, mounting, ganging, low-voltage
+            // conduit), all its keynotes their source.
+            let notes = field(t, "keynotes").unwrap_or_else(|| note.clone());
+            for k in ["keynotes", "keynote_features", "mount", "lv_conduit_in", "gang_with"] {
+                if let Some(v) = field(t, k).filter(|_| t.fields.get(k).is_some_and(|f| f.source == "note")) {
+                    store.set(k, Prop::new(v, Source::from_doc(SourceKind::Note, &notes)));
+                }
+            }
+            // What its keynote corrected (a circuit its box can't take, its place beside its
+            // gang): the design value kept beside, and why.
+            if let Some(c) = field(t, "circuit_read") {
+                store.set("circuit_read", Prop::new(c, Source::from_doc(SourceKind::Print, "the circuit label read by its symbol")));
+            }
+            if let Some(p) = field(t, "design_at") {
+                store.set("design_at", Prop::new(p, Source::from_doc(SourceKind::Print, "where its plan draws it (feet)")));
+            }
+            if let Some(why) = field(t, "correction") {
+                store.set("correction", Prop::new(why, Source::from_doc(SourceKind::Rule, "keynote rules")));
             }
             if let Some(v) = field(t, "review") {
                 store.set("review", Prop::new(v, Source::from_doc(SourceKind::Rule, "keynote rules")));

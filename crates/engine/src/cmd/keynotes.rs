@@ -45,6 +45,70 @@ pub(crate) struct PartRule {
 struct Rules {
     systems: Vec<SystemRules>,
     equipment_receptacle: ReceptacleRules,
+    device_requirements: DeviceRules,
+    unpowered_boxes: UnpoweredBoxes,
+}
+
+/// The roles of a keynote's box that no branch circuit feeds (`antenna`), and why.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct UnpoweredBoxes {
+    pub roles: Vec<String>,
+    pub source: String,
+}
+
+/// The rules data for the boxes no branch circuit feeds.
+pub(crate) fn unpowered_boxes() -> &'static UnpoweredBoxes {
+    &rules().unpowered_boxes
+}
+
+/// How a keynote asking something of the device at its marker is read
+/// ([`device_requirements`]): each kind of requirement's words.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct DeviceRules {
+    pub source: String,
+    pub features: Vec<FeatureRule>,
+    pub gang_words: Vec<String>,
+    pub gang_kinds: Vec<String>,
+    pub gang_source: String,
+    pub mounts: Vec<MountRule>,
+    pub lv_words: Vec<String>,
+    pub lv_kinds: Vec<String>,
+    pub lv_source: String,
+    pub scope_words: Vec<String>,
+    pub scope_kinds: Vec<ScopeKind>,
+    pub scope_skip: Vec<String>,
+    pub scope_reach_words: usize,
+}
+
+/// A device feature a note asks for (`tamper-resistant`, `USB-C`): how it is said, its words,
+/// the kinds of device it is a feature of.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct FeatureRule {
+    pub say: String,
+    pub words: Vec<String>,
+    pub kinds: Vec<String>,
+}
+
+/// A mounting a note puts a device in (`ceiling`, `floor`), its words, the kinds it applies to
+/// (none: any), and what the device then is (`floor box`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct MountRule {
+    pub mount: String,
+    pub words: Vec<String>,
+    pub kinds: Vec<String>,
+    pub device_type: String,
+}
+
+/// A kind of device a note names for a set of rooms (`ALL … RECEPTACLES`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ScopeKind {
+    pub kind: String,
+    pub words: Vec<String>,
 }
 
 /// How an equipment receptacle's keynote is read ([`equipment_receptacle`]): its words, the
@@ -84,6 +148,268 @@ pub(crate) fn systems() -> &'static [SystemRules] {
 /// The rules data for equipment receptacles' keynotes.
 pub(crate) fn receptacle_rules() -> &'static ReceptacleRules {
     &rules().equipment_receptacle
+}
+
+/// The rules data for keynotes that ask something of a device.
+pub(crate) fn device_rules() -> &'static DeviceRules {
+    &rules().device_requirements
+}
+
+/// What a keynote asks of the device at its marker ([`device_requirements`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DeviceReq {
+    /// Features, as the rules data says them (`tamper-resistant`, `USB`, `USB-C`), each with the
+    /// kinds of device it is a feature of.
+    pub features: Vec<(String, Vec<String>)>,
+    /// The devices at its marker share one box and plate.
+    pub ganged: bool,
+    /// Where it is mounted (`ceiling`, `floor`), the kinds that applies to (none: any), and what
+    /// the device then is (`floor box`; empty: what it was).
+    pub mount: Option<(String, Vec<String>, String)>,
+    /// The low-voltage conduit the note gives its outlet, trade size inches.
+    pub lv_conduit_in: Option<f64>,
+    /// A note over a kind of device in some rooms (`ALL SUITE AND LIBRARY 125V
+    /// RECEPTACLES …`): the kind and the rooms' words (empty: every room).
+    pub scope: Option<(String, Vec<String>)>,
+    /// A box note's box ([`work`]: a system's antenna or riser box): its role, and whether no
+    /// branch circuit feeds it (rules `unpowered_boxes`). Its box is at the ceiling.
+    pub box_role: Option<String>,
+    pub unpowered: bool,
+}
+
+impl DeviceReq {
+    /// The features it asks of a device of `kind` (its kind's words: `receptacle`, `gfci
+    /// receptacle`).
+    pub fn features_for(&self, kind: &str) -> Vec<String> {
+        let k = kind.replace('_', " ").to_ascii_lowercase();
+        self.features.iter().filter(|(_, kinds)| kinds.is_empty() || kinds.iter().any(|x| k.contains(x.as_str()))).map(|(f, _)| f.clone()).collect()
+    }
+
+    /// The mounting it gives a device of `kind`, and what that device then is.
+    pub fn mount_for(&self, kind: &str) -> Option<(String, String)> {
+        let k = kind.replace('_', " ").to_ascii_lowercase();
+        self.mount
+            .as_ref()
+            .filter(|(_, kinds, _)| kinds.is_empty() || kinds.iter().any(|x| k.contains(x.as_str())))
+            .map(|(m, _, t)| (m.clone(), t.clone()))
+    }
+
+    /// Whether it asks anything of the one device at its marker (not only of a set of rooms).
+    pub fn at_marker(&self) -> bool {
+        !self.features.is_empty() || self.ganged || self.mount.is_some() || self.lv_conduit_in.is_some() || self.box_role.is_some()
+    }
+}
+
+/// What a keynote asks of the device at its marker: its features (`TAMPER-RESISTANT`, `USB AND
+/// USB-C`), that the devices there be ganged, how it is mounted (`CEILING MOUNTED`, a `FLOOR
+/// BOX`), the size of its low-voltage conduit (`1" LOW-VOLTAGE CONDUIT`); and a note over a kind
+/// of device in some rooms, those rooms. All its words are the rules data's
+/// ([`device_rules`]). None: it asks none of these.
+pub(crate) fn device_requirements(text: &str) -> Option<DeviceReq> {
+    let r = device_rules();
+    let text: String = text.chars().take(MAX_NOTE_CHARS).collect();
+    let norm = |s: &str| {
+        let s: String = s.to_ascii_uppercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect();
+        format!(" {} ", s.split_whitespace().collect::<Vec<_>>().join(" "))
+    };
+    let mut rest = norm(&text);
+    let mut q = DeviceReq::default();
+    // Features, each phrase taken once and longest first (`USB-C` is not also a `USB`).
+    let mut phrases: Vec<(usize, String, &FeatureRule)> =
+        r.features.iter().flat_map(|f| f.words.iter().map(move |w| (norm(w).len(), norm(w), f))).filter(|(n, _, _)| *n > 2).collect();
+    phrases.sort_by_key(|a| std::cmp::Reverse(a.0));
+    for (_, p, f) in &phrases {
+        if rest.contains(p.as_str()) {
+            rest = rest.replace(p.as_str(), " | ");
+            if !q.features.iter().any(|(s, _)| *s == f.say) {
+                q.features.push((f.say.clone(), f.kinds.clone()));
+            }
+        }
+    }
+    // Keep the rules data's order (a record lists them so).
+    q.features.sort_by_key(|(s, _)| r.features.iter().position(|f| f.say == *s).unwrap_or(usize::MAX));
+    q.ganged = r.gang_words.iter().any(|w| has_phrase(&text, w));
+    q.mount =
+        r.mounts.iter().find(|m| m.words.iter().any(|w| has_phrase(&text, w))).map(|m| (m.mount.clone(), m.kinds.clone(), m.device_type.clone()));
+    // A low-voltage conduit's size: the trade size before `CONDUIT` (past the low-voltage words
+    // between), in a note about low-voltage work, not in the ground.
+    let up = text.to_ascii_uppercase();
+    if r.lv_words.iter().any(|w| has_phrase(&text, w)) && !buried(&up) {
+        let words: Vec<&str> = up.split_whitespace().collect();
+        let lv_word = |w: &str| {
+            let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            r.lv_words.iter().any(|x| x.split_whitespace().any(|p| p.trim_matches(|c: char| !c.is_ascii_alphanumeric()) == w)) || w == "VOLTAGE"
+        };
+        q.lv_conduit_in = words.iter().enumerate().filter(|(_, w)| w.starts_with("CONDUIT")).find_map(|(i, _)| {
+            (1..=3).filter_map(|k| i.checked_sub(k)).take_while(|j| *j + 1 == i || words.get(*j + 1).is_some_and(|w| lv_word(w))).find_map(|j| {
+                let w = words.get(j)?;
+                super::gearbuild::trade_in(w.trim_end_matches([',', '.']))
+            })
+        });
+    }
+    // A note over a kind of device in some rooms: `ALL <room words> <kind words>`.
+    let toks: Vec<String> = up.split(|c: char| !c.is_ascii_alphanumeric() && c != '-').filter(|t| !t.is_empty()).map(str::to_string).collect();
+    let reach = if r.scope_reach_words == 0 { 12 } else { r.scope_reach_words };
+    'scope: for (i, t) in toks.iter().enumerate() {
+        if !r.scope_words.iter().any(|w| w == t) {
+            continue;
+        }
+        for j in (i + 1)..toks.len().min(i + 1 + reach) {
+            let Some(tj) = toks.get(j) else { break };
+            let Some(sk) = r.scope_kinds.iter().find(|k| k.words.iter().any(|w| w.split_whitespace().last() == Some(tj.as_str()))) else {
+                continue;
+            };
+            let rooms: Vec<String> = toks
+                .get(i + 1..j)
+                .unwrap_or_default()
+                .iter()
+                .filter(|w| !w.chars().any(|c| c.is_ascii_digit()) && w.len() > 1)
+                .filter(|w| !r.scope_skip.iter().any(|x| x == *w))
+                .filter(|w| !sk.words.iter().any(|x| x.split_whitespace().any(|p| p == w.as_str())))
+                .cloned()
+                .collect();
+            q.scope = Some((sk.kind.clone(), rooms));
+            break 'scope;
+        }
+    }
+    // A box note's box (a system's antenna or riser box): at the ceiling, as the note builds it.
+    if let Some(w) = work(&text).filter(|w| w.box_in.is_some() && !w.role().is_empty()) {
+        q.box_role = Some(w.role().to_string());
+        q.unpowered = w.unpowered();
+        q.mount = Some(("ceiling".to_string(), Vec::new(), String::new()));
+    }
+    (q.at_marker() || q.scope.is_some()).then_some(q)
+}
+
+/// What the keynotes at a device asked of it and it took ([`apply_to_tag`]).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Applied {
+    pub features: Vec<String>,
+    pub mount: Option<String>,
+    pub device_type: Option<String>,
+    pub lv_conduit_in: Option<f64>,
+    pub ganged: bool,
+    /// The circuit read by it that its keynote's box can't take (taken off).
+    pub uncircuited: Option<String>,
+}
+
+/// The note's text of a keynote as the job cites it (`Q-9 keynote 4: <the note>` → the note).
+pub(crate) fn cited_text(cite: &str) -> &str {
+    cite.split_once(": ").map_or(cite, |(_, t)| t)
+}
+
+/// Lays what `cites` (keynotes as the job cites them, `Q-9 keynote 4: <the note>`) ask of a
+/// device of `kind` onto its tag, each with the keynote as its source (`note`): its features
+/// (`keynote_features`), mounting (`mount`) and what that makes it (`device_type`), its
+/// low-voltage conduit (`lv_conduit_in`), the devices it is ganged with (`gang_with`, the key
+/// they share), and the keynotes themselves (`keynotes`; `keynote` when it had none). What it
+/// took.
+pub(crate) fn apply_to_tag(t: &mut cadaddy_walk3d::tags::ElementTag, kind: &str, cites: &[String], gang: &str) -> Applied {
+    let mut out = Applied::default();
+    let mut taken: Vec<&String> = Vec::new();
+    for c in cites.iter().take(MAX_NOTES) {
+        let Some(q) = device_requirements(cited_text(c)) else { continue };
+        let mut any = false;
+        for f in q.features_for(kind) {
+            any = true;
+            if !out.features.contains(&f) {
+                out.features.push(f);
+            }
+        }
+        if let Some((m, ty)) = q.mount_for(kind) {
+            any = true;
+            out.mount = Some(m);
+            if !ty.is_empty() {
+                out.device_type = Some(ty);
+            }
+        }
+        if let Some(v) = q.lv_conduit_in.filter(|_| lv_kind(kind)) {
+            any = true;
+            out.lv_conduit_in = Some(v);
+        }
+        if q.ganged && !gang.is_empty() {
+            any = true;
+            out.ganged = true;
+        }
+        // A box no branch circuit feeds: a circuit label read by its symbol is not its own. Taken
+        // off, the read value kept beside it, with why.
+        if q.unpowered
+            && let Some(c) = t.fields.get("circuit").map(|f| f.value.clone()).filter(|v| !v.trim().is_empty())
+        {
+            any = true;
+            t.fields.remove("circuit");
+            t.set("circuit_read", c.clone(), "plan");
+            t.set(
+                "correction",
+                format!(
+                    "circuit {c} read by its symbol is not built: its keynote makes it a {} box, and {}",
+                    q.box_role.as_deref().unwrap_or_default(),
+                    unpowered_boxes().source
+                ),
+                "rule",
+            );
+            out.uncircuited = Some(c);
+        }
+        if any && !taken.contains(&c) {
+            taken.push(c);
+        }
+    }
+    if taken.is_empty() {
+        return out;
+    }
+    let field = |t: &cadaddy_walk3d::tags::ElementTag, k: &str| t.fields.get(k).map(|f| f.value.clone()).unwrap_or_default();
+    let mut all: Vec<String> = field(t, "keynotes").split(" | ").filter(|x| !x.trim().is_empty()).map(str::to_string).collect();
+    for c in &taken {
+        if !all.iter().any(|x| x == *c) {
+            all.push((*c).clone());
+        }
+    }
+    t.set("keynotes", all.join(" | "), "note");
+    if field(t, "keynote").is_empty()
+        && let Some(c) = taken.first()
+    {
+        t.set("keynote", (*c).clone(), "note");
+    }
+    if !out.features.is_empty() {
+        let mut f: Vec<String> = field(t, "keynote_features").split(", ").filter(|x| !x.trim().is_empty()).map(str::to_string).collect();
+        for x in &out.features {
+            if !f.contains(x) {
+                f.push(x.clone());
+            }
+        }
+        t.set("keynote_features", f.join(", "), "note");
+        // What it is, in words, says them (`duplex receptacle, USB, USB-C`).
+        let mut ty = field(t, "device_type");
+        for x in &out.features {
+            if !ty.to_ascii_lowercase().contains(&x.to_ascii_lowercase()) {
+                ty = if ty.is_empty() { x.clone() } else { format!("{ty}, {x}") };
+            }
+        }
+        t.set("device_type", ty, "note");
+    }
+    if let Some(m) = &out.mount {
+        t.set("mount", m.clone(), "note");
+    }
+    if let Some(ty) = &out.device_type {
+        let was = field(t, "device_type");
+        if !was.to_ascii_lowercase().contains(&ty.to_ascii_lowercase()) {
+            t.set("device_type", if was.is_empty() { ty.clone() } else { format!("{ty} {was}") }, "note");
+        }
+    }
+    if let Some(v) = out.lv_conduit_in {
+        t.set("lv_conduit_in", format!("{v}"), "note");
+    }
+    if out.ganged {
+        t.set("gang_with", gang, "note");
+    }
+    out
+}
+
+/// Whether a device of `kind` is a low-voltage outlet (its pathway is low-voltage conduit).
+pub(crate) fn lv_kind(kind: &str) -> bool {
+    let k = format!(" {} ", kind.replace('_', " ").to_ascii_lowercase());
+    // A kind's word at a word's start (`data` in `data outlet`, not in `metadata`).
+    device_rules().lv_kinds.iter().any(|w| k.contains(&format!(" {}", w.trim().to_ascii_lowercase())))
 }
 
 /// What a keynote asks of a receptacle for a piece of equipment (`30A/2P RECEPTACLE FOR <unit>,
@@ -477,11 +803,7 @@ pub(crate) fn tags(
             continue;
         }
         // The view it is in: the nearest title under it (a `… PLAN` larger than its notes).
-        let title = texts
-            .iter()
-            .filter(|o| o.at.y < t.at.y && o.height >= 1.2 * h && (o.at.x - t.at.x).abs() < VIEW_REACH * h && t.at.y - o.at.y < VIEW_REACH * h)
-            .filter(|o| o.value.to_ascii_uppercase().contains("PLAN"))
-            .min_by(|a, b| (t.at.y - a.at.y).total_cmp(&(t.at.y - b.at.y)));
+        let title = view_title(texts, t.at, h);
         if title.is_some_and(|ti| {
             let u = ti.value.to_ascii_uppercase();
             others.iter().any(|w| u.contains(w.as_str()))
@@ -520,6 +842,49 @@ pub(crate) fn tags(
         }
     }
     out
+}
+
+/// The sheet's main keynote list: its electrical one, else its first.
+pub(crate) fn main_list(lists: &[List]) -> usize {
+    lists.iter().position(|l| l.heading.to_ascii_uppercase().contains("ELECTRICAL")).unwrap_or(0)
+}
+
+/// The title of the view a point of a sheet is in: the nearest text under it naming a `PLAN`,
+/// larger than `h` (its notes' height), within [`VIEW_REACH`] of it.
+fn view_title(texts: &[TextItem], at: Vec2, h: f64) -> Option<&TextItem> {
+    texts
+        .iter()
+        .filter(|o| o.at.y < at.y && o.height >= 1.2 * h && (o.at.x - at.x).abs() < VIEW_REACH * h && at.y - o.at.y < VIEW_REACH * h)
+        .filter(|o| o.value.to_ascii_uppercase().contains("PLAN"))
+        .min_by(|a, b| (at.y - a.at.y).total_cmp(&(at.y - b.at.y)))
+}
+
+/// The markers of a sheet's list `li` ([`tags`]) that are its own where the sheet has several
+/// lists with the same numbers: the main list's ([`main_list`]) unless its view's title names
+/// another list's subject (`ELEVATOR` of an `ELEVATOR PIT … PLAN`); another list's only in a view
+/// whose title names its subject.
+pub(crate) fn owned_tags(
+    texts: &[TextItem],
+    segs: &[(Vec2, Vec2)],
+    boxes: &[[f64; 4]],
+    rounds: &[(Vec2, f64)],
+    lists: &[List],
+    li: usize,
+) -> Vec<(String, [f64; 2])> {
+    let Some(list) = lists.get(li) else { return Vec::new() };
+    let main = main_list(lists);
+    // The other lists' subjects (the main list's is in most views' titles: `… ELECTRICAL PLAN`).
+    let side: Vec<String> = lists.iter().enumerate().filter(|(i, _)| *i != main).map(|(_, l)| subject(l)).filter(|w| !w.is_empty()).collect();
+    let me = subject(list);
+    let title_of =
+        |at: &[f64; 2]| view_title(texts, Vec2::new(at[0], at[1]), list.number_h).map(|t| t.value.to_ascii_uppercase()).unwrap_or_default();
+    tags(texts, segs, boxes, rounds, &[], list)
+        .into_iter()
+        .filter(|(_, at)| {
+            let title = title_of(at);
+            if li == main { !side.iter().any(|w| title.contains(w.as_str())) } else { !me.is_empty() && title.contains(me.as_str()) }
+        })
+        .collect()
 }
 
 /// Whether straight sides close around `c` a box's width away (a text height or two): one above,
@@ -655,6 +1020,24 @@ impl Rating {
 }
 
 impl Work {
+    /// Its box's role (`antenna`, `riser`; empty: a plain box).
+    pub fn role(&self) -> &'static str {
+        if self.antenna {
+            "antenna"
+        } else if self.riser {
+            "riser"
+        } else {
+            ""
+        }
+    }
+
+    /// Whether no branch circuit feeds its box (its role is one the rules data's
+    /// `unpowered_boxes` names).
+    pub fn unpowered(&self) -> bool {
+        let role = self.role();
+        !role.is_empty() && unpowered_boxes().roles.iter().any(|r| r.eq_ignore_ascii_case(role))
+    }
+
     /// The kind its box is built as: `<system>_antenna_box`, `<system>_riser_box`, else a plain
     /// `junction_box` (a note that names no system, or no role for its box).
     pub fn box_kind(&self) -> String {
@@ -885,6 +1268,129 @@ pub(crate) fn work(text: &str) -> Option<Work> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Q6249: a keynote that sets a device's features, ganging, mounting or pathway is read for
+    /// the device at its marker, however the note words it; a note over a kind of device in some
+    /// rooms gives those rooms; a note that asks none of these is none.
+    #[test]
+    fn a_keynotes_device_requirements_are_read_however_worded() {
+        // Features: USB-C is not also a plain USB; the rules data's order.
+        let q = device_requirements("THE COUNTER RECEPTACLE SHALL INCLUDE USB-A AND USB TYPE-C CHARGING PORTS.").unwrap();
+        assert_eq!(q.features_for("receptacle"), ["USB", "USB-C"]);
+        assert!(q.features_for("switch").is_empty(), "a receptacle's feature is no switch's");
+        let q = device_requirements("Desk outlet with USB-C only").unwrap();
+        assert_eq!(q.features_for("duplex receptacle"), ["USB-C"]);
+        // Ganging, in other words.
+        for t in ["SWITCHES TO BE GANGED TOGETHER UNDER ONE PLATE.", "Install these devices in a common box.", "DIMMER AND SWITCH GANGED."] {
+            let q = device_requirements(t).unwrap_or_else(|| panic!("{t}"));
+            assert!(q.ganged && q.at_marker(), "{t}");
+        }
+        // Mounting: ceiling for any kind; a floor box makes a receptacle one.
+        let q = device_requirements("Ceiling-mounted speaker location.").unwrap();
+        assert_eq!(q.mount_for("speaker"), Some(("ceiling".to_string(), String::new())));
+        let q = device_requirements("RUN 3/4\" PVC BELOW THE SLAB TO THE FLOOR BOX RECEPTACLE (FLUSH, BRASS COVER).").unwrap();
+        assert_eq!(q.mount_for("receptacle"), Some(("floor".to_string(), "floor box".to_string())));
+        assert_eq!(q.mount_for("switch"), None, "a floor box is a receptacle's or an outlet's");
+        assert_eq!(q.lv_conduit_in, None, "power in the ground, not a low-voltage pathway");
+        // A low-voltage conduit's size, the words between the size and CONDUIT skipped.
+        for (t, v) in [
+            ("RUN A 1\" LOW-VOLTAGE CONDUIT FROM THIS OUTLET TO THE HALL CEILING.", 1.0),
+            ("1-1/4\" LOW VOLTAGE CONDUIT FROM WALL PHONE TO ACCESSIBLE CEILING", 1.25),
+            ("Data outlet: 3/4\" conduit stubbed above the ceiling.", 0.75),
+        ] {
+            let q = device_requirements(t).unwrap_or_else(|| panic!("{t}"));
+            assert_eq!(q.lv_conduit_in, Some(v), "{t}");
+        }
+        assert!(lv_kind("data_outlet") && lv_kind("low voltage outlet") && !lv_kind("receptacle") && !lv_kind("metadata box"));
+        // A box note's box (a system's antenna box): at the ceiling, fed by no branch circuit.
+        let q =
+            device_requirements("PAGING SYSTEM CEILING ANTENNA LOCATION. PROVIDE 6\"X6\"X4\" JUNCTION BOX. PROVIDE 3/4\" CONDUIT TO RISER.").unwrap();
+        assert_eq!((q.box_role.as_deref(), q.unpowered), (Some("antenna"), true));
+        assert_eq!(q.mount_for("junction box").map(|m| m.0), Some("ceiling".to_string()));
+        // A note over a kind of device in some rooms: the rooms' words, numbers and joins dropped.
+        let q = device_requirements("ALL SUITE, LIBRARY AND FITNESS 125V RECEPTACLES SHALL BE TAMPER RESISTANT.").unwrap();
+        assert_eq!(q.scope, Some(("receptacle".to_string(), vec!["SUITE".to_string(), "LIBRARY".to_string(), "FITNESS".to_string()])));
+        assert_eq!(q.features_for("receptacle"), ["tamper-resistant"]);
+        let q = device_requirements("Every receptacle shall be weather-resistant.").unwrap();
+        assert_eq!(
+            (q.scope.clone(), q.features_for("receptacle")),
+            (Some(("receptacle".to_string(), Vec::new())), vec!["weather-resistant".to_string()])
+        );
+        // None of these: a reference, an equipment receptacle's rating, a dimension.
+        for t in ["REFER TO ARCHITECTURAL ELEVATIONS FOR HEIGHTS.", "30A/2P RECEPTACLE FOR PTAC.", "COORDINATE WITH OWNER PRIOR TO ROUGH-IN."] {
+            assert_eq!(device_requirements(t), None, "{t}");
+        }
+        // Hostile: long text, odd characters.
+        assert!(device_requirements(&"ALL \u{0}USB RECEPTACLES GANGED ".repeat(400)).is_some());
+    }
+
+    /// Q6249: a sheet with two lists numbered alike (its electrical keynotes and an elevator's):
+    /// a marker is the electrical list's unless its view's title names the other's subject.
+    #[test]
+    fn a_marker_is_its_own_lists_where_two_lists_share_numbers() {
+        let t = |v: &str, x: f64, y: f64, h: f64| TextItem { value: v.into(), at: Vec2::new(x, y), height: h, rotation: 0.0 };
+        let texts = vec![
+            t("ELECTRICAL KEYNOTES:", 1000.0, 800.0, 4.0),
+            t("5.", 1000.0, 790.0, 4.0),
+            t("ALL RECEPTACLES SHALL BE TAMPER-RESISTANT.", 1012.0, 790.0, 4.0),
+            t("ELEVATOR KEYNOTES:", 1400.0, 800.0, 4.0),
+            t("5.", 1400.0, 790.0, 4.0),
+            t("SMOKE DETECTOR ON THE PIT CEILING.", 1412.0, 790.0, 4.0),
+            // A unit's view and its marker 5; the elevator pit's view and its marker 5.
+            t("5", 100.0, 300.0, 4.0),
+            t("ENLARGED UNIT PLAN", 80.0, 200.0, 7.0),
+            t("5", 600.0, 300.0, 4.0),
+            t("ELEVATOR PIT ELECTRICAL PLAN", 580.0, 200.0, 7.0),
+        ];
+        let lists = lists(&texts);
+        assert_eq!(lists.len(), 2);
+        assert_eq!(main_list(&lists), 0);
+        let at = |li: usize| owned_tags(&texts, &[], &[], &[], &lists, li).into_iter().map(|(_, a)| a[0].round()).collect::<Vec<_>>();
+        let (el, ev) = (at(0), at(1));
+        assert!(el.len() == 1 && el[0] < 200.0, "the unit's marker is the electrical list's: {el:?}");
+        assert!(ev.len() == 1 && ev[0] > 500.0, "the pit's marker is the elevator list's: {ev:?}");
+    }
+
+    /// Q6249: a device's tag takes what its keynotes ask of its kind, each with the keynote as
+    /// its source; a gang note needs the key its marker gave; an antenna box's circuit read by
+    /// its symbol is taken off, the read value kept beside with why.
+    #[test]
+    fn a_devices_tag_takes_its_keynotes_requirements() {
+        use cadaddy_walk3d::tags::ElementTag;
+        let mut rec = ElementTag { id: "device:L1:1,1".into(), kind: "receptacle".into(), ..Default::default() };
+        rec.set("device_type", "duplex receptacle", "plan");
+        let cites = ["Q-9 keynote 3: DESK RECEPTACLE WITH USB AND USB-C.".to_string(), "Q-9 keynote 5: DEVICES GANGED TOGETHER.".to_string()];
+        let got = apply_to_tag(&mut rec, "receptacle", &cites, "");
+        assert_eq!((got.features.clone(), got.ganged), (vec!["USB".to_string(), "USB-C".to_string()], false), "no key: no gang");
+        let f = |t: &ElementTag, k: &str| t.fields.get(k).map(|f| (f.value.clone(), f.source.clone()));
+        assert_eq!(f(&rec, "keynote_features"), Some(("USB, USB-C".into(), "note".into())));
+        assert_eq!(f(&rec, "device_type"), Some(("duplex receptacle, USB, USB-C".into(), "note".into())));
+        assert_eq!(f(&rec, "keynotes").map(|v| v.0), Some(cites[0].clone()), "only the note it took");
+        assert_eq!(f(&rec, "keynote").map(|v| v.0), Some(cites[0].clone()));
+        let mut sw = ElementTag { kind: "switch".into(), ..Default::default() };
+        assert!(apply_to_tag(&mut sw, "switch", &cites, "Q-9 keynote 5 at 1,2").ganged);
+        assert_eq!(f(&sw, "gang_with").map(|v| v.0), Some("Q-9 keynote 5 at 1,2".to_string()));
+        assert_eq!(f(&sw, "keynote_features"), None, "a receptacle's features are no switch's");
+        // A floor box; a ceiling antenna box on a circuit it can't take.
+        let mut fb = ElementTag { kind: "receptacle".into(), ..Default::default() };
+        apply_to_tag(&mut fb, "receptacle", &["Q-9 keynote 7: FLOOR BOX RECEPTACLE.".to_string()], "");
+        assert_eq!((f(&fb, "mount").map(|v| v.0), f(&fb, "device_type").map(|v| v.0)), (Some("floor".into()), Some("floor box".into())));
+        let mut jb = ElementTag { kind: "junction_box".into(), ..Default::default() };
+        jb.set("circuit", "Q-3", "plan");
+        let got =
+            apply_to_tag(&mut jb, "junction box", &["Q-9 keynote 2: ANTENNA IN THE CEILING HERE. PROVIDE 6\"X6\"X4\" JUNCTION BOX.".to_string()], "");
+        assert_eq!((got.mount.as_deref(), got.uncircuited.as_deref()), (Some("ceiling"), Some("Q-3")));
+        assert_eq!((f(&jb, "circuit"), f(&jb, "circuit_read").map(|v| v.0)), (None, Some("Q-3".into())));
+        assert!(f(&jb, "correction").is_some_and(|c| c.0.contains("antenna box") && c.0.contains("no branch circuit")), "{:?}", f(&jb, "correction"));
+        // A low-voltage outlet's conduit; a receptacle doesn't take it.
+        let lv = ["Q-9 keynote 8: 1\" LOW VOLTAGE CONDUIT, DATA BOX TO HALL CEILING.".to_string()];
+        let mut d = ElementTag { kind: "data_outlet".into(), ..Default::default() };
+        assert_eq!(apply_to_tag(&mut d, "data outlet", &lv, "").lv_conduit_in, Some(1.0));
+        assert_eq!(f(&d, "lv_conduit_in").map(|v| v.0), Some("1".to_string()));
+        let mut r2 = ElementTag { kind: "receptacle".into(), ..Default::default() };
+        assert_eq!(apply_to_tag(&mut r2, "receptacle", &lv, ""), Applied::default());
+        assert!(r2.fields.is_empty(), "a note it doesn't take leaves it as it was");
+    }
 
     /// Q6247: a keynote calling for a unit's receptacle gives its rating, poles, orientation and
     /// place, the unit's kind from the rules data; a note with no receptacle or no unit the data

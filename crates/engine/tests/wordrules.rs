@@ -543,6 +543,11 @@ const ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/engine/src/cmd/propfill.rs",
+        "[keynotes keynote_features]",
+        "our own output: the property keys a keynote's device requirements give a device (Q6249), copied from its tag, not words read off a document",
+    ),
+    (
+        "crates/engine/src/cmd/propfill.rs",
         "[design_value corrected_value]",
         "our own output: the property keys of a corrected value (design value, corrected value, its reason and rule), not words read off a document",
     ),
