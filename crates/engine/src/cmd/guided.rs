@@ -2481,7 +2481,7 @@ const MAX_TAG_HANDLES: usize = 20;
 
 /// Sort the drawing's device symbols sheet by sheet: each sheet's legends and schedules say
 /// which symbols are samples; all of them together say which tags are device types.
-fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> DeviceCensus {
+fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64, String, String)]) -> DeviceCensus {
     use cadaddy_mepfix::device_types::{self, Legend, TagVerdict};
     use cadaddy_mepfix::sheet_facts::{self, TextItem};
     let mut c = DeviceCensus::default();
@@ -2714,14 +2714,31 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
         };
         // A symbol the import tagged with the circuit label beside it may still have its type
         // mark printed by it (`H` over a downlight whose `G-1,a` the import took): the nearest
-        // device mark within reach that no other symbol is nearer.
-        let type_mark_by = |at: cadaddy_geom::Vec2, h: cadaddy_doc::Handle, height: f64| -> Option<String> {
-            texts
-                .get(g)
-                .into_iter()
-                .flatten()
+        // device mark within reach that no other symbol is nearer. A mark with a circuit label of
+        // its own printed under it (`K2` over `Q-1,a` by a receptacle tagged `Q-1`) is that
+        // label's fixture's, not this symbol's.
+        let page_texts: &[TextItem] = texts.get(g).map_or(&[][..], Vec::as_slice);
+        let labelled_apart = |t: &TextItem, label: Option<(cadaddy_geom::Vec2, f64)>| {
+            page_texts.iter().any(|u| {
+                let dy = t.at.y - u.at.y;
+                (circuit_text(&u.value, &sheet_numbers) || is_circuit_tag(&u.value))
+                    && dy > 0.3 * t.height
+                    && dy <= MARK_OVER_LABEL_H * t.height
+                    && (u.at.x - t.at.x).abs() <= t.height
+                    && label.is_none_or(|(p, lh)| u.at.dist(p) > 0.5 * lh)
+            })
+        };
+        let type_mark_by = |at: cadaddy_geom::Vec2, h: cadaddy_doc::Handle, label: Option<(cadaddy_geom::Vec2, f64)>| -> Option<String> {
+            let label_h = label.map(|(_, lh)| lh).filter(|lh| lh.is_finite() && *lh > 0.0);
+            let height = label_h.unwrap_or(DEFAULT_MARK_HEIGHT);
+            page_texts
+                .iter()
                 .filter(|t| {
-                    t.at.dist(at) <= TYPE_MARK_REACH_H * height.max(t.height) && !circuit_text(&t.value, &sheet_numbers) && !is_circuit_tag(&t.value)
+                    label_h.is_none_or(|lh| t.height >= TYPE_MARK_MIN_H * lh && t.height <= TYPE_MARK_MAX_H * lh)
+                        && t.at.dist(at) <= TYPE_MARK_REACH_H * height.max(t.height)
+                        && !circuit_text(&t.value, &sheet_numbers)
+                        && !is_circuit_tag(&t.value)
+                        && !labelled_apart(t, label)
                 })
                 .filter_map(|t| match device_types::tag_verdict(&t.value, &c.legend_types, learned, &sheet_numbers) {
                     TagVerdict::Device(m) => Some((t, m)),
@@ -2746,7 +2763,7 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
             // luminaire's mark only, one the lighting submittals list: a note by a receptacle,
             // `HOR`, is no type.)
             let marked = if electrical(&sheet) && kind.is_empty() && is_circuit_tag(tag) && !legend.covers(*at) && !refused.contains(tag.as_str()) {
-                type_mark_by(*at, *h, tag_at.map_or(DEFAULT_MARK_HEIGHT, |(_, ht)| ht))
+                type_mark_by(*at, *h, *tag_at)
                     .filter(|m| job.luminaire_types.iter().chain(&job.wall_luminaire_types).any(|l| l.eq_ignore_ascii_case(m)))
             } else {
                 None
@@ -2777,7 +2794,15 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                 // On an electrical plan a symbol only its circuit labels is a receptacle on that
                 // circuit (a GFCI one when GFCI is printed by it): receptacles carry no type mark.
                 let building = job.level_at([at.x, at.y]).is_none_or(|r| super::printmep::building_level(&r.level));
-                let bubble = bubbles.iter().any(|(c, r)| r.is_finite() && (at.x - c[0]).hypot(at.y - c[1]) <= 1.5 * r.max(0.0));
+                // A bubble the import made a symbol of: the sheet it points at is the symbol's tag.
+                // (A "bubble" whose number is a device's type mark, `E` over `A-1`, is that
+                // device's mark over its circuit.)
+                let bubble = bubbles.iter().any(|(mid, r, detail, target)| {
+                    r.is_finite()
+                        && (at.x - mid[0]).hypot(at.y - mid[1]) <= 1.5 * r.max(0.0)
+                        && cadaddy_mepfix::printlinks::norm_sheet(target) == cadaddy_mepfix::printlinks::norm_sheet(tag)
+                        && !matches!(device_types::tag_verdict(detail, &c.legend_types, learned, &sheet_numbers), TagVerdict::Device(_))
+                });
                 let fate = if bubble {
                     MarkFate::not_object("a callout bubble: its sheet reference reads like a circuit")
                 } else if !electrical(&sheet) {
@@ -2946,12 +2971,14 @@ fn device_census(s: &Session, job: &GuidedJob, bubbles: &[([f64; 2], f64)]) -> D
                     continue;
                 };
                 // Read already: a luminaire of this sheet by the mark (its symbol, beside or under
-                // it), or any device where the symbol would be drawn (between the mark and its
-                // circuit label). A receptacle beside the mark is another device.
+                // it), or a device of no other kind where the symbol would be drawn (between the
+                // mark and its circuit label). A receptacle beside the mark, or one whose symbol
+                // the import put there, is another device.
                 let spot = cadaddy_geom::Vec2::new((t.at.x + label.at.x) / 2.0, (t.at.y + label.at.y) / 2.0);
                 let read = |dv: &super::readers::ReadDevice| {
                     let p = cadaddy_geom::Vec2::new(dv.at[0], dv.at[1]);
-                    (dv.kind.contains("luminaire") && p.dist(t.at) <= reach) || p.dist(spot) <= LONE_SYMBOL_H * t.height
+                    let fixture = dv.kind.is_empty() || dv.kind.contains("luminaire");
+                    (dv.kind.contains("luminaire") && p.dist(t.at) <= reach) || (fixture && p.dist(spot) <= LONE_SYMBOL_H * t.height)
                 };
                 if c.placed.iter().filter(|dv| dv.sheet == sheet).any(read) || lone.iter().any(read) {
                     continue;
@@ -3985,6 +4012,14 @@ const RECEPTACLE_NOTE_H: f64 = 4.0;
 /// How far a symbol's type mark is printed from it, in the mark's text heights (over or beside
 /// it, its circuit label on the other side).
 const TYPE_MARK_REACH_H: f64 = 3.0;
+/// A type mark is lettered about as high as the symbol's circuit label: from this share to this
+/// many times its height (taller is strokes the lettering reader took for a letter, a chair's
+/// outline read as `C`).
+const TYPE_MARK_MIN_H: f64 = 0.6;
+const TYPE_MARK_MAX_H: f64 = 2.0;
+/// A circuit label printed under a type mark, within this many of the mark's heights below it,
+/// is the mark's own.
+const MARK_OVER_LABEL_H: f64 = 2.2;
 /// A tag's text height where the import didn't keep it (drawing units).
 const DEFAULT_MARK_HEIGHT: f64 = 6.0;
 /// A lone luminaire mark's circuit label is within this of it, in its text heights; a device read
@@ -4041,7 +4076,8 @@ fn run_devices(s: &mut Session, job: &mut GuidedJob) -> Result<Value> {
     // The sheet map: what the sheets' callouts point at, where the enlarged plans sit. Its bubbles
     // are no devices (a bubble's sheet reference reads like a circuit).
     let links = job_links(s, job);
-    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let bubbles: Vec<([f64; 2], f64, String, String)> =
+        links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone(), c.target_sheet.clone())).collect();
     let mut census = device_census(s, job, &bubbles);
     // Inside a registered enlarged plan's boundary its sheet is the authority: its devices move
     // onto the overall plan there, and the overall plan's own copies there are left out.
@@ -6923,7 +6959,8 @@ fn mark_fates(s: &Session, job: &GuidedJob) -> (std::collections::HashMap<u64, M
     let mut fates: std::collections::HashMap<u64, MarkFate> = std::collections::HashMap::new();
     let pages = job_link_pages(s, job);
     let links = pages.as_ref().map(|(sheets, pages, _)| cadaddy_mepfix::printlinks::link_set(sheets, pages));
-    let bubbles: Vec<([f64; 2], f64)> = links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius)).collect();
+    let bubbles: Vec<([f64; 2], f64, String, String)> =
+        links.iter().flat_map(|l| l.callouts.iter()).map(|c| (c.at, c.radius, c.detail.clone(), c.target_sheet.clone())).collect();
     let mut census = device_census(s, job, &bubbles);
     if let Some(links) = &links {
         enlarged_authority(job, links, &mut census);
@@ -23983,6 +24020,115 @@ mod tests {
         assert_eq!((r["circuit_tagged_retyped"].clone(), r["luminaires_by_mark_alone"].clone()), (json!(1), json!(1)), "{r:#}");
         assert!(on("P-1").iter().all(|(t, _)| t != "C"), "a plumbing tag isn't retyped: {:?}", on("P-1"));
         assert!(on("L-1").is_empty(), "another trade's sheet: {:?}", on("L-1"));
+    }
+
+    /// Every receptacle drawn on a plan is read, whatever lettering lies near it (Q6246): one in a
+    /// round table's outline that holds a keynote number and its circuit lettered small (no
+    /// callout bubble to sheet K-3: a bubble's lettering fills it), one beside a letter the
+    /// lettering reader made of furniture strokes (`H` five times its label's height: no type
+    /// mark), one by a fixture's mark printed over that fixture's own circuit label (`H` over
+    /// `K-1,a`: the mark is the label's, the receptacle's is `K-1`), and one by a fixture's mark
+    /// over its circuit with no divider between them (`X` over `S-1`: no bubble to sheet S-1).
+    #[test]
+    fn receptacles_by_a_round_table_or_a_giant_letter_are_read() {
+        let mut s = crate::Session::new();
+        let mut job = GuidedJob::new("/nonexistent/prints", JobGoal::Takeoff);
+        job.sheets = Some(json!({"sheets": [{"number": "E-1", "sheet_type": "plan"}]}));
+        // General sheets numbered like panel K's circuits: `K-3` in a round reads as a callout to
+        // one of them.
+        job.index = Some(json!({"sheets": [
+            {"number": "E-1", "title": "FIRST FLOOR POWER PLAN", "discipline": "E", "type": "plan", "level": "1"},
+            {"number": "K-1", "title": "COVER SHEET", "discipline": "K", "type": "general", "level": ""},
+            {"number": "K-3", "title": "CODE PLAN", "discipline": "K", "type": "general", "level": ""},
+            {"number": "S-1", "title": "FOUNDATION PLAN", "discipline": "S", "type": "plan", "level": "1"},
+            {"number": "E-5", "title": "ELECTRICAL DETAILS", "discipline": "E", "type": "detail", "level": ""}
+        ]}));
+        job.sheets_loaded = true;
+        job.luminaire_types = vec!["H".into()];
+        // Lettering 2 high. The table: a round 40 across at (200, 500), keynote `12` and circuit
+        // `K-3` lettered inside it, its receptacle at (185, 490). The giant `H` (10 high) 12 off
+        // the receptacle at (600, 500). A real downlight `H` (2 high) over its `K-1` at (900, 500).
+        // The receptacle tagged `K-1` whose symbol the import put between `H` and `K-1,a`.
+        let texts: Vec<(&str, f64, f64, f64)> = vec![
+            ("12", 195.0, 506.0, 2.0),
+            ("K-3", 194.0, 492.0, 2.0),
+            ("H", 608.0, 506.0, 10.0),
+            ("H", 899.0, 504.0, 2.0),
+            ("H", 1202.0, 505.0, 2.0),
+            ("K-1,a", 1202.0, 502.0, 2.0),
+            ("X", 1500.0, 506.0, 2.0),
+            ("S-1", 1500.0, 502.0, 2.0),
+        ];
+        // And a receptacle at (1504, 503) beside a fixture's mark `X` over its circuit `S-1`
+        // (no divider between them: no bubble to sheet S-1).
+        let syms: Vec<(&str, f64, f64)> =
+            vec![("K-3", 185.0, 490.0), ("K-9", 600.0, 500.0), ("K-1", 900.0, 500.0), ("K-1", 1202.0, 503.3), ("K-5", 1504.0, 503.0)];
+        let lo = s.doc().map_or(0, |d| d.handseed);
+        add_sheet(&mut s, &texts, &syms);
+        if let Ok(d) = s.doc_mut() {
+            let common = Common { layer: "PDF".into(), ..Common::default() };
+            d.add(&Space::Model, common.clone(), EntityKind::Circle(Circle { center: Vec3::new(200.0, 500.0, 0.0), radius: 20.0 })).ok();
+            // A callout bubble the import made a symbol of (its circle and divider), its sheet
+            // number `E-5` its tag, its detail `2` lettered over it: no receptacle on "E-5".
+            let mut b = Block::new("PDF-SYM-9");
+            for kind in [
+                EntityKind::Circle(Circle { center: Vec3::ZERO, radius: 6.0 }),
+                EntityKind::Line(cadaddy_doc::Line { a: Vec3::new(-6.0, 0.0, 0.0), b: Vec3::new(6.0, 0.0, 0.0) }),
+            ] {
+                b.entities.push(cadaddy_doc::Entity { handle: d.new_handle(), common: Common::default(), kind });
+            }
+            d.blocks.insert("PDF-SYM-9".into(), std::sync::Arc::new(b));
+            let attrib = Attrib {
+                tag: "TAG".into(),
+                text: text("E-5", 1797.0, 496.0, 2.0),
+                invisible: false,
+                constant: false,
+                prompt: String::new(),
+                props: AttribProps::default(),
+                multiline: None,
+                modes: AttribModes::default(),
+            };
+            let ins = Insert {
+                block: "PDF-SYM-9".into(),
+                insert: Vec3::new(1800.0, 500.0, 0.0),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+                rotation: 0.0,
+                attribs: vec![attrib],
+                cols: 1,
+                rows: 1,
+                col_spacing: 0.0,
+                row_spacing: 0.0,
+                clip: None,
+            };
+            d.add(&Space::Model, common.clone(), EntityKind::Insert(ins)).ok();
+            d.add(&Space::Model, common, EntityKind::Text(text("2", 1799.0, 502.0, 2.0))).ok();
+        }
+        let hi = s.doc().map_or(0, |d| d.handseed);
+        job.sheet_spans.push(SheetSpan { sheet: "E-1".into(), lo, hi });
+        job.sheet_regions.push(SheetRegion {
+            number: "E-1".into(),
+            level: "1".into(),
+            discipline: "E".into(),
+            kind: "plan".into(),
+            rect: [0.0, 0.0, 2000.0, 1000.0],
+            area: None,
+            title_block: None,
+            not_built: String::new(),
+            levels: Vec::new(),
+            view: None,
+        });
+        let r = run_devices(&mut s, &mut job).unwrap_or_else(|e| panic!("{e}"));
+        let mut got: Vec<(String, String)> = job.devices.iter().map(|d| (d.tag.clone(), d.circuit.clone())).collect();
+        got.sort();
+        let want: Vec<(String, String)> = [("H", "K-1"), ("H", "K-1"), ("REC", "K-1"), ("REC", "K-3"), ("REC", "K-5"), ("REC", "K-9")]
+            .iter()
+            .map(|(t, c)| (t.to_string(), c.to_string()))
+            .collect();
+        assert_eq!(got, want, "{r:#}");
+        assert!(job.devices.iter().all(|d| d.circuit != "E-5"), "the bubble: {:?}", job.devices);
+        // The `H` over `K-1,a` is a fixture of its own beside the receptacle.
+        let by_mark = job.devices.iter().filter(|d| d.tag == "H" && d.at[0] > 1100.0).count();
+        assert_eq!(by_mark, 1, "{:?}", job.devices);
     }
 
     /// A lone fixture mark is printed as the schedule prints its type, in its label's lettering: a
