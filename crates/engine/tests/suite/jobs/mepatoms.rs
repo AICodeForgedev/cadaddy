@@ -667,3 +667,29 @@ fn a_sconces_box_is_in_its_wall_and_two_units_sconces_never_stand_back_to_back()
     let edge = (q.2[1] - p.3[1]).max(p.2[1] - q.3[1]);
     assert!(edge >= 24.0 - 1e-6, "back to back {edge} in apart");
 }
+
+#[test]
+fn a_device_moved_off_a_back_to_back_box_never_gangs_with_its_new_neighbour() {
+    // Test finding (fix-box-collisions, on the rebuild): a receptacle moved 2 ft along the wall
+    // off its back-to-back partner landed within the gang reach of the next one on its face, and
+    // the next atoms build (the router's final pass) ganged the two into one box between them,
+    // off the moved device. Moved devices gang as the documents draw them.
+    let devices = [("receptacle", 19.6, 5.0, 18.0), ("receptacle", 20.4, 5.2, 18.0), ("receptacle", 20.4, 8.2, 18.0)];
+    let (mut s, _) = two_rooms_with(&devices, true);
+    let first = box_bodies(&mut s);
+    assert_eq!(first.len(), 3, "{first:?}");
+    assert_eq!(first.iter().filter(|b| b.4.get("design:location").is_some()).count(), 1, "one moved: {first:?}");
+    s.execute("conduit.reroute", &json!({})).expect("reroute");
+    let again = box_bodies(&mut s);
+    assert_eq!(again.len(), 3, "each receptacle keeps its own box: {again:?}");
+    assert!(again.iter().all(|b| b.4.get("gang").is_none()), "{again:?}");
+    // Each device is in its box.
+    let d = s.doc().expect("doc");
+    for b in &again {
+        let dev = Handle::parse_hex(&b.1).expect("device");
+        let EntityKind::Mesh(m) = &d.model.get(dev).expect("device").kind else { panic!("device mesh") };
+        let n = m.vertices.len().max(1) as f64;
+        let y = m.vertices.iter().map(|v| v.y / n).sum::<f64>();
+        assert!(y >= b.2[1] - 3.0 && y <= b.3[1] + 3.0, "device at y {y}, box {:?}-{:?}", b.2, b.3);
+    }
+}

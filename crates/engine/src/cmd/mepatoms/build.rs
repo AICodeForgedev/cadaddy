@@ -1295,7 +1295,10 @@ pub(crate) fn build(d: &mut Drawing, sp: &BuildingSpec) -> Value {
         let Some(normal) = wall else { continue };
         spot_devs.push(*h);
         spot_keys.push(ps.get("gang_with").map(Prop::text).unwrap_or_default());
-        spots.push(GangSpot { level: level.clone(), family: family.to_string(), normal, at: plan.center(), z: (z0 + z1) / 2.0 });
+        // A device the build moved for the field (Q6252) gangs as where the documents draw it:
+        // symbols drawn together gang, a device moved beside another doesn't.
+        let at = plan.center() - moved_for_field(ps, upf).unwrap_or(Vec2::new(0.0, 0.0));
+        spots.push(GangSpot { level: level.clone(), family: family.to_string(), normal, at, z: (z0 + z1) / 2.0 });
     }
     let inch = upf / 12.0;
     let mut gang_of: HashMap<Handle, usize> = HashMap::new();
@@ -2834,6 +2837,20 @@ fn touched_gear(gear: &[Gear], level: &str, panel: &str, p: Vec3, touch: f64, mo
         .map(|(g, q)| (g.handle, !is_panel(&g.tag, panel), g.plan.center().dist(q)))
         .min_by(|a, b| (a.1, a.2).partial_cmp(&(b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal))
         .map(|(h, _, _)| h)
+}
+
+/// How far the build moved a device for the field (its `location` from its `design:location`,
+/// model feet; drawing units by `upf`): none when it carries no such correction.
+fn moved_for_field(ps: &Props, upf: f64) -> Option<Vec2> {
+    let xy = |k: &str| -> Option<Vec2> {
+        let v: Vec<f64> = ps.get(k)?.text().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match v[..] {
+            [x, y, ..] if x.is_finite() && y.is_finite() => Some(Vec2::new(x, y)),
+            _ => None,
+        }
+    };
+    let moved = (xy("location")? - xy("design:location")?) * upf;
+    (moved.len() > 1e-9 && moved.len().is_finite()).then_some(moved)
 }
 
 /// Whether a built wall's type (its `type` build tag: a wall type of the spec by name or legend
