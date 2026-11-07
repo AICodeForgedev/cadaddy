@@ -870,14 +870,34 @@ fn turn_deg(rad: f64) -> f64 {
     if d >= 360.0 || !d.is_finite() { 0.0 } else { r2(d) }
 }
 
-/// How a crop reads against the plan, in words, when it is turned or mirrored.
+/// A layout fit matched by fewer of the type's items than this is no certain turn.
+const MIN_FIT_ITEMS: u64 = 3;
+
+/// Why a crop's turn and mirror against the room are not certain: no turn known (only the
+/// unit's hand), or a layout fit that matched too few items. None when they are.
+fn turn_doubt(o: &Value) -> Option<String> {
+    if o.get("rotation_deg").is_none_or(Value::is_null) {
+        return Some(if o.get("mirrored").and_then(Value::as_bool).unwrap_or(false) {
+            "only the unit's hand says it is mirrored; its turn is not known".into()
+        } else {
+            "its turn against the room is not known".into()
+        });
+    }
+    let n = o.get("matched").and_then(Value::as_u64)?;
+    (n < MIN_FIT_ITEMS).then(|| format!("its turn was fitted by {n} of {} items only", o.get("of").and_then(Value::as_u64).unwrap_or(0)))
+}
+
+/// How a crop reads against the plan, in words, when it is turned or mirrored; a turn that is
+/// not certain says so (positions read off it are unsure).
 fn turn_words(o: &Value) -> Option<String> {
     let deg = o.get("rotation_deg").and_then(Value::as_f64);
     let mirrored = o.get("mirrored").and_then(Value::as_bool).unwrap_or(false);
     let turned = deg.filter(|d| d.abs() > 0.05 && (d - 360.0).abs() > 0.05);
+    if let Some(why) = turn_doubt(o) {
+        return Some(format!("{why}: match it to the room by the walls and doors; a position read off it is unsure"));
+    }
     match (turned, mirrored) {
-        (None, false) if deg.is_some() => None,
-        (None, false) => Some("its turn against the room is not known: match it by the walls and doors".into()),
+        (None, false) => None,
         (Some(d), false) => Some(format!("drawn turned {d}° from the room as the plan shows it")),
         (None, true) => Some("drawn mirrored (the room is the opposite hand)".into()),
         (Some(d), true) => Some(format!("drawn mirrored and turned {d}° from the room as the plan shows it")),
@@ -2926,6 +2946,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }
@@ -2936,7 +2957,12 @@ fn plan_crops(
                 break;
             }
             let title = format!("{} {}", l.title, l.view.as_ref().map_or("", |v| v.title.as_str()));
-            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || (!source.is_empty() && l.number.eq_ignore_ascii_case(&source))) {
+            // A view of the type's own sheet is the type's when its title names the type, or the
+            // sheet has no titled views: another titled view there (a core area's, a corridor's)
+            // is not the room's.
+            let titled = l.view.as_ref().is_some_and(|v| !v.title.trim().is_empty());
+            let its_sheet = !titled && !source.is_empty() && l.number.eq_ignore_ascii_case(&source);
+            if sheet_kind(&title, true) != "enlarged_plan" || !(names_it(&title) || its_sheet) {
                 continue;
             }
             let trade = trade_of_discipline(&l.discipline.clone().unwrap_or_else(|| cadaddy_mepfix::sheet_facts::discipline_of(&l.number)));
@@ -2974,6 +3000,7 @@ fn plan_crops(
             };
             o["hand"] = json!(u.hand);
             o["unit_type"] = json!(u.id);
+            o["certain"] = json!(turn_doubt(&o).is_none());
             if let Some(w) = turn_words(&o) {
                 o["read"] = json!(w);
             }

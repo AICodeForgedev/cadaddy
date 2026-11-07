@@ -154,6 +154,21 @@ fn skip_spaces(b: &[u8], mut i: usize) -> usize {
     i
 }
 
+/// The height a text gives as written, when it measures it to the item's top or bottom
+/// (`TOGGLE SWITCH 4'-0" AFF TO TOP`): inches and the datum. None when it gives no height or
+/// several (a range, a standard and an ADA one), or measures to the item's middle. A record that
+/// cites such words is read by them, never by a number turned to the item's middle elsewhere.
+pub fn as_written(text: &str) -> Option<(f64, Datum)> {
+    let datum = Datum::of(text);
+    if datum == Datum::Centre {
+        return None;
+    }
+    match dims(text).as_slice() {
+        [one] if !one.to_next && (RANGE.0..=RANGE.1).contains(&one.inches) && one.inches > 0.0 => Some((one.inches, datum)),
+        _ => None,
+    }
+}
+
 /// The heights written in `text` (`18"`, `1'-8"`, `4' - 2"`, `41 1/2"`, `52 INCHES`), in order.
 pub fn dims(text: &str) -> Vec<Dim> {
     let u = norm(text).to_ascii_uppercase();

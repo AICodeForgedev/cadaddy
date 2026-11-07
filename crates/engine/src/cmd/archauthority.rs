@@ -13,7 +13,9 @@
 //! What a note sends where is rule data (`wordrules.json` `notes.defer_to_architecture`), never
 //! a job's words. The pieces here are plain: reading the notes ([`read`]), pairing the
 //! architecture's noted symbols with the devices one to one, the nearest pairs first ([`pair`]),
-//! and telling whether two spots are on the same wall of a room ([`same_wall`]). An interior
+//! and telling whether two spots are on the same wall of a room ([`same_wall`]). A sheet whose
+//! notes send its locations away, or call its layout reference only, gives no spot Validate
+//! measures against ([`reference_only`]). An interior
 //! elevation of the room draws its wall devices to scale: their faceplates and its wall
 //! luminaires ([`elevation_items`]), each one's height over the floor line, laid along a wall of
 //! the room by the devices it shows ([`register_way`]). Every scan is capped; nothing here panics.
@@ -122,6 +124,27 @@ pub fn read(texts: &[TextItem]) -> Deferral {
         out.locations |= locations;
     }
     out
+}
+
+/// Whether a sheet's notes make its device spots reference only: a note that sends its
+/// locations to the architecture's drawings ([`read`]), or one that says its layout is for
+/// reference only or its locations diagrammatic (`notes.reference_only`, a numbered note or a
+/// line of its own). The note, as printed.
+pub fn reference_only(texts: &[TextItem]) -> Option<String> {
+    let d = read(texts);
+    if d.locations {
+        return Some(d.note);
+    }
+    let rules = cadaddy_mepfix::wordrules::rules("notes.reference_only");
+    let lines = texts.iter().take(MAX_TEXTS).map(|t| t.value.clone());
+    paragraphs(texts)
+        .into_iter()
+        .chain(lines)
+        .find(|p| {
+            let u = squash(p);
+            rules.iter().any(|r| r.matches(|w| u.contains(&squash(w))))
+        })
+        .map(|p| p.chars().take(MAX_REASON_CHARS).collect())
 }
 
 /// The architecture's noted spots paired with devices, one to one: `ok(note, device)` says

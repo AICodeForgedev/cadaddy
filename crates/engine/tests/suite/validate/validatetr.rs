@@ -262,6 +262,25 @@ fn guest_room_receptacles_pass_fail_or_are_unsure_and_a_corridor_is_not_checked(
     assert!(rules.to_string().contains("E-RECEPT-TYPE"), "{rules}");
 }
 
+/// Q6262: the code's rooms are not the only ask. A corridor receptacle whose plan keynote asks
+/// for it tamper-resistant is checked too (unsure here: nothing says what it is); one whose
+/// keynote asks something else is not.
+#[test]
+fn a_keynote_that_asks_for_tamper_resistance_brings_a_receptacle_in_wherever_it_is() {
+    let j = job();
+    let s = set_prop(j.s, &j.corridor, "keynotes", json!("4. PROVIDE TAMPER-RESISTANT RECEPTACLE AT THE DISPLAY NICHE (MADE-UP NOTE)."));
+    let mut s = set_prop(s, &j.plain, "keynotes", json!("2. MOUNT ABOVE THE COUNTER."));
+    let (r, fs) = tr_findings(&mut s);
+    let c = of(&fs, &j.corridor).unwrap_or_else(|| panic!("the keynote's ask is not checked: {r}"));
+    assert_eq!(c["verdict"], "unsure", "{c}");
+    let why = c["measured"]["required_because"].as_str().unwrap();
+    assert!(why.contains("keynote") && why.contains("TAMPER-RESISTANT"), "{why}");
+    // The guest room's plain duplex still for its room, its keynote asking nothing of TR.
+    let p = of(&fs, &j.plain).unwrap();
+    let why = p["measured"]["required_because"].as_str().unwrap();
+    assert!(why.contains("guest room") && !why.contains("keynote"), "{why}");
+}
+
 #[test]
 fn a_blanket_general_note_makes_every_receptacle_tr_and_is_cited() {
     let mut j = job();
