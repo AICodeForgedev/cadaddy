@@ -89,7 +89,7 @@ fn discipline_of(number: &str) -> Option<&'static str> {
 
 /// Whether a text reads as a sheet number: one or two letters, an optional `-` or `.`, then a
 /// number with an optional decimal part and letter (`A-101`, `A101`, `C2.0`, `E-4`, `M-101A`).
-fn looks_like_sheet_number(v: &str) -> bool {
+pub(crate) fn looks_like_sheet_number(v: &str) -> bool {
     let v = v.trim();
     let b = v.as_bytes();
     let letters = b.iter().take_while(|c| c.is_ascii_uppercase()).count();
@@ -223,11 +223,13 @@ fn in_title_block(at: [f64; 2]) -> bool {
 }
 
 /// The sheet number without a `TITLE` layer: the largest text in the title block that reads as
-/// one, the one nearest the bottom right corner when two are as large.
+/// one, the one nearest the bottom right corner when two are as large. Lettering whose letters
+/// name no discipline (`RTU-1`, `EF-2`: an equipment tag in a schedule at the sheet's edge) is no
+/// sheet number.
 fn sheet_number_in_title_block(d: &Drawing) -> Option<String> {
     texts_across(d)
         .into_iter()
-        .filter(|(v, _, at, _)| in_title_block(*at) && looks_like_sheet_number(v))
+        .filter(|(v, _, at, _)| in_title_block(*at) && looks_like_sheet_number(v) && crate::sheet_facts::designator_prefix(v))
         .max_by(|a, b| a.1.total_cmp(&b.1).then((a.2[0] - a.2[1]).total_cmp(&(b.2[0] - b.2[1]))))
         .map(|(v, _, _, _)| v)
 }

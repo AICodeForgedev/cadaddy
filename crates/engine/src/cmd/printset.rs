@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .noundo(),
         CommandSpec::new("printset.classify", "Classify Print Set", run_classify).long()
             .files()
-            .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level}: one entry per real sheet (copies in several files merged by number, the newer revision date current), from each page's title block")
+            .params("{} → {classified: pages read, total: sheets in the index, pages, elapsed_ms, sheets: [{number, title, discipline, type, level, levels, level_source, sources: [file#page], superseded?, issued?}], levels: [{name, sheets, elevation_ft?, height_ft?}], unidentified, plans_without_level, number_conflicts?: [{number, sheets, sources}]}: one entry per real sheet (copies merged when their number and title or contents match, the newer revision date current; different sheets printing one number each keep an entry, `<number>~2`, and are listed in number_conflicts), from each page's title block (a number the set prints at its title block's number spot wins over lettering elsewhere)")
             .enabled(always)
             .noundo(),
         CommandSpec::new("printset.run", "Run Print Set Stages", run_stages).long()
@@ -181,6 +181,7 @@ fn run_classify(s: &mut Session, _p: &Value) -> Result<Value> {
         "unidentified": index.unidentified,
         "plans_without_level": index.plans_without_level,
         "level_warnings": index.level_warnings,
+        "number_conflicts": index.number_conflicts,
         "unreadable": unreadable,
     }))
 }
