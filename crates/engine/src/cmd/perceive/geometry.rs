@@ -359,6 +359,16 @@ pub(crate) fn join_unit_runs(segs: &mut Vec<Seg>, k: f64) -> usize {
     merged
 }
 
+/// The lines of the runs [`join_unit_runs`] joins: each wall face drawn unit by unit, end to end.
+pub(crate) fn unit_run_lines(segs: &[Seg], k: f64) -> Vec<(Vec2, Vec2)> {
+    let mut joined = segs.to_vec();
+    if join_unit_runs(&mut joined, k) == 0 {
+        return Vec::new();
+    }
+    // A run is longer than any piece of one.
+    joined.iter().filter(|g| g.a.dist(g.b) > DASH_MAX_IN * k && !segs.iter().any(|o| o.a == g.a && o.b == g.b)).map(|g| (g.a, g.b)).collect()
+}
+
 /// Drops the pairs a thin outline's side makes with another wall's face. A side of a closed
 /// outline thinner than any wall (a trim piece, a shelf or a jamb drawn beside a wall) paired
 /// with a line that is already the face of a wall on its far side is no wall: one line can't be
@@ -937,6 +947,11 @@ fn same_loop(a: &[Vec2], b: &[Vec2]) -> bool {
     (area(a) - area(b)).abs() <= 1e-6 * area(a).max(1.0) && a.iter().all(|p| b.iter().any(|q| p.dist(*q) < 1e-6))
 }
 
+/// An object smaller than this, inches, is a speck of a plan's stipple (a wall's, a slab's).
+const SPECK_MAX_IN: f64 = 1.0;
+/// A plan with at least this share of specks is stippled, and traced without them.
+const STIPPLED_SHARE: f64 = 0.25;
+
 /// A label's width per character, in its text height (a room tag's capitals).
 const LABEL_CHAR_WIDTH: f64 = 0.6;
 /// A tag's number is within this of its name, in the name's text height (under its last line:
@@ -1163,11 +1178,18 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
         Some(rs) => {
             let inside =
                 |c: Vec2| rs.iter().any(|r| c.x >= r[0].min(r[2]) && c.x <= r[0].max(r[2]) && c.y >= r[1].min(r[3]) && c.y <= r[1].max(r[3]));
-            let keep: std::collections::HashSet<cadaddy_doc::Handle> = crate::cmd::bspec::plan_objects(d)
-                .into_iter()
-                .filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside))
-                .map(|e| e.handle)
-                .collect();
+            let objects: Vec<&std::sync::Arc<Entity>> =
+                crate::cmd::bspec::plan_objects(d).into_iter().filter(|e| crate::cmd::bspec::centre(d, e).is_some_and(inside)).collect();
+            // A stippled plan (grout, concrete, earth drawn as thousands of dots) is too dense to
+            // search for a room's outline, and no speck bounds a room.
+            let speck = |e: &Entity| {
+                let b = cadaddy_doc::entity_bounds(d, e, 0);
+                b.width().max(b.height()) < SPECK_MAX_IN * k
+            };
+            let specks = objects.iter().filter(|e| speck(e)).count();
+            let stippled = specks as f64 >= STIPPLED_SHARE * objects.len() as f64;
+            let keep: std::collections::HashSet<cadaddy_doc::Handle> =
+                objects.iter().filter(|e| !(stippled && speck(e))).map(|e| e.handle).collect();
             crate::cmd::bspec::room_plan_of(s, &keep)?
         }
         None => crate::cmd::bspec::room_plan(s)?,
@@ -1187,7 +1209,16 @@ fn trace_rooms_in(s: &mut Session, regions: Option<&[[f64; 4]]>) -> Result<Vec<F
     };
     // Doors close their rooms: each door swing's leaf, closed and open, drawn across its opening
     // (a print often draws the swing's arc alone, which leaves the room open at the door).
-    let leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    let mut leaves = door_leaves(plan.as_ref().unwrap_or(s).doc()?, k);
+    // A wall drawn block by block closes its rooms too: each run of faces drawn across its joints.
+    {
+        let pd = plan.as_ref().unwrap_or(s).doc()?;
+        let objects = crate::cmd::bspec::plan_objects(pd);
+        for (a, b) in unit_run_lines(&segments(&objects), k) {
+            let line = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a.x, a.y, 0.0), b: cadaddy_geom::Vec3::new(b.x, b.y, 0.0) };
+            leaves.push((cadaddy_doc::Common::default(), line));
+        }
+    }
     phase("tag blocks and door leaves");
     let plan = if leaves.is_empty() || s.space().is_paper() {
         plan
