@@ -145,7 +145,7 @@ fn save(s: &mut Session, st: &State) -> Result<()> {
     let doc = s.doc_mut()?;
     let mut agent: Value = doc.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).filter(Value::is_object).unwrap_or_else(|| json!({}));
     agent[KEY] = serde_json::to_value(st).unwrap_or(Value::Null);
-    doc.agent = Some(agent.to_string());
+    doc.agent = Some(agent.to_string()).into();
     Ok(())
 }
 

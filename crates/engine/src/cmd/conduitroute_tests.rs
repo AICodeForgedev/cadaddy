@@ -375,7 +375,7 @@ fn a_feeder_the_job_routed_as_whole_runs_is_cut_into_pieces_with_its_conductors_
     let mut part = sp.clone();
     part.mep.runs = runs;
     let d = s.doc_mut().unwrap();
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     super::mep::build(d, &part);
     let whole = |s: &crate::Session| {
         s.doc().unwrap().model.iter().filter(|e| !super::mepatoms::is_atom(e) && super::bimlook::made_tag(e, "system") == Some("E-FEEDER")).count()
@@ -457,7 +457,7 @@ fn buried_work_built_whole_after_the_last_cut_is_cut_into_its_pieces_with_no_dev
     let mut part = sp.clone();
     part.mep.runs = runs;
     let d = s.doc_mut().unwrap();
-    d.building_spec = Some(sp.to_json());
+    d.building_spec = Some(sp.to_json()).into();
     super::mep::build(d, &part);
     let ug_of = |s: &crate::Session, atom: bool| {
         s.doc().unwrap().model.iter().filter(|e| super::mepatoms::is_atom(e) == atom && super::bimlook::made_tag(e, "system") == Some("E-UG")).count()

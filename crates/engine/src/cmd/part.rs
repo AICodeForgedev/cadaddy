@@ -183,7 +183,7 @@ fn load(d: &Drawing) -> Parts {
 }
 
 fn store(s: &mut Session, p: &Parts) -> Result<()> {
-    s.doc_mut()?.parts = if p.parts.is_empty() { None } else { serde_json::to_string(p).ok() };
+    s.doc_mut()?.parts = (if p.parts.is_empty() { None } else { serde_json::to_string(p).ok() }).into();
     Ok(())
 }
 

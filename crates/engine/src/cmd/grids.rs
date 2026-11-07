@@ -585,7 +585,7 @@ fn run_align(s: &mut Session, p: &Value) -> Result<Value> {
                 x.base = Some(*b);
             }
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "reference": reference, "levels": rows, "applied": apply }))
 }
@@ -642,7 +642,7 @@ fn run_columns(s: &mut Session, p: &Value) -> Result<Value> {
     if apply {
         sp.columns.retain(|c| c.level != level);
         sp.columns.extend(columns);
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(out)
 }

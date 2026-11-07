@@ -1713,7 +1713,7 @@ pub(crate) fn build(d: &mut cadaddy_doc::Drawing, sp: &BuildingSpec) -> Value {
 // ---------------- commands ----------------
 
 fn spec(cmd: &str, s: &Session) -> Result<BuildingSpec> {
-    let text = s.doc()?.building_spec.clone().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
+    let text = s.doc()?.building_spec.as_ref().cloned().ok_or_else(|| bad(cmd, "the drawing has no building spec (bspec.set)"))?;
     BuildingSpec::from_json(&text).map_err(|e| bad(cmd, e))
 }
 
@@ -1872,7 +1872,7 @@ fn run_set(s: &mut Session, p: &Value) -> Result<Value> {
         changed.push("rules".into());
     }
     if !changed.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     Ok(json!({ "changed": changed, "elements": sp.concrete.elements.len(), "pads": sp.concrete.pads.len(), "pours": sp.concrete.pours.len() }))
 }
@@ -1930,7 +1930,7 @@ fn run_review(s: &mut Session, p: &Value) -> Result<Value> {
         added.push(id);
     }
     if !added.is_empty() {
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let errors = findings.iter().filter(|f| f.severity == "error").count();
     Ok(json!({ "errors": errors, "rfis": added, "findings": findings.iter().map(Finding::json).collect::<Vec<_>>() }))
@@ -2085,7 +2085,7 @@ fn run_signoff(s: &mut Session, p: &Value) -> Result<Value> {
         q.signoffs.push(Signoff { item: key.clone(), by: by.chars().take(80).collect(), on: on.to_string() });
     }
     let changed = undo == had || !undo;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     Ok(json!({ "pour": pour, "item": key, "signed": !undo, "changed": changed }))
 }
 

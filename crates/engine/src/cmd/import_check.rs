@@ -817,7 +817,7 @@ fn truncate(s: &str, max: usize) -> &str {
 
 /// Store the check result into the drawing's `import_check` field.
 pub fn store_result(d: &mut Drawing, result: &ImportCheckResult) {
-    d.import_check = Some(result.to_json());
+    d.import_check = Some(result.to_json()).into();
 }
 
 /// Read the stored check result from a drawing.

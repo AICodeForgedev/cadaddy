@@ -1302,7 +1302,7 @@ fn save_state(s: &mut Session, st: &RuleModelState) -> Result<()> {
     if let Some(obj) = root.as_object_mut() {
         obj.insert("rulemodel".into(), ours);
     }
-    doc.agent = serde_json::to_string(&root).ok();
+    doc.agent = serde_json::to_string(&root).ok().into();
     Ok(())
 }
 
@@ -2299,7 +2299,7 @@ fn edit_spec(s: &mut Session, cmd: &str, f: impl FnOnce(&mut cadaddy_walk3d::Bui
         return Err(bad(cmd, "there is no building spec yet: call bspec.draft {} or printset.open {path} first"));
     }
     let out = f(&mut sp)?;
-    s.doc_mut()?.building_spec = Some(sp.to_json());
+    s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     s.execute("model.build", &json!({}))?;
     Ok(out)
 }
@@ -2955,7 +2955,7 @@ fn run_clashloop(s: &mut Session, p: &Value) -> Result<Value> {
         if moved.is_empty() {
             break;
         }
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
         s.execute("model.build", &json!({}))?;
         clashes = clashes_now(s, &allowed)?;
         iterations += 1;

@@ -97,21 +97,21 @@ fn set_text(d: &mut Drawing, tag: &[u8; 4], data: Vec<u8>, notes: &mut Vec<Strin
     };
     let is_object = |t: &str| serde_json::from_str::<Value>(t).is_ok_and(|v| v.is_object());
     match tag {
-        b"BSPC" => d.building_spec = Some(text),
-        b"TOUR" => d.tours = Some(text),
-        b"BCFI" => d.bcf = Some(text),
-        b"PRTS" => d.parts = Some(text),
+        b"BSPC" => d.building_spec = Some(text).into(),
+        b"TOUR" => d.tours = Some(text).into(),
+        b"BCFI" => d.bcf = Some(text).into(),
+        b"PRTS" => d.parts = Some(text).into(),
         b"SCH4" => match cadaddy_walk3d::fourd::Schedule4d::from_json(Some(&text)) {
-            Ok(s) => d.schedule4d = s.to_json(),
+            Ok(s) => d.schedule4d = s.to_json().into(),
             Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
         },
         b"OVRD" => match cadaddy_doc::overrides::Overrides::from_json(&text) {
-            Ok(o) => d.overrides = o.to_json().ok(),
+            Ok(o) => d.overrides = o.to_json().ok().into(),
             Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
         },
         // Any JSON object (the engine checks it when it reads it).
-        b"AGNT" if is_object(&text) => d.agent = Some(text),
-        b"IMCK" if is_object(&text) => d.import_check = Some(text),
+        b"AGNT" if is_object(&text) => d.agent = Some(text).into(),
+        b"IMCK" if is_object(&text) => d.import_check = Some(text).into(),
         b"BIMT" => match cadaddy_doc::bimspec::BimTypes::from_json(&text) {
             Ok(t) => d.bim_types = t,
             Err(e) => notes.push(format!("the {what} couldn't be read: {e}")),
@@ -724,10 +724,10 @@ pub fn read(bytes: &[u8]) -> Result<(Drawing, ReadReport), String> {
                 d.field_values = t.field_values.iter().map(|(h, v)| (cadaddy_doc::Handle(*h), v.clone())).collect();
                 d.kept_handles = t.kept_handles.iter().take(10_000_000).map(|(k, h)| (k.clone(), *h)).collect();
                 if let Some(spec) = t.building_spec.filter(|s| s.len() <= MAX_TEXT) {
-                    d.building_spec = Some(spec);
+                    d.building_spec = Some(spec).into();
                 }
                 if let Some(tours) = t.tours.filter(|s| s.len() <= MAX_TEXT) {
-                    d.tours = Some(tours);
+                    d.tours = Some(tours).into();
                 }
                 d.active_layout = t.active_layout;
                 d.handseed = t.handseed;

@@ -1293,7 +1293,7 @@ mod tests {
         let with_box = |on: bool| {
             let mut d = d.clone();
             d.building_spec =
-                Some(serde_json::json!({"coord_sectionbox": {"on": on, "min": [900, -100, -1000], "max": [1500, 100, 100000]}}).to_string());
+                Some(serde_json::json!({"coord_sectionbox": {"on": on, "min": [900, -100, -1000], "max": [1500, 100, 100000]}}).to_string()).into();
             Building { drawings: vec![Arc::new(d)], rules: rules.clone(), rules_from: String::new(), scene: scene.clone(), problems: Vec::new() }
         };
         let b = with_box(true);
@@ -1350,7 +1350,8 @@ mod tests {
                 "stairs": [{"name": "S1", "level": "L1", "runs": [{"from": [100, 22], "to": [298, 22], "treads": 18}], "width_in": 44}]
             })
             .to_string(),
-        ),
+        )
+        .into(),
             ..Drawing::default()
         };
         let b = Building::load(Arc::new(d), None).unwrap_or_else(|e| panic!("{e}"));

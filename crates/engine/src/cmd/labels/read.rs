@@ -336,7 +336,7 @@ pub(super) fn run_read(s: &mut Session, p: &Value) -> Result<Value> {
         // Reading a sheet again replaces what it gave; devices entered by hand stay.
         sp.mep.devices.retain(|d| !names.contains(d.source.as_str()));
         sp.mep.devices.extend(devices.iter().cloned());
-        s.doc_mut()?.building_spec = Some(sp.to_json());
+        s.doc_mut()?.building_spec = Some(sp.to_json()).into();
     }
     let sched: Vec<Value> = schedules
         .iter()
