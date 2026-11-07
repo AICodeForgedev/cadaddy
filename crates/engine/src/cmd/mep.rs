@@ -1152,8 +1152,15 @@ fn read_pipes_from_tags(
     // The leaders of every tag and note, arrowheads and all: a line from lettering to an arrowhead
     // is no pipe, though its tag names one (the slant from `1/2" CW TO LAVATORY` to the fixture
     // it points at).
+    // (Lettering at the plan's usual height: a mis-sized copy the import made is no note's.)
     let leaders: std::collections::HashSet<Handle> = {
-        let lettering: Vec<(Vec2, f64, usize)> = notes.iter().map(|(_, t, at, h)| (*at, *h, t.chars().count())).collect();
+        let usual = usual_h.or_else(|| {
+            let mut hs: Vec<f64> = notes.iter().map(|n| n.3).filter(|h| h.is_finite() && *h > 0.0).collect();
+            hs.sort_by(f64::total_cmp);
+            hs.get(hs.len() / 2).copied()
+        });
+        let lettering: Vec<(Vec2, f64, usize)> =
+            notes.iter().filter(|n| usual.is_some_and(|u| n.3 <= LABEL_OUTSIZED * u)).map(|(_, t, at, h)| (*at, *h, t.chars().count())).collect();
         let (strokes, heads) = homerun::leader_strokes(&lettering, &marks.strokes, &marks.heads);
         strokes
             .into_iter()
@@ -3649,7 +3656,7 @@ mod tests {
         add(EntityKind::Line(Line { a: Vec3::new(0.0, 0.0, 0.0), b: Vec3::new(240.0, 0.0, 0.0) }), &mut ents);
         add(text((100.0, 60.0), "1/2\" CW TO LAVATORY"), &mut ents);
         add(poly(&[(97.0, 62.0), (90.0, 62.0), (60.0, 0.0)], false), &mut ents);
-        add(poly(&[(60.0, 0.0), (56.0, 8.0), (63.0, 8.0)], true), &mut ents);
+        add(poly(&[(60.0, 0.0), (65.7, 6.1), (61.2, 8.3)], true), &mut ents);
         // A second line lettered along itself, ending at a small square (a valve box): a pipe.
         add(text((300.0, 102.0), "1\" HW"), &mut ents);
         add(poly(&[(296.0, 100.0), (380.0, 100.0), (380.0, 60.0)], false), &mut ents);

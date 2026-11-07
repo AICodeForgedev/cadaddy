@@ -44,6 +44,8 @@ const MANIFOLD_TAG_FT: f64 = 2.5;
 const MANIFOLD_PAIR_FT: f64 = 4.0;
 /// Most tube ends clustered on one sheet.
 const MAX_ENDS: usize = 100_000;
+/// An arrowhead points back along its leader's last line within this (degrees).
+const HEAD_ALIGN_DEG: f64 = 20.0;
 /// A leader's line has at most this many points (a shoulder and the slant to its arrow).
 const LEADER_POINTS: usize = 3;
 /// Most lettering looked at for leaders, and most characters of one line measured.
@@ -158,8 +160,8 @@ pub(crate) fn leader_tips(at: Vec2, h: f64, chars: usize, strokes: &[Stroke], ar
 /// The strokes that are leaders, which are no pipe: a line or short polyline (at most
 /// [`LEADER_POINTS`] points, up to [`LEADER_HOPS`] of them joined end to end) that starts beside
 /// a line of lettering (`lettering`: where it is, its height, its characters; a pipe tag's or any
-/// note's) and ends on the point of an arrowhead (`heads`: filled triangles) that points back
-/// along it, [`LEADER_MIN_H`] to [`LEADER_MAX_H`] text heights long. A pipe drawn to a riser's
+/// note's) and ends on the point of an arrowhead (`heads`: filled triangles) that points straight
+/// back along it ([`HEAD_ALIGN_DEG`]), [`LEADER_MIN_H`] to [`LEADER_MAX_H`] text heights long. A pipe drawn to a riser's
 /// dot or a valve's fill ends on no triangle's point; one with a flow arrow carries its lettering
 /// at the arrow, not at the far end. Indices into `strokes`, and into `heads` of their arrowheads.
 pub(crate) fn leader_strokes(
@@ -224,10 +226,12 @@ pub(crate) fn leader_strokes(
                 t.iter().fold((t[0], t[0]), |(lo, hi), p| (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y))));
             let size = (hi.x - lo.x).max(hi.y - lo.y);
             let mid = Vec2::new((t[0].x + t[1].x + t[2].x) / 3.0, (t[0].y + t[1].y + t[2].y) / 3.0);
-            size <= ARROW_MAX_H * h
-                && size > 1e-9
-                && t.iter().any(|p| p.dist(tip) <= 0.5 * h)
-                && (mid.x - tip.x) * (back.x - tip.x) + (mid.y - tip.y) * (back.y - tip.y) > 0.0
+            size <= ARROW_MAX_H * h && size > 1e-9 && t.iter().any(|p| p.dist(tip) <= 0.5 * h) && {
+                // Pointing straight back along the leader's last line.
+                let (a, b) = (mid - tip, back - tip);
+                let (la, lb) = (a.x.hypot(a.y), b.x.hypot(b.y));
+                la > 1e-9 && lb > 1e-9 && (a.x * b.x + a.y * b.y) / (la * lb) >= HEAD_ALIGN_DEG.to_radians().cos()
+            }
         })
     };
     for (at, h, chars) in lettering {
@@ -559,7 +563,7 @@ mod tests {
         let notes = [(v(100.0, 60.0), h, 21)];
         // A shoulder by the note, then a slant down to a triangle whose point is its end.
         let leader = vec![v(97.0, 62.0), v(90.0, 62.0), v(60.0, 0.0)];
-        let head = [v(60.0, 0.0), v(56.0, 8.0), v(63.0, 8.0)];
+        let head = [v(60.0, 0.0), v(65.7, 6.1), v(61.2, 8.3)];
         // A pipe passing the note, and one from beside it to a triangle pointing away from it
         // (the next pipe's flow arrow): neither is a leader.
         let pipe = vec![v(0.0, 58.0), v(240.0, 58.0)];
@@ -573,6 +577,9 @@ mod tests {
         let (a, b) = (vec![v(97.0, 62.0), v(90.0, 62.0)], vec![v(90.0, 62.0), v(60.0, 0.0)]);
         assert_eq!(leader_strokes(&notes, &[a.clone(), b.clone()], &[head]).0.len(), 2);
         assert!(leader_strokes(&notes, &[a, b], &[]).0.is_empty());
+        // A triangle whose point is on the end but that lies across the line (another leader's
+        // arrow on the pipe): not this line's arrowhead.
+        assert!(leader_strokes(&notes, std::slice::from_ref(&leader), &[[v(60.0, 0.0), v(64.0, -1.0), v(64.0, 6.0)]]).0.is_empty());
         // A head too big to be an arrow's, and hostile lettering.
         assert!(leader_strokes(&notes, std::slice::from_ref(&leader), &[[v(60.0, 0.0), v(20.0, 80.0), v(100.0, 80.0)]]).0.is_empty());
         assert!(leader_strokes(&[(v(f64::NAN, 0.0), h, 9), (v(100.0, 60.0), 0.0, 9)], &[leader], &[head]).0.is_empty());
