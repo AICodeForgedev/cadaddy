@@ -531,11 +531,14 @@ fn a_packet_is_deterministic_bounded_and_refuses_to_overwrite() {
     let err = j.s.execute("validate.packet", &json!({"area": id, "out_dir": d1.to_string_lossy()})).unwrap_err().to_string();
     assert!(err.contains("force"), "{err}");
     j.s.execute("validate.packet", &json!({"area": id, "out_dir": d1.to_string_lossy(), "force": true})).unwrap();
-    // A cap on the pictures, with what was left out said.
+    // A cap on the pictures, with what was left out said; the documents that decide are kept
+    // beside it (Q6261).
     let d3 = dir("cap");
     let r = j.s.execute("validate.packet", &json!({"area": id, "out_dir": d3.to_string_lossy(), "max_images": 3})).unwrap();
     let m = read_json(&d3.join("manifest.json"));
-    assert_eq!(m["counts"]["pictures"], 3, "{r}");
+    let deciding = m["counts"]["deciding"].as_u64().unwrap();
+    assert!(deciding > 0, "{r}");
+    assert_eq!(m["counts"]["pictures"].as_u64().unwrap() - deciding, 3, "{r}");
     let left: Vec<&Value> =
         m["left_out"].as_array().unwrap().iter().filter(|x| x["why"].as_str().is_some_and(|w| w.contains("max_images"))).collect();
     assert!(!left.is_empty(), "{m:#}");
@@ -750,7 +753,8 @@ fn a_tight_cap_cuts_the_unread_whole_sheets_first_and_says_so() {
     let all = dir("capall");
     s.execute("validate.packet", &json!({"area": id, "out_dir": all.to_string_lossy(), "max_images": 200})).unwrap();
     let full = read_json(&all.join("manifest.json"));
-    let n = full["counts"]["pictures"].as_u64().unwrap() as usize;
+    // The documents that decide are kept beside the cap (Q6261): it counts the others.
+    let n = (full["counts"]["pictures"].as_u64().unwrap() - full["counts"]["deciding"].as_u64().unwrap()) as usize;
     let whole: Vec<String> = full["prints"]
         .as_array()
         .unwrap()
@@ -941,4 +945,175 @@ fn each_view_is_labelled_by_the_view_it_shows_on_its_own_sheet() {
     }
     let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
     assert!(prompt.contains("view OFFICE PLAN - WATER"), "{prompt}");
+}
+
+// ---------------------------------------------------------------- the documents that decide (Q6261)
+
+/// Sheets of the job that are no plan link: a legend and notes sheet, a mechanical and a plumbing
+/// schedule (the job keeps only their rectangles), side by side above the schedule row.
+const DOCS_Y: f64 = 6000.0;
+const E001: f64 = 0.0;
+const M601: f64 = 4000.0;
+const P601: f64 = 8000.0;
+/// The last line of the power plan's general notes, well down the sheet.
+const LAST_NOTE_Y: f64 = 760.0;
+
+fn sheet_rect(x: f64, y: f64) -> [f64; 4] {
+    [x, y, x + SW, y + SH]
+}
+
+/// The job of [`job`] with what a real set has beside its plans: a legend and notes sheet, the
+/// trades' schedule sheets, a long list of general notes on the power plan, and the office's
+/// ceiling height read off the reflected ceiling plan.
+fn job_with_documents() -> Session {
+    let j = job();
+    let mut s = j.s;
+    layer(&mut s, "G-DOCS");
+    for (x, title) in [(E001, "ELECTRICAL SYMBOLS LEGEND"), (M601, "MECHANICAL SCHEDULES"), (P601, "PLUMBING FIXTURE SCHEDULE")] {
+        let r = sheet_rect(x, DOCS_Y);
+        s.execute("pline", &json!({"vertices": [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]], "closed": true})).unwrap();
+        text(&mut s, [x + 200.0, DOCS_Y + 2000.0], title);
+    }
+    text(&mut s, [E001 + 200.0, DOCS_Y + 1900.0], "DUPLEX RECEPTACLE, 18 IN AFF UNLESS NOTED");
+    text(&mut s, [M601 + 200.0, DOCS_Y + 1900.0], "EF-1 EXHAUST FAN 80 CFM");
+    // The power plan's general notes run on far below the share of the sheet a fixed crop takes.
+    for k in 2..=62 {
+        let y = 1980.0 - f64::from(k - 1) * 20.0;
+        text(&mut s, [E101 + 2800.0, y.max(LAST_NOTE_Y)], &format!("{k}. PROVIDE BLANK COVER PLATES AT ALL UNUSED BOXES IN ROOMS"));
+    }
+    let mut sp = spec();
+    sp["rooms"] = json!([
+        {"name": "Office", "number": "101", "ceiling_ft": 8.0, "ceiling_source": "8'-0\" ceiling tag on A-121 REFLECTED CEILING PLAN"},
+        {"name": "Storage", "number": "102"},
+        {"name": "Corridor", "number": "103"}
+    ]);
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let region = |n: &str, kind: &str, x: f64| json!({"number": n, "level": "", "discipline": &n[..1], "kind": kind, "rect": sheet_rect(x, DOCS_Y), "not_built": "no level"});
+    edited(&s, |d| {
+        let mut agent: Value = d.agent.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(json!({}));
+        agent["guided_job"] = json!({
+            "id": "J-1", "goal": "bim", "created": "2026-01-01T00:00:00Z", "pdfs_path": "",
+            "stages": [], "rules": [], "audit": [], "question_seq": 0,
+            "sheets": {"sheets": [
+                {"number": "E-001", "title": "ELECTRICAL SYMBOLS LEGEND AND GENERAL NOTES", "file": "Sample Set.pdf", "page": 7, "type": "cover"},
+                {"number": "M-601", "title": "MECHANICAL SCHEDULES", "file": "Sample Set.pdf", "page": 8, "type": "schedule"},
+                {"number": "P-601", "title": "PLUMBING FIXTURE SCHEDULE", "file": "Sample Set.pdf", "page": 9, "type": "schedule"}
+            ]},
+            "sheet_regions": [region("E-001", "cover", E001), region("M-601", "schedule", M601), region("P-601", "schedule", P601)]
+        });
+        d.agent = Some(agent.to_string());
+    })
+}
+
+fn deciding<'a>(m: &'a Value, sheet: &str, placed_by: &str) -> Vec<&'a Value> {
+    m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == sheet && c["placed_by"] == placed_by && c.get("deciding").is_some()).collect()
+}
+
+#[test]
+fn every_schedule_legend_and_notes_list_of_the_area_comes_whole_and_outranks_the_cap() {
+    let mut s = job_with_documents();
+    let id = office(&mut s);
+    let out = dir("deciding-docs");
+    // A cap of two pictures: the documents that decide are kept beside it.
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy(), "max_images": 2})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    all_written(&m, &out);
+    // The legend and notes sheet and the mechanical schedule the job imported (no plan link): whole.
+    let legend = deciding(&m, "E-001", "document");
+    assert!(!legend.is_empty(), "the legend sheet is in the packet whole: {:#}", m["prints"]);
+    assert_eq!(legend[0]["kind"], "legend", "{}", legend[0]);
+    assert!(legend[0]["deciding"].as_str().unwrap().contains("legend sheet"), "{}", legend[0]);
+    let cover: Vec<f64> = legend.iter().flat_map(|c| rect_of(c)).collect();
+    let r = sheet_rect(E001, DOCS_Y);
+    let (lo_x, lo_y) = (cover.iter().step_by(2).cloned().fold(f64::MAX, f64::min), cover.iter().skip(1).step_by(2).cloned().fold(f64::MAX, f64::min));
+    let (hi_x, hi_y) = (cover.iter().step_by(2).cloned().fold(f64::MIN, f64::max), cover.iter().skip(1).step_by(2).cloned().fold(f64::MIN, f64::max));
+    assert!(lo_x <= r[0] + 1.0 && lo_y <= r[1] + 1.0 && hi_x >= r[2] - 1.0 && hi_y >= r[3] - 1.0, "whole: {cover:?} of {r:?}");
+    assert!(!deciding(&m, "M-601", "document").is_empty(), "the mechanical schedule (an exhaust fan is here): {:#}", m["prints"]);
+    // The plumbing schedule is no trade of this area's.
+    assert!(m["prints"].as_array().unwrap().iter().all(|c| c["sheet"] != "P-601"), "{:#}", m["prints"]);
+    // The schedule sheet the spec links (the row crop stays, a reading aid) is whole too.
+    assert!(!deciding(&m, "E-601", "document").is_empty(), "{:#}", m["prints"]);
+    // The power plan's general notes, whole: down to their last line.
+    let notes: Vec<&Value> = m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == "E-101" && c["kind"] == "general_notes").collect();
+    let ys: Vec<f64> = notes.iter().flat_map(|c| rect_of(c)).skip(1).step_by(2).collect();
+    assert!(
+        ys.iter().cloned().fold(f64::MAX, f64::min) <= LAST_NOTE_Y && ys.iter().cloned().fold(f64::MIN, f64::max) >= 2000.0,
+        "the notes block reaches its last line: {ys:?}"
+    );
+    assert!(notes.iter().all(|c| c.get("deciding").is_some()), "{notes:?}");
+    // Two pictures under the cap; everything else that was kept decides.
+    let others = m["prints"].as_array().unwrap().iter().filter(|c| c.get("deciding").is_none()).count() + m["model"].as_array().unwrap().len();
+    assert!(others <= 2, "{others} pictures under a cap of 2: {m:#}");
+    let left = m["left_out"].as_array().unwrap();
+    assert!(left.iter().all(|x| !x["what"].as_str().unwrap().contains("E-001")), "a deciding document is never capped: {left:?}");
+    assert!(left.iter().any(|x| x["why"].as_str().unwrap().contains("max_images")), "the cap still cuts the rest: {left:?}");
+    let docs: Vec<&str> = m["documents"]["sheets"].as_array().unwrap().iter().filter_map(|x| x["sheet"].as_str()).collect();
+    assert_eq!(docs, vec!["A-601", "E-001", "E-601", "M-601"], "{:#}", m["documents"]);
+    assert_eq!(
+        m["counts"]["deciding"].as_u64().unwrap() as usize,
+        m["prints"].as_array().unwrap().iter().filter(|c| c.get("deciding").is_some()).count()
+    );
+    // The ceiling height, stated with its source; the prompt says it and lists what decides.
+    let o = read_json(&out.join("objects.json"));
+    assert_eq!(o["ceiling"]["height_in"], json!(96.0), "{:#}", o["ceiling"]);
+    assert_eq!(o["ceiling"]["from"], "room");
+    assert!(o["ceiling"]["source"].as_str().unwrap().contains("A-121"), "{:#}", o["ceiling"]);
+    let prompt = std::fs::read_to_string(out.join("prompt.md")).unwrap();
+    let (docs_at, rules_at) = (prompt.find("## The documents that decide").unwrap(), prompt.find("## Rules to check").unwrap());
+    assert!(docs_at < rules_at, "before the rules");
+    assert!(prompt.contains("Ceiling height here: 8'-0\" (96 in) above the floor, from 8'-0\" ceiling tag on A-121"), "{prompt}");
+    assert!(prompt[docs_at..rules_at].contains(legend[0]["file"].as_str().unwrap()), "{}", &prompt[docs_at..rules_at]);
+    let _ = std::fs::remove_dir_all(out);
+}
+
+/// Where a details sheet with no level sits (no plan, no schedule: a packet had no reason to show it).
+const E701: f64 = 40000.0;
+
+#[test]
+fn a_sheet_the_prescreen_cites_is_in_the_packet_round_what_it_read() {
+    let j = job();
+    // The general notes the receptacle's height comes from are on a details sheet, not the plan.
+    let shift = E701 - E101;
+    let mut s = edited(&j.s, |d| {
+        let notes: Vec<_> = d
+            .model
+            .iter()
+            .filter(|e| matches!(&e.kind, EntityKind::Text(t) if t.value == "GENERAL NOTES" || t.value.starts_with("1. MOUNT RECEPTACLES")))
+            .map(|e| e.handle)
+            .collect();
+        for h in notes {
+            d.modify_entity(h, |e| {
+                if let EntityKind::Text(t) = &mut e.kind {
+                    t.insert.x += shift;
+                }
+            })
+            .unwrap();
+        }
+    });
+    let mut sp = spec();
+    sp["sheets"].as_array_mut().unwrap().push(sheet("E-701", "ELECTRICAL DETAILS", "E", None, E701, 0.0, None));
+    s.execute("bspec.set", &json!({"spec": sp, "replace": true})).unwrap();
+    let id = office(&mut s);
+    let out = dir("prescreen-cites");
+    s.execute("validate.packet", &json!({"area": id, "out_dir": out.to_string_lossy()})).unwrap();
+    let m = read_json(&out.join("manifest.json"));
+    let o = read_json(&out.join("objects.json"));
+    // The prescreen read the height off that sheet.
+    let note = [E701 + 2800.0, 1980.0];
+    let f = o["prescreen"]["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "G-HEIGHT").unwrap_or_else(|| panic!("{:#}", o["prescreen"]));
+    assert_eq!(f["expected_source"]["sheet"], "E-701", "{f}");
+    // The packet shows it, round the point it read, as a deciding picture.
+    let shown: Vec<&Value> = m["prints"].as_array().unwrap().iter().filter(|c| c["sheet"] == "E-701").collect();
+    assert!(!shown.is_empty(), "the cited sheet is in the packet: {:#}", m["prints"]);
+    let holds = |c: &Value| {
+        let r = rect_of(c);
+        r[0] <= note[0] && note[0] <= r[2] && r[1] <= note[1] && note[1] <= r[3]
+    };
+    let c = shown.iter().find(|c| holds(c)).unwrap_or_else(|| panic!("a picture holds the cited point: {shown:?}"));
+    assert_eq!(c["placed_by"], "cited_point", "{c}");
+    assert!(c["deciding"].as_str().unwrap().contains("the prescreen cites it (G-HEIGHT"), "{c}");
+    let cited = m["documents"]["cited"].as_array().unwrap().iter().find(|x| x["sheet"] == "E-701").unwrap_or_else(|| panic!("{:#}", m["documents"]));
+    assert_eq!(cited["points"], json!(1));
+    assert!(cited["files"].as_array().unwrap().iter().any(|x| x == &c["file"]), "{cited}");
+    let _ = std::fs::remove_dir_all(out);
 }

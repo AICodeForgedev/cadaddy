@@ -208,6 +208,7 @@ mod unittypes;
 pub mod validate;
 pub mod validate_conduit;
 pub(crate) mod validate_coverage;
+pub(crate) mod validate_docs;
 pub mod validate_equip;
 pub(crate) mod validate_fixtures;
 pub mod validate_gear;
