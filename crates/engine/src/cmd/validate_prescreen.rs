@@ -704,6 +704,7 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
             continue;
         }
         let Some(kind) = super::elemprops::element_kind(e).filter(|k| MEP_KINDS.contains(&k.as_str())) else { continue };
+        let device = kind == "device";
         let kind = super::elemprops::reported_kind(e, kind);
         let Some(level) = super::elemprops::level_of(e) else { continue };
         let b = cadaddy_doc::entity_bounds(d, e, 0);
@@ -730,8 +731,12 @@ fn items(d: &Drawing, sp: &BuildingSpec, model: &Model, frame: &Frame, kinds: &K
         };
         // A built part's height record is its own, else the plan element's it was built from.
         let record = vh::record_of(e).or_else(|| super::bimlook::made_source(e).and_then(|h| d.model.get(h)).and_then(|x| vh::record_of(x)));
-        let aff_documented =
-            mounting == Mounting::Ceiling && record.as_ref().is_some_and(|r| !r.assumed && r.inches <= ceiling * 12.0 - CEILING_BAND_IN);
+        // A ceiling-band part its documents mount lower on a wall, and a device its documents
+        // mount low on a wall (a receptacle in a unit's sub-base, its box near the floor): judged
+        // at their middle against those documents.
+        let aff_documented = (mounting == Mounting::Ceiling
+            && record.as_ref().is_some_and(|r| !r.assumed && r.inches <= ceiling * 12.0 - CEILING_BAND_IN))
+            || (mounting == Mounting::Floor && device && record.as_ref().is_some_and(|r| !r.assumed));
         let c = super::bimlook::classify(d, e);
         let mark = super::validate_kind::mark_of(e);
         let r = kinds.resolve(&kind, mark.as_deref(), Some(e));

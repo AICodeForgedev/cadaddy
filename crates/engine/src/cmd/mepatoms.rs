@@ -157,6 +157,9 @@ pub(crate) struct GangRule {
     pub raceway: Vec<String>,
     pub cable: Vec<String>,
     pub source: String,
+    /// The families that may share one box when a keynote says to gang them (power devices; low
+    /// voltage never with power).
+    pub power_families: Vec<String>,
 }
 
 /// The box a kind of device takes, on raceway and on cable, and whether it takes a ring.
@@ -2314,6 +2317,43 @@ mod tests {
         assert_eq!(r.box_for_raceway(oct, 1.0).map(|b| b.size.as_str()), Some("4\" square"));
         assert!(r.box_for_raceway(r.boxes.get("nm1-18").unwrap(), 1.0).is_none(), "a cable box takes its cable by clamp");
         assert!(has_word("3/4\" EMT", "EMT") && !has_word("EMC", "MC") && has_word("MC CABLE", "MC"));
+    }
+
+    #[test]
+    fn devices_a_keynote_says_to_gang_share_one_box_however_far_apart() {
+        use super::build::{GangSpot, gang_groups, keyed_groups};
+        use cadaddy_geom::Vec2;
+        let n = Vec2::new(0.0, 1.0);
+        let spot = |family: &str, x: f64, z: f64| GangSpot { level: "L1".into(), family: family.into(), normal: n, at: Vec2::new(x, 10.0), z };
+        let spots = vec![
+            // Two switches 30" apart, one 10" higher: too far to gang by distance.
+            spot("switch", 60.0, 48.0),
+            spot("switch", 90.0, 58.0),
+            // A receptacle the same note points at: power, so it may join them.
+            spot("receptacle", 75.0, 18.0),
+            // A data outlet the note points at too: low voltage never shares a power box.
+            spot("low voltage", 80.0, 18.0),
+            // Another room's pair under another key; a lone keyed switch.
+            spot("switch", 400.0, 48.0),
+            spot("switch", 440.0, 48.0),
+            spot("switch", 700.0, 48.0),
+        ];
+        let keys: Vec<String> = ["k1", "k1", "k1", "k1", "k2", "k2", "k3"].iter().map(|k| (*k).to_string()).collect();
+        let by_distance = gang_groups(&spots, 24.0, 6.0, 6.0, 4);
+        assert!(by_distance.is_empty(), "{by_distance:?}");
+        let rules = rules();
+        let mut g = keyed_groups(&spots, &keys, by_distance.clone(), &rules.gang.power_families, 4);
+        for (x, _) in g.iter_mut() {
+            x.sort_unstable();
+        }
+        g.sort();
+        assert_eq!(g, vec![(vec![0, 1, 2], Some("k1".to_string())), (vec![4, 5], Some("k2".to_string()))], "{g:?}");
+        // No keys: the distance's groups as they were; most 2 a box: cut along the wall.
+        let none = vec![String::new(); spots.len()];
+        assert!(keyed_groups(&spots, &none, by_distance.clone(), &rules.gang.power_families, 4).is_empty());
+        let two = keyed_groups(&spots, &keys, by_distance, &rules.gang.power_families, 2);
+        assert!(two.iter().all(|(x, _)| x.len() == 2), "{two:?}");
+        assert_eq!(rules.gang.power_families, ["switch", "receptacle"]);
     }
 
     #[test]

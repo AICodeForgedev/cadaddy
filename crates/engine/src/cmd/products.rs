@@ -668,6 +668,11 @@ fn product_kind(e: &cadaddy_doc::Entity, store: &props::Props) -> Option<(String
     let decided = text("receptacle_type");
     let tr = (text("tamper_resistant") == "YES").then(|| TAMPER_RESISTANT.to_string());
     Some(match k {
+        // A piece of equipment's receptacle its keynote gives (`receptacle_for`: `30A/2P
+        // RECEPTACLE FOR <unit>`): the note's product, not the convenience receptacles' section.
+        "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if !text("receptacle_for").is_empty() => {
+            ("equipment_receptacle".into(), None)
+        }
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "GFCI" => ("gfci_receptacle".into(), tr),
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" | "gfci_receptacle" if decided == "STANDARD" => ("receptacle".into(), tr),
         "receptacle" | "quad_receptacle" | "ceiling_receptacle" if mark.contains("GFCI") || mark.contains("GFI") || name.contains("GFCI") => {
@@ -843,6 +848,19 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let mut features = req.map(|r| r.features.clone()).unwrap_or_default();
         if tr && !features.iter().any(|f| f == "TR") {
             features.push("TR".into());
+        }
+        // What its keynote asks of it besides (`USB`, `USB-C`): the product must have it too.
+        let keyed: Vec<String> = store
+            .get("keynote_features")
+            .filter(|p| p.has_value())
+            .map(|p| p.text().split(", ").map(|f| f.trim().to_string()).filter(|f| !f.is_empty()).collect())
+            .unwrap_or_default();
+        for f in keyed {
+            let tamper = f.to_ascii_uppercase().contains("TAMPER");
+            let has_tr = tamper && features.iter().any(|x| x == "TR");
+            if !has_tr && !features.iter().any(|x| x.eq_ignore_ascii_case(&f)) {
+                features.push(f);
+            }
         }
         let resolved = json!({
             "maker": resolved_maker, "catalog": catalog,

@@ -107,6 +107,7 @@ pub use qselect::wildcard;
 pub use render::apply_environment;
 pub use underlay::forget_pages as forget_underlay_pages;
 pub mod agentready;
+pub(crate) mod archauthority;
 pub mod archread;
 pub mod arexport;
 pub mod bcf;
