@@ -1682,9 +1682,9 @@ pub fn link_set(sheets: &[SetSheet], pages: &[LinkPage]) -> SheetLinks {
             let theirs: Vec<(String, [f64; 2])> = h.read.tags.iter().filter(not_sheet).cloned().collect();
             // Both sheets are read at their scale notes: the scale is near one, or the printed
             // scales' ratio; anything from a fifth to five times is let through. A few tags that
-            // need a turn off square matched the wrong tags (`tagid::few_tags_off_square`).
-            tagid::fit_by_tags(&view_tags, &theirs, tag_tol, (0.2, 5.0))
-                .filter(|f| !tagid::few_tags_off_square(f.matched.len(), f.sim.rotation_deg()))
+            // need a turn off square matched some wrong tags: the ones that are each other's place
+            // it held square, else nothing does (`tagid::square_fit`).
+            tagid::fit_by_tags(&view_tags, &theirs, tag_tol, (0.2, 5.0)).and_then(|f| tagid::square_fit(f, &view_tags, &theirs, tag_tol))
         };
         let placed_on_host = host.is_some_and(|h| grid_fit(e.view, &h.read.grid_x, &h.read.grid_y).is_some() || by_tags(h).is_some());
         if !placed_on_host && view_tags.len() >= 3 {

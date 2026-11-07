@@ -473,19 +473,30 @@ fn a_turned_enlarged_plan_registers_by_its_tags_with_its_rotation() {
     assert_eq!(e.devices, 5);
 }
 
-#[test]
-fn a_few_tags_turned_off_square_do_not_register_an_enlarged_plan() {
+/// The tagged set with E-3's numbers turned `deg` about its corner.
+fn turned_tags(deg: f64) -> SheetLinks {
     let (sheets, mut pages) = tagged_set();
-    // E-3's numbers turned four and a half degrees: four tags agree with that turn, but the plans
-    // of one building are drawn square to each other, so they matched the wrong tags.
-    let (c, s) = (4.5_f64.to_radians().cos(), 4.5_f64.to_radians().sin());
-    let turn = |p: [f64; 2]| [c * p[0] - s * p[1], s * p[0] + c * p[1]];
+    let (c, s) = (deg.to_radians().cos(), deg.to_radians().sin());
     for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
         for t in &mut p.read.tags {
-            t.1 = turn(t.1);
+            t.1 = [c * t.1[0] - s * t.1[1], s * t.1[0] + c * t.1[1]];
         }
     }
-    let l = printlinks::link_set(&sheets, &pages);
+    printlinks::link_set(&sheets, &pages)
+}
+
+#[test]
+fn a_few_tags_turned_off_square_register_an_enlarged_plan_held_square_or_not_at_all() {
+    // Four numbers that agree with a turn of four and a half degrees: the plans of one building
+    // are drawn square to each other, so the plan is placed by them held square, unturned.
+    let l = turned_tags(4.5);
+    let e = &l.enlarged[0];
+    assert!(e.registered && e.method == "tags", "{e:#?}");
+    assert_eq!(e.rotation_deg, None, "held square: {e:#?}");
+    let at = e.place([11.0, 11.0]).expect("placed");
+    assert!((at[0] - 11.5).abs() < 1.0 && (at[1] - 7.5).abs() < 1.0, "{at:?}");
+    // Turned thirty degrees, no three agree held square: not placed by its tags.
+    let l = turned_tags(30.0);
     let e = &l.enlarged[0];
     assert!(!(e.registered && e.method == "tags"), "{e:#?}");
 }
