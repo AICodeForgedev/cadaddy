@@ -134,6 +134,23 @@ fn every_kind_and_table_roundtrips_exactly() {
 }
 
 #[test]
+fn the_agent_state_reads_without_the_drawing() {
+    let mut d = every_kind();
+    let state = r#"{"guided_job":{"id":"job-1"}}"#;
+    d.agent = Some(state.to_string());
+    let bytes = crate::write(&d, "job.cdy").unwrap();
+    assert_eq!(agent(&bytes), Ok(Some(state.to_string())));
+    // A checkpoint (written without its preview) too.
+    assert_eq!(agent(&write_cdy_checkpoint(&d).unwrap()), Ok(Some(state.to_string())));
+    d.agent = None;
+    assert_eq!(agent(&crate::write(&d, "plan.cdy").unwrap()), Ok(None), "a drawing without one");
+    assert!(agent(b"not a drawing").is_err());
+    let mut cut = bytes.clone();
+    cut.truncate(bytes.len() - 8);
+    assert!(agent(&cut).is_err(), "a damaged index: the whole file is read instead");
+}
+
+#[test]
 fn the_public_api_and_io_dispatch_read_what_they_write() {
     let d = every_kind();
     let bytes = crate::write(&d, "plan.cdy").unwrap();
