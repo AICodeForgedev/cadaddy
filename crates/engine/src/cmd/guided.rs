@@ -8510,6 +8510,62 @@ fn rigid_room_fit_turns(
     best.map(|(f, on, _)| (f, on))
 }
 
+/// [`rigid_room_fit`]'s offset set by the room's own outline (`outline`: its walls' inner faces,
+/// which the view draws too) within `tol` of the fit's, to `fine`: each piece of the outline says
+/// the offset across it (a wall running up tells how far across, one running across how far up),
+/// the view's samples voting. The floor's other lines (furniture, the neighbours' walls) can pull
+/// the fit a wall's width or more off; the outline can't. The fit as it was when the outline says
+/// nothing.
+fn outline_fit(fit: RoomFit, view_pts: &[cadaddy_geom::Vec2], outline: &[cadaddy_geom::Vec2], tol: f64, fine: f64) -> RoomFit {
+    if !fit.rigid || outline.len() < 3 || fine.is_nan() || fine <= 0.0 || tol.is_nan() || tol <= 0.0 {
+        return fit;
+    }
+    // The outline's samples every `fine * 12`, each with what it tells: across (x) or up (y).
+    let step = fine * 12.0;
+    let mut room: Vec<(cadaddy_geom::Vec2, bool)> = Vec::new();
+    for (a, b) in outline.iter().zip(outline.iter().cycle().skip(1)).take(MAX_OUTLINE_EDGES) {
+        let d = *b - *a;
+        let len = d.len();
+        if !len.is_finite() || len <= 1e-9 {
+            continue;
+        }
+        let across = d.x.abs() < d.y.abs();
+        let n = ((len / step).ceil() as usize).clamp(1, MAX_EDGE_SAMPLES);
+        for i in 0..=n {
+            room.push((*a + d * (i as f64 / n as f64), across));
+        }
+    }
+    let stride = (view_pts.len() / MAX_FIT_SAMPLES).max(1);
+    let (mut xs, mut ys): (BTreeMap<i64, Vec<f64>>, BTreeMap<i64, Vec<f64>>) = (BTreeMap::new(), BTreeMap::new());
+    for p in view_pts.iter().step_by(stride) {
+        let t = turn_vec(*p - fit.from, fit.k);
+        for (r, across) in &room {
+            let o = *r - t;
+            if (o.x - fit.to.x).abs() > tol || (o.y - fit.to.y).abs() > tol {
+                continue;
+            }
+            if *across {
+                xs.entry((o.x / fine).round() as i64).or_default().push(o.x);
+            } else {
+                ys.entry((o.y / fine).round() as i64).or_default().push(o.y);
+            }
+        }
+    }
+    let peak = |m: &BTreeMap<i64, Vec<f64>>| {
+        let (k, _) = m.iter().max_by(|a, b| a.1.len().cmp(&b.1.len()).then_with(|| b.0.cmp(a.0)))?;
+        let near: Vec<f64> = m.range(k - 1..=k + 1).flat_map(|(_, v)| v.iter().copied()).collect();
+        (!near.is_empty()).then(|| near.iter().sum::<f64>() / near.len() as f64)
+    };
+    match (peak(&xs), peak(&ys)) {
+        (Some(x), Some(y)) => RoomFit { to: cadaddy_geom::Vec2::new(x, y), ..fit },
+        _ => fit,
+    }
+}
+
+/// A room outline's edges an [`outline_fit`] looks at, and samples of one edge, at most.
+const MAX_OUTLINE_EDGES: usize = 2_000;
+const MAX_EDGE_SAMPLES: usize = 2_000;
+
 /// The offsets each turn of a view is tried at (its most agreed-on), for the two-way match.
 const FIT_OFFSETS_TRIED: usize = 3;
 
@@ -10762,8 +10818,10 @@ fn typical_rcp_lights(d: &cadaddy_doc::Drawing, job: &GuidedJob) -> RcpRead {
                         rigid_room_fit_turns(&lines, *view, b, &floor_lines, margin, 6.0 * k_in, &[k]).map(|f| f.0)
                     };
                     let Some(fit) = fit else { continue };
-                    // A light's place to the half inch, not to the fit's six.
-                    let fit = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
+                    // A light's place to the half inch, not to the fit's six: by the room's own
+                    // outline (the built room's, else the rooms stage's), else the floor's lines.
+                    let fine = finer_fit(fit, &lines, b, &floor_lines, margin, 6.0 * k_in, 0.5 * k_in);
+                    let fit = outline_fit(fine, &lines, built_outline.map_or(outline.as_slice(), Vec::as_slice), 24.0 * k_in, 0.5 * k_in);
                     for p in &mine {
                         let Some(q) = place_in_room([p.x, p.y], *view, b, fit) else { continue };
                         let q = cadaddy_geom::Vec2::new(q[0], q[1]);
@@ -27558,6 +27616,36 @@ mod tests {
         assert_eq!(ps.get("design:location").map(Prop::text).as_deref(), Some("837.67, 14.17, 20.17"), "{ps:?}");
         let why = ps.get("correction:location").map(Prop::text).unwrap_or_default();
         assert!(why.starts_with("E-RCP-LIGHT") && why.contains("A-6 UNIT RCP - STUDIO"), "{why}");
+    }
+
+    /// Q6250: a typical view laid 15" off by the floor's lines goes onto the room's outline: its
+    /// inner faces meet the room's, not its walls' outer faces or the furniture.
+    #[test]
+    fn a_rooms_outline_sets_a_typical_views_offset() {
+        use cadaddy_geom::Vec2;
+        let mut pts: Vec<Vec2> = Vec::new();
+        let mut rect = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            let c = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)];
+            for (a, b) in c.iter().zip(c.iter().cycle().skip(1)) {
+                for i in 0..=24 {
+                    pts.push(*a + (*b - *a) * (f64::from(i) / 24.0));
+                }
+            }
+        };
+        rect(0.0, 0.0, 144.0, 288.0); // the inner faces
+        rect(-6.0, -6.0, 150.0, 294.0); // the walls' outer faces
+        rect(30.0, 100.0, 90.0, 180.0); // a bed
+        let from = Vec2::new(72.0, 144.0);
+        let room = [Vec2::new(5000.0, 1000.0), Vec2::new(5144.0, 1000.0), Vec2::new(5144.0, 1288.0), Vec2::new(5000.0, 1288.0)];
+        let right = Vec2::new(5072.0, 1144.0);
+        let off = RoomFit { k: 0, from, to: right + Vec2::new(15.0, -13.0), rigid: true };
+        let got = outline_fit(off, &pts, &room, 24.0, 0.5);
+        assert!(got.to.dist(right) < 0.5, "{:?}", got.to);
+        // Turned half round, the same.
+        let turned = RoomFit { k: 2, ..off };
+        assert!(outline_fit(turned, &pts, &room, 24.0, 0.5).to.dist(right) < 0.5);
+        // An outline that says nothing (too few corners): the fit as it was.
+        assert_eq!(outline_fit(off, &pts, &room[..2], 24.0, 0.5).to, off.to);
     }
 
     /// Q6250: the turn of a typical ceiling plan a room takes.
