@@ -473,6 +473,23 @@ fn a_turned_enlarged_plan_registers_by_its_tags_with_its_rotation() {
     assert_eq!(e.devices, 5);
 }
 
+#[test]
+fn a_few_tags_turned_off_square_do_not_register_an_enlarged_plan() {
+    let (sheets, mut pages) = tagged_set();
+    // E-3's numbers turned four and a half degrees: four tags agree with that turn, but the plans
+    // of one building are drawn square to each other, so they matched the wrong tags.
+    let (c, s) = (4.5_f64.to_radians().cos(), 4.5_f64.to_radians().sin());
+    let turn = |p: [f64; 2]| [c * p[0] - s * p[1], s * p[0] + c * p[1]];
+    for p in pages.iter_mut().filter(|p| p.sheet.number == "E-3") {
+        for t in &mut p.read.tags {
+            t.1 = turn(t.1);
+        }
+    }
+    let l = printlinks::link_set(&sheets, &pages);
+    let e = &l.enlarged[0];
+    assert!(!(e.registered && e.method == "tags"), "{e:#?}");
+}
+
 /// A wall line added to one of the set's drawings.
 fn wall(d: &mut cadaddy_doc::Drawing, a: [f64; 2], b: [f64; 2]) {
     let l = cadaddy_doc::Line { a: cadaddy_geom::Vec3::new(a[0], a[1], 0.0), b: cadaddy_geom::Vec3::new(b[0], b[1], 0.0) };

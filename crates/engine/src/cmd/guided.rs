@@ -20651,30 +20651,22 @@ const MAX_SHEETS_REPORTED: usize = 200;
 const TAG_FIT_MIN: usize = 4;
 /// The scales a fit on many tags may have (a sheet a little off its printed scale).
 const TAG_FIT_SCALES: std::ops::RangeInclusive<f64> = 0.85..=1.18;
-/// How far turned (degrees) any fit by tags may be: the plans of one building are drawn square
-/// to each other and sheets come in unturned, so a fit that turns a sheet more than its tags'
-/// scatter does (a degree or so) matched tags that are not each other's, however many.
-const TAG_FIT_TURN_DEG: f64 = 2.0;
-/// Under this many tags a fit must also be one to one and squarer: sheets come in at their printed
-/// scales, so a handful of tags that need a stretch or a turn (11% and 3 degrees on five tags)
-/// matched the wrong tags, and placing a plan by it puts its ducts and grilles feet from where it
-/// draws them.
-const TAG_FIT_FEW: usize = 8;
-/// How far off one to one (a share) a fit on a few tags may be.
+/// How far off one to one (a share) a fit on a few tags ([`cadaddy_mepfix::tagid::FEW_TAGS`]) may
+/// be: sheets come in at their printed scales, so a handful of tags that need a stretch (11% on
+/// five tags) matched the wrong tags, and placing a plan by it puts its ducts and grilles feet
+/// from where it draws them. A few tags turned off square are no fit either
+/// ([`cadaddy_mepfix::tagid::few_tags_off_square`]).
 const TAG_FIT_FEW_SCALE: f64 = 0.05;
-/// How far turned (degrees) a fit on a few tags may be.
-const TAG_FIT_FEW_TURN_DEG: f64 = 1.5;
 
 /// Whether a sheet's fit by its tags (`matched` tags, at `scale`, turned `turn_deg`) places it,
 /// else why not.
 fn tag_fit_why_not(matched: usize, scale: f64, turn_deg: f64) -> Option<&'static str> {
+    use cadaddy_mepfix::tagid;
     if matched < TAG_FIT_MIN {
         Some("too few tags")
     } else if !TAG_FIT_SCALES.contains(&scale) {
         Some("off its printed scale")
-    } else if !turn_deg.is_finite() || turn_deg.abs() > TAG_FIT_TURN_DEG {
-        Some("turned off the plan")
-    } else if matched < TAG_FIT_FEW && ((scale - 1.0).abs() > TAG_FIT_FEW_SCALE || turn_deg.abs() > TAG_FIT_FEW_TURN_DEG) {
+    } else if tagid::few_tags_off_square(matched, turn_deg) || (matched < tagid::FEW_TAGS && (scale - 1.0).abs() > TAG_FIT_FEW_SCALE) {
         Some("a few tags that need a stretch or a turn")
     } else {
         None
@@ -25892,16 +25884,15 @@ mod tests {
         assert!(!tag_fit_holds(5, 1.112, 2.9));
         assert!(!tag_fit_holds(6, 1.0, 2.0));
         assert!(!tag_fit_holds(7, 0.93, 0.0));
-        // Turned off the plan: never, however many tags (they matched tags not each other's).
-        assert!(!tag_fit_holds(12, 1.10, 4.0));
-        assert!(!tag_fit_holds(40, 1.0, -2.5));
-        assert_eq!(tag_fit_why_not(12, 1.10, 4.0), Some("turned off the plan"));
         assert_eq!(tag_fit_why_not(5, 1.112, 1.0), Some("a few tags that need a stretch or a turn"));
+        // A quarter turn is square (a sheet drawn turned); many tags are their own word.
+        assert!(tag_fit_holds(5, 1.0, 90.2));
+        assert!(tag_fit_holds(12, 1.0, 4.0));
         // Too few, too far off, or not a number: never.
         assert!(!tag_fit_holds(3, 1.0, 0.0));
         assert!(!tag_fit_holds(40, 1.3, 0.0));
         assert!(!tag_fit_holds(40, f64::NAN, 0.0));
-        assert!(!tag_fit_holds(40, 1.0, f64::NAN));
+        assert!(!tag_fit_holds(5, 1.0, f64::NAN));
     }
 
     #[test]

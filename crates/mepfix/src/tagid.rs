@@ -164,6 +164,30 @@ pub struct TagFit {
     pub residual: f64,
 }
 
+/// Under this many matched tags a fit says little on its own: a handful of tags can agree with a
+/// transform none of them is right for.
+pub const FEW_TAGS: usize = 8;
+/// How far (degrees) off square a fit on a few tags may turn: the tags' own scatter.
+pub const FEW_TAGS_TURN_DEG: f64 = 1.5;
+
+/// How far (degrees) `turn_deg` is off the nearest right angle (a view may be drawn turned a
+/// quarter or a half turn on its sheet). Not a number: infinite.
+pub fn off_square_deg(turn_deg: f64) -> f64 {
+    if !turn_deg.is_finite() {
+        return f64::INFINITY;
+    }
+    let r = turn_deg.rem_euclid(90.0);
+    r.min(90.0 - r)
+}
+
+/// Whether a fit on `matched` tags turned `turn_deg` is a few tags turned off square: the plans of
+/// one building are drawn square to each other, so a handful of tags that need a turn of a few
+/// degrees matched tags that are not each other's (seven room numbers turned four and a half
+/// degrees put a floor's core ductwork over the next room). Such a fit places nothing.
+pub fn few_tags_off_square(matched: usize, turn_deg: f64) -> bool {
+    matched < FEW_TAGS && off_square_deg(turn_deg) > FEW_TAGS_TURN_DEG
+}
+
 /// The transform taking the tags `from` onto the same tags in `to`: of every transform two
 /// shared tags give (scale inside `scale_range`), the one most tags agree with (within `tol`, in
 /// `to`'s units), refined by least squares on those tags. None unless at least three distinct
@@ -479,6 +503,22 @@ pub fn merge_identities(items: &[IdItem], tol: &dyn Fn(&str) -> f64) -> (Vec<IdG
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_few_tags_turned_off_square_are_no_fit() {
+        assert_eq!(off_square_deg(0.0), 0.0);
+        assert!((off_square_deg(-90.4) - 0.4).abs() < 1e-9);
+        assert!((off_square_deg(4.47) - 4.47).abs() < 1e-9);
+        assert!((off_square_deg(-178.0) - 2.0).abs() < 1e-9);
+        assert_eq!(off_square_deg(f64::NAN), f64::INFINITY);
+        // Seven tags turned four and a half degrees: no fit; a quarter turn, or a degree: fine.
+        assert!(few_tags_off_square(7, 4.47));
+        assert!(!few_tags_off_square(7, 90.0));
+        assert!(!few_tags_off_square(5, 1.0));
+        assert!(few_tags_off_square(5, f64::NAN));
+        // Many tags: their own word.
+        assert!(!few_tags_off_square(13, 4.47));
+    }
 
     #[test]
     fn one_fit_then_another_is_both_in_turn() {
